@@ -1,9 +1,30 @@
 # Graphlink
 
-Graphlink is a desktop, graph-based AI workspace built with Python and PySide6. Instead of treating an AI session like a single linear chat, Graphlink lets you build a visual canvas of connected nodes for conversation, code, reasoning, web retrieval, review, validation, drafting, and execution.
+![GitHub stars](https://img.shields.io/github/stars/dovvnloading/Graphlink?style=social) 
+![GitHub forks](https://img.shields.io/github/forks/dovvnloading/Graphlink?style=social) 
+![License](https://img.shields.io/badge/License-MIT-green) 
+![Python](https://img.shields.io/badge/Python-3.8%2B-blue) 
+![PySide6](https://img.shields.io/badge/PySide6-Qt%20for%20Python-darkgreen) 
+![Qt](https://img.shields.io/badge/Qt-Framework-41CD52) 
+![Ollama](https://img.shields.io/badge/Ollama-Local%20Models-black) 
+![OpenAI](https://img.shields.io/badge/OpenAI-Compatible-412991) 
+![Local First](https://img.shields.io/badge/Local--First-AI%20Workspace-orange)
 
-The product name shown in the UI is **Graphlink**. The repository and module names still use **Graphite** in many places because the codebase is mid-transition.
+---
 
+<img width="1920" height="1080" alt="graphite-render-1920x1080-1774826472139" src="https://github.com/user-attachments/assets/3fda5311-1d05-49c9-8654-04649f902b8a" />
+
+---
+
+**Graphlink** is a desktop, graph-based AI workspace designed for structured reasoning, experimentation, and complex problem solving. Built with **Python** and **PySide6**, it replaces the traditional linear chat interface with a **visual canvas of connected nodes**, allowing users to explore ideas, run tools, and orchestrate AI-assisted workflows in parallel.
+
+Instead of compressing every interaction into a single conversational timeline, Graphlink enables users to build **branching reasoning graphs**. Conversations, code generation, web retrieval, analysis, drafting, validation, and execution can all exist as separate nodes connected within a larger workspace. Each branch can follow its own line of inquiry, use different tools or models, and maintain its own contextual boundaries.
+
+Graphlink represents the **second generation of the original Graphite project**. What began as a prototype visual interface for AI conversations has evolved into a more complete reasoning environment with expanded architecture, plugin tooling, agent workflows, and a significantly improved user interface. As part of this evolution, the project has been **renamed from Graphite to Graphlink** to avoid confusion with other unrelated software using the Graphite name and to better reflect the system’s focus on connected reasoning environments.
+
+You may still see **Graphite** referenced throughout parts of the codebase, repository structure, and module names. This is expected during the transition period while the project moves fully toward the Graphlink identity.
+
+At its core, Graphlink is designed around a simple idea: complex work rarely happens in a straight line. By giving users a visual environment where ideas, tools, and AI reasoning can branch, interact, and evolve, Graphlink turns AI from a conversational assistant into a **workspace for thinking and building**.
 ## What It Does
 
 Graphlink combines a node canvas, local persistence, multiple model backends, and a plugin system so a single branch can evolve from an idea into a reviewed, validated, and exportable result.
