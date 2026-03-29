@@ -1,0 +1,17 @@
+beautifulsoup4
+ddgs
+google-generativeai
+Markdown
+matplotlib
+ollama
+openai>=1.0.0
+Pillow
+pygments
+pypdf
+PySide6
+pyspellchecker
+python-docx
+qtawesome
+reportlab
+requests
+tiktoken

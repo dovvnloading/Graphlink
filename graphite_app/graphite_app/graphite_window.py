@@ -1,0 +1,598 @@
+from PySide6.QtWidgets import (
+    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QToolBar,
+    QToolButton, QLineEdit, QPushButton, QMessageBox, QSizePolicy, QLabel, QComboBox,
+    QFileDialog
+)
+from PySide6.QtCore import Qt, QSize, QPointF, QTimer
+from PySide6.QtGui import QKeySequence, QGuiApplication, QCursor, QShortcut, QIcon
+import qtawesome as qta
+import os
+
+from graphite_widgets import PinOverlay, SearchOverlay, TokenCounterWidget, TokenEstimator
+from graphite_ui_components import NotificationBanner, DocumentViewerPanel
+from graphite_canvas_items import Note, Frame, Container
+from graphite_node import ChatNode, CodeNode, ThinkingNode
+from graphite_pycoder import PyCoderNode
+from graphite_plugin_code_sandbox import CodeSandboxNode
+from graphite_web import WebNode
+from graphite_conversation_node import ConversationNode
+from graphite_reasoning import ReasoningNode
+from graphite_html_view import HtmlViewNode
+from graphite_plugin_workflow import WorkflowNode
+from graphite_plugin_graph_diff import GraphDiffNode
+from graphite_plugin_quality_gate import QualityGateNode
+from graphite_plugin_code_review import CodeReviewNode
+from graphite_plugin_gitlink import GitlinkNode
+
+from graphite_library_dialog import ChatLibraryDialog
+from graphite_system_dialogs import HelpDialog, AboutDialog
+from graphite_settings_dialogs import SettingsDialog
+
+from graphite_core import ChatSessionManager
+from graphite_command_palette import CommandManager
+from graphite_plugin_portal import PluginPortal
+from graphite_plugin_picker import PluginFlyoutPanel
+from graphite_agents import ChatAgent
+from graphite_file_handler import FileHandler
+import graphite_config as config
+import api_provider
+from graphite_config import get_current_palette, get_neutral_button_colors
+
+from graphite_prompts import BASE_SYSTEM_PROMPT, THINKING_INSTRUCTIONS_PROMPT
+from graphite_window_actions import WindowActionsMixin
+from graphite_window_navigation import WindowNavigationMixin
+
+class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
+    def __init__(self, settings_manager):
+        super().__init__()
+        from graphite_view import ChatView
+        
+        self.settings_manager = settings_manager
+        self.file_handler = FileHandler()
+        self.setAcceptDrops(True)
+        self.setWindowFlags(self.windowFlags() & ~Qt.WindowType.WindowContextHelpButtonHint | Qt.WindowType.WindowCloseButtonHint)
+        self.setGeometry(100, 100, 1200, 800)
+        self.library_dialog = None
+        self.settings_panel = None
+        self.help_panel = None
+        self._initial_show_complete = False
+
+        icon_path = r"C:\Users\Admin\source\repos\graphite_app\assets\graphite.ico"
+        self.setWindowIcon(QIcon(str(icon_path)))
+
+        self.session_manager = ChatSessionManager(self)
+        self.plugin_portal = PluginPortal(self)
+        self.update_title_bar()
+        self.reinitialize_agent()
+
+        self.chat_thread = None
+        self.takeaway_thread = None
+        self.explainer_thread = None
+        self.chart_thread = None
+        self.group_summary_thread = None
+        self.image_gen_thread = None
+        self.code_exec_thread = None
+        self.pycoder_agent_thread = None
+        self.pycoder_exec_thread = None
+        self.sandbox_thread = None
+        self.web_worker_thread = None
+        self.conversation_node_thread = None
+        self.reasoning_thread = None
+        self.workflow_thread = None
+        self.graph_diff_thread = None
+        self.quality_gate_thread = None
+        self.code_review_thread = None
+        self.gitlink_thread = None
+
+        self.container = QWidget()
+        container_layout = QVBoxLayout(self.container)
+        container_layout.setContentsMargins(0, 0, 0, 0)
+        container_layout.setSpacing(0)
+
+        content_widget = QWidget()
+        content_layout = QHBoxLayout(content_widget)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(0)
+
+        self.doc_viewer_panel = DocumentViewerPanel(self)
+        self.doc_viewer_panel.close_requested.connect(self.hide_document_view)
+        self.doc_viewer_panel.setVisible(False)
+        content_layout.addWidget(self.doc_viewer_panel)
+
+        self.chat_view = ChatView(self)
+        self.chat_view.setAcceptDrops(True)
+        content_layout.addWidget(self.chat_view)
+
+        self.notification_banner = NotificationBanner(self.chat_view)
+
+        self.pin_overlay = PinOverlay(self.chat_view, self)
+        self.pin_overlay.closed.connect(self._handle_pin_overlay_closed)
+        self.pin_overlay.setVisible(False)
+
+        self.token_estimator = TokenEstimator()
+        self.total_session_tokens = 0
+        self.token_counter_widget = TokenCounterWidget(self.chat_view)
+        self.token_counter_widget.setVisible(self.settings_manager.get_show_token_counter())
+
+        self.toolbar = QToolBar()
+        container_layout.addWidget(self.toolbar)
+
+        library_btn = QToolButton(); library_btn.setText("Library"); library_btn.setObjectName("actionButton")
+        library_btn.clicked.connect(self.show_library); self.toolbar.addWidget(library_btn)
+        save_btn = QToolButton(); save_btn.setText("Save"); save_btn.setObjectName("actionButton")
+        save_btn.clicked.connect(self.save_chat); self.toolbar.addWidget(save_btn)
+        self.toolbar.addSeparator()
+        self.setup_toolbar(self.toolbar)
+
+        container_layout.addWidget(content_widget)
+
+        input_widget = QWidget()
+        input_layout = QHBoxLayout(input_widget)
+        input_layout.setContentsMargins(8, 8, 8, 8)
+        
+        self.pending_attachments = []
+        self.attach_file_btn = QPushButton()
+        self.attach_file_btn.setIcon(qta.icon('fa5s.paperclip', color='#cccccc'))
+        self.attach_file_btn.setFixedSize(40, 40)
+        self.attach_file_btn.clicked.connect(self.attach_file)
+
+        from graphite_widgets import SpellCheckLineEdit
+        self.message_input = SpellCheckLineEdit()
+        self.message_input.setPlaceholderText("Type your message...")
+        self.message_input.returnPressed.connect(self.send_message)
+        
+        self.send_button = QPushButton(); self.send_button.setFixedSize(40, 40)
+        input_layout.addWidget(self.attach_file_btn); input_layout.addWidget(self.message_input); input_layout.addWidget(self.send_button)
+        
+        bottom_container = QWidget(); bottom_layout = QVBoxLayout(bottom_container)
+        bottom_layout.setContentsMargins(0,0,0,0); bottom_layout.setSpacing(0); bottom_layout.addWidget(input_widget)
+        container_layout.addWidget(bottom_container)
+
+        self.setCentralWidget(self.container)
+        self._update_themed_styles()
+        self.send_button.clicked.connect(self.send_message)
+
+        self.current_node = None
+        self.loading_animation = None
+        self.search_overlay = None
+        self.search_results = []
+        self.current_search_index = -1
+
+        self.command_manager = CommandManager()
+        self._setup_commands()
+        self.plugin_picker = PluginFlyoutPanel(self.plugin_portal, self)
+        self.plugin_picker.pluginSelected.connect(self._handle_plugin_picker_selection)
+
+        self.new_chat_shortcut = QShortcut(QKeySequence("Ctrl+T"), self); self.new_chat_shortcut.activated.connect(self.new_chat)
+        self.library_shortcut = QShortcut(QKeySequence("Ctrl+L"), self); self.library_shortcut.activated.connect(self.show_library)
+        self.save_shortcut = QShortcut(QKeySequence("Ctrl+S"), self); self.save_shortcut.activated.connect(self.save_chat)
+        self.command_palette_shortcut = QShortcut(QKeySequence("Ctrl+K"), self); self.command_palette_shortcut.activated.connect(self.show_command_palette)
+        self.search_shortcut = QShortcut(QKeySequence("Ctrl+F"), self); self.search_shortcut.activated.connect(self.show_search_overlay)
+        self.frame_shortcut = QShortcut(QKeySequence("Ctrl+G"), self); self.frame_shortcut.activated.connect(self.chat_view.scene().createFrame)
+        self.container_shortcut = QShortcut(QKeySequence("Ctrl+Shift+G"), self); self.container_shortcut.activated.connect(self.chat_view.scene().createContainer)
+
+        self.nav_up_shortcut = QShortcut(QKeySequence("Ctrl+Up"), self); self.nav_up_shortcut.activated.connect(self._navigate_up)
+        self.nav_down_shortcut = QShortcut(QKeySequence("Ctrl+Down"), self); self.nav_down_shortcut.activated.connect(self._navigate_down)
+        self.nav_left_shortcut = QShortcut(QKeySequence("Ctrl+Left"), self); self.nav_left_shortcut.activated.connect(self._navigate_left)
+        self.nav_right_shortcut = QShortcut(QKeySequence("Ctrl+Right"), self); self.nav_right_shortcut.activated.connect(self._navigate_right)
+
+        screen = QGuiApplication.primaryScreen().geometry()
+        size = self.geometry(); self.move(int((screen.width() - size.width()) / 2), int((screen.height() - size.height()) / 2))
+        
+    def reinitialize_agent(self):
+        current_prompt = self._get_current_system_prompt()
+        self.agent = ChatAgent("Graphlink Assistant", current_prompt)
+
+    def _get_current_system_prompt(self):
+        reasoning_mode = self.settings_manager.get_ollama_reasoning_mode()
+        if reasoning_mode == "Thinking":
+            return THINKING_INSTRUCTIONS_PROMPT + BASE_SYSTEM_PROMPT
+        else:
+            return BASE_SYSTEM_PROMPT
+
+    def _update_themed_styles(self):
+        palette = get_current_palette()
+        button_colors = get_neutral_button_colors()
+        self.send_button.setIcon(qta.icon('fa5s.paper-plane', color=button_colors["icon"].name()))
+        if hasattr(self, 'plugins_button'):
+            self.plugins_button.setIcon(qta.icon("fa5s.chevron-down", color=palette.SELECTION.lighter(160).name()))
+        if hasattr(self, 'plugin_picker'):
+            self.plugin_picker.refresh()
+        if hasattr(self, 'pin_overlay'):
+            self.pin_overlay.on_theme_changed()
+        self.send_button.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {button_colors["background"].name()};
+                border: 1px solid {button_colors["border"].name()};
+                border-radius: 20px;
+                padding: 10px;
+            }}
+            QPushButton:hover {{
+                background-color: {button_colors["hover"].name()};
+                border-color: {button_colors["hover"].lighter(112).name()};
+            }}
+            QPushButton:pressed {{
+                background-color: {button_colors["pressed"].name()};
+                border-color: {button_colors["border"].darker(105).name()};
+            }}
+        """)
+        self._refresh_attachment_button()
+
+    def on_theme_changed(self):
+        self._update_themed_styles()
+        if self.chat_view and self.chat_view.scene():
+            self.chat_view.scene().update()
+            self.chat_view.viewport().update()
+
+    def on_settings_changed(self):
+        self.token_counter_widget.setVisible(self.settings_manager.get_show_token_counter())
+        self._update_overlay_positions()
+        self.reinitialize_agent()
+
+    def start_with_prompt(self, prompt: str):
+        if prompt:
+            self.message_input.setText(prompt); QTimer.singleShot(100, self.send_message)
+
+    def _handle_pin_overlay_closed(self):
+        pass
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not self._initial_show_complete: self._update_overlay_positions(); self._initial_show_complete = True
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._update_overlay_positions()
+
+    def _update_overlay_positions(self):
+        padding = 10; viewport = self.chat_view.viewport()
+        if hasattr(self, 'notification_banner') and self.notification_banner.isVisible():
+            self.notification_banner.update_position()
+        if self.search_overlay and self.search_overlay.isVisible():
+            self.search_overlay.move(viewport.width() - self.search_overlay.width() - padding, padding)
+        if self.token_counter_widget and self.token_counter_widget.isVisible():
+            self.token_counter_widget.move(padding, viewport.height() - self.token_counter_widget.height() - padding)
+        
+    def show_search_overlay(self):
+        if not self.search_overlay:
+            self.search_overlay = SearchOverlay(self.chat_view)
+            self.search_overlay.textChanged.connect(self._handle_search_changed)
+            self.search_overlay.findNext.connect(self._find_next_match)
+            self.search_overlay.findPrevious.connect(self._find_previous_match)
+            self.search_overlay.closed.connect(self._close_search)
+        self.search_overlay.search_input.clear(); self.search_overlay.show(); self.search_overlay.raise_(); self.search_overlay.focus_input(); self._update_overlay_positions()
+
+    def _close_search(self):
+        if self.search_overlay: self.search_overlay.hide()
+        self.chat_view.scene().update_search_highlight([]); self.search_results = []; self.current_search_index = -1; self._update_overlay_positions()
+
+    def _handle_search_changed(self, text: str):
+        scene = self.chat_view.scene()
+        if not text: self.search_results = []; self.current_search_index = -1; scene.update_search_highlight([])
+        else: self.search_results = scene.find_items(text); self.current_search_index = -1; scene.update_search_highlight(self.search_results)
+        self.search_overlay.update_results_label(0, len(self.search_results))
+
+    def _find_next_match(self):
+        if not self.search_results: return
+        self.current_search_index = (self.current_search_index + 1) % len(self.search_results); self._focus_on_current_match()
+
+    def _find_previous_match(self):
+        if not self.search_results: return
+        self.current_search_index = (self.current_search_index - 1 + len(self.search_results)) % len(self.search_results); self._focus_on_current_match()
+        
+    def _focus_on_current_match(self):
+        if not (0 <= self.current_search_index < len(self.search_results)): return
+        target_node = self.search_results[self.current_search_index]
+        self.chat_view.scene().clearSelection(); target_node.setSelected(True); self.chat_view.centerOn(target_node); self.search_overlay.update_results_label(self.current_search_index + 1, len(self.search_results))
+
+    def show_library(self):
+        if self.library_dialog and self.library_dialog.isVisible():
+            self.library_dialog.raise_()
+            self.library_dialog.activateWindow()
+            return
+
+        self.library_dialog = ChatLibraryDialog(self.session_manager, self)
+        self.library_dialog.destroyed.connect(lambda *_: setattr(self, "library_dialog", None))
+        self.library_dialog.show_centered()
+        
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Escape:
+             if self.pending_attachments: self.clear_attachment()
+        elif event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            if event.key() == Qt.Key.Key_N:
+                view_pos = self.chat_view.mapFromGlobal(QCursor.pos()); scene_pos = self.chat_view.mapToScene(view_pos); self.chat_view.scene().add_note(scene_pos)
+        elif event.key() == Qt.Key.Key_Delete: self.chat_view.scene().deleteSelectedItems()
+        else: super().keyPressEvent(event)
+        
+    def save_chat(self):
+        self.session_manager.save_current_chat()
+        self.notification_banner.show_message("Chat saved in background.", 3000, "success")
+
+    def setup_toolbar(self, toolbar):
+        toolbar.setIconSize(QSize(20, 20)); toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        toolbar.setStyleSheet("QToolBar { spacing: 4px; padding: 4px; } QToolButton { color: white; background: transparent; border: none; border-radius: 4px; padding: 6px; margin: 2px; font-size: 12px; } QToolButton:hover { background: rgba(255, 255, 255, 0.1); }")
+        self.pins_btn = QToolButton(); self.pins_btn.setText("Pins"); self.pins_btn.clicked.connect(self.toggle_pin_overlay); toolbar.addWidget(self.pins_btn)
+        organize_btn = QToolButton(); organize_btn.setText("Organize"); organize_btn.setObjectName("actionButton"); organize_btn.clicked.connect(lambda: self.chat_view.scene().organize_nodes()); toolbar.addWidget(organize_btn)
+        toolbar.addSeparator()
+        zoom_in_btn = QToolButton(); zoom_in_btn.setText("Zoom In"); zoom_in_btn.clicked.connect(lambda: self.chat_view.scale(1.1, 1.1)); toolbar.addWidget(zoom_in_btn)
+        zoom_out_btn = QToolButton(); zoom_out_btn.setText("Zoom Out"); zoom_out_btn.clicked.connect(lambda: self.chat_view.scale(0.9, 0.9)); toolbar.addWidget(zoom_out_btn)
+        toolbar.addSeparator()
+        reset_btn = QToolButton(); reset_btn.setText("Reset"); reset_btn.clicked.connect(self.chat_view.reset_zoom); toolbar.addWidget(reset_btn)
+        fit_btn = QToolButton(); fit_btn.setText("Fit All"); fit_btn.clicked.connect(self.chat_view.fit_all); toolbar.addWidget(fit_btn)
+        toggle_overlays_btn = QToolButton(); toggle_overlays_btn.setText("Controls"); toggle_overlays_btn.setCheckable(True); toggle_overlays_btn.toggled.connect(self.chat_view.toggle_overlays_visibility); toolbar.addWidget(toggle_overlays_btn)
+
+        self.plugins_button = QToolButton()
+        self.plugins_button.setText("Plugins")
+        self.plugins_button.setObjectName("actionButton")
+        self.plugins_button.setPopupMode(QToolButton.ToolButtonPopupMode.DelayedPopup)
+        self.plugins_button.setIcon(qta.icon("fa5s.chevron-down", color="#9aa6b2"))
+        self.plugins_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.plugins_button.clicked.connect(self._toggle_plugin_picker)
+        toolbar.addWidget(self.plugins_button)
+        
+        spacer = QWidget(); spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred); toolbar.addWidget(spacer)
+        
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItem("Ollama (Local)", config.API_PROVIDER_OPENAI)
+        self.mode_combo.addItem("API Endpoint", config.API_PROVIDER_OPENAI)
+        self.mode_combo.setMinimumWidth(150)
+        
+        current_mode = self.settings_manager.get_current_mode()
+        idx = self.mode_combo.findText(current_mode)
+        if idx >= 0:
+            self.mode_combo.setCurrentIndex(idx)
+            
+        self.mode_combo.currentIndexChanged.connect(self.on_mode_changed)
+        toolbar.addWidget(self.mode_combo)
+        
+        self.settings_btn = QToolButton(); self.settings_btn.setText("Settings"); self.settings_btn.clicked.connect(self.show_settings); toolbar.addWidget(self.settings_btn)
+        about_btn = QToolButton(); about_btn.setText("About"); about_btn.clicked.connect(self.show_about_dialog); toolbar.addWidget(about_btn)
+        self.help_btn = QToolButton(); self.help_btn.setText("Help"); self.help_btn.setObjectName("helpButton"); self.help_btn.clicked.connect(self.show_help); toolbar.addWidget(self.help_btn)
+        
+        self.on_mode_changed(self.mode_combo.currentIndex())
+
+    def _toggle_plugin_picker(self):
+        if self.plugin_picker.isVisible():
+            self.plugin_picker.close()
+            return
+        self.plugin_picker.show_for_anchor(self.plugins_button)
+
+    def _handle_plugin_picker_selection(self, plugin_name):
+        self.plugin_portal.execute_plugin(plugin_name)
+
+    def toggle_pin_overlay(self, checked=False):
+        if self.pin_overlay.isVisible():
+            self.pin_overlay.raise_()
+            self.pin_overlay.activateWindow()
+            return
+        self.pin_overlay.show_for_anchor(self.pins_btn)
+
+    def update_title_bar(self):
+        title = "Graphlink"
+        if self.session_manager and self.session_manager.current_chat_id:
+            chat_info = self.session_manager.db.load_chat(self.session_manager.current_chat_id)
+            if chat_info and 'title' in chat_info: title = f"Graphlink - {chat_info['title']}"
+        self.setWindowTitle(title)
+
+    def show_about_dialog(self): AboutDialog(self).exec()
+    def show_help(self):
+        if self.help_panel and self.help_panel.isVisible():
+            self.help_panel.close()
+            return
+
+        if not self.help_panel:
+            self.help_panel = HelpDialog(self)
+
+        self.help_panel.show_for_anchor(self.help_btn if hasattr(self, 'help_btn') else self)
+
+    def show_document_view(self, node):
+        if isinstance(node, ChatNode): self.doc_viewer_panel.set_document_content(node.text); self.doc_viewer_panel.setVisible(True)
+
+    def hide_document_view(self): self.doc_viewer_panel.setVisible(False)
+
+    def show_settings(self):
+        if self.settings_panel and self.settings_panel.isVisible():
+            self.settings_panel.close()
+            return
+
+        if not self.settings_panel:
+            self.settings_panel = SettingsDialog(self.settings_manager, self)
+
+        self.settings_panel.set_current_section_by_mode(self.mode_combo.currentText())
+        self.settings_panel.show_for_anchor(self.settings_btn)
+    
+    def on_mode_changed(self, index):
+        mode_text = self.mode_combo.itemText(index)
+        self.settings_manager.set_current_mode(mode_text)
+        
+        if mode_text == "Ollama (Local)": 
+            api_provider.set_mode(False)
+            self.settings_btn.setEnabled(True)
+        elif mode_text == "API Endpoint":
+            api_provider.set_mode(True)
+            provider = self.settings_manager.get_api_provider()
+            base_url = self.settings_manager.get_api_base_url()
+            
+            saved_models = self.settings_manager.get_api_models()
+            for task, model_name in saved_models.items():
+                api_provider.set_task_model(task, model_name)
+
+            try:
+                if provider == config.API_PROVIDER_OPENAI:
+                    api_key = self.settings_manager.get_openai_key()
+                    api_provider.initialize_api(provider, api_key, base_url)
+                else: 
+                    api_key = self.settings_manager.get_gemini_key()
+                    api_provider.initialize_api(provider, api_key)
+            except Exception as e:
+                QMessageBox.warning(
+                    self,
+                    "API Configuration Required",
+                    f"API Endpoint mode could not be initialized:\n\n{str(e)}"
+                )
+            self.settings_btn.setEnabled(True)
+
+    def setCurrentNode(self, node):
+        self.current_node = node; text_content = ""
+        if isinstance(node, ChatNode): text_content = node.text if node.text else "[Attachment/Content Node]"
+        elif isinstance(node, PyCoderNode): text_content = "Py-Coder Analysis"
+        elif isinstance(node, CodeSandboxNode): text_content = "Execution Sandbox"
+        elif isinstance(node, WebNode): text_content = "Web Search Node"
+        elif isinstance(node, ConversationNode): text_content = "Conversation"
+        elif isinstance(node, ReasoningNode): text_content = "Reasoning Node"
+        elif isinstance(node, HtmlViewNode): text_content = "HTML Renderer"
+        elif isinstance(node, WorkflowNode): text_content = "Workflow Architect"
+        elif isinstance(node, GraphDiffNode): text_content = "Branch Lens"
+        elif isinstance(node, QualityGateNode): text_content = "Quality Gate"
+        elif isinstance(node, CodeReviewNode): text_content = "Code Review Agent"
+        elif isinstance(node, GitlinkNode): text_content = "Gitlink"
+        elif isinstance(node, Note) and node.is_summary_note: self.message_input.setPlaceholderText("Cannot respond to a summary note."); return
+        if text_content: self.message_input.setPlaceholderText(f"Responding to: {text_content[:30]}...")
+        else: self.message_input.setPlaceholderText("Type your message...")
+        
+    def attach_file(self):
+        supported_images = "*.png *.jpg *.jpeg *.webp"
+        supported_docs = " ".join(f"*{ext}" for ext in sorted(self.file_handler.SUPPORTED_EXTENSIONS))
+        file_paths, _ = QFileDialog.getOpenFileNames(
+            self,
+            "Select Files",
+            "",
+            (
+                f"Common Attachments ({supported_images} {supported_docs});;"
+                f"Image Files ({supported_images});;"
+                f"Readable Files (*.*)"
+            ),
+        )
+        if file_paths:
+            self.stage_dropped_files(file_paths)
+
+    def stage_dropped_file(self, file_path):
+        self.stage_dropped_files([file_path])
+
+    def stage_dropped_files(self, file_paths):
+        staged_count = 0
+        rejected_files = []
+
+        for file_path in file_paths:
+            stage_result = self._stage_attachment_file(file_path)
+            if stage_result == "added":
+                staged_count += 1
+            elif stage_result == "rejected":
+                rejected_files.append(os.path.basename(file_path) or file_path)
+
+        if staged_count:
+            noun = "file" if staged_count == 1 else "files"
+            self.notification_banner.show_message(f"Attached {staged_count} {noun}.", 3000, "success")
+
+        if rejected_files:
+            rejected_preview = ", ".join(rejected_files[:3])
+            if len(rejected_files) > 3:
+                rejected_preview += ", ..."
+            self.notification_banner.show_message(
+                f"Skipped unsupported attachments: {rejected_preview}",
+                5000,
+                "warning",
+            )
+
+    def _stage_attachment_file(self, file_path):
+        if not file_path or not os.path.isfile(file_path):
+            return "rejected"
+
+        normalized_path = os.path.abspath(file_path)
+        if any(item['path'] == normalized_path for item in self.pending_attachments):
+            return "duplicate"
+
+        file_extension = os.path.splitext(normalized_path)[1].lower()
+        image_extensions = {'.png', '.jpg', '.jpeg', '.webp'}
+
+        if file_extension in image_extensions:
+            attachment_kind = 'image'
+        elif self.file_handler.can_read_file(normalized_path):
+            attachment_kind = 'document'
+        else:
+            return "rejected"
+
+        self.pending_attachments.append({
+            'path': normalized_path,
+            'kind': attachment_kind,
+            'name': os.path.basename(normalized_path),
+        })
+        self._refresh_attachment_button()
+        return "added"
+
+    def _refresh_attachment_button(self):
+        if not hasattr(self, 'attach_file_btn'):
+            return
+
+        if not self.pending_attachments:
+            self.attach_file_btn.setIcon(qta.icon('fa5s.paperclip', color='#cccccc'))
+            self.attach_file_btn.setToolTip("Attach images or readable files")
+            return
+
+        palette = get_current_palette()
+        attachment_kinds = {item['kind'] for item in self.pending_attachments}
+        if attachment_kinds == {'image'}:
+            icon_name = 'fa5s.image'
+        elif attachment_kinds == {'document'}:
+            icon_name = 'fa5s.file-alt'
+        else:
+            icon_name = 'fa5s.paperclip'
+
+        tooltip_lines = ["Ready to send:"]
+        for item in self.pending_attachments[:6]:
+            tooltip_lines.append(f"- {item['name']}")
+        remaining_count = len(self.pending_attachments) - 6
+        if remaining_count > 0:
+            tooltip_lines.append(f"- and {remaining_count} more")
+        tooltip_lines.append("")
+        tooltip_lines.append("Press Esc to clear staged attachments.")
+
+        self.attach_file_btn.setIcon(qta.icon(icon_name, color=palette.SELECTION.name()))
+        self.attach_file_btn.setToolTip("\n".join(tooltip_lines))
+
+    def clear_attachment(self):
+        self.pending_attachments = []
+        self._refresh_attachment_button()
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+            return
+        super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+            return
+        super().dragMoveEvent(event)
+
+    def dropEvent(self, event):
+        if event.mimeData().hasUrls():
+            file_paths = [url.toLocalFile() for url in event.mimeData().urls() if url.isLocalFile()]
+            if file_paths:
+                self.stage_dropped_files(file_paths)
+            event.acceptProposedAction()
+            return
+        super().dropEvent(event)
+
+    def handle_error(self, error_message):
+        if self.loading_animation: self.loading_animation.stop(); self.chat_view.scene().removeItem(self.loading_animation); self.loading_animation = None
+        self.notification_banner.show_message(f"An error occurred:\n{error_message}", 15000, "error")
+        self.message_input.setEnabled(True); self.send_button.setEnabled(True); self.attach_file_btn.setEnabled(True); self.clear_attachment()
+        
+    def _get_single_selected_node(self):
+        selected_items = self.chat_view.scene().selectedItems(); valid_types = (ChatNode, PyCoderNode, CodeSandboxNode, WebNode, ConversationNode, ReasoningNode, HtmlViewNode, WorkflowNode, GraphDiffNode, QualityGateNode, CodeReviewNode, GitlinkNode)
+        if len(selected_items) == 1 and isinstance(selected_items[0], valid_types): return selected_items[0]
+        return None
+
+    def reset_token_counter(self, total_tokens=0):
+        self.total_session_tokens = total_tokens; self.token_counter_widget.reset(); self.token_counter_widget.update_counts(total_tokens=self.total_session_tokens)
+
+    def new_chat(self, parent_for_dialog=None):
+        scene = self.chat_view.scene()
+        if not scene.items() and not self.session_manager.current_chat_id: return True
+        reply = QMessageBox.question(parent_for_dialog or self, 'New Chat', 'Start a new chat? Any unsaved changes will be lost.', QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
+        if reply == QMessageBox.StandardButton.Yes:
+            if hasattr(self, 'pin_overlay') and self.pin_overlay: self.pin_overlay.clear_pins()
+            self.session_manager.current_chat_id = None; scene.clear(); self.current_node = None; self.message_input.setPlaceholderText("Type your message..."); self.update_title_bar(); self.reset_token_counter(); return True
+        return False
