@@ -126,6 +126,16 @@ The app also includes primary non-plugin node types that form the main graph sur
 `-- GRAPHITE_REPO_NAVIGATION.md
 ```
 
+---
+
+<img width="1920" height="1080" alt="graphite-render-1920x1080-1774826552381" src="https://github.com/user-attachments/assets/dc477feb-a8bf-4f0d-8914-42371329e725" />
+
+---
+
+<img width="1920" height="1080" alt="graphite-render-1920x1080-1774826487402" src="https://github.com/user-attachments/assets/9bfe2cde-70e5-433a-b86d-5bb99105d91f" />
+
+---
+
 ### Important Structural Note
 
 The app is currently **script-oriented**, not a fully namespaced package-first layout. Many imports assume the working directory is the `graphite_app/` folder itself.
