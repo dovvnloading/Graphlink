@@ -477,6 +477,4 @@ Contributions are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md) for set
 
 If you discover a security-sensitive issue, please avoid posting exploit details publicly before the maintainer has a chance to review and patch it.
 
-## License
 
-This repository does not currently include a license file. If you plan to publish it publicly on GitHub, add a license before inviting outside reuse or contributions.
