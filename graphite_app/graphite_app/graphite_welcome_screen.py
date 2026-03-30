@@ -2,9 +2,9 @@ import qtawesome as qta
 import random
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QFrame,
-    QScrollArea, QMainWindow
+    QScrollArea, QMainWindow, QGraphicsOpacityEffect
 )
-from PySide6.QtCore import Qt, Signal, QTimer, QRectF, QSize
+from PySide6.QtCore import Qt, Signal, QTimer, QRectF, QSize, QPropertyAnimation, QEasingCurve
 from PySide6.QtGui import (
     QIcon, QGuiApplication, QPainter, QColor, QBrush, QPen,
     QLinearGradient, QRadialGradient, QFont, QTextOption, QCursor,
@@ -196,12 +196,15 @@ class WelcomeScreen(QMainWindow):
         self.settings_manager = settings_manager
         self.session_manager = ChatSessionManager(window=None)
         self.main_window = main_window
+        self._current_category = None
 
         self.setWindowTitle("Graphlink - Welcome")
         self.setGeometry(0, 0, 800, 550)
         
         icon_path = r"C:\Users\Admin\source\repos\graphite_app\assets\graphite.ico"
         self.setWindowIcon(QIcon(str(icon_path)))
+
+        self._init_starter_data()
 
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
@@ -221,6 +224,79 @@ class WelcomeScreen(QMainWindow):
 
         screen = QGuiApplication.primaryScreen().geometry()
         self.move(int((screen.width() - self.width()) / 2) - 420, int((screen.height() - self.height()) / 2))
+
+    def _init_starter_data(self):
+        """Initialize the categorized conversation starters relevant to Graphlink's workflow."""
+        self.starter_categories = {
+            "Tech": [
+                "Design a scalable microservices architecture and break down each service.",
+                "Help me debug a complex Python memory leak step-by-step.",
+                "Outline an ML training workflow: data prep, training, and validation.",
+                "Compare two sorting algorithms with code and complexity analysis.",
+                "Evaluate authentication strategies for a modern web application.",
+                "Review a refactoring strategy by mapping old vs. new architecture.",
+                "Write a technical spec for a REST API and draft the JSON schemas.",
+                "Brainstorm a data processing pipeline exploring batch vs. streaming."
+            ],
+            "Finance": [
+                "Model a 5-year financial projection for a SaaS startup.",
+                "Analyze the risks and benefits of algorithmic high-frequency trading.",
+                "Draft a comprehensive investment strategy across multiple asset classes.",
+                "Break down the tax implications of remote work across different states.",
+                "Evaluate the economic impact of carbon pricing on manufacturing.",
+                "Design a decentralized finance lending protocol architecture.",
+                "Outline a framework for detecting fraud in credit card transactions.",
+                "Compare the historical performance of value vs. growth investing."
+            ],
+            "Health": [
+                "Design an experiment to test user retention in a fitness app.",
+                "Map out a multi-step research plan for optimizing sleep patterns.",
+                "Compare three different dietary approaches for long-term cardiovascular health.",
+                "Draft a protocol for a clinical trial evaluating a new wellness device.",
+                "Analyze the ethical considerations of AI in diagnostic medicine.",
+                "Outline a public health response strategy for a novel pathogen.",
+                "Evaluate the long-term impacts of microplastics on human physiology.",
+                "Develop a personalized training block for a marathon prep."
+            ],
+            "Legal": [
+                "Draft a mutual Non-Disclosure Agreement highlighting key termination clauses.",
+                "Break down the GDPR compliance requirements for a new mobile app.",
+                "Analyze the legal distinctions between independent contractors and employees.",
+                "Outline a strategy for patenting a software algorithm in multiple jurisdictions.",
+                "Compare open-source licenses: MIT, GPL, and Apache 2.0.",
+                "Draft a terms of service agreement for a user-generated content platform.",
+                "Evaluate the liability risks of deploying autonomous vehicles.",
+                "Construct a framework for handling cross-border data transfer disputes."
+            ],
+            "Research": [
+                "Map out a multi-step research plan for optimizing database queries.",
+                "Draft a literature review outline on the impacts of quantum cryptography.",
+                "Design a methodology for evaluating the bias in large language models.",
+                "Compare historical economic inflation periods and extract key policy shifts.",
+                "Analyze the sociological impacts of remote work on urban development.",
+                "Outline an experimental design to test a new battery chemistry.",
+                "Investigate the correlation between social media use and attention spans.",
+                "Formulate a hypothesis and testing criteria for a new behavioral economics theory."
+            ],
+            "Planning": [
+                "Draft a project proposal and explore different scenarios in parallel.",
+                "Construct an incident response plan: communication, mitigation, post-mortem.",
+                "Plan a content migration strategy, detailing mapping, extraction, and QA.",
+                "Break down a multi-phase launch strategy for a new consumer hardware product.",
+                "Outline a comprehensive 90-day onboarding program for new engineers.",
+                "Design a disaster recovery plan for a multi-region cloud deployment.",
+                "Map out an expansion strategy into an emerging international market.",
+                "Develop a robust testing strategy covering unit, integration, and e2e."
+            ]
+        }
+        
+        # Build the 'All' category by taking 2 random items from every other category
+        all_starters = []
+        for category_list in self.starter_categories.values():
+            all_starters.extend(random.sample(category_list, 2))
+        random.shuffle(all_starters)
+        
+        self.starter_categories = {"All": all_starters} | self.starter_categories
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -278,11 +354,31 @@ class WelcomeScreen(QMainWindow):
         container.setStyleSheet("background: transparent;")
         layout = QVBoxLayout(container)
         layout.setSpacing(10)
+        layout.setContentsMargins(0, 0, 0, 0)
 
+        # Header and categories filter row
+        header_layout = QHBoxLayout()
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        
         title = QLabel("Conversation Starters")
-        title.setStyleSheet("font-size: 16px; font-weight: bold; margin-bottom: 5px; background: transparent;")
-        layout.addWidget(title)
+        title.setStyleSheet("font-size: 16px; font-weight: bold; background: transparent;")
+        header_layout.addWidget(title)
+        header_layout.addSpacing(15)
 
+        self.category_buttons = {}
+        for category in self.starter_categories.keys():
+            btn = QPushButton(category)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setProperty("active", False)
+            btn.setStyleSheet(self._get_category_button_style())
+            btn.clicked.connect(lambda checked=False, c=category: self.set_starter_category(c))
+            self.category_buttons[category] = btn
+            header_layout.addWidget(btn)
+
+        header_layout.addStretch()
+        layout.addLayout(header_layout)
+
+        # Scroll area for starter nodes
         self.starters_scroll_area = QScrollArea()
         self.starters_scroll_area.setWidgetResizable(True)
         self.starters_scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -290,48 +386,135 @@ class WelcomeScreen(QMainWindow):
         self.starters_scroll_area.setFixedHeight(110)
         self.starters_scroll_area.setStyleSheet("QScrollArea { border: none; background: transparent; }")
 
-        starters_widget = QWidget()
-        starters_widget.setStyleSheet("background: transparent;")
-        starters_layout = QHBoxLayout(starters_widget)
-        starters_layout.setSpacing(15)
+        self.starters_widget = QWidget()
+        self.starters_widget.setStyleSheet("background: transparent;")
+        self.starters_layout = QHBoxLayout(self.starters_widget)
+        self.starters_layout.setSpacing(15)
+        self.starters_layout.setContentsMargins(0, 0, 0, 0)
 
-        starters = [
-            "Explain quantum computing like I'm five years old.",
-            "Draft a polite but firm email to a client about an overdue invoice.",
-            "What are the key differences between Python lists and tuples?",
-            "Brainstorm three unique business ideas using AI.",
-            "Write a short, four-line poem about the sunset.",
-            "Create a 3-day workout plan for a beginner.",
-            "Summarize the plot of 'Dune' in three sentences.",
-            "Generate a list of 5 healthy, easy-to-make lunch recipes.",
-            "Write a Python script to rename all files in a directory.",
-            "Explain the concept of blockchain in simple terms."
-        ]
-        
-        random.shuffle(starters)
-        full_starters_list = starters + starters
+        # Apply Opacity Effect for cross-fading
+        self.opacity_effect = QGraphicsOpacityEffect(self.starters_widget)
+        self.opacity_effect.setOpacity(0.0)  # Start hidden for initial fade-in
+        self.starters_widget.setGraphicsEffect(self.opacity_effect)
 
-        for prompt in full_starters_list:
-            starter_node = StarterNodeWidget(prompt)
-            starter_node.clicked.connect(lambda p=prompt: self.start_new_chat(prompt=p))
-            starters_layout.addWidget(starter_node)
+        self.fade_animation = QPropertyAnimation(self.opacity_effect, b"opacity")
+        self.fade_animation.setEasingCurve(QEasingCurve.Type.InOutQuad)
 
-        self.starters_scroll_area.setWidget(starters_widget)
+        self.starters_scroll_area.setWidget(self.starters_widget)
         layout.addWidget(self.starters_scroll_area)
         
         self.scroll_timer = QTimer(self)
         self.scroll_timer.setInterval(30)
         self.scroll_timer.timeout.connect(self._tick_scroll)
         
-        QTimer.singleShot(100, self._setup_starter_animation)
+        self.starters_scroll_area.enterEvent = lambda event: self.scroll_timer.stop()
+        self.starters_scroll_area.leaveEvent = lambda event: self.scroll_timer.start()
+
+        # Initialize the default category gracefully
+        self._current_category = "All"
+        self._update_button_styles("All")
+        self._repopulate_starters("All")
+        
+        # Trigger initial gentle fade-in
+        self.fade_animation.setStartValue(0.0)
+        self.fade_animation.setEndValue(1.0)
+        self.fade_animation.setDuration(400)
+        self.fade_animation.finished.connect(self.scroll_timer.start)
+        QTimer.singleShot(100, self.fade_animation.start)
         
         return container
     
-    def _setup_starter_animation(self):
-        self.scroll_timer.start()
-        self.starters_scroll_area.enterEvent = lambda event: self.scroll_timer.stop()
-        self.starters_scroll_area.leaveEvent = lambda event: self.scroll_timer.start()
+    def _get_category_button_style(self):
+        return """
+            QPushButton {
+                background: transparent;
+                color: #888888;
+                font-size: 12px;
+                font-weight: bold;
+                border: none;
+                padding: 4px 8px;
+                border-radius: 4px;
+            }
+            QPushButton:hover {
+                color: #ffffff;
+                background: #3a3a3a;
+            }
+            QPushButton[active="true"] {
+                color: #2ecc71;
+                background: #2a3d32;
+            }
+        """
+
+    def _update_button_styles(self, category_name):
+        for name, btn in self.category_buttons.items():
+            is_active = (name == category_name)
+            btn.setProperty("active", is_active)
+            btn.style().unpolish(btn)
+            btn.style().polish(btn)
+
+    def set_starter_category(self, category_name):
+        if self._current_category == category_name:
+            return
+
+        self._current_category = category_name
+        self._update_button_styles(category_name)
+        self.scroll_timer.stop()
+
+        # Disconnect any lingering signals to avoid double-firing during spam clicks
+        try:
+            self.fade_animation.finished.disconnect()
+        except RuntimeError:
+            pass
+
+        # Fade out rapidly
+        self.fade_animation.stop()
+        self.fade_animation.setStartValue(self.opacity_effect.opacity())
+        self.fade_animation.setEndValue(0.0)
+        self.fade_animation.setDuration(150)
+        self.fade_animation.finished.connect(self._on_fade_out_complete)
+        self.fade_animation.start()
+
+    def _on_fade_out_complete(self):
+        # Swap content while invisible
+        self._repopulate_starters(self._current_category)
+
+        try:
+            self.fade_animation.finished.disconnect()
+        except RuntimeError:
+            pass
+
+        # Fade back in smoothly
+        self.fade_animation.setStartValue(0.0)
+        self.fade_animation.setEndValue(1.0)
+        self.fade_animation.setDuration(250)
+        self.fade_animation.finished.connect(self.scroll_timer.start)
+        self.fade_animation.start()
+
+    def _repopulate_starters(self, category_name):
+        # Clear existing nodes
+        while self.starters_layout.count():
+            item = self.starters_layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+
+        # Get prompts and multiply to ensure seamless horizontal infinite scroll
+        prompts = self.starter_categories.get(category_name, [])
+        random.shuffle(prompts)
         
+        # Ensure list is long enough to fill screen + overflow before repeating
+        multiplier = max(2, (15 // len(prompts)) + 1) if prompts else 1
+        full_starters_list = prompts * multiplier * 2 
+
+        # Repopulate layout
+        for prompt in full_starters_list:
+            starter_node = StarterNodeWidget(prompt)
+            starter_node.clicked.connect(lambda p=prompt: self.start_new_chat(prompt=p))
+            self.starters_layout.addWidget(starter_node)
+
+        # Reset scrollbar
+        self.starters_scroll_area.horizontalScrollBar().setValue(0)
+
     def _tick_scroll(self):
         try:
             scrollbar = self.starters_scroll_area.horizontalScrollBar()
