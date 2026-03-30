@@ -1496,7 +1496,7 @@ class SplashScreen(QWidget):
         self.animation_widget = SplashAnimationWidget()
         content_layout.addWidget(self.animation_widget, alignment=Qt.AlignmentFlag.AlignCenter)
 
-        self.status_label = QLabel("Version Beta-0.5.3 | © 2025 All Rights Reserved.")
+        self.status_label = QLabel("Version Beta-0.5.3 | © 2026 All Rights Reserved.")
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         content_layout.addWidget(self.status_label)
 
