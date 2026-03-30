@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (
     QGraphicsItem
 )
 from PySide6.QtCore import Qt, Signal, QTimer, QPointF, Property, QParallelAnimationGroup, QPropertyAnimation, QEasingCurve, QRectF, QSize, QRect, QPoint
-from PySide6.QtGui import QPixmap, QIcon, QPainter, QColor, QPainterPath, QBrush, QLinearGradient, QPen, QShortcut, QKeySequence, QFont, QAction, QGuiApplication
+from PySide6.QtGui import QAction, QPixmap, QIcon, QPainter, QColor, QPainterPath, QBrush, QLinearGradient, QPen, QShortcut, QKeySequence, QFont, QGuiApplication, QFontMetrics
 import re
 from graphite_config import get_current_palette
 
@@ -1392,6 +1392,77 @@ class SplashAnimationWidget(QWidget):
         self._angle3 = value
         self.update()
 
+class AnimatedWordLogo(QWidget):
+    def __init__(self, text, parent=None):
+        super().__init__(parent)
+        self.text = text
+        self.setFixedSize(360, 80)
+        self._progress = 0.0
+
+        self.animation = QPropertyAnimation(self, b"progress")
+        self.animation.setStartValue(0.0)
+        self.animation.setEndValue(1.0)
+        self.animation.setDuration(2200)
+        self.animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self.animation.start()
+
+    @Property(float)
+    def progress(self):
+        return self._progress
+
+    @progress.setter
+    def progress(self, value):
+        self._progress = value
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+
+        font = QFont("Segoe UI", 34, QFont.Weight.Bold)
+        font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 2)
+        painter.setFont(font)
+        metrics = QFontMetrics(font)
+
+        total_width = metrics.horizontalAdvance(self.text)
+        start_x = (self.width() - total_width) / 2
+        base_y = self.height() / 2 + metrics.ascent() / 2 - 10
+
+        char_delay = 0.5 / len(self.text)
+        palette = get_current_palette()
+        
+        curve = QEasingCurve(QEasingCurve.Type.OutBack)
+        curve.setOvershoot(1.5)
+
+        for i, char in enumerate(self.text):
+            char_start = i * char_delay
+            char_end = char_start + 0.5
+            
+            if self._progress <= char_start:
+                local_p = 0.0
+            elif self._progress >= char_end:
+                local_p = 1.0
+            else:
+                local_p = (self._progress - char_start) / 0.5
+            
+            ease_p = curve.valueForProgress(local_p)
+            
+            opacity = max(0, min(255, int(local_p * 255))) 
+            
+            y_offset = (1.0 - ease_p) * 25.0
+            
+            if i < 5: 
+                color = QColor("#ffffff")
+            else:
+                color = QColor(palette.SELECTION)
+                
+            color.setAlpha(opacity)
+            painter.setPen(color)
+            painter.drawText(QPointF(start_x, base_y + y_offset), char)
+            
+            start_x += metrics.horizontalAdvance(char)
+
 class SplashScreen(QWidget):
     def __init__(self, main_window, welcome_screen, show_welcome=True):
         super().__init__()
@@ -1419,21 +1490,8 @@ class SplashScreen(QWidget):
         content_layout.setSpacing(15)
         content_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
-        ascii_art = """
-██████╗ ██████╗  █████╗ ██████╗ ██╗  ██╗██╗     ██╗███╗   ██╗██╗  ██╗
-██╔════╝ ██╔══██╗██╔══██╗██╔══██╗██║  ██║██║     ██║████╗  ██║██║ ██╔╝
-██║  ███╗██████╔╝███████║██████╔╝███████║██║     ██║██╔██╗ ██║█████╔╝
-██║   ██║██╔══██╗██╔══██║██╔═══╝ ██╔══██║██║     ██║██║╚██╗██║██╔═██╗
-╚██████╔╝██║  ██║██║  ██║██║     ██║  ██║███████╗██║██║ ╚████║██║  ██╗
- ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝     ╚═╝  ╚═╝╚══════╝╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝
-"""
-        title_label = QLabel(ascii_art)
-        font = QFont("Consolas", 5)
-        font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, -0.2)
-        title_label.setFont(font)
-        title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title_label.setStyleSheet("color: #8a8f8d; background: transparent;")
-        content_layout.addWidget(title_label)
+        self.logo_widget = AnimatedWordLogo("Graphlink")
+        content_layout.addWidget(self.logo_widget, alignment=Qt.AlignmentFlag.AlignCenter)
         
         self.animation_widget = SplashAnimationWidget()
         content_layout.addWidget(self.animation_widget, alignment=Qt.AlignmentFlag.AlignCenter)
