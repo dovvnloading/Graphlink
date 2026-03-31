@@ -10,7 +10,7 @@ import graphite_config as config
 from graphite_styles import THEMES
 
 class AboutDialog(QDialog):
-    """A premium dialog displaying application information, developer credits, and external links."""
+    """dialog displaying application information, developer credits, and external links."""
     def __init__(self, parent=None):
         super().__init__(parent)
 
