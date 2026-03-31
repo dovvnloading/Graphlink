@@ -1,3 +1,6 @@
+import math
+import re
+
 import qtawesome as qta
 from PySide6.QtWidgets import (
     QGraphicsDropShadowEffect, QWidget, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QFrame, QGridLayout,
@@ -6,7 +9,6 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, Signal, QTimer, QPointF, Property, QParallelAnimationGroup, QPropertyAnimation, QEasingCurve, QRectF, QSize, QRect, QPoint
 from PySide6.QtGui import QAction, QPixmap, QIcon, QPainter, QColor, QPainterPath, QBrush, QLinearGradient, QPen, QShortcut, QKeySequence, QFont, QGuiApplication, QFontMetrics
-import re
 from graphite_config import get_current_palette
 
 try:
@@ -1353,23 +1355,86 @@ class SplashAnimationWidget(QWidget):
         self.anim_group.start()
 
     def paintEvent(self, event):
+        import math
         palette = get_current_palette()
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         
-        rect = self.rect().adjusted(5, 5, -5, -5)
+        cx = self.width() / 2.0
+        cy = self.height() / 2.0
         
-        pen1 = QPen(palette.USER_NODE, 4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
-        painter.setPen(pen1)
-        painter.drawArc(rect, int(self._angle1 * 16), 120 * 16)
-        
-        pen2 = QPen(palette.AI_NODE, 4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
-        painter.setPen(pen2)
-        painter.drawArc(rect.adjusted(10, 10, -10, -10), int(self._angle2 * 16), 120 * 16)
+        # 1. Inner orbital dots (Digital feel)
+        painter.setPen(Qt.PenStyle.NoPen)
+        inner_radius = 9
+        for i in range(3):
+            offset_deg = i * 120
+            # angle3 runs from 140 to 500, reverse it and apply offset
+            rad = math.radians(-self._angle3 * 1.5 + offset_deg)
+            x = cx + inner_radius * math.cos(rad)
+            y = cy + inner_radius * math.sin(rad)
+            
+            c = QColor(palette.NAV_HIGHLIGHT)
+            c.setAlpha(200)
+            painter.setBrush(c)
+            painter.drawEllipse(QPointF(x, y), 2.5, 2.5)
 
-        pen3 = QPen(palette.NAV_HIGHLIGHT.darker(120), 4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
-        painter.setPen(pen3)
-        painter.drawArc(rect.adjusted(20, 20, -20, -20), int(self._angle3 * 16), 120 * 16)
+        # 2. Middle Squiggle (Organic feel)
+        path = QPainterPath()
+        base_radius = 17
+        amplitude = 2.5
+        freq = 4
+        
+        # angle1 drives the base rotation and the morphing
+        morph_phase = math.radians(self._angle1 * 1.5)
+        rot_phase = math.radians(self._angle1)
+        
+        for i in range(361):
+            rad = math.radians(i)
+            # radius oscillates creating a continuous wave
+            r = base_radius + amplitude * math.sin(freq * rad + morph_phase)
+            draw_rad = rad + rot_phase
+            
+            x = cx + r * math.cos(draw_rad)
+            y = cy + r * math.sin(draw_rad)
+            
+            if i == 0:
+                path.moveTo(x, y)
+            else:
+                path.lineTo(x, y)
+                
+        pen = QPen(palette.USER_NODE, 2.5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawPath(path)
+
+        # 3. Outer Dot Ring Comet (Modern Loading tail)
+        painter.setPen(Qt.PenStyle.NoPen)
+        num_dots = 18
+        outer_radius = 27
+        tail_length = 240  # Degrees the tail spans
+        
+        for i in range(num_dots):
+            dot_angle_deg = i * (360 / num_dots)
+            # angle2 (70 -> 430) drives the comet head
+            diff = (self._angle2 - dot_angle_deg) % 360
+            
+            if diff < tail_length:
+                # 1.0 at head, 0.0 at tail end
+                progress = 1.0 - (diff / tail_length)
+                # Curve the progress so the tail drops off elegantly
+                eased = progress ** 1.8 
+                
+                opacity = int(eased * 255)
+                size = 1.0 + (eased * 3.5)  # Size from 1.0 to 4.5
+                
+                rad = math.radians(dot_angle_deg)
+                x = cx + outer_radius * math.cos(rad)
+                y = cy + outer_radius * math.sin(rad)
+                
+                c = QColor(palette.SELECTION)
+                c.setAlpha(opacity)
+                painter.setBrush(c)
+                painter.drawEllipse(QPointF(x, y), size, size)
     
     @Property(float)
     def angle1(self): return self._angle1
