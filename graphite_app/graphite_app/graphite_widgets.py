@@ -5,6 +5,7 @@ import qtawesome as qta
 from PySide6.QtWidgets import (
     QGraphicsDropShadowEffect, QWidget, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QFrame, QGridLayout,
     QSizePolicy, QScrollArea, QSlider, QLineEdit, QGraphicsObject, QCheckBox, QMenu, QComboBox, QMainWindow,
+    QPlainTextEdit,
     QGraphicsItem
 )
 from PySide6.QtCore import Qt, Signal, QTimer, QPointF, Property, QParallelAnimationGroup, QPropertyAnimation, QEasingCurve, QRectF, QSize, QRect, QPoint
@@ -528,6 +529,75 @@ class SpellCheckLineEdit(QLineEdit):
         current_text = self.text()
         new_text = current_text[:start] + suggestion + current_text[end:]
         self.setText(new_text)
+
+class ChatInputTextEdit(QPlainTextEdit):
+    sendRequested = Signal()
+    largePasteDetected = Signal(str)
+
+    LARGE_PASTE_CHAR_THRESHOLD = 1400
+    LARGE_PASTE_LINE_THRESHOLD = 24
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._min_height = 40
+        self._max_height = 170
+        self.setFixedHeight(self._min_height)
+        self.setTabChangesFocus(False)
+        self.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.document().documentLayout().documentSizeChanged.connect(self._adjust_height)
+        self.textChanged.connect(self._adjust_height)
+
+    def text(self):
+        return self.toPlainText()
+
+    def setText(self, text):
+        self.setPlainText(text)
+        self._adjust_height()
+
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+                super().keyPressEvent(event)
+            elif not (
+                event.modifiers() & Qt.KeyboardModifier.ControlModifier
+                or event.modifiers() & Qt.KeyboardModifier.AltModifier
+                or event.modifiers() & Qt.KeyboardModifier.MetaModifier
+            ):
+                self.sendRequested.emit()
+                event.accept()
+            else:
+                super().keyPressEvent(event)
+            return
+        super().keyPressEvent(event)
+
+    def insertFromMimeData(self, source):
+        if source and source.hasText() and not source.hasUrls():
+            pasted_text = source.text()
+            if self._is_large_paste(pasted_text):
+                self.largePasteDetected.emit(pasted_text)
+                return
+        super().insertFromMimeData(source)
+
+    def _is_large_paste(self, pasted_text):
+        if not pasted_text:
+            return False
+        char_count = len(pasted_text)
+        line_count = pasted_text.count('\n') + 1
+        return (
+            char_count >= self.LARGE_PASTE_CHAR_THRESHOLD
+            or line_count >= self.LARGE_PASTE_LINE_THRESHOLD
+        )
+
+    def _adjust_height(self, *_):
+        doc_height = int(self.document().size().height())
+        frame_height = int(self.frameWidth()) * 2
+        target_height = max(self._min_height, min(self._max_height, doc_height + frame_height + 8))
+        self.setFixedHeight(target_height)
+        if doc_height + frame_height + 8 > self._max_height:
+            self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        else:
+            self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
 class LoadingAnimation(QGraphicsObject):
     def __init__(self, parent=None):
