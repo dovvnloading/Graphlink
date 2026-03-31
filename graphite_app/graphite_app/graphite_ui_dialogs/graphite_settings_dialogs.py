@@ -722,6 +722,13 @@ class AppearanceSettingsWidget(QWidget):
         self.show_token_counter_checkbox.setToolTip("Displays an overlay with token usage for the current session.")
         self.show_token_counter_checkbox.setChecked(self.settings_manager.get_show_token_counter())
         layout.addWidget(self.show_token_counter_checkbox)
+
+        self.enable_system_prompt_checkbox = QCheckBox("Enable Assistant System Prompt")
+        self.enable_system_prompt_checkbox.setToolTip(
+            "When disabled, Graphlink sends your messages without a system-role prompt."
+        )
+        self.enable_system_prompt_checkbox.setChecked(self.settings_manager.get_enable_system_prompt())
+        layout.addWidget(self.enable_system_prompt_checkbox)
         
         layout.addStretch()
 
@@ -738,6 +745,7 @@ class AppearanceSettingsWidget(QWidget):
         
         self.settings_manager.set_show_welcome_screen(self.show_welcome_checkbox.isChecked())
         self.settings_manager.set_show_token_counter(self.show_token_counter_checkbox.isChecked())
+        self.settings_manager.set_enable_system_prompt(self.enable_system_prompt_checkbox.isChecked())
 
         app = QApplication.instance()
         apply_theme(app, theme_name)
@@ -763,7 +771,7 @@ class SettingsCategoryButton(QPushButton):
 
 class SettingsDialog(QFrame):
     SECTION_DEFS = [
-        ("Appearance", "fa5s.palette", "Theme, welcome screen, and overlay controls."),
+        ("General", "fa5s.sliders-h", "General app preferences, visuals, startup behavior, and assistant defaults."),
         ("Ollama (Local)", "fa5s.microchip", "Choose your local model and reasoning mode."),
         ("API Endpoint", "fa5s.cloud", "Configure provider, keys, and per-task API models."),
         ("Integrations", "fa5s.plug", "Store optional tokens used by plugins such as GitHub-backed code review."),
@@ -871,7 +879,7 @@ class SettingsDialog(QFrame):
         self.integrations_tab = IntegrationsSettingsWidget(self.settings_manager)
 
         self.section_widgets = {
-            "Appearance": self.appearance_tab,
+            "General": self.appearance_tab,
             "Ollama (Local)": self.ollama_tab,
             "API Endpoint": self.api_tab,
             "Integrations": self.integrations_tab,
@@ -889,7 +897,7 @@ class SettingsDialog(QFrame):
 
         self._build_category_buttons()
         self._apply_panel_styles()
-        self.set_current_section("Appearance")
+        self.set_current_section("General")
 
     def _build_scroll_page(self, content_widget):
         scroll_area = QScrollArea()
@@ -1095,7 +1103,7 @@ class SettingsDialog(QFrame):
         elif mode_text == "API Endpoint":
             self.set_current_section("API Endpoint")
         else:
-            self.set_current_section("Appearance")
+            self.set_current_section("General")
 
     def show_for_anchor(self, anchor_widget):
         self._apply_panel_styles()
