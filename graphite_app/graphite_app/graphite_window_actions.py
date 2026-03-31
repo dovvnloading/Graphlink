@@ -157,7 +157,7 @@ class WindowActionsMixin:
             history,
             self.token_estimator,
             max_tokens=8000,
-            system_prompt_estimate=500,
+            system_prompt_estimate=500 if self.settings_manager.get_enable_system_prompt() else 0,
             reserve_tokens=input_tokens,
         )
         self.token_counter_widget.update_counts(input_tokens=input_tokens, context_tokens=context_tokens)
