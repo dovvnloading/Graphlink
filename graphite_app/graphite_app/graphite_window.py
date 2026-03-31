@@ -187,6 +187,8 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         self.agent = ChatAgent("Graphlink Assistant", current_prompt)
 
     def _get_current_system_prompt(self):
+        if not self.settings_manager.get_enable_system_prompt():
+            return ""
         reasoning_mode = self.settings_manager.get_ollama_reasoning_mode()
         if reasoning_mode == "Thinking":
             return THINKING_INSTRUCTIONS_PROMPT + BASE_SYSTEM_PROMPT
