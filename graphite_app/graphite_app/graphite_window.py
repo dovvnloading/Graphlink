@@ -7,6 +7,8 @@ from PySide6.QtCore import Qt, QSize, QPointF, QTimer
 from PySide6.QtGui import QKeySequence, QGuiApplication, QCursor, QShortcut, QIcon
 import qtawesome as qta
 import os
+import tempfile
+from datetime import datetime
 
 from graphite_widgets import PinOverlay, SearchOverlay, TokenCounterWidget, TokenEstimator
 from graphite_ui_components import NotificationBanner, DocumentViewerPanel
@@ -136,10 +138,11 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         self.attach_file_btn.setFixedSize(40, 40)
         self.attach_file_btn.clicked.connect(self.attach_file)
 
-        from graphite_widgets import SpellCheckLineEdit
-        self.message_input = SpellCheckLineEdit()
+        from graphite_widgets import ChatInputTextEdit
+        self.message_input = ChatInputTextEdit()
         self.message_input.setPlaceholderText("Type your message...")
-        self.message_input.returnPressed.connect(self.send_message)
+        self.message_input.sendRequested.connect(self.send_message)
+        self.message_input.largePasteDetected.connect(self._handle_large_paste_from_input)
         
         self.send_button = QPushButton(); self.send_button.setFixedSize(40, 40)
         input_layout.addWidget(self.attach_file_btn); input_layout.addWidget(self.message_input); input_layout.addWidget(self.send_button)
@@ -494,7 +497,7 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
                 "warning",
             )
 
-    def _stage_attachment_file(self, file_path):
+    def _stage_attachment_file(self, file_path, is_temp=False, display_name=None):
         if not file_path or not os.path.isfile(file_path):
             return "rejected"
 
@@ -515,7 +518,8 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         self.pending_attachments.append({
             'path': normalized_path,
             'kind': attachment_kind,
-            'name': os.path.basename(normalized_path),
+            'name': display_name or os.path.basename(normalized_path),
+            'is_temp': bool(is_temp),
         })
         self._refresh_attachment_button()
         return "added"
@@ -551,8 +555,52 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         self.attach_file_btn.setToolTip("\n".join(tooltip_lines))
 
     def clear_attachment(self):
+        for item in self.pending_attachments:
+            if not item.get('is_temp'):
+                continue
+            temp_path = item.get('path')
+            if temp_path and os.path.isfile(temp_path):
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass
         self.pending_attachments = []
         self._refresh_attachment_button()
+
+    def _handle_large_paste_from_input(self, pasted_text):
+        stage_result = self._stage_large_paste_as_attachment(pasted_text)
+        if stage_result == "added":
+            self.notification_banner.show_message(
+                "Large paste captured as an attachment. Add instructions and send.",
+                4500,
+                "success",
+            )
+            return
+
+        self.message_input.insertPlainText(pasted_text)
+        self.notification_banner.show_message(
+            "Could not stage large paste as an attachment. Inserted into input instead.",
+            6000,
+            "warning",
+        )
+
+    def _stage_large_paste_as_attachment(self, pasted_text):
+        if not pasted_text or not pasted_text.strip():
+            return "rejected"
+
+        base_dir = os.path.join(tempfile.gettempdir(), "graphite_paste_attachments")
+        try:
+            os.makedirs(base_dir, exist_ok=True)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            temp_file_path = os.path.join(base_dir, f"pasted_text_{timestamp}.txt")
+            with open(temp_file_path, "w", encoding="utf-8", errors="ignore") as temp_file:
+                temp_file.write(pasted_text)
+
+            line_count = pasted_text.count("\n") + 1
+            preview_name = f"Pasted Text ({line_count} lines).txt"
+            return self._stage_attachment_file(temp_file_path, is_temp=True, display_name=preview_name)
+        except OSError:
+            return "rejected"
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
