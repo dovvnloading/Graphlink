@@ -1,6 +1,6 @@
 from PySide6.QtWidgets import (
     QGraphicsView, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSlider, QPushButton,
-    QApplication, QLineEdit, QTextEdit, QGraphicsProxyWidget
+    QApplication, QLineEdit, QTextEdit, QPlainTextEdit, QGraphicsProxyWidget
 )
 from PySide6.QtCore import Qt, QPointF, QRectF, QTimer, QRect
 from PySide6.QtGui import QPainter, QColor, QBrush, QPen, QGuiApplication
@@ -484,7 +484,7 @@ class ChatView(QGraphicsView):
             return
 
         # A global check for any text input field in the app having focus.
-        if isinstance(QApplication.focusWidget(), (QLineEdit, QTextEdit)):
+        if isinstance(QApplication.focusWidget(), (QLineEdit, QTextEdit, QPlainTextEdit)):
             super().keyPressEvent(event)
             return
 
