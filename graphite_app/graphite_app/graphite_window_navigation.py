@@ -1,3 +1,4 @@
+
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QKeySequence, QCursor, QShortcut
 from graphite_node import ChatNode, CodeNode, DocumentNode, ImageNode, ThinkingNode
