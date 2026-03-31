@@ -43,6 +43,8 @@ class SettingsManager:
                     state['github_access_token'] = ''
                 if 'api_models' not in state:
                     state['api_models'] = {}
+                if 'enable_system_prompt' not in state:
+                    state['enable_system_prompt'] = True
                 return state
         except (json.JSONDecodeError, IOError):
             return self._create_initial_state()
@@ -60,7 +62,8 @@ class SettingsManager:
             "openai_api_key": "",
             "gemini_api_key": "",
             "github_access_token": "",
-            "api_models": {}
+            "api_models": {},
+            "enable_system_prompt": True,
         }
         self._save_state(state)
         return state
@@ -92,6 +95,13 @@ class SettingsManager:
 
     def set_show_token_counter(self, show: bool):
         self.state['show_token_counter'] = show
+        self._save_state()
+
+    def get_enable_system_prompt(self):
+        return self.state.get("enable_system_prompt", True)
+
+    def set_enable_system_prompt(self, enabled: bool):
+        self.state["enable_system_prompt"] = bool(enabled)
         self._save_state()
 
     def get_ollama_chat_model(self):
