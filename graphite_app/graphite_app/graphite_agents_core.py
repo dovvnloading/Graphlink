@@ -80,8 +80,9 @@ class ChatWorker:
             Exception: Propagates exceptions from the API provider.
         """
         final_system_prompt = self.system_prompt
+        use_system_prompt = bool((self.system_prompt or "").strip())
 
-        if current_node:
+        if use_system_prompt and current_node:
             # Traverse up the node hierarchy to find the root of the current branch.
             root_node = current_node
             while root_node.parent_node:
@@ -97,8 +98,12 @@ class ChatWorker:
                         break
 
         try:
-            system_msg = {'role': 'system', 'content': final_system_prompt}
-            sys_tokens = self.token_estimator.count_tokens(json.dumps(system_msg))
+            sys_tokens = 0
+            messages = []
+            if use_system_prompt:
+                system_msg = {'role': 'system', 'content': final_system_prompt}
+                sys_tokens = self.token_estimator.count_tokens(json.dumps(system_msg))
+                messages.append(system_msg)
             trimmed_history, _ = trim_history(
                 conversation_history,
                 self.token_estimator,
@@ -106,10 +111,7 @@ class ChatWorker:
                 system_prompt_estimate=sys_tokens,
             )
 
-            messages = [
-                system_msg,
-                *trimmed_history
-            ]
+            messages.extend(trimmed_history)
             
             response = api_provider.chat(task=config.TASK_CHAT, messages=messages)
             ai_message = response['message']['content']
