@@ -10,7 +10,7 @@ import graphite_config as config
 from graphite_styles import THEMES
 
 class AboutDialog(QDialog):
-    """A dialog displaying application information."""
+    """A premium dialog displaying application information, developer credits, and external links."""
     def __init__(self, parent=None):
         super().__init__(parent)
 
@@ -21,42 +21,157 @@ class AboutDialog(QDialog):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self.setModal(True)
-        self.resize(400, 250)
-        self.on_theme_changed()
+        self.resize(420, 420)
         
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(20, 20, 20, 20)
+        main_layout.setContentsMargins(30, 30, 30, 30)
         main_layout.setSpacing(15)
 
+        # --- Header Section ---
         app_title = QLabel("Graphlink")
-        app_title.setStyleSheet("font-size: 18px; font-weight: bold; color: #2ecc71;")
-        main_layout.addWidget(app_title, alignment=Qt.AlignmentFlag.AlignCenter)
+        app_title.setObjectName("aboutTitle")
+        app_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        main_layout.addWidget(app_title)
 
-        dev_label = QLabel("Developed by: Matthew Wesney")
-        dev_label.setStyleSheet("font-size: 14px;")
-        main_layout.addWidget(dev_label, alignment=Qt.AlignmentFlag.AlignCenter)
+        version_label = QLabel("Version Beta-0.5.3")
+        version_label.setObjectName("aboutVersion")
+        version_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        main_layout.addWidget(version_label)
         
-        contact_label = QLabel("Contact: dev.graphlink@gmail.com")
-        contact_label.setStyleSheet("font-size: 12px;")
-        main_layout.addWidget(contact_label, alignment=Qt.AlignmentFlag.AlignCenter)
+        # --- Divider ---
+        divider = QFrame()
+        divider.setFrameShape(QFrame.Shape.HLine)
+        divider.setStyleSheet("background-color: rgba(255, 255, 255, 0.1); max-height: 1px; margin: 10px 0px;")
+        main_layout.addWidget(divider)
 
-        github_link = QLabel('<a href="https://github.com/dovvnloading/Graphlink" style="color: #3498db; text-decoration: none;">View on GitHub</a>')
-        github_link.setOpenExternalLinks(False)
-        github_link.linkActivated.connect(lambda url: webbrowser.open(url))
-        main_layout.addWidget(github_link, alignment=Qt.AlignmentFlag.AlignCenter)
+        # --- Links & Credits Section ---
+        links_layout = QVBoxLayout()
+        links_layout.setSpacing(8)
+
+        def create_link_btn(icon_name, text, url):
+            btn = QPushButton(qta.icon(icon_name, color='#f3f5f8'), text)
+            btn.setObjectName("aboutLinkBtn")
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.clicked.connect(lambda: webbrowser.open(url))
+            return btn
+
+        # Project Info
+        project_label = QLabel("PROJECT")
+        project_label.setObjectName("aboutSectionLabel")
+        links_layout.addWidget(project_label)
         
+        repo_btn = create_link_btn('fa5b.github', "  Graphlink Repository", "https://github.com/dovvnloading/Graphlink")
+        links_layout.addWidget(repo_btn)
+
+        links_layout.addSpacing(16)
+
+        # Developer Info
+        dev_label = QLabel("DEVELOPED BY")
+        dev_label.setObjectName("aboutSectionLabel")
+        links_layout.addWidget(dev_label)
+
+        name_label = QLabel("Matthew Robert Wesney")
+        name_label.setObjectName("aboutDevName")
+        links_layout.addWidget(name_label)
+
+        web_btn = create_link_btn('fa5s.globe', "  Personal Webpage", "https://mattwesney.com")
+        gh_btn = create_link_btn('fa5b.github', "  Personal GitHub", "https://github.com/dovvnloading")
+
+        links_layout.addWidget(web_btn)
+        links_layout.addWidget(gh_btn)
+
+        # Container to constrain button widths cleanly
+        links_container = QWidget()
+        links_container.setLayout(links_layout)
+        links_container.setContentsMargins(30, 0, 30, 0)
+        main_layout.addWidget(links_container)
+
         main_layout.addStretch()
+
+        # --- Footer Section ---
+        footer_layout = QHBoxLayout()
         
-        button_layout = QHBoxLayout()
-        button_layout.addStretch()
+        copyright_label = QLabel("© 2026")
+        copyright_label.setObjectName("aboutCopyright")
+        footer_layout.addWidget(copyright_label, alignment=Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignLeft)
+        
+        footer_layout.addStretch()
+
         close_button = QPushButton("Close")
+        close_button.setObjectName("aboutCloseBtn")
+        close_button.setFixedSize(100, 32)
+        close_button.setCursor(Qt.CursorShape.PointingHandCursor)
         close_button.clicked.connect(self.accept)
-        button_layout.addWidget(close_button)
-        button_layout.addStretch()
-        main_layout.addLayout(button_layout)
+        footer_layout.addWidget(close_button, alignment=Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignRight)
+
+        main_layout.addLayout(footer_layout)
+
+        self.on_theme_changed()
 
     def on_theme_changed(self):
-        self.setStyleSheet(THEMES[config.CURRENT_THEME]["stylesheet"])
+        """Applies the current theme's stylesheet dynamically to the dialog."""
+        palette = config.get_current_palette()
+        accent = palette.SELECTION.name()
+        
+        self.setStyleSheet(f"""
+            QDialog {{
+                background-color: #1e1e1e;
+            }}
+            QLabel#aboutTitle {{
+                font-size: 26px;
+                font-weight: 900;
+                color: {accent};
+                letter-spacing: 1px;
+            }}
+            QLabel#aboutVersion {{
+                font-size: 12px;
+                color: #888888;
+            }}
+            QLabel#aboutSectionLabel {{
+                color: #8d8d8d;
+                font-size: 10px;
+                font-weight: 700;
+                letter-spacing: 0.1em;
+                margin-left: 2px;
+            }}
+            QLabel#aboutDevName {{
+                color: #e0e0e0;
+                font-size: 13px;
+                font-weight: 600;
+                margin-left: 2px;
+                margin-bottom: 4px;
+            }}
+            QPushButton#aboutLinkBtn {{
+                background-color: rgba(255, 255, 255, 0.05);
+                border: 1px solid rgba(255, 255, 255, 0.1);
+                border-radius: 6px;
+                color: #f3f5f8;
+                font-size: 12px;
+                font-weight: 600;
+                padding: 10px;
+                text-align: left;
+                padding-left: 20px;
+            }}
+            QPushButton#aboutLinkBtn:hover {{
+                background-color: rgba(255, 255, 255, 0.1);
+                border-color: rgba(255, 255, 255, 0.2);
+            }}
+            QLabel#aboutCopyright {{
+                font-size: 11px;
+                color: #666666;
+            }}
+            QPushButton#aboutCloseBtn {{
+                background-color: {accent};
+                color: #ffffff;
+                border: none;
+                border-radius: 6px;
+                font-size: 12px;
+                font-weight: 700;
+            }}
+            QPushButton#aboutCloseBtn:hover {{
+                background-color: {palette.SELECTION.lighter(110).name()};
+            }}
+        """)
 
 
 class HelpCategoryButton(QPushButton):
