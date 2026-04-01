@@ -413,16 +413,21 @@ class ChatNode(QGraphicsItem, HoverAnimationMixin):
         elif self.hovered:
             pen = QPen(QColor("#ffffff"), 2)
 
-        painter.setPen(pen)
+        painter.setPen(Qt.PenStyle.NoPen)
         painter.drawPath(path)
 
         painter.save()
         painter.setClipPath(path)
         accent_fill = colors["accent"]
-        accent_fill.setAlpha(160)
+        accent_fill.setAlpha(140)
         painter.setBrush(accent_fill)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawRect(QRectF(0, 0, 5, current_height))
+        # Keep the accent strip in the body section only so it doesn't
+        # visually compete with the top header.
+        accent_top = self.HEADER_HEIGHT + 1
+        accent_height = max(0.0, current_height - accent_top - 1)
+        if accent_height > 0:
+            painter.drawRect(QRectF(0, accent_top, 5, accent_height))
         painter.restore()
 
         painter.setBrush(colors["accent"])
@@ -459,6 +464,12 @@ class ChatNode(QGraphicsItem, HoverAnimationMixin):
             self._paint_collapse_button(painter, button_x)
         else:
             self.collapse_button_rect = QRectF()
+
+        # Keep the node border in the top paint layer so the header never
+        # visually sits above the outline.
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawPath(path)
 
         if self.is_last_navigated:
             highlight_pen = QPen(palette.NAV_HIGHLIGHT, 2.5, Qt.PenStyle.DashLine)
@@ -566,14 +577,14 @@ class ChatNode(QGraphicsItem, HoverAnimationMixin):
         if change == QGraphicsItem.ItemSceneHasChanged and self.scene():
             self._setup_document()
         if change == QGraphicsItem.ItemPositionChange and self.scene():
-            self.scene().nodeMoved(self)
-
             parent = self.parentItem()
             if parent and isinstance(parent, Container):
                 parent.updateGeometry()
 
             if self.scene().is_dragging_item:
                 return self.scene().snap_position(self, value)
+        if change == QGraphicsItem.ItemPositionHasChanged and self.scene():
+            self.scene().nodeMoved(self)
         return super().itemChange(change, value)
 
     def update_content(self, new_content):
