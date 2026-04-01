@@ -130,7 +130,10 @@ class WindowActionsMixin:
                     continue
 
                 file_name = attachment.get('name') or os.path.basename(attachment_path)
-                doc_content, error = self.file_handler.read_file(attachment_path)
+                doc_content = attachment.get('content')
+                error = None
+                if doc_content is None:
+                    doc_content, error = self.file_handler.read_file(attachment_path)
                 if error:
                     self.handle_error(error)
                     user_node.scene().delete_chat_node(user_node)
