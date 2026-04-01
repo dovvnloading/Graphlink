@@ -457,14 +457,19 @@ class ChatView(QGraphicsView):
             self.viewport().setCursor(Qt.CursorShape.ArrowCursor)
             event.accept()
         else:
-            is_dragging = False
-            if self.scene():
-                is_dragging = self.scene().is_rubber_band_dragging
+            scene = self.scene()
+            is_dragging = bool(scene and scene.is_rubber_band_dragging)
+            was_item_dragging = bool(scene and scene.is_dragging_item)
             
             super().mouseReleaseEvent(event)
             
-            if is_dragging and self.scene():
-                self.scene().is_rubber_band_dragging = False
+            if scene:
+                if is_dragging:
+                    scene.is_rubber_band_dragging = False
+                if was_item_dragging:
+                    scene.is_dragging_item = False
+                    scene._clear_smart_guides()
+                    scene.update_connections()
 
     def _handle_key_pan(self):
         """
@@ -564,6 +569,17 @@ class ChatView(QGraphicsView):
                 self.viewport().update()
         super().keyReleaseEvent(event)
 
+    def _scrollable_item_at(self, position):
+        item = self.itemAt(position)
+        while item is not None:
+            if isinstance(item, (ChatNode, DocumentNode)):
+                scrollbar = getattr(item, "scrollbar", None)
+                if scrollbar and scrollbar.isVisible() and not getattr(item, "is_collapsed", False):
+                    return item
+                return None
+            item = item.parentItem()
+        return None
+
     def wheelEvent(self, event):
         """
         Handles mouse wheel events for zooming or scrolling the view/items.
@@ -583,12 +599,7 @@ class ChatView(QGraphicsView):
             return
 
         # Check if the item under the cursor is scrollable (e.g., a ChatNode with overflow).
-        item = self.itemAt(event.position().toPoint())
-        is_item_scrollable = (
-            isinstance(item, (ChatNode, DocumentNode)) and
-            not item.is_collapsed and
-            item.scrollbar.isVisible()
-        )
+        is_item_scrollable = self._scrollable_item_at(event.position().toPoint()) is not None
 
         if is_item_scrollable:
             # Pass the event to the item for internal scrolling.
