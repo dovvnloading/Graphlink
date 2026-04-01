@@ -105,6 +105,7 @@ class ChatView(QGraphicsView):
         self._controls_overlay_visible = False
 
         self._initial_show = True
+        self._file_drag_active = False
         
     def _clear_nav_highlight(self):
         """Removes the navigation highlight from the previously navigated node."""
@@ -173,16 +174,27 @@ class ChatView(QGraphicsView):
     def dragEnterEvent(self, event):
         """Accepts drag events if they contain file URLs."""
         if event.mimeData().hasUrls():
+            self._file_drag_active = True
             event.acceptProposedAction()
         else:
+            self._file_drag_active = False
             event.ignore()
 
     def dragMoveEvent(self, event):
         """Accepts drag move events with file URLs."""
         if event.mimeData().hasUrls():
+            self._file_drag_active = True
             event.acceptProposedAction()
         else:
             event.ignore()
+
+    def dragLeaveEvent(self, event):
+        """
+        Clears local drag state and accepts the leave to avoid noisy Qt warnings
+        when the platform delivers leave events during target transitions.
+        """
+        self._file_drag_active = False
+        event.accept()
 
     def dropEvent(self, event):
         """
@@ -195,7 +207,10 @@ class ChatView(QGraphicsView):
             file_paths = [url.toLocalFile() for url in event.mimeData().urls() if url.isLocalFile()]
             if file_paths and hasattr(self.window, 'stage_dropped_files'):
                 self.window.stage_dropped_files(file_paths)
-        event.acceptProposedAction()
+            self._file_drag_active = False
+            event.acceptProposedAction()
+            return
+        event.ignore()
 
     def _setup_drag_control(self):
         """Initializes the UI for the pan speed control widget."""
