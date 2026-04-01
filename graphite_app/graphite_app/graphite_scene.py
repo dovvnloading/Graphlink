@@ -154,7 +154,17 @@ class ChatScene(QGraphicsScene):
             self.update()
 
     def update_connection_visibility(self):
-        connection_lists = [
+        connection_lists = self._all_connection_lists()
+
+        for conn_list in connection_lists:
+            for conn in conn_list:
+                if hasattr(conn, "sync_visibility_mode"):
+                    conn.sync_visibility_mode()
+                else:
+                    conn.update()
+
+    def _all_connection_lists(self):
+        return [
             self.connections,
             self.content_connections,
             self.document_connections,
@@ -176,12 +186,21 @@ class ChatScene(QGraphicsScene):
             self.gitlink_connections,
         ]
 
-        for conn_list in connection_lists:
-            for conn in conn_list:
-                if hasattr(conn, "sync_visibility_mode"):
-                    conn.sync_visibility_mode()
-                else:
-                    conn.update()
+    def _remove_connections_for_node(self, node, connection_lists=None):
+        lists_to_scan = connection_lists if connection_lists is not None else self._all_connection_lists()
+        for conn_list in lists_to_scan:
+            for conn in conn_list[:]:
+                try:
+                    if node not in (conn.start_node, conn.end_node):
+                        continue
+                except RuntimeError:
+                    # If the underlying C++ object is already gone, remove the wrapper.
+                    pass
+
+                if conn.scene() == self:
+                    self.removeItem(conn)
+                if conn in conn_list:
+                    conn_list.remove(conn)
 
     def _update_all_node_fonts(self):
         """Iterates through all nodes that support font changes and applies the current settings."""
@@ -1079,27 +1098,7 @@ class ChatScene(QGraphicsScene):
                     child.parent_node = None
             
             # Remove all connections attached to the deleted node.
-            all_conn_lists = [
-                self.system_prompt_connections,
-                self.connections,
-                self.group_summary_connections,
-                self.pycoder_connections,
-                self.code_sandbox_connections,
-                self.web_connections,
-                self.conversation_connections,
-                self.reasoning_connections,
-                self.html_connections,
-                self.artifact_connections,
-                self.workflow_connections,
-                self.quality_gate_connections,
-                self.code_review_connections,
-                self.gitlink_connections,
-            ]
-            for conn_list in all_conn_lists:
-                for conn in conn_list[:]:
-                    if node_to_delete in (conn.start_node, conn.end_node):
-                        self.removeItem(conn)
-                        if conn in conn_list: conn_list.remove(conn)
+            self._remove_connections_for_node(node_to_delete)
 
             node_to_delete.children.clear()
             node_to_delete.parent_node = None
@@ -1177,8 +1176,7 @@ class ChatScene(QGraphicsScene):
                 self._remove_associated_chart_nodes(item)
                 self._remove_graph_diffs_for_source(item)
                 if item.parent_node and item in item.parent_node.children: item.parent_node.children.remove(item)
-                for conn in self.pycoder_connections[:]:
-                    if conn.end_node == item: self.removeItem(conn); self.pycoder_connections.remove(conn)
+                self._remove_connections_for_node(item)
                 if hasattr(item, "dispose"): item.dispose()
                 self.removeItem(item)
                 if item in self.pycoder_nodes: self.pycoder_nodes.remove(item)
@@ -1186,8 +1184,7 @@ class ChatScene(QGraphicsScene):
                 self._remove_associated_chart_nodes(item)
                 self._remove_graph_diffs_for_source(item)
                 if item.parent_node and item in item.parent_node.children: item.parent_node.children.remove(item)
-                for conn in self.code_sandbox_connections[:]:
-                    if conn.end_node == item: self.removeItem(conn); self.code_sandbox_connections.remove(conn)
+                self._remove_connections_for_node(item)
                 if hasattr(item, "dispose"): item.dispose()
                 self.removeItem(item)
                 if item in self.code_sandbox_nodes: self.code_sandbox_nodes.remove(item)
@@ -1195,48 +1192,42 @@ class ChatScene(QGraphicsScene):
                 self._remove_associated_chart_nodes(item)
                 self._remove_graph_diffs_for_source(item)
                 if item.parent_node and item in item.parent_node.children: item.parent_node.children.remove(item)
-                for conn in self.web_connections[:]:
-                    if conn.end_node == item: self.removeItem(conn); self.web_connections.remove(conn)
+                self._remove_connections_for_node(item)
                 self.removeItem(item)
                 if item in self.web_nodes: self.web_nodes.remove(item)
             elif isinstance(item, ConversationNode):
                 self._remove_associated_chart_nodes(item)
                 self._remove_graph_diffs_for_source(item)
                 if item.parent_node and item in item.parent_node.children: item.parent_node.children.remove(item)
-                for conn in self.conversation_connections[:]:
-                    if conn.end_node == item: self.removeItem(conn); self.conversation_connections.remove(conn)
+                self._remove_connections_for_node(item)
                 self.removeItem(item)
                 if item in self.conversation_nodes: self.conversation_nodes.remove(item)
             elif isinstance(item, ReasoningNode):
                 self._remove_associated_chart_nodes(item)
                 self._remove_graph_diffs_for_source(item)
                 if item.parent_node and item in item.parent_node.children: item.parent_node.children.remove(item)
-                for conn in self.reasoning_connections[:]:
-                    if conn.end_node == item: self.removeItem(conn); self.reasoning_connections.remove(conn)
+                self._remove_connections_for_node(item)
                 self.removeItem(item)
                 if item in self.reasoning_nodes: self.reasoning_nodes.remove(item)
             elif isinstance(item, HtmlViewNode):
                 self._remove_associated_chart_nodes(item)
                 self._remove_graph_diffs_for_source(item)
                 if item.parent_node and item in item.parent_node.children: item.parent_node.children.remove(item)
-                for conn in self.html_connections[:]:
-                    if conn.end_node == item: self.removeItem(conn); self.html_connections.remove(conn)
+                self._remove_connections_for_node(item)
                 self.removeItem(item)
                 if item in self.html_view_nodes: self.html_view_nodes.remove(item)
             elif isinstance(item, ArtifactNode):
                 self._remove_associated_chart_nodes(item)
                 self._remove_graph_diffs_for_source(item)
                 if item.parent_node and item in item.parent_node.children: item.parent_node.children.remove(item)
-                for conn in self.artifact_connections[:]:
-                    if conn.end_node == item: self.removeItem(conn); self.artifact_connections.remove(conn)
+                self._remove_connections_for_node(item)
                 self.removeItem(item)
                 if item in self.artifact_nodes: self.artifact_nodes.remove(item)
             elif isinstance(item, WorkflowNode):
                 self._remove_associated_chart_nodes(item)
                 self._remove_graph_diffs_for_source(item)
                 if item.parent_node and item in item.parent_node.children: item.parent_node.children.remove(item)
-                for conn in self.workflow_connections[:]:
-                    if conn.end_node == item: self.removeItem(conn); self.workflow_connections.remove(conn)
+                self._remove_connections_for_node(item)
                 self.removeItem(item)
                 if item in self.workflow_nodes: self.workflow_nodes.remove(item)
             elif isinstance(item, QualityGateNode):
@@ -1244,8 +1235,7 @@ class ChatScene(QGraphicsScene):
                 self._remove_graph_diffs_for_source(item)
                 worker_thread = getattr(item, "worker_thread", None)
                 if item.parent_node and item in item.parent_node.children: item.parent_node.children.remove(item)
-                for conn in self.quality_gate_connections[:]:
-                    if item in (conn.start_node, conn.end_node): self.removeItem(conn); self.quality_gate_connections.remove(conn)
+                self._remove_connections_for_node(item)
                 if hasattr(item, "dispose"): item.dispose()
                 self.removeItem(item)
                 if item in self.quality_gate_nodes: self.quality_gate_nodes.remove(item)
@@ -1259,8 +1249,7 @@ class ChatScene(QGraphicsScene):
                 self._remove_graph_diffs_for_source(item)
                 worker_thread = getattr(item, "worker_thread", None)
                 if item.parent_node and item in item.parent_node.children: item.parent_node.children.remove(item)
-                for conn in self.code_review_connections[:]:
-                    if item in (conn.start_node, conn.end_node): self.removeItem(conn); self.code_review_connections.remove(conn)
+                self._remove_connections_for_node(item)
                 if hasattr(item, "dispose"): item.dispose()
                 self.removeItem(item)
                 if item in self.code_review_nodes: self.code_review_nodes.remove(item)
@@ -1274,8 +1263,7 @@ class ChatScene(QGraphicsScene):
                 self._remove_graph_diffs_for_source(item)
                 worker_thread = getattr(item, "worker_thread", None)
                 if item.parent_node and item in item.parent_node.children: item.parent_node.children.remove(item)
-                for conn in self.gitlink_connections[:]:
-                    if item in (conn.start_node, conn.end_node): self.removeItem(conn); self.gitlink_connections.remove(conn)
+                self._remove_connections_for_node(item)
                 if hasattr(item, "dispose"): item.dispose()
                 self.removeItem(item)
                 if item in self.gitlink_nodes: self.gitlink_nodes.remove(item)
@@ -1302,6 +1290,7 @@ class ChatScene(QGraphicsScene):
                 if hasattr(self.window, 'pin_overlay') and self.window.pin_overlay: self.window.pin_overlay.remove_pin(item)
                 if item in self.pins: self.pins.remove(item)
                 self.removeItem(item)
+        self.update_connections()
         self.scene_changed.emit()
 
     def _clear_smart_guides(self):
