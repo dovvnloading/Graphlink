@@ -1,4 +1,4 @@
-﻿"""Pin-related flyout widgets and placeholders."""
+﻿"""Pin-related flyout widgets and placeholders."""  
 
 import qtawesome as qta
 from PySide6.QtCore import QPoint, Qt, Signal
