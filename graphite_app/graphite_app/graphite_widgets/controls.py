@@ -1,4 +1,4 @@
-﻿"""Floating controls for font and grid configuration."""
+﻿"""Floating controls for font and grid configuration.""" 
 
 import qtawesome as qta
 from PySide6.QtCore import Qt, Signal
