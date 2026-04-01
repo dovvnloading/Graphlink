@@ -23,6 +23,7 @@ import graphite_config as config
 from graphite_canvas_items import HoverAnimationMixin
 from graphite_config import get_current_palette, get_semantic_color
 from graphite_connections import ConnectionItem
+from graphite_plugin_context_menu import PluginNodeContextMenu
 
 
 WORKFLOW_PLUGIN_ICONS = {
@@ -1029,6 +1030,10 @@ class WorkflowNode(QGraphicsObject, HoverAnimationMixin):
             if hasattr(self.scene(), "window"):
                 self.scene().window.setCurrentNode(self)
         super().mousePressEvent(event)
+
+    def contextMenuEvent(self, event):
+        menu = PluginNodeContextMenu(self)
+        menu.exec(event.screenPos())
 
     def mouseReleaseEvent(self, event):
         if self.scene():
