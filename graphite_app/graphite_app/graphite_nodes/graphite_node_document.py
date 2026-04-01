@@ -27,6 +27,7 @@ class DocumentNode(QGraphicsItem, HoverAnimationMixin):
         self.setAcceptHoverEvents(True)
         self.hovered = False
         self.is_search_match = False
+        self.is_collapsed = False
 
         self.width = 500
 
@@ -181,14 +182,14 @@ class DocumentNode(QGraphicsItem, HoverAnimationMixin):
         if change == QGraphicsItem.ItemSceneHasChanged and self.scene():
             self._setup_document()
         if change == QGraphicsItem.ItemPositionChange and self.scene():
-            self.scene().nodeMoved(self)
-
             parent = self.parentItem()
             if parent and isinstance(parent, Container):
                 parent.updateGeometry()
 
             if self.scene().is_dragging_item:
                 return self.scene().snap_position(self, value)
+        if change == QGraphicsItem.ItemPositionHasChanged and self.scene():
+            self.scene().nodeMoved(self)
         return super().itemChange(change, value)
 
 
