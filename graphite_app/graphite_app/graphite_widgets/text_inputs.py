@@ -1,13 +1,12 @@
-﻿"""Text input widgets and attachment pills for chat composition."""
+"""Text input widgets and attachment pills for chat composition."""
 
 import re
 
 import qtawesome as qta
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QRectF, Qt, Signal
 from PySide6.QtGui import QAction, QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QFrame,
-    QGraphicsDropShadowEffect,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -155,6 +154,7 @@ class _BlackHoleEditor(QPlainTextEdit):
     textDropped = Signal(str)
     heightAdjusted = Signal(int)
     dragStateChanged = Signal(bool)
+    focusChanged = Signal(bool)
 
     LARGE_PASTE_CHAR_THRESHOLD = 1400
     LARGE_PASTE_LINE_THRESHOLD = 24
@@ -187,6 +187,14 @@ class _BlackHoleEditor(QPlainTextEdit):
                 super().keyPressEvent(event)
             return
         super().keyPressEvent(event)
+
+    def focusInEvent(self, event):
+        self.focusChanged.emit(True)
+        super().focusInEvent(event)
+
+    def focusOutEvent(self, event):
+        self.focusChanged.emit(False)
+        super().focusOutEvent(event)
 
     def insertFromMimeData(self, source):
         if source and source.hasText() and not source.hasUrls():
@@ -266,6 +274,41 @@ class _BlackHoleEditor(QPlainTextEdit):
         else:
             self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.heightAdjusted.emit(target_height)
+
+
+class ComposerSurface(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._radius = 14.0
+        self._background = QColor("#2a2a2a")
+        self._border = QColor("#3f3f3f")
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAutoFillBackground(False)
+
+    def set_colors(self, background: QColor, border: QColor):
+        self._background = QColor(background)
+        self._border = QColor(border)
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+
+        rect = QRectF(self.rect())
+        rect.adjust(1.0, 1.0, -1.0, -1.0)
+
+        fill_path = QPainterPath()
+        fill_path.addRoundedRect(rect, self._radius, self._radius)
+        painter.fillPath(fill_path, self._background)
+
+        if self._border.alpha() > 0:
+            pen = QPen(self._border)
+            pen.setWidthF(1.25)
+            pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawPath(fill_path)
 
 
 class ContextAttachmentPill(QFrame):
@@ -382,28 +425,25 @@ class ChatInputTextEdit(QWidget):
     filesDropped = Signal(list)
     textDropped = Signal(str)
     attachmentRemoved = Signal(str)
+    composerHeightChanged = Signal(int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._drop_active = False
+        self._is_focused = False
         self._context_items = []
         self.setObjectName("blackHoleComposer")
         self.setAcceptDrops(True)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setAutoFillBackground(False)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
 
         outer_layout = QVBoxLayout(self)
         outer_layout.setContentsMargins(0, 0, 0, 0)
-        outer_layout.setSpacing(0)
+        outer_layout.setSpacing(6)
 
-        self.surface = QFrame(self)
-        self.surface.setObjectName("blackHoleSurface")
-        outer_layout.addWidget(self.surface)
-
-        surface_layout = QVBoxLayout(self.surface)
-        surface_layout.setContentsMargins(8, 6, 8, 6)
-        surface_layout.setSpacing(4)
-
-        self.pill_scroll = QScrollArea(self.surface)
+        self.pill_scroll = QScrollArea(self)
         self.pill_scroll.setObjectName("blackHolePillStrip")
         self.pill_scroll.setWidgetResizable(True)
         self.pill_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
@@ -419,15 +459,28 @@ class ChatInputTextEdit(QWidget):
         self.pill_layout.setSpacing(6)
         self.pill_layout.addStretch(1)
         self.pill_scroll.setWidget(self.pill_host)
-        surface_layout.addWidget(self.pill_scroll)
+        outer_layout.addWidget(self.pill_scroll)
+
+        self.surface = ComposerSurface(self)
+        self.surface.setObjectName("blackHoleSurface")
+        self.surface.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        outer_layout.addWidget(self.surface)
+
+        surface_layout = QVBoxLayout(self.surface)
+        surface_layout.setContentsMargins(10, 7, 10, 7)
+        surface_layout.setSpacing(0)
 
         self.editor = _BlackHoleEditor(self.surface)
+        self.editor.setFrameStyle(QFrame.Shape.NoFrame)
+        self.editor.viewport().setAutoFillBackground(False)
+        self.editor.viewport().setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.editor.sendRequested.connect(self.sendRequested.emit)
         self.editor.largePasteDetected.connect(self.largePasteDetected.emit)
         self.editor.filesDropped.connect(self.filesDropped.emit)
         self.editor.textDropped.connect(self.textDropped.emit)
         self.editor.heightAdjusted.connect(self._sync_height)
         self.editor.dragStateChanged.connect(self._set_drop_active)
+        self.editor.focusChanged.connect(self._set_editor_focused)
         surface_layout.addWidget(self.editor)
 
         self._apply_styles()
@@ -546,54 +599,63 @@ class ChatInputTextEdit(QWidget):
         self._drop_active = bool(active)
         self._apply_styles()
 
+    def _set_editor_focused(self, focused):
+        self._is_focused = bool(focused)
+        self._apply_styles()
+
     def _sync_height(self, *_):
-        pills_height = self.pill_scroll.height() if self.pill_scroll.isVisible() else 0
-        total_height = self.editor.height() + pills_height + 16
+        pills_height = 0
+        if self._context_items:
+            pills_height = max(self.pill_scroll.height(), self.pill_scroll.sizeHint().height(), 34)
+        surface_height = max(50, self.editor.height() + 14)
+        self.surface.setFixedHeight(surface_height)
+        total_height = surface_height + pills_height
+        if pills_height:
+            total_height += 6
         self.setFixedHeight(total_height)
         self.updateGeometry()
+        self.composerHeightChanged.emit(total_height)
+
+    def paintEvent(self, event):
+        # Keep the outer composer shell transparent so only the rounded surface paints.
+        event.accept()
 
     def _apply_styles(self):
         palette = get_current_palette()
-        border_color = palette.SELECTION.lighter(115).name() if self._drop_active else "#3f3f3f"
-        glow_color = palette.SELECTION.name() if self._drop_active else "#252526"
-        bg_color = "rgba(42, 42, 42, 0.94)" if self.isEnabled() else "rgba(35, 35, 35, 0.9)"
+        if self._drop_active:
+            border_color = QColor(palette.SELECTION.lighter(115))
+            bg_color = QColor(44, 44, 44, 244)
+        elif self._is_focused:
+            border_color = QColor("#6a6a6a")
+            bg_color = QColor(43, 43, 43, 238)
+        else:
+            border_color = QColor(76, 76, 76, 180)
+            bg_color = QColor(40, 40, 40, 228)
+        self.surface.set_colors(bg_color, border_color)
 
-        self.surface.setStyleSheet(f"""
-            QFrame#blackHoleSurface {{
-                background-color: {bg_color};
-                border: 1px solid {border_color};
-                border-radius: 14px;
-            }}
-            QFrame#blackHoleSurface[dragActive="true"] {{
-                border-color: {palette.SELECTION.name()};
+        self.setStyleSheet(f"""
+            QWidget#blackHoleComposer {{
+                background-color: transparent;
+                border: none;
             }}
             QScrollArea#blackHolePillStrip {{
                 background: transparent;
                 border: none;
             }}
             QWidget#blackHolePillHost, QWidget#qt_scrollarea_viewport {{
-                background: transparent;
+                background-color: transparent;
                 border: none;
             }}
             QPlainTextEdit#blackHoleEditor {{
-                background: transparent;
+                background-color: transparent;
                 color: #d4d4d4;
                 border: none;
-                padding: 2px 4px 4px 4px;
+                padding: 4px 6px 4px 6px;
                 selection-background-color: #264f78;
             }}
             QPlainTextEdit#blackHoleEditor:disabled {{
                 color: #7b7b7b;
             }}
         """)
-        self.surface.setProperty("dragActive", self._drop_active)
-
-        shadow = self.surface.graphicsEffect()
-        if not isinstance(shadow, QGraphicsDropShadowEffect):
-            shadow = QGraphicsDropShadowEffect(self.surface)
-            shadow.setBlurRadius(18)
-            shadow.setOffset(0, 0)
-            self.surface.setGraphicsEffect(shadow)
-        shadow.setColor(QColor(glow_color if self._drop_active else "#000000"))
 
 
