@@ -1,4 +1,5 @@
-import os 
+import importlib
+import os
 from pathlib import Path
 
 # --- Conditional Imports for Optional Dependencies ---
@@ -8,12 +9,20 @@ from pathlib import Path
 # installed and gracefully inform the user if they attempt to use a feature
 # that requires a missing dependency.
 
-# Attempt to import pypdf for reading .pdf files.
+# Attempt to import a PDF reader implementation.
 try:
-    import pypdf
+    pdf_reader_lib = importlib.import_module("pypdf")
     PDF_AVAILABLE = True
+    PDF_IMPORT_NAME = "pypdf"
 except ImportError:
-    PDF_AVAILABLE = False
+    try:
+        pdf_reader_lib = importlib.import_module("PyPDF2")
+        PDF_AVAILABLE = True
+        PDF_IMPORT_NAME = "PyPDF2"
+    except ImportError:
+        pdf_reader_lib = None
+        PDF_AVAILABLE = False
+        PDF_IMPORT_NAME = None
 
 # Attempt to import python-docx for reading .docx files.
 try:
@@ -46,6 +55,9 @@ class FileHandler:
         '.editorconfig', '.env', '.gitignore', 'Dockerfile', 'Gemfile',
         'Makefile', 'Procfile', 'README', 'README.md', 'requirements.txt',
     }
+    PDF_INSTALL_MESSAGE = (
+        "PDF support is not installed. Please run: pip install pypdf"
+    )
 
     def __init__(self):
         """
@@ -107,22 +119,22 @@ class FileHandler:
 
         try:
             # Dispatch to the correct reader method based on the file extension.
-            if (
-                ext in self.PLAIN_TEXT_EXTENSIONS
-                or path.name in self.SUPPORTED_FILENAMES
-                or self._looks_like_text_file(path)
-            ):
-                return self._read_text(path), None
-            elif ext == '.pdf':
+            if ext == '.pdf':
                 # Check if the required library is available before attempting to read.
                 if not PDF_AVAILABLE:
-                    return None, "PDF support is not installed. Please run: pip install pypdf"
+                    return None, self.PDF_INSTALL_MESSAGE
                 return self._read_pdf(path), None
             elif ext == '.docx':
                 # Check if the required library is available before attempting to read.
                 if not DOCX_AVAILABLE:
                     return None, "Word document support is not installed. Please run: pip install python-docx"
                 return self._read_docx(path), None
+            elif (
+                ext in self.PLAIN_TEXT_EXTENSIONS
+                or path.name in self.SUPPORTED_FILENAMES
+                or self._looks_like_text_file(path)
+            ):
+                return self._read_text(path), None
             else:
                 # If the extension is not in our supported list, return an error.
                 return None, f"Unsupported file type: {ext}"
@@ -179,14 +191,47 @@ class FileHandler:
             str: The extracted text content, with pages joined by newlines.
         """
         content = []
-        # Open the file in binary read mode ('rb') as required by pypdf.
+        extracted_characters = 0
+        # Open the file in binary read mode ('rb') as required by common PDF readers.
         with open(path, 'rb') as f:
-            reader = pypdf.PdfReader(f)
-            # Iterate through each page in the PDF and extract its text.
-            for page in reader.pages:
-                content.append(page.extract_text())
-        # Join the text from all pages into a single string.
-        return "\n".join(content)
+            reader = pdf_reader_lib.PdfReader(f)
+            # Try a layout-preserving extraction first when supported, then fall back.
+            for page_number, page in enumerate(reader.pages, start=1):
+                page_text = self._extract_pdf_page_text(page)
+                if page_text:
+                    normalized_text = page_text.strip()
+                    content.append(normalized_text)
+                    extracted_characters += len(normalized_text)
+                else:
+                    content.append(f"[Page {page_number}: no extractable text found]")
+
+        combined = "\n\n".join(part for part in content if part)
+        if extracted_characters == 0:
+            raise ValueError(
+                "No readable text could be extracted from this PDF. "
+                "It may be image-based, scanned, encrypted, or use an unsupported text encoding."
+            )
+        return combined
+
+    def _extract_pdf_page_text(self, page) -> str:
+        """
+        Extracts text from a PDF page while remaining compatible with multiple
+        PDF reader implementations and versions.
+        """
+        extraction_attempts = (
+            {"extraction_mode": "layout"},
+            {},
+        )
+        for kwargs in extraction_attempts:
+            try:
+                text = page.extract_text(**kwargs)
+            except TypeError:
+                continue
+            except Exception:
+                text = None
+            if text and text.strip():
+                return text
+        return ""
 
     def _read_docx(self, path: Path) -> str:
         """
