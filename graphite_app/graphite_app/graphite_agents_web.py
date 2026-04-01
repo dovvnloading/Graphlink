@@ -1,332 +1,441 @@
-import os
-from PySide6.QtCore import QThread, Signal
-import graphite_config as config
-import api_provider
-
-# --- Conditional Imports for Web Agent ---
-try:
-    from ddgs import DDGS
-    DUCKDUCKGO_SEARCH_AVAILABLE = True
-except ImportError:
-    DUCKDUCKGO_SEARCH_AVAILABLE = False
-
-try:
-    import requests
-    REQUESTS_AVAILABLE = True
-except ImportError:
-    REQUESTS_AVAILABLE = False
-
-try:
-    from bs4 import BeautifulSoup
-    BEAUTIFULSOUP_AVAILABLE = True
-except ImportError:
-    BEAUTIFULSOUP_AVAILABLE = False
+from PySide6.QtWidgets import (
+    QGraphicsItem, QGraphicsProxyWidget, QWidget, QVBoxLayout,
+    QTextEdit, QPushButton, QLabel, QHBoxLayout, QGraphicsObject
+)
+from PySide6.QtCore import QRectF, Qt, QPointF, Signal, QTimer, QRect
+from PySide6.QtGui import QPainter, QColor, QBrush, QPen, QPainterPath, QFont
+import qtawesome as qta
+from graphite_config import get_current_palette, get_graph_node_colors, get_neutral_button_colors, get_semantic_color
+from graphite_connections import ConnectionItem
+from graphite_canvas_items import HoverAnimationMixin
+from graphite_memory import append_history, get_node_history
+from graphite_plugin_context_menu import PluginNodeContextMenu
 
 
-class WebSearchAgent:
+class WebConnectionItem(ConnectionItem):
     """
-    An agent that performs a multi-step web search workflow: refine query, search,
-    fetch content, validate content, and summarize.
+    A specialized ConnectionItem with a distinct visual style (orange dash-dot line)
+    to represent the link to a WebNode.
     """
-    def __init__(self):
-        """Initializes the agent and checks for required dependencies."""
-        self._check_dependencies()
-        self.generate_query_prompt = """
-You are a search query refinement assistant. Your task is to analyze a conversation history and a final user query to generate a self-contained, effective search engine query.
-
-RULES:
-1.  Read the conversation history to understand the context.
-2.  Analyze the final user query.
-3.  If the query is already self-contained and clear (e.g., "what is the capital of France"), return it exactly as is.
-4.  If the query is contextual (e.g., "what about its population?"), use the history to create a specific, self-contained query (e.g., "population of France").
-5.  Your output MUST be ONLY the refined search query string. Do not add any explanation, preamble, or quotation marks.
-"""
-        self.validation_prompt = """
-You are a content validation bot. Your only purpose is to determine if a piece of retrieved web content is safe and relevant to a user's original query.
-
-RULES:
-1. First, check for safety. The content is UNSAFE if it contains any of the following:
-    - Explicit adult content (pornography, graphic violence)
-    - Hate speech, harassment, or discriminatory language
-    - Dangerous or illegal instructions (e.g., self-harm, building weapons)
-    - Deceptive content (scams, phishing, malware links)
-
-2. Second, check for relevance. The content is IRRELEVANT if it does NOT directly help answer the user's query. It is also irrelevant if it is:
-    - A login page, error page, or navigation menu with no useful content.
-    - A product page with only specifications and no descriptive text.
-    - A forum index page without actual discussion content.
-    - Gibberish or non-prose text.
-
-3. Your response MUST be a single word: `SAFE` or `UNSAFE`.
-    - If the content is safe AND relevant, output `SAFE`.
-    - If the content is unsafe OR irrelevant, output `UNSAFE`.
-    - Do NOT provide any explanation or other text.
-"""
-        self.summarization_prompt = """
-You are a web-grounded summarization assistant. You will be given a user's original query, the conversation history for context, and a block of text retrieved from one or more web pages. Your task is to synthesize this information into a single, comprehensive, and well-written answer to the user's query.
-
-RULES:
-1.  **Use the Conversation History:** The history provides crucial context. Your answer must be relevant to the ongoing conversation.
-2.  **Directly Answer the Query:** Your primary goal is to answer the user's original question using the provided web content.
-3.  **Synthesize, Don't List:** Combine information from different parts of the text to form a coherent response. Do not treat the text as separate sources to be summarized individually.
-4.  **Be Concise:** Extract the most important information and present it clearly. Avoid unnecessary details or filler text.
-5.  **Use Markdown:** Format your response for readability using headings, bullet points, and bold text where appropriate.
-"""
-
-    def _check_dependencies(self):
+    def paint(self, painter, option, widget=None):
         """
-        Raises an ImportError if any of the required web-related libraries are missing.
-        """
-        if not DUCKDUCKGO_SEARCH_AVAILABLE:
-            raise ImportError("Web search requires `ddgs`. Please install it: pip install ddgs")
-        if not REQUESTS_AVAILABLE:
-            raise ImportError("Web fetching requires `requests`. Please install it: pip install requests")
-        if not BEAUTIFULSOUP_AVAILABLE:
-            raise ImportError("Web parsing requires `beautifulsoup4`. Please install it: pip install beautifulsoup4")
-
-    def generate_search_query(self, query: str, history: list) -> str:
-        """
-        Refines a user's query based on conversation history to make it self-contained.
+        Handles the custom painting of the connection line.
 
         Args:
-            query (str): The user's latest query.
-            history (list): The preceding conversation history.
-
-        Returns:
-            str: A refined, standalone search query.
+            painter (QPainter): The painter to use.
+            option (QStyleOptionGraphicsItem): Provides style options.
+            widget (QWidget, optional): The widget being painted on. Defaults to None.
         """
-        if not history:
-            return query  # No context, query is as good as it gets.
-
-        history_str = "\n".join([f"{msg['role']}: {msg['content']}" for msg in history])
-        user_prompt = f"""
---- Conversation History ---
-{history_str}
-
---- Final User Query ---
-{query}
-"""
-        try:
-            # Use a fast model for this simple refinement task.
-            response = api_provider.chat(
-                task=config.TASK_TITLE,  # Re-using the title task model as it's meant to be fast
-                messages=[
-                    {'role': 'system', 'content': self.generate_query_prompt},
-                    {'role': 'user', 'content': user_prompt}
-                ]
-            )
-            return response['message']['content'].strip()
-        except Exception as e:
-            print(f"Failed to generate search query, falling back to original. Error: {e}")
-            return query  # Fallback to original query on error
-
-    def search(self, query: str) -> list:
-        """
-        Performs a web search using DuckDuckGo Search.
-
-        Args:
-            query (str): The search query.
-
-        Returns:
-            list: A list of search result dictionaries.
-        """
-        with DDGS() as ddgs:
-            results = list(ddgs.text(query, max_results=5))
-        return results
-
-    def fetch_content(self, url: str) -> (str | None, str | None):
-        """
-        Fetches and cleans the text content from a given URL, applying streaming
-        and chunking to prevent memory exhaustion from massive files.
-
-        Args:
-            url (str): The URL to fetch.
-
-        Returns:
-            tuple[str or None, str or None]: A tuple containing the cleaned text content
-                                             and an error message if an error occurred.
-        """
-        try:
-            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
-            # Enforce streaming to prevent downloading massive payloads directly into memory
-            response = requests.get(url, headers=headers, timeout=10, stream=True)
-            response.raise_for_status()
-
-            # Enforce a hard byte-read limit (2MB)
-            MAX_BYTES = 2 * 1024 * 1024 
-            content_bytes = b""
-            for chunk in response.iter_content(chunk_size=8192):
-                content_bytes += chunk
-                if len(content_bytes) > MAX_BYTES:
-                    break
-
-            soup = BeautifulSoup(content_bytes, 'html.parser')
-            # Remove script, style, and common boilerplate elements.
-            for script in soup(["script", "style", "nav", "footer", "header"]):
-                script.extract()
+        if not (self.start_node and self.end_node):
+            return
             
-            # Extract and clean up the text.
-            text = soup.get_text()
-            lines = (line.strip() for line in text.splitlines())
-            chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
-            text = '\n'.join(chunk for chunk in chunks if chunk)
-            return text, None
-        except requests.RequestException as e:
-            return None, f"Failed to fetch URL {url}: {e}"
-        except Exception as e:
-            return None, f"Failed to parse content from {url}: {e}"
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        node_colors = get_graph_node_colors()
+        web_color = node_colors["header"]
 
-    def validate_content(self, query: str, content: str) -> bool:
-        """
-        Uses an LLM to validate if fetched content is safe and relevant to the original query.
+        # Use a dash-dot line style to distinguish it from other connection types.
+        pen = QPen(web_color, 2, Qt.PenStyle.DashDotLine)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
 
-        Args:
-            query (str): The original search query.
-            content (str): The fetched web page content.
-
-        Returns:
-            bool: True if the content is deemed 'SAFE', False otherwise.
-        """
-        # Truncate content to avoid excessive token usage for a simple validation step.
-        truncated_content = content[:4000]
+        if self.hover:
+            pen.setWidth(3)
         
-        user_prompt = f"""
-Original User Query: "{query}"
+        painter.setPen(pen)
+        painter.drawPath(self.path)
 
---- Retrieved Web Content ---
-{truncated_content}
---- End of Content ---
+        # Draw animated arrows if the animation is active.
+        if self.is_animating:
+            for arrow in self.arrows:
+                self.drawArrow(painter, arrow['pos'], web_color)
 
-Based on the rules, is this content safe and relevant? Respond with only `SAFE` or `UNSAFE`.
-"""
-        try:
-            # This validation step now uses the api_provider to be mode-agnostic.
-            messages = [
-                {'role': 'system', 'content': self.validation_prompt},
-                {'role': 'user', 'content': user_prompt}
-            ]
-            
-            response = api_provider.chat(task=config.TASK_WEB_VALIDATE, messages=messages)
-            decision = response['message']['content'].strip().upper()
-            
-            return "SAFE" in decision
-        except Exception as e:
-            print(f"Content validation failed: {e}")
-            # Re-raise with a more user-friendly message for the UI.
-            raise RuntimeError(f"Content validation step failed: {e}")
-
-    def summarize_content(self, query: str, validated_content: str, history: list) -> str:
+    def drawArrow(self, painter, pos, color):
         """
-        Synthesizes the validated web content into a final answer for the user.
+        Draws a single animated arrow along the connection path.
 
         Args:
-            query (str): The user's original query.
-            validated_content (str): The combined text from all validated sources.
-            history (list): The preceding conversation history for context.
+            painter (QPainter): The painter to use.
+            pos (float): The position along the path (0.0 to 1.0).
+            color (QColor): The color of the arrow.
+        """
+        if pos < 0 or pos > 1:
+            return
+        point = self.path.pointAtPercent(pos)
+        angle = self.path.angleAtPercent(pos)
+        
+        arrow = QPainterPath()
+        arrow.moveTo(-self.arrow_size, -self.arrow_size/2)
+        arrow.lineTo(0, 0)
+        arrow.lineTo(-self.arrow_size, self.arrow_size/2)
+        
+        painter.save()
+        painter.translate(point)
+        painter.rotate(-angle)
+        painter.setBrush(color)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawPath(arrow)
+        painter.restore()
+
+
+class WebNode(QGraphicsObject, HoverAnimationMixin):
+    """
+    A QGraphicsItem representing a web search plugin node on the canvas.
+
+    This node provides a user interface for entering a search query, initiating a
+    web search via a worker thread, and displaying the status and summarized
+    results of that search.
+    """
+    run_clicked = Signal(object) # Emits self when the run button is clicked.
+    
+    NODE_WIDTH = 450
+    NODE_HEIGHT = 400
+    COLLAPSED_WIDTH = 250
+    COLLAPSED_HEIGHT = 40
+    CONNECTION_DOT_RADIUS = 5
+    CONNECTION_DOT_OFFSET = 0
+
+    def __init__(self, parent_node, parent=None):
+        """
+        Initializes the WebNode.
+
+        Args:
+            parent_node (QGraphicsItem): The node from which this WebNode branches.
+            parent (QGraphicsItem, optional): The parent graphics item. Defaults to None.
+        """
+        super().__init__(parent)
+        HoverAnimationMixin.__init__(self)
+        self.parent_node = parent_node
+        self.children = []
+        self.is_user = False # Considered an AI-generated node for history purposes.
+        self.conversation_history = []
+        
+        self.is_collapsed = False
+        self.collapse_button_rect = QRectF()
+
+        # State attributes for the web search process.
+        self.query = ""
+        self.status = "Idle"
+        self.summary = ""
+        self.sources = []
+
+        # Standard graphics item setup.
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges)
+        self.setAcceptHoverEvents(True)
+        self.hovered = False
+
+        # Use a QGraphicsProxyWidget to embed standard Qt widgets into the graphics item.
+        self.widget = QWidget()
+        self.widget.setObjectName("webNodeMainWidget")
+        self.widget.setFixedSize(self.NODE_WIDTH, self.NODE_HEIGHT)
+        self.widget.setStyleSheet("""
+            QWidget#webNodeMainWidget {
+                background-color: transparent;
+                color: #e0e0e0;
+            }
+            QWidget#webNodeMainWidget QLabel {
+                background-color: transparent;
+            }
+        """)
+        
+        self._setup_ui()
+        
+        self.proxy = QGraphicsProxyWidget(self)
+        self.proxy.setWidget(self.widget)
+
+    @property
+    def width(self):
+        """Returns the dynamic width of the node."""
+        return self.COLLAPSED_WIDTH if self.is_collapsed else self.NODE_WIDTH
+
+    @property
+    def height(self):
+        """Returns the dynamic height of the node."""
+        return self.COLLAPSED_HEIGHT if self.is_collapsed else self.NODE_HEIGHT
+
+    def set_collapsed(self, collapsed):
+        if self.is_collapsed != collapsed:
+            self.is_collapsed = collapsed
+            self.proxy.setVisible(not self.is_collapsed)
+            self.prepareGeometryChange()
+            if self.scene():
+                self.scene().update_connections()
+                self.scene().nodeMoved(self)
+            self.update()
+
+    def toggle_collapse(self):
+        self.set_collapsed(not self.is_collapsed)
+
+    def _setup_ui(self):
+        """Constructs the internal widget layout and components of the node."""
+        main_layout = QVBoxLayout(self.widget)
+        main_layout.setContentsMargins(15, 15, 15, 15)
+        main_layout.setSpacing(10)
+        
+        node_colors = get_graph_node_colors()
+        web_color = node_colors["header"]
+        
+        # --- Header Section ---
+        header_layout = QHBoxLayout()
+        icon = QLabel()
+        icon.setPixmap(qta.icon('fa5s.globe-americas', color=web_color).pixmap(18, 18))
+        header_layout.addWidget(icon)
+        title_label = QLabel("Web Search")
+        title_label.setStyleSheet(f"font-weight: bold; font-size: 14px; color: {web_color.name()}; background: transparent;")
+        header_layout.addWidget(title_label)
+        header_layout.addStretch()
+        main_layout.addLayout(header_layout)
+
+        # --- Query Input Section ---
+        main_layout.addWidget(QLabel("Search Query:"))
+        self.query_input = QTextEdit()
+        self.query_input.setPlaceholderText("Enter a search query, e.g., 'Best Italian restaurants in NYC'")
+        self.query_input.setFixedHeight(60)
+        self.query_input.textChanged.connect(self._on_query_changed)
+        main_layout.addWidget(self.query_input)
+
+        # --- Run Button ---
+        self.run_button = QPushButton("Fetch Information")
+        self.run_button.clicked.connect(lambda: self.run_clicked.emit(self))
+        main_layout.addWidget(self.run_button)
+
+        # --- Status Label ---
+        self.status_label = QLabel("Status: Idle")
+        self.status_label.setStyleSheet("color: #888; font-style: italic; background: transparent;")
+        main_layout.addWidget(self.status_label)
+
+        # --- Result Display Section ---
+        main_layout.addWidget(QLabel("Summary:"))
+        self.summary_display = QTextEdit()
+        self.summary_display.setReadOnly(True)
+        self.summary_display.setPlaceholderText("Web search results will be summarized here...")
+        main_layout.addWidget(self.summary_display)
+
+        # Apply common styles to text edit widgets.
+        for widget in [self.query_input, self.summary_display]:
+            widget.setStyleSheet("""
+                QTextEdit {
+                    background-color: #252526; border: 1px solid #3f3f3f;
+                    color: #cccccc; border-radius: 4px; padding: 5px;
+                    font-family: 'Segoe UI', sans-serif;
+                }
+            """)
+
+        # Style the run button with a contrasting text color based on background brightness.
+        button_colors = get_neutral_button_colors()
+
+        self.run_button.setIcon(qta.icon('fa5s.search', color=button_colors["icon"].name()))
+        self.run_button.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {button_colors["background"].name()};
+                color: {button_colors["icon"].name()};
+                border: 1px solid {button_colors["border"].name()};
+                border-radius: 4px;
+                padding: 8px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{
+                background-color: {button_colors["hover"].name()};
+                border-color: {button_colors["hover"].lighter(112).name()};
+            }}
+            QPushButton:pressed {{
+                background-color: {button_colors["pressed"].name()};
+                border-color: {button_colors["border"].darker(105).name()};
+            }}
+            QPushButton:disabled {{
+                background-color: #2b2b2b;
+                border-color: #353535;
+                color: #7b7b7b;
+            }}
+        """)
+        
+    def _on_query_changed(self):
+        """Slot to update the internal query state when the input text changes."""
+        self.query = self.query_input.toPlainText()
+
+    def set_query(self, text: str):
+        """Programmatically sets the query text in the input widget."""
+        self.query_input.setText(text)
+        self.query = text
+
+    def set_status(self, status_text: str):
+        """
+        Updates the status label to provide feedback on the search process.
+
+        Args:
+            status_text (str): The new status message to display.
+        """
+        self.status = status_text
+        self.status_label.setText(f"Status: {status_text}")
+        self.status_label.setStyleSheet(f"color: {get_semantic_color('status_info').name()}; background: transparent;")
+
+    def set_running_state(self, is_running: bool):
+        """
+        Enables or disables UI elements based on the running state.
+
+        Args:
+            is_running (bool): True if the search is active, False otherwise.
+        """
+        self.run_button.setEnabled(not is_running)
+        self.query_input.setReadOnly(is_running)
+        self.run_button.setText("Processing..." if is_running else "Fetch Information")
+
+    def set_result(self, summary: str, sources: list):
+        """
+        Displays the final summary and source links in the result area.
+
+        Args:
+            summary (str): The summarized text from the web search.
+            sources (list[str]): A list of source URLs.
+        """
+        self.summary = summary
+        self.sources = sources
+        
+        # Format sources as clickable Markdown links.
+        source_links = "\n".join([f"- [{src}]({src})" for src in sources])
+        full_text = f"{summary}\n\n---\n\n**Sources:**\n{source_links}"
+        
+        self.summary_display.setMarkdown(full_text)
+        self.set_status("Completed")
+        self.status_label.setStyleSheet(f"color: {get_semantic_color('status_success').name()}; background: transparent;")
+        
+        # Update conversation history for potential child nodes.
+        self.conversation_history = append_history(get_node_history(self.parent_node), [
+            {'role': 'assistant', 'content': full_text}
+        ])
+
+    def set_error(self, error_message: str):
+        """
+        Displays an error message in the status and result areas.
+
+        Args:
+            error_message (str): The error message to display.
+        """
+        self.status = f"Error: {error_message}"
+        self.status_label.setText(self.status)
+        self.status_label.setStyleSheet(f"color: {get_semantic_color('status_error').name()}; font-weight: bold; background: transparent;")
+        self.summary_display.setText(f"An error occurred during the process:\n\n{error_message}")
+
+    def boundingRect(self):
+        """Returns the bounding rectangle of the node, including padding for connection dots."""
+        padding = self.CONNECTION_DOT_OFFSET + self.CONNECTION_DOT_RADIUS
+        return QRectF(-padding, 0, self.width + 2 * padding, self.height)
+        
+    def paint(self, painter, option, widget=None):
+        """
+        Handles the custom painting of the node's border, background, and connection dots.
+
+        Args:
+            painter (QPainter): The painter to use.
+            option (QStyleOptionGraphicsItem): Provides style options.
+            widget (QWidget, optional): The widget being painted on. Defaults to None.
+        """
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        palette = get_current_palette()
+        node_colors = get_graph_node_colors()
+        
+        path = QPainterPath()
+        path.addRoundedRect(0, 0, self.width, self.height, 10, 10)
+        painter.setBrush(QColor("#2d2d2d"))
+        
+        web_color = node_colors["border"]
+        pen = QPen(web_color, 1.5)
+
+        if self.isSelected():
+            pen = QPen(palette.SELECTION, 2)
+        elif self.hovered:
+            pen = QPen(QColor("#ffffff"), 2)
+        
+        painter.setPen(pen)
+        painter.drawPath(path)
+        
+        # Draw connection dots for linking.
+        dot_color = node_colors["dot"]
+        if self.isSelected() or self.hovered:
+            dot_color = pen.color().lighter(110) if self.isSelected() else node_colors["hover_dot"]
+        
+        painter.setBrush(dot_color)
+        painter.setPen(Qt.PenStyle.NoPen)
+        
+        dot_rect_left = QRectF(-self.CONNECTION_DOT_RADIUS, (self.height / 2) - self.CONNECTION_DOT_RADIUS, self.CONNECTION_DOT_RADIUS * 2, self.CONNECTION_DOT_RADIUS * 2)
+        painter.drawPie(dot_rect_left, 90 * 16, -180 * 16)
+        
+        dot_rect_right = QRectF(self.width - self.CONNECTION_DOT_RADIUS, (self.height / 2) - self.CONNECTION_DOT_RADIUS, self.CONNECTION_DOT_RADIUS * 2, self.CONNECTION_DOT_RADIUS * 2)
+        painter.drawPie(dot_rect_right, 90 * 16, 180 * 16)
+        
+        if self.is_collapsed:
+            painter.setPen(QColor("#ffffff"))
+            font = QFont("Segoe UI", 10, QFont.Weight.Bold)
+            painter.setFont(font)
+            painter.drawText(QRectF(40, 0, self.width - 80, self.height), Qt.AlignmentFlag.AlignVCenter, "Web Search")
+            
+            icon = qta.icon('fa5s.globe-americas', color=web_color.name())
+            icon.paint(painter, QRect(10, 10, 20, 20))
+            
+            self.collapse_button_rect = QRectF(self.width - 35, 5, 30, 30)
+            expand_icon = qta.icon('fa5s.expand-arrows-alt', color='#ffffff' if self.hovered else '#888888')
+            expand_icon.paint(painter, QRect(int(self.width - 30), 10, 20, 20))
+        else:
+            if self.hovered:
+                self.collapse_button_rect = QRectF(self.width - 35, 5, 30, 30)
+                painter.setBrush(QColor(255, 255, 255, 30))
+                painter.setPen(QColor(255, 255, 255, 150))
+                painter.drawRoundedRect(self.collapse_button_rect.adjusted(6,6,-6,-6), 4, 4)
+                
+                icon_pen = QPen(QColor("#ffffff"), 2)
+                painter.setPen(icon_pen)
+                center = self.collapse_button_rect.center()
+                painter.drawLine(int(center.x() - 4), int(center.y()), int(center.x() + 4), int(center.y()))
+            else:
+                self.collapse_button_rect = QRectF()
+                
+    def mousePressEvent(self, event):
+        """Handles mouse press to set the current node context and start dragging."""
+        if self.collapse_button_rect.contains(event.pos()):
+            self.toggle_collapse()
+            event.accept()
+            return
+
+        if event.button() == Qt.MouseButton.LeftButton and self.scene():
+            self.scene().is_dragging_item = True
+            if hasattr(self.scene(), 'window'):
+                self.scene().window.setCurrentNode(self)
+        super().mousePressEvent(event)
+
+    def contextMenuEvent(self, event):
+        menu = PluginNodeContextMenu(self)
+        menu.exec(event.screenPos())
+
+    def mouseReleaseEvent(self, event):
+        """Handles mouse release to stop dragging and clear smart guides."""
+        if self.scene():
+            self.scene().is_dragging_item = False
+            self.scene()._clear_smart_guides()
+        super().mouseReleaseEvent(event)
+
+    def itemChange(self, change, value):
+        """
+        Handles item changes, applying snapping logic during position changes.
+
+        Args:
+            change (QGraphicsItem.GraphicsItemChange): The type of change.
+            value: The new value for the changed attribute.
 
         Returns:
-            str: A formatted summary answering the user's query.
+            The modified value or the result of the superclass implementation.
         """
-        history_str = "\n".join([f"{msg['role']}: {msg['content']}" for msg in history])
-        user_prompt = f"""
---- Conversation History ---
-{history_str}
+        if change == QGraphicsItem.ItemPositionChange and self.scene() and self.scene().is_dragging_item:
+            return self.scene().snap_position(self, value)
+        if change == QGraphicsItem.ItemPositionHasChanged and self.scene():
+            self.scene().nodeMoved(self)
+        return super().itemChange(change, value)
 
---- Original User Query for this step ---
-"{query}"
+    def hoverEnterEvent(self, event):
+        """Handles hover enter event using the mixin."""
+        self._handle_hover_enter(event)
+        super().hoverEnterEvent(event)
 
---- Validated Web Content ---
-{validated_content}
---- End of Content ---
-
-Please provide a comprehensive answer to the original query based on the content provided and the conversation history for context.
-"""
-        try:
-            response = api_provider.chat(
-                task=config.TASK_WEB_SUMMARIZE,
-                messages=[
-                    {'role': 'system', 'content': self.summarization_prompt},
-                    {'role': 'user', 'content': user_prompt}
-                ]
-            )
-            return response['message']['content']
-        except Exception as e:
-            raise RuntimeError(f"Failed to summarize web content: {e}")
-
-
-class WebWorkerThread(QThread):
-    """Orchestrates the WebSearchAgent's workflow in a background thread."""
-    update_status = Signal(str) # Emits status updates for the UI.
-    finished = Signal(dict)
-    error = Signal(str)
-
-    def __init__(self, query: str, history: list):
-        super().__init__()
-        self.query = query
-        self.history = history
-        self.agent = WebSearchAgent()
-        self._is_running = True
-
-    def run(self):
-        """Executes the full web search workflow step-by-step."""
-        try:
-            if not self._is_running: return
-
-            # 1. Generate a context-aware search query.
-            self.update_status.emit("Refining search query...")
-            effective_query = self.agent.generate_search_query(self.query, self.history)
-
-            # 2. Perform the web search.
-            if not self._is_running: return
-            self.update_status.emit(f"Searching for: \"{effective_query}\"...")
-            results = self.agent.search(effective_query)
-            if not results:
-                raise ValueError("No search results found for your query.")
-
-            # 3. Fetch, clean, and validate content from the top search results.
-            if not self._is_running: return
-            validated_texts = []
-            source_urls = []
-            for i, result in enumerate(results[:3]): # Process top 3 results
-                if not self._is_running: return
-                url = result.get('href')
-                if not url: continue
-                
-                self.update_status.emit(f"Fetching content from result {i+1}...")
-                content, error = self.agent.fetch_content(url)
-                if error or not content:
-                    print(f"Skipping {url}: {error}")
-                    continue
-
-                if not self._is_running: return
-                self.update_status.emit(f"Validating result {i+1}...")
-                # Use the refined `effective_query` for more accurate validation.
-                if self.agent.validate_content(effective_query, content):
-                    validated_texts.append(content)
-                    source_urls.append(url)
-            
-            if not self._is_running: return
-            if not validated_texts:
-                raise ValueError("No relevant and safe content could be retrieved from the web.")
-
-            # 4. Synthesize the validated content into a final summary.
-            self.update_status.emit("Synthesizing information...")
-            combined_content = "\n\n---\n\n".join(validated_texts)
-            # Pass the original query and history to the summarizer for full context.
-            summary = self.agent.summarize_content(self.query, combined_content, self.history)
-
-            if self._is_running:
-                self.finished.emit({
-                    "summary": summary,
-                    "sources": source_urls,
-                    "query": self.query # Keep original query for the node's display
-                })
-        except Exception as e:
-            if self._is_running:
-                self.error.emit(str(e))
-        finally:
-            self._is_running = False
-            
-    def stop(self):
-        """Stops the thread safely."""
-        self._is_running = False
+    def hoverLeaveEvent(self, event):
+        """Handles hover leave event using the mixin."""
+        self._handle_hover_leave(event)
+        super().hoverLeaveEvent(event)
