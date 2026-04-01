@@ -10,7 +10,7 @@ import graphite_config as config
 from graphite_styles import THEMES
 
 class AboutDialog(QDialog):
-    """dialog displaying application information, developer credits, and external links."""
+    """A premium dialog displaying application information, developer credits, and external links."""
     def __init__(self, parent=None):
         super().__init__(parent)
 
@@ -243,7 +243,7 @@ class HelpDialog(QFrame):
                     ("Charts", "The app can turn text-derived or numeric content into bar, line, pie, histogram, and Sankey charts on the canvas. Charts are useful when a branch contains data you want to explain visually.", "fa5s.chart-bar"),
                     ("Document View", "Long chat content can be opened in the document viewer for easier reading and review. This is especially helpful for lengthy drafts, specifications, or dense research summaries.", "fa5s.book-open"),
                     ("HTML Preview", "The HTML Renderer node can take markup and show a live preview inside the graph, with an optional pop-out preview window for closer inspection.", "fa5s.window-maximize"),
-                    ("Node Context Menus", "Right-click chat and code nodes for copy, export, document view, branch isolation, regeneration, takeaways, explainers, charts, image generation, and deletion actions. When multiple chat nodes are selected, the menu also exposes group summary workflows.", "fa5s.mouse-pointer"),
+            ("Node Context Menus", "Right-click chat, code, and plugin nodes for copy, export, document view, branch isolation, regeneration, takeaways, explainers, charts, image generation, and deletion actions. When multiple chat nodes are selected, the menu also exposes group summary workflows.", "fa5s.mouse-pointer"),
                 ]),
             ],
         ),
