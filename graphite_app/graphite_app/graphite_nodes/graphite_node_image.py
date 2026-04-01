@@ -114,14 +114,14 @@ class ImageNode(QGraphicsItem, HoverAnimationMixin):
 
     def itemChange(self, change, value):
         if change == QGraphicsItem.ItemPositionChange and self.scene():
-            self.scene().nodeMoved(self)
-
             parent = self.parentItem()
             if parent and isinstance(parent, Container):
                 parent.updateGeometry()
 
             if self.scene().is_dragging_item:
                 return self.scene().snap_position(self, value)
+        if change == QGraphicsItem.ItemPositionHasChanged and self.scene():
+            self.scene().nodeMoved(self)
         return super().itemChange(change, value)
 
 
