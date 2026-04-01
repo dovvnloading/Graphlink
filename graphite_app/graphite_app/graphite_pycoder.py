@@ -19,6 +19,7 @@ from graphite_config import get_current_palette, get_graph_node_colors, get_neut
 
 from graphite_agents_pycoder import PyCoderStage, PyCoderStatus, PythonREPL
 from graphite_canvas_items import HoverAnimationMixin
+from graphite_plugin_context_menu import PluginNodeContextMenu
 
 
 class PythonHighlighter(QSyntaxHighlighter):
@@ -680,6 +681,10 @@ class PyCoderNode(QGraphicsItem, HoverAnimationMixin):
             if hasattr(self.scene(), 'window'):
                 self.scene().window.setCurrentNode(self)
         super().mousePressEvent(event)
+
+    def contextMenuEvent(self, event):
+        menu = PluginNodeContextMenu(self)
+        menu.exec(event.screenPos())
 
     def mouseReleaseEvent(self, event):
         if self.scene():
