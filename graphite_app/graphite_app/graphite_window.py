@@ -10,7 +10,7 @@ import os
 import tempfile
 from datetime import datetime
 
-from graphite_widgets import PinOverlay, SearchOverlay, TokenCounterWidget, TokenEstimator
+from graphite_widgets import PinOverlay, SearchOverlay, TokenCounterWidget, TokenEstimator, ChatInputTextEdit
 from graphite_ui_components import NotificationBanner, DocumentViewerPanel
 from graphite_canvas_items import Note, Frame, Container
 from graphite_node import ChatNode, CodeNode, ThinkingNode
@@ -138,11 +138,13 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         self.attach_file_btn.setFixedSize(40, 40)
         self.attach_file_btn.clicked.connect(self.attach_file)
 
-        from graphite_widgets import ChatInputTextEdit
         self.message_input = ChatInputTextEdit()
         self.message_input.setPlaceholderText("Type your message...")
         self.message_input.sendRequested.connect(self.send_message)
         self.message_input.largePasteDetected.connect(self._handle_large_paste_from_input)
+        self.message_input.filesDropped.connect(self._handle_input_files_dropped)
+        self.message_input.textDropped.connect(self._handle_input_text_dropped)
+        self.message_input.attachmentRemoved.connect(self._handle_attachment_pill_removed)
         
         self.send_button = QPushButton(); self.send_button.setFixedSize(40, 40)
         input_layout.addWidget(self.attach_file_btn); input_layout.addWidget(self.message_input); input_layout.addWidget(self.send_button)
@@ -221,6 +223,8 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
                 border-color: {button_colors["border"].darker(105).name()};
             }}
         """)
+        if hasattr(self, 'message_input'):
+            self.message_input.on_theme_changed()
         self._refresh_attachment_button()
 
     def on_theme_changed(self):
@@ -517,12 +521,26 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         else:
             return "rejected"
 
-        self.pending_attachments.append({
+        attachment_item = {
             'path': normalized_path,
             'kind': attachment_kind,
             'name': display_name or os.path.basename(normalized_path),
             'is_temp': bool(is_temp),
-        })
+            'byte_size': os.path.getsize(normalized_path),
+        }
+
+        if attachment_kind == 'document':
+            doc_content, error = self.file_handler.read_file(normalized_path)
+            if error:
+                return "rejected"
+            attachment_item['content'] = doc_content
+            attachment_item['token_count'] = self.token_estimator.count_tokens(doc_content)
+            attachment_item['line_count'] = doc_content.count("\n") + 1 if doc_content else 0
+            attachment_item['context_label'] = self._describe_document_attachment(attachment_item, doc_content)
+        else:
+            attachment_item['context_label'] = 'Vision'
+
+        self.pending_attachments.append(attachment_item)
         self._refresh_attachment_button()
         return "added"
 
@@ -533,6 +551,8 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         if not self.pending_attachments:
             self.attach_file_btn.setIcon(qta.icon('fa5s.paperclip', color='#cccccc'))
             self.attach_file_btn.setToolTip("Attach images or readable files")
+            if hasattr(self, 'message_input'):
+                self.message_input.set_context_items([])
             return
 
         palette = get_current_palette()
@@ -555,6 +575,8 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
 
         self.attach_file_btn.setIcon(qta.icon(icon_name, color=palette.SELECTION.name()))
         self.attach_file_btn.setToolTip("\n".join(tooltip_lines))
+        if hasattr(self, 'message_input'):
+            self.message_input.set_context_items(self.pending_attachments)
 
     def clear_attachment(self):
         for item in self.pending_attachments:
@@ -603,6 +625,119 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
             return self._stage_attachment_file(temp_file_path, is_temp=True, display_name=preview_name)
         except OSError:
             return "rejected"
+
+    def _handle_input_files_dropped(self, file_paths):
+        self.stage_dropped_files(file_paths)
+        self.message_input.setFocus()
+
+    def _handle_input_text_dropped(self, dropped_text):
+        stage_result = self._stage_text_context_attachment(dropped_text)
+        if stage_result == "added":
+            self.notification_banner.show_message(
+                "Context staged from drop. Add instructions and send.",
+                4000,
+                "success",
+            )
+            self.message_input.setFocus()
+            return
+
+        self.message_input.insertPlainText(dropped_text)
+        self.notification_banner.show_message(
+            "Could not stage dropped text as context. Inserted into input instead.",
+            5000,
+            "warning",
+        )
+
+    def _handle_attachment_pill_removed(self, attachment_path):
+        if not attachment_path:
+            return
+
+        retained = []
+        removed = None
+        for item in self.pending_attachments:
+            if removed is None and item.get('path') == attachment_path:
+                removed = item
+                continue
+            retained.append(item)
+
+        if removed and removed.get('is_temp') and os.path.isfile(removed['path']):
+            try:
+                os.remove(removed['path'])
+            except OSError:
+                pass
+
+        self.pending_attachments = retained
+        self._refresh_attachment_button()
+
+    def _stage_text_context_attachment(self, dropped_text):
+        if not dropped_text or not dropped_text.strip():
+            return "rejected"
+
+        base_dir = os.path.join(tempfile.gettempdir(), "graphite_drop_attachments")
+        try:
+            os.makedirs(base_dir, exist_ok=True)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            suffix = self._guess_text_drop_suffix(dropped_text)
+            temp_file_path = os.path.join(base_dir, f"dropped_context_{timestamp}{suffix}")
+            with open(temp_file_path, "w", encoding="utf-8", errors="ignore") as temp_file:
+                temp_file.write(dropped_text)
+
+            line_count = dropped_text.count("\n") + 1
+            if self._looks_like_code_text(dropped_text, suffix):
+                preview_name = f"Dropped Code ({line_count} lines){suffix}"
+            else:
+                preview_name = f"Dropped Text ({line_count} lines){suffix}"
+            return self._stage_attachment_file(temp_file_path, is_temp=True, display_name=preview_name)
+        except OSError:
+            return "rejected"
+
+    def _describe_document_attachment(self, attachment_item, content):
+        file_name = (attachment_item.get('name') or "").lower()
+        _, extension = os.path.splitext(file_name)
+
+        if extension == '.pdf':
+            return 'PDF'
+        if extension == '.docx':
+            return 'DOCX'
+        if self._looks_like_code_text(content, extension):
+            return 'Code'
+        if extension in {'.md', '.mdx'}:
+            return 'Markdown'
+        return 'Text'
+
+    def _looks_like_code_text(self, text, extension=""):
+        code_extensions = {
+            '.py', '.js', '.ts', '.tsx', '.jsx', '.java', '.cs', '.cpp', '.c',
+            '.h', '.hpp', '.go', '.rs', '.php', '.rb', '.swift', '.kt',
+            '.sql', '.sh', '.ps1', '.json', '.yaml', '.yml', '.xml', '.html', '.css'
+        }
+        if extension in code_extensions:
+            return True
+
+        if not text:
+            return False
+
+        code_markers = (
+            'def ', 'class ', 'import ', 'from ', 'function ', 'const ', 'let ',
+            'var ', '#include', 'public class', 'SELECT ', '<html', '{', '};'
+        )
+        marker_hits = sum(marker in text for marker in code_markers)
+        newline_count = text.count('\n')
+        return marker_hits >= 2 or (marker_hits >= 1 and newline_count >= 4)
+
+    def _guess_text_drop_suffix(self, text):
+        stripped = text.lstrip()
+        if stripped.startswith('{') or stripped.startswith('['):
+            return '.json'
+        if stripped.startswith('<!DOCTYPE html') or stripped.startswith('<html'):
+            return '.html'
+        if stripped.startswith('SELECT ') or stripped.startswith('WITH '):
+            return '.sql'
+        if 'def ' in text and 'import ' in text:
+            return '.py'
+        if 'function ' in text or 'const ' in text or 'let ' in text:
+            return '.js'
+        return '.txt'
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
