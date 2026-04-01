@@ -26,6 +26,7 @@ from graphite_agents_pycoder import PyCoderStatus
 from graphite_canvas_items import HoverAnimationMixin
 from graphite_config import get_current_palette, get_semantic_color
 from graphite_connections import ConnectionItem
+from graphite_plugin_context_menu import PluginNodeContextMenu
 from graphite_pycoder import CodeEditor, PythonHighlighter, StatusItemWidget
 
 
@@ -667,6 +668,10 @@ class CodeSandboxNode(QGraphicsObject, HoverAnimationMixin):
                 self.scene().window.setCurrentNode(self)
 
         super().mousePressEvent(event)
+
+    def contextMenuEvent(self, event):
+        menu = PluginNodeContextMenu(self)
+        menu.exec(event.screenPos())
 
     def mouseReleaseEvent(self, event):
         if self.scene():
