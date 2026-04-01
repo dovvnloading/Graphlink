@@ -8,6 +8,7 @@ import qtawesome as qta
 from graphite_config import get_current_palette, get_graph_node_colors, get_neutral_button_colors, get_semantic_color
 from graphite_canvas_items import HoverAnimationMixin
 from graphite_memory import append_history, get_node_history
+from graphite_plugin_context_menu import PluginNodeContextMenu
 
 class ReasoningNode(QGraphicsObject, HoverAnimationMixin):
     """
@@ -304,6 +305,10 @@ class ReasoningNode(QGraphicsObject, HoverAnimationMixin):
             if hasattr(self.scene(), 'window'):
                 self.scene().window.setCurrentNode(self)
         super().mousePressEvent(event)
+
+    def contextMenuEvent(self, event):
+        menu = PluginNodeContextMenu(self)
+        menu.exec(event.screenPos())
 
     def mouseReleaseEvent(self, event):
         if self.scene():
