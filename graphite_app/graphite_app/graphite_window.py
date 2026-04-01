@@ -20,6 +20,7 @@ from graphite_web import WebNode
 from graphite_conversation_node import ConversationNode
 from graphite_reasoning import ReasoningNode
 from graphite_html_view import HtmlViewNode
+from graphite_plugin_artifact import ArtifactNode
 from graphite_plugin_workflow import WorkflowNode
 from graphite_plugin_graph_diff import GraphDiffNode
 from graphite_plugin_quality_gate import QualityGateNode
@@ -466,8 +467,174 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
 
         self.help_panel.show_for_anchor(self.help_btn if hasattr(self, 'help_btn') else self)
 
+    def _build_document_section(self, title, body):
+        text = str(body or "").strip()
+        if not text:
+            return ""
+        return f"## {title}\n\n{text}"
+
+    def _build_code_block(self, code_text, language=""):
+        text = str(code_text or "").rstrip()
+        if not text:
+            return ""
+        return f"```{language}\n{text}\n```"
+
+    def _join_document_sections(self, *sections):
+        active_sections = [section for section in sections if section and section.strip()]
+        return "\n\n---\n\n".join(active_sections)
+
+    def _history_to_markdown(self, history):
+        rows = []
+        for index, message in enumerate(history or [], start=1):
+            role = str(message.get("role", "assistant")).replace("_", " ").title()
+            content = str(message.get("content", "")).strip()
+            if not content:
+                continue
+            rows.append(f"### {index}. {role}\n\n{content}")
+        return "\n\n".join(rows)
+
+    def _truncate_document_text(self, text, limit=12000):
+        value = str(text or "").strip()
+        if len(value) <= limit:
+            return value
+        truncated_count = len(value) - limit
+        return f"{value[:limit].rstrip()}\n\n...[truncated {truncated_count} chars]"
+
+    def _extract_document_view_content(self, node):
+        if isinstance(node, ChatNode):
+            return node.text
+
+        if isinstance(node, CodeNode):
+            language = getattr(node, "language", "")
+            return self._build_document_section("Code", self._build_code_block(getattr(node, "code", ""), language))
+
+        if isinstance(node, ThinkingNode):
+            return self._build_document_section("Reasoning", getattr(node, "thinking_text", ""))
+
+        if isinstance(node, ConversationNode):
+            return self._build_document_section("Conversation Transcript", self._history_to_markdown(getattr(node, "conversation_history", [])))
+
+        if isinstance(node, ReasoningNode):
+            return self._join_document_sections(
+                self._build_document_section("Prompt", getattr(node, "prompt", "")),
+                self._build_document_section("Reasoning Trace", getattr(node, "thought_process", "")),
+            )
+
+        if isinstance(node, WebNode):
+            sources = getattr(node, "sources", []) or []
+            source_lines = "\n".join(f"- [{url}]({url})" for url in sources if str(url).strip())
+            return self._join_document_sections(
+                self._build_document_section("Query", getattr(node, "query", "")),
+                self._build_document_section("Summary", getattr(node, "summary", "")),
+                self._build_document_section("Sources", source_lines),
+            )
+
+        if isinstance(node, PyCoderNode):
+            terminal = node.output_display.toPlainText() if hasattr(node, "output_display") else ""
+            analysis = node.ai_analysis_display.toPlainText() if hasattr(node, "ai_analysis_display") else ""
+            return self._join_document_sections(
+                self._build_document_section("Task Prompt", node.get_prompt() if hasattr(node, "get_prompt") else ""),
+                self._build_document_section("Code", self._build_code_block(node.get_code() if hasattr(node, "get_code") else "", "python")),
+                self._build_document_section("Terminal Output", self._build_code_block(terminal)),
+                self._build_document_section("Analysis", analysis),
+            )
+
+        if isinstance(node, CodeSandboxNode):
+            terminal = node.output_display.toPlainText() if hasattr(node, "output_display") else ""
+            analysis = node.ai_analysis_display.toPlainText() if hasattr(node, "ai_analysis_display") else ""
+            return self._join_document_sections(
+                self._build_document_section("Task Brief", node.get_prompt() if hasattr(node, "get_prompt") else ""),
+                self._build_document_section("Requirements", self._build_code_block(node.get_requirements() if hasattr(node, "get_requirements") else "")),
+                self._build_document_section("Code", self._build_code_block(node.get_code() if hasattr(node, "get_code") else "", "python")),
+                self._build_document_section("Terminal Output", self._build_code_block(terminal)),
+                self._build_document_section("Review", analysis),
+            )
+
+        if isinstance(node, HtmlViewNode):
+            html_source = node.get_html_content() if hasattr(node, "get_html_content") else ""
+            return self._build_document_section("HTML Source", self._build_code_block(html_source, "html"))
+
+        if isinstance(node, ArtifactNode):
+            transcript = self._history_to_markdown(getattr(node, "local_history", []))
+            return self._join_document_sections(
+                self._build_document_section("Artifact", node.get_artifact_content() if hasattr(node, "get_artifact_content") else ""),
+                self._build_document_section("Drafting Transcript", transcript),
+            )
+
+        if isinstance(node, WorkflowNode):
+            recommendations = []
+            for item in getattr(node, "recommendations", []) or []:
+                plugin = str(item.get("plugin", "Plugin")).strip()
+                why = str(item.get("why", "")).strip()
+                priority = str(item.get("priority", "")).strip()
+                prompt = str(item.get("starter_prompt", "")).strip()
+                summary = f"- **{plugin}**"
+                if priority:
+                    summary += f" ({priority})"
+                if why:
+                    summary += f": {why}"
+                if prompt:
+                    summary += f"\n  Starter Prompt: {prompt}"
+                recommendations.append(summary)
+            return self._join_document_sections(
+                self._build_document_section("Goal", node.get_goal() if hasattr(node, "get_goal") else ""),
+                self._build_document_section("Constraints", node.get_constraints() if hasattr(node, "get_constraints") else ""),
+                self._build_document_section("Workflow Blueprint", getattr(node, "blueprint_markdown", "")),
+                self._build_document_section("Recommended Plugins", "\n".join(recommendations)),
+            )
+
+        if isinstance(node, GraphDiffNode):
+            return self._join_document_sections(
+                self._build_document_section("Branch Comparison", getattr(node, "comparison_markdown", "")),
+                self._build_document_section("Summary Note", getattr(node, "note_summary", "")),
+            )
+
+        if isinstance(node, QualityGateNode):
+            recommendations = []
+            for item in getattr(node, "recommendations", []) or []:
+                plugin = str(item.get("plugin", "Plugin")).strip()
+                why = str(item.get("why", "")).strip()
+                starter_prompt = str(item.get("starter_prompt", "")).strip()
+                summary = f"- **{plugin}**"
+                if why:
+                    summary += f": {why}"
+                if starter_prompt:
+                    summary += f"\n  Starter Prompt: {starter_prompt}"
+                recommendations.append(summary)
+            return self._join_document_sections(
+                self._build_document_section("Goal", node.get_goal() if hasattr(node, "get_goal") else ""),
+                self._build_document_section("Acceptance Criteria", node.get_criteria() if hasattr(node, "get_criteria") else ""),
+                self._build_document_section("Quality Review", getattr(node, "review_markdown", "")),
+                self._build_document_section("Recommended Plugins", "\n".join(recommendations)),
+                self._build_document_section("Summary Note", getattr(node, "note_summary", "")),
+            )
+
+        if isinstance(node, CodeReviewNode):
+            source_text = node.source_editor.toPlainText() if hasattr(node, "source_editor") else ""
+            return self._join_document_sections(
+                self._build_document_section("Review Context", node.get_review_context() if hasattr(node, "get_review_context") else ""),
+                self._build_document_section("Code Review", getattr(node, "review_markdown", "")),
+                self._build_document_section("Source Snapshot", self._build_code_block(source_text)),
+            )
+
+        if isinstance(node, GitlinkNode):
+            context_xml = self._truncate_document_text(getattr(node, "context_xml", ""))
+            return self._join_document_sections(
+                self._build_document_section("Task Prompt", node.get_task_prompt() if hasattr(node, "get_task_prompt") else ""),
+                self._build_document_section("Proposal", getattr(node, "proposal_markdown", "")),
+                self._build_document_section("Patch Preview", self._build_code_block(getattr(node, "preview_text", ""))),
+                self._build_document_section("Context XML (truncated)", self._build_code_block(context_xml, "xml")),
+            )
+
+        return ""
+
     def show_document_view(self, node):
-        if isinstance(node, ChatNode): self.doc_viewer_panel.set_document_content(node.text); self.doc_viewer_panel.setVisible(True)
+        document_text = self._extract_document_view_content(node)
+        if not str(document_text or "").strip():
+            self.notification_banner.show_message("No document view content is available for this node yet.", 3000, "info")
+            return
+        self.doc_viewer_panel.set_document_content(document_text)
+        self.doc_viewer_panel.setVisible(True)
 
     def hide_document_view(self): self.doc_viewer_panel.setVisible(False)
 
