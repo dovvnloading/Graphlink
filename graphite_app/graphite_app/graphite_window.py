@@ -3,7 +3,7 @@ from PySide6.QtWidgets import (
     QToolButton, QLineEdit, QPushButton, QMessageBox, QSizePolicy, QLabel, QComboBox,
     QFileDialog
 )
-from PySide6.QtCore import Qt, QSize, QPointF, QTimer
+from PySide6.QtCore import Qt, QSize, QPointF, QTimer, QEvent
 from PySide6.QtGui import QKeySequence, QGuiApplication, QCursor, QShortcut, QIcon
 import qtawesome as qta
 import os
@@ -58,6 +58,7 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         self.settings_panel = None
         self.help_panel = None
         self._initial_show_complete = False
+        self._overlay_update_pending = False
 
         icon_path = r"C:\Users\Admin\source\repos\graphite_app\assets\graphite.ico"
         self.setWindowIcon(QIcon(str(icon_path)))
@@ -103,6 +104,8 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
 
         self.chat_view = ChatView(self)
         self.chat_view.setAcceptDrops(True)
+        self.chat_view.installEventFilter(self)
+        self.chat_view.viewport().installEventFilter(self)
         content_layout.addWidget(self.chat_view)
 
         self.notification_banner = NotificationBanner(self.chat_view)
@@ -128,9 +131,18 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
 
         container_layout.addWidget(content_widget)
 
-        input_widget = QWidget()
-        input_layout = QHBoxLayout(input_widget)
-        input_layout.setContentsMargins(8, 8, 8, 8)
+        self.input_widget = QWidget()
+        self.input_widget.setObjectName("chatInputRow")
+        self.input_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.input_widget.setStyleSheet("""
+            QWidget#chatInputRow {
+                background: transparent;
+                border: none;
+            }
+        """)
+        input_layout = QHBoxLayout(self.input_widget)
+        input_layout.setContentsMargins(8, 10, 8, 10)
+        input_layout.setSpacing(8)
         
         self.pending_attachments = []
         self.attach_file_btn = QPushButton()
@@ -145,17 +157,24 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         self.message_input.filesDropped.connect(self._handle_input_files_dropped)
         self.message_input.textDropped.connect(self._handle_input_text_dropped)
         self.message_input.attachmentRemoved.connect(self._handle_attachment_pill_removed)
+        self.message_input.composerHeightChanged.connect(self._sync_footer_height)
         
         self.send_button = QPushButton(); self.send_button.setFixedSize(40, 40)
         input_layout.addWidget(self.attach_file_btn); input_layout.addWidget(self.message_input); input_layout.addWidget(self.send_button)
+        input_layout.setAlignment(self.attach_file_btn, Qt.AlignmentFlag.AlignBottom)
+        input_layout.setAlignment(self.send_button, Qt.AlignmentFlag.AlignBottom)
         
-        bottom_container = QWidget(); bottom_layout = QVBoxLayout(bottom_container)
-        bottom_layout.setContentsMargins(0,0,0,0); bottom_layout.setSpacing(0); bottom_layout.addWidget(input_widget)
-        container_layout.addWidget(bottom_container)
+        self.bottom_container = QWidget()
+        self.bottom_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.bottom_container.setMinimumHeight(68)
+        bottom_layout = QVBoxLayout(self.bottom_container)
+        bottom_layout.setContentsMargins(0,0,0,0); bottom_layout.setSpacing(0); bottom_layout.addWidget(self.input_widget)
+        container_layout.addWidget(self.bottom_container)
 
         self.setCentralWidget(self.container)
         self._update_themed_styles()
         self.send_button.clicked.connect(self.send_message)
+        self._sync_footer_height()
 
         self.current_node = None
         self.loading_animation = None
@@ -253,14 +272,67 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         super().resizeEvent(event)
         self._update_overlay_positions()
 
+    def eventFilter(self, watched, event):
+        chat_view = getattr(self, 'chat_view', None)
+        viewport = chat_view.viewport() if chat_view else None
+        if watched in (chat_view, viewport):
+            if event.type() in {
+                QEvent.Type.Resize,
+                QEvent.Type.Move,
+                QEvent.Type.Show,
+                QEvent.Type.LayoutRequest,
+            }:
+                self._schedule_overlay_update()
+        return super().eventFilter(watched, event)
+
+    def _schedule_overlay_update(self):
+        if self._overlay_update_pending:
+            return
+        self._overlay_update_pending = True
+        QTimer.singleShot(0, self._flush_overlay_update)
+
+    def _flush_overlay_update(self):
+        self._overlay_update_pending = False
+        self._update_overlay_positions()
+
     def _update_overlay_positions(self):
-        padding = 10; viewport = self.chat_view.viewport()
-        if hasattr(self, 'notification_banner') and self.notification_banner.isVisible():
-            self.notification_banner.update_position()
-        if self.search_overlay and self.search_overlay.isVisible():
-            self.search_overlay.move(viewport.width() - self.search_overlay.width() - padding, padding)
-        if self.token_counter_widget and self.token_counter_widget.isVisible():
-            self.token_counter_widget.move(padding, viewport.height() - self.token_counter_widget.height() - padding)
+        search_overlay = getattr(self, 'search_overlay', None)
+        token_counter_widget = getattr(self, 'token_counter_widget', None)
+        notification_banner = getattr(self, 'notification_banner', None)
+        padding = 10
+        viewport = self.chat_view.viewport()
+
+        if notification_banner and notification_banner.isVisible():
+            notification_banner.update_position()
+        if search_overlay and search_overlay.isVisible():
+            search_overlay.move(viewport.width() - search_overlay.width() - padding, padding)
+        if token_counter_widget and token_counter_widget.isVisible():
+            token_y = viewport.height() - token_counter_widget.height() - padding
+            token_counter_widget.move(padding, max(padding, token_y))
+
+    def _sync_footer_height(self, *_):
+        if not hasattr(self, 'input_widget') or not hasattr(self, 'bottom_container'):
+            return
+
+        layout = self.input_widget.layout()
+        margins = layout.contentsMargins() if layout else None
+        top_margin = margins.top() if margins else 0
+        bottom_margin = margins.bottom() if margins else 0
+        composer_height = 0
+        if hasattr(self, 'message_input'):
+            composer_height = max(self.message_input.height(), self.message_input.sizeHint().height())
+        row_height = max(40, composer_height) + top_margin + bottom_margin
+        target_height = max(72, row_height)
+
+        self.input_widget.setFixedHeight(target_height)
+        self.bottom_container.setFixedHeight(target_height)
+        self.input_widget.updateGeometry()
+        self.bottom_container.updateGeometry()
+        if hasattr(self, 'container'):
+            self.container.updateGeometry()
+            if self.container.layout():
+                self.container.layout().activate()
+        self._schedule_overlay_update()
         
     def show_search_overlay(self):
         if not self.search_overlay:
