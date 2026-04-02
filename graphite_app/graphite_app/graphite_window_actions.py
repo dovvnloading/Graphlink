@@ -54,7 +54,7 @@ class WindowActionsMixin:
         if anchor_node is not None and anchor_node.scene() == self.chat_view.scene():
             loading.setParentItem(anchor_node)
             width, height = self._graphics_item_dimensions(anchor_node)
-            loading.setPos(QPointF(width + 54.0, height * 0.5))
+            loading.setPos(QPointF(width + loading.radius + 26.0, height * 0.5))
         else:
             self.chat_view.scene().addItem(loading)
             loading.setPos(QPointF(scene_pos) if scene_pos is not None else QPointF())
@@ -113,6 +113,8 @@ class WindowActionsMixin:
         if not preview:
             return
 
+        if hasattr(preview, "stop_animation"):
+            preview.stop_animation()
         scene = self.chat_view.scene()
         if scene:
             scene.unregister_transient_layout_item(preview)
@@ -263,7 +265,6 @@ class WindowActionsMixin:
             return
 
         self._show_pending_response_preview(user_node)
-        self._show_loading_animation(anchor_node=user_node)
 
         self.chat_thread = ChatWorkerThread(self.agent, history_for_worker, history_context_node)
         self.chat_thread.finished.connect(lambda new_message: self.handle_response(new_message, user_node, history_for_worker))
