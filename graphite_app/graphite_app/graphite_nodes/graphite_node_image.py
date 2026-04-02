@@ -5,6 +5,7 @@ from PySide6.QtWidgets import QGraphicsItem
 
 from graphite_canvas_items import Container, HoverAnimationMixin
 from graphite_config import get_current_palette, get_graph_node_colors
+from graphite_lod import draw_lod_card, lod_mode_for_item, preview_text
 
 
 class ImageNode(QGraphicsItem, HoverAnimationMixin):
@@ -23,6 +24,7 @@ class ImageNode(QGraphicsItem, HoverAnimationMixin):
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemUsesExtendedStyleOption)
         self.setAcceptHoverEvents(True)
         self.hovered = False
         self.is_search_match = False
@@ -47,6 +49,8 @@ class ImageNode(QGraphicsItem, HoverAnimationMixin):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
 
+        lod_mode = lod_mode_for_item(self)
+
         path = QPainterPath()
         path.addRoundedRect(0, 0, self.width, self.height, 10, 10)
 
@@ -60,6 +64,22 @@ class ImageNode(QGraphicsItem, HoverAnimationMixin):
             painter.setPen(QPen(node_colors["hover_outline"], 2))
         else:
             painter.setPen(QPen(node_colors["border"], 1))
+
+        if lod_mode != "full":
+            draw_lod_card(
+                painter,
+                QRectF(0, 0, self.width, self.height),
+                accent=node_colors["header_start"],
+                selection_color=palette.SELECTION,
+                title="Image",
+                subtitle="Generated asset",
+                preview=preview_text(self.prompt, fallback="Visual content"),
+                badge="IMG",
+                mode=lod_mode,
+                selected=self.isSelected() and not is_dragging,
+                hovered=self.hovered,
+            )
+            return
         painter.drawPath(path)
 
         header_path = QPainterPath()
