@@ -732,6 +732,35 @@ class AppearanceSettingsWidget(QWidget):
         self.enable_system_prompt_checkbox.setChecked(self.settings_manager.get_enable_system_prompt())
         layout.addWidget(self.enable_system_prompt_checkbox)
 
+        notification_divider = QFrame()
+        notification_divider.setFrameShape(QFrame.Shape.HLine)
+        notification_divider.setStyleSheet("background-color: rgba(255, 255, 255, 0.08); max-height: 1px; margin: 12px 0;")
+        layout.addWidget(notification_divider)
+
+        notification_title = QLabel("Notifications")
+        notification_title.setStyleSheet("color: #ffffff; font-weight: bold; margin-top: 2px;")
+        layout.addWidget(notification_title)
+
+        notification_intro = QLabel(
+            "Choose which banner flag types should appear. Turn off success banners if you want to hide the automatic chat-saved notice."
+        )
+        notification_intro.setWordWrap(True)
+        notification_intro.setStyleSheet("color: #d4d4d4;")
+        layout.addWidget(notification_intro)
+
+        notification_preferences = self.settings_manager.get_notification_preferences()
+        self.notification_type_checkboxes = {}
+        for notification_type, label in (
+            ("info", "Show Info Banners"),
+            ("success", "Show Success Banners"),
+            ("warning", "Show Warning Banners"),
+            ("error", "Show Error Banners"),
+        ):
+            checkbox = QCheckBox(label)
+            checkbox.setChecked(notification_preferences.get(notification_type, True))
+            layout.addWidget(checkbox)
+            self.notification_type_checkboxes[notification_type] = checkbox
+
         update_divider = QFrame()
         update_divider.setFrameShape(QFrame.Shape.HLine)
         update_divider.setStyleSheet("background-color: rgba(255, 255, 255, 0.08); max-height: 1px; margin: 12px 0;")
@@ -833,6 +862,10 @@ class AppearanceSettingsWidget(QWidget):
         self.settings_manager.set_show_welcome_screen(self.show_welcome_checkbox.isChecked())
         self.settings_manager.set_show_token_counter(self.show_token_counter_checkbox.isChecked())
         self.settings_manager.set_enable_system_prompt(self.enable_system_prompt_checkbox.isChecked())
+        self.settings_manager.set_notification_preferences({
+            notification_type: checkbox.isChecked()
+            for notification_type, checkbox in self.notification_type_checkboxes.items()
+        })
         self.settings_manager.set_update_notifications_enabled(
             self.enable_update_notifications_checkbox.isChecked()
         )
