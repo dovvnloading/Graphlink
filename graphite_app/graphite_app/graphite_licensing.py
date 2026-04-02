@@ -3,6 +3,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 class SettingsManager:
+    NOTIFICATION_TYPES = ("info", "success", "warning", "error")
+
     """
     Manages all persistent application state and user settings.
 
@@ -48,6 +50,11 @@ class SettingsManager:
                     state['enable_system_prompt'] = True
                 if 'update_notifications_enabled' not in state:
                     state['update_notifications_enabled'] = False
+                if 'notification_preferences' not in state or not isinstance(state.get('notification_preferences'), dict):
+                    state['notification_preferences'] = {}
+                for notification_type in self.NOTIFICATION_TYPES:
+                    if notification_type not in state['notification_preferences']:
+                        state['notification_preferences'][notification_type] = True
                 if 'update_status_message' not in state:
                     state['update_status_message'] = 'Automatic update checks are off.'
                 if 'update_status_level' not in state:
@@ -78,6 +85,7 @@ class SettingsManager:
             "api_models": {},
             "enable_system_prompt": True,
             "update_notifications_enabled": False,
+            "notification_preferences": {notification_type: True for notification_type in self.NOTIFICATION_TYPES},
             "update_status_message": "Automatic update checks are off.",
             "update_status_level": "info",
             "update_last_checked_at": "",
@@ -121,6 +129,25 @@ class SettingsManager:
 
     def set_enable_system_prompt(self, enabled: bool):
         self.state["enable_system_prompt"] = bool(enabled)
+        self._save_state()
+
+    def get_notification_preferences(self):
+        saved_preferences = self.state.get("notification_preferences", {}) or {}
+        return {
+            notification_type: bool(saved_preferences.get(notification_type, True))
+            for notification_type in self.NOTIFICATION_TYPES
+        }
+
+    def get_notification_type_enabled(self, notification_type: str):
+        normalized_type = str(notification_type or "info").strip().lower()
+        return self.get_notification_preferences().get(normalized_type, True)
+
+    def set_notification_preferences(self, preferences: dict):
+        current_preferences = self.get_notification_preferences()
+        for notification_type in self.NOTIFICATION_TYPES:
+            if notification_type in preferences:
+                current_preferences[notification_type] = bool(preferences[notification_type])
+        self.state["notification_preferences"] = current_preferences
         self._save_state()
 
     def get_update_notifications_enabled(self):
