@@ -1,4 +1,5 @@
 import os
+import webbrowser
 import qtawesome as qta
 from PySide6.QtCore import QPoint, QSize, Qt, Signal
 from PySide6.QtGui import QGuiApplication
@@ -14,6 +15,7 @@ import graphite_config as config
 from graphite_agents import ModelPullWorkerThread
 from graphite_styles import THEMES
 from graphite_config import apply_theme, get_current_palette, set_current_model
+from graphite_update import APP_VERSION, UPDATE_REPOSITORY_URL
 
 
 class SettingsComboPopup(QFrame):
@@ -729,6 +731,52 @@ class AppearanceSettingsWidget(QWidget):
         )
         self.enable_system_prompt_checkbox.setChecked(self.settings_manager.get_enable_system_prompt())
         layout.addWidget(self.enable_system_prompt_checkbox)
+
+        update_divider = QFrame()
+        update_divider.setFrameShape(QFrame.Shape.HLine)
+        update_divider.setStyleSheet("background-color: rgba(255, 255, 255, 0.08); max-height: 1px; margin: 12px 0;")
+        layout.addWidget(update_divider)
+
+        update_title = QLabel("Updates")
+        update_title.setStyleSheet("color: #ffffff; font-weight: bold; margin-top: 2px;")
+        layout.addWidget(update_title)
+
+        update_intro = QLabel(
+            f"Current build: {APP_VERSION}. Graphlink can check a GitHub version signal on startup or whenever you request it."
+        )
+        update_intro.setWordWrap(True)
+        update_intro.setStyleSheet("color: #d4d4d4;")
+        layout.addWidget(update_intro)
+
+        self.enable_update_notifications_checkbox = QCheckBox("Enable Update Notifications on Startup")
+        self.enable_update_notifications_checkbox.setToolTip(
+            "When enabled, Graphlink checks the GitHub update signal after the app opens."
+        )
+        self.enable_update_notifications_checkbox.setChecked(
+            self.settings_manager.get_update_notifications_enabled()
+        )
+        layout.addWidget(self.enable_update_notifications_checkbox)
+
+        self.update_status_label = QLabel()
+        self.update_status_label.setWordWrap(True)
+        self.update_status_label.setMinimumHeight(44)
+        layout.addWidget(self.update_status_label)
+
+        self.update_timestamp_label = QLabel()
+        self.update_timestamp_label.setWordWrap(True)
+        self.update_timestamp_label.setStyleSheet("color: #8d8d8d; font-size: 11px;")
+        layout.addWidget(self.update_timestamp_label)
+
+        update_button_row = QHBoxLayout()
+        self.check_updates_button = QPushButton("Check for Updates")
+        self.check_updates_button.clicked.connect(self.check_for_updates)
+        update_button_row.addWidget(self.check_updates_button)
+
+        self.open_repo_button = QPushButton("Open Repository")
+        self.open_repo_button.clicked.connect(lambda: webbrowser.open(UPDATE_REPOSITORY_URL))
+        update_button_row.addWidget(self.open_repo_button)
+        update_button_row.addStretch()
+        layout.addLayout(update_button_row)
         
         layout.addStretch()
 
@@ -738,6 +786,45 @@ class AppearanceSettingsWidget(QWidget):
         self.apply_button.clicked.connect(self.apply_settings)
         button_layout.addWidget(self.apply_button)
         layout.addLayout(button_layout)
+        self.refresh_update_status()
+
+    def refresh_update_status(self):
+        status_message = self.settings_manager.get_update_status_message()
+        status_level = self.settings_manager.get_update_status_level()
+        color_map = {
+            "success": "#2ecc71",
+            "warning": "#f5c04f",
+            "error": "#e74c3c",
+            "info": "#8fb7ff",
+        }
+        self.update_status_label.setText(status_message)
+        self.update_status_label.setStyleSheet(
+            f"color: {color_map.get(status_level, '#d4d4d4')}; font-size: 12px;"
+        )
+
+        checked_at = self.settings_manager.get_update_last_checked_at()
+        latest_version = self.settings_manager.get_update_latest_version()
+        details = []
+        if latest_version:
+            details.append(f"GitHub signal: {latest_version}")
+        if checked_at:
+            details.append(f"Last checked: {checked_at}")
+        if not details:
+            details.append("No update check has run yet.")
+        self.update_timestamp_label.setText(" | ".join(details))
+
+    def set_update_check_in_progress(self, in_progress: bool):
+        self.check_updates_button.setEnabled(not in_progress)
+        self.check_updates_button.setText("Checking..." if in_progress else "Check for Updates")
+
+    def check_for_updates(self):
+        main_window = self.window().parent()
+        if main_window and hasattr(main_window, "check_for_updates"):
+            self.set_update_check_in_progress(True)
+            main_window.check_for_updates(manual=True, status_target=self)
+            return
+        self.set_update_check_in_progress(False)
+        QMessageBox.warning(self, "Update Check Unavailable", "The main window is not available for update checks.")
 
     def apply_settings(self):
         theme_name = "mono" if self.desaturate_checkbox.isChecked() else "dark"
@@ -746,6 +833,10 @@ class AppearanceSettingsWidget(QWidget):
         self.settings_manager.set_show_welcome_screen(self.show_welcome_checkbox.isChecked())
         self.settings_manager.set_show_token_counter(self.show_token_counter_checkbox.isChecked())
         self.settings_manager.set_enable_system_prompt(self.enable_system_prompt_checkbox.isChecked())
+        self.settings_manager.set_update_notifications_enabled(
+            self.enable_update_notifications_checkbox.isChecked()
+        )
+        self.refresh_update_status()
 
         app = QApplication.instance()
         apply_theme(app, theme_name)
@@ -754,7 +845,7 @@ class AppearanceSettingsWidget(QWidget):
         if main_window and hasattr(main_window, 'on_settings_changed'):
             main_window.on_settings_changed()
 
-        QMessageBox.information(self, "Settings Applied", "Appearance settings have been saved.")
+        QMessageBox.information(self, "Settings Applied", "General settings have been saved.")
 
 
 class SettingsCategoryButton(QPushButton):
