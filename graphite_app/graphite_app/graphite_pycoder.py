@@ -16,6 +16,7 @@ from PySide6.QtCore import QRectF, Qt, Property, QPropertyAnimation, QEasingCurv
 from PySide6.QtGui import QPainter, QColor, QBrush, QPen, QPainterPath, QIcon, QSyntaxHighlighter, QTextCharFormat, QFont
 import qtawesome as qta
 from graphite_config import get_current_palette, get_graph_node_colors, get_neutral_button_colors, get_semantic_color
+from graphite_lod import draw_lod_card, preview_text, sync_proxy_render_state
 
 from graphite_agents_pycoder import PyCoderStage, PyCoderStatus, PythonREPL
 from graphite_canvas_items import HoverAnimationMixin
@@ -337,8 +338,10 @@ class PyCoderNode(QGraphicsItem, HoverAnimationMixin):
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemUsesExtendedStyleOption)
         self.setAcceptHoverEvents(True)
         self.hovered = False
+        self._render_lod_mode = "full"
 
         self.widget = QWidget()
         self.widget.setObjectName("pyCoderMainWidget")
@@ -376,15 +379,21 @@ class PyCoderNode(QGraphicsItem, HoverAnimationMixin):
     def set_collapsed(self, collapsed):
         if self.is_collapsed != collapsed:
             self.is_collapsed = collapsed
-            self.proxy.setVisible(not self.is_collapsed)
+            self.proxy.setVisible(not self.is_collapsed and self._render_lod_mode == "full")
             self.prepareGeometryChange()
             if self.scene():
+                self.sync_view_lod()
                 self.scene().update_connections()
                 self.scene().nodeMoved(self)
             self.update()
 
     def toggle_collapse(self):
         self.set_collapsed(not self.is_collapsed)
+
+    def sync_view_lod(self, view_rect=None, zoom=None):
+        sync_proxy_render_state(self, view_rect, zoom)
+        if not self.is_collapsed:
+            self.update()
 
     def _setup_ui(self):
         main_layout = QVBoxLayout(self.widget)
@@ -614,6 +623,7 @@ class PyCoderNode(QGraphicsItem, HoverAnimationMixin):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         palette = get_current_palette()
         node_colors = get_graph_node_colors()
+        render_mode = getattr(self, "_render_lod_mode", "full")
         
         path = QPainterPath()
         path.addRoundedRect(0, 0, self.width, self.height, 10, 10)
@@ -642,6 +652,24 @@ class PyCoderNode(QGraphicsItem, HoverAnimationMixin):
         
         dot_rect_right = QRectF(self.width - self.CONNECTION_DOT_RADIUS, (self.height / 2) - self.CONNECTION_DOT_RADIUS, self.CONNECTION_DOT_RADIUS * 2, self.CONNECTION_DOT_RADIUS * 2)
         painter.drawPie(dot_rect_right, 90 * 16, 180 * 16)
+
+        if not self.is_collapsed and render_mode != "full":
+            self.collapse_button_rect = QRectF()
+            draw_lod_card(
+                painter,
+                QRectF(0, 0, self.width, self.height),
+                accent=pycoder_color,
+                selection_color=palette.SELECTION,
+                title=f"Py-Coder ({'AI' if self.mode == PyCoderMode.AI_DRIVEN else 'Manual'})",
+                subtitle="Running" if self.is_running else ("AI-driven execution" if self.mode == PyCoderMode.AI_DRIVEN else "Manual execution"),
+                preview=preview_text(self.get_prompt(), self.get_code(), self.output_display.toPlainText(), fallback="Python workflow"),
+                badge="PY",
+                mode=render_mode,
+                selected=self.isSelected(),
+                hovered=self.hovered,
+                connection_radius=self.CONNECTION_DOT_RADIUS,
+            )
+            return
 
         if self.is_collapsed:
             painter.setPen(QColor("#ffffff"))
