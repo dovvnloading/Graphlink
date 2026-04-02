@@ -72,6 +72,7 @@ class ChatScene(QGraphicsScene):
         self.code_review_nodes = []
         self.gitlink_nodes = []
         self.chart_nodes = []
+        self.transient_layout_items = []
         
         self.content_connections = []
         self.document_connections = []
@@ -162,6 +163,12 @@ class ChatScene(QGraphicsScene):
                     conn.sync_visibility_mode()
                 else:
                     conn.update()
+
+    def update_view_lod(self, view_rect=None, zoom=None):
+        for item in self.items():
+            sync_lod = getattr(item, "sync_view_lod", None)
+            if callable(sync_lod):
+                sync_lod(view_rect, zoom)
 
     def _all_connection_lists(self):
         return [
@@ -306,7 +313,7 @@ class ChatScene(QGraphicsScene):
                 node.is_search_match = is_match
                 node.update()
 
-    def add_chat_node(self, text, is_user=True, parent_node=None, conversation_history=None):
+    def add_chat_node(self, text, is_user=True, parent_node=None, conversation_history=None, preferred_pos=None):
         """
         Creates and adds a new ChatNode to the scene.
 
@@ -337,13 +344,14 @@ class ChatScene(QGraphicsScene):
             
             # If there's a parent, position the new node relative to it and create a connection.
             if parent_node:
-                parent_pos = parent_node.pos()
                 parent_node.children.append(node)
                 node.parent_node = parent_node
                 
                 # Find an open position to the right of the parent.
-                base_pos = QPointF(parent_pos.x() + self.horizontal_spacing, parent_pos.y())
-                node.setPos(self.find_free_position(base_pos, node))
+                if preferred_pos is not None:
+                    node.setPos(self.find_free_position(QPointF(preferred_pos), node, strategy="branch"))
+                else:
+                    node.setPos(self.find_branch_position(parent_node, node))
                 
                 connection = ConnectionItem(parent_node, node)
                 node.incoming_connection = connection
@@ -351,7 +359,8 @@ class ChatScene(QGraphicsScene):
                 self.connections.append(connection)
             else:
                 # Default position for root nodes.
-                node.setPos(50, 150)
+                root_base = QPointF(preferred_pos) if preferred_pos is not None else QPointF(50, 150)
+                node.setPos(self.find_free_position(root_base, node, strategy="general"))
             
             self.addItem(node)
             self.nodes.append(node)
@@ -367,13 +376,13 @@ class ChatScene(QGraphicsScene):
 
     def _get_next_content_node_y(self, parent_node):
         """Calculates the Y position for a new content node below its parent."""
-        last_y = parent_node.pos().y() + parent_node.height
+        last_y = parent_node.scenePos().y() + parent_node.height
         
         # Check for existing content nodes to stack below them
         all_content_nodes = self.code_nodes + self.document_nodes + self.image_nodes + self.thinking_nodes
         for node in all_content_nodes:
             if hasattr(node, 'parent_content_node') and node.parent_content_node == parent_node:
-                last_y = max(last_y, node.pos().y() + node.height)
+                last_y = max(last_y, node.scenePos().y() + node.height)
                 
         return last_y + 50
 
@@ -390,8 +399,7 @@ class ChatScene(QGraphicsScene):
             CodeNode: The newly created node.
         """
         node = CodeNode(code, language, parent_content_node)
-        y_pos = self._get_next_content_node_y(parent_content_node)
-        node.setPos(QPointF(parent_content_node.pos().x(), y_pos))
+        node.setPos(self.find_content_position(parent_content_node, node))
         
         self.addItem(node)
         self.code_nodes.append(node)
@@ -416,8 +424,7 @@ class ChatScene(QGraphicsScene):
             ImageNode: The newly created node.
         """
         node = ImageNode(image_bytes, parent_chat_node, prompt)
-        y_pos = self._get_next_content_node_y(parent_chat_node)
-        node.setPos(QPointF(parent_chat_node.pos().x(), y_pos))
+        node.setPos(self.find_content_position(parent_chat_node, node))
         
         self.addItem(node)
         self.image_nodes.append(node)
@@ -442,8 +449,7 @@ class ChatScene(QGraphicsScene):
             DocumentNode: The newly created node.
         """
         node = DocumentNode(title, content, parent_user_node)
-        y_pos = self._get_next_content_node_y(parent_user_node)
-        node.setPos(QPointF(parent_user_node.pos().x(), y_pos))
+        node.setPos(self.find_content_position(parent_user_node, node))
         
         self.addItem(node)
         self.document_nodes.append(node)
@@ -467,8 +473,7 @@ class ChatScene(QGraphicsScene):
             ThinkingNode: The newly created node.
         """
         node = ThinkingNode(thinking_text, parent_chat_node)
-        y_pos = self._get_next_content_node_y(parent_chat_node)
-        node.setPos(QPointF(parent_chat_node.pos().x(), y_pos))
+        node.setPos(self.find_content_position(parent_chat_node, node))
         
         self.addItem(node)
         self.thinking_nodes.append(node)
@@ -536,7 +541,8 @@ class ChatScene(QGraphicsScene):
     def add_chart(self, data, pos, parent_content_node=None):
         """Adds a new ChartItem to the scene."""
         chart = ChartItem(data, pos, parent_content_node=parent_content_node)
-        chart.setPos(self.find_free_position(pos, chart))
+        strategy = "content" if parent_content_node is not None else "general"
+        chart.setPos(self.find_free_position(pos, chart, strategy=strategy))
         self.chart_nodes.append(chart)
         self.addItem(chart)
         self.scene_changed.emit()
@@ -748,45 +754,123 @@ class ChatScene(QGraphicsScene):
         for node in self._all_layout_nodes():
             node.setSelected(True)
 
+    def register_transient_layout_item(self, item):
+        if item and item not in self.transient_layout_items:
+            self.transient_layout_items.append(item)
+
+    def unregister_transient_layout_item(self, item):
+        if item in self.transient_layout_items:
+            self.transient_layout_items.remove(item)
+
+    def _spawn_spacing_for(self, item):
+        conversational_types = (
+            ChatNode, PyCoderNode, CodeSandboxNode, WebNode, ConversationNode,
+            ReasoningNode, HtmlViewNode, ArtifactNode, WorkflowNode, GraphDiffNode,
+            QualityGateNode, CodeReviewNode, GitlinkNode,
+        )
+        content_types = (CodeNode, DocumentNode, ImageNode, ThinkingNode, ChartItem)
+
+        if isinstance(item, conversational_types):
+            return 110.0, 80.0
+        if isinstance(item, content_types):
+            return 70.0, 55.0
+        if isinstance(item, (Note, Frame, Container)):
+            return 60.0, 50.0
+
+        return 80.0, 60.0
+
     def calculate_node_rect(self, node, pos):
-        """Calculates a padded bounding rectangle for collision detection."""
-        PADDING = 30
-        return QRectF(pos.x() - PADDING, pos.y() - PADDING, node.width + (PADDING * 2), node.height + (PADDING * 2))
+        """Calculates a padded scene rectangle used for spawn collision detection."""
+        width, height = self._get_node_dimensions(node)
+        padding_x, padding_y = self._spawn_spacing_for(node)
+        return QRectF(
+            pos.x() - padding_x,
+            pos.y() - padding_y,
+            width + (padding_x * 2),
+            height + (padding_y * 2),
+        )
 
     def check_collision(self, test_rect, ignore_node=None):
         """Checks if a given rectangle intersects with any existing nodes."""
-        for node in self._all_layout_nodes() + self.notes:
-            if node == ignore_node: continue
-            node_rect = self.calculate_node_rect(node, node.pos())
+        obstacles = self._all_layout_nodes() + self.notes + self.frames + self.containers + self.transient_layout_items
+        for node in obstacles:
+            if node == ignore_node or not node or node.scene() != self:
+                continue
+            node_rect = self.calculate_node_rect(node, node.scenePos())
             if test_rect.intersects(node_rect):
                 return True
         return False
 
-    def find_free_position(self, base_pos, node, max_attempts=50):
-        """
-        Finds an unoccupied position for a new node, searching in a spiral pattern
-        outward from a base position.
-        """
-        # Generator for spiral positions.
-        def spiral_positions():
-            x, y = base_pos.x(), base_pos.y()
-            layer = 1
-            while True:
-                for i in range(layer): yield QPointF(x, y); x += self.horizontal_spacing // 2
-                for i in range(layer): yield QPointF(x, y); y += self.vertical_spacing
-                for i in range(layer): yield QPointF(x, y); x -= self.horizontal_spacing // 2
-                for i in range(layer): yield QPointF(x, y); y -= self.vertical_spacing
-                layer += 1
+    def _candidate_offsets(self, limit):
+        offsets = [0]
+        distance = 1
+        while len(offsets) < limit:
+            offsets.append(distance)
+            if len(offsets) < limit:
+                offsets.append(-distance)
+            distance += 1
+        return offsets
 
-        for pos in spiral_positions():
-            if max_attempts <= 0: break
+    def _iter_spawn_candidates(self, base_pos, node, strategy):
+        width, height = self._get_node_dimensions(node)
+        padding_x, padding_y = self._spawn_spacing_for(node)
+        step_x = max(self.horizontal_spacing + 20.0, width + padding_x)
+        step_y = max(self.vertical_spacing + 20.0, height + padding_y)
+
+        base_x = float(base_pos.x())
+        base_y = float(base_pos.y())
+
+        if strategy == "branch":
+            for col in range(0, 14):
+                x = base_x + (col * step_x)
+                for row_offset in self._candidate_offsets(15):
+                    yield QPointF(x, base_y + (row_offset * step_y))
+            return
+
+        if strategy == "content":
+            for row in range(0, 14):
+                y = base_y + (row * step_y)
+                lateral_step = max(step_x * 0.7, width + 40.0)
+                for col_offset in self._candidate_offsets(11):
+                    yield QPointF(base_x + (col_offset * lateral_step), y)
+            return
+
+        for ring in range(0, 14):
+            if ring == 0:
+                yield QPointF(base_x, base_y)
+                continue
+            delta_x = ring * step_x
+            delta_y = ring * step_y
+            for row_offset in self._candidate_offsets((ring * 2) + 1):
+                yield QPointF(base_x + delta_x, base_y + (row_offset * step_y))
+            for col_offset in self._candidate_offsets(ring * 2):
+                yield QPointF(base_x + (col_offset * step_x), base_y + delta_y)
+                yield QPointF(base_x + (col_offset * step_x), base_y - delta_y)
+
+    def find_free_position(self, base_pos, node, strategy="general"):
+        """Finds a collision-safe scene position for a new node."""
+        for pos in self._iter_spawn_candidates(base_pos, node, strategy):
             test_rect = self.calculate_node_rect(node, pos)
             if not self.check_collision(test_rect, node):
                 return pos
-            max_attempts -= 1
 
-        # Fallback if no free position is found.
-        return QPointF(base_pos.x(), base_pos.y() + len(self._all_layout_nodes()) * self.vertical_spacing)
+        _, height = self._get_node_dimensions(node)
+        _, padding_y = self._spawn_spacing_for(node)
+        fallback_y = base_pos.y() + len(self._all_layout_nodes() + self.transient_layout_items + self.notes) * max(self.vertical_spacing, height + padding_y)
+        return QPointF(base_pos.x(), fallback_y)
+
+    def branch_spawn_base(self, parent_node, node=None):
+        parent_width, _ = self._get_node_dimensions(parent_node)
+        horizontal_gap = max(140.0, float(self.horizontal_spacing) + 10.0)
+        return QPointF(parent_node.scenePos().x() + parent_width + horizontal_gap, parent_node.scenePos().y())
+
+    def find_branch_position(self, parent_node, node):
+        return self.find_free_position(self.branch_spawn_base(parent_node, node), node, strategy="branch")
+
+    def find_content_position(self, parent_node, node):
+        y_pos = self._get_next_content_node_y(parent_node)
+        base_pos = QPointF(parent_node.scenePos().x(), y_pos)
+        return self.find_free_position(base_pos, node, strategy="content")
 
     def mousePressEvent(self, event):
         """Handles mouse press events for adding/removing connection pins."""
