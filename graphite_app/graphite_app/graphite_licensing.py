@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 class SettingsManager:
@@ -45,6 +46,18 @@ class SettingsManager:
                     state['api_models'] = {}
                 if 'enable_system_prompt' not in state:
                     state['enable_system_prompt'] = True
+                if 'update_notifications_enabled' not in state:
+                    state['update_notifications_enabled'] = False
+                if 'update_status_message' not in state:
+                    state['update_status_message'] = 'Automatic update checks are off.'
+                if 'update_status_level' not in state:
+                    state['update_status_level'] = 'info'
+                if 'update_last_checked_at' not in state:
+                    state['update_last_checked_at'] = ''
+                if 'update_latest_version' not in state:
+                    state['update_latest_version'] = ''
+                if 'update_available' not in state:
+                    state['update_available'] = False
                 return state
         except (json.JSONDecodeError, IOError):
             return self._create_initial_state()
@@ -64,6 +77,12 @@ class SettingsManager:
             "github_access_token": "",
             "api_models": {},
             "enable_system_prompt": True,
+            "update_notifications_enabled": False,
+            "update_status_message": "Automatic update checks are off.",
+            "update_status_level": "info",
+            "update_last_checked_at": "",
+            "update_latest_version": "",
+            "update_available": False,
         }
         self._save_state(state)
         return state
@@ -102,6 +121,44 @@ class SettingsManager:
 
     def set_enable_system_prompt(self, enabled: bool):
         self.state["enable_system_prompt"] = bool(enabled)
+        self._save_state()
+
+    def get_update_notifications_enabled(self):
+        return self.state.get("update_notifications_enabled", False)
+
+    def set_update_notifications_enabled(self, enabled: bool):
+        self.state["update_notifications_enabled"] = bool(enabled)
+        if enabled and self.state.get("update_status_message") == "Automatic update checks are off.":
+            self.state["update_status_message"] = "Automatic update checks are enabled."
+        elif not enabled:
+            self.state["update_status_message"] = "Automatic update checks are off."
+            self.state["update_status_level"] = "info"
+        self._save_state()
+
+    def get_update_status_message(self):
+        return self.state.get("update_status_message", "Automatic update checks are off.")
+
+    def get_update_status_level(self):
+        return self.state.get("update_status_level", "info")
+
+    def get_update_last_checked_at(self):
+        return self.state.get("update_last_checked_at", "")
+
+    def get_update_latest_version(self):
+        return self.state.get("update_latest_version", "")
+
+    def get_update_available(self):
+        return self.state.get("update_available", False)
+
+    def record_update_check_result(self, result: dict):
+        result = result or {}
+        self.state["update_status_message"] = str(result.get("message", "Update check finished.")).strip()
+        self.state["update_status_level"] = str(result.get("level", "info")).strip() or "info"
+        self.state["update_last_checked_at"] = str(
+            result.get("checked_at") or datetime.now(timezone.utc).isoformat()
+        )
+        self.state["update_latest_version"] = str(result.get("remote_version", "")).strip()
+        self.state["update_available"] = bool(result.get("update_available", False))
         self._save_state()
 
     def get_ollama_chat_model(self):
