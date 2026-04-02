@@ -8,7 +8,9 @@ import qtawesome as qta
 from graphite_config import get_current_palette, get_graph_node_colors, get_neutral_button_colors, get_semantic_color
 from graphite_connections import ConnectionItem
 from graphite_canvas_items import HoverAnimationMixin
+from graphite_lod import draw_lod_card, preview_text, sync_proxy_render_state
 from graphite_memory import append_history, get_node_history
+from graphite_plugin_context_menu import PluginNodeContextMenu
 
 
 class WebConnectionItem(ConnectionItem):
@@ -120,8 +122,10 @@ class WebNode(QGraphicsObject, HoverAnimationMixin):
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemUsesExtendedStyleOption)
         self.setAcceptHoverEvents(True)
         self.hovered = False
+        self._render_lod_mode = "full"
 
         # Use a QGraphicsProxyWidget to embed standard Qt widgets into the graphics item.
         self.widget = QWidget()
@@ -155,15 +159,21 @@ class WebNode(QGraphicsObject, HoverAnimationMixin):
     def set_collapsed(self, collapsed):
         if self.is_collapsed != collapsed:
             self.is_collapsed = collapsed
-            self.proxy.setVisible(not self.is_collapsed)
+            self.proxy.setVisible(not self.is_collapsed and self._render_lod_mode == "full")
             self.prepareGeometryChange()
             if self.scene():
+                self.sync_view_lod()
                 self.scene().update_connections()
                 self.scene().nodeMoved(self)
             self.update()
 
     def toggle_collapse(self):
         self.set_collapsed(not self.is_collapsed)
+
+    def sync_view_lod(self, view_rect=None, zoom=None):
+        sync_proxy_render_state(self, view_rect, zoom)
+        if not self.is_collapsed:
+            self.update()
 
     def _setup_ui(self):
         """Constructs the internal widget layout and components of the node."""
@@ -332,6 +342,7 @@ class WebNode(QGraphicsObject, HoverAnimationMixin):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         palette = get_current_palette()
         node_colors = get_graph_node_colors()
+        render_mode = getattr(self, "_render_lod_mode", "full")
         
         path = QPainterPath()
         path.addRoundedRect(0, 0, self.width, self.height, 10, 10)
@@ -361,7 +372,25 @@ class WebNode(QGraphicsObject, HoverAnimationMixin):
         
         dot_rect_right = QRectF(self.width - self.CONNECTION_DOT_RADIUS, (self.height / 2) - self.CONNECTION_DOT_RADIUS, self.CONNECTION_DOT_RADIUS * 2, self.CONNECTION_DOT_RADIUS * 2)
         painter.drawPie(dot_rect_right, 90 * 16, 180 * 16)
-        
+
+        if not self.is_collapsed and render_mode != "full":
+            self.collapse_button_rect = QRectF()
+            draw_lod_card(
+                painter,
+                QRectF(0, 0, self.width, self.height),
+                accent=node_color,
+                selection_color=palette.SELECTION,
+                title="Web Search",
+                subtitle=self.status or "Idle",
+                preview=preview_text(self.query, self.summary, fallback="Search the web"),
+                badge="WEB",
+                mode=render_mode,
+                selected=self.isSelected(),
+                hovered=self.hovered,
+                connection_radius=self.CONNECTION_DOT_RADIUS,
+            )
+            return
+
         if self.is_collapsed:
             painter.setPen(QColor("#ffffff"))
             font = QFont("Segoe UI", 10, QFont.Weight.Bold)
@@ -400,6 +429,10 @@ class WebNode(QGraphicsObject, HoverAnimationMixin):
             if hasattr(self.scene(), 'window'):
                 self.scene().window.setCurrentNode(self)
         super().mousePressEvent(event)
+
+    def contextMenuEvent(self, event):
+        menu = PluginNodeContextMenu(self)
+        menu.exec(event.screenPos())
 
     def mouseReleaseEvent(self, event):
         """Handles mouse release to stop dragging and clear smart guides."""
