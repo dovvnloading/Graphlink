@@ -453,6 +453,11 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         self.session_manager.save_current_chat()
         self.notification_banner.show_message("Chat saved in background.", 3000, "success")
 
+    def should_show_notification(self, msg_type):
+        if not hasattr(self, "settings_manager") or self.settings_manager is None:
+            return True
+        return self.settings_manager.get_notification_type_enabled(msg_type)
+
     def setup_toolbar(self, toolbar):
         toolbar.setIconSize(QSize(20, 20)); toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         toolbar.setStyleSheet("QToolBar { spacing: 4px; padding: 4px; } QToolButton { color: white; background: transparent; border: none; border-radius: 4px; padding: 6px; margin: 2px; font-size: 12px; } QToolButton:hover { background: rgba(255, 255, 255, 0.1); }")
