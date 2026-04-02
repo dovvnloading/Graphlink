@@ -314,6 +314,8 @@ class PyCoderNode(QGraphicsItem, HoverAnimationMixin):
     A specialized QGraphicsItem that provides a UI for both AI-driven code generation
     and manual code execution, styled like a modern IDE pane.
     """
+    supports_branch_context_toggle = True
+
     NODE_WIDTH = 550
     NODE_HEIGHT = 700
     COLLAPSED_WIDTH = 250
