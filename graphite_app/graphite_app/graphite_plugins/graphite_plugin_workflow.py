@@ -561,6 +561,7 @@ class WorkflowConnectionItem(ConnectionItem):
 
 
 class WorkflowNode(QGraphicsObject, HoverAnimationMixin):
+    supports_branch_context_toggle = True
     workflow_requested = Signal(object)
     plugin_requested = Signal(object, str, str)
 
