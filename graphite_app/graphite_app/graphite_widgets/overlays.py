@@ -8,9 +8,10 @@ from graphite_config import get_current_palette
 from .loading_visuals import paint_orbital_loading_spinner
 
 class LoadingAnimation(QGraphicsObject):
-    def __init__(self, parent=None):
+    def __init__(self, diameter=56.0, parent=None):
         super().__init__(parent)
         self.setZValue(100) 
+        self.diameter = max(36.0, float(diameter))
         self._angle1 = 0.0
         self._angle2 = 0.0
         self._angle3 = 0.0
@@ -39,8 +40,12 @@ class LoadingAnimation(QGraphicsObject):
         self.anim_group.addAnimation(self.anim3)
         self.anim_group.setLoopCount(-1)
 
+    @property
+    def radius(self):
+        return self.diameter * 0.5
+
     def boundingRect(self):
-        return QRectF(-24, -24, 48, 48)
+        return QRectF(-self.radius, -self.radius, self.diameter, self.diameter)
 
     def paint(self, painter, option, widget):
         paint_orbital_loading_spinner(
@@ -88,7 +93,7 @@ class LoadingAnimation(QGraphicsObject):
 class GhostNodePreview(QGraphicsObject):
     """A transient placeholder that reserves and visualizes a pending node spawn."""
 
-    def __init__(self, width=420, height=128, title="Generating response", subtitle="Node reserved here", parent=None):
+    def __init__(self, width=420, height=128, title="Generating reply", subtitle="Assistant response will appear here", parent=None):
         super().__init__(parent)
         self.width = max(220.0, float(width))
         self.height = max(88.0, float(height))
@@ -97,23 +102,44 @@ class GhostNodePreview(QGraphicsObject):
         self.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
         self.setAcceptHoverEvents(False)
         self.setZValue(90)
+        spinner_diameter = min(92.0, max(64.0, self.height * 0.52))
+        self._spinner = LoadingAnimation(diameter=spinner_diameter, parent=self)
+        self._spinner.setZValue(1)
+        self._spinner.start()
+        self._layout_loading_visual()
 
     def boundingRect(self):
         return QRectF(-8, -8, self.width + 16, self.height + 16)
 
+    def _layout_loading_visual(self):
+        left_column_width = min(136.0, max(104.0, self.width * 0.26))
+        spinner_center = QPointF(left_column_width * 0.5, self.height * 0.60)
+        self._spinner.setPos(spinner_center)
+
+    def stop_animation(self):
+        self._spinner.stop()
+
     def paint(self, painter, option, widget):
         palette = get_current_palette()
+        accent = QColor(palette.AI_NODE)
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
 
         body_rect = QRectF(0, 0, self.width, self.height)
-        outline = QColor(palette.SELECTION)
-        outline.setAlpha(170)
-        fill = QColor(palette.SELECTION)
-        fill.setAlpha(28)
-        glow = QColor(palette.SELECTION)
-        glow.setAlpha(54)
+        left_column_width = min(136.0, max(104.0, self.width * 0.26))
+        content_left = left_column_width + 14.0
+
+        outline = QColor(accent)
+        outline.setAlpha(188)
+        fill = QColor("#12171d")
+        fill.setAlpha(236)
+        panel_fill = QColor(accent)
+        panel_fill.setAlpha(24)
+        glow = QColor(accent)
+        glow.setAlpha(58)
+        badge_fill = QColor(accent)
+        badge_fill.setAlpha(68)
 
         shadow_path = QPainterPath()
         shadow_path.addRoundedRect(body_rect.adjusted(4, 5, 4, 5), 12, 12)
@@ -129,28 +155,57 @@ class GhostNodePreview(QGraphicsObject):
 
         painter.save()
         painter.setClipPath(node_path)
-        painter.fillRect(QRectF(body_rect.left(), body_rect.top(), 5, body_rect.height()), glow)
+        painter.fillRect(QRectF(body_rect.left(), body_rect.top(), left_column_width, body_rect.height()), panel_fill)
+        painter.fillRect(QRectF(body_rect.left(), body_rect.top(), 6, body_rect.height()), glow)
         painter.restore()
 
-        spinner_rect = QRectF(18, (self.height - 26) * 0.5, 26, 26)
-        paint_orbital_loading_spinner(painter, spinner_rect, 42.0, 170.0, 264.0)
+        painter.setPen(QPen(QColor(255, 255, 255, 24), 1))
+        painter.drawLine(
+            QPointF(left_column_width, 18),
+            QPointF(left_column_width, self.height - 18),
+        )
 
-        title_font = QFont("Segoe UI", 10, QFont.Weight.DemiBold)
+        badge_rect = QRectF(20, 18, 94, 24)
+        badge_path = QPainterPath()
+        badge_path.addRoundedRect(badge_rect, 12, 12)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(badge_fill)
+        painter.drawPath(badge_path)
+
+        badge_font = QFont("Segoe UI", 8, QFont.Weight.DemiBold)
+        painter.setFont(badge_font)
+        painter.setPen(QColor("#eef6ff"))
+        painter.drawText(
+            badge_rect,
+            Qt.AlignmentFlag.AlignCenter,
+            "ASSISTANT",
+        )
+
+        title_font = QFont("Segoe UI", 11, QFont.Weight.DemiBold)
         painter.setFont(title_font)
         painter.setPen(QColor("#eef6ff"))
         painter.drawText(
-            QRectF(58, 24, self.width - 76, 22),
+            QRectF(content_left, 34, self.width - content_left - 20, 24),
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
             self.title,
         )
 
-        subtitle_font = QFont("Segoe UI", 8)
+        subtitle_font = QFont("Segoe UI", 9)
         painter.setFont(subtitle_font)
         painter.setPen(QColor("#aab8c8"))
         painter.drawText(
-            QRectF(58, 50, self.width - 76, 18),
+            QRectF(content_left, 62, self.width - content_left - 20, 36),
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
             self.subtitle,
+        )
+
+        hint_font = QFont("Segoe UI", 8)
+        painter.setFont(hint_font)
+        painter.setPen(QColor("#7f8b98"))
+        painter.drawText(
+            QRectF(content_left, self.height - 40, self.width - content_left - 20, 18),
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            "Reply branches from your prompt into this reserved card.",
         )
 
         painter.restore()
