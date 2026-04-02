@@ -26,6 +26,7 @@ from graphite_agents_pycoder import PyCoderStatus
 from graphite_canvas_items import HoverAnimationMixin
 from graphite_config import get_current_palette, get_semantic_color
 from graphite_connections import ConnectionItem
+from graphite_lod import draw_lod_card, preview_text, sync_proxy_render_state
 from graphite_plugin_context_menu import PluginNodeContextMenu
 from graphite_pycoder import CodeEditor, PythonHighlighter, StatusItemWidget
 
@@ -169,7 +170,9 @@ class CodeSandboxNode(QGraphicsObject, HoverAnimationMixin):
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemUsesExtendedStyleOption)
         self.setAcceptHoverEvents(True)
+        self._render_lod_mode = "full"
 
         self.widget = QWidget()
         self.widget.setObjectName("codeSandboxWidget")
@@ -597,6 +600,7 @@ class CodeSandboxNode(QGraphicsObject, HoverAnimationMixin):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         palette = get_current_palette()
         accent = QColor(palette.FRAME_COLORS["Blue Header"]["color"])
+        render_mode = getattr(self, "_render_lod_mode", "full")
 
         path = QPainterPath()
         path.addRoundedRect(0, 0, self.width, self.height, 12, 12)
@@ -631,6 +635,25 @@ class CodeSandboxNode(QGraphicsObject, HoverAnimationMixin):
         )
         painter.drawPie(left_dot, 90 * 16, -180 * 16)
         painter.drawPie(right_dot, 90 * 16, 180 * 16)
+
+        if not self.is_collapsed and render_mode != "full":
+            self.collapse_button_rect = QRectF()
+            draw_lod_card(
+                painter,
+                QRectF(0, 0, self.width, self.height),
+                accent=accent,
+                selection_color=palette.SELECTION,
+                title="Execution Sandbox",
+                subtitle=self.status or "Idle",
+                preview=preview_text(self.get_prompt(), self.get_code(), self.output_display.toPlainText(), fallback="Generate and run in isolation"),
+                badge="BOX",
+                mode=render_mode,
+                selected=self.isSelected(),
+                hovered=self.hovered,
+                connection_radius=self.CONNECTION_DOT_RADIUS,
+                border_radius=12,
+            )
+            return
 
         if self.is_collapsed:
             painter.setPen(QColor("#ffffff"))
@@ -698,15 +721,21 @@ class CodeSandboxNode(QGraphicsObject, HoverAnimationMixin):
         if self.is_collapsed == collapsed:
             return
         self.is_collapsed = collapsed
-        self.proxy.setVisible(not collapsed)
+        self.proxy.setVisible(not collapsed and self._render_lod_mode == "full")
         self.prepareGeometryChange()
         if self.scene():
+            self.sync_view_lod()
             self.scene().update_connections()
             self.scene().nodeMoved(self)
         self.update()
 
     def toggle_collapse(self):
         self.set_collapsed(not self.is_collapsed)
+
+    def sync_view_lod(self, view_rect=None, zoom=None):
+        sync_proxy_render_state(self, view_rect, zoom)
+        if not self.is_collapsed:
+            self.update()
 
     def dispose(self):
         if self.is_disposed:
