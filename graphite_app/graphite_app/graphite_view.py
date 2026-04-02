@@ -12,6 +12,7 @@ from graphite_canvas_items import Frame, Note, NavigationPin, ChartItem
 from graphite_widgets import CustomScrollBar, GridControl, SearchOverlay, PinOverlay, FontControl
 from graphite_minimap import MinimapWidget
 
+
 class ChatView(QGraphicsView):
     """
     The main graphical view for displaying and interacting with the chat scene.
@@ -103,9 +104,24 @@ class ChatView(QGraphicsView):
         self.scene().scene_changed.connect(self.minimap_widget.update_nodes)
         self._highlighted_from_nav_node = None
         self._controls_overlay_visible = False
+        self._lod_refresh_timer = QTimer(self)
+        self._lod_refresh_timer.setSingleShot(True)
+        self._lod_refresh_timer.timeout.connect(self._refresh_scene_level_of_detail)
 
         self._initial_show = True
         self._file_drag_active = False
+
+    def _schedule_scene_lod_refresh(self):
+        if self.scene() and hasattr(self, "_lod_refresh_timer"):
+            self._lod_refresh_timer.start(0)
+
+    def _refresh_scene_level_of_detail(self):
+        scene = self.scene()
+        if scene and hasattr(scene, "update_view_lod"):
+            scene.update_view_lod(
+                self.mapToScene(self.viewport().rect()).boundingRect(),
+                max(0.01, self.transform().m11()),
+            )
         
     def _clear_nav_highlight(self):
         """Removes the navigation highlight from the previously navigated node."""
@@ -169,6 +185,7 @@ class ChatView(QGraphicsView):
         if self._initial_show:
             self._update_overlay_positions()
             self.minimap_widget.update_nodes()
+            self._schedule_scene_lod_refresh()
             self._initial_show = False
 
     def dragEnterEvent(self, event):
@@ -521,6 +538,7 @@ class ChatView(QGraphicsView):
             self._zoom_factor *= factor
             if self._zoom_factor <= 4.0:
                 self.scale(factor, factor)
+                self._schedule_scene_lod_refresh()
             else:
                 self._zoom_factor /= factor
             event.accept()
@@ -531,6 +549,7 @@ class ChatView(QGraphicsView):
             self._zoom_factor *= factor
             if self._zoom_factor >= 0.1:
                 self.scale(factor, factor)
+                self._schedule_scene_lod_refresh()
             else:
                 self._zoom_factor /= factor
             event.accept()
@@ -596,6 +615,7 @@ class ChatView(QGraphicsView):
             if 0.1 <= new_zoom_factor <= 4.0:
                 self.scale(factor, factor)
                 self._zoom_factor = new_zoom_factor
+                self._schedule_scene_lod_refresh()
             return
 
         # Check if the item under the cursor is scrollable (e.g., a ChatNode with overflow).
@@ -665,11 +685,13 @@ class ChatView(QGraphicsView):
         """
         super().scrollContentsBy(dx, dy)
         self.updateScrollbars()
+        self._schedule_scene_lod_refresh()
             
     def reset_zoom(self):
         """Resets the view's transform to its default state (100% zoom)."""
         self.resetTransform()
         self._zoom_factor = 1.0
+        self._schedule_scene_lod_refresh()
         
     def fit_all(self):
         """Zooms and pans the view to fit all items in the scene."""
@@ -677,6 +699,7 @@ class ChatView(QGraphicsView):
             return
         self.fitInView(self.scene().itemsBoundingRect(), Qt.AspectRatioMode.KeepAspectRatio)
         self._zoom_factor = self.transform().m11()
+        self._schedule_scene_lod_refresh()
 
     def drawBackground(self, painter, rect):
         """
