@@ -214,8 +214,8 @@ def _collect_branch_nodes(node):
     return lineage
 
 
-def build_quality_gate_payload(node):
-    lineage = _collect_branch_nodes(node)
+def build_quality_gate_payload(node, include_branch_context=True):
+    lineage = _collect_branch_nodes(node) if include_branch_context else ([node] if node else [])
     sections = []
     labels = []
 
@@ -825,6 +825,7 @@ class QualityGateConnectionItem(ConnectionItem):
 
 
 class QualityGateNode(QGraphicsObject, HoverAnimationMixin):
+    supports_branch_context_toggle = True
     review_requested = Signal(object)
     plugin_requested = Signal(object, str, str)
     note_requested = Signal(object)
@@ -1217,12 +1218,14 @@ class QualityGateNode(QGraphicsObject, HoverAnimationMixin):
         return self.criteria_input.toPlainText()
 
     def get_review_payload(self):
-        source_node = self.parent_node if self.parent_node else self
-        return build_quality_gate_payload(source_node)
+        include_branch_context = bool(getattr(self, "include_branch_context", True))
+        source_node = self.parent_node if include_branch_context and self.parent_node else self
+        return build_quality_gate_payload(source_node, include_branch_context=include_branch_context)
 
     def refresh_branch_context(self):
         payload = self.get_review_payload()
-        label = f"{payload.get('label', 'Current Branch')} - Depth {payload.get('depth', 0)}"
+        context_state = "On" if bool(getattr(self, "include_branch_context", True)) else "Off"
+        label = f"{payload.get('label', 'Current Branch')} - Depth {payload.get('depth', 0)} - Context {context_state}"
         self.branch_label.setText(label)
         self.branch_label.setToolTip("\n".join(payload.get("node_labels", [])) or payload.get("label", "Current Branch"))
 
