@@ -1,7 +1,7 @@
 """Search and loading overlay widgets."""
 
 import qtawesome as qta
-from PySide6.QtCore import Property, QEasingCurve, QParallelAnimationGroup, QPropertyAnimation, QRectF, Qt, Signal
+from PySide6.QtCore import QPointF, Property, QEasingCurve, QParallelAnimationGroup, QPropertyAnimation, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QKeySequence, QPainter, QPainterPath, QPen, QShortcut
 from PySide6.QtWidgets import QGraphicsObject, QHBoxLayout, QLabel, QLineEdit, QPushButton, QWidget
 from graphite_config import get_current_palette
@@ -123,92 +123,93 @@ class GhostNodePreview(QGraphicsObject):
         palette = get_current_palette()
         accent = QColor(palette.AI_NODE)
         painter.save()
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
 
-        body_rect = QRectF(0, 0, self.width, self.height)
-        left_column_width = min(136.0, max(104.0, self.width * 0.26))
-        content_left = left_column_width + 14.0
+            body_rect = QRectF(0, 0, self.width, self.height)
+            left_column_width = min(136.0, max(104.0, self.width * 0.26))
+            content_left = left_column_width + 14.0
 
-        outline = QColor(accent)
-        outline.setAlpha(188)
-        fill = QColor("#12171d")
-        fill.setAlpha(236)
-        panel_fill = QColor(accent)
-        panel_fill.setAlpha(24)
-        glow = QColor(accent)
-        glow.setAlpha(58)
-        badge_fill = QColor(accent)
-        badge_fill.setAlpha(68)
+            outline = QColor(accent)
+            outline.setAlpha(188)
+            fill = QColor("#12171d")
+            fill.setAlpha(236)
+            panel_fill = QColor(accent)
+            panel_fill.setAlpha(24)
+            glow = QColor(accent)
+            glow.setAlpha(58)
+            badge_fill = QColor(accent)
+            badge_fill.setAlpha(68)
 
-        shadow_path = QPainterPath()
-        shadow_path.addRoundedRect(body_rect.adjusted(4, 5, 4, 5), 12, 12)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(0, 0, 0, 36))
-        painter.drawPath(shadow_path)
+            shadow_path = QPainterPath()
+            shadow_path.addRoundedRect(body_rect.adjusted(4, 5, 4, 5), 12, 12)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(0, 0, 0, 36))
+            painter.drawPath(shadow_path)
 
-        node_path = QPainterPath()
-        node_path.addRoundedRect(body_rect, 12, 12)
-        painter.setBrush(fill)
-        painter.setPen(QPen(outline, 1.6, Qt.PenStyle.DashLine, Qt.PenCapStyle.RoundCap))
-        painter.drawPath(node_path)
+            node_path = QPainterPath()
+            node_path.addRoundedRect(body_rect, 12, 12)
+            painter.setBrush(fill)
+            painter.setPen(QPen(outline, 1.6, Qt.PenStyle.DashLine, Qt.PenCapStyle.RoundCap))
+            painter.drawPath(node_path)
 
-        painter.save()
-        painter.setClipPath(node_path)
-        painter.fillRect(QRectF(body_rect.left(), body_rect.top(), left_column_width, body_rect.height()), panel_fill)
-        painter.fillRect(QRectF(body_rect.left(), body_rect.top(), 6, body_rect.height()), glow)
-        painter.restore()
+            painter.save()
+            painter.setClipPath(node_path)
+            painter.fillRect(QRectF(body_rect.left(), body_rect.top(), left_column_width, body_rect.height()), panel_fill)
+            painter.fillRect(QRectF(body_rect.left(), body_rect.top(), 6, body_rect.height()), glow)
+            painter.restore()
 
-        painter.setPen(QPen(QColor(255, 255, 255, 24), 1))
-        painter.drawLine(
-            QPointF(left_column_width, 18),
-            QPointF(left_column_width, self.height - 18),
-        )
+            painter.setPen(QPen(QColor(255, 255, 255, 24), 1))
+            painter.drawLine(
+                QPointF(left_column_width, 18),
+                QPointF(left_column_width, self.height - 18),
+            )
 
-        badge_rect = QRectF(20, 18, 94, 24)
-        badge_path = QPainterPath()
-        badge_path.addRoundedRect(badge_rect, 12, 12)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(badge_fill)
-        painter.drawPath(badge_path)
+            badge_rect = QRectF(20, 18, 94, 24)
+            badge_path = QPainterPath()
+            badge_path.addRoundedRect(badge_rect, 12, 12)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(badge_fill)
+            painter.drawPath(badge_path)
 
-        badge_font = QFont("Segoe UI", 8, QFont.Weight.DemiBold)
-        painter.setFont(badge_font)
-        painter.setPen(QColor("#eef6ff"))
-        painter.drawText(
-            badge_rect,
-            Qt.AlignmentFlag.AlignCenter,
-            "ASSISTANT",
-        )
+            badge_font = QFont("Segoe UI", 8, QFont.Weight.DemiBold)
+            painter.setFont(badge_font)
+            painter.setPen(QColor("#eef6ff"))
+            painter.drawText(
+                badge_rect,
+                Qt.AlignmentFlag.AlignCenter,
+                "ASSISTANT",
+            )
 
-        title_font = QFont("Segoe UI", 11, QFont.Weight.DemiBold)
-        painter.setFont(title_font)
-        painter.setPen(QColor("#eef6ff"))
-        painter.drawText(
-            QRectF(content_left, 34, self.width - content_left - 20, 24),
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-            self.title,
-        )
+            title_font = QFont("Segoe UI", 11, QFont.Weight.DemiBold)
+            painter.setFont(title_font)
+            painter.setPen(QColor("#eef6ff"))
+            painter.drawText(
+                QRectF(content_left, 34, self.width - content_left - 20, 24),
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                self.title,
+            )
 
-        subtitle_font = QFont("Segoe UI", 9)
-        painter.setFont(subtitle_font)
-        painter.setPen(QColor("#aab8c8"))
-        painter.drawText(
-            QRectF(content_left, 62, self.width - content_left - 20, 36),
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-            self.subtitle,
-        )
+            subtitle_font = QFont("Segoe UI", 9)
+            painter.setFont(subtitle_font)
+            painter.setPen(QColor("#aab8c8"))
+            painter.drawText(
+                QRectF(content_left, 62, self.width - content_left - 20, 36),
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                self.subtitle,
+            )
 
-        hint_font = QFont("Segoe UI", 8)
-        painter.setFont(hint_font)
-        painter.setPen(QColor("#7f8b98"))
-        painter.drawText(
-            QRectF(content_left, self.height - 40, self.width - content_left - 20, 18),
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-            "Reply branches from your prompt into this reserved card.",
-        )
-
-        painter.restore()
+            hint_font = QFont("Segoe UI", 8)
+            painter.setFont(hint_font)
+            painter.setPen(QColor("#7f8b98"))
+            painter.drawText(
+                QRectF(content_left, self.height - 40, self.width - content_left - 20, 18),
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                "Reply branches from your prompt into this reserved card.",
+            )
+        finally:
+            painter.restore()
 
 class SearchOverlay(QWidget):
     textChanged = Signal(str)
