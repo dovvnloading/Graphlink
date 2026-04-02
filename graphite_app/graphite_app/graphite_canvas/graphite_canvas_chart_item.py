@@ -1,7 +1,10 @@
 """Canvas chart item rendering backed by Matplotlib."""
 
 import math
+import os
+import re
 import textwrap
+from datetime import datetime
 from collections import defaultdict, deque
 from statistics import mean, median
 
@@ -12,8 +15,8 @@ from matplotlib.figure import Figure
 from matplotlib.patches import FancyBboxPatch, PathPatch
 from matplotlib.path import Path as MplPath
 
-from PySide6.QtWidgets import QGraphicsItem
-from PySide6.QtCore import Qt, QRectF, QPointF, QSizeF, QTimer
+from PySide6.QtWidgets import QGraphicsItem, QFileDialog, QMenu
+from PySide6.QtCore import Qt, QRectF, QPointF, QSizeF, QTimer, QStandardPaths
 from PySide6.QtGui import QPainter, QColor, QBrush, QPen, QFont, QPainterPath, QImage, QLinearGradient
 
 from graphite_config import get_current_palette, get_graph_node_colors
@@ -30,7 +33,11 @@ class ChartItem(QGraphicsItem):
     HEADER_HEIGHT = 40
     MIN_WIDTH = 440
     MIN_HEIGHT = 320
+    DEFAULT_WIDTH = 680
+    DEFAULT_HEIGHT = 500
     RESIZE_DEBOUNCE_MS = 90
+    EXPORT_SCALE = 3.0
+    RESIZE_GRID = 20
 
     def __init__(self, data, pos, parent=None, parent_content_node=None):
         """
@@ -51,12 +58,14 @@ class ChartItem(QGraphicsItem):
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges)
         self.setAcceptHoverEvents(True)
 
-        self.width = 680
-        self.height = 500
+        self.width = self.DEFAULT_WIDTH
+        self.height = self.DEFAULT_HEIGHT
         self.hovered = False
         self.resize_handle_hovered = False
         self.resizing = False
         self.chart_image = QImage()
+        self.aspect_ratio_locked = True
+        self._base_aspect_ratio = self.DEFAULT_WIDTH / self.DEFAULT_HEIGHT
 
         self.figure = Figure(figsize=(6, 4), dpi=160)
         self.canvas = FigureCanvasAgg(self.figure)
@@ -67,6 +76,13 @@ class ChartItem(QGraphicsItem):
         self.render_timer.timeout.connect(self.generate_chart)
 
         self.generate_chart()
+
+    def dispose(self):
+        self.render_timer.stop()
+        try:
+            self.figure.clear()
+        except Exception:
+            pass
 
     def _chart_type(self):
         return str(self.data.get("type", "chart")).strip().lower()
@@ -95,12 +111,68 @@ class ChartItem(QGraphicsItem):
                 return max(1.0, float(view.devicePixelRatioF()))
         return 1.5
 
+    def _content_aspect_ratio(self):
+        chart_rect = self._chart_rect()
+        if chart_rect.height() <= 0:
+            return self._base_aspect_ratio
+        return max(0.75, chart_rect.width() / chart_rect.height())
+
+    def _snap_dimension(self, value):
+        scene = self.scene()
+        if scene and getattr(scene, "snap_to_grid", False):
+            grid_size = self.RESIZE_GRID
+            views = scene.views()
+            if views:
+                grid_size = max(8, int(getattr(views[0].grid_control, "grid_size", self.RESIZE_GRID)))
+            return max(grid_size, round(value / grid_size) * grid_size)
+        return value
+
+    def _clamp_size(self, width, height, preserve_aspect=None):
+        preserve_aspect = self.aspect_ratio_locked if preserve_aspect is None else preserve_aspect
+        width = max(self.MIN_WIDTH, float(width))
+        height = max(self.MIN_HEIGHT, float(height))
+
+        if preserve_aspect:
+            aspect_ratio = self._base_aspect_ratio if self._base_aspect_ratio > 0 else (self.DEFAULT_WIDTH / self.DEFAULT_HEIGHT)
+            width_from_height = height * aspect_ratio
+            height_from_width = width / aspect_ratio
+            if abs(width_from_height - width) < abs(height_from_width - height):
+                width = width_from_height
+            else:
+                height = height_from_width
+
+        width = self._snap_dimension(width)
+        height = self._snap_dimension(height)
+        width = max(self.MIN_WIDTH, float(width))
+        height = max(self.MIN_HEIGHT, float(height))
+        return width, height
+
+    def set_chart_size(self, width, height, preserve_aspect=None, rerender=True):
+        new_width, new_height = self._clamp_size(width, height, preserve_aspect=preserve_aspect)
+        if abs(self.width - new_width) < 0.1 and abs(self.height - new_height) < 0.1:
+            return
+        self.prepareGeometryChange()
+        self.width = new_width
+        self.height = new_height
+        if rerender:
+            self.render_timer.start()
+        self.update()
+
     def _set_figure_geometry(self):
         chart_rect = self._chart_rect()
         pixel_ratio = self._device_pixel_ratio()
         target_width = max(640, int(chart_rect.width() * pixel_ratio))
         target_height = max(420, int(chart_rect.height() * pixel_ratio))
         dpi = max(140, int(120 * pixel_ratio))
+        self.figure.set_dpi(dpi)
+        self.figure.set_size_inches(target_width / dpi, target_height / dpi, forward=True)
+
+    def _set_export_figure_geometry(self, scale):
+        chart_rect = self._chart_rect()
+        pixel_ratio = max(1.0, float(scale))
+        target_width = max(1600, int(chart_rect.width() * pixel_ratio))
+        target_height = max(1100, int(chart_rect.height() * pixel_ratio))
+        dpi = max(220, int(150 * pixel_ratio))
         self.figure.set_dpi(dpi)
         self.figure.set_size_inches(target_width / dpi, target_height / dpi, forward=True)
 
@@ -709,14 +781,13 @@ class ChartItem(QGraphicsItem):
         buffer = self.canvas.buffer_rgba()
         return QImage(buffer, width, height, width * 4, QImage.Format.Format_RGBA8888).copy()
 
-    def generate_chart(self):
-        """
-        Renders the chart using Matplotlib based on the item's data dictionary.
-        If generation fails (e.g. malformed data), it displays an error placeholder instead of crashing.
-        """
-        self.render_timer.stop()
+    def _render_chart_to_image(self, export_scale=None):
         self.title = self.data.get("title", "Chart")
-        self._set_figure_geometry()
+        if export_scale is None:
+            self._set_figure_geometry()
+        else:
+            self._set_export_figure_geometry(export_scale)
+
         theme = self._build_theme(get_current_palette())
 
         try:
@@ -742,10 +813,58 @@ class ChartItem(QGraphicsItem):
             if use_tight_layout:
                 self.figure.tight_layout(pad=1.25)
 
-            self.chart_image = self._figure_to_image()
+            return self._figure_to_image()
         except Exception as exc:
             self._render_error_image(str(exc))
+            return self.chart_image
 
+    def _image_target_rect(self, rect, image):
+        if image.isNull():
+            return rect
+
+        source_width = max(1.0, float(image.width()))
+        source_height = max(1.0, float(image.height()))
+        scale = min(rect.width() / source_width, rect.height() / source_height)
+        target_width = max(1.0, source_width * scale)
+        target_height = max(1.0, source_height * scale)
+        return QRectF(
+            rect.x() + ((rect.width() - target_width) / 2),
+            rect.y() + ((rect.height() - target_height) / 2),
+            target_width,
+            target_height,
+        )
+
+    def _desktop_export_path(self):
+        desktop_location = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DesktopLocation)
+        desktop_location = desktop_location or os.path.expanduser("~/Desktop")
+        safe_title = "".join(ch if ch.isalnum() or ch in (" ", "-", "_") else "_" for ch in (self.title or "chart")).strip()
+        safe_title = re.sub(r"\s+", "_", safe_title) or "chart"
+        filename = f"{safe_title}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+        return os.path.join(desktop_location, filename)
+
+    def _notify(self, message, level="success", duration_ms=5000):
+        scene = self.scene()
+        main_window = scene.window if scene and hasattr(scene, "window") else None
+        if main_window and hasattr(main_window, "notification_banner"):
+            main_window.notification_banner.show_message(message, duration_ms, level)
+
+    def export_png(self, file_path=None, scale=None):
+        file_path = file_path or self._desktop_export_path()
+        scale = self.EXPORT_SCALE if scale is None else scale
+        image = self._render_chart_to_image(export_scale=scale)
+        if image.isNull():
+            raise ValueError("Chart export failed because no image could be rendered.")
+        if not image.save(file_path, "PNG"):
+            raise IOError(f"Could not save chart image to {file_path}")
+        return file_path
+
+    def generate_chart(self):
+        """
+        Renders the chart using Matplotlib based on the item's data dictionary.
+        If generation fails (e.g. malformed data), it displays an error placeholder instead of crashing.
+        """
+        self.render_timer.stop()
+        self.chart_image = self._render_chart_to_image()
         self.update()
 
     def boundingRect(self):
@@ -808,7 +927,7 @@ class ChartItem(QGraphicsItem):
         painter.drawRoundedRect(chart_panel, 14, 14)
 
         if not self.chart_image.isNull():
-            painter.drawImage(chart_rect, self.chart_image)
+            painter.drawImage(self._image_target_rect(chart_rect, self.chart_image), self.chart_image)
 
         if self.hovered or self.isSelected():
             handle_size = 10
@@ -832,13 +951,23 @@ class ChartItem(QGraphicsItem):
         self.update()
         super().hoverLeaveEvent(event)
 
+    def hoverMoveEvent(self, event):
+        handle_hovered = self._is_resize_handle(event.pos())
+        if self.resize_handle_hovered != handle_hovered:
+            self.resize_handle_hovered = handle_hovered
+            self.update()
+        self.setCursor(Qt.CursorShape.SizeFDiagCursor if handle_hovered else Qt.CursorShape.ArrowCursor)
+        super().hoverMoveEvent(event)
+
     def mousePressEvent(self, event):
         """Starts resizing if the resize handle is clicked."""
         if self._is_resize_handle(event.pos()):
             self.resizing = True
             self.resize_start_pos = event.pos()
             self.resize_start_size = QSizeF(self.width, self.height)
+            self.resize_start_aspect_ratio = self._base_aspect_ratio
             event.accept()
+            return
 
         if event.button() == Qt.MouseButton.LeftButton and self.scene():
             self.scene().is_dragging_item = True
@@ -850,6 +979,7 @@ class ChartItem(QGraphicsItem):
             self.resizing = False
             self.generate_chart()
             event.accept()
+            return
 
         if self.scene():
             self.scene().is_dragging_item = False
@@ -860,13 +990,9 @@ class ChartItem(QGraphicsItem):
         """Handles resizing logic during a drag."""
         if self.resizing:
             delta = event.pos() - self.resize_start_pos
-            new_width = max(self.MIN_WIDTH, self.resize_start_size.width() + delta.x())
-            new_height = max(self.MIN_HEIGHT, self.resize_start_size.height() + delta.y())
-            self.prepareGeometryChange()
-            self.width = new_width
-            self.height = new_height
-            self.render_timer.start()
-            self.update()
+            new_width = self.resize_start_size.width() + delta.x()
+            new_height = self.resize_start_size.height() + delta.y()
+            self.set_chart_size(new_width, new_height, preserve_aspect=self.aspect_ratio_locked, rerender=True)
             event.accept()
         else:
             super().mouseMoveEvent(event)
@@ -875,8 +1001,91 @@ class ChartItem(QGraphicsItem):
         """Checks if a position is within the resize handle's area."""
         return QRectF(self.width - 10, self.height - 10, 10, 10).contains(pos)
 
+    def contextMenuEvent(self, event):
+        menu = QMenu()
+        palette = get_current_palette()
+        menu.setStyleSheet(f"""
+            QMenu {{
+                background-color: #2d2d2d;
+                border: 1px solid #3f3f3f;
+                border-radius: 4px;
+                padding: 4px;
+            }}
+            QMenu::item {{
+                background-color: transparent;
+                padding: 8px 20px;
+                border-radius: 4px;
+                color: white;
+            }}
+            QMenu::item:selected {{
+                background-color: {palette.SELECTION.name()};
+            }}
+        """)
+
+        export_desktop_action = menu.addAction("Export PNG To Desktop")
+        export_as_action = menu.addAction("Export PNG As...")
+        menu.addSeparator()
+
+        aspect_action = menu.addAction("Lock Aspect Ratio")
+        aspect_action.setCheckable(True)
+        aspect_action.setChecked(self.aspect_ratio_locked)
+
+        reset_size_action = menu.addAction("Reset Chart Size")
+        rerender_action = menu.addAction("Refresh Chart Render")
+
+        scene = self.scene()
+        if scene:
+            branch_action = menu.addAction("Show All Branches" if getattr(scene, "is_branch_hidden", False) else "Hide Other Branches")
+        else:
+            branch_action = None
+
+        delete_action = menu.addAction("Delete Chart")
+
+        chosen_action = menu.exec(event.screenPos())
+        if chosen_action == export_desktop_action:
+            try:
+                saved_path = self.export_png()
+                self._notify(f"Chart exported to:\n{saved_path}")
+            except Exception as exc:
+                self._notify(str(exc), level="error", duration_ms=8000)
+        elif chosen_action == export_as_action:
+            default_path = self._desktop_export_path()
+            file_path, _ = QFileDialog.getSaveFileName(
+                None,
+                "Export Chart As PNG",
+                default_path,
+                "PNG Images (*.png)",
+            )
+            if file_path:
+                if not file_path.lower().endswith(".png"):
+                    file_path += ".png"
+                try:
+                    saved_path = self.export_png(file_path=file_path)
+                    self._notify(f"Chart exported to:\n{saved_path}")
+                except Exception as exc:
+                    self._notify(str(exc), level="error", duration_ms=8000)
+        elif chosen_action == aspect_action:
+            self.aspect_ratio_locked = aspect_action.isChecked()
+            if self.aspect_ratio_locked:
+                self.set_chart_size(self.width, self.height, preserve_aspect=True, rerender=False)
+            self.update()
+        elif chosen_action == reset_size_action:
+            self.set_chart_size(self.DEFAULT_WIDTH, self.DEFAULT_HEIGHT, preserve_aspect=True, rerender=False)
+            self.generate_chart()
+        elif chosen_action == rerender_action:
+            self.generate_chart()
+        elif branch_action is not None and chosen_action == branch_action:
+            scene.toggle_branch_visibility(self)
+        elif chosen_action == delete_action and scene:
+            scene.clearSelection()
+            self.setSelected(True)
+            scene.deleteSelectedItems()
+
     def itemChange(self, change, value):
         """Handles item changes."""
+        if change == QGraphicsItem.ItemSceneHasChanged and value is None:
+            self.dispose()
+
         if change == QGraphicsItem.ItemPositionChange and self.scene() and self.scene().is_dragging_item:
             parent = self.parentItem()
             from .graphite_canvas_container import Container
