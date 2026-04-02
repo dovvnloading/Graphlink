@@ -16,6 +16,8 @@ class ReasoningNode(QGraphicsObject, HoverAnimationMixin):
     A specialized QGraphicsItem that provides a UI for a multi-step, iterative
     reasoning process to solve complex problems.
     """
+    supports_branch_context_toggle = True
+
     reasoning_requested = Signal(object) 
 
     NODE_WIDTH = 550
