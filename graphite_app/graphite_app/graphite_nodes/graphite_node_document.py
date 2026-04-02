@@ -4,6 +4,7 @@ from PySide6.QtWidgets import QGraphicsItem
 
 from graphite_canvas_items import Container, HoverAnimationMixin
 from graphite_config import get_current_palette, get_graph_node_colors
+from graphite_lod import draw_lod_card, lod_mode_for_item, preview_text
 from graphite_widgets import ScrollBar
 
 
@@ -24,6 +25,7 @@ class DocumentNode(QGraphicsItem, HoverAnimationMixin):
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemUsesExtendedStyleOption)
         self.setAcceptHoverEvents(True)
         self.hovered = False
         self.is_search_match = False
@@ -88,6 +90,8 @@ class DocumentNode(QGraphicsItem, HoverAnimationMixin):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
 
+        lod_mode = lod_mode_for_item(self)
+
         path = QPainterPath()
         path.addRoundedRect(0, 0, self.width, self.height, 10, 10)
         painter.setBrush(QColor("#2d2d2d"))
@@ -100,6 +104,22 @@ class DocumentNode(QGraphicsItem, HoverAnimationMixin):
             painter.setPen(QPen(node_colors["hover_outline"], 2))
         else:
             painter.setPen(QPen(node_colors["border"], 1))
+
+        if lod_mode != "full":
+            draw_lod_card(
+                painter,
+                QRectF(0, 0, self.width, self.height),
+                accent=node_colors["header_start"],
+                selection_color=palette.SELECTION,
+                title=self.title or "Document",
+                subtitle="Document",
+                preview=preview_text(self.content, fallback="[Empty]"),
+                badge="DOC",
+                mode=lod_mode,
+                selected=self.isSelected() and not is_dragging,
+                hovered=self.hovered,
+            )
+            return
         painter.drawPath(path)
 
         header_path = QPainterPath()
