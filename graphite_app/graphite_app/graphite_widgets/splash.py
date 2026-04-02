@@ -1,11 +1,10 @@
-﻿"""Animated splash screen widgets."""
-
-import math
+"""Animated splash screen widgets."""
 
 from PySide6.QtCore import QPointF, Property, QEasingCurve, QParallelAnimationGroup, QPropertyAnimation, Qt, QTimer
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QGuiApplication, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QGraphicsDropShadowEffect, QLabel, QVBoxLayout, QWidget
 from graphite_config import get_current_palette
+from .loading_visuals import paint_orbital_loading_spinner
 
 class SplashAnimationWidget(QWidget):
     def __init__(self, parent=None):
@@ -41,86 +40,14 @@ class SplashAnimationWidget(QWidget):
         self.anim_group.start()
 
     def paintEvent(self, event):
-        import math
-        palette = get_current_palette()
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        
-        cx = self.width() / 2.0
-        cy = self.height() / 2.0
-        
-        # 1. Inner orbital dots (Digital feel)
-        painter.setPen(Qt.PenStyle.NoPen)
-        inner_radius = 9
-        for i in range(3):
-            offset_deg = i * 120
-            # angle3 runs from 140 to 500, reverse it and apply offset
-            rad = math.radians(-self._angle3 * 1.5 + offset_deg)
-            x = cx + inner_radius * math.cos(rad)
-            y = cy + inner_radius * math.sin(rad)
-            
-            c = QColor(palette.NAV_HIGHLIGHT)
-            c.setAlpha(200)
-            painter.setBrush(c)
-            painter.drawEllipse(QPointF(x, y), 2.5, 2.5)
-
-        # 2. Middle Squiggle (Organic feel)
-        path = QPainterPath()
-        base_radius = 17
-        amplitude = 2.5
-        freq = 4
-        
-        # angle1 drives the base rotation and the morphing
-        morph_phase = math.radians(self._angle1 * 1.5)
-        rot_phase = math.radians(self._angle1)
-        
-        for i in range(361):
-            rad = math.radians(i)
-            # radius oscillates creating a continuous wave
-            r = base_radius + amplitude * math.sin(freq * rad + morph_phase)
-            draw_rad = rad + rot_phase
-            
-            x = cx + r * math.cos(draw_rad)
-            y = cy + r * math.sin(draw_rad)
-            
-            if i == 0:
-                path.moveTo(x, y)
-            else:
-                path.lineTo(x, y)
-                
-        pen = QPen(palette.USER_NODE, 2.5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
-        painter.setPen(pen)
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawPath(path)
-
-        # 3. Outer Dot Ring Comet (Modern Loading tail)
-        painter.setPen(Qt.PenStyle.NoPen)
-        num_dots = 18
-        outer_radius = 27
-        tail_length = 240  # Degrees the tail spans
-        
-        for i in range(num_dots):
-            dot_angle_deg = i * (360 / num_dots)
-            # angle2 (70 -> 430) drives the comet head
-            diff = (self._angle2 - dot_angle_deg) % 360
-            
-            if diff < tail_length:
-                # 1.0 at head, 0.0 at tail end
-                progress = 1.0 - (diff / tail_length)
-                # Curve the progress so the tail drops off elegantly
-                eased = progress ** 1.8 
-                
-                opacity = int(eased * 255)
-                size = 1.0 + (eased * 3.5)  # Size from 1.0 to 4.5
-                
-                rad = math.radians(dot_angle_deg)
-                x = cx + outer_radius * math.cos(rad)
-                y = cy + outer_radius * math.sin(rad)
-                
-                c = QColor(palette.SELECTION)
-                c.setAlpha(opacity)
-                painter.setBrush(c)
-                painter.drawEllipse(QPointF(x, y), size, size)
+        paint_orbital_loading_spinner(
+            painter,
+            self.rect(),
+            self._angle1,
+            self._angle2,
+            self._angle3,
+        )
     
     @Property(float)
     def angle1(self): return self._angle1
