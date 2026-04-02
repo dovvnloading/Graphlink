@@ -709,13 +709,17 @@ class WindowActionsMixin:
             if "error" in chart_data:
                 self.notification_banner.show_message(chart_data["error"], 15000, "error")
                 return
+            scene = self.chat_view.scene()
             if source_node and source_node.scene():
                 chart_pos = QPointF(source_node.scenePos().x() + 450, source_node.scenePos().y())
             elif self.current_node and self.current_node.scene():
                 chart_pos = QPointF(self.current_node.scenePos().x() + 450, self.current_node.scenePos().y())
             else:
                 chart_pos = QPointF(0, 0)
-            self.chat_view.scene().add_chart(chart_data, chart_pos, parent_content_node=source_node)
+            chart = scene.add_chart(chart_data, chart_pos, parent_content_node=source_node)
+            self.current_node = chart
+            self.chat_view.centerOn(chart)
+            self.save_chat()
         except Exception as e:
             self.handle_error(f"Error creating chart: {str(e)}")
         finally:
