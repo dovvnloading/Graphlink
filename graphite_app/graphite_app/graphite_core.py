@@ -1,4 +1,4 @@
-import json 
+import json
 import sqlite3
 from datetime import datetime
 from pathlib import Path
@@ -942,15 +942,9 @@ class ChatSessionManager:
             }
         return None
 
-    def serialize_frame(self, frame):
-        scene = self.window.chat_view.scene()
-        all_nodes_list = (scene.nodes + scene.code_nodes + scene.document_nodes +
-                          scene.image_nodes + scene.thinking_nodes + scene.pycoder_nodes + scene.code_sandbox_nodes + scene.web_nodes +
-                          scene.conversation_nodes + scene.reasoning_nodes + scene.html_view_nodes +
-                          scene.artifact_nodes + scene.workflow_nodes + scene.graph_diff_nodes + scene.quality_gate_nodes + scene.code_review_nodes +
-                          scene.gitlink_nodes)
+    def serialize_frame(self, frame, frame_items_map):
         return {
-            'nodes': [all_nodes_list.index(node) for node in frame.nodes],
+            'items': [frame_items_map[item] for item in frame.nodes if item in frame_items_map],
             'position': {'x': frame.pos().x(), 'y': frame.pos().y()},
             'note': frame.note,
             'size': {
@@ -997,6 +991,7 @@ class ChatSessionManager:
             'data': chart.data,
             'position': {'x': chart.pos().x(), 'y': chart.pos().y()},
             'size': {'width': chart.width, 'height': chart.height},
+            'aspect_ratio_locked': getattr(chart, 'aspect_ratio_locked', True),
             'parent_node_index': parent_node_index,
         }
 
@@ -1015,6 +1010,7 @@ class ChatSessionManager:
         
         all_serializable_items = all_nodes_list + notes + charts + scene.frames + scene.containers
         all_items_map = {item: i for i, item in enumerate(all_serializable_items)}
+        frame_items_map = {item: i for i, item in enumerate(all_nodes_list + charts)}
 
         chat_data = {
             'nodes': [self.serialize_node(node) for node in all_nodes_list],
@@ -1036,7 +1032,7 @@ class ChatSessionManager:
             'quality_gate_connections': [self.serialize_quality_gate_connection(conn, all_nodes_list) for conn in scene.quality_gate_connections],
             'code_review_connections': [self.serialize_code_review_connection(conn, all_nodes_list) for conn in scene.code_review_connections],
             'gitlink_connections': [self.serialize_gitlink_connection(conn, all_nodes_list) for conn in scene.gitlink_connections],
-            'frames': [self.serialize_frame(frame) for frame in scene.frames],
+            'frames': [self.serialize_frame(frame, frame_items_map) for frame in scene.frames],
             'containers': [self.serialize_container(c, all_items_map) for c in scene.containers],
             'charts': [self.serialize_chart(chart, all_nodes_list) for chart in charts],
             'total_session_tokens': self.window.total_session_tokens,
@@ -1058,11 +1054,16 @@ class ChatSessionManager:
             data['position']['x'],
             data['position']['y']
         ), parent_content_node=parent_node)
+        chart.aspect_ratio_locked = bool(data.get('aspect_ratio_locked', True))
         
         if 'size' in data:
-            chart.width = data['size']['width']
-            chart.height = data['size']['height']
-            chart.generate_chart()
+            chart.set_chart_size(
+                data['size']['width'],
+                data['size']['height'],
+                preserve_aspect=chart.aspect_ratio_locked,
+                rerender=False,
+            )
+        chart.generate_chart()
             
         return chart
         
@@ -1727,7 +1728,8 @@ class ChatSessionManager:
         return node
         
     def deserialize_frame(self, data, scene, all_nodes_map):
-        nodes_indices = [i for i in data['nodes'] if i in all_nodes_map]
+        frame_item_indices = data.get('items', data.get('nodes', []))
+        nodes_indices = [i for i in frame_item_indices if i in all_nodes_map]
         nodes = [all_nodes_map[i] for i in nodes_indices]
         
         frame = Frame(nodes)
@@ -1821,10 +1823,16 @@ class ChatSessionManager:
             all_deserialized_notes = list(notes_map.values())
             all_deserialized_charts = list(charts_map.values())
 
+            frame_source_map = {}
+            frame_source_map.update(all_nodes_map)
+            chart_offset = len(frame_source_map)
+            for i, chart in charts_map.items():
+                frame_source_map[chart_offset + i] = chart
+
             frames_map = {}
             if 'frames' in chat['data']:
                 for i, frame_data in enumerate(chat['data']['frames']):
-                    frames_map[i] = self.deserialize_frame(frame_data, scene, all_nodes_map)
+                    frames_map[i] = self.deserialize_frame(frame_data, scene, frame_source_map)
 
             all_deserialized_frames = list(frames_map.values())
             
