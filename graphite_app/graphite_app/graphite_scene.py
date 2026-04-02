@@ -233,7 +233,7 @@ class ChatScene(QGraphicsScene):
         all_nodes = (self.nodes + self.code_nodes + self.document_nodes + self.image_nodes +
                      self.thinking_nodes + self.pycoder_nodes + self.code_sandbox_nodes + self.web_nodes +
                      self.conversation_nodes + self.reasoning_nodes + self.html_view_nodes +
-                     self.artifact_nodes + self.workflow_nodes + self.graph_diff_nodes + self.quality_gate_nodes + self.code_review_nodes + self.gitlink_nodes)
+                     self.artifact_nodes + self.workflow_nodes + self.graph_diff_nodes + self.quality_gate_nodes + self.code_review_nodes + self.gitlink_nodes + self.chart_nodes)
         for node in all_nodes:
             content = ""
             if isinstance(node, ChatNode):
@@ -266,6 +266,21 @@ class ChatScene(QGraphicsScene):
                 content = node.get_prompt() + "\n" + node.get_code() + "\n" + node.output_display.toPlainText()
             elif isinstance(node, CodeSandboxNode):
                 content = node.get_prompt() + "\n" + node.get_requirements() + "\n" + node.get_code() + "\n" + node.output_display.toPlainText()
+            elif isinstance(node, ChartItem):
+                labels = node.data.get("labels", []) if isinstance(node.data, dict) else []
+                flows = node.data.get("flows", []) if isinstance(node.data, dict) else []
+                flow_text = "\n".join(
+                    f"{flow.get('source', '')} -> {flow.get('target', '')}: {flow.get('value', '')}"
+                    for flow in flows if isinstance(flow, dict)
+                )
+                content = "\n".join(
+                    part for part in (
+                        str(node.data.get("title", "")) if isinstance(node.data, dict) else "",
+                        str(node.data.get("type", "")) if isinstance(node.data, dict) else "",
+                        "\n".join(str(label) for label in labels),
+                        flow_text,
+                    ) if part
+                )
 
             if text in content.lower():
                 matches.append(node)
@@ -476,7 +491,8 @@ class ChatScene(QGraphicsScene):
         valid_types = (
             self.nodes + self.code_nodes + self.document_nodes + self.image_nodes + self.thinking_nodes +
             self.pycoder_nodes + self.code_sandbox_nodes + self.web_nodes + self.conversation_nodes + self.reasoning_nodes +
-            self.html_view_nodes + self.artifact_nodes + self.workflow_nodes + self.graph_diff_nodes + self.quality_gate_nodes + self.code_review_nodes + self.gitlink_nodes
+            self.html_view_nodes + self.artifact_nodes + self.workflow_nodes + self.graph_diff_nodes + self.quality_gate_nodes + self.code_review_nodes + self.gitlink_nodes +
+            self.chart_nodes
         )
         if not isinstance(node, (Note, Container)) and node not in valid_types or not node.scene():
             return
@@ -520,6 +536,7 @@ class ChatScene(QGraphicsScene):
     def add_chart(self, data, pos, parent_content_node=None):
         """Adds a new ChartItem to the scene."""
         chart = ChartItem(data, pos, parent_content_node=parent_content_node)
+        chart.setPos(self.find_free_position(pos, chart))
         self.chart_nodes.append(chart)
         self.addItem(chart)
         self.scene_changed.emit()
@@ -528,7 +545,7 @@ class ChatScene(QGraphicsScene):
     def createFrame(self):
         """Creates a Frame around the currently selected nodes."""
         selected_nodes = [item for item in self.selectedItems() 
-                         if isinstance(item, (ChatNode, CodeNode, DocumentNode, ImageNode, ThinkingNode, PyCoderNode, CodeSandboxNode, WebNode, ConversationNode, ReasoningNode, HtmlViewNode, ArtifactNode, WorkflowNode, GraphDiffNode, QualityGateNode, CodeReviewNode, GitlinkNode))]
+                         if isinstance(item, (ChatNode, CodeNode, DocumentNode, ImageNode, ThinkingNode, ChartItem, PyCoderNode, CodeSandboxNode, WebNode, ConversationNode, ReasoningNode, HtmlViewNode, ArtifactNode, WorkflowNode, GraphDiffNode, QualityGateNode, CodeReviewNode, GitlinkNode))]
         
         if not selected_nodes:
             return
@@ -1005,6 +1022,21 @@ class ChatScene(QGraphicsScene):
     def _remove_associated_chart_nodes(self, parent_node):
         charts_to_remove = [chart for chart in self.chart_nodes if getattr(chart, 'parent_content_node', None) == parent_node]
         for chart in charts_to_remove:
+            chart_parent = chart.parentItem()
+            if isinstance(chart_parent, Frame) and chart in chart_parent.nodes:
+                chart_parent.nodes.remove(chart)
+                if chart_parent.nodes:
+                    chart_parent.updateGeometry()
+                else:
+                    self.deleteFrame(chart_parent)
+            elif isinstance(chart_parent, Container) and chart in chart_parent.contained_items:
+                chart_parent.contained_items.remove(chart)
+                if chart_parent.contained_items:
+                    chart_parent.updateGeometry()
+                else:
+                    self.deleteContainer(chart_parent)
+            if hasattr(chart, "dispose"):
+                chart.dispose()
             if chart.scene() == self:
                 self.removeItem(chart)
             if chart in self.chart_nodes:
@@ -1284,6 +1316,21 @@ class ChatScene(QGraphicsScene):
                 self.removeItem(item)
                 if item in self.notes: self.notes.remove(item)
             elif isinstance(item, ChartItem):
+                parent = item.parentItem()
+                if isinstance(parent, Frame) and item in parent.nodes:
+                    parent.nodes.remove(item)
+                    if not parent.nodes:
+                        self.deleteFrame(parent)
+                    else:
+                        parent.updateGeometry()
+                elif isinstance(parent, Container) and item in parent.contained_items:
+                    parent.contained_items.remove(item)
+                    if not parent.contained_items:
+                        self.deleteContainer(parent)
+                    else:
+                        parent.updateGeometry()
+                if hasattr(item, "dispose"):
+                    item.dispose()
                 self.removeItem(item)
                 if item in self.chart_nodes: self.chart_nodes.remove(item)
             elif isinstance(item, NavigationPin):
