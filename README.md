@@ -85,10 +85,6 @@ The app also includes primary non-plugin node types that form the main graph sur
 <div align="center">
   <img width="1920" height="1080" alt="graphite-render-1920x1080-1774826552381" src="https://github.com/user-attachments/assets/dc477feb-a8bf-4f0d-8914-42371329e725" style="margin-bottom: 20px;" />
   <img width="1920" height="1080" alt="graphite-render-1920x1080-1774826487402" src="https://github.com/user-attachments/assets/9bfe2cde-70e5-433a-b86d-5bb99105d91f" />
-
----
-## Built-in Update Detection  
-
 <img width="1920" height="1080" alt="graphite-render-1920x1080-1775163980518" src="https://github.com/user-attachments/assets/93cb0452-18c3-4419-9857-b816a90b7350" />
   
 </div>
