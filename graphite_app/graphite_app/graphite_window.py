@@ -44,6 +44,7 @@ from graphite_config import get_current_palette, get_neutral_button_colors
 from graphite_prompts import BASE_SYSTEM_PROMPT, THINKING_INSTRUCTIONS_PROMPT
 from graphite_window_actions import WindowActionsMixin
 from graphite_window_navigation import WindowNavigationMixin
+from graphite_update import APP_VERSION, UpdateCheckWorker
 
 class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
     def __init__(self, settings_manager):
@@ -60,6 +61,10 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         self.help_panel = None
         self._initial_show_complete = False
         self._overlay_update_pending = False
+        self._startup_update_check_ran = False
+        self.update_check_worker = None
+        self._update_check_status_target = None
+        self._update_check_manual = False
 
         icon_path = r"C:\Users\Admin\source\repos\graphite_app\assets\graphite.ico"
         self.setWindowIcon(QIcon(str(icon_path)))
@@ -268,7 +273,10 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
 
     def showEvent(self, event):
         super().showEvent(event)
-        if not self._initial_show_complete: self._update_overlay_positions(); self._initial_show_complete = True
+        if not self._initial_show_complete:
+            self._update_overlay_positions()
+            self._initial_show_complete = True
+        self._schedule_startup_update_check()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -311,6 +319,60 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         if token_counter_widget and token_counter_widget.isVisible():
             token_y = viewport.height() - token_counter_widget.height() - padding
             token_counter_widget.move(padding, max(padding, token_y))
+
+    def _schedule_startup_update_check(self):
+        if self._startup_update_check_ran:
+            return
+        if not self.settings_manager.get_update_notifications_enabled():
+            return
+        self._startup_update_check_ran = True
+        QTimer.singleShot(900, lambda: self.check_for_updates(manual=False))
+
+    def check_for_updates(self, manual=False, status_target=None):
+        if self.update_check_worker and self.update_check_worker.isRunning():
+            if status_target is not None:
+                self._update_check_status_target = status_target
+            if manual:
+                self.notification_banner.show_message("An update check is already running.", 3000, "info")
+            if status_target and hasattr(status_target, "set_update_check_in_progress"):
+                status_target.set_update_check_in_progress(True)
+            return
+
+        self._update_check_manual = bool(manual)
+        self._update_check_status_target = status_target
+        if status_target and hasattr(status_target, "set_update_check_in_progress"):
+            status_target.set_update_check_in_progress(True)
+
+        self.update_check_worker = UpdateCheckWorker(APP_VERSION, self)
+        self.update_check_worker.finished_check.connect(self._handle_update_check_result)
+        self.update_check_worker.finished.connect(self._cleanup_update_check_worker)
+        self.update_check_worker.start()
+
+    def _handle_update_check_result(self, result):
+        self.settings_manager.record_update_check_result(result)
+
+        status_target = self._update_check_status_target
+        if status_target and hasattr(status_target, "refresh_update_status"):
+            status_target.refresh_update_status()
+        if status_target and hasattr(status_target, "set_update_check_in_progress"):
+            status_target.set_update_check_in_progress(False)
+
+        if self.settings_panel and hasattr(self.settings_panel, "appearance_tab"):
+            self.settings_panel.appearance_tab.refresh_update_status()
+
+        should_notify = self._update_check_manual or result.get("update_available") or not result.get("success", True)
+        if should_notify:
+            duration_ms = 7000 if result.get("update_available") else 5000
+            self.notification_banner.show_message(result.get("message", "Update check finished."), duration_ms, result.get("level", "info"))
+
+        self._update_check_status_target = None
+        self._update_check_manual = False
+
+    def _cleanup_update_check_worker(self):
+        worker = self.update_check_worker
+        self.update_check_worker = None
+        if worker is not None:
+            worker.deleteLater()
 
     def _sync_footer_height(self, *_):
         if not hasattr(self, 'input_widget') or not hasattr(self, 'bottom_container'):
