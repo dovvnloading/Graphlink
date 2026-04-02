@@ -43,7 +43,15 @@ class PluginNodeContextMenu(QMenu):
         doc_view_action.triggered.connect(self.open_document_view)
         self.addAction(doc_view_action)
 
+        if getattr(self.node, "supports_branch_context_toggle", False):
+            branch_context_action = QAction("Include Previous Branch Context", self)
+            branch_context_action.setCheckable(True)
+            branch_context_action.setChecked(bool(getattr(self.node, "include_branch_context", True)))
+            branch_context_action.toggled.connect(self._set_branch_context_enabled)
+            self.addAction(branch_context_action)
+
         if hasattr(self.node, "toggle_collapse"):
+            self.addSeparator()
             collapse_text = "Expand Node" if bool(getattr(self.node, "is_collapsed", False)) else "Collapse Node"
             collapse_icon = "fa5s.expand-arrows-alt" if bool(getattr(self.node, "is_collapsed", False)) else "fa5s.compress-arrows-alt"
             collapse_action = QAction(collapse_text, self)
@@ -63,6 +71,17 @@ class PluginNodeContextMenu(QMenu):
         window = getattr(scene, "window", None) if scene else None
         if window and hasattr(window, "show_document_view"):
             window.show_document_view(self.node)
+
+    def _set_branch_context_enabled(self, enabled):
+        setattr(self.node, "include_branch_context", bool(enabled))
+        callback = getattr(self.node, "on_branch_context_changed", None)
+        if callable(callback):
+            callback(bool(enabled))
+            return
+
+        refresh_callback = getattr(self.node, "refresh_branch_context", None)
+        if callable(refresh_callback):
+            refresh_callback()
 
     def delete_node(self):
         scene = self.node.scene()
