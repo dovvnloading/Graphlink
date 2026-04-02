@@ -5,7 +5,7 @@ from PySide6.QtCore import QPointF
 import graphite_config as config
 import api_provider
 from graphite_prompts import _TokenBytesEncoder
-from graphite_widgets import LoadingAnimation
+from graphite_widgets import GhostNodePreview, LoadingAnimation
 from graphite_node import ChatNode, CodeNode
 from graphite_canvas_items import Note
 from graphite_connections import GroupSummaryConnectionItem
@@ -39,6 +39,80 @@ from graphite_agents import (
 )
 
 class WindowActionsMixin:
+    def _graphics_item_dimensions(self, item):
+        if item is None:
+            return 0.0, 0.0
+        if hasattr(item, 'width') and hasattr(item, 'height'):
+            return float(item.width), float(item.height)
+        bounds = item.boundingRect()
+        return float(bounds.width()), float(bounds.height())
+
+    def _show_loading_animation(self, anchor_node=None, scene_pos=None):
+        self._clear_loading_animation()
+
+        loading = LoadingAnimation()
+        if anchor_node is not None and anchor_node.scene() == self.chat_view.scene():
+            loading.setParentItem(anchor_node)
+            width, height = self._graphics_item_dimensions(anchor_node)
+            loading.setPos(QPointF(width + 54.0, height * 0.5))
+        else:
+            self.chat_view.scene().addItem(loading)
+            loading.setPos(QPointF(scene_pos) if scene_pos is not None else QPointF())
+
+        loading.start()
+        self.loading_animation = loading
+        return loading
+
+    def _clear_loading_animation(self):
+        loading = getattr(self, "loading_animation", None)
+        if not loading:
+            return
+
+        loading.stop()
+        if loading.scene():
+            loading.scene().removeItem(loading)
+        loading.deleteLater()
+        self.loading_animation = None
+
+    def _show_pending_response_preview(self, source_node):
+        self._clear_pending_response_preview()
+        if source_node is None or source_node.scene() != self.chat_view.scene():
+            return None
+
+        scene = self.chat_view.scene()
+        preview = GhostNodePreview(
+            width=ChatNode.DEFAULT_WIDTH,
+            height=max(ChatNode.MIN_HEIGHT + 18, 128),
+            parent=source_node,
+        )
+        preview_scene_pos = scene.find_branch_position(source_node, preview)
+        preview.setPos(source_node.mapFromScene(preview_scene_pos))
+        scene.register_transient_layout_item(preview)
+        self.pending_response_preview = preview
+        return preview
+
+    def _consume_pending_response_preview_position(self):
+        preview = getattr(self, "pending_response_preview", None)
+        if not preview:
+            return None
+
+        preview_pos = preview.scenePos()
+        self._clear_pending_response_preview()
+        return preview_pos
+
+    def _clear_pending_response_preview(self):
+        preview = getattr(self, "pending_response_preview", None)
+        if not preview:
+            return
+
+        scene = self.chat_view.scene()
+        if scene:
+            scene.unregister_transient_layout_item(preview)
+        if preview.scene():
+            preview.scene().removeItem(preview)
+        preview.deleteLater()
+        self.pending_response_preview = None
+
     def _build_attachment_node_summary(self, attachments):
         if not attachments:
             return "[Attachment]"
@@ -180,11 +254,8 @@ class WindowActionsMixin:
             self.save_chat()
             return
 
-        self.loading_animation = LoadingAnimation()
-        self.chat_view.scene().addItem(self.loading_animation)
-        anim_pos = QPointF(user_node.pos().x() + user_node.width + 50, user_node.pos().y() + user_node.height / 2)
-        self.loading_animation.setPos(anim_pos)
-        self.loading_animation.start()
+        self._show_pending_response_preview(user_node)
+        self._show_loading_animation(anchor_node=user_node)
 
         self.chat_thread = ChatWorkerThread(self.agent, history_for_worker, history_context_node)
         self.chat_thread.finished.connect(lambda new_message: self.handle_response(new_message, user_node, history_for_worker))
@@ -194,10 +265,7 @@ class WindowActionsMixin:
         self.chat_thread.start()
 
     def handle_response(self, new_assistant_message, user_node, history_before_assistant):
-        if self.loading_animation:
-            self.loading_animation.stop()
-            self.chat_view.scene().removeItem(self.loading_animation)
-            self.loading_animation = None
+        self._clear_loading_animation()
 
         full_history = append_history(history_before_assistant, [new_assistant_message])
         response_text = new_assistant_message['content']
@@ -223,12 +291,16 @@ class WindowActionsMixin:
                     placeholder_text = "[Assistant Reasoning]"
                 else:
                     placeholder_text = "[Empty Response]"
+            preview_pos = self._consume_pending_response_preview_position()
             ai_node = scene.add_chat_node(
                 placeholder_text,
                 is_user=False, 
                 parent_node=user_node, 
-                conversation_history=full_history
+                conversation_history=full_history,
+                preferred_pos=preview_pos,
             )
+        else:
+            self._clear_pending_response_preview()
         
         parent_for_content = ai_node if ai_node else user_node
         last_created_node = ai_node
@@ -307,11 +379,7 @@ class WindowActionsMixin:
         history_for_worker = get_node_history(node_to_regenerate.parent_node)
         self.message_input.setEnabled(False)
         self.send_button.setEnabled(False)
-        self.loading_animation = LoadingAnimation()
-        self.chat_view.scene().addItem(self.loading_animation)
-        anim_pos = QPointF(node_to_regenerate.pos().x() + node_to_regenerate.width + 50, node_to_regenerate.pos().y() + node_to_regenerate.height / 2)
-        self.loading_animation.setPos(anim_pos)
-        self.loading_animation.start()
+        self._show_loading_animation(anchor_node=node_to_regenerate)
         self.chat_thread = ChatWorkerThread(self.agent, history_for_worker, node_to_regenerate.parent_node)
         self.chat_thread.finished.connect(lambda new_message: self.handle_regenerated_response(new_message, node_to_regenerate, history_for_worker))
         self.chat_thread.error.connect(self.handle_error)
@@ -356,20 +424,13 @@ class WindowActionsMixin:
         except Exception as e:
             self.handle_error(f"An error occurred during regeneration: {str(e)}")
         finally:
-            if self.loading_animation:
-                self.loading_animation.stop()
-                self.chat_view.scene().removeItem(self.loading_animation)
-                self.loading_animation = None
+            self._clear_loading_animation()
             self.message_input.setEnabled(True)
             self.send_button.setEnabled(True)
     
     def generate_takeaway(self, node):
         try:
-            self.loading_animation = LoadingAnimation()
-            self.chat_view.scene().addItem(self.loading_animation)
-            anim_pos = QPointF(node.pos().x() + node.width + 50, node.pos().y() + node.height / 2)
-            self.loading_animation.setPos(anim_pos)
-            self.loading_animation.start()
+            self._show_loading_animation(anchor_node=node)
             self.takeaway_thread = KeyTakeawayWorkerThread(KeyTakeawayAgent(), node.text, node.scenePos())
             self.takeaway_thread.finished.connect(self.handle_takeaway_response)
             self.takeaway_thread.error.connect(self.handle_error)
@@ -389,10 +450,7 @@ class WindowActionsMixin:
         except Exception as e:
             self.handle_error(f"Error creating takeaway note: {str(e)}")
         finally:
-            if self.loading_animation:
-                self.loading_animation.stop()
-                self.chat_view.scene().removeItem(self.loading_animation)
-                self.loading_animation = None
+            self._clear_loading_animation()
 
     def generate_group_summary(self):
         try:
@@ -409,10 +467,7 @@ class WindowActionsMixin:
                 max_x = max(max_x, pos.x() + node.width)
                 avg_y += pos.y()
             note_pos = QPointF(max_x + 100, avg_y / len(selected_nodes))
-            self.loading_animation = LoadingAnimation()
-            scene.addItem(self.loading_animation)
-            self.loading_animation.setPos(QPointF(note_pos.x() - 50, note_pos.y()))
-            self.loading_animation.start()
+            self._show_loading_animation(scene_pos=QPointF(note_pos.x() - 50, note_pos.y()))
             self.group_summary_thread = GroupSummaryWorkerThread(GroupSummaryAgent(), texts, note_pos, selected_nodes)
             self.group_summary_thread.finished.connect(self.handle_group_summary_response)
             self.group_summary_thread.error.connect(self.handle_error)
@@ -437,18 +492,11 @@ class WindowActionsMixin:
         except Exception as e:
             self.handle_error(f"Error creating summary note: {str(e)}")
         finally:
-            if self.loading_animation:
-                self.loading_animation.stop()
-                scene.removeItem(self.loading_animation)
-                self.loading_animation = None
+            self._clear_loading_animation()
 
     def generate_explainer(self, node):
         try:
-            self.loading_animation = LoadingAnimation()
-            self.chat_view.scene().addItem(self.loading_animation)
-            anim_pos = QPointF(node.pos().x() + node.width + 50, node.pos().y() + node.height / 2)
-            self.loading_animation.setPos(anim_pos)
-            self.loading_animation.start()
+            self._show_loading_animation(anchor_node=node)
             self.explainer_thread = ExplainerWorkerThread(ExplainerAgent(), node.text, node.scenePos())
             self.explainer_thread.finished.connect(self.handle_explainer_response)
             self.explainer_thread.error.connect(self.handle_error)
@@ -468,10 +516,7 @@ class WindowActionsMixin:
         except Exception as e:
             self.handle_error(f"Error creating explainer note: {str(e)}")
         finally:
-            if self.loading_animation:
-                self.loading_animation.stop()
-                self.chat_view.scene().removeItem(self.loading_animation)
-                self.loading_animation = None
+            self._clear_loading_animation()
 
     def _clean_chart_context_text(self, text):
         if text is None:
@@ -689,11 +734,7 @@ class WindowActionsMixin:
                     "warning",
                 )
                 return
-            self.loading_animation = LoadingAnimation()
-            self.chat_view.scene().addItem(self.loading_animation)
-            anim_pos = QPointF(node.pos().x() + node.width + 50, node.pos().y() + node.height / 2)
-            self.loading_animation.setPos(anim_pos)
-            self.loading_animation.start()
+            self._show_loading_animation(anchor_node=node)
             self.chart_thread = ChartWorkerThread(chart_source_text, chart_type)
             self.chart_thread.finished.connect(lambda data, emitted_chart_type, source_node=node: self.handle_chart_data(data, emitted_chart_type, source_node))
             self.chart_thread.error.connect(self.handle_error)
@@ -723,10 +764,7 @@ class WindowActionsMixin:
         except Exception as e:
             self.handle_error(f"Error creating chart: {str(e)}")
         finally:
-            if self.loading_animation:
-                self.loading_animation.stop()
-                self.chat_view.scene().removeItem(self.loading_animation)
-                self.loading_animation = None
+            self._clear_loading_animation()
 
     def generate_image(self, node):
         try:
@@ -734,11 +772,7 @@ class WindowActionsMixin:
             if not prompt:
                 self.notification_banner.show_message("The selected node has no text to use as a prompt.", 5000, "warning")
                 return
-            self.loading_animation = LoadingAnimation()
-            self.chat_view.scene().addItem(self.loading_animation)
-            anim_pos = QPointF(node.pos().x() + node.width + 50, node.pos().y() + node.height / 2)
-            self.loading_animation.setPos(anim_pos)
-            self.loading_animation.start()
+            self._show_loading_animation(anchor_node=node)
             self.image_gen_thread = ImageGenerationWorkerThread(ImageGenerationAgent(), prompt)
             self.image_gen_thread.finished.connect(lambda image_bytes, p: self.handle_image_response(image_bytes, p, node))
             self.image_gen_thread.error.connect(self.handle_error)
@@ -769,10 +803,7 @@ class WindowActionsMixin:
         except Exception as e:
             self.handle_error(f"Failed to display generated image: {e}")
         finally:
-            if self.loading_animation:
-                self.loading_animation.stop()
-                self.chat_view.scene().removeItem(self.loading_animation)
-                self.loading_animation = None
+            self._clear_loading_animation()
 
     def execute_pycoder_node(self, pycoder_node):
         if pycoder_node.is_running:
