@@ -85,6 +85,8 @@ class WebNode(QGraphicsObject, HoverAnimationMixin):
     web search via a worker thread, and displaying the status and summarized
     results of that search.
     """
+    supports_branch_context_toggle = True
+
     run_clicked = Signal(object) # Emits self when the run button is clicked.
     
     NODE_WIDTH = 450
@@ -289,13 +291,14 @@ class WebNode(QGraphicsObject, HoverAnimationMixin):
         self.query_input.setReadOnly(is_running)
         self.run_button.setText("Processing..." if is_running else "Fetch Information")
 
-    def set_result(self, summary: str, sources: list):
+    def set_result(self, summary: str, sources: list, base_history=None):
         """
         Displays the final summary and source links in the result area.
 
         Args:
             summary (str): The summarized text from the web search.
             sources (list[str]): A list of source URLs.
+            base_history (list, optional): Conversation history to inherit before storing the result.
         """
         self.summary = summary
         self.sources = sources
@@ -309,7 +312,9 @@ class WebNode(QGraphicsObject, HoverAnimationMixin):
         self.status_label.setStyleSheet(f"color: {get_semantic_color('status_success').name()}; background: transparent;")
         
         # Update conversation history for potential child nodes.
-        self.conversation_history = append_history(get_node_history(self.parent_node), [
+        if base_history is None:
+            base_history = get_node_history(self.parent_node)
+        self.conversation_history = append_history(base_history, [
             {'role': 'assistant', 'content': full_text}
         ])
 
