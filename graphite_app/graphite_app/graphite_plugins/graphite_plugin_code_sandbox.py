@@ -140,6 +140,7 @@ class CodeSandboxConnectionItem(ConnectionItem):
 
 
 class CodeSandboxNode(QGraphicsObject, HoverAnimationMixin):
+    supports_branch_context_toggle = True
     sandbox_requested = Signal(object)
 
     NODE_WIDTH = 620
