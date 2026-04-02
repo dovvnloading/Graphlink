@@ -110,7 +110,7 @@ The app also includes primary non-plugin node types that form the main graph sur
 - **Quality Gate**: Run a production-readiness review, score the branch, and recommend follow-up remediation nodes.
 - **Code Review Agent**: Review a local file or GitHub file with a deterministic weighted rubric and structured findings.
 
-### Build & Execution<img width="1920" height="1080" alt="graphite-render-1920x1080-1775163980518" src="https://github.com/user-attachments/assets/34745c7c-6351-42a0-a60d-7f239734026f" />
+### Build & Execution
 
 - **Gitlink**: Load a repository context, prepare file-level changes, preview them, and write only after explicit approval.
 - **Py-Coder**: Run Python snippets and get AI-assisted coding analysis.
