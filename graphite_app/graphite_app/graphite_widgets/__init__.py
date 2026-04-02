@@ -1,7 +1,7 @@
-﻿"""Widget package for reusable Graphite UI components."""
+"""Widget package for reusable Graphite UI components."""
 
 from .controls import FontControl, GridControl
-from .overlays import LoadingAnimation, SearchOverlay
+from .overlays import GhostNodePreview, LoadingAnimation, SearchOverlay
 from .pins import NavigationPin, PinOverlay
 from .scrolling import CustomScrollArea, CustomScrollBar, ScrollBar, ScrollHandle
 from .splash import AnimatedWordLogo, SplashAnimationWidget, SplashScreen
@@ -17,6 +17,7 @@ __all__ = [
     'CustomScrollBar',
     'CustomTooltip',
     'FontControl',
+    'GhostNodePreview',
     'GridControl',
     'LoadingAnimation',
     'NavigationPin',
