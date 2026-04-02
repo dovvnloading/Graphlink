@@ -378,7 +378,7 @@ class WebNode(QGraphicsObject, HoverAnimationMixin):
             draw_lod_card(
                 painter,
                 QRectF(0, 0, self.width, self.height),
-                accent=node_color,
+                accent=web_color,
                 selection_color=palette.SELECTION,
                 title="Web Search",
                 subtitle=self.status or "Idle",
