@@ -5,6 +5,7 @@ from PySide6.QtWidgets import QApplication, QGraphicsItem
 
 from graphite_canvas_items import Container, HoverAnimationMixin
 from graphite_config import get_current_palette, get_graph_node_colors, get_semantic_color
+from graphite_lod import draw_lod_card, lod_mode_for_item, preview_text
 
 try:
     from pygments import highlight
@@ -59,6 +60,7 @@ class CodeNode(QGraphicsItem, HoverAnimationMixin):
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemUsesExtendedStyleOption)
         self.setAcceptHoverEvents(True)
         self.hovered = False
         self.is_search_match = False
@@ -84,6 +86,8 @@ class CodeNode(QGraphicsItem, HoverAnimationMixin):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
 
+        lod_mode = lod_mode_for_item(self)
+
         path = QPainterPath()
         path.addRoundedRect(0, 0, self.width, self.height, 10, 10)
 
@@ -97,6 +101,23 @@ class CodeNode(QGraphicsItem, HoverAnimationMixin):
             painter.setPen(QPen(node_colors["hover_outline"], 2))
         else:
             painter.setPen(QPen(node_colors["border"], 1))
+
+        if lod_mode != "full":
+            draw_lod_card(
+                painter,
+                QRectF(0, 0, self.width, self.height),
+                accent=node_colors["header_start"],
+                selection_color=palette.SELECTION,
+                title="Code",
+                subtitle=f"Language: {self.language or 'auto-detected'}",
+                preview=preview_text(self.code, fallback="[Empty]"),
+                badge="CODE",
+                mode=lod_mode,
+                selected=self.isSelected() and not is_dragging,
+                hovered=self.hovered,
+                search_match=self.is_search_match,
+            )
+            return
         painter.drawPath(path)
 
         if self.is_search_match:
