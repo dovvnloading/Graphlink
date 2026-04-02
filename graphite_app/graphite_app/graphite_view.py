@@ -122,6 +122,24 @@ class ChatView(QGraphicsView):
                 self.mapToScene(self.viewport().rect()).boundingRect(),
                 max(0.01, self.transform().m11()),
             )
+
+    def visible_scene_rect(self):
+        return self.mapToScene(self.viewport().rect()).boundingRect()
+
+    def is_item_visible(self, item, padding=48):
+        if item is None or item.scene() != self.scene():
+            return False
+        item_rect = item.sceneBoundingRect()
+        visible_rect = self.visible_scene_rect().adjusted(padding, padding, -padding, -padding)
+        return visible_rect.contains(item_rect)
+
+    def reveal_item(self, item, padding=96, force=False):
+        if item is None or item.scene() != self.scene():
+            return
+        if force or not self.is_item_visible(item, padding=max(0, padding // 2)):
+            self.ensureVisible(item.sceneBoundingRect(), padding, padding)
+            self.updateScrollbars()
+            self._schedule_scene_lod_refresh()
         
     def _clear_nav_highlight(self):
         """Removes the navigation highlight from the previously navigated node."""
