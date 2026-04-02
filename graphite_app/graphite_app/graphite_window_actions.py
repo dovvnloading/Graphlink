@@ -74,6 +74,14 @@ class WindowActionsMixin:
         loading.deleteLater()
         self.loading_animation = None
 
+    def _should_include_branch_context(self, node):
+        return bool(getattr(node, "include_branch_context", True))
+
+    def _branch_context_history(self, node, history_source):
+        if not self._should_include_branch_context(node) or history_source is None:
+            return []
+        return get_node_history(history_source)
+
     def _show_pending_response_preview(self, source_node):
         self._clear_pending_response_preview()
         if source_node is None or source_node.scene() != self.chat_view.scene():
@@ -818,7 +826,9 @@ class WindowActionsMixin:
                 pycoder_node.set_running_state(False)
                 return
             self.code_exec_thread = CodeExecutionWorker(code, pycoder_node.repl)
-            self.code_exec_thread.finished.connect(lambda output: self._handle_code_execution_result(output, pycoder_node))
+            self.code_exec_thread.finished.connect(
+                lambda output, history=self._branch_context_history(pycoder_node, pycoder_node.parent_node): self._handle_code_execution_result(output, pycoder_node, history)
+            )
             self.code_exec_thread.error.connect(lambda error_msg: self._handle_pycoder_error(error_msg, pycoder_node))
             self.code_exec_thread.finished.connect(self.code_exec_thread.deleteLater)
             self.code_exec_thread.error.connect(self.code_exec_thread.deleteLater)
@@ -832,10 +842,10 @@ class WindowActionsMixin:
             pycoder_node.reset_statuses(); pycoder_node.set_code(""); pycoder_node.set_output(""); pycoder_node.set_ai_analysis("")
             context_node = pycoder_node.parent_node
             if isinstance(context_node, CodeNode): context_node = context_node.parent_content_node
-            history = get_node_history(context_node)
+            history = self._branch_context_history(pycoder_node, context_node)
             self.pycoder_exec_thread = PyCoderExecutionWorker(prompt, history, pycoder_node.repl)
             self.pycoder_exec_thread.log_update.connect(pycoder_node.update_status)
-            self.pycoder_exec_thread.finished.connect(lambda result: self._handle_ai_pycoder_result(result, pycoder_node))
+            self.pycoder_exec_thread.finished.connect(lambda result, history=history: self._handle_ai_pycoder_result(result, pycoder_node, history))
             self.pycoder_exec_thread.error.connect(lambda error_msg: self._handle_pycoder_error(error_msg, pycoder_node))
             self.pycoder_exec_thread.finished.connect(self.pycoder_exec_thread.deleteLater)
             self.pycoder_exec_thread.error.connect(self.pycoder_exec_thread.deleteLater)
@@ -850,11 +860,9 @@ class WindowActionsMixin:
         pycoder_node.set_running_state(False)
         pycoder_node.set_ai_analysis("Execution manually stopped.")
         
-    def _handle_code_execution_result(self, output, pycoder_node):
+    def _handle_code_execution_result(self, output, pycoder_node, parent_history):
         pycoder_node.set_output(output)
         code = pycoder_node.get_code()
-        
-        parent_history = get_node_history(pycoder_node.parent_node)
         user_msg = f"--- EXECUTED PYTHON CODE ---\n```python\n{code}\n```\n\n--- EXECUTION OUTPUT ---\n{output}"
         
         self.pycoder_agent_thread = PyCoderAgentWorker(code, output)
@@ -875,7 +883,7 @@ class WindowActionsMixin:
         self.setCurrentNode(pycoder_node)
         self.save_chat()
 
-    def _handle_ai_pycoder_result(self, result_dict, pycoder_node):
+    def _handle_ai_pycoder_result(self, result_dict, pycoder_node, parent_history):
         analysis_text = result_dict.get('analysis', '')
         code = result_dict.get('code', '')
         output = result_dict.get('output', '')
@@ -884,8 +892,6 @@ class WindowActionsMixin:
         # We bundle the generated code, execution output, and analysis into the history.
         assistant_msg = f"--- GENERATED CODE ---\n```python\n{code}\n```\n\n--- EXECUTION OUTPUT ---\n{output}\n\n--- ANALYSIS ---\n{analysis_text}"
         
-        parent_history = get_node_history(pycoder_node.parent_node)
-
         assign_history(pycoder_node, append_history(parent_history, [
             {'role': 'user', 'content': prompt},
             {'role': 'assistant', 'content': assistant_msg}
@@ -924,7 +930,7 @@ class WindowActionsMixin:
             sandbox_node.set_running_state(False)
             return
 
-        parent_history = get_node_history(sandbox_node.parent_node)
+        parent_history = self._branch_context_history(sandbox_node, sandbox_node.parent_node)
         trimmed_history, _ = trim_history(
             parent_history,
             self.token_estimator,
@@ -1038,16 +1044,16 @@ class WindowActionsMixin:
             web_node.set_error("Query cannot be empty."); return
         web_node.set_running_state(True); web_node.set_status("Initializing...")
         parent_node = web_node.parent_node
-        parent_history = get_node_history(parent_node)
-        history, _ = trim_history(
+        parent_history = self._branch_context_history(web_node, parent_node)
+        trimmed_history, _ = trim_history(
             parent_history,
             self.token_estimator,
             max_tokens=7000,
             system_prompt_estimate=1000,
         )
-        self.web_worker_thread = WebWorkerThread(query, history)
+        self.web_worker_thread = WebWorkerThread(query, trimmed_history)
         self.web_worker_thread.update_status.connect(lambda status, node=web_node: self._handle_web_worker_status(status, node))
-        self.web_worker_thread.finished.connect(lambda result, node=web_node: self._handle_web_worker_finished(result, node))
+        self.web_worker_thread.finished.connect(lambda result, node=web_node, history=parent_history: self._handle_web_worker_finished(result, node, history))
         self.web_worker_thread.error.connect(lambda error, node=web_node: self._handle_web_worker_error(error, node))
         self.web_worker_thread.finished.connect(self.web_worker_thread.deleteLater)
         self.web_worker_thread.error.connect(self.web_worker_thread.deleteLater)
@@ -1056,9 +1062,9 @@ class WindowActionsMixin:
     def _handle_web_worker_status(self, status, node):
         if node and node.scene(): node.set_status(status)
 
-    def _handle_web_worker_finished(self, result, node):
+    def _handle_web_worker_finished(self, result, node, base_history):
         if node and node.scene():
-            node.set_result(result['summary'], result['sources']); node.set_running_state(False); self.save_chat()
+            node.set_result(result['summary'], result['sources'], base_history=base_history); node.set_running_state(False); self.save_chat()
 
     def _handle_web_worker_error(self, error_message, node):
         if node and node.scene():
@@ -1069,7 +1075,7 @@ class WindowActionsMixin:
         if not prompt:
             reasoning_node.set_error("Prompt cannot be empty."); return
         reasoning_node.set_running_state(True); reasoning_node.clear_thoughts()
-        parent_history = get_node_history(reasoning_node.parent_node)
+        parent_history = self._branch_context_history(reasoning_node, reasoning_node.parent_node)
         trimmed_parent_history, _ = trim_history(
             parent_history,
             self.token_estimator,
@@ -1133,7 +1139,7 @@ class WindowActionsMixin:
         artifact_node.set_running_state(True)
         artifact_node.add_chat_message(instruction, is_user=True)
         
-        parent_history = get_node_history(artifact_node.parent_node)
+        parent_history = self._branch_context_history(artifact_node, artifact_node.parent_node)
         current_doc = artifact_node.get_artifact_content()
         history_to_send = append_history(parent_history, artifact_node.local_history)
         
@@ -1166,7 +1172,7 @@ class WindowActionsMixin:
             artifact_node.add_chat_message(ai_msg, is_user=False)
         artifact_node.set_running_state(False)
         
-        parent_history = get_node_history(artifact_node.parent_node)
+        parent_history = self._branch_context_history(artifact_node, artifact_node.parent_node)
         assign_history(artifact_node, append_history(parent_history, artifact_node.local_history))
         
         self.save_chat()
@@ -1184,7 +1190,7 @@ class WindowActionsMixin:
             return
 
         workflow_node.set_running_state(True)
-        parent_history = get_node_history(workflow_node.parent_node)
+        parent_history = self._branch_context_history(workflow_node, workflow_node.parent_node)
         trimmed_parent_history, _ = trim_history(
             parent_history,
             self.token_estimator,
@@ -1266,7 +1272,7 @@ class WindowActionsMixin:
         if criteria:
             request_text = f"{request_text}\n\nAcceptance Criteria:\n{criteria}"
 
-        parent_history = get_node_history(quality_gate_node.parent_node)
+        parent_history = self._branch_context_history(quality_gate_node, quality_gate_node.parent_node)
         assign_history(quality_gate_node, append_history(parent_history, [
             {'role': 'user', 'content': request_text},
             {'role': 'assistant', 'content': result.get('review_markdown', '')}
