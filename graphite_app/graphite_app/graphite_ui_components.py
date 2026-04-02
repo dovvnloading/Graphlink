@@ -131,6 +131,14 @@ class NotificationBanner(QWidget):
         self.margin_right = 20
 
     def show_message(self, message, duration_ms=5000, msg_type="info"):
+        main_window = self.window()
+        if (
+            main_window
+            and hasattr(main_window, "should_show_notification")
+            and not main_window.should_show_notification(msg_type)
+        ):
+            return
+
         accent_color = "#3498db"
         if msg_type == "error":
             accent_color = "#e74c3c"
