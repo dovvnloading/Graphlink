@@ -16,6 +16,7 @@ from PySide6.QtWidgets import QGraphicsItem
 
 from graphite_canvas_items import Container, Frame, HoverAnimationMixin
 from graphite_config import get_current_palette, get_semantic_color, is_monochrome_theme
+from graphite_lod import draw_lod_card, lod_mode_for_item, preview_text
 from graphite_widgets import ScrollBar
 
 
@@ -47,6 +48,7 @@ class ChatNode(QGraphicsItem, HoverAnimationMixin):
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemUsesExtendedStyleOption)
         self.hovered = False
 
         self.width = self.DEFAULT_WIDTH
@@ -391,6 +393,32 @@ class ChatNode(QGraphicsItem, HoverAnimationMixin):
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
 
         current_width, current_height = self._current_dimensions()
+        is_dragging = self.scene() and getattr(self.scene(), 'is_rubber_band_dragging', False)
+        lod_mode = lod_mode_for_item(self)
+
+        if not self.is_collapsed and lod_mode != "full":
+            draw_lod_card(
+                painter,
+                QRectF(0, 0, current_width, current_height),
+                accent=colors["accent"],
+                selection_color=palette.SELECTION,
+                title=self._role_label(),
+                subtitle=self._role_descriptor(),
+                preview=preview_text(self.text, fallback="[Empty]"),
+                badge="CHAT",
+                mode=lod_mode,
+                selected=self.isSelected() and not is_dragging,
+                hovered=self.hovered,
+                search_match=self.is_search_match,
+                navigation_highlight=self.is_last_navigated,
+                connection_radius=self.CONNECTION_DOT_RADIUS,
+                border_radius=self.BORDER_RADIUS,
+            )
+            if self.is_dimmed:
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(QColor(0, 0, 0, 96))
+                painter.drawRoundedRect(0, 0, current_width, current_height, self.BORDER_RADIUS, self.BORDER_RADIUS)
+            return
 
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor(0, 0, 0, 34))
@@ -406,7 +434,6 @@ class ChatNode(QGraphicsItem, HoverAnimationMixin):
         gradient.setColorAt(1, colors["body_end"])
         painter.setBrush(QBrush(gradient))
 
-        is_dragging = self.scene() and getattr(self.scene(), 'is_rubber_band_dragging', False)
         pen = QPen(colors["accent"].lighter(105), 1.4)
         if self.isSelected() and not is_dragging:
             pen = QPen(palette.SELECTION, 2.2)
