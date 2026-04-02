@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
 import qtawesome as qta
 import graphite_config as config
 from graphite_styles import THEMES
+from graphite_update import APP_VERSION
 
 class AboutDialog(QDialog):
     """A premium dialog displaying application information, developer credits, and external links."""
@@ -33,7 +34,7 @@ class AboutDialog(QDialog):
         app_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         main_layout.addWidget(app_title)
 
-        version_label = QLabel("Version Beta-0.5.3")
+        version_label = QLabel(f"Version {APP_VERSION}")
         version_label.setObjectName("aboutVersion")
         version_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         main_layout.addWidget(version_label)
