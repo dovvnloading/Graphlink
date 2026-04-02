@@ -6,6 +6,7 @@ from PySide6.QtWidgets import QGraphicsItem
 
 from graphite_canvas_items import Container, HoverAnimationMixin
 from graphite_config import get_current_palette, get_graph_node_colors
+from graphite_lod import draw_lod_card, lod_mode_for_item, preview_text
 from graphite_widgets import ScrollBar
 
 
@@ -26,6 +27,7 @@ class ThinkingNode(QGraphicsItem, HoverAnimationMixin):
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemUsesExtendedStyleOption)
         self.setAcceptHoverEvents(True)
         self.hovered = False
         self.is_search_match = False
@@ -114,6 +116,8 @@ class ThinkingNode(QGraphicsItem, HoverAnimationMixin):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
 
+        lod_mode = lod_mode_for_item(self)
+
         path = QPainterPath()
         path.addRoundedRect(0, 0, self.width, self.height, 10, 10)
         painter.setBrush(QColor("#2d2d2d"))
@@ -127,6 +131,24 @@ class ThinkingNode(QGraphicsItem, HoverAnimationMixin):
             pen = QPen(node_colors["hover_outline"], 2)
         else:
             pen = QPen(pen_color, 1)
+
+        if lod_mode != "full":
+            draw_lod_card(
+                painter,
+                QRectF(0, 0, self.width, self.height),
+                accent=node_colors["header_start"],
+                selection_color=palette.SELECTION,
+                title="Assistant Thoughts",
+                subtitle="Reasoning trace",
+                preview=preview_text(self.thinking_text, fallback="[Empty]"),
+                badge="THINK",
+                mode=lod_mode,
+                selected=self.isSelected() and not is_dragging,
+                hovered=self.hovered,
+                search_match=self.is_search_match,
+            )
+            self.dock_button_rect = QRectF()
+            return
         painter.setPen(pen)
         painter.drawPath(path)
 
