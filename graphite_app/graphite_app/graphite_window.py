@@ -179,6 +179,7 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
 
         self.current_node = None
         self.loading_animation = None
+        self.pending_response_preview = None
         self.search_overlay = None
         self.search_results = []
         self.current_search_index = -1
@@ -1000,7 +1001,8 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         super().dropEvent(event)
 
     def handle_error(self, error_message):
-        if self.loading_animation: self.loading_animation.stop(); self.chat_view.scene().removeItem(self.loading_animation); self.loading_animation = None
+        self._clear_loading_animation()
+        self._clear_pending_response_preview()
         self.notification_banner.show_message(f"An error occurred:\n{error_message}", 15000, "error")
         self.message_input.setEnabled(True); self.send_button.setEnabled(True); self.attach_file_btn.setEnabled(True); self.clear_attachment()
         
