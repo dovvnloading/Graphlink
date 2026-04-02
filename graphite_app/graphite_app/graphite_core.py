@@ -717,6 +717,7 @@ class ChatSessionManager:
                 'output': node.output_display.toPlainText(),
                 'analysis': node.ai_analysis_display.toPlainText(),
                 'conversation_history': serializable_history,
+                'include_branch_context': getattr(node, 'include_branch_context', True),
                 'is_collapsed': node.is_collapsed,
                 'parent_node_index': all_nodes_list.index(node.parent_node),
                 'children_indices': [all_nodes_list.index(child) for child in node.children]
@@ -739,6 +740,7 @@ class ChatSessionManager:
                 'status': node.status,
                 'sandbox_id': node.sandbox_id,
                 'conversation_history': serializable_history,
+                'include_branch_context': getattr(node, 'include_branch_context', True),
                 'is_collapsed': node.is_collapsed,
                 'parent_node_index': all_nodes_list.index(node.parent_node),
                 'children_indices': [all_nodes_list.index(child) for child in node.children]
@@ -758,6 +760,7 @@ class ChatSessionManager:
                 'summary': node.summary,
                 'sources': node.sources,
                 'conversation_history': serializable_history,
+                'include_branch_context': getattr(node, 'include_branch_context', True),
                 'is_collapsed': node.is_collapsed,
                 'parent_node_index': all_nodes_list.index(node.parent_node),
                 'children_indices': [all_nodes_list.index(child) for child in node.children]
@@ -792,6 +795,7 @@ class ChatSessionManager:
                 'thought_process': node.thought_process,
                 'status': node.status,
                 'conversation_history': serializable_history,
+                'include_branch_context': getattr(node, 'include_branch_context', True),
                 'is_collapsed': node.is_collapsed,
                 'parent_node_index': all_nodes_list.index(node.parent_node),
                 'children_indices': [all_nodes_list.index(child) for child in node.children]
@@ -834,6 +838,7 @@ class ChatSessionManager:
                 'conversation_history': serializable_history,
                 'local_history': serializable_local_history,
                 'chat_html_cache': node.chat_html_cache,
+                'include_branch_context': getattr(node, 'include_branch_context', True),
                 'is_collapsed': node.is_collapsed,
                 'parent_node_index': all_nodes_list.index(node.parent_node),
                 'children_indices': [all_nodes_list.index(child) for child in node.children]
@@ -854,6 +859,7 @@ class ChatSessionManager:
                 'blueprint_markdown': node.blueprint_markdown,
                 'recommendations': node.recommendations,
                 'conversation_history': serializable_history,
+                'include_branch_context': getattr(node, 'include_branch_context', True),
                 'is_collapsed': node.is_collapsed,
                 'parent_node_index': all_nodes_list.index(node.parent_node),
                 'children_indices': [all_nodes_list.index(child) for child in node.children]
@@ -889,6 +895,7 @@ class ChatSessionManager:
                 'note_summary': node.note_summary,
                 'recommendations': node.recommendations,
                 'conversation_history': serializable_history,
+                'include_branch_context': getattr(node, 'include_branch_context', True),
                 'is_collapsed': node.is_collapsed,
                 'parent_node_index': all_nodes_list.index(node.parent_node),
                 'children_indices': [all_nodes_list.index(child) for child in node.children]
@@ -1374,6 +1381,7 @@ class ChatSessionManager:
                     new_msg['content'] = _process_content_for_deserialization(msg['content'])
                     deserialized_history.append(new_msg)
                 node.conversation_history = deserialized_history
+                node.include_branch_context = data.get('include_branch_context', True)
 
                 if data.get('is_collapsed', False):
                     node.set_collapsed(True)
@@ -1402,6 +1410,7 @@ class ChatSessionManager:
                     new_msg['content'] = _process_content_for_deserialization(msg['content'])
                     deserialized_history.append(new_msg)
                 node.conversation_history = deserialized_history
+                node.include_branch_context = data.get('include_branch_context', True)
 
                 if data.get('is_collapsed', False):
                     node.set_collapsed(True)
@@ -1430,6 +1439,7 @@ class ChatSessionManager:
                     new_msg['content'] = _process_content_for_deserialization(msg['content'])
                     deserialized_history.append(new_msg)
                 node.conversation_history = deserialized_history
+                node.include_branch_context = data.get('include_branch_context', True)
 
                 node.run_clicked.connect(self.window.execute_web_node)
 
@@ -1471,6 +1481,7 @@ class ChatSessionManager:
                     new_msg['content'] = _process_content_for_deserialization(msg['content'])
                     deserialized_history.append(new_msg)
                 node.conversation_history = deserialized_history
+                node.include_branch_context = data.get('include_branch_context', True)
 
                 node.reasoning_requested.connect(self.window.execute_reasoning_node)
 
@@ -1516,6 +1527,7 @@ class ChatSessionManager:
                     new_msg['content'] = _process_content_for_deserialization(msg['content'])
                     deserialized_history.append(new_msg)
                 node.conversation_history = deserialized_history
+                node.include_branch_context = data.get('include_branch_context', True)
 
                 deserialized_local_history = []
                 for msg in data.get('local_history', []):
@@ -1549,6 +1561,7 @@ class ChatSessionManager:
                     new_msg['content'] = _process_content_for_deserialization(msg['content'])
                     deserialized_history.append(new_msg)
                 node.conversation_history = deserialized_history
+                node.include_branch_context = data.get('include_branch_context', True)
 
                 node.blueprint_markdown = data.get('blueprint_markdown', '')
                 node.recommendations = data.get('recommendations', [])
@@ -1616,6 +1629,7 @@ class ChatSessionManager:
                     new_msg['content'] = _process_content_for_deserialization(msg['content'])
                     deserialized_history.append(new_msg)
                 node.conversation_history = deserialized_history
+                node.include_branch_context = data.get('include_branch_context', True)
 
                 node.review_markdown = data.get('review_markdown', '')
                 node.note_summary = data.get('note_summary', '')
