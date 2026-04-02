@@ -225,6 +225,17 @@ class PluginPortal:
         
         return None
 
+    def _resolve_branch_parent(self, selected_node):
+        if isinstance(selected_node, CodeNode):
+            return selected_node.parent_content_node
+        return selected_node
+
+    def _position_branch_node(self, scene, parent_node, node):
+        node.setPos(scene.find_branch_position(parent_node, node))
+
+    def _position_free_node(self, scene, base_pos, node, strategy="general"):
+        node.setPos(scene.find_free_position(base_pos, node, strategy=strategy))
+
     def _create_system_prompt_node(self):
         scene = self.main_window.chat_view.scene()
         root_node = self._get_root_node()
@@ -261,9 +272,7 @@ class PluginPortal:
             self.main_window.notification_banner.show_message("Please select a node to branch from before adding Py-Coder.", 5000, "warning")
             return
 
-        parent_node = selected_node
-        if isinstance(selected_node, CodeNode):
-            parent_node = selected_node.parent_content_node
+        parent_node = self._resolve_branch_parent(selected_node)
         
         # Verify parent node is conversational
         if not hasattr(parent_node, 'children'):
@@ -273,10 +282,7 @@ class PluginPortal:
         pycoder_node = PyCoderNode(parent_node=parent_node)
         parent_node.children.append(pycoder_node)
         
-        parent_pos = parent_node.pos()
-        parent_width = parent_node.width if hasattr(parent_node, 'width') else parent_node.boundingRect().width()
-        pycoder_pos = QPointF(parent_pos.x() + parent_width + 100, parent_pos.y())
-        pycoder_node.setPos(pycoder_pos)
+        self._position_branch_node(scene, parent_node, pycoder_node)
 
         scene.addItem(pycoder_node)
         scene.pycoder_nodes.append(pycoder_node)
@@ -295,9 +301,7 @@ class PluginPortal:
             self.main_window.notification_banner.show_message("Please select a node to branch from before adding an Execution Sandbox.", 5000, "warning")
             return None
 
-        parent_node = selected_node
-        if isinstance(selected_node, CodeNode):
-            parent_node = selected_node.parent_content_node
+        parent_node = self._resolve_branch_parent(selected_node)
 
         if not hasattr(parent_node, 'children'):
             self.main_window.notification_banner.show_message("Execution Sandbox can only branch from a valid conversational node.", 5000, "warning")
@@ -310,10 +314,7 @@ class PluginPortal:
         if hasattr(parent_node, 'conversation_history') and parent_node.conversation_history:
             sandbox_node.conversation_history = clone_history(parent_node.conversation_history)
 
-        parent_pos = parent_node.pos()
-        parent_width = parent_node.width if hasattr(parent_node, 'width') else parent_node.boundingRect().width()
-        sandbox_pos = QPointF(parent_pos.x() + parent_width + 100, parent_pos.y())
-        sandbox_node.setPos(sandbox_pos)
+        self._position_branch_node(scene, parent_node, sandbox_node)
 
         scene.addItem(sandbox_node)
         scene.code_sandbox_nodes.append(sandbox_node)
@@ -332,9 +333,7 @@ class PluginPortal:
             self.main_window.notification_banner.show_message("Please select a node to branch from before adding an Artifact Drafter.", 5000, "warning")
             return
 
-        parent_node = selected_node
-        if isinstance(selected_node, CodeNode):
-            parent_node = selected_node.parent_content_node
+        parent_node = self._resolve_branch_parent(selected_node)
 
         if not hasattr(parent_node, 'children'):
              self.main_window.notification_banner.show_message("Artifact Drafter can only branch from a valid conversational node.", 5000, "warning")
@@ -346,10 +345,7 @@ class PluginPortal:
         parent_node.children.append(artifact_node)
         artifact_node.artifact_requested.connect(self.main_window.execute_artifact_node)
         
-        parent_pos = parent_node.pos()
-        parent_width = parent_node.width if hasattr(parent_node, 'width') else parent_node.boundingRect().width()
-        artifact_pos = QPointF(parent_pos.x() + parent_width + 100, parent_pos.y())
-        artifact_node.setPos(artifact_pos)
+        self._position_branch_node(scene, parent_node, artifact_node)
 
         scene.addItem(artifact_node)
         # Ensure scene tracks it (will be formalized in graphite_scene.py later)
@@ -381,10 +377,7 @@ class PluginPortal:
         if hasattr(selected_node, 'conversation_history') and selected_node.conversation_history:
             workflow_node.conversation_history = clone_history(selected_node.conversation_history)
 
-        parent_pos = selected_node.pos()
-        parent_width = selected_node.width if hasattr(selected_node, 'width') else selected_node.boundingRect().width()
-        workflow_pos = QPointF(parent_pos.x() + parent_width + 100, parent_pos.y())
-        workflow_node.setPos(workflow_pos)
+        self._position_branch_node(scene, selected_node, workflow_node)
 
         scene.addItem(workflow_node)
         scene.workflow_nodes.append(workflow_node)
@@ -412,10 +405,7 @@ class PluginPortal:
         if hasattr(selected_node, 'conversation_history') and selected_node.conversation_history:
             quality_gate_node.conversation_history = clone_history(selected_node.conversation_history)
 
-        parent_pos = selected_node.pos()
-        parent_width = selected_node.width if hasattr(selected_node, 'width') else selected_node.boundingRect().width()
-        quality_gate_pos = QPointF(parent_pos.x() + parent_width + 100, parent_pos.y())
-        quality_gate_node.setPos(quality_gate_pos)
+        self._position_branch_node(scene, selected_node, quality_gate_node)
 
         scene.addItem(quality_gate_node)
         scene.quality_gate_nodes.append(quality_gate_node)
@@ -434,9 +424,7 @@ class PluginPortal:
             self.main_window.notification_banner.show_message("Please select a node to branch from before adding Code Review Agent.", 5000, "warning")
             return None
 
-        parent_node = selected_node
-        if isinstance(selected_node, CodeNode):
-            parent_node = selected_node.parent_content_node
+        parent_node = self._resolve_branch_parent(selected_node)
 
         if not hasattr(parent_node, 'children'):
             self.main_window.notification_banner.show_message("Code Review Agent can only branch from a valid conversational node.", 5000, "warning")
@@ -449,10 +437,7 @@ class PluginPortal:
         if hasattr(parent_node, 'conversation_history') and parent_node.conversation_history:
             review_node.conversation_history = clone_history(parent_node.conversation_history)
 
-        parent_pos = parent_node.pos()
-        parent_width = parent_node.width if hasattr(parent_node, 'width') else parent_node.boundingRect().width()
-        review_pos = QPointF(parent_pos.x() + parent_width + 100, parent_pos.y())
-        review_node.setPos(review_pos)
+        self._position_branch_node(scene, parent_node, review_node)
 
         scene.addItem(review_node)
         scene.code_review_nodes.append(review_node)
@@ -471,9 +456,7 @@ class PluginPortal:
             self.main_window.notification_banner.show_message("Please select a node to branch from before adding Gitlink.", 5000, "warning")
             return None
 
-        parent_node = selected_node
-        if isinstance(selected_node, CodeNode):
-            parent_node = selected_node.parent_content_node
+        parent_node = self._resolve_branch_parent(selected_node)
 
         if not hasattr(parent_node, 'children'):
             self.main_window.notification_banner.show_message("Gitlink can only branch from a valid conversational node.", 5000, "warning")
@@ -486,10 +469,7 @@ class PluginPortal:
         if hasattr(parent_node, 'conversation_history') and parent_node.conversation_history:
             gitlink_node.conversation_history = clone_history(parent_node.conversation_history)
 
-        parent_pos = parent_node.pos()
-        parent_width = parent_node.width if hasattr(parent_node, 'width') else parent_node.boundingRect().width()
-        gitlink_pos = QPointF(parent_pos.x() + parent_width + 100, parent_pos.y())
-        gitlink_node.setPos(gitlink_pos)
+        self._position_branch_node(scene, parent_node, gitlink_node)
 
         scene.addItem(gitlink_node)
         scene.gitlink_nodes.append(gitlink_node)
@@ -518,9 +498,9 @@ class PluginPortal:
 
         left_width = left_node.width if hasattr(left_node, 'width') else left_node.boundingRect().width()
         right_width = right_node.width if hasattr(right_node, 'width') else right_node.boundingRect().width()
-        spawn_x = max(left_node.pos().x() + left_width, right_node.pos().x() + right_width) + 120
-        spawn_y = (left_node.pos().y() + right_node.pos().y()) / 2
-        diff_node.setPos(QPointF(spawn_x, spawn_y))
+        spawn_x = max(left_node.scenePos().x() + left_width, right_node.scenePos().x() + right_width) + 160
+        spawn_y = (left_node.scenePos().y() + right_node.scenePos().y()) / 2
+        self._position_free_node(scene, QPointF(spawn_x, spawn_y), diff_node, strategy="branch")
 
         scene.addItem(diff_node)
         scene.graph_diff_nodes.append(diff_node)
@@ -544,10 +524,7 @@ class PluginPortal:
         selected_node.children.append(web_node)
         web_node.run_clicked.connect(self.main_window.execute_web_node)
         
-        parent_pos = selected_node.pos()
-        parent_width = selected_node.width if hasattr(selected_node, 'width') else selected_node.boundingRect().width()
-        web_node_pos = QPointF(parent_pos.x() + parent_width + 100, parent_pos.y())
-        web_node.setPos(web_node_pos)
+        self._position_branch_node(scene, selected_node, web_node)
 
         scene.addItem(web_node)
         scene.web_nodes.append(web_node)
@@ -574,10 +551,7 @@ class PluginPortal:
             history_copy = clone_history(selected_node.conversation_history)
             convo_node.set_history(history_copy)
 
-        parent_pos = selected_node.pos()
-        parent_width = selected_node.width if hasattr(selected_node, 'width') else selected_node.boundingRect().width()
-        convo_node_pos = QPointF(parent_pos.x() + parent_width + 100, parent_pos.y())
-        convo_node.setPos(convo_node_pos)
+        self._position_branch_node(scene, selected_node, convo_node)
 
         scene.addItem(convo_node)
         scene.conversation_nodes.append(convo_node)
@@ -600,10 +574,7 @@ class PluginPortal:
         selected_node.children.append(reasoning_node)
         reasoning_node.reasoning_requested.connect(self.main_window.execute_reasoning_node)
         
-        parent_pos = selected_node.pos()
-        parent_width = reasoning_node.width if hasattr(selected_node, 'width') else selected_node.boundingRect().width()
-        reasoning_node_pos = QPointF(parent_pos.x() + parent_width + 100, parent_pos.y())
-        reasoning_node.setPos(reasoning_node_pos)
+        self._position_branch_node(scene, selected_node, reasoning_node)
 
         scene.addItem(reasoning_node)
         scene.reasoning_nodes.append(reasoning_node)
@@ -626,10 +597,7 @@ class PluginPortal:
         html_view_node = HtmlViewNode(parent_node=selected_node)
         selected_node.children.append(html_view_node)
         
-        parent_pos = selected_node.pos()
-        parent_width = selected_node.width if hasattr(selected_node, 'width') else selected_node.boundingRect().width()
-        html_node_pos = QPointF(parent_pos.x() + parent_width + 100, parent_pos.y())
-        html_view_node.setPos(html_node_pos)
+        self._position_branch_node(scene, selected_node, html_view_node)
 
         scene.addItem(html_view_node)
         scene.html_view_nodes.append(html_view_node)
