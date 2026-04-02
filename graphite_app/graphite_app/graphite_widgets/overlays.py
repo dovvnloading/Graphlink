@@ -1,10 +1,11 @@
-﻿"""Search and loading overlay widgets."""
+"""Search and loading overlay widgets."""
 
 import qtawesome as qta
 from PySide6.QtCore import Property, QEasingCurve, QParallelAnimationGroup, QPropertyAnimation, QRectF, Qt, Signal
-from PySide6.QtGui import QKeySequence, QPainter, QPen, QShortcut
+from PySide6.QtGui import QColor, QFont, QKeySequence, QPainter, QPainterPath, QPen, QShortcut
 from PySide6.QtWidgets import QGraphicsObject, QHBoxLayout, QLabel, QLineEdit, QPushButton, QWidget
 from graphite_config import get_current_palette
+from .loading_visuals import paint_orbital_loading_spinner
 
 class LoadingAnimation(QGraphicsObject):
     def __init__(self, parent=None):
@@ -39,23 +40,16 @@ class LoadingAnimation(QGraphicsObject):
         self.anim_group.setLoopCount(-1)
 
     def boundingRect(self):
-        return QRectF(-20, -20, 40, 40)
+        return QRectF(-24, -24, 48, 48)
 
     def paint(self, painter, option, widget):
-        palette = get_current_palette()
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        
-        pen1 = QPen(palette.USER_NODE, 3, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
-        painter.setPen(pen1)
-        painter.drawArc(self.boundingRect().toRect(), int(self._angle1 * 16), 120 * 16)
-        
-        pen2 = QPen(palette.AI_NODE, 3, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
-        painter.setPen(pen2)
-        painter.drawArc(self.boundingRect().adjusted(5, 5, -5, -5).toRect(), int(self._angle2 * 16), 120 * 16)
-
-        pen3 = QPen(palette.NAV_HIGHLIGHT.darker(120), 3, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
-        painter.setPen(pen3)
-        painter.drawArc(self.boundingRect().adjusted(10, 10, -10, -10).toRect(), int(self._angle3 * 16), 120 * 16)
+        paint_orbital_loading_spinner(
+            painter,
+            self.boundingRect(),
+            self._angle1,
+            self._angle2,
+            self._angle3,
+        )
 
     def start(self):
         self.anim_group.start()
@@ -89,6 +83,77 @@ class LoadingAnimation(QGraphicsObject):
     def angle3(self, value):
         self._angle3 = value
         self.update()
+
+
+class GhostNodePreview(QGraphicsObject):
+    """A transient placeholder that reserves and visualizes a pending node spawn."""
+
+    def __init__(self, width=420, height=128, title="Generating response", subtitle="Node reserved here", parent=None):
+        super().__init__(parent)
+        self.width = max(220.0, float(width))
+        self.height = max(88.0, float(height))
+        self.title = title
+        self.subtitle = subtitle
+        self.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+        self.setAcceptHoverEvents(False)
+        self.setZValue(90)
+
+    def boundingRect(self):
+        return QRectF(-8, -8, self.width + 16, self.height + 16)
+
+    def paint(self, painter, option, widget):
+        palette = get_current_palette()
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+
+        body_rect = QRectF(0, 0, self.width, self.height)
+        outline = QColor(palette.SELECTION)
+        outline.setAlpha(170)
+        fill = QColor(palette.SELECTION)
+        fill.setAlpha(28)
+        glow = QColor(palette.SELECTION)
+        glow.setAlpha(54)
+
+        shadow_path = QPainterPath()
+        shadow_path.addRoundedRect(body_rect.adjusted(4, 5, 4, 5), 12, 12)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(0, 0, 0, 36))
+        painter.drawPath(shadow_path)
+
+        node_path = QPainterPath()
+        node_path.addRoundedRect(body_rect, 12, 12)
+        painter.setBrush(fill)
+        painter.setPen(QPen(outline, 1.6, Qt.PenStyle.DashLine, Qt.PenCapStyle.RoundCap))
+        painter.drawPath(node_path)
+
+        painter.save()
+        painter.setClipPath(node_path)
+        painter.fillRect(QRectF(body_rect.left(), body_rect.top(), 5, body_rect.height()), glow)
+        painter.restore()
+
+        spinner_rect = QRectF(18, (self.height - 26) * 0.5, 26, 26)
+        paint_orbital_loading_spinner(painter, spinner_rect, 42.0, 170.0, 264.0)
+
+        title_font = QFont("Segoe UI", 10, QFont.Weight.DemiBold)
+        painter.setFont(title_font)
+        painter.setPen(QColor("#eef6ff"))
+        painter.drawText(
+            QRectF(58, 24, self.width - 76, 22),
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            self.title,
+        )
+
+        subtitle_font = QFont("Segoe UI", 8)
+        painter.setFont(subtitle_font)
+        painter.setPen(QColor("#aab8c8"))
+        painter.drawText(
+            QRectF(58, 50, self.width - 76, 18),
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            self.subtitle,
+        )
+
+        painter.restore()
 
 class SearchOverlay(QWidget):
     textChanged = Signal(str)
