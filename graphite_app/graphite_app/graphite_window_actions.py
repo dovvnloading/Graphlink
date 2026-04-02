@@ -252,7 +252,7 @@ class WindowActionsMixin:
 
         if self._looks_like_image_generation_request(message) and not attachments:
             self.current_node = user_node
-            self.chat_view.centerOn(user_node)
+            self.chat_view.reveal_item(user_node)
             self.message_input.clear()
             self.message_input.setEnabled(True)
             self.send_button.setEnabled(True)
@@ -322,7 +322,7 @@ class WindowActionsMixin:
                 last_created_node = thinking_node
 
         self.current_node = last_created_node if last_created_node else user_node
-        self.chat_view.centerOn(self.current_node)
+        self.chat_view.reveal_item(self.current_node)
         self.message_input.clear()
         self.message_input.setEnabled(True)
         self.send_button.setEnabled(True)
@@ -427,7 +427,7 @@ class WindowActionsMixin:
                     last_created_node = thinking_node
             scene.update_connections()
             self.current_node = last_created_node
-            self.chat_view.centerOn(last_created_node)
+            self.chat_view.reveal_item(last_created_node)
             self.save_chat()
         except Exception as e:
             self.handle_error(f"An error occurred during regeneration: {str(e)}")
@@ -767,7 +767,7 @@ class WindowActionsMixin:
                 chart_pos = QPointF(0, 0)
             chart = scene.add_chart(chart_data, chart_pos, parent_content_node=source_node)
             self.current_node = chart
-            self.chat_view.centerOn(chart)
+            self.chat_view.reveal_item(chart)
             self.save_chat()
         except Exception as e:
             self.handle_error(f"Error creating chart: {str(e)}")
@@ -806,7 +806,7 @@ class WindowActionsMixin:
                 is_user=False, parent_node=parent_node, conversation_history=history
             )
             self.chat_view.scene().add_image_node(image_bytes, ai_node, prompt)
-            self.chat_view.centerOn(ai_node)
+            self.chat_view.reveal_item(ai_node)
             self.save_chat()
         except Exception as e:
             self.handle_error(f"Failed to display generated image: {e}")
@@ -1499,7 +1499,7 @@ class WindowActionsMixin:
         if hasattr(new_node, 'setSelected'):
             new_node.setSelected(True)
         self.setCurrentNode(new_node)
-        self.chat_view.centerOn(new_node)
+        self.chat_view.reveal_item(new_node)
         self.save_chat()
 
     def _seed_plugin_prompt(self, node, seed_prompt):
