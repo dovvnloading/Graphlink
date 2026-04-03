@@ -3,6 +3,7 @@ ddgs
 google-generativeai
 Markdown
 matplotlib
+mutagen
 ollama
 openai>=1.0.0
 Pillow
