@@ -188,10 +188,8 @@ class WindowActionsMixin:
         history_context_node = branch_parent if branch_parent else self.current_node
         history = get_node_history(history_context_node)
         user_node_text = message if message else self._build_attachment_node_summary(attachments)
-        llm_content_parts = []
-        
-        if message:
-            llm_content_parts.append({'type': 'text', 'text': user_node_text})
+        media_content_parts = []
+        text_content_parts = []
 
         user_node = self.chat_view.scene().add_chat_node(
             user_node_text,
@@ -210,11 +208,11 @@ class WindowActionsMixin:
                     with open(attachment_path, 'rb') as f:
                         image_bytes = f.read()
                     self.chat_view.scene().add_image_node(image_bytes, user_node, prompt=message)
-                    llm_content_parts.append({'type': 'image_bytes', 'data': image_bytes})
+                    media_content_parts.append({'type': 'image_bytes', 'data': image_bytes})
                     continue
 
                 if attachment.get('kind') == 'audio':
-                    llm_content_parts.append({
+                    media_content_parts.append({
                         'type': 'audio_file',
                         'path': attachment_path,
                         'name': attachment.get('name') or os.path.basename(attachment_path),
@@ -235,7 +233,7 @@ class WindowActionsMixin:
                     return
 
                 self.chat_view.scene().add_document_node(title=file_name, content=doc_content, parent_user_node=user_node)
-                llm_content_parts.append({
+                text_content_parts.append({
                     'type': 'text',
                     'text': self._wrap_attachment_xml(attachment, doc_content),
                 })
@@ -243,6 +241,12 @@ class WindowActionsMixin:
                 self.handle_error(f"Could not read attachment '{attachment_path}': {e}")
                 user_node.scene().delete_chat_node(user_node)
                 return
+
+        if message:
+            text_content_parts.insert(0, {'type': 'text', 'text': user_node_text})
+
+        # Keep media parts ahead of prompt text for multimodal models that prefer that ordering.
+        llm_content_parts = media_content_parts + text_content_parts
 
         if len(llm_content_parts) == 1 and llm_content_parts[0].get('type') == 'text':
             payload_for_llm = llm_content_parts[0]['text']
