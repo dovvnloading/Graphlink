@@ -3,8 +3,8 @@ import re
 
 import requests
 from PySide6.QtCore import QThread, Signal
+from graphite_version import APP_VERSION
 
-APP_VERSION = "v1.0.5"
 UPDATE_SIGNAL_URL = "https://raw.githubusercontent.com/dovvnloading/Graphlink/main/update_signal.md"
 UPDATE_REPOSITORY_URL = "https://github.com/dovvnloading/Graphlink"
 
