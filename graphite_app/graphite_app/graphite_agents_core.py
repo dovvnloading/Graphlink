@@ -108,7 +108,7 @@ class ChatWorkerThread(QThread):
         if self._contains_audio_attachment():
             return (
                 "Audio processing stalled before the model returned a response.\n\n"
-                "Please try again. If this keeps happening, use a shorter clip or switch to Gemini native audio."
+                "Please try again. If this keeps happening, use a shorter clip or switch to an audio-capable Gemini or Ollama model."
             )
         return (
             "The model stopped responding before the request completed.\n\n"
