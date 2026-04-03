@@ -1,13 +1,16 @@
+import os
+
 import qtawesome as qta
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QDesktopServices
 from PySide6.QtWidgets import QApplication, QFileDialog, QMenu
+from PySide6.QtCore import QUrl
 
 from graphite_config import get_current_palette
 from graphite_exporter import Exporter
 
 
 class DocumentNodeContextMenu(QMenu):
-    """Context menu for DocumentNode, providing export and delete actions."""
+    """Context menu for uploaded file attachments."""
 
     def __init__(self, node, parent=None):
         super().__init__(parent)
@@ -21,15 +24,34 @@ class DocumentNodeContextMenu(QMenu):
             QMenu::separator {{ height: 1px; background-color: #3f3f3f; margin: 4px 0px; }}
         """)
 
-        copy_action = QAction("Copy Content", self)
+        copy_action = QAction("Copy Details", self)
         copy_action.setIcon(qta.icon('fa5s.copy', color='white'))
         copy_action.triggered.connect(self.copy_content)
         self.addAction(copy_action)
 
+        collapse_text = "Expand Attachment" if self.node.is_collapsed else "Collapse to Pill"
+        collapse_icon = 'fa5s.expand-arrows-alt' if self.node.is_collapsed else 'fa5s.compress-arrows-alt'
+        collapse_action = QAction(collapse_text, self)
+        collapse_action.setIcon(qta.icon(collapse_icon, color='white'))
+        collapse_action.triggered.connect(self.node.toggle_collapse)
+        self.addAction(collapse_action)
+
+        dock_action = QAction("Dock into Parent Node", self)
+        dock_action.setIcon(qta.icon('fa5s.arrow-up', color='white'))
+        dock_action.triggered.connect(self.node.dock)
+        self.addAction(dock_action)
+
+        if self.node.file_path and os.path.isfile(self.node.file_path):
+            open_action = QAction("Open File", self)
+            open_action.setIcon(qta.icon('fa5s.external-link-alt', color='white'))
+            open_action.triggered.connect(self.open_file)
+            self.addAction(open_action)
+
         self.addSeparator()
 
-        export_menu = self.create_export_menu()
-        self.addMenu(export_menu)
+        if self.node.attachment_kind == "document":
+            export_menu = self.create_export_menu()
+            self.addMenu(export_menu)
 
         scene = self.node.scene()
         is_branch_hidden = getattr(scene, 'is_branch_hidden', False)
@@ -40,7 +62,8 @@ class DocumentNodeContextMenu(QMenu):
         visibility_action.triggered.connect(self.toggle_branch_visibility)
         self.addAction(visibility_action)
 
-        delete_action = QAction("Delete Document", self)
+        delete_label = "Delete Audio Attachment" if self.node.attachment_kind == "audio" else "Delete Attachment"
+        delete_action = QAction(delete_label, self)
         delete_action.setIcon(qta.icon('fa5s.trash', color='white'))
         delete_action.triggered.connect(self.delete_node)
         self.addAction(delete_action)
@@ -115,7 +138,11 @@ class DocumentNodeContextMenu(QMenu):
         QApplication.clipboard().setText(self.node.content)
         main_window = self.node.scene().window if self.node.scene() else None
         if main_window and hasattr(main_window, 'notification_banner'):
-            main_window.notification_banner.show_message("Content copied to clipboard.", 3000, "success")
+            main_window.notification_banner.show_message("Attachment details copied to clipboard.", 3000, "success")
+
+    def open_file(self):
+        if self.node.file_path and os.path.isfile(self.node.file_path):
+            QDesktopServices.openUrl(QUrl.fromLocalFile(self.node.file_path))
 
     def toggle_branch_visibility(self):
         scene = self.node.scene()
