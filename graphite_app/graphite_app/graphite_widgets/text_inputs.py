@@ -377,6 +377,8 @@ class ContextAttachmentPill(QFrame):
         context_label = (attachment.get('context_label') or "").lower()
         if kind == 'image':
             return 'fa5s.image'
+        if kind == 'audio':
+            return 'fa5s.music'
         if 'pdf' in context_label:
             return 'fa5s.file-pdf'
         if 'code' in context_label:
@@ -386,6 +388,8 @@ class ContextAttachmentPill(QFrame):
     def _icon_color_for_attachment(self, attachment):
         if attachment.get('kind') == 'image':
             return '#5dade2'
+        if attachment.get('kind') == 'audio':
+            return '#76d7c4'
         context_label = (attachment.get('context_label') or "").lower()
         if 'pdf' in context_label:
             return '#f1948a'
@@ -407,7 +411,7 @@ class ContextAttachmentPill(QFrame):
         if isinstance(line_count, int) and line_count > 1 and attachment.get('kind') != 'image':
             parts.append(f"{line_count:,} lines")
 
-        if attachment.get('kind') == 'image' and attachment.get('byte_size'):
+        if attachment.get('kind') in {'image', 'audio'} and attachment.get('byte_size'):
             kb_size = max(1, int(round(attachment['byte_size'] / 1024)))
             parts.append(f"{kb_size} KB")
 
