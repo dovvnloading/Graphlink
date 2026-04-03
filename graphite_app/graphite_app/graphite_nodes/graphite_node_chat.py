@@ -25,6 +25,8 @@ class ChatNode(QGraphicsItem, HoverAnimationMixin):
     MIN_HEIGHT = 110
     MAX_HEIGHT = 640
     PADDING = 15
+    CONTENT_INSET_X = 14
+    CONTENT_INSET_Y = 10
     HEADER_HEIGHT = 34
     COLLAPSED_WIDTH = 290
     COLLAPSED_HEIGHT = 58
@@ -248,16 +250,33 @@ class ChatNode(QGraphicsItem, HoverAnimationMixin):
         self._recalculate_geometry()
 
     def _visible_content_height(self):
-        return max(1.0, self.height - self.HEADER_HEIGHT - (self.PADDING * 2))
+        return max(1.0, self._content_body_rect().height())
+
+    def _content_panel_rect(self):
+        content_area_width = self.width - (self.PADDING * 2) - self.CONTROL_GUTTER
+        return QRectF(
+            self.PADDING - 2,
+            self.HEADER_HEIGHT + 6,
+            content_area_width + 4,
+            max(20, self.height - self.HEADER_HEIGHT - 12),
+        )
+
+    def _content_body_rect(self):
+        panel_rect = self._content_panel_rect()
+        return panel_rect.adjusted(
+            self.CONTENT_INSET_X,
+            self.CONTENT_INSET_Y,
+            -self.CONTENT_INSET_X,
+            -self.CONTENT_INSET_Y,
+        )
 
     def _recalculate_geometry(self):
         self.prepareGeometryChange()
 
-        available_width = self.width - (self.PADDING * 2) - self.CONTROL_GUTTER
-        self.document.setTextWidth(max(120, available_width))
+        self.document.setTextWidth(max(120, self._content_body_rect().width()))
 
         self.content_height = max(1.0, self.document.size().height())
-        total_required_height = self.content_height + self.HEADER_HEIGHT + (self.PADDING * 2)
+        total_required_height = self.content_height + self.HEADER_HEIGHT + 12 + (self.CONTENT_INSET_Y * 2)
         self.height = max(self.MIN_HEIGHT, min(self.MAX_HEIGHT, total_required_height))
 
         visible_content_height = self._visible_content_height()
@@ -528,23 +547,23 @@ class ChatNode(QGraphicsItem, HoverAnimationMixin):
         else:
             painter.save()
 
-            content_area_width = self.width - (self.PADDING * 2) - self.CONTROL_GUTTER
-            content_rect = QRectF(
-                self.PADDING - 2,
-                self.HEADER_HEIGHT + 6,
-                content_area_width + 4,
-                max(20, self.height - self.HEADER_HEIGHT - 12),
-            )
+            content_rect = self._content_panel_rect()
+            content_body_rect = self._content_body_rect()
             painter.setBrush(colors["content_panel_fill"])
             painter.setPen(QPen(colors["content_panel_border"], 1))
             painter.drawRoundedRect(content_rect, 10, 10)
 
-            clip_rect = QRectF(self.PADDING, self.HEADER_HEIGHT + self.PADDING, content_area_width, self._visible_content_height())
-            painter.setClipRect(clip_rect)
+            painter.setClipRect(content_body_rect)
 
             max_scroll_distance = max(0.0, self.content_height - self._visible_content_height())
             scroll_offset = max_scroll_distance * self.scroll_value
-            painter.translate(self.PADDING, self.HEADER_HEIGHT + self.PADDING - scroll_offset)
+            content_vertical_offset = 0.0
+            if max_scroll_distance <= 0:
+                content_vertical_offset = max(0.0, (content_body_rect.height() - self.content_height) / 2)
+            painter.translate(
+                content_body_rect.left(),
+                content_body_rect.top() + content_vertical_offset - scroll_offset,
+            )
             self.document.drawContents(painter)
             painter.restore()
 
