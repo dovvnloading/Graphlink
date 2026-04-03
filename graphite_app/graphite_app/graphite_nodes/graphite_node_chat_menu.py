@@ -68,12 +68,19 @@ class ChatNodeContextMenu(QMenu):
         visibility_action.triggered.connect(self.toggle_branch_visibility)
         self.addAction(visibility_action)
 
-        if self.node.docked_thinking_nodes:
+        docked_children = self.node.get_docked_child_nodes() if hasattr(self.node, "get_docked_child_nodes") else []
+        if docked_children:
             self.addSeparator()
-            undock_action = QAction("Undock Thinking Node", self)
-            undock_action.setIcon(qta.icon('fa5s.expand-arrows-alt', color='white'))
-            undock_action.triggered.connect(self.undock_thinking_node)
-            self.addAction(undock_action)
+            undock_menu = QMenu("Reveal Docked Items", self)
+            undock_menu.setIcon(qta.icon('fa5s.expand-arrows-alt', color='white'))
+            undock_menu.setStyleSheet(self.styleSheet())
+            for docked_node in docked_children:
+                node_label = docked_node.docked_label() if hasattr(docked_node, "docked_label") else docked_node.__class__.__name__
+                reveal_action = QAction(node_label, undock_menu)
+                reveal_action.setIcon(qta.icon('fa5s.expand-arrows-alt', color='white'))
+                reveal_action.triggered.connect(lambda checked=False, target=docked_node: self.undock_node(target))
+                undock_menu.addAction(reveal_action)
+            self.addMenu(undock_menu)
 
         self.addSeparator()
 
@@ -141,9 +148,8 @@ class ChatNodeContextMenu(QMenu):
             regenerate_action.triggered.connect(self.regenerate_response)
             self.addAction(regenerate_action)
 
-    def undock_thinking_node(self):
-        if self.node.docked_thinking_nodes:
-            node_to_undock = self.node.docked_thinking_nodes.pop(0)
+    def undock_node(self, node_to_undock):
+        if node_to_undock and hasattr(node_to_undock, "undock"):
             node_to_undock.undock()
             self.node.update()
 
