@@ -94,9 +94,11 @@ class ThinkingNode(QGraphicsItem, HoverAnimationMixin):
         self.is_docked = True
         self.hide()
         if self.parent_content_node:
-            if self not in self.parent_content_node.docked_thinking_nodes:
+            if hasattr(self.parent_content_node, "add_docked_child"):
+                self.parent_content_node.add_docked_child(self)
+            elif self not in self.parent_content_node.docked_thinking_nodes:
                 self.parent_content_node.docked_thinking_nodes.append(self)
-            self.parent_content_node.update()
+                self.parent_content_node.update()
         if self.scene():
             self.scene().update_connections()
 
@@ -104,9 +106,11 @@ class ThinkingNode(QGraphicsItem, HoverAnimationMixin):
         self.is_docked = False
         self.show()
         if self.parent_content_node:
-            if self in self.parent_content_node.docked_thinking_nodes:
+            if hasattr(self.parent_content_node, "remove_docked_child"):
+                self.parent_content_node.remove_docked_child(self)
+            elif self in self.parent_content_node.docked_thinking_nodes:
                 self.parent_content_node.docked_thinking_nodes.remove(self)
-            self.parent_content_node.update()
+                self.parent_content_node.update()
         if self.scene():
             self.scene().update_connections()
 
