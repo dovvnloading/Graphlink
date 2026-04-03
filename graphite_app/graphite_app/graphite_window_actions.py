@@ -213,6 +213,17 @@ class WindowActionsMixin:
                     llm_content_parts.append({'type': 'image_bytes', 'data': image_bytes})
                     continue
 
+                if attachment.get('kind') == 'audio':
+                    llm_content_parts.append({
+                        'type': 'audio_file',
+                        'path': attachment_path,
+                        'name': attachment.get('name') or os.path.basename(attachment_path),
+                        'mime_type': attachment.get('mime_type'),
+                        'duration_seconds': attachment.get('duration_seconds'),
+                        'byte_size': attachment.get('byte_size'),
+                    })
+                    continue
+
                 file_name = attachment.get('name') or os.path.basename(attachment_path)
                 doc_content = attachment.get('content')
                 error = None
@@ -268,6 +279,7 @@ class WindowActionsMixin:
 
         self.chat_thread = ChatWorkerThread(self.agent, history_for_worker, history_context_node)
         self.chat_thread.finished.connect(lambda new_message: self.handle_response(new_message, user_node, history_for_worker))
+        self.chat_thread.status.connect(self._handle_chat_worker_status)
         self.chat_thread.error.connect(self.handle_error)
         self.chat_thread.finished.connect(self.chat_thread.deleteLater)
         self.chat_thread.error.connect(self.chat_thread.deleteLater)
@@ -275,6 +287,7 @@ class WindowActionsMixin:
 
     def handle_response(self, new_assistant_message, user_node, history_before_assistant):
         self._clear_loading_animation()
+        assign_history(user_node, history_before_assistant)
 
         full_history = append_history(history_before_assistant, [new_assistant_message])
         response_text = new_assistant_message['content']
@@ -330,6 +343,11 @@ class WindowActionsMixin:
         self.attach_file_btn.setEnabled(True)
         self.clear_attachment()
         self.save_chat()
+
+    def _handle_chat_worker_status(self, message):
+        if not message:
+            return
+        self.notification_banner.show_message(message, 7000, "info")
 
     def _parse_response(self, response_text):
         parts = []
@@ -391,6 +409,7 @@ class WindowActionsMixin:
         self._show_loading_animation(anchor_node=node_to_regenerate)
         self.chat_thread = ChatWorkerThread(self.agent, history_for_worker, node_to_regenerate.parent_node)
         self.chat_thread.finished.connect(lambda new_message: self.handle_regenerated_response(new_message, node_to_regenerate, history_for_worker))
+        self.chat_thread.status.connect(self._handle_chat_worker_status)
         self.chat_thread.error.connect(self.handle_error)
         self.chat_thread.finished.connect(self.chat_thread.deleteLater)
         self.chat_thread.error.connect(self.chat_thread.deleteLater)
@@ -1113,6 +1132,7 @@ class WindowActionsMixin:
         requesting_node.set_typing(True)
         self.conversation_node_thread = ChatWorkerThread(self.agent, history, requesting_node.parent_node)
         self.conversation_node_thread.finished.connect(lambda new_message: self.handle_conversation_node_response(new_message, requesting_node))
+        self.conversation_node_thread.status.connect(self._handle_chat_worker_status)
         self.conversation_node_thread.error.connect(lambda error_msg: self.handle_conversation_node_error(error_msg, requesting_node))
         self.conversation_node_thread.finished.connect(self.conversation_node_thread.deleteLater)
         self.conversation_node_thread.error.connect(lambda: requesting_node.set_typing(False))
