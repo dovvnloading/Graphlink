@@ -144,6 +144,14 @@ class SceneSerializer:
                 "content": node.content,
                 "position": {"x": node.pos().x(), "y": node.pos().y()},
                 "parent_content_node_index": all_nodes_list.index(node.parent_content_node),
+                "attachment_kind": getattr(node, "attachment_kind", "document"),
+                "file_path": getattr(node, "file_path", ""),
+                "mime_type": getattr(node, "mime_type", ""),
+                "duration_seconds": getattr(node, "duration_seconds", None),
+                "byte_size": getattr(node, "byte_size", None),
+                "preview_label": getattr(node, "preview_label", ""),
+                "is_collapsed": getattr(node, "is_collapsed", False),
+                "is_docked": getattr(node, "is_docked", False),
             }
         if isinstance(node, ImageNode):
             return {
