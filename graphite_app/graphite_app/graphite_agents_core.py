@@ -1,10 +1,12 @@
 import json
 import re
+import threading
+import time
 from PySide6.QtCore import QThread, Signal, QPointF
 import graphite_config as config
 import api_provider
 from graphite_widgets import TokenEstimator
-from graphite_memory import clone_history, trim_history
+from graphite_memory import trim_history
 
 class ChatWorkerThread(QThread):
     """
@@ -16,6 +18,7 @@ class ChatWorkerThread(QThread):
     """
     finished = Signal(dict) # Emits the new message dictionary on success.
     error = Signal(str)     # Emits an error message string on failure.
+    status = Signal(str)    # Emits progress / stall notices.
     
     def __init__(self, agent, conversation_history, current_node):
         """
@@ -30,7 +33,7 @@ class ChatWorkerThread(QThread):
         """
         super().__init__()
         self.agent = agent
-        self.conversation_history = clone_history(conversation_history)
+        self.conversation_history = conversation_history if isinstance(conversation_history, list) else []
         self.current_node = current_node
         
     def run(self):
@@ -38,15 +41,79 @@ class ChatWorkerThread(QThread):
         The main execution method for the thread. This is called when the thread starts.
         It runs the agent and emits the result.
         """
+        result_holder = {}
+        error_holder = {}
+
+        def _invoke():
+            try:
+                result_holder["response"] = self.agent.get_response(self.conversation_history, self.current_node)
+            except Exception as exc:
+                error_holder["error"] = exc
+
+        worker = threading.Thread(target=_invoke, daemon=True)
+        worker.start()
+
+        warning_seconds, timeout_seconds = self._watchdog_limits()
+        warning_sent = False
+        started_at = time.monotonic()
+
+        while worker.is_alive():
+            worker.join(0.25)
+            elapsed = time.monotonic() - started_at
+
+            if not warning_sent and elapsed >= warning_seconds:
+                warning_sent = True
+                self.status.emit(self._stall_message())
+
+            if elapsed >= timeout_seconds:
+                self.error.emit(self._timeout_message())
+                return
+
         try:
-            # Call the agent to get the AI's response text.
-            response_text = self.agent.get_response(self.conversation_history, self.current_node)
+            if "error" in error_holder:
+                raise error_holder["error"]
+
+            response_text = result_holder.get("response", "")
             # Format the response into the standard message dictionary structure.
             new_message = {'role': 'assistant', 'content': response_text}
             self.finished.emit(new_message)
         except Exception as e:
             # If any exception occurs during the agent's execution, emit an error signal.
             self.error.emit(str(e))
+
+    def _watchdog_limits(self):
+        if self._contains_audio_attachment():
+            return 60, 1800
+        return 35, 420
+
+    def _contains_audio_attachment(self):
+        for message in self.conversation_history:
+            content = message.get("content") if isinstance(message, dict) else None
+            if not isinstance(content, list):
+                continue
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "audio_file":
+                    return True
+        return False
+
+    def _stall_message(self):
+        if self._contains_audio_attachment():
+            return (
+                "Audio is still being processed. This can take a while for long clips. "
+                "You’ll get the response or a clear failure message automatically."
+            )
+        return "This request is taking longer than expected, but it is still running."
+
+    def _timeout_message(self):
+        if self._contains_audio_attachment():
+            return (
+                "Audio processing stalled before the model returned a response.\n\n"
+                "Please try again. If this keeps happening, use a shorter clip or switch to Gemini native audio."
+            )
+        return (
+            "The model stopped responding before the request completed.\n\n"
+            "Please try again or choose a faster model."
+        )
 
 
 class ChatWorker:
