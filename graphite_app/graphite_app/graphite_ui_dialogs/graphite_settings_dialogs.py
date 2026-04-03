@@ -227,7 +227,7 @@ class OllamaSettingsWidget(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(15, 15, 15, 15)
 
-        info_label = QLabel("Configure the default model for chat tasks and the reasoning mode when using the local Ollama provider.")
+        info_label = QLabel("Configure the local chat model, the model used to name new chats, and the reasoning mode when using the Ollama provider.")
         info_label.setWordWrap(True)
         info_label.setStyleSheet("color: #d4d4d4; margin-bottom: 15px;")
         layout.addWidget(info_label)
@@ -268,6 +268,7 @@ class OllamaSettingsWidget(QWidget):
         ]
         
         saved_model = self.settings_manager.get_ollama_chat_model()
+        saved_title_model = self.settings_manager.get_ollama_title_model()
 
         self.current_model_label = QLabel(f"<b>{saved_model}</b>")
         self.current_model_label.setStyleSheet("color: #2ecc71;")
@@ -282,10 +283,21 @@ class OllamaSettingsWidget(QWidget):
         self.model_input.setPlaceholderText("e.g., llama3:latest")
         self.model_input.textChanged.connect(self.on_text_change)
         form_layout.addRow("Custom Model Name:", self.model_input)
+
+        self.title_model_combo = SettingsComboBox()
+        self.title_model_combo.setEditable(True)
+        self.title_model_combo.addItems([""] + self.models)
+        self.title_model_combo.setCurrentText(saved_title_model)
+        form_layout.addRow("Chat Naming Model:", self.title_model_combo)
         
         layout.addLayout(form_layout)
 
         self.model_input.setText(saved_model)
+
+        naming_help = QLabel("Used to name new chats. It starts with the active chat model, and you can override it independently.")
+        naming_help.setWordWrap(True)
+        naming_help.setStyleSheet("color: #9fa6ad; margin-top: 2px;")
+        layout.addWidget(naming_help)
 
         self.status_label = QLabel("Enter a model name to validate and set it.")
         self.status_label.setWordWrap(True)
@@ -340,8 +352,10 @@ class OllamaSettingsWidget(QWidget):
             return
         
         reasoning_mode = "Thinking" if self.thinking_radio.isChecked() else "Quick"
+        title_model_name = self.title_model_combo.currentText().strip() or model_name
         
         self.settings_manager.set_ollama_chat_model(model_name)
+        self.settings_manager.set_ollama_title_model(title_model_name)
         self.settings_manager.set_ollama_reasoning_mode(reasoning_mode)
         set_current_model(model_name)
 
@@ -350,7 +364,7 @@ class OllamaSettingsWidget(QWidget):
             main_window.reinitialize_agent()
 
         self.current_model_label.setText(f"<b>{model_name}</b>")
-        QMessageBox.information(self, "Saved", f"Ollama settings have been saved and applied for the current session.")
+        QMessageBox.information(self, "Saved", "Ollama settings have been saved and applied for the current session.")
 
     def on_combo_change(self, text):
         if not text: return
@@ -420,7 +434,7 @@ class ApiSettingsWidget(QWidget):
         info = QLabel(
             "Configure your API endpoint.\n"
             "OpenAI-Compatible works with: OpenAI, LiteLLM, Anthropic, OpenRouter, etc.\n\n"
-            "Choose different models for different tasks."
+            "Choose different models for different tasks, including the chat naming model."
         )
         info.setWordWrap(True)
         info.setStyleSheet("color: #d4d4d4; margin-bottom: 15px; margin-top: 10px;")
@@ -443,11 +457,12 @@ class ApiSettingsWidget(QWidget):
         layout.addWidget(QLabel("Model Selection (per task):", styleSheet="color: #ffffff; font-weight: bold; margin-top: 15px;"))
 
         self.model_combos = {}
-        layout.addWidget(QLabel("Title Generation (fast, cheap model):", styleSheet="color: #d4d4d4; margin-top: 8px;"))
+        layout.addWidget(QLabel("Chat Naming / Session Title:", styleSheet="color: #d4d4d4; margin-top: 8px;"))
         self.title_combo = SettingsComboBox(placeholder_text="Select model...")
         self.title_combo.setEditable(True)
         self.model_combos[config.TASK_TITLE] = self.title_combo
         layout.addWidget(self.title_combo)
+        layout.addWidget(QLabel("Used when a new chat is named in API Endpoint mode.", styleSheet="color: #9fa6ad; margin-top: 2px;"))
         
         layout.addWidget(QLabel("Chat, Explain, Takeaways (main model):", styleSheet="color: #d4d4d4; margin-top: 8px;"))
         self.chat_combo = SettingsComboBox(placeholder_text="Select model...")
@@ -896,8 +911,8 @@ class SettingsCategoryButton(QPushButton):
 class SettingsDialog(QFrame):
     SECTION_DEFS = [
         ("General", "fa5s.sliders-h", "General app preferences, visuals, startup behavior, and assistant defaults."),
-        ("Ollama (Local)", "fa5s.microchip", "Choose your local model and reasoning mode."),
-        ("API Endpoint", "fa5s.cloud", "Configure provider, keys, and per-task API models."),
+        ("Ollama (Local)", "fa5s.microchip", "Choose your local chat model, naming model, and reasoning mode."),
+        ("API Endpoint", "fa5s.cloud", "Configure provider, keys, task models, and chat naming."),
         ("Integrations", "fa5s.plug", "Store optional tokens used by plugins such as GitHub-backed code review."),
     ]
 
