@@ -1,7 +1,7 @@
 import markdown
 import qtawesome as qta
 from PySide6.QtCore import QRectF, Qt
-from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen, QTextDocument
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPen, QTextDocument
 from PySide6.QtWidgets import QGraphicsItem
 
 from graphite_canvas_items import Container, HoverAnimationMixin
@@ -17,6 +17,11 @@ class ThinkingNode(QGraphicsItem, HoverAnimationMixin):
     HEADER_HEIGHT = 30
     MAX_HEIGHT = 600
     SCROLLBAR_PADDING = 5
+    CONTENT_PANEL_MARGIN_X = 12
+    CONTENT_PANEL_TOP = 42
+    CONTENT_PANEL_BOTTOM = 12
+    CONTENT_PANEL_PADDING_X = 14
+    CONTENT_PANEL_PADDING_Y = 12
 
     def __init__(self, thinking_text, parent_content_node, parent=None):
         super().__init__(parent)
@@ -35,6 +40,7 @@ class ThinkingNode(QGraphicsItem, HoverAnimationMixin):
         self.dock_button_hovered = False
 
         self.width = 500
+        self.height = self.HEADER_HEIGHT + (self.PADDING * 2)
 
         self.document = QTextDocument()
         self._setup_document()
@@ -55,31 +61,49 @@ class ThinkingNode(QGraphicsItem, HoverAnimationMixin):
             font_size = self.scene().font_size - 1
             color = self.scene().font_color.lighter(120).name()
 
-        stylesheet = f"p {{ color: {color}; font-family: '{font_family}'; font-size: {font_size}pt; font-style: italic; }}"
+        stylesheet = (
+            f"body {{ color: {color}; font-family: '{font_family}'; font-size: {font_size}pt; margin: 0; }}"
+            f"p {{ color: {color}; margin: 0 0 0.6em 0; }}"
+            "p.thinking-kicker { color: #7aa4c9; font-size: 8.5pt; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; margin: 0 0 8px 0; }"
+            "blockquote { border-left: 3px solid #485666; padding-left: 10px; margin: 0.35em 0 0.8em 0; color: #c6cdd5; }"
+            "pre { background: #0f1317; border: 1px solid #343a42; border-radius: 8px; padding: 10px 12px; margin: 0.35em 0 0.8em 0; color: #d7dde3; }"
+            "code { background: #0f1317; border-radius: 4px; padding: 1px 4px; color: #d7dde3; }"
+            "pre code { background: transparent; padding: 0; }"
+            "ul, ol { margin: 0 0 0.75em 0; padding-left: 20px; }"
+            "li { margin-bottom: 0.2em; }"
+        )
         self.document.setDefaultStyleSheet(stylesheet)
-        html = markdown.markdown(self.thinking_text, extensions=['fenced_code'])
+        content_html = markdown.markdown(self.thinking_text, extensions=['fenced_code'])
+        html = f"<p class='thinking-kicker'>Assistant Thinking</p>{content_html}"
         self.document.setHtml(html)
 
     def _recalculate_geometry(self):
         self.prepareGeometryChange()
 
-        doc_width = self.width - (self.PADDING * 2)
+        doc_width = self._content_body_rect().width()
         self.document.setTextWidth(doc_width)
 
         self.content_height = self.document.size().height()
-        self.height = min(self.MAX_HEIGHT, self.content_height + self.HEADER_HEIGHT + self.PADDING)
+        self.height = min(
+            self.MAX_HEIGHT,
+            self.CONTENT_PANEL_TOP + self.CONTENT_PANEL_BOTTOM + (self.CONTENT_PANEL_PADDING_Y * 2) + self.content_height,
+        )
 
-        is_scrollable = self.content_height + self.HEADER_HEIGHT + self.PADDING > self.height
+        is_scrollable = self.content_height > self._content_body_rect().height()
         self.scrollbar.setVisible(is_scrollable)
 
         if is_scrollable:
-            self.scrollbar.height = self.height - self.HEADER_HEIGHT - (self.SCROLLBAR_PADDING * 2)
+            panel_rect = self._content_panel_rect()
+            self.scrollbar.height = panel_rect.height() - (self.SCROLLBAR_PADDING * 2)
             self.scrollbar.setPos(
-                self.width - self.scrollbar.width - self.SCROLLBAR_PADDING,
-                self.HEADER_HEIGHT + self.SCROLLBAR_PADDING,
+                panel_rect.right() - self.scrollbar.width - self.SCROLLBAR_PADDING,
+                panel_rect.top() + self.SCROLLBAR_PADDING,
             )
-            visible_ratio = (self.height - self.HEADER_HEIGHT - self.PADDING) / self.content_height
+            visible_ratio = self._content_body_rect().height() / self.content_height
             self.scrollbar.set_range(visible_ratio)
+        else:
+            self.scroll_value = 0
+            self.scrollbar.set_value(0)
 
         self.prepareGeometryChange()
         self.update()
@@ -89,6 +113,23 @@ class ThinkingNode(QGraphicsItem, HoverAnimationMixin):
 
     def boundingRect(self):
         return QRectF(-5, -5, self.width + 10, self.height + 10)
+
+    def _content_panel_rect(self):
+        return QRectF(
+            self.CONTENT_PANEL_MARGIN_X,
+            self.CONTENT_PANEL_TOP,
+            self.width - (self.CONTENT_PANEL_MARGIN_X * 2),
+            self.height - self.CONTENT_PANEL_TOP - self.CONTENT_PANEL_BOTTOM,
+        )
+
+    def _content_body_rect(self):
+        panel_rect = self._content_panel_rect()
+        return panel_rect.adjusted(
+            self.CONTENT_PANEL_PADDING_X,
+            self.CONTENT_PANEL_PADDING_Y,
+            -self.CONTENT_PANEL_PADDING_X,
+            -self.CONTENT_PANEL_PADDING_Y,
+        )
 
     def dock(self):
         self.is_docked = True
@@ -168,9 +209,13 @@ class ThinkingNode(QGraphicsItem, HoverAnimationMixin):
         painter.setPen(QColor("#cccccc"))
         font = QFont('Segoe UI', 9, QFont.Weight.Bold)
         painter.setFont(font)
-        painter.drawText(header_rect.adjusted(55, 0, -10, 0), Qt.AlignmentFlag.AlignVCenter, "Assistant's Thoughts")
+        title_metrics = QFontMetrics(font)
 
         self.dock_button_rect = QRectF(self.width - 28, 6, 18, 18)
+        title_rect = QRectF(35, 0, max(120, self.dock_button_rect.left() - 43), self.HEADER_HEIGHT)
+        title_text = title_metrics.elidedText("Assistant's Thoughts", Qt.TextElideMode.ElideRight, int(title_rect.width()))
+        painter.drawText(title_rect, Qt.AlignmentFlag.AlignVCenter, title_text)
+
         button_bg_color = QColor("#555") if self.dock_button_hovered else QColor("#444")
         painter.setBrush(button_bg_color)
         painter.setPen(Qt.PenStyle.NoPen)
@@ -179,13 +224,18 @@ class ThinkingNode(QGraphicsItem, HoverAnimationMixin):
         dock_icon = qta.icon('fa5s.arrow-up', color=dock_icon_color)
         dock_icon.paint(painter, self.dock_button_rect.adjusted(3, 3, -3, -3).toRect())
 
+        panel_rect = self._content_panel_rect()
+        painter.setBrush(QColor("#181c21"))
+        painter.setPen(QPen(QColor("#3a4149"), 1))
+        painter.drawRoundedRect(panel_rect, 11, 11)
+
         painter.save()
-        painter.translate(self.PADDING, self.HEADER_HEIGHT + 5)
-        clip_rect = QRectF(0, 0, self.width - (self.PADDING * 2), self.height - self.HEADER_HEIGHT - self.PADDING)
+        clip_rect = self._content_body_rect()
         painter.setClipRect(clip_rect)
 
-        scroll_offset = (self.content_height - (self.height - self.HEADER_HEIGHT - self.PADDING)) * self.scroll_value
-        painter.translate(0, -scroll_offset)
+        visible_height = clip_rect.height()
+        scroll_offset = max(0.0, self.content_height - visible_height) * self.scroll_value
+        painter.translate(clip_rect.left(), clip_rect.top() - scroll_offset)
 
         self.document.drawContents(painter)
         painter.restore()
@@ -196,7 +246,7 @@ class ThinkingNode(QGraphicsItem, HoverAnimationMixin):
             return
 
         delta = event.delta() / 120
-        scroll_range = self.content_height - (self.height - self.HEADER_HEIGHT)
+        scroll_range = self.content_height - self._content_body_rect().height()
         if scroll_range <= 0:
             return
 
