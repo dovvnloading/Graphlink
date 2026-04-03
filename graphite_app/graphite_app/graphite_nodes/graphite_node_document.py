@@ -54,8 +54,12 @@ class DocumentNode(QGraphicsItem, HoverAnimationMixin):
         self.byte_size = byte_size
         self.preview_label = preview_label or ""
         self.content = content if content is not None else ""
-        if self.attachment_kind == "audio" and not self.content:
-            self.content = self._build_audio_details()
+        self._show_preview_content = True
+        if self.attachment_kind == "audio":
+            audio_details = self._build_audio_details()
+            if not self.content:
+                self.content = audio_details
+            self._show_preview_content = self._should_show_audio_preview(self.content, audio_details)
         if not self.preview_label:
             self.preview_label = self._build_preview_label()
 
@@ -155,6 +159,24 @@ class DocumentNode(QGraphicsItem, HoverAnimationMixin):
     def docked_label(self):
         return self.title or self._subtitle_text()
 
+    def _normalize_preview_text(self, value):
+        return "\n".join(line.rstrip() for line in str(value or "").strip().splitlines()).strip().lower()
+
+    def _should_show_audio_preview(self, content, audio_details):
+        normalized_content = self._normalize_preview_text(content)
+        if not normalized_content:
+            return False
+
+        normalized_details = self._normalize_preview_text(audio_details)
+        if normalized_content == normalized_details:
+            return False
+
+        # Older saved sessions may persist the legacy metadata block as the node content.
+        if normalized_content.startswith("audio attachment") and "duration:" in normalized_content:
+            return False
+
+        return True
+
     def _setup_document(self):
         font_family = "Segoe UI"
         font_size = 10
@@ -170,7 +192,7 @@ class DocumentNode(QGraphicsItem, HoverAnimationMixin):
             f"p {{ margin: 0 0 0.45em 0; }}"
             "table.meta { width: 100%; border-collapse: collapse; margin: 0 0 12px 0; }"
             "table.meta td { padding: 6px 0; vertical-align: top; }"
-            "td.meta-label { color: #8f98a3; font-size: 9pt; font-weight: 600; padding-right: 14px; white-space: nowrap; }"
+            "td.meta-label { color: #8f98a3; font-size: 9pt; font-weight: 600; width: 88px; min-width: 88px; max-width: 88px; padding-right: 18px; white-space: nowrap; }"
             "td.meta-value { color: #eef1f4; font-size: 9.5pt; }"
             "p.attachment-kicker { color: #7ea6c9; font-size: 8.5pt; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; margin: 0 0 4px 0; }"
             "p.attachment-title { color: #f5f7fa; font-size: 12pt; font-weight: 700; margin: 0 0 12px 0; }"
@@ -202,7 +224,7 @@ class DocumentNode(QGraphicsItem, HoverAnimationMixin):
             f"<table class='meta'>{rows_html}</table>",
         ]
 
-        preview_text = (self.content or "").strip()
+        preview_text = (self.content or "").strip() if self._show_preview_content else ""
         if preview_text:
             body_parts.extend(
                 [
@@ -336,6 +358,15 @@ class DocumentNode(QGraphicsItem, HoverAnimationMixin):
         self.collapse_button_rect = QRectF(current_width - 28, button_y, self.BUTTON_SIZE, self.BUTTON_SIZE)
         self.dock_button_rect = QRectF(current_width - 50, button_y, self.BUTTON_SIZE, self.BUTTON_SIZE)
 
+    def _header_layout_metrics(self):
+        badge_font = QFont("Segoe UI", 7, QFont.Weight.DemiBold)
+        badge_metrics = QFontMetrics(badge_font)
+        badge_text = self.preview_label or self._subtitle_text()
+        badge_width = min(118, badge_metrics.horizontalAdvance(badge_text) + 14)
+        badge_rect = QRectF(self.width - badge_width - 58, 7, badge_width, 16)
+        title_rect = QRectF(35, 0, max(120, badge_rect.left() - 43), self.HEADER_HEIGHT)
+        return badge_font, badge_metrics, badge_text, badge_rect, title_rect
+
     def _paint_action_button(self, painter, rect, icon_name, hovered):
         button_bg = QColor(255, 255, 255, 44 if hovered else 26)
         button_border = QColor(255, 255, 255, 110 if hovered else 70)
@@ -427,15 +458,15 @@ class DocumentNode(QGraphicsItem, HoverAnimationMixin):
             title_font = QFont("Segoe UI", 9, QFont.Weight.Bold)
             painter.setFont(title_font)
             title_metrics = QFontMetrics(title_font)
-            elided_title = title_metrics.elidedText(self.title or self._subtitle_text(), Qt.TextElideMode.ElideRight, self.width - 120)
-            painter.drawText(header_rect.adjusted(35, 0, -70, 0), Qt.AlignmentFlag.AlignVCenter, elided_title)
+            badge_font, badge_metrics, badge_text, badge_rect, title_rect = self._header_layout_metrics()
+            elided_title = title_metrics.elidedText(
+                self.title or self._subtitle_text(),
+                Qt.TextElideMode.ElideRight,
+                int(title_rect.width()),
+            )
+            painter.drawText(title_rect, Qt.AlignmentFlag.AlignVCenter, elided_title)
 
-            badge_font = QFont("Segoe UI", 7, QFont.Weight.DemiBold)
             painter.setFont(badge_font)
-            badge_metrics = QFontMetrics(badge_font)
-            badge_text = self.preview_label or self._subtitle_text()
-            badge_width = min(160, badge_metrics.horizontalAdvance(badge_text) + 14)
-            badge_rect = QRectF(self.width - badge_width - 58, 7, badge_width, 16)
             painter.setBrush(QColor(255, 255, 255, 18))
             painter.setPen(Qt.PenStyle.NoPen)
             painter.drawRoundedRect(badge_rect, 8, 8)
