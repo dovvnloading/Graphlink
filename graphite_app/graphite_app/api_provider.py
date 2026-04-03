@@ -14,12 +14,7 @@ except ImportError:
     REQUESTS_AVAILABLE = False
 
 import graphite_config as config
-from graphite_audio import (
-    AudioTranscriptionError,
-    format_duration,
-    guess_audio_mime_type,
-    transcribe_audio_file,
-)
+from graphite_audio import guess_audio_mime_type
 
 
 USE_API_MODE = False
@@ -52,7 +47,112 @@ GEMINI_IMAGE_MODELS_STATIC = sorted([
 ])
 
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com"
-MAX_TRANSCRIPT_FALLBACK_TOKENS = 6000
+_OLLAMA_CAPABILITY_CACHE = {}
+_KNOWN_OLLAMA_AUDIO_MODEL_FAMILIES = {"gemma4"}
+
+
+def _read_attachment_bytes(file_path: str, attachment_kind: str) -> bytes:
+    resolved_path = os.path.abspath(file_path or "")
+    attachment_name = os.path.basename(resolved_path or file_path or "")
+    if not resolved_path or not os.path.isfile(resolved_path):
+        raise RuntimeError(
+            f"Attached {attachment_kind} file is no longer available: "
+            f"{attachment_name or '[missing file]'}"
+        )
+
+    try:
+        with open(resolved_path, "rb") as source_file:
+            return source_file.read()
+    except OSError as exc:
+        raise RuntimeError(
+            f"Failed to read attached {attachment_kind} file '{attachment_name}': {exc}"
+        ) from exc
+
+
+def _extract_response_field(payload, field_name: str, default=None):
+    if payload is None:
+        return default
+    if isinstance(payload, dict):
+        return payload.get(field_name, default)
+    if hasattr(payload, field_name):
+        return getattr(payload, field_name)
+    try:
+        return payload[field_name]
+    except Exception:
+        return default
+
+
+def _normalize_ollama_capabilities(capabilities) -> set[str]:
+    if not capabilities:
+        return set()
+    if isinstance(capabilities, str):
+        return {capabilities.lower()}
+    return {
+        str(capability).strip().lower()
+        for capability in capabilities
+        if str(capability).strip()
+    }
+
+
+def _get_ollama_capabilities(model_name: str | None) -> set[str] | None:
+    normalized_model = (model_name or "").strip()
+    if not normalized_model:
+        return None
+
+    cache_key = normalized_model.lower()
+    if cache_key in _OLLAMA_CAPABILITY_CACHE:
+        return _OLLAMA_CAPABILITY_CACHE[cache_key]
+
+    show_fn = getattr(ollama, "show", None)
+    if not callable(show_fn):
+        _OLLAMA_CAPABILITY_CACHE[cache_key] = None
+        return None
+
+    try:
+        try:
+            show_response = show_fn(normalized_model)
+        except TypeError:
+            show_response = show_fn(model=normalized_model)
+    except Exception:
+        _OLLAMA_CAPABILITY_CACHE[cache_key] = None
+        return None
+
+    raw_capabilities = _extract_response_field(show_response, "capabilities")
+    if raw_capabilities is None:
+        _OLLAMA_CAPABILITY_CACHE[cache_key] = None
+        return None
+
+    capabilities = _normalize_ollama_capabilities(raw_capabilities)
+    _OLLAMA_CAPABILITY_CACHE[cache_key] = capabilities
+    return capabilities
+
+
+def _is_known_ollama_audio_model(model_name: str | None) -> bool:
+    normalized_model = (model_name or "").strip().lower()
+    if not normalized_model:
+        return False
+    family = normalized_model.split(":", 1)[0]
+    return family in _KNOWN_OLLAMA_AUDIO_MODEL_FAMILIES
+
+
+def _assert_ollama_audio_support(model_name: str, messages: list):
+    if not _message_contains_audio(messages):
+        return
+
+    capabilities = _get_ollama_capabilities(model_name)
+    if capabilities is None:
+        return
+
+    if "audio" in capabilities:
+        return
+
+    if _is_known_ollama_audio_model(model_name):
+        return
+
+    raise RuntimeError(
+        f"The selected Ollama model '{model_name}' does not advertise audio input support.\n\n"
+        "Try again with an audio-capable Ollama model such as gemma4:e4b."
+    )
 
 
 def _prepare_ollama_messages(messages: list) -> list:
@@ -61,21 +161,31 @@ def _prepare_ollama_messages(messages: list) -> list:
         content = msg.get("content")
         if isinstance(content, list):
             text_parts = []
-            image_parts = []
+            media_parts = []
             for part in content:
-                if part.get("type") == "text":
+                if not isinstance(part, dict):
+                    text_parts.append(str(part))
+                    continue
+
+                part_type = part.get("type")
+                if part_type == "text":
                     text_parts.append(part.get("text", ""))
-                elif part.get("type") == "image_bytes":
+                elif part_type == "image_bytes":
                     image_data = part.get("data")
                     if image_data:
-                        image_parts.append(image_data)
+                        media_parts.append(image_data)
+                elif part_type == "audio_file":
+                    # Ollama's native Gemma 4 audio currently reuses the multimodal `images` field.
+                    media_parts.append(
+                        _read_attachment_bytes(part.get("path", ""), "audio")
+                    )
 
             new_msg = {
                 "role": msg["role"],
                 "content": "\n".join(part for part in text_parts if part),
             }
-            if image_parts:
-                new_msg["images"] = image_parts
+            if media_parts:
+                new_msg["images"] = media_parts
             processed_messages.append(new_msg)
         else:
             processed_messages.append(msg)
@@ -169,35 +279,6 @@ def _guess_image_mime_type(image_data: bytes) -> str:
     return "application/octet-stream"
 
 
-def _audio_attachment_xml(part: dict, transcript: str) -> str:
-    name = _escape_xml(part.get("name") or os.path.basename(part.get("path", "")) or "audio")
-    mime_type = _escape_xml(part.get("mime_type") or guess_audio_mime_type(part.get("path", "")))
-    duration_text = _escape_xml(format_duration(part.get("duration_seconds")))
-    transcript_cdata = transcript.replace("]]>", "]]]]><![CDATA[>")
-    return (
-        f'<audio_attachment name="{name}" mime_type="{mime_type}" duration="{duration_text}" '
-        'mode="transcript_fallback">\n'
-        f'<![CDATA[\n{transcript_cdata}\n]]>\n'
-        "</audio_attachment>"
-    )
-
-
-def _escape_xml(value) -> str:
-    return (
-        str(value)
-        .replace("&", "&amp;")
-        .replace('"', "&quot;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-    )
-
-
-def _estimate_tokens(text: str) -> int:
-    if not text:
-        return 0
-    return max(1, len(text) // 4)
-
-
 def _iter_audio_parts(messages: list):
     for message in messages:
         content = message.get("content")
@@ -210,54 +291,6 @@ def _iter_audio_parts(messages: list):
 
 def _message_contains_audio(messages: list) -> bool:
     return any(True for _ in _iter_audio_parts(messages))
-
-
-def _native_audio_supported(task: str, model_name: str | None) -> bool:
-    if task != config.TASK_CHAT:
-        return False
-    if not USE_API_MODE:
-        return False
-    if API_PROVIDER_TYPE != config.API_PROVIDER_GEMINI:
-        return False
-    if not model_name:
-        return False
-    lowered = model_name.lower()
-    return lowered.startswith("gemini-") and "image" not in lowered
-
-
-def _preprocess_audio_for_provider(messages: list, *, native_audio_enabled: bool):
-    if native_audio_enabled:
-        return
-
-    for message in messages:
-        content = message.get("content")
-        if not isinstance(content, list):
-            continue
-
-        rewritten_parts = []
-        for part in content:
-            if not isinstance(part, dict) or part.get("type") != "audio_file":
-                rewritten_parts.append(part)
-                continue
-
-            transcript = (part.get("transcript_text") or "").strip()
-            if not transcript:
-                transcript = transcribe_audio_file(part.get("path", ""))
-                part["transcript_text"] = transcript
-
-            transcript_tokens = _estimate_tokens(transcript)
-            if transcript_tokens > MAX_TRANSCRIPT_FALLBACK_TOKENS:
-                raise RuntimeError(
-                    "This audio is too long for transcript-based handling with the selected model. "
-                    "Try a shorter clip, or switch to a Gemini model that supports native audio."
-                )
-
-            rewritten_parts.append({
-                "type": "text",
-                "text": _audio_attachment_xml(part, transcript),
-            })
-
-        message["content"] = rewritten_parts
 
 
 def _gemini_headers(api_key: str, extra_headers: dict | None = None) -> dict:
@@ -556,7 +589,7 @@ def chat(task: str, messages: list, **kwargs) -> dict:
             if not model:
                 raise ValueError(f"No Ollama model configured for task: {task}")
 
-            _preprocess_audio_for_provider(messages, native_audio_enabled=False)
+            _assert_ollama_audio_support(model, messages)
             ollama_messages = _prepare_ollama_messages(messages)
 
             ollama_kwargs = kwargs.copy()
@@ -591,9 +624,6 @@ def chat(task: str, messages: list, **kwargs) -> dict:
                 f"No API model configured for task '{task}'.\n"
                 "Please configure models in API Settings."
             )
-
-        native_audio_enabled = _native_audio_supported(task, api_model)
-        _preprocess_audio_for_provider(messages, native_audio_enabled=native_audio_enabled)
 
         if API_PROVIDER_TYPE == config.API_PROVIDER_OPENAI:
             response = API_CLIENT.chat.completions.create(
@@ -639,11 +669,6 @@ def chat(task: str, messages: list, **kwargs) -> dict:
 
         raise RuntimeError(f"Unsupported API provider: {API_PROVIDER_TYPE}")
 
-    except AudioTranscriptionError as exc:
-        raise RuntimeError(
-            f"{exc}\n\n"
-            "Please try again, verify the audio contains spoken content, or switch to a Gemini model for native audio handling."
-        ) from exc
     except Exception as exc:
         error_str = str(exc).lower()
 
@@ -651,7 +676,7 @@ def chat(task: str, messages: list, **kwargs) -> dict:
             if _message_contains_audio(messages):
                 raise TimeoutError(
                     "The request timed out while processing audio.\n\n"
-                    "Please try again. If this keeps happening, use a shorter clip or switch providers."
+                    "Please try again. If this keeps happening, use a shorter clip or switch to an audio-capable Gemini or Ollama model."
                 ) from exc
             raise TimeoutError(
                 "The model request timed out.\n\n"
@@ -685,6 +710,23 @@ def chat(task: str, messages: list, **kwargs) -> dict:
                 "Failed to connect to the API endpoint. Please verify your Base URL in settings and your network connection.\n\n"
                 f"Details: {exc}"
             ) from exc
+
+        if _message_contains_audio(messages):
+            audio_error_fragments = (
+                "audio input",
+                "audio support",
+                "unsupported audio",
+                "input_audio",
+                "modality",
+                "capabilit",
+                "transcription",
+                "decode audio",
+            )
+            if any(fragment in error_str for fragment in audio_error_fragments):
+                raise RuntimeError(
+                    f"{exc}\n\n"
+                    "Please try again with an audio-capable model, or retry after confirming the file opens correctly."
+                ) from exc
 
         raise
 
