@@ -1093,7 +1093,7 @@ class SettingsDialog(QFrame):
                 border-radius: 14px;
             }}
             QFrame#settingsFlyoutShell QLabel,
-            QFrame#settingsFlyoutShell QWidget {{
+            QFrame#settingsFlyoutShell QWidget:not(QMenu) {{
                 background: transparent;
             }}
             QWidget#settingsCategoryRail, QWidget#settingsPane {{
@@ -1201,6 +1201,32 @@ class SettingsDialog(QFrame):
                 padding: 0;
                 selection-background-color: #264f78;
                 selection-color: #ffffff;
+            }}
+            QFrame#settingsFlyoutShell QMenu {{
+                background-color: #2d2d2d;
+                border: 1px solid #3f3f3f;
+                border-radius: 4px;
+                padding: 4px;
+            }}
+            QFrame#settingsFlyoutShell QMenu::item {{
+                background-color: transparent;
+                padding: 8px 24px 8px 24px;
+                border-radius: 4px;
+                color: #ffffff;
+                font-family: 'Segoe UI', sans-serif;
+                font-size: 12px;
+            }}
+            QFrame#settingsFlyoutShell QMenu::item:selected {{
+                background-color: {accent};
+                color: #ffffff;
+            }}
+            QFrame#settingsFlyoutShell QMenu::item:disabled {{
+                color: #777777;
+            }}
+            QFrame#settingsFlyoutShell QMenu::separator {{
+                height: 1px;
+                background-color: #3f3f3f;
+                margin: 4px 0px;
             }}
             QPushButton#settingsCloseButton {{
                 background-color: rgba(255, 255, 255, 0.04);
