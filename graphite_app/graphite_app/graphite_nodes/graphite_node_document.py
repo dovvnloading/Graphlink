@@ -1,4 +1,5 @@
 import os
+from html import escape
 
 import qtawesome as qta
 from PySide6.QtCore import QRectF, Qt
@@ -23,6 +24,11 @@ class DocumentNode(QGraphicsItem, HoverAnimationMixin):
     COLLAPSED_WIDTH = 260
     COLLAPSED_HEIGHT = 52
     BUTTON_SIZE = 18
+    CONTENT_PANEL_MARGIN_X = 12
+    CONTENT_PANEL_TOP = 42
+    CONTENT_PANEL_BOTTOM = 12
+    CONTENT_PANEL_PADDING_X = 14
+    CONTENT_PANEL_PADDING_Y = 12
 
     def __init__(
         self,
@@ -105,6 +111,23 @@ class DocumentNode(QGraphicsItem, HoverAnimationMixin):
             lines.append(f"Path: {self.file_path}")
         return "\n".join(lines)
 
+    def _build_metadata_rows(self):
+        rows = []
+
+        kind_label = "Audio file" if self.attachment_kind == "audio" else "Document"
+        rows.append(("Type", kind_label))
+
+        if self.duration_seconds is not None:
+            rows.append(("Duration", format_duration(self.duration_seconds)))
+        if self.mime_type:
+            rows.append(("Format", self.mime_type))
+        if self.byte_size:
+            rows.append(("Size", self._format_byte_size()))
+        if self.file_path:
+            rows.append(("Path", self.file_path))
+
+        return rows
+
     def _build_preview_label(self):
         if self.attachment_kind == "audio":
             duration_label = format_duration(self.duration_seconds) if self.duration_seconds is not None else "Audio"
@@ -143,32 +166,94 @@ class DocumentNode(QGraphicsItem, HoverAnimationMixin):
             color = self.scene().font_color.name()
 
         stylesheet = (
-            f"body {{ color: {color}; font-family: '{font_family}'; font-size: {font_size}pt; }}"
-            f"p {{ margin: 0 0 0.4em 0; }}"
+            f"body {{ color: {color}; font-family: '{font_family}'; font-size: {font_size}pt; margin: 0; }}"
+            f"p {{ margin: 0 0 0.45em 0; }}"
+            "table.meta { width: 100%; border-collapse: collapse; margin: 0 0 12px 0; }"
+            "table.meta td { padding: 6px 0; vertical-align: top; }"
+            "td.meta-label { color: #8f98a3; font-size: 9pt; font-weight: 600; padding-right: 14px; white-space: nowrap; }"
+            "td.meta-value { color: #eef1f4; font-size: 9.5pt; }"
+            "p.attachment-kicker { color: #7ea6c9; font-size: 8.5pt; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; margin: 0 0 4px 0; }"
+            "p.attachment-title { color: #f5f7fa; font-size: 12pt; font-weight: 700; margin: 0 0 12px 0; }"
+            "p.section-label { color: #8f98a3; font-size: 8.5pt; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; margin: 6px 0 8px 0; }"
+            "div.preview { background: #0f1317; border: 1px solid #343a42; border-radius: 10px; padding: 10px 12px; }"
+            "pre.preview-text { margin: 0; color: #d9dee3; font-family: 'Consolas', 'Courier New', monospace; white-space: pre-wrap; }"
         )
         self.document.setDefaultStyleSheet(stylesheet)
-        self.document.setPlainText(self.content)
+        self.document.setHtml(self._build_attachment_html())
+
+    def _build_attachment_html(self):
+        title = escape(self.title or self._subtitle_text())
+        kicker = "Audio Attachment" if self.attachment_kind == "audio" else "File Attachment"
+
+        rows_html = "".join(
+            (
+                "<tr>"
+                f"<td class='meta-label'>{escape(label)}</td>"
+                f"<td class='meta-value'>{escape(str(value))}</td>"
+                "</tr>"
+            )
+            for label, value in self._build_metadata_rows()
+            if value not in (None, "")
+        )
+
+        body_parts = [
+            f"<p class='attachment-kicker'>{escape(kicker)}</p>",
+            f"<p class='attachment-title'>{title}</p>",
+            f"<table class='meta'>{rows_html}</table>",
+        ]
+
+        preview_text = (self.content or "").strip()
+        if preview_text:
+            body_parts.extend(
+                [
+                    "<p class='section-label'>Contents</p>",
+                    f"<div class='preview'><pre class='preview-text'>{escape(preview_text)}</pre></div>",
+                ]
+            )
+
+        return "".join(body_parts)
+
+    def _content_panel_rect(self):
+        return QRectF(
+            self.CONTENT_PANEL_MARGIN_X,
+            self.CONTENT_PANEL_TOP,
+            self.width - (self.CONTENT_PANEL_MARGIN_X * 2),
+            self.height - self.CONTENT_PANEL_TOP - self.CONTENT_PANEL_BOTTOM,
+        )
+
+    def _content_body_rect(self):
+        panel_rect = self._content_panel_rect()
+        return panel_rect.adjusted(
+            self.CONTENT_PANEL_PADDING_X,
+            self.CONTENT_PANEL_PADDING_Y,
+            -self.CONTENT_PANEL_PADDING_X,
+            -self.CONTENT_PANEL_PADDING_Y,
+        )
 
     def _recalculate_geometry(self):
         if self.is_collapsed:
             return
 
-        doc_width = self.width - (self.PADDING * 2)
+        doc_width = self._content_body_rect().width()
         self.document.setTextWidth(doc_width)
 
         self.content_height = max(1.0, self.document.size().height())
-        self.height = min(self.MAX_HEIGHT, self.content_height + self.HEADER_HEIGHT + self.PADDING)
+        self.height = min(
+            self.MAX_HEIGHT,
+            self.CONTENT_PANEL_TOP + self.CONTENT_PANEL_BOTTOM + (self.CONTENT_PANEL_PADDING_Y * 2) + self.content_height,
+        )
 
-        is_scrollable = self.content_height + self.HEADER_HEIGHT + self.PADDING > self.height
+        is_scrollable = self.content_height > self._content_body_rect().height()
         self.scrollbar.setVisible(is_scrollable)
 
         if is_scrollable:
-            self.scrollbar.height = self.height - self.HEADER_HEIGHT - (self.SCROLLBAR_PADDING * 2)
+            panel_rect = self._content_panel_rect()
+            self.scrollbar.height = panel_rect.height() - (self.SCROLLBAR_PADDING * 2)
             self.scrollbar.setPos(
-                self.width - self.scrollbar.width - self.SCROLLBAR_PADDING,
-                self.HEADER_HEIGHT + self.SCROLLBAR_PADDING,
+                panel_rect.right() - self.scrollbar.width - self.SCROLLBAR_PADDING,
+                panel_rect.top() + self.SCROLLBAR_PADDING,
             )
-            visible_ratio = (self.height - self.HEADER_HEIGHT - self.PADDING) / self.content_height
+            visible_ratio = self._content_body_rect().height() / self.content_height
             self.scrollbar.set_range(visible_ratio)
         else:
             self.scroll_value = 0
@@ -357,13 +442,18 @@ class DocumentNode(QGraphicsItem, HoverAnimationMixin):
             painter.setPen(QColor("#d6d9dc"))
             painter.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, badge_metrics.elidedText(badge_text, Qt.TextElideMode.ElideRight, int(badge_rect.width() - 10)))
 
+            panel_rect = self._content_panel_rect()
+            painter.setBrush(QColor("#181c21"))
+            painter.setPen(QPen(QColor("#3a4149"), 1))
+            painter.drawRoundedRect(panel_rect, 11, 11)
+
             painter.save()
-            painter.translate(self.PADDING, self.HEADER_HEIGHT + 5)
-            clip_rect = QRectF(0, 0, self.width - (self.PADDING * 2), self.height - self.HEADER_HEIGHT - self.PADDING)
+            clip_rect = self._content_body_rect()
             painter.setClipRect(clip_rect)
 
-            scroll_offset = (self.content_height - (self.height - self.HEADER_HEIGHT - self.PADDING)) * self.scroll_value
-            painter.translate(0, -scroll_offset)
+            visible_height = clip_rect.height()
+            scroll_offset = max(0.0, self.content_height - visible_height) * self.scroll_value
+            painter.translate(clip_rect.left(), clip_rect.top() - scroll_offset)
 
             self.document.drawContents(painter)
             painter.restore()
@@ -387,7 +477,7 @@ class DocumentNode(QGraphicsItem, HoverAnimationMixin):
             return
 
         delta = event.delta() / 120
-        scroll_range = self.content_height - (self.height - self.HEADER_HEIGHT)
+        scroll_range = self.content_height - self._content_body_rect().height()
         if scroll_range <= 0:
             return
 
