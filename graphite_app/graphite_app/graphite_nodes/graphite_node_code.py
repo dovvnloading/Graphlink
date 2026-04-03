@@ -1,6 +1,6 @@
 import qtawesome as qta
 from PySide6.QtCore import QRectF, Qt
-from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen, QTextDocument
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPen, QTextDocument
 from PySide6.QtWidgets import QApplication, QGraphicsItem
 
 from graphite_canvas_items import Container, HoverAnimationMixin
@@ -136,7 +136,14 @@ class CodeNode(QGraphicsItem, HoverAnimationMixin):
         painter.setPen(QColor("#cccccc"))
         font = QFont('Consolas', 9)
         painter.setFont(font)
-        painter.drawText(header_rect.adjusted(10, 0, -10, 0), Qt.AlignmentFlag.AlignVCenter, f"Language: {self.language or 'auto-detected'}")
+        metrics = QFontMetrics(font)
+        label_rect = QRectF(10, 0, self.width - 48, self.HEADER_HEIGHT)
+        label_text = metrics.elidedText(
+            f"Language: {self.language or 'auto-detected'}",
+            Qt.TextElideMode.ElideRight,
+            int(label_rect.width()),
+        )
+        painter.drawText(label_rect, Qt.AlignmentFlag.AlignVCenter, label_text)
 
         copy_icon = qta.icon('fa5s.copy', color='#cccccc')
         copy_icon.paint(painter, QRectF(self.width - 28, 7, 16, 16).toRect())
