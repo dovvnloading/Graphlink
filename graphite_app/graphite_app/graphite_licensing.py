@@ -30,6 +30,8 @@ class SettingsManager:
                     state['show_token_counter'] = True
                 if 'ollama_chat_model' not in state:
                     state['ollama_chat_model'] = 'qwen3:8b'
+                if 'ollama_title_model' not in state:
+                    state['ollama_title_model'] = ''
                 if 'ollama_reasoning_mode' not in state:
                     state['ollama_reasoning_mode'] = 'Thinking'
                 if 'current_mode' not in state:
@@ -75,6 +77,7 @@ class SettingsManager:
             "show_welcome_screen": True,
             "show_token_counter": True,
             "ollama_chat_model": "qwen3:8b",
+            "ollama_title_model": "",
             "ollama_reasoning_mode": "Thinking",
             "current_mode": "Ollama (Local)",
             "api_provider": "OpenAI-Compatible",
@@ -193,6 +196,16 @@ class SettingsManager:
 
     def set_ollama_chat_model(self, model_name: str):
         self.state['ollama_chat_model'] = model_name
+        self._save_state()
+
+    def get_ollama_title_model(self):
+        title_model = str(self.state.get("ollama_title_model", "")).strip()
+        if title_model:
+            return title_model
+        return self.get_ollama_chat_model()
+
+    def set_ollama_title_model(self, model_name: str):
+        self.state["ollama_title_model"] = str(model_name or "").strip()
         self._save_state()
 
     def get_ollama_reasoning_mode(self):
