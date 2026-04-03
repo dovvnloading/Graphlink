@@ -965,6 +965,10 @@ class DocumentConnectionItem(QGraphicsItem):
         if not (self.start_node and self.end_node):
             return
 
+        if self.end_node and getattr(self.end_node, 'is_docked', False):
+            self.setVisible(False)
+            return
+
         effective_start = self._get_effective_endpoint(self.start_node)
         effective_end = self._get_effective_endpoint(self.end_node)
 
@@ -1041,6 +1045,9 @@ class DocumentConnectionItem(QGraphicsItem):
         
     def paint(self, painter, option, widget=None):
         """Paints the dotted connection line."""
+        if self.end_node and getattr(self.end_node, 'is_docked', False):
+            return
+
         palette = get_current_palette()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         pen = QPen(palette.NAV_HIGHLIGHT, 1.5, Qt.PenStyle.DotLine)
