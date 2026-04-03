@@ -31,11 +31,17 @@ from graphite_library_dialog import ChatLibraryDialog
 from graphite_system_dialogs import HelpDialog, AboutDialog
 from graphite_settings_dialogs import SettingsDialog
 
-from graphite_core import ChatSessionManager
+from graphite_session import ChatSessionManager
 from graphite_command_palette import CommandManager
 from graphite_plugin_portal import PluginPortal
 from graphite_plugin_picker import PluginFlyoutPanel
 from graphite_agents import ChatAgent
+from graphite_audio import (
+    AudioValidationError,
+    SUPPORTED_AUDIO_EXTENSIONS,
+    format_duration,
+    inspect_audio_file,
+)
 from graphite_file_handler import FileHandler
 import graphite_config as config
 import api_provider
@@ -768,14 +774,16 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         
     def attach_file(self):
         supported_images = "*.png *.jpg *.jpeg *.webp"
+        supported_audio = " ".join(f"*{ext}" for ext in sorted(SUPPORTED_AUDIO_EXTENSIONS))
         supported_docs = " ".join(f"*{ext}" for ext in sorted(self.file_handler.SUPPORTED_EXTENSIONS))
         file_paths, _ = QFileDialog.getOpenFileNames(
             self,
             "Select Files",
             "",
             (
-                f"Common Attachments ({supported_images} {supported_docs});;"
+                f"Common Attachments ({supported_images} {supported_audio} {supported_docs});;"
                 f"Image Files ({supported_images});;"
+                f"Audio Files ({supported_audio});;"
                 f"Readable Files (*.*)"
             ),
         )
@@ -790,43 +798,48 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         rejected_files = []
 
         for file_path in file_paths:
-            stage_result = self._stage_attachment_file(file_path)
+            stage_result, stage_reason = self._stage_attachment_file(file_path)
             if stage_result == "added":
                 staged_count += 1
             elif stage_result == "rejected":
-                rejected_files.append(os.path.basename(file_path) or file_path)
+                rejected_files.append((os.path.basename(file_path) or file_path, stage_reason))
 
         if staged_count:
             noun = "file" if staged_count == 1 else "files"
             self.notification_banner.show_message(f"Attached {staged_count} {noun}.", 3000, "success")
 
         if rejected_files:
-            rejected_preview = ", ".join(rejected_files[:3])
+            preview_lines = []
+            for file_name, reason in rejected_files[:3]:
+                preview_lines.append(f"{file_name}: {reason or 'Unsupported attachment'}")
+            rejected_preview = "\n".join(preview_lines)
             if len(rejected_files) > 3:
-                rejected_preview += ", ..."
+                rejected_preview += "\n..."
             self.notification_banner.show_message(
-                f"Skipped unsupported attachments: {rejected_preview}",
-                5000,
+                f"Some attachments could not be staged:\n{rejected_preview}",
+                9000,
                 "warning",
             )
 
     def _stage_attachment_file(self, file_path, is_temp=False, display_name=None):
         if not file_path or not os.path.isfile(file_path):
-            return "rejected"
+            return "rejected", "File not found."
 
         normalized_path = os.path.abspath(file_path)
         if any(item['path'] == normalized_path for item in self.pending_attachments):
-            return "duplicate"
+            return "duplicate", "Already attached."
 
         file_extension = os.path.splitext(normalized_path)[1].lower()
         image_extensions = {'.png', '.jpg', '.jpeg', '.webp'}
 
         if file_extension in image_extensions:
             attachment_kind = 'image'
+        elif file_extension in SUPPORTED_AUDIO_EXTENSIONS:
+            attachment_kind = 'audio'
         elif self.file_handler.can_read_file(normalized_path):
             attachment_kind = 'document'
         else:
-            return "rejected"
+            return "rejected", "Unsupported file type."
 
         attachment_item = {
             'path': normalized_path,
@@ -839,17 +852,25 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         if attachment_kind == 'document':
             doc_content, error = self.file_handler.read_file(normalized_path)
             if error:
-                return "rejected"
+                return "rejected", error
             attachment_item['content'] = doc_content
             attachment_item['token_count'] = self.token_estimator.count_tokens(doc_content)
             attachment_item['line_count'] = doc_content.count("\n") + 1 if doc_content else 0
             attachment_item['context_label'] = self._describe_document_attachment(attachment_item, doc_content)
+        elif attachment_kind == 'audio':
+            try:
+                audio_info = inspect_audio_file(normalized_path)
+            except AudioValidationError as exc:
+                return "rejected", str(exc)
+            attachment_item['mime_type'] = audio_info['mime_type']
+            attachment_item['duration_seconds'] = audio_info['duration_seconds']
+            attachment_item['context_label'] = f"Audio | {format_duration(audio_info['duration_seconds'])}"
         else:
             attachment_item['context_label'] = 'Vision'
 
         self.pending_attachments.append(attachment_item)
         self._refresh_attachment_button()
-        return "added"
+        return "added", ""
 
     def _refresh_attachment_button(self):
         if not hasattr(self, 'attach_file_btn'):
@@ -857,7 +878,7 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
 
         if not self.pending_attachments:
             self.attach_file_btn.setIcon(qta.icon('fa5s.paperclip', color='#cccccc'))
-            self.attach_file_btn.setToolTip("Attach images or readable files")
+            self.attach_file_btn.setToolTip("Attach images, audio, or readable files")
             if hasattr(self, 'message_input'):
                 self.message_input.set_context_items([])
             return
@@ -866,6 +887,8 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         attachment_kinds = {item['kind'] for item in self.pending_attachments}
         if attachment_kinds == {'image'}:
             icon_name = 'fa5s.image'
+        elif attachment_kinds == {'audio'}:
+            icon_name = 'fa5s.music'
         elif attachment_kinds == {'document'}:
             icon_name = 'fa5s.file-alt'
         else:
@@ -899,7 +922,7 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         self._refresh_attachment_button()
 
     def _handle_large_paste_from_input(self, pasted_text):
-        stage_result = self._stage_large_paste_as_attachment(pasted_text)
+        stage_result, _ = self._stage_large_paste_as_attachment(pasted_text)
         if stage_result == "added":
             self.notification_banner.show_message(
                 "Large paste captured as an attachment. Add instructions and send.",
@@ -917,7 +940,7 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
 
     def _stage_large_paste_as_attachment(self, pasted_text):
         if not pasted_text or not pasted_text.strip():
-            return "rejected"
+            return "rejected", "No text to attach."
 
         base_dir = os.path.join(tempfile.gettempdir(), "graphite_paste_attachments")
         try:
@@ -931,14 +954,14 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
             preview_name = f"Pasted Text ({line_count} lines).txt"
             return self._stage_attachment_file(temp_file_path, is_temp=True, display_name=preview_name)
         except OSError:
-            return "rejected"
+            return "rejected", "Could not create a temporary attachment file."
 
     def _handle_input_files_dropped(self, file_paths):
         self.stage_dropped_files(file_paths)
         self.message_input.setFocus()
 
     def _handle_input_text_dropped(self, dropped_text):
-        stage_result = self._stage_text_context_attachment(dropped_text)
+        stage_result, _ = self._stage_text_context_attachment(dropped_text)
         if stage_result == "added":
             self.notification_banner.show_message(
                 "Context staged from drop. Add instructions and send.",
@@ -978,7 +1001,7 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
 
     def _stage_text_context_attachment(self, dropped_text):
         if not dropped_text or not dropped_text.strip():
-            return "rejected"
+            return "rejected", "No text to attach."
 
         base_dir = os.path.join(tempfile.gettempdir(), "graphite_drop_attachments")
         try:
@@ -996,7 +1019,7 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
                 preview_name = f"Dropped Text ({line_count} lines){suffix}"
             return self._stage_attachment_file(temp_file_path, is_temp=True, display_name=preview_name)
         except OSError:
-            return "rejected"
+            return "rejected", "Could not create a temporary attachment file."
 
     def _describe_document_attachment(self, attachment_item, content):
         file_name = (attachment_item.get('name') or "").lower()
