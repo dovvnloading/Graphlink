@@ -436,7 +436,18 @@ class ChatScene(QGraphicsScene):
         self.scene_changed.emit()
         return node
 
-    def add_document_node(self, title, content, parent_user_node):
+    def add_document_node(
+        self,
+        title,
+        content,
+        parent_user_node,
+        attachment_kind="document",
+        file_path="",
+        mime_type=None,
+        duration_seconds=None,
+        byte_size=None,
+        preview_label=None,
+    ):
         """
         Creates and adds a new DocumentNode.
 
@@ -448,7 +459,17 @@ class ChatScene(QGraphicsScene):
         Returns:
             DocumentNode: The newly created node.
         """
-        node = DocumentNode(title, content, parent_user_node)
+        node = DocumentNode(
+            title,
+            content,
+            parent_user_node,
+            attachment_kind=attachment_kind,
+            file_path=file_path,
+            mime_type=mime_type,
+            duration_seconds=duration_seconds,
+            byte_size=byte_size,
+            preview_label=preview_label,
+        )
         node.setPos(self.find_content_position(parent_user_node, node))
         
         self.addItem(node)
