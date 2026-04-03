@@ -226,8 +226,22 @@ class SceneDeserializer:
         elif node_type == "document":
             parent_node = all_nodes_map.get(data["parent_content_node_index"])
             if parent_node:
-                node = scene.add_document_node(data["title"], data["content"], parent_node)
+                node = scene.add_document_node(
+                    data["title"],
+                    data["content"],
+                    parent_node,
+                    attachment_kind=data.get("attachment_kind", "document"),
+                    file_path=data.get("file_path", ""),
+                    mime_type=data.get("mime_type", ""),
+                    duration_seconds=data.get("duration_seconds"),
+                    byte_size=data.get("byte_size"),
+                    preview_label=data.get("preview_label"),
+                )
                 node.setPos(data["position"]["x"], data["position"]["y"])
+                if data.get("is_collapsed", False):
+                    node.set_collapsed(True)
+                if data.get("is_docked", False):
+                    node.dock()
 
         elif node_type == "image":
             parent_node = all_nodes_map.get(data["parent_content_node_index"])
