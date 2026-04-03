@@ -12,7 +12,7 @@ class ChatSessionManager:
     def __init__(self, window):
         self.window = window
         self.db = ChatDatabase()
-        self.title_generator = TitleGenerator()
+        self.title_generator = TitleGenerator(getattr(window, "settings_manager", None))
         self.current_chat_id = None
         self.save_thread = None
         self._is_saving = False
