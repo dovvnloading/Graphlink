@@ -5,6 +5,7 @@ from PySide6.QtGui import QColor, QFont, QFontMetrics, QGuiApplication, QPainter
 from PySide6.QtWidgets import QGraphicsDropShadowEffect, QLabel, QVBoxLayout, QWidget
 from graphite_config import get_current_palette
 from .loading_visuals import paint_orbital_loading_spinner
+from graphite_update import APP_VERSION
 
 class SplashAnimationWidget(QWidget):
     def __init__(self, parent=None):
@@ -174,7 +175,7 @@ class SplashScreen(QWidget):
         self.animation_widget = SplashAnimationWidget()
         content_layout.addWidget(self.animation_widget, alignment=Qt.AlignmentFlag.AlignCenter)
 
-        self.status_label = QLabel("Version Beta-0.5.3 | Â© 2026 All Rights Reserved.")
+        self.status_label = QLabel(f"Version {APP_VERSION} | © 2026 All Rights Reserved.")
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         content_layout.addWidget(self.status_label)
 
@@ -198,4 +199,5 @@ class SplashScreen(QWidget):
         if self.show_welcome:
             self.welcome_screen.show()
         self.close()
+
 
