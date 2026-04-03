@@ -127,6 +127,8 @@ def _flatten_content(content):
                     parts.append(str(item.get("text", "")))
                 elif item_type == "image_bytes":
                     parts.append("[Image Attachment]")
+                elif item_type == "audio_file":
+                    parts.append(f"[Audio Attachment: {item.get('name') or 'audio'}]")
         return "\n".join(part for part in parts if part)
 
     return str(content)
