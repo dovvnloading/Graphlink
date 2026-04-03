@@ -2,9 +2,9 @@
 
 import qtawesome as qta
 from PySide6.QtCore import QPointF, Property, QEasingCurve, QParallelAnimationGroup, QPropertyAnimation, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QKeySequence, QPainter, QPainterPath, QPen, QShortcut
+from PySide6.QtGui import QColor, QBrush, QFont, QFontMetrics, QKeySequence, QLinearGradient, QPainter, QPainterPath, QPen, QShortcut
 from PySide6.QtWidgets import QGraphicsObject, QHBoxLayout, QLabel, QLineEdit, QPushButton, QWidget
-from graphite_config import get_current_palette
+from graphite_config import get_current_palette, is_monochrome_theme
 from .loading_visuals import paint_orbital_loading_spinner
 
 class LoadingAnimation(QGraphicsObject):
@@ -93,7 +93,12 @@ class LoadingAnimation(QGraphicsObject):
 class GhostNodePreview(QGraphicsObject):
     """A transient placeholder that reserves and visualizes a pending node spawn."""
 
-    def __init__(self, width=420, height=128, title="Generating reply", subtitle="Assistant response will appear here", parent=None):
+    BORDER_RADIUS = 12
+    HEADER_HEIGHT = 34
+    PADDING = 15
+    CONTROL_GUTTER = 34
+
+    def __init__(self, width=420, height=128, title="Generating response", subtitle=None, parent=None):
         super().__init__(parent)
         self.width = max(220.0, float(width))
         self.height = max(88.0, float(height))
@@ -112,102 +117,190 @@ class GhostNodePreview(QGraphicsObject):
         return QRectF(-8, -8, self.width + 16, self.height + 16)
 
     def _layout_loading_visual(self):
-        left_column_width = min(136.0, max(104.0, self.width * 0.26))
-        spinner_center = QPointF(left_column_width * 0.5, self.height * 0.60)
+        panel_rect = self._content_panel_rect()
+        spinner_center = QPointF(panel_rect.left() + 34.0, panel_rect.center().y())
         self._spinner.setPos(spinner_center)
+
+    def _mix_color(self, base, accent, ratio):
+        base_color = QColor(base)
+        accent_color = QColor(accent)
+        mix = max(0.0, min(1.0, float(ratio)))
+        return QColor(
+            round(base_color.red() + (accent_color.red() - base_color.red()) * mix),
+            round(base_color.green() + (accent_color.green() - base_color.green()) * mix),
+            round(base_color.blue() + (accent_color.blue() - base_color.blue()) * mix),
+        )
+
+    def _surface_colors(self):
+        palette = get_current_palette()
+        accent = QColor(palette.AI_NODE)
+        monochrome = is_monochrome_theme()
+
+        body_start = self._mix_color(QColor("#25282d"), accent, 0.04 if not monochrome else 0.02)
+        body_start.setAlpha(210)
+        body_end = self._mix_color(QColor("#171a1f"), accent, 0.02 if not monochrome else 0.01)
+        body_end.setAlpha(192)
+        header_start = self._mix_color(QColor("#2c333b"), accent, 0.30 if not monochrome else 0.08)
+        header_start.setAlpha(188)
+        header_end = self._mix_color(QColor("#181c22"), accent, 0.18 if not monochrome else 0.04)
+        header_end.setAlpha(170)
+        badge_fill = self._mix_color(QColor("#262c33"), accent, 0.58 if not monochrome else 0.12)
+        badge_fill.setAlpha(138)
+        descriptor_text = self._mix_color(QColor("#9ca6b0"), accent, 0.14 if not monochrome else 0.04)
+        descriptor_text.setAlpha(175)
+        content_panel_border = self._mix_color(QColor("#343a42"), accent, 0.08 if not monochrome else 0.03)
+        content_panel_border.setAlpha(135)
+
+        return {
+            "accent": accent,
+            "body_start": body_start,
+            "body_end": body_end,
+            "header_start": header_start,
+            "header_end": header_end,
+            "badge_fill": badge_fill,
+            "badge_text": QColor("#eef7ff"),
+            "descriptor_text": descriptor_text,
+            "content_panel_fill": QColor(17, 20, 23, 182),
+            "content_panel_border": content_panel_border,
+        }
+
+    def _content_panel_rect(self):
+        content_area_width = self.width - (self.PADDING * 2) - self.CONTROL_GUTTER
+        return QRectF(
+            self.PADDING - 2,
+            self.HEADER_HEIGHT + 6,
+            content_area_width + 4,
+            max(20, self.height - self.HEADER_HEIGHT - 12),
+        )
 
     def stop_animation(self):
         self._spinner.stop()
 
     def paint(self, painter, option, widget):
-        palette = get_current_palette()
-        accent = QColor(palette.AI_NODE)
+        colors = self._surface_colors()
         painter.save()
         try:
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
             painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
 
             body_rect = QRectF(0, 0, self.width, self.height)
-            left_column_width = min(136.0, max(104.0, self.width * 0.26))
-            content_left = left_column_width + 14.0
-
-            outline = QColor(accent)
-            outline.setAlpha(188)
-            fill = QColor("#12171d")
-            fill.setAlpha(236)
-            panel_fill = QColor(accent)
-            panel_fill.setAlpha(24)
-            glow = QColor(accent)
-            glow.setAlpha(58)
-            badge_fill = QColor(accent)
-            badge_fill.setAlpha(68)
 
             shadow_path = QPainterPath()
-            shadow_path.addRoundedRect(body_rect.adjusted(4, 5, 4, 5), 12, 12)
+            shadow_path.addRoundedRect(3, 4, self.width, self.height, self.BORDER_RADIUS, self.BORDER_RADIUS)
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor(0, 0, 0, 36))
+            painter.setBrush(QColor(0, 0, 0, 34))
             painter.drawPath(shadow_path)
 
             node_path = QPainterPath()
-            node_path.addRoundedRect(body_rect, 12, 12)
-            painter.setBrush(fill)
-            painter.setPen(QPen(outline, 1.6, Qt.PenStyle.DashLine, Qt.PenCapStyle.RoundCap))
+            node_path.addRoundedRect(body_rect, self.BORDER_RADIUS, self.BORDER_RADIUS)
+
+            gradient = QLinearGradient(QPointF(0, 0), QPointF(0, self.height))
+            gradient.setColorAt(0, colors["body_start"])
+            gradient.setColorAt(1, colors["body_end"])
+            painter.setBrush(QBrush(gradient))
+            painter.setPen(Qt.PenStyle.NoPen)
             painter.drawPath(node_path)
 
             painter.save()
             painter.setClipPath(node_path)
-            painter.fillRect(QRectF(body_rect.left(), body_rect.top(), left_column_width, body_rect.height()), panel_fill)
-            painter.fillRect(QRectF(body_rect.left(), body_rect.top(), 6, body_rect.height()), glow)
+            accent_fill = QColor(colors["accent"])
+            accent_fill.setAlpha(116)
+            accent_top = self.HEADER_HEIGHT + 1
+            accent_height = max(0.0, self.height - accent_top - 1)
+            if accent_height > 0:
+                painter.setBrush(accent_fill)
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.drawRect(QRectF(0, accent_top, 5, accent_height))
             painter.restore()
 
-            painter.setPen(QPen(QColor(255, 255, 255, 24), 1))
-            painter.drawLine(
-                QPointF(left_column_width, 18),
-                QPointF(left_column_width, self.height - 18),
-            )
+            header_rect = QRectF(0, 0, self.width, self.HEADER_HEIGHT)
+            header_path = QPainterPath()
+            corner_radius = min(self.BORDER_RADIUS, self.HEADER_HEIGHT, self.width / 2)
+            header_path.moveTo(header_rect.left(), header_rect.bottom())
+            header_path.lineTo(header_rect.left(), header_rect.top() + corner_radius)
+            header_path.quadTo(header_rect.left(), header_rect.top(), header_rect.left() + corner_radius, header_rect.top())
+            header_path.lineTo(header_rect.right() - corner_radius, header_rect.top())
+            header_path.quadTo(header_rect.right(), header_rect.top(), header_rect.right(), header_rect.top() + corner_radius)
+            header_path.lineTo(header_rect.right(), header_rect.bottom())
+            header_path.closeSubpath()
 
-            badge_rect = QRectF(20, 18, 94, 24)
-            badge_path = QPainterPath()
-            badge_path.addRoundedRect(badge_rect, 12, 12)
+            header_gradient = QLinearGradient(QPointF(0, 0), QPointF(0, self.HEADER_HEIGHT))
+            header_gradient.setColorAt(0, colors["header_start"])
+            header_gradient.setColorAt(1, colors["header_end"])
+            painter.setBrush(QBrush(header_gradient))
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(badge_fill)
-            painter.drawPath(badge_path)
+            painter.drawPath(header_path)
+
+            painter.setPen(QPen(colors["content_panel_border"], 1))
+            painter.drawLine(
+                QPointF(10, self.HEADER_HEIGHT),
+                QPointF(self.width - 10, self.HEADER_HEIGHT),
+            )
 
             badge_font = QFont("Segoe UI", 8, QFont.Weight.DemiBold)
             painter.setFont(badge_font)
-            painter.setPen(QColor("#eef6ff"))
+            badge_text = "Assistant"
+            badge_metrics = QFontMetrics(badge_font)
+            badge_width = badge_metrics.horizontalAdvance(badge_text) + 18
+            badge_rect = QRectF(12, 8, badge_width, 18)
+            badge_path = QPainterPath()
+            badge_path.addRoundedRect(badge_rect, 9, 9)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(colors["badge_fill"])
+            painter.drawPath(badge_path)
+
+            badge_text_color = QColor(colors["badge_text"])
+            badge_text_color.setAlpha(214)
+            painter.setPen(badge_text_color)
+            painter.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, badge_text)
+
+            descriptor_font = QFont("Segoe UI", 8)
+            painter.setFont(descriptor_font)
+            painter.setPen(colors["descriptor_text"])
             painter.drawText(
-                badge_rect,
-                Qt.AlignmentFlag.AlignCenter,
-                "ASSISTANT",
+                QRectF(badge_rect.right() + 10, 0, self.width - badge_rect.right() - 60, self.HEADER_HEIGHT),
+                Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+                "Reply pending",
             )
 
-            title_font = QFont("Segoe UI", 11, QFont.Weight.DemiBold)
+            content_rect = self._content_panel_rect()
+            painter.setBrush(colors["content_panel_fill"])
+            content_border = QColor(colors["content_panel_border"])
+            content_border.setAlpha(125)
+            painter.setPen(QPen(content_border, 1))
+            painter.drawRoundedRect(content_rect, 10, 10)
+
+            text_left = content_rect.left() + 68
+            text_width = max(80.0, content_rect.width() - 84.0)
+
+            title_font = QFont("Segoe UI", 10, QFont.Weight.DemiBold)
             painter.setFont(title_font)
-            painter.setPen(QColor("#eef6ff"))
+            title_color = QColor("#eef6ff")
+            title_color.setAlpha(220)
+            painter.setPen(title_color)
             painter.drawText(
-                QRectF(content_left, 34, self.width - content_left - 20, 24),
+                QRectF(text_left, content_rect.top() + 13, text_width, 20),
                 Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
                 self.title,
             )
 
-            subtitle_font = QFont("Segoe UI", 9)
-            painter.setFont(subtitle_font)
-            painter.setPen(QColor("#aab8c8"))
-            painter.drawText(
-                QRectF(content_left, 62, self.width - content_left - 20, 36),
-                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                self.subtitle,
-            )
+            if self.subtitle:
+                subtitle_font = QFont("Segoe UI", 8)
+                painter.setFont(subtitle_font)
+                subtitle_color = QColor("#aab8c8")
+                subtitle_color.setAlpha(165)
+                painter.setPen(subtitle_color)
+                painter.drawText(
+                    QRectF(text_left, content_rect.top() + 34, text_width, 18),
+                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                    self.subtitle,
+                )
 
-            hint_font = QFont("Segoe UI", 8)
-            painter.setFont(hint_font)
-            painter.setPen(QColor("#7f8b98"))
-            painter.drawText(
-                QRectF(content_left, self.height - 40, self.width - content_left - 20, 18),
-                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                "Reply branches from your prompt into this reserved card.",
-            )
+            outline_color = QColor(colors["accent"].lighter(105))
+            outline_color.setAlpha(135)
+            painter.setPen(QPen(outline_color, 1.4, Qt.PenStyle.DashLine))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawPath(node_path)
         finally:
             painter.restore()
 
