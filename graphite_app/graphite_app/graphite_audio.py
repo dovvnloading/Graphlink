@@ -1,6 +1,4 @@
 import mimetypes
-import os
-import threading
 import wave
 from pathlib import Path
 
@@ -44,16 +42,7 @@ _AUDIO_MIME_OVERRIDES = {
     ".webm": "audio/webm",
 }
 
-_whisper_model = None
-_whisper_model_name = None
-_whisper_model_lock = threading.Lock()
-
-
 class AudioValidationError(ValueError):
-    pass
-
-
-class AudioTranscriptionError(RuntimeError):
     pass
 
 
@@ -116,38 +105,6 @@ def inspect_audio_file(file_path: str) -> dict:
     }
 
 
-def transcribe_audio_file(file_path: str) -> str:
-    path = Path(file_path)
-    if not path.is_file():
-        raise AudioTranscriptionError(f"Audio file not found: {file_path}")
-
-    model = _get_whisper_model()
-
-    try:
-        segments, _ = model.transcribe(
-            str(path),
-            beam_size=5,
-            vad_filter=True,
-            condition_on_previous_text=False,
-        )
-        transcript = " ".join(
-            segment.text.strip()
-            for segment in segments
-            if getattr(segment, "text", "").strip()
-        ).strip()
-    except Exception as exc:
-        raise AudioTranscriptionError(
-            f"Local audio transcription failed for '{path.name}': {exc}"
-        ) from exc
-
-    if not transcript:
-        raise AudioTranscriptionError(
-            f"Transcription finished but no text could be extracted from '{path.name}'."
-        )
-
-    return transcript
-
-
 def _probe_audio_duration_seconds(path: Path) -> float | None:
     if MUTAGEN_AVAILABLE:
         try:
@@ -170,25 +127,3 @@ def _probe_audio_duration_seconds(path: Path) -> float | None:
             pass
 
     return None
-
-
-def _get_whisper_model():
-    global _whisper_model, _whisper_model_name
-
-    try:
-        from faster_whisper import WhisperModel
-    except ImportError as exc:
-        raise AudioTranscriptionError(
-            "Audio transcription dependencies are not installed. "
-            "Install dependencies with: pip install -r requirements.txt"
-        ) from exc
-
-    model_name = os.environ.get("GRAPHITE_AUDIO_TRANSCRIBE_MODEL", "distil-large-v3")
-    device = os.environ.get("GRAPHITE_AUDIO_TRANSCRIBE_DEVICE", "auto")
-
-    with _whisper_model_lock:
-        if _whisper_model is None or _whisper_model_name != model_name:
-            _whisper_model = WhisperModel(model_name, device=device)
-            _whisper_model_name = model_name
-
-    return _whisper_model
