@@ -4,8 +4,8 @@ from PySide6.QtCore import QPointF, Property, QEasingCurve, QParallelAnimationGr
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QGuiApplication, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QGraphicsDropShadowEffect, QLabel, QVBoxLayout, QWidget
 from graphite_config import get_current_palette
+from graphite_version import APP_VERSION
 from .loading_visuals import paint_orbital_loading_spinner
-from graphite_update import APP_VERSION
 
 class SplashAnimationWidget(QWidget):
     def __init__(self, parent=None):
