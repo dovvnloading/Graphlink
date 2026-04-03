@@ -212,6 +212,17 @@ class WindowActionsMixin:
                     continue
 
                 if attachment.get('kind') == 'audio':
+                    self.chat_view.scene().add_document_node(
+                        title=attachment.get('name') or os.path.basename(attachment_path),
+                        content="",
+                        parent_user_node=user_node,
+                        attachment_kind='audio',
+                        file_path=attachment_path,
+                        mime_type=attachment.get('mime_type'),
+                        duration_seconds=attachment.get('duration_seconds'),
+                        byte_size=attachment.get('byte_size'),
+                        preview_label=attachment.get('context_label'),
+                    )
                     media_content_parts.append({
                         'type': 'audio_file',
                         'path': attachment_path,
@@ -232,7 +243,15 @@ class WindowActionsMixin:
                     user_node.scene().delete_chat_node(user_node)
                     return
 
-                self.chat_view.scene().add_document_node(title=file_name, content=doc_content, parent_user_node=user_node)
+                self.chat_view.scene().add_document_node(
+                    title=file_name,
+                    content=doc_content,
+                    parent_user_node=user_node,
+                    attachment_kind='document',
+                    file_path=attachment_path,
+                    byte_size=attachment.get('byte_size'),
+                    preview_label=attachment.get('context_label'),
+                )
                 text_content_parts.append({
                     'type': 'text',
                     'text': self._wrap_attachment_xml(attachment, doc_content),
