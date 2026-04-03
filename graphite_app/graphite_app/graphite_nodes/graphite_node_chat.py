@@ -46,6 +46,7 @@ class ChatNode(QGraphicsItem, HoverAnimationMixin):
         self.incoming_connection = None
         self.conversation_history = []
         self.docked_thinking_nodes = []
+        self.docked_attachment_nodes = []
         self.setAcceptHoverEvents(True)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable)
@@ -98,6 +99,31 @@ class ChatNode(QGraphicsItem, HoverAnimationMixin):
 
     def _role_descriptor(self):
         return "Prompt" if self.is_user else "Response"
+
+    def docked_child_count(self):
+        return len(self.docked_thinking_nodes) + len(self.docked_attachment_nodes)
+
+    def get_docked_child_nodes(self):
+        return list(self.docked_thinking_nodes) + list(self.docked_attachment_nodes)
+
+    def add_docked_child(self, node):
+        if node is None:
+            return
+
+        target_list = self.docked_attachment_nodes if hasattr(node, "attachment_kind") else self.docked_thinking_nodes
+        if node not in target_list:
+            target_list.append(node)
+            self.update()
+
+    def remove_docked_child(self, node):
+        if node is None:
+            return
+
+        for target_list in (self.docked_thinking_nodes, self.docked_attachment_nodes):
+            if node in target_list:
+                target_list.remove(node)
+                self.update()
+                break
 
     def _role_accent(self):
         palette = get_current_palette()
@@ -497,11 +523,18 @@ class ChatNode(QGraphicsItem, HoverAnimationMixin):
 
         self._paint_header(painter, current_width)
 
-        if self.docked_thinking_nodes:
+        docked_child_count = self.docked_child_count()
+        if docked_child_count:
             indicator_color = QColor("#95a5a6").lighter(130)
             painter.setBrush(indicator_color)
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.drawEllipse(QRectF((current_width / 2) - 4, 6, 8, 8))
+            badge_width = 26 if docked_child_count < 10 else 32
+            badge_rect = QRectF(current_width - badge_width - 38, 8, badge_width, 18)
+            painter.drawRoundedRect(badge_rect, 9, 9)
+            painter.setPen(QColor("#111417"))
+            count_font = QFont(self.scene().font_family if self.scene() else "Segoe UI", 8, QFont.Weight.Bold)
+            painter.setFont(count_font)
+            painter.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, str(docked_child_count))
 
         if self.hovered:
             button_x = self.width - 26 if not self.is_collapsed else current_width - 26
