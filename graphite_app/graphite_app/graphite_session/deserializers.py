@@ -325,6 +325,7 @@ class SceneDeserializer:
                 node.setPos(data["position"]["x"], data["position"]["y"])
                 node.set_history(data.get("conversation_history", []))
                 self._connect_if_available(node.ai_request_sent, "handle_conversation_node_request")
+                self._connect_if_available(node.cancel_requested, "handle_conversation_node_cancel")
                 if data.get("is_collapsed", False):
                     node.set_collapsed(True)
                 scene.addItem(node)
