@@ -8,6 +8,35 @@ LOD_FULL_THRESHOLD = 0.72
 LOD_SUMMARY_THRESHOLD = 0.3
 LOD_PROXY_THRESHOLD = 0.62
 LOD_PROXY_INTERACTIVE_THRESHOLD = 0.42
+LOD_MODE_HYSTERESIS = 0.04
+
+
+def _clamp(value, minimum, maximum):
+    return max(minimum, min(maximum, value))
+
+
+def _resolved_zoom(painter=None, fallback=1.0):
+    if painter is not None:
+        transform = painter.worldTransform()
+        scale = max(abs(transform.m11()), abs(transform.m22()))
+        if scale > 0:
+            return max(0.01, scale)
+    return max(0.01, float(fallback))
+
+
+def _scaled_font(family, base_size, *, scale=1.0, weight=QFont.Weight.Normal, max_scale=3.0):
+    font = QFont(family)
+    font.setWeight(weight)
+    font.setPointSizeF(base_size * _clamp(scale, 1.0, max_scale))
+    return font
+
+
+def _detail_text_scale(zoom, mode):
+    if mode == "glyph":
+        return _clamp(1.08 / zoom, 1.0, 3.3)
+    if mode == "summary":
+        return _clamp(0.92 / zoom, 1.0, 3.0)
+    return 1.0
 
 
 def current_view_zoom(item):
@@ -19,7 +48,21 @@ def current_view_zoom(item):
     return max(0.01, abs(transform.m11()))
 
 
-def lod_mode_for_zoom(zoom):
+def lod_mode_for_zoom(zoom, previous_mode=None):
+    zoom = max(0.01, float(zoom))
+    previous_mode = str(previous_mode or "").lower()
+
+    if previous_mode == "full" and zoom >= (LOD_FULL_THRESHOLD - LOD_MODE_HYSTERESIS):
+        return "full"
+    if previous_mode == "glyph" and zoom < (LOD_SUMMARY_THRESHOLD + LOD_MODE_HYSTERESIS):
+        return "glyph"
+    if previous_mode == "summary":
+        if zoom >= (LOD_FULL_THRESHOLD + LOD_MODE_HYSTERESIS):
+            return "full"
+        if zoom < (LOD_SUMMARY_THRESHOLD - LOD_MODE_HYSTERESIS):
+            return "glyph"
+        return "summary"
+
     if zoom >= LOD_FULL_THRESHOLD:
         return "full"
     if zoom >= LOD_SUMMARY_THRESHOLD:
@@ -28,7 +71,13 @@ def lod_mode_for_zoom(zoom):
 
 
 def lod_mode_for_item(item, zoom=None):
-    return lod_mode_for_zoom(current_view_zoom(item) if zoom is None else zoom)
+    resolved_zoom = current_view_zoom(item) if zoom is None else zoom
+    previous_mode = getattr(item, "_lod_mode_cache", None)
+    mode = lod_mode_for_zoom(resolved_zoom, previous_mode=previous_mode)
+    if item is not None:
+        item._lod_mode_cache = mode
+        item._render_lod_zoom = resolved_zoom
+    return mode
 
 
 def current_view_scene_rect(item):
@@ -62,7 +111,7 @@ def sync_proxy_render_state(item, view_rect=None, zoom=None):
     zoom = current_view_zoom(item) if zoom is None else max(0.01, float(zoom))
     view_rect = current_view_scene_rect(item) if view_rect is None else view_rect
 
-    mode = lod_mode_for_zoom(zoom)
+    mode = lod_mode_for_zoom(zoom, previous_mode=getattr(item, "_render_lod_mode", None))
     is_collapsed = bool(getattr(item, "is_collapsed", False))
     hovered = bool(getattr(item, "hovered", False))
     selected = bool(item.isSelected()) if hasattr(item, "isSelected") else False
@@ -96,6 +145,7 @@ def sync_proxy_render_state(item, view_rect=None, zoom=None):
 
     item._render_lod_zoom = zoom
     item._render_lod_mode = "full" if show_proxy and not is_collapsed else mode
+    item._lod_mode_cache = item._render_lod_mode
     item._render_lod_near_view = near_view
     return item._render_lod_mode
 
@@ -117,6 +167,7 @@ def draw_lod_card(
     navigation_highlight=False,
     connection_radius=0,
     border_radius=12,
+    zoom=None,
 ):
     painter.save()
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -125,6 +176,8 @@ def draw_lod_card(
     accent = QColor(accent)
     selection_color = QColor(selection_color)
     panel_rect = QRectF(rect)
+    zoom = _resolved_zoom(painter, fallback=zoom if zoom is not None else 1.0)
+    detail_scale = _detail_text_scale(zoom, mode)
 
     shadow_path = QPainterPath()
     shadow_path.addRoundedRect(panel_rect.adjusted(3, 4, 3, 4), border_radius, border_radius)
@@ -176,73 +229,121 @@ def draw_lod_card(
         painter.drawPie(right_rect, 90 * 16, 180 * 16)
 
     if mode == "glyph":
+        orb_size = _clamp(
+            48.0 * _clamp(0.92 + ((detail_scale - 1.0) * 0.16), 1.0, 1.34),
+            48.0,
+            max(48.0, min(panel_rect.width() - 24.0, panel_rect.height() * 0.54)),
+        )
         orb_rect = QRectF(
-            panel_rect.center().x() - 24,
+            panel_rect.center().x() - (orb_size / 2),
             panel_rect.top() + max(18.0, panel_rect.height() * 0.2),
-            48,
-            48,
+            orb_size,
+            orb_size,
         )
         painter.setBrush(QColor(accent.red(), accent.green(), accent.blue(), 48))
         painter.setPen(QPen(QColor(accent.red(), accent.green(), accent.blue(), 112), 1.2))
         painter.drawEllipse(orb_rect)
 
-        glyph_font = QFont("Segoe UI", 14, QFont.Weight.DemiBold)
+        glyph_font = _scaled_font("Segoe UI", 14, scale=detail_scale, weight=QFont.Weight.DemiBold, max_scale=2.35)
         painter.setFont(glyph_font)
         painter.setPen(QColor("#f4f7fb"))
         painter.drawText(orb_rect, Qt.AlignmentFlag.AlignCenter, initials_for_title(title))
 
-        label_font = QFont("Segoe UI", 9, QFont.Weight.DemiBold)
+        label_font = _scaled_font("Segoe UI", 9, scale=min(detail_scale, 2.15), weight=QFont.Weight.DemiBold, max_scale=2.15)
         painter.setFont(label_font)
         label_metrics = QFontMetrics(label_font)
         label_text = label_metrics.elidedText(title, Qt.TextElideMode.ElideRight, int(panel_rect.width() - 26))
-        label_rect = QRectF(panel_rect.left() + 13, orb_rect.bottom() + 10, panel_rect.width() - 26, 20)
+        label_rect = QRectF(
+            panel_rect.left() + 13,
+            orb_rect.bottom() + max(8.0, 7.0 * min(detail_scale, 1.5)),
+            panel_rect.width() - 26,
+            label_metrics.height() + 6,
+        )
         painter.drawText(label_rect, Qt.AlignmentFlag.AlignCenter, label_text)
     else:
         header_y = panel_rect.top() + 14
+        compact_summary = zoom < 0.52 or panel_rect.height() < 135
+
         if badge:
-            badge_font = QFont("Segoe UI", 7, QFont.Weight.DemiBold)
+            badge_font = _scaled_font("Segoe UI", 7, scale=min(detail_scale, 1.55), weight=QFont.Weight.DemiBold, max_scale=1.55)
             painter.setFont(badge_font)
             badge_metrics = QFontMetrics(badge_font)
             badge_width = badge_metrics.horizontalAdvance(badge) + 18
-            badge_rect = QRectF(panel_rect.left() + 14, header_y, badge_width, 18)
+            badge_height = max(18.0, badge_metrics.height() + 8.0)
+            badge_rect = QRectF(panel_rect.left() + 14, header_y, badge_width, badge_height)
             painter.setBrush(QColor(accent.red(), accent.green(), accent.blue(), 58))
             painter.setPen(Qt.PenStyle.NoPen)
             painter.drawRoundedRect(badge_rect, 9, 9)
             painter.setPen(QColor("#eff6ff"))
             painter.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, badge)
             text_x = badge_rect.right() + 10
+            title_y = header_y + max(0.0, (badge_height - 22.0) / 2)
         else:
             text_x = panel_rect.left() + 16
+            badge_rect = QRectF()
+            title_y = header_y
 
-        title_font = QFont("Segoe UI", 10, QFont.Weight.DemiBold)
+        title_font = _scaled_font(
+            "Segoe UI",
+            12 if compact_summary else 10,
+            scale=min(detail_scale, 2.7 if compact_summary else 2.35),
+            weight=QFont.Weight.DemiBold,
+            max_scale=2.7 if compact_summary else 2.35,
+        )
         painter.setFont(title_font)
         title_metrics = QFontMetrics(title_font)
         title_text = title_metrics.elidedText(title, Qt.TextElideMode.ElideRight, int(panel_rect.width() - (text_x - panel_rect.left()) - 18))
         painter.setPen(QColor("#f7fafc"))
-        painter.drawText(QRectF(text_x, header_y - 1, panel_rect.width() - (text_x - panel_rect.left()) - 16, 20), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, title_text)
+        title_rect = QRectF(
+            text_x,
+            title_y - 1,
+            panel_rect.width() - (text_x - panel_rect.left()) - 16,
+            title_metrics.height() + 4,
+        )
+        painter.drawText(title_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, title_text)
+
+        preview_font = _scaled_font(
+            "Segoe UI",
+            9 if compact_summary else 8,
+            scale=min(detail_scale, 2.0 if compact_summary else 1.75),
+            max_scale=2.0 if compact_summary else 1.75,
+        )
+        preview_metrics = QFontMetrics(preview_font)
+        preview_height = preview_metrics.height() + 4
+        preview_rect = QRectF(
+            panel_rect.left() + 16,
+            panel_rect.bottom() - 18 - preview_height,
+            panel_rect.width() - 32,
+            preview_height,
+        )
 
         if subtitle:
-            subtitle_font = QFont("Segoe UI", 8)
+            subtitle_font = _scaled_font("Segoe UI", 8, scale=min(detail_scale, 1.55), max_scale=1.55)
             painter.setFont(subtitle_font)
             subtitle_metrics = QFontMetrics(subtitle_font)
             subtitle_text = subtitle_metrics.elidedText(subtitle, Qt.TextElideMode.ElideRight, int(panel_rect.width() - 32))
-            painter.setPen(QColor("#9da6b1"))
-            painter.drawText(QRectF(panel_rect.left() + 16, header_y + 18, panel_rect.width() - 32, 16), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, subtitle_text)
+            subtitle_top = title_rect.bottom() + max(2.0, 2.5 * min(detail_scale, 1.5))
+            subtitle_rect = QRectF(panel_rect.left() + 16, subtitle_top, panel_rect.width() - 32, subtitle_metrics.height() + 2)
+            subtitle_gap = preview_rect.top() - subtitle_rect.bottom()
+            show_subtitle = (not compact_summary) and subtitle_gap >= (subtitle_metrics.height() + 4)
+            if show_subtitle:
+                painter.setPen(QColor("#9da6b1"))
+                painter.drawText(subtitle_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, subtitle_text)
 
-        preview_rect = QRectF(panel_rect.left() + 16, panel_rect.bottom() - 36, panel_rect.width() - 32, 18)
         painter.setPen(QColor("#d6dde6"))
-        preview_font = QFont("Segoe UI", 8)
         painter.setFont(preview_font)
-        preview_metrics = QFontMetrics(preview_font)
         preview_text_value = preview_metrics.elidedText(preview or " ", Qt.TextElideMode.ElideRight, int(preview_rect.width()))
         painter.drawText(preview_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, preview_text_value)
 
-        painter.setPen(Qt.PenStyle.NoPen)
-        line_color = QColor(255, 255, 255, 22)
-        painter.setBrush(line_color)
-        line_width = max(40.0, panel_rect.width() * 0.26)
-        painter.drawRoundedRect(QRectF(panel_rect.left() + 16, panel_rect.bottom() - 56, line_width, 4), 2, 2)
-        painter.drawRoundedRect(QRectF(panel_rect.left() + 16, panel_rect.bottom() - 48, max(28.0, line_width * 0.68), 4), 2, 2)
+        skeleton_top = preview_rect.top() - max(18.0, 14.0 * min(detail_scale, 1.45))
+        show_skeleton = (not compact_summary) and (skeleton_top - title_rect.bottom()) >= 14.0
+        if show_skeleton:
+            painter.setPen(Qt.PenStyle.NoPen)
+            line_color = QColor(255, 255, 255, 22)
+            painter.setBrush(line_color)
+            line_width = max(40.0, panel_rect.width() * 0.26)
+            painter.drawRoundedRect(QRectF(panel_rect.left() + 16, skeleton_top, line_width, 4), 2, 2)
+            painter.drawRoundedRect(QRectF(panel_rect.left() + 16, skeleton_top + 8, max(28.0, line_width * 0.68), 4), 2, 2)
 
     if navigation_highlight:
         nav_pen = QPen(QColor(selection_color), 2.2, Qt.PenStyle.DashLine)
