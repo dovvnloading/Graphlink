@@ -3,6 +3,7 @@ import json
 import os
 import urllib.error
 import urllib.request
+from pathlib import Path
 from urllib.parse import urlparse
 
 import ollama
@@ -53,6 +54,170 @@ _KNOWN_OLLAMA_AUDIO_MODEL_FAMILIES = {"gemma4"}
 
 class RequestCancelledError(RuntimeError):
     """Raised when the user cancels an in-flight model request."""
+
+
+def _normalize_ollama_models_root(path_value: str | None) -> Path | None:
+    normalized = str(path_value or "").strip()
+    if not normalized:
+        return None
+
+    candidate = Path(normalized).expanduser()
+    if candidate.name.lower() == "manifests":
+        return candidate
+    if candidate.name.lower() == "models":
+        return candidate / "manifests"
+    return candidate / "models" / "manifests"
+
+
+def _iter_existing_ollama_manifest_roots() -> list[Path]:
+    candidate_roots: list[Path] = []
+    env_models_root = os.environ.get("OLLAMA_MODELS")
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    program_data = os.environ.get("PROGRAMDATA")
+
+    for raw_path in (
+        env_models_root,
+        Path.home() / ".ollama",
+        Path.home() / ".ollama" / "models",
+        local_app_data and Path(local_app_data) / "Ollama",
+        local_app_data and Path(local_app_data) / "Ollama" / "models",
+        program_data and Path(program_data) / "Ollama",
+        program_data and Path(program_data) / "Ollama" / "models",
+    ):
+        manifests_root = _normalize_ollama_models_root(raw_path)
+        if manifests_root and manifests_root.is_dir():
+            candidate_roots.append(manifests_root)
+
+    unique_roots: list[Path] = []
+    seen_roots: set[str] = set()
+    for root in candidate_roots:
+        resolved = str(root.resolve()).lower()
+        if resolved in seen_roots:
+            continue
+        seen_roots.add(resolved)
+        unique_roots.append(root)
+    return unique_roots
+
+
+def _discover_manifest_roots_in_folder(scan_path: str) -> list[Path]:
+    root_path = Path(scan_path).expanduser()
+    if not root_path.exists():
+        raise RuntimeError(f"Scan folder does not exist: {scan_path}")
+    if not root_path.is_dir():
+        raise RuntimeError(f"Scan folder is not a directory: {scan_path}")
+
+    direct_candidates = [
+        root_path,
+        root_path / "manifests",
+        root_path / "models" / "manifests",
+    ]
+    manifest_roots: list[Path] = []
+    seen_roots: set[str] = set()
+
+    for candidate in direct_candidates:
+        manifests_root = _normalize_ollama_models_root(candidate)
+        if manifests_root and manifests_root.is_dir():
+            resolved = str(manifests_root.resolve()).lower()
+            if resolved not in seen_roots:
+                seen_roots.add(resolved)
+                manifest_roots.append(manifests_root)
+
+    for current_root, dir_names, _ in os.walk(root_path):
+        current_name = os.path.basename(current_root).lower()
+        parent_name = os.path.basename(os.path.dirname(current_root)).lower()
+        if current_name == "blobs":
+            dir_names[:] = []
+            continue
+        if current_name == "manifests" and parent_name == "models":
+            manifests_root = Path(current_root)
+            resolved = str(manifests_root.resolve()).lower()
+            if resolved not in seen_roots:
+                seen_roots.add(resolved)
+                manifest_roots.append(manifests_root)
+            dir_names[:] = []
+
+    return manifest_roots
+
+
+def _extract_model_name_from_manifest_path(manifest_path: Path, manifests_root: Path) -> str | None:
+    try:
+        relative_parts = manifest_path.relative_to(manifests_root).parts
+    except ValueError:
+        return None
+
+    if len(relative_parts) < 3:
+        return None
+
+    repository_parts = list(relative_parts[1:-1])
+    if repository_parts and repository_parts[0].lower() == "library":
+        repository_parts = repository_parts[1:]
+    if not repository_parts:
+        return None
+
+    tag = relative_parts[-1].strip()
+    if not tag:
+        return None
+
+    repository_name = "/".join(part.strip() for part in repository_parts if part.strip())
+    if not repository_name:
+        return None
+
+    return f"{repository_name}:{tag}"
+
+
+def _collect_models_from_manifest_root(manifests_root: Path) -> list[str]:
+    discovered_models: set[str] = set()
+    for current_root, dir_names, file_names in os.walk(manifests_root):
+        dir_names[:] = [dir_name for dir_name in dir_names if dir_name.lower() != "blobs"]
+        for file_name in file_names:
+            manifest_path = Path(current_root) / file_name
+            model_name = _extract_model_name_from_manifest_path(manifest_path, manifests_root)
+            if model_name:
+                discovered_models.add(model_name)
+    return sorted(discovered_models, key=str.lower)
+
+
+def _list_models_from_running_ollama() -> list[str]:
+    try:
+        response = ollama.list()
+    except Exception:
+        return []
+
+    raw_models = _extract_response_field(response, "models", [])
+    discovered_models: set[str] = set()
+    for raw_model in raw_models or []:
+        model_name = _extract_response_field(raw_model, "model") or _extract_response_field(raw_model, "name")
+        normalized = str(model_name or "").strip()
+        if normalized:
+            discovered_models.add(normalized)
+    return sorted(discovered_models, key=str.lower)
+
+
+def scan_local_ollama_models(scan_path: str | None = None) -> dict:
+    if scan_path:
+        manifest_roots = _discover_manifest_roots_in_folder(scan_path)
+        scan_mode = "folder"
+        scan_root = str(Path(scan_path).expanduser().resolve())
+        running_models: list[str] = []
+    else:
+        manifest_roots = _iter_existing_ollama_manifest_roots()
+        scan_mode = "system"
+        scan_root = ""
+        running_models = _list_models_from_running_ollama()
+
+    discovered_models: set[str] = set(running_models)
+    scanned_locations: list[str] = []
+
+    for manifests_root in manifest_roots:
+        discovered_models.update(_collect_models_from_manifest_root(manifests_root))
+        scanned_locations.append(str(manifests_root.resolve()))
+
+    return {
+        "models": sorted(discovered_models, key=str.lower),
+        "scan_mode": scan_mode,
+        "scan_path": scan_root,
+        "locations": sorted(set(scanned_locations), key=str.lower),
+    }
 
 
 def _read_attachment_bytes(file_path: str, attachment_kind: str) -> bytes:
