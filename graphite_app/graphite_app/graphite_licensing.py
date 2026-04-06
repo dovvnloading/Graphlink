@@ -34,6 +34,14 @@ class SettingsManager:
                     state['ollama_title_model'] = ''
                 if 'ollama_reasoning_mode' not in state:
                     state['ollama_reasoning_mode'] = 'Thinking'
+                if 'ollama_scanned_models' not in state:
+                    state['ollama_scanned_models'] = []
+                if 'ollama_model_scan_mode' not in state:
+                    state['ollama_model_scan_mode'] = ''
+                if 'ollama_model_scan_path' not in state:
+                    state['ollama_model_scan_path'] = ''
+                if 'ollama_model_scan_locations' not in state:
+                    state['ollama_model_scan_locations'] = []
                 if 'current_mode' not in state:
                     state['current_mode'] = 'Ollama (Local)'
                 if 'api_provider' not in state:
@@ -79,6 +87,10 @@ class SettingsManager:
             "ollama_chat_model": "qwen3:8b",
             "ollama_title_model": "",
             "ollama_reasoning_mode": "Thinking",
+            "ollama_scanned_models": [],
+            "ollama_model_scan_mode": "",
+            "ollama_model_scan_path": "",
+            "ollama_model_scan_locations": [],
             "current_mode": "Ollama (Local)",
             "api_provider": "OpenAI-Compatible",
             "api_base_url": "https://api.openai.com/v1",
@@ -215,6 +227,37 @@ class SettingsManager:
         if mode in ['Thinking', 'Quick']:
             self.state['ollama_reasoning_mode'] = mode
             self._save_state()
+
+    def get_ollama_scanned_models(self):
+        models = self.state.get("ollama_scanned_models", [])
+        if not isinstance(models, list):
+            return []
+        return [str(model).strip() for model in models if str(model).strip()]
+
+    def get_ollama_model_scan_mode(self):
+        return str(self.state.get("ollama_model_scan_mode", "")).strip()
+
+    def get_ollama_model_scan_path(self):
+        return str(self.state.get("ollama_model_scan_path", "")).strip()
+
+    def get_ollama_model_scan_locations(self):
+        locations = self.state.get("ollama_model_scan_locations", [])
+        if not isinstance(locations, list):
+            return []
+        return [str(location).strip() for location in locations if str(location).strip()]
+
+    def set_ollama_model_scan_cache(self, models: list[str], scan_mode: str = "", scan_path: str = "", locations: list[str] | None = None):
+        self.state["ollama_scanned_models"] = sorted(
+            {str(model).strip() for model in (models or []) if str(model).strip()},
+            key=str.lower,
+        )
+        self.state["ollama_model_scan_mode"] = str(scan_mode or "").strip()
+        self.state["ollama_model_scan_path"] = str(scan_path or "").strip()
+        self.state["ollama_model_scan_locations"] = sorted(
+            {str(location).strip() for location in (locations or []) if str(location).strip()},
+            key=str.lower,
+        )
+        self._save_state()
             
     def get_current_mode(self):
         return self.state.get("current_mode", "Ollama (Local)")
