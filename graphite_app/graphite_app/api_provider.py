@@ -51,6 +51,10 @@ _OLLAMA_CAPABILITY_CACHE = {}
 _KNOWN_OLLAMA_AUDIO_MODEL_FAMILIES = {"gemma4"}
 
 
+class RequestCancelledError(RuntimeError):
+    """Raised when the user cancels an in-flight model request."""
+
+
 def _read_attachment_bytes(file_path: str, attachment_kind: str) -> bytes:
     resolved_path = os.path.abspath(file_path or "")
     attachment_name = os.path.basename(resolved_path or file_path or "")
@@ -293,6 +297,11 @@ def _message_contains_audio(messages: list) -> bool:
     return any(True for _ in _iter_audio_parts(messages))
 
 
+def _raise_if_cancelled(cancel_event=None):
+    if cancel_event is not None and getattr(cancel_event, "is_set", None) and cancel_event.is_set():
+        raise RequestCancelledError("Request cancelled.")
+
+
 def _gemini_headers(api_key: str, extra_headers: dict | None = None) -> dict:
     headers = {
         "x-goog-api-key": api_key,
@@ -303,7 +312,8 @@ def _gemini_headers(api_key: str, extra_headers: dict | None = None) -> dict:
     return headers
 
 
-def _gemini_post_json(endpoint: str, body: dict, timeout: int = 120) -> dict:
+def _gemini_post_json(endpoint: str, body: dict, timeout: int = 120, cancel_event=None) -> dict:
+    _raise_if_cancelled(cancel_event)
     api_key = _get_gemini_api_key()
     request = urllib.request.Request(
         endpoint,
@@ -314,7 +324,9 @@ def _gemini_post_json(endpoint: str, body: dict, timeout: int = 120) -> dict:
 
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
-            return json.loads(response.read().decode("utf-8"))
+            payload = json.loads(response.read().decode("utf-8"))
+        _raise_if_cancelled(cancel_event)
+        return payload
     except urllib.error.HTTPError as exc:
         error_payload = exc.read().decode("utf-8", errors="replace")
         try:
@@ -325,7 +337,13 @@ def _gemini_post_json(endpoint: str, body: dict, timeout: int = 120) -> dict:
         raise RuntimeError(message) from exc
 
 
-def _gemini_upload_file(file_path: str, mime_type: str, display_name: str | None = None) -> dict:
+def _gemini_upload_file(
+    file_path: str,
+    mime_type: str,
+    display_name: str | None = None,
+    cancel_event=None,
+) -> dict:
+    _raise_if_cancelled(cancel_event)
     api_key = _get_gemini_api_key()
     resolved_path = os.path.abspath(file_path)
     file_size = os.path.getsize(resolved_path)
@@ -344,6 +362,7 @@ def _gemini_upload_file(file_path: str, mime_type: str, display_name: str | None
     try:
         with urllib.request.urlopen(upload_start, timeout=300) as response:
             upload_url = response.headers.get("X-Goog-Upload-URL")
+        _raise_if_cancelled(cancel_event)
     except urllib.error.HTTPError as exc:
         error_payload = exc.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"Gemini file upload initialization failed: {error_payload}") from exc
@@ -363,6 +382,7 @@ def _gemini_upload_file(file_path: str, mime_type: str, display_name: str | None
                 data=source_file,
                 timeout=1800,
             )
+        _raise_if_cancelled(cancel_event)
         if not response.ok:
             raise RuntimeError(f"Gemini file upload failed: {response.text}")
         payload = response.json()
@@ -381,6 +401,7 @@ def _gemini_upload_file(file_path: str, mime_type: str, display_name: str | None
             try:
                 with urllib.request.urlopen(upload_request, timeout=1800) as response:
                     payload = json.loads(response.read().decode("utf-8"))
+                _raise_if_cancelled(cancel_event)
             except urllib.error.HTTPError as exc:
                 error_payload = exc.read().decode("utf-8", errors="replace")
                 raise RuntimeError(f"Gemini file upload failed: {error_payload}") from exc
@@ -418,7 +439,8 @@ def _gemini_delete_file(file_name: str):
         return
 
 
-def _gemini_part_from_content(part: dict, uploaded_files: list) -> dict | None:
+def _gemini_part_from_content(part: dict, uploaded_files: list, cancel_event=None) -> dict | None:
+    _raise_if_cancelled(cancel_event)
     part_type = part.get("type")
     if part_type == "text":
         return {"text": part.get("text", "")}
@@ -442,7 +464,12 @@ def _gemini_part_from_content(part: dict, uploaded_files: list) -> dict | None:
             )
 
         mime_type = part.get("mime_type") or guess_audio_mime_type(audio_path)
-        upload_info = _gemini_upload_file(audio_path, mime_type, part.get("name"))
+        upload_info = _gemini_upload_file(
+            audio_path,
+            mime_type,
+            part.get("name"),
+            cancel_event=cancel_event,
+        )
         uploaded_files.append(upload_info.get("name"))
         return {
             "file_data": {
@@ -454,12 +481,13 @@ def _gemini_part_from_content(part: dict, uploaded_files: list) -> dict | None:
     return None
 
 
-def _prepare_gemini_contents(messages: list) -> tuple[str | None, list, list]:
+def _prepare_gemini_contents(messages: list, cancel_event=None) -> tuple[str | None, list, list]:
     system_prompt = None
     contents = []
     uploaded_files = []
 
     for msg in messages:
+        _raise_if_cancelled(cancel_event)
         role_name = msg.get("role")
         if role_name == "system":
             system_prompt = msg.get("content")
@@ -474,7 +502,7 @@ def _prepare_gemini_contents(messages: list) -> tuple[str | None, list, list]:
                 if not isinstance(part, dict):
                     parts.append({"text": str(part)})
                     continue
-                gemini_part = _gemini_part_from_content(part, uploaded_files)
+                gemini_part = _gemini_part_from_content(part, uploaded_files, cancel_event=cancel_event)
                 if gemini_part is not None:
                     parts.append(gemini_part)
         else:
@@ -583,7 +611,10 @@ def generate_image(prompt: str, size: str = "1024x1024") -> bytes:
 
 
 def chat(task: str, messages: list, **kwargs) -> dict:
+    cancel_event = kwargs.pop("cancellation_event", None)
+
     try:
+        _raise_if_cancelled(cancel_event)
         if not USE_API_MODE:
             model = config.OLLAMA_MODELS.get(task)
             if not model:
@@ -597,6 +628,7 @@ def chat(task: str, messages: list, **kwargs) -> dict:
                 ollama_kwargs["think"] = True
 
             response = ollama.chat(model=model, messages=ollama_messages, **ollama_kwargs)
+            _raise_if_cancelled(cancel_event)
 
             full_response_content = response["message"].get("content", "")
             reasoning = response["message"].get("thinking")
@@ -631,6 +663,7 @@ def chat(task: str, messages: list, **kwargs) -> dict:
                 messages=messages,
                 **kwargs,
             )
+            _raise_if_cancelled(cancel_event)
             return {
                 "message": {
                     "content": response.choices[0].message.content,
@@ -639,7 +672,10 @@ def chat(task: str, messages: list, **kwargs) -> dict:
             }
 
         if API_PROVIDER_TYPE == config.API_PROVIDER_GEMINI:
-            system_prompt, gemini_contents, uploaded_files = _prepare_gemini_contents(messages)
+            system_prompt, gemini_contents, uploaded_files = _prepare_gemini_contents(
+                messages,
+                cancel_event=cancel_event,
+            )
             request_body = {
                 "contents": gemini_contents,
             }
@@ -655,6 +691,7 @@ def chat(task: str, messages: list, **kwargs) -> dict:
                     f"{GEMINI_BASE_URL}/v1beta/models/{api_model}:generateContent",
                     request_body,
                     timeout=_calculate_gemini_timeout(messages),
+                    cancel_event=cancel_event,
                 )
             finally:
                 for file_name in uploaded_files:
@@ -670,6 +707,9 @@ def chat(task: str, messages: list, **kwargs) -> dict:
         raise RuntimeError(f"Unsupported API provider: {API_PROVIDER_TYPE}")
 
     except Exception as exc:
+        if isinstance(exc, RequestCancelledError):
+            raise
+
         error_str = str(exc).lower()
 
         if "timed out" in error_str or "timeout" in error_str:
