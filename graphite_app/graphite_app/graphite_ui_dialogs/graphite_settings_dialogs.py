@@ -67,7 +67,7 @@ class SettingsComboPopup(QFrame):
     def apply_style(self, accent_color):
         self.setStyleSheet(f"""
             QFrame#settingsComboPopupFrame {{
-                background: transparent;
+                background-color: transparent;
                 border: none;
             }}
             QFrame#settingsComboPopupShell {{
@@ -76,14 +76,14 @@ class SettingsComboPopup(QFrame):
                 border-radius: 9px;
             }}
             QListWidget#settingsComboPopupList {{
-                background: transparent;
+                background-color: transparent;
                 color: #ffffff;
                 border: none;
                 outline: none;
                 padding: 2px;
             }}
             QListWidget#settingsComboPopupList::item {{
-                background: transparent;
+                background-color: transparent;
                 color: #ffffff;
                 border: none;
                 border-radius: 6px;
@@ -1084,7 +1084,7 @@ class SettingsDialog(QFrame):
 
         self.setStyleSheet(f"""
             QFrame#settingsFlyoutPanel {{
-                background: transparent;
+                background-color: transparent;
                 border: none;
             }}
             QFrame#settingsFlyoutShell {{
@@ -1092,12 +1092,18 @@ class SettingsDialog(QFrame):
                 border: 1px solid {line_gray};
                 border-radius: 14px;
             }}
+            /* Keep text rows explicitly transparent. The app theme applies a dark
+               background to every QWidget subclass, so using shorthand `background`
+               or unsupported selectors here brings the dark bars back under titles,
+               labels, and checkbox rows inside the flyout. */
             QFrame#settingsFlyoutShell QLabel,
-            QFrame#settingsFlyoutShell QWidget:not(QMenu) {{
-                background: transparent;
-            }}
-            QWidget#settingsCategoryRail, QWidget#settingsPane {{
-                background: transparent;
+            QFrame#settingsFlyoutShell QCheckBox,
+            QFrame#settingsFlyoutShell QRadioButton,
+            QWidget#settingsCategoryRail,
+            QWidget#settingsPane,
+            QWidget#settingsScrollContent,
+            QScrollArea#settingsScrollArea > QWidget > QWidget {{
+                background-color: transparent;
             }}
             QFrame#settingsFlyoutDivider {{
                 background-color: rgba(255, 255, 255, 0.06);
@@ -1111,13 +1117,13 @@ class SettingsDialog(QFrame):
                 font-weight: 700;
                 letter-spacing: 0.14em;
                 text-transform: uppercase;
-                background: transparent;
+                background-color: transparent;
             }}
             QLabel#settingsRailIntro {{
                 color: {muted_text};
                 font-size: 11px;
                 line-height: 1.35em;
-                background: transparent;
+                background-color: transparent;
                 padding: 0 2px 4px 2px;
             }}
             QPushButton#settingsCategoryButton {{
@@ -1149,19 +1155,19 @@ class SettingsDialog(QFrame):
                 color: #f3f5f8;
                 font-size: 15px;
                 font-weight: 700;
-                background: transparent;
+                background-color: transparent;
             }}
             QLabel#settingsPaneMeta {{
                 color: {muted_text};
                 font-size: 11px;
-                background: transparent;
+                background-color: transparent;
             }}
             QScrollArea#settingsScrollArea, QWidget#settingsScrollContent, QStackedWidget#settingsStack {{
-                background: transparent;
+                background-color: transparent;
                 border: none;
             }}
             QScrollArea#settingsScrollArea > QWidget > QWidget {{
-                background: transparent;
+                background-color: transparent;
             }}
             QComboBox#settingsComboBox {{
                 background-color: #2d2d2d;
@@ -1187,7 +1193,7 @@ class SettingsDialog(QFrame):
                 border-left-style: solid;
                 border-top-right-radius: 3px;
                 border-bottom-right-radius: 3px;
-                background: transparent;
+                background-color: transparent;
             }}
             QComboBox#settingsComboBox::down-arrow {{
                 image: url(C:/Users/Admin/source/repos/graphite_app/assets/down_arrow.png);
@@ -1195,7 +1201,7 @@ class SettingsDialog(QFrame):
                 height: 10px;
             }}
             QComboBox#settingsComboBox QLineEdit {{
-                background: transparent;
+                background-color: transparent;
                 color: #ffffff;
                 border: none;
                 padding: 0;
