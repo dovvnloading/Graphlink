@@ -19,6 +19,7 @@ class ChatWorkerThread(QThread):
     finished = Signal(dict) # Emits the new message dictionary on success.
     error = Signal(str)     # Emits an error message string on failure.
     status = Signal(str)    # Emits progress / stall notices.
+    cancelled = Signal()    # Emits when the user cancels the request.
     
     def __init__(self, agent, conversation_history, current_node):
         """
@@ -35,6 +36,11 @@ class ChatWorkerThread(QThread):
         self.agent = agent
         self.conversation_history = conversation_history if isinstance(conversation_history, list) else []
         self.current_node = current_node
+        self._cancel_event = threading.Event()
+
+    def cancel(self):
+        self._cancel_event.set()
+        self.requestInterruption()
         
     def run(self):
         """
@@ -46,7 +52,11 @@ class ChatWorkerThread(QThread):
 
         def _invoke():
             try:
-                result_holder["response"] = self.agent.get_response(self.conversation_history, self.current_node)
+                result_holder["response"] = self.agent.get_response(
+                    self.conversation_history,
+                    self.current_node,
+                    cancellation_event=self._cancel_event,
+                )
             except Exception as exc:
                 error_holder["error"] = exc
 
@@ -59,6 +69,9 @@ class ChatWorkerThread(QThread):
 
         while worker.is_alive():
             worker.join(0.25)
+            if self._cancel_event.is_set() or self.isInterruptionRequested():
+                self.cancelled.emit()
+                return
             elapsed = time.monotonic() - started_at
 
             if not warning_sent and elapsed >= warning_seconds:
@@ -70,6 +83,10 @@ class ChatWorkerThread(QThread):
                 return
 
         try:
+            if self._cancel_event.is_set() or self.isInterruptionRequested():
+                self.cancelled.emit()
+                return
+
             if "error" in error_holder:
                 raise error_holder["error"]
 
@@ -78,6 +95,9 @@ class ChatWorkerThread(QThread):
             new_message = {'role': 'assistant', 'content': response_text}
             self.finished.emit(new_message)
         except Exception as e:
+            if isinstance(e, api_provider.RequestCancelledError):
+                self.cancelled.emit()
+                return
             # If any exception occurs during the agent's execution, emit an error signal.
             self.error.emit(str(e))
 
@@ -132,7 +152,7 @@ class ChatWorker:
         self.token_estimator = TokenEstimator()
         self.MAX_TOKENS = 8000
         
-    def run(self, conversation_history, current_node):
+    def run(self, conversation_history, current_node, cancellation_event=None):
         """
         Executes the chat logic for a single turn.
 
@@ -180,7 +200,11 @@ class ChatWorker:
 
             messages.extend(trimmed_history)
             
-            response = api_provider.chat(task=config.TASK_CHAT, messages=messages)
+            response = api_provider.chat(
+                task=config.TASK_CHAT,
+                messages=messages,
+                cancellation_event=cancellation_event,
+            )
             ai_message = response['message']['content']
             return ai_message
         except Exception as e:
@@ -205,7 +229,7 @@ class ChatAgent:
         self.persona = persona or "(default persona)"
         self.system_prompt = f"You are {self.name}. {self.persona}"
         
-    def get_response(self, conversation_history, current_node):
+    def get_response(self, conversation_history, current_node, cancellation_event=None):
         """
         Gets an AI response for a given conversation history.
 
@@ -219,7 +243,11 @@ class ChatAgent:
         # This agent is stateless. It does not store conversation_history.
         # It creates a temporary ChatWorker to handle the API call.
         chat_worker = ChatWorker(self.system_prompt)
-        ai_response = chat_worker.run(conversation_history, current_node)
+        ai_response = chat_worker.run(
+            conversation_history,
+            current_node,
+            cancellation_event=cancellation_event,
+        )
         return ai_response
 
 
