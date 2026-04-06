@@ -546,6 +546,7 @@ class PluginPortal:
         convo_node = ConversationNode(parent_node=selected_node)
         selected_node.children.append(convo_node)
         convo_node.ai_request_sent.connect(self.main_window.handle_conversation_node_request)
+        convo_node.cancel_requested.connect(self.main_window.handle_conversation_node_cancel)
         
         if hasattr(selected_node, 'conversation_history') and selected_node.conversation_history:
             history_copy = clone_history(selected_node.conversation_history)
