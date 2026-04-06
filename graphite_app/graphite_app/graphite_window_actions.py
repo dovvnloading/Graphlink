@@ -300,15 +300,29 @@ class WindowActionsMixin:
 
         self._show_pending_response_preview(user_node)
 
-        self.chat_thread = ChatWorkerThread(self.agent, history_for_worker, history_context_node)
-        self.chat_thread.finished.connect(lambda new_message: self.handle_response(new_message, user_node, history_for_worker))
-        self.chat_thread.status.connect(self._handle_chat_worker_status)
-        self.chat_thread.error.connect(self.handle_error)
-        self.chat_thread.finished.connect(self.chat_thread.deleteLater)
-        self.chat_thread.error.connect(self.chat_thread.deleteLater)
-        self.chat_thread.start()
+        worker_thread = ChatWorkerThread(self.agent, history_for_worker, history_context_node)
+        self.chat_thread = worker_thread
+        self._set_main_request_state(
+            active=True,
+            cancel_callback=lambda thread=worker_thread: self._cancel_main_chat_request(thread),
+        )
+        worker_thread.finished.connect(
+            lambda new_message, node=user_node, history=history_for_worker, thread=worker_thread:
+                self.handle_response(new_message, node, history, thread)
+        )
+        worker_thread.status.connect(self._handle_chat_worker_status)
+        worker_thread.error.connect(lambda error_message, thread=worker_thread: self._handle_main_chat_error(error_message, thread))
+        worker_thread.cancelled.connect(lambda thread=worker_thread: self._handle_main_chat_cancelled(thread))
+        worker_thread.finished.connect(lambda _message, thread=worker_thread: self._cleanup_main_chat_thread(thread))
+        worker_thread.error.connect(lambda _error, thread=worker_thread: self._cleanup_main_chat_thread(thread))
+        worker_thread.cancelled.connect(lambda thread=worker_thread: self._cleanup_main_chat_thread(thread))
+        worker_thread.start()
 
-    def handle_response(self, new_assistant_message, user_node, history_before_assistant):
+    def handle_response(self, new_assistant_message, user_node, history_before_assistant, worker_thread=None):
+        if worker_thread is not None and self.chat_thread is not worker_thread:
+            return
+
+        self._set_main_request_state(active=False)
         self._clear_loading_animation()
         assign_history(user_node, history_before_assistant)
 
@@ -429,17 +443,32 @@ class WindowActionsMixin:
         history_for_worker = get_node_history(node_to_regenerate.parent_node)
         self.message_input.setEnabled(False)
         self.send_button.setEnabled(False)
+        self.attach_file_btn.setEnabled(False)
         self._show_loading_animation(anchor_node=node_to_regenerate)
-        self.chat_thread = ChatWorkerThread(self.agent, history_for_worker, node_to_regenerate.parent_node)
-        self.chat_thread.finished.connect(lambda new_message: self.handle_regenerated_response(new_message, node_to_regenerate, history_for_worker))
-        self.chat_thread.status.connect(self._handle_chat_worker_status)
-        self.chat_thread.error.connect(self.handle_error)
-        self.chat_thread.finished.connect(self.chat_thread.deleteLater)
-        self.chat_thread.error.connect(self.chat_thread.deleteLater)
-        self.chat_thread.start()
+        worker_thread = ChatWorkerThread(self.agent, history_for_worker, node_to_regenerate.parent_node)
+        self.chat_thread = worker_thread
+        self._set_main_request_state(
+            active=True,
+            cancel_callback=lambda thread=worker_thread: self._cancel_main_chat_request(thread),
+        )
+        worker_thread.finished.connect(
+            lambda new_message, node=node_to_regenerate, history=history_for_worker, thread=worker_thread:
+                self.handle_regenerated_response(new_message, node, history, thread)
+        )
+        worker_thread.status.connect(self._handle_chat_worker_status)
+        worker_thread.error.connect(lambda error_message, thread=worker_thread: self._handle_main_chat_error(error_message, thread))
+        worker_thread.cancelled.connect(lambda thread=worker_thread: self._handle_regeneration_cancelled(thread))
+        worker_thread.finished.connect(lambda _message, thread=worker_thread: self._cleanup_main_chat_thread(thread))
+        worker_thread.error.connect(lambda _error, thread=worker_thread: self._cleanup_main_chat_thread(thread))
+        worker_thread.cancelled.connect(lambda thread=worker_thread: self._cleanup_main_chat_thread(thread))
+        worker_thread.start()
 
-    def handle_regenerated_response(self, new_assistant_message, old_node, parent_history):
+    def handle_regenerated_response(self, new_assistant_message, old_node, parent_history, worker_thread=None):
+        if worker_thread is not None and self.chat_thread is not worker_thread:
+            return
+
         try:
+            self._set_main_request_state(active=False)
             new_response = new_assistant_message['content']
             if not new_response or not new_response.strip():
                 self.notification_banner.show_message("The model returned an empty response. The original response has been kept.", 6000, "warning")
@@ -478,6 +507,7 @@ class WindowActionsMixin:
             self._clear_loading_animation()
             self.message_input.setEnabled(True)
             self.send_button.setEnabled(True)
+            self.attach_file_btn.setEnabled(True)
     
     def generate_takeaway(self, node):
         try:
@@ -1153,25 +1183,104 @@ class WindowActionsMixin:
 
     def handle_conversation_node_request(self, requesting_node, history):
         requesting_node.set_typing(True)
-        self.conversation_node_thread = ChatWorkerThread(self.agent, history, requesting_node.parent_node)
-        self.conversation_node_thread.finished.connect(lambda new_message: self.handle_conversation_node_response(new_message, requesting_node))
-        self.conversation_node_thread.status.connect(self._handle_chat_worker_status)
-        self.conversation_node_thread.error.connect(lambda error_msg: self.handle_conversation_node_error(error_msg, requesting_node))
-        self.conversation_node_thread.finished.connect(self.conversation_node_thread.deleteLater)
-        self.conversation_node_thread.error.connect(lambda: requesting_node.set_typing(False))
-        self.conversation_node_thread.start()
+        worker_thread = ChatWorkerThread(self.agent, history, requesting_node.parent_node)
+        self.conversation_node_thread = worker_thread
+        requesting_node.worker_thread = worker_thread
+        worker_thread.finished.connect(
+            lambda new_message, node=requesting_node, thread=worker_thread:
+                self.handle_conversation_node_response(new_message, node, thread)
+        )
+        worker_thread.status.connect(self._handle_chat_worker_status)
+        worker_thread.error.connect(
+            lambda error_msg, node=requesting_node, thread=worker_thread:
+                self.handle_conversation_node_error(error_msg, node, thread)
+        )
+        worker_thread.cancelled.connect(
+            lambda node=requesting_node, thread=worker_thread:
+                self.handle_conversation_node_cancelled(node, thread)
+        )
+        worker_thread.finished.connect(lambda _message, node=requesting_node, thread=worker_thread: self._cleanup_conversation_node_thread(thread, node))
+        worker_thread.error.connect(lambda _error, node=requesting_node, thread=worker_thread: self._cleanup_conversation_node_thread(thread, node))
+        worker_thread.cancelled.connect(lambda node=requesting_node, thread=worker_thread: self._cleanup_conversation_node_thread(thread, node))
+        worker_thread.start()
 
-    def handle_conversation_node_response(self, new_message, target_node):
+    def handle_conversation_node_response(self, new_message, target_node, worker_thread=None):
+        if worker_thread is not None and getattr(target_node, "worker_thread", None) is not worker_thread:
+            return
+
         target_node.set_typing(False)
         if target_node and target_node.scene():
             response_text = new_message.get('content', '')
             target_node.add_ai_message(response_text); self.save_chat()
 
-    def handle_conversation_node_error(self, error_message, target_node):
+    def handle_conversation_node_error(self, error_message, target_node, worker_thread=None):
+        if worker_thread is not None and getattr(target_node, "worker_thread", None) is not worker_thread:
+            return
+
         target_node.set_typing(False)
         self.notification_banner.show_message(f"An error occurred: {error_message}", 8000, "error")
         if target_node and target_node.scene():
             target_node.set_input_enabled(True); target_node.add_ai_message(f"[ERROR]: Could not get response. {error_message}")
+
+    def handle_conversation_node_cancel(self, requesting_node):
+        worker_thread = getattr(requesting_node, "worker_thread", None)
+        if worker_thread and worker_thread.isRunning():
+            requesting_node.set_cancel_pending(True)
+            worker_thread.cancel()
+
+    def handle_conversation_node_cancelled(self, target_node, worker_thread=None):
+        if worker_thread is not None and getattr(target_node, "worker_thread", None) is not worker_thread:
+            return
+
+        target_node.set_typing(False)
+        target_node.set_input_enabled(True)
+        self.save_chat()
+        self.notification_banner.show_message("Conversation request cancelled.", 3000, "info")
+
+    def _cancel_main_chat_request(self, worker_thread):
+        if worker_thread is None or worker_thread is not self.chat_thread:
+            return
+        worker_thread.cancel()
+
+    def _handle_main_chat_error(self, error_message, worker_thread):
+        if worker_thread is not self.chat_thread:
+            return
+        self._set_main_request_state(active=False)
+        self.handle_error(error_message)
+
+    def _handle_main_chat_cancelled(self, worker_thread):
+        if worker_thread is not self.chat_thread:
+            return
+        self._set_main_request_state(active=False)
+        self._clear_loading_animation()
+        self._clear_pending_response_preview()
+        self.message_input.setEnabled(True)
+        self.send_button.setEnabled(True)
+        self.attach_file_btn.setEnabled(True)
+        self.save_chat()
+        self.notification_banner.show_message("Request cancelled.", 3000, "info")
+
+    def _handle_regeneration_cancelled(self, worker_thread):
+        if worker_thread is not self.chat_thread:
+            return
+        self._set_main_request_state(active=False)
+        self._clear_loading_animation()
+        self.message_input.setEnabled(True)
+        self.send_button.setEnabled(True)
+        self.attach_file_btn.setEnabled(True)
+        self.notification_banner.show_message("Regeneration cancelled.", 3000, "info")
+
+    def _cleanup_main_chat_thread(self, worker_thread):
+        if self.chat_thread is worker_thread:
+            self.chat_thread = None
+        worker_thread.deleteLater()
+
+    def _cleanup_conversation_node_thread(self, worker_thread, conversation_node):
+        if conversation_node and getattr(conversation_node, "worker_thread", None) is worker_thread:
+            conversation_node.worker_thread = None
+        if getattr(self, "conversation_node_thread", None) is worker_thread:
+            self.conversation_node_thread = None
+        worker_thread.deleteLater()
 
     def execute_artifact_node(self, artifact_node):
         """Starts the ArtifactAgent workflow."""
