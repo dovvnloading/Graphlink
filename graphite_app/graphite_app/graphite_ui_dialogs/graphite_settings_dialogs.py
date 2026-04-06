@@ -1,10 +1,10 @@
 import os
 import webbrowser
 import qtawesome as qta
-from PySide6.QtCore import QPoint, QSize, Qt, Signal
+from PySide6.QtCore import QPoint, QSize, Qt, QThread, Signal
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QComboBox, QFormLayout,
+    QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QComboBox, QFileDialog, QFormLayout,
     QFrame, QGraphicsDropShadowEffect, QHBoxLayout, QLabel, QLineEdit,
     QListWidget, QListWidgetItem, QMessageBox, QPushButton, QRadioButton,
     QScrollArea, QSizePolicy, QStackedWidget, QVBoxLayout, QWidget
@@ -218,11 +218,33 @@ class SettingsComboBox(QComboBox):
             super().hidePopup()
 
 
+class OllamaModelScanWorker(QThread):
+    finished = Signal(dict)
+    error = Signal(str)
+
+    def __init__(self, scan_path=None, parent=None):
+        super().__init__(parent)
+        self.scan_path = scan_path
+
+    def run(self):
+        try:
+            results = api_provider.scan_local_ollama_models(self.scan_path)
+            self.finished.emit(results)
+        except Exception as exc:
+            self.error.emit(str(exc))
+
+
 class OllamaSettingsWidget(QWidget):
+    DEFAULT_MODELS = [
+        'qwen2.5:7b-instruct', 'qwen3:8b', 'qwen3:14b', 'deepseek-r1:14b', 'phi3:14b', 'mistral:7b',
+        'gpt-oss:20b', 'qwen3-vl:8b', 'deepseek-coder:6.7b', 'gemma3:4b', 'gemma3:12b'
+    ]
+
     def __init__(self, settings_manager, parent=None):
         super().__init__(parent)
         self.settings_manager = settings_manager
         self.worker_thread = None
+        self.scan_worker = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(15, 15, 15, 15)
@@ -262,22 +284,33 @@ class OllamaSettingsWidget(QWidget):
         else:
             self.quick_radio.setChecked(True)
 
-        self.models =[
-            'qwen2.5:7b-instruct', 'qwen3:8b', 'qwen3:14b', 'deepseek-r1:14b', 'phi3:14b', 'mistral:7b',
-            'gpt-oss:20b', 'qwen3-vl:8b', 'deepseek-coder:6.7b', 'gemma3:4b', 'gemma3:12b'
-        ]
-        
         saved_model = self.settings_manager.get_ollama_chat_model()
         saved_title_model = self.settings_manager.get_ollama_title_model()
+        self.models = self._build_model_cache(saved_model, saved_title_model)
 
         self.current_model_label = QLabel(f"<b>{saved_model}</b>")
         self.current_model_label.setStyleSheet("color: #2ecc71;")
         form_layout.addRow("Current Active Chat Model:", self.current_model_label)
 
+        scan_controls = QHBoxLayout()
+        self.system_scan_button = QPushButton("System Scan")
+        self.system_scan_button.clicked.connect(self.scan_system_for_models)
+        self.folder_scan_button = QPushButton("Scan Folder...")
+        self.folder_scan_button.clicked.connect(self.scan_selected_folder)
+        scan_controls.addWidget(self.system_scan_button)
+        scan_controls.addWidget(self.folder_scan_button)
+        scan_controls.addStretch()
+        form_layout.addRow("Available Model Scan:", scan_controls)
+
+        self.scan_summary_label = QLabel(self._get_scan_summary_text())
+        self.scan_summary_label.setWordWrap(True)
+        self.scan_summary_label.setStyleSheet("color: #9fa6ad;")
+        form_layout.addRow("", self.scan_summary_label)
+
         self.model_combo = SettingsComboBox()
         self.model_combo.addItems([""] + self.models)
         self.model_combo.currentTextChanged.connect(self.on_combo_change)
-        form_layout.addRow("Preset Model:", self.model_combo)
+        form_layout.addRow("Scanned Model:", self.model_combo)
 
         self.model_input = QLineEdit()
         self.model_input.setPlaceholderText("e.g., llama3:latest")
@@ -298,6 +331,11 @@ class OllamaSettingsWidget(QWidget):
         naming_help.setWordWrap(True)
         naming_help.setStyleSheet("color: #9fa6ad; margin-top: 2px;")
         layout.addWidget(naming_help)
+
+        scan_help = QLabel("System scan checks the local Ollama install/cache locations and stores the discovered list until you rescan. Folder scan lets you point directly at a custom models folder.")
+        scan_help.setWordWrap(True)
+        scan_help.setStyleSheet("color: #9fa6ad; margin-top: 4px;")
+        layout.addWidget(scan_help)
 
         self.status_label = QLabel("Enter a model name to validate and set it.")
         self.status_label.setWordWrap(True)
@@ -344,6 +382,117 @@ class OllamaSettingsWidget(QWidget):
                 border-radius: 4px;
             }}
         """)
+
+    def _build_model_cache(self, *extra_models):
+        cached_models = self.settings_manager.get_ollama_scanned_models()
+        has_saved_scan = bool(
+            self.settings_manager.get_ollama_model_scan_mode()
+            or self.settings_manager.get_ollama_model_scan_path()
+            or self.settings_manager.get_ollama_model_scan_locations()
+        )
+        base_models = cached_models if has_saved_scan else self.DEFAULT_MODELS
+        combined_models = {
+            str(model).strip()
+            for model in [*base_models, *extra_models]
+            if str(model).strip()
+        }
+        return sorted(combined_models, key=str.lower)
+
+    def _get_scan_summary_text(self):
+        scan_mode = self.settings_manager.get_ollama_model_scan_mode()
+        scan_path = self.settings_manager.get_ollama_model_scan_path()
+        cached_models = self.settings_manager.get_ollama_scanned_models()
+        has_saved_scan = bool(scan_mode or scan_path or self.settings_manager.get_ollama_model_scan_locations())
+        if not has_saved_scan:
+            return "No saved scan yet. Run a system scan or choose a folder to build the local model list."
+        if not cached_models:
+            return "The last scan is saved, but it did not find any Ollama models."
+        if scan_mode == "folder" and scan_path:
+            return f"Using saved scan from folder: {scan_path}"
+        if scan_mode == "system":
+            return "Using saved system scan results from local Ollama locations."
+        return "Using saved scanned model list."
+
+    def _refresh_model_combos(self):
+        current_model_text = self.model_input.text().strip()
+        current_title_text = self.title_model_combo.currentText().strip()
+
+        self.model_combo.blockSignals(True)
+        self.model_combo.clear()
+        self.model_combo.addItems([""] + self.models)
+        if current_model_text in self.models:
+            self.model_combo.setCurrentText(current_model_text)
+        else:
+            self.model_combo.setCurrentIndex(0)
+        self.model_combo.blockSignals(False)
+
+        self.title_model_combo.blockSignals(True)
+        self.title_model_combo.clear()
+        self.title_model_combo.addItems([""] + self.models)
+        self.title_model_combo.setCurrentText(current_title_text)
+        self.title_model_combo.blockSignals(False)
+
+        self.scan_summary_label.setText(self._get_scan_summary_text())
+
+    def _set_scan_buttons_enabled(self, enabled):
+        self.system_scan_button.setEnabled(enabled)
+        self.folder_scan_button.setEnabled(enabled)
+
+    def scan_system_for_models(self):
+        self._start_scan_worker()
+
+    def scan_selected_folder(self):
+        initial_directory = self.settings_manager.get_ollama_model_scan_path() or str(os.path.expanduser("~"))
+        selected_directory = QFileDialog.getExistingDirectory(self, "Select Ollama Folder to Scan", initial_directory)
+        if not selected_directory:
+            return
+        self._start_scan_worker(selected_directory)
+
+    def _start_scan_worker(self, scan_path=None):
+        if self.scan_worker and self.scan_worker.isRunning():
+            return
+
+        self._set_scan_buttons_enabled(False)
+        if scan_path:
+            self.status_label.setText(f"Scanning folder for Ollama models: {scan_path}")
+        else:
+            self.status_label.setText("Scanning local Ollama model locations...")
+        self.status_label.setStyleSheet("color: #3498db; min-height: 40px;")
+
+        self.scan_worker = OllamaModelScanWorker(scan_path, self)
+        self.scan_worker.finished.connect(self.handle_scan_finished)
+        self.scan_worker.error.connect(self.handle_scan_error)
+        self.scan_worker.start()
+
+    def handle_scan_finished(self, results):
+        models = results.get("models", [])
+        self.settings_manager.set_ollama_model_scan_cache(
+            models,
+            results.get("scan_mode", ""),
+            results.get("scan_path", ""),
+            results.get("locations", []),
+        )
+        self.models = self._build_model_cache(
+            self.model_input.text().strip(),
+            self.title_model_combo.currentText().strip(),
+        )
+        self._refresh_model_combos()
+        self._set_scan_buttons_enabled(True)
+
+        if models:
+            self.status_label.setText(f"Found {len(models)} Ollama model(s). Saved this list for reuse until the next scan.")
+            self.status_label.setStyleSheet("color: #2ecc71; min-height: 40px;")
+        else:
+            self.status_label.setText("Scan finished, but no Ollama models were found in the selected locations.")
+            self.status_label.setStyleSheet("color: #e67e22; min-height: 40px;")
+
+        self.scan_worker = None
+
+    def handle_scan_error(self, error_message):
+        self._set_scan_buttons_enabled(True)
+        self.status_label.setText(f"Scan failed: {error_message}")
+        self.status_label.setStyleSheet("color: #e74c3c; min-height: 40px;")
+        self.scan_worker = None
 
     def save_settings(self):
         model_name = self.model_input.text().strip()
