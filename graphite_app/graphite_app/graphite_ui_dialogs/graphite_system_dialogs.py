@@ -118,6 +118,12 @@ class AboutDialog(QDialog):
             QDialog {{
                 background-color: #1e1e1e;
             }}
+            /* The app theme paints every QWidget subclass dark. About is mostly
+               labels, so they must stay explicitly transparent or title strips
+               reappear behind the text. */
+            QLabel {{
+                background-color: transparent;
+            }}
             QLabel#aboutTitle {{
                 font-size: 26px;
                 font-weight: 900;
@@ -509,7 +515,7 @@ class HelpDialog(QFrame):
 
         self.setStyleSheet(f"""
             QFrame#helpFlyoutPanel {{
-                background: transparent;
+                background-color: transparent;
                 border: none;
             }}
             QFrame#helpFlyoutShell {{
@@ -517,12 +523,17 @@ class HelpDialog(QFrame):
                 border: 1px solid {line_gray};
                 border-radius: 14px;
             }}
+            /* Keep flyout copy surfaces explicitly transparent. The shared theme
+               gives every QWidget subclass a dark fill, so shorthand `background`
+               or loose rules can bring the dark bars back under Help headings. */
             QFrame#helpFlyoutShell QLabel,
-            QFrame#helpFlyoutShell QWidget {{
-                background: transparent;
-            }}
-            QWidget#helpCategoryRail, QWidget#helpPane {{
-                background: transparent;
+            QWidget#helpCategoryRail,
+            QWidget#helpPane,
+            QWidget#helpScrollContent,
+            QWidget#helpSectionBlock,
+            QWidget#helpItemText,
+            QScrollArea#helpScrollArea > QWidget > QWidget {{
+                background-color: transparent;
             }}
             QFrame#helpFlyoutDivider {{
                 background-color: rgba(255, 255, 255, 0.06);
@@ -535,12 +546,12 @@ class HelpDialog(QFrame):
                 font-size: 10px;
                 font-weight: 700;
                 letter-spacing: 0.14em;
-                background: transparent;
+                background-color: transparent;
             }}
             QLabel#helpRailIntro {{
                 color: {muted_text};
                 font-size: 11px;
-                background: transparent;
+                background-color: transparent;
                 padding: 0 2px 4px 2px;
             }}
             QPushButton#helpCategoryButton {{
@@ -572,19 +583,19 @@ class HelpDialog(QFrame):
                 color: #f3f5f8;
                 font-size: 15px;
                 font-weight: 700;
-                background: transparent;
+                background-color: transparent;
             }}
             QLabel#helpPaneMeta {{
                 color: {muted_text};
                 font-size: 11px;
-                background: transparent;
+                background-color: transparent;
             }}
             QScrollArea#helpScrollArea {{
-                background: transparent;
+                background-color: transparent;
                 border: none;
             }}
             QScrollArea#helpScrollArea > QWidget > QWidget {{
-                background: transparent;
+                background-color: transparent;
             }}
             QPushButton#helpCloseButton {{
                 background-color: rgba(255, 255, 255, 0.04);
@@ -599,20 +610,20 @@ class HelpDialog(QFrame):
                 background-color: rgba(255, 255, 255, 0.08);
             }}
             QWidget#helpScrollContent {{
-                background: transparent;
+                background-color: transparent;
             }}
             QWidget#helpSectionBlock {{
-                background: transparent;
+                background-color: transparent;
             }}
             QWidget#helpItemText {{
-                background: transparent;
+                background-color: transparent;
             }}
             QLabel#helpSectionTitle {{
                 color: {accent};
                 font-size: 15px;
                 font-weight: 700;
                 padding-bottom: 6px;
-                background: transparent;
+                background-color: transparent;
             }}
             QFrame#helpItemCard {{
                 background-color: rgba(255, 255, 255, 0.02);
@@ -628,12 +639,12 @@ class HelpDialog(QFrame):
                 color: #ffffff;
                 font-size: 12px;
                 font-weight: 700;
-                background: transparent;
+                background-color: transparent;
             }}
             QLabel#helpItemDescription {{
                 color: {muted_text};
                 font-size: 11px;
-                background: transparent;
+                background-color: transparent;
             }}
         """)
         self._accent_color = accent
