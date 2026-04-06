@@ -4,7 +4,7 @@ from PySide6.QtWidgets import (
     QFileDialog
 )
 from PySide6.QtCore import Qt, QSize, QPointF, QTimer, QEvent
-from PySide6.QtGui import QKeySequence, QGuiApplication, QCursor, QShortcut, QIcon
+from PySide6.QtGui import QKeySequence, QGuiApplication, QCursor, QShortcut, QIcon, QColor
 import qtawesome as qta
 import os
 import tempfile
@@ -45,7 +45,7 @@ from graphite_audio import (
 from graphite_file_handler import FileHandler
 import graphite_config as config
 import api_provider
-from graphite_config import get_current_palette, get_neutral_button_colors
+from graphite_config import get_current_palette, get_neutral_button_colors, get_semantic_color
 
 from graphite_prompts import BASE_SYSTEM_PROMPT, THINKING_INSTRUCTIONS_PROMPT
 from graphite_window_actions import WindowActionsMixin
@@ -98,6 +98,9 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         self.quality_gate_thread = None
         self.code_review_thread = None
         self.gitlink_thread = None
+        self._main_request_active = False
+        self._main_request_cancel_pending = False
+        self._main_request_cancel_callback = None
 
         self.container = QWidget()
         container_layout = QVBoxLayout(self.container)
@@ -185,7 +188,7 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
 
         self.setCentralWidget(self.container)
         self._update_themed_styles()
-        self.send_button.clicked.connect(self.send_message)
+        self.send_button.clicked.connect(self._handle_send_button_click)
         self._sync_footer_height()
 
         self.current_node = None
@@ -232,7 +235,26 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
     def _update_themed_styles(self):
         palette = get_current_palette()
         button_colors = get_neutral_button_colors()
-        self.send_button.setIcon(qta.icon('fa5s.paper-plane', color=button_colors["icon"].name()))
+        if self._main_request_active:
+            stop_accent = get_semantic_color("status_error")
+            stop_background = self._blend_button_color(button_colors["background"], stop_accent, 0.18)
+            stop_hover = self._blend_button_color(button_colors["hover"], stop_accent, 0.24)
+            stop_pressed = self._blend_button_color(button_colors["pressed"], stop_accent, 0.16)
+            stop_border = self._blend_button_color(button_colors["border"], stop_accent, 0.30)
+            stop_icon = button_colors["muted_icon"] if self._main_request_cancel_pending else QColor("#ffffff")
+            self.send_button.setIcon(qta.icon('fa5s.stop', color=stop_icon.name()))
+            self.send_button.setToolTip("Cancelling..." if self._main_request_cancel_pending else "Cancel response")
+            background = stop_background
+            hover = stop_hover
+            pressed = stop_pressed
+            border = stop_border
+        else:
+            self.send_button.setIcon(qta.icon('fa5s.paper-plane', color=button_colors["icon"].name()))
+            self.send_button.setToolTip("Send message")
+            background = button_colors["background"]
+            hover = button_colors["hover"]
+            pressed = button_colors["pressed"]
+            border = button_colors["border"]
         if hasattr(self, 'plugins_button'):
             self.plugins_button.setIcon(qta.icon("fa5s.chevron-down", color=palette.SELECTION.lighter(160).name()))
         if hasattr(self, 'plugin_picker'):
@@ -241,23 +263,59 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
             self.pin_overlay.on_theme_changed()
         self.send_button.setStyleSheet(f"""
             QPushButton {{
-                background-color: {button_colors["background"].name()};
-                border: 1px solid {button_colors["border"].name()};
+                background-color: {background.name()};
+                border: 1px solid {border.name()};
                 border-radius: 20px;
                 padding: 10px;
             }}
             QPushButton:hover {{
-                background-color: {button_colors["hover"].name()};
-                border-color: {button_colors["hover"].lighter(112).name()};
+                background-color: {hover.name()};
+                border-color: {hover.lighter(112).name()};
             }}
             QPushButton:pressed {{
-                background-color: {button_colors["pressed"].name()};
-                border-color: {button_colors["border"].darker(105).name()};
+                background-color: {pressed.name()};
+                border-color: {border.darker(105).name()};
+            }}
+            QPushButton:disabled {{
+                background-color: {background.darker(108).name()};
+                border-color: {border.darker(112).name()};
             }}
         """)
         if hasattr(self, 'message_input'):
             self.message_input.on_theme_changed()
         self._refresh_attachment_button()
+
+    def _blend_button_color(self, base, accent, ratio):
+        base_color = QColor(base)
+        accent_color = QColor(accent)
+        mix = max(0.0, min(1.0, float(ratio)))
+        return QColor(
+            round(base_color.red() + (accent_color.red() - base_color.red()) * mix),
+            round(base_color.green() + (accent_color.green() - base_color.green()) * mix),
+            round(base_color.blue() + (accent_color.blue() - base_color.blue()) * mix),
+        )
+
+    def _handle_send_button_click(self):
+        if self._main_request_active:
+            if self._main_request_cancel_callback and not self._main_request_cancel_pending:
+                self._main_request_cancel_pending = True
+                self.send_button.setEnabled(False)
+                self._update_themed_styles()
+                self._main_request_cancel_callback()
+            return
+        self.send_message()
+
+    def _set_main_request_state(self, *, active: bool, cancel_callback=None, cancel_pending: bool = False):
+        self._main_request_active = active
+        self._main_request_cancel_pending = cancel_pending if active else False
+        self._main_request_cancel_callback = cancel_callback if active else None
+        if active:
+            self.send_button.setEnabled(not self._main_request_cancel_pending)
+            self.message_input.setEnabled(False)
+            self.attach_file_btn.setEnabled(False)
+        else:
+            self.send_button.setEnabled(True)
+        self._update_themed_styles()
 
     def on_theme_changed(self):
         self._update_themed_styles()
@@ -1091,6 +1149,7 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         super().dropEvent(event)
 
     def handle_error(self, error_message):
+        self._set_main_request_state(active=False)
         self._clear_loading_animation()
         self._clear_pending_response_preview()
         self.notification_banner.show_message(f"An error occurred:\n{error_message}", 15000, "error")
