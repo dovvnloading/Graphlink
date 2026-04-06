@@ -126,6 +126,7 @@ class TypingIndicatorItem(QGraphicsObject):
 
 class ConversationNode(QGraphicsObject, HoverAnimationMixin):
     ai_request_sent = Signal(object, list)
+    cancel_requested = Signal(object)
 
     NODE_WIDTH = 550
     NODE_HEIGHT = 600
@@ -164,6 +165,9 @@ class ConversationNode(QGraphicsObject, HoverAnimationMixin):
         self._message_items = []
         self._next_message_y = 10
         self._typing_indicator = None
+        self._request_active = False
+        self._cancel_pending = False
+        self.worker_thread = None
 
         self._setup_ui()
         self.proxy = QGraphicsProxyWidget(self)
@@ -235,29 +239,67 @@ class ConversationNode(QGraphicsObject, HoverAnimationMixin):
         input_layout.addWidget(self.send_button)
         main_layout.addLayout(input_layout)
 
-        self.send_button.clicked.connect(self.send_message)
+        self.send_button.clicked.connect(self._handle_action_button)
         self._update_button_style()
+
+    def _blend_color(self, base, accent, ratio):
+        mix = max(0.0, min(1.0, float(ratio)))
+        return QColor(
+            round(base.red() + (accent.red() - base.red()) * mix),
+            round(base.green() + (accent.green() - base.green()) * mix),
+            round(base.blue() + (accent.blue() - base.blue()) * mix),
+        )
 
     def _update_button_style(self):
         button_colors = get_neutral_button_colors()
-        self.send_button.setIcon(qta.icon('fa5s.paper-plane', color=button_colors["icon"].name()))
+        if self._request_active:
+            accent = get_semantic_color("status_error")
+            background = self._blend_color(button_colors["background"], accent, 0.26)
+            hover = self._blend_color(button_colors["hover"], accent, 0.30)
+            pressed = self._blend_color(button_colors["pressed"], accent, 0.24)
+            border = self._blend_color(button_colors["border"], accent, 0.42)
+            icon_color = button_colors["muted_icon"] if self._cancel_pending else QColor("#ffffff")
+            icon_name = 'fa5s.stop'
+            tooltip = "Cancelling..." if self._cancel_pending else "Cancel response"
+        else:
+            background = button_colors["background"]
+            hover = button_colors["hover"]
+            pressed = button_colors["pressed"]
+            border = button_colors["border"]
+            icon_color = button_colors["icon"]
+            icon_name = 'fa5s.paper-plane'
+            tooltip = "Send message"
+
+        self.send_button.setIcon(qta.icon(icon_name, color=icon_color.name()))
+        self.send_button.setToolTip(tooltip)
         self.send_button.setStyleSheet(
             f"""
             QPushButton {{
-                background-color: {button_colors["background"].name()};
-                border: 1px solid {button_colors["border"].name()};
+                background-color: {background.name()};
+                border: 1px solid {border.name()};
                 border-radius: 18px;
             }}
             QPushButton:hover {{
-                background-color: {button_colors["hover"].name()};
-                border-color: {button_colors["hover"].lighter(112).name()};
+                background-color: {hover.name()};
+                border-color: {hover.lighter(112).name()};
             }}
             QPushButton:pressed {{
-                background-color: {button_colors["pressed"].name()};
-                border-color: {button_colors["border"].darker(105).name()};
+                background-color: {pressed.name()};
+                border-color: {border.darker(105).name()};
+            }}
+            QPushButton:disabled {{
+                background-color: {background.darker(108).name()};
+                border-color: {border.darker(112).name()};
             }}
             """
         )
+
+    def _handle_action_button(self):
+        if self._request_active:
+            if not self._cancel_pending:
+                self.cancel_requested.emit(self)
+            return
+        self.send_message()
 
     def _add_bubble(self, text, is_user):
         bubble_item = ChatMessageBubbleItem(text, is_user)
@@ -335,10 +377,21 @@ class ConversationNode(QGraphicsObject, HoverAnimationMixin):
         self.set_input_enabled(True)
 
     def set_input_enabled(self, enabled: bool):
+        self._request_active = not enabled
+        if enabled:
+            self._cancel_pending = False
         self.message_input.setEnabled(enabled)
-        self.send_button.setEnabled(enabled)
+        self.send_button.setEnabled(enabled or not self._cancel_pending)
         self.set_typing(not enabled)
+        self._update_button_style()
         if enabled: self.message_input.setFocus()
+
+    def set_cancel_pending(self, pending: bool):
+        if not self._request_active:
+            return
+        self._cancel_pending = pending
+        self.send_button.setEnabled(not pending)
+        self._update_button_style()
     
     def set_history(self, history: list):
         self.internal_scene.clear()
