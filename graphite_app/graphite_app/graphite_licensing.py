@@ -2,6 +2,12 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
+
+def _is_llama_cpp_gguf_path(path_value) -> bool:
+    normalized = str(path_value or "").strip()
+    return bool(normalized) and normalized.lower().endswith(".gguf")
+
+
 class SettingsManager:
     NOTIFICATION_TYPES = ("info", "success", "warning", "error")
 
@@ -42,6 +48,28 @@ class SettingsManager:
                     state['ollama_model_scan_path'] = ''
                 if 'ollama_model_scan_locations' not in state:
                     state['ollama_model_scan_locations'] = []
+                if 'llama_cpp_chat_model_path' not in state:
+                    state['llama_cpp_chat_model_path'] = ''
+                if 'llama_cpp_title_model_path' not in state:
+                    state['llama_cpp_title_model_path'] = ''
+                if 'llama_cpp_reasoning_mode' not in state:
+                    state['llama_cpp_reasoning_mode'] = 'Thinking'
+                if 'llama_cpp_chat_format' not in state:
+                    state['llama_cpp_chat_format'] = ''
+                if 'llama_cpp_n_ctx' not in state:
+                    state['llama_cpp_n_ctx'] = 4096
+                if 'llama_cpp_n_gpu_layers' not in state:
+                    state['llama_cpp_n_gpu_layers'] = 0
+                if 'llama_cpp_n_threads' not in state:
+                    state['llama_cpp_n_threads'] = 0
+                if 'llama_cpp_scanned_models' not in state:
+                    state['llama_cpp_scanned_models'] = []
+                if 'llama_cpp_model_scan_mode' not in state:
+                    state['llama_cpp_model_scan_mode'] = ''
+                if 'llama_cpp_model_scan_path' not in state:
+                    state['llama_cpp_model_scan_path'] = ''
+                if 'llama_cpp_model_scan_locations' not in state:
+                    state['llama_cpp_model_scan_locations'] = []
                 if 'current_mode' not in state:
                     state['current_mode'] = 'Ollama (Local)'
                 if 'api_provider' not in state:
@@ -91,6 +119,17 @@ class SettingsManager:
             "ollama_model_scan_mode": "",
             "ollama_model_scan_path": "",
             "ollama_model_scan_locations": [],
+            "llama_cpp_chat_model_path": "",
+            "llama_cpp_title_model_path": "",
+            "llama_cpp_reasoning_mode": "Thinking",
+            "llama_cpp_chat_format": "",
+            "llama_cpp_n_ctx": 4096,
+            "llama_cpp_n_gpu_layers": 0,
+            "llama_cpp_n_threads": 0,
+            "llama_cpp_scanned_models": [],
+            "llama_cpp_model_scan_mode": "",
+            "llama_cpp_model_scan_path": "",
+            "llama_cpp_model_scan_locations": [],
             "current_mode": "Ollama (Local)",
             "api_provider": "OpenAI-Compatible",
             "api_base_url": "https://api.openai.com/v1",
@@ -258,6 +297,116 @@ class SettingsManager:
             key=str.lower,
         )
         self._save_state()
+
+    def get_llama_cpp_chat_model_path(self):
+        return str(self.state.get("llama_cpp_chat_model_path", "")).strip()
+
+    def set_llama_cpp_chat_model_path(self, model_path: str):
+        self.state["llama_cpp_chat_model_path"] = str(model_path or "").strip()
+        self._save_state()
+
+    def get_llama_cpp_title_model_path(self):
+        title_model = str(self.state.get("llama_cpp_title_model_path", "")).strip()
+        if title_model:
+            return title_model
+        return self.get_llama_cpp_chat_model_path()
+
+    def get_llama_cpp_title_model_override_path(self):
+        return str(self.state.get("llama_cpp_title_model_path", "")).strip()
+
+    def set_llama_cpp_title_model_path(self, model_path: str):
+        self.state["llama_cpp_title_model_path"] = str(model_path or "").strip()
+        self._save_state()
+
+    def get_llama_cpp_reasoning_mode(self):
+        return self.state.get("llama_cpp_reasoning_mode", "Thinking")
+
+    def set_llama_cpp_reasoning_mode(self, mode: str):
+        if mode in ['Thinking', 'Quick']:
+            self.state['llama_cpp_reasoning_mode'] = mode
+            self._save_state()
+
+    def get_llama_cpp_chat_format(self):
+        return str(self.state.get("llama_cpp_chat_format", "")).strip()
+
+    def set_llama_cpp_chat_format(self, chat_format: str):
+        self.state["llama_cpp_chat_format"] = str(chat_format or "").strip()
+        self._save_state()
+
+    def get_llama_cpp_n_ctx(self):
+        try:
+            return int(self.state.get("llama_cpp_n_ctx", 4096))
+        except (TypeError, ValueError):
+            return 4096
+
+    def get_llama_cpp_n_gpu_layers(self):
+        try:
+            return int(self.state.get("llama_cpp_n_gpu_layers", 0))
+        except (TypeError, ValueError):
+            return 0
+
+    def get_llama_cpp_n_threads(self):
+        try:
+            return int(self.state.get("llama_cpp_n_threads", 0))
+        except (TypeError, ValueError):
+            return 0
+
+    def get_llama_cpp_scanned_models(self):
+        models = self.state.get("llama_cpp_scanned_models", [])
+        if not isinstance(models, list):
+            return []
+        return [
+            str(model).strip()
+            for model in models
+            if _is_llama_cpp_gguf_path(model)
+        ]
+
+    def get_llama_cpp_model_scan_mode(self):
+        return str(self.state.get("llama_cpp_model_scan_mode", "")).strip()
+
+    def get_llama_cpp_model_scan_path(self):
+        return str(self.state.get("llama_cpp_model_scan_path", "")).strip()
+
+    def get_llama_cpp_model_scan_locations(self):
+        locations = self.state.get("llama_cpp_model_scan_locations", [])
+        if not isinstance(locations, list):
+            return []
+        return [str(location).strip() for location in locations if str(location).strip()]
+
+    def set_llama_cpp_runtime(self, *, n_ctx: int, n_gpu_layers: int, n_threads: int, chat_format: str):
+        self.state["llama_cpp_n_ctx"] = max(256, int(n_ctx))
+        self.state["llama_cpp_n_gpu_layers"] = int(n_gpu_layers)
+        self.state["llama_cpp_n_threads"] = max(0, int(n_threads))
+        self.state["llama_cpp_chat_format"] = str(chat_format or "").strip()
+        self._save_state()
+
+    def set_llama_cpp_model_scan_cache(self, models: list[str], scan_mode: str = "", scan_path: str = "", locations: list[str] | None = None):
+        self.state["llama_cpp_scanned_models"] = sorted(
+            {
+                str(model).strip()
+                for model in (models or [])
+                if _is_llama_cpp_gguf_path(model)
+            },
+            key=str.lower,
+        )
+        self.state["llama_cpp_model_scan_mode"] = str(scan_mode or "").strip()
+        self.state["llama_cpp_model_scan_path"] = str(scan_path or "").strip()
+        self.state["llama_cpp_model_scan_locations"] = sorted(
+            {str(location).strip() for location in (locations or []) if str(location).strip()},
+            key=str.lower,
+        )
+        self._save_state()
+
+    def get_llama_cpp_settings(self):
+        return {
+            "chat_model_path": self.get_llama_cpp_chat_model_path(),
+            "title_model_path": self.get_llama_cpp_title_model_override_path(),
+            "reasoning_mode": self.get_llama_cpp_reasoning_mode(),
+            "chat_format": self.get_llama_cpp_chat_format(),
+            "n_ctx": self.get_llama_cpp_n_ctx(),
+            "n_gpu_layers": self.get_llama_cpp_n_gpu_layers(),
+            "n_threads": self.get_llama_cpp_n_threads(),
+        }
             
     def get_current_mode(self):
         return self.state.get("current_mode", "Ollama (Local)")
