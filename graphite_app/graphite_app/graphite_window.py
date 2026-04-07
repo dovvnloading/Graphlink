@@ -226,7 +226,11 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
     def _get_current_system_prompt(self):
         if not self.settings_manager.get_enable_system_prompt():
             return ""
-        reasoning_mode = self.settings_manager.get_ollama_reasoning_mode()
+        current_mode = self.settings_manager.get_current_mode()
+        if current_mode == config.MODE_LLAMACPP_LOCAL:
+            reasoning_mode = self.settings_manager.get_llama_cpp_reasoning_mode()
+        else:
+            reasoning_mode = self.settings_manager.get_ollama_reasoning_mode()
         if reasoning_mode == "Thinking":
             return THINKING_INSTRUCTIONS_PROMPT + BASE_SYSTEM_PROMPT
         else:
@@ -547,8 +551,9 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         spacer = QWidget(); spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred); toolbar.addWidget(spacer)
         
         self.mode_combo = QComboBox()
-        self.mode_combo.addItem("Ollama (Local)", config.API_PROVIDER_OPENAI)
-        self.mode_combo.addItem("API Endpoint", config.API_PROVIDER_OPENAI)
+        self.mode_combo.addItem(config.MODE_OLLAMA_LOCAL, config.LOCAL_PROVIDER_OLLAMA)
+        self.mode_combo.addItem(config.MODE_LLAMACPP_LOCAL, config.LOCAL_PROVIDER_LLAMACPP)
+        self.mode_combo.addItem(config.MODE_API_ENDPOINT, config.API_PROVIDER_OPENAI)
         self.mode_combo.setMinimumWidth(150)
         
         current_mode = self.settings_manager.get_current_mode()
@@ -563,7 +568,7 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         about_btn = QToolButton(); about_btn.setText("About"); about_btn.clicked.connect(self.show_about_dialog); toolbar.addWidget(about_btn)
         self.help_btn = QToolButton(); self.help_btn.setText("Help"); self.help_btn.setObjectName("helpButton"); self.help_btn.clicked.connect(self.show_help); toolbar.addWidget(self.help_btn)
         
-        self.on_mode_changed(self.mode_combo.currentIndex())
+        self._initialize_saved_mode_on_startup()
 
     def _toggle_plugin_picker(self):
         if self.plugin_picker.isVisible():
@@ -780,37 +785,85 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
 
         self.settings_panel.set_current_section_by_mode(self.mode_combo.currentText())
         self.settings_panel.show_for_anchor(self.settings_btn)
-    
-    def on_mode_changed(self, index):
-        mode_text = self.mode_combo.itemText(index)
-        self.settings_manager.set_current_mode(mode_text)
-        
-        if mode_text == "Ollama (Local)": 
-            api_provider.set_mode(False)
+
+    def _set_mode_combo_silently(self, mode_text):
+        if not hasattr(self, "mode_combo"):
+            return
+        target_index = self.mode_combo.findText(mode_text)
+        if target_index < 0:
+            return
+        self.mode_combo.blockSignals(True)
+        self.mode_combo.setCurrentIndex(target_index)
+        self.mode_combo.blockSignals(False)
+
+    def _initialize_mode(self, mode_text, *, show_dialogs):
+        if mode_text == config.MODE_OLLAMA_LOCAL:
+            api_provider.initialize_local_provider(config.LOCAL_PROVIDER_OLLAMA)
             self.settings_btn.setEnabled(True)
-        elif mode_text == "API Endpoint":
-            api_provider.set_mode(True)
+            return True
+
+        if mode_text == config.MODE_LLAMACPP_LOCAL:
+            api_provider.initialize_local_provider(
+                config.LOCAL_PROVIDER_LLAMACPP,
+                self.settings_manager.get_llama_cpp_settings(),
+            )
+            self.settings_btn.setEnabled(True)
+            return True
+
+        if mode_text == config.MODE_API_ENDPOINT:
             provider = self.settings_manager.get_api_provider()
             base_url = self.settings_manager.get_api_base_url()
-            
+
             saved_models = self.settings_manager.get_api_models()
             for task, model_name in saved_models.items():
                 api_provider.set_task_model(task, model_name)
 
-            try:
-                if provider == config.API_PROVIDER_OPENAI:
-                    api_key = self.settings_manager.get_openai_key()
-                    api_provider.initialize_api(provider, api_key, base_url)
-                else: 
-                    api_key = self.settings_manager.get_gemini_key()
-                    api_provider.initialize_api(provider, api_key)
-            except Exception as e:
-                QMessageBox.warning(
-                    self,
-                    "API Configuration Required",
-                    f"API Endpoint mode could not be initialized:\n\n{str(e)}"
-                )
+            if provider == config.API_PROVIDER_OPENAI:
+                api_key = self.settings_manager.get_openai_key()
+                api_provider.initialize_api(provider, api_key, base_url)
+            else:
+                api_key = self.settings_manager.get_gemini_key()
+                api_provider.initialize_api(provider, api_key)
             self.settings_btn.setEnabled(True)
+            return True
+
+        if show_dialogs:
+            QMessageBox.warning(
+                self,
+                "Unknown Mode",
+                f"Graphlink does not recognize the saved mode '{mode_text}'.",
+            )
+        return False
+    
+    def on_mode_changed(self, index):
+        mode_text = self.mode_combo.itemText(index)
+        self.settings_manager.set_current_mode(mode_text)
+        try:
+            self._initialize_mode(mode_text, show_dialogs=True)
+        except Exception as e:
+            title = (
+                "Llama.cpp Configuration Required"
+                if mode_text == config.MODE_LLAMACPP_LOCAL
+                else "API Configuration Required"
+                if mode_text == config.MODE_API_ENDPOINT
+                else "Ollama Initialization Error"
+            )
+            QMessageBox.warning(
+                self,
+                title,
+                f"{mode_text} could not be initialized:\n\n{str(e)}"
+            )
+
+    def _initialize_saved_mode_on_startup(self):
+        mode_text = self.mode_combo.currentText()
+        self.settings_manager.set_current_mode(mode_text)
+        try:
+            self._initialize_mode(mode_text, show_dialogs=False)
+        except Exception:
+            fallback_mode = config.MODE_OLLAMA_LOCAL
+            self._set_mode_combo_silently(fallback_mode)
+            self.settings_manager.set_current_mode(fallback_mode)
+            api_provider.initialize_local_provider(config.LOCAL_PROVIDER_OLLAMA)
 
     def setCurrentNode(self, node):
         self.current_node = node; text_content = ""
