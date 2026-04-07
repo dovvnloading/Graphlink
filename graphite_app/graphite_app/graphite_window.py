@@ -806,6 +806,7 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
             api_provider.initialize_local_provider(
                 config.LOCAL_PROVIDER_LLAMACPP,
                 self.settings_manager.get_llama_cpp_settings(),
+                preload_model=False,
             )
             self.settings_btn.setEnabled(True)
             return True
@@ -840,6 +841,12 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         self.settings_manager.set_current_mode(mode_text)
         try:
             self._initialize_mode(mode_text, show_dialogs=True)
+            if mode_text == config.MODE_LLAMACPP_LOCAL:
+                self.notification_banner.show_message(
+                    "Llama.cpp is configured. The GGUF will load on the first request instead of blocking startup or mode switching.",
+                    5000,
+                    "info",
+                )
         except Exception as e:
             title = (
                 "Llama.cpp Configuration Required"
