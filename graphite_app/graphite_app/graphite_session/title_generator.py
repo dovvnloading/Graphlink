@@ -121,7 +121,7 @@ class TitleGenerator:
 
     def generate_title(self, message):
         try:
-            if api_provider.USE_API_MODE:
+            if api_provider.is_api_mode() or api_provider.is_local_llama_cpp_mode():
                 messages = [
                     {"role": "system", "content": self.system_prompt},
                     {"role": "user", "content": f"Create a 2-3 word title for this message: {message}"},
