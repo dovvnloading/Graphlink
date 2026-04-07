@@ -481,6 +481,21 @@ def _normalize_llama_cpp_settings(settings: dict | None = None) -> dict:
     return normalized
 
 
+def _resolve_llama_cpp_thread_count(configured_threads: int) -> int:
+    configured = int(configured_threads or 0)
+    if configured > 0:
+        return configured
+
+    cpu_count = os.cpu_count() or 4
+    if cpu_count <= 2:
+        return 1
+    if cpu_count <= 4:
+        return max(1, cpu_count - 1)
+    if cpu_count <= 8:
+        return max(1, cpu_count - 2)
+    return max(1, cpu_count - max(2, cpu_count // 4))
+
+
 def _close_llama_cpp_clients():
     with _LLAMA_CPP_CLIENT_LOCK:
         clients = list(_LLAMA_CPP_CLIENT_CACHE.values())
@@ -623,12 +638,15 @@ def _get_llama_cpp_client(task: str):
     _validate_llama_cpp_model_path(model_path, task)
 
     normalized_path = os.path.abspath(model_path)
+    resolved_n_threads = _resolve_llama_cpp_thread_count(
+        int(LLAMA_CPP_SETTINGS.get("n_threads", 0) or 0)
+    )
     cache_key = (
         normalized_path,
         LLAMA_CPP_SETTINGS.get("chat_format", ""),
         int(LLAMA_CPP_SETTINGS.get("n_ctx", 4096) or 4096),
         int(LLAMA_CPP_SETTINGS.get("n_gpu_layers", 0) or 0),
-        int(LLAMA_CPP_SETTINGS.get("n_threads", 0) or 0),
+        resolved_n_threads,
     )
 
     with _LLAMA_CPP_CLIENT_LOCK:
@@ -645,8 +663,7 @@ def _get_llama_cpp_client(task: str):
         }
         if cache_key[1]:
             client_kwargs["chat_format"] = cache_key[1]
-        if cache_key[4] > 0:
-            client_kwargs["n_threads"] = cache_key[4]
+        client_kwargs["n_threads"] = cache_key[4]
 
         try:
             client = Llama(**client_kwargs)
@@ -1289,7 +1306,12 @@ def initialize_api(provider: str, api_key: str, base_url: str = None):
     return API_CLIENT
 
 
-def initialize_local_provider(provider: str, settings: dict | None = None):
+def initialize_local_provider(
+    provider: str,
+    settings: dict | None = None,
+    *,
+    preload_model: bool = False,
+):
     global USE_API_MODE, LOCAL_PROVIDER_TYPE, API_PROVIDER_TYPE, API_CLIENT, API_KEY, API_BASE_URL, LLAMA_CPP_SETTINGS
     USE_API_MODE = False
     LOCAL_PROVIDER_TYPE = provider
@@ -1306,12 +1328,18 @@ def initialize_local_provider(provider: str, settings: dict | None = None):
     if provider == config.LOCAL_PROVIDER_LLAMACPP:
         LLAMA_CPP_SETTINGS = _normalize_llama_cpp_settings(settings)
         _close_llama_cpp_clients()
+        _validate_llama_cpp_model_path(
+            _get_llama_cpp_model_path(config.TASK_CHAT),
+            config.TASK_CHAT,
+        )
         if LLAMA_CPP_SETTINGS.get("title_model_path"):
             _validate_llama_cpp_model_path(LLAMA_CPP_SETTINGS["title_model_path"], config.TASK_TITLE)
-        _get_llama_cpp_client(config.TASK_CHAT)
+        if preload_model:
+            _get_llama_cpp_client(config.TASK_CHAT)
         return {
             "provider": provider,
             "model_path": _get_llama_cpp_model_path(config.TASK_CHAT),
+            "preloaded": bool(preload_model),
         }
 
     raise ValueError(f"Unknown local provider: {provider}")
