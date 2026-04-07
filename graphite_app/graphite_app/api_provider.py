@@ -1,6 +1,7 @@
 import base64
 import json
 import os
+import threading
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -23,6 +24,7 @@ API_PROVIDER_TYPE = None
 API_CLIENT = None
 API_KEY = None
 API_BASE_URL = None
+LOCAL_PROVIDER_TYPE = config.LOCAL_PROVIDER_OLLAMA
 API_MODELS = {
     config.TASK_TITLE: None,
     config.TASK_CHAT: None,
@@ -31,6 +33,16 @@ API_MODELS = {
     config.TASK_WEB_VALIDATE: None,
     config.TASK_WEB_SUMMARIZE: None,
 }
+LLAMA_CPP_SETTINGS = {
+    "chat_model_path": "",
+    "title_model_path": "",
+    "chat_format": "",
+    "n_ctx": 4096,
+    "n_gpu_layers": 0,
+    "n_threads": 0,
+}
+_LLAMA_CPP_CLIENT_CACHE = {}
+_LLAMA_CPP_CLIENT_LOCK = threading.RLock()
 
 GEMINI_MODELS_STATIC = sorted([
     "gemini-3.1-pro-preview",
@@ -220,6 +232,101 @@ def scan_local_ollama_models(scan_path: str | None = None) -> dict:
     }
 
 
+def _normalize_llama_cpp_scan_root(path_value: str | None) -> Path | None:
+    normalized = str(path_value or "").strip()
+    if not normalized:
+        return None
+
+    candidate = Path(normalized).expanduser()
+    if candidate.is_file():
+        return candidate.parent
+    return candidate
+
+
+def _iter_existing_llama_cpp_scan_roots() -> list[Path]:
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    candidate_roots = [
+        os.environ.get("LLAMA_CPP_MODELS"),
+        Path.home() / "models",
+        Path.home() / "llama.cpp",
+        Path.home() / "llama.cpp" / "models",
+        Path.home() / "Downloads",
+        Path.home() / "Documents",
+        Path.home() / "Desktop",
+        Path.home() / ".cache" / "lm-studio" / "models",
+        local_app_data and Path(local_app_data) / "llama.cpp" / "models",
+    ]
+
+    unique_roots: list[Path] = []
+    seen_roots: set[str] = set()
+    for raw_path in candidate_roots:
+        root = _normalize_llama_cpp_scan_root(raw_path)
+        if not root or not root.is_dir():
+            continue
+        resolved = str(root.resolve()).lower()
+        if resolved in seen_roots:
+            continue
+        seen_roots.add(resolved)
+        unique_roots.append(root)
+    return unique_roots
+
+
+def _collect_gguf_files_from_root(root_path: Path) -> list[str]:
+    discovered_models: set[str] = set()
+    skip_directories = {
+        ".git",
+        ".hg",
+        ".svn",
+        "__pycache__",
+        "node_modules",
+        "venv",
+        ".venv",
+    }
+
+    for current_root, dir_names, file_names in os.walk(root_path):
+        dir_names[:] = [
+            dir_name for dir_name in dir_names
+            if dir_name.lower() not in skip_directories
+        ]
+        for file_name in file_names:
+            if not file_name.lower().endswith(".gguf"):
+                continue
+            model_path = Path(current_root) / file_name
+            discovered_models.add(str(model_path.resolve()))
+
+    return sorted(discovered_models, key=str.lower)
+
+
+def scan_local_llama_cpp_models(scan_path: str | None = None) -> dict:
+    if scan_path:
+        root = _normalize_llama_cpp_scan_root(scan_path)
+        if not root or not root.exists():
+            raise RuntimeError(f"Scan folder does not exist: {scan_path}")
+        if not root.is_dir():
+            raise RuntimeError(f"Scan folder is not a directory: {scan_path}")
+        scan_roots = [root]
+        scan_mode = "folder"
+        scan_root = str(root.resolve())
+    else:
+        scan_roots = _iter_existing_llama_cpp_scan_roots()
+        scan_mode = "system"
+        scan_root = ""
+
+    discovered_models: set[str] = set()
+    scanned_locations: list[str] = []
+
+    for root in scan_roots:
+        discovered_models.update(_collect_gguf_files_from_root(root))
+        scanned_locations.append(str(root.resolve()))
+
+    return {
+        "models": sorted(discovered_models, key=str.lower),
+        "scan_mode": scan_mode,
+        "scan_path": scan_root,
+        "locations": sorted(set(scanned_locations), key=str.lower),
+    }
+
+
 def _read_attachment_bytes(file_path: str, attachment_kind: str) -> bytes:
     resolved_path = os.path.abspath(file_path or "")
     attachment_name = os.path.basename(resolved_path or file_path or "")
@@ -359,6 +466,197 @@ def _prepare_ollama_messages(messages: list) -> list:
         else:
             processed_messages.append(msg)
     return processed_messages
+
+
+def _normalize_llama_cpp_settings(settings: dict | None = None) -> dict:
+    raw_settings = settings or {}
+    normalized = {
+        "chat_model_path": str(raw_settings.get("chat_model_path", "")).strip(),
+        "title_model_path": str(raw_settings.get("title_model_path", "")).strip(),
+        "chat_format": str(raw_settings.get("chat_format", "")).strip(),
+        "n_ctx": max(256, int(raw_settings.get("n_ctx", 4096) or 4096)),
+        "n_gpu_layers": int(raw_settings.get("n_gpu_layers", 0) or 0),
+        "n_threads": max(0, int(raw_settings.get("n_threads", 0) or 0)),
+    }
+    return normalized
+
+
+def _close_llama_cpp_clients():
+    with _LLAMA_CPP_CLIENT_LOCK:
+        clients = list(_LLAMA_CPP_CLIENT_CACHE.values())
+        _LLAMA_CPP_CLIENT_CACHE.clear()
+
+    for client in clients:
+        close_fn = getattr(client, "close", None)
+        if callable(close_fn):
+            try:
+                close_fn()
+            except Exception:
+                pass
+
+
+def _load_llama_cpp_class():
+    try:
+        from llama_cpp import Llama
+    except ImportError as exc:
+        raise RuntimeError(
+            "llama-cpp-python is required for Llama.cpp local mode.\n\n"
+            "Install it with: pip install llama-cpp-python"
+        ) from exc
+    return Llama
+
+
+def _get_llama_cpp_model_path(task: str) -> str:
+    if task == config.TASK_TITLE:
+        title_model_path = LLAMA_CPP_SETTINGS.get("title_model_path", "")
+        if title_model_path:
+            return title_model_path
+    return LLAMA_CPP_SETTINGS.get("chat_model_path", "")
+
+
+def _validate_llama_cpp_model_path(model_path: str, task: str):
+    raw_model_path = str(model_path or "").strip()
+    if not raw_model_path:
+        task_name = "chat" if task != config.TASK_TITLE else "chat naming"
+        raise RuntimeError(f"No Llama.cpp {task_name} model file is configured.")
+    normalized_path = os.path.abspath(raw_model_path)
+    if not os.path.isfile(normalized_path):
+        raise RuntimeError(f"Llama.cpp model file was not found: {normalized_path}")
+    if not normalized_path.lower().endswith(".gguf"):
+        raise RuntimeError(
+            "Llama.cpp local mode expects a GGUF model file.\n\n"
+            f"Received: {normalized_path}"
+        )
+
+
+def _llama_cpp_contains_unsupported_media(messages: list) -> str | None:
+    for message in messages:
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            part_type = str(part.get("type", "")).strip().lower()
+            if part_type == "audio_file":
+                return "audio"
+            if part_type == "image_bytes":
+                return "image"
+    return None
+
+
+def _assert_llama_cpp_message_support(messages: list):
+    unsupported_kind = _llama_cpp_contains_unsupported_media(messages)
+    if not unsupported_kind:
+        return
+
+    raise RuntimeError(
+        f"Llama.cpp local mode does not currently support {unsupported_kind} attachments in Graphlink.\n\n"
+        "Use Ollama or Gemini for multimodal requests, or retry with text-only input."
+    )
+
+
+def _prepare_llama_cpp_messages(messages: list) -> list:
+    processed_messages = []
+    for msg in messages:
+        content = msg.get("content")
+        if isinstance(content, list):
+            text_parts = []
+            for part in content:
+                if not isinstance(part, dict):
+                    text_parts.append(str(part))
+                    continue
+                if part.get("type") == "text":
+                    text_parts.append(str(part.get("text", "")))
+            processed_messages.append(
+                {
+                    "role": msg["role"],
+                    "content": "\n".join(part for part in text_parts if part),
+                }
+            )
+        else:
+            processed_messages.append(
+                {
+                    "role": msg["role"],
+                    "content": str(content or ""),
+                }
+            )
+    return processed_messages
+
+
+def _prepare_llama_cpp_kwargs(kwargs: dict) -> dict:
+    prepared = dict(kwargs or {})
+    if prepared.pop("format", None) == "json":
+        prepared.setdefault("response_format", {"type": "json_object"})
+    prepared.pop("response_mime_type", None)
+    return prepared
+
+
+def _extract_llama_cpp_text(response) -> str:
+    choices = _extract_response_field(response, "choices", [])
+    if not choices:
+        raise RuntimeError("Llama.cpp returned no completion choices.")
+
+    first_choice = choices[0]
+    message = _extract_response_field(first_choice, "message", {})
+    content = _extract_response_field(message, "content")
+
+    if isinstance(content, list):
+        return "".join(
+            str(part.get("text", ""))
+            for part in content
+            if isinstance(part, dict) and part.get("type") == "text"
+        ).strip()
+
+    if content is not None:
+        return str(content).strip()
+
+    fallback_text = _extract_response_field(first_choice, "text")
+    if fallback_text is not None:
+        return str(fallback_text).strip()
+
+    raise RuntimeError("Llama.cpp returned an empty response.")
+
+
+def _get_llama_cpp_client(task: str):
+    model_path = _get_llama_cpp_model_path(task)
+    _validate_llama_cpp_model_path(model_path, task)
+
+    normalized_path = os.path.abspath(model_path)
+    cache_key = (
+        normalized_path,
+        LLAMA_CPP_SETTINGS.get("chat_format", ""),
+        int(LLAMA_CPP_SETTINGS.get("n_ctx", 4096) or 4096),
+        int(LLAMA_CPP_SETTINGS.get("n_gpu_layers", 0) or 0),
+        int(LLAMA_CPP_SETTINGS.get("n_threads", 0) or 0),
+    )
+
+    with _LLAMA_CPP_CLIENT_LOCK:
+        cached_client = _LLAMA_CPP_CLIENT_CACHE.get(cache_key)
+        if cached_client is not None:
+            return cached_client
+
+        Llama = _load_llama_cpp_class()
+        client_kwargs = {
+            "model_path": normalized_path,
+            "n_ctx": cache_key[2],
+            "n_gpu_layers": cache_key[3],
+            "verbose": False,
+        }
+        if cache_key[1]:
+            client_kwargs["chat_format"] = cache_key[1]
+        if cache_key[4] > 0:
+            client_kwargs["n_threads"] = cache_key[4]
+
+        try:
+            client = Llama(**client_kwargs)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed to load the Llama.cpp model '{normalized_path}': {exc}"
+            ) from exc
+
+        _LLAMA_CPP_CLIENT_CACHE[cache_key] = client
+        return client
 
 
 def _decode_base64_image(image_data: str) -> bytes:
@@ -781,32 +1079,49 @@ def chat(task: str, messages: list, **kwargs) -> dict:
     try:
         _raise_if_cancelled(cancel_event)
         if not USE_API_MODE:
-            model = config.OLLAMA_MODELS.get(task)
-            if not model:
-                raise ValueError(f"No Ollama model configured for task: {task}")
+            if LOCAL_PROVIDER_TYPE == config.LOCAL_PROVIDER_OLLAMA:
+                model = config.OLLAMA_MODELS.get(task)
+                if not model:
+                    raise ValueError(f"No Ollama model configured for task: {task}")
 
-            _assert_ollama_audio_support(model, messages)
-            ollama_messages = _prepare_ollama_messages(messages)
+                _assert_ollama_audio_support(model, messages)
+                ollama_messages = _prepare_ollama_messages(messages)
 
-            ollama_kwargs = kwargs.copy()
-            if task == config.TASK_CHAT and ("qwen3" in model.lower() or "deepseek" in model.lower()):
-                ollama_kwargs["think"] = True
+                ollama_kwargs = kwargs.copy()
+                if task == config.TASK_CHAT and ("qwen3" in model.lower() or "deepseek" in model.lower()):
+                    ollama_kwargs["think"] = True
 
-            response = ollama.chat(model=model, messages=ollama_messages, **ollama_kwargs)
-            _raise_if_cancelled(cancel_event)
+                response = ollama.chat(model=model, messages=ollama_messages, **ollama_kwargs)
+                _raise_if_cancelled(cancel_event)
 
-            full_response_content = response["message"].get("content", "")
-            reasoning = response["message"].get("thinking")
+                full_response_content = response["message"].get("content", "")
+                reasoning = response["message"].get("thinking")
 
-            if reasoning:
-                full_response_content = f"<think>{reasoning}</think>\n{full_response_content}"
+                if reasoning:
+                    full_response_content = f"<think>{reasoning}</think>\n{full_response_content}"
 
-            return {
-                "message": {
-                    "content": full_response_content,
-                    "role": "assistant",
+                return {
+                    "message": {
+                        "content": full_response_content,
+                        "role": "assistant",
+                    }
                 }
-            }
+
+            if LOCAL_PROVIDER_TYPE == config.LOCAL_PROVIDER_LLAMACPP:
+                _assert_llama_cpp_message_support(messages)
+                llama_messages = _prepare_llama_cpp_messages(messages)
+                llama_kwargs = _prepare_llama_cpp_kwargs(kwargs)
+                client = _get_llama_cpp_client(task)
+                response = client.create_chat_completion(messages=llama_messages, **llama_kwargs)
+                _raise_if_cancelled(cancel_event)
+                return {
+                    "message": {
+                        "content": _extract_llama_cpp_text(response),
+                        "role": "assistant",
+                    }
+                }
+
+            raise RuntimeError(f"Unsupported local provider: {LOCAL_PROVIDER_TYPE}")
 
         if not API_CLIENT:
             raise RuntimeError("API client not initialized. Configure API settings first.")
@@ -937,7 +1252,9 @@ def chat(task: str, messages: list, **kwargs) -> dict:
 
 
 def initialize_api(provider: str, api_key: str, base_url: str = None):
-    global API_PROVIDER_TYPE, API_CLIENT, API_KEY, API_BASE_URL
+    global USE_API_MODE, API_PROVIDER_TYPE, API_CLIENT, API_KEY, API_BASE_URL
+    USE_API_MODE = True
+    _close_llama_cpp_clients()
     API_PROVIDER_TYPE = provider
     API_KEY = api_key
     API_BASE_URL = base_url
@@ -972,6 +1289,34 @@ def initialize_api(provider: str, api_key: str, base_url: str = None):
     return API_CLIENT
 
 
+def initialize_local_provider(provider: str, settings: dict | None = None):
+    global USE_API_MODE, LOCAL_PROVIDER_TYPE, API_PROVIDER_TYPE, API_CLIENT, API_KEY, API_BASE_URL, LLAMA_CPP_SETTINGS
+    USE_API_MODE = False
+    LOCAL_PROVIDER_TYPE = provider
+    API_PROVIDER_TYPE = None
+    API_CLIENT = None
+    API_KEY = None
+    API_BASE_URL = None
+
+    if provider == config.LOCAL_PROVIDER_OLLAMA:
+        _close_llama_cpp_clients()
+        LLAMA_CPP_SETTINGS = _normalize_llama_cpp_settings()
+        return {"provider": provider}
+
+    if provider == config.LOCAL_PROVIDER_LLAMACPP:
+        LLAMA_CPP_SETTINGS = _normalize_llama_cpp_settings(settings)
+        _close_llama_cpp_clients()
+        if LLAMA_CPP_SETTINGS.get("title_model_path"):
+            _validate_llama_cpp_model_path(LLAMA_CPP_SETTINGS["title_model_path"], config.TASK_TITLE)
+        _get_llama_cpp_client(config.TASK_CHAT)
+        return {
+            "provider": provider,
+            "model_path": _get_llama_cpp_model_path(config.TASK_CHAT),
+        }
+
+    raise ValueError(f"Unknown local provider: {provider}")
+
+
 def get_available_models():
     if not API_CLIENT:
         raise RuntimeError("API client not initialized")
@@ -1001,9 +1346,29 @@ def get_task_models() -> dict:
     return API_MODELS.copy()
 
 
+def is_api_mode() -> bool:
+    return USE_API_MODE
+
+
+def is_local_ollama_mode() -> bool:
+    return not USE_API_MODE and LOCAL_PROVIDER_TYPE == config.LOCAL_PROVIDER_OLLAMA
+
+
+def is_local_llama_cpp_mode() -> bool:
+    return not USE_API_MODE and LOCAL_PROVIDER_TYPE == config.LOCAL_PROVIDER_LLAMACPP
+
+
 def get_mode() -> str:
-    return "API" if USE_API_MODE else "Ollama"
+    if USE_API_MODE:
+        return "API"
+    return LOCAL_PROVIDER_TYPE
 
 
 def is_configured() -> bool:
-    return API_CLIENT is not None and all(API_MODELS.values())
+    if USE_API_MODE:
+        return API_CLIENT is not None and all(API_MODELS.values())
+    if LOCAL_PROVIDER_TYPE == config.LOCAL_PROVIDER_OLLAMA:
+        return bool(config.OLLAMA_MODELS.get(config.TASK_CHAT))
+    if LOCAL_PROVIDER_TYPE == config.LOCAL_PROVIDER_LLAMACPP:
+        return bool(_get_llama_cpp_model_path(config.TASK_CHAT))
+    return False
