@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QComboBox, QFileDialog, QFormLayout,
     QFrame, QGraphicsDropShadowEffect, QHBoxLayout, QLabel, QLineEdit,
     QListWidget, QListWidgetItem, QMessageBox, QPushButton, QRadioButton,
-    QScrollArea, QSizePolicy, QStackedWidget, QVBoxLayout, QWidget
+    QScrollArea, QSizePolicy, QSpinBox, QStackedWidget, QVBoxLayout, QWidget
 )
 
 import api_provider
@@ -182,6 +182,10 @@ class SettingsComboBox(QComboBox):
     def __init__(self, parent=None, placeholder_text=None):
         super().__init__(parent)
         self.setObjectName("settingsComboBox")
+        self.setMinimumWidth(0)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.setMinimumContentsLength(1)
         if placeholder_text:
             self.setPlaceholderText(placeholder_text)
 
@@ -217,6 +221,25 @@ class SettingsComboBox(QComboBox):
         if not self._popup_closing:
             super().hidePopup()
 
+    def wheelEvent(self, event):
+        if self.hasFocus() or self._popup.isVisible():
+            super().wheelEvent(event)
+            return
+        event.ignore()
+
+
+class SettingsSpinBox(QSpinBox):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMinimumWidth(0)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+    def wheelEvent(self, event):
+        if self.hasFocus():
+            super().wheelEvent(event)
+            return
+        event.ignore()
+
 
 class OllamaModelScanWorker(QThread):
     finished = Signal(dict)
@@ -232,6 +255,32 @@ class OllamaModelScanWorker(QThread):
             self.finished.emit(results)
         except Exception as exc:
             self.error.emit(str(exc))
+
+
+class LlamaCppModelScanWorker(QThread):
+    finished = Signal(dict)
+    error = Signal(str)
+
+    def __init__(self, scan_path=None, parent=None):
+        super().__init__(parent)
+        self.scan_path = scan_path
+
+    def run(self):
+        try:
+            results = api_provider.scan_local_llama_cpp_models(self.scan_path)
+            self.finished.emit(results)
+        except Exception as exc:
+            self.error.emit(str(exc))
+
+
+def _settings_file_dialog_parent(widget):
+    window = widget.window() if widget else None
+    if window is not None:
+        parent_widget = window.parentWidget() if hasattr(window, "parentWidget") else None
+        if parent_widget is not None:
+            return parent_widget
+        return window
+    return widget
 
 
 class OllamaSettingsWidget(QWidget):
@@ -443,7 +492,11 @@ class OllamaSettingsWidget(QWidget):
 
     def scan_selected_folder(self):
         initial_directory = self.settings_manager.get_ollama_model_scan_path() or str(os.path.expanduser("~"))
-        selected_directory = QFileDialog.getExistingDirectory(self, "Select Ollama Folder to Scan", initial_directory)
+        selected_directory = QFileDialog.getExistingDirectory(
+            _settings_file_dialog_parent(self),
+            "Select Ollama Folder to Scan",
+            initial_directory,
+        )
         if not selected_directory:
             return
         self._start_scan_worker(selected_directory)
@@ -564,6 +617,423 @@ class OllamaSettingsWidget(QWidget):
     def reset_button(self):
         self.validate_button.setEnabled(True)
         self.validate_button.setText("Validate and Pull Model")
+
+
+class LlamaCppSettingsWidget(QWidget):
+    def __init__(self, settings_manager, parent=None):
+        super().__init__(parent)
+        self.settings_manager = settings_manager
+        self.scan_worker = None
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(15, 15, 15, 15)
+
+        info_label = QLabel(
+            "Configure direct local GGUF model access through llama-cpp-python. "
+            "This mode loads the selected GGUF file into the app directly instead of calling a local server "
+            "or reusing Ollama's internal model store."
+        )
+        info_label.setWordWrap(True)
+        info_label.setStyleSheet("color: #d4d4d4; margin-bottom: 15px;")
+        layout.addWidget(info_label)
+
+        form_layout = QFormLayout()
+        form_layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapAllRows)
+        form_layout.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+
+        reasoning_mode_label = QLabel("Reasoning Mode:")
+        reasoning_mode_label.setStyleSheet("color: #ffffff; font-weight: bold;")
+
+        self.thinking_radio = QRadioButton("Thinking Mode (Enable CoT)")
+        self.quick_radio = QRadioButton("Quick Mode (No CoT)")
+        self.reasoning_group = QButtonGroup(self)
+        self.reasoning_group.addButton(self.thinking_radio)
+        self.reasoning_group.addButton(self.quick_radio)
+
+        reasoning_layout = QHBoxLayout()
+        reasoning_layout.addWidget(self.thinking_radio)
+        reasoning_layout.addWidget(self.quick_radio)
+        reasoning_layout.addStretch()
+        form_layout.addRow(reasoning_mode_label, reasoning_layout)
+
+        saved_reasoning_mode = self.settings_manager.get_llama_cpp_reasoning_mode()
+        if saved_reasoning_mode == "Thinking":
+            self.thinking_radio.setChecked(True)
+        else:
+            self.quick_radio.setChecked(True)
+
+        saved_chat_model = self.settings_manager.get_llama_cpp_chat_model_path()
+        saved_title_model = self.settings_manager.get_llama_cpp_title_model_override_path()
+        self.models = self._build_model_cache(saved_chat_model, saved_title_model)
+
+        self.current_model_label = QLabel()
+        self.current_model_label.setStyleSheet("color: #2ecc71;")
+        form_layout.addRow("Current Active GGUF:", self.current_model_label)
+
+        scan_controls = QHBoxLayout()
+        self.system_scan_button = QPushButton("System Scan")
+        self.system_scan_button.clicked.connect(self.scan_system_for_models)
+        self.folder_scan_button = QPushButton("Scan Folder...")
+        self.folder_scan_button.clicked.connect(self.scan_selected_folder)
+        scan_controls.addWidget(self.system_scan_button)
+        scan_controls.addWidget(self.folder_scan_button)
+        scan_controls.addStretch()
+        form_layout.addRow("Available GGUF Scan:", scan_controls)
+
+        self.scan_summary_label = QLabel(self._get_scan_summary_text())
+        self.scan_summary_label.setWordWrap(True)
+        self.scan_summary_label.setStyleSheet("color: #9fa6ad;")
+        form_layout.addRow("", self.scan_summary_label)
+
+        self.chat_model_combo = SettingsComboBox()
+        self.chat_model_combo.setMinimumWidth(0)
+        self.chat_model_combo.addItems([""] + self.models)
+        self.chat_model_combo.currentTextChanged.connect(self.on_chat_combo_change)
+        form_layout.addRow("Scanned Chat Model:", self.chat_model_combo)
+
+        self.chat_model_input = QLineEdit(saved_chat_model)
+        self.chat_model_input.setMinimumWidth(0)
+        self.chat_model_input.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.chat_model_input.textChanged.connect(self._update_current_model_label)
+        self.chat_model_input.textChanged.connect(self.on_chat_text_change)
+        browse_chat_button = QPushButton("Browse...")
+        browse_chat_button.clicked.connect(self.browse_chat_model)
+        chat_model_row = QHBoxLayout()
+        chat_model_row.addWidget(self.chat_model_input, 1)
+        chat_model_row.addWidget(browse_chat_button)
+        form_layout.addRow("Chat Model File:", chat_model_row)
+
+        self.title_model_combo = SettingsComboBox()
+        self.title_model_combo.setMinimumWidth(0)
+        self.title_model_combo.addItems([""] + self.models)
+        self.title_model_combo.currentTextChanged.connect(self.on_title_combo_change)
+        form_layout.addRow("Scanned Naming Model:", self.title_model_combo)
+
+        self.title_model_input = QLineEdit(saved_title_model)
+        self.title_model_input.setMinimumWidth(0)
+        self.title_model_input.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.title_model_input.textChanged.connect(self.on_title_text_change)
+        browse_title_button = QPushButton("Browse...")
+        browse_title_button.clicked.connect(self.browse_title_model)
+        title_model_row = QHBoxLayout()
+        title_model_row.addWidget(self.title_model_input, 1)
+        title_model_row.addWidget(browse_title_button)
+        form_layout.addRow("Chat Naming File:", title_model_row)
+
+        self.chat_format_input = QLineEdit(self.settings_manager.get_llama_cpp_chat_format())
+        self.chat_format_input.setMinimumWidth(0)
+        self.chat_format_input.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        form_layout.addRow("Chat Format Override:", self.chat_format_input)
+
+        self.n_ctx_spin = SettingsSpinBox()
+        self.n_ctx_spin.setRange(256, 131072)
+        self.n_ctx_spin.setSingleStep(256)
+        self.n_ctx_spin.setValue(self.settings_manager.get_llama_cpp_n_ctx())
+        form_layout.addRow("Context Window:", self.n_ctx_spin)
+
+        self.n_gpu_layers_spin = SettingsSpinBox()
+        self.n_gpu_layers_spin.setRange(-1, 9999)
+        self.n_gpu_layers_spin.setValue(self.settings_manager.get_llama_cpp_n_gpu_layers())
+        self.n_gpu_layers_spin.setToolTip("Use -1 to offload as many layers as the backend can fit.")
+        form_layout.addRow("GPU Layers:", self.n_gpu_layers_spin)
+
+        self.n_threads_spin = SettingsSpinBox()
+        self.n_threads_spin.setRange(0, 256)
+        self.n_threads_spin.setSpecialValueText("Auto")
+        self.n_threads_spin.setValue(self.settings_manager.get_llama_cpp_n_threads())
+        self.n_threads_spin.setToolTip("Set 0 to let llama-cpp-python choose the thread count automatically.")
+        form_layout.addRow("CPU Threads:", self.n_threads_spin)
+
+        layout.addLayout(form_layout)
+
+        help_label = QLabel(
+            "Leave Chat Format Override blank to let the GGUF metadata decide. "
+            "If a model ships without a usable chat template, enter a specific chat format manually."
+        )
+        help_label.setWordWrap(True)
+        help_label.setStyleSheet("color: #9fa6ad; margin-top: 4px;")
+        layout.addWidget(help_label)
+
+        title_help = QLabel(
+            "Chat Naming File is optional. Leave it empty to reuse the main chat model instead of loading a second GGUF."
+        )
+        title_help.setWordWrap(True)
+        title_help.setStyleSheet("color: #9fa6ad; margin-top: 2px;")
+        layout.addWidget(title_help)
+
+        scan_help = QLabel(
+            "System scan looks through common local model folders for `.gguf` files only. "
+            "Folder scan lets you point straight at a custom model directory. Ollama-managed manifests and blobs "
+            "are not valid llama.cpp model files here."
+        )
+        scan_help.setWordWrap(True)
+        scan_help.setStyleSheet("color: #9fa6ad; margin-top: 2px;")
+        layout.addWidget(scan_help)
+
+        self.status_label = QLabel("Choose a GGUF file and save settings.")
+        self.status_label.setWordWrap(True)
+        self.status_label.setStyleSheet("color: #e67e22; min-height: 40px;")
+        layout.addWidget(self.status_label)
+        layout.addStretch()
+
+        button_layout = QHBoxLayout()
+        self.save_button = QPushButton("Save Settings")
+        self.save_button.clicked.connect(self.save_settings)
+        button_layout.addStretch()
+        button_layout.addWidget(self.save_button)
+        layout.addLayout(button_layout)
+
+        self._update_current_model_label(saved_chat_model)
+        self._refresh_model_combos()
+
+    def _restore_settings_panel(self):
+        settings_dialog = self.window()
+        dialog_parent = _settings_file_dialog_parent(self)
+        if (
+            settings_dialog is not None
+            and hasattr(settings_dialog, "show_for_anchor")
+            and not settings_dialog.isVisible()
+            and dialog_parent is not None
+            and hasattr(dialog_parent, "settings_btn")
+        ):
+            settings_dialog.set_current_section(config.MODE_LLAMACPP_LOCAL)
+            settings_dialog.show_for_anchor(dialog_parent.settings_btn)
+
+    def _build_model_cache(self, *extra_models):
+        cached_models = self.settings_manager.get_llama_cpp_scanned_models()
+        combined_models = {
+            str(model).strip()
+            for model in [*cached_models, *extra_models]
+            if str(model).strip()
+        }
+        return sorted(combined_models, key=str.lower)
+
+    def _get_scan_summary_text(self):
+        scan_mode = self.settings_manager.get_llama_cpp_model_scan_mode()
+        scan_path = self.settings_manager.get_llama_cpp_model_scan_path()
+        cached_models = self.settings_manager.get_llama_cpp_scanned_models()
+        has_saved_scan = bool(scan_mode or scan_path or self.settings_manager.get_llama_cpp_model_scan_locations())
+        if not has_saved_scan:
+            return "No saved GGUF scan yet. Run a system scan or choose a folder to build the local model list."
+        if not cached_models:
+            return "The last GGUF scan is saved, but it did not find any models."
+        if scan_mode == "folder" and scan_path:
+            return f"Using saved scan from folder: {scan_path}"
+        if scan_mode == "system":
+            return "Using saved system scan results from common local model folders."
+        return "Using saved scanned GGUF model list."
+
+    def _refresh_model_combos(self):
+        current_chat_text = self.chat_model_input.text().strip()
+        current_title_text = self.title_model_input.text().strip()
+
+        self.chat_model_combo.blockSignals(True)
+        self.chat_model_combo.clear()
+        self.chat_model_combo.addItems([""] + self.models)
+        if current_chat_text in self.models:
+            self.chat_model_combo.setCurrentText(current_chat_text)
+        else:
+            self.chat_model_combo.setCurrentIndex(0)
+        self.chat_model_combo.blockSignals(False)
+
+        self.title_model_combo.blockSignals(True)
+        self.title_model_combo.clear()
+        self.title_model_combo.addItems([""] + self.models)
+        if current_title_text in self.models:
+            self.title_model_combo.setCurrentText(current_title_text)
+        else:
+            self.title_model_combo.setCurrentIndex(0)
+        self.title_model_combo.blockSignals(False)
+
+        self.scan_summary_label.setText(self._get_scan_summary_text())
+
+    def _set_scan_buttons_enabled(self, enabled):
+        self.system_scan_button.setEnabled(enabled)
+        self.folder_scan_button.setEnabled(enabled)
+
+    def _select_model_file(self, caption, initial_path):
+        initial_location = initial_path or self.settings_manager.get_llama_cpp_model_scan_path() or str(os.path.expanduser("~"))
+        dialog_parent = _settings_file_dialog_parent(self)
+        dialog = QFileDialog(dialog_parent, caption, initial_location, "GGUF Models (*.gguf);;All Files (*.*)")
+        dialog.setFileMode(QFileDialog.FileMode.ExistingFile)
+        dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptOpen)
+        if dialog.exec() == QFileDialog.DialogCode.Accepted:
+            selected_files = dialog.selectedFiles()
+            self._restore_settings_panel()
+            return selected_files[0] if selected_files else ""
+        self._restore_settings_panel()
+        return ""
+
+    def scan_system_for_models(self):
+        self._start_scan_worker()
+
+    def scan_selected_folder(self):
+        initial_directory = self.settings_manager.get_llama_cpp_model_scan_path() or str(os.path.expanduser("~"))
+        selected_directory = QFileDialog.getExistingDirectory(
+            _settings_file_dialog_parent(self),
+            "Select Folder to Scan for GGUF Models",
+            initial_directory,
+        )
+        self._restore_settings_panel()
+        if not selected_directory:
+            return
+        self._start_scan_worker(selected_directory)
+
+    def _start_scan_worker(self, scan_path=None):
+        if self.scan_worker and self.scan_worker.isRunning():
+            return
+
+        self._set_scan_buttons_enabled(False)
+        if scan_path:
+            self._set_status(f"Scanning folder for GGUF models: {scan_path}", "#3498db")
+        else:
+            self._set_status("Scanning common local folders for GGUF models...", "#3498db")
+
+        self.scan_worker = LlamaCppModelScanWorker(scan_path, self)
+        self.scan_worker.finished.connect(self.handle_scan_finished)
+        self.scan_worker.error.connect(self.handle_scan_error)
+        self.scan_worker.start()
+
+    def browse_chat_model(self):
+        selected_path = self._select_model_file("Select Llama.cpp Chat Model", self.chat_model_input.text().strip())
+        if selected_path:
+            self.chat_model_input.setText(selected_path)
+
+    def browse_title_model(self):
+        initial_path = self.title_model_input.text().strip() or self.chat_model_input.text().strip()
+        selected_path = self._select_model_file("Select Llama.cpp Chat Naming Model", initial_path)
+        if selected_path:
+            self.title_model_input.setText(selected_path)
+
+    def handle_scan_finished(self, results):
+        models = results.get("models", [])
+        self.settings_manager.set_llama_cpp_model_scan_cache(
+            models,
+            results.get("scan_mode", ""),
+            results.get("scan_path", ""),
+            results.get("locations", []),
+        )
+        self.models = self._build_model_cache(
+            self.chat_model_input.text().strip(),
+            self.title_model_input.text().strip(),
+        )
+        self._refresh_model_combos()
+        self._set_scan_buttons_enabled(True)
+
+        if models:
+            self._set_status(f"Found {len(models)} GGUF model file(s). Saved this list for reuse until the next scan.", "#2ecc71")
+        else:
+            self._set_status("Scan finished, but no GGUF models were found in the selected locations.", "#e67e22")
+
+        self.scan_worker = None
+
+    def handle_scan_error(self, error_message):
+        self._set_scan_buttons_enabled(True)
+        self._set_status(f"Scan failed: {error_message}", "#e74c3c")
+        self.scan_worker = None
+
+    def _set_status(self, message, color):
+        self.status_label.setText(message)
+        self.status_label.setStyleSheet(f"color: {color}; min-height: 40px;")
+
+    def _update_current_model_label(self, model_path):
+        normalized_path = str(model_path or "").strip()
+        if not normalized_path:
+            self.current_model_label.setText("<b>No model selected</b>")
+            self.current_model_label.setToolTip("")
+            return
+
+        self.current_model_label.setText(f"<b>{os.path.basename(normalized_path)}</b>")
+        self.current_model_label.setToolTip(normalized_path)
+
+    def on_chat_combo_change(self, text):
+        self.chat_model_input.blockSignals(True)
+        self.chat_model_input.setText(text)
+        self.chat_model_input.blockSignals(False)
+        self._update_current_model_label(text)
+
+    def on_chat_text_change(self, text):
+        self.chat_model_combo.blockSignals(True)
+        if text in self.models:
+            self.chat_model_combo.setCurrentText(text)
+        else:
+            self.chat_model_combo.setCurrentIndex(0)
+        self.chat_model_combo.blockSignals(False)
+
+    def on_title_combo_change(self, text):
+        self.title_model_input.blockSignals(True)
+        self.title_model_input.setText(text)
+        self.title_model_input.blockSignals(False)
+
+    def on_title_text_change(self, text):
+        self.title_model_combo.blockSignals(True)
+        if text in self.models:
+            self.title_model_combo.setCurrentText(text)
+        else:
+            self.title_model_combo.setCurrentIndex(0)
+        self.title_model_combo.blockSignals(False)
+
+    def _collect_settings(self):
+        chat_model_path = self.chat_model_input.text().strip()
+        title_model_path = self.title_model_input.text().strip()
+        chat_format = self.chat_format_input.text().strip()
+
+        if not chat_model_path:
+            raise ValueError("Chat Model File cannot be empty.")
+        if not os.path.isfile(chat_model_path):
+            raise ValueError(f"Chat model file was not found:\n{chat_model_path}")
+        if not chat_model_path.lower().endswith(".gguf"):
+            raise ValueError("Chat Model File must point to a `.gguf` file. Ollama-managed blob files are not supported here.")
+
+        if title_model_path:
+            if not os.path.isfile(title_model_path):
+                raise ValueError(f"Chat naming model file was not found:\n{title_model_path}")
+            if not title_model_path.lower().endswith(".gguf"):
+                raise ValueError("Chat Naming File must point to a `.gguf` file. Ollama-managed blob files are not supported here.")
+
+        return {
+            "chat_model_path": chat_model_path,
+            "title_model_path": title_model_path,
+            "reasoning_mode": "Thinking" if self.thinking_radio.isChecked() else "Quick",
+            "chat_format": chat_format,
+            "n_ctx": self.n_ctx_spin.value(),
+            "n_gpu_layers": self.n_gpu_layers_spin.value(),
+            "n_threads": self.n_threads_spin.value(),
+        }
+
+    def save_settings(self):
+        try:
+            settings = self._collect_settings()
+        except ValueError as exc:
+            self._set_status(str(exc), "#e74c3c")
+            QMessageBox.warning(self, "Invalid Llama.cpp Settings", str(exc))
+            return
+
+        if self.settings_manager.get_current_mode() == config.MODE_LLAMACPP_LOCAL:
+            try:
+                api_provider.initialize_local_provider(config.LOCAL_PROVIDER_LLAMACPP, settings)
+            except Exception as exc:
+                self._set_status(f"Failed to load the configured model: {exc}", "#e74c3c")
+                QMessageBox.critical(self, "Llama.cpp Initialization Error", str(exc))
+                return
+
+        self.settings_manager.set_llama_cpp_chat_model_path(settings["chat_model_path"])
+        self.settings_manager.set_llama_cpp_title_model_path(settings["title_model_path"])
+        self.settings_manager.set_llama_cpp_reasoning_mode(settings["reasoning_mode"])
+        self.settings_manager.set_llama_cpp_runtime(
+            n_ctx=settings["n_ctx"],
+            n_gpu_layers=settings["n_gpu_layers"],
+            n_threads=settings["n_threads"],
+            chat_format=settings["chat_format"],
+        )
+
+        main_window = self.window().parent()
+        if main_window and hasattr(main_window, 'reinitialize_agent'):
+            main_window.reinitialize_agent()
+
+        self._update_current_model_label(settings["chat_model_path"])
+        self._set_status("Llama.cpp settings have been saved.", "#2ecc71")
+        QMessageBox.information(self, "Saved", "Llama.cpp settings have been saved.")
 
 
 class ApiSettingsWidget(QWidget):
@@ -1060,8 +1530,9 @@ class SettingsCategoryButton(QPushButton):
 class SettingsDialog(QFrame):
     SECTION_DEFS = [
         ("General", "fa5s.sliders-h", "General app preferences, visuals, startup behavior, and assistant defaults."),
-        ("Ollama (Local)", "fa5s.microchip", "Choose your local chat model, naming model, and reasoning mode."),
-        ("API Endpoint", "fa5s.cloud", "Configure provider, keys, task models, and chat naming."),
+        (config.MODE_OLLAMA_LOCAL, "fa5s.microchip", "Choose your local chat model, naming model, and reasoning mode."),
+        (config.MODE_LLAMACPP_LOCAL, "fa5s.hdd", "Load a local GGUF through llama-cpp-python and tune its runtime."),
+        (config.MODE_API_ENDPOINT, "fa5s.cloud", "Configure provider, keys, task models, and chat naming."),
         ("Integrations", "fa5s.plug", "Store optional tokens used by plugins such as GitHub-backed code review."),
     ]
 
@@ -1163,13 +1634,15 @@ class SettingsDialog(QFrame):
 
         self.appearance_tab = AppearanceSettingsWidget(self.settings_manager)
         self.ollama_tab = OllamaSettingsWidget(self.settings_manager)
+        self.llama_cpp_tab = LlamaCppSettingsWidget(self.settings_manager)
         self.api_tab = ApiSettingsWidget(self.settings_manager)
         self.integrations_tab = IntegrationsSettingsWidget(self.settings_manager)
 
         self.section_widgets = {
             "General": self.appearance_tab,
-            "Ollama (Local)": self.ollama_tab,
-            "API Endpoint": self.api_tab,
+            config.MODE_OLLAMA_LOCAL: self.ollama_tab,
+            config.MODE_LLAMACPP_LOCAL: self.llama_cpp_tab,
+            config.MODE_API_ENDPOINT: self.api_tab,
             "Integrations": self.integrations_tab,
         }
         self.section_pages = {}
@@ -1418,10 +1891,12 @@ class SettingsDialog(QFrame):
         self.stack.setCurrentWidget(self.section_pages[section_name])
 
     def set_current_section_by_mode(self, mode_text):
-        if mode_text == "Ollama (Local)":
-            self.set_current_section("Ollama (Local)")
-        elif mode_text == "API Endpoint":
-            self.set_current_section("API Endpoint")
+        if mode_text == config.MODE_OLLAMA_LOCAL:
+            self.set_current_section(config.MODE_OLLAMA_LOCAL)
+        elif mode_text == config.MODE_LLAMACPP_LOCAL:
+            self.set_current_section(config.MODE_LLAMACPP_LOCAL)
+        elif mode_text == config.MODE_API_ENDPOINT:
+            self.set_current_section(config.MODE_API_ENDPOINT)
         else:
             self.set_current_section("General")
 
