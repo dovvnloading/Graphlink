@@ -4,7 +4,7 @@ Living navigation document for the Graphite / Graphlink codebase.
 
 Primary goal: give future work a reliable, current map of where behavior actually lives so we do not need to re-discover the repo from scratch every session.
 
-Last refreshed: 2026-04-02
+Last refreshed: 2026-04-07
 
 ## Repo Snapshot
 
@@ -13,23 +13,26 @@ Last refreshed: 2026-04-02
 - Code root: `graphite_app/`
 - Startup project: `graphite_app/graphite_app.pyproj`
 - Solution file: `graphite_app.sln`
-- Python files under `graphite_app/` excluding `__pycache__`: `93`
-- Top-level Python modules under `graphite_app/`: `51`
-- Concrete top-level modules: `33`
-- Top-level facades:
-  - `17` compatibility wrappers
-  - `1` broad agent facade: `graphite_agents.py`
-- Real package directories with `__init__.py`: `5`
+- Python files under `graphite_app/` excluding `__pycache__`: `107`
+- Top-level Python modules under `graphite_app/`: `55`
+- Real package directories with `__init__.py`: `6`
   - `graphite_canvas/` (`8` Python files)
   - `graphite_nodes/` (`11` Python files)
   - `graphite_plugins/` (`10` Python files)
+  - `graphite_session/` (`9` Python files)
   - `graphite_ui_dialogs/` (`4` Python files)
-  - `graphite_widgets/` (`9` Python files)
+  - `graphite_widgets/` (`10` Python files)
+- Runtime modes exposed in the shell:
+  - `Ollama (Local)`
+  - `Llama.cpp (Local)`
+  - `API Endpoint`
 - Runtime persistence outside the repo:
   - chats database: `~/.graphlink/chats.db`
   - settings/session state: `~/.graphlink/session.dat`
-- Hardcoded repo-local icon path appears in multiple UI files:
+- Hardcoded repo-local asset paths still exist in UI code:
   - `C:\Users\Admin\source\repos\graphite_app\assets\graphite.ico`
+  - `C:\Users\Admin\source\repos\graphite_app\assets\check.png`
+  - `C:\Users\Admin\source\repos\graphite_app\assets\down_arrow.png`
 
 ## Read This First
 
@@ -38,55 +41,101 @@ If you need to rebuild the mental model quickly, open files in this order:
 1. `graphite_app/graphite_app.py`
 2. `graphite_app/graphite_window.py`
 3. `graphite_app/graphite_window_actions.py`
-4. `graphite_app/graphite_view.py`
-5. `graphite_app/graphite_scene.py`
-6. `graphite_app/graphite_core.py`
-7. `graphite_app/graphite_memory.py`
-8. `graphite_app/graphite_plugins/graphite_plugin_portal.py`
-9. `graphite_app/api_provider.py`
-10. `graphite_app/graphite_agents.py`
-11. `graphite_app/graphite_widgets/__init__.py`
+4. `graphite_app/api_provider.py`
+5. `graphite_app/graphite_ui_dialogs/graphite_settings_dialogs.py`
+6. `graphite_app/graphite_scene.py`
+7. `graphite_app/graphite_session/manager.py`
+8. `graphite_app/graphite_session/serializers.py`
+9. `graphite_app/graphite_session/deserializers.py`
+10. `graphite_app/graphite_session/scene_index.py`
+11. `graphite_app/graphite_plugins/graphite_plugin_portal.py`
+12. `graphite_app/graphite_memory.py`
+13. `graphite_app/graphite_lod.py`
 
-That path shows boot, shell ownership, message dispatch, viewport behavior, scene ownership, persistence, branch memory, plugin registration, provider plumbing, agent facades, and reusable widgets.
+That path shows boot, shell ownership, provider/mode initialization, live settings UI, scene authority, persistence, schema indexing, plugin registration, branch-memory rules, and the shared zoom-based render fallback system.
 
 ## Architecture Truths That Matter
 
 ### 1. This is still a flat-import app with package islands
 
-- Root modules import each other by top-level names such as `from graphite_window import ChatWindow`.
-- The app is not organized as a fully namespaced package-first design.
-- The split packages are real, but much of the running app still enters them through top-level compatibility modules.
+- Root modules still import each other by top-level names such as `from graphite_window import ChatWindow`.
+- The split packages are real, but the running app is not yet a clean package-first namespaced design.
+- Compatibility wrappers still matter because much of the repo enters package code through those top-level modules.
 
-### 2. The repo is mid-migration toward split packages
+### 2. The repo is still mid-migration toward split packages
 
-- Concrete implementations now live in `graphite_nodes/`, `graphite_canvas/`, `graphite_plugins/`, `graphite_ui_dialogs/`, and `graphite_widgets/`.
-- Top-level wrappers preserve import stability.
-- When both a wrapper and a package module exist, edit the concrete package module unless you are intentionally changing the public import surface.
+- Concrete implementations increasingly live in `graphite_nodes/`, `graphite_canvas/`, `graphite_plugins/`, `graphite_session/`, `graphite_ui_dialogs/`, and `graphite_widgets/`.
+- Top-level wrappers still preserve import stability.
+- When both a wrapper and a concrete package module exist, edit the concrete package module unless you are intentionally changing the import surface.
 
-### 3. The runtime shell is split cleanly across four files
+### 3. Runtime mode handling is now a first-class architecture seam
 
-- `graphite_window.py` owns the main window, toolbar, input row, overlays, plugin picker, and worker-thread handles.
-- `graphite_window_actions.py` owns prompt dispatch, response parsing, chart/image generation, and `execute_*_node()` workflows.
-- `graphite_window_navigation.py` owns keyboard navigation, command palette entry points, and canvas commands.
-- `graphite_view.py` and `graphite_scene.py` own the actual graph surface.
+- `graphite_config.py` defines task keys and user-facing mode labels.
+- `graphite_licensing.py` persists per-mode settings, scan caches, update-check state, and current mode.
+- `graphite_ui_dialogs/graphite_settings_dialogs.py` is the live configuration surface for Ollama, Llama.cpp, API providers, integrations, and update controls.
+- `graphite_window.py` owns startup mode initialization and toolbar mode switching.
+- `api_provider.py` is the real execution authority for:
+  - Ollama local runtime
+  - direct `llama-cpp-python` GGUF runtime
+  - OpenAI-compatible endpoints
+  - Gemini endpoints
 
-### 4. `ChatScene` and `ChatSessionManager` are the real schema authorities
+### 4. `Llama.cpp (Local)` is direct GGUF execution, not Ollama reuse
 
-- `graphite_scene.py` defines which node lists and connection lists exist at runtime.
-- `graphite_core.py` decides which node types and connection types are serialized, deserialized, and considered load-compatible.
-- If you add a new node family and only wire the UI, the app is still incomplete until `ChatScene` and `ChatSessionManager` know about it.
+- The app scans for `.gguf` files directly.
+- Settings persist:
+  - chat model path
+  - optional title model path
+  - chat format override
+  - `n_ctx`
+  - `n_gpu_layers`
+  - `n_threads`
+- Ollama manifests/blobs are not valid `Llama.cpp` model files in this mode.
+- Graphlink intentionally defers GGUF loading until the first request instead of blocking mode switching or Save Settings.
 
-### 5. Package `__init__` files are convenience surfaces, not perfect truth
+### 5. Attachments are now multimodal, and document nodes also carry audio
 
-- `graphite_nodes/__init__.py`, `graphite_canvas/__init__.py`, and `graphite_widgets/__init__.py` are useful.
-- `graphite_plugins/__init__.py` is not exhaustive; for example, it does not export the code-review plugin types even though the top-level compatibility wrapper exists.
-- For plugin work, the most authoritative files are the concrete modules plus `graphite_plugins/graphite_plugin_portal.py`.
+- `graphite_window.py` stages image, document, and audio attachments.
+- `graphite_window_actions.py` turns:
+  - image attachments into `ImageNode`
+  - document attachments into `DocumentNode`
+  - audio attachments into `DocumentNode` with `attachment_kind='audio'`
+- `graphite_audio.py` validates audio files, MIME types, duration limits, and preview labels.
+- `graphite_nodes/graphite_node_document.py` is now the live UI for both document and audio attachment nodes.
+- Graphlink-level limitation:
+  - `Llama.cpp` local mode is text-only inside the app right now
+  - Ollama and Gemini are the multimodal paths for audio or image-backed requests
 
-### 6. There are a few easy-to-misread legacy seams
+### 6. `ChatScene`, `ChatSessionManager`, and `graphite_session/scene_index.py` now form the schema triangle
 
-- `graphite_dialogs.py` duplicates canvas dialog classes but appears unused by repo imports; the live canvas dialog implementations are in `graphite_canvas/graphite_canvas_dialogs.py`.
-- `graphite_widgets/pins.py` defines a lightweight overlay-side `NavigationPin`; `graphite_canvas/graphite_canvas_navigation_pin.py` defines the persisted scene item with the same name.
-- `graphite_widgets/*.py` use UTF-8 BOM; tooling that parses them directly should use `utf-8-sig`.
+- `graphite_scene.py` still owns the live runtime lists and creation/deletion behavior.
+- `graphite_session/serializers.py` and `graphite_session/deserializers.py` still decide save/load compatibility.
+- `graphite_session/scene_index.py` now centralizes:
+  - node list names
+  - save-guard node list names
+  - child-link-capable node types
+  - serializer/deserializer item indexing helpers
+- If you add a new persisted node family, update all three places:
+  - `graphite_scene.py`
+  - `graphite_session/scene_index.py`
+  - session serializer/deserializer code
+
+### 7. A shared LoD/proxy render layer now matters across many node families
+
+- `graphite_lod.py` owns zoom thresholds, summary/glyph fallback rendering, preview text helpers, and proxy visibility rules.
+- Many node UIs now rely on it for readable zoomed-out behavior instead of each node hand-rolling its own fallback.
+- If a node looks wrong when zoomed out, `graphite_lod.py` is usually as important as the node class itself.
+
+### 8. Shared visuals are a little more centralized than before
+
+- `graphite_widgets/loading_visuals.py` now owns the shared orbital spinner painting used by both the splash and loading overlays.
+- `graphite_update.py` plus `graphite_version.py` own the update-check signal and local version metadata.
+
+### 9. There are still easy-to-misread legacy seams
+
+- `graphite_dialogs.py` duplicates canvas dialog classes but does not appear to be the live authority.
+- `graphite_widgets/pins.py` defines overlay-side `NavigationPin`; `graphite_canvas/graphite_canvas_navigation_pin.py` defines the persisted scene item with the same name.
+- `graphite_widgets/*.py` still use UTF-8 BOM in places; direct parsing tools should be BOM-aware.
 
 ## Runtime Ownership Map
 
@@ -97,85 +146,107 @@ That path shows boot, shell ownership, message dispatch, viewport behavior, scen
   - Creates `QApplication`, loads persisted settings, applies theme/model, creates `ChatWindow`, `WelcomeScreen`, and `SplashScreen`.
 - `graphite_app/graphite_window.py`
   - `ChatWindow`
-  - Main shell, toolbar, document viewer panel, pin overlay, token counter, attachment staging, plugin picker, shortcuts, and session lifecycle.
+  - Main shell, toolbar, document viewer panel, pin overlay, mode switching, update checks, plugin picker, attachment staging, shortcuts, and session lifecycle.
 - `graphite_app/graphite_window_actions.py`
   - `WindowActionsMixin`
-  - Core prompt send flow, attachment packing, response parsing, regeneration, takeaways, group summaries, explainers, charts, images, and all plugin execution entry points.
+  - Core prompt send flow, attachment packing, response parsing, regeneration, charts, images, and all plugin execution entry points.
 - `graphite_app/graphite_window_navigation.py`
   - `WindowNavigationMixin`
   - Command registration, collapse/expand/delete/focus commands, note creation, directional navigation, command palette.
 - `graphite_app/graphite_command_palette.py`
   - `CommandManager`, `CommandPaletteDialog`
-  - Generic command registration and searchable palette dialog.
+  - Searchable command palette.
+- `graphite_app/graphite_update.py`
+  - `UpdateCheckWorker`, version comparison helpers, update-signal fetch.
+- `graphite_app/graphite_version.py`
+  - `APP_VERSION`
 
 ### Canvas, graph surface, and layout
 
 - `graphite_app/graphite_view.py`
   - `ChatView`
-  - `QGraphicsView` wrapper, panning/zooming, drag-and-drop attachments, custom scrollbars, overlay widgets, minimap mounting, background grid, keyboard pan.
+  - `QGraphicsView` wrapper, panning/zooming, drag-and-drop attachments, overlay widgets, minimap mounting, background grid, keyboard pan.
 - `graphite_app/graphite_scene.py`
   - `ChatScene`
   - Node registries, connection registries, node creation helpers, search, frame/container/note/chart creation, delete logic, branch visibility, font propagation.
 - `graphite_app/graphite_connections.py`
-  - Core connection types: `ConnectionItem`, `ContentConnectionItem`, `DocumentConnectionItem`, `ImageConnectionItem`, `ThinkingConnectionItem`, `SystemPromptConnectionItem`, `PyCoderConnectionItem`, `ConversationConnectionItem`, `ReasoningConnectionItem`, `GroupSummaryConnectionItem`, `HtmlConnectionItem`
-  - Shared pin behavior and connection path updates.
+  - Core connection families and shared pin/path behavior.
 - `graphite_app/graphite_minimap.py`
   - `MinimapWidget`
-  - Graph overview and node jump navigation.
+  - Graph overview and jump navigation.
+- `graphite_app/graphite_lod.py`
+  - Shared level-of-detail thresholds, preview text helpers, zoom-aware proxy visibility, and fallback card painting.
 
 ### Persistence, context, and attachments
 
+- `graphite_app/graphite_session/`
+  - Concrete persistence package.
+  - Key files: `content_codec.py`, `database.py`, `deserializers.py`, `manager.py`, `scene_index.py`, `serializers.py`, `title_generator.py`, `workers.py`
 - `graphite_app/graphite_core.py`
-  - `ChatDatabase`, `SaveWorkerThread`, `ChatSessionManager`, `TitleGenerator`
-  - SQLite schema, save/load pipeline, node serialization, connection serialization, note/pin persistence, graph reconstruction, chat title generation.
+  - Compatibility facade for session persistence.
 - `graphite_app/graphite_memory.py`
-  - `clone_history`, `append_history`, `assign_history`, `resolve_context_anchor`, `resolve_branch_parent`, `get_node_history`, `trim_history`, `history_to_transcript`
   - Branch-memory utilities; do not hand-roll history mutation when these helpers already exist.
 - `graphite_app/graphite_file_handler.py`
-  - `FileHandler`
   - Attachment readability checks and text extraction for plain text, code, PDF, and DOCX.
+- `graphite_app/graphite_audio.py`
+  - Audio validation, duration probing, MIME inference, and duration formatting.
 - `graphite_app/graphite_exporter.py`
-  - `Exporter`
   - Export helpers used by node context menus.
 
-### Providers, prompts, settings, and themes
+### Providers, prompts, settings, updates, and themes
 
 - `graphite_app/api_provider.py`
-  - Provider/runtime abstraction for Ollama, OpenAI-compatible APIs, and Gemini.
-  - Chat, image generation, task-model routing, endpoint initialization, provider-mode switching.
+  - Provider/runtime abstraction for Ollama, direct Llama.cpp, OpenAI-compatible APIs, and Gemini.
+  - Also owns local model scanning:
+    - Ollama manifest scanning
+    - GGUF scanning for `Llama.cpp`
+  - Also owns modality handling rules and local runtime initialization.
 - `graphite_app/graphite_prompts.py`
-  - `BASE_SYSTEM_PROMPT`, `THINKING_INSTRUCTIONS_PROMPT`, `_TokenBytesEncoder`
   - Global prompt text and token-safe JSON encoding helpers.
 - `graphite_app/graphite_config.py`
-  - Theme palette getters, semantic colors, graph-node colors, theme application, current model assignment.
+  - Task keys, mode labels, local provider constants, theme palette getters, semantic colors, current model assignment.
 - `graphite_app/graphite_licensing.py`
   - `SettingsManager`
-  - Persisted user settings: theme, welcome screen, token counter, system prompt toggle, local model, reasoning mode, API endpoint config, API models, GitHub token.
+  - Persisted user settings:
+    - theme
+    - welcome screen
+    - token counter
+    - system prompt toggle
+    - current runtime mode
+    - Ollama model settings and scan cache
+    - Llama.cpp GGUF settings and scan cache
+    - API endpoint/provider settings
+    - GitHub token
+    - update-check state
 - `graphite_app/graphite_styles.py`
-  - `StyleSheet`, `ColorPalette`, `THEMES`
-  - QSS themes and palette definitions for `dark` and `mono`.
+  - QSS themes and shared palette definitions.
 
 ### Shared UI, welcome flow, and dialogs
 
 - `graphite_app/graphite_ui_components.py`
   - `NotificationBanner`, `DocumentViewerPanel`, `CustomTitleBar`
-  - `NotificationBanner` and `DocumentViewerPanel` are active; `CustomTitleBar` exists but is not imported elsewhere.
 - `graphite_app/graphite_welcome_screen.py`
-  - `WelcomeScreen`, `GridBackgroundWidget`, `StarterNodeWidget`, `ProjectButton`
-  - Splash-follow welcome screen, recent chats, starter templates.
+  - `WelcomeScreen`, starter templates, recent chats.
 - `graphite_app/graphite_ui_dialogs/graphite_library_dialog.py`
   - `ChatLibraryDialog`
-  - Recent chat browser, rename/delete/load.
 - `graphite_app/graphite_ui_dialogs/graphite_settings_dialogs.py`
-  - `SettingsDialog`, provider widgets, appearance settings, integrations settings.
+  - Real settings surface.
+  - Key sections:
+    - `AppearanceSettingsWidget`
+    - `OllamaSettingsWidget`
+    - `LlamaCppSettingsWidget`
+    - `ApiSettingsWidget`
+    - `IntegrationsSettingsWidget`
+    - `SettingsDialog`
 - `graphite_app/graphite_ui_dialogs/graphite_system_dialogs.py`
   - `HelpDialog`, `AboutDialog`
-  - Static product/help UI.
+- `graphite_app/graphite_widgets/loading_visuals.py`
+  - Shared spinner painter for splash and overlay loading states.
 
 ### Agents and background workers
 
 - `graphite_app/graphite_agents.py`
-  - Broad facade used by the shell and settings code.
+  - Broad facade used by shell and settings code.
 - `graphite_app/graphite_agents_core.py`
   - Standard chat, explainer, takeaway, and group-summary agents plus worker threads.
 - `graphite_app/graphite_agents_tools.py`
@@ -191,7 +262,7 @@ That path shows boot, shell ownership, message dispatch, viewport behavior, scen
 
 ## Concrete Node and Connection Taxonomy
 
-### Persisted node types in `ChatSessionManager.serialize_node()`
+### Persisted node types in the session payload
 
 - `chat`
 - `code`
@@ -211,6 +282,17 @@ That path shows boot, shell ownership, message dispatch, viewport behavior, scen
 - `code_review`
 - `gitlink`
 
+### Important current node-shape detail
+
+- `document` nodes now carry both normal file attachments and audio attachments.
+- Audio-backed `document` nodes persist extra fields such as:
+  - `attachment_kind`
+  - `file_path`
+  - `mime_type`
+  - `duration_seconds`
+  - `byte_size`
+  - `preview_label`
+
 ### Other persisted scene objects
 
 - frames
@@ -219,9 +301,9 @@ That path shows boot, shell ownership, message dispatch, viewport behavior, scen
 - charts
 - navigation pins
 
-### Connection families present in `ChatScene` and `ChatSessionManager`
+### Connection families present in `ChatScene` and session save/load
 
-- base conversation graph: `connections`
+- `connections`
 - `content_connections`
 - `document_connections`
 - `image_connections`
@@ -250,24 +332,51 @@ That path shows boot, shell ownership, message dispatch, viewport behavior, scen
 3. `graphite_config.apply_theme()`
 4. `graphite_config.set_current_model()`
 5. `graphite_window.ChatWindow`
-6. `graphite_welcome_screen.WelcomeScreen`
-7. `graphite_widgets.SplashScreen`
+6. `ChatWindow._initialize_saved_mode_on_startup()`
+7. Mode-specific initialization goes through `api_provider.initialize_local_provider()` or `api_provider.initialize_api()`
+8. `graphite_welcome_screen.WelcomeScreen`
+9. `graphite_widgets.SplashScreen`
 
-### 2. Normal prompt send / response flow
+### 2. Runtime mode initialization
+
+1. `graphite_window.ChatWindow._initialize_mode()`
+2. If `Ollama (Local)`:
+   - `api_provider.initialize_local_provider(config.LOCAL_PROVIDER_OLLAMA)`
+3. If `Llama.cpp (Local)`:
+   - settings come from `SettingsManager.get_llama_cpp_settings()`
+   - `api_provider.initialize_local_provider(config.LOCAL_PROVIDER_LLAMACPP, ..., preload_model=False)`
+4. If `API Endpoint`:
+   - provider/model settings come from `SettingsManager`
+   - `api_provider.initialize_api(...)`
+5. The settings flyout mirrors these same seams in `graphite_ui_dialogs/graphite_settings_dialogs.py`
+
+### 3. Normal prompt send / attachment flow
 
 1. `WindowActionsMixin.send_message()`
 2. `graphite_memory.resolve_branch_parent()` and `get_node_history()`
 3. `ChatScene.add_chat_node()` creates the user node
-4. `FileHandler` reads attachment text or image bytes when needed
+4. Pending attachments are expanded:
+   - images become `ImageNode`
+   - documents become `DocumentNode`
+   - audio becomes `DocumentNode` with audio metadata
 5. `trim_history()` bounds the context window
-6. `ChatWorkerThread` runs `ChatAgent`
-7. `ChatWorker` optionally swaps in a branch system-prompt note
-8. `api_provider.chat()` executes the provider call
-9. `WindowActionsMixin.handle_response()` parses plain text, code blocks, and thinking blocks
-10. `ChatScene.add_chat_node()`, `add_code_node()`, and `add_thinking_node()` create the result structure
-11. `ChatWindow.save_chat()` persists the updated graph
+6. `ChatWorkerThread` runs the agent request
+7. `api_provider.chat()` executes the chosen runtime path
+8. `WindowActionsMixin.handle_response()` parses plain text, code blocks, and thinking blocks
+9. `ChatScene.add_chat_node()`, `add_code_node()`, and `add_thinking_node()` create result structure
+10. `ChatWindow.save_chat()` persists the updated graph
 
-### 3. Plugin lifecycle
+### 4. Save / load flow
+
+1. `ChatWindow.save_chat()`
+2. `ChatSessionManager.save_current_chat()`
+3. `SceneSerializer.serialize_chat_data()`
+4. `graphite_session.scene_index` supplies node list and indexing helpers
+5. `ChatDatabase.save_chat()` or `update_chat()`
+6. Notes and pins are stored in dedicated SQLite tables
+7. `SceneDeserializer.restore_chat()` recreates nodes first, then notes/charts/frames/containers, then connections, then pins
+
+### 5. Plugin lifecycle
 
 1. `PluginPortal` registers plugin metadata and categories
 2. The plugin picker surfaces that catalog
@@ -277,33 +386,21 @@ That path shows boot, shell ownership, message dispatch, viewport behavior, scen
 6. `ChatSessionManager` serializes the node and its specialized connections
 7. Delete logic in `ChatScene` and plugin `dispose()` methods performs cleanup
 
-### 4. Save / load flow
+### 6. Title generation flow
 
-1. `ChatWindow.save_chat()`
-2. `ChatSessionManager._get_serialized_chat_data()`
-3. `ChatDatabase.save_chat()` or `update_chat()`
-4. Main graph JSON goes into `chats.data`
-5. Notes and pins are stored in dedicated SQLite tables
-6. `ChatSessionManager.load_chat()` deserializes nodes first, then notes/charts/frames/containers, then connections, then pins
+1. `ChatSessionManager` delegates naming to `TitleGenerator`
+2. If runtime is API mode or local Llama.cpp mode:
+   - `TitleGenerator.generate_title()` routes through `api_provider.chat(task=config.TASK_TITLE, ...)`
+3. If runtime is local Ollama mode:
+   - `TitleGenerator` prefers configured/local Ollama naming models and falls back across installed candidates
 
-### 5. Branch memory / anti-drift flow
+### 7. Update-check flow
 
-Use the helpers in `graphite_app/graphite_memory.py`:
-
-- `clone_history()`
-- `append_history()`
-- `assign_history()`
-- `resolve_context_anchor()`
-- `resolve_branch_parent()`
-- `get_node_history()`
-- `trim_history()`
-- `history_to_transcript()`
-
-Rule of thumb:
-
-- Never share mutable history lists by reference across nodes.
-- Never replace these helpers with ad hoc list slicing or shallow copies.
-- Planner / reasoning / review / comparison plugins should consume deliberate branch context, not arbitrary graph-wide state.
+1. `graphite_window.ChatWindow.check_for_updates()`
+2. `graphite_update.UpdateCheckWorker`
+3. Remote version signal fetched from GitHub
+4. `graphite_licensing.SettingsManager.record_update_check_result()`
+5. `AppearanceSettingsWidget` surfaces the saved status and manual re-check action
 
 ## Plugin Catalog As Registered Today
 
@@ -378,239 +475,138 @@ These top-level files are import-stability shims, not the main implementation.
 
 This is the practical lookup map for where code actually lives today.
 
-### Top-level concrete modules
+### Top-level concrete modules that changed or matter most
 
 - `api_provider.py`
-  - Provider abstraction for chat and image generation
-  - Key functions: `chat()`, `generate_image()`, `initialize_api()`, `get_available_models()`, `set_mode()`, `set_task_model()`
-- `graphite_agents_code_sandbox.py`
-  - Sandbox runtime and virtualenv execution
-  - Key classes/functions: `SandboxStage`, `SandboxGenerationAgent`, `SandboxRepairAgent`, `VirtualEnvSandbox`, `CodeSandboxExecutionWorker`, `_normalize_requirements()`
-- `graphite_agents_core.py`
-  - Core chat/text agents and worker threads
-  - Key classes: `ChatWorkerThread`, `ChatWorker`, `ChatAgent`, `ExplainerAgent`, `KeyTakeawayAgent`, `GroupSummaryAgent`
-- `graphite_agents_pycoder.py`
-  - Py-Coder execution pipeline
-  - Key classes: `PythonREPL`, `CodeExecutionWorker`, `PyCoderExecutionAgent`, `PyCoderRepairAgent`, `PyCoderAnalysisAgent`, `PyCoderExecutionWorker`, `PyCoderAgentWorker`
-- `graphite_agents_reasoning.py`
-  - Reasoning-node execution runtime
-  - Key classes: `ReasoningAgent`, `ReasoningWorkerThread`
-- `graphite_agents_tools.py`
-  - Charts, image generation, and model pull helpers
-  - Key classes: `ChartDataAgent`, `ChartWorkerThread`, `ImageGenerationAgent`, `ImageGenerationWorkerThread`, `ModelPullWorkerThread`
-- `graphite_agents_web.py`
-  - Web-search runtime
-  - Key classes: `WebSearchAgent`, `WebWorkerThread`
-- `graphite_app.py`
-  - App entry point
-  - Key function: `main()`
-- `graphite_command_palette.py`
-  - Generic command palette
-  - Key classes: `CommandManager`, `CommandPaletteDialog`
-- `graphite_config.py`
-  - Theme/model globals
-  - Key functions: `get_current_palette()`, `get_semantic_color()`, `apply_theme()`, `set_current_model()`
-- `graphite_connections.py`
-  - Shared connection rendering and interaction layer
-  - Key classes: `Pin`, `ConnectionItem`, `ContentConnectionItem`, `DocumentConnectionItem`, `ImageConnectionItem`, `ThinkingConnectionItem`, `SystemPromptConnectionItem`, `PyCoderConnectionItem`, `ConversationConnectionItem`, `ReasoningConnectionItem`, `GroupSummaryConnectionItem`, `HtmlConnectionItem`
-- `graphite_conversation_node.py`
-  - Self-contained chat thread node
-  - Key classes: `ChatMessageBubbleItem`, `TypingIndicatorItem`, `ConversationNode`
-- `graphite_core.py`
-  - SQLite persistence and graph serialization authority
-  - Key classes/functions: `TitleGenerator`, `ChatDatabase`, `SaveWorkerThread`, `ChatSessionManager`, `_process_content_for_serialization()`, `_process_content_for_deserialization()`
-- `graphite_dialogs.py`
-  - Legacy duplicate of canvas dialogs
-  - Key classes: `ColorPickerDialog`, `PinEditDialog`
-- `graphite_exporter.py`
-  - Export helpers used by node context menus
-  - Key class: `Exporter`
-- `graphite_file_handler.py`
-  - Attachment reader
-  - Key class: `FileHandler`
-- `graphite_html_view.py`
-  - HTML render node and popout window
-  - Key classes: `HtmlPopoutWindow`, `HtmlViewNode`
-- `graphite_licensing.py`
-  - Persisted settings manager
-  - Key class: `SettingsManager`
-- `graphite_memory.py`
-  - Branch/history utilities
-  - Key functions: `clone_history()`, `append_history()`, `assign_history()`, `resolve_context_anchor()`, `resolve_branch_parent()`, `get_node_history()`, `trim_history()`, `history_to_transcript()`
-- `graphite_minimap.py`
-  - Minimap UI
-  - Key class: `MinimapWidget`
-- `graphite_plugin_context_menu.py`
-  - Shared context menu for plugin nodes
-  - Key class: `PluginNodeContextMenu`
-- `graphite_prompts.py`
-  - Global prompt constants and token-safe encoder
-  - Key symbols: `BASE_SYSTEM_PROMPT`, `THINKING_INSTRUCTIONS_PROMPT`, `_TokenBytesEncoder`
-- `graphite_pycoder.py`
-  - Py-Coder node UI
-  - Key classes: `PythonHighlighter`, `CodeEditor`, `PyCoderMode`, `StatusTrackerWidget`, `PyCoderNode`
-- `graphite_reasoning.py`
-  - Reasoning node UI
-  - Key class: `ReasoningNode`
-- `graphite_scene.py`
-  - Scene/controller authority
-  - Key class: `ChatScene`
-- `graphite_styles.py`
-  - QSS themes and palettes
-  - Key classes/symbols: `StyleSheet`, `ColorPalette`, `THEMES`
-- `graphite_ui_components.py`
-  - Shared shell widgets
-  - Key classes: `CustomTitleBar`, `NotificationBanner`, `DocumentViewerPanel`
-- `graphite_view.py`
-  - Canvas viewport
-  - Key class: `ChatView`
-- `graphite_web.py`
-  - Web node UI and its specialized connection item
-  - Key classes: `WebConnectionItem`, `WebNode`
-- `graphite_welcome_screen.py`
-  - Welcome screen and starter UI
-  - Key classes: `GridBackgroundWidget`, `StarterNodeWidget`, `ProjectButton`, `WelcomeScreen`
+  - Provider abstraction for Ollama, direct `Llama.cpp`, OpenAI-compatible chat/image APIs, and Gemini.
+  - Key responsibilities:
+    - local/runtime initialization
+    - GGUF scanning
+    - Ollama model scanning
+    - modality preparation
+    - `chat()`
+    - `generate_image()`
+- `graphite_audio.py`
+  - Audio attachment validation and duration probing.
+  - Key functions/classes: `AudioValidationError`, `is_supported_audio_file()`, `guess_audio_mime_type()`, `inspect_audio_file()`, `format_duration()`
+- `graphite_lod.py`
+  - Shared zoom-dependent render helpers.
+  - Key helpers: `lod_mode_for_item()`, `preview_text()`, `sync_proxy_render_state()`, `draw_lod_card()`
+- `graphite_update.py`
+  - Update signal fetch and comparison logic.
+  - Key symbols: `UPDATE_SIGNAL_URL`, `UPDATE_REPOSITORY_URL`, `UpdateCheckWorker`, `build_update_result()`
+- `graphite_version.py`
+  - Current local app version constant.
 - `graphite_window.py`
-  - Main shell
-  - Key class: `ChatWindow`
+  - Main shell, mode switching, toolbar, update checks, settings flyout, attachment staging.
 - `graphite_window_actions.py`
-  - Action dispatch and plugin execution
-  - Key class: `WindowActionsMixin`
-- `graphite_window_navigation.py`
-  - Keyboard/navigation mixin
-  - Key class: `WindowNavigationMixin`
+  - Prompt dispatch, attachment packaging, response parsing, plugin execution.
+- `graphite_scene.py`
+  - Scene/controller authority.
+- `graphite_memory.py`
+  - Branch/history helpers.
+- `graphite_plugin_context_menu.py`
+  - Shared context menu for plugin nodes.
 
-### `graphite_nodes/`
+### `graphite_session/`
 
-- `graphite_nodes/__init__.py`
-  - Re-exports the split node classes and context menus
-- `graphite_nodes/graphite_node_chat.py`
-  - `ChatNode`
-- `graphite_nodes/graphite_node_chat_menu.py`
-  - `ChatNodeContextMenu`
-- `graphite_nodes/graphite_node_code.py`
-  - `CodeHighlighter`, `CodeNode`
-- `graphite_nodes/graphite_node_code_menu.py`
-  - `CodeNodeContextMenu`
-- `graphite_nodes/graphite_node_document.py`
-  - `DocumentNode`
-- `graphite_nodes/graphite_node_document_menu.py`
-  - `DocumentNodeContextMenu`
-- `graphite_nodes/graphite_node_image.py`
-  - `ImageNode`
-- `graphite_nodes/graphite_node_image_menu.py`
-  - `ImageNodeContextMenu`
-- `graphite_nodes/graphite_node_thinking.py`
-  - `ThinkingNode`
-- `graphite_nodes/graphite_node_thinking_menu.py`
-  - `ThinkingNodeContextMenu`
-
-### `graphite_canvas/`
-
-- `graphite_canvas/__init__.py`
-  - Re-exports canvas items and dialogs
-- `graphite_canvas/graphite_canvas_base.py`
-  - Shared canvas helpers
-  - Key classes/functions: `HoverAnimationMixin`, `GhostFrame`, `CanvasHeaderLineEdit`, `iter_scene_connection_lists()`, `update_connections_for_items()`
-- `graphite_canvas/graphite_canvas_chart_item.py`
-  - `ChartItem`
-- `graphite_canvas/graphite_canvas_container.py`
-  - `Container`
-- `graphite_canvas/graphite_canvas_dialogs.py`
-  - `ColorPickerDialog`, `PinEditDialog`
-- `graphite_canvas/graphite_canvas_frame.py`
-  - `Frame`
-- `graphite_canvas/graphite_canvas_navigation_pin.py`
-  - Persisted scene `NavigationPin`
-- `graphite_canvas/graphite_canvas_note.py`
-  - `Note`
-
-### `graphite_plugins/`
-
-- `graphite_plugins/__init__.py`
-  - Partial convenience exports; do not treat as exhaustive plugin truth
-- `graphite_plugins/graphite_plugin_artifact.py`
-  - Markdown drafting node
-  - Key classes: `ArtifactInstructionInput`, `ArtifactAgent`, `ArtifactWorkerThread`, `ArtifactConnectionItem`, `ArtifactNode`
-- `graphite_plugins/graphite_plugin_code_review.py`
-  - Structured review node for local or GitHub files
-  - Key classes/functions: `CodeReviewComboPopup`, `CodeReviewPopupComboBox`, `CodeReviewAnalyzer`, `CodeReviewWorkerThread`, `CodeReviewConnectionItem`, `CodeReviewNode`, `_prepare_numbered_source()`, `_source_scope_summary()`
-- `graphite_plugins/graphite_plugin_code_sandbox.py`
-  - Isolated execution node UI
-  - Key classes: `SandboxStatusTracker`, `CodeSandboxConnectionItem`, `CodeSandboxNode`
-- `graphite_plugins/graphite_plugin_gitlink.py`
-  - GitHub/local-repo context and proposal workflow
-  - Key classes/functions: `GitlinkAgent`, `GitlinkWorkerThread`, `GitlinkConnectionItem`, `GitlinkNode`, `load_github_repositories()`, `load_repository_tree()`, `get_selected_paths()`, `get_task_prompt()`, `clear_proposal()`, `apply_approved_changes()`
-- `graphite_plugins/graphite_plugin_graph_diff.py`
-  - Branch comparison / Branch Lens
-  - Key classes/functions: `GraphDiffAnalyzer`, `GraphDiffWorkerThread`, `GraphDiffConnectionItem`, `GraphDiffNode`, `build_branch_payload()`
-- `graphite_plugins/graphite_plugin_picker.py`
-  - Plugin picker UI
-  - Key classes: `PluginCategoryButton`, `PluginEntryCard`, `PluginFlyoutPanel`
-- `graphite_plugins/graphite_plugin_portal.py`
-  - Plugin registry and node creation authority
-  - Key class: `PluginPortal`
-- `graphite_plugins/graphite_plugin_quality_gate.py`
-  - Release-readiness review node
-  - Key classes/functions: `QualityGateAnalyzer`, `QualityGateWorkerThread`, `QualityGateRecommendationCard`, `QualityGateConnectionItem`, `QualityGateNode`, `build_quality_gate_payload()`
-- `graphite_plugins/graphite_plugin_workflow.py`
-  - Plan/recommendation node
-  - Key classes: `WorkflowArchitectAgent`, `WorkflowWorkerThread`, `WorkflowRecommendationCard`, `WorkflowConnectionItem`, `WorkflowNode`
+- `content_codec.py`
+  - Serialization helpers for history and binary image content.
+- `database.py`
+  - SQLite persistence.
+- `deserializers.py`
+  - Concrete load compatibility and graph restoration.
+- `manager.py`
+  - `ChatSessionManager`
+  - Coordinates save/load/title generation and delegates runtime helpers.
+- `scene_index.py`
+  - Centralized node-list/index helpers used by persistence code.
+- `serializers.py`
+  - Concrete save payload authority.
+- `title_generator.py`
+  - Chat naming strategy across Ollama, Llama.cpp, and API modes.
+- `workers.py`
+  - Background save worker.
 
 ### `graphite_ui_dialogs/`
 
-- `graphite_ui_dialogs/__init__.py`
-  - Re-exports library/settings/system dialogs
-- `graphite_ui_dialogs/graphite_library_dialog.py`
-  - `ChatLibraryDialog`
-- `graphite_ui_dialogs/graphite_settings_dialogs.py`
-  - `SettingsComboPopup`, `SettingsComboBox`, `OllamaSettingsWidget`, `ApiSettingsWidget`, `IntegrationsSettingsWidget`, `AppearanceSettingsWidget`, `SettingsCategoryButton`, `SettingsDialog`
-- `graphite_ui_dialogs/graphite_system_dialogs.py`
-  - `AboutDialog`, `HelpCategoryButton`, `HelpDialog`
+- `graphite_library_dialog.py`
+  - Recent chat browser.
+- `graphite_settings_dialogs.py`
+  - Live settings flyout.
+  - This is the real place to edit:
+    - Ollama scans
+    - GGUF scans
+    - API provider/model settings
+    - GitHub token settings
+    - update-check controls
+- `graphite_system_dialogs.py`
+  - About/help UI.
 
 ### `graphite_widgets/`
 
-- `graphite_widgets/__init__.py`
-  - Re-exports the reusable widget package
-- `graphite_widgets/controls.py`
-  - `FontControl`, `GridControl`
-- `graphite_widgets/overlays.py`
+- `loading_visuals.py`
+  - Shared spinner painter.
+- `overlays.py`
   - `LoadingAnimation`, `SearchOverlay`
-- `graphite_widgets/pins.py`
-  - Overlay-side `NavigationPin` data helper plus `PinOverlay`
-- `graphite_widgets/scrolling.py`
-  - `CustomScrollBar`, `CustomScrollArea`, `ScrollHandle`, `ScrollBar`
-- `graphite_widgets/splash.py`
-  - `SplashAnimationWidget`, `AnimatedWordLogo`, `SplashScreen`
-- `graphite_widgets/text_inputs.py`
-  - `SpellCheckLineEdit`, `_BlackHoleEditor`, `ComposerSurface`, `ContextAttachmentPill`, `ChatInputTextEdit`
-- `graphite_widgets/tokens.py`
-  - `TokenEstimator`, `TokenCounterWidget`
-- `graphite_widgets/tooltips.py`
-  - `CustomTooltip`
+- `pins.py`
+  - Overlay-side pin helper plus `PinOverlay`
+- `splash.py`
+  - Splash screen and animation
+- `text_inputs.py`
+  - Composer surface and attachment pills
+- `tokens.py`
+  - Token estimator and token counter widget
 
 ## Where To Edit When...
 
-### You want to change app startup or persisted defaults
+### You want to change startup, current mode handling, or mode switching
 
-- `graphite_app/graphite_app.py`
-- `graphite_app/graphite_licensing.py`
+- `graphite_app/graphite_window.py`
 - `graphite_app/graphite_config.py`
-- `graphite_app/graphite_styles.py`
+- `graphite_app/graphite_licensing.py`
+- `graphite_app/api_provider.py`
+- `graphite_app/graphite_ui_dialogs/graphite_settings_dialogs.py`
+
+### You want to change Ollama scanning or default local models
+
+- `graphite_app/api_provider.py`
+- `graphite_app/graphite_config.py`
+- `graphite_app/graphite_licensing.py`
+- `graphite_app/graphite_ui_dialogs/graphite_settings_dialogs.py`
+
+### You want to change direct `Llama.cpp` / GGUF behavior
+
+- `graphite_app/api_provider.py`
+- `graphite_app/graphite_licensing.py`
+- `graphite_app/graphite_ui_dialogs/graphite_settings_dialogs.py`
+- `graphite_app/graphite_window.py`
+- `graphite_app/graphite_session/title_generator.py`
 
 ### You want to change prompt send, response parsing, attachment handling, or execution dispatch
 
 - `graphite_app/graphite_window_actions.py`
 - `graphite_app/graphite_memory.py`
 - `graphite_app/graphite_file_handler.py`
+- `graphite_app/graphite_audio.py`
 - `graphite_app/api_provider.py`
 
-### You want to change canvas behavior, graph layout, selection, deletion, or visibility
+### You want to change attachment staging or supported attachment kinds
+
+- `graphite_app/graphite_window.py`
+- `graphite_app/graphite_window_actions.py`
+- `graphite_app/graphite_audio.py`
+- `graphite_app/graphite_nodes/graphite_node_document.py`
+- `graphite_app/graphite_session/serializers.py`
+- `graphite_app/graphite_session/deserializers.py`
+
+### You want to change canvas behavior, graph layout, or zoomed-out rendering
 
 - `graphite_app/graphite_view.py`
 - `graphite_app/graphite_scene.py`
 - `graphite_app/graphite_connections.py`
 - `graphite_app/graphite_minimap.py`
+- `graphite_app/graphite_lod.py`
 - `graphite_app/graphite_canvas/*`
 
 ### You want to add or modify a node family
@@ -625,7 +621,9 @@ This is the practical lookup map for where code actually lives today.
   - `graphite_app/graphite_html_view.py`
 - Then update:
   - `graphite_app/graphite_scene.py`
-  - `graphite_app/graphite_core.py`
+  - `graphite_app/graphite_session/scene_index.py`
+  - `graphite_app/graphite_session/serializers.py`
+  - `graphite_app/graphite_session/deserializers.py`
   - `graphite_app/graphite_window.py`
   - `graphite_app/graphite_window_actions.py`
 
@@ -641,15 +639,29 @@ This is the practical lookup map for where code actually lives today.
   - `graphite_app/graphite_plugins/graphite_plugin_*.py`
 - Then verify:
   - `graphite_app/graphite_scene.py`
-  - `graphite_app/graphite_core.py`
+  - `graphite_app/graphite_session/scene_index.py`
+  - `graphite_app/graphite_session/serializers.py`
+  - `graphite_app/graphite_session/deserializers.py`
   - `graphite_app/graphite_window_actions.py`
 
 ### You want to change save/load compatibility
 
+- `graphite_app/graphite_session/scene_index.py`
+- `graphite_app/graphite_session/serializers.py`
+- `graphite_app/graphite_session/deserializers.py`
+- `graphite_app/graphite_session/manager.py`
 - `graphite_app/graphite_core.py`
 - `graphite_app/graphite_scene.py`
 
-### You want to change reusable widgets or overlays
+### You want to change update checks or version reporting
+
+- `graphite_app/graphite_update.py`
+- `graphite_app/graphite_version.py`
+- `graphite_app/graphite_licensing.py`
+- `graphite_app/graphite_window.py`
+- `graphite_app/graphite_ui_dialogs/graphite_settings_dialogs.py`
+
+### You want to change reusable widgets or loading visuals
 
 - `graphite_app/graphite_widgets/*`
 - `graphite_app/graphite_ui_components.py`
@@ -657,14 +669,19 @@ This is the practical lookup map for where code actually lives today.
 ## Short Working Rules For Future Sessions
 
 - Open the concrete package file before touching a compatibility wrapper.
-- Treat `ChatScene` plus `ChatSessionManager` as the graph schema.
+- Treat `api_provider.py` as the runtime execution authority for every model mode.
+- Treat `ChatScene` plus session serializer/deserializer code as the graph schema.
+- Treat `graphite_session/scene_index.py` as the central list/index helper whenever you add a new persisted node family.
 - Treat `WindowActionsMixin` as the execution dispatcher.
 - Treat `PluginPortal` as the plugin catalog authority.
 - Treat `graphite_memory.py` as the only safe place to define branch-history semantics.
+- Treat `graphite_lod.py` as shared render infrastructure, not optional polish.
+- Remember that `Llama.cpp` mode expects direct `.gguf` files, not Ollama blobs/manifests.
+- Remember that audio attachments persist through `DocumentNode`, not a separate audio node type.
 - Be careful with duplicate names:
   - scene `NavigationPin` lives in `graphite_canvas`
   - overlay `NavigationPin` lives in `graphite_widgets`
 - Be careful with legacy files:
   - `graphite_dialogs.py` is not the live canvas dialog authority
 - Be careful with machine-specific paths:
-  - the icon path is currently hardcoded to one local repo location
+  - several asset paths are still hardcoded to one local repo location
