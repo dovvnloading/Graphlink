@@ -273,6 +273,25 @@ class LlamaCppModelScanWorker(QThread):
             self.error.emit(str(exc))
 
 
+class LlamaCppInitWorker(QThread):
+    finished = Signal(dict)
+    error = Signal(str)
+
+    def __init__(self, settings, parent=None):
+        super().__init__(parent)
+        self.settings = dict(settings or {})
+
+    def run(self):
+        try:
+            result = api_provider.initialize_local_provider(
+                config.LOCAL_PROVIDER_LLAMACPP,
+                self.settings,
+            )
+            self.finished.emit(result)
+        except Exception as exc:
+            self.error.emit(str(exc))
+
+
 def _settings_file_dialog_parent(widget):
     window = widget.window() if widget else None
     if window is not None:
@@ -624,6 +643,7 @@ class LlamaCppSettingsWidget(QWidget):
         super().__init__(parent)
         self.settings_manager = settings_manager
         self.scan_worker = None
+        self.init_worker = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(15, 15, 15, 15)
@@ -936,6 +956,10 @@ class LlamaCppSettingsWidget(QWidget):
         self.status_label.setText(message)
         self.status_label.setStyleSheet(f"color: {color}; min-height: 40px;")
 
+    def _set_save_enabled(self, enabled):
+        self.save_button.setEnabled(enabled)
+        self.save_button.setText("Save Settings" if enabled else "Applying...")
+
     def _update_current_model_label(self, model_path):
         normalized_path = str(model_path or "").strip()
         if not normalized_path:
@@ -1009,14 +1033,6 @@ class LlamaCppSettingsWidget(QWidget):
             QMessageBox.warning(self, "Invalid Llama.cpp Settings", str(exc))
             return
 
-        if self.settings_manager.get_current_mode() == config.MODE_LLAMACPP_LOCAL:
-            try:
-                api_provider.initialize_local_provider(config.LOCAL_PROVIDER_LLAMACPP, settings)
-            except Exception as exc:
-                self._set_status(f"Failed to load the configured model: {exc}", "#e74c3c")
-                QMessageBox.critical(self, "Llama.cpp Initialization Error", str(exc))
-                return
-
         self.settings_manager.set_llama_cpp_chat_model_path(settings["chat_model_path"])
         self.settings_manager.set_llama_cpp_title_model_path(settings["title_model_path"])
         self.settings_manager.set_llama_cpp_reasoning_mode(settings["reasoning_mode"])
@@ -1027,13 +1043,55 @@ class LlamaCppSettingsWidget(QWidget):
             chat_format=settings["chat_format"],
         )
 
+        self._update_current_model_label(settings["chat_model_path"])
+        if self.settings_manager.get_current_mode() != config.MODE_LLAMACPP_LOCAL:
+            main_window = self.window().parent()
+            if main_window and hasattr(main_window, 'reinitialize_agent'):
+                main_window.reinitialize_agent()
+            self._set_status("Llama.cpp settings have been saved.", "#2ecc71")
+            QMessageBox.information(self, "Saved", "Llama.cpp settings have been saved.")
+            return
+
+        if self.init_worker and self.init_worker.isRunning():
+            return
+
+        self._set_save_enabled(False)
+        self._set_status("Applying Llama.cpp settings and loading the selected GGUF in the background...", "#3498db")
+        self.init_worker = LlamaCppInitWorker(settings, self)
+        self.init_worker.finished.connect(self._handle_init_finished)
+        self.init_worker.error.connect(self._handle_init_error)
+        self.init_worker.finished.connect(self.init_worker.deleteLater)
+        self.init_worker.error.connect(self.init_worker.deleteLater)
+        self.init_worker.start()
+
+    def _handle_init_finished(self, _result):
+        self._set_save_enabled(True)
+        self.init_worker = None
+
         main_window = self.window().parent()
         if main_window and hasattr(main_window, 'reinitialize_agent'):
             main_window.reinitialize_agent()
 
-        self._update_current_model_label(settings["chat_model_path"])
-        self._set_status("Llama.cpp settings have been saved.", "#2ecc71")
-        QMessageBox.information(self, "Saved", "Llama.cpp settings have been saved.")
+        self._set_status("Llama.cpp settings have been saved and applied.", "#2ecc71")
+        QMessageBox.information(
+            self,
+            "Saved",
+            "Llama.cpp settings have been saved. The model finished loading in the background.",
+        )
+
+    def _handle_init_error(self, error_message):
+        self._set_save_enabled(True)
+        self.init_worker = None
+        self._set_status(
+            f"Settings were saved, but loading the configured model failed: {error_message}",
+            "#e74c3c",
+        )
+        QMessageBox.critical(
+            self,
+            "Llama.cpp Initialization Error",
+            "The settings were saved, but the model could not be loaded for the current session.\n\n"
+            f"{error_message}",
+        )
 
 
 class ApiSettingsWidget(QWidget):
