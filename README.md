@@ -54,14 +54,14 @@ Core capabilities include:
 - Branching conversations on a visual canvas instead of a single threaded prompt log.
 - Built-in node types for chat, code, documents, images, and thinking/reasoning outputs.
 - Specialist plugins for validation, delivery, workflow planning, drafting, code execution, and repository-aware changes.
-- Support for both local Ollama models and API-backed providers.
+- Support for both local providers (Ollama and llama.cpp via `llama-cpp-python`) and API-backed providers.
 - Local-first persistence of conversations, notes, pins, and graph layout.
 - Export helpers for text, Markdown, HTML, Python, DOCX, and PDF outputs.
 
 ### Highlights
 - **Visual branching workspace**: Build multiple parallel thought paths, experiments, and delivery tracks in one view.
 - **Plugin-driven workflow**: Add specialized nodes such as Workflow Architect, Branch Lens, Quality Gate, Code Review Agent, Gitlink, Py-Coder, and Execution Sandbox.
-- **Provider flexibility**: Run locally with Ollama, or switch to API Endpoint mode for OpenAI-compatible providers and Google Gemini.
+- **Provider flexibility**: Run locally with Ollama or direct GGUF loading through llama.cpp, or switch to API Endpoint mode for OpenAI-compatible providers and Google Gemini.
 - **Review and delivery tooling**: Compare branches, run production-readiness checks, review code with a deterministic rubric, and stage repo-aware file changes before writing them.
 - **Structured persistence**: Sessions are stored locally in SQLite with notes and navigation pins kept separately for efficient reloads.
 - **Windows-friendly development**: The repository includes a Visual Studio solution and Python project for local editing on Windows.
@@ -144,11 +144,12 @@ py -m venv .venv
 pip install --upgrade pip
 pip install -r requirements.txt
 ```
-*Note: The `requirements.txt` includes libraries such as `PySide6`, `ollama`, `openai`, `google-generativeai`, `requests`, `qtawesome`, `Markdown`, `reportlab`, `python-docx`, `pypdf`, `Pillow`, `tiktoken`, `pygments`, `beautifulsoup4`, `ddgs`, `matplotlib`, and `pyspellchecker`.*
+*Note: The `requirements.txt` includes libraries such as `PySide6`, `ollama`, `openai`, `google-generativeai`, `requests`, `qtawesome`, `Markdown`, `reportlab`, `python-docx`, `pypdf`, `Pillow`, `tiktoken`, `pygments`, `beautifulsoup4`, `ddgs`, `matplotlib`, and `pyspellchecker`. For **Llama.cpp (Local)** mode, install `llama-cpp-python` separately (`pip install llama-cpp-python`) because it is optional and not bundled in `requirements.txt`.*
 
 **4. Choose a Model Strategy**
 You can run Graphlink in either of these modes:
-- **Ollama (Local)**: Best for local-first usage with self-hosted models.
+- **Ollama (Local)**: Best for local-first usage with Ollama-managed models.
+- **Llama.cpp (Local)**: Best when you want direct GGUF file loading through `llama-cpp-python` with runtime controls.
 - **API Endpoint**: Best when using OpenAI-compatible APIs or Google Gemini.
 
 **5. Launch the App**
@@ -187,6 +188,25 @@ ollama pull deepseek-coder:6.7b
 ```
 Then start Graphlink and keep the mode set to **Ollama (Local)**.
 
+**Llama.cpp (Local)**
+This mode uses **direct GGUF loading** through `llama-cpp-python` instead of a local model server.
+Use the Settings panel to configure:
+- Chat GGUF file (required)
+- Optional chat naming GGUF file (falls back to chat model when empty)
+- Reasoning mode (Thinking or Quick)
+- Runtime controls: `n_ctx`, `n_gpu_layers`, `n_threads`, optional `chat_format` override
+
+Model discovery supports:
+- **System Scan** of common folders (`LLAMA_CPP_MODELS`, `~/models`, `~/llama.cpp`, Downloads/Documents/Desktop, LM Studio cache, etc.)
+- **Scan Folder** for a custom directory
+- GGUF files only (`.gguf`)
+
+Llama.cpp compatibility notes in Graphlink:
+- Text chat and title generation are supported.
+- Image/audio attachments are **not** supported in this mode.
+- Image generation remains API Endpoint-only.
+- Ollama manifest/blob storage is not valid as a llama.cpp GGUF path.
+
 **API Endpoint Mode**
 The app supports **OpenAI-Compatible** and **Google Gemini** endpoints.
 The API settings UI supports per-task model selection for:
@@ -204,6 +224,7 @@ Some settings paths and dialogs read these values:
 - `GRAPHITE_GEMINI_API_KEY`
 - `GRAPHITE_API_KEY`
 - `GEMINI_API_KEY`
+- `LLAMA_CPP_MODELS`
 
 In practice, the in-app settings flow is the main configuration surface, but these environment variables are still relevant during development.
 
@@ -249,7 +270,7 @@ The file handling layer supports reading: `.txt`, `.md`, `.py`, `.json`, `.html`
 ### Technology Stack
 - **Language**: Python
 - **Desktop UI**: PySide6 / Qt
-- **Local model runtime**: Ollama
+- **Local model runtimes**: Ollama, llama.cpp via `llama-cpp-python`
 - **API providers**: OpenAI-compatible endpoints, Google Gemini
 - **HTTP / integrations**: `requests`
 - **Export / file support**: Markdown, ReportLab, `python-docx`, `pypdf`, Pillow
@@ -287,7 +308,7 @@ At a high level, Graphlink works like this:
 1. The app boots a Qt application and applies saved settings.
 2. The main window owns the graph view, plugin portal, and interaction shell.
 3. Nodes and plugins spawn worker threads for AI or execution tasks.
-4. Providers route requests to Ollama or API-backed services.
+4. Providers route requests to Ollama, llama.cpp local runtime, or API-backed services.
 5. The session manager serializes the graph into SQLite-backed storage.
 6. Reloading reconstructs the graph, branch history, notes, and plugin state.
 
@@ -366,6 +387,12 @@ This repository now includes GitHub-facing project files for a cleaner public sh
 - Make sure Ollama is installed and running.
 - Pull the required models before launching the app.
 - Confirm the selected model exists locally.
+
+**Llama.cpp features fail**
+- Install `llama-cpp-python` in the same environment (`pip install llama-cpp-python`).
+- Confirm the configured model path points to an existing `.gguf` file.
+- If the model does not respond correctly, try setting a `chat_format` override or reducing runtime settings.
+- For image/audio attachments, switch to Ollama or API Endpoint mode.
 
 **API mode fails**
 - Verify your API key is present.
