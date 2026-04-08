@@ -93,6 +93,7 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         self.web_worker_thread = None
         self.conversation_node_thread = None
         self.reasoning_thread = None
+        self.artifact_thread = None
         self.workflow_thread = None
         self.graph_diff_thread = None
         self.quality_gate_thread = None
@@ -441,6 +442,94 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         self.update_check_worker = None
         if worker is not None:
             worker.deleteLater()
+
+    def _iter_shutdown_threads(self):
+        for attr_name, label in (
+            ("chat_thread", "active chat request"),
+            ("takeaway_thread", "takeaway generation"),
+            ("explainer_thread", "explanation generation"),
+            ("chart_thread", "chart generation"),
+            ("group_summary_thread", "group summary generation"),
+            ("image_gen_thread", "image generation"),
+            ("code_exec_thread", "PyCoder code execution"),
+            ("pycoder_agent_thread", "PyCoder analysis"),
+            ("pycoder_exec_thread", "PyCoder workflow"),
+            ("sandbox_thread", "code sandbox execution"),
+            ("web_worker_thread", "web research"),
+            ("conversation_node_thread", "conversation node request"),
+            ("reasoning_thread", "reasoning workflow"),
+            ("artifact_thread", "artifact workflow"),
+            ("workflow_thread", "workflow generation"),
+            ("graph_diff_thread", "graph diff"),
+            ("quality_gate_thread", "quality gate"),
+            ("code_review_thread", "code review"),
+            ("gitlink_thread", "Gitlink proposal"),
+            ("update_check_worker", "update check"),
+        ):
+            worker = getattr(self, attr_name, None)
+            if worker is not None:
+                yield attr_name, label, worker
+
+        save_thread = getattr(getattr(self, "session_manager", None), "save_thread", None)
+        if save_thread is not None:
+            yield "session_manager.save_thread", "background save", save_thread
+
+    def _request_thread_shutdown(self, worker):
+        if worker is None:
+            return
+
+        for method_name in ("cancel", "stop"):
+            method = getattr(worker, method_name, None)
+            if callable(method):
+                try:
+                    method()
+                except Exception:
+                    pass
+                return
+
+        request_interruption = getattr(worker, "requestInterruption", None)
+        if callable(request_interruption):
+            try:
+                request_interruption()
+            except Exception:
+                pass
+
+    def _shutdown_background_threads(self, timeout_ms=3000):
+        still_running = []
+        for attr_name, label, worker in self._iter_shutdown_threads():
+            if not hasattr(worker, "isRunning") or not worker.isRunning():
+                continue
+
+            self._request_thread_shutdown(worker)
+            if worker.wait(timeout_ms):
+                if attr_name != "session_manager.save_thread" and getattr(self, attr_name, None) is worker:
+                    setattr(self, attr_name, None)
+                continue
+
+            still_running.append(label)
+
+        return still_running
+
+    def closeEvent(self, event):
+        still_running = self._shutdown_background_threads()
+        session_manager = getattr(self, "session_manager", None)
+        save_shutdown_ok = session_manager.shutdown() if session_manager else True
+
+        if not save_shutdown_ok and "background save" not in still_running:
+            still_running.append("background save")
+
+        if still_running:
+            task_list = "\n".join(f"- {label}" for label in still_running)
+            QMessageBox.information(
+                self,
+                "Background Work Still Running",
+                "Please wait for these background tasks to finish before closing:\n\n"
+                f"{task_list}",
+            )
+            event.ignore()
+            return
+
+        super().closeEvent(event)
 
     def _sync_footer_height(self, *_):
         if not hasattr(self, 'input_widget') or not hasattr(self, 'bottom_container'):
