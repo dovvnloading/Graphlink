@@ -1,6 +1,8 @@
 import base64
+import inspect
 import json
 import os
+import re
 import threading
 import urllib.error
 import urllib.request
@@ -36,6 +38,7 @@ API_MODELS = {
 LLAMA_CPP_SETTINGS = {
     "chat_model_path": "",
     "title_model_path": "",
+    "reasoning_mode": "Quick",
     "chat_format": "",
     "n_ctx": 4096,
     "n_gpu_layers": 0,
@@ -62,6 +65,21 @@ GEMINI_IMAGE_MODELS_STATIC = sorted([
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com"
 _OLLAMA_CAPABILITY_CACHE = {}
 _KNOWN_OLLAMA_AUDIO_MODEL_FAMILIES = {"gemma4"}
+_THINK_TAG_PATTERN = re.compile(r"<(think|thinking)>\s*(.*?)\s*</\1>", re.DOTALL | re.IGNORECASE)
+_THINK_CLOSING_ONLY_PATTERN = re.compile(r"</(think|thinking)>", re.IGNORECASE)
+_FALLBACK_REASONING_PATTERN = re.compile(
+    r"--- REASONING ---\s*(.*?)\s*--- END REASONING ---",
+    re.DOTALL | re.IGNORECASE,
+)
+_HARMONY_ANALYSIS_PREFIX_PATTERN = re.compile(
+    r"^\s*<\|channel\|>analysis<\|message\|>\s*",
+    re.IGNORECASE,
+)
+_HARMONY_FINAL_MARKER_PATTERN = re.compile(
+    r"<\|start\|>assistant<\|channel\|>(?:final|final json)<\|message\|>\s*",
+    re.IGNORECASE,
+)
+_HARMONY_END_MARKER_PATTERN = re.compile(r"<\|end\|>\s*", re.IGNORECASE)
 
 
 class RequestCancelledError(RuntimeError):
@@ -358,6 +376,135 @@ def _extract_response_field(payload, field_name: str, default=None):
         return default
 
 
+def _append_unique_text_segment(parts: list[str], text, seen: set[str]):
+    normalized = str(text or "").strip()
+    if not normalized:
+        return
+
+    key = re.sub(r"\s+", " ", normalized).strip().lower()
+    if not key or key in seen:
+        return
+
+    seen.add(key)
+    parts.append(normalized)
+
+
+def _strip_leading_harmony_tokens(text: str) -> str:
+    remaining = str(text or "")
+    while True:
+        updated = _HARMONY_FINAL_MARKER_PATTERN.sub("", remaining, count=1)
+        updated = _HARMONY_END_MARKER_PATTERN.sub("", updated, count=1)
+        updated = updated.lstrip()
+        if updated == remaining:
+            return updated
+        remaining = updated
+
+
+def _split_harmony_reasoning_block(text: str) -> tuple[str, str] | None:
+    raw_text = str(text or "")
+    prefix_match = _HARMONY_ANALYSIS_PREFIX_PATTERN.match(raw_text)
+    if not prefix_match:
+        return None
+
+    remaining = raw_text[prefix_match.end():]
+    final_match = _HARMONY_FINAL_MARKER_PATTERN.search(remaining)
+    end_match = _HARMONY_END_MARKER_PATTERN.search(remaining)
+
+    if final_match and (not end_match or final_match.start() <= end_match.start()):
+        reasoning_text = remaining[:final_match.start()].strip()
+        answer_text = remaining[final_match.end():].strip()
+        return reasoning_text, answer_text
+
+    if end_match:
+        reasoning_text = remaining[:end_match.start()].strip()
+        answer_text = _strip_leading_harmony_tokens(remaining[end_match.end():]).strip()
+        return reasoning_text, answer_text
+
+    return remaining.strip(), ""
+
+
+def _split_closing_only_think_block(text: str) -> tuple[str, str] | None:
+    raw_text = str(text or "")
+    closing_match = _THINK_CLOSING_ONLY_PATTERN.search(raw_text)
+    if not closing_match:
+        return None
+
+    prefix = raw_text[:closing_match.start()]
+    if re.search(r"<(think|thinking)>", prefix, re.IGNORECASE):
+        return None
+
+    reasoning_text = prefix.strip()
+    answer_text = raw_text[closing_match.end():].strip()
+    return reasoning_text, answer_text
+
+
+def split_reasoning_and_content(text: str) -> tuple[str, str]:
+    remaining_text = str(text or "").strip()
+    if not remaining_text:
+        return "", ""
+
+    reasoning_parts: list[str] = []
+    reasoning_seen: set[str] = set()
+
+    while True:
+        changed = False
+
+        think_match = _THINK_TAG_PATTERN.search(remaining_text)
+        if think_match:
+            _append_unique_text_segment(reasoning_parts, think_match.group(2), reasoning_seen)
+            remaining_text = (
+                f"{remaining_text[:think_match.start()]}\n{remaining_text[think_match.end():]}"
+            ).strip()
+            changed = True
+
+        fallback_match = _FALLBACK_REASONING_PATTERN.search(remaining_text)
+        if fallback_match:
+            _append_unique_text_segment(reasoning_parts, fallback_match.group(1), reasoning_seen)
+            remaining_text = (
+                f"{remaining_text[:fallback_match.start()]}\n{remaining_text[fallback_match.end():]}"
+            ).strip()
+            changed = True
+
+        closing_only_split = _split_closing_only_think_block(remaining_text)
+        if closing_only_split:
+            closing_reasoning, closing_answer = closing_only_split
+            _append_unique_text_segment(reasoning_parts, closing_reasoning, reasoning_seen)
+            remaining_text = closing_answer.strip()
+            changed = True
+
+        harmony_split = _split_harmony_reasoning_block(remaining_text)
+        if harmony_split:
+            harmony_reasoning, harmony_answer = harmony_split
+            _append_unique_text_segment(reasoning_parts, harmony_reasoning, reasoning_seen)
+            remaining_text = harmony_answer.strip()
+            changed = True
+
+        if not changed:
+            break
+
+    remaining_text = _strip_leading_harmony_tokens(remaining_text).strip()
+    reasoning_text = "\n\n".join(reasoning_parts).strip()
+    return reasoning_text, remaining_text
+
+
+def _compose_reasoned_response(answer_text: str, reasoning_text: str, provider_name: str) -> str:
+    normalized_answer = str(answer_text or "").strip()
+    normalized_reasoning = str(reasoning_text or "").strip()
+
+    if normalized_answer:
+        if normalized_reasoning:
+            return f"<think>{normalized_reasoning}</think>\n{normalized_answer}"
+        return normalized_answer
+
+    if normalized_reasoning:
+        raise RuntimeError(
+            f"{provider_name} returned reasoning but no final answer. "
+            "Retry in Quick mode or choose a different chat format/model."
+        )
+
+    raise RuntimeError(f"{provider_name} returned an empty response.")
+
+
 def _normalize_ollama_capabilities(capabilities) -> set[str]:
     if not capabilities:
         return set()
@@ -473,6 +620,11 @@ def _normalize_llama_cpp_settings(settings: dict | None = None) -> dict:
     normalized = {
         "chat_model_path": str(raw_settings.get("chat_model_path", "")).strip(),
         "title_model_path": str(raw_settings.get("title_model_path", "")).strip(),
+        "reasoning_mode": (
+            "Thinking"
+            if str(raw_settings.get("reasoning_mode", "Quick")).strip().lower() == "thinking"
+            else "Quick"
+        ),
         "chat_format": str(raw_settings.get("chat_format", "")).strip(),
         "n_ctx": max(256, int(raw_settings.get("n_ctx", 4096) or 4096)),
         "n_gpu_layers": int(raw_settings.get("n_gpu_layers", 0) or 0),
@@ -571,9 +723,40 @@ def _assert_llama_cpp_message_support(messages: list):
     )
 
 
-def _prepare_llama_cpp_messages(messages: list) -> list:
+def _is_qwen_reasoning_model_path(model_path: str | None) -> bool:
+    normalized_path = os.path.basename(str(model_path or "")).strip().lower()
+    if not normalized_path:
+        return False
+    return any(token in normalized_path for token in ("qwen", "qwq"))
+
+
+def _inject_qwen_thinking_instruction(messages: list, enable_thinking: bool) -> list:
+    directive = "/think" if enable_thinking else "/no_think"
+    processed_messages = [dict(message) for message in messages]
+
+    for message in processed_messages:
+        if message.get("role") != "system":
+            continue
+
+        current_content = str(message.get("content") or "").strip()
+        lowered_content = current_content.lower()
+        if "/think" in lowered_content or "/no_think" in lowered_content:
+            return processed_messages
+
+        message["content"] = f"{directive}\n{current_content}" if current_content else directive
+        return processed_messages
+
+    return [{"role": "system", "content": directive}, *processed_messages]
+
+
+def _prepare_llama_cpp_messages(messages: list, task: str) -> list:
+    normalized_messages = [dict(message) for message in messages]
+    if task == config.TASK_CHAT and _is_qwen_reasoning_model_path(_get_llama_cpp_model_path(task)):
+        enable_thinking = str(LLAMA_CPP_SETTINGS.get("reasoning_mode", "Quick")).strip().lower() == "thinking"
+        normalized_messages = _inject_qwen_thinking_instruction(normalized_messages, enable_thinking)
+
     processed_messages = []
-    for msg in messages:
+    for msg in normalized_messages:
         content = msg.get("content")
         if isinstance(content, list):
             text_parts = []
@@ -604,7 +787,116 @@ def _prepare_llama_cpp_kwargs(kwargs: dict) -> dict:
     if prepared.pop("format", None) == "json":
         prepared.setdefault("response_format", {"type": "json_object"})
     prepared.pop("response_mime_type", None)
+    enable_thinking = str(LLAMA_CPP_SETTINGS.get("reasoning_mode", "Quick")).strip().lower() == "thinking"
+    prepared.setdefault("enable_thinking", enable_thinking)
+    chat_template_kwargs = prepared.get("chat_template_kwargs")
+    if isinstance(chat_template_kwargs, dict):
+        chat_template_kwargs = dict(chat_template_kwargs)
+    else:
+        chat_template_kwargs = {}
+    chat_template_kwargs.setdefault("enable_thinking", enable_thinking)
+    prepared["chat_template_kwargs"] = chat_template_kwargs
     return prepared
+
+
+def _filter_kwargs_for_callable(callable_obj, kwargs: dict) -> dict:
+    try:
+        signature = inspect.signature(callable_obj)
+    except (TypeError, ValueError):
+        return dict(kwargs or {})
+
+    parameters = signature.parameters.values()
+    if any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters):
+        return dict(kwargs or {})
+
+    allowed_names = {
+        parameter.name
+        for parameter in parameters
+        if parameter.kind in (
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.KEYWORD_ONLY,
+        )
+    }
+    return {
+        key: value
+        for key, value in (kwargs or {}).items()
+        if key in allowed_names
+    }
+
+
+def _configure_llama_cpp_chat_handler(client):
+    try:
+        import llama_cpp.llama_chat_format as llama_chat_format
+    except Exception:
+        return
+
+    base_handler = getattr(client, "_graphite_base_chat_handler", None)
+    if base_handler is None:
+        configured_handler = getattr(client, "chat_handler", None)
+        if configured_handler is not None and not getattr(configured_handler, "_graphite_wrapped_handler", False):
+            base_handler = configured_handler
+        else:
+            chat_handlers = getattr(client, "_chat_handlers", {}) or {}
+            chat_format_name = getattr(client, "chat_format", None)
+            if chat_format_name and chat_format_name in chat_handlers:
+                base_handler = chat_handlers[chat_format_name]
+            elif chat_format_name:
+                try:
+                    base_handler = llama_chat_format.get_chat_completion_handler(chat_format_name)
+                except Exception:
+                    base_handler = None
+
+    if base_handler is None:
+        return
+
+    enable_thinking = str(LLAMA_CPP_SETTINGS.get("reasoning_mode", "Quick")).strip().lower() == "thinking"
+    current_flag = getattr(client, "_graphite_enable_thinking", None)
+    if current_flag == enable_thinking and getattr(getattr(client, "chat_handler", None), "_graphite_wrapped_handler", False):
+        return
+
+    def graphite_chat_handler(**call_kwargs):
+        if "enable_thinking" not in call_kwargs:
+            call_kwargs["enable_thinking"] = getattr(client, "_graphite_enable_thinking", False)
+        return base_handler(**call_kwargs)
+
+    graphite_chat_handler._graphite_wrapped_handler = True
+    client._graphite_base_chat_handler = base_handler
+    client._graphite_enable_thinking = enable_thinking
+    client.chat_handler = graphite_chat_handler
+
+
+def _flatten_llama_cpp_text(value) -> str:
+    if value is None:
+        return ""
+
+    if isinstance(value, str):
+        return value.strip()
+
+    if isinstance(value, list):
+        text_parts: list[str] = []
+        for item in value:
+            if isinstance(item, dict):
+                text_candidate = (
+                    item.get("text")
+                    or item.get("content")
+                    or item.get("value")
+                )
+                flattened = _flatten_llama_cpp_text(text_candidate)
+            else:
+                flattened = _flatten_llama_cpp_text(item)
+
+            if flattened:
+                text_parts.append(flattened)
+        return "\n".join(text_parts).strip()
+
+    if isinstance(value, dict):
+        for key in ("text", "content", "value", "reasoning_content", "reasoning", "thinking", "analysis", "message"):
+            flattened = _flatten_llama_cpp_text(value.get(key))
+            if flattened:
+                return flattened
+        return ""
+
+    return str(value).strip()
 
 
 def _extract_llama_cpp_text(response) -> str:
@@ -615,22 +907,90 @@ def _extract_llama_cpp_text(response) -> str:
     first_choice = choices[0]
     message = _extract_response_field(first_choice, "message", {})
     content = _extract_response_field(message, "content")
+    answer_parts: list[str] = []
+    reasoning_parts: list[str] = []
+    answer_seen: set[str] = set()
+    reasoning_seen: set[str] = set()
 
     if isinstance(content, list):
-        return "".join(
-            str(part.get("text", ""))
-            for part in content
-            if isinstance(part, dict) and part.get("type") == "text"
-        ).strip()
+        for part in content:
+            if not isinstance(part, dict):
+                flattened = _flatten_llama_cpp_text(part)
+                extracted_reasoning, visible_text = split_reasoning_and_content(flattened)
+                _append_unique_text_segment(reasoning_parts, extracted_reasoning, reasoning_seen)
+                _append_unique_text_segment(answer_parts, visible_text, answer_seen)
+                continue
 
-    if content is not None:
-        return str(content).strip()
+            part_type = str(part.get("type", "")).strip().lower()
+            if part_type in {"thinking", "think", "reasoning", "reasoning_content"}:
+                part_text = _flatten_llama_cpp_text(
+                    part.get("reasoning_content")
+                    or part.get("reasoning")
+                    or part.get("thinking")
+                    or part.get("text")
+                    or part.get("content")
+                    or part.get("value")
+                )
+            else:
+                part_text = _flatten_llama_cpp_text(
+                    part.get("text")
+                    or part.get("content")
+                    or part.get("value")
+                    or part.get("message")
+                )
+            if not part_text:
+                continue
 
-    fallback_text = _extract_response_field(first_choice, "text")
-    if fallback_text is not None:
-        return str(fallback_text).strip()
+            if part_type in {"thinking", "think", "reasoning", "reasoning_content"}:
+                extracted_reasoning, visible_text = split_reasoning_and_content(part_text)
+                _append_unique_text_segment(
+                    reasoning_parts,
+                    extracted_reasoning or visible_text or part_text,
+                    reasoning_seen,
+                )
+            else:
+                extracted_reasoning, visible_text = split_reasoning_and_content(part_text)
+                _append_unique_text_segment(reasoning_parts, extracted_reasoning, reasoning_seen)
+                _append_unique_text_segment(answer_parts, visible_text, answer_seen)
+    else:
+        flattened_content = _flatten_llama_cpp_text(content)
+        if flattened_content:
+            extracted_reasoning, visible_text = split_reasoning_and_content(flattened_content)
+            _append_unique_text_segment(reasoning_parts, extracted_reasoning, reasoning_seen)
+            _append_unique_text_segment(answer_parts, visible_text, answer_seen)
 
-    raise RuntimeError("Llama.cpp returned an empty response.")
+    for reasoning_candidate in (
+        _extract_response_field(message, "thinking"),
+        _extract_response_field(message, "reasoning"),
+        _extract_response_field(message, "reasoning_content"),
+        _extract_response_field(first_choice, "thinking"),
+        _extract_response_field(first_choice, "reasoning"),
+        _extract_response_field(first_choice, "reasoning_content"),
+    ):
+        flattened = _flatten_llama_cpp_text(reasoning_candidate)
+        if flattened:
+            extracted_reasoning, visible_text = split_reasoning_and_content(flattened)
+            _append_unique_text_segment(
+                reasoning_parts,
+                extracted_reasoning or visible_text or flattened,
+                reasoning_seen,
+            )
+
+    for answer_candidate in (
+        _extract_response_field(message, "text"),
+        _extract_response_field(message, "response"),
+        _extract_response_field(first_choice, "text"),
+        _extract_response_field(first_choice, "response"),
+    ):
+        flattened = _flatten_llama_cpp_text(answer_candidate)
+        if flattened:
+            extracted_reasoning, visible_text = split_reasoning_and_content(flattened)
+            _append_unique_text_segment(reasoning_parts, extracted_reasoning, reasoning_seen)
+            _append_unique_text_segment(answer_parts, visible_text, answer_seen)
+
+    answer_text = "\n\n".join(part for part in answer_parts if part).strip()
+    reasoning_text = "\n\n".join(part for part in reasoning_parts if part).strip()
+    return _compose_reasoned_response(answer_text, reasoning_text, "Llama.cpp")
 
 
 def _get_llama_cpp_client(task: str):
@@ -652,6 +1012,7 @@ def _get_llama_cpp_client(task: str):
     with _LLAMA_CPP_CLIENT_LOCK:
         cached_client = _LLAMA_CPP_CLIENT_CACHE.get(cache_key)
         if cached_client is not None:
+            _configure_llama_cpp_chat_handler(cached_client)
             return cached_client
 
         Llama = _load_llama_cpp_class()
@@ -672,6 +1033,7 @@ def _get_llama_cpp_client(task: str):
                 f"Failed to load the Llama.cpp model '{normalized_path}': {exc}"
             ) from exc
 
+        _configure_llama_cpp_chat_handler(client)
         _LLAMA_CPP_CLIENT_CACHE[cache_key] = client
         return client
 
@@ -1111,11 +1473,17 @@ def chat(task: str, messages: list, **kwargs) -> dict:
                 response = ollama.chat(model=model, messages=ollama_messages, **ollama_kwargs)
                 _raise_if_cancelled(cancel_event)
 
-                full_response_content = response["message"].get("content", "")
-                reasoning = response["message"].get("thinking")
-
-                if reasoning:
-                    full_response_content = f"<think>{reasoning}</think>\n{full_response_content}"
+                raw_response_content = response["message"].get("content", "")
+                embedded_reasoning, visible_response_content = split_reasoning_and_content(raw_response_content)
+                reasoning_parts: list[str] = []
+                reasoning_seen: set[str] = set()
+                _append_unique_text_segment(reasoning_parts, response["message"].get("thinking"), reasoning_seen)
+                _append_unique_text_segment(reasoning_parts, embedded_reasoning, reasoning_seen)
+                full_response_content = _compose_reasoned_response(
+                    visible_response_content,
+                    "\n\n".join(reasoning_parts).strip(),
+                    "Ollama",
+                )
 
                 return {
                     "message": {
@@ -1126,9 +1494,12 @@ def chat(task: str, messages: list, **kwargs) -> dict:
 
             if LOCAL_PROVIDER_TYPE == config.LOCAL_PROVIDER_LLAMACPP:
                 _assert_llama_cpp_message_support(messages)
-                llama_messages = _prepare_llama_cpp_messages(messages)
-                llama_kwargs = _prepare_llama_cpp_kwargs(kwargs)
+                llama_messages = _prepare_llama_cpp_messages(messages, task)
                 client = _get_llama_cpp_client(task)
+                llama_kwargs = _filter_kwargs_for_callable(
+                    client.create_chat_completion,
+                    _prepare_llama_cpp_kwargs(kwargs),
+                )
                 response = client.create_chat_completion(messages=llama_messages, **llama_kwargs)
                 _raise_if_cancelled(cancel_event)
                 return {
@@ -1270,11 +1641,6 @@ def chat(task: str, messages: list, **kwargs) -> dict:
 
 def initialize_api(provider: str, api_key: str, base_url: str = None):
     global USE_API_MODE, API_PROVIDER_TYPE, API_CLIENT, API_KEY, API_BASE_URL
-    USE_API_MODE = True
-    _close_llama_cpp_clients()
-    API_PROVIDER_TYPE = provider
-    API_KEY = api_key
-    API_BASE_URL = base_url
 
     if provider == config.API_PROVIDER_OPENAI:
         try:
@@ -1290,19 +1656,23 @@ def initialize_api(provider: str, api_key: str, base_url: str = None):
         if not api_key:
             if _is_local_base_url(base_url):
                 api_key = "dummy-key-for-local"
-                API_KEY = api_key
             else:
                 raise RuntimeError("OpenAI-compatible API key not configured. Open Settings and save your API key.")
 
-        API_CLIENT = OpenAI(api_key=api_key, base_url=base_url)
+        client = OpenAI(api_key=api_key, base_url=base_url)
 
     elif provider == config.API_PROVIDER_GEMINI:
         if not (api_key or os.environ.get("GRAPHITE_GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY")):
             raise RuntimeError("Gemini API key not configured. Open Settings and save your Gemini API key.")
-        API_CLIENT = {"provider": config.API_PROVIDER_GEMINI}
+        client = {"provider": config.API_PROVIDER_GEMINI}
     else:
         raise ValueError(f"Unknown API provider: {provider}")
 
+    USE_API_MODE = True
+    API_PROVIDER_TYPE = provider
+    API_CLIENT = client
+    API_KEY = api_key
+    API_BASE_URL = base_url
     return API_CLIENT
 
 
@@ -1313,29 +1683,59 @@ def initialize_local_provider(
     preload_model: bool = False,
 ):
     global USE_API_MODE, LOCAL_PROVIDER_TYPE, API_PROVIDER_TYPE, API_CLIENT, API_KEY, API_BASE_URL, LLAMA_CPP_SETTINGS
-    USE_API_MODE = False
-    LOCAL_PROVIDER_TYPE = provider
-    API_PROVIDER_TYPE = None
-    API_CLIENT = None
-    API_KEY = None
-    API_BASE_URL = None
 
     if provider == config.LOCAL_PROVIDER_OLLAMA:
-        _close_llama_cpp_clients()
-        LLAMA_CPP_SETTINGS = _normalize_llama_cpp_settings()
+        normalized_settings = _normalize_llama_cpp_settings()
+        USE_API_MODE = False
+        LOCAL_PROVIDER_TYPE = provider
+        API_PROVIDER_TYPE = None
+        API_CLIENT = None
+        API_KEY = None
+        API_BASE_URL = None
+        LLAMA_CPP_SETTINGS = normalized_settings
         return {"provider": provider}
 
     if provider == config.LOCAL_PROVIDER_LLAMACPP:
-        LLAMA_CPP_SETTINGS = _normalize_llama_cpp_settings(settings)
-        _close_llama_cpp_clients()
+        normalized_settings = _normalize_llama_cpp_settings(settings)
         _validate_llama_cpp_model_path(
-            _get_llama_cpp_model_path(config.TASK_CHAT),
+            normalized_settings.get("chat_model_path"),
             config.TASK_CHAT,
         )
-        if LLAMA_CPP_SETTINGS.get("title_model_path"):
-            _validate_llama_cpp_model_path(LLAMA_CPP_SETTINGS["title_model_path"], config.TASK_TITLE)
-        if preload_model:
-            _get_llama_cpp_client(config.TASK_CHAT)
+        if normalized_settings.get("title_model_path"):
+            _validate_llama_cpp_model_path(normalized_settings["title_model_path"], config.TASK_TITLE)
+
+        previous_state = (
+            USE_API_MODE,
+            LOCAL_PROVIDER_TYPE,
+            API_PROVIDER_TYPE,
+            API_CLIENT,
+            API_KEY,
+            API_BASE_URL,
+            LLAMA_CPP_SETTINGS,
+        )
+
+        try:
+            USE_API_MODE = False
+            LOCAL_PROVIDER_TYPE = provider
+            API_PROVIDER_TYPE = None
+            API_CLIENT = None
+            API_KEY = None
+            API_BASE_URL = None
+            LLAMA_CPP_SETTINGS = normalized_settings
+            if preload_model:
+                _get_llama_cpp_client(config.TASK_CHAT)
+        except Exception:
+            (
+                USE_API_MODE,
+                LOCAL_PROVIDER_TYPE,
+                API_PROVIDER_TYPE,
+                API_CLIENT,
+                API_KEY,
+                API_BASE_URL,
+                LLAMA_CPP_SETTINGS,
+            ) = previous_state
+            raise
+
         return {
             "provider": provider,
             "model_path": _get_llama_cpp_model_path(config.TASK_CHAT),
