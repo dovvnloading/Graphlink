@@ -96,7 +96,15 @@ TASK_WEB_VALIDATE = "task_web_validate"
 TASK_WEB_SUMMARIZE = "task_web_summarize"
 
 API_PROVIDER_OPENAI = "OpenAI-Compatible"
+API_PROVIDER_ANTHROPIC = "Anthropic Claude"
 API_PROVIDER_GEMINI = "Google Gemini"
+
+LOCAL_PROVIDER_OLLAMA = "Ollama"
+LOCAL_PROVIDER_LLAMACPP = "Llama.cpp"
+
+MODE_OLLAMA_LOCAL = "Ollama (Local)"
+MODE_LLAMACPP_LOCAL = "Llama.cpp (Local)"
+MODE_API_ENDPOINT = "API Endpoint"
 
 OLLAMA_MODELS = {
     TASK_TITLE: 'qwen3:8b',
