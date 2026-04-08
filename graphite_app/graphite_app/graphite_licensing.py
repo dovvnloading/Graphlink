@@ -78,6 +78,8 @@ class SettingsManager:
                     state['api_base_url'] = 'https://api.openai.com/v1'
                 if 'openai_api_key' not in state:
                     state['openai_api_key'] = ''
+                if 'anthropic_api_key' not in state:
+                    state['anthropic_api_key'] = ''
                 if 'gemini_api_key' not in state:
                     state['gemini_api_key'] = ''
                 if 'github_access_token' not in state:
@@ -134,6 +136,7 @@ class SettingsManager:
             "api_provider": "OpenAI-Compatible",
             "api_base_url": "https://api.openai.com/v1",
             "openai_api_key": "",
+            "anthropic_api_key": "",
             "gemini_api_key": "",
             "github_access_token": "",
             "api_models": {},
@@ -423,6 +426,9 @@ class SettingsManager:
         
     def get_openai_key(self):
         return self.state.get("openai_api_key", "")
+
+    def get_anthropic_key(self):
+        return self.state.get("anthropic_api_key", "")
         
     def get_gemini_key(self):
         return self.state.get("gemini_api_key", "")
@@ -433,10 +439,18 @@ class SettingsManager:
     def get_api_models(self):
         return self.state.get("api_models", {})
 
-    def set_api_settings(self, provider: str, base_url: str, openai_key: str, gemini_key: str):
+    def set_api_settings(
+        self,
+        provider: str,
+        base_url: str,
+        openai_key: str,
+        anthropic_key: str,
+        gemini_key: str,
+    ):
         self.state["api_provider"] = provider
         self.state["api_base_url"] = base_url
         self.state["openai_api_key"] = openai_key
+        self.state["anthropic_api_key"] = anthropic_key
         self.state["gemini_api_key"] = gemini_key
         self._save_state()
 
@@ -452,6 +466,7 @@ class SettingsManager:
         self.state["api_provider"] = "OpenAI-Compatible"
         self.state["api_base_url"] = "https://api.openai.com/v1"
         self.state["openai_api_key"] = ""
+        self.state["anthropic_api_key"] = ""
         self.state["gemini_api_key"] = ""
         self.state["api_models"] = {}
         self._save_state()
