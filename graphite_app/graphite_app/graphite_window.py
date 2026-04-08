@@ -837,10 +837,12 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         return False
     
     def on_mode_changed(self, index):
+        previous_mode = self.settings_manager.get_current_mode()
         mode_text = self.mode_combo.itemText(index)
-        self.settings_manager.set_current_mode(mode_text)
         try:
             self._initialize_mode(mode_text, show_dialogs=True)
+            self.settings_manager.set_current_mode(mode_text)
+            self.reinitialize_agent()
             if mode_text == config.MODE_LLAMACPP_LOCAL:
                 self.notification_banner.show_message(
                     "Llama.cpp is configured. The GGUF will load on the first request instead of blocking startup or mode switching.",
@@ -848,6 +850,14 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
                     "info",
                 )
         except Exception as e:
+            if previous_mode and previous_mode != mode_text:
+                self._set_mode_combo_silently(previous_mode)
+                self.settings_manager.set_current_mode(previous_mode)
+                try:
+                    self._initialize_mode(previous_mode, show_dialogs=False)
+                    self.reinitialize_agent()
+                except Exception:
+                    pass
             title = (
                 "Llama.cpp Configuration Required"
                 if mode_text == config.MODE_LLAMACPP_LOCAL
@@ -863,14 +873,15 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
 
     def _initialize_saved_mode_on_startup(self):
         mode_text = self.mode_combo.currentText()
-        self.settings_manager.set_current_mode(mode_text)
         try:
             self._initialize_mode(mode_text, show_dialogs=False)
+            self.settings_manager.set_current_mode(mode_text)
         except Exception:
             fallback_mode = config.MODE_OLLAMA_LOCAL
             self._set_mode_combo_silently(fallback_mode)
             self.settings_manager.set_current_mode(fallback_mode)
             api_provider.initialize_local_provider(config.LOCAL_PROVIDER_OLLAMA)
+        self.reinitialize_agent()
 
     def setCurrentNode(self, node):
         self.current_node = node; text_content = ""
