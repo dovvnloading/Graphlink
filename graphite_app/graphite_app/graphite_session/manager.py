@@ -70,14 +70,35 @@ class ChatSessionManager:
         self.save_thread.start()
 
     def _on_save_finished(self, new_chat_id):
+        thread = self.save_thread
         self.current_chat_id = new_chat_id
         self._is_saving = False
+        self.save_thread = None
+        if thread is not None:
+            thread.deleteLater()
         print(f"Background save completed for chat ID: {new_chat_id}")
         if hasattr(self.window, "update_title_bar"):
             self.window.update_title_bar()
 
     def _on_save_error(self, error_message):
+        thread = self.save_thread
         self._is_saving = False
+        self.save_thread = None
+        if thread is not None:
+            thread.deleteLater()
         print(f"Error during background save: {error_message}")
         if hasattr(self.window, "notification_banner"):
             self.window.notification_banner.show_message(f"Error saving chat: {error_message}", 10000, "error")
+
+    def shutdown(self, timeout_ms=3000):
+        thread = self.save_thread
+        if thread is None:
+            return True
+
+        if thread.isRunning() and not thread.wait(timeout_ms):
+            return False
+
+        self.save_thread = None
+        self._is_saving = False
+        thread.deleteLater()
+        return True
