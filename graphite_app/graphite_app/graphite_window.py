@@ -911,6 +911,9 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
             if provider == config.API_PROVIDER_OPENAI:
                 api_key = self.settings_manager.get_openai_key()
                 api_provider.initialize_api(provider, api_key, base_url)
+            elif provider == config.API_PROVIDER_ANTHROPIC:
+                api_key = self.settings_manager.get_anthropic_key()
+                api_provider.initialize_api(provider, api_key)
             else:
                 api_key = self.settings_manager.get_gemini_key()
                 api_provider.initialize_api(provider, api_key)
