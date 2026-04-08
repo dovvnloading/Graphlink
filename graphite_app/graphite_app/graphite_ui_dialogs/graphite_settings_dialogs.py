@@ -748,7 +748,9 @@ class LlamaCppSettingsWidget(QWidget):
 
         help_label = QLabel(
             "Leave Chat Format Override blank to let the GGUF metadata decide. "
-            "If a model ships without a usable chat template, enter a specific chat format manually."
+            "If a model ships without a usable chat template, enter a specific chat format manually. "
+            "Graphite also forwards the `enable_thinking` chat-template flag to templates that support it, "
+            "including Qwen3.5 GGUFs that expose a thinking toggle."
         )
         help_label.setWordWrap(True)
         help_label.setStyleSheet("color: #9fa6ad; margin-top: 4px;")
@@ -1936,3 +1938,52 @@ class SettingsDialog(QFrame):
 
     def on_theme_changed(self):
         self._apply_panel_styles()
+
+    def _iter_running_workers(self):
+        for label, worker in (
+            ("Ollama model validation", getattr(self.ollama_tab, "worker_thread", None)),
+            ("Ollama model scan", getattr(self.ollama_tab, "scan_worker", None)),
+            ("Llama.cpp model scan", getattr(self.llama_cpp_tab, "scan_worker", None)),
+        ):
+            if worker is not None:
+                yield label, worker
+
+    def _request_worker_shutdown(self, worker):
+        for method_name in ("cancel", "stop"):
+            method = getattr(worker, method_name, None)
+            if callable(method):
+                try:
+                    method()
+                except Exception:
+                    pass
+                return
+
+        request_interruption = getattr(worker, "requestInterruption", None)
+        if callable(request_interruption):
+            try:
+                request_interruption()
+            except Exception:
+                pass
+
+    def closeEvent(self, event):
+        still_running = []
+        for label, worker in self._iter_running_workers():
+            if not hasattr(worker, "isRunning") or not worker.isRunning():
+                continue
+
+            self._request_worker_shutdown(worker)
+            if not worker.wait(3000):
+                still_running.append(label)
+
+        if still_running:
+            worker_list = "\n".join(f"- {label}" for label in still_running)
+            QMessageBox.information(
+                self,
+                "Background Work Still Running",
+                "Please wait for these settings tasks to finish before closing:\n\n"
+                f"{worker_list}",
+            )
+            event.ignore()
+            return
+
+        super().closeEvent(event)
