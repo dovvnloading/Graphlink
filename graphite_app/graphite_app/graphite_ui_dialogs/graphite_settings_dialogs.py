@@ -1060,18 +1060,23 @@ class ApiSettingsWidget(QWidget):
         
         layout.addWidget(QLabel("API Provider:", styleSheet="color: #ffffff; font-weight: bold;"))
         self.provider_combo = SettingsComboBox()
-        self.provider_combo.addItems([config.API_PROVIDER_OPENAI, config.API_PROVIDER_GEMINI])
+        self.provider_combo.addItems([
+            config.API_PROVIDER_OPENAI,
+            config.API_PROVIDER_ANTHROPIC,
+            config.API_PROVIDER_GEMINI,
+        ])
         self.provider_combo.currentTextChanged.connect(self._on_provider_changed)
         layout.addWidget(self.provider_combo)
 
-        info = QLabel(
+        self.info_label = QLabel(
             "Configure your API endpoint.\n"
-            "OpenAI-Compatible works with: OpenAI, LiteLLM, Anthropic, OpenRouter, etc.\n\n"
+            "OpenAI-Compatible works with: OpenAI, LiteLLM, OpenRouter, LM Studio, and similar endpoints.\n"
+            "Anthropic Claude uses Anthropic's native API.\n\n"
             "Choose different models for different tasks, including the chat naming model."
         )
-        info.setWordWrap(True)
-        info.setStyleSheet("color: #d4d4d4; margin-bottom: 15px; margin-top: 10px;")
-        layout.addWidget(info)
+        self.info_label.setWordWrap(True)
+        self.info_label.setStyleSheet("color: #d4d4d4; margin-bottom: 15px; margin-top: 10px;")
+        layout.addWidget(self.info_label)
 
         self.base_url_label = QLabel("Base URL:")
         self.base_url_label.setStyleSheet("color: #ffffff; font-weight: bold;")
@@ -1083,7 +1088,7 @@ class ApiSettingsWidget(QWidget):
         self.api_key_input = QLineEdit(echoMode=QLineEdit.Password, placeholderText="Enter your API key...")
         layout.addWidget(self.api_key_input)
 
-        self.load_btn = QPushButton("Load Models from Endpoint")
+        self.load_btn = QPushButton("Load Available Models")
         self.load_btn.clicked.connect(self.load_models_from_endpoint)
         layout.addWidget(self.load_btn)
 
@@ -1114,8 +1119,12 @@ class ApiSettingsWidget(QWidget):
         self.image_combo.setEditable(True)
         self.model_combos[config.TASK_IMAGE_GEN] = self.image_combo
         layout.addWidget(self.image_combo)
+        self.image_help_label = QLabel("Select an image model if your provider supports image generation.")
+        self.image_help_label.setWordWrap(True)
+        self.image_help_label.setStyleSheet("color: #9fa6ad; margin-top: 2px;")
+        layout.addWidget(self.image_help_label)
         
-        layout.addWidget(QLabel("Web Content Validation (fastest model, Gemini-only):", styleSheet="color: #d4d4d4; margin-top: 8px;"))
+        layout.addWidget(QLabel("Web Content Validation:", styleSheet="color: #d4d4d4; margin-top: 8px;"))
         self.web_validate_combo = SettingsComboBox(placeholder_text="Default: gemini-3.1-flash-lite-preview")
         self.web_validate_combo.setEditable(True)
         self.model_combos[config.TASK_WEB_VALIDATE] = self.web_validate_combo
@@ -1147,16 +1156,20 @@ class ApiSettingsWidget(QWidget):
 
     def restore_saved_models(self):
         saved_models = self.settings_manager.get_api_models()
+        provider = self.provider_combo.currentText()
         for task, combo in self.model_combos.items():
+            if provider == config.API_PROVIDER_ANTHROPIC and task == config.TASK_IMAGE_GEN:
+                continue
             saved_model = saved_models.get(task, "")
             if saved_model:
                 if combo.findText(saved_model) == -1:
                     combo.addItem(saved_model)
                 combo.setCurrentText(saved_model)
 
-    def _populate_models(self, models):
+    def _populate_models(self, models, skip_tasks=None):
+        skip_tasks = set(skip_tasks or ())
         for task, combo in self.model_combos.items():
-            if task == config.TASK_WEB_VALIDATE and self.provider_combo.currentText() == config.API_PROVIDER_GEMINI:
+            if task in skip_tasks:
                 continue
             
             current = combo.currentText()
@@ -1164,36 +1177,53 @@ class ApiSettingsWidget(QWidget):
             combo.addItems(models)
             if current and combo.findText(current) != -1:
                 combo.setCurrentText(current)
+
+    def _required_tasks_for_provider(self, provider_name):
+        required_tasks = list(self.model_combos.keys())
+        if provider_name == config.API_PROVIDER_ANTHROPIC:
+            required_tasks.remove(config.TASK_IMAGE_GEN)
+        return required_tasks
+
+    def _configure_anthropic_image_state(self):
+        self.image_combo.clear()
+        self.image_combo.setEnabled(False)
+        self.image_combo.setEditable(False)
+        self.image_help_label.setText("Anthropic Claude does not support image generation in Graphlink yet.")
+
+    def _configure_supported_image_state(self, provider_name):
+        self.image_combo.setEnabled(True)
+        self.image_combo.setEditable(provider_name == config.API_PROVIDER_OPENAI)
+        if provider_name == config.API_PROVIDER_GEMINI:
+            self.image_help_label.setText("Select a Gemini image model for image generation.")
+        else:
+            self.image_help_label.setText("Select an image model if your provider supports image generation.")
     
     def _on_provider_changed(self, provider_name):
         is_openai = (provider_name == config.API_PROVIDER_OPENAI)
+        is_anthropic = (provider_name == config.API_PROVIDER_ANTHROPIC)
 
         for task, combo in self.model_combos.items():
-            combo.setEditable(is_openai or task == config.TASK_WEB_VALIDATE)
+            combo.setEditable((is_openai or is_anthropic) and task != config.TASK_IMAGE_GEN)
+            if task == config.TASK_WEB_VALIDATE:
+                combo.setEditable(True)
         
         self.base_url_label.setVisible(is_openai)
         self.base_url_input.setVisible(is_openai)
-        self.load_btn.setVisible(is_openai)
+        self.load_btn.setVisible(is_openai or is_anthropic)
         
         self.web_validate_combo.clear()
-        self.web_validate_combo.addItems(api_provider.GEMINI_MODELS_STATIC)
-        self.web_validate_combo.setEnabled(provider_name == config.API_PROVIDER_GEMINI)
-        
-        default_idx = self.web_validate_combo.findText("gemini-3.1-flash-lite-preview")
-        if default_idx >= 0:
-            self.web_validate_combo.setCurrentIndex(default_idx)
-
-        self.image_combo.clear()
-        if provider_name == config.API_PROVIDER_GEMINI:
-            self.image_combo.addItems(api_provider.GEMINI_IMAGE_MODELS_STATIC)
-            image_default_idx = self.image_combo.findText("gemini-2.5-flash-image")
-            if image_default_idx >= 0:
-                self.image_combo.setCurrentIndex(image_default_idx)
+        self.web_validate_combo.setEnabled(True)
 
         if is_openai:
             self.api_key_input.setPlaceholderText("Enter your OpenAI-compatible API key...")
             self.api_key_input.setText(self.settings_manager.get_openai_key())
-            self._populate_models([]) 
+            self._populate_models([])
+            self._configure_supported_image_state(provider_name)
+        elif is_anthropic:
+            self.api_key_input.setPlaceholderText("Enter your Anthropic API key...")
+            self.api_key_input.setText(self.settings_manager.get_anthropic_key())
+            self._populate_models([], skip_tasks={config.TASK_IMAGE_GEN})
+            self._configure_anthropic_image_state()
         else:
             self.api_key_input.setPlaceholderText("Enter your Google Gemini API key...")
             self.api_key_input.setText(self.settings_manager.get_gemini_key())
@@ -1202,7 +1232,18 @@ class ApiSettingsWidget(QWidget):
                     continue
                 combo.clear()
                 combo.addItems(api_provider.GEMINI_MODELS_STATIC)
-                    
+            self.web_validate_combo.addItems(api_provider.GEMINI_MODELS_STATIC)
+            default_idx = self.web_validate_combo.findText("gemini-3.1-flash-lite-preview")
+            if default_idx >= 0:
+                self.web_validate_combo.setCurrentIndex(default_idx)
+
+            self.image_combo.clear()
+            self.image_combo.addItems(api_provider.GEMINI_IMAGE_MODELS_STATIC)
+            image_default_idx = self.image_combo.findText("gemini-2.5-flash-image")
+            if image_default_idx >= 0:
+                self.image_combo.setCurrentIndex(image_default_idx)
+            self._configure_supported_image_state(provider_name)
+
         self.restore_saved_models()
 
     def load_models_from_endpoint(self):
@@ -1222,7 +1263,9 @@ class ApiSettingsWidget(QWidget):
             models = api_provider.get_available_models()
             
             if provider == config.API_PROVIDER_OPENAI:
-                 self._populate_models(models)
+                self._populate_models(models)
+            elif provider == config.API_PROVIDER_ANTHROPIC:
+                self._populate_models(models, skip_tasks={config.TASK_IMAGE_GEN})
             
             self.restore_saved_models()
             QMessageBox.information(self, "Models Loaded", f"Successfully loaded {len(models)} models!")
@@ -1238,20 +1281,23 @@ class ApiSettingsWidget(QWidget):
             QMessageBox.warning(self, "Missing API Key", "Please enter your API Key.")
             return
             
-        tasks_to_check =[t for t in self.model_combos.keys() if t != config.TASK_WEB_VALIDATE or provider == config.API_PROVIDER_GEMINI]
+        tasks_to_check = self._required_tasks_for_provider(provider)
         for task_key in tasks_to_check:
             if not self.model_combos[task_key].currentText():
                 QMessageBox.warning(self, "Missing Model Selection", f"Please select a model for task: {task_key}")
                 return
 
         openai_key = api_key if provider == config.API_PROVIDER_OPENAI else self.settings_manager.get_openai_key()
+        anthropic_key = api_key if provider == config.API_PROVIDER_ANTHROPIC else self.settings_manager.get_anthropic_key()
         gemini_key = api_key if provider == config.API_PROVIDER_GEMINI else self.settings_manager.get_gemini_key()
         
-        self.settings_manager.set_api_settings(provider, base_url, openai_key, gemini_key)
+        self.settings_manager.set_api_settings(provider, base_url, openai_key, anthropic_key, gemini_key)
 
-        models_dict = {}
+        models_dict = dict(self.settings_manager.get_api_models())
         for task_key, combo in self.model_combos.items():
-            if combo.currentText() or (task_key == config.TASK_WEB_VALIDATE and provider == config.API_PROVIDER_GEMINI):
+            if provider == config.API_PROVIDER_ANTHROPIC and task_key == config.TASK_IMAGE_GEN:
+                continue
+            if combo.currentText():
                 models_dict[task_key] = combo.currentText()
                 api_provider.set_task_model(task_key, combo.currentText())
                 
@@ -1261,8 +1307,10 @@ class ApiSettingsWidget(QWidget):
         if provider == config.API_PROVIDER_OPENAI:
             os.environ['GRAPHITE_OPENAI_API_KEY'] = api_key
             os.environ['GRAPHITE_API_BASE'] = base_url
+        elif provider == config.API_PROVIDER_ANTHROPIC:
+            os.environ['GRAPHITE_ANTHROPIC_API_KEY'] = api_key
         else:
-             os.environ['GRAPHITE_GEMINI_API_KEY'] = api_key
+            os.environ['GRAPHITE_GEMINI_API_KEY'] = api_key
 
         try:
             if provider == config.API_PROVIDER_OPENAI:
@@ -1286,10 +1334,9 @@ class ApiSettingsWidget(QWidget):
             self.api_key_input.clear()
             self.base_url_input.setText("https://api.openai.com/v1")
             for task, combo in self.model_combos.items():
-                if task != config.TASK_WEB_VALIDATE:
-                    combo.clear()
-            self.provider_combo.setCurrentText("OpenAI-Compatible")
-            self._on_provider_changed("OpenAI-Compatible")
+                combo.clear()
+            self.provider_combo.setCurrentText(config.API_PROVIDER_OPENAI)
+            self._on_provider_changed(config.API_PROVIDER_OPENAI)
             QMessageBox.information(self, "Reset Successful", "All API settings have been cleared.")
 
 
@@ -1551,7 +1598,9 @@ class SettingsDialog(QFrame):
     ]
 
     def __init__(self, settings_manager, parent=None):
-        super().__init__(parent, Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint | Qt.WindowType.NoDropShadowWindowHint)
+        # Use a persistent tool window instead of a popup so the settings panel
+        # stays open during scans, message boxes, and incidental outside clicks.
+        super().__init__(parent, Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint | Qt.WindowType.NoDropShadowWindowHint)
         self.settings_manager = settings_manager
         self.category_buttons = {}
         self.current_section_name = None
