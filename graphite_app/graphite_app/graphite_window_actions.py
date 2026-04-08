@@ -388,22 +388,11 @@ class WindowActionsMixin:
 
     def _parse_response(self, response_text):
         parts = []
-        think_tag_pattern = re.compile(r"<(think|thinking)>(.*?)</\1>", re.DOTALL | re.IGNORECASE)
-        fallback_reasoning_pattern = re.compile(r"--- REASONING ---\s*(.*?)\s*--- END REASONING ---", re.DOTALL | re.IGNORECASE)
         code_block_tag_pattern = re.compile(r"<code_block>([\s\S]*?)</code_block>", re.IGNORECASE)
         code_fence_pattern = re.compile(r"```(\w*)\s*\n?([\s\S]*?)\s*```")
-        remaining_text = response_text
-        thinking_match = think_tag_pattern.search(remaining_text)
-        if thinking_match:
-            thinking_content = thinking_match.group(2).strip()
+        thinking_content, remaining_text = api_provider.split_reasoning_and_content(response_text)
+        if thinking_content:
             parts.append({'type': 'thinking', 'content': thinking_content})
-            remaining_text = remaining_text.replace(thinking_match.group(0), "").strip()
-        else:
-            fallback_match = fallback_reasoning_pattern.search(remaining_text)
-            if fallback_match:
-                thinking_content = fallback_match.group(1).strip()
-                parts.append({'type': 'thinking', 'content': thinking_content})
-                remaining_text = remaining_text.replace(fallback_match.group(0), "").strip()
         text_content = ""
         code_snippets = []
         language = ""
