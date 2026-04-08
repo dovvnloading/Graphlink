@@ -1,6 +1,8 @@
+anthropic
 beautifulsoup4
 ddgs
 google-generativeai
+llama-cpp-python
 Markdown
 matplotlib
 mutagen
