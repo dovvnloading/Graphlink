@@ -63,6 +63,14 @@ GEMINI_IMAGE_MODELS_STATIC = sorted([
 ])
 
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com"
+ANTHROPIC_MODELS_URL = "https://api.anthropic.com/v1/models?limit=1000"
+ANTHROPIC_DEFAULT_MAX_TOKENS = {
+    config.TASK_TITLE: 128,
+    config.TASK_WEB_VALIDATE: 64,
+    config.TASK_CHAT: 4096,
+    config.TASK_CHART: 4096,
+    config.TASK_WEB_SUMMARIZE: 4096,
+}
 _OLLAMA_CAPABILITY_CACHE = {}
 _KNOWN_OLLAMA_AUDIO_MODEL_FAMILIES = {"gemma4"}
 _THINK_TAG_PATTERN = re.compile(r"<(think|thinking)>\s*(.*?)\s*</\1>", re.DOTALL | re.IGNORECASE)
@@ -1106,6 +1114,13 @@ def _get_gemini_api_key() -> str:
     return api_key
 
 
+def _get_anthropic_api_key() -> str:
+    api_key = API_KEY or os.environ.get("GRAPHITE_ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise RuntimeError("Anthropic API key not configured. Open Settings and save your Anthropic API key.")
+    return api_key
+
+
 def _is_local_base_url(base_url: str | None) -> bool:
     if not base_url:
         return False
@@ -1137,6 +1152,213 @@ def _iter_audio_parts(messages: list):
 
 def _message_contains_audio(messages: list) -> bool:
     return any(True for _ in _iter_audio_parts(messages))
+
+
+def _stringify_message_content(content) -> str:
+    if isinstance(content, list):
+        text_parts = []
+        for part in content:
+            if isinstance(part, dict):
+                if part.get("type") == "text":
+                    text_parts.append(str(part.get("text", "")))
+                elif "text" in part:
+                    text_parts.append(str(part.get("text", "")))
+            else:
+                text_parts.append(str(part))
+        return "\n".join(part for part in text_parts if part).strip()
+    return str(content or "").strip()
+
+
+def _anthropic_headers(api_key: str, extra_headers: dict | None = None) -> dict:
+    headers = {
+        "x-api-key": api_key,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+    }
+    if extra_headers:
+        headers.update(extra_headers)
+    return headers
+
+
+def _anthropic_get_json(endpoint: str, timeout: int = 30, cancel_event=None) -> dict:
+    _raise_if_cancelled(cancel_event)
+    request = urllib.request.Request(
+        endpoint,
+        headers=_anthropic_headers(_get_anthropic_api_key()),
+        method="GET",
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            _raise_if_cancelled(cancel_event)
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        details = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Anthropic API request failed ({exc.code}): {details or exc.reason}") from exc
+    except urllib.error.URLError as exc:
+        raise ConnectionError(f"Failed to reach Anthropic API: {exc.reason}") from exc
+
+
+def _anthropic_post_json(endpoint: str, body: dict, timeout: int = 180, cancel_event=None) -> dict:
+    _raise_if_cancelled(cancel_event)
+    request = urllib.request.Request(
+        endpoint,
+        data=json.dumps(body).encode("utf-8"),
+        headers=_anthropic_headers(_get_anthropic_api_key()),
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        _raise_if_cancelled(cancel_event)
+        return payload
+    except urllib.error.HTTPError as exc:
+        error_payload = exc.read().decode("utf-8", errors="replace")
+        try:
+            parsed = json.loads(error_payload)
+            message = (
+                parsed.get("error", {}).get("message")
+                or parsed.get("message")
+                or error_payload
+            )
+        except json.JSONDecodeError:
+            message = error_payload
+        raise RuntimeError(message) from exc
+    except urllib.error.URLError as exc:
+        raise ConnectionError(f"Failed to reach Anthropic API: {exc.reason}") from exc
+
+
+def _anthropic_content_block_from_part(part: dict) -> dict | None:
+    part_type = part.get("type")
+
+    if part_type == "text":
+        text_value = str(part.get("text", ""))
+        if text_value:
+            return {"type": "text", "text": text_value}
+        return None
+
+    if part_type == "image_bytes":
+        image_data = part.get("data")
+        if not image_data:
+            return None
+        if isinstance(image_data, str):
+            encoded_data = image_data
+            raw_image_bytes = base64.b64decode(image_data)
+        else:
+            raw_image_bytes = bytes(image_data)
+            encoded_data = base64.b64encode(raw_image_bytes).decode("utf-8")
+        return {
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": _guess_image_mime_type(raw_image_bytes),
+                "data": encoded_data,
+            },
+        }
+
+    if part_type == "audio_file":
+        raise RuntimeError(
+            "Anthropic Claude does not support audio input in Graphlink yet.\n\n"
+            "Please remove the audio attachment or switch to Google Gemini or Ollama."
+        )
+
+    fallback_text = str(part.get("text", "")).strip()
+    if fallback_text:
+        return {"type": "text", "text": fallback_text}
+    return None
+
+
+def _prepare_anthropic_messages(messages: list, cancel_event=None) -> tuple[str | None, list]:
+    system_parts = []
+    anthropic_messages = []
+
+    for msg in messages:
+        _raise_if_cancelled(cancel_event)
+        role_name = str(msg.get("role") or "user").strip().lower()
+        content = msg.get("content")
+
+        if role_name == "system":
+            system_text = _stringify_message_content(content)
+            if system_text:
+                system_parts.append(system_text)
+            continue
+
+        role = "assistant" if role_name == "assistant" else "user"
+        blocks = []
+
+        if isinstance(content, list):
+            for part in content:
+                if not isinstance(part, dict):
+                    text_value = str(part or "").strip()
+                    if text_value:
+                        blocks.append({"type": "text", "text": text_value})
+                    continue
+                anthropic_part = _anthropic_content_block_from_part(part)
+                if anthropic_part is not None:
+                    blocks.append(anthropic_part)
+        else:
+            text_value = str(content or "").strip()
+            if text_value:
+                blocks.append({"type": "text", "text": text_value})
+
+        if not blocks:
+            continue
+
+        if anthropic_messages and anthropic_messages[-1]["role"] == role:
+            anthropic_messages[-1]["content"].extend(blocks)
+            continue
+
+        anthropic_messages.append({
+            "role": role,
+            "content": blocks,
+        })
+
+    system_prompt = "\n\n".join(part for part in system_parts if part).strip()
+    return (system_prompt or None), anthropic_messages
+
+
+def _prepare_anthropic_kwargs(task: str, kwargs: dict) -> dict:
+    anthropic_kwargs = dict(kwargs or {})
+
+    if "max_completion_tokens" in anthropic_kwargs and "max_tokens" not in anthropic_kwargs:
+        anthropic_kwargs["max_tokens"] = anthropic_kwargs.pop("max_completion_tokens")
+
+    if "stop" in anthropic_kwargs and "stop_sequences" not in anthropic_kwargs:
+        stop_value = anthropic_kwargs.pop("stop")
+        if isinstance(stop_value, str):
+            anthropic_kwargs["stop_sequences"] = [stop_value]
+        elif isinstance(stop_value, (list, tuple)):
+            anthropic_kwargs["stop_sequences"] = [str(item) for item in stop_value if str(item)]
+
+    if not anthropic_kwargs.get("max_tokens"):
+        anthropic_kwargs["max_tokens"] = ANTHROPIC_DEFAULT_MAX_TOKENS.get(task, 4096)
+
+    return anthropic_kwargs
+
+
+def _extract_anthropic_text(response) -> str:
+    answer_parts = []
+    reasoning_parts = []
+    reasoning_seen: set[str] = set()
+
+    for block in _extract_response_field(response, "content", []) or []:
+        block_type = str(_extract_response_field(block, "type", "")).strip().lower()
+        if block_type == "text":
+            answer_parts.append(str(_extract_response_field(block, "text", "")))
+            continue
+        if block_type == "thinking":
+            _append_unique_text_segment(
+                reasoning_parts,
+                _extract_response_field(block, "thinking") or _extract_response_field(block, "text"),
+                reasoning_seen,
+            )
+
+    return _compose_reasoned_response(
+        "".join(answer_parts).strip(),
+        "\n\n".join(reasoning_parts).strip(),
+        "Anthropic Claude",
+    )
 
 
 def _raise_if_cancelled(cancel_event=None):
@@ -1405,6 +1627,12 @@ def generate_image(prompt: str, size: str = "1024x1024") -> bytes:
     if not API_CLIENT:
         raise RuntimeError("API client not initialized. Configure API settings first.")
 
+    if API_PROVIDER_TYPE == config.API_PROVIDER_ANTHROPIC:
+        raise RuntimeError(
+            "Image generation is not available for Anthropic Claude in Graphlink yet.\n\n"
+            "Switch to Google Gemini or an OpenAI-compatible image endpoint for image generation."
+        )
+
     api_model = API_MODELS.get(config.TASK_IMAGE_GEN)
     if not api_model and API_PROVIDER_TYPE == config.API_PROVIDER_GEMINI:
         api_model = "gemini-2.5-flash-image"
@@ -1539,6 +1767,38 @@ def chat(task: str, messages: list, **kwargs) -> dict:
                 }
             }
 
+        if API_PROVIDER_TYPE == config.API_PROVIDER_ANTHROPIC:
+            system_prompt, anthropic_messages = _prepare_anthropic_messages(
+                messages,
+                cancel_event=cancel_event,
+            )
+            request_kwargs = {
+                "model": api_model,
+                "messages": anthropic_messages,
+                **_prepare_anthropic_kwargs(task, kwargs),
+            }
+            if system_prompt:
+                request_kwargs["system"] = system_prompt
+
+            create_callable = getattr(getattr(API_CLIENT, "messages", None), "create", None)
+            if callable(create_callable):
+                filtered_kwargs = _filter_kwargs_for_callable(create_callable, request_kwargs)
+                response = create_callable(**filtered_kwargs)
+            else:
+                response = _anthropic_post_json(
+                    "https://api.anthropic.com/v1/messages",
+                    request_kwargs,
+                    timeout=180,
+                    cancel_event=cancel_event,
+                )
+            _raise_if_cancelled(cancel_event)
+            return {
+                "message": {
+                    "content": _extract_anthropic_text(response),
+                    "role": "assistant",
+                }
+            }
+
         if API_PROVIDER_TYPE == config.API_PROVIDER_GEMINI:
             system_prompt, gemini_contents, uploaded_files = _prepare_gemini_contents(
                 messages,
@@ -1579,6 +1839,7 @@ def chat(task: str, messages: list, **kwargs) -> dict:
             raise
 
         error_str = str(exc).lower()
+        status_code = getattr(exc, "status_code", None)
 
         if "timed out" in error_str or "timeout" in error_str:
             if _message_contains_audio(messages):
@@ -1597,12 +1858,24 @@ def chat(task: str, messages: list, **kwargs) -> dict:
                     "OpenAI-compatible API quota exceeded or rate limited.\n\n"
                     "Please verify billing, rate limits, and the selected model for your endpoint."
                 ) from exc
+            if API_PROVIDER_TYPE == config.API_PROVIDER_ANTHROPIC:
+                raise RuntimeError(
+                    "Anthropic API quota exceeded or rate limited.\n\n"
+                    "Please verify billing, rate limits, and the selected Claude model."
+                ) from exc
             raise RuntimeError(
                 "Google Gemini API Quota Exceeded.\n\n"
                 "Note: Google does not offer a free tier for their 'Pro' models. "
                 "Please switch your default task models to a 'Flash' model in the API Settings, "
                 "or link a billing account in Google AI Studio."
             ) from exc
+
+        if USE_API_MODE and API_PROVIDER_TYPE == config.API_PROVIDER_ANTHROPIC:
+            if status_code in (401, 403) or "authentication" in error_str or "invalid x-api-key" in error_str:
+                raise RuntimeError(
+                    "Anthropic API authentication failed.\n\n"
+                    "Please verify your Anthropic API key in Settings."
+                ) from exc
 
         if (
             "connection refused" in error_str
@@ -1613,6 +1886,11 @@ def chat(task: str, messages: list, **kwargs) -> dict:
             if not USE_API_MODE:
                 raise ConnectionError(
                     "Failed to connect to local Ollama server. Please ensure the Ollama app is running and accessible."
+                ) from exc
+            if API_PROVIDER_TYPE == config.API_PROVIDER_ANTHROPIC:
+                raise ConnectionError(
+                    "Failed to connect to the Anthropic API. Please verify your network connection and try again.\n\n"
+                    f"Details: {exc}"
                 ) from exc
             raise ConnectionError(
                 "Failed to connect to the API endpoint. Please verify your Base URL in settings and your network connection.\n\n"
@@ -1660,6 +1938,26 @@ def initialize_api(provider: str, api_key: str, base_url: str = None):
                 raise RuntimeError("OpenAI-compatible API key not configured. Open Settings and save your API key.")
 
         client = OpenAI(api_key=api_key, base_url=base_url)
+
+    elif provider == config.API_PROVIDER_ANTHROPIC:
+        api_key = api_key or os.environ.get("GRAPHITE_ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
+        if not api_key:
+            raise RuntimeError("Anthropic API key not configured. Open Settings and save your Anthropic API key.")
+
+        client = None
+        try:
+            from anthropic import Anthropic
+            try:
+                client = Anthropic(api_key=api_key)
+            except TypeError as exc:
+                if "unexpected keyword argument 'proxies'" not in str(exc):
+                    raise
+        except ImportError:
+            client = None
+
+        if client is None:
+            client = {"provider": config.API_PROVIDER_ANTHROPIC, "transport": "rest"}
+        base_url = None
 
     elif provider == config.API_PROVIDER_GEMINI:
         if not (api_key or os.environ.get("GRAPHITE_GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY")):
@@ -1753,6 +2051,16 @@ def get_available_models():
         if API_PROVIDER_TYPE == config.API_PROVIDER_OPENAI:
             models = API_CLIENT.models.list()
             return sorted([model.id for model in models.data])
+        if API_PROVIDER_TYPE == config.API_PROVIDER_ANTHROPIC:
+            payload = _anthropic_get_json(ANTHROPIC_MODELS_URL)
+            return sorted(
+                {
+                    str(model_info.get("id", "")).strip()
+                    for model_info in payload.get("data", [])
+                    if str(model_info.get("id", "")).strip()
+                },
+                key=str.lower,
+            )
         if API_PROVIDER_TYPE == config.API_PROVIDER_GEMINI:
             return GEMINI_MODELS_STATIC
         return []
@@ -1794,6 +2102,15 @@ def get_mode() -> str:
 
 def is_configured() -> bool:
     if USE_API_MODE:
+        if API_PROVIDER_TYPE == config.API_PROVIDER_ANTHROPIC:
+            required_tasks = (
+                config.TASK_TITLE,
+                config.TASK_CHAT,
+                config.TASK_CHART,
+                config.TASK_WEB_VALIDATE,
+                config.TASK_WEB_SUMMARIZE,
+            )
+            return API_CLIENT is not None and all(API_MODELS.get(task_key) for task_key in required_tasks)
         return API_CLIENT is not None and all(API_MODELS.values())
     if LOCAL_PROVIDER_TYPE == config.LOCAL_PROVIDER_OLLAMA:
         return bool(config.OLLAMA_MODELS.get(config.TASK_CHAT))
