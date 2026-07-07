@@ -79,6 +79,18 @@ def test_create_artifact_node_wires_artifact_requested_to_main_window():
     main_window.execute_artifact_node.assert_called_once_with(result)
 
 
+def test_create_artifact_node_wires_stop_requested_to_main_window():
+    # stop_requested is what makes the node's dual-purpose button's "stop" state
+    # actually do something (see doc/PLUGIN_SYSTEM_REFACTOR_PLAN.md section 4.1/§31) -
+    # this locks in that _create_artifact_node wires it alongside artifact_requested.
+    portal, main_window, scene, parent = _make_portal_and_parent()
+    result = portal._create_artifact_node()
+
+    result.stop_requested.emit(result)
+
+    main_window.stop_artifact_node.assert_called_once_with(result)
+
+
 def test_create_artifact_node_warns_and_returns_none_with_no_selection():
     portal, main_window, scene, parent = _make_portal_and_parent()
     main_window.current_node = None

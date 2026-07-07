@@ -379,6 +379,7 @@ class SceneDeserializer:
                 if data.get("is_collapsed", False):
                     node.set_collapsed(True)
                 self._connect_if_available(node.artifact_requested, "execute_artifact_node")
+                self._connect_if_available(node.stop_requested, "stop_artifact_node")
                 scene.addItem(node)
                 scene.artifact_nodes.append(node)
 

@@ -523,12 +523,17 @@ class PluginPortal:
 
     def _create_artifact_node(self):
         scene = self.main_window.chat_view.scene()
+
+        def _wire(node):
+            node.artifact_requested.connect(self.main_window.execute_artifact_node)
+            node.stop_requested.connect(self.main_window.stop_artifact_node)
+
         return self.create_node(
             node_cls=ArtifactNode,
             connection_cls=ArtifactConnectionItem,
             scene_nodes=scene.artifact_nodes,
             scene_connections=scene.artifact_connections,
-            wire=lambda node: node.artifact_requested.connect(self.main_window.execute_artifact_node),
+            wire=_wire,
             no_selection_message="Please select a node to branch from before adding an Artifact Drafter.",
             invalid_parent_message="Artifact Drafter can only branch from a valid conversational node.",
         )

@@ -1,4 +1,5 @@
 import re
+from html import escape as escape_html
 import markdown
 from PySide6.QtWidgets import (
     QGraphicsObject, QGraphicsProxyWidget, QWidget, QVBoxLayout,
@@ -102,14 +103,22 @@ RULES:
         
         # Parse out the artifact and the conversational response
         artifact_match = re.search(r'<artifact>(.*?)</artifact>', raw_text, re.DOTALL)
-        if artifact_match:
-            new_artifact = artifact_match.group(1).strip()
-            ai_message = raw_text.replace(artifact_match.group(0), "").strip()
-        else:
-            # If the model fails to use the tags, fallback to treating the whole response as the artifact
-            new_artifact = raw_text.strip()
-            ai_message = "I have updated the document."
-            
+        if not artifact_match:
+            # Previously fell back to treating the ENTIRE raw response - including any
+            # conversational preamble/explanation the model wrote outside the tags - as
+            # the new document body, silently corrupting the document on any tag-format
+            # miss. Raising here instead routes through ArtifactWorkerThread's existing
+            # except/error.emit path, which surfaces "Error: ..." in the node's chat and
+            # leaves the previous document content untouched (see
+            # _handle_artifact_error in graphite_window_actions.py) rather than
+            # overwriting it with something that was never meant to be the document.
+            raise RuntimeError(
+                "The model's response did not include the required <artifact>...</artifact> tags, "
+                "so the document was left unchanged to avoid overwriting it with an unstructured reply."
+            )
+
+        new_artifact = artifact_match.group(1).strip()
+        ai_message = raw_text.replace(artifact_match.group(0), "").strip()
         return new_artifact, ai_message
 
 class ArtifactWorkerThread(QThread):
@@ -181,6 +190,7 @@ class ArtifactConnectionItem(ConnectionItem):
 class ArtifactNode(QGraphicsObject, HoverAnimationMixin):
     supports_branch_context_toggle = True
     artifact_requested = Signal(object)
+    stop_requested = Signal(object)
 
     NODE_WIDTH = 850
     NODE_HEIGHT = 650
@@ -199,6 +209,7 @@ class ArtifactNode(QGraphicsObject, HoverAnimationMixin):
         self.conversation_history = []
         self.local_history = []
         self.chat_html_cache = ""
+        self.is_running = False
         self.is_collapsed = False
         self.collapse_button_rect = QRectF()
         
@@ -354,7 +365,7 @@ class ArtifactNode(QGraphicsObject, HoverAnimationMixin):
         self.update_button.setFixedSize(40, 40)
         self.update_button.setIconSize(QSize(16, 16))
         self.update_button.setIcon(qta.icon('fa5s.arrow-up', color=artifact_button_icon))
-        self.update_button.clicked.connect(lambda: self.artifact_requested.emit(self))
+        self.update_button.clicked.connect(self._handle_action_button)
         self.update_button.setStyleSheet(f"""
             QPushButton {{ background-color: {artifact_icon_text}; border: none; border-radius: 20px; margin: 0px; }}
             QPushButton:hover {{ background-color: {artifact_hover_color.name()}; }}
@@ -427,7 +438,13 @@ class ArtifactNode(QGraphicsObject, HoverAnimationMixin):
     def _on_tab_changed(self, index):
         if index == 1: # Switching to Live Preview
             content = self.raw_editor.toPlainText()
-            html = markdown.markdown(content, extensions=['fenced_code', 'tables'])
+            # Escape literal HTML before markdown-rendering it: the document content is
+            # AI/user-controlled text, not trusted markup, so a literal "<img src=... />"
+            # or "<div style=...>" typed/generated into the document must not be handed
+            # to QTextEdit.setHtml as real HTML (see doc/PLUGIN_SYSTEM_REFACTOR_PLAN.md
+            # section 4.1). quote=False keeps quote characters literal so normal
+            # Markdown syntax (e.g. link titles) isn't mangled by entity-encoding them.
+            html = markdown.markdown(escape_html(content, quote=False), extensions=['fenced_code', 'tables'])
             self.preview_display.setHtml(html)
 
     def get_instruction(self):
@@ -443,7 +460,7 @@ class ArtifactNode(QGraphicsObject, HoverAnimationMixin):
     def set_artifact_content(self, text):
         self.raw_editor.setPlainText(text)
         if self.tabs.currentIndex() == 1:
-            html = markdown.markdown(text, extensions=['fenced_code', 'tables'])
+            html = markdown.markdown(escape_html(text, quote=False), extensions=['fenced_code', 'tables'])
             self.preview_display.setHtml(html)
 
     def add_chat_message(self, text, is_user=False):
@@ -455,7 +472,7 @@ class ArtifactNode(QGraphicsObject, HoverAnimationMixin):
         if not display_text:
             display_text = "[Processing...]"
 
-        html = markdown.markdown(display_text, extensions=['fenced_code'])
+        html = markdown.markdown(escape_html(display_text, quote=False), extensions=['fenced_code'])
         
         # SOTA styling with left border indicator and crisp typography
         formatted = f"""
@@ -473,19 +490,32 @@ class ArtifactNode(QGraphicsObject, HoverAnimationMixin):
         scrollbar = self.chat_display.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
 
+    def _handle_action_button(self):
+        # Single dual-purpose button (mirrors ConversationNode._handle_action_button):
+        # while a generation is running the icon/tooltip switch to "stop", and this is
+        # what makes that actually clickable - see doc/PLUGIN_SYSTEM_REFACTOR_PLAN.md
+        # section 4.1, this used to stay disabled the whole time it showed a stop icon.
+        if self.is_running:
+            self.stop_requested.emit(self)
+            return
+        self.artifact_requested.emit(self)
+
     def set_running_state(self, is_running):
+        self.is_running = is_running
         self.instruction_input.setReadOnly(is_running)
         self.raw_editor.setReadOnly(is_running)
-        
+
         if is_running:
-            self.update_button.setEnabled(False)
-            self.update_button.setIcon(qta.icon('fa5s.stop', color='#aaaaaa'))
-            self.update_button.setStyleSheet("QPushButton { background-color: #444444; border: none; border-radius: 20px; margin: 0px; }")
+            self.update_button.setEnabled(True)
+            self.update_button.setToolTip("Stop generation")
+            self.update_button.setIcon(qta.icon('fa5s.stop', color='#dddddd'))
+            self.update_button.setStyleSheet("QPushButton { background-color: #444444; border: none; border-radius: 20px; margin: 0px; } QPushButton:hover { background-color: #555555; }")
         else:
             artifact_color = get_semantic_color("artifact")
             artifact_hover_color = artifact_color.lighter(115)
             artifact_button_icon = "#1e1e1e" if artifact_color.lightness() > 150 else "#f3f3f3"
             self.update_button.setEnabled(True)
+            self.update_button.setToolTip("")
             self.update_button.setIcon(qta.icon('fa5s.arrow-up', color=artifact_button_icon))
             self.update_button.setStyleSheet(f"QPushButton {{ background-color: {artifact_color.name()}; border: none; border-radius: 20px; margin: 0px; }} QPushButton:hover {{ background-color: {artifact_hover_color.name()}; }}")
             self.instruction_input.clear()
