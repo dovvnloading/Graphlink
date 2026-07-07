@@ -1,4 +1,4 @@
-"""Tests for graphite_plugin_quality_gate._node_label (Phase 5).
+"""Tests for graphite_plugins.quality_gate.scoring._node_label (Phase 5).
 
 Mirrors graphite_plugin_graph_diff._node_label's migration (see
 tests/test_graph_diff_node_label.py): this map was already complete/correct (unlike
@@ -6,6 +6,10 @@ Graph Diff's, which was missing CodeReviewNode) but was still an independently
 hand-maintained copy of the same class-name -> display-name knowledge PLUGIN_REGISTRY
 now owns. Migrated onto graphite_plugin_portal.get_display_name_for_node() for the
 same reason - one less place for this to drift out of sync in the future.
+
+_node_label itself now lives in graphite_plugins.quality_gate.scoring (extracted out of
+graphite_plugin_quality_gate.py along with QualityGateAnalyzer - see
+doc/PLUGIN_SYSTEM_REFACTOR_PLAN.md section 4.7).
 
 Note: QUALITY_GATE_PLUGIN_ICONS/QUALITY_GATE_ALLOWED_PLUGINS (a separate map used for
 the recommendation-card UI, not this text-label function) were deliberately NOT
@@ -28,7 +32,7 @@ from graphite_plugins.graphite_plugin_artifact import ArtifactNode
 from graphite_plugins.graphite_plugin_code_review import CodeReviewNode
 from graphite_plugins.graphite_plugin_graph_diff import GraphDiffNode
 from graphite_plugins.graphite_plugin_portal import PLUGIN_REGISTRY
-from graphite_plugins.graphite_plugin_quality_gate import _node_label
+from graphite_plugins.quality_gate.scoring import _node_label
 
 
 def _instantiate(node_cls):

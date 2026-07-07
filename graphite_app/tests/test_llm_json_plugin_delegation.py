@@ -12,7 +12,9 @@ particular call site is the one invoking it.
 CodeReviewAnalyzer itself now lives in graphite_plugins.code_review.scoring (extracted
 out of the 2000+ line graphite_plugin_code_review.py widget file - see
 doc/PLUGIN_SYSTEM_REFACTOR_PLAN.md section 4.2), so its delegation patches target that
-module instead of graphite_plugin_code_review.
+module instead of graphite_plugin_code_review. Likewise QualityGateAnalyzer now lives
+in graphite_plugins.quality_gate.scoring (section 4.7), so its delegation patches
+target that module instead of graphite_plugin_quality_gate.
 """
 
 import sys
@@ -23,8 +25,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from graphite_plugins.code_review.scoring import CodeReviewAnalyzer
 from graphite_plugins.graphite_plugin_gitlink import GitlinkAgent
-from graphite_plugins.graphite_plugin_quality_gate import QualityGateAnalyzer
 from graphite_plugins.graphite_plugin_workflow import WorkflowArchitectAgent
+from graphite_plugins.quality_gate.scoring import QualityGateAnalyzer
 
 
 class TestExtractJsonDelegation:
@@ -37,7 +39,7 @@ class TestExtractJsonDelegation:
 
     def test_quality_gate_analyzer_clean_json_response_delegates(self):
         analyzer = QualityGateAnalyzer()
-        with patch("graphite_plugins.graphite_plugin_quality_gate.extract_json_object", return_value="delegated") as mock_fn:
+        with patch("graphite_plugins.quality_gate.scoring.extract_json_object", return_value="delegated") as mock_fn:
             result = analyzer._clean_json_response("raw text")
         mock_fn.assert_called_once_with("raw text")
         assert result == "delegated"
@@ -93,7 +95,7 @@ class TestCallLlmAndParseJsonDelegation:
         analyzer._build_markdown = lambda normalized, payload: "markdown"
 
         with patch(
-            "graphite_plugins.graphite_plugin_quality_gate.call_llm_and_parse_json",
+            "graphite_plugins.quality_gate.scoring.call_llm_and_parse_json",
             return_value={"verdict": "ready"},
         ) as mock_call:
             result = analyzer.get_response("goal", "criteria", {"label": "branch", "node_labels": [], "transcript": ""})
@@ -108,7 +110,7 @@ class TestCallLlmAndParseJsonDelegation:
         analyzer._build_markdown = lambda normalized, payload: "markdown"
 
         with patch(
-            "graphite_plugins.graphite_plugin_quality_gate.call_llm_and_parse_json",
+            "graphite_plugins.quality_gate.scoring.call_llm_and_parse_json",
             side_effect=RuntimeError("boom"),
         ):
             result = analyzer.get_response("goal", "criteria", {"label": "branch", "node_labels": [], "transcript": ""})
