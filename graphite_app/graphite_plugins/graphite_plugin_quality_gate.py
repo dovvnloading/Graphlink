@@ -120,23 +120,24 @@ def _read_widget_text(widget):
     return ""
 
 
+_NON_PLUGIN_NODE_LABELS = {
+    # Core node types that aren't registered plugins (see PLUGIN_REGISTRY in
+    # graphite_plugin_portal.py) but can still appear in a branch transcript.
+    "ChatNode": "Chat Node",
+}
+
+
 def _node_label(node):
-    name_map = {
-        "ChatNode": "Chat Node",
-        "PyCoderNode": "Py-Coder",
-        "CodeSandboxNode": "Execution Sandbox",
-        "WebNode": "Graphlink-Web",
-        "ConversationNode": "Conversation Node",
-        "ReasoningNode": "Graphlink-Reasoning",
-        "HtmlViewNode": "HTML Renderer",
-        "ArtifactNode": "Artifact / Drafter",
-        "WorkflowNode": "Workflow Architect",
-        "GraphDiffNode": "Branch Lens",
-        "QualityGateNode": "Quality Gate",
-        "CodeReviewNode": "Code Review Agent",
-        "GitlinkNode": "Gitlink",
-    }
-    return name_map.get(node.__class__.__name__, node.__class__.__name__)
+    class_name = node.__class__.__name__
+    if class_name in _NON_PLUGIN_NODE_LABELS:
+        return _NON_PLUGIN_NODE_LABELS[class_name]
+
+    # Deferred import: graphite_plugin_portal imports this module (to register the
+    # Quality Gate plugin), so importing it back at module load time would be circular.
+    # By the time _node_label() actually runs, both modules are already fully loaded.
+    from graphite_plugins.graphite_plugin_portal import get_display_name_for_node
+
+    return get_display_name_for_node(node)
 
 
 def _extract_node_text(node):
