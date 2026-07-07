@@ -387,6 +387,7 @@ class PluginPortal:
         node_kwargs=None,
         clone_parent_history=False,
         resolve_branch_parent=True,
+        validate_parent=None,
         no_selection_message,
         invalid_parent_message=None,
     ):
@@ -402,6 +403,12 @@ class PluginPortal:
         Prompt attaches to the graph root rather than branching from a selection, and
         Branch Lens/GraphDiffNode requires exactly two pre-selected existing nodes - they
         keep their own bespoke factory methods below.
+
+        `validate_parent`, if given, replaces the default `hasattr(parent_node,
+        'children')` acceptance check with a custom predicate (e.g. HTML Renderer only
+        accepts a specific tuple of node types) - this is still "one parent, one new
+        node", just with a different notion of what counts as a valid attach point, not
+        a different creation contract.
 
         `scene_nodes`/`scene_connections` are passed in as the actual list objects (e.g.
         `scene.artifact_nodes`) rather than looked up by name, since the per-plugin scene
@@ -419,7 +426,8 @@ class PluginPortal:
 
         parent_node = self._resolve_branch_parent(selected_node) if resolve_branch_parent else selected_node
 
-        if not hasattr(parent_node, 'children'):
+        is_valid_parent = validate_parent(parent_node) if validate_parent else hasattr(parent_node, 'children')
+        if not is_valid_parent:
             self.main_window.notification_banner.show_message(invalid_parent_message or no_selection_message, 5000, "warning")
             return None
 
@@ -473,64 +481,27 @@ class PluginPortal:
 
     def _create_pycoder_node(self):
         scene = self.main_window.chat_view.scene()
-        selected_node = self.main_window.current_node
-
-        if not selected_node:
-            self.main_window.notification_banner.show_message("Please select a node to branch from before adding Py-Coder.", 5000, "warning")
-            return
-
-        parent_node = self._resolve_branch_parent(selected_node)
-        
-        # Verify parent node is conversational
-        if not hasattr(parent_node, 'children'):
-             self.main_window.notification_banner.show_message("Py-Coder can only branch from a valid conversational node.", 5000, "warning")
-             return
-
-        pycoder_node = PyCoderNode(parent_node=parent_node)
-        parent_node.children.append(pycoder_node)
-        
-        self._position_branch_node(scene, parent_node, pycoder_node)
-
-        scene.addItem(pycoder_node)
-        scene.pycoder_nodes.append(pycoder_node)
-
-        connection = PyCoderConnectionItem(parent_node, pycoder_node)
-        pycoder_node.incoming_connection = connection
-        scene.addItem(connection)
-        scene.pycoder_connections.append(connection)
-        return pycoder_node
+        return self.create_node(
+            node_cls=PyCoderNode,
+            connection_cls=PyCoderConnectionItem,
+            scene_nodes=scene.pycoder_nodes,
+            scene_connections=scene.pycoder_connections,
+            no_selection_message="Please select a node to branch from before adding Py-Coder.",
+            invalid_parent_message="Py-Coder can only branch from a valid conversational node.",
+        )
 
     def _create_code_sandbox_node(self):
         scene = self.main_window.chat_view.scene()
-        selected_node = self.main_window.current_node
-
-        if not selected_node:
-            self.main_window.notification_banner.show_message("Please select a node to branch from before adding an Execution Sandbox.", 5000, "warning")
-            return None
-
-        parent_node = self._resolve_branch_parent(selected_node)
-
-        if not hasattr(parent_node, 'children'):
-            self.main_window.notification_banner.show_message("Execution Sandbox can only branch from a valid conversational node.", 5000, "warning")
-            return None
-
-        sandbox_node = CodeSandboxNode(parent_node=parent_node)
-        parent_node.children.append(sandbox_node)
-        sandbox_node.sandbox_requested.connect(self.main_window.execute_code_sandbox_node)
-
-        if hasattr(parent_node, 'conversation_history') and parent_node.conversation_history:
-            sandbox_node.conversation_history = clone_history(parent_node.conversation_history)
-
-        self._position_branch_node(scene, parent_node, sandbox_node)
-
-        scene.addItem(sandbox_node)
-        scene.code_sandbox_nodes.append(sandbox_node)
-
-        connection = CodeSandboxConnectionItem(parent_node, sandbox_node)
-        sandbox_node.incoming_connection = connection
-        scene.addItem(connection)
-        scene.code_sandbox_connections.append(connection)
-        return sandbox_node
+        return self.create_node(
+            node_cls=CodeSandboxNode,
+            connection_cls=CodeSandboxConnectionItem,
+            scene_nodes=scene.code_sandbox_nodes,
+            scene_connections=scene.code_sandbox_connections,
+            wire=lambda node: node.sandbox_requested.connect(self.main_window.execute_code_sandbox_node),
+            clone_parent_history=True,
+            no_selection_message="Please select a node to branch from before adding an Execution Sandbox.",
+            invalid_parent_message="Execution Sandbox can only branch from a valid conversational node.",
+        )
 
     def _create_artifact_node(self):
         scene = self.main_window.chat_view.scene()
@@ -546,122 +517,68 @@ class PluginPortal:
 
     def _create_workflow_node(self):
         scene = self.main_window.chat_view.scene()
-        selected_node = self.main_window.current_node
 
-        if not selected_node or not hasattr(selected_node, 'children'):
-            self.main_window.notification_banner.show_message("Please select a valid node to branch from before adding Workflow Architect.", 5000, "warning")
-            return None
+        def _wire(node):
+            node.workflow_requested.connect(self.main_window.execute_workflow_node)
+            node.plugin_requested.connect(self.main_window.instantiate_seeded_plugin)
 
-        workflow_node = WorkflowNode(parent_node=selected_node)
-        selected_node.children.append(workflow_node)
-        workflow_node.workflow_requested.connect(self.main_window.execute_workflow_node)
-        workflow_node.plugin_requested.connect(self.main_window.instantiate_seeded_plugin)
-
-        if hasattr(selected_node, 'conversation_history') and selected_node.conversation_history:
-            workflow_node.conversation_history = clone_history(selected_node.conversation_history)
-
-        self._position_branch_node(scene, selected_node, workflow_node)
-
-        scene.addItem(workflow_node)
-        scene.workflow_nodes.append(workflow_node)
-
-        connection = WorkflowConnectionItem(selected_node, workflow_node)
-        workflow_node.incoming_connection = connection
-        scene.addItem(connection)
-        scene.workflow_connections.append(connection)
-        return workflow_node
+        return self.create_node(
+            node_cls=WorkflowNode,
+            connection_cls=WorkflowConnectionItem,
+            scene_nodes=scene.workflow_nodes,
+            scene_connections=scene.workflow_connections,
+            wire=_wire,
+            clone_parent_history=True,
+            resolve_branch_parent=False,
+            no_selection_message="Please select a valid node to branch from before adding Workflow Architect.",
+        )
 
     def _create_quality_gate_node(self):
         scene = self.main_window.chat_view.scene()
-        selected_node = self.main_window.current_node
 
-        if not selected_node or not hasattr(selected_node, 'children'):
-            self.main_window.notification_banner.show_message("Please select a valid node to branch from before adding Quality Gate.", 5000, "warning")
-            return None
+        def _wire(node):
+            node.review_requested.connect(self.main_window.execute_quality_gate_node)
+            node.plugin_requested.connect(self.main_window.instantiate_seeded_plugin)
+            node.note_requested.connect(self.main_window.create_quality_gate_note)
 
-        quality_gate_node = QualityGateNode(parent_node=selected_node)
-        selected_node.children.append(quality_gate_node)
-        quality_gate_node.review_requested.connect(self.main_window.execute_quality_gate_node)
-        quality_gate_node.plugin_requested.connect(self.main_window.instantiate_seeded_plugin)
-        quality_gate_node.note_requested.connect(self.main_window.create_quality_gate_note)
-
-        if hasattr(selected_node, 'conversation_history') and selected_node.conversation_history:
-            quality_gate_node.conversation_history = clone_history(selected_node.conversation_history)
-
-        self._position_branch_node(scene, selected_node, quality_gate_node)
-
-        scene.addItem(quality_gate_node)
-        scene.quality_gate_nodes.append(quality_gate_node)
-
-        connection = QualityGateConnectionItem(selected_node, quality_gate_node)
-        quality_gate_node.incoming_connection = connection
-        scene.addItem(connection)
-        scene.quality_gate_connections.append(connection)
-        return quality_gate_node
+        return self.create_node(
+            node_cls=QualityGateNode,
+            connection_cls=QualityGateConnectionItem,
+            scene_nodes=scene.quality_gate_nodes,
+            scene_connections=scene.quality_gate_connections,
+            wire=_wire,
+            clone_parent_history=True,
+            resolve_branch_parent=False,
+            no_selection_message="Please select a valid node to branch from before adding Quality Gate.",
+        )
 
     def _create_code_review_node(self):
         scene = self.main_window.chat_view.scene()
-        selected_node = self.main_window.current_node
-
-        if not selected_node:
-            self.main_window.notification_banner.show_message("Please select a node to branch from before adding Code Review Agent.", 5000, "warning")
-            return None
-
-        parent_node = self._resolve_branch_parent(selected_node)
-
-        if not hasattr(parent_node, 'children'):
-            self.main_window.notification_banner.show_message("Code Review Agent can only branch from a valid conversational node.", 5000, "warning")
-            return None
-
-        review_node = CodeReviewNode(parent_node=parent_node, settings_manager=self.main_window.settings_manager)
-        parent_node.children.append(review_node)
-        review_node.review_requested.connect(self.main_window.execute_code_review_node)
-
-        if hasattr(parent_node, 'conversation_history') and parent_node.conversation_history:
-            review_node.conversation_history = clone_history(parent_node.conversation_history)
-
-        self._position_branch_node(scene, parent_node, review_node)
-
-        scene.addItem(review_node)
-        scene.code_review_nodes.append(review_node)
-
-        connection = CodeReviewConnectionItem(parent_node, review_node)
-        review_node.incoming_connection = connection
-        scene.addItem(connection)
-        scene.code_review_connections.append(connection)
-        return review_node
+        return self.create_node(
+            node_cls=CodeReviewNode,
+            connection_cls=CodeReviewConnectionItem,
+            scene_nodes=scene.code_review_nodes,
+            scene_connections=scene.code_review_connections,
+            node_kwargs={"settings_manager": self.main_window.settings_manager},
+            wire=lambda node: node.review_requested.connect(self.main_window.execute_code_review_node),
+            clone_parent_history=True,
+            no_selection_message="Please select a node to branch from before adding Code Review Agent.",
+            invalid_parent_message="Code Review Agent can only branch from a valid conversational node.",
+        )
 
     def _create_gitlink_node(self):
         scene = self.main_window.chat_view.scene()
-        selected_node = self.main_window.current_node
-
-        if not selected_node:
-            self.main_window.notification_banner.show_message("Please select a node to branch from before adding Gitlink.", 5000, "warning")
-            return None
-
-        parent_node = self._resolve_branch_parent(selected_node)
-
-        if not hasattr(parent_node, 'children'):
-            self.main_window.notification_banner.show_message("Gitlink can only branch from a valid conversational node.", 5000, "warning")
-            return None
-
-        gitlink_node = GitlinkNode(parent_node=parent_node, settings_manager=self.main_window.settings_manager)
-        parent_node.children.append(gitlink_node)
-        gitlink_node.gitlink_requested.connect(self.main_window.execute_gitlink_node)
-
-        if hasattr(parent_node, 'conversation_history') and parent_node.conversation_history:
-            gitlink_node.conversation_history = clone_history(parent_node.conversation_history)
-
-        self._position_branch_node(scene, parent_node, gitlink_node)
-
-        scene.addItem(gitlink_node)
-        scene.gitlink_nodes.append(gitlink_node)
-
-        connection = GitlinkConnectionItem(parent_node, gitlink_node)
-        gitlink_node.incoming_connection = connection
-        scene.addItem(connection)
-        scene.gitlink_connections.append(connection)
-        return gitlink_node
+        return self.create_node(
+            node_cls=GitlinkNode,
+            connection_cls=GitlinkConnectionItem,
+            scene_nodes=scene.gitlink_nodes,
+            scene_connections=scene.gitlink_connections,
+            node_kwargs={"settings_manager": self.main_window.settings_manager},
+            wire=lambda node: node.gitlink_requested.connect(self.main_window.execute_gitlink_node),
+            clone_parent_history=True,
+            no_selection_message="Please select a node to branch from before adding Gitlink.",
+            invalid_parent_message="Gitlink can only branch from a valid conversational node.",
+        )
 
     def _create_graph_diff_node(self):
         from graphite_plugins.graphite_plugin_artifact import ArtifactNode
@@ -697,100 +614,67 @@ class PluginPortal:
 
     def _create_web_node(self):
         scene = self.main_window.chat_view.scene()
-        selected_node = self.main_window.current_node
-
-        if not selected_node or not hasattr(selected_node, 'children'):
-            self.main_window.notification_banner.show_message("Please select a valid node to branch from before adding a Web Node.", 5000, "warning")
-            return
-
-        web_node = WebNode(parent_node=selected_node)
-        selected_node.children.append(web_node)
-        web_node.run_clicked.connect(self.main_window.execute_web_node)
-        
-        self._position_branch_node(scene, selected_node, web_node)
-
-        scene.addItem(web_node)
-        scene.web_nodes.append(web_node)
-
-        connection = WebConnectionItem(selected_node, web_node)
-        web_node.incoming_connection = connection
-        scene.addItem(connection)
-        scene.web_connections.append(connection)
-        return web_node
+        return self.create_node(
+            node_cls=WebNode,
+            connection_cls=WebConnectionItem,
+            scene_nodes=scene.web_nodes,
+            scene_connections=scene.web_connections,
+            wire=lambda node: node.run_clicked.connect(self.main_window.execute_web_node),
+            resolve_branch_parent=False,
+            no_selection_message="Please select a valid node to branch from before adding a Web Node.",
+        )
 
     def _create_conversation_node(self):
         scene = self.main_window.chat_view.scene()
         selected_node = self.main_window.current_node
 
-        if not selected_node or not hasattr(selected_node, 'children'):
-            self.main_window.notification_banner.show_message("Please select a valid node to branch from before adding a Conversation Node.", 5000, "warning")
-            return
+        def _wire(node):
+            node.ai_request_sent.connect(self.main_window.handle_conversation_node_request)
+            node.cancel_requested.connect(self.main_window.handle_conversation_node_cancel)
+            # ConversationNode clones history via set_history() (which also updates its
+            # internal chat-bubble scene), not a direct conversation_history assignment,
+            # so this can't use create_node()'s generic clone_parent_history flag.
+            if selected_node and getattr(selected_node, 'conversation_history', None):
+                node.set_history(clone_history(selected_node.conversation_history))
 
-        convo_node = ConversationNode(parent_node=selected_node)
-        selected_node.children.append(convo_node)
-        convo_node.ai_request_sent.connect(self.main_window.handle_conversation_node_request)
-        convo_node.cancel_requested.connect(self.main_window.handle_conversation_node_cancel)
-        
-        if hasattr(selected_node, 'conversation_history') and selected_node.conversation_history:
-            history_copy = clone_history(selected_node.conversation_history)
-            convo_node.set_history(history_copy)
-
-        self._position_branch_node(scene, selected_node, convo_node)
-
-        scene.addItem(convo_node)
-        scene.conversation_nodes.append(convo_node)
-
-        connection = ConversationConnectionItem(selected_node, convo_node)
-        convo_node.incoming_connection = connection
-        scene.addItem(connection)
-        scene.conversation_connections.append(connection)
-        return convo_node
+        return self.create_node(
+            node_cls=ConversationNode,
+            connection_cls=ConversationConnectionItem,
+            scene_nodes=scene.conversation_nodes,
+            scene_connections=scene.conversation_connections,
+            wire=_wire,
+            resolve_branch_parent=False,
+            no_selection_message="Please select a valid node to branch from before adding a Conversation Node.",
+        )
 
     def _create_reasoning_node(self):
         scene = self.main_window.chat_view.scene()
-        selected_node = self.main_window.current_node
-
-        if not selected_node or not hasattr(selected_node, 'children'):
-            self.main_window.notification_banner.show_message("Please select a valid node to branch from before adding a Reasoning Node.", 5000, "warning")
-            return
-
-        reasoning_node = ReasoningNode(parent_node=selected_node)
-        selected_node.children.append(reasoning_node)
-        reasoning_node.reasoning_requested.connect(self.main_window.execute_reasoning_node)
-        
-        self._position_branch_node(scene, selected_node, reasoning_node)
-
-        scene.addItem(reasoning_node)
-        scene.reasoning_nodes.append(reasoning_node)
-
-        connection = ReasoningConnectionItem(selected_node, reasoning_node)
-        reasoning_node.incoming_connection = connection
-        scene.addItem(connection)
-        scene.reasoning_connections.append(connection)
-        return reasoning_node
+        return self.create_node(
+            node_cls=ReasoningNode,
+            connection_cls=ReasoningConnectionItem,
+            scene_nodes=scene.reasoning_nodes,
+            scene_connections=scene.reasoning_connections,
+            wire=lambda node: node.reasoning_requested.connect(self.main_window.execute_reasoning_node),
+            resolve_branch_parent=False,
+            no_selection_message="Please select a valid node to branch from before adding a Reasoning Node.",
+        )
 
     def _create_html_view_node(self):
         scene = self.main_window.chat_view.scene()
         selected_node = self.main_window.current_node
-
         valid_parents = (ChatNode, CodeNode, PyCoderNode, CodeSandboxNode, WebNode, ConversationNode, ReasoningNode, WorkflowNode, QualityGateNode, CodeReviewNode, GitlinkNode)
-        if not selected_node or not isinstance(selected_node, valid_parents):
-            self.main_window.notification_banner.show_message("Please select a valid node to branch from before adding an HTML Renderer.", 5000, "warning")
-            return None
 
-        html_view_node = HtmlViewNode(parent_node=selected_node)
-        selected_node.children.append(html_view_node)
-        
-        self._position_branch_node(scene, selected_node, html_view_node)
+        def _wire(node):
+            if isinstance(selected_node, CodeNode):
+                node.set_html_content(selected_node.code)
 
-        scene.addItem(html_view_node)
-        scene.html_view_nodes.append(html_view_node)
-        
-        if isinstance(selected_node, CodeNode):
-            html_view_node.set_html_content(selected_node.code)
-
-        connection = HtmlConnectionItem(selected_node, html_view_node)
-        html_view_node.incoming_connection = connection
-        scene.addItem(connection)
-        scene.html_connections.append(connection)
-        return html_view_node
+        return self.create_node(
+            node_cls=HtmlViewNode,
+            connection_cls=HtmlConnectionItem,
+            scene_nodes=scene.html_view_nodes,
+            scene_connections=scene.html_connections,
+            wire=_wire,
+            resolve_branch_parent=False,
+            validate_parent=lambda parent_node: isinstance(parent_node, valid_parents),
+            no_selection_message="Please select a valid node to branch from before adding an HTML Renderer.",
+        )
