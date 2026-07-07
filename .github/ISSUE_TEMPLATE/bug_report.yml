@@ -1,0 +1,62 @@
+name: Bug report
+description: Report a defect, regression, crash, or broken workflow in Graphlink.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What broke?
+      placeholder: A short description of the issue.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: List the exact steps needed to trigger the problem.
+      placeholder: |
+        1. Open the app
+        2. Load a branch
+        3. Add the plugin
+        4. Click Run
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      placeholder: What should have happened?
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      placeholder: What happened instead?
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Runtime mode
+      options:
+        - Ollama (Local)
+        - API Endpoint
+        - Not sure
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Python version, and any relevant model/provider details.
+      placeholder: Windows 11, Python 3.12, Ollama qwen3:8b
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs, screenshots, or stack traces
+      description: Paste any useful diagnostics here.
+      render: shell

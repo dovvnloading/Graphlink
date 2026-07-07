@@ -1,0 +1,32 @@
+name: Feature request
+description: Suggest a product, workflow, or developer-experience improvement for Graphlink.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or opportunity
+      description: What is missing, frustrating, or low leverage today?
+      placeholder: Describe the workflow gap you want to improve.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      placeholder: Describe the behavior or capability you want.
+    validations:
+      required: true
+  - type: textarea
+    id: use_case
+    attributes:
+      label: Use case
+      description: How would this help in real work?
+      placeholder: Explain the scenario where this matters.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      placeholder: Describe any workarounds or alternative ideas.

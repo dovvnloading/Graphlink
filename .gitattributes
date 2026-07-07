@@ -1,0 +1,11 @@
+* text=auto
+
+*.py text eol=crlf
+*.pyproj text eol=crlf
+*.sln text eol=crlf
+*.txt text eol=crlf
+*.md text eol=crlf
+
+*.png binary
+*.ico binary
+*.wav binary

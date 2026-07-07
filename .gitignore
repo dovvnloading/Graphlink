@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+build/
+dist/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# IDEs and editors
+.vs/
+.vscode/
+.idea/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# OS files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Logs and local scratch files
+*.log
+*.tmp
+*.temp
+
+# Python version managers
+.python-version
+
+# Local app state if created inside the repo by mistake
+.graphlink/
+session.dat
+chats.db
