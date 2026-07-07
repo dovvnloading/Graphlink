@@ -13,17 +13,17 @@ from graphite_connections import (
 )
 from graphite_canvas_items import Frame, Note, NavigationPin, ChartItem, Container
 from graphite_pycoder import PyCoderNode
-from graphite_plugin_code_sandbox import CodeSandboxNode
+from graphite_plugins.graphite_plugin_code_sandbox import CodeSandboxNode
 from graphite_web import WebNode, WebConnectionItem
 from graphite_conversation_node import ConversationNode
 from graphite_reasoning import ReasoningNode
 from graphite_html_view import HtmlViewNode
-from graphite_plugin_artifact import ArtifactNode, ArtifactConnectionItem
-from graphite_plugin_workflow import WorkflowNode, WorkflowConnectionItem
-from graphite_plugin_graph_diff import GraphDiffNode, GraphDiffConnectionItem
-from graphite_plugin_quality_gate import QualityGateNode, QualityGateConnectionItem
-from graphite_plugin_code_review import CodeReviewNode, CodeReviewConnectionItem
-from graphite_plugin_gitlink import GitlinkNode, GitlinkConnectionItem
+from graphite_plugins.graphite_plugin_artifact import ArtifactNode, ArtifactConnectionItem
+from graphite_plugins.graphite_plugin_workflow import WorkflowNode, WorkflowConnectionItem
+from graphite_plugins.graphite_plugin_graph_diff import GraphDiffNode, GraphDiffConnectionItem
+from graphite_plugins.graphite_plugin_quality_gate import QualityGateNode, QualityGateConnectionItem
+from graphite_plugins.graphite_plugin_code_review import CodeReviewNode, CodeReviewConnectionItem
+from graphite_plugins.graphite_plugin_gitlink import GitlinkNode, GitlinkConnectionItem
 from graphite_memory import clone_history, resolve_branch_parent
 
 class ChatScene(QGraphicsScene):
@@ -237,10 +237,7 @@ class ChatScene(QGraphicsScene):
         text = text.lower()
         matches = []
         
-        all_nodes = (self.nodes + self.code_nodes + self.document_nodes + self.image_nodes +
-                     self.thinking_nodes + self.pycoder_nodes + self.code_sandbox_nodes + self.web_nodes +
-                     self.conversation_nodes + self.reasoning_nodes + self.html_view_nodes +
-                     self.artifact_nodes + self.workflow_nodes + self.graph_diff_nodes + self.quality_gate_nodes + self.code_review_nodes + self.gitlink_nodes + self.chart_nodes)
+        all_nodes = self._all_layout_nodes()
         for node in all_nodes:
             content = ""
             if isinstance(node, ChatNode):
@@ -303,10 +300,8 @@ class ChatScene(QGraphicsScene):
         Args:
             matched_nodes (list): A list of nodes that should be highlighted.
         """
-        all_nodes = (self.nodes + self.code_nodes + self.document_nodes + self.image_nodes +
-                     self.thinking_nodes + self.pycoder_nodes + self.code_sandbox_nodes + self.web_nodes +
-                     self.conversation_nodes + self.reasoning_nodes + self.html_view_nodes +
-                     self.artifact_nodes + self.workflow_nodes + self.graph_diff_nodes + self.quality_gate_nodes + self.code_review_nodes + self.gitlink_nodes)
+        all_nodes = (self._all_conversational_nodes() + self.code_nodes + self.document_nodes +
+                     self.image_nodes + self.thinking_nodes)
         for node in all_nodes:
             is_match = node in matched_nodes
             if getattr(node, 'is_search_match', False) != is_match:
@@ -329,11 +324,7 @@ class ChatScene(QGraphicsScene):
         try:
             # Validate the parent node if provided.
             if parent_node is not None:
-                valid_parent_types = (
-                    self.nodes + self.pycoder_nodes + self.code_sandbox_nodes + self.web_nodes +
-                    self.conversation_nodes + self.reasoning_nodes + self.html_view_nodes +
-                    self.artifact_nodes + self.workflow_nodes + self.graph_diff_nodes + self.quality_gate_nodes + self.code_review_nodes + self.gitlink_nodes
-                )
+                valid_parent_types = self._all_conversational_nodes()
                 if parent_node not in valid_parent_types or not parent_node.scene():
                     print("Warning: Parent node is invalid or no longer in the scene.")
                     parent_node = None
@@ -514,12 +505,7 @@ class ChatScene(QGraphicsScene):
             node (QGraphicsItem): The node that was moved.
         """
         # Ensure the node is a valid, tracked item before proceeding.
-        valid_types = (
-            self.nodes + self.code_nodes + self.document_nodes + self.image_nodes + self.thinking_nodes +
-            self.pycoder_nodes + self.code_sandbox_nodes + self.web_nodes + self.conversation_nodes + self.reasoning_nodes +
-            self.html_view_nodes + self.artifact_nodes + self.workflow_nodes + self.graph_diff_nodes + self.quality_gate_nodes + self.code_review_nodes + self.gitlink_nodes +
-            self.chart_nodes
-        )
+        valid_types = self._all_layout_nodes()
         if not isinstance(node, (Note, Container)) and node not in valid_types or not node.scene():
             return
 
@@ -935,11 +921,9 @@ class ChatScene(QGraphicsScene):
         Updates the paths of all connections and removes any invalid connections
         (e.g., those connected to deleted nodes).
         """
-        all_nodes = (self.nodes + self.code_nodes + self.document_nodes + self.image_nodes + self.thinking_nodes +
-                     self.pycoder_nodes + self.code_sandbox_nodes + self.web_nodes +
-                     self.conversation_nodes + self.reasoning_nodes + self.html_view_nodes +
-                     self.artifact_nodes + self.workflow_nodes + self.graph_diff_nodes + self.quality_gate_nodes + self.code_review_nodes + self.gitlink_nodes)
-        
+        all_nodes = (self._all_conversational_nodes() + self.code_nodes + self.document_nodes +
+                     self.image_nodes + self.thinking_nodes)
+
         # Validate and update primary connections.
         valid_connections = []
         for conn in self.connections[:]:
