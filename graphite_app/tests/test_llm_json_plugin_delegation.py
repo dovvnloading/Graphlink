@@ -52,10 +52,10 @@ class TestExtractJsonDelegation:
         assert result == "delegated"
 
     def test_gitlink_module_extract_json_object_delegates(self):
-        import graphite_plugins.graphite_plugin_gitlink as gitlink_module
+        import graphite_plugins.gitlink.agent as gitlink_agent_module
 
-        with patch("graphite_plugins.graphite_plugin_gitlink.extract_json_object", return_value="delegated") as mock_fn:
-            result = gitlink_module._extract_json_object("raw text")
+        with patch("graphite_plugins.gitlink.agent.extract_json_object", return_value="delegated") as mock_fn:
+            result = gitlink_agent_module._extract_json_object("raw text")
         mock_fn.assert_called_once_with("raw text")
         assert result == "delegated"
 

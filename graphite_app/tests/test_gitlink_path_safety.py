@@ -1,9 +1,12 @@
 """Tests for the Gitlink write-gate's security boundary.
 
-graphite_plugin_gitlink.py has no prior test coverage even though
 _normalize_repo_path / _safe_local_target are the only thing standing between an
 LLM-proposed file path and a write to the user's local disk (see
 doc/PLUGIN_SYSTEM_REFACTOR_PLAN.md section 2.2 / 4.4).
+
+These now live in graphite_plugins.gitlink.agent (extracted out of
+graphite_plugin_gitlink.py along with GitlinkAgent - see section 4.4), which is what
+makes them directly importable here without any Qt widget or QApplication.
 """
 
 import sys
@@ -13,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import pytest
 
-from graphite_plugins.graphite_plugin_gitlink import (
+from graphite_plugins.gitlink.agent import (
     _fingerprint_changes,
     _normalize_repo_path,
     _safe_local_target,
