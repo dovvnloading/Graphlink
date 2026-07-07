@@ -312,6 +312,10 @@ class CodeSandboxExecutionWorker(QThread):
     terminal_chunk = Signal(str)
     finished = Signal(dict)
     error = Signal(str)
+    # Emitted with (code, requirements_manifest) once code is ready but before the
+    # sandbox installs anything or executes it. The receiver (main thread) must call
+    # approve() or deny() to unblock run(), which is parked on _approval_event.wait().
+    approval_requested = Signal(str, str)
 
     def __init__(self, sandbox_id, user_prompt, conversation_history, requirements_manifest, existing_code=""):
         super().__init__()
@@ -324,9 +328,20 @@ class CodeSandboxExecutionWorker(QThread):
         self.repair_agent = SandboxRepairAgent()
         self.analysis_agent = PyCoderAnalysisAgent()
         self._is_running = True
+        self._approval_event = threading.Event()
+        self._approved = False
+
+    def approve(self):
+        self._approved = True
+        self._approval_event.set()
+
+    def deny(self):
+        self._approved = False
+        self._approval_event.set()
 
     def stop(self):
         self._is_running = False
+        self._approval_event.set()
         self.sandbox.stop()
 
     def _emit_terminal(self, text):
@@ -386,6 +401,17 @@ class CodeSandboxExecutionWorker(QThread):
                     return
 
             if not self._is_running:
+                return
+
+            self._emit_terminal("[Sandbox] Waiting for approval to install dependencies and execute this code...\n")
+            self.approval_requested.emit(current_code, requirements_manifest)
+            self._approval_event.wait()
+
+            if not self._is_running:
+                return
+
+            if not self._approved:
+                self.error.emit("Sandbox run cancelled: execution was not approved.")
                 return
 
             self.log_update.emit(SandboxStage.PREPARE, PyCoderStatus.RUNNING)

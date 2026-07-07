@@ -2,6 +2,7 @@ import os
 import re
 import json
 from PySide6.QtCore import QPointF
+from PySide6.QtWidgets import QMessageBox
 import graphite_config as config
 import api_provider
 from graphite_prompts import _TokenBytesEncoder
@@ -1026,6 +1027,9 @@ class WindowActionsMixin:
 
         worker_thread.log_update.connect(sandbox_node.update_status)
         worker_thread.terminal_chunk.connect(sandbox_node.append_terminal_output)
+        worker_thread.approval_requested.connect(
+            lambda code, reqs, worker=worker_thread, node=sandbox_node: self._handle_code_sandbox_approval_request(worker, node, code, reqs)
+        )
         worker_thread.finished.connect(
             lambda result, node=sandbox_node, history=parent_history, mode=run_mode: self._handle_code_sandbox_result(result, node, history, mode)
         )
@@ -1033,6 +1037,34 @@ class WindowActionsMixin:
         worker_thread.finished.connect(lambda _result, thread=worker_thread, node=sandbox_node: self._cleanup_code_sandbox_thread(thread, node))
         worker_thread.error.connect(lambda _error, thread=worker_thread, node=sandbox_node: self._cleanup_code_sandbox_thread(thread, node))
         worker_thread.start()
+
+    def _handle_code_sandbox_approval_request(self, worker_thread, sandbox_node, code, requirements_manifest):
+        if not sandbox_node or getattr(sandbox_node, "is_disposed", False):
+            worker_thread.deny()
+            return
+
+        declared_packages = [line.strip() for line in (requirements_manifest or "").splitlines() if line.strip()]
+        if declared_packages:
+            package_summary = f"{len(declared_packages)} package(s) declared in requirements.txt will be installed from PyPI if not already cached:\n\n" + "\n".join(declared_packages)
+        else:
+            package_summary = "No extra packages are declared."
+
+        message_box = QMessageBox(
+            QMessageBox.Icon.Question,
+            "Approve Sandbox Execution",
+            "This will run Python code inside an isolated virtual environment with the "
+            "full privileges of your user account (the environment isolates installed "
+            "packages, not the operating system).\n\n" + package_summary,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        message_box.setDefaultButton(QMessageBox.StandardButton.No)
+        message_box.setDetailedText(code or "[No code to display]")
+        reply = message_box.exec()
+
+        if reply == QMessageBox.StandardButton.Yes:
+            worker_thread.approve()
+        else:
+            worker_thread.deny()
 
     def stop_code_sandbox_node(self, sandbox_node):
         worker_thread = getattr(sandbox_node, "worker_thread", None)
