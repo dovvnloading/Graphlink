@@ -2,7 +2,7 @@
 
 **Project:** Graphite App
 **Date:** 2026-07-07
-**Status:** Phase 0 in progress. Fixed so far: Workflow allowlist drift for Code Review Agent (§1.4/§4.7), Gitlink's write-approval state machine + path-safety tests (§2.2/§4.4), Code Sandbox's human-approval gate (§2.1/§4.3). Still open: Code Sandbox OS-level hardening (deferred pending a scope decision), and the full Phase 1-5 registry refactor (§3, §5).
+**Status:** Phase 0 complete, Phase 1 started. Fixed so far: Workflow allowlist drift for Code Review Agent (§1.4/§4.7), Gitlink's write-approval state machine + path-safety tests (§2.2/§4.4), Code Sandbox's human-approval gate (§2.1/§4.3), and the additive `PluginSpec`/`PLUGIN_REGISTRY` table (§3.1/§4.8) with drift-detecting tests. Still open: Code Sandbox OS-level hardening (deferred pending a scope decision), and Phase 2-5 (migrating existing hardcoded metadata/isinstance chains onto the registry, one plugin at a time — see §5).
 
 ## Scope & Method
 
@@ -280,6 +280,8 @@ None of this requires a big-bang rewrite — see §5 for a phased path that lets
 **Refactor Plan:** This is the centerpiece of §3 — implement `PluginSpec`/`PLUGIN_REGISTRY` and the generic `create_node(key, parent_node)` path here. Once done, this file should shrink from ~614 lines of hand-written factories to a short declarative table plus one generic method with named hooks for the handful of genuinely special cases (Graph Diff's two-source selection, System Prompt's note-based implementation).
 
 **Effort/Risk:** **L**, but additive — the registry and generic path can be built and tested alongside the existing hardcoded methods, then each `_create_X_node` migrated one at a time (see §5), so this doesn't require a single risky cutover.
+
+**✅ Phase 1 done:** `PluginSpec` (dataclass) and a module-level `PLUGIN_REGISTRY: dict[str, PluginSpec]` now exist in this file, populated for all 13 plugins with `key`/`display_name`/`description`/`category`/`icon`/`node_cls`/`connection_cls`/`seedable`. `get_plugin_spec(key)` and `get_display_name_for_node(node_or_cls)` are available as the intended eventual replacement for the hand-copied name maps in `graphite_plugin_quality_gate.py`/`graphite_plugin_graph_diff.py`/`graphite_plugin_workflow.py` — **not yet wired into them**, per the phased plan (that's Phase 2+, one plugin at a time). `_discover_plugins` and all 13 `_create_X_node` factories are untouched. [tests/test_plugin_registry.py](C:/Users/Admin/source/repos/graphite_app/graphite_app/tests/test_plugin_registry.py) cross-checks the registry against the live `PluginPortal` registration (name drift) and against `graphite_window_actions.py`'s `_seed_plugin_prompt` isinstance chain (`seedable` flag correctness) — the same class of drift that caused the Workflow allowlist bug in §1.4, now caught by a test instead of a future audit. As a side effect, `ArtifactNode`/`ArtifactConnectionItem` moved from a deferred import inside `_create_artifact_node` to a top-level import (no circular-import reason existed for the deferral, confirmed before the change).
 
 ---
 

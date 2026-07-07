@@ -1,3 +1,6 @@
+from dataclasses import dataclass
+from typing import Optional
+
 from PySide6.QtCore import QPointF
 
 from graphite_connections import (
@@ -17,7 +20,144 @@ from graphite_plugins.graphite_plugin_graph_diff import GraphDiffNode, GraphDiff
 from graphite_plugins.graphite_plugin_quality_gate import QualityGateNode, QualityGateConnectionItem
 from graphite_plugins.graphite_plugin_code_review import CodeReviewNode, CodeReviewConnectionItem
 from graphite_plugins.graphite_plugin_gitlink import GitlinkNode, GitlinkConnectionItem
+from graphite_plugins.graphite_plugin_artifact import ArtifactNode, ArtifactConnectionItem
 from graphite_memory import clone_history
+
+
+@dataclass(frozen=True)
+class PluginSpec:
+    """Declarative metadata for one plugin node type.
+
+    Phase 1 of doc/PLUGIN_SYSTEM_REFACTOR_PLAN.md: introduced additively, alongside the
+    existing hand-written `_register_plugin` calls and `_create_X_node` factories on
+    PluginPortal below, which are unchanged by this. Other hardcoded per-plugin metadata
+    scattered around the app (graphite_plugin_quality_gate.py's `_node_label`,
+    graphite_plugin_workflow.py's `WORKFLOW_PLUGIN_ICONS`/`WORKFLOW_ALLOWED_PLUGINS`,
+    graphite_window_actions.py's `_seed_plugin_prompt` isinstance chain, the isinstance
+    chains in graphite_scene.py/graphite_window.py, etc.) are candidates to migrate onto
+    this table one plugin at a time in later phases - this phase only builds the table
+    and does not rewire any existing consumer.
+    """
+    key: str
+    display_name: str
+    description: str
+    category: str
+    icon: str
+    node_cls: Optional[type]
+    connection_cls: Optional[type]
+    # Whether graphite_window_actions.py's instantiate_seeded_plugin/_seed_plugin_prompt
+    # flow can create this plugin from a single parent node plus a starter prompt. False
+    # for plugins with a different creation contract (System Prompt attaches to the graph
+    # root; Branch Lens/GraphDiffNode requires exactly two pre-selected existing nodes).
+    seedable: bool
+
+
+PLUGIN_REGISTRY: dict[str, "PluginSpec"] = {}
+
+
+def _register_spec(**kwargs):
+    spec = PluginSpec(**kwargs)
+    PLUGIN_REGISTRY[spec.key] = spec
+    return spec
+
+
+_register_spec(
+    key="system_prompt", display_name="System Prompt",
+    description="Adds a special node to override the default system prompt for a conversation branch.",
+    category="Branch Foundations", icon="fa5s.sliders-h",
+    node_cls=None, connection_cls=SystemPromptConnectionItem, seedable=False,
+)
+_register_spec(
+    key="conversation", display_name="Conversation Node",
+    description="Adds a node for a self-contained, linear chat conversation.",
+    category="Branch Foundations", icon="fa5s.comments",
+    node_cls=ConversationNode, connection_cls=ConversationConnectionItem, seedable=True,
+)
+_register_spec(
+    key="reasoning", display_name="Graphlink-Reasoning",
+    description="A multi-step reasoning agent for solving complex problems.",
+    category="Reasoning & Research", icon="fa5s.brain",
+    node_cls=ReasoningNode, connection_cls=ReasoningConnectionItem, seedable=True,
+)
+_register_spec(
+    key="web", display_name="Graphlink-Web",
+    description="Adds a node with web access for real-time information retrieval.",
+    category="Reasoning & Research", icon="fa5s.globe",
+    node_cls=WebNode, connection_cls=WebConnectionItem, seedable=True,
+)
+_register_spec(
+    key="graph_diff", display_name="Branch Lens",
+    description="Compares two selected graph branches side-by-side and highlights where their logic, code, and intent diverge.",
+    category="Validation & Delivery", icon="fa5s.code-branch",
+    node_cls=GraphDiffNode, connection_cls=GraphDiffConnectionItem, seedable=False,
+)
+_register_spec(
+    key="quality_gate", display_name="Quality Gate",
+    description="Runs a production-readiness review on the current branch, scores its readiness, and recommends the highest-value remediation nodes.",
+    category="Validation & Delivery", icon="fa5s.check-circle",
+    node_cls=QualityGateNode, connection_cls=QualityGateConnectionItem, seedable=True,
+)
+_register_spec(
+    key="code_review", display_name="Code Review Agent",
+    description="Reviews a local or GitHub source file with deterministic scoring, structured findings, and a weighted code quality report.",
+    category="Validation & Delivery", icon="fa5s.search",
+    node_cls=CodeReviewNode, connection_cls=CodeReviewConnectionItem, seedable=True,
+)
+_register_spec(
+    key="gitlink", display_name="Gitlink",
+    description="Loads a GitHub repository into structured XML context, prepares file-level changes, and only writes after explicit approval.",
+    category="Build & Execution", icon="fa5s.link",
+    node_cls=GitlinkNode, connection_cls=GitlinkConnectionItem, seedable=True,
+)
+_register_spec(
+    key="pycoder", display_name="Py-Coder",
+    description="Opens a Python execution environment to run code and get AI analysis.",
+    category="Build & Execution", icon="fa5s.laptop-code",
+    node_cls=PyCoderNode, connection_cls=PyCoderConnectionItem, seedable=True,
+)
+_register_spec(
+    key="code_sandbox", display_name="Execution Sandbox",
+    description="Runs Python inside an isolated virtualenv and lets you declare per-node requirements.txt dependencies.",
+    category="Build & Execution", icon="fa5s.shield-alt",
+    node_cls=CodeSandboxNode, connection_cls=CodeSandboxConnectionItem, seedable=True,
+)
+_register_spec(
+    key="html_renderer", display_name="HTML Renderer",
+    description="Adds a node to render HTML code from a parent node.",
+    category="Build & Execution", icon="fa5s.window-maximize",
+    node_cls=HtmlViewNode, connection_cls=HtmlConnectionItem, seedable=True,
+)
+_register_spec(
+    key="workflow", display_name="Workflow Architect",
+    description="Designs an agentic execution plan, recommends the right specialist plugins, and seeds follow-up nodes.",
+    category="Workflow & Drafting", icon="fa5s.project-diagram",
+    node_cls=WorkflowNode, connection_cls=WorkflowConnectionItem, seedable=True,
+)
+_register_spec(
+    key="artifact", display_name="Artifact / Drafter",
+    description="A split-pane node for iteratively drafting and refining living documents (Markdown).",
+    category="Workflow & Drafting", icon="fa5s.pen-nib",
+    node_cls=ArtifactNode, connection_cls=ArtifactConnectionItem, seedable=True,
+)
+
+
+def get_plugin_spec(key):
+    return PLUGIN_REGISTRY.get(key)
+
+
+def get_display_name_for_node(node_or_cls):
+    """Look up a node's registered display name by class, falling back to the class name.
+
+    Intended as the eventual replacement for the several hand-maintained class-name ->
+    display-name maps scattered around the app (see the PluginSpec docstring). Not yet
+    wired into any of them - this phase only builds the table.
+    """
+    target_cls = node_or_cls if isinstance(node_or_cls, type) else type(node_or_cls)
+    for spec in PLUGIN_REGISTRY.values():
+        if spec.node_cls is target_cls:
+            return spec.display_name
+    return target_cls.__name__
+
 
 PLUGIN_CATEGORY_META = [
     {
@@ -339,8 +479,6 @@ class PluginPortal:
              self.main_window.notification_banner.show_message("Artifact Drafter can only branch from a valid conversational node.", 5000, "warning")
              return
 
-        from graphite_plugins.graphite_plugin_artifact import ArtifactNode, ArtifactConnectionItem
-        
         artifact_node = ArtifactNode(parent_node=parent_node)
         parent_node.children.append(artifact_node)
         artifact_node.artifact_requested.connect(self.main_window.execute_artifact_node)
