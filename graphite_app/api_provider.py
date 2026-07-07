@@ -507,6 +507,16 @@ def split_reasoning_and_content(text: str) -> tuple[str, str]:
     return reasoning_text, remaining_text
 
 
+class ReasoningWithoutAnswerError(RuntimeError):
+    """A reasoning-capable model returned chain-of-thought text but no final answer.
+
+    Distinct from a plain RuntimeError so callers (see the Ollama branch of chat())
+    can specifically retry this failure mode - it's often just sampling variance (the
+    model didn't finish "thinking" within its own budget that particular time), not a
+    persistent configuration problem.
+    """
+
+
 def _compose_reasoned_response(answer_text: str, reasoning_text: str, provider_name: str) -> str:
     normalized_answer = str(answer_text or "").strip()
     normalized_reasoning = str(reasoning_text or "").strip()
@@ -517,7 +527,7 @@ def _compose_reasoned_response(answer_text: str, reasoning_text: str, provider_n
         return normalized_answer
 
     if normalized_reasoning:
-        raise RuntimeError(
+        raise ReasoningWithoutAnswerError(
             f"{provider_name} returned reasoning but no final answer. "
             "Retry in Quick mode or choose a different chat format/model."
         )
@@ -1710,20 +1720,43 @@ def chat(task: str, messages: list, **kwargs) -> dict:
                 if task == config.TASK_CHAT and ("qwen3" in model.lower() or "deepseek" in model.lower()):
                     ollama_kwargs["think"] = True
 
-                response = ollama.chat(model=model, messages=ollama_messages, **ollama_kwargs)
-                _raise_if_cancelled(cancel_event)
+                # Reasoning-capable local models occasionally exhaust their own
+                # "thinking" budget before writing a final answer - often just sampling
+                # variance, not a persistent problem - so retry the identical request a
+                # couple of times before surfacing it to the user (see
+                # ReasoningWithoutAnswerError).
+                max_attempts = 3
+                last_reasoning_error = None
+                full_response_content = None
+                for attempt in range(max_attempts):
+                    if attempt > 0:
+                        _raise_if_cancelled(cancel_event)
 
-                raw_response_content = response["message"].get("content", "")
-                embedded_reasoning, visible_response_content = split_reasoning_and_content(raw_response_content)
-                reasoning_parts: list[str] = []
-                reasoning_seen: set[str] = set()
-                _append_unique_text_segment(reasoning_parts, response["message"].get("thinking"), reasoning_seen)
-                _append_unique_text_segment(reasoning_parts, embedded_reasoning, reasoning_seen)
-                full_response_content = _compose_reasoned_response(
-                    visible_response_content,
-                    "\n\n".join(reasoning_parts).strip(),
-                    "Ollama",
-                )
+                    response = ollama.chat(model=model, messages=ollama_messages, **ollama_kwargs)
+                    _raise_if_cancelled(cancel_event)
+
+                    raw_response_content = response["message"].get("content", "")
+                    embedded_reasoning, visible_response_content = split_reasoning_and_content(raw_response_content)
+                    reasoning_parts: list[str] = []
+                    reasoning_seen: set[str] = set()
+                    _append_unique_text_segment(reasoning_parts, response["message"].get("thinking"), reasoning_seen)
+                    _append_unique_text_segment(reasoning_parts, embedded_reasoning, reasoning_seen)
+
+                    try:
+                        full_response_content = _compose_reasoned_response(
+                            visible_response_content,
+                            "\n\n".join(reasoning_parts).strip(),
+                            "Ollama",
+                        )
+                        break
+                    except ReasoningWithoutAnswerError as exc:
+                        last_reasoning_error = exc
+                        continue
+                else:
+                    raise RuntimeError(
+                        f"Ollama returned reasoning but no final answer after {max_attempts} attempts. "
+                        "Retry in Quick mode or choose a different chat format/model."
+                    ) from last_reasoning_error
 
                 return {
                     "message": {
