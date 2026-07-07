@@ -376,6 +376,73 @@ class PluginPortal:
     def _position_free_node(self, scene, base_pos, node, strategy="general"):
         node.setPos(scene.find_free_position(base_pos, node, strategy=strategy))
 
+    def create_node(
+        self,
+        *,
+        node_cls,
+        connection_cls,
+        scene_nodes,
+        scene_connections,
+        wire=None,
+        node_kwargs=None,
+        clone_parent_history=False,
+        resolve_branch_parent=True,
+        no_selection_message,
+        invalid_parent_message=None,
+    ):
+        """Generic single-parent plugin node factory (Phase 2 of doc/PLUGIN_SYSTEM_REFACTOR_PLAN.md).
+
+        Handles the ~15-line skeleton duplicated across most `_create_X_node` methods:
+        resolve/validate the parent, construct the node, wire it into the parent's
+        children, optionally clone conversation history, position it, and register both
+        the node and its connection with the scene's existing (still hardcoded, see
+        PLUGIN_SYSTEM_REFACTOR_PLAN.md section 3.3) node/connection lists.
+
+        Plugins with a genuinely different creation contract don't use this - System
+        Prompt attaches to the graph root rather than branching from a selection, and
+        Branch Lens/GraphDiffNode requires exactly two pre-selected existing nodes - they
+        keep their own bespoke factory methods below.
+
+        `scene_nodes`/`scene_connections` are passed in as the actual list objects (e.g.
+        `scene.artifact_nodes`) rather than looked up by name, since the per-plugin scene
+        attribute names don't consistently derive from the plugin's registry key (e.g.
+        the "html_renderer" plugin's list is `scene.html_view_nodes`, named after the
+        node class instead) - see PLUGIN_SYSTEM_REFACTOR_PLAN.md section 3.3 for the
+        planned follow-up that would let this be looked up generically too.
+        """
+        scene = self.main_window.chat_view.scene()
+        selected_node = self.main_window.current_node
+
+        if not selected_node:
+            self.main_window.notification_banner.show_message(no_selection_message, 5000, "warning")
+            return None
+
+        parent_node = self._resolve_branch_parent(selected_node) if resolve_branch_parent else selected_node
+
+        if not hasattr(parent_node, 'children'):
+            self.main_window.notification_banner.show_message(invalid_parent_message or no_selection_message, 5000, "warning")
+            return None
+
+        node = node_cls(parent_node=parent_node, **(node_kwargs or {}))
+        parent_node.children.append(node)
+
+        if wire:
+            wire(node)
+
+        if clone_parent_history and getattr(parent_node, 'conversation_history', None):
+            node.conversation_history = clone_history(parent_node.conversation_history)
+
+        self._position_branch_node(scene, parent_node, node)
+        scene.addItem(node)
+        scene_nodes.append(node)
+
+        connection = connection_cls(parent_node, node)
+        node.incoming_connection = connection
+        scene.addItem(connection)
+        scene_connections.append(connection)
+
+        return node
+
     def _create_system_prompt_node(self):
         scene = self.main_window.chat_view.scene()
         root_node = self._get_root_node()
@@ -467,37 +534,15 @@ class PluginPortal:
 
     def _create_artifact_node(self):
         scene = self.main_window.chat_view.scene()
-        selected_node = self.main_window.current_node
-
-        if not selected_node:
-            self.main_window.notification_banner.show_message("Please select a node to branch from before adding an Artifact Drafter.", 5000, "warning")
-            return
-
-        parent_node = self._resolve_branch_parent(selected_node)
-
-        if not hasattr(parent_node, 'children'):
-             self.main_window.notification_banner.show_message("Artifact Drafter can only branch from a valid conversational node.", 5000, "warning")
-             return
-
-        artifact_node = ArtifactNode(parent_node=parent_node)
-        parent_node.children.append(artifact_node)
-        artifact_node.artifact_requested.connect(self.main_window.execute_artifact_node)
-        
-        self._position_branch_node(scene, parent_node, artifact_node)
-
-        scene.addItem(artifact_node)
-        # Ensure scene tracks it (will be formalized in graphite_scene.py later)
-        if not hasattr(scene, 'artifact_nodes'):
-            scene.artifact_nodes = []
-            scene.artifact_connections = []
-            
-        scene.artifact_nodes.append(artifact_node)
-
-        connection = ArtifactConnectionItem(parent_node, artifact_node)
-        artifact_node.incoming_connection = connection
-        scene.addItem(connection)
-        scene.artifact_connections.append(connection)
-        return artifact_node
+        return self.create_node(
+            node_cls=ArtifactNode,
+            connection_cls=ArtifactConnectionItem,
+            scene_nodes=scene.artifact_nodes,
+            scene_connections=scene.artifact_connections,
+            wire=lambda node: node.artifact_requested.connect(self.main_window.execute_artifact_node),
+            no_selection_message="Please select a node to branch from before adding an Artifact Drafter.",
+            invalid_parent_message="Artifact Drafter can only branch from a valid conversational node.",
+        )
 
     def _create_workflow_node(self):
         scene = self.main_window.chat_view.scene()
