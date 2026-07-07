@@ -3,15 +3,19 @@
 doc/PLUGIN_SYSTEM_REFACTOR_PLAN.md documents that plugin metadata is hand-copied in
 several independent places across the app (PluginPortal's _register_plugin calls,
 graphite_plugin_quality_gate.py's _node_label, graphite_plugin_workflow.py's
-WORKFLOW_PLUGIN_ICONS, graphite_window_actions.py's _seed_plugin_prompt isinstance
-chain) and that this drift already caused a live bug (Workflow's allowlist silently
-omitted Code Review Agent). PLUGIN_REGISTRY is meant to become the single source of
-truth those should eventually read from - these tests cross-check it against the
-existing hand-maintained lists so registry/reality drift is caught immediately
-instead of being discovered by a future audit.
+WORKFLOW_PLUGIN_ICONS) and that this drift already caused a live bug (Workflow's
+allowlist silently omitted Code Review Agent). PLUGIN_REGISTRY is meant to become the
+single source of truth those should eventually read from - these tests cross-check it
+against the existing hand-maintained lists so registry/reality drift is caught
+immediately instead of being discovered by a future audit.
+
+Note: graphite_window_actions.py's former isinstance-chain dispatcher was replaced in
+Phase 2 by each node class implementing seed_prompt(text) itself (see
+tests/test_seed_prompt_protocol.py for the behavioral coverage of that). The
+seedable-flag-vs-reality cross-check below now asserts against that protocol directly
+instead of scraping the old isinstance chain out of the dispatcher's source.
 """
 
-import re
 import sys
 from pathlib import Path
 
@@ -23,18 +27,6 @@ from graphite_plugins.graphite_plugin_portal import (
     get_display_name_for_node,
     get_plugin_spec,
 )
-
-_WINDOW_ACTIONS_SOURCE = (Path(__file__).resolve().parents[1] / "graphite_window_actions.py").read_text(encoding="utf-8")
-
-
-def _seed_plugin_prompt_body():
-    match = re.search(
-        r"def _seed_plugin_prompt\(self, node, seed_prompt\):\n(.*?)(?:\n    def |\Z)",
-        _WINDOW_ACTIONS_SOURCE,
-        re.DOTALL,
-    )
-    assert match, "_seed_plugin_prompt method not found in graphite_window_actions.py"
-    return match.group(1)
 
 
 def test_registry_has_thirteen_entries():
@@ -72,27 +64,22 @@ def test_get_display_name_for_node_falls_back_to_class_name():
     assert get_display_name_for_node(UnregisteredNode) == "UnregisteredNode"
 
 
-def test_seedable_specs_are_all_handled_by_seed_plugin_prompt():
-    body = _seed_plugin_prompt_body()
+def test_seedable_specs_implement_seed_prompt():
     for spec in PLUGIN_REGISTRY.values():
         if not spec.seedable or spec.node_cls is None:
             continue
-        pattern = rf"isinstance\(node,\s*{spec.node_cls.__name__}\)"
-        assert re.search(pattern, body), (
-            f"{spec.key!r} is marked seedable=True but _seed_plugin_prompt has no "
-            f"isinstance(node, {spec.node_cls.__name__}) branch - seeding it would "
-            f"silently do nothing."
+        assert callable(getattr(spec.node_cls, "seed_prompt", None)), (
+            f"{spec.key!r} is marked seedable=True but {spec.node_cls.__name__} has no "
+            f"seed_prompt() method - instantiate_seeded_plugin would silently do nothing."
         )
 
 
-def test_non_seedable_node_specs_are_not_handled_by_seed_plugin_prompt():
-    body = _seed_plugin_prompt_body()
+def test_non_seedable_node_specs_do_not_implement_seed_prompt():
     for spec in PLUGIN_REGISTRY.values():
         if spec.seedable or spec.node_cls is None:
             continue
-        pattern = rf"isinstance\(node,\s*{spec.node_cls.__name__}\)"
-        assert not re.search(pattern, body), (
-            f"{spec.key!r} is marked seedable=False but _seed_plugin_prompt already "
-            f"handles {spec.node_cls.__name__} - the registry's seedable flag is stale "
-            f"and should be flipped to True."
+        assert getattr(spec.node_cls, "seed_prompt", None) is None, (
+            f"{spec.key!r} is marked seedable=False but {spec.node_cls.__name__} already "
+            f"implements seed_prompt() - the registry's seedable flag is stale and should "
+            f"be flipped to True."
         )

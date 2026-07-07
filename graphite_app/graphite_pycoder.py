@@ -743,6 +743,10 @@ class PyCoderNode(QGraphicsItem, HoverAnimationMixin):
     def get_prompt(self):
         return self.prompt_input.toPlainText()
 
+    def seed_prompt(self, text):
+        """Protocol method used by graphite_window_actions.instantiate_seeded_plugin."""
+        self.prompt_input.setPlainText(text)
+
     def get_code(self):
         return self.code_input.toPlainText()
 

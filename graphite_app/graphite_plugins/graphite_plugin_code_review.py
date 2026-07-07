@@ -1712,6 +1712,11 @@ class CodeReviewNode(QGraphicsObject, HoverAnimationMixin):
     def _on_context_changed(self):
         self.review_context = self.context_input.toPlainText()
 
+    def seed_prompt(self, text):
+        """Protocol method used by graphite_window_actions.instantiate_seeded_plugin."""
+        self.context_input.setPlainText(text)
+        self._on_context_changed()
+
     def _on_source_changed(self):
         if self._suppress_source_state_updates:
             return

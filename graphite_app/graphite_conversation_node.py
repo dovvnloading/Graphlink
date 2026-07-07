@@ -393,6 +393,10 @@ class ConversationNode(QGraphicsObject, HoverAnimationMixin):
         self.send_button.setEnabled(not pending)
         self._update_button_style()
     
+    def seed_prompt(self, text):
+        """Protocol method used by graphite_window_actions.instantiate_seeded_plugin."""
+        self.message_input.setText(text)
+
     def set_history(self, history: list):
         self.internal_scene.clear()
         self._message_items.clear()

@@ -992,6 +992,11 @@ class GitlinkNode(QGraphicsObject, HoverAnimationMixin):
             return
         self.task_prompt = self.task_input.toPlainText()
 
+    def seed_prompt(self, text):
+        """Protocol method used by graphite_window_actions.instantiate_seeded_plugin."""
+        self.task_input.setPlainText(text)
+        self._on_task_changed()
+
     def _mark_context_dirty(self):
         self._context_dirty = True
         self.context_summary = ""

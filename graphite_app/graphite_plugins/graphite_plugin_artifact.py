@@ -432,6 +432,10 @@ class ArtifactNode(QGraphicsObject, HoverAnimationMixin):
     def get_instruction(self):
         return self.instruction_input.toPlainText()
 
+    def seed_prompt(self, text):
+        """Protocol method used by graphite_window_actions.instantiate_seeded_plugin."""
+        self.instruction_input.setPlainText(text)
+
     def get_artifact_content(self):
         return self.raw_editor.toPlainText()
 

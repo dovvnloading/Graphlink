@@ -1685,31 +1685,14 @@ class WindowActionsMixin:
         self.save_chat()
 
     def _seed_plugin_prompt(self, node, seed_prompt):
-        if isinstance(node, WebNode):
-            node.set_query(seed_prompt)
-        elif isinstance(node, ReasoningNode):
-            node.prompt_input.setPlainText(seed_prompt)
-            node._on_prompt_changed()
-        elif isinstance(node, PyCoderNode):
-            node.prompt_input.setPlainText(seed_prompt)
-        elif isinstance(node, CodeSandboxNode):
-            node.prompt_input.setPlainText(seed_prompt)
-        elif isinstance(node, ArtifactNode):
-            node.instruction_input.setPlainText(seed_prompt)
-        elif isinstance(node, ConversationNode):
-            node.message_input.setText(seed_prompt)
-        elif isinstance(node, HtmlViewNode):
-            node.html_input.setPlainText(seed_prompt)
-        elif isinstance(node, WorkflowNode):
-            node.goal_input.setPlainText(seed_prompt)
-        elif isinstance(node, QualityGateNode):
-            node.goal_input.setPlainText(seed_prompt)
-        elif isinstance(node, CodeReviewNode):
-            node.context_input.setPlainText(seed_prompt)
-            node._on_context_changed()
-        elif isinstance(node, GitlinkNode):
-            node.task_input.setPlainText(seed_prompt)
-            node._on_task_changed()
+        # Plugin nodes implement seed_prompt(text) themselves (see PluginSpec.seedable in
+        # graphite_plugin_portal.py) - adding a new seedable plugin no longer requires
+        # editing this dispatcher. Note is not a plugin node (System Prompt has no
+        # dedicated node class, see PLUGIN_REGISTRY's "system_prompt" entry) so it keeps
+        # its own branch here.
+        seed_method = getattr(node, "seed_prompt", None)
+        if callable(seed_method):
+            seed_method(seed_prompt)
         elif isinstance(node, Note):
             node.content = seed_prompt
             if hasattr(node, '_recalculate_geometry'):

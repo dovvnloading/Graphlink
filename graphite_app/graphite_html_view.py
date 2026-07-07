@@ -373,6 +373,10 @@ class HtmlViewNode(QGraphicsObject, HoverAnimationMixin):
     def get_html_content(self):
         """Returns the current HTML content from the input editor."""
         return self.html_content
+
+    def seed_prompt(self, text):
+        """Protocol method used by graphite_window_actions.instantiate_seeded_plugin."""
+        self.html_input.setPlainText(text)
     
     def set_html_content(self, html_text):
         """

@@ -185,6 +185,11 @@ class ReasoningNode(QGraphicsObject, HoverAnimationMixin):
     def _on_prompt_changed(self):
         self.prompt = self.prompt_input.toPlainText()
 
+    def seed_prompt(self, text):
+        """Protocol method used by graphite_window_actions.instantiate_seeded_plugin."""
+        self.prompt_input.setPlainText(text)
+        self._on_prompt_changed()
+
     def _on_budget_changed(self, value):
         self.thinking_budget = value
         self.budget_label.setText(str(value))

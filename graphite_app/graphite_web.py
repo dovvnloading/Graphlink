@@ -269,6 +269,10 @@ class WebNode(QGraphicsObject, HoverAnimationMixin):
         self.query_input.setText(text)
         self.query = text
 
+    def seed_prompt(self, text):
+        """Protocol method used by graphite_window_actions.instantiate_seeded_plugin."""
+        self.set_query(text)
+
     def set_status(self, status_text: str):
         """
         Updates the status label to provide feedback on the search process.

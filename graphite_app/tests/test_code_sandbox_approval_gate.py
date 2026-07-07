@@ -14,11 +14,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from PySide6.QtCore import QCoreApplication
+from PySide6.QtWidgets import QApplication
 
 from graphite_agents_code_sandbox import CodeSandboxExecutionWorker
 
-_APP = QCoreApplication.instance() or QCoreApplication([])
+# A full QApplication (not QCoreApplication) is required process-wide: other test
+# modules in this suite construct real QWidget-based plugin nodes, and Qt can only
+# have one application instance per process (see tests/conftest.py).
+_APP = QApplication.instance() or QApplication([])
 
 
 def _make_worker(existing_code="print('hello')", requirements_manifest=""):

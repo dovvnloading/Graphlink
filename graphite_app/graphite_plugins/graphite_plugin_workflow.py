@@ -929,6 +929,10 @@ class WorkflowNode(QGraphicsObject, HoverAnimationMixin):
     def get_goal(self):
         return self.goal_input.toPlainText()
 
+    def seed_prompt(self, text):
+        """Protocol method used by graphite_window_actions.instantiate_seeded_plugin."""
+        self.goal_input.setPlainText(text)
+
     def get_constraints(self):
         return self.constraints_input.toPlainText()
 
