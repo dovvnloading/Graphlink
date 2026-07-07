@@ -30,8 +30,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import graphite_conversation_node  # noqa: F401 - imports graphite_plugins.graphite_plugin_context_menu
 import graphite_html_view  # noqa: F401
 import graphite_plugins  # noqa: F401
+import graphite_plugins.graphite_plugin_reasoning  # noqa: F401
 import graphite_pycoder  # noqa: F401 - this is the module that was on the circular side
-import graphite_reasoning  # noqa: F401
 import graphite_scene  # noqa: F401
 import graphite_web  # noqa: F401
 import graphite_window  # noqa: F401
@@ -64,6 +64,14 @@ def test_root_level_plugin_shim_files_are_gone():
         "graphite_plugin_portal.py",
         "graphite_plugin_quality_gate.py",
         "graphite_plugin_workflow.py",
+        # Not "shims" in the same sense (these predated graphite_plugins/ entirely
+        # rather than being a re-export left behind after a package move), but the
+        # same "root-level plugin implementation file should no longer exist" check
+        # applies now that Graphlink-Reasoning moved into graphite_plugins/reasoning/
+        # and graphite_plugins/graphite_plugin_reasoning.py (see
+        # doc/PLUGIN_SYSTEM_REFACTOR_PLAN.md section 4.10).
+        "graphite_reasoning.py",
+        "graphite_agents_reasoning.py",
     ]
     for name in shim_names:
         assert not (app_root / name).exists(), f"{name} should have been removed from the app root"

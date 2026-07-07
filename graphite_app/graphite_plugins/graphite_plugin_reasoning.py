@@ -2,14 +2,137 @@ from PySide6.QtWidgets import (
     QGraphicsObject, QGraphicsProxyWidget, QWidget, QVBoxLayout,
     QTextEdit, QPushButton, QLabel, QHBoxLayout, QSlider
 )
-from PySide6.QtCore import QRectF, Qt, Signal, QRect
+from PySide6.QtCore import QRectF, Qt, Signal, QRect, QThread
 from PySide6.QtGui import QPainter, QColor, QBrush, QPen, QPainterPath, QFont
 import qtawesome as qta
 from graphite_config import get_current_palette, get_graph_node_colors, get_neutral_button_colors, get_semantic_color
 from graphite_canvas_items import HoverAnimationMixin
+from graphite_connections import ConnectionItem
 from graphite_lod import draw_lod_card, preview_text, sync_proxy_render_state
 from graphite_memory import append_history, get_node_history
 from graphite_plugins.graphite_plugin_context_menu import PluginNodeContextMenu
+from graphite_plugins.reasoning.agent import ReasoningAgent
+
+
+class ReasoningWorkerThread(QThread):
+    """Orchestrates the ReasoningAgent's plan -> (reason+critique) x budget -> synthesize
+    workflow in a background thread.
+
+    Cancellation is cooperative (an _is_running flag checked between calls), same
+    limitation as every other threaded plugin in this codebase (Artifact, Workflow,
+    etc.) - api_provider.chat() is always a single blocking call, so a .stop() cannot
+    interrupt a call already in flight, only prevent the next one from starting.
+    """
+
+    step_finished = Signal(str, str)  # title, text
+    finished = Signal(str)  # final_answer
+    error = Signal(str)
+
+    def __init__(self, agent: ReasoningAgent, original_prompt: str, budget: int, branch_context: str = ""):
+        super().__init__()
+        self.agent = agent
+        self.original_prompt = original_prompt
+        self.budget = budget
+        self.branch_context = branch_context or "No prior branch context."
+        self._is_running = True
+
+    def _format_plan_text(self, steps):
+        return "\n".join(f"{i}. {step['title']}: {step['goal']}" for i, step in enumerate(steps, start=1))
+
+    def _format_step_text(self, step_result):
+        return (
+            f"**Initial Thought:**\n{step_result['initial_thought']}\n\n"
+            f"**Critique:**\n{step_result['critique']}\n\n"
+            f"**Refined Thought:**\n{step_result['refined_thought']}"
+        )
+
+    def run(self):
+        try:
+            if not self._is_running:
+                return
+
+            plan_result = self.agent.plan(self.original_prompt, self.branch_context)
+            steps = plan_result["steps"]
+            self.step_finished.emit("Step 1: The Plan", self._format_plan_text(steps))
+
+            thought_history = []
+
+            for i in range(self.budget):
+                if not self._is_running:
+                    return
+
+                step = steps[i % len(steps)]
+                step_result = self.agent.reason_and_critique(
+                    self.original_prompt, self.branch_context, step, thought_history
+                )
+
+                if not self._is_running:
+                    return
+
+                thought_history.append(f"Thought on '{step['title']}':\n{step_result['refined_thought']}")
+                self.step_finished.emit(f"Step {i + 2}: {step['title']}", self._format_step_text(step_result))
+
+            if not self._is_running:
+                return
+
+            final_answer = self.agent.synthesize(self.original_prompt, self.branch_context, thought_history)
+
+            if self._is_running:
+                self.finished.emit(final_answer)
+
+        except Exception as e:
+            if self._is_running:
+                self.error.emit(str(e))
+        finally:
+            self._is_running = False
+
+    def stop(self):
+        self._is_running = False
+
+
+class ReasoningConnectionItem(ConnectionItem):
+    """A visually distinct connection for ReasoningNode, featuring a blue dash-dot-dot line."""
+
+    def paint(self, painter, option, widget=None):
+        if not (self.start_node and self.end_node):
+            return
+
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        palette = get_current_palette()
+        node_color = QColor(palette.FRAME_COLORS["Blue"]["color"])
+
+        pen = QPen(node_color, 2, Qt.PenStyle.DashDotDotLine)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+
+        if self.hover:
+            pen.setWidth(3)
+
+        painter.setPen(pen)
+        painter.drawPath(self.path)
+
+        if self.is_animating:
+            for arrow in self.arrows:
+                self.drawArrow(painter, arrow['pos'], node_color)
+
+    def drawArrow(self, painter, pos, color):
+        if pos < 0 or pos > 1:
+            return
+        point = self.path.pointAtPercent(pos)
+        angle = self.path.angleAtPercent(pos)
+
+        arrow = QPainterPath()
+        arrow.moveTo(-self.arrow_size, -self.arrow_size / 2)
+        arrow.lineTo(0, 0)
+        arrow.lineTo(-self.arrow_size, self.arrow_size / 2)
+
+        painter.save()
+        painter.translate(point)
+        painter.rotate(-angle)
+        painter.setBrush(color)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawPath(arrow)
+        painter.restore()
+
 
 class ReasoningNode(QGraphicsObject, HoverAnimationMixin):
     """
@@ -18,7 +141,8 @@ class ReasoningNode(QGraphicsObject, HoverAnimationMixin):
     """
     supports_branch_context_toggle = True
 
-    reasoning_requested = Signal(object) 
+    reasoning_requested = Signal(object)
+    stop_requested = Signal(object)
 
     NODE_WIDTH = 550
     NODE_HEIGHT = 700
@@ -32,16 +156,18 @@ class ReasoningNode(QGraphicsObject, HoverAnimationMixin):
         HoverAnimationMixin.__init__(self)
         self.parent_node = parent_node
         self.children = []
-        self.is_user = False 
+        self.is_user = False
         self.conversation_history = []
-        
+
         self.is_collapsed = False
         self.collapse_button_rect = QRectF()
 
         self.prompt = ""
-        self.thinking_budget = 3 
+        self.thinking_budget = 3
         self.status = "Idle"
         self.thought_process = ""
+        self.worker_thread = None
+        self.is_running = False
 
         self.setFlag(QGraphicsObject.GraphicsItemFlag.ItemIsMovable)
         self.setFlag(QGraphicsObject.GraphicsItemFlag.ItemIsSelectable)
@@ -58,12 +184,12 @@ class ReasoningNode(QGraphicsObject, HoverAnimationMixin):
             QWidget#reasoningMainWidget { background-color: transparent; color: #e0e0e0; }
             QWidget#reasoningMainWidget QLabel { background-color: transparent; }
         """)
-        
+
         self._setup_ui()
-        
+
         self.proxy = QGraphicsProxyWidget(self)
         self.proxy.setWidget(self.widget)
-    
+
     @property
     def width(self):
         return self.COLLAPSED_WIDTH if self.is_collapsed else self.NODE_WIDTH
@@ -95,10 +221,10 @@ class ReasoningNode(QGraphicsObject, HoverAnimationMixin):
         main_layout = QVBoxLayout(self.widget)
         main_layout.setContentsMargins(15, 15, 15, 15)
         main_layout.setSpacing(10)
-        
+
         node_colors = get_graph_node_colors()
         node_color = node_colors["header"]
-        
+
         header_layout = QHBoxLayout()
         icon = QLabel()
         icon.setPixmap(qta.icon('fa5s.brain', color=node_color).pixmap(18, 18))
@@ -133,9 +259,9 @@ class ReasoningNode(QGraphicsObject, HoverAnimationMixin):
         main_layout.addLayout(budget_layout)
 
         self.run_button = QPushButton("Start Reasoning")
-        self.run_button.clicked.connect(lambda: self.reasoning_requested.emit(self))
+        self.run_button.clicked.connect(self._handle_action_button)
         main_layout.addWidget(self.run_button)
-        
+
         self.status_label = QLabel("Status: Idle")
         self.status_label.setStyleSheet("color: #888; font-style: italic; background: transparent;")
         main_layout.addWidget(self.status_label)
@@ -154,7 +280,7 @@ class ReasoningNode(QGraphicsObject, HoverAnimationMixin):
                     font-family: Segoe UI, sans-serif;
                 }
             """)
-        
+
         button_colors = get_neutral_button_colors()
 
         self.run_button.setIcon(qta.icon('fa5s.cogs', color=button_colors["icon"].name()))
@@ -175,11 +301,6 @@ class ReasoningNode(QGraphicsObject, HoverAnimationMixin):
                 background-color: {button_colors["pressed"].name()};
                 border-color: {button_colors["border"].darker(105).name()};
             }}
-            QPushButton:disabled {{
-                background-color: #2b2b2b;
-                border-color: #353535;
-                color: #7b7b7b;
-            }}
         """)
 
     def _on_prompt_changed(self):
@@ -194,11 +315,22 @@ class ReasoningNode(QGraphicsObject, HoverAnimationMixin):
         self.thinking_budget = value
         self.budget_label.setText(str(value))
 
+    def _handle_action_button(self):
+        # Single dual-purpose button (mirrors ArtifactNode._handle_action_button): while
+        # a run is in progress the button switches to "Stop Reasoning" - and stays
+        # enabled the whole time, unlike the prior implementation which disabled it,
+        # making the button unreachable exactly when a cancel was most wanted.
+        if self.is_running:
+            self.stop_requested.emit(self)
+            return
+        self.reasoning_requested.emit(self)
+
     def set_running_state(self, is_running: bool):
-        self.run_button.setEnabled(not is_running)
+        self.is_running = is_running
+        self.run_button.setEnabled(True)
         self.prompt_input.setReadOnly(is_running)
         self.budget_slider.setEnabled(not is_running)
-        self.run_button.setText("Reasoning..." if is_running else "Start Reasoning")
+        self.run_button.setText("Stop Reasoning" if is_running else "Start Reasoning")
         if is_running:
             self.set_status("Thinking...")
         else:
@@ -217,7 +349,7 @@ class ReasoningNode(QGraphicsObject, HoverAnimationMixin):
     def clear_thoughts(self):
         self.thought_process = ""
         self.thought_process_display.clear()
-        
+
     def append_thought(self, step_title: str, thought_text: str):
         formatted_step = f"## {step_title}\n\n{thought_text}\n\n---\n\n"
         self.thought_process += formatted_step
@@ -251,11 +383,11 @@ class ReasoningNode(QGraphicsObject, HoverAnimationMixin):
         palette = get_current_palette()
         node_colors = get_graph_node_colors()
         render_mode = getattr(self, "_render_lod_mode", "full")
-        
+
         path = QPainterPath()
         path.addRoundedRect(0, 0, self.width, self.height, 10, 10)
         painter.setBrush(QColor("#2d2d2d"))
-        
+
         node_color = node_colors["border"]
         pen = QPen(node_color, 1.5)
 
@@ -263,20 +395,20 @@ class ReasoningNode(QGraphicsObject, HoverAnimationMixin):
             pen = QPen(palette.SELECTION, 2)
         elif self.hovered:
             pen = QPen(QColor("#ffffff"), 2)
-        
+
         painter.setPen(pen)
         painter.drawPath(path)
-        
+
         dot_color = node_colors["dot"]
         if self.isSelected() or self.hovered:
             dot_color = pen.color().lighter(110) if self.isSelected() else node_colors["hover_dot"]
-        
+
         painter.setBrush(dot_color)
         painter.setPen(Qt.PenStyle.NoPen)
-        
+
         dot_rect_left = QRectF(-self.CONNECTION_DOT_RADIUS, (self.height / 2) - self.CONNECTION_DOT_RADIUS, self.CONNECTION_DOT_RADIUS * 2, self.CONNECTION_DOT_RADIUS * 2)
         painter.drawPie(dot_rect_left, 90 * 16, -180 * 16)
-        
+
         dot_rect_right = QRectF(self.width - self.CONNECTION_DOT_RADIUS, (self.height / 2) - self.CONNECTION_DOT_RADIUS, self.CONNECTION_DOT_RADIUS * 2, self.CONNECTION_DOT_RADIUS * 2)
         painter.drawPie(dot_rect_right, 90 * 16, 180 * 16)
 
@@ -303,10 +435,10 @@ class ReasoningNode(QGraphicsObject, HoverAnimationMixin):
             font = QFont("Segoe UI", 10, QFont.Weight.Bold)
             painter.setFont(font)
             painter.drawText(QRectF(40, 0, self.width - 80, self.height), Qt.AlignmentFlag.AlignVCenter, "Graphlink-Reasoning")
-            
+
             icon = qta.icon('fa5s.brain', color=node_color.name())
             icon.paint(painter, QRect(10, 10, 20, 20))
-            
+
             self.collapse_button_rect = QRectF(self.width - 35, 5, 30, 30)
             expand_icon = qta.icon('fa5s.expand-arrows-alt', color='#ffffff' if self.hovered else '#888888')
             expand_icon.paint(painter, QRect(int(self.width - 30), 10, 20, 20))
@@ -315,8 +447,8 @@ class ReasoningNode(QGraphicsObject, HoverAnimationMixin):
                 self.collapse_button_rect = QRectF(self.width - 35, 5, 30, 30)
                 painter.setBrush(QColor(255, 255, 255, 30))
                 painter.setPen(QColor(255, 255, 255, 150))
-                painter.drawRoundedRect(self.collapse_button_rect.adjusted(6,6,-6,-6), 4, 4)
-                
+                painter.drawRoundedRect(self.collapse_button_rect.adjusted(6, 6, -6, -6), 4, 4)
+
                 icon_pen = QPen(QColor("#ffffff"), 2)
                 painter.setPen(icon_pen)
                 center = self.collapse_button_rect.center()

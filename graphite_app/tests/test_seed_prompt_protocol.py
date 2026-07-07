@@ -22,7 +22,7 @@ from PySide6.QtWidgets import QApplication
 _APP = QApplication.instance() or QApplication([])
 
 from graphite_web import WebNode
-from graphite_reasoning import ReasoningNode
+from graphite_plugins.graphite_plugin_reasoning import ReasoningNode
 from graphite_pycoder import PyCoderNode
 from graphite_plugins.graphite_plugin_code_sandbox import CodeSandboxNode
 from graphite_plugins.graphite_plugin_artifact import ArtifactNode

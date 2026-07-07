@@ -1666,59 +1666,6 @@ class ConversationConnectionItem(ConnectionItem):
         painter.drawPath(arrow)
         painter.restore()
 
-class ReasoningConnectionItem(ConnectionItem):
-    """
-    A visually distinct connection for ReasoningNode, featuring a blue dash-dot-dot line.
-    """
-    def paint(self, painter, option, widget=None):
-        """
-        Handles the custom painting of the connection line.
-
-        Args:
-            painter (QPainter): The painter object.
-            option (QStyleOptionGraphicsItem): Style options.
-            widget (QWidget, optional): The widget being painted on. Defaults to None.
-        """
-        if not (self.start_node and self.end_node):
-            return
-            
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        palette = get_current_palette()
-        node_color = QColor(palette.FRAME_COLORS["Blue"]["color"])
-
-        pen = QPen(node_color, 2, Qt.PenStyle.DashDotDotLine)
-        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-
-        if self.hover:
-            pen.setWidth(3)
-        
-        painter.setPen(pen)
-        painter.drawPath(self.path)
-
-        if self.is_animating:
-            for arrow in self.arrows:
-                self.drawArrow(painter, arrow['pos'], node_color)
-
-    def drawArrow(self, painter, pos, color):
-        """Draws a single animated arrow on the path."""
-        if pos < 0 or pos > 1:
-            return
-        point = self.path.pointAtPercent(pos)
-        angle = self.path.angleAtPercent(pos)
-        
-        arrow = QPainterPath()
-        arrow.moveTo(-self.arrow_size, -self.arrow_size/2)
-        arrow.lineTo(0, 0)
-        arrow.lineTo(-self.arrow_size, self.arrow_size/2)
-        
-        painter.save()
-        painter.translate(point)
-        painter.rotate(-angle)
-        painter.setBrush(color)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawPath(arrow)
-        painter.restore()
-
 class GroupSummaryConnectionItem(ConnectionItem):
     """
     A connection from a ChatNode (source) to a summary Note (destination).

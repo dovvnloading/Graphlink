@@ -7,9 +7,9 @@ from graphite_plugins.graphite_plugin_code_sandbox import CodeSandboxNode
 from graphite_plugins.graphite_plugin_gitlink import GitlinkNode
 from graphite_plugins.graphite_plugin_graph_diff import GraphDiffNode
 from graphite_plugins.graphite_plugin_quality_gate import QualityGateNode
+from graphite_plugins.graphite_plugin_reasoning import ReasoningNode
 from graphite_plugins.graphite_plugin_workflow import WorkflowNode
 from graphite_pycoder import PyCoderNode
-from graphite_reasoning import ReasoningNode
 from graphite_web import WebNode
 
 from graphite_session.content_codec import (

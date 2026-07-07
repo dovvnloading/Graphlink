@@ -10,6 +10,12 @@ whatever main_window.sandbox_thread currently was - meaning clicking "stop" on o
 sandbox node could stop a *different*, more-recently-started concurrent sandbox node's
 execution instead of (or as well as) its own.
 
+Graphlink-Reasoning got the same fix later, as part of its full redesign (see
+doc/PLUGIN_SYSTEM_REFACTOR_PLAN.md section 4.10): it predates graphite_plugins/ entirely
+so it never got task #26's fix along with the other six - it had the shared
+main_window.reasoning_thread attribute AND no stop capability of any kind (no
+node.worker_thread, no stop_reasoning_node method at all).
+
 These tests use WindowActionsMixin directly (a bare mixin - the methods only need the
 attributes they actually touch, so a minimal instance is enough) rather than a full
 ChatWindow, which needs a running QApplication with a real settings_manager and more
@@ -29,6 +35,7 @@ _APP = QApplication.instance() or QApplication([])
 import graphite_window_actions
 from graphite_plugins.graphite_plugin_artifact import ArtifactNode
 from graphite_plugins.graphite_plugin_code_sandbox import CodeSandboxNode
+from graphite_plugins.graphite_plugin_reasoning import ReasoningNode
 from graphite_plugins.graphite_plugin_workflow import WorkflowNode
 from graphite_window_actions import WindowActionsMixin
 
@@ -108,6 +115,38 @@ class TestArtifactAndWorkflowStopMethods:
         assert node.run_button.isEnabled() is True  # set_running_state(False) ran
 
 
+class TestReasoningStopMethod:
+    def test_stop_reasoning_node_stops_its_own_thread_and_resets_state(self):
+        main_window = _FakeMainWindow()
+        node = ReasoningNode(parent_node=None)
+        thread = _fake_worker_thread()
+        node.worker_thread = thread
+        node.set_running_state(True)
+        # Sanity check for the actual bug being fixed: unlike Artifact/Workflow, the
+        # button must stay ENABLED while running - Reasoning's run_button used to be
+        # disabled the whole time it showed a "stop" state, making it unclickable.
+        assert node.run_button.isEnabled() is True
+        assert node.run_button.text() == "Stop Reasoning"
+
+        main_window.stop_reasoning_node(node)
+
+        thread.stop.assert_called_once()
+        assert node.worker_thread is None
+        assert node.run_button.text() == "Start Reasoning"  # set_running_state(False) ran
+
+    def test_stopping_one_node_does_not_stop_a_different_concurrent_node(self):
+        main_window = _FakeMainWindow()
+        node_a = ReasoningNode(parent_node=None)
+        node_b = ReasoningNode(parent_node=None)
+        node_a.worker_thread = _fake_worker_thread()
+        node_b.worker_thread = _fake_worker_thread()
+
+        main_window.stop_reasoning_node(node_a)
+
+        assert node_a.worker_thread is None
+        node_b.worker_thread.stop.assert_not_called()
+
+
 class TestNoDeadSharedThreadAttributesRemainInSource:
     def test_window_actions_source_has_no_shared_thread_assignments(self):
         source = Path(graphite_window_actions.__file__).read_text(encoding="utf-8")
@@ -119,6 +158,7 @@ class TestNoDeadSharedThreadAttributesRemainInSource:
             "self.code_review_thread",
             "self.gitlink_thread",
             "self.sandbox_thread",
+            "self.reasoning_thread",
         ]:
             assert dead_attr not in source, (
                 f"{dead_attr} reappeared in graphite_window_actions.py - this was removed "

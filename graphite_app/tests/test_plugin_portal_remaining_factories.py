@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import pytest
 from PySide6.QtCore import QPointF
 
-from graphite_connections import ConversationConnectionItem, HtmlConnectionItem, PyCoderConnectionItem, ReasoningConnectionItem
+from graphite_connections import ConversationConnectionItem, HtmlConnectionItem, PyCoderConnectionItem
 from graphite_conversation_node import ConversationNode
 from graphite_html_view import HtmlViewNode
 from graphite_nodes.graphite_node_code import CodeNode
@@ -29,9 +29,9 @@ from graphite_plugins.graphite_plugin_code_sandbox import CodeSandboxConnectionI
 from graphite_plugins.graphite_plugin_gitlink import GitlinkConnectionItem, GitlinkNode
 from graphite_plugins.graphite_plugin_portal import PluginPortal
 from graphite_plugins.graphite_plugin_quality_gate import QualityGateConnectionItem, QualityGateNode
+from graphite_plugins.graphite_plugin_reasoning import ReasoningConnectionItem, ReasoningNode
 from graphite_plugins.graphite_plugin_workflow import WorkflowConnectionItem, WorkflowNode
 from graphite_pycoder import PyCoderNode
-from graphite_reasoning import ReasoningNode
 from graphite_web import WebConnectionItem, WebNode
 
 
@@ -75,13 +75,17 @@ def _make_portal(current_node):
 
 # (factory_method, node_cls, connection_cls, scene_node_attr, scene_connection_attr,
 #  signal_name, handler_name, clones_history)
+#
+# Reasoning is deliberately NOT in this list (see TestReasoningExtraSignal below): it
+# now needs two signals wired (reasoning_requested and stop_requested), which doesn't
+# fit this tuple's one-signal-per-case shape - same reasoning as Workflow/Quality Gate's
+# multi-signal cases living in their own dedicated test class instead.
 STANDARD_CASES = [
     ("_create_pycoder_node", PyCoderNode, PyCoderConnectionItem, "pycoder_nodes", "pycoder_connections", None, None, False),
     ("_create_code_sandbox_node", CodeSandboxNode, CodeSandboxConnectionItem, "code_sandbox_nodes", "code_sandbox_connections", "sandbox_requested", "execute_code_sandbox_node", True),
     ("_create_code_review_node", CodeReviewNode, CodeReviewConnectionItem, "code_review_nodes", "code_review_connections", "review_requested", "execute_code_review_node", True),
     ("_create_gitlink_node", GitlinkNode, GitlinkConnectionItem, "gitlink_nodes", "gitlink_connections", "gitlink_requested", "execute_gitlink_node", True),
     ("_create_web_node", WebNode, WebConnectionItem, "web_nodes", "web_connections", "run_clicked", "execute_web_node", False),
-    ("_create_reasoning_node", ReasoningNode, ReasoningConnectionItem, "reasoning_nodes", "reasoning_connections", "reasoning_requested", "execute_reasoning_node", False),
 ]
 
 
@@ -186,6 +190,47 @@ class TestResolveBranchParentThroughCodeNode:
 
         assert result in real_parent.children
         assert result not in getattr(code_node, "children", [])
+
+
+class TestReasoningExtraSignal:
+    """Reasoning gained a stop_requested signal (see doc/PLUGIN_SYSTEM_REFACTOR_PLAN.md
+    section 4.10 - the same real-cancellation fix Artifact/Workflow/Quality Gate
+    already got), so it needs both signals verified rather than fitting the
+    single-signal STANDARD_CASES shape above.
+    """
+
+    def test_builds_node_and_connection(self):
+        parent = ArtifactNode(parent_node=None)
+        portal, main_window, scene = _make_portal(parent)
+
+        result = portal._create_reasoning_node()
+
+        assert isinstance(result, ReasoningNode)
+        assert result in parent.children
+        assert result in scene.reasoning_nodes
+        assert isinstance(result.incoming_connection, ReasoningConnectionItem)
+        assert result.incoming_connection in scene.reasoning_connections
+        assert result.pos() == QPointF(10, 20)
+
+    def test_wires_both_signals(self):
+        parent = ArtifactNode(parent_node=None)
+        portal, main_window, scene = _make_portal(parent)
+
+        result = portal._create_reasoning_node()
+
+        result.reasoning_requested.emit(result)
+        main_window.execute_reasoning_node.assert_called_once_with(result)
+        result.stop_requested.emit(result)
+        main_window.stop_reasoning_node.assert_called_once_with(result)
+
+    def test_returns_none_with_no_selection(self):
+        portal, main_window, scene = _make_portal(current_node=None)
+
+        result = portal._create_reasoning_node()
+
+        assert result is None
+        assert scene.reasoning_nodes == []
+        main_window.notification_banner.show_message.assert_called_once()
 
 
 class TestWorkflowAndQualityGateExtraSignals:

@@ -5,7 +5,7 @@ from graphite_pycoder import PyCoderNode
 from graphite_plugins.graphite_plugin_code_sandbox import CodeSandboxNode
 from graphite_web import WebNode
 from graphite_conversation_node import ConversationNode
-from graphite_reasoning import ReasoningNode
+from graphite_plugins.graphite_plugin_reasoning import ReasoningNode
 from graphite_html_view import HtmlViewNode
 from graphite_plugins.graphite_plugin_artifact import ArtifactNode
 from graphite_plugins.graphite_plugin_workflow import WorkflowNode

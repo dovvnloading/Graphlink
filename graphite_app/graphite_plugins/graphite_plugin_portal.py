@@ -5,7 +5,7 @@ from PySide6.QtCore import QPointF
 
 from graphite_connections import (
     SystemPromptConnectionItem, PyCoderConnectionItem, ConversationConnectionItem,
-    ReasoningConnectionItem, HtmlConnectionItem
+    HtmlConnectionItem
 )
 from graphite_config import get_current_palette
 from graphite_pycoder import PyCoderNode
@@ -13,7 +13,7 @@ from graphite_plugins.graphite_plugin_code_sandbox import CodeSandboxNode, CodeS
 from graphite_node import ChatNode, CodeNode
 from graphite_web import WebNode, WebConnectionItem
 from graphite_conversation_node import ConversationNode
-from graphite_reasoning import ReasoningNode
+from graphite_plugins.graphite_plugin_reasoning import ReasoningNode, ReasoningConnectionItem
 from graphite_html_view import HtmlViewNode
 from graphite_plugins.graphite_plugin_workflow import WorkflowNode, WorkflowConnectionItem
 from graphite_plugins.graphite_plugin_graph_diff import GraphDiffNode, GraphDiffConnectionItem
@@ -672,12 +672,17 @@ class PluginPortal:
 
     def _create_reasoning_node(self):
         scene = self.main_window.chat_view.scene()
+
+        def _wire(node):
+            node.reasoning_requested.connect(self.main_window.execute_reasoning_node)
+            node.stop_requested.connect(self.main_window.stop_reasoning_node)
+
         return self.create_node(
             node_cls=ReasoningNode,
             connection_cls=ReasoningConnectionItem,
             scene_nodes=scene.reasoning_nodes,
             scene_connections=scene.reasoning_connections,
-            wire=lambda node: node.reasoning_requested.connect(self.main_window.execute_reasoning_node),
+            wire=_wire,
             resolve_branch_parent=False,
             no_selection_message="Please select a valid node to branch from before adding a Reasoning Node.",
         )

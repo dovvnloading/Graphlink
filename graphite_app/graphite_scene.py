@@ -8,7 +8,7 @@ from graphite_node import ChatNode, CodeNode, DocumentNode, ImageNode, ThinkingN
 from graphite_connections import (
     ConnectionItem, ContentConnectionItem, SystemPromptConnectionItem,
     DocumentConnectionItem, ImageConnectionItem, PyCoderConnectionItem,
-    ConversationConnectionItem, ReasoningConnectionItem, GroupSummaryConnectionItem,
+    ConversationConnectionItem, GroupSummaryConnectionItem,
     HtmlConnectionItem, ThinkingConnectionItem
 )
 from graphite_canvas_items import Frame, Note, NavigationPin, ChartItem, Container
@@ -16,7 +16,7 @@ from graphite_pycoder import PyCoderNode
 from graphite_plugins.graphite_plugin_code_sandbox import CodeSandboxNode
 from graphite_web import WebNode, WebConnectionItem
 from graphite_conversation_node import ConversationNode
-from graphite_reasoning import ReasoningNode
+from graphite_plugins.graphite_plugin_reasoning import ReasoningNode, ReasoningConnectionItem
 from graphite_html_view import HtmlViewNode
 from graphite_plugins.graphite_plugin_artifact import ArtifactNode, ArtifactConnectionItem
 from graphite_plugins.graphite_plugin_workflow import WorkflowNode, WorkflowConnectionItem

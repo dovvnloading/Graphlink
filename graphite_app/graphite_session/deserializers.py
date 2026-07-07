@@ -13,7 +13,6 @@ from graphite_connections import (
     HtmlConnectionItem,
     ImageConnectionItem,
     PyCoderConnectionItem,
-    ReasoningConnectionItem,
     SystemPromptConnectionItem,
     ThinkingConnectionItem,
 )
@@ -26,9 +25,9 @@ from graphite_plugins.graphite_plugin_code_sandbox import CodeSandboxConnectionI
 from graphite_plugins.graphite_plugin_gitlink import GitlinkConnectionItem, GitlinkNode
 from graphite_plugins.graphite_plugin_graph_diff import GraphDiffConnectionItem, GraphDiffNode
 from graphite_plugins.graphite_plugin_quality_gate import QualityGateConnectionItem, QualityGateNode
+from graphite_plugins.graphite_plugin_reasoning import ReasoningConnectionItem, ReasoningNode
 from graphite_plugins.graphite_plugin_workflow import WorkflowConnectionItem, WorkflowNode
 from graphite_pycoder import PyCoderMode, PyCoderNode
-from graphite_reasoning import ReasoningNode
 from graphite_web import WebConnectionItem, WebNode
 
 from graphite_session.content_codec import (
@@ -346,6 +345,7 @@ class SceneDeserializer:
                 node.conversation_history = deserialize_history(data.get("conversation_history", []))
                 node.include_branch_context = data.get("include_branch_context", True)
                 self._connect_if_available(node.reasoning_requested, "execute_reasoning_node")
+                self._connect_if_available(node.stop_requested, "stop_reasoning_node")
                 if data.get("is_collapsed", False):
                     node.set_collapsed(True)
                 scene.addItem(node)

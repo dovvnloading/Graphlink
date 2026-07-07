@@ -14,7 +14,7 @@ from graphite_pycoder import PyCoderMode, PyCoderNode
 from graphite_plugins.graphite_plugin_code_sandbox import CodeSandboxNode
 from graphite_web import WebNode
 from graphite_conversation_node import ConversationNode
-from graphite_reasoning import ReasoningNode
+from graphite_plugins.graphite_plugin_reasoning import ReasoningNode
 from graphite_html_view import HtmlViewNode
 from graphite_plugins.graphite_plugin_artifact import ArtifactNode
 from graphite_plugins.graphite_plugin_workflow import WorkflowNode, WorkflowWorkerThread
@@ -36,8 +36,8 @@ from graphite_agents import (
     ChatWorkerThread, KeyTakeawayWorkerThread, ExplainerWorkerThread, ChartWorkerThread,
     GroupSummaryWorkerThread, ImageGenerationWorkerThread, CodeExecutionWorker,
     PyCoderExecutionWorker, PyCoderExecutionAgent, PyCoderRepairAgent, PyCoderAnalysisAgent,
-    PyCoderAgentWorker, SandboxStage, CodeSandboxExecutionWorker, WebWorkerThread, ReasoningWorkerThread,
-    KeyTakeawayAgent, ExplainerAgent, GroupSummaryAgent, ImageGenerationAgent, ReasoningAgent
+    PyCoderAgentWorker, SandboxStage, CodeSandboxExecutionWorker, WebWorkerThread,
+    KeyTakeawayAgent, ExplainerAgent, GroupSummaryAgent, ImageGenerationAgent
 )
 
 class WindowActionsMixin:
@@ -1183,18 +1183,35 @@ class WindowActionsMixin:
             system_prompt_estimate=1200,
         )
         branch_context = history_to_transcript(trimmed_parent_history, max_messages=8, max_chars_per_message=700)
-        self.reasoning_thread = ReasoningWorkerThread(
+
+        from graphite_plugins.graphite_plugin_reasoning import ReasoningWorkerThread
+        from graphite_plugins.reasoning.agent import ReasoningAgent
+        worker_thread = ReasoningWorkerThread(
             ReasoningAgent(),
             original_prompt=prompt,
             budget=reasoning_node.thinking_budget,
             branch_context=branch_context,
         )
-        self.reasoning_thread.step_finished.connect(lambda title, text, node=reasoning_node: self._handle_reasoning_step(title, text, node))
-        self.reasoning_thread.finished.connect(lambda answer, node=reasoning_node, history=parent_history: self._handle_reasoning_finished(answer, node, history))
-        self.reasoning_thread.error.connect(lambda error, node=reasoning_node: self._handle_reasoning_error(error, node))
-        self.reasoning_thread.finished.connect(self.reasoning_thread.deleteLater)
-        self.reasoning_thread.error.connect(self.reasoning_thread.deleteLater)
-        self.reasoning_thread.start()
+        reasoning_node.worker_thread = worker_thread
+        worker_thread.step_finished.connect(lambda title, text, node=reasoning_node: self._handle_reasoning_step(title, text, node))
+        worker_thread.finished.connect(lambda answer, node=reasoning_node, history=parent_history: self._handle_reasoning_finished(answer, node, history))
+        worker_thread.error.connect(lambda error, node=reasoning_node: self._handle_reasoning_error(error, node))
+        worker_thread.finished.connect(lambda _answer, thread=worker_thread, node=reasoning_node: self._cleanup_reasoning_thread(thread, node))
+        worker_thread.error.connect(lambda _error, thread=worker_thread, node=reasoning_node: self._cleanup_reasoning_thread(thread, node))
+        worker_thread.start()
+
+    def _cleanup_reasoning_thread(self, worker_thread, reasoning_node):
+        if reasoning_node and getattr(reasoning_node, "worker_thread", None) is worker_thread:
+            reasoning_node.worker_thread = None
+        worker_thread.deleteLater()
+
+    def stop_reasoning_node(self, reasoning_node):
+        worker_thread = getattr(reasoning_node, "worker_thread", None)
+        if worker_thread and worker_thread.isRunning():
+            worker_thread.stop()
+        reasoning_node.worker_thread = None
+        reasoning_node.append_thought("Stopped", "Reasoning manually stopped.")
+        reasoning_node.set_running_state(False)
 
     def _handle_reasoning_step(self, title, text, node):
         if node and node.scene(): node.set_status(title); node.append_thought(title, text)
