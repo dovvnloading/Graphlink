@@ -1,4 +1,3 @@
-import json
 import re
 
 from PySide6.QtCore import QRect, QRectF, Qt, QThread, Signal
@@ -18,12 +17,12 @@ from PySide6.QtWidgets import (
 )
 import qtawesome as qta
 
-import api_provider
 import graphite_config as config
 from graphite_canvas_items import HoverAnimationMixin
 from graphite_config import get_current_palette, get_semantic_color
 from graphite_connections import ConnectionItem
 from graphite_plugin_context_menu import PluginNodeContextMenu
+from graphite_plugins.common.llm_json import call_llm_and_parse_json, extract_json_object
 
 
 QUALITY_GATE_PLUGIN_ICONS = {
@@ -290,15 +289,9 @@ Return exactly this shape:
 """
 
     def _clean_json_response(self, raw_text):
-        block_match = re.search(r"```(?:json)?\s*(\{[\s\S]*\})\s*```", raw_text, re.IGNORECASE)
-        if block_match:
-            return block_match.group(1).strip()
-
-        json_match = re.search(r"(\{[\s\S]*\})", raw_text)
-        if json_match:
-            return json_match.group(1).strip()
-
-        return raw_text.strip()
+        # Delegates to the shared regex (doc/PLUGIN_SYSTEM_REFACTOR_PLAN.md section
+        # 1.6/3.5) - kept as a wrapper so this method's existing call site is unchanged.
+        return extract_json_object(raw_text)
 
     def _fallback_review(self, goal, criteria, payload):
         transcript = payload.get("transcript", "")
@@ -646,15 +639,7 @@ Branch Transcript:
 """
 
         try:
-            response = api_provider.chat(
-                task=config.TASK_CHAT,
-                messages=[
-                    {"role": "system", "content": self.SYSTEM_PROMPT},
-                    {"role": "user", "content": user_prompt},
-                ],
-            )
-            raw_text = response["message"]["content"]
-            parsed = json.loads(self._clean_json_response(raw_text))
+            parsed = call_llm_and_parse_json(self.SYSTEM_PROMPT, user_prompt, task=config.TASK_CHAT)
             normalized = self._normalize_review(parsed, goal, criteria, payload)
         except Exception:
             normalized = self._fallback_review(goal, criteria, payload)

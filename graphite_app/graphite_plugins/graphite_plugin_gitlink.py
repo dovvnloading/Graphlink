@@ -43,6 +43,7 @@ from graphite_config import get_current_palette, get_semantic_color
 from graphite_connections import ConnectionItem
 from graphite_plugin_context_menu import PluginNodeContextMenu
 from graphite_plugins.common.github_client import GitHubRestClient
+from graphite_plugins.common.llm_json import extract_json_object
 from graphite_plugins.graphite_plugin_code_review import CodeReviewPopupComboBox
 
 
@@ -201,15 +202,9 @@ def _truncate_for_context(source_text, max_chars=MAX_FILE_CONTEXT_CHARS):
 
 
 def _extract_json_object(raw_text):
-    block_match = re.search(r"```(?:json)?\s*(\{[\s\S]*\})\s*```", raw_text, re.IGNORECASE)
-    if block_match:
-        return block_match.group(1).strip()
-
-    json_match = re.search(r"(\{[\s\S]*\})", raw_text)
-    if json_match:
-        return json_match.group(1).strip()
-
-    return raw_text.strip()
+    # Delegates to the shared regex (doc/PLUGIN_SYSTEM_REFACTOR_PLAN.md section
+    # 1.6/3.5) - kept as a wrapper so this function's existing call site is unchanged.
+    return extract_json_object(raw_text)
 
 
 class GitlinkAgent:

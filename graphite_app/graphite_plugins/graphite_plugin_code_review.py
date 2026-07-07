@@ -1,6 +1,5 @@
 import ast
 import base64
-import json
 import re
 from pathlib import Path
 from urllib.parse import quote
@@ -31,13 +30,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-import api_provider
 import graphite_config as config
 from graphite_canvas_items import HoverAnimationMixin
 from graphite_config import get_current_palette, get_semantic_color
 from graphite_connections import ConnectionItem
 from graphite_plugin_context_menu import PluginNodeContextMenu
 from graphite_plugins.common.github_client import GitHubRestClient
+from graphite_plugins.common.llm_json import call_llm_and_parse_json, extract_json_object
 
 
 class CodeReviewComboPopup(QFrame):
@@ -618,14 +617,9 @@ Return exactly this shape:
 """
 
     def _extract_json(self, raw_text):
-        code_block_match = re.search(r"```(?:json)?\s*(\{[\s\S]*\})\s*```", raw_text, re.IGNORECASE)
-        if code_block_match:
-            return code_block_match.group(1).strip()
-
-        object_match = re.search(r"(\{[\s\S]*\})", raw_text)
-        if object_match:
-            return object_match.group(1).strip()
-        return raw_text.strip()
+        # Delegates to the shared regex (doc/PLUGIN_SYSTEM_REFACTOR_PLAN.md section
+        # 1.6/3.5) - kept as a wrapper so this method's existing call site is unchanged.
+        return extract_json_object(raw_text)
 
     def _normalize_preflight(self, payload, checks):
         default_checks = [
@@ -1055,15 +1049,7 @@ Return exactly this shape:
         ])
 
         try:
-            response = api_provider.chat(
-                task=config.TASK_CHAT,
-                messages=[
-                    {"role": "system", "content": self.SYSTEM_PROMPT},
-                    {"role": "user", "content": user_prompt},
-                ],
-            )
-            raw_text = response["message"]["content"]
-            parsed = json.loads(self._extract_json(raw_text))
+            parsed = call_llm_and_parse_json(self.SYSTEM_PROMPT, user_prompt, task=config.TASK_CHAT)
         except Exception as exc:
             parsed = self._fallback_review(payload, str(exc))
         return self._normalize_response(parsed, payload)
