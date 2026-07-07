@@ -8,6 +8,11 @@ call_llm_and_parse_json, extract_json_object`, binding those names into its own 
 namespace - so patching e.g. `graphite_plugin_code_review.call_llm_and_parse_json`
 (not `graphite_plugins.common.llm_json.call_llm_and_parse_json`) is what proves this
 particular call site is the one invoking it.
+
+CodeReviewAnalyzer itself now lives in graphite_plugins.code_review.scoring (extracted
+out of the 2000+ line graphite_plugin_code_review.py widget file - see
+doc/PLUGIN_SYSTEM_REFACTOR_PLAN.md section 4.2), so its delegation patches target that
+module instead of graphite_plugin_code_review.
 """
 
 import sys
@@ -16,7 +21,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from graphite_plugins.graphite_plugin_code_review import CodeReviewAnalyzer
+from graphite_plugins.code_review.scoring import CodeReviewAnalyzer
 from graphite_plugins.graphite_plugin_gitlink import GitlinkAgent
 from graphite_plugins.graphite_plugin_quality_gate import QualityGateAnalyzer
 from graphite_plugins.graphite_plugin_workflow import WorkflowArchitectAgent
@@ -25,7 +30,7 @@ from graphite_plugins.graphite_plugin_workflow import WorkflowArchitectAgent
 class TestExtractJsonDelegation:
     def test_code_review_analyzer_extract_json_delegates(self):
         analyzer = CodeReviewAnalyzer()
-        with patch("graphite_plugins.graphite_plugin_code_review.extract_json_object", return_value="delegated") as mock_fn:
+        with patch("graphite_plugins.code_review.scoring.extract_json_object", return_value="delegated") as mock_fn:
             result = analyzer._extract_json("raw text")
         mock_fn.assert_called_once_with("raw text")
         assert result == "delegated"
@@ -60,7 +65,7 @@ class TestCallLlmAndParseJsonDelegation:
         payload = {"source_for_model": "print(1)", "source_state": {}, "source_truncated": False}
 
         with patch(
-            "graphite_plugins.graphite_plugin_code_review.call_llm_and_parse_json",
+            "graphite_plugins.code_review.scoring.call_llm_and_parse_json",
             return_value={"quality_summary": "ok"},
         ) as mock_call:
             result = analyzer.get_response(payload)
@@ -75,7 +80,7 @@ class TestCallLlmAndParseJsonDelegation:
         payload = {"source_for_model": "print(1)", "source_state": {}, "source_truncated": False}
 
         with patch(
-            "graphite_plugins.graphite_plugin_code_review.call_llm_and_parse_json",
+            "graphite_plugins.code_review.scoring.call_llm_and_parse_json",
             side_effect=RuntimeError("boom"),
         ):
             result = analyzer.get_response(payload)
