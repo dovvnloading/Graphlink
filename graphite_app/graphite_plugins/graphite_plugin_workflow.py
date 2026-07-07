@@ -40,6 +40,12 @@ WORKFLOW_PLUGIN_ICONS = {
 
 WORKFLOW_ALLOWED_PLUGINS = list(WORKFLOW_PLUGIN_ICONS.keys())
 
+# Generated from WORKFLOW_ALLOWED_PLUGINS rather than hand-typed a second time in
+# SYSTEM_PROMPT below - the two lists silently drifting out of sync (missing "Code
+# Review Agent" from the prompt's bullet list) was a real bug, see
+# doc/PLUGIN_SYSTEM_REFACTOR_PLAN.md section 1.4/4.7.
+_WORKFLOW_ALLOWED_PLUGINS_BULLETS = "\n".join(f"- {name}" for name in WORKFLOW_ALLOWED_PLUGINS)
+
 WORKFLOW_SCROLLBAR_STYLE = """
     QScrollBar:vertical {
         background: #1a1d20;
@@ -97,17 +103,7 @@ You are Graphlink's Workflow Architect.
 Your job is to examine the user's goal and design the smallest, highest-leverage execution plan using Graphlink's existing tools.
 
 Allowed plugins:
-- System Prompt
-- Py-Coder
-- Gitlink
-- Execution Sandbox
-- Artifact / Drafter
-- Graphlink-Web
-- Conversation Node
-- Graphlink-Reasoning
-- HTML Renderer
-- Quality Gate
-- Code Review Agent
+__ALLOWED_PLUGINS_BULLETS__
 
 Rules:
 1. Prefer the fewest plugins that will realistically finish the work well.
@@ -142,7 +138,7 @@ Return exactly this shape:
     "Signal 1"
   ]
 }
-"""
+""".replace("__ALLOWED_PLUGINS_BULLETS__", _WORKFLOW_ALLOWED_PLUGINS_BULLETS)
 
     def _flatten_content(self, content):
         if isinstance(content, str):

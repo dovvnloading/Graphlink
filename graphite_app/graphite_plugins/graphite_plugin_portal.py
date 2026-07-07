@@ -346,7 +346,17 @@ class PluginPortal:
         for plugin in self.plugins:
             if plugin['name'] == plugin_name:
                 return plugin['callback']()
-        print(f"Warning: Plugin '{plugin_name}' not found.")
+        # A plugin_name that doesn't match any registered plugin is a real, user-visible
+        # failure (e.g. an LLM-recommended plugin name drifting out of sync with the
+        # registry - see PLUGIN_REGISTRY), not just a log-worthy event: silently
+        # returning None here previously left instantiate_seeded_plugin() in
+        # graphite_window_actions.py restoring state and returning with zero feedback,
+        # so the user just saw nothing happen. Surface it the same way every other
+        # plugin-creation failure in this file already is - the notification banner -
+        # instead of a console-only print().
+        self.main_window.notification_banner.show_message(
+            f"'{plugin_name}' is not a recognized plugin and could not be created.", 6000, "warning"
+        )
         return None
 
     def _get_root_node(self):
