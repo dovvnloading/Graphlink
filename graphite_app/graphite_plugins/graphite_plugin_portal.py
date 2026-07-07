@@ -432,7 +432,15 @@ class PluginPortal:
             return None
 
         node = node_cls(parent_node=parent_node, **(node_kwargs or {}))
-        parent_node.children.append(node)
+        # Not every valid parent tracks a `children` list (e.g. HTML Renderer accepts
+        # CodeNode via `validate_parent`, but CodeNode has no `children` attribute -
+        # confirmed via direct investigation that deletion and connection-validity
+        # elsewhere in graphite_scene.py discover nodes via the scene's own per-type
+        # lists, not by traversing `.children`, so skipping this is safe: it only
+        # means the new node won't participate in `.children`-based branch-visibility
+        # traversal for a parent type that was never part of that system anyway).
+        if hasattr(parent_node, 'children'):
+            parent_node.children.append(node)
 
         if wire:
             wire(node)

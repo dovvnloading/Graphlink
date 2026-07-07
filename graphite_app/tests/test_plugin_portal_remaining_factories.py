@@ -292,20 +292,21 @@ class TestHtmlRendererValidateParent:
         assert scene.html_view_nodes == []
         main_window.notification_banner.show_message.assert_called_once()
 
-    def test_code_node_as_parent_crashes_before_the_content_copy_ever_runs(self):
-        # Pre-existing bug, confirmed present in the pre-refactor baseline too (not
-        # introduced by the create_node() migration): CodeNode is listed in
-        # valid_parents and is meant to have its .code copied into the new
-        # HtmlViewNode (`if isinstance(selected_node, CodeNode):
-        # html_view_node.set_html_content(selected_node.code)`), but CodeNode has no
-        # `children` attribute, and the unconditional `parent_node.children.append(node)`
-        # step runs *before* that copy step - so selecting a CodeNode and adding an
-        # HTML Renderer raises AttributeError instead of copying the code, making the
-        # content-copy feature unreachable. Documented here rather than silently fixed,
-        # since fixing it is outside the scope of this creation-mechanism migration -
-        # see doc/PLUGIN_SYSTEM_REFACTOR_PLAN.md.
+    def test_copies_code_content_when_parent_is_a_code_node(self):
+        # Was a crash before create_node() guarded the children.append() step: CodeNode
+        # is listed in valid_parents and is meant to have its .code copied into the new
+        # HtmlViewNode, but CodeNode has no `children` attribute, and the previously
+        # unconditional `parent_node.children.append(node)` ran before the copy step,
+        # raising AttributeError instead. Confirmed via direct investigation of
+        # graphite_scene.py's deletion/connection-validity logic that CodeNode was
+        # never part of the `.children`-based branch-visibility system anyway, so
+        # skipping that step for a CodeNode parent is safe - see
+        # doc/PLUGIN_SYSTEM_REFACTOR_PLAN.md section 4.8/5.
         code_node = CodeNode(code="print(42)", language="python", parent_content_node=None)
         portal, main_window, scene = _make_portal(code_node)
 
-        with pytest.raises(AttributeError):
-            portal._create_html_view_node()
+        result = portal._create_html_view_node()
+
+        assert isinstance(result, HtmlViewNode)
+        assert "print(42)" in result.get_html_content()
+        assert not hasattr(code_node, "children")
