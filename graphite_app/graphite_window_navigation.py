@@ -2,15 +2,15 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QKeySequence, QCursor, QShortcut
 from graphite_node import ChatNode, CodeNode, DocumentNode, ImageNode, ThinkingNode
 from graphite_pycoder import PyCoderNode
-from graphite_plugin_code_sandbox import CodeSandboxNode
+from graphite_plugins.graphite_plugin_code_sandbox import CodeSandboxNode
 from graphite_web import WebNode
 from graphite_conversation_node import ConversationNode
 from graphite_reasoning import ReasoningNode
 from graphite_html_view import HtmlViewNode
-from graphite_plugin_artifact import ArtifactNode
-from graphite_plugin_workflow import WorkflowNode
-from graphite_plugin_quality_gate import QualityGateNode
-from graphite_plugin_gitlink import GitlinkNode
+from graphite_plugins.graphite_plugin_artifact import ArtifactNode
+from graphite_plugins.graphite_plugin_workflow import WorkflowNode
+from graphite_plugins.graphite_plugin_quality_gate import QualityGateNode
+from graphite_plugins.graphite_plugin_gitlink import GitlinkNode
 from graphite_command_palette import CommandPaletteDialog
 
 class WindowNavigationMixin:

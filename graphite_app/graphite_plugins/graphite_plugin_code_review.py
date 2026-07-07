@@ -34,7 +34,7 @@ import graphite_config as config
 from graphite_canvas_items import HoverAnimationMixin
 from graphite_config import get_current_palette, get_semantic_color
 from graphite_connections import ConnectionItem
-from graphite_plugin_context_menu import PluginNodeContextMenu
+from graphite_plugins.graphite_plugin_context_menu import PluginNodeContextMenu
 from graphite_plugins.common.github_client import GitHubRestClient
 from graphite_plugins.common.llm_json import call_llm_and_parse_json, extract_json_object
 

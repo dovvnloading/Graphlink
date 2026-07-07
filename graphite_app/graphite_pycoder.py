@@ -20,7 +20,7 @@ from graphite_lod import draw_lod_card, preview_text, sync_proxy_render_state
 
 from graphite_agents_pycoder import PyCoderStage, PyCoderStatus, PythonREPL
 from graphite_canvas_items import HoverAnimationMixin
-from graphite_plugin_context_menu import PluginNodeContextMenu
+from graphite_plugins.graphite_plugin_context_menu import PluginNodeContextMenu
 
 
 class PythonHighlighter(QSyntaxHighlighter):

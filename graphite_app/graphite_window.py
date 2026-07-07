@@ -15,17 +15,17 @@ from graphite_ui_components import NotificationBanner, DocumentViewerPanel
 from graphite_canvas_items import Note, Frame, Container
 from graphite_node import ChatNode, CodeNode, ThinkingNode
 from graphite_pycoder import PyCoderNode
-from graphite_plugin_code_sandbox import CodeSandboxNode
+from graphite_plugins.graphite_plugin_code_sandbox import CodeSandboxNode
 from graphite_web import WebNode
 from graphite_conversation_node import ConversationNode
 from graphite_reasoning import ReasoningNode
 from graphite_html_view import HtmlViewNode
-from graphite_plugin_artifact import ArtifactNode
-from graphite_plugin_workflow import WorkflowNode
-from graphite_plugin_graph_diff import GraphDiffNode
-from graphite_plugin_quality_gate import QualityGateNode
-from graphite_plugin_code_review import CodeReviewNode
-from graphite_plugin_gitlink import GitlinkNode
+from graphite_plugins.graphite_plugin_artifact import ArtifactNode
+from graphite_plugins.graphite_plugin_workflow import WorkflowNode
+from graphite_plugins.graphite_plugin_graph_diff import GraphDiffNode
+from graphite_plugins.graphite_plugin_quality_gate import QualityGateNode
+from graphite_plugins.graphite_plugin_code_review import CodeReviewNode
+from graphite_plugins.graphite_plugin_gitlink import GitlinkNode
 
 from graphite_library_dialog import ChatLibraryDialog
 from graphite_system_dialogs import HelpDialog, AboutDialog
@@ -33,8 +33,8 @@ from graphite_settings_dialogs import SettingsDialog
 
 from graphite_session import ChatSessionManager
 from graphite_command_palette import CommandManager
-from graphite_plugin_portal import PluginPortal
-from graphite_plugin_picker import PluginFlyoutPanel
+from graphite_plugins.graphite_plugin_portal import PluginPortal
+from graphite_plugins.graphite_plugin_picker import PluginFlyoutPanel
 from graphite_agents import ChatAgent
 from graphite_audio import (
     AudioValidationError,

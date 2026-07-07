@@ -11,17 +11,17 @@ from graphite_node import ChatNode, CodeNode
 from graphite_canvas_items import Note
 from graphite_connections import GroupSummaryConnectionItem
 from graphite_pycoder import PyCoderMode, PyCoderNode
-from graphite_plugin_code_sandbox import CodeSandboxNode
+from graphite_plugins.graphite_plugin_code_sandbox import CodeSandboxNode
 from graphite_web import WebNode
 from graphite_conversation_node import ConversationNode
 from graphite_reasoning import ReasoningNode
 from graphite_html_view import HtmlViewNode
-from graphite_plugin_artifact import ArtifactNode
-from graphite_plugin_workflow import WorkflowNode, WorkflowWorkerThread
-from graphite_plugin_graph_diff import GraphDiffNode, GraphDiffWorkerThread
-from graphite_plugin_quality_gate import QualityGateNode, QualityGateWorkerThread
-from graphite_plugin_code_review import CodeReviewNode, CodeReviewWorkerThread
-from graphite_plugin_gitlink import GitlinkNode, GitlinkWorkerThread
+from graphite_plugins.graphite_plugin_artifact import ArtifactNode
+from graphite_plugins.graphite_plugin_workflow import WorkflowNode, WorkflowWorkerThread
+from graphite_plugins.graphite_plugin_graph_diff import GraphDiffNode, GraphDiffWorkerThread
+from graphite_plugins.graphite_plugin_quality_gate import QualityGateNode, QualityGateWorkerThread
+from graphite_plugins.graphite_plugin_code_review import CodeReviewNode, CodeReviewWorkerThread
+from graphite_plugins.graphite_plugin_gitlink import GitlinkNode, GitlinkWorkerThread
 from graphite_config import get_current_palette
 from graphite_config import get_semantic_color
 from graphite_memory import (
@@ -1339,7 +1339,7 @@ class WindowActionsMixin:
         # Update the internal node state with the latest history before AI replies
         assign_history(artifact_node, append_history(parent_history, artifact_node.local_history))
 
-        from graphite_plugin_artifact import ArtifactWorkerThread
+        from graphite_plugins.graphite_plugin_artifact import ArtifactWorkerThread
         self.artifact_thread = ArtifactWorkerThread(current_doc, trimmed_history)
         self.artifact_thread.finished.connect(lambda doc, msg, node=artifact_node: self._handle_artifact_result(doc, msg, node))
         self.artifact_thread.error.connect(lambda err, node=artifact_node: self._handle_artifact_error(err, node))

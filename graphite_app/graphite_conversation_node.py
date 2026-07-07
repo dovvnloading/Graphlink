@@ -10,7 +10,7 @@ import markdown
 from graphite_config import get_current_palette, get_graph_node_colors, get_neutral_button_colors, get_semantic_color
 from graphite_canvas_items import HoverAnimationMixin
 from graphite_lod import draw_lod_card, preview_text, sync_proxy_render_state
-from graphite_plugin_context_menu import PluginNodeContextMenu
+from graphite_plugins.graphite_plugin_context_menu import PluginNodeContextMenu
 
 class ChatMessageBubbleItem(QGraphicsObject):
     """

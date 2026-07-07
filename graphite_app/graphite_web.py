@@ -10,7 +10,7 @@ from graphite_connections import ConnectionItem
 from graphite_canvas_items import HoverAnimationMixin
 from graphite_lod import draw_lod_card, preview_text, sync_proxy_render_state
 from graphite_memory import append_history, get_node_history
-from graphite_plugin_context_menu import PluginNodeContextMenu
+from graphite_plugins.graphite_plugin_context_menu import PluginNodeContextMenu
 
 
 class WebConnectionItem(ConnectionItem):

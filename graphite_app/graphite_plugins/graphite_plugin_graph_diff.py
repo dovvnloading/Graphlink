@@ -22,7 +22,7 @@ import graphite_config as config
 from graphite_canvas_items import HoverAnimationMixin
 from graphite_connections import ConnectionItem
 from graphite_config import get_current_palette, get_semantic_color
-from graphite_plugin_context_menu import PluginNodeContextMenu
+from graphite_plugins.graphite_plugin_context_menu import PluginNodeContextMenu
 
 
 GRAPH_DIFF_SCROLLBAR_STYLE = """

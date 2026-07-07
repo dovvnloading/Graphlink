@@ -20,13 +20,13 @@ from graphite_connections import (
 from graphite_conversation_node import ConversationNode
 from graphite_html_view import HtmlViewNode
 from graphite_node import ChatNode, CodeNode, DocumentNode, ImageNode, ThinkingNode
-from graphite_plugin_artifact import ArtifactConnectionItem, ArtifactNode
-from graphite_plugin_code_review import CodeReviewConnectionItem, CodeReviewNode
-from graphite_plugin_code_sandbox import CodeSandboxConnectionItem, CodeSandboxNode
-from graphite_plugin_gitlink import GitlinkConnectionItem, GitlinkNode
-from graphite_plugin_graph_diff import GraphDiffConnectionItem, GraphDiffNode
-from graphite_plugin_quality_gate import QualityGateConnectionItem, QualityGateNode
-from graphite_plugin_workflow import WorkflowConnectionItem, WorkflowNode
+from graphite_plugins.graphite_plugin_artifact import ArtifactConnectionItem, ArtifactNode
+from graphite_plugins.graphite_plugin_code_review import CodeReviewConnectionItem, CodeReviewNode
+from graphite_plugins.graphite_plugin_code_sandbox import CodeSandboxConnectionItem, CodeSandboxNode
+from graphite_plugins.graphite_plugin_gitlink import GitlinkConnectionItem, GitlinkNode
+from graphite_plugins.graphite_plugin_graph_diff import GraphDiffConnectionItem, GraphDiffNode
+from graphite_plugins.graphite_plugin_quality_gate import QualityGateConnectionItem, QualityGateNode
+from graphite_plugins.graphite_plugin_workflow import WorkflowConnectionItem, WorkflowNode
 from graphite_pycoder import PyCoderMode, PyCoderNode
 from graphite_reasoning import ReasoningNode
 from graphite_web import WebConnectionItem, WebNode

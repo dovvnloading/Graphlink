@@ -13,7 +13,7 @@ from graphite_config import get_semantic_color
 from graphite_canvas_items import HoverAnimationMixin
 from graphite_connections import ConnectionItem
 from graphite_lod import draw_lod_card, preview_text, sync_proxy_render_state
-from graphite_plugin_context_menu import PluginNodeContextMenu
+from graphite_plugins.graphite_plugin_context_menu import PluginNodeContextMenu
 import graphite_config as config
 import api_provider
 
