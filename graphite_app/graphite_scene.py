@@ -1252,8 +1252,6 @@ class ChatScene(QGraphicsScene):
         if not diff_node:
             return
 
-        worker_thread = getattr(diff_node, "worker_thread", None)
-
         for conn in self.graph_diff_connections[:]:
             if diff_node in (conn.start_node, conn.end_node):
                 if conn.scene() == self:
@@ -1270,8 +1268,6 @@ class ChatScene(QGraphicsScene):
         if self.window and self.window.current_node == diff_node:
             self.window.current_node = None
             self.window.message_input.setPlaceholderText("Type your message...")
-        if self.window and getattr(self.window, "graph_diff_thread", None) is worker_thread:
-            self.window.graph_diff_thread = None
 
     def _remove_graph_diffs_for_source(self, source_node):
         for diff_node in self.graph_diff_nodes[:]:
@@ -1366,42 +1362,33 @@ class ChatScene(QGraphicsScene):
             elif isinstance(item, QualityGateNode):
                 self._remove_associated_chart_nodes(item)
                 self._remove_graph_diffs_for_source(item)
-                worker_thread = getattr(item, "worker_thread", None)
                 if item.parent_node and item in item.parent_node.children: item.parent_node.children.remove(item)
                 self._remove_connections_for_node(item)
                 if hasattr(item, "dispose"): item.dispose()
                 self.removeItem(item)
                 if item in self.quality_gate_nodes: self.quality_gate_nodes.remove(item)
-                if self.window and getattr(self.window, "quality_gate_thread", None) is worker_thread:
-                    self.window.quality_gate_thread = None
                 if self.window and self.window.current_node == item:
                     self.window.current_node = None
                     self.window.message_input.setPlaceholderText("Type your message...")
             elif isinstance(item, CodeReviewNode):
                 self._remove_associated_chart_nodes(item)
                 self._remove_graph_diffs_for_source(item)
-                worker_thread = getattr(item, "worker_thread", None)
                 if item.parent_node and item in item.parent_node.children: item.parent_node.children.remove(item)
                 self._remove_connections_for_node(item)
                 if hasattr(item, "dispose"): item.dispose()
                 self.removeItem(item)
                 if item in self.code_review_nodes: self.code_review_nodes.remove(item)
-                if self.window and getattr(self.window, "code_review_thread", None) is worker_thread:
-                    self.window.code_review_thread = None
                 if self.window and self.window.current_node == item:
                     self.window.current_node = None
                     self.window.message_input.setPlaceholderText("Type your message...")
             elif isinstance(item, GitlinkNode):
                 self._remove_associated_chart_nodes(item)
                 self._remove_graph_diffs_for_source(item)
-                worker_thread = getattr(item, "worker_thread", None)
                 if item.parent_node and item in item.parent_node.children: item.parent_node.children.remove(item)
                 self._remove_connections_for_node(item)
                 if hasattr(item, "dispose"): item.dispose()
                 self.removeItem(item)
                 if item in self.gitlink_nodes: self.gitlink_nodes.remove(item)
-                if self.window and getattr(self.window, "gitlink_thread", None) is worker_thread:
-                    self.window.gitlink_thread = None
                 if self.window and self.window.current_node == item:
                     self.window.current_node = None
                     self.window.message_input.setPlaceholderText("Type your message...")

@@ -194,7 +194,8 @@ class ArtifactNode(QGraphicsObject, HoverAnimationMixin):
         HoverAnimationMixin.__init__(self)
         self.parent_node = parent_node
         self.children = []
-        
+        self.worker_thread = None
+
         self.conversation_history = []
         self.local_history = []
         self.chat_html_cache = ""

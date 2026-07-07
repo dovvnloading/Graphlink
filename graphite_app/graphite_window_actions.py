@@ -1022,7 +1022,6 @@ class WindowActionsMixin:
             requirements_manifest,
             existing_code=existing_code,
         )
-        self.sandbox_thread = worker_thread
         sandbox_node.worker_thread = worker_thread
 
         worker_thread.log_update.connect(sandbox_node.update_status)
@@ -1067,14 +1066,15 @@ class WindowActionsMixin:
             worker_thread.deny()
 
     def stop_code_sandbox_node(self, sandbox_node):
+        # Only ever touch this node's own worker_thread. Previously this also stopped
+        # main_window.sandbox_thread unconditionally, which - since that was a single
+        # attribute shared across every CodeSandboxNode - meant clicking "stop" on one
+        # sandbox node could also stop a *different*, concurrently-running sandbox
+        # node's execution if it happened to be the most recently started one.
         worker_thread = getattr(sandbox_node, "worker_thread", None)
         if worker_thread and worker_thread.isRunning():
             worker_thread.stop()
-        if getattr(self, "sandbox_thread", None) and self.sandbox_thread.isRunning():
-            self.sandbox_thread.stop()
         sandbox_node.worker_thread = None
-        if getattr(self, "sandbox_thread", None) is worker_thread:
-            self.sandbox_thread = None
 
         sandbox_node.append_terminal_output("\n[Sandbox] Execution manually stopped.\n")
         sandbox_node.status = "Stopped"
@@ -1084,8 +1084,6 @@ class WindowActionsMixin:
     def _cleanup_code_sandbox_thread(self, worker_thread, sandbox_node):
         if sandbox_node and getattr(sandbox_node, "worker_thread", None) is worker_thread:
             sandbox_node.worker_thread = None
-        if getattr(self, "sandbox_thread", None) is worker_thread:
-            self.sandbox_thread = None
         worker_thread.deleteLater()
 
     def _handle_code_sandbox_result(self, result_dict, sandbox_node, parent_history, run_mode):
@@ -1340,12 +1338,26 @@ class WindowActionsMixin:
         assign_history(artifact_node, append_history(parent_history, artifact_node.local_history))
 
         from graphite_plugins.graphite_plugin_artifact import ArtifactWorkerThread
-        self.artifact_thread = ArtifactWorkerThread(current_doc, trimmed_history)
-        self.artifact_thread.finished.connect(lambda doc, msg, node=artifact_node: self._handle_artifact_result(doc, msg, node))
-        self.artifact_thread.error.connect(lambda err, node=artifact_node: self._handle_artifact_error(err, node))
-        self.artifact_thread.finished.connect(self.artifact_thread.deleteLater)
-        self.artifact_thread.error.connect(self.artifact_thread.deleteLater)
-        self.artifact_thread.start()
+        worker_thread = ArtifactWorkerThread(current_doc, trimmed_history)
+        artifact_node.worker_thread = worker_thread
+        worker_thread.finished.connect(lambda doc, msg, node=artifact_node: self._handle_artifact_result(doc, msg, node))
+        worker_thread.error.connect(lambda err, node=artifact_node: self._handle_artifact_error(err, node))
+        worker_thread.finished.connect(lambda _doc, _msg, thread=worker_thread, node=artifact_node: self._cleanup_artifact_thread(thread, node))
+        worker_thread.error.connect(lambda _err, thread=worker_thread, node=artifact_node: self._cleanup_artifact_thread(thread, node))
+        worker_thread.start()
+
+    def _cleanup_artifact_thread(self, worker_thread, artifact_node):
+        if artifact_node and getattr(artifact_node, "worker_thread", None) is worker_thread:
+            artifact_node.worker_thread = None
+        worker_thread.deleteLater()
+
+    def stop_artifact_node(self, artifact_node):
+        worker_thread = getattr(artifact_node, "worker_thread", None)
+        if worker_thread and worker_thread.isRunning():
+            worker_thread.stop()
+        artifact_node.worker_thread = None
+        artifact_node.add_chat_message("Generation manually stopped.", is_user=False)
+        artifact_node.set_running_state(False)
 
     def _handle_artifact_result(self, new_doc, ai_msg, artifact_node):
         """Processes the finished document and commentary from the Artifact thread."""
@@ -1379,12 +1391,26 @@ class WindowActionsMixin:
             max_tokens=6500,
             system_prompt_estimate=1200,
         )
-        self.workflow_thread = WorkflowWorkerThread(goal, constraints, trimmed_parent_history)
-        self.workflow_thread.finished.connect(lambda result, node=workflow_node, history=parent_history: self._handle_workflow_result(result, node, history))
-        self.workflow_thread.error.connect(lambda error_msg, node=workflow_node: self._handle_workflow_error(error_msg, node))
-        self.workflow_thread.finished.connect(self.workflow_thread.deleteLater)
-        self.workflow_thread.error.connect(self.workflow_thread.deleteLater)
-        self.workflow_thread.start()
+        worker_thread = WorkflowWorkerThread(goal, constraints, trimmed_parent_history)
+        workflow_node.worker_thread = worker_thread
+        worker_thread.finished.connect(lambda result, node=workflow_node, history=parent_history: self._handle_workflow_result(result, node, history))
+        worker_thread.error.connect(lambda error_msg, node=workflow_node: self._handle_workflow_error(error_msg, node))
+        worker_thread.finished.connect(lambda _result, thread=worker_thread, node=workflow_node: self._cleanup_workflow_thread(thread, node))
+        worker_thread.error.connect(lambda _error, thread=worker_thread, node=workflow_node: self._cleanup_workflow_thread(thread, node))
+        worker_thread.start()
+
+    def _cleanup_workflow_thread(self, worker_thread, workflow_node):
+        if workflow_node and getattr(workflow_node, "worker_thread", None) is worker_thread:
+            workflow_node.worker_thread = None
+        worker_thread.deleteLater()
+
+    def stop_workflow_node(self, workflow_node):
+        worker_thread = getattr(workflow_node, "worker_thread", None)
+        if worker_thread and worker_thread.isRunning():
+            worker_thread.stop()
+        workflow_node.worker_thread = None
+        workflow_node.set_error("Workflow planning manually stopped.")
+        workflow_node.set_running_state(False)
 
     def _handle_workflow_result(self, result, workflow_node, parent_history):
         if not workflow_node or not workflow_node.scene():
@@ -1426,7 +1452,6 @@ class WindowActionsMixin:
         quality_gate_node.set_running_state(True)
 
         worker_thread = QualityGateWorkerThread(goal, criteria, payload)
-        self.quality_gate_thread = worker_thread
         quality_gate_node.worker_thread = worker_thread
 
         worker_thread.finished.connect(lambda result, node=quality_gate_node: self._handle_quality_gate_result(result, node))
@@ -1438,8 +1463,6 @@ class WindowActionsMixin:
     def _cleanup_quality_gate_thread(self, worker_thread, quality_gate_node):
         if quality_gate_node and getattr(quality_gate_node, "worker_thread", None) is worker_thread:
             quality_gate_node.worker_thread = None
-        if getattr(self, "quality_gate_thread", None) is worker_thread:
-            self.quality_gate_thread = None
         worker_thread.deleteLater()
 
     def _handle_quality_gate_result(self, result, quality_gate_node):
@@ -1482,7 +1505,6 @@ class WindowActionsMixin:
         code_review_node.set_running_state(True)
 
         worker_thread = CodeReviewWorkerThread(payload)
-        self.code_review_thread = worker_thread
         code_review_node.worker_thread = worker_thread
 
         worker_thread.finished.connect(lambda result, node=code_review_node: self._handle_code_review_result(result, node))
@@ -1494,8 +1516,6 @@ class WindowActionsMixin:
     def _cleanup_code_review_thread(self, worker_thread, code_review_node):
         if code_review_node and getattr(code_review_node, "worker_thread", None) is worker_thread:
             code_review_node.worker_thread = None
-        if getattr(self, "code_review_thread", None) is worker_thread:
-            self.code_review_thread = None
         worker_thread.deleteLater()
 
     def _handle_code_review_result(self, result, code_review_node):
@@ -1554,7 +1574,6 @@ class WindowActionsMixin:
         gitlink_node.set_running_state(True)
 
         worker_thread = GitlinkWorkerThread(payload)
-        self.gitlink_thread = worker_thread
         gitlink_node.worker_thread = worker_thread
 
         worker_thread.finished.connect(lambda result, node=gitlink_node, history=parent_history: self._handle_gitlink_result(result, node, history))
@@ -1566,8 +1585,6 @@ class WindowActionsMixin:
     def _cleanup_gitlink_thread(self, worker_thread, gitlink_node):
         if gitlink_node and getattr(gitlink_node, "worker_thread", None) is worker_thread:
             gitlink_node.worker_thread = None
-        if getattr(self, "gitlink_thread", None) is worker_thread:
-            self.gitlink_thread = None
         worker_thread.deleteLater()
 
     def _handle_gitlink_result(self, result, gitlink_node, parent_history):
@@ -1602,7 +1619,6 @@ class WindowActionsMixin:
         graph_diff_node.set_running_state(True)
 
         worker_thread = GraphDiffWorkerThread(left_payload, right_payload)
-        self.graph_diff_thread = worker_thread
         graph_diff_node.worker_thread = worker_thread
 
         worker_thread.finished.connect(lambda result, node=graph_diff_node: self._handle_graph_diff_result(result, node))
@@ -1614,8 +1630,6 @@ class WindowActionsMixin:
     def _cleanup_graph_diff_thread(self, worker_thread, graph_diff_node):
         if graph_diff_node and getattr(graph_diff_node, "worker_thread", None) is worker_thread:
             graph_diff_node.worker_thread = None
-        if getattr(self, "graph_diff_thread", None) is worker_thread:
-            self.graph_diff_thread = None
         worker_thread.deleteLater()
 
     def _handle_graph_diff_result(self, result, graph_diff_node):

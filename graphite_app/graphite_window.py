@@ -89,16 +89,9 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         self.code_exec_thread = None
         self.pycoder_agent_thread = None
         self.pycoder_exec_thread = None
-        self.sandbox_thread = None
         self.web_worker_thread = None
         self.conversation_node_thread = None
         self.reasoning_thread = None
-        self.artifact_thread = None
-        self.workflow_thread = None
-        self.graph_diff_thread = None
-        self.quality_gate_thread = None
-        self.code_review_thread = None
-        self.gitlink_thread = None
         self._main_request_active = False
         self._main_request_cancel_pending = False
         self._main_request_cancel_callback = None
