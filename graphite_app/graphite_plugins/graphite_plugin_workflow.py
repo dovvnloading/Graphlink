@@ -38,6 +38,7 @@ WORKFLOW_PLUGIN_ICONS = {
     "Graphlink-Reasoning": "fa5s.brain",
     "HTML Renderer": "fa5s.code",
     "Quality Gate": "fa5s.check-circle",
+    "Code Review Agent": "fa5s.search",
 }
 
 WORKFLOW_ALLOWED_PLUGINS = list(WORKFLOW_PLUGIN_ICONS.keys())
@@ -109,13 +110,14 @@ Allowed plugins:
 - Graphlink-Reasoning
 - HTML Renderer
 - Quality Gate
+- Code Review Agent
 
 Rules:
 1. Prefer the fewest plugins that will realistically finish the work well.
 2. Recommend at most 4 plugins.
 3. Only recommend HTML Renderer when the task clearly benefits from rendering HTML or UI output.
 4. Only recommend System Prompt when a persistent role/persona change would materially improve the branch.
-5. Favor Graphlink-Web for current facts or research, Graphlink-Reasoning for decomposition, Gitlink for repository grounding and codebase context, Py-Coder for lightweight implementation or debugging, Execution Sandbox for dependency-aware Python runs or reproducible package-based experiments, Artifact / Drafter for specs/docs, Conversation Node for deep iterative sub-work, and Quality Gate for acceptance review, hardening, or release-readiness checks.
+5. Favor Graphlink-Web for current facts or research, Graphlink-Reasoning for decomposition, Gitlink for repository grounding and codebase context, Py-Coder for lightweight implementation or debugging, Execution Sandbox for dependency-aware Python runs or reproducible package-based experiments, Artifact / Drafter for specs/docs, Conversation Node for deep iterative sub-work, Quality Gate for acceptance review, hardening, or release-readiness checks, and Code Review Agent when a specific local or GitHub file needs a deterministic, scored code-quality review.
 6. Output valid JSON only. No markdown fences, no preamble.
 
 Return exactly this shape:
@@ -233,6 +235,14 @@ Return exactly this shape:
                 "Quality Gate",
                 "This goal needs a stronger acceptance review so the branch can be judged against a real shipping bar.",
                 f"Review this branch for production readiness and identify the highest-value remaining gaps:\n\n{goal}",
+                "medium",
+            )
+
+        if any(term in lowered for term in ["review", "pull request", "pr", "code review", "lint", "audit", "readability", "maintainability", "vulnerab", "security review"]):
+            add(
+                "Code Review Agent",
+                "This goal calls for a deterministic, scored review of a specific file rather than a broad readiness check.",
+                f"Review the relevant source file for correctness, security, and maintainability, and score it against a weighted rubric:\n\n{goal}",
                 "medium",
             )
 

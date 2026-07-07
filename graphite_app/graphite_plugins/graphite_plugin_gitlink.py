@@ -1,5 +1,6 @@
 import base64
 import difflib
+import hashlib
 import html
 import json
 import re
@@ -161,6 +162,21 @@ def _safe_local_target(root_path, repo_path):
     if target != root and root not in target.parents:
         raise RuntimeError("Resolved file path escaped the selected repository root.")
     return target
+
+
+# Write-gate state machine for GitlinkNode.apply_approved_changes: a proposal starts as
+# DRAFT, becomes PREVIEWED once a change set is rendered for review, only becomes APPROVED
+# inside the confirmation-dialog flow (stamped with a fingerprint of exactly what was shown),
+# and only becomes APPLIED if that fingerprint still matches the change set at write time.
+GITLINK_STATE_DRAFT = "draft"
+GITLINK_STATE_PREVIEWED = "previewed"
+GITLINK_STATE_APPROVED = "approved"
+GITLINK_STATE_APPLIED = "applied"
+
+
+def _fingerprint_changes(changes):
+    canonical = json.dumps(changes, sort_keys=True, default=str)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _wrap_cdata(text):
@@ -425,6 +441,8 @@ class GitlinkNode(QGraphicsObject, HoverAnimationMixin):
         self.proposal_markdown = ""
         self.preview_text = ""
         self.pending_changes = []
+        self.change_state = GITLINK_STATE_DRAFT
+        self._approved_fingerprint = None
         self.repo_file_entries = []
         self.repo_file_paths = []
         self.selected_paths = []
@@ -1543,6 +1561,8 @@ class GitlinkNode(QGraphicsObject, HoverAnimationMixin):
         self.proposal_markdown = ""
         self.preview_text = ""
         self.pending_changes = []
+        self.change_state = GITLINK_STATE_DRAFT
+        self._approved_fingerprint = None
         self.proposal_display.clear()
         self.preview_editor.clear()
         self.apply_button.setEnabled(False)
@@ -1558,6 +1578,8 @@ class GitlinkNode(QGraphicsObject, HoverAnimationMixin):
 
         self.proposal_data = dict(proposal or {})
         self.pending_changes = list(self.proposal_data.get("files", []) or [])
+        self.change_state = GITLINK_STATE_PREVIEWED if self.pending_changes else GITLINK_STATE_DRAFT
+        self._approved_fingerprint = None
         self.proposal_markdown = self._build_proposal_markdown(self.proposal_data)
         self.preview_text = preview_override if preview_override is not None else self._build_preview_text(self.pending_changes)
 
@@ -1623,6 +1645,12 @@ class GitlinkNode(QGraphicsObject, HoverAnimationMixin):
             self.set_error("The selected local repository path does not exist.")
             return
 
+        # Fingerprint the exact change set being shown before the confirmation dialog opens,
+        # then re-verify it right before writing. If a background result (e.g. a re-run
+        # completing) mutated pending_changes while the dialog was open, this refuses to
+        # write a change set the user never actually saw or approved.
+        shown_fingerprint = _fingerprint_changes(self.pending_changes)
+
         reply = QMessageBox.question(
             None,
             "Apply Gitlink Changes",
@@ -1632,6 +1660,16 @@ class GitlinkNode(QGraphicsObject, HoverAnimationMixin):
         )
         if reply != QMessageBox.StandardButton.Yes:
             self.set_status("Write cancelled.")
+            return
+
+        self.change_state = GITLINK_STATE_APPROVED
+        self._approved_fingerprint = shown_fingerprint
+
+        current_fingerprint = _fingerprint_changes(self.pending_changes)
+        if self.change_state != GITLINK_STATE_APPROVED or current_fingerprint != self._approved_fingerprint:
+            self.change_state = GITLINK_STATE_PREVIEWED
+            self._approved_fingerprint = None
+            self.set_error("The proposed change set changed after approval. Review it again before applying.")
             return
 
         written_files = 0
@@ -1651,8 +1689,11 @@ class GitlinkNode(QGraphicsObject, HoverAnimationMixin):
                 target_path.write_text(file_item.get("content", ""), encoding="utf-8")
                 written_files += 1
 
+            self.change_state = GITLINK_STATE_APPLIED
             self.set_status(f"Applied {written_files} file changes.")
         except Exception as exc:
+            self.change_state = GITLINK_STATE_PREVIEWED
+            self._approved_fingerprint = None
             self.set_error(f"Failed to write approved changes: {exc}")
 
     def set_running_state(self, is_running):
