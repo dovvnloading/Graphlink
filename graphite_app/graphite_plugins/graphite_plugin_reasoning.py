@@ -1,6 +1,6 @@
 from PySide6.QtWidgets import (
     QGraphicsObject, QGraphicsProxyWidget, QWidget, QVBoxLayout,
-    QTextEdit, QPushButton, QLabel, QHBoxLayout, QSlider
+    QTextEdit, QPushButton, QLabel, QHBoxLayout, QSlider, QProgressBar
 )
 from PySide6.QtCore import QRectF, Qt, Signal, QRect, QThread
 from PySide6.QtGui import QPainter, QColor, QBrush, QPen, QPainterPath, QFont
@@ -266,6 +266,28 @@ class ReasoningNode(QGraphicsObject, HoverAnimationMixin):
         self.status_label.setStyleSheet("color: #888; font-style: italic; background: transparent;")
         main_layout.addWidget(self.status_label)
 
+        # Indeterminate ("busy") progress bar - the only prior feedback while a run was
+        # in progress was this same status_label's text changing to "Thinking...", which
+        # is easy to miss on a canvas full of nodes. This gives an actually-visible,
+        # continuously-animating signal that something is happening in the background.
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 0)
+        self.progress_bar.setTextVisible(False)
+        self.progress_bar.setFixedHeight(6)
+        self.progress_bar.setStyleSheet("""
+            QProgressBar {
+                background-color: #2b2b2b;
+                border: none;
+                border-radius: 3px;
+            }
+            QProgressBar::chunk {
+                background-color: #4a90d9;
+                border-radius: 3px;
+            }
+        """)
+        self.progress_bar.setVisible(False)
+        main_layout.addWidget(self.progress_bar)
+
         main_layout.addWidget(QLabel("Thought Process:"))
         self.thought_process_display = QTextEdit()
         self.thought_process_display.setReadOnly(True)
@@ -331,6 +353,7 @@ class ReasoningNode(QGraphicsObject, HoverAnimationMixin):
         self.prompt_input.setReadOnly(is_running)
         self.budget_slider.setEnabled(not is_running)
         self.run_button.setText("Stop Reasoning" if is_running else "Start Reasoning")
+        self.progress_bar.setVisible(is_running)
         if is_running:
             self.set_status("Thinking...")
         else:
