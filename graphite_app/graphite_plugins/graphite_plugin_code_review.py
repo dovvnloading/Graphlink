@@ -37,6 +37,7 @@ from graphite_canvas_items import HoverAnimationMixin
 from graphite_config import get_current_palette, get_semantic_color
 from graphite_connections import ConnectionItem
 from graphite_plugin_context_menu import PluginNodeContextMenu
+from graphite_plugins.common.github_client import GitHubRestClient
 
 
 class CodeReviewComboPopup(QFrame):
@@ -1148,6 +1149,7 @@ class CodeReviewNode(QGraphicsObject, HoverAnimationMixin):
         HoverAnimationMixin.__init__(self)
         self.parent_node = parent_node
         self.settings_manager = settings_manager
+        self._github_client = GitHubRestClient(settings_manager)
         self.children = []
         self.is_user = False
         self.conversation_history = []
@@ -1659,36 +1661,16 @@ class CodeReviewNode(QGraphicsObject, HoverAnimationMixin):
         return display
 
     def _get_github_token(self):
-        if self.settings_manager:
-            return self.settings_manager.get_github_token().strip()
-        return ""
+        # Delegates to the shared GitHubRestClient (doc/PLUGIN_SYSTEM_REFACTOR_PLAN.md
+        # section 1.6/4.2) - kept as a thin wrapper so every existing call site in this
+        # file (load_github_repositories, _resolve_repo_and_branch, etc.) is unchanged.
+        return self._github_client.get_token()
 
     def _github_headers(self):
-        headers = {
-            "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
-        }
-        token = self._get_github_token()
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
-        return headers
+        return self._github_client.build_headers()
 
-    def _github_request(self, url, params=None):
-        response = requests.get(url, headers=self._github_headers(), params=params or {}, timeout=25)
-        if response.status_code >= 400:
-            try:
-                payload = response.json()
-                message = payload.get("message") or response.reason
-            except ValueError:
-                message = response.text or response.reason
-            if response.status_code == 404:
-                raise RuntimeError("GitHub resource not found. Check the repository, branch, and file path.")
-            if response.status_code == 401:
-                raise RuntimeError("GitHub rejected the saved token. Update it in Settings > Integrations.")
-            if response.status_code == 403 and "rate limit" in message.lower():
-                raise RuntimeError("GitHub API rate limit reached. Add a token or try again later.")
-            raise RuntimeError(message)
-        return response.json()
+    def _github_request(self, url, params=None, **kwargs):
+        return self._github_client.request(url, params, **kwargs)
 
     def refresh_github_state(self):
         token = self._get_github_token()
