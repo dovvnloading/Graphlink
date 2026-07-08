@@ -53,16 +53,16 @@ Graphlink combines a node canvas, local persistence, multiple model backends, an
 Core capabilities include:
 - Branching conversations on a visual canvas instead of a single threaded prompt log.
 - Built-in node types for chat, code, documents, images, and thinking/reasoning outputs.
-- Specialist plugins for validation, delivery, workflow planning, drafting, code execution, and repository-aware changes.
+- Specialist plugins for research, drafting, code execution, and repository-aware changes.
 - Support for both local providers (Ollama and llama.cpp via `llama-cpp-python`) and API-backed providers.
 - Local-first persistence of conversations, notes, pins, and graph layout.
 - Export helpers for text, Markdown, HTML, Python, DOCX, and PDF outputs.
 
 ### Highlights
 - **Visual branching workspace**: Build multiple parallel thought paths, experiments, and delivery tracks in one view.
-- **Plugin-driven workflow**: Add specialized nodes such as Workflow Architect, Branch Lens, Quality Gate, Code Review Agent, Gitlink, Py-Coder, and Execution Sandbox.
+- **Plugin-driven workflow**: Add specialized nodes such as Gitlink, Py-Coder, Execution Sandbox, and Artifact / Drafter.
 - **Provider flexibility**: Run locally with Ollama or direct GGUF loading through llama.cpp, or switch to API Endpoint mode for OpenAI-compatible providers and Google Gemini.
-- **Review and delivery tooling**: Compare branches, run production-readiness checks, review code with a deterministic rubric, and stage repo-aware file changes before writing them.
+- **Repository-aware delivery**: Load a repo into structured context with Gitlink, preview file-level changes, and only write them after explicit approval.
 - **Structured persistence**: Sessions are stored locally in SQLite with notes and navigation pins kept separately for efficient reloads.
 - **Windows-friendly development**: The repository includes a Visual Studio solution and Python project for local editing on Windows.
 
@@ -98,13 +98,7 @@ The app also includes primary non-plugin node types that form the main graph sur
 - **Conversation Node**: Create a self-contained linear conversation inside a node.
 
 ### Reasoning & Research
-- **Graphlink-Reasoning**: Multi-step reasoning workflow for harder tasks.
 - **Graphlink-Web**: Web-enabled research node for real-time retrieval and summarization.
-
-### Validation & Delivery
-- **Branch Lens**: Compare two branches and surface differences in logic, intent, or implementation direction.
-- **Quality Gate**: Run a production-readiness review, score the branch, and recommend follow-up remediation nodes.
-- **Code Review Agent**: Review a local file or GitHub file with a deterministic weighted rubric and structured findings.
 
 ### Build & Execution
 
@@ -114,7 +108,6 @@ The app also includes primary non-plugin node types that form the main graph sur
 - **HTML Renderer**: Render generated HTML from a parent branch directly inside the app.
 
 ### Workflow & Drafting
-- **Workflow Architect**: Generate an execution plan and seed the best next specialist nodes.
 - **Artifact / Drafter**: Draft and refine long-form Markdown artifacts in a split-pane writing surface.
 
 ---
@@ -229,7 +222,7 @@ Some settings paths and dialogs read these values:
 In practice, the in-app settings flow is the main configuration surface, but these environment variables are still relevant during development.
 
 ### GitHub Integration
-GitHub-backed features are used by **Code Review Agent** and **Gitlink**.
+GitHub-backed features are used by **Gitlink**.
 To use private repositories, save a GitHub access token in the app settings.
 
 ---
@@ -242,13 +235,7 @@ To use private repositories, save a GitHub access token in the app settings.
 Launch the app, create or load a session, and begin with a chat node or starter prompt.
 
 **Build Branches**
-Select nodes and add plugins from the plugin picker or controls. Each new node can become the start of a more specialized path such as research, code generation, drafting, validation, or execution.
-
-**Validate Work**
-Use validation-oriented nodes when a branch is moving from exploration toward delivery:
-- **Branch Lens** to compare alternative directions
-- **Quality Gate** to judge readiness
-- **Code Review Agent** for file-level review
+Select nodes and add plugins from the plugin picker or controls. Each new node can become the start of a more specialized path such as research, code generation, drafting, or execution.
 
 **Execute or Draft**
 Use build-oriented nodes when you want to move from planning into artifacts:
@@ -348,7 +335,7 @@ python graphite_app.py
 ```
 
 ### Compatibility Facades
-Several top-level modules such as `graphite_plugin_code_review.py`, `graphite_plugin_workflow.py`, and similar files are lightweight compatibility wrappers. The real implementations live in the package directories:
+Several top-level modules such as `graphite_plugin_gitlink.py` and `graphite_plugin_artifact.py` are lightweight compatibility wrappers. The real implementations live in the package directories:
 - `graphite_app/graphite_plugins/`
 - `graphite_app/graphite_nodes/`
 - `graphite_app/graphite_canvas/`
