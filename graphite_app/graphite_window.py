@@ -18,13 +18,8 @@ from graphite_pycoder import PyCoderNode
 from graphite_plugins.graphite_plugin_code_sandbox import CodeSandboxNode
 from graphite_web import WebNode
 from graphite_conversation_node import ConversationNode
-from graphite_plugins.graphite_plugin_reasoning import ReasoningNode
 from graphite_html_view import HtmlViewNode
 from graphite_plugins.graphite_plugin_artifact import ArtifactNode
-from graphite_plugins.graphite_plugin_workflow import WorkflowNode
-from graphite_plugins.graphite_plugin_graph_diff import GraphDiffNode
-from graphite_plugins.graphite_plugin_quality_gate import QualityGateNode
-from graphite_plugins.graphite_plugin_code_review import CodeReviewNode
 from graphite_plugins.graphite_plugin_gitlink import GitlinkNode
 
 from graphite_library_dialog import ChatLibraryDialog
@@ -732,12 +727,6 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         if isinstance(node, ConversationNode):
             return self._build_document_section("Conversation Transcript", self._history_to_markdown(getattr(node, "conversation_history", [])))
 
-        if isinstance(node, ReasoningNode):
-            return self._join_document_sections(
-                self._build_document_section("Prompt", getattr(node, "prompt", "")),
-                self._build_document_section("Reasoning Trace", getattr(node, "thought_process", "")),
-            )
-
         if isinstance(node, WebNode):
             sources = getattr(node, "sources", []) or []
             source_lines = "\n".join(f"- [{url}]({url})" for url in sources if str(url).strip())
@@ -777,62 +766,6 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
             return self._join_document_sections(
                 self._build_document_section("Artifact", node.get_artifact_content() if hasattr(node, "get_artifact_content") else ""),
                 self._build_document_section("Drafting Transcript", transcript),
-            )
-
-        if isinstance(node, WorkflowNode):
-            recommendations = []
-            for item in getattr(node, "recommendations", []) or []:
-                plugin = str(item.get("plugin", "Plugin")).strip()
-                why = str(item.get("why", "")).strip()
-                priority = str(item.get("priority", "")).strip()
-                prompt = str(item.get("starter_prompt", "")).strip()
-                summary = f"- **{plugin}**"
-                if priority:
-                    summary += f" ({priority})"
-                if why:
-                    summary += f": {why}"
-                if prompt:
-                    summary += f"\n  Starter Prompt: {prompt}"
-                recommendations.append(summary)
-            return self._join_document_sections(
-                self._build_document_section("Goal", node.get_goal() if hasattr(node, "get_goal") else ""),
-                self._build_document_section("Constraints", node.get_constraints() if hasattr(node, "get_constraints") else ""),
-                self._build_document_section("Workflow Blueprint", getattr(node, "blueprint_markdown", "")),
-                self._build_document_section("Recommended Plugins", "\n".join(recommendations)),
-            )
-
-        if isinstance(node, GraphDiffNode):
-            return self._join_document_sections(
-                self._build_document_section("Branch Comparison", getattr(node, "comparison_markdown", "")),
-                self._build_document_section("Summary Note", getattr(node, "note_summary", "")),
-            )
-
-        if isinstance(node, QualityGateNode):
-            recommendations = []
-            for item in getattr(node, "recommendations", []) or []:
-                plugin = str(item.get("plugin", "Plugin")).strip()
-                why = str(item.get("why", "")).strip()
-                starter_prompt = str(item.get("starter_prompt", "")).strip()
-                summary = f"- **{plugin}**"
-                if why:
-                    summary += f": {why}"
-                if starter_prompt:
-                    summary += f"\n  Starter Prompt: {starter_prompt}"
-                recommendations.append(summary)
-            return self._join_document_sections(
-                self._build_document_section("Goal", node.get_goal() if hasattr(node, "get_goal") else ""),
-                self._build_document_section("Acceptance Criteria", node.get_criteria() if hasattr(node, "get_criteria") else ""),
-                self._build_document_section("Quality Review", getattr(node, "review_markdown", "")),
-                self._build_document_section("Recommended Plugins", "\n".join(recommendations)),
-                self._build_document_section("Summary Note", getattr(node, "note_summary", "")),
-            )
-
-        if isinstance(node, CodeReviewNode):
-            source_text = node.source_editor.toPlainText() if hasattr(node, "source_editor") else ""
-            return self._join_document_sections(
-                self._build_document_section("Review Context", node.get_review_context() if hasattr(node, "get_review_context") else ""),
-                self._build_document_section("Code Review", getattr(node, "review_markdown", "")),
-                self._build_document_section("Source Snapshot", self._build_code_block(source_text)),
             )
 
         if isinstance(node, GitlinkNode):
@@ -974,12 +907,7 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         elif isinstance(node, CodeSandboxNode): text_content = "Execution Sandbox"
         elif isinstance(node, WebNode): text_content = "Web Search Node"
         elif isinstance(node, ConversationNode): text_content = "Conversation"
-        elif isinstance(node, ReasoningNode): text_content = "Reasoning Node"
         elif isinstance(node, HtmlViewNode): text_content = "HTML Renderer"
-        elif isinstance(node, WorkflowNode): text_content = "Workflow Architect"
-        elif isinstance(node, GraphDiffNode): text_content = "Branch Lens"
-        elif isinstance(node, QualityGateNode): text_content = "Quality Gate"
-        elif isinstance(node, CodeReviewNode): text_content = "Code Review Agent"
         elif isinstance(node, GitlinkNode): text_content = "Gitlink"
         elif isinstance(node, Note) and node.is_summary_note: self.message_input.setPlaceholderText("Cannot respond to a summary note."); return
         if text_content: self.message_input.setPlaceholderText(f"Responding to: {text_content[:30]}...")
@@ -1311,7 +1239,7 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         self.message_input.setEnabled(True); self.send_button.setEnabled(True); self.attach_file_btn.setEnabled(True); self.clear_attachment()
         
     def _get_single_selected_node(self):
-        selected_items = self.chat_view.scene().selectedItems(); valid_types = (ChatNode, PyCoderNode, CodeSandboxNode, WebNode, ConversationNode, ReasoningNode, HtmlViewNode, WorkflowNode, GraphDiffNode, QualityGateNode, CodeReviewNode, GitlinkNode)
+        selected_items = self.chat_view.scene().selectedItems(); valid_types = (ChatNode, PyCoderNode, CodeSandboxNode, WebNode, ConversationNode, HtmlViewNode, GitlinkNode)
         if len(selected_items) == 1 and isinstance(selected_items[0], valid_types): return selected_items[0]
         return None
 

@@ -30,7 +30,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import graphite_conversation_node  # noqa: F401 - imports graphite_plugins.graphite_plugin_context_menu
 import graphite_html_view  # noqa: F401
 import graphite_plugins  # noqa: F401
-import graphite_plugins.graphite_plugin_reasoning  # noqa: F401
 import graphite_pycoder  # noqa: F401 - this is the module that was on the circular side
 import graphite_scene  # noqa: F401
 import graphite_web  # noqa: F401

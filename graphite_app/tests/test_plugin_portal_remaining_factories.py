@@ -1,13 +1,12 @@
-"""Tests for the Phase 4 migration of the remaining 10 standard-shape plugin factories
-onto PluginPortal.create_node() (Py-Coder, Execution Sandbox, Workflow Architect,
-Quality Gate, Code Review Agent, Gitlink, Graphlink-Web, Conversation Node,
-Graphlink-Reasoning, HTML Renderer).
+"""Tests for the Phase 4 migration of the standard-shape plugin factories onto
+PluginPortal.create_node() (Py-Coder, Execution Sandbox, Gitlink, Graphlink-Web,
+Conversation Node, HTML Renderer).
 
 Mirrors tests/test_plugin_portal_create_node.py's approach (fake scene/main_window,
-real headlessly-constructed node instances) but covers all ten factories, since they
-now share the same generic create_node() call shape and the same class of regression
-risk: a missed signal-wire, a dropped history clone, or a warning message that silently
-changed would be caught here, not just at review time.
+real headlessly-constructed node instances) but covers each remaining factory, since
+they now share the same generic create_node() call shape and the same class of
+regression risk: a missed signal-wire, a dropped history clone, or a warning message
+that silently changed would be caught here, not just at review time.
 """
 
 import sys
@@ -24,13 +23,9 @@ from graphite_conversation_node import ConversationNode
 from graphite_html_view import HtmlViewNode
 from graphite_nodes.graphite_node_code import CodeNode
 from graphite_plugins.graphite_plugin_artifact import ArtifactNode
-from graphite_plugins.graphite_plugin_code_review import CodeReviewConnectionItem, CodeReviewNode
 from graphite_plugins.graphite_plugin_code_sandbox import CodeSandboxConnectionItem, CodeSandboxNode
 from graphite_plugins.graphite_plugin_gitlink import GitlinkConnectionItem, GitlinkNode
 from graphite_plugins.graphite_plugin_portal import PluginPortal
-from graphite_plugins.graphite_plugin_quality_gate import QualityGateConnectionItem, QualityGateNode
-from graphite_plugins.graphite_plugin_reasoning import ReasoningConnectionItem, ReasoningNode
-from graphite_plugins.graphite_plugin_workflow import WorkflowConnectionItem, WorkflowNode
 from graphite_pycoder import PyCoderNode
 from graphite_web import WebConnectionItem, WebNode
 
@@ -40,13 +35,9 @@ class FakeScene:
         for name in [
             "pycoder_nodes", "pycoder_connections",
             "code_sandbox_nodes", "code_sandbox_connections",
-            "workflow_nodes", "workflow_connections",
-            "quality_gate_nodes", "quality_gate_connections",
-            "code_review_nodes", "code_review_connections",
             "gitlink_nodes", "gitlink_connections",
             "web_nodes", "web_connections",
             "conversation_nodes", "conversation_connections",
-            "reasoning_nodes", "reasoning_connections",
             "html_view_nodes", "html_connections",
         ]:
             setattr(self, name, [])
@@ -75,15 +66,9 @@ def _make_portal(current_node):
 
 # (factory_method, node_cls, connection_cls, scene_node_attr, scene_connection_attr,
 #  signal_name, handler_name, clones_history)
-#
-# Reasoning is deliberately NOT in this list (see TestReasoningExtraSignal below): it
-# now needs two signals wired (reasoning_requested and stop_requested), which doesn't
-# fit this tuple's one-signal-per-case shape - same reasoning as Workflow/Quality Gate's
-# multi-signal cases living in their own dedicated test class instead.
 STANDARD_CASES = [
     ("_create_pycoder_node", PyCoderNode, PyCoderConnectionItem, "pycoder_nodes", "pycoder_connections", None, None, False),
     ("_create_code_sandbox_node", CodeSandboxNode, CodeSandboxConnectionItem, "code_sandbox_nodes", "code_sandbox_connections", "sandbox_requested", "execute_code_sandbox_node", True),
-    ("_create_code_review_node", CodeReviewNode, CodeReviewConnectionItem, "code_review_nodes", "code_review_connections", "review_requested", "execute_code_review_node", True),
     ("_create_gitlink_node", GitlinkNode, GitlinkConnectionItem, "gitlink_nodes", "gitlink_connections", "gitlink_requested", "execute_gitlink_node", True),
     ("_create_web_node", WebNode, WebConnectionItem, "web_nodes", "web_connections", "run_clicked", "execute_web_node", False),
 ]
@@ -158,17 +143,7 @@ def test_standard_factory_returns_none_with_no_selection(
     main_window.notification_banner.show_message.assert_called_once()
 
 
-class TestCodeReviewAndGitlinkSettingsManager:
-    def test_code_review_node_receives_main_window_settings_manager(self):
-        parent = ArtifactNode(parent_node=None)
-        portal, main_window, scene = _make_portal(parent)
-        fake_settings = FakeSettingsManager()
-        main_window.settings_manager = fake_settings
-
-        result = portal._create_code_review_node()
-
-        assert result.settings_manager is fake_settings
-
+class TestGitlinkSettingsManager:
     def test_gitlink_node_receives_main_window_settings_manager(self):
         parent = ArtifactNode(parent_node=None)
         portal, main_window, scene = _make_portal(parent)
@@ -190,91 +165,6 @@ class TestResolveBranchParentThroughCodeNode:
 
         assert result in real_parent.children
         assert result not in getattr(code_node, "children", [])
-
-
-class TestReasoningExtraSignal:
-    """Reasoning gained a stop_requested signal (see doc/PLUGIN_SYSTEM_REFACTOR_PLAN.md
-    section 4.10 - the same real-cancellation fix Artifact/Workflow/Quality Gate
-    already got), so it needs both signals verified rather than fitting the
-    single-signal STANDARD_CASES shape above.
-    """
-
-    def test_builds_node_and_connection(self):
-        parent = ArtifactNode(parent_node=None)
-        portal, main_window, scene = _make_portal(parent)
-
-        result = portal._create_reasoning_node()
-
-        assert isinstance(result, ReasoningNode)
-        assert result in parent.children
-        assert result in scene.reasoning_nodes
-        assert isinstance(result.incoming_connection, ReasoningConnectionItem)
-        assert result.incoming_connection in scene.reasoning_connections
-        assert result.pos() == QPointF(10, 20)
-
-    def test_wires_both_signals(self):
-        parent = ArtifactNode(parent_node=None)
-        portal, main_window, scene = _make_portal(parent)
-
-        result = portal._create_reasoning_node()
-
-        result.reasoning_requested.emit(result)
-        main_window.execute_reasoning_node.assert_called_once_with(result)
-        result.stop_requested.emit(result)
-        main_window.stop_reasoning_node.assert_called_once_with(result)
-
-    def test_returns_none_with_no_selection(self):
-        portal, main_window, scene = _make_portal(current_node=None)
-
-        result = portal._create_reasoning_node()
-
-        assert result is None
-        assert scene.reasoning_nodes == []
-        main_window.notification_banner.show_message.assert_called_once()
-
-
-class TestWorkflowAndQualityGateExtraSignals:
-    def test_workflow_node_wires_both_signals(self):
-        parent = ArtifactNode(parent_node=None)
-        portal, main_window, scene = _make_portal(parent)
-
-        result = portal._create_workflow_node()
-
-        result.workflow_requested.emit(result)
-        main_window.execute_workflow_node.assert_called_once_with(result)
-        result.plugin_requested.emit(result, "Some Plugin", "prompt")
-        main_window.instantiate_seeded_plugin.assert_called_once_with(result, "Some Plugin", "prompt")
-
-    def test_workflow_node_clones_parent_history(self):
-        parent = ArtifactNode(parent_node=None)
-        parent.conversation_history = [{"role": "user", "content": "hi"}]
-        portal, main_window, scene = _make_portal(parent)
-
-        result = portal._create_workflow_node()
-
-        assert result.conversation_history == [{"role": "user", "content": "hi"}]
-
-    def test_quality_gate_node_wires_all_three_signals(self):
-        parent = ArtifactNode(parent_node=None)
-        portal, main_window, scene = _make_portal(parent)
-
-        result = portal._create_quality_gate_node()
-
-        result.review_requested.emit(result)
-        main_window.execute_quality_gate_node.assert_called_once_with(result)
-        result.plugin_requested.emit(result, "Some Plugin", "prompt")
-        main_window.instantiate_seeded_plugin.assert_called_once_with(result, "Some Plugin", "prompt")
-        result.note_requested.emit(result)
-        main_window.create_quality_gate_note.assert_called_once_with(result)
-
-    def test_quality_gate_node_clones_parent_history(self):
-        parent = ArtifactNode(parent_node=None)
-        parent.conversation_history = [{"role": "user", "content": "hi"}]
-        portal, main_window, scene = _make_portal(parent)
-
-        result = portal._create_quality_gate_node()
-
-        assert result.conversation_history == [{"role": "user", "content": "hi"}]
 
 
 class TestConversationNodeHistoryHandling:
