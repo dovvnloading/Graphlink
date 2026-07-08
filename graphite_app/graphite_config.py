@@ -152,11 +152,24 @@ def set_current_model(model_name: str):
     if model_name:
         CURRENT_MODEL = model_name
         OLLAMA_MODELS[TASK_CHAT] = model_name
-        # Graphlink-Web's validate/summarize calls (api_provider.chat with
-        # TASK_WEB_VALIDATE/TASK_WEB_SUMMARIZE) have no settings UI of their own in
-        # Ollama (Local) mode and no fallback logic like TitleGenerator's - they read
-        # config.OLLAMA_MODELS.get(task) directly. Without this, they stayed pinned to
-        # the 'qwen3:8b' hardcoded default forever, failing for anyone who switched to
-        # a different chat model and doesn't have qwen3:8b pulled.
-        OLLAMA_MODELS[TASK_WEB_VALIDATE] = model_name
-        OLLAMA_MODELS[TASK_WEB_SUMMARIZE] = model_name
+
+
+def sync_ollama_task_models(settings_manager):
+    """Populate the per-task Ollama model table from the user's own persisted settings.
+
+    api_provider.chat() resolves the Ollama model for a task with a plain
+    OLLAMA_MODELS.get(task) lookup - it has no per-call fallback logic. TASK_CHART,
+    TASK_WEB_VALIDATE, and TASK_WEB_SUMMARIZE each have their own independent settings
+    field now (see OllamaSettingsWidget), each with its own sensible get_ollama_*_model
+    fallback (chart falls back to a code-specialized default, web validate/summarize
+    fall back to the chat model) - so this has to read through the settings manager
+    rather than just copying whatever the chat model happens to be, the way
+    set_current_model() does for TASK_CHAT alone.
+
+    Call this once at startup (after set_current_model) and again whenever
+    OllamaSettingsWidget.save_settings() persists a change, so the new selection takes
+    effect in the current session without a restart.
+    """
+    OLLAMA_MODELS[TASK_CHART] = settings_manager.get_ollama_chart_model()
+    OLLAMA_MODELS[TASK_WEB_VALIDATE] = settings_manager.get_ollama_web_validate_model()
+    OLLAMA_MODELS[TASK_WEB_SUMMARIZE] = settings_manager.get_ollama_web_summarize_model()

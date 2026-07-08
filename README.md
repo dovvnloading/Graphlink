@@ -168,18 +168,18 @@ The welcome screen provides recent projects, starter prompts, and a quick path i
 ### Model and Provider Setup
 
 **Ollama (Local)**
-Local mode is the default path. The app ships with Ollama task defaults in `graphite_app/graphite_config.py`.
-Current defaults include:
-- Chat/title/web tasks: `qwen3:8b`
-- Chart/code-capable task: `deepseek-coder:6.7b`
+Local mode is the default path. Every per-task model is independently configurable in Settings and persists across launches - nothing is permanently hardcoded. The out-of-the-box defaults (used until you save your own) are:
+- Chat and Chat Naming: `qwen3:8b`
+- Chart Generation: `deepseek-coder:6.7b`
+- Web Content Validation and Summarization: whatever you've set as your chat model
 
-Recommended local setup:
+Recommended local setup for the defaults:
 ```powershell
 ollama serve
 ollama pull qwen3:8b
 ollama pull deepseek-coder:6.7b
 ```
-Then start Graphlink and keep the mode set to **Ollama (Local)**.
+Then start Graphlink and keep the mode set to **Ollama (Local)**. If you'd rather use different models, pull those instead and set them per-task in Settings > Ollama - you don't need `qwen3:8b`/`deepseek-coder:6.7b` specifically.
 
 **Llama.cpp (Local)**
 This mode uses **direct GGUF loading** through `llama-cpp-python` instead of a local model server.

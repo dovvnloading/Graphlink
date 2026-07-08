@@ -332,6 +332,9 @@ class OllamaSettingsWidget(QWidget):
 
         saved_model = self.settings_manager.get_ollama_chat_model()
         saved_title_model = self.settings_manager.get_ollama_title_model()
+        saved_chart_model = self.settings_manager.get_ollama_chart_model()
+        saved_web_validate_model = self.settings_manager.get_ollama_web_validate_model()
+        saved_web_summarize_model = self.settings_manager.get_ollama_web_summarize_model()
         self.models = self._build_model_cache()
 
         self.current_model_label = QLabel(f"<b>{saved_model}</b>")
@@ -368,7 +371,25 @@ class OllamaSettingsWidget(QWidget):
         self.title_model_combo.addItems([""] + self.models)
         self.title_model_combo.setCurrentText(saved_title_model)
         form_layout.addRow("Chat Naming Model:", self.title_model_combo)
-        
+
+        self.chart_model_combo = SettingsComboBox()
+        self.chart_model_combo.setEditable(True)
+        self.chart_model_combo.addItems([""] + self.models)
+        self.chart_model_combo.setCurrentText(saved_chart_model)
+        form_layout.addRow("Chart Generation Model:", self.chart_model_combo)
+
+        self.web_validate_model_combo = SettingsComboBox()
+        self.web_validate_model_combo.setEditable(True)
+        self.web_validate_model_combo.addItems([""] + self.models)
+        self.web_validate_model_combo.setCurrentText(saved_web_validate_model)
+        form_layout.addRow("Web Content Validation Model:", self.web_validate_model_combo)
+
+        self.web_summarize_model_combo = SettingsComboBox()
+        self.web_summarize_model_combo.setEditable(True)
+        self.web_summarize_model_combo.addItems([""] + self.models)
+        self.web_summarize_model_combo.setCurrentText(saved_web_summarize_model)
+        form_layout.addRow("Web Content Summarization Model:", self.web_summarize_model_combo)
+
         layout.addLayout(form_layout)
 
         self.model_input.setText(saved_model)
@@ -377,6 +398,15 @@ class OllamaSettingsWidget(QWidget):
         naming_help.setWordWrap(True)
         naming_help.setStyleSheet("color: #9fa6ad; margin-top: 2px;")
         layout.addWidget(naming_help)
+
+        task_models_help = QLabel(
+            "Chart Generation starts with a code-capable default (deepseek-coder:6.7b). "
+            "Web Content Validation and Summarization (used by Graphlink-Web) start with the active chat model. "
+            "All three can be overridden independently and are never silently changed when you switch chat models."
+        )
+        task_models_help.setWordWrap(True)
+        task_models_help.setStyleSheet("color: #9fa6ad; margin-top: 2px;")
+        layout.addWidget(task_models_help)
 
         scan_help = QLabel("System scan checks the local Ollama install/cache locations and stores the discovered list until you rescan. Folder scan lets you point directly at a custom models folder.")
         scan_help.setWordWrap(True)
@@ -479,6 +509,9 @@ class OllamaSettingsWidget(QWidget):
     def _refresh_model_combos(self):
         current_model_text = self.model_input.text().strip()
         current_title_text = self.title_model_combo.currentText().strip()
+        current_chart_text = self.chart_model_combo.currentText().strip()
+        current_web_validate_text = self.web_validate_model_combo.currentText().strip()
+        current_web_summarize_text = self.web_summarize_model_combo.currentText().strip()
 
         self.model_combo.blockSignals(True)
         self.model_combo.clear()
@@ -489,11 +522,17 @@ class OllamaSettingsWidget(QWidget):
             self.model_combo.setCurrentIndex(0)
         self.model_combo.blockSignals(False)
 
-        self.title_model_combo.blockSignals(True)
-        self.title_model_combo.clear()
-        self.title_model_combo.addItems([""] + self.models)
-        self.title_model_combo.setCurrentText(current_title_text)
-        self.title_model_combo.blockSignals(False)
+        for combo, current_text in (
+            (self.title_model_combo, current_title_text),
+            (self.chart_model_combo, current_chart_text),
+            (self.web_validate_model_combo, current_web_validate_text),
+            (self.web_summarize_model_combo, current_web_summarize_text),
+        ):
+            combo.blockSignals(True)
+            combo.clear()
+            combo.addItems([""] + self.models)
+            combo.setCurrentText(current_text)
+            combo.blockSignals(False)
 
         self.scan_summary_label.setText(self._get_scan_summary_text())
 
@@ -570,11 +609,18 @@ class OllamaSettingsWidget(QWidget):
         
         reasoning_mode = "Thinking" if self.thinking_radio.isChecked() else "Quick"
         title_model_name = self.title_model_combo.currentText().strip() or model_name
-        
+        chart_model_name = self.chart_model_combo.currentText().strip() or self.settings_manager.get_ollama_chart_model()
+        web_validate_model_name = self.web_validate_model_combo.currentText().strip() or model_name
+        web_summarize_model_name = self.web_summarize_model_combo.currentText().strip() or model_name
+
         self.settings_manager.set_ollama_chat_model(model_name)
         self.settings_manager.set_ollama_title_model(title_model_name)
+        self.settings_manager.set_ollama_chart_model(chart_model_name)
+        self.settings_manager.set_ollama_web_validate_model(web_validate_model_name)
+        self.settings_manager.set_ollama_web_summarize_model(web_summarize_model_name)
         self.settings_manager.set_ollama_reasoning_mode(reasoning_mode)
         set_current_model(model_name)
+        config.sync_ollama_task_models(self.settings_manager)
 
         main_window = self.window().parent()
         if main_window and hasattr(main_window, 'reinitialize_agent'):

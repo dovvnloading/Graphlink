@@ -4,7 +4,7 @@ from PySide6.QtWidgets import QApplication
 from graphite_window import ChatWindow
 from graphite_widgets import SplashScreen
 import graphite_licensing
-from graphite_config import apply_theme, set_current_model
+from graphite_config import apply_theme, set_current_model, sync_ollama_task_models
 
 def main():
     app = QApplication(sys.argv)
@@ -18,6 +18,7 @@ def main():
 
     saved_model = settings_manager.get_ollama_chat_model()
     set_current_model(saved_model)
+    sync_ollama_task_models(settings_manager)
 
     # Initialize windows without license checks
     main_chat_window = ChatWindow(settings_manager)

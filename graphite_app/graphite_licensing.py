@@ -36,6 +36,12 @@ class SettingsManager:
                     state['ollama_chat_model'] = 'qwen3:8b'
                 if 'ollama_title_model' not in state:
                     state['ollama_title_model'] = ''
+                if 'ollama_chart_model' not in state:
+                    state['ollama_chart_model'] = ''
+                if 'ollama_web_validate_model' not in state:
+                    state['ollama_web_validate_model'] = ''
+                if 'ollama_web_summarize_model' not in state:
+                    state['ollama_web_summarize_model'] = ''
                 if 'ollama_reasoning_mode' not in state:
                     state['ollama_reasoning_mode'] = 'Thinking'
                 if 'ollama_scanned_models' not in state:
@@ -113,6 +119,9 @@ class SettingsManager:
             "show_token_counter": True,
             "ollama_chat_model": "qwen3:8b",
             "ollama_title_model": "",
+            "ollama_chart_model": "",
+            "ollama_web_validate_model": "",
+            "ollama_web_summarize_model": "",
             "ollama_reasoning_mode": "Thinking",
             "ollama_scanned_models": [],
             "ollama_model_scan_mode": "",
@@ -250,6 +259,39 @@ class SettingsManager:
 
     def set_ollama_title_model(self, model_name: str):
         self.state["ollama_title_model"] = str(model_name or "").strip()
+        self._save_state()
+
+    def get_ollama_chart_model(self):
+        # Chart generation defaults to a code-specialized model, not the chat model -
+        # deepseek-coder:6.7b is a deliberately different default from qwen3:8b, not an
+        # unwired copy of it. Still fully overridable via OllamaSettingsWidget.
+        chart_model = str(self.state.get("ollama_chart_model", "")).strip()
+        if chart_model:
+            return chart_model
+        return "deepseek-coder:6.7b"
+
+    def set_ollama_chart_model(self, model_name: str):
+        self.state["ollama_chart_model"] = str(model_name or "").strip()
+        self._save_state()
+
+    def get_ollama_web_validate_model(self):
+        web_model = str(self.state.get("ollama_web_validate_model", "")).strip()
+        if web_model:
+            return web_model
+        return self.get_ollama_chat_model()
+
+    def set_ollama_web_validate_model(self, model_name: str):
+        self.state["ollama_web_validate_model"] = str(model_name or "").strip()
+        self._save_state()
+
+    def get_ollama_web_summarize_model(self):
+        web_model = str(self.state.get("ollama_web_summarize_model", "")).strip()
+        if web_model:
+            return web_model
+        return self.get_ollama_chat_model()
+
+    def set_ollama_web_summarize_model(self, model_name: str):
+        self.state["ollama_web_summarize_model"] = str(model_name or "").strip()
         self._save_state()
 
     def get_ollama_reasoning_mode(self):
