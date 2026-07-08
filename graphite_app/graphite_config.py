@@ -152,3 +152,11 @@ def set_current_model(model_name: str):
     if model_name:
         CURRENT_MODEL = model_name
         OLLAMA_MODELS[TASK_CHAT] = model_name
+        # Graphlink-Web's validate/summarize calls (api_provider.chat with
+        # TASK_WEB_VALIDATE/TASK_WEB_SUMMARIZE) have no settings UI of their own in
+        # Ollama (Local) mode and no fallback logic like TitleGenerator's - they read
+        # config.OLLAMA_MODELS.get(task) directly. Without this, they stayed pinned to
+        # the 'qwen3:8b' hardcoded default forever, failing for anyone who switched to
+        # a different chat model and doesn't have qwen3:8b pulled.
+        OLLAMA_MODELS[TASK_WEB_VALIDATE] = model_name
+        OLLAMA_MODELS[TASK_WEB_SUMMARIZE] = model_name
