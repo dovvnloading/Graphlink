@@ -29,7 +29,7 @@ If you prefer Visual Studio, open `graphite_app.sln`.
   - `graphite_app/graphite_nodes/`
   - `graphite_app/graphite_canvas/`
   - `graphite_app/graphite_ui_dialogs/`
-- Treat top-level wrapper modules such as `graphite_plugin_code_review.py` as compatibility facades unless the change is specifically about import stability.
+- Treat top-level wrapper modules such as `graphite_plugin_gitlink.py` as compatibility facades unless the change is specifically about import stability.
 - Keep changes focused. UI cleanup, plugin behavior, persistence updates, and provider changes should be easy to review independently.
 
 ## Pull Request Expectations
@@ -42,19 +42,22 @@ Please include:
 - Screenshots or short recordings for visible UI changes.
 - Manual verification steps.
 
-## Manual Validation Checklist
+## Validation
 
-There is not yet a broad automated test suite, so please do at least the following when relevant:
+Run the `pytest` suite from the inner `graphite_app/` directory, and a compile smoke check:
+
+```powershell
+cd graphite_app
+pytest
+python -m compileall -q .
+```
+
+The automated coverage is headless (plugin registration, scene/session serialization, path-safety and JSON helpers, and Qt node behavior), so please also validate the app manually when relevant:
 
 1. Launch the app successfully.
 2. Create or load a chat session.
 3. Exercise the area you changed.
 4. Verify the app still saves and reloads without obvious breakage.
-5. Run a Python compile smoke check:
-
-```powershell
-python -m compileall -q graphite_app
-```
 
 ## Good First Areas
 
