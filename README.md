@@ -201,7 +201,10 @@ Llama.cpp compatibility notes in Graphlink:
 - Ollama manifest/blob storage is not valid as a llama.cpp GGUF path.
 
 **API Endpoint Mode**
-The app supports **OpenAI-Compatible**, **Anthropic Claude**, and **Google Gemini** endpoints. Image generation is currently OpenAI-Compatible only; Anthropic Claude does not support it in Graphlink yet.
+The app supports **OpenAI-Compatible**, **Anthropic Claude**, and **Google Gemini** endpoints.
+- Image generation is currently OpenAI-Compatible only; Anthropic Claude does not support it in Graphlink yet.
+- Anthropic Claude accepts image attachments but not audio attachments (switch to Gemini or Ollama for audio).
+
 The API settings UI supports per-task model selection for:
 - title generation
 - main chat / explain / takeaway

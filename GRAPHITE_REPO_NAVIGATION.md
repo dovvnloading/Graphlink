@@ -4,7 +4,7 @@ Living navigation document for the Graphite / Graphlink codebase.
 
 Primary goal: give future work a reliable, current map of where behavior actually lives so we do not need to re-discover the repo from scratch every session.
 
-Last refreshed: 2026-04-07
+Last refreshed: 2026-07-08
 
 ## Repo Snapshot
 
@@ -13,15 +13,16 @@ Last refreshed: 2026-04-07
 - Code root: `graphite_app/`
 - Startup project: `graphite_app/graphite_app.pyproj`
 - Solution file: `graphite_app.sln`
-- Python files under `graphite_app/` excluding `__pycache__`: `107`
-- Top-level Python modules under `graphite_app/`: `55`
+- Python files under `graphite_app/` excluding `__pycache__`: `114` (`42` top-level, `72` inside package/test directories)
+- Top-level Python modules directly in `graphite_app/` (not in any subdirectory): `42`
 - Real package directories with `__init__.py`: `6`
   - `graphite_canvas/` (`8` Python files)
   - `graphite_nodes/` (`11` Python files)
-  - `graphite_plugins/` (`10` Python files)
+  - `graphite_plugins/` (`13` Python files, including the `common/` and `gitlink/` sub-packages)
   - `graphite_session/` (`9` Python files)
   - `graphite_ui_dialogs/` (`4` Python files)
   - `graphite_widgets/` (`10` Python files)
+- `tests/` (not a package - no `__init__.py`): `17` Python files
 - Runtime modes exposed in the shell:
   - `Ollama (Local)`
   - `Llama.cpp (Local)`
@@ -78,6 +79,7 @@ That path shows boot, shell ownership, provider/mode initialization, live settin
   - Ollama local runtime
   - direct `llama-cpp-python` GGUF runtime
   - OpenAI-compatible endpoints
+  - Anthropic Claude endpoints
   - Gemini endpoints
 
 ### 4. `Llama.cpp (Local)` is direct GGUF execution, not Ollama reuse
@@ -104,7 +106,8 @@ That path shows boot, shell ownership, provider/mode initialization, live settin
 - `graphite_nodes/graphite_node_document.py` is now the live UI for both document and audio attachment nodes.
 - Graphlink-level limitation:
   - `Llama.cpp` local mode is text-only inside the app right now
-  - Ollama and Gemini are the multimodal paths for audio or image-backed requests
+  - Ollama and Gemini support both audio and image attachments
+  - Anthropic Claude supports image attachments but explicitly rejects audio attachments (`_anthropic_content_block_from_part` raises, telling the user to switch to Gemini or Ollama)
 
 ### 6. `ChatScene`, `ChatSessionManager`, and `graphite_session/scene_index.py` now form the schema triangle
 
@@ -196,7 +199,7 @@ That path shows boot, shell ownership, provider/mode initialization, live settin
 ### Providers, prompts, settings, updates, and themes
 
 - `graphite_app/api_provider.py`
-  - Provider/runtime abstraction for Ollama, direct Llama.cpp, OpenAI-compatible APIs, and Gemini.
+  - Provider/runtime abstraction for Ollama, direct Llama.cpp, OpenAI-compatible APIs, Anthropic Claude, and Gemini.
   - Also owns local model scanning:
     - Ollama manifest scanning
     - GGUF scanning for `Llama.cpp`
@@ -257,8 +260,6 @@ That path shows boot, shell ownership, provider/mode initialization, live settin
   - Virtualenv sandbox, generation/repair agents, isolated execution worker.
 - `graphite_app/graphite_agents_web.py`
   - Search/fetch/validate/summarize worker for the web node.
-- `graphite_app/graphite_agents_reasoning.py`
-  - Multi-step reasoning workflow and worker thread.
 
 ## Concrete Node and Connection Taxonomy
 
@@ -273,14 +274,14 @@ That path shows boot, shell ownership, provider/mode initialization, live settin
 - `code_sandbox`
 - `web`
 - `conversation`
-- `reasoning`
 - `html`
 - `artifact`
-- `workflow`
-- `graph_diff`
-- `quality_gate`
-- `code_review`
 - `gitlink`
+
+`reasoning`, `workflow`, `graph_diff`, `quality_gate`, and `code_review` node types no
+longer exist - their plugins were removed. The deserializer still initializes `node =
+None` and only matches known types, so an old saved session containing one of these is
+skipped gracefully rather than crashing.
 
 ### Important current node-shape detail
 
@@ -313,14 +314,9 @@ That path shows boot, shell ownership, provider/mode initialization, live settin
 - `code_sandbox_connections`
 - `web_connections`
 - `conversation_connections`
-- `reasoning_connections`
 - `group_summary_connections`
 - `html_connections`
 - `artifact_connections`
-- `workflow_connections`
-- `graph_diff_connections`
-- `quality_gate_connections`
-- `code_review_connections`
 - `gitlink_connections`
 
 ## Core Runtime Flows
@@ -462,7 +458,7 @@ This is the practical lookup map for where code actually lives today.
 ### Top-level concrete modules that changed or matter most
 
 - `api_provider.py`
-  - Provider abstraction for Ollama, direct `Llama.cpp`, OpenAI-compatible chat/image APIs, and Gemini.
+  - Provider abstraction for Ollama, direct `Llama.cpp`, OpenAI-compatible chat/image APIs, Anthropic Claude, and Gemini.
   - Key responsibilities:
     - local/runtime initialization
     - GGUF scanning
@@ -539,6 +535,12 @@ This is the practical lookup map for where code actually lives today.
   - Composer surface and attachment pills
 - `tokens.py`
   - Token estimator and token counter widget
+- `controls.py`
+  - `FontControl`, `GridControl`
+- `scrolling.py`
+  - `CustomScrollBar`, `CustomScrollArea`, `ScrollHandle`, `ScrollBar`
+- `tooltips.py`
+  - `CustomTooltip`
 
 ## Where To Edit When...
 
@@ -599,7 +601,6 @@ This is the practical lookup map for where code actually lives today.
   - `graphite_app/graphite_pycoder.py`
   - `graphite_app/graphite_web.py`
   - `graphite_app/graphite_conversation_node.py`
-  - `graphite_app/graphite_reasoning.py`
   - `graphite_app/graphite_html_view.py`
 - Then update:
   - `graphite_app/graphite_scene.py`
