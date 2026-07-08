@@ -5,7 +5,7 @@
 ![GitHub stars](https://img.shields.io/github/stars/dovvnloading/Graphlink?style=social) 
 ![GitHub forks](https://img.shields.io/github/forks/dovvnloading/Graphlink?style=social) 
 ![License](https://img.shields.io/badge/License-MIT-green) 
-![Python](https://img.shields.io/badge/Python-3.8%2B-blue) 
+![Python](https://img.shields.io/badge/Python-3.10%2B-blue) 
 ![PySide6](https://img.shields.io/badge/PySide6-Qt%20for%20Python-darkgreen) 
 ![Qt](https://img.shields.io/badge/Qt-Framework-41CD52) 
 ![Ollama](https://img.shields.io/badge/Ollama-Local%20Models-black) 
@@ -61,7 +61,7 @@ Core capabilities include:
 ### Highlights
 - **Visual branching workspace**: Build multiple parallel thought paths, experiments, and delivery tracks in one view.
 - **Plugin-driven workflow**: Add specialized nodes such as Gitlink, Py-Coder, Execution Sandbox, and Artifact / Drafter.
-- **Provider flexibility**: Run locally with Ollama or direct GGUF loading through llama.cpp, or switch to API Endpoint mode for OpenAI-compatible providers and Google Gemini.
+- **Provider flexibility**: Run locally with Ollama or direct GGUF loading through llama.cpp, or switch to API Endpoint mode for OpenAI-compatible providers, Anthropic Claude, or Google Gemini.
 - **Repository-aware delivery**: Load a repo into structured context with Gitlink, preview file-level changes, and only write them after explicit approval.
 - **Structured persistence**: Sessions are stored locally in SQLite with notes and navigation pins kept separately for efficient reloads.
 - **Windows-friendly development**: The repository includes a Visual Studio solution and Python project for local editing on Windows.
@@ -137,13 +137,13 @@ py -m venv .venv
 pip install --upgrade pip
 pip install -r requirements.txt
 ```
-*Note: The `requirements.txt` includes libraries such as `PySide6`, `ollama`, `openai`, `google-generativeai`, `requests`, `qtawesome`, `Markdown`, `reportlab`, `python-docx`, `pypdf`, `Pillow`, `tiktoken`, `pygments`, `beautifulsoup4`, `ddgs`, `matplotlib`, and `pyspellchecker`. For **Llama.cpp (Local)** mode, install `llama-cpp-python` separately (`pip install llama-cpp-python`) because it is optional and not bundled in `requirements.txt`.*
+*Note: `requirements.txt` includes `PySide6`, `ollama`, `openai`, `anthropic`, `google-generativeai`, `llama-cpp-python`, `requests`, `qtawesome`, `Markdown`, `reportlab`, `python-docx`, `pypdf`, `Pillow`, `mutagen`, `tiktoken`, `pygments`, `beautifulsoup4`, `ddgs`, `matplotlib`, and `pyspellchecker` - a single install covers Ollama, Llama.cpp (GGUF), and every API Endpoint provider, no separate install step needed.*
 
 **4. Choose a Model Strategy**
 You can run Graphlink in either of these modes:
 - **Ollama (Local)**: Best for local-first usage with Ollama-managed models.
 - **Llama.cpp (Local)**: Best when you want direct GGUF file loading through `llama-cpp-python` with runtime controls.
-- **API Endpoint**: Best when using OpenAI-compatible APIs or Google Gemini.
+- **API Endpoint**: Best when using OpenAI-compatible APIs, Anthropic Claude, or Google Gemini.
 
 **5. Launch the App**
 From the repository root, move into the app directory and run:
@@ -201,7 +201,7 @@ Llama.cpp compatibility notes in Graphlink:
 - Ollama manifest/blob storage is not valid as a llama.cpp GGUF path.
 
 **API Endpoint Mode**
-The app supports **OpenAI-Compatible** and **Google Gemini** endpoints.
+The app supports **OpenAI-Compatible**, **Anthropic Claude**, and **Google Gemini** endpoints. Image generation is currently OpenAI-Compatible only; Anthropic Claude does not support it in Graphlink yet.
 The API settings UI supports per-task model selection for:
 - title generation
 - main chat / explain / takeaway
@@ -210,16 +210,13 @@ The API settings UI supports per-task model selection for:
 - web summarization
 
 ### Common Environment Variables
-Some settings paths and dialogs read these values:
-- `GRAPHITE_API_PROVIDER`
-- `GRAPHITE_API_BASE`
-- `GRAPHITE_OPENAI_API_KEY`
-- `GRAPHITE_GEMINI_API_KEY`
-- `GRAPHITE_API_KEY`
-- `GEMINI_API_KEY`
-- `LLAMA_CPP_MODELS`
+The app reads these as fallbacks when no key is saved in Settings, or for model-discovery paths:
+- `GRAPHITE_ANTHROPIC_API_KEY` / `ANTHROPIC_API_KEY` - Anthropic Claude key
+- `GRAPHITE_GEMINI_API_KEY` / `GEMINI_API_KEY` - Google Gemini key
+- `LLAMA_CPP_MODELS` - root folder scanned for GGUF files in Llama.cpp mode
+- `OLLAMA_MODELS` - override for Ollama's model storage root during local model discovery
 
-In practice, the in-app settings flow is the main configuration surface, but these environment variables are still relevant during development.
+OpenAI-Compatible mode does not currently read an API key from the environment - its key is settings-only. In practice, the in-app settings flow is the main configuration surface; these environment variables mostly matter during development.
 
 ### GitHub Integration
 GitHub-backed features are used by **Gitlink**.
@@ -258,7 +255,7 @@ The file handling layer supports reading: `.txt`, `.md`, `.py`, `.json`, `.html`
 - **Language**: Python
 - **Desktop UI**: PySide6 / Qt
 - **Local model runtimes**: Ollama, llama.cpp via `llama-cpp-python`
-- **API providers**: OpenAI-compatible endpoints, Google Gemini
+- **API providers**: OpenAI-compatible endpoints, Anthropic Claude, Google Gemini
 - **HTTP / integrations**: `requests`
 - **Export / file support**: Markdown, ReportLab, `python-docx`, `pypdf`, Pillow
 - **Persistence**: SQLite + JSON payload serialization
@@ -302,7 +299,9 @@ At a high level, Graphlink works like this:
 ### Repository Layout
 ```text
 .
+|-- .github/
 |-- assets/
+|-- doc/
 |-- graphite_app.sln
 |-- requirements.txt
 |-- graphite_app/
@@ -318,7 +317,8 @@ At a high level, Graphlink works like this:
 |   |-- graphite_nodes/
 |   |-- graphite_canvas/
 |   |-- graphite_plugins/
-|   `-- graphite_ui_dialogs/
+|   |-- graphite_ui_dialogs/
+|   `-- tests/
 `-- GRAPHITE_REPO_NAVIGATION.md
 ```
 
@@ -346,8 +346,12 @@ If you are making code changes, prefer editing the concrete implementation modul
 ### Visual Studio Support
 The repository includes `graphite_app.sln` and `graphite_app/graphite_app.pyproj`. This makes the project easy to work with on Windows, but you can also use a standard Python virtual environment and run from the terminal.
 
-### No Formal Test Suite Yet
-This repository currently does not ship with a full automated test suite. The included GitHub Actions workflow performs a Python compile smoke check to catch syntax and merge-level breakage early.
+### Test Suite
+`graphite_app/tests/` has a `pytest` suite (148 tests as of this writing) covering plugin registration, scene/session serialization, path-safety and JSON-parsing helpers, and Qt node behavior headlessly. Run it from `graphite_app/`:
+```powershell
+pytest
+```
+The included GitHub Actions workflow additionally performs a Python compile smoke check to catch syntax and merge-level breakage early.
 
 ### GitHub Files Included
 This repository now includes GitHub-facing project files for a cleaner public share:
@@ -401,7 +405,7 @@ This repository now includes GitHub-facing project files for a cleaner public sh
 - The app is Windows-first today, even though much of the Python code is portable.
 - Some settings flows still mix environment-based and persisted configuration behavior.
 - Secrets are stored locally in a plain application state file.
-- A broader automated test suite is still needed.
+- Test coverage is headless (Qt widgets, JSON/path-safety helpers, serialization) rather than end-to-end UI coverage.
 
 ---
 

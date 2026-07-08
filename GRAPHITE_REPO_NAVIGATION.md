@@ -412,14 +412,7 @@ This is the live registration order in `graphite_plugins/graphite_plugin_portal.
 
 ### Reasoning & Research
 
-- `Graphlink-Reasoning`
 - `Graphlink-Web`
-
-### Validation & Delivery
-
-- `Branch Lens`
-- `Quality Gate`
-- `Code Review Agent`
 
 ### Build & Execution
 
@@ -430,8 +423,12 @@ This is the live registration order in `graphite_plugins/graphite_plugin_portal.
 
 ### Workflow & Drafting
 
-- `Workflow Architect`
 - `Artifact / Drafter`
+
+Reasoning, Workflow Architect, Quality Gate, Code Review Agent, and Branch Lens
+(GraphDiff) were removed - see the "Remove the 5 advisor plugins" commit. The
+"Validation & Delivery" category had no members left after that removal and is gone
+from `PLUGIN_CATEGORY_META` entirely.
 
 ## Compatibility Wrapper Map
 
@@ -453,18 +450,6 @@ These top-level files are import-stability shims, not the main implementation.
 - `graphite_app/graphite_library_dialog.py` -> `graphite_app/graphite_ui_dialogs/graphite_library_dialog.py`
 - `graphite_app/graphite_settings_dialogs.py` -> `graphite_app/graphite_ui_dialogs/graphite_settings_dialogs.py`
 - `graphite_app/graphite_system_dialogs.py` -> `graphite_app/graphite_ui_dialogs/graphite_system_dialogs.py`
-
-### Plugin wrappers
-
-- `graphite_app/graphite_plugin_artifact.py` -> `graphite_app/graphite_plugins/graphite_plugin_artifact.py`
-- `graphite_app/graphite_plugin_code_review.py` -> `graphite_app/graphite_plugins/graphite_plugin_code_review.py`
-- `graphite_app/graphite_plugin_code_sandbox.py` -> `graphite_app/graphite_plugins/graphite_plugin_code_sandbox.py`
-- `graphite_app/graphite_plugin_gitlink.py` -> `graphite_app/graphite_plugins/graphite_plugin_gitlink.py`
-- `graphite_app/graphite_plugin_graph_diff.py` -> `graphite_app/graphite_plugins/graphite_plugin_graph_diff.py`
-- `graphite_app/graphite_plugin_picker.py` -> `graphite_app/graphite_plugins/graphite_plugin_picker.py`
-- `graphite_app/graphite_plugin_portal.py` -> `graphite_app/graphite_plugins/graphite_plugin_portal.py`
-- `graphite_app/graphite_plugin_quality_gate.py` -> `graphite_app/graphite_plugins/graphite_plugin_quality_gate.py`
-- `graphite_app/graphite_plugin_workflow.py` -> `graphite_app/graphite_plugins/graphite_plugin_workflow.py`
 
 ### Agent facade
 
@@ -504,8 +489,6 @@ This is the practical lookup map for where code actually lives today.
   - Scene/controller authority.
 - `graphite_memory.py`
   - Branch/history helpers.
-- `graphite_plugin_context_menu.py`
-  - Shared context menu for plugin nodes.
 
 ### `graphite_session/`
 
@@ -633,7 +616,7 @@ This is the practical lookup map for where code actually lives today.
 - Picker UI:
   - `graphite_app/graphite_plugins/graphite_plugin_picker.py`
 - Shared plugin context menu:
-  - `graphite_app/graphite_plugin_context_menu.py`
+  - `graphite_app/graphite_plugins/graphite_plugin_context_menu.py`
 - Concrete plugin logic:
   - `graphite_app/graphite_plugins/graphite_plugin_*.py`
 - Then verify:
