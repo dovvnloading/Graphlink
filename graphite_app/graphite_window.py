@@ -376,6 +376,16 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
             token_y = viewport.height() - token_counter_widget.height() - padding
             token_counter_widget.move(padding, max(padding, token_y))
 
+        # ChatView stacks search_overlay/control_widget/grid_control/font_control/
+        # minimap_widget in its own _update_overlay_positions(), which accounts for
+        # search_overlay's current visibility when placing the rest of that stack.
+        # Without this, toggling search while the Controls panel is already open left
+        # the panel at its old Y (calculated before search became visible) while the
+        # search bar always renders at the top - the two would render on top of each
+        # other until something else (e.g. a resize) happened to recompute the stack.
+        if self.chat_view:
+            self.chat_view._update_overlay_positions()
+
     def _schedule_startup_update_check(self):
         if self._startup_update_check_ran:
             return
