@@ -5,18 +5,15 @@ from graphite_pycoder import PyCoderNode
 from graphite_plugins.graphite_plugin_code_sandbox import CodeSandboxNode
 from graphite_web import WebNode
 from graphite_conversation_node import ConversationNode
-from graphite_plugins.graphite_plugin_reasoning import ReasoningNode
 from graphite_html_view import HtmlViewNode
 from graphite_plugins.graphite_plugin_artifact import ArtifactNode
-from graphite_plugins.graphite_plugin_workflow import WorkflowNode
-from graphite_plugins.graphite_plugin_quality_gate import QualityGateNode
 from graphite_plugins.graphite_plugin_gitlink import GitlinkNode
 from graphite_command_palette import CommandPaletteDialog
 
 class WindowNavigationMixin:
     def _setup_commands(self):
         self.command_manager.register_command("New Chat", ["start new", "clear session"], self.new_chat)
-        self.command_manager.register_command("Create Frame From Selection", ["group nodes", "frame selection"], self.chat_view.scene().createFrame, lambda: any(isinstance(item, (ChatNode, CodeNode, DocumentNode, ImageNode, ThinkingNode, PyCoderNode, CodeSandboxNode, WebNode, ConversationNode, ReasoningNode, HtmlViewNode, ArtifactNode, WorkflowNode, QualityGateNode, GitlinkNode)) for item in self.chat_view.scene().selectedItems()))
+        self.command_manager.register_command("Create Frame From Selection", ["group nodes", "frame selection"], self.chat_view.scene().createFrame, lambda: any(isinstance(item, (ChatNode, CodeNode, DocumentNode, ImageNode, ThinkingNode, PyCoderNode, CodeSandboxNode, WebNode, ConversationNode, HtmlViewNode, ArtifactNode, GitlinkNode)) for item in self.chat_view.scene().selectedItems()))
         self.command_manager.register_command("Create Container From Selection", ["group nodes", "container selection"], self.chat_view.scene().createContainer, lambda: bool(self.chat_view.scene().selectedItems()))
         self.command_manager.register_command("Collapse All Nodes", ["fold all"], self._cmd_collapse_all, lambda: bool(self.chat_view.scene()._all_conversational_nodes()))
         self.command_manager.register_command("Expand All Nodes", ["unfold all"], self._cmd_expand_all, lambda: bool(self.chat_view.scene()._all_conversational_nodes()))
@@ -27,14 +24,11 @@ class WindowNavigationMixin:
         self.command_manager.register_command("Reset View", ["reset zoom", "default view"], self.chat_view.reset_zoom)
         self.command_manager.register_command("Focus on Selection", ["zoom to selection", "center selection"], self._cmd_focus_selection, lambda: bool(self.chat_view.scene().selectedItems()))
         self.command_manager.register_command("Add Note", ["create note", "new note"], self._cmd_add_note_center)
-        self.command_manager.register_command("Add Web Search Node", ["web search", "internet"], self.plugin_portal._create_web_node, lambda: isinstance(self.current_node, (ChatNode, PyCoderNode, CodeSandboxNode, WebNode, ConversationNode, ReasoningNode, WorkflowNode, ArtifactNode, QualityGateNode, GitlinkNode)))
-        self.command_manager.register_command("Add Reasoning Node", ["reasoning", "multi-step"], self.plugin_portal._create_reasoning_node, lambda: isinstance(self.current_node, (ChatNode, PyCoderNode, CodeSandboxNode, WebNode, ConversationNode, ReasoningNode, WorkflowNode, ArtifactNode, QualityGateNode, GitlinkNode)))
-        self.command_manager.register_command("Add HTML Renderer Node", ["render html", "html preview"], self.plugin_portal._create_html_view_node, lambda: isinstance(self.current_node, (ChatNode, CodeNode, PyCoderNode, CodeSandboxNode, WebNode, ConversationNode, ReasoningNode, WorkflowNode, QualityGateNode, GitlinkNode)))
-        self.command_manager.register_command("Add Artifact Drafter Node", ["artifact", "document drafter"], self.plugin_portal._create_artifact_node, lambda: isinstance(self.current_node, (ChatNode, PyCoderNode, CodeSandboxNode, WebNode, ConversationNode, ReasoningNode, WorkflowNode, ArtifactNode, QualityGateNode, GitlinkNode)))
-        self.command_manager.register_command("Add Workflow Architect Node", ["workflow", "orchestrate plugins", "agentic planner"], self.plugin_portal._create_workflow_node, lambda: isinstance(self.current_node, (ChatNode, PyCoderNode, CodeSandboxNode, WebNode, ConversationNode, ReasoningNode, WorkflowNode, ArtifactNode, QualityGateNode, GitlinkNode)))
-        self.command_manager.register_command("Add Quality Gate Node", ["quality gate", "acceptance review", "production readiness", "ship review"], self.plugin_portal._create_quality_gate_node, lambda: isinstance(self.current_node, (ChatNode, PyCoderNode, CodeSandboxNode, WebNode, ConversationNode, ReasoningNode, HtmlViewNode, WorkflowNode, ArtifactNode, QualityGateNode, GitlinkNode)))
-        self.command_manager.register_command("Add Execution Sandbox Node", ["sandbox", "isolated python", "requirements runner"], self.plugin_portal._create_code_sandbox_node, lambda: isinstance(self.current_node, (ChatNode, PyCoderNode, CodeSandboxNode, WebNode, ConversationNode, ReasoningNode, WorkflowNode, ArtifactNode, QualityGateNode, GitlinkNode)))
-        self.command_manager.register_command("Add Gitlink Node", ["gitlink", "repo context", "github repo"], self.plugin_portal._create_gitlink_node, lambda: isinstance(self.current_node, (ChatNode, PyCoderNode, CodeSandboxNode, WebNode, ConversationNode, ReasoningNode, WorkflowNode, ArtifactNode, QualityGateNode, GitlinkNode)))
+        self.command_manager.register_command("Add Web Search Node", ["web search", "internet"], self.plugin_portal._create_web_node, lambda: isinstance(self.current_node, (ChatNode, PyCoderNode, CodeSandboxNode, WebNode, ConversationNode, ArtifactNode, GitlinkNode)))
+        self.command_manager.register_command("Add HTML Renderer Node", ["render html", "html preview"], self.plugin_portal._create_html_view_node, lambda: isinstance(self.current_node, (ChatNode, CodeNode, PyCoderNode, CodeSandboxNode, WebNode, ConversationNode, GitlinkNode)))
+        self.command_manager.register_command("Add Artifact Drafter Node", ["artifact", "document drafter"], self.plugin_portal._create_artifact_node, lambda: isinstance(self.current_node, (ChatNode, PyCoderNode, CodeSandboxNode, WebNode, ConversationNode, ArtifactNode, GitlinkNode)))
+        self.command_manager.register_command("Add Execution Sandbox Node", ["sandbox", "isolated python", "requirements runner"], self.plugin_portal._create_code_sandbox_node, lambda: isinstance(self.current_node, (ChatNode, PyCoderNode, CodeSandboxNode, WebNode, ConversationNode, ArtifactNode, GitlinkNode)))
+        self.command_manager.register_command("Add Gitlink Node", ["gitlink", "repo context", "github repo"], self.plugin_portal._create_gitlink_node, lambda: isinstance(self.current_node, (ChatNode, PyCoderNode, CodeSandboxNode, WebNode, ConversationNode, ArtifactNode, GitlinkNode)))
         self.command_manager.register_command("Generate Key Takeaway", ["takeaway", "summarize node"], lambda: self.generate_takeaway(self._get_single_selected_node()), self._get_single_selected_node)
         self.command_manager.register_command("Generate Explainer Note", ["explain", "simplify node"], lambda: self.generate_explainer(self._get_single_selected_node()), self._get_single_selected_node)
         self.command_manager.register_command("Regenerate Response", ["regen", "new response"], lambda: self.regenerate_node(self._get_single_selected_node()), lambda: self._get_single_selected_node() and not self._get_single_selected_node().is_user)

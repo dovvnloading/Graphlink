@@ -35,8 +35,6 @@ _APP = QApplication.instance() or QApplication([])
 import graphite_window_actions
 from graphite_plugins.graphite_plugin_artifact import ArtifactNode
 from graphite_plugins.graphite_plugin_code_sandbox import CodeSandboxNode
-from graphite_plugins.graphite_plugin_reasoning import ReasoningNode
-from graphite_plugins.graphite_plugin_workflow import WorkflowNode
 from graphite_window_actions import WindowActionsMixin
 
 
@@ -85,7 +83,7 @@ class TestCodeSandboxStopOnlyTouchesItsOwnNode:
         assert not hasattr(main_window, "sandbox_thread")
 
 
-class TestArtifactAndWorkflowStopMethods:
+class TestArtifactStopMethods:
     def test_stop_artifact_node_stops_its_own_thread_and_resets_state(self):
         main_window = _FakeMainWindow()
         node = ArtifactNode(parent_node=None)
@@ -99,52 +97,6 @@ class TestArtifactAndWorkflowStopMethods:
         thread.stop.assert_called_once()
         assert node.worker_thread is None
         assert node.instruction_input.isReadOnly() is False  # set_running_state(False) ran
-
-    def test_stop_workflow_node_stops_its_own_thread_and_resets_state(self):
-        main_window = _FakeMainWindow()
-        node = WorkflowNode(parent_node=None)
-        thread = _fake_worker_thread()
-        node.worker_thread = thread
-        node.set_running_state(True)
-        assert node.run_button.isEnabled() is False  # sanity: "running" disables the button
-
-        main_window.stop_workflow_node(node)
-
-        thread.stop.assert_called_once()
-        assert node.worker_thread is None
-        assert node.run_button.isEnabled() is True  # set_running_state(False) ran
-
-
-class TestReasoningStopMethod:
-    def test_stop_reasoning_node_stops_its_own_thread_and_resets_state(self):
-        main_window = _FakeMainWindow()
-        node = ReasoningNode(parent_node=None)
-        thread = _fake_worker_thread()
-        node.worker_thread = thread
-        node.set_running_state(True)
-        # Sanity check for the actual bug being fixed: unlike Artifact/Workflow, the
-        # button must stay ENABLED while running - Reasoning's run_button used to be
-        # disabled the whole time it showed a "stop" state, making it unclickable.
-        assert node.run_button.isEnabled() is True
-        assert node.run_button.text() == "Stop Reasoning"
-
-        main_window.stop_reasoning_node(node)
-
-        thread.stop.assert_called_once()
-        assert node.worker_thread is None
-        assert node.run_button.text() == "Start Reasoning"  # set_running_state(False) ran
-
-    def test_stopping_one_node_does_not_stop_a_different_concurrent_node(self):
-        main_window = _FakeMainWindow()
-        node_a = ReasoningNode(parent_node=None)
-        node_b = ReasoningNode(parent_node=None)
-        node_a.worker_thread = _fake_worker_thread()
-        node_b.worker_thread = _fake_worker_thread()
-
-        main_window.stop_reasoning_node(node_a)
-
-        assert node_a.worker_thread is None
-        node_b.worker_thread.stop.assert_not_called()
 
 
 class TestNoDeadSharedThreadAttributesRemainInSource:

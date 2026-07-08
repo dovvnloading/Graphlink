@@ -2,13 +2,8 @@ from graphite_conversation_node import ConversationNode
 from graphite_html_view import HtmlViewNode
 from graphite_node import ChatNode, CodeNode, DocumentNode, ImageNode, ThinkingNode
 from graphite_plugins.graphite_plugin_artifact import ArtifactNode
-from graphite_plugins.graphite_plugin_code_review import CodeReviewNode
 from graphite_plugins.graphite_plugin_code_sandbox import CodeSandboxNode
 from graphite_plugins.graphite_plugin_gitlink import GitlinkNode
-from graphite_plugins.graphite_plugin_graph_diff import GraphDiffNode
-from graphite_plugins.graphite_plugin_quality_gate import QualityGateNode
-from graphite_plugins.graphite_plugin_reasoning import ReasoningNode
-from graphite_plugins.graphite_plugin_workflow import WorkflowNode
 from graphite_pycoder import PyCoderNode
 from graphite_web import WebNode
 
@@ -88,22 +83,10 @@ class SceneSerializer:
     def serialize_conversation_connection(self, connection, all_nodes_list):
         return self._serialize_basic_connection(connection, all_nodes_list)
 
-    def serialize_reasoning_connection(self, connection, all_nodes_list):
-        return self._serialize_basic_connection(connection, all_nodes_list)
-
     def serialize_html_connection(self, connection, all_nodes_list):
         return self._serialize_basic_connection(connection, all_nodes_list)
 
     def serialize_artifact_connection(self, connection, all_nodes_list):
-        return self._serialize_basic_connection(connection, all_nodes_list)
-
-    def serialize_workflow_connection(self, connection, all_nodes_list):
-        return self._serialize_basic_connection(connection, all_nodes_list)
-
-    def serialize_quality_gate_connection(self, connection, all_nodes_list):
-        return self._serialize_basic_connection(connection, all_nodes_list)
-
-    def serialize_code_review_connection(self, connection, all_nodes_list):
         return self._serialize_basic_connection(connection, all_nodes_list)
 
     def serialize_gitlink_connection(self, connection, all_nodes_list):
@@ -224,20 +207,6 @@ class SceneSerializer:
                 "parent_node_index": all_nodes_list.index(node.parent_node),
                 "children_indices": [all_nodes_list.index(child) for child in node.children],
             }
-        if isinstance(node, ReasoningNode):
-            return {
-                "node_type": "reasoning",
-                "position": {"x": node.pos().x(), "y": node.pos().y()},
-                "prompt": node.prompt,
-                "thinking_budget": node.thinking_budget,
-                "thought_process": node.thought_process,
-                "status": node.status,
-                "conversation_history": serialize_history(getattr(node, "conversation_history", [])),
-                "include_branch_context": getattr(node, "include_branch_context", True),
-                "is_collapsed": node.is_collapsed,
-                "parent_node_index": all_nodes_list.index(node.parent_node),
-                "children_indices": [all_nodes_list.index(child) for child in node.children],
-            }
         if isinstance(node, HtmlViewNode):
             return {
                 "node_type": "html",
@@ -259,69 +228,6 @@ class SceneSerializer:
                 "local_history": serialize_history(getattr(node, "local_history", [])),
                 "chat_html_cache": node.chat_html_cache,
                 "include_branch_context": getattr(node, "include_branch_context", True),
-                "is_collapsed": node.is_collapsed,
-                "parent_node_index": all_nodes_list.index(node.parent_node),
-                "children_indices": [all_nodes_list.index(child) for child in node.children],
-            }
-        if isinstance(node, WorkflowNode):
-            return {
-                "node_type": "workflow",
-                "position": {"x": node.pos().x(), "y": node.pos().y()},
-                "goal": node.get_goal(),
-                "constraints": node.get_constraints(),
-                "status": node.status,
-                "blueprint_markdown": node.blueprint_markdown,
-                "recommendations": node.recommendations,
-                "conversation_history": serialize_history(getattr(node, "conversation_history", [])),
-                "include_branch_context": getattr(node, "include_branch_context", True),
-                "is_collapsed": node.is_collapsed,
-                "parent_node_index": all_nodes_list.index(node.parent_node),
-                "children_indices": [all_nodes_list.index(child) for child in node.children],
-            }
-        if isinstance(node, GraphDiffNode):
-            return {
-                "node_type": "graph_diff",
-                "position": {"x": node.pos().x(), "y": node.pos().y()},
-                "status": node.status,
-                "comparison_markdown": node.comparison_markdown,
-                "note_summary": node.note_summary,
-                "left_source_index": all_nodes_list.index(node.left_source_node),
-                "right_source_index": all_nodes_list.index(node.right_source_node),
-                "is_collapsed": node.is_collapsed,
-                "children_indices": [],
-            }
-        if isinstance(node, QualityGateNode):
-            return {
-                "node_type": "quality_gate",
-                "position": {"x": node.pos().x(), "y": node.pos().y()},
-                "goal": node.get_goal(),
-                "criteria": node.get_criteria(),
-                "status": node.status,
-                "verdict": node.verdict,
-                "readiness_score": node.readiness_score,
-                "review_markdown": node.review_markdown,
-                "note_summary": node.note_summary,
-                "recommendations": node.recommendations,
-                "conversation_history": serialize_history(getattr(node, "conversation_history", [])),
-                "include_branch_context": getattr(node, "include_branch_context", True),
-                "is_collapsed": node.is_collapsed,
-                "parent_node_index": all_nodes_list.index(node.parent_node),
-                "children_indices": [all_nodes_list.index(child) for child in node.children],
-            }
-        if isinstance(node, CodeReviewNode):
-            return {
-                "node_type": "code_review",
-                "position": {"x": node.pos().x(), "y": node.pos().y()},
-                "review_context": node.get_review_context(),
-                "source_text": node.source_editor.toPlainText(),
-                "source_state": node.source_state,
-                "status": node.status,
-                "verdict": node.verdict,
-                "quality_score": node.quality_score,
-                "risk_level": node.risk_level,
-                "review_markdown": node.review_markdown,
-                "review_data": node.review_data,
-                "conversation_history": serialize_history(getattr(node, "conversation_history", [])),
                 "is_collapsed": node.is_collapsed,
                 "parent_node_index": all_nodes_list.index(node.parent_node),
                 "children_indices": [all_nodes_list.index(child) for child in node.children],
@@ -418,12 +324,8 @@ class SceneSerializer:
             ("code_sandbox_connections", scene.code_sandbox_connections, self.serialize_code_sandbox_connection),
             ("web_connections", scene.web_connections, self.serialize_web_connection),
             ("conversation_connections", scene.conversation_connections, self.serialize_conversation_connection),
-            ("reasoning_connections", scene.reasoning_connections, self.serialize_reasoning_connection),
             ("html_connections", scene.html_connections, self.serialize_html_connection),
             ("artifact_connections", scene.artifact_connections, self.serialize_artifact_connection),
-            ("workflow_connections", scene.workflow_connections, self.serialize_workflow_connection),
-            ("quality_gate_connections", scene.quality_gate_connections, self.serialize_quality_gate_connection),
-            ("code_review_connections", scene.code_review_connections, self.serialize_code_review_connection),
             ("gitlink_connections", scene.gitlink_connections, self.serialize_gitlink_connection),
         )
 

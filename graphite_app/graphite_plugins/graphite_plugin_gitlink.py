@@ -50,7 +50,7 @@ from graphite_plugins.gitlink.agent import (
     _truncate_for_context,
     _xml_file_block,
 )
-from graphite_plugins.graphite_plugin_code_review import CodeReviewPopupComboBox
+from graphite_plugins.common.combo import PopupComboBox
 
 
 GITLINK_SCROLLBAR_STYLE = """
@@ -472,7 +472,7 @@ class GitlinkNode(QGraphicsObject, HoverAnimationMixin):
         self.load_repos_button.clicked.connect(self.load_github_repositories)
         repo_picker_row.addWidget(self.load_repos_button)
 
-        self.repo_combo = CodeReviewPopupComboBox()
+        self.repo_combo = PopupComboBox()
         self.repo_combo.setEditable(False)
         self.repo_combo.setMinimumWidth(220)
         self.repo_combo.apply_popup_style(node_color.name())

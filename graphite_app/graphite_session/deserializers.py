@@ -20,13 +20,8 @@ from graphite_conversation_node import ConversationNode
 from graphite_html_view import HtmlViewNode
 from graphite_node import ChatNode, CodeNode, DocumentNode, ImageNode, ThinkingNode
 from graphite_plugins.graphite_plugin_artifact import ArtifactConnectionItem, ArtifactNode
-from graphite_plugins.graphite_plugin_code_review import CodeReviewConnectionItem, CodeReviewNode
 from graphite_plugins.graphite_plugin_code_sandbox import CodeSandboxConnectionItem, CodeSandboxNode
 from graphite_plugins.graphite_plugin_gitlink import GitlinkConnectionItem, GitlinkNode
-from graphite_plugins.graphite_plugin_graph_diff import GraphDiffConnectionItem, GraphDiffNode
-from graphite_plugins.graphite_plugin_quality_gate import QualityGateConnectionItem, QualityGateNode
-from graphite_plugins.graphite_plugin_reasoning import ReasoningConnectionItem, ReasoningNode
-from graphite_plugins.graphite_plugin_workflow import WorkflowConnectionItem, WorkflowNode
 from graphite_pycoder import PyCoderMode, PyCoderNode
 from graphite_web import WebConnectionItem, WebNode
 
@@ -150,11 +145,6 @@ class SceneDeserializer:
             data, scene, all_nodes_map, ConversationConnectionItem, "conversation_connections"
         )
 
-    def deserialize_reasoning_connection(self, data, scene, all_nodes_map):
-        return self._deserialize_basic_connection(
-            data, scene, all_nodes_map, ReasoningConnectionItem, "reasoning_connections"
-        )
-
     def deserialize_html_connection(self, data, scene, all_nodes_map):
         return self._deserialize_basic_connection(
             data, scene, all_nodes_map, HtmlConnectionItem, "html_connections"
@@ -163,21 +153,6 @@ class SceneDeserializer:
     def deserialize_artifact_connection(self, data, scene, all_nodes_map):
         return self._deserialize_basic_connection(
             data, scene, all_nodes_map, ArtifactConnectionItem, "artifact_connections"
-        )
-
-    def deserialize_workflow_connection(self, data, scene, all_nodes_map):
-        return self._deserialize_basic_connection(
-            data, scene, all_nodes_map, WorkflowConnectionItem, "workflow_connections"
-        )
-
-    def deserialize_quality_gate_connection(self, data, scene, all_nodes_map):
-        return self._deserialize_basic_connection(
-            data, scene, all_nodes_map, QualityGateConnectionItem, "quality_gate_connections"
-        )
-
-    def deserialize_code_review_connection(self, data, scene, all_nodes_map):
-        return self._deserialize_basic_connection(
-            data, scene, all_nodes_map, CodeReviewConnectionItem, "code_review_connections"
         )
 
     def deserialize_gitlink_connection(self, data, scene, all_nodes_map):
@@ -333,24 +308,6 @@ class SceneDeserializer:
                 scene.addItem(node)
                 scene.conversation_nodes.append(node)
 
-        elif node_type == "reasoning":
-            parent_node = all_nodes_map.get(data["parent_node_index"])
-            if parent_node:
-                node = ReasoningNode(parent_node)
-                node.setPos(data["position"]["x"], data["position"]["y"])
-                node.prompt_input.setText(data.get("prompt", ""))
-                node.budget_slider.setValue(data.get("thinking_budget", 3))
-                node.thought_process_display.setMarkdown(data.get("thought_process", ""))
-                node.set_status(data.get("status", "Idle"))
-                node.conversation_history = deserialize_history(data.get("conversation_history", []))
-                node.include_branch_context = data.get("include_branch_context", True)
-                self._connect_if_available(node.reasoning_requested, "execute_reasoning_node")
-                self._connect_if_available(node.stop_requested, "stop_reasoning_node")
-                if data.get("is_collapsed", False):
-                    node.set_collapsed(True)
-                scene.addItem(node)
-                scene.reasoning_nodes.append(node)
-
         elif node_type == "html":
             parent_node = all_nodes_map.get(data["parent_node_index"])
             if parent_node:
@@ -382,140 +339,6 @@ class SceneDeserializer:
                 self._connect_if_available(node.stop_requested, "stop_artifact_node")
                 scene.addItem(node)
                 scene.artifact_nodes.append(node)
-
-        elif node_type == "workflow":
-            parent_node = all_nodes_map.get(data["parent_node_index"])
-            if parent_node:
-                node = WorkflowNode(parent_node)
-                node.setPos(data["position"]["x"], data["position"]["y"])
-                node.goal_input.setPlainText(data.get("goal", ""))
-                node.constraints_input.setPlainText(data.get("constraints", ""))
-                node.conversation_history = deserialize_history(data.get("conversation_history", []))
-                node.include_branch_context = data.get("include_branch_context", True)
-                node.blueprint_markdown = data.get("blueprint_markdown", "")
-                node.recommendations = data.get("recommendations", [])
-                node.status = data.get("status", "Idle")
-                if node.blueprint_markdown or node.recommendations:
-                    node.set_plan(
-                        {
-                            "blueprint_markdown": node.blueprint_markdown,
-                            "recommended_plugins": node.recommendations,
-                        }
-                    )
-                else:
-                    node.set_status(node.status)
-                if data.get("is_collapsed", False):
-                    node.set_collapsed(True)
-                self._connect_if_available(node.workflow_requested, "execute_workflow_node")
-                self._connect_if_available(node.plugin_requested, "instantiate_seeded_plugin")
-                scene.addItem(node)
-                scene.workflow_nodes.append(node)
-
-        elif node_type == "graph_diff":
-            left_source = all_nodes_map.get(data.get("left_source_index"))
-            right_source = all_nodes_map.get(data.get("right_source_index"))
-            if left_source and right_source:
-                node = GraphDiffNode(left_source, right_source)
-                node.setPos(data["position"]["x"], data["position"]["y"])
-                node.comparison_markdown = data.get("comparison_markdown", "")
-                node.note_summary = data.get("note_summary", "")
-                node.status = data.get("status", "Idle")
-                if node.comparison_markdown:
-                    node.set_result(
-                        {
-                            "comparison_markdown": node.comparison_markdown,
-                            "note_summary": node.note_summary,
-                        }
-                    )
-                else:
-                    node.set_status(node.status)
-                if data.get("is_collapsed", False):
-                    node.set_collapsed(True)
-                self._connect_if_available(node.compare_requested, "execute_graph_diff_node")
-                self._connect_if_available(node.note_requested, "create_graph_diff_note")
-                scene.addItem(node)
-                scene.graph_diff_nodes.append(node)
-
-                for source_node in (left_source, right_source):
-                    connection = GraphDiffConnectionItem(source_node, node)
-                    scene.addItem(connection)
-                    scene.graph_diff_connections.append(connection)
-
-        elif node_type == "quality_gate":
-            parent_node = all_nodes_map.get(data["parent_node_index"])
-            if parent_node:
-                node = QualityGateNode(parent_node)
-                node.setPos(data["position"]["x"], data["position"]["y"])
-                node.goal_input.setPlainText(data.get("goal", ""))
-                node.criteria_input.setPlainText(data.get("criteria", ""))
-                node.conversation_history = deserialize_history(data.get("conversation_history", []))
-                node.include_branch_context = data.get("include_branch_context", True)
-                node.review_markdown = data.get("review_markdown", "")
-                node.note_summary = data.get("note_summary", "")
-                node.recommendations = data.get("recommendations", [])
-                node.verdict = data.get("verdict", "pending")
-                node.readiness_score = data.get("readiness_score", 0)
-                node.status = data.get("status", "Idle")
-                if node.review_markdown or node.recommendations:
-                    node.set_review(
-                        {
-                            "verdict": node.verdict,
-                            "readiness_score": node.readiness_score,
-                            "review_markdown": node.review_markdown,
-                            "note_summary": node.note_summary,
-                            "recommended_plugins": node.recommendations,
-                        }
-                    )
-                else:
-                    node.set_status(node.status)
-                if data.get("is_collapsed", False):
-                    node.set_collapsed(True)
-                self._connect_if_available(node.review_requested, "execute_quality_gate_node")
-                self._connect_if_available(node.plugin_requested, "instantiate_seeded_plugin")
-                self._connect_if_available(node.note_requested, "create_quality_gate_note")
-                scene.addItem(node)
-                scene.quality_gate_nodes.append(node)
-
-        elif node_type == "code_review":
-            parent_node = all_nodes_map.get(data["parent_node_index"])
-            if parent_node:
-                node = CodeReviewNode(parent_node, settings_manager=getattr(self.window, "settings_manager", None))
-                node.setPos(data["position"]["x"], data["position"]["y"])
-                node.context_input.setPlainText(data.get("review_context", ""))
-                node._set_source_text(
-                    data.get("source_text", ""),
-                    data.get(
-                        "source_state",
-                        {
-                            "origin": "",
-                            "label": "",
-                            "repo": "",
-                            "branch": "",
-                            "path": "",
-                            "local_path": "",
-                            "edited": False,
-                        },
-                    ),
-                )
-                node.conversation_history = deserialize_history(data.get("conversation_history", []))
-                node.review_markdown = data.get("review_markdown", "")
-                node.review_data = data.get("review_data", {})
-                node.verdict = data.get("verdict", "pending")
-                node.quality_score = data.get("quality_score", 0)
-                node.risk_level = data.get("risk_level", "unknown")
-                node.status = data.get("status", "Idle")
-                if node.review_data:
-                    node.set_review(node.review_data)
-                elif node.review_markdown:
-                    node.overview_display.setMarkdown(node.review_markdown)
-                    node.set_status(node.status)
-                else:
-                    node.set_status(node.status)
-                if data.get("is_collapsed", False):
-                    node.set_collapsed(True)
-                self._connect_if_available(node.review_requested, "execute_code_review_node")
-                scene.addItem(node)
-                scene.code_review_nodes.append(node)
 
         elif node_type == "gitlink":
             parent_node = all_nodes_map.get(data["parent_node_index"])
@@ -740,12 +563,8 @@ class SceneDeserializer:
                 ("code_sandbox_connections", self.deserialize_code_sandbox_connection),
                 ("web_connections", self.deserialize_web_connection),
                 ("conversation_connections", self.deserialize_conversation_connection),
-                ("reasoning_connections", self.deserialize_reasoning_connection),
                 ("html_connections", self.deserialize_html_connection),
                 ("artifact_connections", self.deserialize_artifact_connection),
-                ("workflow_connections", self.deserialize_workflow_connection),
-                ("quality_gate_connections", self.deserialize_quality_gate_connection),
-                ("code_review_connections", self.deserialize_code_review_connection),
                 ("gitlink_connections", self.deserialize_gitlink_connection),
             )
 

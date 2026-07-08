@@ -29,8 +29,8 @@ from graphite_plugins.graphite_plugin_portal import (
 )
 
 
-def test_registry_has_thirteen_entries():
-    assert len(PLUGIN_REGISTRY) == 13
+def test_registry_has_eight_entries():
+    assert len(PLUGIN_REGISTRY) == 8
 
 
 def test_registry_names_match_the_live_portal_registration():
@@ -53,8 +53,8 @@ def test_get_plugin_spec_returns_none_for_unknown_key():
 
 
 def test_get_display_name_for_node_uses_registered_name():
-    spec = get_plugin_spec("code_review")
-    assert get_display_name_for_node(spec.node_cls) == "Code Review Agent"
+    spec = get_plugin_spec("conversation")
+    assert get_display_name_for_node(spec.node_cls) == "Conversation Node"
 
 
 def test_get_display_name_for_node_falls_back_to_class_name():

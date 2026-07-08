@@ -305,17 +305,13 @@ class HelpDialog(QFrame):
             [
                 ("Research and Analysis", [
                     ("Graphlink-Web", "Use this when a branch depends on current information or external sources. The node runs a web retrieval flow, summarizes the findings, and stores source links directly in the result.", "fa5s.globe-americas"),
-                    ("Graphlink-Reasoning", "Best for complex questions that benefit from staged thinking instead of a single direct answer. You can raise the thinking budget when a branch needs a slower, more deliberate analysis path.", "fa5s.brain"),
                     ("Conversation Node", "Creates a self-contained linear chat surface inside the graph. Use it when you want a focused sub-conversation that can be pruned and iterated without expanding the main branch too aggressively.", "fa5s.comments"),
-                    ("Branch Lens", "Compare two selected branch tips to see how their logic, code orientation, and intent differ. You can then turn the comparison into a note for easier project review.", "fa5s.code-branch"),
-                    ("Quality Gate", "Runs a production-readiness review against the current branch, scores how close it is to done, calls out blockers and missing evidence, and can spawn the next best remediation nodes directly from the report.", "fa5s.check-circle"),
                 ]),
                 ("Build, Draft, and Render", [
                     ("System Prompt", "Adds a branch-scoped system prompt note that changes assistant behavior only for that conversation path. This is ideal when you want a role, tone, or instruction change without affecting the rest of the project.", "fa5s.sliders-h"),
                     ("Py-Coder", "A coding workspace with AI-driven and manual modes, generated code, terminal output, and final analysis tabs. Use it for fast implementation, debugging, code generation, and lightweight computation.", "fa5s.laptop-code"),
                     ("Execution Sandbox", "Runs Python in an isolated virtual environment and supports per-node requirements. Choose this over Py-Coder when you need dependency-aware execution or a cleaner reproducible runtime.", "fa5s.shield-alt"),
                     ("Artifact / Drafter", "A living markdown drafting surface for reports, specs, briefs, and other documents that need repeated revision. It is the most natural place to keep polished long-form output inside the graph.", "fa5s.pen-nib"),
-                    ("Workflow Architect", "Builds a compact execution blueprint for the current goal and recommends the next plugin nodes to create, complete with seeded starter prompts. It is especially useful at the start of a large or ambiguous task.", "fa5s.project-diagram"),
                     ("HTML Renderer", "Turns HTML or UI markup into a preview pane inside the graph and can pop the preview into a separate window. It is the right tool when a branch needs visual feedback instead of plain text output.", "fa5s.window-maximize"),
                 ]),
             ],

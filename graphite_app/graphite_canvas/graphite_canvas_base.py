@@ -192,12 +192,9 @@ def iter_scene_connection_lists(scene):
         "code_sandbox_connections",
         "web_connections",
         "conversation_connections",
-        "reasoning_connections",
         "group_summary_connections",
         "html_connections",
         "artifact_connections",
-        "workflow_connections",
-        "graph_diff_connections",
     )
 
     for name in list_names:

@@ -22,15 +22,11 @@ from PySide6.QtWidgets import QApplication
 _APP = QApplication.instance() or QApplication([])
 
 from graphite_web import WebNode
-from graphite_plugins.graphite_plugin_reasoning import ReasoningNode
 from graphite_pycoder import PyCoderNode
 from graphite_plugins.graphite_plugin_code_sandbox import CodeSandboxNode
 from graphite_plugins.graphite_plugin_artifact import ArtifactNode
 from graphite_conversation_node import ConversationNode
 from graphite_html_view import HtmlViewNode
-from graphite_plugins.graphite_plugin_workflow import WorkflowNode
-from graphite_plugins.graphite_plugin_quality_gate import QualityGateNode
-from graphite_plugins.graphite_plugin_code_review import CodeReviewNode
 from graphite_plugins.graphite_plugin_gitlink import GitlinkNode
 
 
@@ -38,15 +34,11 @@ from graphite_plugins.graphite_plugin_gitlink import GitlinkNode
     "node_cls, get_widget_text",
     [
         (WebNode, lambda n: n.query_input.toPlainText()),
-        (ReasoningNode, lambda n: n.prompt_input.toPlainText()),
         (PyCoderNode, lambda n: n.prompt_input.toPlainText()),
         (CodeSandboxNode, lambda n: n.prompt_input.toPlainText()),
         (ArtifactNode, lambda n: n.instruction_input.toPlainText()),
         (ConversationNode, lambda n: n.message_input.text()),
         (HtmlViewNode, lambda n: n.html_input.toPlainText()),
-        (WorkflowNode, lambda n: n.goal_input.toPlainText()),
-        (QualityGateNode, lambda n: n.goal_input.toPlainText()),
-        (CodeReviewNode, lambda n: n.context_input.toPlainText()),
         (GitlinkNode, lambda n: n.task_input.toPlainText()),
     ],
 )
@@ -60,18 +52,6 @@ def test_web_node_query_state_updates():
     node = WebNode(parent_node=None)
     node.seed_prompt("search this")
     assert node.query == "search this"
-
-
-def test_reasoning_node_prompt_state_updates():
-    node = ReasoningNode(parent_node=None)
-    node.seed_prompt("reason about this")
-    assert node.prompt == "reason about this"
-
-
-def test_code_review_node_review_context_state_updates():
-    node = CodeReviewNode(parent_node=None)
-    node.seed_prompt("review this file")
-    assert node.review_context == "review this file"
 
 
 def test_gitlink_node_task_prompt_state_updates():
