@@ -310,7 +310,10 @@ class ChatView(QGraphicsView):
 
         notches_layout = QHBoxLayout()
         notches_layout.setContentsMargins(0, 0, 0, 0)
-        notches_layout.setSpacing(12)
+        # 4 buttons x 40px + 3 gaps must fit inside the panel's 180px content width
+        # (200px fixed width - 20px margins). At spacing=12 that's 196px, which
+        # overflowed the panel and clipped the rightmost ("100%") button.
+        notches_layout.setSpacing(4)
 
         button_labels = [(25, "25%"), (50, "50%"), (75, "75%"), (100, "100%")]
         for value, label in button_labels:

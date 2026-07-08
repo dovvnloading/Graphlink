@@ -145,7 +145,10 @@ class GridControl(QWidget):
         
         grid_presets_layout = QHBoxLayout()
         grid_presets_layout.setContentsMargins(0, 0, 0, 0)
-        grid_presets_layout.setSpacing(12)
+        # 4 buttons x 40px + 3 gaps must fit inside the panel's 180px content width
+        # (200px fixed width - 20px margins). At spacing=12 that's 196px, which
+        # overflowed the panel and clipped the rightmost ("100px") button.
+        grid_presets_layout.setSpacing(4)
         preset_sizes = [(10, "10px"), (20, "20px"), (50, "50px"), (100, "100px")]
         for size, label_text in preset_sizes:
             button = QPushButton(label_text, self.canvas)
@@ -163,6 +166,8 @@ class GridControl(QWidget):
         main_layout.addLayout(grid_presets_layout)
 
         style_presets_layout = QHBoxLayout()
+        style_presets_layout.setContentsMargins(0, 0, 0, 0)
+        style_presets_layout.setSpacing(4)
         style_presets = [("Dots", "fa5s.ellipsis-h"), ("Lines", "fa5s.grip-lines"), ("Cross", "fa5s.plus")]
         for style, icon_name in style_presets:
             button = QPushButton(qta.icon(icon_name, color='white'), "", self.canvas)
@@ -175,14 +180,17 @@ class GridControl(QWidget):
 
         color_presets_layout = QHBoxLayout()
         color_presets_layout.setContentsMargins(0, 0, 0, 0)
-        color_presets_layout.setSpacing(12)
+        # 5 swatches need to fit inside the panel's 180px content width - even at
+        # spacing=0, 5 buttons at the other rows' 40px width alone need 200px, which
+        # overflowed the panel and squeezed/clipped the swatches. Narrower buttons.
+        color_presets_layout.setSpacing(4)
         palette = get_current_palette()
         preset_colors = [
             "#404040", "#555555", palette.SELECTION.name(), palette.USER_NODE.name(), palette.AI_NODE.name()
         ]
         for color_hex in preset_colors:
             button = QPushButton("", self.canvas)
-            button.setFixedSize(40, 25)
+            button.setFixedSize(30, 25)
             button.setStyleSheet(f"background-color: {color_hex}; border: 2px solid #2d2d2d; border-radius: 5px;")
             button.clicked.connect(lambda checked, c=color_hex: self._set_grid_color(c))
             color_presets_layout.addWidget(button)
