@@ -80,8 +80,8 @@ Attach these specialist nodes to a branch from the plugin picker:
 ### Install and run
 
 ```powershell
-git clone <your-repo-url>
-cd graphlink_app
+git clone <your-repo-url> graphlink
+cd graphlink
 
 py -m venv .venv
 .venv\Scripts\Activate.ps1
@@ -92,7 +92,7 @@ cd graphlink_app
 python graphlink_app.py
 ```
 
-Dependencies (PySide6, the provider SDKs, `llama-cpp-python`, and the export/parsing libraries) install from `requirements.txt` in a single step. If you prefer Visual Studio, open `graphlink_app.sln`.
+`graphlink` above is the repo root (containing `requirements.txt`); `graphlink_app/` is the inner package directory the app actually runs from. Dependencies — PySide6, the provider SDKs, `llama-cpp-python`, web-search/spellcheck/charting/audio helpers, and the export/parsing libraries — install from `requirements.txt` in a single step. If you prefer Visual Studio, open `graphlink_app.sln`.
 
 > The app is script-oriented: launch it from the inner `graphlink_app/` directory so its imports resolve.
 
@@ -128,7 +128,7 @@ Loads a GGUF file directly (not an Ollama model store). Configure the chat model
 
 ### API providers
 
-OpenAI-Compatible, Anthropic Claude, and Google Gemini are supported, with per-task model selection. Image generation is OpenAI-Compatible only. Anthropic Claude accepts image attachments but not audio (use Gemini or Ollama for audio).
+OpenAI-Compatible, Anthropic Claude, and Google Gemini are supported, with per-task model selection. Image generation works with OpenAI-Compatible and Google Gemini providers (not Anthropic Claude). Anthropic Claude accepts image attachments but not audio (use Gemini or Ollama for audio).
 
 ### Environment variables
 
@@ -136,10 +136,13 @@ The app reads these as fallbacks when no key is saved in Settings, or for model 
 
 | Variable | Purpose |
 | --- | --- |
+| `GRAPHLINK_OPENAI_API_KEY` / `OPENAI_API_KEY` | OpenAI-Compatible key |
 | `GRAPHLINK_ANTHROPIC_API_KEY` / `ANTHROPIC_API_KEY` | Anthropic Claude key |
 | `GRAPHLINK_GEMINI_API_KEY` / `GEMINI_API_KEY` | Google Gemini key |
 | `LLAMA_CPP_MODELS` | Root folder scanned for GGUF files in Llama.cpp mode |
 | `OLLAMA_MODELS` | Override for Ollama's model storage root during model discovery |
+
+> The legacy `GRAPHITE_*`-prefixed names (e.g. `GRAPHITE_OPENAI_API_KEY`) from before the app was renamed still work as a fallback, below the `GRAPHLINK_*` names in priority.
 
 ## Usage
 
@@ -147,7 +150,7 @@ The app reads these as fallbacks when no key is saved in Settings, or for model 
 - **Branch** by selecting a node and adding a plugin from the picker or controls; each new node begins a more specialized path (research, code, drafting, execution).
 - **Deliver** with build-oriented nodes — Gitlink for repo-aware change proposals, Py-Coder and Execution Sandbox for running code, Artifact / Drafter for documents.
 - **Export** to `.txt`, `.py`, `.md`, `.html`, `.docx`, or `.pdf`.
-- **Ingest** files: `.txt`, `.md`, `.py`, `.json`, `.html`, `.css`, `.js`, `.csv`, `.xml`, `.pdf`, `.docx`.
+- **Ingest** files: plain text, most source/config/markup formats (`.py`, `.js`, `.ts`, `.json`, `.html`, `.css`, `.yaml`, `.sql`, and many more — see `graphlink_file_handler.py`), common extensionless config files (`Dockerfile`, `Makefile`, `.gitignore`), plus `.pdf` and `.docx`. Other files are still accepted if they look like text.
 
 ## Architecture
 
@@ -180,12 +183,12 @@ Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, dev
 ## Limitations
 
 - Windows is the primary target today, though much of the Python is portable.
-- The codebase is mid-migration, so some top-level modules are still compatibility wrappers over the real package implementations.
-- API keys and GitHub tokens are stored locally in plain application state (see [Security](#license-and-security)).
+- The codebase is mid-migration: most top-level modules are thin compatibility re-exports over the real package implementations, though at least one (`graphlink_dialogs.py`) is a stale, unused duplicate rather than a wrapper — see [GRAPHLINK_REPO_NAVIGATION.md](GRAPHLINK_REPO_NAVIGATION.md) before touching top-level dialog code.
+- API keys and GitHub tokens are encrypted at rest with Windows DPAPI, scoped to your Windows user account; on non-Windows platforms, or if DPAPI is unavailable, they fall back to plain application state (see [Security](#license-and-security)).
 - Automated coverage is headless (Qt widgets, serialization, and helper logic) rather than end-to-end UI testing.
 
 ## License and Security
 
 Licensed under the [MIT License](LICENSE).
 
-Secrets (API keys, GitHub tokens) are stored locally in `~/.graphlink/session.dat` in plain text — review that model before distributing packaged builds or using Graphlink in a shared environment. If you find a security-sensitive issue, please avoid posting exploit details publicly before the maintainer can review and patch it; see [SECURITY.md](SECURITY.md).
+Secrets (API keys, GitHub tokens) are stored in `~/.graphlink/session.dat`, encrypted at rest with Windows DPAPI (`CryptProtectData`/`CryptUnprotectData`) and bound to your Windows user account — a copied `session.dat` cannot be decrypted on another machine or account. On non-Windows platforms, or if the DPAPI call fails, secrets fall back to plain text in that same file, so review that fallback before distributing packaged builds or using Graphlink in a shared or non-Windows environment. Legacy plaintext secrets from older versions are migrated to encrypted form automatically on first launch. If you find a security-sensitive issue, please avoid posting exploit details publicly before the maintainer can review and patch it; see [SECURITY.md](SECURITY.md).
