@@ -120,7 +120,7 @@ class ChatWorkerThread(QThread):
         if self._contains_audio_attachment():
             return (
                 "Audio is still being processed. This can take a while for long clips. "
-                "You’ll get the response or a clear failure message automatically."
+                "You'll get the response or a clear failure message automatically."
             )
         return "This request is taking longer than expected, but it is still running."
 
@@ -251,6 +251,79 @@ class ChatAgent:
         return ai_response
 
 
+def clean_agent_markdown_response(text, required_title, section_markers, reset_bullet_state_on_section_header=False):
+    """Strip common markdown noise and normalize bullets/section spacing for a
+    structured agent response (Explainer/KeyTakeaway/GroupSummary all used a
+    near-identical ~40-line clean_text() before this was extracted - see
+    doc/ARCHITECTURE_REVIEW_FINDINGS.md #58).
+
+    Args:
+        text (str): The raw text from the AI model.
+        required_title (str): Header line to prepend if the first cleaned line
+            doesn't already contain it.
+        section_markers (list[str]): Line substrings (e.g. "Key Parts:") that get
+            an extra blank line before them.
+        reset_bullet_state_on_section_header (bool): Whether encountering a
+            section-marker line resets bullet-run tracking (GroupSummaryAgent did;
+            ExplainerAgent/KeyTakeawayAgent didn't - preserved here so extracting
+            this doesn't change any of their three outputs).
+
+    Returns:
+        str: The cleaned and formatted text.
+    """
+    # Remove markdown and special characters that might interfere with display.
+    replacements = [
+        ('```', ''),
+        ('`', ''),
+        ('**', ''),
+        ('__', ''),
+        ('*', ''),
+        ('_', ''),
+        ('•', '•'),
+        ('→', '->'),
+        ('\n\n\n', '\n\n'),
+    ]
+
+    cleaned = text
+    for old, new in replacements:
+        cleaned = cleaned.replace(old, new)
+
+    # Process line by line for finer control.
+    cleaned_lines = []
+    for line in cleaned.split('\n'):
+        line = line.strip()
+        if line:
+            # Standardize bullet points.
+            if line.lstrip().startswith('-'):
+                line = '• ' + line.lstrip('- ')
+            cleaned_lines.append(line)
+
+    # Rebuild the text with consistent spacing and headers.
+    formatted = ''
+    in_bullet_list = False
+
+    for i, line in enumerate(cleaned_lines):
+        # Ensure the required header is present.
+        if i == 0 and required_title not in line:
+            formatted += f"{required_title}\n"
+
+        # Add line with proper spacing based on its content type.
+        if line.startswith('•'):
+            if not in_bullet_list:
+                formatted += '\n' if formatted else ''
+            in_bullet_list = True
+            formatted += line + '\n'
+        elif any(marker in line for marker in section_markers):
+            formatted += '\n' + line + '\n'
+            if reset_bullet_state_on_section_header:
+                in_bullet_list = False
+        else:
+            in_bullet_list = False
+            formatted += line + '\n'
+
+    return formatted.strip()
+
+
 class ExplainerAgent:
     """An agent specialized in simplifying complex topics."""
     def __init__(self):
@@ -293,57 +366,11 @@ Remember: Write as if explaining to a curious 5-year-old. No technical terms, no
         Returns:
             str: The cleaned and formatted text.
         """
-        # Remove markdown and special characters that might interfere with display.
-        replacements = [
-            ('```', ''),
-            ('`', ''),
-            ('**', ''),
-            ('__', ''),
-            ('*', ''),
-            ('_', ''),
-            ('•', '•'),
-            ('→', '->'),
-            ('\n\n\n', '\n\n'),
-        ]
-        
-        cleaned = text
-        for old, new in replacements:
-            cleaned = cleaned.replace(old, new)
-            
-        # Split into lines and clean each line individually.
-        lines = cleaned.split('\n')
-        cleaned_lines = []
-        
-        for line in lines:
-            line = line.strip()
-            if line:
-                # Standardize bullet points.
-                if line.lstrip().startswith('-'):
-                    line = '• ' + line.lstrip('- ')
-                cleaned_lines.append(line)
-        
-        # Rebuild the text with consistent spacing and headers.
-        formatted = ''
-        in_bullet_list = False
-        
-        for i, line in enumerate(cleaned_lines):
-            # Ensure the "Simple Explanation" title is present.
-            if i == 0 and "Simple Explanation" not in line:
-                formatted += "Simple Explanation\n"
-                
-            # Add line with proper spacing based on its content type.
-            if line.startswith('•'):
-                if not in_bullet_list:
-                    formatted += '\n' if formatted else ''
-                in_bullet_list = True
-                formatted += line + '\n'
-            elif any(section in line for section in ['Think of it Like This:', 'Key Parts:']):
-                formatted += '\n' + line + '\n'
-            else:
-                in_bullet_list = False
-                formatted += line + '\n'
-        
-        return formatted.strip()
+        return clean_agent_markdown_response(
+            text,
+            required_title="Simple Explanation",
+            section_markers=['Think of it Like This:', 'Key Parts:'],
+        )
 
     def get_response(self, text):
         """
@@ -424,57 +451,11 @@ No markdown formatting, no special characters."""
         Returns:
             str: The cleaned and formatted text.
         """
-        # A series of replacements to strip unwanted formatting.
-        replacements = [
-            ('```', ''),  # code blocks
-            ('`', ''),    # inline code
-            ('**', ''),   # bold
-            ('__', ''),   # alternate bold
-            ('*', ''),    # italic/bullet
-            ('_', ''),    # alternate italic
-            ('•', '•'),   # standardize bullets
-            ('→', '->'),  # standardize arrows
-            ('\n\n\n', '\n\n'),  # remove extra newlines
-        ]
-        
-        cleaned = text
-        for old, new in replacements:
-            cleaned = cleaned.replace(old, new)
-            
-        # Process line by line for finer control.
-        lines = cleaned.split('\n')
-        cleaned_lines = []
-        
-        for line in lines:
-            line = line.strip()
-            if line:
-                # Ensure bullet points are properly formatted.
-                if line.lstrip().startswith('-'):
-                    line = '• ' + line.lstrip('- ')
-                cleaned_lines.append(line)
-        
-        # Rebuild the text with consistent spacing and headers.
-        formatted = ''
-        in_bullet_list = False
-        
-        for i, line in enumerate(cleaned_lines):
-            # Ensure the main title is present.
-            if i == 0 and "Key Takeaway" not in line:
-                formatted += "Key Takeaway\n"
-                
-            # Add line with proper spacing.
-            if line.startswith('•'):
-                if not in_bullet_list:
-                    formatted += '\n' if formatted else ''
-                in_bullet_list = True
-                formatted += line + '\n'
-            elif 'Main Points:' in line:
-                formatted += '\n' + line + '\n'
-            else:
-                in_bullet_list = False
-                formatted += line + '\n'
-        
-        return formatted.strip()
+        return clean_agent_markdown_response(
+            text,
+            required_title="Key Takeaway",
+            section_markers=['Main Points:'],
+        )
 
     def get_response(self, text):
         """
@@ -568,41 +549,12 @@ Key Connected Points:
         Returns:
             str: The cleaned and formatted text.
         """
-        replacements = [
-            ('```', ''), ('`', ''), ('**', ''), ('__', ''), ('*', ''), ('_', ''),
-            ('•', '•'), ('→', '->'), ('\n\n\n', '\n\n'),
-        ]
-        cleaned = text
-        for old, new in replacements:
-            cleaned = cleaned.replace(old, new)
-        
-        lines = [line.strip() for line in cleaned.split('\n') if line.strip()]
-        cleaned_lines = []
-        for line in lines:
-            if line.lstrip().startswith('-'):
-                cleaned_lines.append('• ' + line.lstrip('- '))
-            else:
-                cleaned_lines.append(line)
-
-        formatted = ''
-        in_bullet_list = False
-        for i, line in enumerate(cleaned_lines):
-            if i == 0 and "Synthesized Summary" not in line:
-                formatted += "Synthesized Summary\n"
-            
-            if line.startswith('•'):
-                if not in_bullet_list:
-                    formatted += '\n'
-                in_bullet_list = True
-                formatted += line + '\n'
-            elif "Key Connected Points:" in line:
-                formatted += '\n' + line + '\n'
-                in_bullet_list = False
-            else:
-                in_bullet_list = False
-                formatted += line + '\n'
-        
-        return formatted.strip()
+        return clean_agent_markdown_response(
+            text,
+            required_title="Synthesized Summary",
+            section_markers=['Key Connected Points:'],
+            reset_bullet_state_on_section_header=True,
+        )
 
     def get_response(self, texts: list):
         """
