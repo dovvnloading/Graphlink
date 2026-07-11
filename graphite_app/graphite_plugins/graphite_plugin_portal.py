@@ -88,7 +88,7 @@ _register_spec(
 )
 _register_spec(
     key="code_sandbox", display_name="Execution Sandbox",
-    description="Runs Python inside an isolated virtualenv and lets you declare per-node requirements.txt dependencies.",
+    description="Runs Python inside an isolated virtualenv with your full user-account privileges (isolates installed packages, not the operating system) and lets you declare per-node requirements.txt dependencies.",
     category="Build & Execution", icon="fa5s.shield-alt",
     node_cls=CodeSandboxNode, connection_cls=CodeSandboxConnectionItem, seedable=True,
 )
@@ -215,7 +215,7 @@ class PluginPortal:
 
         self._register_plugin(
             name='Execution Sandbox',
-            description='Runs Python inside an isolated virtualenv and lets you declare per-node requirements.txt dependencies.',
+            description='Runs Python inside an isolated virtualenv with your full user-account privileges (isolates installed packages, not the operating system) and lets you declare per-node requirements.txt dependencies.',
             callback=self._create_code_sandbox_node,
             category='Build & Execution',
             icon='fa5s.shield-alt',

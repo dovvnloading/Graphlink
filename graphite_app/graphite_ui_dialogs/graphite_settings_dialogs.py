@@ -16,6 +16,7 @@ from graphite_agents import ModelPullWorkerThread
 from graphite_styles import THEMES
 from graphite_config import apply_theme, get_current_palette, get_semantic_color, set_current_model
 from graphite_update import APP_VERSION, UPDATE_REPOSITORY_URL
+from graphite_paths import asset_url
 
 
 class SettingsComboPopup(QFrame):
@@ -454,7 +455,7 @@ class OllamaSettingsWidget(QWidget):
             QRadioButton::indicator:checked {{
                 background-color: {selection_color};
                 border: 1px solid {selection_border};
-                image: url(C:/Users/Admin/source/repos/graphite_app/assets/check.png);
+                image: url({asset_url('check.png')});
                 border-radius: 4px;
             }}
         """)
@@ -983,10 +984,16 @@ class LlamaCppSettingsWidget(QWidget):
         self._refresh_model_combos()
         self._set_scan_buttons_enabled(True)
 
+        truncated_suffix = (
+            " Scan stopped early (very large folder tree) - results may be incomplete; "
+            "point the scan at a narrower folder to see everything."
+            if results.get("truncated")
+            else ""
+        )
         if models:
-            self._set_status(f"Found {len(models)} GGUF model file(s). Saved this list for reuse until the next scan.", "success")
+            self._set_status(f"Found {len(models)} GGUF model file(s). Saved this list for reuse until the next scan.{truncated_suffix}", "success")
         else:
-            self._set_status("Scan finished, but no GGUF models were found in the selected locations.", "warning")
+            self._set_status(f"Scan finished, but no GGUF models were found in the selected locations.{truncated_suffix}", "warning")
 
         self.scan_worker = None
 
@@ -1968,7 +1975,7 @@ class SettingsDialog(QFrame):
                 background-color: transparent;
             }}
             QComboBox#settingsComboBox::down-arrow {{
-                image: url(C:/Users/Admin/source/repos/graphite_app/assets/down_arrow.png);
+                image: url({asset_url('down_arrow.png')});
                 width: 10px;
                 height: 10px;
             }}

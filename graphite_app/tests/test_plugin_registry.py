@@ -42,6 +42,29 @@ def test_registry_names_match_the_live_portal_registration():
     assert portal_names == registry_names
 
 
+def test_registry_descriptions_match_the_live_portal_registration():
+    # Description text is hand-duplicated between PLUGIN_REGISTRY and
+    # PluginPortal._discover_plugins() (see doc/ARCHITECTURE_REVIEW_FINDINGS.md #61) -
+    # this doesn't fix that duplication, but it does catch the two copies drifting out
+    # of sync, which is exactly what happened to Execution Sandbox's description before
+    # #16 was fixed (both copies had to be updated by hand to stay honest about the
+    # sandbox not isolating from the OS).
+    portal = PluginPortal(main_window=None)
+    portal_descriptions_by_name = {p["name"]: p["description"] for p in portal.get_plugins()}
+    for spec in PLUGIN_REGISTRY.values():
+        assert portal_descriptions_by_name[spec.display_name] == spec.description
+
+
+def test_execution_sandbox_description_does_not_oversell_containment():
+    # See doc/ARCHITECTURE_REVIEW_FINDINGS.md #16: the description used to just say
+    # "isolated virtualenv" with no caveat, which a user could easily read as stronger
+    # containment than a venv actually provides. The approval dialog shown before every
+    # run has always been honest about this (_handle_code_sandbox_approval_request);
+    # the picker-level description should say the same thing, not oversell it.
+    spec = get_plugin_spec("code_sandbox")
+    assert "not the operating system" in spec.description
+
+
 def test_get_plugin_spec_returns_the_registered_spec():
     spec = get_plugin_spec("gitlink")
     assert spec is not None
