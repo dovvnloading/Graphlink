@@ -305,8 +305,8 @@ class WindowActionsMixin:
             cancel_callback=lambda thread=worker_thread: self._cancel_main_chat_request(thread),
         )
         worker_thread.finished.connect(
-            lambda new_message, node=user_node, history=history_for_worker, thread=worker_thread:
-                self.handle_response(new_message, node, history, thread)
+            lambda new_message, node=user_node, history=history_for_worker, tokens=input_tokens, thread=worker_thread:
+                self.handle_response(new_message, node, history, tokens, thread)
         )
         worker_thread.status.connect(self._handle_chat_worker_status)
         worker_thread.error.connect(lambda error_message, thread=worker_thread: self._handle_main_chat_error(error_message, thread))
@@ -316,7 +316,7 @@ class WindowActionsMixin:
         worker_thread.cancelled.connect(lambda thread=worker_thread: self._cleanup_main_chat_thread(thread))
         worker_thread.start()
 
-    def handle_response(self, new_assistant_message, user_node, history_before_assistant, worker_thread=None):
+    def handle_response(self, new_assistant_message, user_node, history_before_assistant, input_tokens, worker_thread=None):
         if worker_thread is not None and self.chat_thread is not worker_thread:
             return
 
@@ -335,8 +335,6 @@ class WindowActionsMixin:
         response_text = new_assistant_message['content']
         
         output_tokens = self.token_estimator.count_tokens(response_text)
-        input_tokens_str = self.token_counter_widget.input_label.text().replace(',', '')
-        input_tokens = int(input_tokens_str) if input_tokens_str.isdigit() else 0
         self.total_session_tokens += input_tokens + output_tokens
         self.token_counter_widget.update_counts(output_tokens=output_tokens, total_tokens=self.total_session_tokens)
 
@@ -891,14 +889,15 @@ class WindowActionsMixin:
                 pycoder_node.set_output("[No code to run]")
                 pycoder_node.set_running_state(False)
                 return
-            self.code_exec_thread = CodeExecutionWorker(code, pycoder_node.repl)
-            self.code_exec_thread.finished.connect(
+            worker_thread = CodeExecutionWorker(code, pycoder_node.repl)
+            pycoder_node.worker_thread = worker_thread
+            worker_thread.finished.connect(
                 lambda output, history=self._branch_context_history(pycoder_node, pycoder_node.parent_node): self._handle_code_execution_result(output, pycoder_node, history)
             )
-            self.code_exec_thread.error.connect(lambda error_msg: self._handle_pycoder_error(error_msg, pycoder_node))
-            self.code_exec_thread.finished.connect(self.code_exec_thread.deleteLater)
-            self.code_exec_thread.error.connect(self.code_exec_thread.deleteLater)
-            self.code_exec_thread.start()
+            worker_thread.error.connect(lambda error_msg: self._handle_pycoder_error(error_msg, pycoder_node))
+            worker_thread.finished.connect(lambda _output, thread=worker_thread, node=pycoder_node: self._cleanup_pycoder_thread(thread, node))
+            worker_thread.error.connect(lambda _error, thread=worker_thread, node=pycoder_node: self._cleanup_pycoder_thread(thread, node))
+            worker_thread.start()
         elif pycoder_node.mode == PyCoderMode.AI_DRIVEN:
             prompt = pycoder_node.get_prompt()
             if not prompt.strip():
@@ -909,20 +908,63 @@ class WindowActionsMixin:
             context_node = pycoder_node.parent_node
             if isinstance(context_node, CodeNode): context_node = context_node.parent_content_node
             history = self._branch_context_history(pycoder_node, context_node)
-            self.pycoder_exec_thread = PyCoderExecutionWorker(prompt, history, pycoder_node.repl)
-            self.pycoder_exec_thread.log_update.connect(pycoder_node.update_status)
-            self.pycoder_exec_thread.finished.connect(lambda result, history=history: self._handle_ai_pycoder_result(result, pycoder_node, history))
-            self.pycoder_exec_thread.error.connect(lambda error_msg: self._handle_pycoder_error(error_msg, pycoder_node))
-            self.pycoder_exec_thread.finished.connect(self.pycoder_exec_thread.deleteLater)
-            self.pycoder_exec_thread.error.connect(self.pycoder_exec_thread.deleteLater)
-            self.pycoder_exec_thread.start()
+            worker_thread = PyCoderExecutionWorker(prompt, history, pycoder_node.repl)
+            pycoder_node.worker_thread = worker_thread
+            worker_thread.log_update.connect(pycoder_node.update_status)
+            worker_thread.approval_requested.connect(
+                lambda code, worker=worker_thread, node=pycoder_node: self._handle_pycoder_approval_request(worker, node, code)
+            )
+            worker_thread.finished.connect(lambda result, history=history: self._handle_ai_pycoder_result(result, pycoder_node, history))
+            worker_thread.error.connect(lambda error_msg: self._handle_pycoder_error(error_msg, pycoder_node))
+            worker_thread.finished.connect(lambda _result, thread=worker_thread, node=pycoder_node: self._cleanup_pycoder_thread(thread, node))
+            worker_thread.error.connect(lambda _error, thread=worker_thread, node=pycoder_node: self._cleanup_pycoder_thread(thread, node))
+            worker_thread.start()
+
+    def _handle_pycoder_approval_request(self, worker_thread, pycoder_node, code):
+        # Mirrors _handle_code_sandbox_approval_request: AI-generated code runs in a
+        # completely unsandboxed REPL subprocess with the full privileges of the user's
+        # account, so the user sees exactly what will run and must opt in. MANUAL mode
+        # is deliberately ungated - there the user authored the code themselves and
+        # clicking Run *is* the approval.
+        if not pycoder_node or getattr(pycoder_node, "is_disposed", False):
+            worker_thread.deny()
+            return
+
+        message_box = QMessageBox(
+            QMessageBox.Icon.Question,
+            "Approve Py-Coder Execution",
+            "This will run AI-generated Python code in a persistent local session with "
+            "the full privileges of your user account (there is no sandboxing).\n\n"
+            "If execution fails, automatically repaired versions of this code may run "
+            "under this same approval.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        message_box.setDefaultButton(QMessageBox.StandardButton.No)
+        message_box.setDetailedText(code or "[No code to display]")
+        reply = message_box.exec()
+
+        if reply == QMessageBox.StandardButton.Yes:
+            worker_thread.approve()
+        else:
+            worker_thread.deny()
+
+    def _cleanup_pycoder_thread(self, worker_thread, pycoder_node):
+        if pycoder_node and getattr(pycoder_node, "worker_thread", None) is worker_thread:
+            pycoder_node.worker_thread = None
+        worker_thread.deleteLater()
 
     def stop_pycoder_node(self, pycoder_node):
-        if hasattr(self, 'code_exec_thread') and self.code_exec_thread and self.code_exec_thread.isRunning():
-            self.code_exec_thread.stop()
-        if hasattr(self, 'pycoder_exec_thread') and self.pycoder_exec_thread and self.pycoder_exec_thread.isRunning():
-            self.pycoder_exec_thread.stop()
-            
+        # Only ever touch this node's own worker_thread - previously this stopped
+        # main_window.code_exec_thread/pycoder_exec_thread unconditionally, which (since
+        # those were single attributes shared across every PyCoderNode) meant clicking
+        # "stop" on one node could instead stop a *different*, concurrently-running
+        # node's execution if it happened to be the most recently started one. Same
+        # class of bug already fixed for CodeSandboxNode - see stop_code_sandbox_node.
+        worker_thread = getattr(pycoder_node, "worker_thread", None)
+        if worker_thread and worker_thread.isRunning():
+            worker_thread.stop()
+        pycoder_node.worker_thread = None
+
         pycoder_node.set_running_state(False)
         pycoder_node.set_ai_analysis("Execution manually stopped.")
         

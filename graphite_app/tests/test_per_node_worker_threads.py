@@ -16,6 +16,15 @@ so it never got task #26's fix along with the other six - it had the shared
 main_window.reasoning_thread attribute AND no stop capability of any kind (no
 node.worker_thread, no stop_reasoning_node method at all).
 
+PyCoderNode had the same bug and was still unfixed as of
+doc/ARCHITECTURE_REVIEW_FINDINGS.md #21: stop_pycoder_node(pycoder_node) took a specific
+node argument but stopped main_window.code_exec_thread/pycoder_exec_thread - single
+attributes shared across every PyCoderNode - so clicking "stop" on one node could stop a
+different, more-recently-started concurrent PyCoderNode's execution instead of (or as
+well as) its own. Fixed the same way as Code Sandbox: both CodeExecutionWorker (MANUAL
+mode) and PyCoderExecutionWorker (AI_DRIVEN mode) are now stored on the owning
+pycoder_node.worker_thread instead.
+
 These tests use WindowActionsMixin directly (a bare mixin - the methods only need the
 attributes they actually touch, so a minimal instance is enough) rather than a full
 ChatWindow, which needs a running QApplication with a real settings_manager and more
@@ -35,6 +44,7 @@ _APP = QApplication.instance() or QApplication([])
 import graphite_window_actions
 from graphite_plugins.graphite_plugin_artifact import ArtifactNode
 from graphite_plugins.graphite_plugin_code_sandbox import CodeSandboxNode
+from graphite_pycoder import PyCoderMode, PyCoderNode
 from graphite_window_actions import WindowActionsMixin
 
 
@@ -99,6 +109,46 @@ class TestArtifactStopMethods:
         assert node.instruction_input.isReadOnly() is False  # set_running_state(False) ran
 
 
+class TestPyCoderStopOnlyTouchesItsOwnNode:
+    def test_stopping_one_node_does_not_stop_a_different_concurrent_node(self):
+        main_window = _FakeMainWindow()
+        node_a = PyCoderNode(parent_node=None, mode=PyCoderMode.MANUAL)
+        node_b = PyCoderNode(parent_node=None, mode=PyCoderMode.MANUAL)
+        node_a.worker_thread = _fake_worker_thread()
+        node_b.worker_thread = _fake_worker_thread()
+
+        main_window.stop_pycoder_node(node_a)
+
+        assert node_a.worker_thread is None
+        node_b.worker_thread.stop.assert_not_called()
+        node_b.worker_thread.isRunning.assert_not_called()
+
+    def test_stopping_the_correct_node_actually_stops_its_thread(self):
+        main_window = _FakeMainWindow()
+        node = PyCoderNode(parent_node=None, mode=PyCoderMode.AI_DRIVEN)
+        thread = _fake_worker_thread()
+        node.worker_thread = thread
+
+        main_window.stop_pycoder_node(node)
+
+        thread.stop.assert_called_once()
+        assert node.worker_thread is None
+
+    def test_new_pycoder_node_starts_with_no_worker_thread(self):
+        node = PyCoderNode(parent_node=None)
+        assert node.worker_thread is None
+
+    def test_main_window_has_no_shared_pycoder_thread_attributes_after_stop(self):
+        main_window = _FakeMainWindow()
+        node = PyCoderNode(parent_node=None, mode=PyCoderMode.MANUAL)
+        node.worker_thread = _fake_worker_thread()
+
+        main_window.stop_pycoder_node(node)
+
+        assert not hasattr(main_window, "code_exec_thread")
+        assert not hasattr(main_window, "pycoder_exec_thread")
+
+
 class TestNoDeadSharedThreadAttributesRemainInSource:
     def test_window_actions_source_has_no_shared_thread_assignments(self):
         source = Path(graphite_window_actions.__file__).read_text(encoding="utf-8")
@@ -111,6 +161,8 @@ class TestNoDeadSharedThreadAttributesRemainInSource:
             "self.gitlink_thread",
             "self.sandbox_thread",
             "self.reasoning_thread",
+            "self.code_exec_thread",
+            "self.pycoder_exec_thread",
         ]:
             assert dead_attr not in source, (
                 f"{dead_attr} reappeared in graphite_window_actions.py - this was removed "

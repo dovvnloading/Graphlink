@@ -46,6 +46,7 @@ from graphite_prompts import BASE_SYSTEM_PROMPT, THINKING_INSTRUCTIONS_PROMPT
 from graphite_window_actions import WindowActionsMixin
 from graphite_window_navigation import WindowNavigationMixin
 from graphite_update import APP_VERSION, UpdateCheckWorker
+from graphite_paths import asset_path
 
 class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
     def __init__(self, settings_manager):
@@ -67,8 +68,7 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         self._update_check_status_target = None
         self._update_check_manual = False
 
-        icon_path = r"C:\Users\Admin\source\repos\graphite_app\assets\graphite.ico"
-        self.setWindowIcon(QIcon(str(icon_path)))
+        self.setWindowIcon(QIcon(str(asset_path("graphite.ico"))))
 
         self.session_manager = ChatSessionManager(self)
         self.plugin_portal = PluginPortal(self)
@@ -81,9 +81,7 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         self.chart_thread = None
         self.group_summary_thread = None
         self.image_gen_thread = None
-        self.code_exec_thread = None
         self.pycoder_agent_thread = None
-        self.pycoder_exec_thread = None
         self.web_worker_thread = None
         self.conversation_node_thread = None
         self._main_request_active = False
@@ -441,6 +439,10 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
             worker.deleteLater()
 
     def _iter_shutdown_threads(self):
+        # Artifact/Gitlink/Code Sandbox/PyCoder nodes each keep their running worker on
+        # their own node.worker_thread (see doc/ARCHITECTURE_REVIEW_FINDINGS.md #21/#24)
+        # - multiple nodes of the same plugin type can run concurrently, so there is no
+        # single shared main_window attribute to check for them anymore.
         for attr_name, label in (
             ("chat_thread", "active chat request"),
             ("takeaway_thread", "takeaway generation"),
@@ -448,28 +450,32 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
             ("chart_thread", "chart generation"),
             ("group_summary_thread", "group summary generation"),
             ("image_gen_thread", "image generation"),
-            ("code_exec_thread", "PyCoder code execution"),
             ("pycoder_agent_thread", "PyCoder analysis"),
-            ("pycoder_exec_thread", "PyCoder workflow"),
-            ("sandbox_thread", "code sandbox execution"),
             ("web_worker_thread", "web research"),
             ("conversation_node_thread", "conversation node request"),
-            ("reasoning_thread", "reasoning workflow"),
-            ("artifact_thread", "artifact workflow"),
-            ("workflow_thread", "workflow generation"),
-            ("graph_diff_thread", "graph diff"),
-            ("quality_gate_thread", "quality gate"),
-            ("code_review_thread", "code review"),
-            ("gitlink_thread", "Gitlink proposal"),
             ("update_check_worker", "update check"),
         ):
             worker = getattr(self, attr_name, None)
             if worker is not None:
-                yield attr_name, label, worker
+                yield label, worker, (lambda name=attr_name: setattr(self, name, None))
+
+        chat_view = getattr(self, "chat_view", None)
+        scene = chat_view.scene() if chat_view is not None else None
+        if scene is not None:
+            for node_list_name, label in (
+                ("code_sandbox_nodes", "code sandbox execution"),
+                ("artifact_nodes", "artifact workflow"),
+                ("pycoder_nodes", "PyCoder execution"),
+                ("gitlink_nodes", "Gitlink proposal"),
+            ):
+                for node in list(getattr(scene, node_list_name, [])):
+                    worker = getattr(node, "worker_thread", None)
+                    if worker is not None:
+                        yield label, worker, (lambda n=node: setattr(n, "worker_thread", None))
 
         save_thread = getattr(getattr(self, "session_manager", None), "save_thread", None)
         if save_thread is not None:
-            yield "session_manager.save_thread", "background save", save_thread
+            yield "background save", save_thread, None
 
     def _request_thread_shutdown(self, worker):
         if worker is None:
@@ -493,14 +499,14 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
 
     def _shutdown_background_threads(self, timeout_ms=3000):
         still_running = []
-        for attr_name, label, worker in self._iter_shutdown_threads():
+        for label, worker, clear_ref in self._iter_shutdown_threads():
             if not hasattr(worker, "isRunning") or not worker.isRunning():
                 continue
 
             self._request_thread_shutdown(worker)
             if worker.wait(timeout_ms):
-                if attr_name != "session_manager.save_thread" and getattr(self, attr_name, None) is worker:
-                    setattr(self, attr_name, None)
+                if clear_ref is not None:
+                    clear_ref()
                 continue
 
             still_running.append(label)
@@ -675,8 +681,8 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
     def update_title_bar(self):
         title = "Graphlink"
         if self.session_manager and self.session_manager.current_chat_id:
-            chat_info = self.session_manager.db.load_chat(self.session_manager.current_chat_id)
-            if chat_info and 'title' in chat_info: title = f"Graphlink - {chat_info['title']}"
+            chat_title = self.session_manager.db.get_chat_title(self.session_manager.current_chat_id)
+            if chat_title: title = f"Graphlink - {chat_title}"
         self.setWindowTitle(title)
 
     def show_about_dialog(self): AboutDialog(self).exec()
@@ -866,6 +872,22 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
     def on_mode_changed(self, index):
         previous_mode = self.settings_manager.get_current_mode()
         mode_text = self.mode_combo.itemText(index)
+
+        # Switching modes calls api_provider.initialize_* which swaps the provider
+        # globals (USE_API_MODE, API_CLIENT, API_KEY, ...) that a running chat request
+        # is reading from a worker thread - the request could execute against a
+        # half-swapped provider (doc/ARCHITECTURE_REVIEW_FINDINGS.md #9). Block the
+        # switch while a main request is in flight instead of racing it.
+        if self._main_request_active and mode_text != previous_mode:
+            self._set_mode_combo_silently(previous_mode)
+            self.notification_banner.show_message(
+                "Can't switch modes while a response is being generated. "
+                "Cancel the request or wait for it to finish, then switch.",
+                6000,
+                "warning",
+            )
+            return
+
         try:
             self._initialize_mode(mode_text, show_dialogs=True)
             self.settings_manager.set_current_mode(mode_text)
@@ -1098,7 +1120,11 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
             os.makedirs(base_dir, exist_ok=True)
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
             temp_file_path = os.path.join(base_dir, f"pasted_text_{timestamp}.txt")
-            with open(temp_file_path, "w", encoding="utf-8", errors="ignore") as temp_file:
+            # errors="replace" (not "ignore") - unencodable characters (e.g. an
+            # unpaired surrogate from a malformed Windows clipboard/drop payload) become
+            # a visible replacement character instead of silently vanishing from the
+            # saved attachment with no trace.
+            with open(temp_file_path, "w", encoding="utf-8", errors="replace") as temp_file:
                 temp_file.write(pasted_text)
 
             line_count = pasted_text.count("\n") + 1
@@ -1160,7 +1186,11 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
             suffix = self._guess_text_drop_suffix(dropped_text)
             temp_file_path = os.path.join(base_dir, f"dropped_context_{timestamp}{suffix}")
-            with open(temp_file_path, "w", encoding="utf-8", errors="ignore") as temp_file:
+            # errors="replace" (not "ignore") - unencodable characters (e.g. an
+            # unpaired surrogate from a malformed Windows clipboard/drop payload) become
+            # a visible replacement character instead of silently vanishing from the
+            # saved attachment with no trace.
+            with open(temp_file_path, "w", encoding="utf-8", errors="replace") as temp_file:
                 temp_file.write(dropped_text)
 
             line_count = dropped_text.count("\n") + 1

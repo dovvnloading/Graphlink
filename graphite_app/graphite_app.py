@@ -5,8 +5,11 @@ from graphite_window import ChatWindow
 from graphite_widgets import SplashScreen
 import graphite_licensing
 from graphite_config import apply_theme, set_current_model, sync_ollama_task_models
+from graphite_logging import configure_logging
 
 def main():
+    configure_logging()
+
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(True)
 
