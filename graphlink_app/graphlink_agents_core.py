@@ -8,6 +8,39 @@ import api_provider
 from graphlink_widgets import TokenEstimator
 from graphlink_memory import trim_history
 
+
+def resolve_branch_system_prompt(current_node, default_system_prompt):
+    """Resolve the effective system prompt for a chat branch.
+
+    Walks up to the branch root and, if a system-prompt note is attached there, uses its
+    content instead of the default. This reads live QGraphicsScene objects
+    (``parent_node``/``scene()``/``system_prompt_connections``/``prompt_note.content``),
+    so it MUST run on the GUI thread - QGraphicsScene is not thread-safe, and doing this
+    walk from a worker thread races node deletion / scene.clear() and can crash or read
+    torn state (doc/ARCHITECTURE_REVIEW_FINDINGS.md #20). Callers resolve it here on the
+    UI thread and hand the resulting string to the worker, which never touches the scene.
+
+    Returns the final system prompt string (the default if nothing overrides it).
+    """
+    final_system_prompt = default_system_prompt
+    if not (default_system_prompt or "").strip():
+        return default_system_prompt
+    if not current_node:
+        return final_system_prompt
+
+    root_node = current_node
+    while root_node.parent_node:
+        root_node = root_node.parent_node
+
+    if root_node.scene():
+        for conn in root_node.scene().system_prompt_connections:
+            if conn.end_node == root_node:
+                prompt_note = conn.start_node
+                if prompt_note.content:
+                    final_system_prompt = prompt_note.content
+                break
+    return final_system_prompt
+
 class ChatWorkerThread(QThread):
     """
     A QThread worker for handling standard chat conversations in the background.
@@ -36,6 +69,11 @@ class ChatWorkerThread(QThread):
         self.agent = agent
         self.conversation_history = conversation_history if isinstance(conversation_history, list) else []
         self.current_node = current_node
+        # __init__ runs on the GUI thread (the caller's thread), so resolve any
+        # branch-scoped system prompt from the live scene HERE, before the worker thread
+        # starts. run() must never walk the scene itself (#20).
+        default_prompt = getattr(agent, "system_prompt", "") if agent else ""
+        self.resolved_system_prompt = resolve_branch_system_prompt(current_node, default_prompt)
         self._cancel_event = threading.Event()
 
     def cancel(self):
@@ -56,6 +94,7 @@ class ChatWorkerThread(QThread):
                     self.conversation_history,
                     self.current_node,
                     cancellation_event=self._cancel_event,
+                    resolved_system_prompt=self.resolved_system_prompt,
                 )
             except Exception as exc:
                 error_holder["error"] = exc
@@ -152,13 +191,17 @@ class ChatWorker:
         self.token_estimator = TokenEstimator()
         self.MAX_TOKENS = 8000
         
-    def run(self, conversation_history, current_node, cancellation_event=None):
+    def run(self, conversation_history, current_node, cancellation_event=None, resolved_system_prompt=None):
         """
         Executes the chat logic for a single turn.
 
         Args:
             conversation_history (list): The list of messages in the conversation.
-            current_node (QGraphicsItem): The current node context to check for custom prompts.
+            current_node (QGraphicsItem): The current node context. Only used to resolve the
+                branch system prompt when `resolved_system_prompt` is not supplied.
+            resolved_system_prompt (str, optional): The branch system prompt already
+                resolved on the GUI thread. When provided, the scene is NOT walked here -
+                this is how the worker-thread path avoids touching QGraphicsScene (#20).
 
         Returns:
             str: The AI-generated response text.
@@ -166,23 +209,12 @@ class ChatWorker:
         Raises:
             Exception: Propagates exceptions from the API provider.
         """
-        final_system_prompt = self.system_prompt
-        use_system_prompt = bool((self.system_prompt or "").strip())
-
-        if use_system_prompt and current_node:
-            # Traverse up the node hierarchy to find the root of the current branch.
-            root_node = current_node
-            while root_node.parent_node:
-                root_node = root_node.parent_node
-            
-            # Check if the root node has a custom system prompt note attached.
-            if root_node.scene():
-                for conn in root_node.scene().system_prompt_connections:
-                    if conn.end_node == root_node:
-                        prompt_note = conn.start_node
-                        if prompt_note.content:
-                            final_system_prompt = prompt_note.content
-                        break
+        if resolved_system_prompt is not None:
+            final_system_prompt = resolved_system_prompt
+        else:
+            # Legacy/direct path (no pre-resolution): safe only on the GUI thread.
+            final_system_prompt = resolve_branch_system_prompt(current_node, self.system_prompt)
+        use_system_prompt = bool((final_system_prompt or "").strip())
 
         try:
             sys_tokens = 0
@@ -229,13 +261,16 @@ class ChatAgent:
         self.persona = persona or "(default persona)"
         self.system_prompt = f"You are {self.name}. {self.persona}"
         
-    def get_response(self, conversation_history, current_node, cancellation_event=None):
+    def get_response(self, conversation_history, current_node, cancellation_event=None, resolved_system_prompt=None):
         """
         Gets an AI response for a given conversation history.
 
         Args:
             conversation_history (list): The list of messages in the conversation.
             current_node (QGraphicsItem): The current node context.
+            resolved_system_prompt (str, optional): Branch system prompt already resolved
+                on the GUI thread; passed straight through so the worker never walks the
+                scene itself (#20).
 
         Returns:
             str: The AI-generated response text.
@@ -247,6 +282,7 @@ class ChatAgent:
             conversation_history,
             current_node,
             cancellation_event=cancellation_event,
+            resolved_system_prompt=resolved_system_prompt,
         )
         return ai_response
 

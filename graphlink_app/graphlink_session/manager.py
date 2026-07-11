@@ -17,6 +17,15 @@ class ChatSessionManager:
         self.save_thread = None
         self._is_saving = False
         self._save_pending = False
+        # A background save serializes the chat that was active when it STARTED. If the
+        # user switches chats (new chat / load) while that save is in flight, its result
+        # is stale: applying its returned id would restore the previous chat as "active"
+        # and the next autosave would then overwrite the wrong chat's row (silent data
+        # loss). `_context_epoch` bumps on every switch; `_saving_epoch` records the epoch
+        # a save started under, and _on_save_finished only adopts the result if they still
+        # match. See doc/ARCHITECTURE_REVIEW_FINDINGS.md.
+        self._context_epoch = 0
+        self._saving_epoch = 0
         self.serializer = SceneSerializer(window) if window else None
         self.deserializer = SceneDeserializer(window) if window else None
 
@@ -35,10 +44,24 @@ class ChatSessionManager:
     def _scene_has_content(self, scene):
         return bool(scene and scene.items())
 
+    def mark_context_switch(self):
+        """Signal that the active chat is changing (new chat, load chat, etc.).
+
+        Any background save already running was serializing the PREVIOUS chat; bumping
+        the epoch lets _on_save_finished recognize its result as stale so it does not
+        restore the previous chat_id over the newly-active one. Callers that reassign
+        `current_chat_id` for a context switch (ChatWindow.new_chat, load_chat) must call
+        this. See doc/ARCHITECTURE_REVIEW_FINDINGS.md.
+        """
+        self._context_epoch += 1
+
     def load_chat(self, chat_id):
         chat = self.db.load_chat(chat_id)
         if not chat:
             return None
+
+        # Switching away from whatever is currently active - invalidate any in-flight save.
+        self.mark_context_switch()
 
         if not self.window:
             self.current_chat_id = chat_id
@@ -93,6 +116,9 @@ class ChatSessionManager:
         self.save_thread.finished.connect(self._on_save_finished)
         self.save_thread.error.connect(self._on_save_error)
         self.save_thread.cancelled.connect(self._on_save_cancelled)
+        # Pin the epoch this save is being performed under, so its completion handler can
+        # tell whether the user switched chats while it ran.
+        self._saving_epoch = self._context_epoch
         try:
             self.save_thread.start()
         except Exception as error:
@@ -106,16 +132,31 @@ class ChatSessionManager:
 
     def _on_save_finished(self, new_chat_id):
         thread = self.save_thread
-        self.current_chat_id = new_chat_id
+        # Only adopt the saved chat as "active" if the user hasn't switched chats while
+        # this save ran. If they did, the row we just wrote (the previous chat) is correct
+        # and intact - we simply must not restore its id over the now-active chat, or the
+        # next autosave would overwrite the wrong row. The current chat keeps its own id
+        # (None for a brand-new chat -> it saves as its own INSERT next time).
+        context_unchanged = self._saving_epoch == self._context_epoch
+        if context_unchanged:
+            self.current_chat_id = new_chat_id
         self._is_saving = False
         self.save_thread = None
         queued = self._save_pending
         self._save_pending = False
         if thread is not None:
             thread.deleteLater()
-        print(f"Background save completed for chat ID: {new_chat_id}")
-        if hasattr(self.window, "update_title_bar"):
-            self.window.update_title_bar()
+        if context_unchanged:
+            print(f"Background save completed for chat ID: {new_chat_id}")
+            if hasattr(self.window, "update_title_bar"):
+                self.window.update_title_bar()
+        else:
+            print(
+                f"Background save completed for a previous chat (id {new_chat_id}); "
+                "active chat changed mid-save, so it is not restored as current."
+            )
+        # A queued save always targets the CURRENT scene + CURRENT chat id, both of which
+        # are now consistent, so it is safe to run regardless of the epoch check above.
         if queued:
             self.save_current_chat()
 

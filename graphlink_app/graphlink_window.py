@@ -1298,5 +1298,5 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
                 self._clear_loading_animation()
                 self._clear_pending_response_preview()
             if hasattr(self, 'pin_overlay') and self.pin_overlay: self.pin_overlay.clear_pins()
-            self.session_manager.current_chat_id = None; scene.clear(); self.current_node = None; self.message_input.setPlaceholderText("Type your message..."); self.update_title_bar(); self.reset_token_counter(); return True
+            self.session_manager.mark_context_switch(); self.session_manager.current_chat_id = None; scene.clear(); self.current_node = None; self.message_input.setPlaceholderText("Type your message..."); self.update_title_bar(); self.reset_token_counter(); return True
         return False

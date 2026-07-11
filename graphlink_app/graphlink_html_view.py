@@ -13,12 +13,101 @@ from graphlink_plugins.graphlink_plugin_context_menu import PluginNodeContextMen
 import json
 
 try:
+    from PySide6.QtWidgets import QApplication
     from PySide6.QtWebEngineWidgets import QWebEngineView
-    from PySide6.QtWebEngineCore import QWebEngineScript
+    from PySide6.QtWebEngineCore import (
+        QWebEnginePage,
+        QWebEngineProfile,
+        QWebEngineScript,
+        QWebEngineSettings,
+        QWebEngineUrlRequestInterceptor,
+    )
     WEBENGINE_AVAILABLE = True
 except ImportError:
     # Handle the case where WebEngine might not be installed but other parts of the app are
     WEBENGINE_AVAILABLE = False
+
+
+# Schemes a self-contained local preview legitimately needs: the setHtml document itself
+# (about:), inline data: URIs, and JS-created blob: URLs. Everything else - http(s), file,
+# ftp, ws(s) - would leave the machine or reach localhost/intranet/disk.
+_LOCAL_PREVIEW_SCHEMES = frozenset({"about", "data", "blob"})
+
+
+def preview_url_is_allowed(url):
+    """Whether a sub-resource/navigation request from the HTML preview may proceed.
+
+    The HTML Renderer previews AI-generated and session-loaded markup (see
+    graphlink_plugin_portal / deserializers, which auto-render it with no prompt). Its
+    QWebEngineView runs JavaScript, so an injected ``<script>``/``onerror`` payload could
+    otherwise exfiltrate page content to a remote host or hit the user's localhost/intranet
+    (SSRF/CSRF from their network position). We treat the preview as an offline sandbox:
+    only local, self-contained schemes are permitted; any request that would leave the
+    machine is blocked. See doc/ARCHITECTURE_REVIEW_FINDINGS.md.
+    """
+    try:
+        scheme = (url.scheme() or "").lower()
+    except AttributeError:
+        return False
+    return scheme in _LOCAL_PREVIEW_SCHEMES
+
+
+if WEBENGINE_AVAILABLE:
+
+    class _LocalOnlyRequestInterceptor(QWebEngineUrlRequestInterceptor):
+        """Blocks every preview request whose scheme isn't local (see
+        preview_url_is_allowed). Applied to the preview profile so it covers <img>/<script>/
+        fetch/XHR/form-POST/navigation uniformly, regardless of how the payload was crafted.
+        """
+
+        def interceptRequest(self, info):
+            if not preview_url_is_allowed(info.requestUrl()):
+                info.block(True)
+
+    # One dedicated, process-wide preview profile carries the interceptor. Created lazily
+    # (never at import time - a QWebEngine QObject built before QApplication exists can
+    # crash) and cached, so we do NOT mutate the shared default profile on every view and
+    # do NOT create a new profile per view. Lifetime is the crux of QtWebEngine stability:
+    # - the profile is parented to the QApplication, so C++ owns it and it outlives every
+    #   preview page (a profile destroyed before its pages crashes);
+    # - the interceptor is parented to the profile, so C++ owns it too - the profile can
+    #   never call back into a Python object that GC already reclaimed.
+    _PREVIEW_PROFILE = None
+
+    def _get_preview_profile():
+        global _PREVIEW_PROFILE
+        if _PREVIEW_PROFILE is None:
+            app = QApplication.instance()
+            # Off-the-record profile: no on-disk cache/cookies for previewed content.
+            profile = QWebEngineProfile(app)
+            interceptor = _LocalOnlyRequestInterceptor(profile)
+            profile.setUrlRequestInterceptor(interceptor)
+            _PREVIEW_PROFILE = profile
+        return _PREVIEW_PROFILE
+
+    def _harden_preview_web_view(web_view):
+        """Lock a preview QWebEngineView down to an offline, self-contained sandbox.
+
+        The view is given its own page backed by the shared local-only profile, so every
+        request (``<img>``/``<script>``/fetch/XHR/form-POST/navigation) is filtered through
+        the interceptor regardless of how the payload was crafted.
+        """
+        profile = _get_preview_profile()
+        page = QWebEnginePage(profile, web_view)  # child of the view: destroyed with it
+        web_view.setPage(page)
+        settings = web_view.settings()
+        # Defense in depth alongside the interceptor: no disk reads, no remote pulls from
+        # local content, no clipboard access, no popups.
+        for attr, value in (
+            ("LocalContentCanAccessFileUrls", False),
+            ("LocalContentCanAccessRemoteUrls", False),
+            ("JavascriptCanAccessClipboard", False),
+            ("JavascriptCanPaste", False),
+            ("JavascriptCanOpenWindows", False),
+        ):
+            enum_val = getattr(QWebEngineSettings.WebAttribute, attr, None)
+            if enum_val is not None:
+                settings.setAttribute(enum_val, value)
 
 
 class HtmlPopoutWindow(QDialog):
@@ -30,6 +119,7 @@ class HtmlPopoutWindow(QDialog):
         self.setGeometry(200, 200, 1024, 768)
 
         self.web_view = QWebEngineView()
+        _harden_preview_web_view(self.web_view)
         self._inject_scrollbar_style()
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -244,6 +334,7 @@ class HtmlViewNode(QGraphicsObject, HoverAnimationMixin):
         
         if WEBENGINE_AVAILABLE:
             self.web_view = QWebEngineView()
+            _harden_preview_web_view(self.web_view)
             self._inject_scrollbar_style()
             self.web_view.setStyleSheet("background-color: #ffffff; border-radius: 4px;")
             webview_layout.addWidget(self.web_view)
