@@ -1,6 +1,9 @@
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
+
+import graphite_secrets
 
 
 def _is_llama_cpp_gguf_path(path_value) -> bool:
@@ -10,6 +13,11 @@ def _is_llama_cpp_gguf_path(path_value) -> bool:
 
 class SettingsManager:
     NOTIFICATION_TYPES = ("info", "success", "warning", "error")
+    # Bumped whenever session.dat's shape changes in a way future code needs to branch
+    # on. No migration logic reads this yet (see doc/ARCHITECTURE_REVIEW_FINDINGS.md #49)
+    # - it's the version marker itself, not a migration framework. Existing pre-this-field
+    # files backfill to 1 on next load, same as every other key here.
+    CURRENT_SCHEMA_VERSION = 1
 
     """
     Manages all persistent application state and user settings.
@@ -17,10 +25,33 @@ class SettingsManager:
     This class reads from and writes to a local state file (`session.dat`) to
     persist data across application launches.
     """
-    def __init__(self):
-        self.state_file = Path.home() / '.graphlink' / 'session.dat'
+    # Settings fields that hold secrets - encrypted at rest via graphite_secrets
+    # (Windows DPAPI, "dpapi:"-prefixed values; see that module for the tradeoffs).
+    SECRET_KEYS = ("openai_api_key", "anthropic_api_key", "gemini_api_key", "github_access_token")
+
+    def __init__(self, state_file: Path | str | None = None):
+        self.state_file = Path(state_file) if state_file is not None else Path.home() / '.graphlink' / 'session.dat'
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
         self.state = self._load_state()
+        self._migrate_plaintext_secrets()
+
+    def _migrate_plaintext_secrets(self):
+        """Encrypt any legacy plaintext secret still on disk from before #14 was fixed.
+
+        Runs once per launch: if DPAPI is available and a secret field holds a
+        plaintext value, re-protect it and persist immediately so the plaintext leaves
+        disk on the first launch after upgrading, not whenever the user next happens
+        to touch a setting. Where DPAPI is unavailable, protect() returns the value
+        unchanged, so nothing is rewritten and nothing regresses."""
+        migrated = False
+        for key in self.SECRET_KEYS:
+            current_value = str(self.state.get(key, "") or "")
+            protected_value = graphite_secrets.protect(current_value)
+            if protected_value != current_value:
+                self.state[key] = protected_value
+                migrated = True
+        if migrated:
+            self._save_state()
 
     def _load_state(self):
         if not self.state_file.exists():
@@ -109,12 +140,35 @@ class SettingsManager:
                     state['update_latest_version'] = ''
                 if 'update_available' not in state:
                     state['update_available'] = False
+                if 'schema_version' not in state:
+                    state['schema_version'] = self.CURRENT_SCHEMA_VERSION
                 return state
-        except (json.JSONDecodeError, IOError):
+        except (json.JSONDecodeError, IOError) as e:
+            self._backup_corrupt_state_file(e)
             return self._create_initial_state()
+
+    def _backup_corrupt_state_file(self, error):
+        # Preserve the unreadable file for forensic recovery instead of silently
+        # overwriting it with defaults - previously a corrupt session.dat (which,
+        # pre-atomic-write, could happen from a crash mid-save) was destroyed with no
+        # trace and no warning the moment it failed to parse.
+        try:
+            timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            backup_path = self.state_file.with_name(f"{self.state_file.name}.corrupted-{timestamp}")
+            self.state_file.replace(backup_path)
+            print(
+                f"Warning: {self.state_file} could not be read ({error}). "
+                f"Backed it up to {backup_path} and reset settings to defaults."
+            )
+        except OSError as backup_error:
+            print(
+                f"Warning: {self.state_file} could not be read ({error}) and could not "
+                f"be backed up ({backup_error}). Resetting settings to defaults."
+            )
 
     def _create_initial_state(self):
         state = {
+            "schema_version": self.CURRENT_SCHEMA_VERSION,
             "theme": "dark",
             "show_token_counter": True,
             "ollama_chat_model": "qwen3:8b",
@@ -159,12 +213,32 @@ class SettingsManager:
         return state
 
     def _save_state(self, state_data=None):
+        # Write to a temp file and atomically rename it into place (os.replace is
+        # atomic on both Windows and POSIX when source/dest are on the same volume,
+        # guaranteed here since the temp file lives next to state_file). Previously
+        # this wrote directly to state_file - a crash or power loss mid-write left a
+        # truncated/corrupt file, which _load_state's JSONDecodeError handler then
+        # silently replaced with defaults, destroying every saved API key and
+        # preference with no warning. Now a crash can only ever leave the *temp* file
+        # incomplete; state_file itself is always either the old complete version or
+        # the new complete version, never something in between.
         data_to_save = state_data if state_data else self.state
+        tmp_path = self.state_file.with_name(self.state_file.name + ".tmp")
         try:
-            with open(self.state_file, 'w') as f:
+            with open(tmp_path, 'w') as f:
                 json.dump(data_to_save, f, indent=4)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, self.state_file)
         except IOError as e:
             print(f"Error: Could not save session state to {self.state_file}. Reason: {e}")
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    def get_schema_version(self):
+        return self.state.get("schema_version", self.CURRENT_SCHEMA_VERSION)
 
     def get_theme(self):
         return self.state.get("theme", "dark")
@@ -457,16 +531,16 @@ class SettingsManager:
         return self.state.get("api_base_url", "https://api.openai.com/v1")
         
     def get_openai_key(self):
-        return self.state.get("openai_api_key", "")
+        return graphite_secrets.unprotect(self.state.get("openai_api_key", ""))
 
     def get_anthropic_key(self):
-        return self.state.get("anthropic_api_key", "")
-        
+        return graphite_secrets.unprotect(self.state.get("anthropic_api_key", ""))
+
     def get_gemini_key(self):
-        return self.state.get("gemini_api_key", "")
+        return graphite_secrets.unprotect(self.state.get("gemini_api_key", ""))
 
     def get_github_token(self):
-        return self.state.get("github_access_token", "")
+        return graphite_secrets.unprotect(self.state.get("github_access_token", ""))
         
     def get_api_models(self):
         return self.state.get("api_models", {})
@@ -481,9 +555,9 @@ class SettingsManager:
     ):
         self.state["api_provider"] = provider
         self.state["api_base_url"] = base_url
-        self.state["openai_api_key"] = openai_key
-        self.state["anthropic_api_key"] = anthropic_key
-        self.state["gemini_api_key"] = gemini_key
+        self.state["openai_api_key"] = graphite_secrets.protect(openai_key)
+        self.state["anthropic_api_key"] = graphite_secrets.protect(anthropic_key)
+        self.state["gemini_api_key"] = graphite_secrets.protect(gemini_key)
         self._save_state()
 
     def set_api_models(self, models_dict: dict):
@@ -491,7 +565,7 @@ class SettingsManager:
         self._save_state()
 
     def set_github_token(self, token: str):
-        self.state["github_access_token"] = token
+        self.state["github_access_token"] = graphite_secrets.protect(token)
         self._save_state()
 
     def reset_api_settings(self):

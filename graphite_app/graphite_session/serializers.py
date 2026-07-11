@@ -1,3 +1,5 @@
+from uuid import uuid4
+
 from graphite_conversation_node import ConversationNode
 from graphite_html_view import HtmlViewNode
 from graphite_node import ChatNode, CodeNode, DocumentNode, ImageNode, ThinkingNode
@@ -13,6 +15,7 @@ from graphite_session.content_codec import (
     serialize_history,
 )
 from graphite_session.scene_index import (
+    CURRENT_CHAT_SCHEMA_VERSION,
     build_item_index,
     get_all_nodes,
     get_all_serializable_items,
@@ -30,6 +33,23 @@ class SceneSerializer:
     def _scene(self):
         return self.window.chat_view.scene()
 
+    @staticmethod
+    def _node_persistent_id(node):
+        """Return the node's stable identity for cross-referencing in the payload.
+
+        Graph references used to be serialized purely as list positions
+        (all_nodes_list.index(node)), which silently corrupt when a load skips any
+        node and later positions shift (doc/ARCHITECTURE_REVIEW_FINDINGS.md #47).
+        IDs are assigned lazily, stored on the node object so they stay stable across
+        saves within a session, and restored from the payload on load so they stay
+        stable across sessions too.
+        """
+        persistent_id = getattr(node, "persistent_id", None)
+        if not persistent_id:
+            persistent_id = uuid4().hex
+            node.persistent_id = persistent_id
+        return persistent_id
+
     def serialize_pin(self, pin):
         return {
             "title": pin.title,
@@ -43,9 +63,14 @@ class SceneSerializer:
         }
 
     def _serialize_basic_connection(self, connection, all_nodes_list):
+        # Indices are still written for backward compatibility (older app versions
+        # read only them); IDs are the preferred reference on load - they survive a
+        # node being skipped, where positional references silently shift (#47).
         return {
             "start_node_index": all_nodes_list.index(connection.start_node),
             "end_node_index": all_nodes_list.index(connection.end_node),
+            "start_node_id": self._node_persistent_id(connection.start_node),
+            "end_node_id": self._node_persistent_id(connection.end_node),
         }
 
     def serialize_connection(self, connection, all_nodes_list):
@@ -66,9 +91,13 @@ class SceneSerializer:
         return self._serialize_basic_connection(connection, all_nodes_list)
 
     def serialize_system_prompt_connection(self, connection, notes_list, nodes_list):
+        # Notes are never skipped on load, so the note side stays positional; the
+        # node side gets an ID because scene.nodes positions shift if a chat node
+        # is skipped (#47).
         return {
             "start_note_index": notes_list.index(connection.start_node),
             "end_node_index": nodes_list.index(connection.end_node),
+            "end_node_id": self._node_persistent_id(connection.end_node),
         }
 
     def serialize_pycoder_connection(self, connection, all_nodes_list):
@@ -96,6 +125,7 @@ class SceneSerializer:
         return {
             "start_node_index": nodes_list.index(connection.start_node),
             "end_note_index": notes_list.index(connection.end_node),
+            "start_node_id": self._node_persistent_id(connection.start_node),
         }
 
     def serialize_node(self, node, all_nodes_list=None):
@@ -251,6 +281,25 @@ class SceneSerializer:
             }
         return None
 
+    def _serialize_node_with_identity(self, node, all_nodes_list):
+        """serialize_node() plus the stable-ID fields (#47).
+
+        Stamped here, outside the per-type isinstance chain, so every node type gets
+        identity fields without 12 parallel edits: `id` on every payload, and
+        `children_ids` alongside any `children_indices` (positions still written for
+        older readers; IDs preferred by the deserializer).
+        """
+        payload = self.serialize_node(node, all_nodes_list)
+        if payload is None:
+            return payload
+
+        payload["id"] = self._node_persistent_id(node)
+        if "children_indices" in payload:
+            payload["children_ids"] = [
+                self._node_persistent_id(child) for child in node.children
+            ]
+        return payload
+
     def serialize_frame(self, frame, frame_items_map):
         return {
             "items": [frame_items_map[item] for item in frame.nodes if item in frame_items_map],
@@ -330,7 +379,8 @@ class SceneSerializer:
         )
 
         chat_data = {
-            "nodes": [self.serialize_node(node, all_nodes_list) for node in all_nodes_list],
+            "schema_version": CURRENT_CHAT_SCHEMA_VERSION,
+            "nodes": [self._serialize_node_with_identity(node, all_nodes_list) for node in all_nodes_list],
             "system_prompt_connections": [
                 self.serialize_system_prompt_connection(connection, notes, scene.nodes)
                 for connection in scene.system_prompt_connections

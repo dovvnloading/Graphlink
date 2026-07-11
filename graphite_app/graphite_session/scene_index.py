@@ -8,6 +8,14 @@ from graphite_plugins.graphite_plugin_gitlink import GitlinkNode
 from graphite_pycoder import PyCoderNode
 from graphite_web import WebNode
 
+# Bumped whenever the saved chat payload's shape changes in a way future load code needs
+# to branch on. No migration logic reads this yet (see
+# doc/ARCHITECTURE_REVIEW_FINDINGS.md #49) - it's the version marker itself, not a
+# migration framework. Payloads saved before this field existed simply have no
+# "schema_version" key; deserializers.py already tolerates missing/legacy shapes
+# (nodes/items/nested data.nodes) so this is purely additive.
+CURRENT_CHAT_SCHEMA_VERSION = 1
+
 NODE_LIST_NAMES = (
     "nodes",
     "code_nodes",

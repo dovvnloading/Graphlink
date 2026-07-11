@@ -26,12 +26,26 @@ class SaveWorkerThread(QThread):
         return self._stop_event.is_set()
 
     def _fallback_title(self):
-        words = re.findall(r"[A-Za-z0-9']+", str(self.first_message or ""))
+        # \w is unicode-aware by default for str patterns, so this keeps CJK/Cyrillic/
+        # accented-Latin etc. first messages intact instead of stripping them down to
+        # nothing (which used to force every non-ASCII chat to a timestamp title).
+        words = re.findall(r"[\w']+", str(self.first_message or ""), re.UNICODE)
         if words:
             title = " ".join(words[:5]).strip()
             if title:
                 return title[:80]
         return f"Chat {datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+    def _generate_title(self):
+        generate = getattr(self.title_generator, "generate_title", None)
+        if callable(generate):
+            try:
+                title = str(generate(self.first_message) or "").strip()
+                if title:
+                    return title
+            except Exception:
+                pass
+        return self._fallback_title()
 
     def run(self):
         try:
@@ -39,10 +53,13 @@ class SaveWorkerThread(QThread):
                 self.cancelled.emit()
                 return
 
-            new_chat_id = self.current_chat_id
+            # Resolve (title, chat_id_for_save) first - chat_id_for_save is the id to
+            # UPDATE, or None to INSERT a new chat - then make exactly one atomic call
+            # that writes the chat blob, notes, and pins together (see
+            # save_chat_atomically's docstring / doc/ARCHITECTURE_REVIEW_FINDINGS.md #52).
+            chat_id_for_save = None
             if not self.current_chat_id:
-                title = self._fallback_title()
-                new_chat_id = self.db.save_chat(title, self.chat_data)
+                title = self._generate_title()
             else:
                 chat = self.db.load_chat(self.current_chat_id)
                 if self._is_cancelled():
@@ -50,18 +67,21 @@ class SaveWorkerThread(QThread):
                     return
                 if chat:
                     title = chat["title"]
-                    self.db.update_chat(self.current_chat_id, title, self.chat_data)
+                    chat_id_for_save = self.current_chat_id
                 else:
-                    title = self._fallback_title()
-                    new_chat_id = self.db.save_chat(title, self.chat_data)
+                    title = self._generate_title()
 
             if self._is_cancelled():
                 self.cancelled.emit()
                 return
 
-            if new_chat_id:
-                self.db.save_notes(new_chat_id, self.chat_data.get("notes_data", []))
-                self.db.save_pins(new_chat_id, self.chat_data.get("pins_data", []))
+            new_chat_id = self.db.save_chat_atomically(
+                chat_id_for_save,
+                title,
+                self.chat_data,
+                self.chat_data.get("notes_data", []),
+                self.chat_data.get("pins_data", []),
+            )
 
             self.finished.emit(new_chat_id)
         except Exception as exc:

@@ -50,9 +50,24 @@ class SceneDeserializer:
         if hasattr(end_node, "incoming_connection"):
             end_node.incoming_connection = connection
 
+    def _resolve_node_ref(self, data, id_key, index_key, all_nodes_map):
+        """Resolve a serialized node reference, preferring the stable ID (#47).
+
+        IDs survive a node being skipped during load; positional indices are the
+        legacy fallback for payloads saved before IDs existed. Both resolutions can
+        legitimately return None (the referenced node itself failed to load) - the
+        caller drops the reference, which is safe; what IDs prevent is a reference
+        silently resolving to the *wrong* node.
+        """
+        nodes_by_id = getattr(self, "_nodes_by_id", None) or {}
+        node_id = data.get(id_key)
+        if node_id and node_id in nodes_by_id:
+            return nodes_by_id[node_id]
+        return all_nodes_map.get(data.get(index_key))
+
     def _deserialize_basic_connection(self, data, scene, all_nodes_map, connection_cls, target_list_name):
-        start_node = all_nodes_map.get(data["start_node_index"])
-        end_node = all_nodes_map.get(data["end_node_index"])
+        start_node = self._resolve_node_ref(data, "start_node_id", "start_node_index", all_nodes_map)
+        end_node = self._resolve_node_ref(data, "end_node_id", "end_node_index", all_nodes_map)
         if not start_node or not end_node:
             return None
         connection = connection_cls(start_node, end_node)
@@ -115,7 +130,7 @@ class SceneDeserializer:
 
     def deserialize_system_prompt_connection(self, data, scene, notes_map, nodes_map):
         start_note = notes_map.get(data["start_note_index"])
-        end_node = nodes_map.get(data["end_node_index"])
+        end_node = self._resolve_node_ref(data, "end_node_id", "end_node_index", nodes_map)
         if not start_note or not end_node:
             print("Warning: Skipping orphaned system prompt connection during load.")
             return None
@@ -161,7 +176,7 @@ class SceneDeserializer:
         )
 
     def deserialize_group_summary_connection(self, data, scene, nodes_map, notes_map):
-        start_node = nodes_map.get(data["start_node_index"])
+        start_node = self._resolve_node_ref(data, "start_node_id", "start_node_index", nodes_map)
         end_note = notes_map.get(data["end_note_index"])
         if not start_node or not end_note:
             print("Warning: Skipping orphaned group summary connection.")
@@ -414,18 +429,33 @@ class SceneDeserializer:
         return container
 
     def _restore_children(self, node_payloads, all_nodes_map):
+        nodes_by_id = getattr(self, "_nodes_by_id", None) or {}
         for index, node_data in enumerate(node_payloads):
             if not isinstance(node_data, dict):
                 continue
             node = all_nodes_map.get(index)
             if not node:
                 continue
-            if isinstance(node, CHILD_LINK_NODE_TYPES) and "children_indices" in node_data:
-                for child_index in node_data["children_indices"]:
-                    child_node = all_nodes_map.get(child_index)
-                    if child_node:
-                        node.children.append(child_node)
-                        child_node.parent_node = node
+            if not isinstance(node, CHILD_LINK_NODE_TYPES):
+                continue
+            if "children_indices" not in node_data and "children_ids" not in node_data:
+                continue
+
+            # Prefer stable IDs (#47), falling back per-position to the legacy index
+            # so pre-ID payloads (and any position whose ID didn't resolve) keep
+            # working. Position i in children_ids corresponds to position i in
+            # children_indices - both are serialized from the same node.children list.
+            child_ids = node_data.get("children_ids") or []
+            child_indices = node_data.get("children_indices") or []
+            for position in range(max(len(child_ids), len(child_indices))):
+                child_node = None
+                if position < len(child_ids):
+                    child_node = nodes_by_id.get(child_ids[position])
+                if child_node is None and position < len(child_indices):
+                    child_node = all_nodes_map.get(child_indices[position])
+                if child_node:
+                    node.children.append(child_node)
+                    child_node.parent_node = node
 
     def _load_notes(self, scene, notes_data):
         notes_map = {}
@@ -492,6 +522,9 @@ class SceneDeserializer:
         scene = self._scene()
         scene.clear()
         self.window.current_node = None
+        # payload id -> node, for ID-preferred reference resolution (#47). Reset per
+        # restore so a previous chat's ids can never bleed into this one.
+        self._nodes_by_id = {}
 
         try:
             chat_data = chat.get("data")
@@ -523,8 +556,27 @@ class SceneDeserializer:
                 )
                 node_payloads = []
 
+            # chat_nodes_map keys must be the node's position among chat-type
+            # *payloads* (the save-side scene.nodes order), not its position in the
+            # loaded scene.nodes - those diverge whenever a chat node is skipped,
+            # which used to attach system-prompt/group-summary connections to the
+            # wrong chat node (#47).
+            chat_nodes_map = {}
+            chat_payload_position = 0
             for index, node_data in enumerate(node_payloads):
-                self.deserialize_node(index, node_data, all_nodes_map)
+                node = self.deserialize_node(index, node_data, all_nodes_map)
+                if not isinstance(node_data, dict):
+                    continue
+                payload_id = node_data.get("id")
+                if node is not None and payload_id:
+                    # Restore the stable identity so re-saving this chat keeps the
+                    # same ids instead of minting new ones every load/save cycle.
+                    node.persistent_id = payload_id
+                    self._nodes_by_id[payload_id] = node
+                if node_data.get("node_type", "chat") == "chat":
+                    if node is not None:
+                        chat_nodes_map[chat_payload_position] = node
+                    chat_payload_position += 1
 
             self._restore_children(node_payloads, all_nodes_map)
 
@@ -534,24 +586,35 @@ class SceneDeserializer:
             for index, chart_data in enumerate(chat_data.get("charts", [])):
                 charts_map[index] = self.deserialize_chart(chart_data, scene, all_nodes_map)
 
+            # Frame/container item references are positions in the SAVE-side item
+            # space (all payload nodes, then notes, then charts, then frames - see
+            # scene_index.get_all_serializable_items). Offsets must therefore come
+            # from the original payload counts, not from how many nodes survived the
+            # load: deriving them from the survivor count shifted every later slot
+            # whenever any node was skipped, silently attaching frames/containers to
+            # the wrong items (#47).
+            node_slot_count = len(node_payloads)
+            note_slot_count = len(notes_data)
+            chart_slot_count = len(chat_data.get("charts", []))
+
             frame_source_map = dict(all_nodes_map)
-            chart_offset = len(frame_source_map)
             for index, chart in charts_map.items():
-                frame_source_map[chart_offset + index] = chart
+                frame_source_map[node_slot_count + index] = chart
 
             frames_map = {}
             for index, frame_data in enumerate(chat_data.get("frames", [])):
                 frames_map[index] = self.deserialize_frame(frame_data, scene, frame_source_map)
 
-            all_items_list = list(all_nodes_map.values()) + list(notes_map.values()) + list(charts_map.values()) + list(
-                frames_map.values()
-            )
-            all_items_map = {index: item for index, item in enumerate(all_items_list)}
+            all_items_map = dict(all_nodes_map)
+            for index, note in notes_map.items():
+                all_items_map[node_slot_count + index] = note
+            for index, chart in charts_map.items():
+                all_items_map[node_slot_count + note_slot_count + index] = chart
+            for index, frame in frames_map.items():
+                all_items_map[node_slot_count + note_slot_count + chart_slot_count + index] = frame
 
             for container_data in chat_data.get("containers", []):
                 self.deserialize_container(container_data, scene, all_items_map)
-
-            chat_nodes_map = {index: node for index, node in enumerate(scene.nodes)}
 
             connection_groups = (
                 ("connections", self.deserialize_connection),
