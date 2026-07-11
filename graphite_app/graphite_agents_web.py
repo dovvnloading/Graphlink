@@ -208,7 +208,11 @@ Based on the rules, is this content safe and relevant? Respond with only `SAFE` 
             
             response = api_provider.chat(task=config.TASK_WEB_VALIDATE, messages=messages)
             decision = response['message']['content'].strip().upper()
-            
+
+            # Check UNSAFE first - "SAFE" is a substring of "UNSAFE", so a plain
+            # "SAFE" in decision check would treat an explicit UNSAFE verdict as safe.
+            if "UNSAFE" in decision:
+                return False
             return "SAFE" in decision
         except Exception as e:
             print(f"Content validation failed: {e}")
