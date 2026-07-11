@@ -14,7 +14,7 @@ Describe the change in 2-5 sentences.
 
 - [ ] App launches
 - [ ] Relevant workflow was exercised manually
-- [ ] `python -m compileall -q graphite_app` passes
+- [ ] `python -m compileall -q graphlink_app` passes
 
 ## UI Notes
 

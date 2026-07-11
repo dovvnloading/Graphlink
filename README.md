@@ -20,7 +20,7 @@ Graphlink replaces the linear chat window with a visual canvas of connected node
 
 It is built with Python and PySide6, runs entirely on your machine, and works with local model runtimes (Ollama, llama.cpp) as well as hosted APIs (OpenAI-compatible, Anthropic Claude, Google Gemini).
 
-> Graphlink is the second generation of the **Graphite** project, renamed to avoid collision with unrelated software. Many modules and folders still use the `graphite` name while that transition finishes.
+> Graphlink is the second generation of the **Graphite** project, renamed to avoid collision with unrelated software. The rename is complete: modules, folders, and the UI all use the `graphlink` name.
 
 ## Table of Contents
 
@@ -81,20 +81,20 @@ Attach these specialist nodes to a branch from the plugin picker:
 
 ```powershell
 git clone <your-repo-url>
-cd graphite_app
+cd graphlink_app
 
 py -m venv .venv
 .venv\Scripts\Activate.ps1
 pip install --upgrade pip
 pip install -r requirements.txt
 
-cd graphite_app
-python graphite_app.py
+cd graphlink_app
+python graphlink_app.py
 ```
 
-Dependencies (PySide6, the provider SDKs, `llama-cpp-python`, and the export/parsing libraries) install from `requirements.txt` in a single step. If you prefer Visual Studio, open `graphite_app.sln`.
+Dependencies (PySide6, the provider SDKs, `llama-cpp-python`, and the export/parsing libraries) install from `requirements.txt` in a single step. If you prefer Visual Studio, open `graphlink_app.sln`.
 
-> The app is script-oriented: launch it from the inner `graphite_app/` directory so its imports resolve.
+> The app is script-oriented: launch it from the inner `graphlink_app/` directory so its imports resolve.
 
 On first launch, Graphlink creates `~/.graphlink/` to hold your sessions and settings (see [Architecture](#architecture)).
 
@@ -136,8 +136,8 @@ The app reads these as fallbacks when no key is saved in Settings, or for model 
 
 | Variable | Purpose |
 | --- | --- |
-| `GRAPHITE_ANTHROPIC_API_KEY` / `ANTHROPIC_API_KEY` | Anthropic Claude key |
-| `GRAPHITE_GEMINI_API_KEY` / `GEMINI_API_KEY` | Google Gemini key |
+| `GRAPHLINK_ANTHROPIC_API_KEY` / `ANTHROPIC_API_KEY` | Anthropic Claude key |
+| `GRAPHLINK_GEMINI_API_KEY` / `GEMINI_API_KEY` | Google Gemini key |
 | `LLAMA_CPP_MODELS` | Root folder scanned for GGUF files in Llama.cpp mode |
 | `OLLAMA_MODELS` | Override for Ollama's model storage root during model discovery |
 
@@ -160,17 +160,17 @@ Your data lives entirely on your machine:
 ~/.graphlink/session.dat  local settings and saved credentials
 ```
 
-For a detailed, current map of where behavior lives in the codebase, see [GRAPHITE_REPO_NAVIGATION.md](GRAPHITE_REPO_NAVIGATION.md).
+For a detailed, current map of where behavior lives in the codebase, see [GRAPHLINK_REPO_NAVIGATION.md](GRAPHLINK_REPO_NAVIGATION.md).
 
 ## Contributing
 
-Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, development conventions, and pull-request expectations. The repository has a `pytest` suite under `graphite_app/tests/`; run it with `pytest` from the inner `graphite_app/` directory, and a GitHub Actions workflow additionally runs a compile smoke check on every push.
+Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, development conventions, and pull-request expectations. The repository has a `pytest` suite under `graphlink_app/tests/`; run it with `pytest` from the inner `graphlink_app/` directory, and a GitHub Actions workflow additionally runs a compile smoke check on every push.
 
 ## Troubleshooting
 
 | Symptom | Things to check |
 | --- | --- |
-| App does not start | Dependencies installed from `requirements.txt`; launched from the inner `graphite_app/` directory; Python 3.10+. |
+| App does not start | Dependencies installed from `requirements.txt`; launched from the inner `graphlink_app/` directory; Python 3.10+. |
 | Ollama features fail | Ollama installed and running; the selected model has been pulled and exists locally. |
 | Llama.cpp features fail | `llama-cpp-python` installed; the configured path points to a real `.gguf`; try a `chat_format` override or lower runtime settings. Use Ollama or API mode for image/audio. |
 | API mode fails | API key present; base URL correct for OpenAI-compatible mode; the selected models exist on the endpoint. |

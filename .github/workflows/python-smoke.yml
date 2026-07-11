@@ -22,10 +22,10 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Compile Python sources
-        run: python -m compileall -q graphite_app
+        run: python -m compileall -q graphlink_app
 
       - name: Run pytest
-        working-directory: graphite_app
+        working-directory: graphlink_app
         run: pytest
         env:
           QT_QPA_PLATFORM: offscreen

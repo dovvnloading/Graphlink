@@ -1,6 +1,6 @@
 # UI Color Refactor Plan and Execution Log
 
-**Project:** Graphite App
+**Project:** Graphlink App
 **Date:** 2026-07-07
 **Status:** In progress (core sweep complete)
 
@@ -9,61 +9,61 @@ The UI currently had a high saturation look driven by hard-coded accent hex valu
 
 ## Refactor Principles
 - Prefer **semantic roles** over fixed hex values.
-- Keep one source of truth for palette and semantics in `graphite_styles.py` and `graphite_config.py`.
+- Keep one source of truth for palette and semantics in `graphlink_styles.py` and `graphlink_config.py`.
 - Keep status messaging visually meaningful (`success`, `warning`, `error`, `info`) without neon/high-chroma tones.
 - Preserve accessibility and contrast while reducing visual noise.
 
 ## Files Updated
-- `graphite_app/graphite_styles.py`
+- `graphlink_app/graphlink_styles.py`
   - Added `MUTED_THEME` and `MUTED_FRAME_COLORS`.
   - Tuned `DARK_THEME` and `MONOCHROMATIC_THEME` to lower chroma.
   - Added `MUTED_PALETTE` and updated `THEMES` mapping.
   - Reduced bright accent pressure in `DARK_PALETTE` and frame accents.
 
-- `graphite_app/graphite_config.py`
+- `graphlink_app/graphlink_config.py`
   - Added `is_muted_theme()` helper.
   - Updated `get_semantic_color`, `get_neutral_button_colors`, and `get_graph_node_colors` to return muted-aware values.
 
-- `graphite_app/graphite_ui_dialogs/graphite_settings_dialogs.py`
+- `graphlink_app/graphlink_ui_dialogs/graphlink_settings_dialogs.py`
   - Replaced monochrome toggle with a theme selector (`dark`, `muted`, `mono`).
   - Migrated settings apply/read path to stored theme key.
   - Swapped hard-coded status/notification colors for `get_semantic_color(...)` lookups.
 
-- `graphite_app/graphite_ui_components.py`
+- `graphlink_app/graphlink_ui_components.py`
   - Refactored notification banner accents to semantic status colors.
 
-- `graphite_app/graphite_window_actions.py`
+- `graphlink_app/graphlink_window_actions.py`
   - Replaced note-header hardcoded accents with semantic status colors.
   - Neutralized secondary colors in note bodies.
 
-- `graphite_app/graphite_canvas/graphite_canvas_frame.py`
+- `graphlink_app/graphlink_canvas/graphlink_canvas_frame.py`
   - Updated lock/unlock icon hovers to semantic info/success colors.
 
-- `graphite_app/graphite_command_palette.py`
+- `graphlink_app/graphlink_command_palette.py`
   - Selection background uses semantic success color.
 
-- `graphite_app/graphite_canvas/graphite_canvas_dialogs.py`
+- `graphlink_app/graphlink_canvas/graphlink_canvas_dialogs.py`
   - Primary action button states aligned with neutralized palette strategy.
 
-- `graphite_app/graphite_dialogs.py`
+- `graphlink_app/graphlink_dialogs.py`
   - Dialog action button color treatment aligned with muted accent model.
 
-- `graphite_app/graphite_widgets/controls.py`
+- `graphlink_app/graphlink_widgets/controls.py`
   - Reworked grid color presets and replaced explicit vibrant pressed accent.
 
-- `graphite_app/graphite_html_view.py`
+- `graphlink_app/graphlink_html_view.py`
   - Replaced splitter hover color with semantic success color.
 
-- `graphite_app/graphite_view.py`
+- `graphlink_app/graphlink_view.py`
   - Drag handles and selection stroke semantics moved to `get_semantic_color("status_success")`.
 
-- `graphite_app/graphite_widgets/overlays.py`
+- `graphlink_app/graphlink_widgets/overlays.py`
   - Overlay search empty-result label uses semantic error color.
 
-- `graphite_app/graphite_conversation_node.py`
+- `graphlink_app/graphlink_conversation_node.py`
   - Replaced delete icon red accent with `get_semantic_color("status_error").name()`.
 
-- `graphite_app/graphite_pycoder.py`
+- `graphlink_app/graphlink_pycoder.py`
   - Replaced focus/hover status colors in input fields and code output with semantic theme-aware colors.
   - Replaced stop-state button styling with semantic error-derived colors.
 
@@ -71,7 +71,7 @@ The UI currently had a high saturation look driven by hard-coded accent hex valu
 Executed a targeted regex search for prior high-chroma legacy tokens:
 - `#2ecc71`, `#3498db`, `#e74c3c`, `#e67e22`, `#f1c40f`, `#9b59b6`, `#f5c04f`, `#8fb7ff`, `#00bcd4`, and common warm/cyan accent variants.
 
-Result: no remaining matches in `graphite_app/`.
+Result: no remaining matches in `graphlink_app/`.
 
 ## Why this meets “full color refactor” intent
 - Most UI touch points now consume semantic roles from the theme system instead of fixed hues.

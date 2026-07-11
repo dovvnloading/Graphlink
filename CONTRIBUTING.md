@@ -4,7 +4,7 @@ Thanks for contributing to Graphlink.
 
 ## Before You Start
 
-- The UI product name is **Graphlink**, but many modules and folders still use **Graphite**.
+- The UI product name and the module/folder naming are both **Graphlink** (the codebase was renamed from its earlier **Graphite** naming).
 - The app is currently developed primarily on Windows.
 - The repository is script-oriented, so the launch working directory matters.
 
@@ -15,21 +15,21 @@ py -m venv .venv
 .venv\Scripts\Activate.ps1
 pip install --upgrade pip
 pip install -r requirements.txt
-cd graphite_app
-python graphite_app.py
+cd graphlink_app
+python graphlink_app.py
 ```
 
-If you prefer Visual Studio, open `graphite_app.sln`.
+If you prefer Visual Studio, open `graphlink_app.sln`.
 
 ## Development Rules
 
-- Launch the app from `graphite_app/`, not from the repo root.
+- Launch the app from `graphlink_app/`, not from the repo root.
 - Prefer editing the real implementation modules in:
-  - `graphite_app/graphite_plugins/`
-  - `graphite_app/graphite_nodes/`
-  - `graphite_app/graphite_canvas/`
-  - `graphite_app/graphite_ui_dialogs/`
-- Treat top-level wrapper modules such as `graphite_plugin_gitlink.py` as compatibility facades unless the change is specifically about import stability.
+  - `graphlink_app/graphlink_plugins/`
+  - `graphlink_app/graphlink_nodes/`
+  - `graphlink_app/graphlink_canvas/`
+  - `graphlink_app/graphlink_ui_dialogs/`
+- Treat top-level wrapper modules such as `graphlink_plugin_gitlink.py` as compatibility facades unless the change is specifically about import stability.
 - Keep changes focused. UI cleanup, plugin behavior, persistence updates, and provider changes should be easy to review independently.
 
 ## Pull Request Expectations
@@ -44,10 +44,10 @@ Please include:
 
 ## Validation
 
-Run the `pytest` suite from the inner `graphite_app/` directory, and a compile smoke check:
+Run the `pytest` suite from the inner `graphlink_app/` directory, and a compile smoke check:
 
 ```powershell
-cd graphite_app
+cd graphlink_app
 pytest
 python -m compileall -q .
 ```

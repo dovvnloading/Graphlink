@@ -2,15 +2,15 @@
 
 ## 2026-07-07
 
-- Completed implementation of all findings from [BUG_SWEEP_REPORT.md](C:/Users/Admin/source/repos/graphite_app/doc/BUG_SWEEP_REPORT.md).
+- Completed implementation of all findings from [BUG_SWEEP_REPORT.md](C:/Users/Admin/source/repos/graphlink_app/doc/BUG_SWEEP_REPORT.md).
 - Updated behavior was traced and fixed in:
-  - `graphite_app/graphite_session/manager.py`
-  - `graphite_app/graphite_session/workers.py`
-  - `graphite_app/graphite_window.py`
-  - `graphite_app/graphite_window_actions.py`
-  - `graphite_app/graphite_agents_code_sandbox.py`
-  - `graphite_app/graphite_update.py`
-  - `graphite_app/graphite_agents_pycoder.py`
+  - `graphlink_app/graphlink_session/manager.py`
+  - `graphlink_app/graphlink_session/workers.py`
+  - `graphlink_app/graphlink_window.py`
+  - `graphlink_app/graphlink_window_actions.py`
+  - `graphlink_app/graphlink_agents_code_sandbox.py`
+  - `graphlink_app/graphlink_update.py`
+  - `graphlink_app/graphlink_agents_pycoder.py`
 - Rationale highlights:
   - Preserve load correctness by only returning successful restores.
   - Make background save path cancellable and cleanup-safe.
