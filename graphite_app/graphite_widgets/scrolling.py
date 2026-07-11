@@ -1,4 +1,4 @@
-﻿"""Custom scrollbar widgets for Qt and graphics scenes."""
+"""Custom scrollbar widgets for Qt and graphics scenes."""
 
 from PySide6.QtCore import QRectF, Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QPainter

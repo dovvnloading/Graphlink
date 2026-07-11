@@ -1,4 +1,4 @@
-﻿"""Search and loading overlay widgets."""
+"""Search and loading overlay widgets."""
 
 import qtawesome as qta
 from PySide6.QtCore import QPointF, Property, QEasingCurve, QParallelAnimationGroup, QPropertyAnimation, QRectF, Qt, Signal

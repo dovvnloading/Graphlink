@@ -1,4 +1,4 @@
-﻿"""Widget package for reusable Graphite UI components."""
+"""Widget package for reusable Graphite UI components."""
 
 from .controls import FontControl, GridControl
 from .overlays import GhostNodePreview, LoadingAnimation, SearchOverlay

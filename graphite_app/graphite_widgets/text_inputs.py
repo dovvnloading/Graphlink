@@ -1,4 +1,4 @@
-﻿"""Text input widgets and attachment pills for chat composition."""
+"""Text input widgets and attachment pills for chat composition."""
 
 import re
 
