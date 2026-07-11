@@ -333,9 +333,11 @@ class PyCoderNode(QGraphicsItem, HoverAnimationMixin):
         self.is_user = False
         
         self.is_running = False
+        self.is_disposed = False
         self.is_collapsed = False
         self.collapse_button_rect = QRectF()
         self.repl = PythonREPL()
+        self.worker_thread = None
 
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable)
@@ -365,6 +367,24 @@ class PyCoderNode(QGraphicsItem, HoverAnimationMixin):
         self.proxy.setWidget(self.widget)
 
         self._update_ui_for_mode()
+
+    def dispose(self):
+        # Called by ChatScene.deleteSelectedItems when this node is removed. Stop the
+        # running worker so deletion doesn't orphan a live QThread: once the node
+        # leaves scene.pycoder_nodes, ChatWindow._iter_shutdown_threads can no longer
+        # find that worker at app close, which would let the app tear down with the
+        # thread still running (Qt aborts on "QThread destroyed while still running").
+        # Mirrors CodeSandboxNode.dispose(); the delete path is hasattr-gated so simply
+        # defining this method wires it up.
+        if self.is_disposed:
+            return
+        self.is_disposed = True
+        worker = getattr(self, "worker_thread", None)
+        if worker and worker.isRunning():
+            worker.stop()
+        self.worker_thread = None
+        if getattr(self, "repl", None):
+            self.repl.stop()
 
     def __del__(self):
         if hasattr(self, 'repl') and self.repl:

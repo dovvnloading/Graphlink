@@ -876,7 +876,12 @@ class ModelPullWorkerThread(QThread):
             
             # This is a blocking call, hence the need for a thread.
             ollama.pull(self.model_name)
-            
+
+            # A (re-)pull can change what this model reports for capabilities (e.g. a
+            # newer build gaining audio support) - drop any cached answer from before
+            # this pull so the next capability check re-fetches it.
+            api_provider.invalidate_ollama_capability_cache(self.model_name)
+
             self.finished.emit(f"Model '{self.model_name}' is ready to use.", self.model_name)
 
         except Exception as e:

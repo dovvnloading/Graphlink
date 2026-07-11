@@ -5,6 +5,7 @@ import os
 import re
 import json
 import base64
+import threading
 from enum import Enum
 from PySide6.QtCore import QThread, Signal
 import graphite_config as config
@@ -262,6 +263,12 @@ class PyCoderExecutionWorker(QThread):
     log_update = Signal(object, object)
     finished = Signal(dict)
     error = Signal(str)
+    # Emitted with the generated code once it is ready but before anything executes in
+    # the REPL. The receiver (main thread) must call approve() or deny() to unblock
+    # run(), which is parked on _approval_event.wait(). Same contract as
+    # CodeSandboxExecutionWorker.approval_requested - see
+    # doc/ARCHITECTURE_REVIEW_FINDINGS.md #15 for why Py-Coder needs the same gate.
+    approval_requested = Signal(str)
 
     def __init__(self, user_prompt, conversation_history, repl):
         super().__init__()
@@ -272,9 +279,21 @@ class PyCoderExecutionWorker(QThread):
         self.repair_agent = PyCoderRepairAgent()
         self.analysis_agent = PyCoderAnalysisAgent()
         self._is_running = True
-        
+        self._approval_event = threading.Event()
+        self._approved = False
+
+    def approve(self):
+        self._approved = True
+        self._approval_event.set()
+
+    def deny(self):
+        self._approved = False
+        self._approval_event.set()
+
     def stop(self):
         self._is_running = False
+        # Unblock a worker parked on the approval wait so stop() can't hang it.
+        self._approval_event.set()
         if self.repl:
             self.repl.stop()
 
@@ -312,6 +331,21 @@ class PyCoderExecutionWorker(QThread):
             
             current_code = code_match.group(1).strip()
             self.log_update.emit(PyCoderStage.GENERATE, PyCoderStatus.SUCCESS)
+
+            # Approval gate: AI-generated code runs with full user privileges (the
+            # REPL subprocess is completely unsandboxed), so pause here until the main
+            # thread approves - the same contract Code Sandbox has had all along.
+            # Repair-loop iterations below run under this same single approval,
+            # matching the sandbox's behavior for its own repair attempts.
+            self.approval_requested.emit(current_code)
+            self._approval_event.wait()
+
+            if not self._is_running:
+                return
+
+            if not self._approved:
+                self.error.emit("Py-Coder run cancelled: execution was not approved.")
+                return
 
             while retry_count < max_retries:
                 if not self._is_running: return

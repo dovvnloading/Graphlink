@@ -4,9 +4,11 @@ import json
 import os
 import re
 import threading
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from typing import NamedTuple
 from urllib.parse import urlparse
 
 import ollama
@@ -38,7 +40,7 @@ API_MODELS = {
 LLAMA_CPP_SETTINGS = {
     "chat_model_path": "",
     "title_model_path": "",
-    "reasoning_mode": "Quick",
+    "reasoning_mode": "Thinking",
     "chat_format": "",
     "n_ctx": 4096,
     "n_gpu_layers": 0,
@@ -46,6 +48,41 @@ LLAMA_CPP_SETTINGS = {
 }
 _LLAMA_CPP_CLIENT_CACHE = {}
 _LLAMA_CPP_CLIENT_LOCK = threading.RLock()
+
+# Guards the provider globals above. Mutators (initialize_api,
+# initialize_local_provider, set_mode, set_task_model) write under this lock;
+# chat()/generate_image() take one consistent snapshot under it at request entry and
+# route the whole request through that snapshot. Previously a mode switch during an
+# in-flight request could interleave with the request's many separate global reads,
+# executing it against a half-swapped provider (e.g. the new provider type with the
+# old client/key) - see doc/ARCHITECTURE_REVIEW_FINDINGS.md #9. The module globals
+# stay authoritative (and monkeypatchable) - the snapshot is a per-request view.
+_PROVIDER_STATE_LOCK = threading.Lock()
+
+
+class _ProviderSnapshot(NamedTuple):
+    use_api_mode: bool
+    api_provider_type: str | None
+    api_client: object
+    api_key: str | None
+    api_base_url: str | None
+    local_provider_type: str
+    api_models: dict
+    llama_cpp_settings: dict
+
+
+def _snapshot_provider_state() -> _ProviderSnapshot:
+    with _PROVIDER_STATE_LOCK:
+        return _ProviderSnapshot(
+            use_api_mode=USE_API_MODE,
+            api_provider_type=API_PROVIDER_TYPE,
+            api_client=API_CLIENT,
+            api_key=API_KEY,
+            api_base_url=API_BASE_URL,
+            local_provider_type=LOCAL_PROVIDER_TYPE,
+            api_models=dict(API_MODELS),
+            llama_cpp_settings=dict(LLAMA_CPP_SETTINGS),
+        )
 
 GEMINI_MODELS_STATIC = sorted([
     "gemini-3.1-pro-preview",
@@ -73,6 +110,7 @@ ANTHROPIC_DEFAULT_MAX_TOKENS = {
 }
 _OLLAMA_CAPABILITY_CACHE = {}
 _KNOWN_OLLAMA_AUDIO_MODEL_FAMILIES = {"gemma4"}
+_OLLAMA_REASONING_RETRY_BACKOFF_SECONDS = 1.0
 _THINK_TAG_PATTERN = re.compile(r"<(think|thinking)>\s*(.*?)\s*</\1>", re.DOTALL | re.IGNORECASE)
 _THINK_CLOSING_ONLY_PATTERN = re.compile(r"</(think|thinking)>", re.IGNORECASE)
 _FALLBACK_REASONING_PATTERN = re.compile(
@@ -309,7 +347,19 @@ def _iter_existing_llama_cpp_scan_roots() -> list[Path]:
     return unique_roots
 
 
-def _collect_gguf_files_from_root(root_path: Path) -> list[str]:
+_GGUF_SCAN_MAX_DIRECTORIES = 50_000
+_GGUF_SCAN_MAX_SECONDS = 30
+
+
+def _collect_gguf_files_from_root(root_path: Path) -> tuple[list[str], bool]:
+    """Walk root_path for .gguf files, bounded by directory count and wall-clock time.
+
+    The default (no scan_path configured) roots include the user's whole
+    Downloads/Documents/Desktop trees (see _iter_existing_llama_cpp_scan_roots) - an
+    unbounded os.walk there can run for a very long time against a pathological or
+    cloud-synced tree. Returns (models, was_truncated) so callers can tell the scan
+    stopped early rather than silently reporting an incomplete list as complete.
+    """
     discovered_models: set[str] = set()
     skip_directories = {
         ".git",
@@ -321,7 +371,19 @@ def _collect_gguf_files_from_root(root_path: Path) -> list[str]:
         ".venv",
     }
 
+    started_at = time.monotonic()
+    directories_visited = 0
+    truncated = False
+
     for current_root, dir_names, file_names in os.walk(root_path):
+        directories_visited += 1
+        if (
+            directories_visited > _GGUF_SCAN_MAX_DIRECTORIES
+            or (time.monotonic() - started_at) > _GGUF_SCAN_MAX_SECONDS
+        ):
+            truncated = True
+            break
+
         dir_names[:] = [
             dir_name for dir_name in dir_names
             if dir_name.lower() not in skip_directories
@@ -332,7 +394,7 @@ def _collect_gguf_files_from_root(root_path: Path) -> list[str]:
             model_path = Path(current_root) / file_name
             discovered_models.add(str(model_path.resolve()))
 
-    return sorted(discovered_models, key=str.lower)
+    return sorted(discovered_models, key=str.lower), truncated
 
 
 def scan_local_llama_cpp_models(scan_path: str | None = None) -> dict:
@@ -352,16 +414,20 @@ def scan_local_llama_cpp_models(scan_path: str | None = None) -> dict:
 
     discovered_models: set[str] = set()
     scanned_locations: list[str] = []
+    truncated = False
 
     for root in scan_roots:
-        discovered_models.update(_collect_gguf_files_from_root(root))
+        root_models, root_truncated = _collect_gguf_files_from_root(root)
+        discovered_models.update(root_models)
         scanned_locations.append(str(root.resolve()))
+        truncated = truncated or root_truncated
 
     return {
         "models": sorted(discovered_models, key=str.lower),
         "scan_mode": scan_mode,
         "scan_path": scan_root,
         "locations": sorted(set(scanned_locations), key=str.lower),
+        "truncated": truncated,
     }
 
 
@@ -580,6 +646,23 @@ def _get_ollama_capabilities(model_name: str | None) -> set[str] | None:
     return capabilities
 
 
+def invalidate_ollama_capability_cache(model_name: str | None = None):
+    """Drop cached `ollama.show()` capability info so it gets re-fetched next use.
+
+    Call this after a model is pulled/updated (see ModelPullWorkerThread) - the cache
+    otherwise never expires, so a model re-pulled with different capabilities (e.g.
+    gaining audio support in a newer build) would keep answering with whatever it
+    reported the first time it was seen this session.
+
+    Args:
+        model_name: Invalidate just this model's entry. Omit to clear the whole cache.
+    """
+    if model_name is None:
+        _OLLAMA_CAPABILITY_CACHE.clear()
+        return
+    _OLLAMA_CAPABILITY_CACHE.pop(model_name.strip().lower(), None)
+
+
 def _is_known_ollama_audio_model(model_name: str | None) -> bool:
     normalized_model = (model_name or "").strip().lower()
     if not normalized_model:
@@ -652,7 +735,7 @@ def _normalize_llama_cpp_settings(settings: dict | None = None) -> dict:
         "title_model_path": str(raw_settings.get("title_model_path", "")).strip(),
         "reasoning_mode": (
             "Thinking"
-            if str(raw_settings.get("reasoning_mode", "Quick")).strip().lower() == "thinking"
+            if str(raw_settings.get("reasoning_mode", "Thinking")).strip().lower() == "thinking"
             else "Quick"
         ),
         "chat_format": str(raw_settings.get("chat_format", "")).strip(),
@@ -703,12 +786,15 @@ def _load_llama_cpp_class():
     return Llama
 
 
-def _get_llama_cpp_model_path(task: str) -> str:
+def _get_llama_cpp_model_path(task: str, settings: dict | None = None) -> str:
+    # `settings` lets chat() thread its per-request snapshot through (#9); callers
+    # without one (is_configured, title generation) keep reading the live global.
+    active_settings = settings if settings is not None else LLAMA_CPP_SETTINGS
     if task == config.TASK_TITLE:
-        title_model_path = LLAMA_CPP_SETTINGS.get("title_model_path", "")
+        title_model_path = active_settings.get("title_model_path", "")
         if title_model_path:
             return title_model_path
-    return LLAMA_CPP_SETTINGS.get("chat_model_path", "")
+    return active_settings.get("chat_model_path", "")
 
 
 def _validate_llama_cpp_model_path(model_path: str, task: str):
@@ -779,10 +865,11 @@ def _inject_qwen_thinking_instruction(messages: list, enable_thinking: bool) -> 
     return [{"role": "system", "content": directive}, *processed_messages]
 
 
-def _prepare_llama_cpp_messages(messages: list, task: str) -> list:
+def _prepare_llama_cpp_messages(messages: list, task: str, settings: dict | None = None) -> list:
+    active_settings = settings if settings is not None else LLAMA_CPP_SETTINGS
     normalized_messages = [dict(message) for message in messages]
-    if task == config.TASK_CHAT and _is_qwen_reasoning_model_path(_get_llama_cpp_model_path(task)):
-        enable_thinking = str(LLAMA_CPP_SETTINGS.get("reasoning_mode", "Quick")).strip().lower() == "thinking"
+    if task == config.TASK_CHAT and _is_qwen_reasoning_model_path(_get_llama_cpp_model_path(task, active_settings)):
+        enable_thinking = str(active_settings.get("reasoning_mode", "Quick")).strip().lower() == "thinking"
         normalized_messages = _inject_qwen_thinking_instruction(normalized_messages, enable_thinking)
 
     processed_messages = []
@@ -812,12 +899,13 @@ def _prepare_llama_cpp_messages(messages: list, task: str) -> list:
     return processed_messages
 
 
-def _prepare_llama_cpp_kwargs(kwargs: dict) -> dict:
+def _prepare_llama_cpp_kwargs(kwargs: dict, settings: dict | None = None) -> dict:
+    active_settings = settings if settings is not None else LLAMA_CPP_SETTINGS
     prepared = dict(kwargs or {})
     if prepared.pop("format", None) == "json":
         prepared.setdefault("response_format", {"type": "json_object"})
     prepared.pop("response_mime_type", None)
-    enable_thinking = str(LLAMA_CPP_SETTINGS.get("reasoning_mode", "Quick")).strip().lower() == "thinking"
+    enable_thinking = str(active_settings.get("reasoning_mode", "Quick")).strip().lower() == "thinking"
     prepared.setdefault("enable_thinking", enable_thinking)
     chat_template_kwargs = prepared.get("chat_template_kwargs")
     if isinstance(chat_template_kwargs, dict):
@@ -854,7 +942,8 @@ def _filter_kwargs_for_callable(callable_obj, kwargs: dict) -> dict:
     }
 
 
-def _configure_llama_cpp_chat_handler(client):
+def _configure_llama_cpp_chat_handler(client, settings: dict | None = None):
+    active_settings = settings if settings is not None else LLAMA_CPP_SETTINGS
     try:
         import llama_cpp.llama_chat_format as llama_chat_format
     except Exception:
@@ -879,7 +968,7 @@ def _configure_llama_cpp_chat_handler(client):
     if base_handler is None:
         return
 
-    enable_thinking = str(LLAMA_CPP_SETTINGS.get("reasoning_mode", "Quick")).strip().lower() == "thinking"
+    enable_thinking = str(active_settings.get("reasoning_mode", "Quick")).strip().lower() == "thinking"
     current_flag = getattr(client, "_graphite_enable_thinking", None)
     if current_flag == enable_thinking and getattr(getattr(client, "chat_handler", None), "_graphite_wrapped_handler", False):
         return
@@ -1023,26 +1112,27 @@ def _extract_llama_cpp_text(response) -> str:
     return _compose_reasoned_response(answer_text, reasoning_text, "Llama.cpp")
 
 
-def _get_llama_cpp_client(task: str):
-    model_path = _get_llama_cpp_model_path(task)
+def _get_llama_cpp_client(task: str, settings: dict | None = None):
+    active_settings = settings if settings is not None else LLAMA_CPP_SETTINGS
+    model_path = _get_llama_cpp_model_path(task, active_settings)
     _validate_llama_cpp_model_path(model_path, task)
 
     normalized_path = os.path.abspath(model_path)
     resolved_n_threads = _resolve_llama_cpp_thread_count(
-        int(LLAMA_CPP_SETTINGS.get("n_threads", 0) or 0)
+        int(active_settings.get("n_threads", 0) or 0)
     )
     cache_key = (
         normalized_path,
-        LLAMA_CPP_SETTINGS.get("chat_format", ""),
-        int(LLAMA_CPP_SETTINGS.get("n_ctx", 4096) or 4096),
-        int(LLAMA_CPP_SETTINGS.get("n_gpu_layers", 0) or 0),
+        active_settings.get("chat_format", ""),
+        int(active_settings.get("n_ctx", 4096) or 4096),
+        int(active_settings.get("n_gpu_layers", 0) or 0),
         resolved_n_threads,
     )
 
     with _LLAMA_CPP_CLIENT_LOCK:
         cached_client = _LLAMA_CPP_CLIENT_CACHE.get(cache_key)
         if cached_client is not None:
-            _configure_llama_cpp_chat_handler(cached_client)
+            _configure_llama_cpp_chat_handler(cached_client, active_settings)
             return cached_client
 
         Llama = _load_llama_cpp_class()
@@ -1063,7 +1153,7 @@ def _get_llama_cpp_client(task: str):
                 f"Failed to load the Llama.cpp model '{normalized_path}': {exc}"
             ) from exc
 
-        _configure_llama_cpp_chat_handler(client)
+        _configure_llama_cpp_chat_handler(client, active_settings)
         _LLAMA_CPP_CLIENT_CACHE[cache_key] = client
         return client
 
@@ -1129,15 +1219,17 @@ def _extract_gemini_image_bytes(payload: dict) -> bytes:
     raise RuntimeError("Gemini did not return image data.")
 
 
-def _get_gemini_api_key() -> str:
-    api_key = API_KEY or os.environ.get("GRAPHITE_GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY")
+def _get_gemini_api_key(snapshot_key: str | None = None) -> str:
+    # `snapshot_key` carries the per-request provider snapshot's key (#9) so a mode
+    # switch mid-request can't pair this request with a different provider's key.
+    api_key = snapshot_key or API_KEY or os.environ.get("GRAPHITE_GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY")
     if not api_key:
         raise RuntimeError("Gemini API key not configured. Open Settings and save your Gemini API key.")
     return api_key
 
 
-def _get_anthropic_api_key() -> str:
-    api_key = API_KEY or os.environ.get("GRAPHITE_ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
+def _get_anthropic_api_key(snapshot_key: str | None = None) -> str:
+    api_key = snapshot_key or API_KEY or os.environ.get("GRAPHITE_ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         raise RuntimeError("Anthropic API key not configured. Open Settings and save your Anthropic API key.")
     return api_key
@@ -1221,12 +1313,12 @@ def _anthropic_get_json(endpoint: str, timeout: int = 30, cancel_event=None) -> 
         raise ConnectionError(f"Failed to reach Anthropic API: {exc.reason}") from exc
 
 
-def _anthropic_post_json(endpoint: str, body: dict, timeout: int = 180, cancel_event=None) -> dict:
+def _anthropic_post_json(endpoint: str, body: dict, timeout: int = 180, cancel_event=None, api_key: str | None = None) -> dict:
     _raise_if_cancelled(cancel_event)
     request = urllib.request.Request(
         endpoint,
         data=json.dumps(body).encode("utf-8"),
-        headers=_anthropic_headers(_get_anthropic_api_key()),
+        headers=_anthropic_headers(_get_anthropic_api_key(api_key)),
         method="POST",
     )
 
@@ -1398,9 +1490,9 @@ def _gemini_headers(api_key: str, extra_headers: dict | None = None) -> dict:
     return headers
 
 
-def _gemini_post_json(endpoint: str, body: dict, timeout: int = 120, cancel_event=None) -> dict:
+def _gemini_post_json(endpoint: str, body: dict, timeout: int = 120, cancel_event=None, api_key: str | None = None) -> dict:
     _raise_if_cancelled(cancel_event)
-    api_key = _get_gemini_api_key()
+    api_key = _get_gemini_api_key(api_key)
     request = urllib.request.Request(
         endpoint,
         data=json.dumps(body).encode("utf-8"),
@@ -1428,9 +1520,10 @@ def _gemini_upload_file(
     mime_type: str,
     display_name: str | None = None,
     cancel_event=None,
+    api_key: str | None = None,
 ) -> dict:
     _raise_if_cancelled(cancel_event)
-    api_key = _get_gemini_api_key()
+    api_key = _get_gemini_api_key(api_key)
     resolved_path = os.path.abspath(file_path)
     file_size = os.path.getsize(resolved_path)
     upload_start = urllib.request.Request(
@@ -1507,11 +1600,11 @@ def _gemini_upload_file(
     }
 
 
-def _gemini_delete_file(file_name: str):
+def _gemini_delete_file(file_name: str, api_key: str | None = None):
     if not file_name:
         return
 
-    api_key = _get_gemini_api_key()
+    api_key = _get_gemini_api_key(api_key)
     resource_name = file_name if str(file_name).startswith("files/") else f"files/{file_name}"
     delete_request = urllib.request.Request(
         f"{GEMINI_BASE_URL}/v1beta/{resource_name}",
@@ -1525,7 +1618,7 @@ def _gemini_delete_file(file_name: str):
         return
 
 
-def _gemini_part_from_content(part: dict, uploaded_files: list, cancel_event=None) -> dict | None:
+def _gemini_part_from_content(part: dict, uploaded_files: list, cancel_event=None, api_key: str | None = None) -> dict | None:
     _raise_if_cancelled(cancel_event)
     part_type = part.get("type")
     if part_type == "text":
@@ -1555,6 +1648,7 @@ def _gemini_part_from_content(part: dict, uploaded_files: list, cancel_event=Non
             mime_type,
             part.get("name"),
             cancel_event=cancel_event,
+            api_key=api_key,
         )
         uploaded_files.append(upload_info.get("name"))
         return {
@@ -1567,7 +1661,7 @@ def _gemini_part_from_content(part: dict, uploaded_files: list, cancel_event=Non
     return None
 
 
-def _prepare_gemini_contents(messages: list, cancel_event=None) -> tuple[str | None, list, list]:
+def _prepare_gemini_contents(messages: list, cancel_event=None, api_key: str | None = None) -> tuple[str | None, list, list]:
     system_prompt = None
     contents = []
     uploaded_files = []
@@ -1588,7 +1682,7 @@ def _prepare_gemini_contents(messages: list, cancel_event=None) -> tuple[str | N
                 if not isinstance(part, dict):
                     parts.append({"text": str(part)})
                     continue
-                gemini_part = _gemini_part_from_content(part, uploaded_files, cancel_event=cancel_event)
+                gemini_part = _gemini_part_from_content(part, uploaded_files, cancel_event=cancel_event, api_key=api_key)
                 if gemini_part is not None:
                     parts.append(gemini_part)
         else:
@@ -1643,20 +1737,25 @@ def generate_image(prompt: str, size: str = "1024x1024") -> bytes:
     if not prompt or not prompt.strip():
         raise ValueError("Image prompt cannot be empty.")
 
-    if not USE_API_MODE:
+    # One consistent view of the provider state for the whole request (#9) - a mode
+    # switch mid-generation can no longer pair this request's provider branch with a
+    # different provider's client/key/model.
+    state = _snapshot_provider_state()
+
+    if not state.use_api_mode:
         raise RuntimeError("Image generation is only available in API Endpoint mode.")
 
-    if not API_CLIENT:
+    if not state.api_client:
         raise RuntimeError("API client not initialized. Configure API settings first.")
 
-    if API_PROVIDER_TYPE == config.API_PROVIDER_ANTHROPIC:
+    if state.api_provider_type == config.API_PROVIDER_ANTHROPIC:
         raise RuntimeError(
             "Image generation is not available for Anthropic Claude in Graphlink yet.\n\n"
             "Switch to Google Gemini or an OpenAI-compatible image endpoint for image generation."
         )
 
-    api_model = API_MODELS.get(config.TASK_IMAGE_GEN)
-    if not api_model and API_PROVIDER_TYPE == config.API_PROVIDER_GEMINI:
+    api_model = state.api_models.get(config.TASK_IMAGE_GEN)
+    if not api_model and state.api_provider_type == config.API_PROVIDER_GEMINI:
         api_model = "gemini-2.5-flash-image"
     if not api_model:
         raise RuntimeError(
@@ -1665,18 +1764,19 @@ def generate_image(prompt: str, size: str = "1024x1024") -> bytes:
         )
 
     try:
-        if API_PROVIDER_TYPE == config.API_PROVIDER_OPENAI:
-            if not hasattr(API_CLIENT, "images") or not hasattr(API_CLIENT.images, "generate"):
+        if state.api_provider_type == config.API_PROVIDER_OPENAI:
+            client = state.api_client
+            if not hasattr(client, "images") or not hasattr(client.images, "generate"):
                 raise RuntimeError("The configured OpenAI-compatible client does not expose an images.generate API.")
 
-            response = API_CLIENT.images.generate(
+            response = client.images.generate(
                 model=api_model,
                 prompt=prompt,
                 size=size,
             )
             return _extract_openai_image_bytes(response)
 
-        if API_PROVIDER_TYPE == config.API_PROVIDER_GEMINI:
+        if state.api_provider_type == config.API_PROVIDER_GEMINI:
             payload = _gemini_post_json(
                 f"{GEMINI_BASE_URL}/v1beta/models/{api_model}:generateContent",
                 {
@@ -1688,10 +1788,11 @@ def generate_image(prompt: str, size: str = "1024x1024") -> bytes:
                     },
                 },
                 timeout=120,
+                api_key=state.api_key,
             )
             return _extract_gemini_image_bytes(payload)
 
-        raise RuntimeError(f"Unsupported API provider: {API_PROVIDER_TYPE}")
+        raise RuntimeError(f"Unsupported API provider: {state.api_provider_type}")
     except Exception as exc:
         error_str = str(exc).lower()
         if "429" in error_str or "quota" in error_str or "resourceexhausted" in error_str:
@@ -1705,10 +1806,17 @@ def generate_image(prompt: str, size: str = "1024x1024") -> bytes:
 def chat(task: str, messages: list, **kwargs) -> dict:
     cancel_event = kwargs.pop("cancellation_event", None)
 
+    # One consistent view of the provider state for the whole request (#9). Worker
+    # threads call chat() while the UI thread can re-run initialize_* at any time;
+    # without the snapshot, the request's many separate global reads could interleave
+    # with a swap and execute against a half-swapped provider (new provider type with
+    # the old client/key, mixed llama.cpp settings, wrong error-message branch, ...).
+    state = _snapshot_provider_state()
+
     try:
         _raise_if_cancelled(cancel_event)
-        if not USE_API_MODE:
-            if LOCAL_PROVIDER_TYPE == config.LOCAL_PROVIDER_OLLAMA:
+        if not state.use_api_mode:
+            if state.local_provider_type == config.LOCAL_PROVIDER_OLLAMA:
                 model = config.OLLAMA_MODELS.get(task)
                 if not model:
                     raise ValueError(f"No Ollama model configured for task: {task}")
@@ -1724,12 +1832,16 @@ def chat(task: str, messages: list, **kwargs) -> dict:
                 # "thinking" budget before writing a final answer - often just sampling
                 # variance, not a persistent problem - so retry the identical request a
                 # couple of times before surfacing it to the user (see
-                # ReasoningWithoutAnswerError).
+                # ReasoningWithoutAnswerError). A short backoff between attempts gives a
+                # transient/momentary cause (e.g. local resource contention) a chance to
+                # clear instead of immediately re-sending the identical request.
                 max_attempts = 3
                 last_reasoning_error = None
                 full_response_content = None
                 for attempt in range(max_attempts):
                     if attempt > 0:
+                        _raise_if_cancelled(cancel_event)
+                        time.sleep(_OLLAMA_REASONING_RETRY_BACKOFF_SECONDS)
                         _raise_if_cancelled(cancel_event)
 
                     response = ollama.chat(model=model, messages=ollama_messages, **ollama_kwargs)
@@ -1765,13 +1877,13 @@ def chat(task: str, messages: list, **kwargs) -> dict:
                     }
                 }
 
-            if LOCAL_PROVIDER_TYPE == config.LOCAL_PROVIDER_LLAMACPP:
+            if state.local_provider_type == config.LOCAL_PROVIDER_LLAMACPP:
                 _assert_llama_cpp_message_support(messages)
-                llama_messages = _prepare_llama_cpp_messages(messages, task)
-                client = _get_llama_cpp_client(task)
+                llama_messages = _prepare_llama_cpp_messages(messages, task, state.llama_cpp_settings)
+                client = _get_llama_cpp_client(task, state.llama_cpp_settings)
                 llama_kwargs = _filter_kwargs_for_callable(
                     client.create_chat_completion,
-                    _prepare_llama_cpp_kwargs(kwargs),
+                    _prepare_llama_cpp_kwargs(kwargs, state.llama_cpp_settings),
                 )
                 response = client.create_chat_completion(messages=llama_messages, **llama_kwargs)
                 _raise_if_cancelled(cancel_event)
@@ -1782,15 +1894,15 @@ def chat(task: str, messages: list, **kwargs) -> dict:
                     }
                 }
 
-            raise RuntimeError(f"Unsupported local provider: {LOCAL_PROVIDER_TYPE}")
+            raise RuntimeError(f"Unsupported local provider: {state.local_provider_type}")
 
-        if not API_CLIENT:
+        if not state.api_client:
             raise RuntimeError("API client not initialized. Configure API settings first.")
 
-        if task == config.TASK_WEB_VALIDATE and API_PROVIDER_TYPE == config.API_PROVIDER_GEMINI:
-            api_model = API_MODELS.get(task) or "gemini-3.1-flash-lite-preview"
+        if task == config.TASK_WEB_VALIDATE and state.api_provider_type == config.API_PROVIDER_GEMINI:
+            api_model = state.api_models.get(task) or "gemini-3.1-flash-lite-preview"
         else:
-            api_model = API_MODELS.get(task)
+            api_model = state.api_models.get(task)
 
         if not api_model:
             raise RuntimeError(
@@ -1798,8 +1910,8 @@ def chat(task: str, messages: list, **kwargs) -> dict:
                 "Please configure models in API Settings."
             )
 
-        if API_PROVIDER_TYPE == config.API_PROVIDER_OPENAI:
-            response = API_CLIENT.chat.completions.create(
+        if state.api_provider_type == config.API_PROVIDER_OPENAI:
+            response = state.api_client.chat.completions.create(
                 model=api_model,
                 messages=messages,
                 **kwargs,
@@ -1812,7 +1924,7 @@ def chat(task: str, messages: list, **kwargs) -> dict:
                 }
             }
 
-        if API_PROVIDER_TYPE == config.API_PROVIDER_ANTHROPIC:
+        if state.api_provider_type == config.API_PROVIDER_ANTHROPIC:
             system_prompt, anthropic_messages = _prepare_anthropic_messages(
                 messages,
                 cancel_event=cancel_event,
@@ -1825,7 +1937,7 @@ def chat(task: str, messages: list, **kwargs) -> dict:
             if system_prompt:
                 request_kwargs["system"] = system_prompt
 
-            create_callable = getattr(getattr(API_CLIENT, "messages", None), "create", None)
+            create_callable = getattr(getattr(state.api_client, "messages", None), "create", None)
             if callable(create_callable):
                 filtered_kwargs = _filter_kwargs_for_callable(create_callable, request_kwargs)
                 response = create_callable(**filtered_kwargs)
@@ -1835,6 +1947,7 @@ def chat(task: str, messages: list, **kwargs) -> dict:
                     request_kwargs,
                     timeout=180,
                     cancel_event=cancel_event,
+                    api_key=state.api_key,
                 )
             _raise_if_cancelled(cancel_event)
             return {
@@ -1844,10 +1957,11 @@ def chat(task: str, messages: list, **kwargs) -> dict:
                 }
             }
 
-        if API_PROVIDER_TYPE == config.API_PROVIDER_GEMINI:
+        if state.api_provider_type == config.API_PROVIDER_GEMINI:
             system_prompt, gemini_contents, uploaded_files = _prepare_gemini_contents(
                 messages,
                 cancel_event=cancel_event,
+                api_key=state.api_key,
             )
             request_body = {
                 "contents": gemini_contents,
@@ -1865,10 +1979,11 @@ def chat(task: str, messages: list, **kwargs) -> dict:
                     request_body,
                     timeout=_calculate_gemini_timeout(messages),
                     cancel_event=cancel_event,
+                    api_key=state.api_key,
                 )
             finally:
                 for file_name in uploaded_files:
-                    _gemini_delete_file(file_name)
+                    _gemini_delete_file(file_name, api_key=state.api_key)
 
             return {
                 "message": {
@@ -1877,7 +1992,7 @@ def chat(task: str, messages: list, **kwargs) -> dict:
                 }
             }
 
-        raise RuntimeError(f"Unsupported API provider: {API_PROVIDER_TYPE}")
+        raise RuntimeError(f"Unsupported API provider: {state.api_provider_type}")
 
     except Exception as exc:
         if isinstance(exc, RequestCancelledError):
@@ -1898,12 +2013,12 @@ def chat(task: str, messages: list, **kwargs) -> dict:
             ) from exc
 
         if "429" in error_str or "quota" in error_str or "resourceexhausted" in error_str:
-            if API_PROVIDER_TYPE == config.API_PROVIDER_OPENAI:
+            if state.api_provider_type == config.API_PROVIDER_OPENAI:
                 raise RuntimeError(
                     "OpenAI-compatible API quota exceeded or rate limited.\n\n"
                     "Please verify billing, rate limits, and the selected model for your endpoint."
                 ) from exc
-            if API_PROVIDER_TYPE == config.API_PROVIDER_ANTHROPIC:
+            if state.api_provider_type == config.API_PROVIDER_ANTHROPIC:
                 raise RuntimeError(
                     "Anthropic API quota exceeded or rate limited.\n\n"
                     "Please verify billing, rate limits, and the selected Claude model."
@@ -1915,7 +2030,7 @@ def chat(task: str, messages: list, **kwargs) -> dict:
                 "or link a billing account in Google AI Studio."
             ) from exc
 
-        if USE_API_MODE and API_PROVIDER_TYPE == config.API_PROVIDER_ANTHROPIC:
+        if state.use_api_mode and state.api_provider_type == config.API_PROVIDER_ANTHROPIC:
             if status_code in (401, 403) or "authentication" in error_str or "invalid x-api-key" in error_str:
                 raise RuntimeError(
                     "Anthropic API authentication failed.\n\n"
@@ -1928,11 +2043,11 @@ def chat(task: str, messages: list, **kwargs) -> dict:
             or "connection error" in error_str
             or "all connection attempts failed" in error_str
         ):
-            if not USE_API_MODE:
+            if not state.use_api_mode:
                 raise ConnectionError(
                     "Failed to connect to local Ollama server. Please ensure the Ollama app is running and accessible."
                 ) from exc
-            if API_PROVIDER_TYPE == config.API_PROVIDER_ANTHROPIC:
+            if state.api_provider_type == config.API_PROVIDER_ANTHROPIC:
                 raise ConnectionError(
                     "Failed to connect to the Anthropic API. Please verify your network connection and try again.\n\n"
                     f"Details: {exc}"
@@ -1976,6 +2091,7 @@ def initialize_api(provider: str, api_key: str, base_url: str = None):
         if not base_url:
             base_url = "https://api.openai.com/v1"
 
+        api_key = api_key or os.environ.get("GRAPHITE_OPENAI_API_KEY") or os.environ.get("OPENAI_API_KEY")
         if not api_key:
             if _is_local_base_url(base_url):
                 api_key = "dummy-key-for-local"
@@ -2011,12 +2127,13 @@ def initialize_api(provider: str, api_key: str, base_url: str = None):
     else:
         raise ValueError(f"Unknown API provider: {provider}")
 
-    USE_API_MODE = True
-    API_PROVIDER_TYPE = provider
-    API_CLIENT = client
-    API_KEY = api_key
-    API_BASE_URL = base_url
-    return API_CLIENT
+    with _PROVIDER_STATE_LOCK:
+        USE_API_MODE = True
+        API_PROVIDER_TYPE = provider
+        API_CLIENT = client
+        API_KEY = api_key
+        API_BASE_URL = base_url
+    return client
 
 
 def initialize_local_provider(
@@ -2029,13 +2146,14 @@ def initialize_local_provider(
 
     if provider == config.LOCAL_PROVIDER_OLLAMA:
         normalized_settings = _normalize_llama_cpp_settings()
-        USE_API_MODE = False
-        LOCAL_PROVIDER_TYPE = provider
-        API_PROVIDER_TYPE = None
-        API_CLIENT = None
-        API_KEY = None
-        API_BASE_URL = None
-        LLAMA_CPP_SETTINGS = normalized_settings
+        with _PROVIDER_STATE_LOCK:
+            USE_API_MODE = False
+            LOCAL_PROVIDER_TYPE = provider
+            API_PROVIDER_TYPE = None
+            API_CLIENT = None
+            API_KEY = None
+            API_BASE_URL = None
+            LLAMA_CPP_SETTINGS = normalized_settings
         return {"provider": provider}
 
     if provider == config.LOCAL_PROVIDER_LLAMACPP:
@@ -2047,28 +2165,8 @@ def initialize_local_provider(
         if normalized_settings.get("title_model_path"):
             _validate_llama_cpp_model_path(normalized_settings["title_model_path"], config.TASK_TITLE)
 
-        previous_state = (
-            USE_API_MODE,
-            LOCAL_PROVIDER_TYPE,
-            API_PROVIDER_TYPE,
-            API_CLIENT,
-            API_KEY,
-            API_BASE_URL,
-            LLAMA_CPP_SETTINGS,
-        )
-
-        try:
-            USE_API_MODE = False
-            LOCAL_PROVIDER_TYPE = provider
-            API_PROVIDER_TYPE = None
-            API_CLIENT = None
-            API_KEY = None
-            API_BASE_URL = None
-            LLAMA_CPP_SETTINGS = normalized_settings
-            if preload_model:
-                _get_llama_cpp_client(config.TASK_CHAT)
-        except Exception:
-            (
+        with _PROVIDER_STATE_LOCK:
+            previous_state = (
                 USE_API_MODE,
                 LOCAL_PROVIDER_TYPE,
                 API_PROVIDER_TYPE,
@@ -2076,12 +2174,36 @@ def initialize_local_provider(
                 API_KEY,
                 API_BASE_URL,
                 LLAMA_CPP_SETTINGS,
-            ) = previous_state
+            )
+            USE_API_MODE = False
+            LOCAL_PROVIDER_TYPE = provider
+            API_PROVIDER_TYPE = None
+            API_CLIENT = None
+            API_KEY = None
+            API_BASE_URL = None
+            LLAMA_CPP_SETTINGS = normalized_settings
+
+        try:
+            # The (potentially slow, multi-GB) model preload deliberately happens
+            # OUTSIDE the state lock so it never blocks other requests' snapshots.
+            if preload_model:
+                _get_llama_cpp_client(config.TASK_CHAT, normalized_settings)
+        except Exception:
+            with _PROVIDER_STATE_LOCK:
+                (
+                    USE_API_MODE,
+                    LOCAL_PROVIDER_TYPE,
+                    API_PROVIDER_TYPE,
+                    API_CLIENT,
+                    API_KEY,
+                    API_BASE_URL,
+                    LLAMA_CPP_SETTINGS,
+                ) = previous_state
             raise
 
         return {
             "provider": provider,
-            "model_path": _get_llama_cpp_model_path(config.TASK_CHAT),
+            "model_path": _get_llama_cpp_model_path(config.TASK_CHAT, normalized_settings),
             "preloaded": bool(preload_model),
         }
 
@@ -2115,12 +2237,14 @@ def get_available_models():
 
 def set_mode(use_api: bool):
     global USE_API_MODE
-    USE_API_MODE = use_api
+    with _PROVIDER_STATE_LOCK:
+        USE_API_MODE = use_api
 
 
 def set_task_model(task: str, api_model: str):
-    if task in API_MODELS:
-        API_MODELS[task] = api_model
+    with _PROVIDER_STATE_LOCK:
+        if task in API_MODELS:
+            API_MODELS[task] = api_model
 
 
 def get_task_models() -> dict:
