@@ -3,6 +3,7 @@
 # data to ensure a consistent look and feel and to make theming easier.
 
 from PySide6.QtGui import QColor
+from graphite_paths import asset_url
 
 class StyleSheet:
     """A namespace class to hold large QSS string constants for different themes."""
@@ -212,7 +213,7 @@ class StyleSheet:
         }
 
         QComboBox::down-arrow {
-            image: url(C:/Users/Admin/source/repos/graphite_app/assets/down_arrow.png);
+            image: url(__ASSET_DOWN_ARROW__);
             width: 10px;
             height: 10px;
         }
@@ -648,7 +649,7 @@ MUTED_PALETTE = ColorPalette(
 # This is the central point for theme lookup in the application.
 THEMES = {
     "dark": {
-        "stylesheet": StyleSheet.DARK_THEME,
+        "stylesheet": StyleSheet.DARK_THEME.replace("__ASSET_DOWN_ARROW__", asset_url("down_arrow.png")),
         "palette": DARK_PALETTE
     },
     "muted": {

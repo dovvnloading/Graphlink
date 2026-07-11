@@ -4,6 +4,7 @@ from PySide6.QtGui import QPixmap, QIcon, QColor
 import markdown
 import qtawesome as qta
 from graphite_config import get_current_palette, get_semantic_color
+from graphite_paths import asset_path
 
 class CustomTitleBar(QWidget):
     def __init__(self, parent=None):
@@ -11,13 +12,11 @@ class CustomTitleBar(QWidget):
         self.parent = parent
         self.setObjectName("titleBar")
         
-        icon_path = r"C:\Users\Admin\source\repos\graphite_app\assets\graphite.ico"
-        
         layout = QHBoxLayout(self)
         layout.setContentsMargins(8, 0, 0, 0)
 
         icon_label = QLabel()
-        icon_pixmap = QPixmap(str(icon_path)).scaled(32, 32, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+        icon_pixmap = QPixmap(str(asset_path("graphite.ico"))).scaled(32, 32, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
         icon_label.setPixmap(icon_pixmap)
         layout.addWidget(icon_label)
         

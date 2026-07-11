@@ -1,4 +1,4 @@
-﻿"""Floating controls for font and grid configuration."""
+"""Floating controls for font and grid configuration."""
 
 import qtawesome as qta
 from PySide6.QtCore import Qt, Signal
@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 from graphite_config import get_current_palette
+from graphite_paths import asset_url
 
 class FontControl(QWidget):
     fontFamilyChanged = Signal(str)
@@ -257,7 +258,7 @@ class GridControl(QWidget):
             }}
             QCheckBox::indicator:checked {{
                 background-color: {selection_color}; border: 1px solid {selection_border};
-                image: url(C:/Users/Admin/source/repos/graphite_app/assets/check.png);
+                image: url({asset_url('check.png')});
                 border-radius: 4px;
             }}
         """)
