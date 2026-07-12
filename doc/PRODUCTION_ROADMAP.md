@@ -198,17 +198,56 @@ regression tests; see `doc/ARCHITECTURE_REVIEW_FINDINGS.md`):
   thread and hand the worker plain data, so `ChatWorker` no longer walks live scene objects.
   (The general `RequestContext` refactor in §5 finishes the class of issue.)
 
+**Week 1 of §9 below** (2026-07-11), executed in order with an independent adversarial
+cross-check pass after implementation:
+
+- **Honest execution-isolation labeling** — the sandbox's subtitle, LOD preview text,
+  in-app help entry, README row, live progress-log lines, and the synthetic chat-history
+  message describing it now all state the venv isolates installed packages only, not a
+  security boundary. Deliberately **not** renamed: the node's display name ("Execution
+  Sandbox"), its title-bar/LOD-card/collapsed-view text, and its command-palette entry —
+  matching the same title/branding-is-a-separate-call precedent already recorded in
+  finding #16. (This roadmap's own §6 phrasing said "relabel 'Execution Sandbox' ->
+  'Execution Environment'"; that specific rename was not done and is being corrected here
+  rather than silently left inconsistent — a full display-name change is a bigger,
+  more disruptive UX decision than a captions/descriptions accuracy pass and deserves its
+  own explicit call, not an implied one.)
+- **Crash reporting** — `graphlink_crash.py`: `faulthandler` + `sys`/`threading`
+  excepthooks + `qInstallMessageHandler`, writing redacted local JSON reports (redaction is
+  structural — the report builder only ever reads `sys.exc_info()` plus an explicit,
+  pre-approved context dict, so it cannot see chat content regardless of what's live in the
+  app). A `running.lock` sentinel shows a "didn't shut down cleanly last time" notice on the
+  next launch. No sentry-sdk; opt-in GitHub-issue URL prefill only.
+- **Packaging foundation** — root `pyproject.toml` (setuptools `package-dir`/`py-modules`
+  mapping that preserves the flat top-level import style unchanged), `graphlink` entry
+  point, dynamic version from `graphlink_version.py`, `.python-version` pinned to `3.12`,
+  `llama-cpp-python` split into an optional `llamacpp` extra, and a `sys.frozen` branch in
+  `graphlink_paths.py` for the future PyInstaller freeze. Verified with a real editable
+  install in a clean Python 3.12 venv, not just read.
+- **Supply-chain hygiene** — `requirements.in` (source) + `pip-compile --generate-hashes`
+  regenerated, hash-locked `requirements.txt`; `.github/workflows/security.yml` (pip-audit
+  + weekly cron + CycloneDX SBOM); `.github/dependabot.yml`; every GitHub Action in both
+  workflow files SHA-pinned. Verified with a real install of the locked file in a clean
+  venv (`pip check` clean) and every SHA independently re-verified against
+  `git ls-remote --tags` for its upstream repo.
+
+Still open from Week 1: **starting the code-signing application** (Azure Trusted
+Signing/SignPath/Certum) — this requires the maintainer's own identity verification and
+payment method and cannot be automated.
+
 ---
 
 ## 9. Suggested first two weeks
 
 A concrete near-term slice that unblocks the most while carrying the least risk:
 
-1. **Week 1:** packaging foundation (`pyproject.toml`, deps split, frozen paths) **+** start
-   the code-signing application (long lead time) **+** supply-chain lockfile & pip-audit
-   **+** the honest sandbox-relabel (`days`) **+** crash reporting (`days`).
-2. **Week 2:** PyInstaller freeze + frozen smoke test **+** undo foundation **+** crash
-   recovery/dirty-state **+** the Ed25519 update-manifest signing (before any installer).
+1. **Week 1 — done, see §8.** packaging foundation (`pyproject.toml`, deps split, frozen
+   paths) **+** supply-chain lockfile & pip-audit **+** the honest sandbox-relabel (`days`)
+   **+** crash reporting (`days`). **Not done:** starting the code-signing application
+   (long lead time, requires the maintainer directly).
+2. **Week 2 (next):** PyInstaller freeze + frozen smoke test **+** undo foundation **+**
+   crash recovery/dirty-state **+** the Ed25519 update-manifest signing (before any
+   installer).
 
 That sequence produces a signable, freezable build with crash visibility and safe-work
 guarantees — the minimum honest "1.0" spine — without having touched the deeper model-layer
