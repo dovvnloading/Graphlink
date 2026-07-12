@@ -31,6 +31,12 @@ jobs:
     # windows-latest does not have installed - runs natively on Linux, and this job only
     # introspects the dependency manifest, so it doesn't need Windows at all.
     runs-on: ubuntu-latest
+    # The repo's default workflow token permissions are read-only, which blocks the
+    # artifact-container creation the action needs to upload the SBOM - grant it here
+    # rather than loosening the repo-wide default.
+    permissions:
+      contents: read
+      actions: write
 
     steps:
       - name: Check out repository
