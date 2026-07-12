@@ -6,9 +6,16 @@ from graphlink_widgets import SplashScreen
 import graphlink_licensing
 from graphlink_config import apply_theme, set_current_model, sync_ollama_task_models
 from graphlink_logging import configure_logging
+from graphlink_crash import install_crash_handlers, mark_running, previous_run_crashed
+from graphlink_version import APP_VERSION
 
 def main():
     configure_logging()
+    # Install crash capture before anything else can fail - faulthandler/excepthooks need
+    # no QApplication, and must be in place before Qt/provider/model init runs.
+    install_crash_handlers(version=APP_VERSION)
+    crashed_last_time = previous_run_crashed()
+    mark_running(version=APP_VERSION)
 
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(True)
@@ -25,6 +32,8 @@ def main():
 
     # Initialize windows without license checks
     main_chat_window = ChatWindow(settings_manager)
+    if crashed_last_time:
+        main_chat_window.show_previous_crash_notice()
     splash = SplashScreen(main_chat_window)
     splash.show()
     

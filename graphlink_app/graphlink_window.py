@@ -47,6 +47,7 @@ from graphlink_window_actions import WindowActionsMixin
 from graphlink_window_navigation import WindowNavigationMixin
 from graphlink_update import APP_VERSION, UpdateCheckWorker
 from graphlink_paths import asset_path
+from graphlink_crash import mark_clean_exit
 
 class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
     def __init__(self, settings_manager):
@@ -532,7 +533,19 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
             event.ignore()
             return
 
+        mark_clean_exit()
         super().closeEvent(event)
+
+    def show_previous_crash_notice(self):
+        """Called by main() when graphlink_crash.previous_run_crashed() found the
+        running.lock sentinel still present at startup - the prior run didn't reach
+        closeEvent's clean-exit path."""
+        self.notification_banner.show_message(
+            "Graphlink didn't shut down cleanly last time. If it crashed, a report was "
+            "saved under ~/.graphlink/crash/.",
+            8000,
+            "warning",
+        )
 
     def _sync_footer_height(self, *_):
         if not hasattr(self, 'input_widget') or not hasattr(self, 'bottom_container'):
