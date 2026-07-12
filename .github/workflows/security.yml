@@ -41,4 +41,4 @@ jobs:
         with:
           path: .
           format: cyclonedx-json
-          artifact-name: graphlink-sbom.cyclonedx.json
+          artifact-name: graphlink-sbom
