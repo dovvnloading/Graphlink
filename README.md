@@ -92,7 +92,7 @@ cd graphlink_app
 python graphlink_app.py
 ```
 
-`graphlink` above is the repo root (containing `requirements.txt`); `graphlink_app/` is the inner package directory the app actually runs from. Dependencies — PySide6, the provider SDKs, `llama-cpp-python`, web-search/spellcheck/charting/audio helpers, and the export/parsing libraries — install from `requirements.txt` in a single step. If you prefer Visual Studio, open `graphlink_app.sln`.
+`graphlink` above is the repo root (containing `requirements.txt`); `graphlink_app/` is the inner package directory the app actually runs from. Dependencies — PySide6, the provider SDKs, web-search/spellcheck/charting/audio helpers, and the export/parsing libraries — install from `requirements.txt` in a single step. `llama-cpp-python` is optional (only needed for Llama.cpp local mode; Ollama is the built-in local path) — install it separately with `pip install llama-cpp-python`. If you prefer Visual Studio, open `graphlink_app.sln`.
 
 > The app is script-oriented: launch it from the inner `graphlink_app/` directory so its imports resolve.
 
