@@ -27,7 +27,10 @@ jobs:
           inputs: requirements.txt
 
   sbom:
-    runs-on: windows-latest
+    # anchore/sbom-action shells out to syft via WSL on Windows runners, which
+    # windows-latest does not have installed - runs natively on Linux, and this job only
+    # introspects the dependency manifest, so it doesn't need Windows at all.
+    runs-on: ubuntu-latest
 
     steps:
       - name: Check out repository
@@ -38,10 +41,4 @@ jobs:
         with:
           path: .
           format: cyclonedx-json
-          output-file: graphlink-sbom.cyclonedx.json
-
-      - name: Upload SBOM artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: sbom
-          path: graphlink-sbom.cyclonedx.json
+          artifact-name: graphlink-sbom.cyclonedx.json
