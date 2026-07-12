@@ -310,7 +310,7 @@ class HelpDialog(QFrame):
                 ("Build, Draft, and Render", [
                     ("System Prompt", "Adds a branch-scoped system prompt note that changes assistant behavior only for that conversation path. This is ideal when you want a role, tone, or instruction change without affecting the rest of the project.", "fa5s.sliders-h"),
                     ("Py-Coder", "A coding workspace with AI-driven and manual modes, generated code, terminal output, and final analysis tabs. Use it for fast implementation, debugging, code generation, and lightweight computation.", "fa5s.laptop-code"),
-                    ("Execution Sandbox", "Runs Python in an isolated virtual environment and supports per-node requirements. Choose this over Py-Coder when you need dependency-aware execution or a cleaner reproducible runtime.", "fa5s.shield-alt"),
+                    ("Execution Sandbox", "Runs Python in a per-node virtualenv with declared dependencies - the venv isolates installed packages, not the operating system; code still runs with your full account privileges. Choose this over Py-Coder when you need dependency-aware execution or a cleaner reproducible runtime.", "fa5s.shield-alt"),
                     ("Artifact / Drafter", "A living markdown drafting surface for reports, specs, briefs, and other documents that need repeated revision. It is the most natural place to keep polished long-form output inside the graph.", "fa5s.pen-nib"),
                     ("HTML Renderer", "Turns HTML or UI markup into a preview pane inside the graph and can pop the preview into a separate window. It is the right tool when a branch needs visual feedback instead of plain text output.", "fa5s.window-maximize"),
                 ]),

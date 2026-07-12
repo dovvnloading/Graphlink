@@ -31,7 +31,8 @@ class PythonREPL:
     """
     A persistent Python subprocess that acts as a stateful REPL.
     Variables and imports survive between executions.
-    Communicates securely via base64 encoded strings over stdin/stdout.
+    Communicates via base64-encoded strings over stdin/stdout (encoding for safe IPC
+    framing, not a security mechanism).
     """
     def __init__(self):
         self.process = None

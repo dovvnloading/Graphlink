@@ -229,7 +229,7 @@ class CodeSandboxNode(QGraphicsObject, HoverAnimationMixin):
         title_label.setStyleSheet(f"font-size: 15px; font-weight: 700; color: {accent.name()};")
         title_column.addWidget(title_label)
 
-        subtitle_label = QLabel("Isolated Python runs with per-node requirements and a virtualenv-backed execution lane.")
+        subtitle_label = QLabel("Runs Python with per-node requirements in a virtualenv. Isolates installed packages only - not a security boundary; code runs with your full account privileges.")
         subtitle_label.setWordWrap(True)
         subtitle_label.setStyleSheet("font-size: 11px; color: #9aa5b1;")
         title_column.addWidget(subtitle_label)
@@ -646,7 +646,7 @@ class CodeSandboxNode(QGraphicsObject, HoverAnimationMixin):
                 selection_color=palette.SELECTION,
                 title="Execution Sandbox",
                 subtitle=self.status or "Idle",
-                preview=preview_text(self.get_prompt(), self.get_code(), self.output_display.toPlainText(), fallback="Generate and run in isolation"),
+                preview=preview_text(self.get_prompt(), self.get_code(), self.output_display.toPlainText(), fallback="Generate and run in a venv"),
                 badge="BOX",
                 mode=render_mode,
                 selected=self.isSelected(),

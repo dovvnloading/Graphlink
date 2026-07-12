@@ -240,7 +240,7 @@ class VirtualEnvSandbox:
             return
 
         if emit_line:
-            emit_line("[Sandbox] Creating isolated virtual environment...\n")
+            emit_line("[Sandbox] Creating virtual environment...\n")
         output, return_code = self._run_subprocess(
             [sys.executable, "-m", "venv", str(self.venv_dir)],
             should_continue=should_continue,
@@ -295,7 +295,7 @@ class VirtualEnvSandbox:
         self.base_dir.mkdir(parents=True, exist_ok=True)
         self.script_path.write_text(code, encoding="utf-8")
         if emit_line:
-            emit_line(f"[Sandbox] Running {self.script_path.name} inside the isolated environment...\n")
+            emit_line(f"[Sandbox] Running {self.script_path.name} in the virtualenv...\n")
 
         output, return_code = self._run_subprocess(
             [str(self.python_executable), str(self.script_path)],

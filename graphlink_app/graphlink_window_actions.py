@@ -1146,7 +1146,7 @@ class WindowActionsMixin:
         else:
             user_message = (
                 "--- SANDBOX REQUEST ---\n"
-                "Execute the following code inside the isolated sandbox.\n\n"
+                "Execute the following code in the sandbox virtualenv.\n\n"
                 f"--- REQUIREMENTS ---\n{requirements_manifest or '[none specified]'}\n\n"
                 f"--- CODE ---\n```python\n{code}\n```"
             )

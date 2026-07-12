@@ -66,7 +66,7 @@ Attach these specialist nodes to a branch from the plugin picker:
 | Graphlink-Web | Reasoning and Research | Web retrieval, summarization, and source capture for real-time information. |
 | Gitlink | Build and Execution | Loads a GitHub repo into structured context, previews file-level changes, and writes only after approval. |
 | Py-Coder | Build and Execution | Runs Python with AI-assisted generation, execution, and analysis. |
-| Execution Sandbox | Build and Execution | Runs Python in an isolated virtual environment with per-node dependencies. |
+| Execution Sandbox | Build and Execution | Runs Python in a per-node virtualenv with declared dependencies (isolates installed packages, not the OS or filesystem/network access). |
 | HTML Renderer | Build and Execution | Renders HTML from a parent branch directly inside the app. |
 | Artifact / Drafter | Workflow and Drafting | A split-pane surface for drafting and refining long-form Markdown. |
 
