@@ -2,13 +2,24 @@
 
 Keeps asset lookups independent of where the repo happens to be checked out -
 several call sites previously hardcoded an absolute path to one developer's machine.
+
+Also independent of whether the app is running from a source checkout or a PyInstaller
+freeze: __file__-based resolution (assets/ as a sibling of graphlink_app/) only holds in a
+checkout. A frozen onedir/onefile build extracts bundled `datas` under sys._MEIPASS
+instead, so ASSETS_DIR branches on sys.frozen. See doc/PRODUCTION_ROADMAP.md Section 4.
 """
 
+import sys
 from pathlib import Path
 
 PACKAGE_DIR = Path(__file__).resolve().parent
 REPO_ROOT = PACKAGE_DIR.parent
-ASSETS_DIR = REPO_ROOT / "assets"
+
+if getattr(sys, "frozen", False):
+    _FROZEN_BASE_DIR = Path(getattr(sys, "_MEIPASS", None) or Path(sys.executable).resolve().parent)
+    ASSETS_DIR = _FROZEN_BASE_DIR / "assets"
+else:
+    ASSETS_DIR = REPO_ROOT / "assets"
 
 
 def asset_path(filename: str) -> Path:

@@ -39,9 +39,6 @@ Desktop.ini
 *.tmp
 *.temp
 
-# Python version managers
-.python-version
-
 # Local app state if created inside the repo by mistake
 .graphlink/
 session.dat

@@ -1,0 +1,117 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "graphlink"
+dynamic = ["version"]
+description = "A local-first, graph-based AI workspace for branching reasoning, tool use, and multi-provider workflows."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+dependencies = [
+    "anthropic",
+    "beautifulsoup4",
+    "ddgs",
+    "Markdown",
+    "matplotlib",
+    "mutagen",
+    "ollama",
+    "openai>=1.0.0",
+    "packaging",
+    "Pillow",
+    "pygments",
+    "pypdf",
+    "PySide6",
+    "pyspellchecker",
+    "python-docx",
+    "qtawesome",
+    "reportlab",
+    "requests",
+    "tiktoken",
+]
+
+# llama-cpp-python is lazily imported (api_provider._load_llama_cpp_class) only when
+# Llama.cpp local mode is actually used - Ollama is the built-in local path, so it is an
+# opt-in extra rather than a hard dependency. See doc/PRODUCTION_ROADMAP.md Section 4.
+[project.optional-dependencies]
+llamacpp = ["llama-cpp-python"]
+dev = ["pytest"]
+
+[project.gui-scripts]
+graphlink = "graphlink_app:main"
+
+[project.urls]
+Homepage = "https://github.com/dovvnloading/Graphlink"
+
+# graphlink_app/ has no __init__.py by design (see CONTRIBUTING.md: it is the sys.path
+# root, not a package) - modules inside it import each other as flat top-level names
+# (e.g. `from graphlink_window import ChatWindow`). package-dir maps graphlink_app/'s
+# CONTENTS to the top of the installed distribution so that import style keeps working
+# unchanged under an editable/real install; py-modules lists every loose top-level file
+# explicitly since setuptools' auto-discovery only picks up real packages (__init__.py
+# subdirectories), not loose modules.
+[tool.setuptools]
+package-dir = { "" = "graphlink_app" }
+py-modules = [
+    "api_provider",
+    "graphlink_agents",
+    "graphlink_agents_code_sandbox",
+    "graphlink_agents_core",
+    "graphlink_agents_pycoder",
+    "graphlink_agents_tools",
+    "graphlink_agents_web",
+    "graphlink_app",
+    "graphlink_audio",
+    "graphlink_canvas_dialogs",
+    "graphlink_canvas_groups",
+    "graphlink_canvas_items",
+    "graphlink_canvas_note_items",
+    "graphlink_command_palette",
+    "graphlink_config",
+    "graphlink_connections",
+    "graphlink_conversation_node",
+    "graphlink_core",
+    "graphlink_crash",
+    "graphlink_dialogs",
+    "graphlink_exporter",
+    "graphlink_file_handler",
+    "graphlink_html_view",
+    "graphlink_library_dialog",
+    "graphlink_licensing",
+    "graphlink_lod",
+    "graphlink_logging",
+    "graphlink_memory",
+    "graphlink_minimap",
+    "graphlink_node",
+    "graphlink_paths",
+    "graphlink_prompts",
+    "graphlink_pycoder",
+    "graphlink_scene",
+    "graphlink_secrets",
+    "graphlink_settings_dialogs",
+    "graphlink_styles",
+    "graphlink_system_dialogs",
+    "graphlink_ui_components",
+    "graphlink_update",
+    "graphlink_version",
+    "graphlink_view",
+    "graphlink_web",
+    "graphlink_window",
+    "graphlink_window_actions",
+    "graphlink_window_navigation",
+]
+
+[tool.setuptools.packages.find]
+where = ["graphlink_app"]
+include = [
+    "graphlink_canvas*",
+    "graphlink_nodes*",
+    "graphlink_plugins*",
+    "graphlink_session*",
+    "graphlink_ui_dialogs*",
+    "graphlink_widgets*",
+]
+
+[tool.setuptools.dynamic]
+version = { attr = "graphlink_version.APP_VERSION" }
