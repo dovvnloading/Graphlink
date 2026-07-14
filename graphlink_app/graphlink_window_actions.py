@@ -156,21 +156,6 @@ class WindowActionsMixin:
             f'</attachment>'
         )
 
-    def _looks_like_image_generation_request(self, message):
-        text = (message or "").strip().lower()
-        if not text:
-            return False
-
-        if text.endswith("?") or text.startswith(("how ", "what ", "why ", "can ", "could ", "should ", "would ", "do ")):
-            return False
-
-        image_verbs = ("generate", "create", "make", "render", "draw", "illustrate", "design")
-        image_targets = (
-            "image", "picture", "photo", "portrait", "illustration",
-            "art", "artwork", "logo", "icon", "wallpaper", "poster"
-        )
-        return any(verb in text for verb in image_verbs) and any(target in text for target in image_targets)
-
     def send_message(self):
         message = self.message_input.text().strip()
         attachments = list(getattr(self, 'pending_attachments', []))
@@ -284,18 +269,9 @@ class WindowActionsMixin:
         assign_history(user_node, history_for_worker)
         self.session_manager.save_current_chat()
 
-        if self._looks_like_image_generation_request(message) and not attachments:
-            self.current_node = user_node
-            self.chat_view.reveal_item(user_node)
-            self.message_input.clear()
-            self.message_input.setEnabled(True)
-            self.send_button.setEnabled(True)
-            self.attach_file_btn.setEnabled(True)
-            self.clear_attachment()
-            self.generate_image(user_node)
-            self.save_chat()
-            return
-
+        # Image generation is an explicit node action. Never infer it from chat
+        # text: doing so routes ordinary local/Ollama prompts into the API-only
+        # image backend and produces a misleading provider-mode error.
         self._show_pending_response_preview(user_node)
 
         worker_thread = ChatWorkerThread(self.agent, history_for_worker, history_context_node)
