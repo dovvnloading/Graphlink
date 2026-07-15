@@ -4,8 +4,9 @@ from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath, Q
 from PySide6.QtWidgets import QApplication, QGraphicsItem
 
 from graphlink_canvas_items import Container, HoverAnimationMixin
-from graphlink_config import get_current_palette, get_graph_node_colors, get_semantic_color
+from graphlink_config import canvas_font, canvas_font_color, get_current_palette, get_graph_node_colors, get_semantic_color
 from graphlink_lod import draw_lod_card, lod_mode_for_item, preview_text
+from graphlink_widgets import ScrollBar
 
 try:
     from pygments import highlight
@@ -50,6 +51,7 @@ class CodeNode(QGraphicsItem, HoverAnimationMixin):
     PADDING = 15
     HEADER_HEIGHT = 30
     MAX_HEIGHT = 800
+    SCROLLBAR_PADDING = 6
 
     def __init__(self, code, language, parent_content_node, parent=None):
         super().__init__(parent)
@@ -67,15 +69,65 @@ class CodeNode(QGraphicsItem, HoverAnimationMixin):
 
         self.highlighter = CodeHighlighter()
         self.document = QTextDocument()
-        self.document.setDefaultStyleSheet(self.highlighter.get_stylesheet())
-        self.document.setHtml(self.highlighter.highlight(self.code, self.language))
+        self.scroll_value = 0.0
+        self.content_height = 1.0
+        self.scrollbar = ScrollBar(self)
+        self.scrollbar.valueChanged.connect(self._on_scroll_value_changed)
+        self._set_document_style()
 
         self.width = 600
         doc_width = self.width - (self.PADDING * 2)
         self.document.setTextWidth(doc_width)
 
-        content_height = self.document.size().height()
-        self.height = min(self.MAX_HEIGHT, content_height + self.HEADER_HEIGHT + self.PADDING)
+        self._recalculate_geometry()
+
+    def _set_document_style(self):
+        scene = self.scene()
+        family = getattr(scene, "font_family", "Segoe UI")
+        size = max(1, int(getattr(scene, "font_size", 10)))
+        color = canvas_font_color(scene, "#dddddd").name()
+        stylesheet = self.highlighter.get_stylesheet()
+        stylesheet += f" body, pre {{ font-family: '{family}'; font-size: {size}pt; color: {color}; }}"
+        self.document.setDefaultStyleSheet(stylesheet)
+        self.document.setHtml(self.highlighter.highlight(self.code, self.language))
+
+    def _content_rect(self):
+        return QRectF(
+            self.PADDING,
+            self.HEADER_HEIGHT,
+            max(1.0, self.width - (self.PADDING * 2) - self.scrollbar.width - self.SCROLLBAR_PADDING),
+            max(1.0, self.height - self.HEADER_HEIGHT - self.PADDING),
+        )
+
+    def _recalculate_geometry(self):
+        content_width = max(1.0, self.width - (self.PADDING * 2) - self.scrollbar.width - self.SCROLLBAR_PADDING)
+        self.document.setTextWidth(content_width)
+        new_content_height = max(1.0, self.document.size().height())
+        new_height = min(self.MAX_HEIGHT, new_content_height + self.HEADER_HEIGHT + self.PADDING)
+        if new_height != getattr(self, "height", None):
+            self.prepareGeometryChange()
+            self.height = new_height
+        self.content_height = new_content_height
+
+        content_rect = self._content_rect()
+        is_scrollable = self.content_height > content_rect.height()
+        self.scrollbar.setVisible(is_scrollable)
+        if is_scrollable:
+            self.scrollbar.height = content_rect.height()
+            self.scrollbar.setPos(self.width - self.PADDING - self.scrollbar.width, content_rect.top())
+            self.scrollbar.set_range(content_rect.height() / self.content_height)
+        else:
+            self.scroll_value = 0.0
+            self.scrollbar.set_value(0.0)
+        self.update()
+
+    def _on_scroll_value_changed(self, value):
+        self.scroll_value = value
+        self.update()
+
+    def update_font_settings(self, font_family, font_size, color):
+        self._set_document_style()
+        self._recalculate_geometry()
 
     def boundingRect(self):
         return QRectF(-5, -5, self.width + 10, self.height + 10)
@@ -134,7 +186,7 @@ class CodeNode(QGraphicsItem, HoverAnimationMixin):
         painter.drawPath(header_path)
 
         painter.setPen(QColor("#cccccc"))
-        font = QFont('Consolas', 9)
+        font = canvas_font(self.scene(), delta=-1)
         painter.setFont(font)
         metrics = QFontMetrics(font)
         label_rect = QRectF(10, 0, self.width - 48, self.HEADER_HEIGHT)
@@ -149,11 +201,16 @@ class CodeNode(QGraphicsItem, HoverAnimationMixin):
         copy_icon.paint(painter, QRectF(self.width - 28, 7, 16, 16).toRect())
 
         painter.save()
-        painter.translate(self.PADDING, self.HEADER_HEIGHT)
-        clip_rect = QRectF(0, 0, self.width - (self.PADDING * 2), self.height - self.HEADER_HEIGHT - self.PADDING)
-        painter.setClipRect(clip_rect)
+        content_rect = self._content_rect()
+        painter.setClipRect(content_rect)
+        scroll_offset = max(0.0, self.content_height - content_rect.height()) * self.scroll_value
+        painter.translate(content_rect.left(), content_rect.top() - scroll_offset)
         self.document.drawContents(painter)
         painter.restore()
+
+        if self.scrollbar.isVisible():
+            self.scrollbar.height = content_rect.height()
+            self.scrollbar.setPos(self.width - self.PADDING - self.scrollbar.width, content_rect.top())
 
     def contextMenuEvent(self, event):
         from graphlink_nodes.graphlink_node_code_menu import CodeNodeContextMenu
@@ -180,6 +237,15 @@ class CodeNode(QGraphicsItem, HoverAnimationMixin):
             self.scene().is_dragging_item = False
             self.scene()._clear_smart_guides()
         super().mouseReleaseEvent(event)
+
+    def wheelEvent(self, event):
+        if self.scrollbar.isVisible() and self.content_height > self._content_rect().height():
+            delta = event.delta() / 120.0
+            step = min(0.25, 48.0 / max(1.0, self.content_height - self._content_rect().height()))
+            self.scrollbar.set_value(self.scrollbar.value - delta * step)
+            event.accept()
+            return
+        super().wheelEvent(event)
 
     def hoverEnterEvent(self, event):
         self._handle_hover_enter(event)

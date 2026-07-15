@@ -8,7 +8,7 @@ from PySide6.QtGui import QPainter, QColor, QBrush, QPen, QFont, QPainterPath, Q
 
 from .graphlink_canvas_base import CanvasHeaderLineEdit, GhostFrame, update_connections_for_items
 from .graphlink_canvas_dialogs import ColorPickerDialog
-from graphlink_config import get_current_palette, get_graph_node_colors
+from graphlink_config import canvas_font, get_current_palette, get_graph_node_colors
 
 
 class Container(QGraphicsItem):
@@ -352,7 +352,7 @@ class Container(QGraphicsItem):
 
             # Draw the title text in collapsed mode.
             painter.setPen(QColor("#ffffff"))
-            font = QFont("Segoe UI", 12, QFont.Weight.Bold)
+            font = canvas_font(self.scene(), delta=2, weight=QFont.Weight.Bold)
             painter.setFont(font)
             title_rect = QRectF(self.rect.left() + 14, self.rect.top(), self.rect.width() - 56, self.rect.height())
             display_title = painter.fontMetrics().elidedText(self.title, Qt.TextElideMode.ElideRight, int(title_rect.width()))
@@ -420,7 +420,7 @@ class Container(QGraphicsItem):
 
         # Draw the title, either in display or editing mode.
         painter.setPen(QPen(QColor("#ffffff")))
-        font = QFont("Segoe UI", 10, QFont.Weight.Bold)
+        font = canvas_font(self.scene(), weight=QFont.Weight.Bold)
         painter.setFont(font)
         text_rect = self._header_text_rect()
 

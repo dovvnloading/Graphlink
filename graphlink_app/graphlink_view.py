@@ -32,7 +32,7 @@ class ChatView(QGraphicsView):
         super().__init__()
         self.window = window
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
-        self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.FullViewportUpdate)
+        self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.MinimalViewportUpdate)
         
         # Disable default scrollbars to use custom ones.
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -123,6 +123,19 @@ class ChatView(QGraphicsView):
                 self.mapToScene(self.viewport().rect()).boundingRect(),
                 max(0.01, self.transform().m11()),
             )
+
+    def zoom_by(self, factor):
+        """Apply a bounded zoom step and keep the view's zoom state in sync."""
+        factor = float(factor)
+        if factor <= 0:
+            return False
+        new_zoom_factor = self._zoom_factor * factor
+        if not 0.1 <= new_zoom_factor <= 4.0:
+            return False
+        self.scale(factor, factor)
+        self._zoom_factor = new_zoom_factor
+        self._schedule_scene_lod_refresh()
+        return True
 
     def visible_scene_rect(self):
         return self.mapToScene(self.viewport().rect()).boundingRect()
@@ -557,24 +570,12 @@ class ChatView(QGraphicsView):
             return
 
         if key == Qt.Key.Key_E: # Zoom In
-            factor = 1.05
-            self._zoom_factor *= factor
-            if self._zoom_factor <= 4.0:
-                self.scale(factor, factor)
-                self._schedule_scene_lod_refresh()
-            else:
-                self._zoom_factor /= factor
+            self.zoom_by(1.05)
             event.accept()
             return
             
         if key == Qt.Key.Key_Q: # Zoom Out
-            factor = 0.95
-            self._zoom_factor *= factor
-            if self._zoom_factor >= 0.1:
-                self.scale(factor, factor)
-                self._schedule_scene_lod_refresh()
-            else:
-                self._zoom_factor /= factor
+            self.zoom_by(0.95)
             event.accept()
             return
         
@@ -614,11 +615,14 @@ class ChatView(QGraphicsView):
     def _scrollable_item_at(self, position):
         item = self.itemAt(position)
         while item is not None:
-            if isinstance(item, (ChatNode, DocumentNode)):
-                scrollbar = getattr(item, "scrollbar", None)
-                if scrollbar and scrollbar.isVisible() and not getattr(item, "is_collapsed", False):
-                    return item
-                return None
+            scrollbar = getattr(item, "scrollbar", None)
+            if (
+                scrollbar is not None
+                and scrollbar.isVisible()
+                and not getattr(item, "is_collapsed", False)
+                and callable(getattr(item, "wheelEvent", None))
+            ):
+                return item
             item = item.parentItem()
         return None
 
@@ -633,12 +637,7 @@ class ChatView(QGraphicsView):
             # Zoom the view if Ctrl is held.
             zoom_in = event.angleDelta().y() > 0
             factor = 1.1 if zoom_in else 0.9
-            new_zoom_factor = self._zoom_factor * factor
-                
-            if 0.1 <= new_zoom_factor <= 4.0:
-                self.scale(factor, factor)
-                self._zoom_factor = new_zoom_factor
-                self._schedule_scene_lod_refresh()
+            self.zoom_by(factor)
             return
 
         # Check if the item under the cursor is scrollable (e.g., a ChatNode with overflow).
@@ -719,9 +718,13 @@ class ChatView(QGraphicsView):
         
     def fit_all(self):
         """Zooms and pans the view to fit all items in the scene."""
-        if self.scene() and not self.scene().nodes and not self.scene().code_nodes and not self.scene().image_nodes:
+        scene = self.scene()
+        if scene is None:
             return
-        self.fitInView(self.scene().itemsBoundingRect(), Qt.AspectRatioMode.KeepAspectRatio)
+        rect = scene.overview_rect() if hasattr(scene, "overview_rect") else scene.itemsBoundingRect()
+        if not rect.isValid() or rect.width() <= 0 or rect.height() <= 0:
+            return
+        self.fitInView(rect.adjusted(-40, -40, 40, 40), Qt.AspectRatioMode.KeepAspectRatio)
         self._zoom_factor = self.transform().m11()
         self._schedule_scene_lod_refresh()
 

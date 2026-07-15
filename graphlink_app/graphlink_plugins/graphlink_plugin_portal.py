@@ -390,6 +390,9 @@ class PluginPortal:
         node.incoming_connection = connection
         scene.addItem(connection)
         scene_connections.append(connection)
+        register_connection = getattr(scene, "register_connection", None)
+        if callable(register_connection):
+            register_connection(connection)
 
         return node
 
@@ -419,6 +422,9 @@ class PluginPortal:
         connection = SystemPromptConnectionItem(prompt_note, root_node)
         scene.addItem(connection)
         scene.system_prompt_connections.append(connection)
+        register_connection = getattr(scene, "register_connection", None)
+        if callable(register_connection):
+            register_connection(connection)
         return prompt_note
 
     def _create_pycoder_node(self):

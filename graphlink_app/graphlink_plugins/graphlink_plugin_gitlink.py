@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from graphlink_config import canvas_font
 
 from graphlink_canvas_items import HoverAnimationMixin
 from graphlink_config import get_current_palette, get_semantic_color
@@ -1624,7 +1625,7 @@ class GitlinkNode(QGraphicsObject, HoverAnimationMixin):
 
         if self.is_collapsed:
             painter.setPen(QColor("#ffffff"))
-            painter.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+            painter.setFont(canvas_font(self.scene(), weight=QFont.Weight.Bold))
             painter.drawText(QRectF(42, 0, self.width - 84, self.height), Qt.AlignmentFlag.AlignVCenter, "Gitlink")
             qta.icon("fa5s.link", color=node_color.name()).paint(painter, QRect(12, 10, 20, 20))
             self.collapse_button_rect = QRectF(self.width - 35, 5, 30, 30)

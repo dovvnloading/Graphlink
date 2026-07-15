@@ -537,6 +537,7 @@ class WindowActionsMixin:
                     conn = GroupSummaryConnectionItem(source_node, note)
                     scene.addItem(conn)
                     scene.group_summary_connections.append(conn)
+                    scene.register_connection(conn)
         except Exception as e:
             self.handle_error(f"Error creating summary note: {str(e)}")
         finally:

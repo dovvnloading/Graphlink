@@ -7,7 +7,7 @@ from PySide6.QtCore import QTimer, Qt, Signal, QRectF, QPointF, QDateTime, QRect
 from PySide6.QtGui import QPainter, QColor, QBrush, QPen, QPainterPath, QTextDocument, QAction, QCursor, QFont
 import qtawesome as qta
 import markdown
-from graphlink_config import get_current_palette, get_graph_node_colors, get_neutral_button_colors, get_semantic_color
+from graphlink_config import canvas_font, get_current_palette, get_graph_node_colors, get_neutral_button_colors, get_semantic_color
 from graphlink_canvas_items import HoverAnimationMixin
 from graphlink_lod import draw_lod_card, preview_text, sync_proxy_render_state
 from graphlink_plugins.graphlink_plugin_context_menu import PluginNodeContextMenu
@@ -480,7 +480,7 @@ class ConversationNode(QGraphicsObject, HoverAnimationMixin):
 
         if self.is_collapsed:
             painter.setPen(QColor("#ffffff"))
-            font = QFont("Segoe UI", 10, QFont.Weight.Bold)
+            font = canvas_font(self.scene(), weight=QFont.Weight.Bold)
             painter.setFont(font)
             painter.drawText(QRectF(40, 0, self.width - 80, self.height), Qt.AlignmentFlag.AlignVCenter, "Conversation")
             

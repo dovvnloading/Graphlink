@@ -74,6 +74,7 @@ class SceneDeserializer:
         self._set_incoming_connection(end_node, connection)
         scene.addItem(connection)
         getattr(scene, target_list_name).append(connection)
+        scene.register_connection(connection)
         return connection
 
     def deserialize_chart(self, data, scene, all_nodes_map):
@@ -138,6 +139,7 @@ class SceneDeserializer:
         connection = SystemPromptConnectionItem(start_note, end_node)
         scene.addItem(connection)
         scene.system_prompt_connections.append(connection)
+        scene.register_connection(connection)
         return connection
 
     def deserialize_pycoder_connection(self, data, scene, all_nodes_map):
@@ -185,6 +187,7 @@ class SceneDeserializer:
         connection = GroupSummaryConnectionItem(start_node, end_note)
         scene.addItem(connection)
         scene.group_summary_connections.append(connection)
+        scene.register_connection(connection)
         return connection
 
     def deserialize_node(self, index, data, all_nodes_map):

@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import QRectF, Qt, Signal, QThread, QPointF, QSize
 from PySide6.QtGui import QPainter, QColor, QPen, QPainterPath, QFont, QBrush, QLinearGradient
 import qtawesome as qta
-from graphlink_config import get_current_palette
+from graphlink_config import canvas_font, get_current_palette
 from graphlink_config import get_semantic_color
 from graphlink_canvas_items import HoverAnimationMixin
 from graphlink_connections import ConnectionItem
@@ -577,7 +577,7 @@ class ArtifactNode(QGraphicsObject, HoverAnimationMixin):
 
         if self.is_collapsed:
             painter.setPen(QColor("#ffffff"))
-            font = QFont("Segoe UI", 10, QFont.Weight.Bold)
+            font = canvas_font(self.scene(), weight=QFont.Weight.Bold)
             painter.setFont(font)
             painter.drawText(QRectF(40, 0, self.width - 80, self.height), Qt.AlignmentFlag.AlignVCenter, "Artifact Drafter")
             
