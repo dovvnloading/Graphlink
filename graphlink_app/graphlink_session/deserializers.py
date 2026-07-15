@@ -405,6 +405,8 @@ class SceneDeserializer:
         nodes = [all_nodes_map[index] for index in frame_item_indices if index in all_nodes_map]
 
         frame = Frame(nodes)
+        if data.get("id"):
+            frame.persistent_id = data["id"]
         frame.setPos(data["position"]["x"], data["position"]["y"])
         frame.note = data["note"]
 
@@ -415,19 +417,32 @@ class SceneDeserializer:
         if "size" in data:
             frame.rect.setWidth(data["size"]["width"])
             frame.rect.setHeight(data["size"]["height"])
+        rect_data = data.get("rect")
+        if rect_data:
+            frame.rect = QRectF(rect_data["x"], rect_data["y"], rect_data["width"], rect_data["height"])
+            frame._user_resized = True
+        expanded_data = data.get("expanded_rect")
+        if expanded_data:
+            frame.expanded_rect = QRectF(expanded_data["x"], expanded_data["y"], expanded_data["width"], expanded_data["height"])
 
         scene.addItem(frame)
         scene.frames.append(frame)
         frame.setZValue(-2)
-        if not data.get("is_locked", True):
-            frame.toggle_lock()
-        if data.get("is_collapsed", False):
-            frame.toggle_collapse()
+        frame.is_locked = data.get("is_locked", True)
+        frame.is_collapsed = data.get("is_collapsed", False)
+        frame._apply_lock_state()
+        for node in frame.nodes:
+            node.setVisible(not frame.is_collapsed)
+        if frame.is_collapsed:
+            frame.rect = QRectF(0, 0, frame.COLLAPSED_WIDTH, frame.COLLAPSED_HEIGHT)
+        frame._update_title_editor_geometry()
         return frame
 
     def deserialize_container(self, data, scene, all_items_map):
         items = [all_items_map[index] for index in data["items"] if index in all_items_map]
         container = Container(items)
+        if data.get("id"):
+            container.persistent_id = data["id"]
         container.setPos(data["position"]["x"], data["position"]["y"])
         container.title = data.get("title", "Container")
         container.color = data.get("color", "#3a3a3a")
@@ -438,9 +453,16 @@ class SceneDeserializer:
             container.expanded_rect = QRectF(
                 rect_data["x"], rect_data["y"], rect_data["width"], rect_data["height"]
             )
+        rect_data = data.get("rect")
+        if rect_data:
+            container.rect = QRectF(rect_data["x"], rect_data["y"], rect_data["width"], rect_data["height"])
 
-        if data.get("is_collapsed", False):
-            container.toggle_collapse()
+        container.is_collapsed = data.get("is_collapsed", False)
+        for item in container.contained_items:
+            item.setVisible(not container.is_collapsed)
+        if container.is_collapsed:
+            container.rect = QRectF(0, 0, container.COLLAPSED_WIDTH, container.COLLAPSED_HEIGHT)
+        container._update_title_editor_geometry()
 
         scene.addItem(container)
         scene.containers.append(container)
@@ -485,6 +507,13 @@ class SceneDeserializer:
             note.header_color = note_data["header_color"]
             note.is_system_prompt = note_data.get("is_system_prompt", False)
             note.is_summary_note = note_data.get("is_summary_note", False)
+            if note_data.get("id"):
+                note.persistent_id = note_data["id"]
+            note.note_role = note_data.get("role", "manual")
+            note.source_ids = list(note_data.get("source_ids", []))
+            note.operation_id = note_data.get("operation_id", "")
+            note.source_revisions = dict(note_data.get("source_revisions", {}))
+            note.provider_snapshot = dict(note_data.get("provider_snapshot", {}))
             note.content = note_data["content"]
             notes_map[index] = note
         return notes_map

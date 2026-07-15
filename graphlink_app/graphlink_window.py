@@ -49,6 +49,7 @@ from graphlink_update import APP_VERSION, UpdateCheckWorker
 from graphlink_paths import asset_path
 from graphlink_crash import mark_clean_exit
 from graphlink_composer import ComposerController
+from graphlink_utility import UtilityOperationController
 
 class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
     def __init__(self, settings_manager):
@@ -90,6 +91,8 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         self._main_request_cancel_pending = False
         self._main_request_cancel_callback = None
         self.composer_controller = ComposerController(self)
+        self.utility_operation_controller = UtilityOperationController(self)
+        self.utility_threads = {}
 
         self.container = QWidget()
         container_layout = QVBoxLayout(self.container)
@@ -464,6 +467,9 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
             if worker is not None:
                 yield label, worker, (lambda name=attr_name: setattr(self, name, None))
 
+        for operation_id, worker in list(getattr(self, "utility_threads", {}).items()):
+            yield "canvas utility operation", worker, (lambda op=operation_id: self.utility_threads.pop(op, None))
+
         chat_view = getattr(self, "chat_view", None)
         scene = chat_view.scene() if chat_view is not None else None
         if scene is not None:
@@ -632,7 +638,9 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Escape:
-             if self.pending_attachments: self.clear_attachment()
+             if self.cancel_latest_utility_operation():
+                 event.accept()
+             elif self.pending_attachments: self.clear_attachment()
         elif event.modifiers() & Qt.KeyboardModifier.ControlModifier:
             if event.key() == Qt.Key.Key_N:
                 view_pos = self.chat_view.mapFromGlobal(QCursor.pos()); scene_pos = self.chat_view.mapToScene(view_pos); self.chat_view.scene().add_note(scene_pos)

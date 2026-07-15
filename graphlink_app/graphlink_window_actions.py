@@ -11,6 +11,7 @@ from graphlink_composer import ComposerRequestState
 from graphlink_node import ChatNode, CodeNode
 from graphlink_canvas_items import Note
 from graphlink_connections import GroupSummaryConnectionItem
+from graphlink_utility import UtilityKind, render_context, source_snapshot
 from graphlink_pycoder import PyCoderMode, PyCoderNode
 from graphlink_plugins.graphlink_plugin_code_sandbox import CodeSandboxNode
 from graphlink_web import WebNode
@@ -37,6 +38,94 @@ from graphlink_agents import (
 )
 
 class WindowActionsMixin:
+    def _utility_chat_epoch(self):
+        return int(getattr(getattr(self, "session_manager", None), "_context_epoch", 0))
+
+    def _utility_bounded_text(self, node):
+        snapshot = source_snapshot(node, getattr(node, "text", ""))
+        return render_context([snapshot])[0]
+
+    def _utility_bounded_texts(self, nodes):
+        snapshots = [source_snapshot(node, getattr(node, "text", "")) for node in nodes]
+        rendered, omitted = render_context(snapshots)
+        omitted_ids = set(omitted)
+        return [snapshot.text for snapshot in snapshots if snapshot.source_id not in omitted_ids]
+
+    def _utility_start(self, kind, source_nodes, worker, finished_factory):
+        snapshots = [source_snapshot(node, getattr(node, "text", "")) for node in source_nodes]
+        rendered_context, omitted = render_context(snapshots)
+        operation_id = self.utility_operation_controller.begin(
+            kind, snapshots, chat_epoch=self._utility_chat_epoch(),
+            rendered_context=rendered_context,
+            estimated_tokens=max(1, len(rendered_context) // 4),
+            omitted_source_ids=omitted,
+        )
+        self.utility_operation_controller.mark_running(operation_id)
+        self.utility_threads[operation_id] = worker
+        worker.finished.connect(finished_factory(operation_id))
+        worker.error.connect(lambda message, op=operation_id: self._utility_failed(op, message))
+        worker.finished.connect(worker.deleteLater)
+        worker.error.connect(worker.deleteLater)
+        worker.start()
+        return operation_id
+
+    def _utility_failed(self, operation_id, message):
+        if self.utility_operation_controller.cancellation_requested(operation_id):
+            self._utility_cleanup(operation_id)
+            self._clear_loading_animation()
+            return
+        self.utility_operation_controller.fail(operation_id, message)
+        self._utility_cleanup(operation_id)
+        self.handle_error(message)
+
+    def _utility_cleanup(self, operation_id):
+        self.utility_threads.pop(operation_id, None)
+
+    def _utility_result(self, operation_id, source_nodes, response):
+        controller = self.utility_operation_controller
+        scene = self.chat_view.scene()
+        if not controller.is_current(operation_id, self._utility_chat_epoch()):
+            controller.mark_stale(operation_id)
+            self._utility_cleanup(operation_id)
+            self._clear_loading_animation()
+            return None
+        if any(node.scene() != scene for node in source_nodes):
+            controller.mark_stale(operation_id)
+            self._utility_cleanup(operation_id)
+            self._clear_loading_animation()
+            return None
+        result = controller.complete(operation_id, response)
+        self._utility_cleanup(operation_id)
+        return result
+
+    def cancel_latest_utility_operation(self):
+        active = self.utility_operation_controller.active_operations()
+        if not active:
+            return False
+        operation = active[-1]
+        self.utility_operation_controller.cancel(operation.operation_id)
+        worker = self.utility_threads.get(operation.operation_id)
+        if worker is not None and hasattr(worker, "stop"):
+            worker.stop()
+        self._utility_cleanup(operation.operation_id)
+        self._clear_loading_animation()
+        self.notification_banner.show_message("Utility generation cancelled.", 2500, "info")
+        return True
+
+    def _decorate_utility_note(self, note, result, role, source_nodes):
+        note.note_role = role.value
+        note.operation_id = result.operation_id
+        note.source_ids = [source.source_id for source in result.context.sources]
+        note.source_revisions = {source.source_id: source.revision for source in result.context.sources if source.revision}
+        note.provider_snapshot = result.provider_snapshot
+        note.is_summary_note = role == UtilityKind.GROUP_SUMMARY
+        scene = self.chat_view.scene()
+        for source_node in source_nodes:
+            conn = GroupSummaryConnectionItem(source_node, note)
+            scene.addItem(conn)
+            scene.group_summary_connections.append(conn)
+            scene.register_connection(conn)
+
     def _graphics_item_dimensions(self, item):
         if item is None:
             return 0.0, 0.0
@@ -493,22 +582,28 @@ class WindowActionsMixin:
     def generate_takeaway(self, node):
         try:
             self._show_loading_animation(anchor_node=node)
-            self.takeaway_thread = KeyTakeawayWorkerThread(KeyTakeawayAgent(), node.text, node.scenePos())
-            self.takeaway_thread.finished.connect(self.handle_takeaway_response)
-            self.takeaway_thread.error.connect(self.handle_error)
-            self.takeaway_thread.finished.connect(self.takeaway_thread.deleteLater)
-            self.takeaway_thread.error.connect(self.takeaway_thread.deleteLater)
-            self.takeaway_thread.start()
+            self.takeaway_thread = KeyTakeawayWorkerThread(KeyTakeawayAgent(), self._utility_bounded_text(node), node.scenePos())
+            self._utility_start(
+                UtilityKind.TAKEAWAY, [node], self.takeaway_thread,
+                lambda operation_id: lambda response, node_pos: self.handle_takeaway_response(
+                    operation_id, response, node_pos, [node]
+                ),
+            )
         except Exception as e:
             self.handle_error(f"Error generating takeaway: {str(e)}")
             
-    def handle_takeaway_response(self, response, node_pos):
+    def handle_takeaway_response(self, operation_id, response, node_pos, source_nodes):
         try:
+            result = self._utility_result(operation_id, source_nodes, response)
+            if result is None:
+                return
             note_pos = QPointF(node_pos.x() + 400, node_pos.y())
             note = self.chat_view.scene().add_note(note_pos)
             note.width, note.content = 400, response
             note.color, note.header_color = get_current_palette().FRAME_COLORS["Mid Gray"]["color"], get_semantic_color("status_info").name()
+            self._decorate_utility_note(note, result, UtilityKind.TAKEAWAY, source_nodes)
             note._recalculate_geometry()
+            self.save_chat()
         except Exception as e:
             self.handle_error(f"Error creating takeaway note: {str(e)}")
         finally:
@@ -521,7 +616,10 @@ class WindowActionsMixin:
             if len(selected_nodes) < 2:
                 self.notification_banner.show_message("Please select two or more chat nodes to summarize.", 5000, "warning")
                 return
-            texts = [node.text for node in selected_nodes]
+            texts = self._utility_bounded_texts(selected_nodes)
+            if len(texts) < 2:
+                self.notification_banner.show_message("Selected context exceeds the utility limit; select fewer sources.", 5000, "warning")
+                return
             avg_x, max_x, avg_y = 0, 0, 0
             for node in selected_nodes:
                 pos = node.scenePos()
@@ -531,27 +629,27 @@ class WindowActionsMixin:
             note_pos = QPointF(max_x + 100, avg_y / len(selected_nodes))
             self._show_loading_animation(scene_pos=QPointF(note_pos.x() - 50, note_pos.y()))
             self.group_summary_thread = GroupSummaryWorkerThread(GroupSummaryAgent(), texts, note_pos, selected_nodes)
-            self.group_summary_thread.finished.connect(self.handle_group_summary_response)
-            self.group_summary_thread.error.connect(self.handle_error)
-            self.group_summary_thread.finished.connect(self.group_summary_thread.deleteLater)
-            self.group_summary_thread.error.connect(self.group_summary_thread.deleteLater)
-            self.group_summary_thread.start()
+            self._utility_start(
+                UtilityKind.GROUP_SUMMARY, selected_nodes, self.group_summary_thread,
+                lambda operation_id: lambda response, result_pos, result_sources: self.handle_group_summary_response(
+                    operation_id, response, result_pos, result_sources
+                ),
+            )
         except Exception as e:
             self.handle_error(f"Error generating group summary: {str(e)}")
 
-    def handle_group_summary_response(self, response, note_pos, source_nodes):
+    def handle_group_summary_response(self, operation_id, response, note_pos, source_nodes):
         try:
+            result = self._utility_result(operation_id, source_nodes, response)
+            if result is None:
+                return
             scene = self.chat_view.scene()
             note = scene.add_note(note_pos)
             note.content, note.color, note.header_color = response, get_current_palette().FRAME_COLORS["Mid Gray"]["color"], get_semantic_color("status_warning").name()
             note.width, note.is_summary_note = 450, True
+            self._decorate_utility_note(note, result, UtilityKind.GROUP_SUMMARY, source_nodes)
             note._recalculate_geometry()
-            for source_node in source_nodes:
-                if source_node.scene() == scene:
-                    conn = GroupSummaryConnectionItem(source_node, note)
-                    scene.addItem(conn)
-                    scene.group_summary_connections.append(conn)
-                    scene.register_connection(conn)
+            self.save_chat()
         except Exception as e:
             self.handle_error(f"Error creating summary note: {str(e)}")
         finally:
@@ -560,22 +658,28 @@ class WindowActionsMixin:
     def generate_explainer(self, node):
         try:
             self._show_loading_animation(anchor_node=node)
-            self.explainer_thread = ExplainerWorkerThread(ExplainerAgent(), node.text, node.scenePos())
-            self.explainer_thread.finished.connect(self.handle_explainer_response)
-            self.explainer_thread.error.connect(self.handle_error)
-            self.explainer_thread.finished.connect(self.explainer_thread.deleteLater)
-            self.explainer_thread.error.connect(self.explainer_thread.deleteLater)
-            self.explainer_thread.start()
+            self.explainer_thread = ExplainerWorkerThread(ExplainerAgent(), self._utility_bounded_text(node), node.scenePos())
+            self._utility_start(
+                UtilityKind.EXPLAINER, [node], self.explainer_thread,
+                lambda operation_id: lambda response, node_pos: self.handle_explainer_response(
+                    operation_id, response, node_pos, [node]
+                ),
+            )
         except Exception as e:
             self.handle_error(f"Error generating explanation: {str(e)}")
             
-    def handle_explainer_response(self, response, node_pos):
+    def handle_explainer_response(self, operation_id, response, node_pos, source_nodes):
         try:
+            result = self._utility_result(operation_id, source_nodes, response)
+            if result is None:
+                return
             note_pos = QPointF(node_pos.x() + 400, node_pos.y() + 100)
             note = self.chat_view.scene().add_note(note_pos)
             note.width, note.content = 400, response
             note.color, note.header_color = get_current_palette().FRAME_COLORS["Mid Gray"]["color"], get_semantic_color("status_info").name()
+            self._decorate_utility_note(note, result, UtilityKind.EXPLAINER, source_nodes)
             note._recalculate_geometry()
+            self.save_chat()
         except Exception as e:
             self.handle_error(f"Error creating explainer note: {str(e)}")
         finally:

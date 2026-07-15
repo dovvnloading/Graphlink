@@ -279,7 +279,8 @@ class ChatScene(QGraphicsScene):
         matches = []
         
         all_nodes = self._all_layout_nodes()
-        for node in all_nodes:
+        utility_items = self.notes + self.frames + self.containers
+        for node in all_nodes + utility_items:
             content = ""
             if isinstance(node, ChatNode):
                 content = node.text
@@ -303,6 +304,12 @@ class ChatScene(QGraphicsScene):
                 content = node.get_prompt() + "\n" + node.get_requirements() + "\n" + node.get_code() + "\n" + node.output_display.toPlainText()
             elif isinstance(node, ChartItem):
                 content = node.to_context_text() if hasattr(node, "to_context_text") else str(node.data)
+            elif isinstance(node, Note):
+                content = getattr(node, "content", "")
+            elif isinstance(node, Frame):
+                content = getattr(node, "note", "")
+            elif isinstance(node, Container):
+                content = getattr(node, "title", "")
 
             if text in content.lower():
                 matches.append(node)
@@ -318,7 +325,7 @@ class ChatScene(QGraphicsScene):
         Args:
             matched_nodes (list): A list of nodes that should be highlighted.
         """
-        all_nodes = self._all_layout_nodes()
+        all_nodes = self._all_layout_nodes() + self.notes + self.frames + self.containers
         for node in all_nodes:
             is_match = node in matched_nodes
             if getattr(node, 'is_search_match', False) != is_match:
@@ -576,6 +583,54 @@ class ChatScene(QGraphicsScene):
         self.scene_changed.emit()
         return chart
 
+    def _detach_item_from_groups(self, item, remove_empty=True):
+        """Detach an item through one ownership path and repair stale indexes."""
+        parent = item.parentItem()
+        known_parents = []
+        if isinstance(parent, (Frame, Container)):
+            known_parents.append(parent)
+        for group in list(self.frames) + list(self.containers):
+            members = group.nodes if isinstance(group, Frame) else group.contained_items
+            if item in members and group not in known_parents:
+                known_parents.append(group)
+
+        scene_pos = item.scenePos()
+        if isinstance(parent, (Frame, Container)):
+            item.setParentItem(None)
+            item.setPos(scene_pos)
+
+        for group in known_parents:
+            members = group.nodes if isinstance(group, Frame) else group.contained_items
+            while item in members:
+                members.remove(item)
+            if group.scene() == self and members:
+                group.updateGeometry()
+            elif remove_empty and group.scene() == self and not members:
+                if isinstance(group, Frame):
+                    self.deleteFrame(group)
+                else:
+                    self.deleteContainer(group)
+        return known_parents
+
+    def validate_group_invariants(self):
+        """Return human-readable group/index violations for tests and diagnostics."""
+        violations = []
+        memberships = {}
+        for group in self.frames:
+            for item in group.nodes:
+                memberships.setdefault(item, []).append(group)
+                if item.parentItem() is not group:
+                    violations.append(f"{type(group).__name__} member has wrong parent")
+        for group in self.containers:
+            for item in group.contained_items:
+                memberships.setdefault(item, []).append(group)
+                if item.parentItem() is not group:
+                    violations.append(f"{type(group).__name__} member has wrong parent")
+        for groups in memberships.values():
+            if len(groups) > 1:
+                violations.append("item appears in multiple groups")
+        return violations
+
     def createFrame(self):
         """Creates a Frame around the currently selected nodes."""
         selected_nodes = [item for item in self.selectedItems() 
@@ -584,21 +639,8 @@ class ChatScene(QGraphicsScene):
         if not selected_nodes:
             return
             
-        # If a selected node is already in a frame, un-parent it first.
         for node in selected_nodes:
-            if node.parentItem() and isinstance(node.parentItem(), Frame):
-                old_frame = node.parentItem()
-                scene_pos = node.scenePos()
-                node.setParentItem(None)
-                node.setPos(scene_pos)
-                old_frame.nodes.remove(node)
-                # If the old frame is now empty, remove it.
-                if not old_frame.nodes:
-                    self.removeItem(old_frame)
-                    if old_frame in self.frames:
-                        self.frames.remove(old_frame)
-                else:
-                    old_frame.updateGeometry()
+            self._detach_item_from_groups(node)
         
         frame = Frame(selected_nodes)
         self.addItem(frame)
@@ -619,21 +661,8 @@ class ChatScene(QGraphicsScene):
         if not selected_items:
             return
 
-        # Un-parent selected items from any existing containers or frames.
         for item in selected_items:
-            if item.parentItem() and isinstance(item.parentItem(), (Frame, Container)):
-                old_parent = item.parentItem()
-                scene_pos = item.scenePos()
-                item.setParentItem(None)
-                item.setPos(scene_pos)
-                
-                # Clean up the old parent if it becomes empty.
-                if isinstance(old_parent, Frame):
-                    old_parent.nodes.remove(item)
-                    if not old_parent.nodes: self.deleteFrame(old_parent)
-                elif isinstance(old_parent, Container):
-                    old_parent.contained_items.remove(item)
-                    if not old_parent.contained_items: self.deleteContainer(old_parent)
+            self._detach_item_from_groups(item)
         
         container = Container(selected_items)
         self.addItem(container)
@@ -668,7 +697,9 @@ class ChatScene(QGraphicsScene):
         """
         if hasattr(frame, 'dispose'):
             frame.dispose()
-        release_parent = frame.parentItem()
+        release_parent = frame.parentItem() if isinstance(frame.parentItem(), Container) else None
+        if isinstance(frame.parentItem(), Container) and frame in frame.parentItem().contained_items:
+            frame.parentItem().contained_items.remove(frame)
 
         # Un-parent all nodes from the frame, restoring their scene positions.
         for node in frame.nodes:
@@ -677,6 +708,8 @@ class ChatScene(QGraphicsScene):
                 node.setParentItem(release_parent)
                 if release_parent:
                     node.setPos(release_parent.mapFromScene(scene_pos))
+                    if node not in release_parent.contained_items:
+                        release_parent.contained_items.append(node)
                 else:
                     node.setPos(scene_pos)
             node.setVisible(True)
@@ -687,6 +720,8 @@ class ChatScene(QGraphicsScene):
         self.removeItem(frame)
         if frame in self.frames:
             self.frames.remove(frame)
+        if release_parent and release_parent.scene() == self:
+            release_parent.updateGeometry()
         self.scene_changed.emit()
 
     def deleteContainer(self, container):
@@ -698,16 +733,23 @@ class ChatScene(QGraphicsScene):
         """
         if hasattr(container, 'dispose'):
             container.dispose()
-        for item in container.contained_items:
+        release_parent = container.parentItem() if isinstance(container.parentItem(), Container) else None
+        if release_parent and container in release_parent.contained_items:
+            release_parent.contained_items.remove(container)
+        for item in list(container.contained_items):
             scene_pos = item.scenePos()
-            item.setParentItem(None)
-            item.setPos(scene_pos)
+            item.setParentItem(release_parent)
+            item.setPos(release_parent.mapFromScene(scene_pos) if release_parent else scene_pos)
+            if release_parent and item not in release_parent.contained_items:
+                release_parent.contained_items.append(item)
             item.setVisible(True)
             self.nodeMoved(item)
         
         self.removeItem(container)
         if container in self.containers:
             self.containers.remove(container)
+        if release_parent and release_parent.scene() == self:
+            release_parent.updateGeometry()
         self.scene_changed.emit()
 
     def keyPressEvent(self, event):
@@ -798,7 +840,7 @@ class ChatScene(QGraphicsScene):
         
     def selectAllNodes(self):
         """Selects all node-like items in the scene, including plugins and charts."""
-        for node in self._all_layout_nodes():
+        for node in self._all_layout_nodes() + self.notes + self.frames + self.containers:
             node.setSelected(True)
 
     def register_transient_layout_item(self, item):
@@ -1308,6 +1350,8 @@ class ChatScene(QGraphicsScene):
         Deletes all currently selected items, handling each type appropriately.
         """
         for item in list(self.selectedItems()):
+            if not isinstance(item, (Frame, Container)):
+                self._detach_item_from_groups(item, remove_empty=False)
             if isinstance(item, ChatNode): self.delete_chat_node(item)
             elif isinstance(item, CodeNode):
                 for conn in self.content_connections[:]:
