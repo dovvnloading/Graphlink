@@ -8,6 +8,7 @@ from graphlink_plugins.graphlink_plugin_code_sandbox import CodeSandboxNode
 from graphlink_plugins.graphlink_plugin_gitlink import GitlinkNode
 from graphlink_pycoder import PyCoderNode
 from graphlink_web import WebNode
+from graphlink_chart_data import ChartDataError, canonicalize_chart_data
 
 from graphlink_session.content_codec import (
     encode_image_bytes,
@@ -345,12 +346,23 @@ class SceneSerializer:
     def serialize_chart(self, chart, all_nodes_list):
         parent_node = getattr(chart, "parent_content_node", None)
         parent_node_index = all_nodes_list.index(parent_node) if parent_node in all_nodes_list else None
+        try:
+            chart_data = canonicalize_chart_data(chart.data)
+            data_error = None
+        except (ChartDataError, TypeError, ValueError) as exc:
+            chart_data = dict(getattr(chart, "data", {}) or {})
+            data_error = str(exc)
+        source_node = getattr(chart, "source_node", None)
         return {
-            "data": chart.data,
+            "id": self._node_persistent_id(chart),
+            "data": chart_data,
             "position": {"x": chart.pos().x(), "y": chart.pos().y()},
             "size": {"width": chart.width, "height": chart.height},
             "aspect_ratio_locked": getattr(chart, "aspect_ratio_locked", True),
             "parent_node_index": parent_node_index,
+            "parent_node_id": self._node_persistent_id(parent_node) if parent_node is not None else None,
+            "source_node_id": self._node_persistent_id(source_node) if source_node is not None else None,
+            "data_error": data_error,
         }
 
     def serialize_chat_data(self):

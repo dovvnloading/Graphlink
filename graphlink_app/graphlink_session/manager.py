@@ -54,6 +54,8 @@ class ChatSessionManager:
         this. See doc/ARCHITECTURE_REVIEW_FINDINGS.md.
         """
         self._context_epoch += 1
+        if self.window and hasattr(self.window, "invalidate_chart_requests"):
+            self.window.invalidate_chart_requests()
 
     def load_chat(self, chat_id):
         chat = self.db.load_chat(chat_id)

@@ -62,6 +62,7 @@ class ChatScene(QGraphicsScene):
         self.artifact_nodes = []
         self.gitlink_nodes = []
         self.chart_nodes = []
+        self.chart_connections = []
         self.transient_layout_items = []
         self._connection_index = {}
         self._scene_change_pending = False
@@ -173,6 +174,7 @@ class ChatScene(QGraphicsScene):
             self.html_connections,
             self.artifact_connections,
             self.gitlink_connections,
+            self.chart_connections,
         ]
 
     def register_connection(self, connection):
@@ -245,6 +247,21 @@ class ChatScene(QGraphicsScene):
         self.update_connections()
         self.scene_changed.emit()
 
+    def resolve_chart_parent(self, node):
+        """Return the nearest conversational owner for a chart source."""
+        conversational = set(self._all_conversational_nodes())
+        current = node
+        visited = set()
+        while current is not None and id(current) not in visited:
+            if current in conversational:
+                return current
+            visited.add(id(current))
+            current = (
+                getattr(current, "parent_content_node", None)
+                or getattr(current, "parent_node", None)
+            )
+        return None
+
     def find_items(self, text):
         """
         Searches all nodes for a given text string.
@@ -285,20 +302,7 @@ class ChatScene(QGraphicsScene):
             elif isinstance(node, CodeSandboxNode):
                 content = node.get_prompt() + "\n" + node.get_requirements() + "\n" + node.get_code() + "\n" + node.output_display.toPlainText()
             elif isinstance(node, ChartItem):
-                labels = node.data.get("labels", []) if isinstance(node.data, dict) else []
-                flows = node.data.get("flows", []) if isinstance(node.data, dict) else []
-                flow_text = "\n".join(
-                    f"{flow.get('source', '')} -> {flow.get('target', '')}: {flow.get('value', '')}"
-                    for flow in flows if isinstance(flow, dict)
-                )
-                content = "\n".join(
-                    part for part in (
-                        str(node.data.get("title", "")) if isinstance(node.data, dict) else "",
-                        str(node.data.get("type", "")) if isinstance(node.data, dict) else "",
-                        "\n".join(str(label) for label in labels),
-                        flow_text,
-                    ) if part
-                )
+                content = node.to_context_text() if hasattr(node, "to_context_text") else str(node.data)
 
             if text in content.lower():
                 matches.append(node)
@@ -314,8 +318,7 @@ class ChatScene(QGraphicsScene):
         Args:
             matched_nodes (list): A list of nodes that should be highlighted.
         """
-        all_nodes = (self._all_conversational_nodes() + self.code_nodes + self.document_nodes +
-                     self.image_nodes + self.thinking_nodes)
+        all_nodes = self._all_layout_nodes()
         for node in all_nodes:
             is_match = node in matched_nodes
             if getattr(node, 'is_search_match', False) != is_match:
@@ -555,13 +558,21 @@ class ChatScene(QGraphicsScene):
         self.pins.append(pin)
         return pin
     
-    def add_chart(self, data, pos, parent_content_node=None):
+    def add_chart(self, data, pos, parent_content_node=None, source_node=None):
         """Adds a new ChartItem to the scene."""
-        chart = ChartItem(data, pos, parent_content_node=parent_content_node)
-        strategy = "content" if parent_content_node is not None else "general"
+        source_node = source_node or parent_content_node
+        resolved_parent = self.resolve_chart_parent(parent_content_node or source_node)
+        chart = ChartItem(data, pos, parent_content_node=resolved_parent)
+        chart.source_node = source_node if source_node in self._all_layout_nodes() else resolved_parent
+        strategy = "content" if resolved_parent is not None else "general"
         chart.setPos(self.find_free_position(pos, chart, strategy=strategy))
         self.chart_nodes.append(chart)
         self.addItem(chart)
+        if chart.source_node is not None and chart.source_node is not chart and chart.source_node.scene() == self:
+            connection = ContentConnectionItem(chart.source_node, chart)
+            self.addItem(connection)
+            self.chart_connections.append(connection)
+            self.register_connection(connection)
         self.scene_changed.emit()
         return chart
 
@@ -976,7 +987,8 @@ class ChatScene(QGraphicsScene):
         for conn_list in [self.content_connections, self.document_connections, self.image_connections, self.thinking_connections,
                           self.system_prompt_connections, self.pycoder_connections, self.code_sandbox_connections, self.web_connections,
                           self.conversation_connections, self.group_summary_connections,
-                          self.html_connections, self.artifact_connections, self.gitlink_connections]:
+                          self.html_connections, self.artifact_connections, self.gitlink_connections,
+                          self.chart_connections]:
             for conn in conn_list:
                 conn.update_path()
                 if hasattr(conn, 'sync_visibility_mode'):
@@ -1151,7 +1163,20 @@ class ChatScene(QGraphicsScene):
         self.scene_changed.emit()
 
     def _remove_associated_chart_nodes(self, parent_node):
-        charts_to_remove = [chart for chart in self.chart_nodes if getattr(chart, 'parent_content_node', None) == parent_node]
+        owners = {parent_node}
+        charts_to_remove = []
+        changed = True
+        while changed:
+            changed = False
+            for chart in self.chart_nodes:
+                chart_parent = getattr(chart, "parent_content_node", None)
+                chart_source = getattr(chart, "source_node", None)
+                if chart in charts_to_remove:
+                    continue
+                if chart_parent in owners or chart_source in owners:
+                    charts_to_remove.append(chart)
+                    owners.add(chart)
+                    changed = True
         for chart in charts_to_remove:
             chart_parent = chart.parentItem()
             if isinstance(chart_parent, Frame) and chart in chart_parent.nodes:
@@ -1166,6 +1191,7 @@ class ChatScene(QGraphicsScene):
                     chart_parent.updateGeometry()
                 else:
                     self.deleteContainer(chart_parent)
+            self._remove_connections_for_node(chart, [self.chart_connections])
             if hasattr(chart, "dispose"):
                 chart.dispose()
             if chart.scene() == self:
@@ -1373,6 +1399,7 @@ class ChatScene(QGraphicsScene):
                         self.deleteContainer(parent)
                     else:
                         parent.updateGeometry()
+                self._remove_connections_for_node(item, [self.chart_connections])
                 if hasattr(item, "dispose"):
                     item.dispose()
                 self.removeItem(item)
@@ -1532,6 +1559,7 @@ class ChatScene(QGraphicsScene):
         self.html_connections.clear()
         self.artifact_connections.clear()
         self.gitlink_connections.clear()
+        self.chart_connections.clear()
         
         if hasattr(self, 'window') and self.window:
             self.window.current_node = None

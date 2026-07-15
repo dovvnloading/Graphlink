@@ -10,10 +10,8 @@ inline expressions in addition to the three helpers. They're now reused instead.
 
 These tests populate a real ChatScene (constructible headlessly - its __init__ only
 needs a `window` reference, which it just stores) with representative items in every
-relevant list and verify the refactored methods still consider exactly the same nodes
-valid/matched as the original inline concatenations would have, including the
-deliberate differences between call sites (e.g. update_search_highlight/
-update_connections exclude chart_nodes; find_items/nodeMoved include them).
+relevant list and verify the refactored methods treat chart nodes consistently with
+the other searchable/layout content nodes.
 """
 
 import sys
@@ -114,8 +112,8 @@ class TestFindItemsUsesAllLayoutNodes:
         assert artifact not in results
 
 
-class TestUpdateSearchHighlightExcludesChartNodes:
-    def test_syncs_flag_on_plugin_and_content_nodes_but_not_chart_nodes(self):
+class TestUpdateSearchHighlightIncludesChartNodes:
+    def test_syncs_flag_on_plugin_content_and_chart_nodes(self):
         scene = _make_scene()
         artifact = _tag(is_search_match=False, update=lambda: None)
         code_item = _tag(is_search_match=False, update=lambda: None)
@@ -128,9 +126,7 @@ class TestUpdateSearchHighlightExcludesChartNodes:
 
         assert artifact.is_search_match is True
         assert code_item.is_search_match is True
-        # chart_nodes are deliberately excluded from this method's node set (matches
-        # the pre-refactor inline concatenation, which never included chart_nodes here)
-        assert chart_item.is_search_match is False
+        assert chart_item.is_search_match is True
 
 
 class TestNodeMovedTypeValidation:

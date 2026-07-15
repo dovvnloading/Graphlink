@@ -4,6 +4,7 @@ import ollama
 from PySide6.QtCore import QThread, Signal
 import graphlink_config as config
 import api_provider
+from graphlink_chart_data import ChartDataError, canonicalize_chart_data
 
 
 class ChartDataAgent:
@@ -525,87 +526,12 @@ STRICT OUTPUT RULES:
                                       and an error message if validation fails.
         """
         try:
-            if not isinstance(data, dict):
-                return False, "Chart payload must be a JSON object"
-            data['type'] = str(data.get('type') or chart_type).strip().lower()
-            if data['type'] != chart_type:
-                data['type'] = chart_type
-            data['title'] = str(data.get('title') or f"{chart_type.title()} Chart").strip()
-
-            if chart_type == 'sankey':
-                if 'flows' not in data:
-                    return False, "Missing required field for sankey chart: flows"
-                if not isinstance(data.get('flows'), list):
-                    return False, "'flows' must be a list of objects"
-                if not data['flows']:
-                    return False, "Sankey charts require at least one flow"
-                for i, flow in enumerate(data['flows']):
-                    if not all(k in flow for k in ['source', 'target', 'value']):
-                        return False, f"Flow item at index {i} is missing a source, target, or value."
-                    if not isinstance(flow['value'], (int, float)):
-                        return False, f"Flow value at index {i} must be a number."
-                    if flow['value'] <= 0:
-                        return False, f"Flow value at index {i} must be greater than zero."
-                    if not str(flow['source']).strip() or not str(flow['target']).strip():
-                        return False, f"Flow item at index {i} must have a non-empty source and target."
-            
-            elif chart_type == 'histogram':
-                if 'values' not in data:
-                    return False, "Missing required field for histogram: values"
-                data.setdefault('bins', 10)
-                data.setdefault('xAxis', 'Value')
-                data.setdefault('yAxis', 'Frequency')
-                if not isinstance(data['bins'], (int, float)):
-                    return False, "Bins must be a number"
-                if int(data['bins']) < 2:
-                    return False, "Histogram bins must be at least 2"
-                if not isinstance(data.get('values'), list) or len(data['values']) < 2:
-                    return False, "Histogram charts require at least two values"
-                    
-            elif chart_type in ['bar', 'line']:
-                if 'labels' not in data or 'values' not in data:
-                    return False, f"Missing required fields for {chart_type} chart: labels and values"
-                data.setdefault('xAxis', 'Category' if chart_type == 'bar' else 'Sequence')
-                data.setdefault('yAxis', 'Value')
-                if not isinstance(data.get('labels', []), list):
-                    return False, "Labels must be a list"
-                if len(data['labels']) != len(data['values']):
-                    return False, "Labels and values must have the same length"
-                if not data['labels']:
-                    return False, f"{chart_type.title()} charts require at least one labeled value"
-                if chart_type == 'line' and len(data['values']) < 2:
-                    return False, "Line charts require at least two data points"
-                if any(not str(label).strip() for label in data['labels']):
-                    return False, "Labels must be non-empty strings"
-                    
-            elif chart_type == 'pie':
-                if 'labels' not in data or 'values' not in data:
-                    return False, "Missing required fields for pie chart: labels and values"
-                if not isinstance(data.get('labels', []), list):
-                    return False, "Labels must be a list"
-                if len(data['labels']) != len(data['values']):
-                    return False, "Labels and values must have the same length"
-                if not data['labels']:
-                    return False, "Pie charts require at least one labeled value"
-                if any(not str(label).strip() for label in data['labels']):
-                    return False, "Labels must be non-empty strings"
-            
-            # Ensure all 'values' are numeric for non-Sankey charts.
-            if chart_type != 'sankey':
-                try:
-                    if isinstance(data['values'], list):
-                        data['values'] = [float(v) for v in data['values']]
-                except (ValueError, TypeError):
-                    return False, "All values must be numeric"
-                if chart_type == 'pie' and any(v <= 0 for v in data['values']):
-                    return False, "Pie chart values must be greater than zero"
-                if chart_type == 'histogram':
-                    data['bins'] = max(2, int(data['bins']))
-                     
+            canonical = canonicalize_chart_data(data, chart_type)
+            data.clear()
+            data.update(canonical)
             return True, None
-             
-        except Exception as e:
-            return False, f"Validation error: {str(e)}"
+        except (ChartDataError, TypeError, ValueError) as exc:
+            return False, str(exc)
 
     def process_sankey_data(self, raw_data):
         """

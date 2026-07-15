@@ -604,6 +604,8 @@ class WindowActionsMixin:
         except Exception:
             text_value = ""
         add_fragment("Visible Text", text_value)
+        if hasattr(node, "to_context_text"):
+            add_fragment("Structured Chart Data", node.to_context_text())
 
         for label, attr_name in (
             ("Prompt", "prompt"),
@@ -784,36 +786,67 @@ class WindowActionsMixin:
                 )
                 return
             self._show_loading_animation(anchor_node=node)
-            self.chart_thread = ChartWorkerThread(chart_source_text, chart_type)
-            self.chart_thread.finished.connect(lambda data, emitted_chart_type, source_node=node: self.handle_chart_data(data, emitted_chart_type, source_node))
-            self.chart_thread.error.connect(self.handle_error)
-            self.chart_thread.finished.connect(self.chart_thread.deleteLater)
-            self.chart_thread.error.connect(self.chart_thread.deleteLater)
-            self.chart_thread.start()
+            self._chart_generation_token = getattr(self, "_chart_generation_token", 0) + 1
+            request_token = self._chart_generation_token
+            source_scene = node.scene()
+            thread = ChartWorkerThread(chart_source_text, chart_type)
+            self.chart_thread = thread
+            thread.finished.connect(
+                lambda data, emitted_chart_type, source_node=node, origin_scene=source_scene, token=request_token:
+                    self.handle_chart_data(data, emitted_chart_type, source_node, token, origin_scene)
+            )
+            thread.error.connect(
+                lambda message, token=request_token: self._handle_chart_error(message, token)
+            )
+            thread.finished.connect(thread.deleteLater)
+            thread.error.connect(thread.deleteLater)
+            thread.start()
         except Exception as e:
             self.handle_error(f"Error generating chart: {str(e)}")
-        
-    def handle_chart_data(self, data, chart_type, source_node=None):
+
+    def invalidate_chart_requests(self):
+        """Invalidate results from chart workers that belong to another chat."""
+        self._chart_generation_token = getattr(self, "_chart_generation_token", 0) + 1
+
+    def _handle_chart_error(self, message, request_token):
+        if request_token == getattr(self, "_chart_generation_token", request_token):
+            self.handle_error(message)
+
+    def handle_chart_data(self, data, chart_type, source_node=None, request_token=None, source_scene=None):
+        is_current_request = request_token is None or request_token == getattr(self, "_chart_generation_token", request_token)
         try:
+            if not is_current_request:
+                return
             chart_data = json.loads(data)
             if "error" in chart_data:
                 self.notification_banner.show_message(chart_data["error"], 15000, "error")
                 return
             scene = self.chat_view.scene()
-            if source_node and source_node.scene():
-                chart_pos = QPointF(source_node.scenePos().x() + 450, source_node.scenePos().y())
-            elif self.current_node and self.current_node.scene():
-                chart_pos = QPointF(self.current_node.scenePos().x() + 450, self.current_node.scenePos().y())
-            else:
-                chart_pos = QPointF(0, 0)
-            chart = scene.add_chart(chart_data, chart_pos, parent_content_node=source_node)
+            if source_node is None or (source_scene is not None and source_scene is not scene) or source_node.scene() is not scene:
+                self.notification_banner.show_message(
+                    "Chart generation finished after its source chat was closed; the result was discarded.",
+                    8000,
+                    "warning",
+                )
+                return
+            chart_pos = QPointF(source_node.scenePos().x() + 450, source_node.scenePos().y())
+            parent_node = scene.resolve_chart_parent(source_node)
+            if parent_node is None:
+                raise ValueError("The chart source is no longer attached to a conversational node.")
+            chart = scene.add_chart(
+                chart_data,
+                chart_pos,
+                parent_content_node=parent_node,
+                source_node=source_node,
+            )
             self.current_node = chart
             self.chat_view.reveal_item(chart)
             self.save_chat()
         except Exception as e:
             self.handle_error(f"Error creating chart: {str(e)}")
         finally:
-            self._clear_loading_animation()
+            if is_current_request:
+                self._clear_loading_animation()
 
     def generate_image(self, node):
         try:

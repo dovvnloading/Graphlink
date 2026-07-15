@@ -65,6 +65,17 @@ class SceneDeserializer:
             return nodes_by_id[node_id]
         return all_nodes_map.get(data.get(index_key))
 
+    def _resolve_chart_ref(self, data, id_key, index_key, all_nodes_map):
+        node_id = data.get(id_key)
+        if node_id:
+            for mapping in (
+                getattr(self, "_nodes_by_id", None) or {},
+                getattr(self, "_charts_by_id", None) or {},
+            ):
+                if node_id in mapping:
+                    return mapping[node_id]
+        return all_nodes_map.get(data.get(index_key))
+
     def _deserialize_basic_connection(self, data, scene, all_nodes_map, connection_cls, target_list_name):
         start_node = self._resolve_node_ref(data, "start_node_id", "start_node_index", all_nodes_map)
         end_node = self._resolve_node_ref(data, "end_node_id", "end_node_index", all_nodes_map)
@@ -78,12 +89,17 @@ class SceneDeserializer:
         return connection
 
     def deserialize_chart(self, data, scene, all_nodes_map):
-        parent_node = all_nodes_map.get(data.get("parent_node_index"))
+        if not isinstance(data, dict) or not isinstance(data.get("data"), dict):
+            raise ValueError("Chart record is missing a data object")
+        parent_node = self._resolve_chart_ref(data, "parent_node_id", "parent_node_index", all_nodes_map)
+        source_node = self._resolve_chart_ref(data, "source_node_id", "parent_node_index", all_nodes_map)
         chart = scene.add_chart(
             data["data"],
             QPointF(data["position"]["x"], data["position"]["y"]),
             parent_content_node=parent_node,
+            source_node=source_node,
         )
+        chart.persistent_id = data.get("id") or chart.persistent_id
         chart.aspect_ratio_locked = bool(data.get("aspect_ratio_locked", True))
 
         if "size" in data:
@@ -586,8 +602,16 @@ class SceneDeserializer:
             notes_map = self._load_notes(scene, notes_data)
 
             charts_map = {}
+            self._charts_by_id = {}
             for index, chart_data in enumerate(chat_data.get("charts", [])):
-                charts_map[index] = self.deserialize_chart(chart_data, scene, all_nodes_map)
+                try:
+                    chart = self.deserialize_chart(chart_data, scene, all_nodes_map)
+                except Exception as exc:
+                    self._set_status_message(f"Skipped invalid chart {index + 1}: {exc}", "warning")
+                    continue
+                charts_map[index] = chart
+                if isinstance(chart_data, dict) and chart_data.get("id"):
+                    self._charts_by_id[chart_data["id"]] = chart
 
             # Frame/container item references are positions in the SAVE-side item
             # space (all payload nodes, then notes, then charts, then frames - see
