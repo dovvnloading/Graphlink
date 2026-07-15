@@ -5,7 +5,7 @@ from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath, Q
 from PySide6.QtWidgets import QGraphicsItem
 
 from graphlink_canvas_items import Container, HoverAnimationMixin
-from graphlink_config import get_current_palette, get_graph_node_colors
+from graphlink_config import canvas_font, get_current_palette, get_graph_node_colors
 from graphlink_lod import draw_lod_card, lod_mode_for_item, preview_text
 from graphlink_widgets import ScrollBar
 
@@ -78,16 +78,18 @@ class ThinkingNode(QGraphicsItem, HoverAnimationMixin):
         self.document.setHtml(html)
 
     def _recalculate_geometry(self):
-        self.prepareGeometryChange()
-
         doc_width = self._content_body_rect().width()
         self.document.setTextWidth(doc_width)
 
-        self.content_height = self.document.size().height()
-        self.height = min(
+        new_content_height = max(1.0, self.document.size().height())
+        new_height = min(
             self.MAX_HEIGHT,
-            self.CONTENT_PANEL_TOP + self.CONTENT_PANEL_BOTTOM + (self.CONTENT_PANEL_PADDING_Y * 2) + self.content_height,
+            self.CONTENT_PANEL_TOP + self.CONTENT_PANEL_BOTTOM + (self.CONTENT_PANEL_PADDING_Y * 2) + new_content_height,
         )
+        if new_height != self.height:
+            self.prepareGeometryChange()
+            self.height = new_height
+        self.content_height = new_content_height
 
         is_scrollable = self.content_height > self._content_body_rect().height()
         self.scrollbar.setVisible(is_scrollable)
@@ -105,7 +107,6 @@ class ThinkingNode(QGraphicsItem, HoverAnimationMixin):
             self.scroll_value = 0
             self.scrollbar.set_value(0)
 
-        self.prepareGeometryChange()
         self.update()
 
     def update_font_settings(self, font_family, font_size, color):
@@ -207,7 +208,7 @@ class ThinkingNode(QGraphicsItem, HoverAnimationMixin):
         icon.paint(painter, QRectF(10, 7, 16, 16).toRect())
 
         painter.setPen(QColor("#cccccc"))
-        font = QFont('Segoe UI', 9, QFont.Weight.Bold)
+        font = canvas_font(self.scene(), delta=-1, weight=QFont.Weight.Bold)
         painter.setFont(font)
         title_metrics = QFontMetrics(font)
 

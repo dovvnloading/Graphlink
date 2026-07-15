@@ -8,7 +8,7 @@ from PySide6.QtWidgets import QGraphicsItem
 
 from graphlink_audio import format_duration
 from graphlink_canvas_items import Container, HoverAnimationMixin
-from graphlink_config import get_current_palette, get_graph_node_colors
+from graphlink_config import canvas_font, get_current_palette, get_graph_node_colors
 from graphlink_lod import draw_lod_card, lod_mode_for_item, preview_text
 from graphlink_widgets import ScrollBar
 
@@ -259,11 +259,15 @@ class DocumentNode(QGraphicsItem, HoverAnimationMixin):
         doc_width = self._content_body_rect().width()
         self.document.setTextWidth(doc_width)
 
-        self.content_height = max(1.0, self.document.size().height())
-        self.height = min(
+        new_content_height = max(1.0, self.document.size().height())
+        new_height = min(
             self.MAX_HEIGHT,
-            self.CONTENT_PANEL_TOP + self.CONTENT_PANEL_BOTTOM + (self.CONTENT_PANEL_PADDING_Y * 2) + self.content_height,
+            self.CONTENT_PANEL_TOP + self.CONTENT_PANEL_BOTTOM + (self.CONTENT_PANEL_PADDING_Y * 2) + new_content_height,
         )
+        if new_height != self.height:
+            self.prepareGeometryChange()
+            self.height = new_height
+        self.content_height = new_content_height
 
         is_scrollable = self.content_height > self._content_body_rect().height()
         self.scrollbar.setVisible(is_scrollable)
@@ -281,7 +285,6 @@ class DocumentNode(QGraphicsItem, HoverAnimationMixin):
             self.scroll_value = 0
             self.scrollbar.set_value(0)
 
-        self.prepareGeometryChange()
         self.update()
 
     def _current_dimensions(self):
@@ -359,7 +362,7 @@ class DocumentNode(QGraphicsItem, HoverAnimationMixin):
         self.dock_button_rect = QRectF(current_width - 50, button_y, self.BUTTON_SIZE, self.BUTTON_SIZE)
 
     def _header_layout_metrics(self):
-        badge_font = QFont("Segoe UI", 7, QFont.Weight.DemiBold)
+        badge_font = canvas_font(self.scene(), delta=-3, weight=QFont.Weight.DemiBold)
         badge_metrics = QFontMetrics(badge_font)
         badge_text = self.preview_label or self._subtitle_text()
         badge_width = min(118, badge_metrics.horizontalAdvance(badge_text) + 14)
@@ -455,7 +458,7 @@ class DocumentNode(QGraphicsItem, HoverAnimationMixin):
             icon.paint(painter, QRectF(10, 7, 16, 16).toRect())
 
             painter.setPen(QColor("#cccccc"))
-            title_font = QFont("Segoe UI", 9, QFont.Weight.Bold)
+            title_font = canvas_font(self.scene(), delta=-1, weight=QFont.Weight.Bold)
             painter.setFont(title_font)
             title_metrics = QFontMetrics(title_font)
             badge_font, badge_metrics, badge_text, badge_rect, title_rect = self._header_layout_metrics()

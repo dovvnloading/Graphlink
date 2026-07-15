@@ -1,7 +1,7 @@
 from PySide6.QtWidgets import (
     QGraphicsItem, QGraphicsScene, QMessageBox, QGraphicsLineItem
 )
-from PySide6.QtCore import Qt, QPointF, QRectF, Signal
+from PySide6.QtCore import Qt, QPointF, QRectF, Signal, QTimer
 from PySide6.QtGui import QColor, QPen, QTransform
 
 from graphlink_node import ChatNode, CodeNode, DocumentNode, ImageNode, ThinkingNode
@@ -63,6 +63,8 @@ class ChatScene(QGraphicsScene):
         self.gitlink_nodes = []
         self.chart_nodes = []
         self.transient_layout_items = []
+        self._connection_index = {}
+        self._scene_change_pending = False
         
         self.content_connections = []
         self.document_connections = []
@@ -173,6 +175,45 @@ class ChatScene(QGraphicsScene):
             self.gitlink_connections,
         ]
 
+    def register_connection(self, connection):
+        """Add a connection to the endpoint index used during node drags."""
+        if connection is None:
+            return
+        for endpoint in (getattr(connection, "start_node", None), getattr(connection, "end_node", None)):
+            if endpoint is not None:
+                self._connection_index.setdefault(endpoint, set()).add(connection)
+
+    def unregister_connection(self, connection):
+        for endpoint in (getattr(connection, "start_node", None), getattr(connection, "end_node", None)):
+            connections = self._connection_index.get(endpoint)
+            if not connections:
+                continue
+            connections.discard(connection)
+            if not connections:
+                self._connection_index.pop(endpoint, None)
+
+    def rebuild_connection_index(self):
+        self._connection_index.clear()
+        for conn_list in self._all_connection_lists():
+            for connection in conn_list:
+                self.register_connection(connection)
+
+    def connections_for_node(self, node):
+        return tuple(
+            connection for connection in self._connection_index.get(node, ())
+            if connection.scene() == self
+        )
+
+    def _schedule_scene_changed(self):
+        if self._scene_change_pending:
+            return
+        self._scene_change_pending = True
+        QTimer.singleShot(0, self._emit_scheduled_scene_changed)
+
+    def _emit_scheduled_scene_changed(self):
+        self._scene_change_pending = False
+        self.scene_changed.emit()
+
     def _remove_connections_for_node(self, node, connection_lists=None):
         lists_to_scan = connection_lists if connection_lists is not None else self._all_connection_lists()
         for conn_list in lists_to_scan:
@@ -186,12 +227,15 @@ class ChatScene(QGraphicsScene):
 
                 if conn.scene() == self:
                     self.removeItem(conn)
+                self.unregister_connection(conn)
                 if conn in conn_list:
                     conn_list.remove(conn)
 
     def _update_all_node_fonts(self):
         """Iterates through all nodes that support font changes and applies the current settings."""
-        nodes_to_update = self.nodes + self.document_nodes + self.thinking_nodes
+        nodes_to_update = list(dict.fromkeys(
+            self._all_layout_nodes() + self.notes + self.frames + self.containers
+        ))
         for node in nodes_to_update:
             if hasattr(node, 'update_font_settings'):
                 node.update_font_settings(self.font_family, self.font_size, self.font_color)
@@ -318,6 +362,7 @@ class ChatScene(QGraphicsScene):
                 node.incoming_connection = connection
                 self.addItem(connection)
                 self.connections.append(connection)
+                self.register_connection(connection)
             else:
                 # Default position for root nodes.
                 root_base = QPointF(preferred_pos) if preferred_pos is not None else QPointF(50, 150)
@@ -368,6 +413,7 @@ class ChatScene(QGraphicsScene):
         connection = ContentConnectionItem(parent_content_node, node)
         self.addItem(connection)
         self.content_connections.append(connection)
+        self.register_connection(connection)
         
         self.scene_changed.emit()
         return node
@@ -393,6 +439,7 @@ class ChatScene(QGraphicsScene):
         connection = ImageConnectionItem(parent_chat_node, node)
         self.addItem(connection)
         self.image_connections.append(connection)
+        self.register_connection(connection)
         
         self.scene_changed.emit()
         return node
@@ -439,6 +486,7 @@ class ChatScene(QGraphicsScene):
         connection = DocumentConnectionItem(parent_user_node, node)
         self.addItem(connection)
         self.document_connections.append(connection)
+        self.register_connection(connection)
         
         self.scene_changed.emit()
         return node
@@ -463,6 +511,7 @@ class ChatScene(QGraphicsScene):
         connection = ThinkingConnectionItem(parent_chat_node, node)
         self.addItem(connection)
         self.thinking_connections.append(connection)
+        self.register_connection(connection)
         
         self.scene_changed.emit()
         return node
@@ -485,19 +534,10 @@ class ChatScene(QGraphicsScene):
             
         # Iterate through all connection types and update any connected to the moved node.
         # Note: Slicing `[:]` creates a copy, allowing safe removal from the list during iteration if a connection is invalid.
-        all_connection_lists = [
-            self.connections, self.content_connections, self.document_connections, self.image_connections,
-            self.thinking_connections, self.system_prompt_connections, self.pycoder_connections, self.code_sandbox_connections, self.web_connections,
-            self.conversation_connections, self.group_summary_connections,
-            self.html_connections, self.artifact_connections, self.gitlink_connections
-        ]
+        for conn in self.connections_for_node(node):
+            conn.update_path()
 
-        for conn_list in all_connection_lists:
-            for conn in conn_list[:]:
-                if node in (conn.start_node, conn.end_node):
-                    conn.update_path()
-        
-        self.scene_changed.emit()
+        self._schedule_scene_changed()
                         
     def add_navigation_pin(self, pos):
         """
@@ -679,6 +719,25 @@ class ChatScene(QGraphicsScene):
 
     def _all_layout_nodes(self):
         return self._all_conversational_nodes() + self._all_content_nodes()
+
+    def overview_items(self):
+        """Return visible persistent canvas items suitable for Fit All."""
+        candidates = self._all_layout_nodes() + self.notes + self.frames + self.containers + self.pins
+        seen = set()
+        items = []
+        for item in candidates:
+            if item in seen or item.scene() != self or not item.isVisible():
+                continue
+            seen.add(item)
+            items.append(item)
+        return items
+
+    def overview_rect(self):
+        rect = QRectF()
+        for item in self.overview_items():
+            item_rect = item.sceneBoundingRect()
+            rect = item_rect if not rect.isValid() else rect.united(item_rect)
+        return rect
 
     def _all_branch_visibility_nodes(self):
         """Returns every node-like item that should participate in branch focus mode."""
@@ -922,6 +981,8 @@ class ChatScene(QGraphicsScene):
                 conn.update_path()
                 if hasattr(conn, 'sync_visibility_mode'):
                     conn.sync_visibility_mode()
+
+        self.rebuild_connection_index()
 
     def toggle_branch_visibility(self, originating_node):
         """

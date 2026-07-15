@@ -4,7 +4,7 @@ from PySide6.QtGui import QColor, QFont, QFontMetrics, QImage, QPainter, QPainte
 from PySide6.QtWidgets import QGraphicsItem
 
 from graphlink_canvas_items import Container, HoverAnimationMixin
-from graphlink_config import get_current_palette, get_graph_node_colors
+from graphlink_config import canvas_font, canvas_font_color, get_current_palette, get_graph_node_colors
 from graphlink_lod import draw_lod_card, lod_mode_for_item, preview_text
 
 
@@ -13,6 +13,7 @@ class ImageNode(QGraphicsItem, HoverAnimationMixin):
 
     PADDING = 15
     HEADER_HEIGHT = 30
+    MAX_HEIGHT = 600
 
     def __init__(self, image_bytes, parent_content_node, prompt="", parent=None):
         super().__init__(parent)
@@ -30,15 +31,19 @@ class ImageNode(QGraphicsItem, HoverAnimationMixin):
         self.is_search_match = False
 
         self.image = QImage.fromData(self.image_bytes)
+        self.image_valid = not self.image.isNull()
         self.width = 512 + (self.PADDING * 2)
 
-        if not self.image.isNull():
+        if self.image_valid:
             aspect_ratio = self.image.height() / self.image.width() if self.image.width() > 0 else 1
             content_width = self.width - (self.PADDING * 2)
             content_height = content_width * aspect_ratio
-            self.height = content_height + self.HEADER_HEIGHT + (self.PADDING * 2)
+            self.height = min(self.MAX_HEIGHT, content_height + self.HEADER_HEIGHT + (self.PADDING * 2))
         else:
             self.height = 400
+
+    def update_font_settings(self, font_family, font_size, color):
+        self.update()
 
     def boundingRect(self):
         return QRectF(-5, -5, self.width + 10, self.height + 10)
@@ -92,20 +97,43 @@ class ImageNode(QGraphicsItem, HoverAnimationMixin):
         icon.paint(painter, QRectF(10, 7, 16, 16).toRect())
 
         painter.setPen(QColor("#cccccc"))
-        font = QFont('Segoe UI', 9)
+        font = canvas_font(self.scene(), delta=-1)
         painter.setFont(font)
         metrics = QFontMetrics(font)
         elided_prompt = metrics.elidedText(f"Image: {self.prompt}", Qt.TextElideMode.ElideRight, self.width - 50)
         painter.drawText(header_rect.adjusted(35, 0, -10, 0), Qt.AlignmentFlag.AlignVCenter, elided_prompt)
 
-        if not self.image.isNull():
-            image_rect = QRectF(
-                self.PADDING,
-                self.HEADER_HEIGHT + self.PADDING,
-                self.width - (self.PADDING * 2),
-                self.height - self.HEADER_HEIGHT - (self.PADDING * 2),
+        image_rect = QRectF(
+            self.PADDING,
+            self.HEADER_HEIGHT + self.PADDING,
+            self.width - (self.PADDING * 2),
+            self.height - self.HEADER_HEIGHT - (self.PADDING * 2),
+        )
+        if self.image_valid:
+            scale = min(
+                image_rect.width() / max(1, self.image.width()),
+                image_rect.height() / max(1, self.image.height()),
             )
-            painter.drawImage(image_rect, self.image)
+            target_width = self.image.width() * scale
+            target_height = self.image.height() * scale
+            target_rect = QRectF(
+                image_rect.center().x() - target_width / 2,
+                image_rect.center().y() - target_height / 2,
+                target_width,
+                target_height,
+            )
+            painter.drawImage(target_rect, self.image)
+        else:
+            painter.save()
+            placeholder_color = canvas_font_color(self.scene(), "#aab2bb")
+            placeholder_color.setAlpha(180)
+            painter.setPen(QPen(placeholder_color, 1, Qt.PenStyle.DashLine))
+            painter.setBrush(QColor(255, 255, 255, 10))
+            painter.drawRoundedRect(image_rect, 8, 8)
+            painter.setPen(placeholder_color)
+            painter.setFont(canvas_font(self.scene(), delta=-1))
+            painter.drawText(image_rect, Qt.AlignmentFlag.AlignCenter, "Image unavailable")
+            painter.restore()
 
     def contextMenuEvent(self, event):
         from graphlink_nodes.graphlink_node_image_menu import ImageNodeContextMenu

@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
 from graphlink_agents_code_sandbox import SandboxStage
 from graphlink_agents_pycoder import PyCoderStatus
 from graphlink_canvas_items import HoverAnimationMixin
-from graphlink_config import get_current_palette, get_semantic_color
+from graphlink_config import canvas_font, get_current_palette, get_semantic_color
 from graphlink_connections import ConnectionItem
 from graphlink_lod import draw_lod_card, preview_text, sync_proxy_render_state
 from graphlink_plugins.graphlink_plugin_context_menu import PluginNodeContextMenu
@@ -658,7 +658,7 @@ class CodeSandboxNode(QGraphicsObject, HoverAnimationMixin):
 
         if self.is_collapsed:
             painter.setPen(QColor("#ffffff"))
-            painter.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+            painter.setFont(canvas_font(self.scene(), weight=QFont.Weight.Bold))
             painter.drawText(QRectF(42, 0, self.width - 84, self.height), Qt.AlignmentFlag.AlignVCenter, "Execution Sandbox")
             qta.icon("fa5s.shield-alt", color=accent.name()).paint(painter, QRect(12, 11, 18, 18))
             self.collapse_button_rect = QRectF(self.width - 34, 6, 28, 28)

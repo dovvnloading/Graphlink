@@ -139,11 +139,11 @@ class Pin(QGraphicsItem):
                 round(value.x() / grid_size) * grid_size,
                 round(value.y() / grid_size) * grid_size
             )
-            # Notify the parent connection to redraw its path
-            if isinstance(self.parentItem(), ConnectionItem):
-                self.parentItem().prepareGeometryChange()
-                self.parentItem().update_path()
             return new_pos
+        if change == QGraphicsItem.ItemPositionHasChanged:
+            parent_connection = self.parentItem()
+            if isinstance(parent_connection, ConnectionItem):
+                parent_connection.update_path()
         return super().itemChange(change, value)
 
 class ConnectionItem(QGraphicsItem):
@@ -191,8 +191,10 @@ class ConnectionItem(QGraphicsItem):
         
         self.update_path()
         
-        # Cache the item's painting to improve performance
-        self.setCacheMode(QGraphicsItem.CacheMode.DeviceCoordinateCache)
+        # Connections are mutable paths. DeviceCoordinateCache leaves stale
+        # pixels behind while nodes or pins move, so let Qt repaint the small
+        # geometry directly instead of caching an invalid bitmap.
+        self.setCacheMode(QGraphicsItem.CacheMode.NoCache)
         self.sync_visibility_mode()
 
     def sync_visibility_mode(self):
@@ -483,9 +485,9 @@ class ConnectionItem(QGraphicsItem):
         
         # If the path has changed, update geometry and cached hover path
         if new_path != old_path:
+            self.prepareGeometryChange()
             self.path = new_path
             self.hover_path = None
-            self.prepareGeometryChange()
             self.update()
 
     def startArrowAnimation(self):
@@ -494,6 +496,9 @@ class ConnectionItem(QGraphicsItem):
             self.is_animating = True
             self.arrows = []
             path_length = self.path.length()
+            if path_length <= 0:
+                self.is_animating = False
+                return
             
             # Pre-populate arrows along the path
             current_distance = 0
@@ -521,6 +526,9 @@ class ConnectionItem(QGraphicsItem):
             return
             
         path_length = self.path.length()
+        if path_length <= 0:
+            self.stopArrowAnimation()
+            return
         arrows_to_remove = []
         
         for arrow in self.arrows:
@@ -614,11 +622,15 @@ class ConnectionItem(QGraphicsItem):
             return
             
         palette = get_current_palette()
-        # Culling: Don't draw if the connection is off-screen
-        view = self.scene().views()[0]
-        view_rect = view.mapToScene(view.viewport().rect()).boundingRect()
-        if not self.boundingRect().intersects(view_rect):
-            return
+        # Culling is only safe when the scene is attached to a view. Export and
+        # test renders intentionally paint scenes without one.
+        scene = self.scene()
+        views = scene.views() if scene else []
+        if views:
+            view = views[0]
+            view_rect = view.mapToScene(view.viewport().rect()).boundingRect()
+            if not self.boundingRect().intersects(view_rect):
+                return
             
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         

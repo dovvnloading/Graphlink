@@ -11,7 +11,7 @@ from PySide6.QtGui import (
 )
 
 from .graphlink_canvas_dialogs import ColorPickerDialog
-from graphlink_config import get_current_palette
+from graphlink_config import canvas_font, get_current_palette
 from graphlink_widgets import ScrollBar
 
 
@@ -122,6 +122,10 @@ class Note(QGraphicsItem):
         self.document.setHtml(html)
         
         self._recalculate_geometry()
+
+    def update_font_settings(self, font_family, font_size, color):
+        self._setup_document()
+        self.update()
 
     def _recalculate_geometry(self):
         """
@@ -241,7 +245,7 @@ class Note(QGraphicsItem):
             
         # --- Content Rendering ---
         painter.setPen(QPen(QColor("#ffffff")))
-        font = QFont("Segoe UI", 10)
+        font = canvas_font(self.scene())
         painter.setFont(font)
         
         content_rect = QRectF(self.PADDING, self.HEADER_HEIGHT + 10, self.width - (self.PADDING * 2), self.height - self.HEADER_HEIGHT - 20)
@@ -332,11 +336,12 @@ class Note(QGraphicsItem):
         a given x, y coordinate within the note's content area. This is crucial
         for placing the cursor correctly when the user clicks.
         """
-        metrics = QFontMetrics(QFont("Segoe UI", 10))
+        font = canvas_font(self.scene())
+        metrics = QFontMetrics(font)
         content_rect = QRectF(self.PADDING, self.HEADER_HEIGHT + 10, self.width - (self.PADDING * 2), self.height - self.HEADER_HEIGHT - (self.PADDING * 2))
     
         # Use QTextLayout to determine line breaks and character positions.
-        layout = QTextLayout(self.edit_text, QFont("Segoe UI", 10))
+        layout = QTextLayout(self.edit_text, font)
         layout.setTextOption(QTextOption(alignment=Qt.AlignmentFlag.AlignLeft, wrapMode=QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere))
     
         layout.beginLayout()

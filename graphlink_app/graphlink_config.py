@@ -1,4 +1,4 @@
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import QApplication
 from graphlink_styles import THEMES
 
@@ -6,6 +6,24 @@ CURRENT_THEME = "dark"
 
 def get_current_palette():
     return THEMES[CURRENT_THEME]["palette"]
+
+
+def canvas_font(scene=None, delta=0, weight=QFont.Weight.Normal):
+    """Return a canvas font using the scene's live typography settings.
+
+    Canvas items are painted manually, so widget-level application styles do not
+    reach their headers. Keeping this small helper in the shared config module
+    makes those headers follow the same family and scale as document-backed nodes.
+    """
+    family = getattr(scene, "font_family", "Segoe UI") if scene else "Segoe UI"
+    base_size = getattr(scene, "font_size", 10) if scene else 10
+    font = QFont(family, max(1, int(base_size) + int(delta)), weight)
+    return font
+
+
+def canvas_font_color(scene=None, fallback="#dddddd"):
+    color = getattr(scene, "font_color", None) if scene else None
+    return QColor(color) if color is not None else QColor(fallback)
 
 
 def is_monochrome_theme():
