@@ -43,3 +43,6 @@ Desktop.ini
 .graphlink/
 session.dat
 chats.db
+
+# Internal planning and QA documents; keep local, never publish to GitHub.
+/doc/
