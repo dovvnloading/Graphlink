@@ -94,6 +94,7 @@ py-modules = [
     "graphlink_styles",
     "graphlink_system_dialogs",
     "graphlink_ui_components",
+    "graphlink_utility",
     "graphlink_update",
     "graphlink_version",
     "graphlink_view",

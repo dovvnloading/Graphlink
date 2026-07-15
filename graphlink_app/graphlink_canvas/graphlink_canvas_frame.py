@@ -45,10 +45,12 @@ class Frame(QGraphicsItem):
         self.setAcceptHoverEvents(True)
         
         # Load icons for the lock/unlock button.
-        self.lock_icon = qta.icon('fa.lock', color='#ffffff')
-        self.unlock_icon = qta.icon('fa.unlock-alt', color='#ffffff')
-        self.lock_icon_hover = qta.icon('fa.lock', color=get_semantic_color("status_info").name())
-        self.unlock_icon_hover = qta.icon('fa.unlock-alt', color=get_semantic_color("status_success").name())
+        # QtAwesome's legacy ``fa`` prefix is not installed in current releases;
+        # use the Font Awesome 5 solid set used by the rest of the canvas.
+        self.lock_icon = qta.icon('fa5s.lock', color='#ffffff')
+        self.unlock_icon = qta.icon('fa5s.unlock-alt', color='#ffffff')
+        self.lock_icon_hover = qta.icon('fa5s.lock', color=get_semantic_color("status_info").name())
+        self.unlock_icon_hover = qta.icon('fa5s.unlock-alt', color=get_semantic_color("status_success").name())
         
         # State attributes
         self.is_locked = True
@@ -82,6 +84,7 @@ class Frame(QGraphicsItem):
         self.resizing = False
         self.resize_start_rect = None
         self.resize_start_pos = None
+        self._user_resized = False
 
         # Animation for the "unlocked" state outline.
         self.outline_animation = QVariantAnimation()
@@ -284,9 +287,10 @@ class Frame(QGraphicsItem):
                 self.rect = QRectF(0, 0, 320, 180)
             self._update_title_editor_geometry()
             return
-        old_rect = QRectF(self.rect)
         new_rect = self.calculate_minimum_size()
-        final_rect = old_rect.united(new_rect) if old_rect.isValid() else new_rect
+        final_rect = new_rect
+        if self._user_resized and self.rect.isValid():
+            final_rect = self.rect.united(new_rect)
 
         if final_rect != self.rect:
             self.prepareGeometryChange()
@@ -298,6 +302,13 @@ class Frame(QGraphicsItem):
         from .graphlink_canvas_container import Container
         if parent and isinstance(parent, Container):
             parent.updateGeometry()
+
+    def fit_to_content(self):
+        """Reset manual bounds to the current membership bounds."""
+        self._user_resized = False
+        self.updateGeometry()
+        self._update_child_connections()
+        self.update()
 
     def boundingRect(self):
         """Returns the bounding rectangle of the item."""
@@ -456,6 +467,7 @@ class Frame(QGraphicsItem):
             if new_rect != self.rect:
                 self.prepareGeometryChange()
                 self.rect = new_rect
+                self._user_resized = True
                 self._update_title_editor_geometry()
                 self._update_child_connections()
     
@@ -582,6 +594,15 @@ class Frame(QGraphicsItem):
     def keyPressEvent(self, event):
         """While the embedded editor is open, let it own keyboard input."""
         if self.editing:
+            event.accept()
+            return
+
+        if (
+            event.key() == Qt.Key.Key_F
+            and event.modifiers() & Qt.KeyboardModifier.ControlModifier
+            and event.modifiers() & Qt.KeyboardModifier.ShiftModifier
+        ):
+            self.fit_to_content()
             event.accept()
             return
 

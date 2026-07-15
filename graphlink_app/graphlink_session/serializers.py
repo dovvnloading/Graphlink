@@ -303,13 +303,17 @@ class SceneSerializer:
 
     def serialize_frame(self, frame, frame_items_map):
         return {
+            "id": self._node_persistent_id(frame),
             "items": [frame_items_map[item] for item in frame.nodes if item in frame_items_map],
+            "item_ids": [self._node_persistent_id(item) for item in frame.nodes],
             "position": {"x": frame.pos().x(), "y": frame.pos().y()},
             "note": frame.note,
             "size": {
                 "width": frame.rect.width(),
                 "height": frame.rect.height(),
             },
+            "rect": {"x": frame.rect.x(), "y": frame.rect.y(), "width": frame.rect.width(), "height": frame.rect.height()},
+            "expanded_rect": {"x": frame.expanded_rect.x(), "y": frame.expanded_rect.y(), "width": frame.expanded_rect.width(), "height": frame.expanded_rect.height()},
             "is_locked": frame.is_locked,
             "is_collapsed": frame.is_collapsed,
             "color": frame.color,
@@ -318,7 +322,9 @@ class SceneSerializer:
 
     def serialize_container(self, container, all_items_map):
         return {
+            "id": self._node_persistent_id(container),
             "items": [all_items_map[item] for item in container.contained_items],
+            "item_ids": [self._node_persistent_id(item) for item in container.contained_items],
             "position": {"x": container.pos().x(), "y": container.pos().y()},
             "title": container.title,
             "is_collapsed": container.is_collapsed,
@@ -330,10 +336,12 @@ class SceneSerializer:
                 "width": container.expanded_rect.width(),
                 "height": container.expanded_rect.height(),
             },
+            "rect": {"x": container.rect.x(), "y": container.rect.y(), "width": container.rect.width(), "height": container.rect.height()},
         }
 
     def serialize_note(self, note):
         return {
+            "id": self._node_persistent_id(note),
             "content": note.content,
             "position": {"x": note.pos().x(), "y": note.pos().y()},
             "size": {"width": note.width, "height": note.height},
@@ -341,6 +349,11 @@ class SceneSerializer:
             "header_color": note.header_color,
             "is_system_prompt": getattr(note, "is_system_prompt", False),
             "is_summary_note": getattr(note, "is_summary_note", False),
+            "role": getattr(note, "note_role", "manual"),
+            "source_ids": list(getattr(note, "source_ids", [])),
+            "operation_id": getattr(note, "operation_id", ""),
+            "source_revisions": dict(getattr(note, "source_revisions", {})),
+            "provider_snapshot": dict(getattr(note, "provider_snapshot", {})),
         }
 
     def serialize_chart(self, chart, all_nodes_list):

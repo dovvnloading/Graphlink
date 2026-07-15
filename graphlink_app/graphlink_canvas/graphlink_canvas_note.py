@@ -2,6 +2,7 @@
 
 import markdown
 import qtawesome as qta
+from uuid import uuid4
 
 from PySide6.QtWidgets import QDialog, QGraphicsItem, QApplication, QMessageBox
 from PySide6.QtCore import Qt, QRectF, QPointF, QTimer
@@ -26,6 +27,7 @@ class Note(QGraphicsItem):
     DEFAULT_WIDTH = 200
     DEFAULT_HEIGHT = 150
     MAX_HEIGHT = 500
+    MAX_CONTENT_LENGTH = 100_000
     CONTROL_GUTTER = 25
     SCROLLBAR_PADDING = 5
     
@@ -46,6 +48,12 @@ class Note(QGraphicsItem):
         self.setAcceptHoverEvents(True)
         self.is_system_prompt = False
         self.is_summary_note = False
+        self.persistent_id = uuid4().hex
+        self.note_role = "manual"
+        self.source_ids = []
+        self.operation_id = ""
+        self.source_revisions = {}
+        self.provider_snapshot = {}
         
         # Geometry and appearance
         self.width = self.DEFAULT_WIDTH
@@ -58,6 +66,8 @@ class Note(QGraphicsItem):
         self.edit_text = ""
         self.cursor_pos = 0
         self.cursor_visible = True
+        self._edit_history = []
+        self._edit_redo = []
         
         # State for text selection
         self.selection_start = 0
@@ -94,11 +104,14 @@ class Note(QGraphicsItem):
         Sets the note's content. If not in editing mode, it immediately updates
         the QTextDocument for rendering.
         """
+        new_content = str(new_content or "")[:self.MAX_CONTENT_LENGTH]
         if self._content != new_content:
             self._content = new_content
             if not self.editing:
                 self._setup_document()
             self.update()
+            if self.scene() and hasattr(self.scene(), "_schedule_scene_changed"):
+                self.scene()._schedule_scene_changed()
 
     def _setup_document(self):
         """
@@ -387,6 +400,7 @@ class Note(QGraphicsItem):
         elif self.color_button_rect.contains(event.pos()):
             self.show_color_picker()
             event.accept()
+            return
         
         if event.button() == Qt.MouseButton.LeftButton and self.scene():
             self.scene().is_dragging_item = True
@@ -420,6 +434,8 @@ class Note(QGraphicsItem):
             if not self.editing:
                 self.editing = True
                 self.edit_text = self.content
+                self._edit_history = []
+                self._edit_redo = []
             
             char_pos = self.get_char_pos_at_x(event.pos().x(), event.pos().y())
             text = self.edit_text
@@ -448,12 +464,17 @@ class Note(QGraphicsItem):
             elif event.key() == Qt.Key.Key_V: self.paste_text(); return
             elif event.key() == Qt.Key.Key_X: self.cut_selection(); return
             elif event.key() == Qt.Key.Key_A: self.select_all(); return
+            elif event.key() == Qt.Key.Key_Z:
+                self.undo_edit(); return
+            elif event.key() == Qt.Key.Key_Y:
+                self.redo_edit(); return
         
         if event.key() == Qt.Key.Key_Return and event.modifiers() & Qt.KeyboardModifier.ControlModifier:
             self.finishEditing()
         elif event.key() == Qt.Key.Key_Escape:
             self.editing = False; self.cursor_timer.stop(); self.update()
         elif event.key() in (Qt.Key.Key_Backspace, Qt.Key.Key_Delete):
+            self._push_edit_snapshot()
             if self.selection_start != self.selection_end: self.delete_selection()
             elif event.key() == Qt.Key.Key_Backspace and self.cursor_pos > 0:
                 self.edit_text = self.edit_text[:self.cursor_pos-1] + self.edit_text[self.cursor_pos:]
@@ -492,13 +513,15 @@ class Note(QGraphicsItem):
             self.update()
         elif event.key() == Qt.Key.Key_Return:
             # Insert newline.
+            self._push_edit_snapshot()
             if self.selection_start != self.selection_end: self.delete_selection()
             self.edit_text = self.edit_text[:self.cursor_pos] + '\n' + self.edit_text[self.cursor_pos:]
             self.cursor_pos += 1; self.selection_start = self.selection_end = self.cursor_pos; self.update()
         elif len(event.text()) and event.text().isprintable():
             # Insert typed character.
+            self._push_edit_snapshot()
             if self.selection_start != self.selection_end: self.delete_selection()
-            self.edit_text = self.edit_text[:self.cursor_pos] + event.text() + self.edit_text[self.cursor_pos:]
+            self.edit_text = (self.edit_text[:self.cursor_pos] + event.text() + self.edit_text[self.cursor_pos:])[:self.MAX_CONTENT_LENGTH]
             self.cursor_pos += 1; self.selection_start = self.selection_end = self.cursor_pos; self.update()
 
     def wheelEvent(self, event):
@@ -525,6 +548,29 @@ class Note(QGraphicsItem):
             self.scroll_value = value; self.update()
 
     # --- Text manipulation methods ---
+    def _push_edit_snapshot(self):
+        if not self._edit_history or self._edit_history[-1] != self.edit_text:
+            self._edit_history.append(self.edit_text)
+        self._edit_redo.clear()
+
+    def _restore_edit_text(self, text):
+        self.edit_text = str(text or "")[:self.MAX_CONTENT_LENGTH]
+        self.cursor_pos = min(self.cursor_pos, len(self.edit_text))
+        self.selection_start = self.selection_end = self.cursor_pos
+        self.update()
+
+    def undo_edit(self):
+        if not self._edit_history:
+            return
+        self._edit_redo.append(self.edit_text)
+        self._restore_edit_text(self._edit_history.pop())
+
+    def redo_edit(self):
+        if not self._edit_redo:
+            return
+        self._edit_history.append(self.edit_text)
+        self._restore_edit_text(self._edit_redo.pop())
+
     def copy_selection(self):
         if self.selection_start != self.selection_end:
             start, end = min(self.selection_start, self.selection_end), max(self.selection_start, self.selection_end)
@@ -532,17 +578,20 @@ class Note(QGraphicsItem):
 
     def cut_selection(self):
         if self.selection_start != self.selection_end:
+            self._push_edit_snapshot()
             self.copy_selection(); self.delete_selection()
 
     def paste_text(self):
         text = QApplication.clipboard().text()
         if text:
+            self._push_edit_snapshot()
             if self.selection_start != self.selection_end: self.delete_selection()
-            self.edit_text = self.edit_text[:self.cursor_pos] + text + self.edit_text[self.cursor_pos:]
+            self.edit_text = (self.edit_text[:self.cursor_pos] + text + self.edit_text[self.cursor_pos:])[:self.MAX_CONTENT_LENGTH]
             self.cursor_pos += len(text); self.selection_start = self.selection_end = self.cursor_pos; self.update()
 
     def delete_selection(self):
         if self.selection_start != self.selection_end:
+            self._push_edit_snapshot()
             start, end = min(self.selection_start, self.selection_end), max(self.selection_start, self.selection_end)
             self.edit_text = self.edit_text[:start] + self.edit_text[end:]
             self.cursor_pos = self.selection_start = self.selection_end = start
@@ -568,10 +617,14 @@ class Note(QGraphicsItem):
         
     def show_color_picker(self):
         """Opens the color picker dialog."""
-        dialog = ColorPickerDialog(self.scene().views()[0])
+        scene = self.scene()
+        if scene is None or not scene.views():
+            return
+        view = scene.views()[0]
+        dialog = ColorPickerDialog(view)
         note_pos = self.mapToScene(self.color_button_rect.topRight())
-        view_pos = self.scene().views()[0].mapFromScene(note_pos)
-        global_pos = self.scene().views()[0].mapToGlobal(view_pos)
+        view_pos = view.mapFromScene(note_pos)
+        global_pos = view.mapToGlobal(view_pos)
         dialog.move(global_pos.x() + 10, global_pos.y())
         if dialog.exec() == QDialog.DialogCode.Accepted:
             color, color_type = dialog.get_selected_color()
