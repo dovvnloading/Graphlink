@@ -4,6 +4,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import graphlink_secrets
+from graphlink_model_catalog import (
+    AUTO_MODEL,
+    INHERIT_MODEL,
+    ModelAssignment,
+    assignment_values,
+    normalize_model_id,
+)
 
 
 def _is_llama_cpp_gguf_path(path_value) -> bool:
@@ -14,10 +21,17 @@ def _is_llama_cpp_gguf_path(path_value) -> bool:
 class SettingsManager:
     NOTIFICATION_TYPES = ("info", "success", "warning", "error")
     # Bumped whenever session.dat's shape changes in a way future code needs to branch
-    # on. No migration logic reads this yet (see doc/ARCHITECTURE_REVIEW_FINDINGS.md #49)
-    # - it's the version marker itself, not a migration framework. Existing pre-this-field
-    # files backfill to 1 on next load, same as every other key here.
-    CURRENT_SCHEMA_VERSION = 1
+    # on. Version 2 introduces provider-scoped cloud profiles and explicit local
+    # model assignment modes.
+    CURRENT_SCHEMA_VERSION = 2
+    LEGACY_PRODUCT_MODEL_IDS = {"qwen3:8b", "deepseek-coder:6.7b"}
+    OLLAMA_MODEL_TASKS = (
+        "task_title",
+        "task_chat",
+        "task_chart",
+        "task_web_validate",
+        "task_web_summarize",
+    )
 
     """
     Manages all persistent application state and user settings.
@@ -32,7 +46,10 @@ class SettingsManager:
     def __init__(self, state_file: Path | str | None = None):
         self.state_file = Path(state_file) if state_file is not None else Path.home() / '.graphlink' / 'session.dat'
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
+        self._state_needs_save = False
         self.state = self._load_state()
+        if self._state_needs_save:
+            self._save_state()
         self._migrate_plaintext_secrets()
 
     def _migrate_plaintext_secrets(self):
@@ -63,8 +80,10 @@ class SettingsManager:
                     state['theme'] = 'dark'
                 if 'show_token_counter' not in state:
                     state['show_token_counter'] = True
+                state_changed = False
                 if 'ollama_chat_model' not in state:
-                    state['ollama_chat_model'] = 'qwen3:8b'
+                    state['ollama_chat_model'] = ''
+                    state_changed = True
                 if 'ollama_title_model' not in state:
                     state['ollama_title_model'] = ''
                 if 'ollama_chart_model' not in state:
@@ -121,6 +140,13 @@ class SettingsManager:
                     state['github_access_token'] = ''
                 if 'api_models' not in state:
                     state['api_models'] = {}
+                    state_changed = True
+                if 'api_models_by_provider' not in state or not isinstance(state.get('api_models_by_provider'), dict):
+                    state['api_models_by_provider'] = {
+                        str(state.get('api_provider', 'OpenAI-Compatible')): dict(state.get('api_models', {}) or {})
+                    }
+                    state_changed = True
+                state_changed = self._migrate_model_settings(state) or state_changed
                 if 'enable_system_prompt' not in state:
                     state['enable_system_prompt'] = True
                 if 'update_notifications_enabled' not in state:
@@ -142,6 +168,12 @@ class SettingsManager:
                     state['update_available'] = False
                 if 'schema_version' not in state:
                     state['schema_version'] = self.CURRENT_SCHEMA_VERSION
+                    state_changed = True
+                elif state.get('schema_version', 0) < self.CURRENT_SCHEMA_VERSION:
+                    state['schema_version'] = self.CURRENT_SCHEMA_VERSION
+                    state_changed = True
+                if state_changed:
+                    self._state_needs_save = True
                 return state
         except (json.JSONDecodeError, IOError) as e:
             self._backup_corrupt_state_file(e)
@@ -171,11 +203,18 @@ class SettingsManager:
             "schema_version": self.CURRENT_SCHEMA_VERSION,
             "theme": "dark",
             "show_token_counter": True,
-            "ollama_chat_model": "qwen3:8b",
+            "ollama_chat_model": "",
             "ollama_title_model": "",
             "ollama_chart_model": "",
             "ollama_web_validate_model": "",
             "ollama_web_summarize_model": "",
+            "ollama_model_assignments": {
+                "task_title": {"mode": INHERIT_MODEL, "model_id": ""},
+                "task_chat": {"mode": AUTO_MODEL, "model_id": ""},
+                "task_chart": {"mode": INHERIT_MODEL, "model_id": ""},
+                "task_web_validate": {"mode": INHERIT_MODEL, "model_id": ""},
+                "task_web_summarize": {"mode": INHERIT_MODEL, "model_id": ""},
+            },
             "ollama_reasoning_mode": "Thinking",
             "ollama_scanned_models": [],
             "ollama_model_scan_mode": "",
@@ -200,6 +239,7 @@ class SettingsManager:
             "gemini_api_key": "",
             "github_access_token": "",
             "api_models": {},
+            "api_models_by_provider": {},
             "enable_system_prompt": True,
             "update_notifications_enabled": False,
             "notification_preferences": {notification_type: True for notification_type in self.NOTIFICATION_TYPES},
@@ -211,6 +251,58 @@ class SettingsManager:
         }
         self._save_state(state)
         return state
+
+    def _migrate_model_settings(self, state: dict) -> bool:
+        """Migrate legacy model strings without activating product defaults."""
+        changed = False
+        raw_assignments = state.get("ollama_model_assignments")
+        if not isinstance(raw_assignments, dict):
+            raw_assignments = {}
+            for task in self.OLLAMA_MODEL_TASKS:
+                legacy_key = {
+                    "task_title": "ollama_title_model",
+                    "task_chat": "ollama_chat_model",
+                    "task_chart": "ollama_chart_model",
+                    "task_web_validate": "ollama_web_validate_model",
+                    "task_web_summarize": "ollama_web_summarize_model",
+                }[task]
+                legacy_value = normalize_model_id(state.get(legacy_key, ""))
+                if legacy_value.lower() in self.LEGACY_PRODUCT_MODEL_IDS:
+                    mode = AUTO_MODEL if task == "task_chat" else INHERIT_MODEL
+                    raw_assignments[task] = ModelAssignment(mode).to_dict()
+                elif legacy_value:
+                    raw_assignments[task] = ModelAssignment("explicit", legacy_value).to_dict()
+                else:
+                    mode = AUTO_MODEL if task == "task_chat" else INHERIT_MODEL
+                    raw_assignments[task] = ModelAssignment(mode).to_dict()
+            changed = True
+
+        normalized = assignment_values(raw_assignments)
+        for task, value in list(normalized.items()):
+            assignment = ModelAssignment.from_value(value)
+            if assignment.mode == "explicit" and assignment.model_id.lower() in self.LEGACY_PRODUCT_MODEL_IDS:
+                normalized[task] = ModelAssignment(
+                    AUTO_MODEL if task == "task_chat" else INHERIT_MODEL
+                ).to_dict()
+        if state.get("ollama_model_assignments") != normalized:
+            state["ollama_model_assignments"] = normalized
+            changed = True
+
+        # Keep legacy fields synchronized for older builds that may inspect the
+        # state file, but never write a product-authored default into them.
+        for task, key in {
+            "task_title": "ollama_title_model",
+            "task_chat": "ollama_chat_model",
+            "task_chart": "ollama_chart_model",
+            "task_web_validate": "ollama_web_validate_model",
+            "task_web_summarize": "ollama_web_summarize_model",
+        }.items():
+            assignment = ModelAssignment.from_value(normalized.get(task))
+            legacy_value = assignment.model_id if assignment.mode == "explicit" else ""
+            if state.get(key, "") != legacy_value:
+                state[key] = legacy_value
+                changed = True
+        return changed
 
     def _save_state(self, state_data=None):
         # Write to a temp file and atomically rename it into place (os.replace is
@@ -318,55 +410,73 @@ class SettingsManager:
         self.state["update_available"] = bool(result.get("update_available", False))
         self._save_state()
 
+    def get_ollama_model_assignments(self):
+        assignments = self.state.get("ollama_model_assignments", {})
+        if not isinstance(assignments, dict):
+            return {}
+        return assignment_values(assignments)
+
+    def set_ollama_model_assignments(self, assignments: dict):
+        normalized = assignment_values(assignments)
+        self.state["ollama_model_assignments"] = normalized
+        for task, key in {
+            "task_title": "ollama_title_model",
+            "task_chat": "ollama_chat_model",
+            "task_chart": "ollama_chart_model",
+            "task_web_validate": "ollama_web_validate_model",
+            "task_web_summarize": "ollama_web_summarize_model",
+        }.items():
+            assignment = ModelAssignment.from_value(normalized.get(task))
+            self.state[key] = assignment.model_id if assignment.mode == "explicit" else ""
+        self._save_state()
+
+    def _get_ollama_model(self, task: str) -> str:
+        assignment = ModelAssignment.from_value(
+            self.get_ollama_model_assignments().get(task, {})
+        )
+        return assignment.model_id if assignment.mode == "explicit" else ""
+
+    def _set_ollama_model(self, task: str, legacy_key: str, model_name: str):
+        model_id = normalize_model_id(model_name)
+        assignments = self.get_ollama_model_assignments()
+        if model_id and model_id.lower() not in self.LEGACY_PRODUCT_MODEL_IDS:
+            assignments[task] = ModelAssignment("explicit", model_id).to_dict()
+        else:
+            mode = AUTO_MODEL if task == "task_chat" else INHERIT_MODEL
+            assignments[task] = ModelAssignment(mode).to_dict()
+        self.state[legacy_key] = model_id if model_id.lower() not in self.LEGACY_PRODUCT_MODEL_IDS else ""
+        self.state["ollama_model_assignments"] = assignment_values(assignments)
+        self._save_state()
+
     def get_ollama_chat_model(self):
-        return self.state.get("ollama_chat_model", "qwen3:8b")
+        return self._get_ollama_model("task_chat")
 
     def set_ollama_chat_model(self, model_name: str):
-        self.state['ollama_chat_model'] = model_name
-        self._save_state()
+        self._set_ollama_model("task_chat", "ollama_chat_model", model_name)
 
     def get_ollama_title_model(self):
-        title_model = str(self.state.get("ollama_title_model", "")).strip()
-        if title_model:
-            return title_model
-        return self.get_ollama_chat_model()
+        return self._get_ollama_model("task_title")
 
     def set_ollama_title_model(self, model_name: str):
-        self.state["ollama_title_model"] = str(model_name or "").strip()
-        self._save_state()
+        self._set_ollama_model("task_title", "ollama_title_model", model_name)
 
     def get_ollama_chart_model(self):
-        # Chart generation defaults to a code-specialized model, not the chat model -
-        # deepseek-coder:6.7b is a deliberately different default from qwen3:8b, not an
-        # unwired copy of it. Still fully overridable via OllamaSettingsWidget.
-        chart_model = str(self.state.get("ollama_chart_model", "")).strip()
-        if chart_model:
-            return chart_model
-        return "deepseek-coder:6.7b"
+        return self._get_ollama_model("task_chart")
 
     def set_ollama_chart_model(self, model_name: str):
-        self.state["ollama_chart_model"] = str(model_name or "").strip()
-        self._save_state()
+        self._set_ollama_model("task_chart", "ollama_chart_model", model_name)
 
     def get_ollama_web_validate_model(self):
-        web_model = str(self.state.get("ollama_web_validate_model", "")).strip()
-        if web_model:
-            return web_model
-        return self.get_ollama_chat_model()
+        return self._get_ollama_model("task_web_validate")
 
     def set_ollama_web_validate_model(self, model_name: str):
-        self.state["ollama_web_validate_model"] = str(model_name or "").strip()
-        self._save_state()
+        self._set_ollama_model("task_web_validate", "ollama_web_validate_model", model_name)
 
     def get_ollama_web_summarize_model(self):
-        web_model = str(self.state.get("ollama_web_summarize_model", "")).strip()
-        if web_model:
-            return web_model
-        return self.get_ollama_chat_model()
+        return self._get_ollama_model("task_web_summarize")
 
     def set_ollama_web_summarize_model(self, model_name: str):
-        self.state["ollama_web_summarize_model"] = str(model_name or "").strip()
-        self._save_state()
+        self._set_ollama_model("task_web_summarize", "ollama_web_summarize_model", model_name)
 
     def get_ollama_reasoning_mode(self):
         return self.state.get("ollama_reasoning_mode", "Thinking")
@@ -542,8 +652,12 @@ class SettingsManager:
     def get_github_token(self):
         return graphlink_secrets.unprotect(self.state.get("github_access_token", ""))
         
-    def get_api_models(self):
-        return self.state.get("api_models", {})
+    def get_api_models(self, provider: str | None = None):
+        provider = provider or self.get_api_provider()
+        profiles = self.state.get("api_models_by_provider", {})
+        if isinstance(profiles, dict):
+            return dict(profiles.get(provider, {}) or {})
+        return dict(self.state.get("api_models", {}) or {})
 
     def set_api_settings(
         self,
@@ -560,8 +674,19 @@ class SettingsManager:
         self.state["gemini_api_key"] = graphlink_secrets.protect(gemini_key)
         self._save_state()
 
-    def set_api_models(self, models_dict: dict):
-        self.state["api_models"] = models_dict
+    def set_api_models(self, models_dict: dict, provider: str | None = None):
+        provider = provider or self.get_api_provider()
+        normalized = {
+            str(task): normalize_model_id(model)
+            for task, model in (models_dict or {}).items()
+            if normalize_model_id(model)
+        }
+        profiles = self.state.get("api_models_by_provider", {})
+        if not isinstance(profiles, dict):
+            profiles = {}
+        profiles[provider] = normalized
+        self.state["api_models_by_provider"] = profiles
+        self.state["api_models"] = normalized
         self._save_state()
 
     def set_github_token(self, token: str):
@@ -575,4 +700,5 @@ class SettingsManager:
         self.state["anthropic_api_key"] = ""
         self.state["gemini_api_key"] = ""
         self.state["api_models"] = {}
+        self.state["api_models_by_provider"] = {}
         self._save_state()

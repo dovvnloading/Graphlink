@@ -156,14 +156,16 @@ MODE_LLAMACPP_LOCAL = "Llama.cpp (Local)"
 MODE_API_ENDPOINT = "API Endpoint"
 
 OLLAMA_MODELS = {
-    TASK_TITLE: 'qwen3:8b',
-    TASK_CHAT: 'qwen3:8b',
-    TASK_CHART: 'deepseek-coder:6.7b',
-    TASK_WEB_VALIDATE: 'qwen3:8b',
-    TASK_WEB_SUMMARIZE: 'qwen3:8b'
+    # These are runtime-resolved selections, not product defaults.  An empty
+    # value means the user has not selected a ready local model yet.
+    TASK_TITLE: '',
+    TASK_CHAT: '',
+    TASK_CHART: '',
+    TASK_WEB_VALIDATE: '',
+    TASK_WEB_SUMMARIZE: ''
 }
 
-CURRENT_MODEL = OLLAMA_MODELS[TASK_CHAT]
+CURRENT_MODEL = ''
 
 def set_current_model(model_name: str):
     global CURRENT_MODEL
@@ -173,21 +175,39 @@ def set_current_model(model_name: str):
 
 
 def sync_ollama_task_models(settings_manager):
-    """Populate the per-task Ollama model table from the user's own persisted settings.
+    """Populate runtime selections from explicit/inherited/Auto settings.
 
-    api_provider.chat() resolves the Ollama model for a task with a plain
-    OLLAMA_MODELS.get(task) lookup - it has no per-call fallback logic. TASK_CHART,
-    TASK_WEB_VALIDATE, and TASK_WEB_SUMMARIZE each have their own independent settings
-    field now (see OllamaSettingsWidget), each with its own sensible get_ollama_*_model
-    fallback (chart falls back to a code-specialized default, web validate/summarize
-    fall back to the chat model) - so this has to read through the settings manager
-    rather than just copying whatever the chat model happens to be, the way
-    set_current_model() does for TASK_CHAT alone.
-
-    Call this once at startup (after set_current_model) and again whenever
-    OllamaSettingsWidget.save_settings() persists a change, so the new selection takes
-    effect in the current session without a restart.
+    The compatibility table remains for callers that already pass a task to
+    :func:`api_provider.chat`, but it no longer contains product-authored model
+    IDs.  Cached discovery is intentionally best-effort; an empty result leaves
+    an Auto task unconfigured until the provider is reachable and the user picks
+    or discovers a model.
     """
-    OLLAMA_MODELS[TASK_CHART] = settings_manager.get_ollama_chart_model()
-    OLLAMA_MODELS[TASK_WEB_VALIDATE] = settings_manager.get_ollama_web_validate_model()
-    OLLAMA_MODELS[TASK_WEB_SUMMARIZE] = settings_manager.get_ollama_web_summarize_model()
+    from graphlink_model_catalog import ModelDescriptor, resolve_task_model
+
+    if hasattr(settings_manager, "get_ollama_model_assignments"):
+        assignments = settings_manager.get_ollama_model_assignments()
+    else:
+        assignments = {
+            TASK_CHAT: settings_manager.get_ollama_chat_model(),
+            TASK_TITLE: settings_manager.get_ollama_title_model(),
+            TASK_CHART: settings_manager.get_ollama_chart_model(),
+            TASK_WEB_VALIDATE: settings_manager.get_ollama_web_validate_model(),
+            TASK_WEB_SUMMARIZE: settings_manager.get_ollama_web_summarize_model(),
+        }
+
+    cached_models = []
+    if hasattr(settings_manager, "get_ollama_scanned_models"):
+        cached_models = settings_manager.get_ollama_scanned_models()
+    catalog = [ModelDescriptor(model_id=model, provider=LOCAL_PROVIDER_OLLAMA) for model in cached_models]
+    chat_model = resolve_task_model(TASK_CHAT, assignments, catalog)
+    for task in (TASK_CHAT, TASK_TITLE, TASK_CHART, TASK_WEB_VALIDATE, TASK_WEB_SUMMARIZE):
+        OLLAMA_MODELS[task] = resolve_task_model(
+            task,
+            assignments,
+            catalog,
+            chat_model=chat_model,
+        )
+
+    global CURRENT_MODEL
+    CURRENT_MODEL = OLLAMA_MODELS[TASK_CHAT]

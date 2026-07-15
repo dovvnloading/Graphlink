@@ -1,4 +1,4 @@
-"""Tests for per-task Ollama model settings (Chart, Web Validation, Web Summarization).
+"""Regression coverage for Ollama task routing and no-default semantics.
 
 Earlier, config.OLLAMA_MODELS hardcoded a literal default for every Ollama task, and
 set_current_model() only ever updated TASK_CHAT. TASK_WEB_VALIDATE/TASK_WEB_SUMMARIZE
@@ -18,8 +18,8 @@ These tests cover:
    other tasks' explicit settings.
 2. sync_ollama_task_models() correctly pulls each task's model from the settings
    manager.
-3. SettingsManager's new get/set methods round-trip correctly and fall back
-   sensibly when nothing has been explicitly set.
+3. SettingsManager's new get/set methods round-trip correctly without hidden
+   product-authored fallback models.
 """
 
 import sys
@@ -79,37 +79,37 @@ class TestSyncOllamaTaskModels:
         assert config.OLLAMA_MODELS[config.TASK_WEB_VALIDATE] == "phi4:14b"
         assert config.OLLAMA_MODELS[config.TASK_WEB_SUMMARIZE] == "mistral:7b"
 
-    def test_falls_back_when_nothing_explicitly_set(self, monkeypatch, tmp_path):
+    def test_auto_tasks_stay_unconfigured_until_discovery(self, monkeypatch, tmp_path):
         manager = _make_settings_manager(tmp_path)
         manager.set_ollama_chat_model("llama3.1:8b")
 
         config.sync_ollama_task_models(manager)
 
-        assert config.OLLAMA_MODELS[config.TASK_CHART] == "deepseek-coder:6.7b"
-        assert config.OLLAMA_MODELS[config.TASK_WEB_VALIDATE] == "llama3.1:8b"
-        assert config.OLLAMA_MODELS[config.TASK_WEB_SUMMARIZE] == "llama3.1:8b"
+        assert config.OLLAMA_MODELS[config.TASK_CHART] == ""
+        assert config.OLLAMA_MODELS[config.TASK_WEB_VALIDATE] == ""
+        assert config.OLLAMA_MODELS[config.TASK_WEB_SUMMARIZE] == ""
 
 
 class TestSettingsManagerOllamaTaskModelMethods:
-    def test_chart_model_round_trips_and_defaults_to_code_specialized_model(self, tmp_path):
+    def test_chart_model_round_trips_and_defaults_to_auto(self, tmp_path):
         manager = _make_settings_manager(tmp_path)
-        assert manager.get_ollama_chart_model() == "deepseek-coder:6.7b"
+        assert manager.get_ollama_chart_model() == ""
 
         manager.set_ollama_chart_model("qwen2.5-coder:7b")
         assert manager.get_ollama_chart_model() == "qwen2.5-coder:7b"
 
-    def test_web_validate_model_round_trips_and_falls_back_to_chat_model(self, tmp_path):
+    def test_web_validate_model_round_trips_without_implicit_chat_fallback(self, tmp_path):
         manager = _make_settings_manager(tmp_path)
         manager.set_ollama_chat_model("llama3.1:8b")
-        assert manager.get_ollama_web_validate_model() == "llama3.1:8b"
+        assert manager.get_ollama_web_validate_model() == ""
 
         manager.set_ollama_web_validate_model("phi4:14b")
         assert manager.get_ollama_web_validate_model() == "phi4:14b"
 
-    def test_web_summarize_model_round_trips_and_falls_back_to_chat_model(self, tmp_path):
+    def test_web_summarize_model_round_trips_without_implicit_chat_fallback(self, tmp_path):
         manager = _make_settings_manager(tmp_path)
         manager.set_ollama_chat_model("llama3.1:8b")
-        assert manager.get_ollama_web_summarize_model() == "llama3.1:8b"
+        assert manager.get_ollama_web_summarize_model() == ""
 
         manager.set_ollama_web_summarize_model("mistral:7b")
         assert manager.get_ollama_web_summarize_model() == "mistral:7b"

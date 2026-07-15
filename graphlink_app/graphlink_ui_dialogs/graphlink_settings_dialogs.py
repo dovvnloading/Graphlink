@@ -1,7 +1,7 @@
 import os
 import webbrowser
 import qtawesome as qta
-from PySide6.QtCore import QPoint, QSize, Qt, QThread, Signal
+from PySide6.QtCore import QPoint, QSize, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QComboBox, QFileDialog, QFormLayout,
@@ -17,6 +17,7 @@ from graphlink_styles import THEMES
 from graphlink_config import apply_theme, get_current_palette, get_semantic_color, set_current_model
 from graphlink_update import APP_VERSION, UPDATE_REPOSITORY_URL
 from graphlink_paths import asset_url
+from graphlink_model_catalog import AUTO_MODEL, INHERIT_MODEL, ModelAssignment
 
 
 class SettingsComboPopup(QFrame):
@@ -51,6 +52,13 @@ class SettingsComboPopup(QFrame):
         shell_layout = QVBoxLayout(self.shell)
         shell_layout.setContentsMargins(4, 4, 4, 4)
         shell_layout.setSpacing(0)
+
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("Search models...")
+        self.search_input.setClearButtonEnabled(True)
+        self.search_input.textChanged.connect(self._filter_items)
+        self.search_input.returnPressed.connect(self._activate_current_item)
+        shell_layout.addWidget(self.search_input)
 
         self.list_widget = QListWidget()
         self.list_widget.setObjectName("settingsComboPopupList")
@@ -102,6 +110,14 @@ class SettingsComboPopup(QFrame):
                 background-color: {accent_color};
                 color: #ffffff;
             }}
+            QLineEdit {{
+                background-color: #242424;
+                color: #ffffff;
+                border: 1px solid #4a4a4a;
+                border-radius: 6px;
+                padding: 6px 8px;
+                margin: 2px 2px 6px 2px;
+            }}
         """)
 
     def populate_from_combo(self, combo):
@@ -109,6 +125,9 @@ class SettingsComboPopup(QFrame):
         current_text = combo.currentText()
 
         self.list_widget.clear()
+        self.search_input.blockSignals(True)
+        self.search_input.clear()
+        self.search_input.blockSignals(False)
         for index in range(combo.count()):
             text = combo.itemText(index)
             item = QListWidgetItem(text)
@@ -125,6 +144,22 @@ class SettingsComboPopup(QFrame):
                 self.list_widget.scrollToItem(current_item, QAbstractItemView.ScrollHint.PositionAtCenter)
         else:
             self.list_widget.clearSelection()
+
+    def _filter_items(self, query):
+        query = str(query or "").strip().lower()
+        for index in range(self.list_widget.count()):
+            item = self.list_widget.item(index)
+            item.setHidden(bool(query and query not in item.text().lower()))
+        for index in range(self.list_widget.count()):
+            item = self.list_widget.item(index)
+            if not item.isHidden():
+                self.list_widget.setCurrentItem(item)
+                break
+
+    def _activate_current_item(self):
+        item = self.list_widget.currentItem()
+        if item is not None and not item.isHidden():
+            self._emit_item_selection(item)
 
     def show_for_combo(self, combo):
         self.populate_from_combo(combo)
@@ -166,7 +201,7 @@ class SettingsComboPopup(QFrame):
         self.move(x, y)
         self.show()
         self.raise_()
-        self.list_widget.setFocus()
+        self.search_input.setFocus()
 
     def _emit_item_selection(self, item):
         if item is None:
@@ -258,6 +293,41 @@ class OllamaModelScanWorker(QThread):
             self.error.emit(str(exc))
 
 
+class ApiModelLoadWorker(QThread):
+    finished = Signal(list)
+    error = Signal(str)
+
+    def __init__(self, provider, api_key, base_url=None, parent=None):
+        super().__init__(parent)
+        self.provider = provider
+        self.api_key = api_key
+        self.base_url = base_url
+
+    def run(self):
+        try:
+            # Discovery is deliberately isolated from the GUI thread.  It also
+            # exercises the same provider initialization path used by Save, so a
+            # successful catalog load is a useful connection check.
+            api_provider.initialize_api(
+                self.provider,
+                self.api_key,
+                self.base_url if self.provider == config.API_PROVIDER_OPENAI else None,
+            )
+            descriptors = api_provider.get_available_model_descriptors()
+            self.finished.emit([
+                {
+                    "model_id": descriptor.model_id,
+                    "provider": descriptor.provider,
+                    "capabilities": sorted(descriptor.capabilities),
+                    "ready": descriptor.ready,
+                    "available": descriptor.available,
+                }
+                for descriptor in descriptors
+            ])
+        except Exception as exc:
+            self.error.emit(str(exc))
+
+
 class LlamaCppModelScanWorker(QThread):
     finished = Signal(dict)
     error = Signal(str)
@@ -329,16 +399,15 @@ class OllamaSettingsWidget(QWidget):
         else:
             self.quick_radio.setChecked(True)
 
-        self._refresh_scanned_ollama_models_cache()
-
         saved_model = self.settings_manager.get_ollama_chat_model()
-        saved_title_model = self.settings_manager.get_ollama_title_model()
-        saved_chart_model = self.settings_manager.get_ollama_chart_model()
-        saved_web_validate_model = self.settings_manager.get_ollama_web_validate_model()
-        saved_web_summarize_model = self.settings_manager.get_ollama_web_summarize_model()
+        self.saved_assignments = (
+            self.settings_manager.get_ollama_model_assignments()
+            if hasattr(self.settings_manager, "get_ollama_model_assignments")
+            else {}
+        )
         self.models = self._build_model_cache()
 
-        self.current_model_label = QLabel(f"<b>{saved_model}</b>")
+        self.current_model_label = QLabel(f"<b>{saved_model or 'Auto — no installed model selected yet'}</b>")
         self.current_model_label.setStyleSheet(f"color: {get_semantic_color('status_success').name()};")
         form_layout.addRow("Current Active Chat Model:", self.current_model_label)
 
@@ -358,52 +427,46 @@ class OllamaSettingsWidget(QWidget):
         form_layout.addRow("", self.scan_summary_label)
 
         self.model_combo = SettingsComboBox()
+        self.model_combo.setEditable(True)
+        self.model_combo.setPlaceholderText("Select an installed model or enter a model ID")
         self.model_combo.addItems([""] + self.models)
         self.model_combo.currentTextChanged.connect(self.on_combo_change)
-        form_layout.addRow("Scanned Model:", self.model_combo)
+        self.model_combo.setCurrentText(saved_model)
+        form_layout.addRow("Chat Model:", self.model_combo)
 
         self.model_input = QLineEdit()
-        self.model_input.setPlaceholderText("e.g., llama3:latest")
+        self.model_input.setPlaceholderText("Advanced model ID entry")
         self.model_input.textChanged.connect(self.on_text_change)
-        form_layout.addRow("Custom Model Name:", self.model_input)
+        self.model_input.setVisible(False)
+        form_layout.addRow("", self.model_input)
 
         self.title_model_combo = SettingsComboBox()
-        self.title_model_combo.setEditable(True)
-        self.title_model_combo.addItems([""] + self.models)
-        self.title_model_combo.setCurrentText(saved_title_model)
+        self._configure_assignment_combo(self.title_model_combo, "task_title")
         form_layout.addRow("Chat Naming Model:", self.title_model_combo)
 
         self.chart_model_combo = SettingsComboBox()
-        self.chart_model_combo.setEditable(True)
-        self.chart_model_combo.addItems([""] + self.models)
-        self.chart_model_combo.setCurrentText(saved_chart_model)
+        self._configure_assignment_combo(self.chart_model_combo, "task_chart")
         form_layout.addRow("Chart Generation Model:", self.chart_model_combo)
 
         self.web_validate_model_combo = SettingsComboBox()
-        self.web_validate_model_combo.setEditable(True)
-        self.web_validate_model_combo.addItems([""] + self.models)
-        self.web_validate_model_combo.setCurrentText(saved_web_validate_model)
+        self._configure_assignment_combo(self.web_validate_model_combo, "task_web_validate")
         form_layout.addRow("Web Content Validation Model:", self.web_validate_model_combo)
 
         self.web_summarize_model_combo = SettingsComboBox()
-        self.web_summarize_model_combo.setEditable(True)
-        self.web_summarize_model_combo.addItems([""] + self.models)
-        self.web_summarize_model_combo.setCurrentText(saved_web_summarize_model)
+        self._configure_assignment_combo(self.web_summarize_model_combo, "task_web_summarize")
         form_layout.addRow("Web Content Summarization Model:", self.web_summarize_model_combo)
 
         layout.addLayout(form_layout)
 
         self.model_input.setText(saved_model)
 
-        naming_help = QLabel("Used to name new chats. It starts with the active chat model, and you can override it independently.")
+        naming_help = QLabel("Each task can inherit the chat model, choose Auto, or use an explicit installed/custom model. Missing models stay visible as unavailable instead of silently changing routes.")
         naming_help.setWordWrap(True)
         naming_help.setStyleSheet("color: #9fa6ad; margin-top: 2px;")
         layout.addWidget(naming_help)
 
         task_models_help = QLabel(
-            "Chart Generation starts with a code-capable default (deepseek-coder:6.7b). "
-            "Web Content Validation and Summarization (used by Graphlink-Web) start with the active chat model. "
-            "All three can be overridden independently and are never silently changed when you switch chat models."
+            "Auto chooses from models detected on this machine. Ollama model IDs are never assumed or downloaded implicitly; use Validate and Pull for a custom ID."
         )
         task_models_help.setWordWrap(True)
         task_models_help.setStyleSheet("color: #9fa6ad; margin-top: 2px;")
@@ -432,6 +495,7 @@ class OllamaSettingsWidget(QWidget):
         layout.addLayout(button_layout)
 
         self.on_theme_changed()
+        QTimer.singleShot(0, self.scan_system_for_models)
 
     def on_theme_changed(self):
         palette = get_current_palette()
@@ -460,6 +524,30 @@ class OllamaSettingsWidget(QWidget):
             }}
         """)
 
+    def _configure_assignment_combo(self, combo, task):
+        combo.setEditable(True)
+        combo.clear()
+        combo.addItem("Use chat model", INHERIT_MODEL)
+        combo.addItem("Auto — choose a compatible installed model", AUTO_MODEL)
+        for model in self.models:
+            combo.addItem(model, model)
+        assignment = ModelAssignment.from_value(self.saved_assignments.get(task, {}))
+        if assignment.mode == "explicit" and assignment.model_id:
+            combo.setCurrentText(assignment.model_id)
+        else:
+            target_mode = assignment.mode if assignment.mode in {INHERIT_MODEL, AUTO_MODEL} else INHERIT_MODEL
+            index = combo.findData(target_mode)
+            combo.setCurrentIndex(index if index >= 0 else 0)
+
+    def _assignment_from_combo(self, combo, *, default_mode=INHERIT_MODEL):
+        data = combo.currentData()
+        text = combo.currentText().strip()
+        if data in {INHERIT_MODEL, AUTO_MODEL}:
+            return ModelAssignment(str(data))
+        if text and text not in {"Use chat model", "Auto — choose a compatible installed model"}:
+            return ModelAssignment("explicit", text)
+        return ModelAssignment(default_mode)
+
     def _build_model_cache(self):
         cached_models = self.settings_manager.get_ollama_scanned_models()
         combined_models = {
@@ -468,29 +556,6 @@ class OllamaSettingsWidget(QWidget):
             if str(model).strip()
         }
         return sorted(combined_models, key=str.lower)
-
-    def _refresh_scanned_ollama_models_cache(self):
-        try:
-            results = api_provider.scan_local_ollama_models()
-        except Exception:
-            return
-
-        discovered = sorted(
-            {
-                str(model).strip()
-                for model in (results.get("models", []) or [])
-                if str(model).strip()
-            },
-            key=str.lower,
-        )
-        scan_mode = str(results.get("scan_mode", "system")).strip() or "system"
-        scan_path = str(results.get("scan_path", "")).strip()
-        locations = [
-            str(location).strip()
-            for location in (results.get("locations", []) or [])
-            if str(location).strip()
-        ]
-        self.settings_manager.set_ollama_model_scan_cache(discovered, scan_mode, scan_path, locations)
 
     def _get_scan_summary_text(self):
         scan_mode = self.settings_manager.get_ollama_model_scan_mode()
@@ -509,30 +574,30 @@ class OllamaSettingsWidget(QWidget):
 
     def _refresh_model_combos(self):
         current_model_text = self.model_input.text().strip()
-        current_title_text = self.title_model_combo.currentText().strip()
-        current_chart_text = self.chart_model_combo.currentText().strip()
-        current_web_validate_text = self.web_validate_model_combo.currentText().strip()
-        current_web_summarize_text = self.web_summarize_model_combo.currentText().strip()
 
         self.model_combo.blockSignals(True)
         self.model_combo.clear()
         self.model_combo.addItems([""] + self.models)
+        self.model_combo.setEditable(True)
+        self.model_combo.setPlaceholderText("Select an installed model or enter a model ID")
         if current_model_text in self.models:
             self.model_combo.setCurrentText(current_model_text)
         else:
-            self.model_combo.setCurrentIndex(0)
+            self.model_combo.setCurrentText(current_model_text)
         self.model_combo.blockSignals(False)
 
-        for combo, current_text in (
-            (self.title_model_combo, current_title_text),
-            (self.chart_model_combo, current_chart_text),
-            (self.web_validate_model_combo, current_web_validate_text),
-            (self.web_summarize_model_combo, current_web_summarize_text),
+        for combo, task in (
+            (self.title_model_combo, "task_title"),
+            (self.chart_model_combo, "task_chart"),
+            (self.web_validate_model_combo, "task_web_validate"),
+            (self.web_summarize_model_combo, "task_web_summarize"),
         ):
+            current_assignment = self._assignment_from_combo(combo)
+            self.saved_assignments[task] = current_assignment.to_dict()
             combo.blockSignals(True)
-            combo.clear()
-            combo.addItems([""] + self.models)
-            combo.setCurrentText(current_text)
+            self._configure_assignment_combo(combo, task)
+            if current_assignment.mode == "explicit":
+                combo.setCurrentText(current_assignment.model_id)
             combo.blockSignals(False)
 
         self.scan_summary_label.setText(self._get_scan_summary_text())
@@ -581,10 +646,17 @@ class OllamaSettingsWidget(QWidget):
         )
         self.models = self._build_model_cache()
         self._refresh_model_combos()
+        config.sync_ollama_task_models(self.settings_manager)
+        resolved_chat_model = config.OLLAMA_MODELS.get(config.TASK_CHAT, "")
+        self.current_model_label.setText(
+            f"<b>{resolved_chat_model or 'Auto — no compatible installed model found'}</b>"
+        )
         self._set_scan_buttons_enabled(True)
 
         if models:
-            self.status_label.setText(f"Found {len(models)} Ollama model(s). Saved this list for reuse until the next scan.")
+            self.status_label.setText(
+                f"Found {len(models)} Ollama model(s). Auto routing is now ready; saved selections were preserved."
+            )
             self.status_label.setStyleSheet(
                 f"color: {get_semantic_color('status_success').name()}; min-height: 40px;"
             )
@@ -603,32 +675,35 @@ class OllamaSettingsWidget(QWidget):
         self.scan_worker = None
 
     def save_settings(self):
-        model_name = self.model_input.text().strip()
-        if not model_name:
-            QMessageBox.warning(self, "Warning", "Model name cannot be empty.")
-            return
-        
+        model_name = self.model_combo.currentText().strip() or self.model_input.text().strip()
         reasoning_mode = "Thinking" if self.thinking_radio.isChecked() else "Quick"
-        title_model_name = self.title_model_combo.currentText().strip() or model_name
-        chart_model_name = self.chart_model_combo.currentText().strip() or self.settings_manager.get_ollama_chart_model()
-        web_validate_model_name = self.web_validate_model_combo.currentText().strip() or model_name
-        web_summarize_model_name = self.web_summarize_model_combo.currentText().strip() or model_name
+        assignments = {
+            "task_chat": ModelAssignment("explicit", model_name).to_dict() if model_name else ModelAssignment(AUTO_MODEL).to_dict(),
+            "task_title": self._assignment_from_combo(self.title_model_combo).to_dict(),
+            "task_chart": self._assignment_from_combo(self.chart_model_combo).to_dict(),
+            "task_web_validate": self._assignment_from_combo(self.web_validate_model_combo).to_dict(),
+            "task_web_summarize": self._assignment_from_combo(self.web_summarize_model_combo).to_dict(),
+        }
 
-        self.settings_manager.set_ollama_chat_model(model_name)
-        self.settings_manager.set_ollama_title_model(title_model_name)
-        self.settings_manager.set_ollama_chart_model(chart_model_name)
-        self.settings_manager.set_ollama_web_validate_model(web_validate_model_name)
-        self.settings_manager.set_ollama_web_summarize_model(web_summarize_model_name)
+        if hasattr(self.settings_manager, "set_ollama_model_assignments"):
+            self.settings_manager.set_ollama_model_assignments(assignments)
+        else:
+            self.settings_manager.set_ollama_chat_model(model_name)
         self.settings_manager.set_ollama_reasoning_mode(reasoning_mode)
-        set_current_model(model_name)
+        if model_name:
+            set_current_model(model_name)
         config.sync_ollama_task_models(self.settings_manager)
 
         main_window = self.window().parent()
         if main_window and hasattr(main_window, 'reinitialize_agent'):
             main_window.reinitialize_agent()
 
-        self.current_model_label.setText(f"<b>{model_name}</b>")
-        QMessageBox.information(self, "Saved", "Ollama settings have been saved and applied for the current session.")
+        self.current_model_label.setText(f"<b>{model_name or 'Auto — waiting for a detected model'}</b>")
+        self.status_label.setText(
+            "Settings saved. Auto will resolve from the next successful Ollama discovery." if not model_name
+            else "Settings saved and applied for the current session."
+        )
+        self.status_label.setStyleSheet(f"color: {get_semantic_color('status_success').name()}; min-height: 40px;")
 
     def on_combo_change(self, text):
         if not text: return
@@ -1127,6 +1202,8 @@ class ApiSettingsWidget(QWidget):
     def __init__(self, settings_manager, parent=None):
         super().__init__(parent)
         self.settings_manager = settings_manager
+        self.api_worker = None
+        self.api_worker_provider = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(15, 15, 15, 15)
@@ -1164,6 +1241,10 @@ class ApiSettingsWidget(QWidget):
         self.load_btn = QPushButton("Load Available Models")
         self.load_btn.clicked.connect(self.load_models_from_endpoint)
         layout.addWidget(self.load_btn)
+        self.discovery_status_label = QLabel("Model catalog has not been refreshed yet.")
+        self.discovery_status_label.setWordWrap(True)
+        self.discovery_status_label.setStyleSheet("color: #9fa6ad;")
+        layout.addWidget(self.discovery_status_label)
 
         layout.addWidget(QLabel("Model Selection (per task):", styleSheet="color: #ffffff; font-weight: bold; margin-top: 15px;"))
 
@@ -1198,7 +1279,7 @@ class ApiSettingsWidget(QWidget):
         layout.addWidget(self.image_help_label)
         
         layout.addWidget(QLabel("Web Content Validation:", styleSheet="color: #d4d4d4; margin-top: 8px;"))
-        self.web_validate_combo = SettingsComboBox(placeholder_text="Default: gemini-3.1-flash-lite-preview")
+        self.web_validate_combo = SettingsComboBox(placeholder_text="Select a validation model...")
         self.web_validate_combo.setEditable(True)
         self.model_combos[config.TASK_WEB_VALIDATE] = self.web_validate_combo
         layout.addWidget(self.web_validate_combo)
@@ -1228,7 +1309,7 @@ class ApiSettingsWidget(QWidget):
         self.restore_saved_models()
 
     def restore_saved_models(self):
-        saved_models = self.settings_manager.get_api_models()
+        saved_models = self.settings_manager.get_api_models(self.provider_combo.currentText())
         provider = self.provider_combo.currentText()
         for task, combo in self.model_combos.items():
             if provider == config.API_PROVIDER_ANTHROPIC and task == config.TASK_IMAGE_GEN:
@@ -1306,20 +1387,19 @@ class ApiSettingsWidget(QWidget):
                 combo.clear()
                 combo.addItems(api_provider.GEMINI_MODELS_STATIC)
             self.web_validate_combo.addItems(api_provider.GEMINI_MODELS_STATIC)
-            default_idx = self.web_validate_combo.findText("gemini-3.1-flash-lite-preview")
-            if default_idx >= 0:
-                self.web_validate_combo.setCurrentIndex(default_idx)
 
             self.image_combo.clear()
             self.image_combo.addItems(api_provider.GEMINI_IMAGE_MODELS_STATIC)
-            image_default_idx = self.image_combo.findText("gemini-2.5-flash-image")
-            if image_default_idx >= 0:
-                self.image_combo.setCurrentIndex(image_default_idx)
             self._configure_supported_image_state(provider_name)
 
+        self.discovery_status_label.setText(
+            "Choose Refresh to load the provider's current catalog. Saved IDs remain available as unverified custom selections."
+        )
         self.restore_saved_models()
 
     def load_models_from_endpoint(self):
+        if self.api_worker and self.api_worker.isRunning():
+            return
         provider = self.provider_combo.currentText()
         base_url = self.base_url_input.text().strip()
         api_key = self.api_key_input.text().strip()
@@ -1331,19 +1411,53 @@ class ApiSettingsWidget(QWidget):
             QMessageBox.warning(self, "Missing Information", "Please enter the API Key.")
             return
 
-        try:
-            api_provider.initialize_api(provider, api_key, base_url if provider == config.API_PROVIDER_OPENAI else None)
-            models = api_provider.get_available_models()
-            
-            if provider == config.API_PROVIDER_OPENAI:
-                self._populate_models(models)
-            elif provider == config.API_PROVIDER_ANTHROPIC:
-                self._populate_models(models, skip_tasks={config.TASK_IMAGE_GEN})
-            
-            self.restore_saved_models()
-            QMessageBox.information(self, "Models Loaded", f"Successfully loaded {len(models)} models!")
-        except Exception as e:
-            QMessageBox.critical(self, "Failed to Load Models", f"Could not fetch models from API:\n\n{str(e)}")
+        self.load_btn.setEnabled(False)
+        self.load_btn.setText("Loading catalog…")
+        self.discovery_status_label.setText("Contacting the provider… You can keep editing other settings.")
+        self.discovery_status_label.setStyleSheet(f"color: {get_semantic_color('status_info').name()};")
+        self.api_worker = ApiModelLoadWorker(
+            provider,
+            api_key,
+            base_url if provider == config.API_PROVIDER_OPENAI else None,
+            self,
+        )
+        self.api_worker_provider = provider
+        self.api_worker.finished.connect(self.handle_models_loaded)
+        self.api_worker.error.connect(self.handle_models_load_error)
+        self.api_worker.finished.connect(self._clear_api_worker)
+        self.api_worker.error.connect(self._clear_api_worker)
+        self.api_worker.start()
+
+    def handle_models_loaded(self, descriptors):
+        if self.api_worker_provider != self.provider_combo.currentText():
+            return
+        models = [item.get("model_id", "") for item in descriptors if item.get("model_id")]
+        provider = self.provider_combo.currentText()
+        if provider == config.API_PROVIDER_OPENAI:
+            self._populate_models(models)
+        elif provider == config.API_PROVIDER_ANTHROPIC:
+            self._populate_models(models, skip_tasks={config.TASK_IMAGE_GEN})
+        else:
+            self._populate_models(models, skip_tasks={config.TASK_IMAGE_GEN})
+            self.image_combo.clear()
+            self.image_combo.addItems(api_provider.GEMINI_IMAGE_MODELS_STATIC)
+        self.restore_saved_models()
+        self.discovery_status_label.setText(f"Catalog refreshed — {len(models)} model(s) available from {provider}.")
+        self.discovery_status_label.setStyleSheet(f"color: {get_semantic_color('status_success').name()};")
+
+    def handle_models_load_error(self, error_message):
+        if self.api_worker_provider != self.provider_combo.currentText():
+            return
+        self.discovery_status_label.setText(
+            f"Catalog refresh failed: {error_message}\nSaved/custom model IDs remain usable if the endpoint supports them."
+        )
+        self.discovery_status_label.setStyleSheet(f"color: {get_semantic_color('status_warning').name()};")
+
+    def _clear_api_worker(self, *_args):
+        self.load_btn.setEnabled(True)
+        self.load_btn.setText("Refresh Available Models")
+        self.api_worker = None
+        self.api_worker_provider = None
 
     def save_settings(self):
         provider = self.provider_combo.currentText()
@@ -1364,9 +1478,7 @@ class ApiSettingsWidget(QWidget):
         anthropic_key = api_key if provider == config.API_PROVIDER_ANTHROPIC else self.settings_manager.get_anthropic_key()
         gemini_key = api_key if provider == config.API_PROVIDER_GEMINI else self.settings_manager.get_gemini_key()
         
-        self.settings_manager.set_api_settings(provider, base_url, openai_key, anthropic_key, gemini_key)
-
-        models_dict = dict(self.settings_manager.get_api_models())
+        models_dict = dict(self.settings_manager.get_api_models(provider))
         for task_key, combo in self.model_combos.items():
             if provider == config.API_PROVIDER_ANTHROPIC and task_key == config.TASK_IMAGE_GEN:
                 continue
@@ -1374,7 +1486,19 @@ class ApiSettingsWidget(QWidget):
                 models_dict[task_key] = combo.currentText()
                 api_provider.set_task_model(task_key, combo.currentText())
                 
-        self.settings_manager.set_api_models(models_dict)
+        try:
+            if provider == config.API_PROVIDER_OPENAI:
+                api_provider.initialize_api(provider, api_key, base_url)
+            else:
+                api_provider.initialize_api(provider, api_key)
+        except Exception as e:
+            QMessageBox.critical(self, "Initialization Error", f"Failed to initialize the API provider:\n\n{str(e)}")
+            return
+
+        # Commit only after provider initialization succeeds. A rejected key or
+        # endpoint must not overwrite the last known-good settings profile.
+        self.settings_manager.set_api_settings(provider, base_url, openai_key, anthropic_key, gemini_key)
+        self.settings_manager.set_api_models(models_dict, provider)
 
         os.environ['GRAPHLINK_API_PROVIDER'] = provider
         if provider == config.API_PROVIDER_OPENAI:
@@ -1384,15 +1508,6 @@ class ApiSettingsWidget(QWidget):
             os.environ['GRAPHLINK_ANTHROPIC_API_KEY'] = api_key
         else:
             os.environ['GRAPHLINK_GEMINI_API_KEY'] = api_key
-
-        try:
-            if provider == config.API_PROVIDER_OPENAI:
-                api_provider.initialize_api(provider, api_key, base_url)
-            else:
-                api_provider.initialize_api(provider, api_key)
-        except Exception as e:
-            QMessageBox.critical(self, "Initialization Error", f"Failed to initialize the API provider:\n\n{str(e)}")
-            return
         
         QMessageBox.information(self, "Configuration Saved", f"API settings for {provider} have been saved.")
 

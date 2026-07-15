@@ -21,6 +21,7 @@ except ImportError:
 
 import graphlink_config as config
 from graphlink_audio import guess_audio_mime_type
+from graphlink_model_catalog import ModelDescriptor, ollama_descriptor, sort_descriptors
 
 
 USE_API_MODE = False
@@ -265,23 +266,26 @@ def _collect_models_from_manifest_root(manifests_root: Path) -> list[str]:
     return sorted(discovered_models, key=str.lower)
 
 
-def _list_models_from_running_ollama() -> list[str]:
+def _list_model_descriptors_from_running_ollama() -> tuple[list[ModelDescriptor], bool, str]:
+    """Return installed Ollama models plus an honest server health signal."""
     try:
         response = ollama.list()
-    except Exception:
-        return []
+    except Exception as exc:
+        return [], False, str(exc)
 
     raw_models = _extract_response_field(response, "models", [])
-    discovered_models: set[str] = set()
+    descriptors = []
     for raw_model in raw_models or []:
-        model_name = _extract_response_field(raw_model, "model") or _extract_response_field(raw_model, "name")
-        normalized = str(model_name or "").strip()
-        if normalized:
-            discovered_models.add(normalized)
-    return sorted(discovered_models, key=str.lower)
+        descriptor = ollama_descriptor(raw_model)
+        if descriptor.model_id:
+            descriptors.append(descriptor)
+    return sort_descriptors(descriptors), True, ""
 
 
 def scan_local_ollama_models(scan_path: str | None = None) -> dict:
+    running_descriptors: list[ModelDescriptor] = []
+    server_reachable = None
+    server_error = ""
     if scan_path:
         manifest_roots = _discover_manifest_roots_in_folder(scan_path)
         scan_mode = "folder"
@@ -291,7 +295,8 @@ def scan_local_ollama_models(scan_path: str | None = None) -> dict:
         manifest_roots = _iter_existing_ollama_manifest_roots()
         scan_mode = "system"
         scan_root = ""
-        running_models = _list_models_from_running_ollama()
+        running_descriptors, server_reachable, server_error = _list_model_descriptors_from_running_ollama()
+        running_models = [descriptor.model_id for descriptor in running_descriptors]
 
     discovered_models: set[str] = set(running_models)
     scanned_locations: list[str] = []
@@ -300,11 +305,43 @@ def scan_local_ollama_models(scan_path: str | None = None) -> dict:
         discovered_models.update(_collect_models_from_manifest_root(manifests_root))
         scanned_locations.append(str(manifests_root.resolve()))
 
+    descriptors_by_id = {
+        descriptor.model_id.lower(): descriptor
+        for descriptor in (running_descriptors if not scan_path else [])
+    }
+    for model_name in discovered_models:
+        descriptors_by_id.setdefault(
+            model_name.lower(),
+            ModelDescriptor(
+                model_id=model_name,
+                provider=config.LOCAL_PROVIDER_OLLAMA,
+                ready=True,
+                available=True,
+                source="manifest",
+            ),
+        )
+
     return {
         "models": sorted(discovered_models, key=str.lower),
+        "descriptors": [
+            {
+                "model_id": descriptor.model_id,
+                "provider": descriptor.provider,
+                "ready": descriptor.ready,
+                "available": descriptor.available,
+                "capabilities": sorted(descriptor.capabilities),
+                "source": descriptor.source,
+                "size_bytes": descriptor.size_bytes,
+                "context_length": descriptor.context_length,
+                "quantization": descriptor.quantization,
+            }
+            for descriptor in sort_descriptors(descriptors_by_id.values())
+        ],
         "scan_mode": scan_mode,
         "scan_path": scan_root,
         "locations": sorted(set(scanned_locations), key=str.lower),
+        "server_reachable": server_reachable if not scan_path else None,
+        "server_error": server_error if not scan_path else "",
     }
 
 
@@ -1763,8 +1800,6 @@ def generate_image(prompt: str, size: str = "1024x1024") -> bytes:
         )
 
     api_model = state.api_models.get(config.TASK_IMAGE_GEN)
-    if not api_model and state.api_provider_type == config.API_PROVIDER_GEMINI:
-        api_model = "gemini-2.5-flash-image"
     if not api_model:
         raise RuntimeError(
             "No image generation model configured.\n"
@@ -1907,10 +1942,7 @@ def chat(task: str, messages: list, **kwargs) -> dict:
         if not state.api_client:
             raise RuntimeError("API client not initialized. Configure API settings first.")
 
-        if task == config.TASK_WEB_VALIDATE and state.api_provider_type == config.API_PROVIDER_GEMINI:
-            api_model = state.api_models.get(task) or "gemini-3.1-flash-lite-preview"
-        else:
-            api_model = state.api_models.get(task)
+        api_model = state.api_models.get(task)
 
         if not api_model:
             raise RuntimeError(
@@ -2253,6 +2285,22 @@ def get_available_models():
         return []
     except Exception as exc:
         raise RuntimeError(f"Failed to fetch models from endpoint: {exc}") from exc
+
+
+def get_available_model_descriptors() -> list[ModelDescriptor]:
+    """Fetch the active provider catalog with stable metadata for the UI."""
+    models = get_available_models()
+    return sort_descriptors(
+        ModelDescriptor(
+            model_id=str(model_id).strip(),
+            provider=str(API_PROVIDER_TYPE or ""),
+            ready=True,
+            available=True,
+            source="endpoint",
+        )
+        for model_id in models
+        if str(model_id).strip()
+    )
 
 
 def set_mode(use_api: bool):
