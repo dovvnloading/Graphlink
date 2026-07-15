@@ -195,6 +195,7 @@ def iter_scene_connection_lists(scene):
         "group_summary_connections",
         "html_connections",
         "artifact_connections",
+        "chart_connections",
     )
 
     for name in list_names:

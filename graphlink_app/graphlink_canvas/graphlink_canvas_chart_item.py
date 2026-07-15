@@ -20,6 +20,7 @@ from PySide6.QtCore import Qt, QRectF, QPointF, QSizeF, QTimer, QStandardPaths
 from PySide6.QtGui import QPainter, QColor, QBrush, QPen, QFont, QPainterPath, QImage, QLinearGradient
 
 from graphlink_config import get_current_palette, get_graph_node_colors
+from graphlink_chart_data import ChartDataError, canonicalize_chart_data
 
 
 class ChartItem(QGraphicsItem):
@@ -35,6 +36,8 @@ class ChartItem(QGraphicsItem):
     MIN_HEIGHT = 320
     DEFAULT_WIDTH = 680
     DEFAULT_HEIGHT = 500
+    MAX_WIDTH = 2400
+    MAX_HEIGHT = 1800
     RESIZE_DEBOUNCE_MS = 90
     EXPORT_SCALE = 3.0
     RESIZE_GRID = 20
@@ -50,8 +53,15 @@ class ChartItem(QGraphicsItem):
         """
         super().__init__(parent)
         self.setPos(pos)
-        self.data = data
-        self.title = data.get("title", "Chart")
+        self.persistent_id = None
+        self.source_node = None
+        self.data_error = None
+        try:
+            self.data = canonicalize_chart_data(data)
+        except (ChartDataError, TypeError, ValueError) as exc:
+            self.data = dict(data) if isinstance(data, dict) else {}
+            self.data_error = str(exc)
+        self.title = str(self.data.get("title") or "Chart")
         self.parent_content_node = parent_content_node
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable)
@@ -64,8 +74,13 @@ class ChartItem(QGraphicsItem):
         self.resize_handle_hovered = False
         self.resizing = False
         self.chart_image = QImage()
+        self._render_cache = {}
         self.aspect_ratio_locked = True
         self._base_aspect_ratio = self.DEFAULT_WIDTH / self.DEFAULT_HEIGHT
+        self.resize_start_aspect_ratio = self._base_aspect_ratio
+        self.font_family = "Segoe UI"
+        self.font_size = 10
+        self.font_color = QColor("#dddddd")
 
         self.figure = Figure(figsize=(6, 4), dpi=160)
         self.canvas = FigureCanvasAgg(self.figure)
@@ -129,22 +144,25 @@ class ChartItem(QGraphicsItem):
 
     def _clamp_size(self, width, height, preserve_aspect=None):
         preserve_aspect = self.aspect_ratio_locked if preserve_aspect is None else preserve_aspect
-        width = max(self.MIN_WIDTH, float(width))
-        height = max(self.MIN_HEIGHT, float(height))
+        width = min(self.MAX_WIDTH, max(self.MIN_WIDTH, float(width)))
+        height = min(self.MAX_HEIGHT, max(self.MIN_HEIGHT, float(height)))
 
         if preserve_aspect:
-            aspect_ratio = self._base_aspect_ratio if self._base_aspect_ratio > 0 else (self.DEFAULT_WIDTH / self.DEFAULT_HEIGHT)
+            aspect_ratio = self.resize_start_aspect_ratio if self.resizing else self._base_aspect_ratio
+            aspect_ratio = aspect_ratio if aspect_ratio > 0 else (self.DEFAULT_WIDTH / self.DEFAULT_HEIGHT)
             width_from_height = height * aspect_ratio
             height_from_width = width / aspect_ratio
             if abs(width_from_height - width) < abs(height_from_width - height):
-                width = width_from_height
+                width = min(self.MAX_WIDTH, width_from_height)
+                height = width / aspect_ratio
             else:
-                height = height_from_width
+                height = min(self.MAX_HEIGHT, height_from_width)
+                width = height * aspect_ratio
 
         width = self._snap_dimension(width)
         height = self._snap_dimension(height)
-        width = max(self.MIN_WIDTH, float(width))
-        height = max(self.MIN_HEIGHT, float(height))
+        width = min(self.MAX_WIDTH, max(self.MIN_WIDTH, float(width)))
+        height = min(self.MAX_HEIGHT, max(self.MIN_HEIGHT, float(height)))
         return width, height
 
     def set_chart_size(self, width, height, preserve_aspect=None, rerender=True):
@@ -273,87 +291,7 @@ class ChartItem(QGraphicsItem):
         return "\n".join(lines)
 
     def _sanitize_chart_data(self):
-        chart_type = self._chart_type()
-        cleaned = {
-            "type": chart_type,
-            "title": str(self.data.get("title", "Chart")).strip() or "Chart",
-        }
-
-        if chart_type in {"bar", "line", "pie"}:
-            labels = []
-            values = []
-            for raw_label, raw_value in zip(self.data.get("labels", []), self.data.get("values", [])):
-                number = self._coerce_number(raw_value)
-                label = "" if raw_label is None else str(raw_label).strip()
-                if not label or number is None:
-                    continue
-                if chart_type == "pie" and number <= 0:
-                    continue
-                labels.append(label)
-                values.append(number)
-
-            if not labels or not values:
-                raise ValueError("The chart data does not contain enough valid labeled values.")
-
-            cleaned["labels"] = labels
-            cleaned["values"] = values
-            cleaned["xAxis"] = str(self.data.get("xAxis", "")).strip()
-            cleaned["yAxis"] = str(self.data.get("yAxis", "")).strip()
-            return cleaned
-
-        if chart_type == "histogram":
-            values = [
-                number
-                for number in (self._coerce_number(value) for value in self.data.get("values", []))
-                if number is not None
-            ]
-            if len(values) < 2:
-                raise ValueError("Histogram charts need at least two numeric values.")
-            bins = self.data.get("bins", 10)
-            bins = int(bins) if isinstance(bins, (int, float)) else 10
-            cleaned["values"] = values
-            cleaned["bins"] = max(3, min(24, bins, len(values)))
-            cleaned["xAxis"] = str(self.data.get("xAxis", "")).strip()
-            cleaned["yAxis"] = str(self.data.get("yAxis", "Frequency")).strip() or "Frequency"
-            return cleaned
-
-        if chart_type == "sankey":
-            flows = []
-            raw_flows = self.data.get("flows", [])
-            if not raw_flows and isinstance(self.data.get("data"), dict):
-                nodes = self.data["data"].get("nodes", [])
-                links = self.data["data"].get("links", [])
-                raw_flows = []
-                for link in links:
-                    source_idx = link.get("source")
-                    target_idx = link.get("target")
-                    if not isinstance(source_idx, int) or not isinstance(target_idx, int):
-                        continue
-                    if source_idx >= len(nodes) or target_idx >= len(nodes):
-                        continue
-                    raw_flows.append(
-                        {
-                            "source": nodes[source_idx].get("name", f"Node {source_idx}"),
-                            "target": nodes[target_idx].get("name", f"Node {target_idx}"),
-                            "value": link.get("value"),
-                        }
-                    )
-
-            for flow in raw_flows:
-                source = str(flow.get("source", "")).strip()
-                target = str(flow.get("target", "")).strip()
-                value = self._coerce_number(flow.get("value"))
-                if not source or not target or value is None or value <= 0:
-                    continue
-                flows.append({"source": source, "target": target, "value": value})
-
-            if not flows:
-                raise ValueError("Sankey charts need at least one valid flow.")
-
-            cleaned["flows"] = flows
-            return cleaned
-
-        raise ValueError(f"Unsupported chart type: {chart_type or 'unknown'}")
+        return canonicalize_chart_data(self.data, self._chart_type())
 
     def _prepare_standard_axes(self, ax, theme, x_label="", y_label="", x_grid=False, y_grid=True):
         ax.set_facecolor(theme["surface"].name())
@@ -371,6 +309,24 @@ class ChartItem(QGraphicsItem):
         if y_label:
             ax.set_ylabel(y_label, fontsize=9, color=theme["muted"].name(), labelpad=8)
 
+    def _set_categorical_ticks(self, ax, positions, labels):
+        """Show a readable subset of labels while retaining every data point."""
+        if not positions:
+            return
+        max_ticks = max(4, min(12, int(max(1.0, self._chart_rect().width()) / 72)))
+        stride = max(1, math.ceil(len(positions) / max_ticks))
+        tick_indexes = list(range(0, len(positions), stride))
+        if tick_indexes[-1] != len(positions) - 1:
+            tick_indexes.append(len(positions) - 1)
+        tick_positions = [positions[index] for index in tick_indexes]
+        tick_labels = [self._wrap_label(labels[index], 14, 2) for index in tick_indexes]
+        ax.set_xticks(tick_positions)
+        ax.set_xticklabels(
+            tick_labels,
+            rotation=25 if len(tick_indexes) > 5 else 0,
+            ha="right" if len(tick_indexes) > 5 else "center",
+        )
+
     def _render_bar_chart(self, ax, chart_data, theme):
         values = chart_data["values"]
         labels = chart_data["labels"]
@@ -387,8 +343,7 @@ class ChartItem(QGraphicsItem):
             zorder=3,
         )
         self._prepare_standard_axes(ax, theme, chart_data["xAxis"], chart_data["yAxis"], y_grid=True)
-        ax.set_xticks(positions)
-        ax.set_xticklabels([self._wrap_label(label, 12, 2) for label in labels])
+        self._set_categorical_ticks(ax, positions, labels)
         ax.margins(x=0.04)
 
         min_value = min(values)
@@ -442,8 +397,7 @@ class ChartItem(QGraphicsItem):
             color=self._mpl_rgba(theme["primary"], 0.15),
             zorder=2,
         )
-        ax.set_xticks(positions)
-        ax.set_xticklabels([self._wrap_label(label, 12, 2) for label in labels])
+        self._set_categorical_ticks(ax, positions, labels)
         ax.margins(x=0.04)
 
         value_span = max(values) - min(values)
@@ -465,10 +419,16 @@ class ChartItem(QGraphicsItem):
     def _render_pie_chart(self, ax, chart_data, theme):
         values = chart_data["values"]
         labels = chart_data["labels"]
+        if len(values) > 10:
+            ranked = sorted(zip(values, labels), reverse=True)
+            top = ranked[:9]
+            remainder = sum(value for value, _ in ranked[9:])
+            values = [value for value, _ in top] + [remainder]
+            labels = [label for _, label in top] + ["Other"]
         colors = [theme["cycle"][index % len(theme["cycle"])] for index in range(len(values))]
         total = sum(values)
 
-        self.figure.subplots_adjust(left=0.06, right=0.78, top=0.92, bottom=0.08)
+        self.figure.subplots_adjust(left=0.06, right=0.66, top=0.92, bottom=0.08)
         wedges, _ = ax.pie(
             values,
             startangle=90,
@@ -501,14 +461,14 @@ class ChartItem(QGraphicsItem):
         legend_labels = []
         for label, value in zip(labels, values):
             percentage = (value / total) * 100 if total else 0
-            wrapped = self._wrap_label(label, 20, 2).replace("\n", " ")
+            wrapped = textwrap.shorten(" ".join(str(label).split()), width=24, placeholder="...")
             legend_labels.append(f"{wrapped}  {percentage:.1f}%")
 
         legend = ax.legend(
             wedges,
             legend_labels,
             loc="center left",
-            bbox_to_anchor=(0.98, 0.5),
+            bbox_to_anchor=(1.01, 0.5),
             frameon=False,
             fontsize=8,
             handlelength=1.2,
@@ -782,14 +742,44 @@ class ChartItem(QGraphicsItem):
         return QImage(buffer, width, height, width * 4, QImage.Format.Format_RGBA8888).copy()
 
     def _render_chart_to_image(self, export_scale=None):
-        self.title = self.data.get("title", "Chart")
+        self.title = str(self.data.get("title") or "Chart").strip() or "Chart"
+        palette = get_current_palette()
+        palette_signature = tuple(
+            repr(getattr(palette, name, "")) for name in ("AI_NODE", "USER_NODE", "SELECTION")
+        )
+        cache_key = (
+            export_scale,
+            round(self.width, 1),
+            round(self.height, 1),
+            self.font_family,
+            self.font_size,
+            repr(self.font_color),
+            palette_signature,
+            repr(self.data),
+        )
+        cached = self._render_cache.get(cache_key)
+        if cached is not None:
+            return cached.copy()
         if export_scale is None:
             self._set_figure_geometry()
         else:
             self._set_export_figure_geometry(export_scale)
 
-        theme = self._build_theme(get_current_palette())
+        theme = self._build_theme(palette)
 
+        try:
+            with matplotlib.rc_context({"font.family": [self.font_family]}):
+                image = self._render_chart_content(theme)
+                if not image.isNull():
+                    self._render_cache[cache_key] = image.copy()
+                    if len(self._render_cache) > 8:
+                        self._render_cache.pop(next(iter(self._render_cache)))
+                return image
+        except Exception as exc:
+            self._render_error_image(str(exc))
+            return self.chart_image
+
+    def _render_chart_content(self, theme):
         try:
             self.figure.clear()
             self.figure.patch.set_facecolor(theme["surface"].name())
@@ -817,6 +807,20 @@ class ChartItem(QGraphicsItem):
         except Exception as exc:
             self._render_error_image(str(exc))
             return self.chart_image
+
+    def update_font_settings(self, family, size, color):
+        self.font_family = str(family or "Segoe UI")
+        self.font_size = max(6, min(32, int(size)))
+        self.font_color = QColor(color)
+        self.generate_chart()
+
+    def to_context_text(self):
+        """Return bounded structured data for chart-to-chart generation context."""
+        try:
+            canonical = self._sanitize_chart_data()
+        except (ChartDataError, TypeError, ValueError):
+            canonical = self.data
+        return str(canonical)
 
     def _image_target_rect(self, rect, image):
         if image.isNull():
@@ -851,12 +855,18 @@ class ChartItem(QGraphicsItem):
     def export_png(self, file_path=None, scale=None):
         file_path = file_path or self._desktop_export_path()
         scale = self.EXPORT_SCALE if scale is None else scale
-        image = self._render_chart_to_image(export_scale=scale)
-        if image.isNull():
-            raise ValueError("Chart export failed because no image could be rendered.")
-        if not image.save(file_path, "PNG"):
-            raise IOError(f"Could not save chart image to {file_path}")
-        return file_path
+        try:
+            image = self._render_chart_to_image(export_scale=scale)
+            if image.isNull():
+                raise ValueError("Chart export failed because no image could be rendered.")
+            parent_directory = os.path.dirname(os.path.abspath(file_path))
+            if parent_directory:
+                os.makedirs(parent_directory, exist_ok=True)
+            if not image.save(file_path, "PNG"):
+                raise IOError(f"Could not save chart image to {file_path}")
+            return file_path
+        finally:
+            self.generate_chart()
 
     def generate_chart(self):
         """
@@ -909,16 +919,16 @@ class ChartItem(QGraphicsItem):
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawPath(header_path)
 
-        painter.setPen(QPen(QColor("#ffffff")))
-        painter.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+        painter.setPen(QPen(self.font_color))
+        painter.setFont(QFont(self.font_family, self.font_size, QFont.Weight.Bold))
         painter.drawText(header_rect.adjusted(12, 0, -120, 0), Qt.AlignmentFlag.AlignVCenter, self.title)
 
         badge_rect = QRectF(self.width - 102, 8, 90, 24)
         painter.setPen(QPen(self._with_alpha(QColor("#ffffff"), 65), 1))
         painter.setBrush(QBrush(node_colors["badge_fill"]))
         painter.drawRoundedRect(badge_rect, 12, 12)
-        painter.setPen(QPen(QColor("#ffffff")))
-        painter.setFont(QFont("Segoe UI", 8, QFont.Weight.DemiBold))
+        painter.setPen(QPen(self.font_color))
+        painter.setFont(QFont(self.font_family, max(6, self.font_size - 2), QFont.Weight.DemiBold))
         painter.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, self._badge_text())
 
         chart_panel = chart_rect.adjusted(-8, -8, 8, 8)
@@ -965,7 +975,7 @@ class ChartItem(QGraphicsItem):
             self.resizing = True
             self.resize_start_pos = event.pos()
             self.resize_start_size = QSizeF(self.width, self.height)
-            self.resize_start_aspect_ratio = self._base_aspect_ratio
+            self.resize_start_aspect_ratio = self.width / self.height if self.height else self._base_aspect_ratio
             event.accept()
             return
 
