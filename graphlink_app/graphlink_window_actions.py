@@ -7,6 +7,7 @@ import graphlink_config as config
 import api_provider
 from graphlink_prompts import _TokenBytesEncoder
 from graphlink_widgets import GhostNodePreview, LoadingAnimation
+from graphlink_composer import ComposerRequestState
 from graphlink_node import ChatNode, CodeNode
 from graphlink_canvas_items import Note
 from graphlink_connections import GroupSummaryConnectionItem
@@ -162,7 +163,9 @@ class WindowActionsMixin:
         if not message and not attachments:
             return
 
-        self.message_input.setEnabled(False)
+        request_id = self.composer_controller.begin_request(text=message, attachments=attachments)
+
+        self.message_input.set_editor_enabled(False) if hasattr(self.message_input, 'set_editor_enabled') else self.message_input.setEnabled(False)
         self.send_button.setEnabled(False)
         self.attach_file_btn.setEnabled(False)
 
@@ -180,6 +183,7 @@ class WindowActionsMixin:
             conversation_history=history
         )
         if user_node is None:
+            self.composer_controller.fail(request_id, "Unable to add the message node to the scene.")
             self.handle_error("Unable to add the message node to the scene.")
             return
         
@@ -221,6 +225,7 @@ class WindowActionsMixin:
                 if doc_content is None:
                     doc_content, error = self.file_handler.read_file(attachment_path)
                 if error:
+                    self.composer_controller.fail(request_id, error)
                     self.handle_error(error)
                     user_node.scene().delete_chat_node(user_node)
                     return
@@ -239,6 +244,7 @@ class WindowActionsMixin:
                     'text': self._wrap_attachment_xml(attachment, doc_content),
                 })
             except IOError as e:
+                self.composer_controller.fail(request_id, f"Could not read attachment '{attachment_path}': {e}")
                 self.handle_error(f"Could not read attachment '{attachment_path}': {e}")
                 user_node.scene().delete_chat_node(user_node)
                 return
@@ -280,20 +286,23 @@ class WindowActionsMixin:
             active=True,
             cancel_callback=lambda thread=worker_thread: self._cancel_main_chat_request(thread),
         )
+        self.composer_controller.mark_started(request_id)
         worker_thread.finished.connect(
-            lambda new_message, node=user_node, history=history_for_worker, tokens=input_tokens, thread=worker_thread:
-                self.handle_response(new_message, node, history, tokens, thread)
+            lambda new_message, node=user_node, history=history_for_worker, tokens=input_tokens, thread=worker_thread, rid=request_id:
+                self.handle_response(new_message, node, history, tokens, thread, rid)
         )
         worker_thread.status.connect(self._handle_chat_worker_status)
-        worker_thread.error.connect(lambda error_message, thread=worker_thread: self._handle_main_chat_error(error_message, thread))
-        worker_thread.cancelled.connect(lambda thread=worker_thread: self._handle_main_chat_cancelled(thread))
+        worker_thread.error.connect(lambda error_message, thread=worker_thread, rid=request_id: self._handle_main_chat_error(error_message, thread, rid))
+        worker_thread.cancelled.connect(lambda thread=worker_thread, rid=request_id: self._handle_main_chat_cancelled(thread, rid))
         worker_thread.finished.connect(lambda _message, thread=worker_thread: self._cleanup_main_chat_thread(thread))
         worker_thread.error.connect(lambda _error, thread=worker_thread: self._cleanup_main_chat_thread(thread))
         worker_thread.cancelled.connect(lambda thread=worker_thread: self._cleanup_main_chat_thread(thread))
         worker_thread.start()
 
-    def handle_response(self, new_assistant_message, user_node, history_before_assistant, input_tokens, worker_thread=None):
+    def handle_response(self, new_assistant_message, user_node, history_before_assistant, input_tokens, worker_thread=None, request_id=None):
         if worker_thread is not None and self.chat_thread is not worker_thread:
+            return
+        if request_id and not self.composer_controller.is_current(request_id):
             return
 
         scene = self.chat_view.scene()
@@ -353,15 +362,20 @@ class WindowActionsMixin:
         self.current_node = last_created_node if last_created_node else user_node
         self.chat_view.reveal_item(self.current_node)
         self.message_input.clear()
-        self.message_input.setEnabled(True)
+        self.message_input.set_editor_enabled(True) if hasattr(self.message_input, 'set_editor_enabled') else self.message_input.setEnabled(True)
         self.send_button.setEnabled(True)
         self.attach_file_btn.setEnabled(True)
         self.clear_attachment()
+        if request_id:
+            self.composer_controller.complete(request_id, "Response ready")
+            self.composer_controller.clear_after_success()
         self.save_chat()
 
     def _handle_chat_worker_status(self, message):
         if not message:
             return
+        if getattr(self, 'composer_controller', None) and self.composer_controller.active_request_id:
+            self.composer_controller.set_state(ComposerRequestState.GENERATING, message)
         self.notification_banner.show_message(message, 7000, "info")
 
     def _parse_response(self, response_text):
@@ -408,7 +422,7 @@ class WindowActionsMixin:
             return
 
         history_for_worker = get_node_history(node_to_regenerate.parent_node)
-        self.message_input.setEnabled(False)
+        self.message_input.set_editor_enabled(False) if hasattr(self.message_input, 'set_editor_enabled') else self.message_input.setEnabled(False)
         self.send_button.setEnabled(False)
         self.attach_file_btn.setEnabled(False)
         self._show_loading_animation(anchor_node=node_to_regenerate)
@@ -472,7 +486,7 @@ class WindowActionsMixin:
             self.handle_error(f"An error occurred during regeneration: {str(e)}")
         finally:
             self._clear_loading_animation()
-            self.message_input.setEnabled(True)
+            self.message_input.set_editor_enabled(True) if hasattr(self.message_input, 'set_editor_enabled') else self.message_input.setEnabled(True)
             self.send_button.setEnabled(True)
             self.attach_file_btn.setEnabled(True)
     
@@ -1278,19 +1292,27 @@ class WindowActionsMixin:
             return
         worker_thread.cancel()
 
-    def _handle_main_chat_error(self, error_message, worker_thread):
+    def _handle_main_chat_error(self, error_message, worker_thread, request_id=None):
         if worker_thread is not self.chat_thread:
             return
+        if request_id and not self.composer_controller.is_current(request_id):
+            return
+        if request_id:
+            self.composer_controller.fail(request_id, error_message)
         self._set_main_request_state(active=False)
         self.handle_error(error_message)
 
-    def _handle_main_chat_cancelled(self, worker_thread):
+    def _handle_main_chat_cancelled(self, worker_thread, request_id=None):
         if worker_thread is not self.chat_thread:
             return
+        if request_id and not self.composer_controller.is_current(request_id):
+            return
+        if request_id:
+            self.composer_controller.cancel(request_id)
         self._set_main_request_state(active=False)
         self._clear_loading_animation()
         self._clear_pending_response_preview()
-        self.message_input.setEnabled(True)
+        self.message_input.set_editor_enabled(True) if hasattr(self.message_input, 'set_editor_enabled') else self.message_input.setEnabled(True)
         self.send_button.setEnabled(True)
         self.attach_file_btn.setEnabled(True)
         self.save_chat()
@@ -1301,7 +1323,7 @@ class WindowActionsMixin:
             return
         self._set_main_request_state(active=False)
         self._clear_loading_animation()
-        self.message_input.setEnabled(True)
+        self.message_input.set_editor_enabled(True) if hasattr(self.message_input, 'set_editor_enabled') else self.message_input.setEnabled(True)
         self.send_button.setEnabled(True)
         self.attach_file_btn.setEnabled(True)
         self.notification_banner.show_message("Regeneration cancelled.", 3000, "info")

@@ -1,6 +1,7 @@
 """Widget package for reusable Graphlink UI components."""
 
 from .controls import FontControl, GridControl
+from .composer import ComposerWidget
 from .overlays import GhostNodePreview, LoadingAnimation, SearchOverlay
 from .pins import NavigationPin, PinOverlay
 from .scrolling import CustomScrollArea, CustomScrollBar, ScrollBar, ScrollHandle
@@ -16,6 +17,7 @@ __all__ = [
     'CustomScrollArea',
     'CustomScrollBar',
     'CustomTooltip',
+    'ComposerWidget',
     'FontControl',
     'GhostNodePreview',
     'GridControl',

@@ -10,7 +10,7 @@ import os
 import tempfile
 from datetime import datetime
 
-from graphlink_widgets import PinOverlay, SearchOverlay, TokenCounterWidget, TokenEstimator, ChatInputTextEdit
+from graphlink_widgets import PinOverlay, SearchOverlay, TokenCounterWidget, TokenEstimator, ComposerWidget
 from graphlink_ui_components import NotificationBanner, DocumentViewerPanel
 from graphlink_canvas_items import Note, Frame, Container
 from graphlink_node import ChatNode, CodeNode, ThinkingNode
@@ -48,6 +48,7 @@ from graphlink_window_navigation import WindowNavigationMixin
 from graphlink_update import APP_VERSION, UpdateCheckWorker
 from graphlink_paths import asset_path
 from graphlink_crash import mark_clean_exit
+from graphlink_composer import ComposerController
 
 class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
     def __init__(self, settings_manager):
@@ -88,6 +89,7 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         self._main_request_active = False
         self._main_request_cancel_pending = False
         self._main_request_cancel_callback = None
+        self.composer_controller = ComposerController(self)
 
         self.container = QWidget()
         container_layout = QVBoxLayout(self.container)
@@ -133,49 +135,32 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
 
         container_layout.addWidget(content_widget)
 
-        self.input_widget = QWidget()
-        self.input_widget.setObjectName("chatInputRow")
-        self.input_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.input_widget.setStyleSheet("""
-            QWidget#chatInputRow {
-                background: transparent;
-                border: none;
-            }
-        """)
-        input_layout = QHBoxLayout(self.input_widget)
-        input_layout.setContentsMargins(8, 10, 8, 10)
-        input_layout.setSpacing(8)
-        
+        self.composer = ComposerWidget(self)
+        self.input_widget = self.composer
         self.pending_attachments = []
-        self.attach_file_btn = QPushButton()
-        self.attach_file_btn.setIcon(qta.icon('fa5s.paperclip', color='#cccccc'))
-        self.attach_file_btn.setFixedSize(40, 40)
-        self.attach_file_btn.clicked.connect(self.attach_file)
-
-        self.message_input = ChatInputTextEdit()
-        self.message_input.setPlaceholderText("Type your message...")
+        self.attach_file_btn = self.composer.attach_file_btn
+        self.message_input = self.composer
         self.message_input.sendRequested.connect(self.send_message)
         self.message_input.largePasteDetected.connect(self._handle_large_paste_from_input)
         self.message_input.filesDropped.connect(self._handle_input_files_dropped)
         self.message_input.textDropped.connect(self._handle_input_text_dropped)
         self.message_input.attachmentRemoved.connect(self._handle_attachment_pill_removed)
         self.message_input.composerHeightChanged.connect(self._sync_footer_height)
-        
-        self.send_button = QPushButton(); self.send_button.setFixedSize(40, 40)
-        input_layout.addWidget(self.attach_file_btn); input_layout.addWidget(self.message_input); input_layout.addWidget(self.send_button)
-        input_layout.setAlignment(self.attach_file_btn, Qt.AlignmentFlag.AlignBottom)
-        input_layout.setAlignment(self.send_button, Qt.AlignmentFlag.AlignBottom)
+        self.send_button = self.composer.send_button
         
         self.bottom_container = QWidget()
         self.bottom_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.bottom_container.setMinimumHeight(68)
         bottom_layout = QVBoxLayout(self.bottom_container)
-        bottom_layout.setContentsMargins(0,0,0,0); bottom_layout.setSpacing(0); bottom_layout.addWidget(self.input_widget)
+        bottom_layout.setContentsMargins(8, 0, 8, 8); bottom_layout.setSpacing(0); bottom_layout.addWidget(self.input_widget)
         container_layout.addWidget(self.bottom_container)
 
         self.setCentralWidget(self.container)
         self._update_themed_styles()
         self.send_button.clicked.connect(self._handle_send_button_click)
+        self.composer.textChanged.connect(self.composer_controller.update_text)
+        self.composer_controller.draftChanged.connect(self._handle_composer_draft_changed)
+        self.composer_controller.stateChanged.connect(self._handle_composer_state_changed)
         self._sync_footer_height()
 
         self.current_node = None
@@ -302,7 +287,10 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         self._main_request_cancel_callback = cancel_callback if active else None
         if active:
             self.send_button.setEnabled(not self._main_request_cancel_pending)
-            self.message_input.setEnabled(False)
+            if hasattr(self.message_input, 'set_editor_enabled'):
+                self.message_input.set_editor_enabled(False)
+            else:
+                self.message_input.setEnabled(False)
             self.attach_file_btn.setEnabled(False)
         else:
             self.send_button.setEnabled(True)
@@ -318,6 +306,22 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         self.token_counter_widget.setVisible(self.settings_manager.get_show_token_counter())
         self._update_overlay_positions()
         self.reinitialize_agent()
+        self._refresh_composer_provider_status()
+
+    def _refresh_composer_provider_status(self):
+        if not hasattr(self, 'composer'):
+            return
+        mode = self.settings_manager.get_current_mode() or "Active provider route"
+        if mode == config.MODE_API_ENDPOINT:
+            provider = self.settings_manager.get_api_provider() or "Cloud API"
+            label = f"Cloud · {provider}"
+        elif mode == config.MODE_LLAMACPP_LOCAL:
+            label = "Local · llama.cpp"
+        elif mode == config.MODE_OLLAMA_LOCAL:
+            label = "Local · Ollama"
+        else:
+            label = str(mode)
+        self.composer.set_provider_status(label, f"Requests follow the active mode: {mode}")
 
     def start_with_prompt(self, prompt: str):
         if prompt:
@@ -570,6 +574,19 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
             if self.container.layout():
                 self.container.layout().activate()
         self._schedule_overlay_update()
+
+    def _handle_composer_draft_changed(self, draft):
+        """Keep the legacy attachment list and new draft model in sync."""
+        if draft is None:
+            return
+        if self.composer.text() != draft.text:
+            self.composer.setText(draft.text)
+
+    def _handle_composer_state_changed(self, state, message):
+        if not hasattr(self, 'composer'):
+            return
+        active_states = {"preparing", "uploading", "waiting", "generating", "finalizing"}
+        self.composer.set_request_state(state in active_states, self._main_request_cancel_pending, message)
         
     def show_search_overlay(self):
         if not self.search_overlay:
@@ -905,6 +922,7 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
             self._initialize_mode(mode_text, show_dialogs=True)
             self.settings_manager.set_current_mode(mode_text)
             self.reinitialize_agent()
+            self._refresh_composer_provider_status()
             if mode_text == config.MODE_LLAMACPP_LOCAL:
                 self.notification_banner.show_message(
                     "Llama.cpp is configured. The GGUF will load on the first request instead of blocking startup or mode switching.",
@@ -944,9 +962,12 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
             self.settings_manager.set_current_mode(fallback_mode)
             api_provider.initialize_local_provider(config.LOCAL_PROVIDER_OLLAMA)
         self.reinitialize_agent()
+        self._refresh_composer_provider_status()
 
     def setCurrentNode(self, node):
         self.current_node = node; text_content = ""
+        if hasattr(self, 'composer'):
+            self.composer.set_context_anchor(node)
         if isinstance(node, ChatNode): text_content = node.text if node.text else "[Attachment/Content Node]"
         elif isinstance(node, PyCoderNode): text_content = "Py-Coder Analysis"
         elif isinstance(node, CodeSandboxNode): text_content = "Execution Sandbox"
@@ -1067,6 +1088,8 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
             self.attach_file_btn.setToolTip("Attach images, audio, or readable files")
             if hasattr(self, 'message_input'):
                 self.message_input.set_context_items([])
+            if hasattr(self, 'composer_controller'):
+                self.composer_controller.set_attachments([])
             return
 
         palette = get_current_palette()
@@ -1093,6 +1116,8 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         self.attach_file_btn.setToolTip("\n".join(tooltip_lines))
         if hasattr(self, 'message_input'):
             self.message_input.set_context_items(self.pending_attachments)
+        if hasattr(self, 'composer_controller'):
+            self.composer_controller.set_attachments(self.pending_attachments)
 
     def clear_attachment(self):
         for item in self.pending_attachments:
@@ -1108,20 +1133,11 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         self._refresh_attachment_button()
 
     def _handle_large_paste_from_input(self, pasted_text):
-        stage_result, _ = self._stage_large_paste_as_attachment(pasted_text)
-        if stage_result == "added":
-            self.notification_banner.show_message(
-                "Large paste captured as an attachment. Add instructions and send.",
-                4500,
-                "success",
-            )
-            return
-
         self.message_input.insertPlainText(pasted_text)
         self.notification_banner.show_message(
-            "Could not stage large paste as an attachment. Inserted into input instead.",
-            6000,
-            "warning",
+            "Large paste kept in the draft. Attach it explicitly when it should be treated as context.",
+            5000,
+            "info",
         )
 
     def _stage_large_paste_as_attachment(self, pasted_text):
@@ -1151,22 +1167,13 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         self.message_input.setFocus()
 
     def _handle_input_text_dropped(self, dropped_text):
-        stage_result, _ = self._stage_text_context_attachment(dropped_text)
-        if stage_result == "added":
-            self.notification_banner.show_message(
-                "Context staged from drop. Add instructions and send.",
-                4000,
-                "success",
-            )
-            self.message_input.setFocus()
-            return
-
         self.message_input.insertPlainText(dropped_text)
         self.notification_banner.show_message(
-            "Could not stage dropped text as context. Inserted into input instead.",
+            "Dropped text inserted into the draft. Attach it explicitly when it should be sent as context.",
             5000,
-            "warning",
+            "info",
         )
+        self.message_input.setFocus()
 
     def _handle_attachment_pill_removed(self, attachment_path):
         if not attachment_path:
@@ -1289,7 +1296,7 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         self._clear_loading_animation()
         self._clear_pending_response_preview()
         self.notification_banner.show_message(f"An error occurred:\n{error_message}", 15000, "error")
-        self.message_input.setEnabled(True); self.send_button.setEnabled(True); self.attach_file_btn.setEnabled(True); self.clear_attachment()
+        self.message_input.setEnabled(True); self.send_button.setEnabled(True); self.attach_file_btn.setEnabled(True)
         
     def _get_single_selected_node(self):
         selected_items = self.chat_view.scene().selectedItems(); valid_types = (ChatNode, PyCoderNode, CodeSandboxNode, WebNode, ConversationNode, HtmlViewNode, GitlinkNode)
@@ -1311,5 +1318,5 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
                 self._clear_loading_animation()
                 self._clear_pending_response_preview()
             if hasattr(self, 'pin_overlay') and self.pin_overlay: self.pin_overlay.clear_pins()
-            self.session_manager.mark_context_switch(); self.session_manager.current_chat_id = None; scene.clear(); self.current_node = None; self.message_input.setPlaceholderText("Type your message..."); self.update_title_bar(); self.reset_token_counter(); return True
+            self.session_manager.mark_context_switch(); self.session_manager.current_chat_id = None; scene.clear(); self.current_node = None; self.message_input.clear(); self.clear_attachment(); self.message_input.set_context_anchor(None); self.message_input.setPlaceholderText("Type your message..."); self.update_title_bar(); self.reset_token_counter(); return True
         return False
