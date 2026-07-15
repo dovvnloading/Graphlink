@@ -858,7 +858,7 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
             provider = self.settings_manager.get_api_provider()
             base_url = self.settings_manager.get_api_base_url()
 
-            saved_models = self.settings_manager.get_api_models()
+            saved_models = self.settings_manager.get_api_models(provider)
             for task, model_name in saved_models.items():
                 api_provider.set_task_model(task, model_name)
 
