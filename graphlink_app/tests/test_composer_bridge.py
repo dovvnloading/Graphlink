@@ -3,9 +3,20 @@
 import json
 from pathlib import Path
 
+from PySide6.QtCore import QPoint, QRect, QSize
+
 from graphlink_composer import ComposerController, ComposerRequestState
-from graphlink_composer_bridge import ComposerBridge
-from graphlink_composer_web import _inline_bundle
+from graphlink_composer_bridge import (
+    COMPOSER_MAX_HEIGHT,
+    COMPOSER_MIN_HEIGHT,
+    ComposerBridge,
+)
+from graphlink_composer_popups import (
+    ComposerContextPopup,
+    composer_picker_list_height,
+    composer_picker_position,
+)
+from graphlink_composer_web import _inline_bundle, _rounded_region
 
 
 class _Settings:
@@ -72,12 +83,15 @@ def test_bridge_routes_send_and_removes_context_by_opaque_id():
     window = _Window()
     controller = ComposerController()
     bridge = ComposerBridge(window, controller)
+    states = []
+    bridge.stateChanged.connect(states.append)
     bridge.updateDraft("Summarize it")
     bridge.send()
 
     assert window.send_calls == 1
     bridge.removeContextItem("attachment-0")
     assert window.pending_attachments == []
+    assert json.loads(states[-1])["context"]["items"] == []
 
 
 def test_bridge_cancel_prefers_window_request_callback():
@@ -90,6 +104,94 @@ def test_bridge_cancel_prefers_window_request_callback():
 
     assert window.cancel_calls == 1
     assert controller.state is ComposerRequestState.PREPARING
+
+
+def test_selector_intents_are_delegated_to_the_desktop_window():
+    window = _Window()
+    calls = []
+    window.open_composer_model_picker = calls.append
+    bridge = ComposerBridge(window, ComposerController())
+
+    bridge.openModelSelector()
+    bridge.openReasoningSelector()
+
+    assert calls == ["model", "reasoning"]
+
+
+def test_context_review_is_delegated_to_a_native_desktop_popup():
+    window = _Window()
+    calls = []
+    window.open_composer_context_popup = calls.append
+    bridge = ComposerBridge(window, ComposerController())
+
+    bridge.reviewContext()
+
+    assert len(calls) == 1
+    assert calls[0]["anchor"]["label"] == "Chart analysis"
+    assert calls[0]["items"][0]["name"] == "analysis.csv"
+
+
+def test_context_popup_is_a_native_window_surface_with_bounded_content():
+    popup = ComposerContextPopup(
+        {
+            "anchor": {"type": "ChatNode", "label": "Chart analysis"},
+            "items": [
+                {"id": "attachment-0", "kind": "document", "name": "analysis.csv"},
+            ],
+            "totalTokens": 42,
+        }
+    )
+
+    assert popup.isWindow()
+    assert popup.list_widget.count() == 2
+    assert "42" in popup.total_label.text()
+    popup.close()
+    popup.deleteLater()
+
+
+def test_picker_position_prefers_space_above_and_clamps_horizontally():
+    position = composer_picker_position(
+        QRect(0, 0, 1000, 800),
+        QRect(100, 700, 800, 72),
+        QSize(360, 260),
+    )
+
+    assert position == QPoint(530, 432)
+
+
+def test_picker_position_falls_back_to_viewport_margin_when_popup_is_tall():
+    position = composer_picker_position(
+        QRect(0, 0, 400, 300),
+        QRect(40, 210, 320, 70),
+        QSize(360, 280),
+    )
+
+    assert position == QPoint(8, 8)
+
+
+def test_picker_list_height_is_content_sized_and_capped_for_catalogs():
+    assert composer_picker_list_height([]) == 0
+    assert composer_picker_list_height([50, 50]) == 120
+    assert composer_picker_list_height([50] * 6) == 300
+
+
+def test_bridge_clamps_compact_composer_height_requests():
+    bridge = ComposerBridge(_Window(), ComposerController())
+    heights = []
+    bridge.heightRequested.connect(heights.append)
+
+    bridge.resize(1)
+    bridge.resize(10_000)
+
+    assert heights == [COMPOSER_MIN_HEIGHT, COMPOSER_MAX_HEIGHT]
+
+
+def test_composer_native_mask_has_rounded_corners():
+    region = _rounded_region(QRect(0, 0, 100, 40), 12)
+
+    assert region.contains(QPoint(50, 20))
+    assert not region.contains(QPoint(0, 0))
+    assert region.contains(QPoint(12, 0))
 
 
 def test_inline_bundle_is_self_contained_and_keeps_channel_local():

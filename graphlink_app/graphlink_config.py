@@ -132,6 +132,12 @@ def apply_theme(app: QApplication, theme_name: str):
     
     stylesheet = THEMES[CURRENT_THEME]["stylesheet"]
     app.setStyleSheet(stylesheet)
+
+    # Qt creates standard editor context menus internally, so they do not
+    # pass through Graphlink's explicit menu factory. Install the process-wide
+    # surface guard after the application theme is applied.
+    from graphlink_context_menu import install_context_menu_filter
+    install_context_menu_filter(app)
     
     for widget in app.topLevelWidgets():
         if hasattr(widget, 'on_theme_changed'):

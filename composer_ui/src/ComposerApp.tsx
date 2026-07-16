@@ -1,15 +1,14 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ComposerState, initialComposerState } from "./bridgeTypes";
 import { ComposerBridge, createComposerBridge } from "./bridge";
-import { contextSummary, isBusy, requestLabel } from "./state";
+import { isBusy, requestLabel } from "./state";
 
-function Icon({ name }: { name: "attach" | "send" | "stop" | "chevron" | "close" }) {
+function Icon({ name }: { name: "attach" | "send" | "stop" | "chevron" }) {
   const paths: Record<string, string> = {
     attach: "M12 5.5 6.4 11.1a3.6 3.6 0 0 0 5.1 5.1l6-6a2.5 2.5 0 0 0-3.5-3.5l-6.1 6.1a1.35 1.35 0 0 0 1.9 1.9l5.5-5.5",
     send: "M3.5 4.6 20.5 12 3.5 19.4l2.2-6.2L15 12 5.7 10.8 3.5 4.6Z",
     stop: "M6.5 6.5h11v11h-11z",
     chevron: "m7 10 5 5 5-5",
-    close: "m7 7 10 10M17 7 7 17",
   };
   return (
     <svg aria-hidden="true" viewBox="0 0 24 24" className="icon">
@@ -20,10 +19,11 @@ function Icon({ name }: { name: "attach" | "send" | "stop" | "chevron" | "close"
 
 function ComposerApp() {
   const [state, setState] = useState<ComposerState>(initialComposerState);
-  const [reviewOpen, setReviewOpen] = useState(false);
   const bridgeRef = useRef<ComposerBridge | null>(null);
+  const shellRef = useRef<HTMLElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const isRequestBusy = isBusy(state);
+  const attachmentCount = state.context.items.length;
 
   useEffect(() => {
     const bridge = createComposerBridge(setState);
@@ -36,22 +36,32 @@ function ComposerApp() {
   }, []);
 
   useEffect(() => {
-    const input = inputRef.current;
-    if (!input || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(([entry]) => {
-      const height = Math.round(entry.contentRect.height + 188);
-      bridgeRef.current?.resize(Math.max(220, Math.min(520, height)));
-    });
-    observer.observe(input);
-    return () => observer.disconnect();
+    const shell = shellRef.current;
+    if (!shell) return;
+
+    const reportHeight = () => {
+      bridgeRef.current?.resize(Math.ceil(shell.getBoundingClientRect().height));
+    };
+    const observer =
+      typeof ResizeObserver === "undefined" ? null : new ResizeObserver(reportHeight);
+    observer?.observe(shell);
+    reportHeight();
+    return () => observer?.disconnect();
   }, []);
 
-  const nodeLabel = state.context.anchor?.label || "New graph request";
+  useLayoutEffect(() => {
+    const input = inputRef.current;
+    if (!input) return;
+    input.style.height = "auto";
+    input.style.height = `${Math.max(42, Math.min(160, input.scrollHeight))}px`;
+  }, [state.draft.text]);
+
   const canSend = state.request.canSend && !isRequestBusy;
   const routeDetail = useMemo(() => {
-    if (state.route.modelId) return state.route.label + " · " + state.route.modelId;
+    if (state.route.modelId) return state.route.label + " \u00b7 " + state.route.modelId;
     return state.route.label;
-  }, [state.route.label, state.route.modelId]);
+  }, [state.route.label, state.route.modelId, state.route.modelLabel]);
+  const modelDisplayLabel = state.route.modelLabel || state.route.modelId || "Select a model";
 
   function submit() {
     if (isRequestBusy) {
@@ -75,72 +85,18 @@ function ComposerApp() {
   }
 
   return (
-    <main className="composer-shell" data-request-state={state.request.state}>
-      <header className="composer-header">
-        <div className="context-heading">
-          <span className="eyebrow">Graph context</span>
-          <span className="context-title">{nodeLabel}</span>
-        </div>
-        <button
-          className="quiet-button"
-          type="button"
-          onClick={() => {
-            setReviewOpen((open) => !open);
-            bridgeRef.current?.reviewContext();
-          }}
-          disabled={!state.capabilities.contextReview || !state.context.reviewAvailable}
-          aria-expanded={reviewOpen}
-        >
-          Review context
-          <Icon name="chevron" />
-        </button>
-      </header>
-
-      {reviewOpen && (
-        <section className="context-popover" aria-label="Context review">
-          <div className="popover-heading">
-            <span>Included context</span>
-            <button
-              className="icon-button"
-              type="button"
-              onClick={() => setReviewOpen(false)}
-              aria-label="Close context review"
-            >
-              <Icon name="close" />
-            </button>
-          </div>
-          {state.context.anchor && (
-            <div className="context-row">
-              <span className="context-kind">{state.context.anchor.type}</span>
-              <span>{state.context.anchor.label}</span>
-            </div>
-          )}
-          {state.context.items.map((item) => (
-            <div className="context-row" key={item.id}>
-              <span className="context-kind">{item.kind}</span>
-              <span className="context-name">{item.name}</span>
-              <button
-                className="remove-context"
-                type="button"
-                onClick={() => bridgeRef.current?.removeContextItem(item.id)}
-              >
-                Remove
-              </button>
-            </div>
-          ))}
-          <div className="context-total">
-            Estimated context · {state.context.totalTokens.toLocaleString()} tokens
-          </div>
-        </section>
-      )}
-
+    <main
+      ref={shellRef}
+      className="composer-shell"
+      data-request-state={state.request.state}
+    >
       <div className="input-wrap">
         <textarea
           ref={inputRef}
           value={state.draft.text}
           onChange={(event) => bridgeRef.current?.updateDraft(event.target.value)}
           onKeyDown={onKeyDown}
-          placeholder="Ask about this graph…"
+          placeholder={"Ask about this graph\u2026"}
           aria-label="Message composer"
           rows={1}
           spellCheck
@@ -150,23 +106,60 @@ function ComposerApp() {
 
       <footer className="composer-footer">
         <div className="footer-left">
-          <button
-            className="attach-button"
-            type="button"
-            onClick={() => bridgeRef.current?.requestAttachment()}
-            disabled={!state.capabilities.attachments || isRequestBusy}
-            aria-label="Attach context"
-          >
-            <Icon name="attach" />
-          </button>
-          <span className="context-summary">{contextSummary(state)}</span>
+          <div className="attachment-control">
+            <button
+              className="attach-button"
+              type="button"
+              onClick={() => bridgeRef.current?.requestAttachment()}
+              disabled={!state.capabilities.attachments || isRequestBusy}
+              aria-label="Attach context"
+              title="Attach context"
+            >
+              <Icon name="attach" />
+            </button>
+            {attachmentCount > 0 && (
+              <button
+                className="attachment-count"
+                type="button"
+                onClick={() => bridgeRef.current?.reviewContext()}
+                disabled={!state.capabilities.contextReview || isRequestBusy}
+                aria-haspopup="dialog"
+                aria-label={`Review ${attachmentCount} attached ${attachmentCount === 1 ? "item" : "items"}`}
+                title={`Review ${attachmentCount} attached ${attachmentCount === 1 ? "item" : "items"}`}
+              >
+                {attachmentCount}
+              </button>
+            )}
+          </div>
           {state.draft.restored && <span className="restored-pill">Restored draft</span>}
         </div>
         <div className="footer-right">
-          <span className="route-status" title={routeDetail}>
-            <span className={"status-dot " + (state.route.available ? "ready" : "offline")} />
-            {state.route.label}
-          </span>
+          <button
+            className="composer-control reasoning-control"
+            type="button"
+            disabled={!state.capabilities.reasoningSelection || isRequestBusy}
+            aria-haspopup="dialog"
+            onClick={() => bridgeRef.current?.openReasoningSelector()}
+            title="Choose reasoning level"
+          >
+            <span className="control-kicker">Reasoning</span>
+            <span className="control-value">{state.route.reasoning.label}</span>
+            <Icon name="chevron" />
+          </button>
+          <button
+            className="composer-control model-control"
+            type="button"
+            disabled={!state.capabilities.modelSelection || !state.route.canChange || isRequestBusy}
+            aria-haspopup="dialog"
+            onClick={() => bridgeRef.current?.openModelSelector()}
+            title={routeDetail}
+          >
+            <span className="control-copy">
+              <span className="control-kicker">{state.route.provider}</span>
+              <span className="control-value" title={modelDisplayLabel}>{modelDisplayLabel}</span>
+            </span>
+            <Icon name="chevron" />
+          </button>
           <button
             className={"send-button " + (isRequestBusy ? "cancel" : "")}
             type="button"

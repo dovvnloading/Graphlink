@@ -2,7 +2,7 @@ import qtawesome as qta
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import QApplication, QFileDialog, QMenu
 
-from graphlink_config import get_current_palette
+from graphlink_context_menu import configure_context_menu, create_context_menu
 from graphlink_exporter import Exporter
 from graphlink_nodes.graphlink_node_chat import ChatNode
 
@@ -16,30 +16,7 @@ class ChatNodeContextMenu(QMenu):
     def __init__(self, node, parent=None):
         super().__init__(parent)
         self.node = node
-        palette = get_current_palette()
-
-        self.setStyleSheet(f"""
-            QMenu {{
-                background-color: #2d2d2d;
-                border: 1px solid #3f3f3f;
-                border-radius: 4px;
-                padding: 4px;
-            }}
-            QMenu::item {{
-                background-color: transparent;
-                padding: 8px 20px;
-                border-radius: 4px;
-                color: white;
-            }}
-            QMenu::item:selected {{
-                background-color: {palette.SELECTION.name()};
-            }}
-            QMenu::separator {{
-                height: 1px;
-                background-color: #3f3f3f;
-                margin: 4px 0px;
-            }}
-        """)
+        configure_context_menu(self)
 
         copy_action = QAction("Copy Text", self)
         copy_action.setIcon(qta.icon('fa5s.copy', color='white'))
@@ -71,9 +48,8 @@ class ChatNodeContextMenu(QMenu):
         docked_children = self.node.get_docked_child_nodes() if hasattr(self.node, "get_docked_child_nodes") else []
         if docked_children:
             self.addSeparator()
-            undock_menu = QMenu("Reveal Docked Items", self)
+            undock_menu = create_context_menu(self, "Reveal Docked Items")
             undock_menu.setIcon(qta.icon('fa5s.expand-arrows-alt', color='white'))
-            undock_menu.setStyleSheet(self.styleSheet())
             for docked_node in docked_children:
                 node_label = docked_node.docked_label() if hasattr(docked_node, "docked_label") else docked_node.__class__.__name__
                 reveal_action = QAction(node_label, undock_menu)
@@ -108,9 +84,8 @@ class ChatNodeContextMenu(QMenu):
             explainer_action.triggered.connect(self.generate_explainer)
             self.addAction(explainer_action)
 
-            chart_menu = QMenu("Generate Chart", self)
+            chart_menu = create_context_menu(self, "Generate Chart")
             chart_menu.setIcon(qta.icon('fa5s.chart-bar', color='white'))
-            chart_menu.setStyleSheet(self.styleSheet())
 
             chart_types = [
                 ("Bar Chart", "bar", 'fa5s.chart-bar'),
@@ -154,7 +129,7 @@ class ChatNodeContextMenu(QMenu):
             self.node.update()
 
     def create_export_menu(self):
-        export_menu = QMenu("Export to Doc", self)
+        export_menu = create_context_menu(self, "Export to Doc")
         export_menu.setIcon(qta.icon('fa5s.file-export', color='white'))
 
         txt_action = QAction("Text File (.txt)", self)

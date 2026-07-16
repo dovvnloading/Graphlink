@@ -2,7 +2,7 @@ import qtawesome as qta
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import QApplication, QFileDialog, QMenu
 
-from graphlink_config import get_current_palette
+from graphlink_context_menu import configure_context_menu
 
 
 class ImageNodeContextMenu(QMenu):
@@ -11,20 +11,7 @@ class ImageNodeContextMenu(QMenu):
     def __init__(self, node, parent=None):
         super().__init__(parent)
         self.node = node
-        palette = get_current_palette()
-
-        self.setStyleSheet(f"""
-            QMenu {{
-                background-color: #2d2d2d; border: 1px solid #3f3f3f;
-                border-radius: 4px; padding: 4px;
-            }}
-            QMenu::item {{
-                background-color: transparent; padding: 8px 20px;
-                border-radius: 4px; color: white;
-            }}
-            QMenu::item:selected {{ background-color: {palette.SELECTION.name()}; }}
-            QMenu::separator {{ height: 1px; background-color: #3f3f3f; margin: 4px 0px; }}
-        """)
+        configure_context_menu(self)
 
         copy_image_action = QAction("Copy Image", self)
         copy_image_action.setIcon(qta.icon('fa5s.copy', color='white'))

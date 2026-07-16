@@ -16,6 +16,11 @@ interface QtComposerObject {
   reviewContext: () => void;
   requestAttachment: () => void;
   removeContextItem: (itemId: string) => void;
+  selectModel: (modelId: string) => void;
+  setReasoningLevel: (level: string) => void;
+  openSettings: () => void;
+  openModelSelector: () => void;
+  openReasoningSelector: () => void;
   resize: (height: number) => void;
 }
 
@@ -35,6 +40,11 @@ export interface ComposerBridge {
   reviewContext(): void;
   requestAttachment(): void;
   removeContextItem(itemId: string): void;
+  selectModel(modelId: string): void;
+  setReasoningLevel(level: string): void;
+  openSettings(): void;
+  openModelSelector(): void;
+  openReasoningSelector(): void;
   resize(height: number): void;
   dispose(): void;
 }
@@ -110,6 +120,45 @@ class MockComposerBridge implements ComposerBridge {
   reviewContext(): void {}
   requestAttachment(): void {}
   removeContextItem(): void {}
+  selectModel(modelId: string): void {
+    const option = this.state.route.modelOptions.find((item) => item.id === modelId);
+    this.state = {
+      ...this.state,
+      revision: this.state.revision + 1,
+      route: {
+        ...this.state.route,
+        modelId,
+        modelValue: modelId,
+        modelLabel: option?.label || modelId,
+        modelOptions: this.state.route.modelOptions.map((item) => ({
+          ...item,
+          active: item.id === modelId,
+        })),
+      },
+    };
+    this.listener(this.state);
+  }
+
+  setReasoningLevel(level: string): void {
+    const normalized = level.toLowerCase() === "thinking" ? "Thinking" : "Quick";
+    this.state = {
+      ...this.state,
+      revision: this.state.revision + 1,
+      route: {
+        ...this.state.route,
+        reasoning: {
+          ...this.state.route.reasoning,
+          level: normalized,
+          label: normalized,
+        },
+      },
+    };
+    this.listener(this.state);
+  }
+
+  openSettings(): void {}
+  openModelSelector(): void {}
+  openReasoningSelector(): void {}
   resize(): void {}
   dispose(): void {}
 }
@@ -124,6 +173,7 @@ export function createComposerBridge(listener: StateListener): ComposerBridge {
 
   let remote: QtComposerObject | null = null;
   let connected = false;
+  let pendingHeight: number | null = null;
   const stateListener = (payload: string) => {
     const state = parseState(payload);
     if (state) listener(state);
@@ -134,6 +184,7 @@ export function createComposerBridge(listener: StateListener): ComposerBridge {
     remote.stateChanged.connect(stateListener);
     connected = true;
     remote.ready();
+    if (pendingHeight !== null) remote.resize(pendingHeight);
   });
 
   const call = <K extends keyof QtComposerObject>(
@@ -153,7 +204,15 @@ export function createComposerBridge(listener: StateListener): ComposerBridge {
     reviewContext: () => call("reviewContext"),
     requestAttachment: () => call("requestAttachment"),
     removeContextItem: (itemId) => call("removeContextItem", itemId),
-    resize: (height) => call("resize", height),
+    selectModel: (modelId) => call("selectModel", modelId),
+    setReasoningLevel: (level) => call("setReasoningLevel", level),
+    openSettings: () => call("openSettings"),
+    openModelSelector: () => call("openModelSelector"),
+    openReasoningSelector: () => call("openReasoningSelector"),
+    resize: (height) => {
+      pendingHeight = height;
+      call("resize", height);
+    },
     dispose: () => {
       remote?.stateChanged.disconnect?.(stateListener);
       remote = null;

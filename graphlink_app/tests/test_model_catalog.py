@@ -60,7 +60,7 @@ def test_legacy_product_defaults_migrate_to_auto_and_inherit(tmp_path):
     assignments = manager.get_ollama_model_assignments()
     assert assignments["task_chat"]["mode"] == AUTO_MODEL
     assert assignments["task_chart"]["mode"] == INHERIT_MODEL
-    assert json.loads(state_file.read_text(encoding="utf-8"))["schema_version"] == 2
+    assert json.loads(state_file.read_text(encoding="utf-8"))["schema_version"] == 3
 
 
 def test_provider_model_profiles_are_isolated(tmp_path):

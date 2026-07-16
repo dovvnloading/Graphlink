@@ -1,7 +1,7 @@
 from PySide6.QtWidgets import (
     QGraphicsObject, QGraphicsProxyWidget, QWidget, QVBoxLayout,
     QLineEdit, QPushButton, QHBoxLayout, QLabel, QGraphicsView, QGraphicsScene,
-    QMenu, QApplication
+    QApplication
 )
 from PySide6.QtCore import QTimer, Qt, Signal, QRectF, QPointF, QDateTime, QRect
 from PySide6.QtGui import QPainter, QColor, QBrush, QPen, QPainterPath, QTextDocument, QAction, QCursor, QFont
@@ -11,6 +11,7 @@ from graphlink_config import canvas_font, get_current_palette, get_graph_node_co
 from graphlink_canvas_items import HoverAnimationMixin
 from graphlink_lod import draw_lod_card, preview_text, sync_proxy_render_state
 from graphlink_plugins.graphlink_plugin_context_menu import PluginNodeContextMenu
+from graphlink_context_menu import create_context_menu
 
 class ChatMessageBubbleItem(QGraphicsObject):
     """
@@ -73,7 +74,7 @@ class ChatMessageBubbleItem(QGraphicsObject):
         painter.restore()
 
     def contextMenuEvent(self, event):
-        menu = QMenu()
+        menu = create_context_menu()
         copy_action = QAction(qta.icon('fa5s.copy', color='white'), "Copy Message", menu)
         copy_action.triggered.connect(self._copy_to_clipboard)
         

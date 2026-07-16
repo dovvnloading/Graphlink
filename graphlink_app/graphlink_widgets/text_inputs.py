@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 from graphlink_config import get_current_palette
+from graphlink_context_menu import configure_context_menu
 
 try:
     from spellchecker import SpellChecker
@@ -115,11 +116,12 @@ class SpellCheckLineEdit(QLineEdit):
         return opt
 
     def contextMenuEvent(self, event):
-        if not SPELLCHECK_AVAILABLE:
-            super().contextMenuEvent(event)
-            return
-
         menu = self.createStandardContextMenu()
+        configure_context_menu(menu)
+
+        if not SPELLCHECK_AVAILABLE:
+            menu.exec(event.globalPos())
+            return
         
         char_index = self.cursorPositionAt(event.pos())
         

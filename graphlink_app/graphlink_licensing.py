@@ -22,8 +22,10 @@ class SettingsManager:
     NOTIFICATION_TYPES = ("info", "success", "warning", "error")
     # Bumped whenever session.dat's shape changes in a way future code needs to branch
     # on. Version 2 introduces provider-scoped cloud profiles and explicit local
-    # model assignment modes.
-    CURRENT_SCHEMA_VERSION = 2
+    # model assignment modes. Version 3 persists refreshed cloud model catalogs so
+    # the composer can offer a useful selector without making a network request on
+    # every render.
+    CURRENT_SCHEMA_VERSION = 3
     LEGACY_PRODUCT_MODEL_IDS = {"qwen3:8b", "deepseek-coder:6.7b"}
     OLLAMA_MODEL_TASKS = (
         "task_title",
@@ -146,6 +148,9 @@ class SettingsManager:
                         str(state.get('api_provider', 'OpenAI-Compatible')): dict(state.get('api_models', {}) or {})
                     }
                     state_changed = True
+                if 'api_model_catalog_by_provider' not in state or not isinstance(state.get('api_model_catalog_by_provider'), dict):
+                    state['api_model_catalog_by_provider'] = {}
+                    state_changed = True
                 state_changed = self._migrate_model_settings(state) or state_changed
                 if 'enable_system_prompt' not in state:
                     state['enable_system_prompt'] = True
@@ -240,6 +245,7 @@ class SettingsManager:
             "github_access_token": "",
             "api_models": {},
             "api_models_by_provider": {},
+            "api_model_catalog_by_provider": {},
             "enable_system_prompt": True,
             "update_notifications_enabled": False,
             "notification_preferences": {notification_type: True for notification_type in self.NOTIFICATION_TYPES},
@@ -659,6 +665,40 @@ class SettingsManager:
             return dict(profiles.get(provider, {}) or {})
         return dict(self.state.get("api_models", {}) or {})
 
+    def get_api_model_catalog(self, provider: str | None = None):
+        """Return the last successful provider catalog refresh for the UI."""
+        provider = provider or self.get_api_provider()
+        catalogs = self.state.get("api_model_catalog_by_provider", {})
+        raw_models = catalogs.get(provider, []) if isinstance(catalogs, dict) else []
+        if not isinstance(raw_models, list):
+            return []
+
+        normalized = []
+        seen = set()
+        for raw_model in raw_models:
+            if isinstance(raw_model, dict):
+                model_id = str(raw_model.get("model_id") or raw_model.get("id") or "").strip()
+                descriptor = dict(raw_model)
+            else:
+                model_id = str(raw_model or "").strip()
+                descriptor = {}
+            if not model_id or model_id.lower() in seen:
+                continue
+            seen.add(model_id.lower())
+            descriptor.update(
+                {
+                    "model_id": model_id,
+                    "provider": str(descriptor.get("provider") or provider),
+                    "ready": bool(descriptor.get("ready", True)),
+                    "available": bool(descriptor.get("available", True)),
+                    "capabilities": sorted(
+                        {str(item).strip() for item in descriptor.get("capabilities", []) if str(item).strip()}
+                    ),
+                }
+            )
+            normalized.append(descriptor)
+        return normalized
+
     def set_api_settings(
         self,
         provider: str,
@@ -687,6 +727,39 @@ class SettingsManager:
         profiles[provider] = normalized
         self.state["api_models_by_provider"] = profiles
         self.state["api_models"] = normalized
+        self._save_state()
+
+    def set_api_model_catalog(self, models: list[dict] | list[str], provider: str | None = None):
+        """Persist a normalized, non-secret snapshot of a provider model catalog."""
+        provider = provider or self.get_api_provider()
+        normalized = []
+        seen = set()
+        for raw_model in models or []:
+            if isinstance(raw_model, dict):
+                model_id = str(raw_model.get("model_id") or raw_model.get("id") or "").strip()
+                descriptor = dict(raw_model)
+            else:
+                model_id = str(raw_model or "").strip()
+                descriptor = {}
+            if not model_id or model_id.lower() in seen:
+                continue
+            seen.add(model_id.lower())
+            normalized.append(
+                {
+                    "model_id": model_id,
+                    "provider": str(descriptor.get("provider") or provider),
+                    "ready": bool(descriptor.get("ready", True)),
+                    "available": bool(descriptor.get("available", True)),
+                    "capabilities": sorted(
+                        {str(item).strip() for item in descriptor.get("capabilities", []) if str(item).strip()}
+                    ),
+                }
+            )
+        catalogs = self.state.get("api_model_catalog_by_provider", {})
+        if not isinstance(catalogs, dict):
+            catalogs = {}
+        catalogs[provider] = normalized
+        self.state["api_model_catalog_by_provider"] = catalogs
         self._save_state()
 
     def set_github_token(self, token: str):

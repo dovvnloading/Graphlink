@@ -3,9 +3,10 @@ from PySide6.QtWidgets import (
     QToolButton, QLineEdit, QPushButton, QMessageBox, QSizePolicy, QLabel, QComboBox,
     QFileDialog
 )
-from PySide6.QtCore import Qt, QSize, QPointF, QTimer, QEvent
+from PySide6.QtCore import Qt, QSize, QPoint, QRect, QPointF, QTimer, QEvent
 from PySide6.QtGui import QKeySequence, QGuiApplication, QCursor, QShortcut, QIcon, QColor
 import qtawesome as qta
+import logging
 import os
 import tempfile
 from datetime import datetime
@@ -49,6 +50,30 @@ from graphlink_update import APP_VERSION, UpdateCheckWorker
 from graphlink_paths import asset_path
 from graphlink_crash import mark_clean_exit
 from graphlink_composer import ComposerController
+from graphlink_composer_bridge import COMPOSER_MIN_HEIGHT
+from graphlink_composer_popups import (
+    ComposerContextPopup,
+    ComposerPickerPopup,
+    composer_picker_position,
+)
+
+
+logger = logging.getLogger(__name__)
+
+
+def _composer_renderer_from_env():
+    """Return the production composer renderer, with legacy as an explicit escape hatch.
+
+    The React/QWebEngine composer is the supported default surface. Keeping the
+    legacy QWidget implementation behind an explicit environment value makes the
+    migration reversible without allowing a missing flag to silently ship the old UI.
+    Unknown values also resolve to the production renderer so a stale launcher setting
+    cannot unexpectedly downgrade the user experience.
+    """
+    requested = os.environ.get("GRAPHLINK_COMPOSER_RENDERER", "web").strip().lower()
+    return "legacy" if requested == "legacy" else "web"
+
+
 from graphlink_utility import UtilityOperationController
 
 class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
@@ -66,6 +91,8 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         self.help_panel = None
         self._initial_show_complete = False
         self._overlay_update_pending = False
+        self._composer_picker = None
+        self._composer_context_popup = None
         self._startup_update_check_ran = False
         self.update_check_worker = None
         self._update_check_status_target = None
@@ -98,6 +125,10 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         container_layout = QVBoxLayout(self.container)
         container_layout.setContentsMargins(0, 0, 0, 0)
         container_layout.setSpacing(0)
+        # The composer is a window overlay. It must not be parented to the
+        # QGraphicsView viewport, otherwise graph panning/scrolling and the
+        # viewport's clipping region can move or crop the composer.
+        self.composer_overlay_parent = self.container
 
         content_widget = QWidget()
         content_layout = QHBoxLayout(content_widget)
@@ -115,7 +146,11 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         self.chat_view.viewport().installEventFilter(self)
         content_layout.addWidget(self.chat_view)
 
-        self.notification_banner = NotificationBanner(self.chat_view)
+        # Notifications share the window overlay parent with the composer so
+        # their z-order is meaningful across the graph/content hierarchy.
+        # Keeping the banner under ChatView would leave it trapped below the
+        # fixed composer even when NotificationBanner.raise_() is called.
+        self.notification_banner = NotificationBanner(self.composer_overlay_parent)
 
         self.pin_overlay = PinOverlay(self.chat_view, self)
         self.pin_overlay.closed.connect(self._handle_pin_overlay_closed)
@@ -139,20 +174,25 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         container_layout.addWidget(content_widget)
 
         self.pending_attachments = []
-        self.composer_renderer = os.environ.get("GRAPHLINK_COMPOSER_RENDERER", "legacy").strip().lower()
+        self.composer_renderer = _composer_renderer_from_env()
         if self.composer_renderer == "web":
             try:
                 from graphlink_composer_web import ComposerWebHost
 
-                self.composer = ComposerWebHost(self, self.composer_controller, self)
+                self.composer = ComposerWebHost(
+                    self,
+                    self.composer_controller,
+                    self.composer_overlay_parent,
+                )
             except Exception:
-                # The web renderer is an opt-in migration path. A broken or
-                # unavailable WebEngine must never prevent the desktop app from
-                # starting with the stable Qt composer.
+                # Keep startup resilient if a machine has a broken WebEngine
+                # installation, but make the failure diagnosable. The normal
+                # installation path now uses React; legacy is only a fallback.
+                logger.exception("React composer failed to initialize; using legacy composer")
                 self.composer_renderer = "legacy"
-                self.composer = ComposerWidget(self)
+                self.composer = ComposerWidget(self.composer_overlay_parent)
         else:
-            self.composer = ComposerWidget(self)
+            self.composer = ComposerWidget(self.composer_overlay_parent)
         self.input_widget = self.composer
         self.attach_file_btn = self.composer.attach_file_btn
         self.message_input = self.composer
@@ -164,12 +204,8 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         self.message_input.composerHeightChanged.connect(self._sync_footer_height)
         self.send_button = self.composer.send_button
         
-        self.bottom_container = QWidget()
-        self.bottom_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.bottom_container.setMinimumHeight(68)
-        bottom_layout = QVBoxLayout(self.bottom_container)
-        bottom_layout.setContentsMargins(8, 0, 8, 8); bottom_layout.setSpacing(0); bottom_layout.addWidget(self.input_widget)
-        container_layout.addWidget(self.bottom_container)
+        self.composer.setVisible(True)
+        self.composer.raise_()
 
         self.setCentralWidget(self.container)
         self._update_themed_styles()
@@ -405,6 +441,164 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         if self.chat_view:
             self.chat_view._update_overlay_positions()
 
+        self._update_composer_overlay()
+
+    def _update_composer_overlay(self):
+        """Keep the composer as a centered, floating surface over the graph."""
+        composer = getattr(self, "composer", None)
+        chat_view = getattr(self, "chat_view", None)
+        if composer is None or chat_view is None:
+            return
+
+        viewport = chat_view.viewport()
+        if viewport is None or viewport.width() <= 0 or viewport.height() <= 0:
+            return
+
+        horizontal_margin = 16
+        target_width = min(820, max(0, viewport.width() - horizontal_margin * 2))
+        if target_width <= 0:
+            composer.hide()
+            return
+
+        composer.show()
+        composer.setFixedWidth(target_width)
+
+        if self.composer_renderer == "legacy":
+            composer.setFixedHeight(max(COMPOSER_MIN_HEIGHT, composer.sizeHint().height()))
+        else:
+            composer.setFixedHeight(max(COMPOSER_MIN_HEIGHT, composer.height()))
+
+        overlay_parent = getattr(self, "composer_overlay_parent", None)
+        viewport_origin = (
+            viewport.mapTo(overlay_parent, QPoint(0, 0))
+            if overlay_parent is not None
+            else QPoint(0, 0)
+        )
+        target_x = viewport_origin.x() + max(0, (viewport.width() - target_width) // 2)
+        bottom_inset = 18
+        if (
+            token_counter_widget := getattr(self, "token_counter_widget", None)
+        ) is not None and token_counter_widget.isVisible():
+            if target_x < token_counter_widget.width() + horizontal_margin:
+                bottom_inset += token_counter_widget.height() + 12
+
+        target_y = viewport_origin.y() + max(
+            12,
+            viewport.height() - composer.height() - bottom_inset,
+        )
+        composer.move(target_x, target_y)
+        composer.raise_()
+
+        # The composer sits above graph controls, but transient notifications
+        # are a higher-priority surface and must remain readable.  Reassert
+        # their ordering here because composer repositioning can happen after
+        # a notification is shown (resize, draft growth, or viewport layout).
+        notification_banner = getattr(self, "notification_banner", None)
+        if notification_banner is not None and notification_banner.isVisible():
+            notification_banner.raise_()
+
+        self._position_composer_picker()
+        self._position_composer_context_popup()
+
+    def _position_composer_popup(self, popup):
+        composer = getattr(self, "composer", None)
+        chat_view = getattr(self, "chat_view", None)
+        if popup is None or composer is None or chat_view is None:
+            return
+
+        viewport = chat_view.viewport()
+        viewport_origin = viewport.mapToGlobal(QPoint(0, 0))
+        viewport_rect = QRect(viewport_origin, viewport.size())
+        composer_origin = composer.mapToGlobal(QPoint(0, 0))
+        composer_rect = QRect(composer_origin, composer.size())
+        popup.move(composer_picker_position(viewport_rect, composer_rect, popup.size()))
+
+    def _position_composer_picker(self):
+        """Keep the native model/reasoning picker above the graph."""
+        self._position_composer_popup(getattr(self, "_composer_picker", None))
+
+    def _position_composer_context_popup(self):
+        """Keep context review outside the clipped QWebEngine document."""
+        self._position_composer_popup(getattr(self, "_composer_context_popup", None))
+
+    def _clear_composer_picker(self, picker=None):
+        if picker is None or picker is getattr(self, "_composer_picker", None):
+            self._composer_picker = None
+
+    def _close_composer_picker(self):
+        picker = getattr(self, "_composer_picker", None)
+        self._composer_picker = None
+        if picker is not None:
+            picker.close()
+            picker.deleteLater()
+
+    def _clear_composer_context_popup(self, popup=None):
+        if popup is None or popup is getattr(self, "_composer_context_popup", None):
+            self._composer_context_popup = None
+
+    def _close_composer_context_popup(self):
+        popup = getattr(self, "_composer_context_popup", None)
+        self._composer_context_popup = None
+        if popup is not None:
+            popup.close()
+            popup.deleteLater()
+
+    def open_composer_model_picker(self, kind="model"):
+        """Open a native model/reasoning picker requested by the React composer."""
+        if self.composer_renderer != "web":
+            return
+        bridge = getattr(getattr(self, "composer", None), "bridge", None)
+        if bridge is None:
+            return
+
+        self._close_composer_context_popup()
+
+        requested_kind = "reasoning" if kind == "reasoning" else "model"
+        current = getattr(self, "_composer_picker", None)
+        if current is not None:
+            if current.kind == requested_kind and current.isVisible():
+                self._close_composer_picker()
+                return
+            self._close_composer_picker()
+
+        picker = ComposerPickerPopup(requested_kind, bridge.route_snapshot(), self)
+        picker.modelSelected.connect(bridge.selectModel)
+        picker.reasoningSelected.connect(bridge.setReasoningLevel)
+        picker.settingsRequested.connect(self.show_settings)
+        picker.destroyed.connect(lambda: self._clear_composer_picker(picker))
+        self._composer_picker = picker
+        picker.adjustSize()
+        self._position_composer_picker()
+        picker.show()
+        self._position_composer_picker()
+        picker.raise_()
+        picker.activateWindow()
+
+    def open_composer_context_popup(self, context):
+        """Open context review as a native window-level surface."""
+        if self.composer_renderer != "web":
+            return
+        bridge = getattr(getattr(self, "composer", None), "bridge", None)
+        if bridge is None:
+            return
+
+        current = getattr(self, "_composer_context_popup", None)
+        if current is not None and current.isVisible():
+            self._close_composer_context_popup()
+            return
+
+        self._close_composer_picker()
+        popup = ComposerContextPopup(context, self)
+        popup.contextItemRemoved.connect(bridge.removeContextItem)
+        popup.destroyed.connect(lambda: self._clear_composer_context_popup(popup))
+        self._composer_context_popup = popup
+        popup.adjustSize()
+        self._position_composer_context_popup()
+        popup.show()
+        self._position_composer_context_popup()
+        popup.raise_()
+        popup.activateWindow()
+
     def _schedule_startup_update_check(self):
         if self._startup_update_check_ran:
             return
@@ -571,27 +765,8 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         )
 
     def _sync_footer_height(self, *_):
-        if not hasattr(self, 'input_widget') or not hasattr(self, 'bottom_container'):
+        if not hasattr(self, "composer"):
             return
-
-        layout = self.input_widget.layout()
-        margins = layout.contentsMargins() if layout else None
-        top_margin = margins.top() if margins else 0
-        bottom_margin = margins.bottom() if margins else 0
-        composer_height = 0
-        if hasattr(self, 'message_input'):
-            composer_height = max(self.message_input.height(), self.message_input.sizeHint().height())
-        row_height = max(40, composer_height) + top_margin + bottom_margin
-        target_height = max(72, row_height)
-
-        self.input_widget.setFixedHeight(target_height)
-        self.bottom_container.setFixedHeight(target_height)
-        self.input_widget.updateGeometry()
-        self.bottom_container.updateGeometry()
-        if hasattr(self, 'container'):
-            self.container.updateGeometry()
-            if self.container.layout():
-                self.container.layout().activate()
         self._schedule_overlay_update()
 
     def _handle_composer_draft_changed(self, draft):
@@ -879,7 +1054,10 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
 
     def _initialize_mode(self, mode_text, *, show_dialogs):
         if mode_text == config.MODE_OLLAMA_LOCAL:
-            api_provider.initialize_local_provider(config.LOCAL_PROVIDER_OLLAMA)
+            api_provider.initialize_local_provider(
+                config.LOCAL_PROVIDER_OLLAMA,
+                {"reasoning_mode": self.settings_manager.get_ollama_reasoning_mode()},
+            )
             self.settings_btn.setEnabled(True)
             return True
 
