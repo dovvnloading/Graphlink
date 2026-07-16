@@ -69,8 +69,8 @@ _register_spec(
     node_cls=ConversationNode, connection_cls=ConversationConnectionItem, seedable=True,
 )
 _register_spec(
-    key="web", display_name="Graphlink-Web",
-    description="Adds a node with web access for real-time information retrieval.",
+    key="web", display_name="Web Research",
+    description="Searches, retrieves, and summarizes cited web sources under a bounded network policy.",
     category="Reasoning & Research", icon="fa5s.globe",
     node_cls=WebNode, connection_cls=WebConnectionItem, seedable=True,
 )
@@ -190,8 +190,8 @@ class PluginPortal:
         )
 
         self._register_plugin(
-            name='Graphlink-Web',
-            description='Adds a node with web access for real-time information retrieval.',
+            name='Web Research',
+            description='Searches, retrieves, and summarizes cited web sources under a bounded network policy.',
             callback=self._create_web_node,
             category='Reasoning & Research',
             icon='fa5s.globe',
@@ -489,7 +489,10 @@ class PluginPortal:
             connection_cls=WebConnectionItem,
             scene_nodes=scene.web_nodes,
             scene_connections=scene.web_connections,
-            wire=lambda node: node.run_clicked.connect(self.main_window.execute_web_node),
+            wire=lambda node: (
+                node.run_clicked.connect(self.main_window.execute_web_node),
+                node.cancel_requested.connect(self.main_window.cancel_web_node),
+            ),
             resolve_branch_parent=False,
             no_selection_message="Please select a valid node to branch from before adding a Web Node.",
         )

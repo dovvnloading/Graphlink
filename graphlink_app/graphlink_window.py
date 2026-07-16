@@ -112,7 +112,6 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         self.group_summary_thread = None
         self.image_gen_thread = None
         self.pycoder_agent_thread = None
-        self.web_worker_thread = None
         self.conversation_node_thread = None
         self._main_request_active = False
         self._main_request_cancel_pending = False
@@ -666,7 +665,6 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
             ("group_summary_thread", "group summary generation"),
             ("image_gen_thread", "image generation"),
             ("pycoder_agent_thread", "PyCoder analysis"),
-            ("web_worker_thread", "web research"),
             ("conversation_node_thread", "conversation node request"),
             ("update_check_worker", "update check"),
         ):
@@ -685,6 +683,7 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
                 ("artifact_nodes", "artifact workflow"),
                 ("pycoder_nodes", "PyCoder execution"),
                 ("gitlink_nodes", "Gitlink proposal"),
+                ("web_nodes", "web research"),
             ):
                 for node in list(getattr(scene, node_list_name, [])):
                     worker = getattr(node, "worker_thread", None)
@@ -1170,7 +1169,7 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         if isinstance(node, ChatNode): text_content = node.text if node.text else "[Attachment/Content Node]"
         elif isinstance(node, PyCoderNode): text_content = "Py-Coder Analysis"
         elif isinstance(node, CodeSandboxNode): text_content = "Execution Sandbox"
-        elif isinstance(node, WebNode): text_content = "Web Search Node"
+        elif isinstance(node, WebNode): text_content = "Web Research Node"
         elif isinstance(node, ConversationNode): text_content = "Conversation"
         elif isinstance(node, HtmlViewNode): text_content = "HTML Renderer"
         elif isinstance(node, GitlinkNode): text_content = "Gitlink"
