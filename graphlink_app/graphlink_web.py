@@ -1,9 +1,9 @@
 from PySide6.QtWidgets import (
     QGraphicsItem, QGraphicsProxyWidget, QWidget, QVBoxLayout,
-    QTextEdit, QPushButton, QLabel, QHBoxLayout, QGraphicsObject
+    QTextEdit, QTextBrowser, QPushButton, QLabel, QHBoxLayout, QGraphicsObject
 )
-from PySide6.QtCore import QRectF, Qt, QPointF, Signal, QTimer, QRect
-from PySide6.QtGui import QPainter, QColor, QBrush, QPen, QPainterPath, QFont
+from PySide6.QtCore import QRectF, Qt, QPointF, Signal, QTimer, QRect, QUrl
+from PySide6.QtGui import QPainter, QColor, QBrush, QPen, QPainterPath, QFont, QDesktopServices
 import qtawesome as qta
 from graphlink_config import canvas_font, get_current_palette, get_graph_node_colors, get_neutral_button_colors, get_semantic_color
 from graphlink_connections import ConnectionItem
@@ -88,6 +88,7 @@ class WebNode(QGraphicsObject, HoverAnimationMixin):
     supports_branch_context_toggle = True
 
     run_clicked = Signal(object) # Emits self when the run button is clicked.
+    cancel_requested = Signal(object)
     
     NODE_WIDTH = 450
     NODE_HEIGHT = 400
@@ -119,6 +120,13 @@ class WebNode(QGraphicsObject, HoverAnimationMixin):
         self.status = "Idle"
         self.summary = ""
         self.sources = []
+        self.warnings = []
+        self.research_result = None
+        self.research_result_payload = {}
+        self.worker_thread = None
+        self.operation_id = ""
+        self.is_running = False
+        self.is_disposed = False
 
         # Standard graphics item setup.
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable)
@@ -206,8 +214,10 @@ class WebNode(QGraphicsObject, HoverAnimationMixin):
         main_layout.addWidget(self.query_input)
 
         # --- Run Button ---
-        self.run_button = QPushButton("Fetch Information")
-        self.run_button.clicked.connect(lambda: self.run_clicked.emit(self))
+        self.run_button = QPushButton("Research Web")
+        self.run_button.setObjectName("webResearchRunButton")
+        self.run_button.setAccessibleName("Research the web")
+        self.run_button.clicked.connect(self._handle_run_button)
         main_layout.addWidget(self.run_button)
 
         # --- Status Label ---
@@ -216,20 +226,36 @@ class WebNode(QGraphicsObject, HoverAnimationMixin):
         main_layout.addWidget(self.status_label)
 
         # --- Result Display Section ---
-        main_layout.addWidget(QLabel("Summary:"))
-        self.summary_display = QTextEdit()
+        result_header = QHBoxLayout()
+        result_header.addWidget(QLabel("Answer:"))
+        self.source_count_label = QLabel("No sources")
+        self.source_count_label.setStyleSheet("color: #9aa6b2; background: transparent;")
+        result_header.addWidget(self.source_count_label)
+        result_header.addStretch()
+        main_layout.addLayout(result_header)
+        self.summary_display = QTextBrowser()
         self.summary_display.setReadOnly(True)
         self.summary_display.setPlaceholderText("Web search results will be summarized here...")
+        self.summary_display.setOpenExternalLinks(False)
+        self.summary_display.anchorClicked.connect(self._open_source_link)
+        self.summary_display.setObjectName("webResearchResultBrowser")
+        self.summary_display.setAccessibleName("Web research answer and sources")
         main_layout.addWidget(self.summary_display)
+
+        self.warning_label = QLabel("")
+        self.warning_label.setWordWrap(True)
+        self.warning_label.setStyleSheet("color: #c5a86a; background: transparent;")
+        main_layout.addWidget(self.warning_label)
 
         # Apply common styles to text edit widgets.
         for widget in [self.query_input, self.summary_display]:
             widget.setStyleSheet("""
-                QTextEdit {
+                QTextEdit, QTextBrowser {
                     background-color: #252526; border: 1px solid #3f3f3f;
                     color: #cccccc; border-radius: 4px; padding: 5px;
                     font-family: 'Segoe UI', sans-serif;
                 }
+                QTextBrowser a { color: #9eb7d0; text-decoration: none; }
             """)
 
         # Style the run button with a contrasting text color based on background brightness.
@@ -264,6 +290,12 @@ class WebNode(QGraphicsObject, HoverAnimationMixin):
         """Slot to update the internal query state when the input text changes."""
         self.query = self.query_input.toPlainText()
 
+    def _handle_run_button(self):
+        if self.is_running:
+            self.cancel_requested.emit(self)
+        else:
+            self.run_clicked.emit(self)
+
     def set_query(self, text: str):
         """Programmatically sets the query text in the input widget."""
         self.query_input.setText(text)
@@ -291,11 +323,17 @@ class WebNode(QGraphicsObject, HoverAnimationMixin):
         Args:
             is_running (bool): True if the search is active, False otherwise.
         """
-        self.run_button.setEnabled(not is_running)
+        self.is_running = bool(is_running)
+        self.run_button.setEnabled(True)
         self.query_input.setReadOnly(is_running)
-        self.run_button.setText("Processing..." if is_running else "Fetch Information")
+        self.run_button.setText("Stop Research" if is_running else "Research Web")
+        self.run_button.setToolTip("Cancel the active web research operation" if is_running else "Search, retrieve, and summarize cited web sources")
+        self.run_button.setAccessibleName("Stop web research" if is_running else "Research the web")
+        button_colors = get_neutral_button_colors()
+        icon_color = get_semantic_color("status_error").name() if is_running else button_colors["icon"].name()
+        self.run_button.setIcon(qta.icon("fa5s.stop" if is_running else "fa5s.search", color=icon_color))
 
-    def set_result(self, summary: str, sources: list, base_history=None):
+    def set_result(self, summary: str, sources: list, base_history=None, research_result=None):
         """
         Displays the final summary and source links in the result area.
 
@@ -304,14 +342,51 @@ class WebNode(QGraphicsObject, HoverAnimationMixin):
             sources (list[str]): A list of source URLs.
             base_history (list, optional): Conversation history to inherit before storing the result.
         """
+        self.research_result = research_result
+        if research_result is not None:
+            summary = getattr(research_result, "answer_markdown", summary)
+            sources = getattr(research_result, "sources", sources)
+            self.warnings = list(getattr(research_result, "warnings", []) or [])
+            if callable(getattr(research_result, "to_dict", None)):
+                self.research_result_payload = research_result.to_dict()
         self.summary = summary
-        self.sources = sources
+        self.sources = sources or []
         
         # Format sources as clickable Markdown links.
-        source_links = "\n".join([f"- [{src}]({src})" for src in sources])
-        full_text = f"{summary}\n\n---\n\n**Sources:**\n{source_links}"
+        source_links = []
+        for source in self.sources:
+            if isinstance(source, str):
+                src = source
+                title = src
+                status = "accepted"
+            elif isinstance(source, dict):
+                src = source.get("final_url") or source.get("url") or ""
+                title = source.get("title") or src
+                status = str(source.get("status") or "accepted").lower()
+            else:
+                src = getattr(source, "final_url", "") or getattr(source, "url", "")
+                title = getattr(source, "title", "") or src
+                status = str(getattr(source, "status", "accepted") or "accepted").lower()
+            if status == "accepted" and QUrl(src).scheme().lower() in {"http", "https"}:
+                safe_title = str(title).replace("\\", "\\\\").replace("[", "\\[").replace("]", "\\]").replace("\r", " ").replace("\n", " ")
+                safe_url = str(src).replace("\\", "%5C").replace(")", "%29").replace("\r", "").replace("\n", "")
+                source_links.append(f"- [{safe_title}]({safe_url})")
+        full_text = str(summary or "")
+        if source_links:
+            full_text += "\n\n---\n\n**Sources:**\n" + "\n".join(source_links)
         
         self.summary_display.setMarkdown(full_text)
+        accepted_count = sum(
+            1
+            for source in self.sources
+            if (
+                isinstance(source, str)
+                or (isinstance(source, dict) and str(source.get("status") or "accepted").lower() == "accepted")
+                or (not isinstance(source, (str, dict)) and str(getattr(source, "status", "accepted") or "accepted").lower() == "accepted")
+            )
+        )
+        self.source_count_label.setText(f"{accepted_count} source{'s' if accepted_count != 1 else ''}")
+        self.warning_label.setText(" ".join(self.warnings))
         self.set_status("Completed")
         self.status_label.setStyleSheet(f"color: {get_semantic_color('status_success').name()}; background: transparent;")
         
@@ -330,9 +405,59 @@ class WebNode(QGraphicsObject, HoverAnimationMixin):
             error_message (str): The error message to display.
         """
         self.status = f"Error: {error_message}"
+        self.research_result = None
+        self.research_result_payload = {}
+        self.sources = []
+        self.warnings = []
+        self.summary = ""
         self.status_label.setText(self.status)
         self.status_label.setStyleSheet(f"color: {get_semantic_color('status_error').name()}; font-weight: bold; background: transparent;")
         self.summary_display.setText(f"An error occurred during the process:\n\n{error_message}")
+        self.source_count_label.setText("No usable sources")
+        self.warning_label.setText("")
+
+    def restore_research_result(self, payload: dict):
+        """Restore a bounded typed result snapshot from a saved chat payload."""
+        from graphlink_plugins.web_research.domain import ResearchCitation, ResearchResult, ResearchSource
+
+        sources = []
+        for raw_source in payload.get("sources", []):
+            if not isinstance(raw_source, dict):
+                continue
+            allowed = {field for field in ResearchSource.__dataclass_fields__}
+            sources.append(ResearchSource(**{key: value for key, value in raw_source.items() if key in allowed}))
+        citations = [ResearchCitation(**raw) for raw in payload.get("citations", []) if isinstance(raw, dict) and raw.get("source_id") and raw.get("marker")]
+        result = ResearchResult(
+            request_id=str(payload.get("request_id", "legacy")),
+            original_query=str(payload.get("original_query", self.query)),
+            effective_query=str(payload.get("effective_query", self.query)),
+            answer_markdown=str(payload.get("answer_markdown", "")),
+            sources=sources,
+            citations=citations,
+            warnings=[str(value) for value in payload.get("warnings", [])],
+            provider_snapshot=dict(payload.get("provider_snapshot", {}) or {}),
+        )
+        self.set_result(result.answer_markdown, result.sources, research_result=result)
+        self.research_result_payload = dict(payload)
+
+    def _open_source_link(self, url):
+        parsed = QUrl(url)
+        if parsed.scheme().lower() in {"http", "https"}:
+            QDesktopServices.openUrl(parsed)
+
+    def dispose(self):
+        """Cancel active work before the scene releases this node."""
+        if self.is_disposed:
+            return
+        self.is_disposed = True
+        worker = self.worker_thread
+        try:
+            if worker is not None and worker.isRunning():
+                worker.stop()
+        except RuntimeError:
+            pass
+        self.worker_thread = None
+        self.is_running = False
 
     def boundingRect(self):
         """Returns the bounding rectangle of the node, including padding for connection dots."""

@@ -1,6 +1,7 @@
 import os
 import re
 import json
+import uuid
 from PySide6.QtCore import QPointF
 from PySide6.QtWidgets import QMessageBox
 import graphlink_config as config
@@ -36,6 +37,7 @@ from graphlink_agents import (
     PyCoderAgentWorker, SandboxStage, CodeSandboxExecutionWorker, WebWorkerThread,
     KeyTakeawayAgent, ExplainerAgent, GroupSummaryAgent, ImageGenerationAgent
 )
+from graphlink_plugins.web_research.domain import WebResearchRequest
 
 class WindowActionsMixin:
     def _utility_chat_epoch(self):
@@ -1309,6 +1311,14 @@ class WindowActionsMixin:
         sandbox_node.set_error(error_message)
 
     def execute_web_node(self, web_node):
+        if not web_node or getattr(web_node, "is_disposed", False):
+            return
+        active_worker = getattr(web_node, "worker_thread", None)
+        try:
+            if active_worker is not None and active_worker.isRunning():
+                return
+        except RuntimeError:
+            web_node.worker_thread = None
         query = web_node.query.strip()
         if not query:
             web_node.set_error("Query cannot be empty."); return
@@ -1321,24 +1331,85 @@ class WindowActionsMixin:
             max_tokens=7000,
             system_prompt_estimate=1000,
         )
-        self.web_worker_thread = WebWorkerThread(query, trimmed_history)
-        self.web_worker_thread.update_status.connect(lambda status, node=web_node: self._handle_web_worker_status(status, node))
-        self.web_worker_thread.finished.connect(lambda result, node=web_node, history=parent_history: self._handle_web_worker_finished(result, node, history))
-        self.web_worker_thread.error.connect(lambda error, node=web_node: self._handle_web_worker_error(error, node))
-        self.web_worker_thread.finished.connect(self.web_worker_thread.deleteLater)
-        self.web_worker_thread.error.connect(self.web_worker_thread.deleteLater)
-        self.web_worker_thread.start()
+        operation_id = str(uuid.uuid4())
+        node_id = getattr(web_node, "persistent_id", None) or f"web-{id(web_node)}"
+        request = WebResearchRequest(
+            request_id=operation_id,
+            node_id=node_id,
+            chat_epoch=self._utility_chat_epoch(),
+            original_query=query,
+            branch_history=trimmed_history,
+            provider_snapshot={"task": "web_research"},
+        )
+        worker = WebWorkerThread(query, trimmed_history, request=request)
+        web_node.operation_id = operation_id
+        web_node.worker_thread = worker
+        worker.update_status.connect(lambda status, node=web_node, op=operation_id: self._handle_web_worker_status(status, node, op))
+        worker.finished.connect(lambda result, node=web_node, history=parent_history, op=operation_id, thread=worker: self._handle_web_worker_finished(result, node, history, op, thread))
+        worker.error.connect(lambda error, node=web_node, op=operation_id, thread=worker: self._handle_web_worker_error(error, node, op, thread))
+        worker.cancelled.connect(lambda _request_id, node=web_node, op=operation_id, thread=worker: self._handle_web_worker_cancelled(node, op, thread))
+        worker.start()
 
-    def _handle_web_worker_status(self, status, node):
-        if node and node.scene(): node.set_status(status)
+    def cancel_web_node(self, web_node):
+        if not web_node or getattr(web_node, "is_disposed", False):
+            return
+        worker = getattr(web_node, "worker_thread", None)
+        try:
+            running = worker is not None and worker.isRunning()
+        except RuntimeError:
+            running = False
+        if running:
+            web_node.set_status("Cancelling...")
+            worker.stop()
+        else:
+            web_node.set_running_state(False)
 
-    def _handle_web_worker_finished(self, result, node, base_history):
-        if node and node.scene():
-            node.set_result(result['summary'], result['sources'], base_history=base_history); node.set_running_state(False); self.save_chat()
+    def _web_operation_is_current(self, node, operation_id):
+        if not node or getattr(node, "is_disposed", False):
+            return False
+        if getattr(node, "operation_id", None) != operation_id:
+            return False
+        try:
+            return node.scene() is not None
+        except RuntimeError:
+            return False
 
-    def _handle_web_worker_error(self, error_message, node):
-        if node and node.scene():
-            node.set_error(error_message); node.set_running_state(False)
+    def _handle_web_worker_status(self, status, node, operation_id=None):
+        if operation_id is None or self._web_operation_is_current(node, operation_id):
+            node.set_status(status)
+
+    def _handle_web_worker_finished(self, result, node, base_history, operation_id, worker):
+        if self._web_operation_is_current(node, operation_id):
+            answer = getattr(result, "answer_markdown", None)
+            sources = getattr(result, "sources", None)
+            if answer is not None:
+                node.set_result(answer, sources or [], base_history=base_history, research_result=result)
+            else:
+                legacy = result if isinstance(result, dict) else {}
+                node.set_result(legacy.get("summary", ""), legacy.get("sources", []), base_history=base_history)
+            node.set_running_state(False)
+            self.session_manager.save_current_chat()
+        self._cleanup_web_worker(worker, node, operation_id)
+
+    def _handle_web_worker_error(self, error_message, node, operation_id, worker):
+        if self._web_operation_is_current(node, operation_id):
+            node.set_error(str(error_message))
+            node.set_running_state(False)
+        self._cleanup_web_worker(worker, node, operation_id)
+
+    def _handle_web_worker_cancelled(self, node, operation_id, worker):
+        if self._web_operation_is_current(node, operation_id):
+            node.set_status("Cancelled")
+            node.set_running_state(False)
+        self._cleanup_web_worker(worker, node, operation_id)
+
+    def _cleanup_web_worker(self, worker, node, operation_id):
+        if node is not None and getattr(node, "worker_thread", None) is worker:
+            node.worker_thread = None
+            if getattr(node, "operation_id", None) == operation_id:
+                node.operation_id = ""
+        if worker is not None:
+            worker.deleteLater()
 
     def handle_conversation_node_request(self, requesting_node, history):
         requesting_node.set_typing(True)

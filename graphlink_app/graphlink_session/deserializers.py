@@ -319,11 +319,14 @@ class SceneDeserializer:
                 node.set_status(data.get("status", "Idle"))
                 summary = data.get("summary", "")
                 sources = data.get("sources", [])
-                if summary:
+                if data.get("research_result"):
+                    node.restore_research_result(data["research_result"])
+                elif summary:
                     node.set_result(summary, sources)
                 node.conversation_history = deserialize_history(data.get("conversation_history", []))
                 node.include_branch_context = data.get("include_branch_context", True)
                 self._connect_if_available(node.run_clicked, "execute_web_node")
+                self._connect_if_available(node.cancel_requested, "cancel_web_node")
                 if data.get("is_collapsed", False):
                     node.set_collapsed(True)
                 scene.addItem(node)
