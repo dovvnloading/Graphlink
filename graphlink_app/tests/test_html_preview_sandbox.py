@@ -31,6 +31,7 @@ class TestLocalSchemesAreAllowed:
         "data:text/html;base64,PHA+aGk8L3A+",
         "data:image/png;base64,iVBORw0KGgo=",
         "blob:about:blank/1234-5678",
+        "qrc:///qtwebchannel/qwebchannel.js",
     ])
     def test_self_contained_local_schemes_pass(self, url):
         assert preview_url_is_allowed(QUrl(url)) is True

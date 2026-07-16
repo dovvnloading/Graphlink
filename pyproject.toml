@@ -69,6 +69,8 @@ py-modules = [
     "graphlink_canvas_note_items",
     "graphlink_command_palette",
     "graphlink_composer",
+    "graphlink_composer_bridge",
+    "graphlink_composer_web",
     "graphlink_config",
     "graphlink_connections",
     "graphlink_conversation_node",

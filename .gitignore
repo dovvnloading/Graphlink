@@ -15,6 +15,7 @@ build/
 dist/
 
 # Virtual environments
+node_modules/
 .venv/
 venv/
 env/

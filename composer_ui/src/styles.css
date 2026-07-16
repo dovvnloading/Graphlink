@@ -1,0 +1,106 @@
+:root {
+  color-scheme: dark;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 13px;
+  color: #e7edf5;
+  background: transparent;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 320px; background: transparent; }
+button, textarea { font: inherit; }
+button { color: inherit; }
+
+.composer-shell {
+  position: relative;
+  width: 100%;
+  min-height: 184px;
+  padding: 14px 14px 12px;
+  border: 1px solid rgba(143, 161, 184, 0.34);
+  border-radius: 14px;
+  background: linear-gradient(145deg, rgba(31, 36, 44, 0.98), rgba(24, 28, 34, 0.98));
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.24), inset 0 1px rgba(255, 255, 255, 0.035);
+}
+
+.composer-header, .composer-footer, .footer-left, .footer-right, .context-row, .popover-heading {
+  display: flex;
+  align-items: center;
+}
+
+.composer-header { justify-content: space-between; gap: 12px; margin: 0 2px 10px; }
+.context-heading { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.eyebrow { color: #8d9bad; font-size: 10px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; }
+.context-title { overflow: hidden; color: #eef3fa; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+
+.quiet-button, .attach-button, .icon-button, .send-button, .remove-context {
+  border: 0;
+  cursor: pointer;
+  transition: background-color .16s ease, border-color .16s ease, opacity .16s ease, transform .16s ease;
+}
+.quiet-button {
+  display: inline-flex; align-items: center; gap: 7px; flex: 0 0 auto;
+  padding: 7px 9px; border: 1px solid rgba(143, 161, 184, .32); border-radius: 8px;
+  color: #bac6d4; background: rgba(255, 255, 255, .025); font-size: 11px;
+}
+.quiet-button:hover:not(:disabled) { border-color: #83a7ff; color: #f4f7ff; background: rgba(131, 167, 255, .09); }
+.quiet-button:disabled, button:disabled { cursor: default; opacity: .45; }
+.icon { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.8; }
+.quiet-button .icon { width: 13px; height: 13px; }
+
+.input-wrap {
+  min-height: 72px; border: 1px solid rgba(143, 161, 184, .27); border-radius: 11px;
+  background: rgba(8, 11, 15, .27); transition: border-color .16s ease, box-shadow .16s ease;
+}
+.input-wrap:focus-within { border-color: rgba(131, 167, 255, .75); box-shadow: 0 0 0 3px rgba(131, 167, 255, .10); }
+textarea {
+  display: block; width: 100%; min-height: 72px; max-height: 260px; resize: vertical;
+  padding: 13px 14px; border: 0; outline: 0; color: #eef3fa; background: transparent;
+  line-height: 1.5; scrollbar-color: #4d5d73 transparent;
+}
+textarea::placeholder { color: #758397; }
+textarea:disabled { cursor: wait; opacity: .7; }
+
+.composer-footer { justify-content: space-between; gap: 12px; margin-top: 10px; }
+.footer-left, .footer-right { min-width: 0; gap: 8px; }
+.attach-button, .icon-button {
+  display: grid; place-items: center; width: 32px; height: 30px; border: 1px solid rgba(143, 161, 184, .32);
+  border-radius: 8px; color: #bdc8d6; background: rgba(255, 255, 255, .025);
+}
+.attach-button:hover:not(:disabled), .icon-button:hover { border-color: #83a7ff; color: #f4f7ff; background: rgba(131, 167, 255, .09); }
+.context-summary, .route-status { overflow: hidden; color: #8795a7; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.restored-pill { padding: 3px 7px; border: 1px solid rgba(131, 167, 255, .28); border-radius: 999px; color: #a9c0ff; background: rgba(131, 167, 255, .08); font-size: 10px; }
+.route-status { display: inline-flex; align-items: center; gap: 6px; max-width: 190px; }
+.status-dot { width: 7px; height: 7px; border-radius: 50%; background: #78d7a5; box-shadow: 0 0 0 3px rgba(120, 215, 165, .10); }
+.status-dot.offline { background: #e4a36a; box-shadow: 0 0 0 3px rgba(228, 163, 106, .10); }
+.send-button {
+  display: grid; place-items: center; width: 36px; height: 32px; border: 1px solid rgba(255, 255, 255, .18);
+  border-radius: 9px; color: #fff; background: #6c8ee8; box-shadow: 0 4px 12px rgba(66, 98, 181, .27);
+}
+.send-button:hover:not(:disabled) { transform: translateY(-1px); background: #7d9df2; }
+.send-button.cancel { background: #b7646c; box-shadow: 0 4px 12px rgba(183, 100, 108, .22); }
+
+.context-popover {
+  position: absolute; z-index: 2; top: 56px; right: 14px; left: 14px; padding: 12px;
+  border: 1px solid rgba(143, 161, 184, .38); border-radius: 10px; background: #20262e;
+  box-shadow: 0 16px 34px rgba(0, 0, 0, .38);
+}
+.popover-heading { justify-content: space-between; margin-bottom: 9px; color: #eaf0f8; font-size: 12px; font-weight: 650; }
+.icon-button { width: 25px; height: 25px; border-color: transparent; background: transparent; }
+.context-row { gap: 8px; min-height: 29px; color: #cad4e0; }
+.context-kind { min-width: 52px; color: #8e9db0; font-size: 10px; text-transform: uppercase; }
+.context-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.remove-context { margin-left: auto; padding: 4px 6px; border-radius: 5px; color: #9eb8ef; background: transparent; font-size: 10px; }
+.remove-context:hover { background: rgba(131, 167, 255, .1); }
+.context-total { margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(143, 161, 184, .16); color: #8492a5; font-size: 10px; }
+
+.request-status { display: flex; justify-content: space-between; gap: 12px; margin: 9px 2px 0; color: #a9b7c8; font-size: 11px; }
+.request-status.failed { color: #e8a9a9; }
+.request-status button { padding: 0; border: 0; color: #a9c0ff; background: transparent; cursor: pointer; font-weight: 650; }
+
+@media (max-width: 540px) {
+  .composer-header { align-items: flex-start; flex-direction: column; }
+  .quiet-button { align-self: flex-start; }
+  .route-status { max-width: 125px; }
+}

@@ -138,9 +138,22 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
 
         container_layout.addWidget(content_widget)
 
-        self.composer = ComposerWidget(self)
-        self.input_widget = self.composer
         self.pending_attachments = []
+        self.composer_renderer = os.environ.get("GRAPHLINK_COMPOSER_RENDERER", "legacy").strip().lower()
+        if self.composer_renderer == "web":
+            try:
+                from graphlink_composer_web import ComposerWebHost
+
+                self.composer = ComposerWebHost(self, self.composer_controller, self)
+            except Exception:
+                # The web renderer is an opt-in migration path. A broken or
+                # unavailable WebEngine must never prevent the desktop app from
+                # starting with the stable Qt composer.
+                self.composer_renderer = "legacy"
+                self.composer = ComposerWidget(self)
+        else:
+            self.composer = ComposerWidget(self)
+        self.input_widget = self.composer
         self.attach_file_btn = self.composer.attach_file_btn
         self.message_input = self.composer
         self.message_input.sendRequested.connect(self.send_message)
