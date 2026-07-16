@@ -30,6 +30,7 @@ API_CLIENT = None
 API_KEY = None
 API_BASE_URL = None
 LOCAL_PROVIDER_TYPE = config.LOCAL_PROVIDER_OLLAMA
+OLLAMA_REASONING_MODE = "Thinking"
 API_MODELS = {
     config.TASK_TITLE: None,
     config.TASK_CHAT: None,
@@ -70,6 +71,7 @@ class _ProviderSnapshot(NamedTuple):
     local_provider_type: str
     api_models: dict
     llama_cpp_settings: dict
+    ollama_reasoning_mode: str
 
 
 def _snapshot_provider_state() -> _ProviderSnapshot:
@@ -83,6 +85,7 @@ def _snapshot_provider_state() -> _ProviderSnapshot:
             local_provider_type=LOCAL_PROVIDER_TYPE,
             api_models=dict(API_MODELS),
             llama_cpp_settings=dict(LLAMA_CPP_SETTINGS),
+            ollama_reasoning_mode=OLLAMA_REASONING_MODE,
         )
 
 GEMINI_MODELS_STATIC = sorted([
@@ -1869,7 +1872,7 @@ def chat(task: str, messages: list, **kwargs) -> dict:
 
                 ollama_kwargs = kwargs.copy()
                 if task == config.TASK_CHAT and ("qwen3" in model.lower() or "deepseek" in model.lower()):
-                    ollama_kwargs["think"] = True
+                    ollama_kwargs["think"] = state.ollama_reasoning_mode == "Thinking"
 
                 # Reasoning-capable local models occasionally exhaust their own
                 # "thinking" budget before writing a final answer - often just sampling
@@ -2194,11 +2197,13 @@ def initialize_local_provider(
     *,
     preload_model: bool = False,
 ):
-    global USE_API_MODE, LOCAL_PROVIDER_TYPE, API_PROVIDER_TYPE, API_CLIENT, API_KEY, API_BASE_URL, LLAMA_CPP_SETTINGS
+    global USE_API_MODE, LOCAL_PROVIDER_TYPE, API_PROVIDER_TYPE, API_CLIENT, API_KEY, API_BASE_URL, LLAMA_CPP_SETTINGS, OLLAMA_REASONING_MODE
 
     if provider == config.LOCAL_PROVIDER_OLLAMA:
         normalized_settings = _normalize_llama_cpp_settings()
         with _PROVIDER_STATE_LOCK:
+            requested_reasoning = str((settings or {}).get("reasoning_mode") or OLLAMA_REASONING_MODE).strip().lower()
+            OLLAMA_REASONING_MODE = "Thinking" if requested_reasoning == "thinking" else "Quick"
             USE_API_MODE = False
             LOCAL_PROVIDER_TYPE = provider
             API_PROVIDER_TYPE = None
@@ -2307,6 +2312,14 @@ def set_mode(use_api: bool):
     global USE_API_MODE
     with _PROVIDER_STATE_LOCK:
         USE_API_MODE = use_api
+
+
+def set_ollama_reasoning_mode(mode: str):
+    """Update the request snapshot source used by reasoning-capable Ollama models."""
+    global OLLAMA_REASONING_MODE
+    normalized = "Thinking" if str(mode or "").strip().lower() == "thinking" else "Quick"
+    with _PROVIDER_STATE_LOCK:
+        OLLAMA_REASONING_MODE = normalized
 
 
 def set_task_model(task: str, api_model: str):

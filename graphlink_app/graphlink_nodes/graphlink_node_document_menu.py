@@ -5,7 +5,7 @@ from PySide6.QtGui import QAction, QDesktopServices
 from PySide6.QtWidgets import QApplication, QFileDialog, QMenu
 from PySide6.QtCore import QUrl
 
-from graphlink_config import get_current_palette
+from graphlink_context_menu import configure_context_menu, create_context_menu
 from graphlink_exporter import Exporter
 
 
@@ -15,14 +15,7 @@ class DocumentNodeContextMenu(QMenu):
     def __init__(self, node, parent=None):
         super().__init__(parent)
         self.node = node
-        palette = get_current_palette()
-
-        self.setStyleSheet(f"""
-            QMenu {{ background-color: #2d2d2d; border: 1px solid #3f3f3f; border-radius: 4px; padding: 4px; }}
-            QMenu::item {{ background-color: transparent; padding: 8px 20px; border-radius: 4px; color: white; }}
-            QMenu::item:selected {{ background-color: {palette.SELECTION.name()}; }}
-            QMenu::separator {{ height: 1px; background-color: #3f3f3f; margin: 4px 0px; }}
-        """)
+        configure_context_menu(self)
 
         copy_action = QAction("Copy Details", self)
         copy_action.setIcon(qta.icon('fa5s.copy', color='white'))
@@ -69,7 +62,7 @@ class DocumentNodeContextMenu(QMenu):
         self.addAction(delete_action)
 
     def create_export_menu(self):
-        export_menu = QMenu("Export to Doc", self)
+        export_menu = create_context_menu(self, "Export to Doc")
         export_menu.setIcon(qta.icon('fa5s.file-export', color='white'))
 
         txt_action = QAction("Text File (.txt)", self)

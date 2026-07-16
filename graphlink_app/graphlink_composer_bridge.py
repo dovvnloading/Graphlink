@@ -20,6 +20,8 @@ from graphlink_config import get_current_palette
 
 _MAX_DRAFT_CHARS = 100_000
 _ACTIVE_STATES = frozenset({"preparing", "uploading", "waiting", "generating", "finalizing"})
+COMPOSER_MIN_HEIGHT = 92
+COMPOSER_MAX_HEIGHT = 420
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -42,6 +44,30 @@ def _clean_label(value: Any, fallback: str, limit: int = 80) -> str:
     if not label:
         return fallback
     return label if len(label) <= limit else label[: limit - 1].rstrip() + "…"
+
+
+def _model_option(
+    model_id: Any,
+    *,
+    provider: str,
+    source: str,
+    active: bool = False,
+    ready: bool = True,
+    available: bool = True,
+    label: Any = None,
+    capabilities: Any = None,
+) -> dict[str, Any]:
+    normalized_id = str(model_id or "").strip()
+    return {
+        "id": normalized_id,
+        "label": _clean_label(label or normalized_id, normalized_id or "Model", 100),
+        "provider": str(provider or ""),
+        "source": str(source or "configured"),
+        "active": bool(active),
+        "ready": bool(ready),
+        "available": bool(available),
+        "capabilities": sorted({str(item).strip() for item in (capabilities or []) if str(item).strip()}),
+    }
 
 
 class ComposerBridge(QObject):
@@ -108,6 +134,10 @@ class ComposerBridge(QObject):
     @Slot()
     def reviewContext(self):
         context = self._state_payload()["context"]
+        open_context = getattr(self.window, "open_composer_context_popup", None)
+        if callable(open_context):
+            open_context(context)
+            return
         self.contextReviewChanged.emit(json.dumps(context, sort_keys=True))
 
     @Slot()
@@ -124,9 +154,111 @@ class ComposerBridge(QObject):
             remove(path)
             self._publish()
 
+    @Slot(str)
+    def selectModel(self, model_id: str):
+        """Persist and activate the chat model selected in the composer."""
+        if self._state_payload()["request"]["state"] in _ACTIVE_STATES:
+            return
+        model_id = str(model_id or "").strip()
+        if not model_id:
+            return
+
+        settings = getattr(self.window, "settings_manager", None)
+        mode = str(_safe_call(settings, "get_current_mode", config.MODE_OLLAMA_LOCAL) or "")
+        try:
+            import api_provider
+
+            if mode == config.MODE_API_ENDPOINT:
+                provider = str(_safe_call(settings, "get_api_provider", "") or "")
+                models = dict(_safe_call(settings, "get_api_models", {}, provider) or {})
+                models[config.TASK_CHAT] = model_id
+                _safe_call(settings, "set_api_models", None, models, provider)
+                api_provider.set_task_model(config.TASK_CHAT, model_id)
+            elif mode == config.MODE_LLAMACPP_LOCAL:
+                _safe_call(settings, "set_llama_cpp_chat_model_path", None, model_id)
+                api_provider.initialize_local_provider(
+                    config.LOCAL_PROVIDER_LLAMACPP,
+                    _safe_call(settings, "get_llama_cpp_settings", {}),
+                    preload_model=False,
+                )
+            else:
+                _safe_call(settings, "set_ollama_chat_model", None, model_id)
+                config.sync_ollama_task_models(settings)
+                api_provider.set_ollama_reasoning_mode(
+                    _safe_call(settings, "get_ollama_reasoning_mode", "Thinking")
+                )
+
+            self._notify_settings_changed()
+            self._publish()
+        except Exception as exc:
+            self._show_configuration_error(f"Model selection failed: {exc}")
+
+    @Slot(str)
+    def setReasoningLevel(self, level: str):
+        """Persist and activate the composer reasoning level."""
+        if self._state_payload()["request"]["state"] in _ACTIVE_STATES:
+            return
+
+        normalized = "Thinking" if str(level or "").strip().lower() == "thinking" else "Quick"
+        settings = getattr(self.window, "settings_manager", None)
+        mode = str(_safe_call(settings, "get_current_mode", config.MODE_OLLAMA_LOCAL) or "")
+        try:
+            import api_provider
+
+            if mode == config.MODE_LLAMACPP_LOCAL:
+                _safe_call(settings, "set_llama_cpp_reasoning_mode", None, normalized)
+                api_provider.initialize_local_provider(
+                    config.LOCAL_PROVIDER_LLAMACPP,
+                    _safe_call(settings, "get_llama_cpp_settings", {}),
+                    preload_model=False,
+                )
+            else:
+                _safe_call(settings, "set_ollama_reasoning_mode", None, normalized)
+                api_provider.set_ollama_reasoning_mode(normalized)
+
+            self._notify_settings_changed()
+            self._publish()
+        except Exception as exc:
+            self._show_configuration_error(f"Reasoning setting failed: {exc}")
+
+    @Slot()
+    def openSettings(self):
+        show_settings = getattr(self.window, "show_settings", None)
+        if callable(show_settings):
+            show_settings()
+
+    @Slot()
+    def openModelSelector(self):
+        """Open the native picker outside the QWebEngine viewport."""
+        show_picker = getattr(self.window, "open_composer_model_picker", None)
+        if callable(show_picker):
+            show_picker("model")
+
+    @Slot()
+    def openReasoningSelector(self):
+        """Open the native reasoning picker outside the QWebEngine viewport."""
+        show_picker = getattr(self.window, "open_composer_model_picker", None)
+        if callable(show_picker):
+            show_picker("reasoning")
+
+    def route_snapshot(self) -> dict[str, Any]:
+        """Return the current route for native UI owned by the desktop window."""
+        return self._route()
+
+    def _notify_settings_changed(self):
+        callback = getattr(self.window, "on_settings_changed", None)
+        if callable(callback):
+            callback()
+
+    def _show_configuration_error(self, message: str):
+        banner = getattr(self.window, "notification_banner", None)
+        notify = getattr(banner, "show_message", None)
+        if callable(notify):
+            notify(str(message), 7000, "error")
+
     @Slot(int)
     def resize(self, height: int):
-        bounded = max(220, min(520, int(height)))
+        bounded = max(COMPOSER_MIN_HEIGHT, min(COMPOSER_MAX_HEIGHT, int(height)))
         if bounded == self._last_height:
             return
         self._last_height = bounded
@@ -185,6 +317,121 @@ class ComposerBridge(QObject):
             )
         return items
 
+    def _cloud_model_options(self, settings, provider: str, active_model: str) -> list[dict[str, Any]]:
+        options: dict[str, dict[str, Any]] = {}
+
+        def add(model_id, *, source="saved", ready=True, available=True, capabilities=None):
+            normalized = str(model_id or "").strip()
+            if not normalized:
+                return
+            key = normalized.lower()
+            if key not in options:
+                options[key] = _model_option(
+                    normalized,
+                    provider=provider,
+                    source=source,
+                    active=normalized == active_model,
+                    ready=ready,
+                    available=available,
+                    capabilities=capabilities,
+                )
+            elif normalized == active_model:
+                options[key]["active"] = True
+
+        for descriptor in _safe_call(settings, "get_api_model_catalog", [], provider) or []:
+            if isinstance(descriptor, dict):
+                add(
+                    descriptor.get("model_id") or descriptor.get("id"),
+                    source="catalog",
+                    ready=descriptor.get("ready", True),
+                    available=descriptor.get("available", True),
+                    capabilities=descriptor.get("capabilities", []),
+                )
+            else:
+                add(descriptor, source="catalog")
+
+        saved_models = _safe_call(settings, "get_api_models", {}, provider) or {}
+        if isinstance(saved_models, dict):
+            for model_id in saved_models.values():
+                add(model_id, source="saved")
+
+        if provider == config.API_PROVIDER_GEMINI and not options:
+            try:
+                import api_provider
+
+                for model_id in api_provider.GEMINI_MODELS_STATIC:
+                    add(model_id, source="catalog")
+            except (AttributeError, ImportError):
+                pass
+
+        add(active_model, source="configured")
+        return sorted(
+            options.values(),
+            key=lambda item: (not item["active"], not item["ready"], item["label"].lower()),
+        )
+
+    def _local_model_options(self, settings, provider: str, active_model: str) -> list[dict[str, Any]]:
+        options: dict[str, dict[str, Any]] = {}
+        if provider == "Ollama":
+            scanned_models = _safe_call(settings, "get_ollama_scanned_models", []) or []
+            for model_id in scanned_models:
+                normalized = str(model_id or "").strip()
+                if normalized:
+                    options[normalized.lower()] = _model_option(
+                        normalized,
+                        provider=provider,
+                        source="installed",
+                        active=normalized == active_model,
+                    )
+        else:
+            scanned_models = _safe_call(settings, "get_llama_cpp_scanned_models", []) or []
+            for model_path in scanned_models:
+                normalized = str(model_path or "").strip()
+                if normalized:
+                    options[normalized.lower()] = _model_option(
+                        normalized,
+                        provider=provider,
+                        source="installed",
+                        active=normalized == active_model,
+                        label=os.path.basename(normalized),
+                    )
+
+        if active_model and active_model.lower() not in options:
+            options[active_model.lower()] = _model_option(
+                active_model,
+                provider=provider,
+                source="configured",
+                active=True,
+                ready=False,
+                available=True,
+                label=os.path.basename(active_model) if provider != "Ollama" else active_model,
+            )
+        return sorted(
+            options.values(),
+            key=lambda item: (not item["active"], not item["ready"], item["label"].lower()),
+        )
+
+    def _reasoning(self, settings, mode: str) -> dict[str, Any]:
+        if mode == config.MODE_API_ENDPOINT:
+            return {
+                "level": "Provider",
+                "label": "Provider managed",
+                "options": [],
+            }
+        if mode == config.MODE_LLAMACPP_LOCAL:
+            level = _safe_call(settings, "get_llama_cpp_reasoning_mode", "Thinking")
+        else:
+            level = _safe_call(settings, "get_ollama_reasoning_mode", "Thinking")
+        level = "Thinking" if str(level or "").strip().lower() == "thinking" else "Quick"
+        return {
+            "level": level,
+            "label": level,
+            "options": [
+                {"id": "Quick", "label": "Quick", "description": "Direct responses with less deliberation."},
+                {"id": "Thinking", "label": "Thinking", "description": "More deliberate reasoning for complex requests."},
+            ],
+        }
+
     def _route(self) -> dict[str, Any]:
         settings = getattr(self.window, "settings_manager", None)
         mode = str(_safe_call(settings, "get_current_mode", config.MODE_OLLAMA_LOCAL) or "")
@@ -192,37 +439,68 @@ class ComposerBridge(QObject):
             provider = str(_safe_call(settings, "get_api_provider", "Cloud API") or "Cloud API")
             models = _safe_call(settings, "get_api_models", {}, provider) or {}
             model_id = str(models.get(config.TASK_CHAT) or "") if isinstance(models, dict) else ""
+            if not model_id:
+                import api_provider
+
+                task_models = _safe_call(api_provider, "get_task_models", {}) or {}
+                model_id = str(task_models.get(config.TASK_CHAT) or "") if isinstance(task_models, dict) else ""
+            model_options = self._cloud_model_options(settings, provider, model_id)
+            model_label = next(
+                (item["label"] for item in model_options if item["active"]),
+                model_id or "Select a model",
+            )
             return {
                 "mode": "cloud",
                 "provider": provider,
                 "modelId": model_id,
+                "modelLabel": model_label,
+                "modelOptions": model_options,
                 "label": f"Cloud · {provider}",
-                "available": bool(provider),
-                "canChange": False,
+                "available": bool(provider and model_id),
+                "canChange": True,
+                "reasoning": self._reasoning(settings, mode),
             }
         if mode == config.MODE_LLAMACPP_LOCAL:
             model_path = str(_safe_call(settings, "get_llama_cpp_chat_model_path", "") or "")
-            model_id = os.path.basename(model_path) if model_path else ""
+            model_options = self._local_model_options(settings, "llama.cpp", model_path)
+            model_label = next(
+                (item["label"] for item in model_options if item["active"]),
+                os.path.basename(model_path) if model_path else "Select a model",
+            )
             return {
                 "mode": "llamacpp",
                 "provider": "llama.cpp",
-                "modelId": model_id,
+                "modelId": os.path.basename(model_path) if model_path else "",
+                "modelValue": model_path,
+                "modelLabel": model_label,
+                "modelOptions": model_options,
                 "label": "Local · llama.cpp",
                 "available": bool(model_path),
-                "canChange": False,
+                "canChange": True,
+                "reasoning": self._reasoning(settings, mode),
             }
 
-        model_id = str(_safe_call(settings, "get_ollama_chat_model", "") or "")
+        model_id = str(config.OLLAMA_MODELS.get(config.TASK_CHAT) or "")
+        if not model_id:
+            model_id = str(_safe_call(settings, "get_ollama_chat_model", "") or "")
         if not model_id:
             scanned = _safe_call(settings, "get_ollama_scanned_models", []) or []
             model_id = str(scanned[0]) if scanned else ""
+        model_options = self._local_model_options(settings, "Ollama", model_id)
+        model_label = next(
+            (item["label"] for item in model_options if item["active"]),
+            model_id or "Select a model",
+        )
         return {
             "mode": "ollama",
             "provider": "Ollama",
             "modelId": model_id,
+            "modelLabel": model_label,
+            "modelOptions": model_options,
             "label": "Local · Ollama",
-            "available": True,
-            "canChange": False,
+            "available": bool(model_id),
+            "canChange": True,
+            "reasoning": self._reasoning(settings, mode),
         }
 
     def _theme(self) -> dict[str, str]:
@@ -245,6 +523,7 @@ class ComposerBridge(QObject):
         }
         request_state = getattr(self.controller.state, "value", str(self.controller.state))
         request_state = str(request_state)
+        route = self._route()
         # The desktop request path rejects an empty prompt with only a graph
         # anchor. Attachments are valid input; an anchor alone is reviewable
         # context, not a sendable request.
@@ -260,7 +539,7 @@ class ComposerBridge(QObject):
                 "restored": bool(draft.restored),
             },
             "context": context,
-            "route": self._route(),
+            "route": route,
             "request": {
                 "id": self.controller.active_request_id,
                 "state": request_state,
@@ -272,7 +551,10 @@ class ComposerBridge(QObject):
             "capabilities": {
                 "attachments": True,
                 "contextReview": True,
-                "routeSelection": False,
+                "routeSelection": True,
+                "modelSelection": True,
+                "reasoningSelection": route["mode"] != "cloud",
+                "settingsShortcut": True,
                 "cancellation": True,
             },
             "theme": self._theme(),

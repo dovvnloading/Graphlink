@@ -15,12 +15,13 @@ from matplotlib.figure import Figure
 from matplotlib.patches import FancyBboxPatch, PathPatch
 from matplotlib.path import Path as MplPath
 
-from PySide6.QtWidgets import QGraphicsItem, QFileDialog, QMenu
+from PySide6.QtWidgets import QGraphicsItem, QFileDialog
 from PySide6.QtCore import Qt, QRectF, QPointF, QSizeF, QTimer, QStandardPaths
 from PySide6.QtGui import QPainter, QColor, QBrush, QPen, QFont, QPainterPath, QImage, QLinearGradient
 
 from graphlink_config import get_current_palette, get_graph_node_colors
 from graphlink_chart_data import ChartDataError, canonicalize_chart_data
+from graphlink_context_menu import create_context_menu
 
 
 class ChartItem(QGraphicsItem):
@@ -1012,25 +1013,7 @@ class ChartItem(QGraphicsItem):
         return QRectF(self.width - 10, self.height - 10, 10, 10).contains(pos)
 
     def contextMenuEvent(self, event):
-        menu = QMenu()
-        palette = get_current_palette()
-        menu.setStyleSheet(f"""
-            QMenu {{
-                background-color: #2d2d2d;
-                border: 1px solid #3f3f3f;
-                border-radius: 4px;
-                padding: 4px;
-            }}
-            QMenu::item {{
-                background-color: transparent;
-                padding: 8px 20px;
-                border-radius: 4px;
-                color: white;
-            }}
-            QMenu::item:selected {{
-                background-color: {palette.SELECTION.name()};
-            }}
-        """)
+        menu = create_context_menu()
 
         export_desktop_action = menu.addAction("Export PNG To Desktop")
         export_as_action = menu.addAction("Export PNG As...")

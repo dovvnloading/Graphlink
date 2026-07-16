@@ -180,6 +180,7 @@ class ComposerController(QObject):
         if request_id and not self.is_current(request_id):
             return False
         active_id = request_id or self.active_request_id or ""
+        self._restore_submitted_text()
         self.set_state(ComposerRequestState.FAILED, message)
         self.requestFailed.emit(active_id, message)
         self.active_snapshot = None
@@ -189,6 +190,7 @@ class ComposerController(QObject):
         if request_id and not self.is_current(request_id):
             return False
         active_id = request_id or self.active_request_id or ""
+        self._restore_submitted_text()
         self.set_state(ComposerRequestState.CANCELED, "Request canceled")
         self.requestCancelled.emit(active_id)
         self.active_snapshot = None
@@ -198,6 +200,29 @@ class ComposerController(QObject):
         self.draft.text = ""
         self.draft.attachments = []
         self.draft.restored = False
+        self._touch_draft()
+
+    def clear_submitted_text(self):
+        """Clear the visible prompt while retaining the active request snapshot.
+
+        The request snapshot remains the source of truth for retry/error
+        recovery. This lets the composer clear immediately on send without
+        losing the prompt if the provider later fails or the user cancels.
+        """
+        if self.active_snapshot is None:
+            return False
+        if not self.draft.text:
+            return True
+        self.draft.text = ""
+        self.draft.restored = False
+        self._touch_draft()
+        return True
+
+    def _restore_submitted_text(self):
+        snapshot = self.active_snapshot
+        if snapshot is None or self.draft.text == snapshot.text:
+            return
+        self.draft.text = snapshot.text
         self._touch_draft()
 
     def serialize_draft(self) -> dict:

@@ -30,6 +30,8 @@ import graphlink_window
 def _make_mock_window():
     mock_self = MagicMock()
     mock_self.chat_view.viewport.return_value = MagicMock(width=lambda: 1000, height=lambda: 800)
+    mock_self.composer = None
+    mock_self.composer_overlay_parent = None
     mock_self.search_overlay.isVisible.return_value = False
     mock_self.notification_banner.isVisible.return_value = False
     mock_self.token_counter_widget.isVisible.return_value = False
@@ -54,3 +56,51 @@ def test_delegation_happens_regardless_of_search_overlay_visibility():
         graphlink_window.ChatWindow._update_overlay_positions(mock_self)
 
         mock_self.chat_view._update_overlay_positions.assert_called_once()
+
+
+def test_composer_is_centered_over_the_graph_viewport():
+    mock_self = _make_mock_window()
+    composer = MagicMock()
+    composer.height.return_value = 96
+    composer.sizeHint.return_value.height.return_value = 96
+    mock_self.composer = composer
+    mock_self.composer_renderer = "web"
+
+    graphlink_window.ChatWindow._update_composer_overlay(mock_self)
+
+    composer.setFixedWidth.assert_called_once_with(820)
+    composer.setFixedHeight.assert_called_once_with(96)
+    composer.move.assert_called_once_with(90, 686)
+    composer.raise_.assert_called_once()
+
+
+def test_composer_position_is_translated_into_window_overlay_coordinates():
+    mock_self = _make_mock_window()
+    overlay_parent = MagicMock()
+    viewport = mock_self.chat_view.viewport.return_value
+    viewport.mapTo.return_value = graphlink_window.QPoint(25, 40)
+    mock_self.composer_overlay_parent = overlay_parent
+    composer = MagicMock()
+    composer.height.return_value = 96
+    composer.sizeHint.return_value.height.return_value = 96
+    mock_self.composer = composer
+    mock_self.composer_renderer = "web"
+
+    graphlink_window.ChatWindow._update_composer_overlay(mock_self)
+
+    viewport.mapTo.assert_called_once_with(overlay_parent, graphlink_window.QPoint(0, 0))
+    composer.move.assert_called_once_with(115, 726)
+
+
+def test_visible_notification_is_raised_above_composer():
+    mock_self = _make_mock_window()
+    mock_self.notification_banner.isVisible.return_value = True
+    composer = MagicMock()
+    composer.height.return_value = 96
+    composer.sizeHint.return_value.height.return_value = 96
+    mock_self.composer = composer
+    mock_self.composer_renderer = "web"
+
+    graphlink_window.ChatWindow._update_composer_overlay(mock_self)
+
+    mock_self.notification_banner.raise_.assert_called_once()

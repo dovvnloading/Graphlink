@@ -1433,6 +1433,8 @@ class ApiSettingsWidget(QWidget):
             return
         models = [item.get("model_id", "") for item in descriptors if item.get("model_id")]
         provider = self.provider_combo.currentText()
+        if hasattr(self.settings_manager, "set_api_model_catalog"):
+            self.settings_manager.set_api_model_catalog(descriptors, provider)
         if provider == config.API_PROVIDER_OPENAI:
             self._populate_models(models)
         elif provider == config.API_PROVIDER_ANTHROPIC:

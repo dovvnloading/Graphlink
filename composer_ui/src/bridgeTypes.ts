@@ -29,9 +29,36 @@ export interface ComposerRoute {
   mode: "cloud" | "ollama" | "llamacpp" | "unknown";
   provider: string;
   modelId: string;
+  modelValue?: string;
+  modelLabel: string;
+  modelOptions: ComposerModelOption[];
+  reasoning: ComposerReasoning;
   label: string;
   available: boolean;
   canChange: boolean;
+}
+
+export interface ComposerModelOption {
+  id: string;
+  label: string;
+  provider: string;
+  source: "installed" | "catalog" | "saved" | "configured" | string;
+  active: boolean;
+  ready: boolean;
+  available: boolean;
+  capabilities: string[];
+}
+
+export interface ComposerReasoningOption {
+  id: "Quick" | "Thinking" | string;
+  label: string;
+  description: string;
+}
+
+export interface ComposerReasoning {
+  level: "Quick" | "Thinking" | string;
+  label: string;
+  options: ComposerReasoningOption[];
 }
 
 export interface ComposerState {
@@ -58,6 +85,9 @@ export interface ComposerState {
     attachments: boolean;
     contextReview: boolean;
     routeSelection: boolean;
+    modelSelection: boolean;
+    reasoningSelection: boolean;
+    settingsShortcut: boolean;
     cancellation: boolean;
   };
   theme: { mode: "dark" | "light"; accent: string; surface: string };
@@ -83,6 +113,16 @@ export const initialComposerState: ComposerState = {
     mode: "ollama",
     provider: "Ollama",
     modelId: "",
+    modelLabel: "Select a model",
+    modelOptions: [],
+    reasoning: {
+      level: "Thinking",
+      label: "Thinking",
+      options: [
+        { id: "Quick", label: "Quick", description: "Direct responses with less deliberation." },
+        { id: "Thinking", label: "Thinking", description: "More deliberate reasoning for complex requests." },
+      ],
+    },
     label: "Local · Ollama",
     available: true,
     canChange: false,
@@ -98,7 +138,10 @@ export const initialComposerState: ComposerState = {
   capabilities: {
     attachments: true,
     contextReview: true,
-    routeSelection: false,
+    routeSelection: true,
+    modelSelection: true,
+    reasoningSelection: true,
+    settingsShortcut: true,
     cancellation: true,
   },
   theme: { mode: "dark", accent: "#83a7ff", surface: "#1b1f25" },

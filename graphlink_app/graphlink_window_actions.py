@@ -253,6 +253,11 @@ class WindowActionsMixin:
             return
 
         request_id = self.composer_controller.begin_request(text=message, attachments=attachments)
+        # Clear the visible prompt at the accepted-send boundary. The
+        # controller retains the immutable request snapshot and restores the
+        # text automatically if preparation, the provider, or cancellation
+        # fails.
+        self.composer_controller.clear_submitted_text()
 
         self.message_input.set_editor_enabled(False) if hasattr(self.message_input, 'set_editor_enabled') else self.message_input.setEnabled(False)
         self.send_button.setEnabled(False)

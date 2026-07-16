@@ -72,6 +72,7 @@ py-modules = [
     "graphlink_composer_bridge",
     "graphlink_composer_web",
     "graphlink_config",
+    "graphlink_context_menu",
     "graphlink_connections",
     "graphlink_conversation_node",
     "graphlink_core",

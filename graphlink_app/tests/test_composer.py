@@ -54,6 +54,28 @@ def test_controller_round_trips_restored_draft_and_clears_only_after_success():
     assert controller.draft.attachments == []
 
 
+def test_submitted_text_clears_immediately_and_returns_on_failure():
+    controller = ComposerController()
+    request_id = controller.begin_request(text="Retry this prompt")
+
+    assert controller.clear_submitted_text()
+    assert controller.draft.text == ""
+
+    assert controller.fail(request_id, "Provider unavailable")
+    assert controller.draft.text == "Retry this prompt"
+
+
+def test_submitted_text_stays_empty_after_success():
+    controller = ComposerController()
+    request_id = controller.begin_request(text="Send this prompt")
+
+    controller.clear_submitted_text()
+    assert controller.complete(request_id)
+    controller.clear_after_success()
+
+    assert controller.draft.text == ""
+
+
 def test_composer_exposes_visible_context_and_accessible_actions():
     composer = ComposerWidget()
     composer.set_context_anchor(type("Node", (), {"title": "Chart analysis"})())

@@ -1,11 +1,12 @@
-"""Local React composer host for the optional QWebEngine renderer."""
+"""Local React composer host for the QWebEngine renderer."""
 
 from __future__ import annotations
 
 import re
 from pathlib import Path
 
-from PySide6.QtCore import QUrl, Qt, Signal
+from PySide6.QtCore import QRect, QUrl, Qt, Signal
+from PySide6.QtGui import QColor, QRegion
 from PySide6.QtWidgets import (
     QFrame,
     QLabel,
@@ -28,7 +29,11 @@ except ImportError:
     WEBENGINE_AVAILABLE = False
     _harden_preview_web_view = None
 
-from graphlink_composer_bridge import ComposerBridge
+from graphlink_composer_bridge import (
+    COMPOSER_MAX_HEIGHT,
+    COMPOSER_MIN_HEIGHT,
+    ComposerBridge,
+)
 
 
 def _inline_bundle(asset_root: Path) -> str:
@@ -87,8 +92,42 @@ def _inline_bundle(asset_root: Path) -> str:
     return document
 
 
+def _rounded_region(rect: QRect, radius: int) -> QRegion:
+    """Return a true rounded-rectangle region for native child clipping."""
+    width = max(0, rect.width())
+    height = max(0, rect.height())
+    if width == 0 or height == 0:
+        return QRegion()
+
+    radius = max(0, min(int(radius), width // 2, height // 2))
+    if radius == 0:
+        return QRegion(QRect(0, 0, width, height), QRegion.RegionType.Rectangle)
+
+    diameter = radius * 2
+    region = QRegion(
+        QRect(radius, 0, max(1, width - diameter), height),
+        QRegion.RegionType.Rectangle,
+    )
+    region = region.united(
+        QRegion(
+            QRect(0, radius, width, max(1, height - diameter)),
+            QRegion.RegionType.Rectangle,
+        )
+    )
+    for x, y in (
+        (0, 0),
+        (width - diameter, 0),
+        (0, height - diameter),
+        (width - diameter, height - diameter),
+    ):
+        region = region.united(
+            QRegion(QRect(x, y, diameter, diameter), QRegion.RegionType.Ellipse)
+        )
+    return region
+
+
 class ComposerWebHost(QFrame):
-    """QWidget-compatible host for the React composer.
+    """QWidget-compatible host for the React/QWebEngine composer.
 
     The compatibility methods let ChatWindow migrate without giving the web
     surface ownership of request logic or attachment paths.
@@ -109,7 +148,11 @@ class ComposerWebHost(QFrame):
         self.controller = controller or getattr(window, "composer_controller", None)
         self.setObjectName("composerWebHost")
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.setMinimumHeight(220)
+        self.setFixedHeight(COMPOSER_MIN_HEIGHT)
+        self.setStyleSheet("QFrame#composerWebHost { background: transparent; border: 0; }")
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self._corner_radius = 14
         self._placeholder = "Ask about this graph…"
 
         # These hidden controls preserve the existing ChatWindow styling and
@@ -129,6 +172,8 @@ class ComposerWebHost(QFrame):
 
         if WEBENGINE_AVAILABLE and QWebEngineView and QWebChannel:
             self.web_view = QWebEngineView(self)
+            self.web_view.setStyleSheet("background: transparent; border: 0;")
+            self.web_view.page().setBackgroundColor(QColor(0, 0, 0, 0))
             _harden_preview_web_view(self.web_view)
             channel = QWebChannel(self.web_view.page())
             channel.registerObject("composerBridge", self.bridge)
@@ -145,6 +190,17 @@ class ComposerWebHost(QFrame):
             fallback.setWordWrap(True)
             fallback.setAlignment(Qt.AlignmentFlag.AlignCenter)
             layout.addWidget(fallback)
+
+        self._apply_native_mask()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._apply_native_mask()
+
+    def _apply_native_mask(self):
+        self.setMask(_rounded_region(self.rect(), self._corner_radius))
+        if self.web_view is not None:
+            self.web_view.setMask(_rounded_region(self.web_view.rect(), self._corner_radius))
 
     def text(self) -> str:
         return str(self.controller.draft.text or "")
@@ -194,7 +250,7 @@ class ComposerWebHost(QFrame):
         self.bridge._publish()
 
     def _apply_requested_height(self, height: int):
-        bounded = max(220, min(520, int(height)))
+        bounded = max(COMPOSER_MIN_HEIGHT, min(COMPOSER_MAX_HEIGHT, int(height)))
         if self.height() == bounded:
             return
         self.setFixedHeight(bounded)
