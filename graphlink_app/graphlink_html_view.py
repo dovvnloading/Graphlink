@@ -29,9 +29,10 @@ except ImportError:
 
 
 # Schemes a self-contained local preview legitimately needs: the setHtml document itself
-# (about:), inline data: URIs, and JS-created blob: URLs. Everything else - http(s), file,
-# ftp, ws(s) - would leave the machine or reach localhost/intranet/disk.
-_LOCAL_PREVIEW_SCHEMES = frozenset({"about", "data", "blob"})
+# (about:), inline data: URIs, JS-created blob: URLs, and Qt's compiled-in qrc resources.
+# Everything else - http(s), file, ftp, ws(s) - would leave the machine or reach
+# localhost/intranet/disk.
+_LOCAL_PREVIEW_SCHEMES = frozenset({"about", "data", "blob", "qrc"})
 
 
 def preview_url_is_allowed(url):
