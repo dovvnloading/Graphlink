@@ -78,7 +78,7 @@ class Pin(QGraphicsItem):
         elif self.hover:
             color = palette.AI_NODE
         else:
-            color = QColor("#ffffff")
+            color = QColor("#FFFFFF")
             
         painter.setPen(QPen(color.darker(120), 1))
         painter.setBrush(QBrush(color))
@@ -1273,7 +1273,7 @@ class ThinkingConnectionItem(ContentConnectionItem):
         palette = get_current_palette()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         
-        pen_color = QColor("#95a5a6") # A soft gray-blue
+        pen_color = QColor("#A2A2A2") # A soft gray-blue
         if self.hover:
             pen_color = pen_color.lighter(130)
 
@@ -1788,7 +1788,7 @@ class GroupSummaryConnectionItem(ConnectionItem):
         
         color = QColor("#888888")
         if self.hover:
-            color = QColor("#bbbbbb")
+            color = QColor("#BBBBBB")
         color.setAlphaF(opacity)
         
         painter.setBrush(color)

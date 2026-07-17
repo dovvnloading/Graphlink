@@ -50,7 +50,7 @@ class AboutDialog(QDialog):
         links_layout.setSpacing(8)
 
         def create_link_btn(icon_name, text, url):
-            btn = QPushButton(qta.icon(icon_name, color='#f3f5f8'), text)
+            btn = QPushButton(qta.icon(icon_name, color='#F5F5F5'), text)
             btn.setObjectName("aboutLinkBtn")
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.clicked.connect(lambda: webbrowser.open(url))
@@ -116,7 +116,7 @@ class AboutDialog(QDialog):
         
         self.setStyleSheet(f"""
             QDialog {{
-                background-color: #1e1e1e;
+                background-color: #1E1E1E;
             }}
             /* The app theme paints every QWidget subclass dark. About is mostly
                labels, so they must stay explicitly transparent or title strips
@@ -135,14 +135,14 @@ class AboutDialog(QDialog):
                 color: #888888;
             }}
             QLabel#aboutSectionLabel {{
-                color: #8d8d8d;
+                color: #8D8D8D;
                 font-size: 10px;
                 font-weight: 700;
                 letter-spacing: 0.1em;
                 margin-left: 2px;
             }}
             QLabel#aboutDevName {{
-                color: #e0e0e0;
+                color: #E0E0E0;
                 font-size: 13px;
                 font-weight: 600;
                 margin-left: 2px;
@@ -152,7 +152,7 @@ class AboutDialog(QDialog):
                 background-color: rgba(255, 255, 255, 0.05);
                 border: 1px solid rgba(255, 255, 255, 0.1);
                 border-radius: 6px;
-                color: #f3f5f8;
+                color: #F5F5F5;
                 font-size: 12px;
                 font-weight: 600;
                 padding: 10px;
@@ -169,7 +169,7 @@ class AboutDialog(QDialog):
             }}
             QPushButton#aboutCloseBtn {{
                 background-color: {accent};
-                color: #ffffff;
+                color: #FFFFFF;
                 border: none;
                 border-radius: 6px;
                 font-size: 12px;
@@ -189,7 +189,7 @@ class HelpCategoryButton(QPushButton):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setCheckable(True)
         self.setMinimumHeight(40)
-        self.setIcon(qta.icon(icon_name, color="#d9e1ea"))
+        self.setIcon(qta.icon(icon_name, color="#E0E0E0"))
         self.setIconSize(QSize(14, 14))
 
 
@@ -503,8 +503,8 @@ class HelpDialog(QFrame):
         accent = palette.SELECTION.name()
         panel_gray = "rgba(42, 42, 42, 248)"
         line_gray = "rgba(255, 255, 255, 0.08)"
-        muted_text = "#8d8d8d"
-        soft_text = "#bfc4ca"
+        muted_text = "#8D8D8D"
+        soft_text = "#C3C3C3"
         hover_gray = "rgba(255, 255, 255, 0.055)"
         badge_gray = "rgba(255, 255, 255, 0.025)"
 
@@ -562,12 +562,12 @@ class HelpDialog(QFrame):
             QPushButton#helpCategoryButton:hover {{
                 background-color: {hover_gray};
                 border-color: rgba(255, 255, 255, 0.05);
-                color: #ffffff;
+                color: #FFFFFF;
             }}
             QPushButton#helpCategoryButton:checked {{
                 background-color: rgba(255, 255, 255, 0.06);
                 border-color: rgba(255, 255, 255, 0.08);
-                color: #ffffff;
+                color: #FFFFFF;
             }}
             QLabel#helpCategoryIcon {{
                 background-color: {badge_gray};
@@ -575,7 +575,7 @@ class HelpDialog(QFrame):
                 border-radius: 14px;
             }}
             QLabel#helpPaneTitle {{
-                color: #f3f5f8;
+                color: #F5F5F5;
                 font-size: 15px;
                 font-weight: 700;
                 background-color: transparent;
@@ -594,7 +594,7 @@ class HelpDialog(QFrame):
             }}
             QPushButton#helpCloseButton {{
                 background-color: rgba(255, 255, 255, 0.04);
-                color: #f3f5f8;
+                color: #F5F5F5;
                 border: 1px solid rgba(255, 255, 255, 0.08);
                 border-radius: 8px;
                 padding: 8px 14px;
@@ -631,7 +631,7 @@ class HelpDialog(QFrame):
                 border-radius: 14px;
             }}
             QLabel#helpItemAction {{
-                color: #ffffff;
+                color: #FFFFFF;
                 font-size: 12px;
                 font-weight: 700;
                 background-color: transparent;

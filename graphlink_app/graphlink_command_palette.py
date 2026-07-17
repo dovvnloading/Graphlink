@@ -121,20 +121,20 @@ class CommandPaletteDialog(QDialog):
                 background: transparent;
             }
             QWidget#commandPaletteCanvas {
-                background-color: #252526;
-                color: #ffffff;
+                background-color: #252525;
+                color: #FFFFFF;
                 border-radius: 8px;
             }
             QLineEdit {
                 padding: 10px;
                 font-size: 14px;
-                background-color: #1e1e1e;
-                border: 1px solid #3f3f3f;
+                background-color: #1E1E1E;
+                border: 1px solid #3F3F3F;
                 border-radius: 4px;
             }
             QListWidget {
-                border: 1px solid #3f3f3f;
-                background-color: #2d2d2d;
+                border: 1px solid #3F3F3F;
+                background-color: #2D2D2D;
                 font-size: 13px;
                 border-radius: 4px;
             }

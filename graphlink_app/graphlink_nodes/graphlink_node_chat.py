@@ -143,15 +143,15 @@ class ChatNode(QGraphicsItem, HoverAnimationMixin):
         accent = self._role_accent()
         monochrome = is_monochrome_theme()
 
-        body_start = self._mix_color(QColor("#25282d"), accent, 0.04 if not monochrome else 0.02)
-        body_end = self._mix_color(QColor("#171a1f"), accent, 0.02 if not monochrome else 0.01)
-        header_start = self._mix_color(QColor("#2c333b"), accent, 0.30 if not monochrome else 0.08)
-        header_end = self._mix_color(QColor("#181c22"), accent, 0.18 if not monochrome else 0.04)
-        badge_fill = self._mix_color(QColor("#262c33"), accent, 0.58 if not monochrome else 0.12)
-        badge_text = QColor("#f3fff8") if self.is_user else QColor("#eef7ff")
-        descriptor_text = self._mix_color(QColor("#9ca6b0"), accent, 0.14 if not monochrome else 0.04)
-        content_panel_fill = QColor("#111417")
-        content_panel_border = self._mix_color(QColor("#343a42"), accent, 0.08 if not monochrome else 0.03)
+        body_start = self._mix_color(QColor("#282828"), accent, 0.04 if not monochrome else 0.02)
+        body_end = self._mix_color(QColor("#1A1A1A"), accent, 0.02 if not monochrome else 0.01)
+        header_start = self._mix_color(QColor("#323232"), accent, 0.30 if not monochrome else 0.08)
+        header_end = self._mix_color(QColor("#1C1C1C"), accent, 0.18 if not monochrome else 0.04)
+        badge_fill = self._mix_color(QColor("#2B2B2B"), accent, 0.58 if not monochrome else 0.12)
+        badge_text = QColor("#FCFCFC") if self.is_user else QColor("#F6F6F6")
+        descriptor_text = self._mix_color(QColor("#A5A5A5"), accent, 0.14 if not monochrome else 0.04)
+        content_panel_fill = QColor("#141414")
+        content_panel_border = self._mix_color(QColor("#393939"), accent, 0.08 if not monochrome else 0.03)
 
         return {
             "accent": accent,
@@ -169,11 +169,11 @@ class ChatNode(QGraphicsItem, HoverAnimationMixin):
     def _get_default_stylesheet(self, color, font_family, font_size):
         base_text = QColor(color)
         accent = self._role_accent()
-        muted_text = self._mix_color(base_text, QColor("#c7d0d9"), 0.18 if not is_monochrome_theme() else 0.04)
+        muted_text = self._mix_color(base_text, QColor("#CFCFCF"), 0.18 if not is_monochrome_theme() else 0.04)
         link_color = accent.lighter(125)
-        quote_border = self._mix_color(QColor("#4b5560"), accent, 0.55 if not is_monochrome_theme() else 0.10)
-        code_bg = self._mix_color(QColor("#111418"), accent, 0.10 if not is_monochrome_theme() else 0.03)
-        table_border = self._mix_color(QColor("#39414a"), accent, 0.26 if not is_monochrome_theme() else 0.06)
+        quote_border = self._mix_color(QColor("#545454"), accent, 0.55 if not is_monochrome_theme() else 0.10)
+        code_bg = self._mix_color(QColor("#141414"), accent, 0.10 if not is_monochrome_theme() else 0.03)
+        table_border = self._mix_color(QColor("#404040"), accent, 0.26 if not is_monochrome_theme() else 0.06)
 
         return f"""
             body {{
@@ -199,7 +199,7 @@ class ChatNode(QGraphicsItem, HoverAnimationMixin):
                 margin-bottom: 0.2em;
             }}
             h1, h2, h3, h4, h5, h6 {{
-                color: #ffffff;
+                color: #FFFFFF;
                 font-family: '{font_family}';
                 font-weight: bold;
                 margin-top: 0.2em;
@@ -262,7 +262,7 @@ class ChatNode(QGraphicsItem, HoverAnimationMixin):
     def _setup_document(self):
         font_family = "Segoe UI"
         font_size = 10
-        color = "#dddddd"
+        color = "#DDDDDD"
 
         if self.scene():
             font_family = self.scene().font_family
@@ -424,7 +424,7 @@ class ChatNode(QGraphicsItem, HoverAnimationMixin):
         painter.setPen(QColor(255, 255, 255, 110))
         painter.drawRoundedRect(self.collapse_button_rect, 4, 4)
 
-        icon_pen = QPen(QColor("#ffffff"), 1.8)
+        icon_pen = QPen(QColor("#FFFFFF"), 1.8)
         painter.setPen(icon_pen)
         center = self.collapse_button_rect.center()
         painter.drawLine(int(center.x() - 4), int(center.y()), int(center.x() + 4), int(center.y()))
@@ -483,7 +483,7 @@ class ChatNode(QGraphicsItem, HoverAnimationMixin):
         if self.isSelected() and not is_dragging:
             pen = QPen(palette.SELECTION, 2.2)
         elif self.hovered:
-            pen = QPen(QColor("#ffffff"), 2)
+            pen = QPen(QColor("#FFFFFF"), 2)
 
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawPath(path)
@@ -525,13 +525,13 @@ class ChatNode(QGraphicsItem, HoverAnimationMixin):
 
         docked_child_count = self.docked_child_count()
         if docked_child_count:
-            indicator_color = QColor("#95a5a6").lighter(130)
+            indicator_color = QColor("#A2A2A2").lighter(130)
             painter.setBrush(indicator_color)
             painter.setPen(Qt.PenStyle.NoPen)
             badge_width = 26 if docked_child_count < 10 else 32
             badge_rect = QRectF(current_width - badge_width - 38, 8, badge_width, 18)
             painter.drawRoundedRect(badge_rect, 9, 9)
-            painter.setPen(QColor("#111417"))
+            painter.setPen(QColor("#141414"))
             count_font = QFont(self.scene().font_family if self.scene() else "Segoe UI", 8, QFont.Weight.Bold)
             painter.setFont(count_font)
             painter.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, str(docked_child_count))
@@ -568,7 +568,7 @@ class ChatNode(QGraphicsItem, HoverAnimationMixin):
             font_family = self.scene().font_family if self.scene() else "Segoe UI"
             snippet_font = QFont(font_family, 9)
             painter.setFont(snippet_font)
-            painter.setPen(QColor("#f0f3f6"))
+            painter.setPen(QColor("#F3F3F3"))
             metrics = QFontMetrics(snippet_font)
             text_to_show = self.text.split('\n')[0].strip() or "[Empty]"
             elided_text = metrics.elidedText(text_to_show, Qt.TextElideMode.ElideRight, current_width - 26)

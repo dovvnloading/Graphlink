@@ -31,7 +31,7 @@ class PythonHighlighter(QSyntaxHighlighter):
 
         # Keywords
         keyword_format = QTextCharFormat()
-        keyword_format.setForeground(QColor("#c678dd")) # Purple
+        keyword_format.setForeground(QColor("#909090")) # Purple
         keyword_format.setFontWeight(QFont.Weight.Bold)
         keywords = [
             "and", "as", "assert", "break", "class", "continue", "def",
@@ -46,7 +46,7 @@ class PythonHighlighter(QSyntaxHighlighter):
 
         # Builtins
         builtin_format = QTextCharFormat()
-        builtin_format.setForeground(QColor("#56b6c2")) # Cyan
+        builtin_format.setForeground(QColor("#A2A2A2")) # Cyan
         builtins = ["print", "len", "range", "int", "float", "str", "list", "dict", "set", "tuple", "open", "type", "dir"]
         for word in builtins:
             pattern = QRegularExpression(rf"\b{word}\b")
@@ -54,24 +54,24 @@ class PythonHighlighter(QSyntaxHighlighter):
 
         # Numbers
         number_format = QTextCharFormat()
-        number_format.setForeground(QColor("#d19a66")) # Orange
+        number_format.setForeground(QColor("#A2A2A2")) # Orange
         self.highlighting_rules.append((QRegularExpression(r"\b[0-9]+(?:\.[0-9]+)?\b"), number_format))
 
         # Strings
         string_format = QTextCharFormat()
-        string_format.setForeground(QColor("#98c379")) # Green
+        string_format.setForeground(QColor("#B5B5B5")) # Green
         self.highlighting_rules.append((QRegularExpression(r'".*?"'), string_format))
         self.highlighting_rules.append((QRegularExpression(r"'.*?'"), string_format))
 
         # Comments
         comment_format = QTextCharFormat()
-        comment_format.setForeground(QColor("#5c6370")) # Grey
+        comment_format.setForeground(QColor("#626262")) # Grey
         comment_format.setFontItalic(True)
         self.highlighting_rules.append((QRegularExpression(r"#[^\n]*"), comment_format))
         
         # Functions
         function_format = QTextCharFormat()
-        function_format.setForeground(QColor("#61afef")) # Blue
+        function_format.setForeground(QColor("#A3A3A3")) # Blue
         self.highlighting_rules.append((QRegularExpression(r"\b[A-Za-z0-9_]+(?=\()"), function_format))
 
     def highlightBlock(self, text):
@@ -134,7 +134,7 @@ class CodeEditor(QPlainTextEdit):
 
     def lineNumberAreaPaintEvent(self, event):
         painter = QPainter(self.lineNumberArea)
-        painter.fillRect(event.rect(), QColor("#1e1e1e").lighter(120))
+        painter.fillRect(event.rect(), QColor("#1E1E1E").lighter(120))
 
         block = self.firstVisibleBlock()
         blockNumber = block.blockNumber()
@@ -144,7 +144,7 @@ class CodeEditor(QPlainTextEdit):
         while block.isValid() and top <= event.rect().bottom():
             if block.isVisible() and bottom >= event.rect().top():
                 number = str(blockNumber + 1)
-                painter.setPen(QColor("#6b6b6b"))
+                painter.setPen(QColor("#6B6B6B"))
                 font = painter.font()
                 font.setFamily("Consolas")
                 painter.setFont(font)
@@ -293,8 +293,8 @@ class StatusTrackerWidget(QWidget):
             
         self.setStyleSheet("""
             StatusTrackerWidget {
-                background-color: #1e1e1e;
-                border: 1px solid #3f3f3f;
+                background-color: #1E1E1E;
+                border: 1px solid #3F3F3F;
                 border-radius: 6px;
             }
             QLabel { background: transparent; }
@@ -353,7 +353,7 @@ class PyCoderNode(QGraphicsItem, HoverAnimationMixin):
         self.widget.setStyleSheet("""
             QWidget#pyCoderMainWidget {
                 background-color: transparent;
-                color: #e0e0e0;
+                color: #E0E0E0;
                 font-family: 'Segoe UI', sans-serif;
             }
             QWidget#pyCoderMainWidget QLabel {
@@ -440,15 +440,15 @@ class PyCoderNode(QGraphicsItem, HoverAnimationMixin):
         self.mode_toggle_button.setFixedSize(30, 30)
         self.mode_toggle_button.clicked.connect(self._toggle_mode)
         self.mode_toggle_button.setStyleSheet("""
-            QPushButton { border: 1px solid #555; border-radius: 15px; background-color: #2a2a2a; }
-            QPushButton:hover { background-color: #4f4f4f; border: 1px solid #777; }
+            QPushButton { border: 1px solid #555; border-radius: 15px; background-color: #2A2A2A; }
+            QPushButton:hover { background-color: #4F4F4F; border: 1px solid #777; }
         """)
         header_layout.addWidget(self.mode_toggle_button)
         main_layout.addLayout(header_layout)
 
         line = QFrame()
         line.setFrameShape(QFrame.Shape.HLine)
-        line.setStyleSheet("background-color: #3f3f3f; border: none; height: 1px;")
+        line.setStyleSheet("background-color: #3F3F3F; border: none; height: 1px;")
         main_layout.addWidget(line)
 
         # --- AI-Driven Input Container ---
@@ -458,7 +458,7 @@ class PyCoderNode(QGraphicsItem, HoverAnimationMixin):
         prompt_layout.setSpacing(5)
         
         self.ai_prompt_label = QLabel("Instruction Prompt:")
-        self.ai_prompt_label.setStyleSheet("color: #aaaaaa; font-weight: bold; font-size: 12px; background: transparent;")
+        self.ai_prompt_label.setStyleSheet("color: #AAAAAA; font-weight: bold; font-size: 12px; background: transparent;")
         prompt_layout.addWidget(self.ai_prompt_label)
         
         self.prompt_input = QTextEdit()
@@ -468,8 +468,8 @@ class PyCoderNode(QGraphicsItem, HoverAnimationMixin):
         prompt_focus_color = get_semantic_color("status_info").name()
         self.prompt_input.setStyleSheet("""
             QTextEdit { 
-                background-color: #1e1e1e; border: 1px solid #3f3f3f; 
-                border-radius: 6px; padding: 8px; color: #ffffff;
+                background-color: #1E1E1E; border: 1px solid #3F3F3F;
+                border-radius: 6px; padding: 8px; color: #FFFFFF;
                 font-family: 'Segoe UI', sans-serif;
             }
             QTextEdit:focus { border: 1px solid %s; }
@@ -488,7 +488,7 @@ class PyCoderNode(QGraphicsItem, HoverAnimationMixin):
         manual_layout.setSpacing(5)
         
         self.manual_code_label = QLabel("Python Code:")
-        self.manual_code_label.setStyleSheet("color: #aaaaaa; font-weight: bold; font-size: 12px; background: transparent;")
+        self.manual_code_label.setStyleSheet("color: #AAAAAA; font-weight: bold; font-size: 12px; background: transparent;")
         manual_layout.addWidget(self.manual_code_label)
 
         self.code_input = CodeEditor()
@@ -496,8 +496,8 @@ class PyCoderNode(QGraphicsItem, HoverAnimationMixin):
         self.code_input.setFixedHeight(140)
         self.code_input.setStyleSheet("""
             QPlainTextEdit { 
-                background-color: #1e1e1e; border: 1px solid #3f3f3f; 
-                border-radius: 6px; padding: 8px; color: #dcdcaa;
+                background-color: #1E1E1E; border: 1px solid #3F3F3F;
+                border-radius: 6px; padding: 8px; color: #D8D8D8;
                 font-family: Consolas, Monaco, monospace; font-size: 13px;
             }
             QPlainTextEdit:focus { border: 1px solid %s; }
@@ -528,9 +528,9 @@ class PyCoderNode(QGraphicsItem, HoverAnimationMixin):
                 border-color: {button_colors["border"].darker(105).name()};
             }}
             QPushButton:disabled {{
-                background-color: #2b2b2b;
+                background-color: #2B2B2B;
                 border-color: #353535;
-                color: #7b7b7b;
+                color: #7B7B7B;
             }}
         """
         for btn in [self.generate_button, self.run_button]:
@@ -547,21 +547,21 @@ class PyCoderNode(QGraphicsItem, HoverAnimationMixin):
         self.tabs = QTabWidget()
         self.tabs.setStyleSheet(f"""
             QTabWidget::pane {{
-                border: 1px solid #3f3f3f; background: #1e1e1e; border-radius: 6px;
+                border: 1px solid #3F3F3F; background: #1E1E1E; border-radius: 6px;
             }}
             QTabBar::tab {{
-                background: #252526; color: #aaaaaa; padding: 8px 16px;
-                border: 1px solid #3f3f3f; border-bottom: none;
+                background: #252525; color: #AAAAAA; padding: 8px 16px;
+                border: 1px solid #3F3F3F; border-bottom: none;
                 border-top-left-radius: 6px; border-top-right-radius: 6px;
                 margin-right: 2px; font-weight: bold;
             }}
             QTabBar::tab:selected {{
-                background: #1e1e1e; color: #ffffff;
+                background: #1E1E1E; color: #FFFFFF;
                 border-top: 2px solid {pycoder_color.name()};
-                border-bottom: 1px solid #1e1e1e;
+                border-bottom: 1px solid #1E1E1E;
             }}
             QTabBar::tab:hover:!selected {{
-                background: #2d2d2d; color: #ffffff;
+                background: #2D2D2D; color: #FFFFFF;
             }}
         """)
 
@@ -570,7 +570,7 @@ class PyCoderNode(QGraphicsItem, HoverAnimationMixin):
         self.generated_code_display.setReadOnly(True)
         self.generated_code_display.setPlaceholderText("Generated code will appear here...")
         self.generated_code_display.setStyleSheet("""
-            QPlainTextEdit { background-color: transparent; color: #dcdcaa; font-family: Consolas, monospace; border: none; padding: 10px; font-size: 13px; }
+            QPlainTextEdit { background-color: transparent; color: #D8D8D8; font-family: Consolas, monospace; border: none; padding: 10px; font-size: 13px; }
         """)
         self.tabs.addTab(self.generated_code_display, qta.icon('fa5s.code', color='#ccc'), "Code")
 
@@ -580,7 +580,7 @@ class PyCoderNode(QGraphicsItem, HoverAnimationMixin):
         self.output_display.setPlaceholderText("Execution output will appear here...")
         output_text_color = get_semantic_color("status_success").name()
         self.output_display.setStyleSheet("""
-            QTextEdit { background-color: #0d0d0d; color: %s; font-family: Consolas, monospace; border: none; padding: 10px; font-size: 12px; }
+            QTextEdit { background-color: #0D0D0D; color: %s; font-family: Consolas, monospace; border: none; padding: 10px; font-size: 12px; }
         """ % output_text_color)
         self.tabs.addTab(self.output_display, qta.icon('fa5s.terminal', color='#ccc'), "Terminal")
 
@@ -593,11 +593,11 @@ class PyCoderNode(QGraphicsItem, HoverAnimationMixin):
         """)
         # Base styling for markdown content inside the text edit
         self.ai_analysis_display.document().setDefaultStyleSheet("""
-            p, ul, ol, li { color: #e0e0e0; font-family: 'Segoe UI', sans-serif; font-size: 13px; line-height: 1.5; }
-            h1, h2, h3, h4 { color: #ffffff; font-weight: bold; margin-bottom: 5px; }
-            pre { background-color: #2d2d2d; padding: 10px; border-radius: 6px; font-family: Consolas, monospace; color: #dcdcaa; }
-            code { background-color: #3f3f3f; color: #dcdcaa; padding: 2px 4px; border-radius: 4px; font-family: Consolas, monospace; }
-            blockquote { border-left: 3px solid #555555; padding-left: 10px; color: #aaaaaa; }
+            p, ul, ol, li { color: #E0E0E0; font-family: 'Segoe UI', sans-serif; font-size: 13px; line-height: 1.5; }
+            h1, h2, h3, h4 { color: #FFFFFF; font-weight: bold; margin-bottom: 5px; }
+            pre { background-color: #2D2D2D; padding: 10px; border-radius: 6px; font-family: Consolas, monospace; color: #D8D8D8; }
+            code { background-color: #3F3F3F; color: #D8D8D8; padding: 2px 4px; border-radius: 4px; font-family: Consolas, monospace; }
+            blockquote { border-left: 3px solid #555555; padding-left: 10px; color: #AAAAAA; }
         """)
         self.tabs.addTab(self.ai_analysis_display, qta.icon('fa5s.robot', color='#ccc'), "Analysis")
 
@@ -652,7 +652,7 @@ class PyCoderNode(QGraphicsItem, HoverAnimationMixin):
         
         path = QPainterPath()
         path.addRoundedRect(0, 0, self.width, self.height, 10, 10)
-        painter.setBrush(QColor("#2d2d2d"))
+        painter.setBrush(QColor("#2D2D2D"))
         
         pycoder_color = node_colors["border"]
         pen = QPen(pycoder_color, 1.5)
@@ -660,7 +660,7 @@ class PyCoderNode(QGraphicsItem, HoverAnimationMixin):
         if self.isSelected():
             pen = QPen(palette.SELECTION, 2)
         elif self.hovered:
-            pen = QPen(QColor("#ffffff"), 2)
+            pen = QPen(QColor("#FFFFFF"), 2)
         
         painter.setPen(pen)
         painter.drawPath(path)
@@ -697,7 +697,7 @@ class PyCoderNode(QGraphicsItem, HoverAnimationMixin):
             return
 
         if self.is_collapsed:
-            painter.setPen(QColor("#ffffff"))
+            painter.setPen(QColor("#FFFFFF"))
             font = canvas_font(self.scene(), weight=QFont.Weight.Bold)
             painter.setFont(font)
             title = f"Py-Coder ({'AI' if self.mode == PyCoderMode.AI_DRIVEN else 'Manual'})"
@@ -707,7 +707,7 @@ class PyCoderNode(QGraphicsItem, HoverAnimationMixin):
             icon.paint(painter, QRect(10, 10, 20, 20))
             
             self.collapse_button_rect = QRectF(self.width - 35, 5, 30, 30)
-            expand_icon = qta.icon('fa5s.expand-arrows-alt', color='#ffffff' if self.hovered else '#888888')
+            expand_icon = qta.icon('fa5s.expand-arrows-alt', color='#FFFFFF' if self.hovered else '#888888')
             expand_icon.paint(painter, QRect(int(self.width - 30), 10, 20, 20))
         else:
             if self.hovered:
@@ -716,7 +716,7 @@ class PyCoderNode(QGraphicsItem, HoverAnimationMixin):
                 painter.setPen(QColor(255, 255, 255, 150))
                 painter.drawRoundedRect(self.collapse_button_rect.adjusted(6,6,-6,-6), 4, 4)
                 
-                icon_pen = QPen(QColor("#ffffff"), 2)
+                icon_pen = QPen(QColor("#FFFFFF"), 2)
                 painter.setPen(icon_pen)
                 center = self.collapse_button_rect.center()
                 painter.drawLine(int(center.x() - 4), int(center.y()), int(center.x() + 4), int(center.y()))

@@ -20,8 +20,8 @@ def _colors() -> dict[str, str]:
     """Return the menu colors for the active Graphlink theme."""
     if is_monochrome_theme():
         return {
-            "surface": "#2a2a2a",
-            "text": "#dddddd",
+            "surface": "#2A2A2A",
+            "text": "#DDDDDD",
             "border": "#444444",
             "hover": "#666666",
             "disabled": "#777777",
@@ -29,19 +29,19 @@ def _colors() -> dict[str, str]:
 
     if is_muted_theme():
         return {
-            "surface": "#1f242a",
-            "text": "#cad2db",
-            "border": "#323943",
-            "hover": "#5f7384",
-            "disabled": "#69717a",
+            "surface": "#232323",
+            "text": "#D1D1D1",
+            "border": "#383838",
+            "hover": "#707070",
+            "disabled": "#707070",
         }
 
     return {
-        "surface": "#23282f",
-        "text": "#d7dde4",
-        "border": "#3b434d",
+        "surface": "#272727",
+        "text": "#DCDCDC",
+        "border": "#424242",
         "hover": get_current_palette().SELECTION.name(),
-        "disabled": "#6f7780",
+        "disabled": "#767676",
     }
 
 
@@ -67,7 +67,7 @@ def context_menu_stylesheet() -> str:
         }}
         QMenu::item:selected {{
             background-color: {colors['hover']};
-            color: #ffffff;
+            color: #FFFFFF;
         }}
         QMenu::item:disabled {{
             color: {colors['disabled']};

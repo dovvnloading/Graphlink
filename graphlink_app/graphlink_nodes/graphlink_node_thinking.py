@@ -54,7 +54,7 @@ class ThinkingNode(QGraphicsItem, HoverAnimationMixin):
     def _setup_document(self):
         font_family = "Segoe UI"
         font_size = 9
-        color = "#b0b0b0"
+        color = "#B0B0B0"
 
         if self.scene():
             font_family = self.scene().font_family
@@ -64,10 +64,10 @@ class ThinkingNode(QGraphicsItem, HoverAnimationMixin):
         stylesheet = (
             f"body {{ color: {color}; font-family: '{font_family}'; font-size: {font_size}pt; margin: 0; }}"
             f"p {{ color: {color}; margin: 0 0 0.6em 0; }}"
-            "p.thinking-kicker { color: #7aa4c9; font-size: 8.5pt; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; margin: 0 0 8px 0; }"
-            "blockquote { border-left: 3px solid #485666; padding-left: 10px; margin: 0.35em 0 0.8em 0; color: #c6cdd5; }"
-            "pre { background: #0f1317; border: 1px solid #343a42; border-radius: 8px; padding: 10px 12px; margin: 0.35em 0 0.8em 0; color: #d7dde3; }"
-            "code { background: #0f1317; border-radius: 4px; padding: 1px 4px; color: #d7dde3; }"
+            "p.thinking-kicker { color: #9E9E9E; font-size: 8.5pt; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; margin: 0 0 8px 0; }"
+            "blockquote { border-left: 3px solid #545454; padding-left: 10px; margin: 0.35em 0 0.8em 0; color: #CCCCCC; }"
+            "pre { background: #121212; border: 1px solid #393939; border-radius: 8px; padding: 10px 12px; margin: 0.35em 0 0.8em 0; color: #DCDCDC; }"
+            "code { background: #121212; border-radius: 4px; padding: 1px 4px; color: #DCDCDC; }"
             "pre code { background: transparent; padding: 0; }"
             "ul, ol { margin: 0 0 0.75em 0; padding-left: 20px; }"
             "li { margin-bottom: 0.2em; }"
@@ -166,7 +166,7 @@ class ThinkingNode(QGraphicsItem, HoverAnimationMixin):
 
         path = QPainterPath()
         path.addRoundedRect(0, 0, self.width, self.height, 10, 10)
-        painter.setBrush(QColor("#2d2d2d"))
+        painter.setBrush(QColor("#2D2D2D"))
 
         is_dragging = self.scene() and getattr(self.scene(), 'is_rubber_band_dragging', False)
 
@@ -204,10 +204,10 @@ class ThinkingNode(QGraphicsItem, HoverAnimationMixin):
         painter.setBrush(node_colors["header_start"])
         painter.drawPath(header_path)
 
-        icon = qta.icon('fa5s.brain', color='#cccccc')
+        icon = qta.icon('fa5s.brain', color='#CCCCCC')
         icon.paint(painter, QRectF(10, 7, 16, 16).toRect())
 
-        painter.setPen(QColor("#cccccc"))
+        painter.setPen(QColor("#CCCCCC"))
         font = canvas_font(self.scene(), delta=-1, weight=QFont.Weight.Bold)
         painter.setFont(font)
         title_metrics = QFontMetrics(font)
@@ -221,13 +221,13 @@ class ThinkingNode(QGraphicsItem, HoverAnimationMixin):
         painter.setBrush(button_bg_color)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawRoundedRect(self.dock_button_rect, 4, 4)
-        dock_icon_color = "#ffffff" if self.dock_button_hovered else "#aaaaaa"
+        dock_icon_color = "#FFFFFF" if self.dock_button_hovered else "#AAAAAA"
         dock_icon = qta.icon('fa5s.arrow-up', color=dock_icon_color)
         dock_icon.paint(painter, self.dock_button_rect.adjusted(3, 3, -3, -3).toRect())
 
         panel_rect = self._content_panel_rect()
-        painter.setBrush(QColor("#181c21"))
-        painter.setPen(QPen(QColor("#3a4149"), 1))
+        painter.setBrush(QColor("#1C1C1C"))
+        painter.setPen(QPen(QColor("#404040"), 1))
         painter.drawRoundedRect(panel_rect, 11, 11)
 
         painter.save()

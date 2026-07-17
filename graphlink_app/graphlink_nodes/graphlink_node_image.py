@@ -59,7 +59,7 @@ class ImageNode(QGraphicsItem, HoverAnimationMixin):
         path = QPainterPath()
         path.addRoundedRect(0, 0, self.width, self.height, 10, 10)
 
-        painter.setBrush(QColor("#2d2d2d"))
+        painter.setBrush(QColor("#2D2D2D"))
 
         is_dragging = self.scene() and getattr(self.scene(), 'is_rubber_band_dragging', False)
 
@@ -93,10 +93,10 @@ class ImageNode(QGraphicsItem, HoverAnimationMixin):
         painter.setBrush(node_colors["header_start"])
         painter.drawPath(header_path)
 
-        icon = qta.icon('fa5s.image', color='#cccccc')
+        icon = qta.icon('fa5s.image', color='#CCCCCC')
         icon.paint(painter, QRectF(10, 7, 16, 16).toRect())
 
-        painter.setPen(QColor("#cccccc"))
+        painter.setPen(QColor("#CCCCCC"))
         font = canvas_font(self.scene(), delta=-1)
         painter.setFont(font)
         metrics = QFontMetrics(font)
@@ -125,7 +125,7 @@ class ImageNode(QGraphicsItem, HoverAnimationMixin):
             painter.drawImage(target_rect, self.image)
         else:
             painter.save()
-            placeholder_color = canvas_font_color(self.scene(), "#aab2bb")
+            placeholder_color = canvas_font_color(self.scene(), "#B1B1B1")
             placeholder_color.setAlpha(180)
             painter.setPen(QPen(placeholder_color, 1, Qt.PenStyle.DashLine))
             painter.setBrush(QColor(255, 255, 255, 10))

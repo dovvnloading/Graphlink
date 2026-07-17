@@ -144,5 +144,5 @@ export const initialComposerState: ComposerState = {
     settingsShortcut: true,
     cancellation: true,
   },
-  theme: { mode: "dark", accent: "#83a7ff", surface: "#1b1f25" },
+  theme: { mode: "dark", accent: "#a0a0a0", surface: "#1d1d1d" },
 };

@@ -132,13 +132,13 @@ class Exporter:
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{title}</title>
     <style>
-        body {{ font-family: sans-serif; line-height: 1.6; padding: 2em; background-color: #f4f4f4; color: #333; }}
+        body {{ font-family: sans-serif; line-height: 1.6; padding: 2em; background-color: #F4F4F4; color: #333; }}
         .container {{ max-width: 800px; margin: auto; background: white; padding: 2em; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }}
-        pre {{ background-color: #2d2d2d; color: #f8f8f2; padding: 1em; border-radius: 5px; overflow-x: auto; }}
+        pre {{ background-color: #2D2D2D; color: #F8F8F8; padding: 1em; border-radius: 5px; overflow-x: auto; }}
         code {{ font-family: monospace; }}
         table {{ border-collapse: collapse; width: 100%; }}
         th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
-        th {{ background-color: #f2f2f2; }}
+        th {{ background-color: #F2F2F2; }}
     </style>
 </head>
 <body>

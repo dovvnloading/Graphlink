@@ -81,7 +81,7 @@ class ChartItem(QGraphicsItem):
         self.resize_start_aspect_ratio = self._base_aspect_ratio
         self.font_family = "Segoe UI"
         self.font_size = 10
-        self.font_color = QColor("#dddddd")
+        self.font_color = QColor("#DDDDDD")
 
         self.figure = Figure(figsize=(6, 4), dpi=160)
         self.canvas = FigureCanvasAgg(self.figure)
@@ -216,18 +216,18 @@ class ChartItem(QGraphicsItem):
         return (color.redF(), color.greenF(), color.blueF(), alpha)
 
     def _build_theme(self, palette):
-        surface = QColor("#171b21")
-        panel = QColor("#11161d")
-        border = QColor("#414855")
-        text = QColor("#f5f7fb")
-        muted = QColor("#9aa6b8")
-        grid = QColor("#8f9bb0")
+        surface = QColor("#1B1B1B")
+        panel = QColor("#151515")
+        border = QColor("#474747")
+        text = QColor("#F7F7F7")
+        muted = QColor("#A5A5A5")
+        grid = QColor("#9A9A9A")
         primary = QColor(palette.AI_NODE)
         secondary = QColor(palette.USER_NODE)
         selection = QColor(palette.SELECTION)
         accent = self._blend_colors(primary, secondary, 0.55)
         tertiary = self._blend_colors(primary, selection, 0.50)
-        slate = QColor("#6f8aa6")
+        slate = QColor("#868686")
 
         cycle = [
             primary,
@@ -925,7 +925,7 @@ class ChartItem(QGraphicsItem):
         painter.drawText(header_rect.adjusted(12, 0, -120, 0), Qt.AlignmentFlag.AlignVCenter, self.title)
 
         badge_rect = QRectF(self.width - 102, 8, 90, 24)
-        painter.setPen(QPen(self._with_alpha(QColor("#ffffff"), 65), 1))
+        painter.setPen(QPen(self._with_alpha(QColor("#FFFFFF"), 65), 1))
         painter.setBrush(QBrush(node_colors["badge_fill"]))
         painter.drawRoundedRect(badge_rect, 12, 12)
         painter.setPen(QPen(self.font_color))
@@ -943,7 +943,7 @@ class ChartItem(QGraphicsItem):
         if self.hovered or self.isSelected():
             handle_size = 10
             handle_rect = QRectF(self.width - handle_size, self.height - handle_size, handle_size, handle_size)
-            painter.setPen(QPen(QColor("#ffffff")))
+            painter.setPen(QPen(QColor("#FFFFFF")))
             painter.drawLine(handle_rect.topLeft(), handle_rect.bottomRight())
             painter.drawLine(
                 handle_rect.topLeft() + QPointF(0, handle_size / 2),

@@ -24,6 +24,7 @@ class WindowNavigationMixin:
         self.command_manager.register_command("Reset View", ["reset zoom", "default view"], self.chat_view.reset_zoom)
         self.command_manager.register_command("Focus on Selection", ["zoom to selection", "center selection"], self._cmd_focus_selection, lambda: bool(self.chat_view.scene().selectedItems()))
         self.command_manager.register_command("Add Note", ["create note", "new note"], self._cmd_add_note_center)
+        self.command_manager.register_command("Add Navigation Pin", ["create pin", "bookmark location", "pin current view"], self._cmd_add_navigation_pin)
         self.command_manager.register_command("Add Web Research Node", ["web search", "web research", "internet"], self.plugin_portal._create_web_node, lambda: isinstance(self.current_node, (ChatNode, PyCoderNode, CodeSandboxNode, WebNode, ConversationNode, ArtifactNode, GitlinkNode)))
         self.command_manager.register_command("Add HTML Renderer Node", ["render html", "html preview"], self.plugin_portal._create_html_view_node, lambda: isinstance(self.current_node, (ChatNode, CodeNode, PyCoderNode, CodeSandboxNode, WebNode, ConversationNode, GitlinkNode)))
         self.command_manager.register_command("Add Artifact Drafter Node", ["artifact", "document drafter"], self.plugin_portal._create_artifact_node, lambda: isinstance(self.current_node, (ChatNode, PyCoderNode, CodeSandboxNode, WebNode, ConversationNode, ArtifactNode, GitlinkNode)))
@@ -59,6 +60,10 @@ class WindowNavigationMixin:
     def _cmd_add_note_center(self):
         center_pos = self.chat_view.mapToScene(self.chat_view.viewport().rect().center())
         self.chat_view.scene().add_note(center_pos)
+
+    def _cmd_add_navigation_pin(self):
+        if hasattr(self, "pin_overlay"):
+            self.pin_overlay.create_pin()
 
     def _navigate_to_node(self, node):
         if not node: return
