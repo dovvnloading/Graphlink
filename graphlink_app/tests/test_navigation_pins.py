@@ -1,6 +1,7 @@
 """Regression coverage for canvas navigation-pin repaint geometry."""
 
 from PySide6.QtCore import QPointF
+from PySide6.QtWidgets import QStyleOptionViewItem
 
 from graphlink_canvas.graphlink_canvas_navigation_pin import NavigationPin
 from graphlink_navigation_pins import (
@@ -8,6 +9,7 @@ from graphlink_navigation_pins import (
     NavigationPinStore,
     NavigationPinValidationError,
 )
+from graphlink_widgets.pins import NavigationPinDelegate, NavigationPinsListModel
 
 
 def test_navigation_pin_dirty_rect_covers_everything_it_paints():
@@ -31,6 +33,23 @@ def test_navigation_pin_uses_the_new_beacon_visual_and_waypoint_default():
     assert pin.shape().contains(QPointF(0, 0))
     assert pin.shape().contains(QPointF(0, 30))
     assert pin.boundingRect().width() > 160
+
+
+def test_navigation_pin_list_rows_keep_consistent_vertical_rhythm():
+    store = NavigationPinStore()
+    store.add(title="Short pin")
+    store.add(title="Annotated pin", note="A useful canvas checkpoint")
+    model = NavigationPinsListModel(store)
+    delegate = NavigationPinDelegate()
+    option = QStyleOptionViewItem()
+
+    plain_height = delegate.sizeHint(option, model.index(0, 0)).height()
+    noted_height = delegate.sizeHint(option, model.index(1, 0)).height()
+
+    assert plain_height == NavigationPinDelegate.ROW_HEIGHT
+    assert noted_height == NavigationPinDelegate.NOTE_ROW_HEIGHT
+    assert noted_height > plain_height
+    model.dispose()
 
 
 def test_pin_store_preserves_explicit_order_and_reindexes_after_remove():
