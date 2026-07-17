@@ -6,7 +6,12 @@ from graphlink_widgets import SplashScreen
 import graphlink_licensing
 from graphlink_config import apply_theme, set_current_model, sync_ollama_task_models
 from graphlink_logging import configure_logging
-from graphlink_crash import install_crash_handlers, mark_running, previous_run_crashed
+from graphlink_crash import (
+    install_crash_handlers,
+    mark_running,
+    previous_run_crashed,
+    uninstall_crash_handlers,
+)
 from graphlink_version import APP_VERSION
 
 def main():
@@ -19,6 +24,8 @@ def main():
 
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(True)
+    # Remove Python/Qt crash callbacks before Qt destroys its Python wrappers.
+    app.aboutToQuit.connect(uninstall_crash_handlers)
 
     # Use the new SettingsManager (formerly LicenseManager)
     settings_manager = graphlink_licensing.SettingsManager()
