@@ -185,6 +185,43 @@ def install_crash_handlers(version="unknown", crash_dir=None):
         pass
 
 
+def uninstall_crash_handlers():
+    """Restore process-global handlers before Qt/PySide is torn down.
+
+    Crash reporting is installed before ``QApplication`` exists, so the normal
+    application shutdown path must explicitly remove the Qt message callback
+    while Qt's Python wrappers are still alive.  This is also required by the
+    test suite: leaving a callback that closes over PySide objects installed
+    until interpreter shutdown can turn an otherwise passing Qt test run into
+    a non-zero process exit.
+    """
+    global _installed, _faulthandler_file
+
+    sys.excepthook = sys.__excepthook__
+    threading.excepthook = threading.__excepthook__
+
+    try:
+        from PySide6.QtCore import qInstallMessageHandler
+
+        qInstallMessageHandler(None)
+    except (ImportError, AttributeError, RuntimeError, SystemError, TypeError):
+        pass
+
+    try:
+        faulthandler.disable()
+    except (AttributeError, RuntimeError, SystemError, ValueError):
+        pass
+
+    if _faulthandler_file is not None:
+        try:
+            _faulthandler_file.close()
+        except (AttributeError, OSError, ValueError):
+            pass
+        _faulthandler_file = None
+
+    _installed = False
+
+
 # --- "did the previous run crash" sentinel ---
 #
 # A JSON file at ~/.graphlink/running.lock is written at startup (mark_running) and

@@ -164,15 +164,7 @@ class TestBuildGithubIssueUrl:
 
 class TestInstallCrashHandlers:
     def teardown_method(self):
-        sys.excepthook = sys.__excepthook__
-        threading.excepthook = threading.__excepthook__
-        graphlink_crash._installed = False
-        if graphlink_crash._faulthandler_file is not None:
-            try:
-                graphlink_crash._faulthandler_file.close()
-            except Exception:
-                pass
-            graphlink_crash._faulthandler_file = None
+        graphlink_crash.uninstall_crash_handlers()
 
     def test_installs_a_non_default_excepthook(self, tmp_path):
         graphlink_crash.install_crash_handlers(version="v1", crash_dir=tmp_path)
@@ -186,6 +178,16 @@ class TestInstallCrashHandlers:
         graphlink_crash.install_crash_handlers(version="v1", crash_dir=tmp_path)
 
         assert sys.excepthook is first_hook
+
+    def test_uninstall_restores_process_global_handlers(self, tmp_path):
+        graphlink_crash.install_crash_handlers(version="v1", crash_dir=tmp_path)
+
+        graphlink_crash.uninstall_crash_handlers()
+
+        assert sys.excepthook is sys.__excepthook__
+        assert threading.excepthook is threading.__excepthook__
+        assert graphlink_crash._installed is False
+        assert graphlink_crash._faulthandler_file is None
 
     def test_the_installed_excepthook_writes_a_report(self, tmp_path, monkeypatch):
         monkeypatch.setattr(graphlink_crash, "_crash_dir", lambda base_dir=None: tmp_path)
