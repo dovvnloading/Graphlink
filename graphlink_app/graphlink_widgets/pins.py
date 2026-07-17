@@ -12,6 +12,7 @@ from PySide6.QtCore import (
     QAbstractListModel,
     QModelIndex,
     QPoint,
+    QRect,
     QSortFilterProxyModel,
     QSize,
     Qt,
@@ -132,24 +133,31 @@ class NavigationPinsFilterModel(QSortFilterProxyModel):
 
 
 class NavigationPinDelegate(QStyledItemDelegate):
-    """Compact grayscale row renderer with deterministic elision."""
+    """Spacious grayscale row renderer with deterministic text elision."""
+
+    ROW_HEIGHT = 58
+    NOTE_ROW_HEIGHT = 72
 
     def sizeHint(self, option, index):
         note = str(index.data(PIN_NOTE_ROLE) or "")
-        line_height = option.fontMetrics.height()
-        height = max(46, line_height * (2 if note else 1) + 18)
+        height = self.NOTE_ROW_HEIGHT if note else self.ROW_HEIGHT
         return QSize(option.rect.width(), height)
 
     def paint(self, painter, option, index):
         painter.save()
-        rect = option.rect.adjusted(4, 3, -4, -3)
+        rect = option.rect.adjusted(2, 4, -2, -4)
         selected = bool(option.state & QStyle.StateFlag.State_Selected)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor("#3d3d3d" if selected else "#292929"))
-        painter.drawRoundedRect(rect, 9, 9)
+        painter.drawRoundedRect(rect, 10, 10)
 
-        painter.setBrush(QColor("#b5b5b5" if selected else "#8c8c8c"))
-        painter.drawEllipse(rect.left() + 12, rect.top() + 12, 8, 8)
+        marker_rect = QRect(rect.left() + 12, rect.center().y() - 10, 20, 20)
+        painter.setPen(QColor("#d0d0d0" if selected else "#686868"))
+        painter.setBrush(QColor("#b8b8b8" if selected else "#858585"))
+        painter.drawRoundedRect(marker_rect, 6, 6)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor("#2b2b2b"))
+        painter.drawEllipse(marker_rect.adjusted(6, 6, -6, -6))
 
         title = str(index.data(Qt.ItemDataRole.DisplayRole) or "")
         note = str(index.data(PIN_NOTE_ROLE) or "")
@@ -157,7 +165,7 @@ class NavigationPinDelegate(QStyledItemDelegate):
         title_font.setWeight(QFont.Weight.DemiBold)
         painter.setFont(title_font)
         painter.setPen(QColor("#f0f0f0"))
-        title_rect = rect.adjusted(30, 7, -12, -rect.height() // 2)
+        title_rect = rect.adjusted(44, 8, -16, -rect.height() // 2)
         painter.drawText(
             title_rect,
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
@@ -169,7 +177,7 @@ class NavigationPinDelegate(QStyledItemDelegate):
             note_font.setPointSize(max(8, note_font.pointSize() - 1))
             painter.setFont(note_font)
             painter.setPen(QColor("#9b9b9b"))
-            note_rect = rect.adjusted(30, rect.height() // 2 - 2, -12, -6)
+            note_rect = rect.adjusted(44, rect.height() // 2 - 2, -16, -8)
             painter.drawText(
                 note_rect,
                 Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
@@ -249,8 +257,9 @@ class PinOverlay(QFrame):
     """Model-driven in-window navigation-pin panel."""
 
     closed = Signal()
-    BASE_WIDTH = 360
-    MAX_HEIGHT = 500
+    BASE_WIDTH = 400
+    MAX_HEIGHT = 560
+    MIN_HEIGHT = 320
 
     def __init__(self, canvas_view, parent=None, controller=None):
         super().__init__(parent)
@@ -260,7 +269,8 @@ class PinOverlay(QFrame):
         self.setObjectName("pinFlyoutPanel")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        self.resize(self.BASE_WIDTH, 300)
+        self.setMinimumWidth(self.BASE_WIDTH)
+        self.resize(self.BASE_WIDTH, self.MIN_HEIGHT)
 
         shadow = QGraphicsDropShadowEffect(self)
         shadow.setBlurRadius(24)
@@ -268,7 +278,7 @@ class PinOverlay(QFrame):
         shadow.setColor(Qt.GlobalColor.black)
 
         outer_layout = QVBoxLayout(self)
-        outer_layout.setContentsMargins(12, 12, 12, 14)
+        outer_layout.setContentsMargins(14, 14, 16, 16)
         outer_layout.setSpacing(0)
 
         self.container = QFrame()
@@ -277,38 +287,41 @@ class PinOverlay(QFrame):
         outer_layout.addWidget(self.container)
 
         main_layout = QVBoxLayout(self.container)
-        main_layout.setContentsMargins(14, 14, 14, 14)
-        main_layout.setSpacing(10)
+        main_layout.setContentsMargins(18, 16, 18, 16)
+        main_layout.setSpacing(12)
 
         header = QHBoxLayout()
-        header.setSpacing(10)
+        header.setSpacing(12)
         self.icon_badge = QLabel()
         self.icon_badge.setObjectName("pinFlyoutBadge")
-        self.icon_badge.setFixedSize(30, 30)
+        self.icon_badge.setFixedSize(34, 34)
         self.icon_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
         header.addWidget(self.icon_badge, 0, Qt.AlignmentFlag.AlignTop)
 
         heading_column = QVBoxLayout()
-        heading_column.setSpacing(2)
+        heading_column.setSpacing(4)
         self.header_text = QLabel("Navigation pins")
         self.header_text.setObjectName("pinFlyoutTitle")
         heading_column.addWidget(self.header_text)
         self.header_body = QLabel("Save and revisit important canvas locations.")
         self.header_body.setObjectName("pinFlyoutMeta")
-        self.header_body.setWordWrap(True)
+        self.header_body.setWordWrap(False)
         heading_column.addWidget(self.header_body)
         header.addLayout(heading_column, 1)
 
         self.close_btn = QPushButton("Close")
         self.close_btn.setObjectName("pinFlyoutCloseButton")
+        self.close_btn.setFixedHeight(32)
         self.close_btn.clicked.connect(self.close)
         header.addWidget(self.close_btn, 0, Qt.AlignmentFlag.AlignTop)
         main_layout.addLayout(header)
 
         search_row = QHBoxLayout()
+        search_row.setContentsMargins(0, 2, 0, 0)
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("Search pins...")
         self.search_input.setClearButtonEnabled(True)
+        self.search_input.setMinimumHeight(38)
         self.search_input.setAccessibleName("Search navigation pins")
         self.search_input.textChanged.connect(self._filter_changed)
         search_row.addWidget(self.search_input, 1)
@@ -325,6 +338,11 @@ class PinOverlay(QFrame):
         self.pin_list.setSelectionMode(QListView.SelectionMode.SingleSelection)
         self.pin_list.setEditTriggers(QListView.EditTrigger.NoEditTriggers)
         self.pin_list.setVerticalScrollMode(QListView.ScrollMode.ScrollPerPixel)
+        self.pin_list.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.pin_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.pin_list.setSpacing(2)
+        self.pin_list.setUniformItemSizes(False)
+        self.pin_list.setMinimumHeight(120)
         self.pin_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.pin_list.clicked.connect(self._navigate_from_index)
         self.pin_list.customContextMenuRequested.connect(self._show_context_menu)
@@ -332,11 +350,15 @@ class PinOverlay(QFrame):
         main_layout.addWidget(self.pin_list, 1)
 
         footer = QHBoxLayout()
+        footer.setContentsMargins(0, 4, 0, 0)
+        footer.setSpacing(12)
         self.pin_count_label = QLabel("")
         self.pin_count_label.setObjectName("pinFlyoutCount")
+        self.pin_count_label.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
         footer.addWidget(self.pin_count_label, 1)
         self.add_btn = QPushButton("Add pin here")
         self.add_btn.setObjectName("pinAddButton")
+        self.add_btn.setMinimumSize(126, 36)
         self.add_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.add_btn.clicked.connect(self.create_pin)
         footer.addWidget(self.add_btn)
@@ -381,18 +403,31 @@ class PinOverlay(QFrame):
             QLabel#pinFlyoutMeta, QLabel#pinFlyoutCount {{ color: #999999; font-size: 11px; }}
             QLineEdit {{
                 background: #202020; color: #eeeeee; border: 1px solid #494949;
-                border-radius: 8px; padding: 8px 10px;
+                border-radius: 9px; padding: 8px 12px; min-height: 20px;
             }}
             QLineEdit:focus {{ border-color: #858585; }}
-            QListView#pinListView {{ background: #202020; border: 1px solid #454545; border-radius: 10px; padding: 4px; }}
+            QListView#pinListView {{
+                background: #202020; border: 1px solid #454545; border-radius: 11px;
+                padding: 7px; outline: none;
+            }}
+            QScrollBar:vertical {{
+                background: transparent; width: 10px; margin: 8px 2px 8px 0;
+            }}
+            QScrollBar::handle:vertical {{
+                background: #5d5d5d; min-height: 28px; border-radius: 5px;
+            }}
+            QScrollBar::handle:vertical:hover {{ background: #7a7a7a; }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
             QPushButton#pinFlyoutCloseButton {{
                 background: #353535; color: #eeeeee; border: 1px solid #555555;
-                border-radius: 8px; padding: 8px 12px; font-size: 11px; font-weight: 600;
+                border-radius: 9px; min-width: 64px; padding: 0 12px;
+                font-size: 11px; font-weight: 600;
             }}
             QPushButton#pinFlyoutCloseButton:hover {{ background: #454545; }}
             QPushButton#pinAddButton {{
                 background: {accent}; color: {accent_text}; border: none;
-                border-radius: 8px; padding: 9px 14px; font-size: 11px; font-weight: 700;
+                border-radius: 9px; min-height: 36px; padding: 0 16px;
+                font-size: 11px; font-weight: 700;
             }}
             QPushButton#pinAddButton:hover {{ background: #a0a0a0; }}
             QPushButton#pinAddButton:disabled {{ background: #555555; color: #c9c9c9; }}
@@ -538,8 +573,10 @@ class PinOverlay(QFrame):
         self.search_input.setFocus()
 
     def _resize_for_content(self):
-        rows = min(max(1, self.pin_model.rowCount()), 6)
-        self.resize(self.BASE_WIDTH, min(self.MAX_HEIGHT, 226 + rows * 62))
+        rows = min(max(1, self.pin_filter.rowCount()), 6)
+        list_height = rows * NavigationPinDelegate.ROW_HEIGHT + 18
+        chrome_height = 230
+        self.resize(self.BASE_WIDTH, min(self.MAX_HEIGHT, max(self.MIN_HEIGHT, chrome_height + list_height)))
 
     def reposition(self):
         if self._anchor_widget is None or self.parentWidget() is None:
