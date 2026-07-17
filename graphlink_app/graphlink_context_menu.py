@@ -9,6 +9,8 @@ one place and use it for application menus and standard editor menus alike.
 
 from __future__ import annotations
 
+import atexit
+
 from PySide6.QtCore import QEvent, QObject, QTimer, Qt
 from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import QApplication, QMenu, QWidget
@@ -100,26 +102,62 @@ class _ContextMenuSurfaceGuard(QObject):
         self._timer.timeout.connect(self._enforce)
 
     def eventFilter(self, watched, event):
-        if watched is self.menu and event.type() in {
-            QEvent.Type.Polish,
-            QEvent.Type.Show,
-            QEvent.Type.StyleChange,
-        }:
-            # QStyleSheetStyle can run after the event filter.  Defer one
-            # turn so the final visible popup state is the opaque state.
-            self._timer.start(0)
+        try:
+            if watched is self.menu and event.type() in {
+                QEvent.Type.Polish,
+                QEvent.Type.Show,
+                QEvent.Type.StyleChange,
+            }:
+                # QStyleSheetStyle can run after the event filter.  Defer one
+                # turn so the final visible popup state is the opaque state.
+                self._timer.start(0)
+        except (AttributeError, RuntimeError, SystemError, TypeError):
+            # PySide can dispatch a final event while its C++ wrappers are
+            # already being torn down. The filter must never turn shutdown
+            # into a failing process exit.
+            return False
         return False
 
     def _enforce(self):
-        _enforce_opaque_surface(self.menu)
+        try:
+            _enforce_opaque_surface(self.menu)
+        except (AttributeError, RuntimeError, SystemError, TypeError):
+            return
 
 
 class _ApplicationContextMenuFilter(QObject):
     """Configure QMenus created internally by Qt (for example text editors)."""
 
     def eventFilter(self, watched, event):
-        if isinstance(watched, QMenu) and event.type() == QEvent.Type.Show:
-            configure_context_menu(watched)
+        try:
+            if _is_qmenu(watched) and event.type() == QEvent.Type.Show:
+                configure_context_menu(watched)
+        except (AttributeError, RuntimeError, SystemError, TypeError):
+            # During interpreter shutdown Shiboken may tear down QMenu's type
+            # object before QApplication stops dispatching its event filter.
+            # Treat that late callback as a no-op instead of leaking a Python
+            # exception through QObject::eventFilter and failing pytest.
+            return False
+        return False
+
+    def detach(self):
+        """Remove this filter while QApplication and its wrappers are alive."""
+        try:
+            app = self.parent()
+            if app is None:
+                return
+            app.removeEventFilter(self)
+            if getattr(app, "_graphlink_context_menu_filter", None) is self:
+                app._graphlink_context_menu_filter = None
+        except (AttributeError, RuntimeError, SystemError, TypeError):
+            return
+
+
+def _is_qmenu(watched, menu_type=QMenu):
+    """Return whether ``watched`` is a menu, including during Qt teardown."""
+    try:
+        return isinstance(watched, menu_type)
+    except (RuntimeError, SystemError, TypeError):
         return False
 
 
@@ -163,6 +201,22 @@ def install_context_menu_filter(app: QApplication) -> QObject:
         guard = _ApplicationContextMenuFilter(app)
         app._graphlink_context_menu_filter = guard
         app.installEventFilter(guard)
+        app.aboutToQuit.connect(guard.detach)
+
+        # pytest and some embedded hosts do not run the normal Qt quit path.
+        # Register cleanup before PySide's module-shutdown handler so the
+        # application filter is gone before Shiboken destroys QMenu's type.
+        if not getattr(app, "_graphlink_context_menu_atexit", False):
+            def _cleanup():
+                try:
+                    current = getattr(app, "_graphlink_context_menu_filter", None)
+                    if current is not None:
+                        current.detach()
+                except (AttributeError, RuntimeError, SystemError, TypeError):
+                    return
+
+            atexit.register(_cleanup)
+            app._graphlink_context_menu_atexit = True
     return guard
 
 
