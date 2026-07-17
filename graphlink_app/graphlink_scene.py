@@ -567,7 +567,7 @@ class ChatScene(QGraphicsScene):
         self.pin_store.move(pin_id, position.x(), position.y())
         self._schedule_scene_changed()
 
-    def add_navigation_pin(self, pos, title="Canvas location", note="", pin_id=None, anchor_item_id=None):
+    def add_navigation_pin(self, pos, title=None, note="", pin_id=None, anchor_item_id=None):
         """
         Adds a new NavigationPin to the scene at the specified position.
 
@@ -577,6 +577,9 @@ class ChatScene(QGraphicsScene):
         Returns:
             NavigationPin: The created pin item.
         """
+        if title is None or not str(title).strip():
+            title = f"Waypoint {len(self.pin_store.records) + 1}"
+
         record = self.pin_store.add(
             title=title,
             note=note,
