@@ -14,14 +14,23 @@ def test_navigation_pin_dirty_rect_covers_everything_it_paints():
     pin = NavigationPin()
     rect = pin.boundingRect()
 
-    # The pin body reaches y=25 and the hover/selection title is painted in a
-    # 100px-wide rectangle starting at (-50, -35).  The dirty region must cover
-    # both so moving/panning cannot leave a frame-sized trail behind.
-    assert rect.left() <= -50
-    assert rect.top() <= -35
-    assert rect.right() >= 50
-    assert rect.bottom() >= 25
-    assert rect.contains(QPointF(0, 25))
+    # The beacon reaches y=33 and the hover/selection label spans 164px from
+    # x=-82. The dirty region must cover the complete visual so moving/panning
+    # cannot leave a frame-sized trail behind.
+    assert rect.left() <= -82
+    assert rect.top() <= -52
+    assert rect.right() >= 82
+    assert rect.bottom() >= 33
+    assert rect.contains(QPointF(0, 32))
+
+
+def test_navigation_pin_uses_the_new_beacon_visual_and_waypoint_default():
+    pin = NavigationPin()
+
+    assert pin.title == "Waypoint"
+    assert pin.shape().contains(QPointF(0, 0))
+    assert pin.shape().contains(QPointF(0, 30))
+    assert pin.boundingRect().width() > 160
 
 
 def test_pin_store_preserves_explicit_order_and_reindexes_after_remove():

@@ -181,7 +181,7 @@ class NavigationPinDelegate(QStyledItemDelegate):
 class NavigationPinEditor(QDialog):
     """Shared, validated editor for creating and editing a navigation pin."""
 
-    def __init__(self, title="Canvas location", note="", parent=None, creating=False):
+    def __init__(self, title="Waypoint", note="", parent=None, creating=False):
         super().__init__(parent)
         self.setWindowTitle("Add navigation pin" if creating else "Edit navigation pin")
         self.setModal(True)

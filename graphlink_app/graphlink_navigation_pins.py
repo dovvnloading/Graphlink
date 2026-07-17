@@ -67,7 +67,7 @@ class NavigationPinRecord:
     def create(
         cls,
         *,
-        title: str = "Canvas location",
+        title: str = "Waypoint",
         note: str = "",
         x: float = 0.0,
         y: float = 0.0,
@@ -228,7 +228,7 @@ class NavigationPinsController:
         self.scene = scene
         self.view = view
 
-    def create_at(self, position, *, title="Canvas location", note="", anchor_item_id=None):
+    def create_at(self, position, *, title=None, note="", anchor_item_id=None):
         return self.scene.add_navigation_pin(
             position,
             title=title,
