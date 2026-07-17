@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 
-from PySide6.QtCore import QPoint, QRect, QSize
+from PySide6.QtCore import QEvent, QPoint, QRect, QSize
 
 from graphlink_composer import ComposerController, ComposerRequestState
 from graphlink_composer_bridge import (
@@ -13,6 +13,7 @@ from graphlink_composer_bridge import (
 )
 from graphlink_composer_popups import (
     ComposerContextPopup,
+    ComposerPickerPopup,
     composer_picker_list_height,
     composer_picker_position,
 )
@@ -57,6 +58,9 @@ class _Window:
             item for item in self.pending_attachments if item["path"] != path
         ]
 
+    def _handle_large_paste_from_input(self, text):
+        self.large_paste = text
+
 
 def test_bridge_publishes_versioned_state_without_attachment_paths():
     window = _Window()
@@ -92,6 +96,15 @@ def test_bridge_routes_send_and_removes_context_by_opaque_id():
     bridge.removeContextItem("attachment-0")
     assert window.pending_attachments == []
     assert json.loads(states[-1])["context"]["items"] == []
+
+
+def test_bridge_routes_large_paste_to_native_attachment_staging():
+    window = _Window()
+    bridge = ComposerBridge(window, ComposerController())
+
+    bridge.stageTextAttachment("def explain_chart():\n    return 'context'")
+
+    assert window.large_paste.startswith("def explain_chart")
 
 
 def test_bridge_cancel_prefers_window_request_callback():
@@ -192,6 +205,15 @@ def test_composer_native_mask_has_rounded_corners():
     assert region.contains(QPoint(50, 20))
     assert not region.contains(QPoint(0, 0))
     assert region.contains(QPoint(12, 0))
+
+
+def test_picker_event_filter_is_safe_for_reasoning_popup_without_search_control():
+    popup = ComposerPickerPopup("reasoning", {"reasoning": {"options": []}})
+
+    assert popup.eventFilter(object(), QEvent(QEvent.Type.MouseMove)) is False
+
+    popup.close()
+    popup.deleteLater()
 
 
 def test_inline_bundle_is_self_contained_and_keeps_channel_local():

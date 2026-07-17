@@ -30,6 +30,16 @@ def test_attachment_actions_use_fixed_compact_controls():
     assert "width: 30px;" in styles
 
 
+def test_large_pastes_are_staged_as_context_attachments():
+    source = (SOURCE_ROOT / "ComposerApp.tsx").read_text(encoding="utf-8")
+    bridge = (SOURCE_ROOT / "bridge.ts").read_text(encoding="utf-8")
+
+    assert "onPaste={onPaste}" in source
+    assert "event.preventDefault()" in source
+    assert "stageTextAttachment(pastedText)" in source
+    assert "stageTextAttachment" in bridge
+
+
 def test_graph_anchor_is_not_part_of_attachment_badge_logic():
     source = (SOURCE_ROOT / "ComposerApp.tsx").read_text(encoding="utf-8")
 

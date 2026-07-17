@@ -15,6 +15,7 @@ interface QtComposerObject {
   cancel: (requestId?: string) => void;
   reviewContext: () => void;
   requestAttachment: () => void;
+  stageTextAttachment: (text: string) => void;
   removeContextItem: (itemId: string) => void;
   selectModel: (modelId: string) => void;
   setReasoningLevel: (level: string) => void;
@@ -39,6 +40,7 @@ export interface ComposerBridge {
   cancel(requestId?: string): void;
   reviewContext(): void;
   requestAttachment(): void;
+  stageTextAttachment(text: string): void;
   removeContextItem(itemId: string): void;
   selectModel(modelId: string): void;
   setReasoningLevel(level: string): void;
@@ -119,6 +121,31 @@ class MockComposerBridge implements ComposerBridge {
 
   reviewContext(): void {}
   requestAttachment(): void {}
+  stageTextAttachment(text: string): void {
+    const normalized = String(text || "");
+    if (!normalized.trim()) return;
+    const lineCount = normalized.split("\n").length;
+    const attachmentId = `paste-${this.state.revision + 1}`;
+    const attachment = {
+      id: attachmentId,
+      name: `Pasted Text (${lineCount} lines).txt`,
+      kind: "document",
+      tokenCount: 0,
+      preparationState: "ready",
+      contextLabel: "Text",
+    };
+    this.state = {
+      ...this.state,
+      revision: this.state.revision + 1,
+      context: {
+        ...this.state.context,
+        items: [...this.state.context.items, attachment],
+        reviewAvailable: true,
+      },
+      request: { ...this.state.request, canSend: true },
+    };
+    this.listener(this.state);
+  }
   removeContextItem(): void {}
   selectModel(modelId: string): void {
     const option = this.state.route.modelOptions.find((item) => item.id === modelId);
@@ -203,6 +230,7 @@ export function createComposerBridge(listener: StateListener): ComposerBridge {
     cancel: (requestId) => call("cancel", requestId),
     reviewContext: () => call("reviewContext"),
     requestAttachment: () => call("requestAttachment"),
+    stageTextAttachment: (text) => call("stageTextAttachment", text),
     removeContextItem: (itemId) => call("removeContextItem", itemId),
     selectModel: (modelId) => call("selectModel", modelId),
     setReasoningLevel: (level) => call("setReasoningLevel", level),

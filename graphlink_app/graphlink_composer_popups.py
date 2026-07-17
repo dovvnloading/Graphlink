@@ -471,11 +471,16 @@ class ComposerPickerPopup(QFrame):
         QTimer.singleShot(0, self._reposition_owner)
 
     def _reposition_owner(self):
-        if not self.isVisible():
+        try:
+            if not self.isVisible():
+                return
+            reposition = getattr(self.parentWidget(), "_position_composer_picker", None)
+            if callable(reposition):
+                reposition()
+        except (AttributeError, RuntimeError, SystemError, TypeError):
+            # A queued reposition can run after the native popup has begun
+            # closing. Never call back into a partially destroyed Qt wrapper.
             return
-        reposition = getattr(self.parentWidget(), "_position_composer_picker", None)
-        if callable(reposition):
-            reposition()
 
     def _commit_item(self, item: QListWidgetItem | None):
         if item is None or not (item.flags() & Qt.ItemFlag.ItemIsEnabled):
@@ -494,20 +499,27 @@ class ComposerPickerPopup(QFrame):
         self.close()
 
     def eventFilter(self, watched, event):
-        if event.type() == QEvent.Type.MouseButtonPress:
-            global_position = event.globalPosition().toPoint()
-            if not self.rect().contains(self.mapFromGlobal(global_position)):
-                self.close()
-                return False
-        if watched is self.search and event.type() == QEvent.Type.KeyPress:
-            if event.key() in (Qt.Key.Key_Down, Qt.Key.Key_Up):
-                self.list_widget.setFocus()
-                return True
-        return super().eventFilter(watched, event)
+        try:
+            if event.type() == QEvent.Type.MouseButtonPress:
+                global_position = event.globalPosition().toPoint()
+                if not self.rect().contains(self.mapFromGlobal(global_position)):
+                    self.close()
+                    return False
+            search = getattr(self, "search", None)
+            if search is not None and watched is search and event.type() == QEvent.Type.KeyPress:
+                if event.key() in (Qt.Key.Key_Down, Qt.Key.Key_Up):
+                    self.list_widget.setFocus()
+                    return True
+            return super().eventFilter(watched, event)
+        except (AttributeError, RuntimeError, SystemError, TypeError):
+            return False
 
     def closeEvent(self, event):
-        if self._application is not None and self._event_filter_installed:
-            self._application.removeEventFilter(self)
+        try:
+            if self._application is not None and self._event_filter_installed:
+                self._application.removeEventFilter(self)
+                self._event_filter_installed = False
+        except (AttributeError, RuntimeError, SystemError, TypeError):
             self._event_filter_installed = False
         super().closeEvent(event)
 
@@ -518,15 +530,22 @@ class ComposerPickerPopup(QFrame):
         QTimer.singleShot(0, self._focus_default)
 
     def _install_event_filter(self):
-        if self.isVisible() and self._application is not None and not self._event_filter_installed:
-            self._application.installEventFilter(self)
-            self._event_filter_installed = True
+        try:
+            if self.isVisible() and self._application is not None and not self._event_filter_installed:
+                self._application.installEventFilter(self)
+                self._event_filter_installed = True
+        except (AttributeError, RuntimeError, SystemError, TypeError):
+            self._event_filter_installed = False
 
     def _focus_default(self):
-        if self.search is not None:
-            self.search.setFocus(Qt.FocusReason.PopupFocusReason)
-        else:
-            self.list_widget.setFocus(Qt.FocusReason.PopupFocusReason)
+        try:
+            search = getattr(self, "search", None)
+            if search is not None:
+                search.setFocus(Qt.FocusReason.PopupFocusReason)
+            else:
+                self.list_widget.setFocus(Qt.FocusReason.PopupFocusReason)
+        except (AttributeError, RuntimeError, SystemError, TypeError):
+            return
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Escape:
@@ -781,11 +800,14 @@ class ComposerContextPopup(QFrame):
         QTimer.singleShot(0, self._reposition_owner)
 
     def _reposition_owner(self):
-        if not self.isVisible():
+        try:
+            if not self.isVisible():
+                return
+            reposition = getattr(self.parentWidget(), "_position_composer_context_popup", None)
+            if callable(reposition):
+                reposition()
+        except (AttributeError, RuntimeError, SystemError, TypeError):
             return
-        reposition = getattr(self.parentWidget(), "_position_composer_context_popup", None)
-        if callable(reposition):
-            reposition()
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -794,21 +816,30 @@ class ComposerContextPopup(QFrame):
         QTimer.singleShot(0, self.setFocus)
 
     def _install_event_filter(self):
-        if self.isVisible() and self._application is not None and not self._event_filter_installed:
-            self._application.installEventFilter(self)
-            self._event_filter_installed = True
+        try:
+            if self.isVisible() and self._application is not None and not self._event_filter_installed:
+                self._application.installEventFilter(self)
+                self._event_filter_installed = True
+        except (AttributeError, RuntimeError, SystemError, TypeError):
+            self._event_filter_installed = False
 
     def eventFilter(self, watched, event):
-        if event.type() == QEvent.Type.MouseButtonPress:
-            global_position = event.globalPosition().toPoint()
-            if not self.rect().contains(self.mapFromGlobal(global_position)):
-                self.close()
-                return False
-        return super().eventFilter(watched, event)
+        try:
+            if event.type() == QEvent.Type.MouseButtonPress:
+                global_position = event.globalPosition().toPoint()
+                if not self.rect().contains(self.mapFromGlobal(global_position)):
+                    self.close()
+                    return False
+            return super().eventFilter(watched, event)
+        except (AttributeError, RuntimeError, SystemError, TypeError):
+            return False
 
     def closeEvent(self, event):
-        if self._application is not None and self._event_filter_installed:
-            self._application.removeEventFilter(self)
+        try:
+            if self._application is not None and self._event_filter_installed:
+                self._application.removeEventFilter(self)
+                self._event_filter_installed = False
+        except (AttributeError, RuntimeError, SystemError, TypeError):
             self._event_filter_installed = False
         super().closeEvent(event)
 

@@ -3,6 +3,9 @@ import { ComposerState, initialComposerState } from "./bridgeTypes";
 import { ComposerBridge, createComposerBridge } from "./bridge";
 import { isBusy, requestLabel } from "./state";
 
+const LARGE_PASTE_CHAR_THRESHOLD = 1400;
+const LARGE_PASTE_LINE_THRESHOLD = 24;
+
 function Icon({ name }: { name: "attach" | "send" | "stop" | "chevron" }) {
   const paths: Record<string, string> = {
     attach: "M12 5.5 6.4 11.1a3.6 3.6 0 0 0 5.1 5.1l6-6a2.5 2.5 0 0 0-3.5-3.5l-6.1 6.1a1.35 1.35 0 0 0 1.9 1.9l5.5-5.5",
@@ -84,6 +87,19 @@ function ComposerApp() {
     }
   }
 
+  function onPaste(event: React.ClipboardEvent<HTMLTextAreaElement>) {
+    if (isRequestBusy || event.clipboardData.files.length > 0) return;
+
+    const pastedText = event.clipboardData.getData("text/plain");
+    const isLargePaste =
+      pastedText.length >= LARGE_PASTE_CHAR_THRESHOLD ||
+      pastedText.split("\n").length >= LARGE_PASTE_LINE_THRESHOLD;
+    if (!pastedText.trim() || !isLargePaste) return;
+
+    event.preventDefault();
+    bridgeRef.current?.stageTextAttachment(pastedText);
+  }
+
   return (
     <main
       ref={shellRef}
@@ -96,6 +112,7 @@ function ComposerApp() {
           value={state.draft.text}
           onChange={(event) => bridgeRef.current?.updateDraft(event.target.value)}
           onKeyDown={onKeyDown}
+          onPaste={onPaste}
           placeholder={"Ask about this graph\u2026"}
           aria-label="Message composer"
           rows={1}

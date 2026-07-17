@@ -40,3 +40,13 @@ def test_replace_semantics_surface_corruption_instead_of_hiding_it():
     visibly_replaced = text_with_unpaired_surrogate.encode("utf-8", errors="replace")
     assert visibly_replaced == b"before?after"  # the bad character is visibly marked instead
     assert len(visibly_replaced) > len(silently_dropped)
+
+
+def test_large_paste_is_staged_as_an_attachment_instead_of_inserted_into_draft():
+    source = Path(graphlink_window.__file__).read_text(encoding="utf-8")
+    handler_start = source.index("    def _handle_large_paste_from_input")
+    handler_end = source.index("    def _stage_large_paste_as_attachment", handler_start)
+    handler = source[handler_start:handler_end]
+
+    assert "_stage_large_paste_as_attachment" in handler
+    assert "message_input.insertPlainText(pasted_text)" not in handler
