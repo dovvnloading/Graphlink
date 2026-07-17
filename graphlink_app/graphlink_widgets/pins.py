@@ -138,6 +138,11 @@ class NavigationPinDelegate(QStyledItemDelegate):
     ROW_HEIGHT = 58
     NOTE_ROW_HEIGHT = 72
 
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._pin_icon = qta.icon("fa5s.map-pin", color="#858585")
+        self._selected_pin_icon = qta.icon("fa5s.map-pin", color="#d0d0d0")
+
     def sizeHint(self, option, index):
         note = str(index.data(PIN_NOTE_ROLE) or "")
         height = self.NOTE_ROW_HEIGHT if note else self.ROW_HEIGHT
@@ -152,12 +157,9 @@ class NavigationPinDelegate(QStyledItemDelegate):
         painter.drawRoundedRect(rect, 10, 10)
 
         marker_rect = QRect(rect.left() + 12, rect.center().y() - 10, 20, 20)
-        painter.setPen(QColor("#d0d0d0" if selected else "#686868"))
-        painter.setBrush(QColor("#b8b8b8" if selected else "#858585"))
-        painter.drawRoundedRect(marker_rect, 6, 6)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor("#2b2b2b"))
-        painter.drawEllipse(marker_rect.adjusted(6, 6, -6, -6))
+        (self._selected_pin_icon if selected else self._pin_icon).paint(
+            painter, marker_rect, Qt.AlignmentFlag.AlignCenter
+        )
 
         title = str(index.data(Qt.ItemDataRole.DisplayRole) or "")
         note = str(index.data(PIN_NOTE_ROLE) or "")

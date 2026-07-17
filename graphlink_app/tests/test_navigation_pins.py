@@ -49,6 +49,8 @@ def test_navigation_pin_list_rows_keep_consistent_vertical_rhythm():
     assert plain_height == NavigationPinDelegate.ROW_HEIGHT
     assert noted_height == NavigationPinDelegate.NOTE_ROW_HEIGHT
     assert noted_height > plain_height
+    assert not delegate._pin_icon.isNull()
+    assert not delegate._selected_pin_icon.isNull()
     model.dispose()
 
 
