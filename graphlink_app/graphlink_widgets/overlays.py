@@ -136,19 +136,19 @@ class GhostNodePreview(QGraphicsObject):
         accent = QColor(palette.AI_NODE)
         monochrome = is_monochrome_theme()
 
-        body_start = self._mix_color(QColor("#25282d"), accent, 0.04 if not monochrome else 0.02)
+        body_start = self._mix_color(QColor("#282828"), accent, 0.04 if not monochrome else 0.02)
         body_start.setAlpha(210)
-        body_end = self._mix_color(QColor("#171a1f"), accent, 0.02 if not monochrome else 0.01)
+        body_end = self._mix_color(QColor("#1A1A1A"), accent, 0.02 if not monochrome else 0.01)
         body_end.setAlpha(192)
-        header_start = self._mix_color(QColor("#2c333b"), accent, 0.30 if not monochrome else 0.08)
+        header_start = self._mix_color(QColor("#323232"), accent, 0.30 if not monochrome else 0.08)
         header_start.setAlpha(188)
-        header_end = self._mix_color(QColor("#181c22"), accent, 0.18 if not monochrome else 0.04)
+        header_end = self._mix_color(QColor("#1C1C1C"), accent, 0.18 if not monochrome else 0.04)
         header_end.setAlpha(170)
-        badge_fill = self._mix_color(QColor("#262c33"), accent, 0.58 if not monochrome else 0.12)
+        badge_fill = self._mix_color(QColor("#2B2B2B"), accent, 0.58 if not monochrome else 0.12)
         badge_fill.setAlpha(138)
-        descriptor_text = self._mix_color(QColor("#9ca6b0"), accent, 0.14 if not monochrome else 0.04)
+        descriptor_text = self._mix_color(QColor("#A5A5A5"), accent, 0.14 if not monochrome else 0.04)
         descriptor_text.setAlpha(175)
-        content_panel_border = self._mix_color(QColor("#343a42"), accent, 0.08 if not monochrome else 0.03)
+        content_panel_border = self._mix_color(QColor("#393939"), accent, 0.08 if not monochrome else 0.03)
         content_panel_border.setAlpha(135)
 
         return {
@@ -158,7 +158,7 @@ class GhostNodePreview(QGraphicsObject):
             "header_start": header_start,
             "header_end": header_end,
             "badge_fill": badge_fill,
-            "badge_text": QColor("#eef7ff"),
+            "badge_text": QColor("#F6F6F6"),
             "descriptor_text": descriptor_text,
             "content_panel_fill": QColor(17, 20, 23, 182),
             "content_panel_border": content_panel_border,
@@ -275,7 +275,7 @@ class GhostNodePreview(QGraphicsObject):
 
             title_font = QFont("Segoe UI", 10, QFont.Weight.DemiBold)
             painter.setFont(title_font)
-            title_color = QColor("#eef6ff")
+            title_color = QColor("#F5F5F5")
             title_color.setAlpha(220)
             painter.setPen(title_color)
             painter.drawText(
@@ -287,7 +287,7 @@ class GhostNodePreview(QGraphicsObject):
             if self.subtitle:
                 subtitle_font = QFont("Segoe UI", 8)
                 painter.setFont(subtitle_font)
-                subtitle_color = QColor("#aab8c8")
+                subtitle_color = QColor("#B6B6B6")
                 subtitle_color.setAlpha(165)
                 painter.setPen(subtitle_color)
                 painter.drawText(
@@ -353,14 +353,14 @@ class SearchOverlay(QWidget):
 
         self.setStyleSheet("""
             QWidget#searchOverlay {
-                background-color: #2d2d2d;
-                border: 1px solid #3f3f3f;
+                background-color: #2D2D2D;
+                border: 1px solid #3F3F3F;
                 border-radius: 5px;
             }
             QLabel { color: #ccc; background-color: transparent; }
             QLineEdit {
                 border: 1px solid #555;
-                background-color: #3f3f3f;
+                background-color: #3F3F3F;
                 border-radius: 3px;
                 padding: 4px;
             }

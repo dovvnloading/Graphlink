@@ -77,12 +77,12 @@ class ComboPopup(QFrame):
 
         self.apply_style()
 
-    def apply_style(self, accent_color="#2d6fa3"):
+    def apply_style(self, accent_color="#656565"):
         self.setStyleSheet(
             f"""
             QFrame#pluginComboPopupFrame {{
-                background-color: #1f2327;
-                border: 1px solid #353b43;
+                background-color: #222222;
+                border: 1px solid #3A3A3A;
                 border-radius: 10px;
             }}
             QFrame#pluginComboPopupShell {{
@@ -91,29 +91,29 @@ class ComboPopup(QFrame):
             }}
             QListWidget#pluginComboPopupList {{
                 background: transparent;
-                color: #ffffff;
+                color: #FFFFFF;
                 border: none;
                 outline: none;
                 padding: 2px;
             }}
             QListWidget#pluginComboPopupList::item {{
                 background: transparent;
-                color: #ffffff;
+                color: #FFFFFF;
                 border: none;
                 border-radius: 6px;
                 min-height: 26px;
                 padding: 6px 10px;
             }}
             QListWidget#pluginComboPopupList::item:hover {{
-                background-color: #2a3037;
+                background-color: #2F2F2F;
             }}
             QListWidget#pluginComboPopupList::item:selected {{
                 background-color: {accent_color};
-                color: #ffffff;
+                color: #FFFFFF;
             }}
             QListWidget#pluginComboPopupList::item:selected:hover {{
                 background-color: {accent_color};
-                color: #ffffff;
+                color: #FFFFFF;
             }}
             """
         )

@@ -291,14 +291,14 @@ def draw_lod_card(
     panel_path.addRoundedRect(panel_rect, border_radius, border_radius)
 
     gradient = QLinearGradient(QPointF(panel_rect.left(), panel_rect.top()), QPointF(panel_rect.left(), panel_rect.bottom()))
-    gradient.setColorAt(0, QColor("#272b31"))
-    gradient.setColorAt(1, QColor("#171b20"))
+    gradient.setColorAt(0, QColor("#2B2B2B"))
+    gradient.setColorAt(1, QColor("#1B1B1B"))
     painter.setBrush(QBrush(gradient))
 
     border_color = accent.lighter(110)
     border_width = 1.35
     if hovered:
-        border_color = QColor("#ffffff")
+        border_color = QColor("#FFFFFF")
         border_width = 1.9
     if selected:
         border_color = selection_color
@@ -365,7 +365,7 @@ def draw_lod_card(
             painter.setBrush(QColor(accent.red(), accent.green(), accent.blue(), 64))
             painter.setPen(QPen(QColor(accent.red(), accent.green(), accent.blue(), 116), 1.0))
             painter.drawRoundedRect(chip_rect, chip_height / 2, chip_height / 2)
-            painter.setPen(QColor("#f5fbff"))
+            painter.setPen(QColor("#FAFAFA"))
             painter.drawText(chip_rect, Qt.AlignmentFlag.AlignCenter, badge)
 
         footer_font = _fit_font_to_height(
@@ -400,7 +400,7 @@ def draw_lod_card(
         )
         orb_gradient = QLinearGradient(QPointF(orb_rect.left(), orb_rect.top()), QPointF(orb_rect.left(), orb_rect.bottom()))
         orb_gradient.setColorAt(0, QColor(accent.red(), accent.green(), accent.blue(), 110))
-        orb_gradient.setColorAt(1, QColor(20, 24, 28, 220))
+        orb_gradient.setColorAt(1, QColor(24, 24, 24, 220))
         painter.setBrush(QBrush(orb_gradient))
         painter.setPen(QPen(QColor(accent.red(), accent.green(), accent.blue(), 138), 1.4))
         painter.drawEllipse(orb_rect)
@@ -428,7 +428,7 @@ def draw_lod_card(
             min_point_size=8.0,
         )
         painter.setFont(glyph_font)
-        painter.setPen(QColor("#f4f7fb"))
+        painter.setPen(QColor("#F7F7F7"))
         painter.drawText(orb_rect, Qt.AlignmentFlag.AlignCenter, initials_for_title(title))
 
         painter.setBrush(QColor(255, 255, 255, 18))
@@ -439,7 +439,7 @@ def draw_lod_card(
             footer_rect.adjusted(10.0, 0.0, -10.0, 0.0),
             title,
             font=footer_font,
-            color=QColor("#f3f7fb"),
+            color=QColor("#F6F6F6"),
             max_lines=1,
             alignment=Qt.AlignmentFlag.AlignHCenter,
         )
@@ -490,7 +490,7 @@ def draw_lod_card(
             painter.setBrush(QColor(accent.red(), accent.green(), accent.blue(), 74))
             painter.setPen(QPen(QColor(accent.red(), accent.green(), accent.blue(), 116), 1.0))
             painter.drawRoundedRect(badge_rect, badge_height / 2, badge_height / 2)
-            painter.setPen(QColor("#f4f8fc"))
+            painter.setPen(QColor("#F7F7F7"))
             painter.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, badge)
             meta_text_x = badge_rect.right() + 10.0
 
@@ -511,7 +511,7 @@ def draw_lod_card(
                 QRectF(meta_text_x, header_rect.top(), max(18.0, content_right - meta_text_x), header_rect.height()),
                 subtitle,
                 font=subtitle_font,
-                color=QColor("#adb7c2"),
+                color=QColor("#B6B6B6"),
                 max_lines=1,
             )
 
@@ -545,7 +545,7 @@ def draw_lod_card(
             title_rect,
             title,
             font=title_font,
-            color=QColor("#f7fafc"),
+            color=QColor("#FAFAFA"),
             max_lines=title_line_limit,
             line_gap=2.0,
         )
@@ -586,7 +586,7 @@ def draw_lod_card(
             preview_inner_rect,
             preview or " ",
             font=preview_font,
-            color=QColor("#d5dde6"),
+            color=QColor("#DCDCDC"),
             max_lines=preview_line_limit,
             line_gap=2.0,
         )
@@ -622,7 +622,7 @@ def draw_lod_card(
         painter.drawPath(panel_path)
 
     if search_match:
-        search_pen = QPen(QColor("#f5c542"), 2.2)
+        search_pen = QPen(QColor("#C6C6C6"), 2.2)
         search_pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
         painter.setPen(search_pen)
         painter.setBrush(Qt.BrushStyle.NoBrush)

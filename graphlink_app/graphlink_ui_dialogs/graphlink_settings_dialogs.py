@@ -80,20 +80,20 @@ class SettingsComboPopup(QFrame):
                 border: none;
             }}
             QFrame#settingsComboPopupShell {{
-                background-color: #2d2d2d;
-                border: 1px solid #3f3f3f;
+                background-color: #2D2D2D;
+                border: 1px solid #3F3F3F;
                 border-radius: 9px;
             }}
             QListWidget#settingsComboPopupList {{
                 background-color: transparent;
-                color: #ffffff;
+                color: #FFFFFF;
                 border: none;
                 outline: none;
                 padding: 2px;
             }}
             QListWidget#settingsComboPopupList::item {{
                 background-color: transparent;
-                color: #ffffff;
+                color: #FFFFFF;
                 border: none;
                 border-radius: 6px;
                 min-height: 26px;
@@ -104,16 +104,16 @@ class SettingsComboPopup(QFrame):
             }}
             QListWidget#settingsComboPopupList::item:selected {{
                 background-color: {accent_color};
-                color: #ffffff;
+                color: #FFFFFF;
             }}
             QListWidget#settingsComboPopupList::item:selected:hover {{
                 background-color: {accent_color};
-                color: #ffffff;
+                color: #FFFFFF;
             }}
             QLineEdit {{
                 background-color: #242424;
-                color: #ffffff;
-                border: 1px solid #4a4a4a;
+                color: #FFFFFF;
+                border: 1px solid #4A4A4A;
                 border-radius: 6px;
                 padding: 6px 8px;
                 margin: 2px 2px 6px 2px;
@@ -366,7 +366,7 @@ class OllamaSettingsWidget(QWidget):
 
         info_label = QLabel("Configure the local chat model, the model used to name new chats, and the reasoning mode when using the Ollama provider.")
         info_label.setWordWrap(True)
-        info_label.setStyleSheet("color: #d4d4d4; margin-bottom: 15px;")
+        info_label.setStyleSheet("color: #D4D4D4; margin-bottom: 15px;")
         layout.addWidget(info_label)
         
         form_layout = QFormLayout()
@@ -374,7 +374,7 @@ class OllamaSettingsWidget(QWidget):
         form_layout.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
 
         reasoning_mode_label = QLabel("Reasoning Mode:")
-        reasoning_mode_label.setStyleSheet("color: #ffffff; font-weight: bold;")
+        reasoning_mode_label.setStyleSheet("color: #FFFFFF; font-weight: bold;")
         
         self.thinking_radio = QRadioButton("Thinking Mode (Enable CoT)")
         self.thinking_radio.setToolTip("Instructs the model to provide a step-by-step reasoning process. Best for complex queries.")
@@ -423,7 +423,7 @@ class OllamaSettingsWidget(QWidget):
 
         self.scan_summary_label = QLabel(self._get_scan_summary_text())
         self.scan_summary_label.setWordWrap(True)
-        self.scan_summary_label.setStyleSheet("color: #9fa6ad;")
+        self.scan_summary_label.setStyleSheet("color: #A5A5A5;")
         form_layout.addRow("", self.scan_summary_label)
 
         self.model_combo = SettingsComboBox()
@@ -462,19 +462,19 @@ class OllamaSettingsWidget(QWidget):
 
         naming_help = QLabel("Each task can inherit the chat model, choose Auto, or use an explicit installed/custom model. Missing models stay visible as unavailable instead of silently changing routes.")
         naming_help.setWordWrap(True)
-        naming_help.setStyleSheet("color: #9fa6ad; margin-top: 2px;")
+        naming_help.setStyleSheet("color: #A5A5A5; margin-top: 2px;")
         layout.addWidget(naming_help)
 
         task_models_help = QLabel(
             "Auto chooses from models detected on this machine. Ollama model IDs are never assumed or downloaded implicitly; use Validate and Pull for a custom ID."
         )
         task_models_help.setWordWrap(True)
-        task_models_help.setStyleSheet("color: #9fa6ad; margin-top: 2px;")
+        task_models_help.setStyleSheet("color: #A5A5A5; margin-top: 2px;")
         layout.addWidget(task_models_help)
 
         scan_help = QLabel("System scan checks the local Ollama install/cache locations and stores the discovered list until you rescan. Folder scan lets you point directly at a custom models folder.")
         scan_help.setWordWrap(True)
-        scan_help.setStyleSheet("color: #9fa6ad; margin-top: 4px;")
+        scan_help.setStyleSheet("color: #A5A5A5; margin-top: 4px;")
         layout.addWidget(scan_help)
 
         self.status_label = QLabel("Enter a model name to validate and set it.")
@@ -504,7 +504,7 @@ class OllamaSettingsWidget(QWidget):
 
         self.setStyleSheet(f"""
             QRadioButton {{
-                color: #cccccc;
+                color: #CCCCCC;
                 font-size: 11px;
             }}
             QRadioButton::indicator {{
@@ -513,7 +513,7 @@ class OllamaSettingsWidget(QWidget):
             }}
             QRadioButton::indicator:unchecked {{
                 border: 1px solid #555;
-                background-color: #3f3f3f;
+                background-color: #3F3F3F;
                 border-radius: 4px;
             }}
             QRadioButton::indicator:checked {{
@@ -771,7 +771,7 @@ class LlamaCppSettingsWidget(QWidget):
             "or reusing Ollama's internal model store."
         )
         info_label.setWordWrap(True)
-        info_label.setStyleSheet("color: #d4d4d4; margin-bottom: 15px;")
+        info_label.setStyleSheet("color: #D4D4D4; margin-bottom: 15px;")
         layout.addWidget(info_label)
 
         form_layout = QFormLayout()
@@ -779,7 +779,7 @@ class LlamaCppSettingsWidget(QWidget):
         form_layout.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
 
         reasoning_mode_label = QLabel("Reasoning Mode:")
-        reasoning_mode_label.setStyleSheet("color: #ffffff; font-weight: bold;")
+        reasoning_mode_label.setStyleSheet("color: #FFFFFF; font-weight: bold;")
 
         self.thinking_radio = QRadioButton("Thinking Mode (Enable CoT)")
         self.quick_radio = QRadioButton("Quick Mode (No CoT)")
@@ -819,7 +819,7 @@ class LlamaCppSettingsWidget(QWidget):
 
         self.scan_summary_label = QLabel(self._get_scan_summary_text())
         self.scan_summary_label.setWordWrap(True)
-        self.scan_summary_label.setStyleSheet("color: #9fa6ad;")
+        self.scan_summary_label.setStyleSheet("color: #A5A5A5;")
         form_layout.addRow("", self.scan_summary_label)
 
         self.chat_model_combo = SettingsComboBox()
@@ -890,14 +890,14 @@ class LlamaCppSettingsWidget(QWidget):
             "including Qwen3.5 GGUFs that expose a thinking toggle."
         )
         help_label.setWordWrap(True)
-        help_label.setStyleSheet("color: #9fa6ad; margin-top: 4px;")
+        help_label.setStyleSheet("color: #A5A5A5; margin-top: 4px;")
         layout.addWidget(help_label)
 
         title_help = QLabel(
             "Chat Naming File is optional. Leave it empty to reuse the main chat model instead of loading a second GGUF."
         )
         title_help.setWordWrap(True)
-        title_help.setStyleSheet("color: #9fa6ad; margin-top: 2px;")
+        title_help.setStyleSheet("color: #A5A5A5; margin-top: 2px;")
         layout.addWidget(title_help)
 
         scan_help = QLabel(
@@ -906,7 +906,7 @@ class LlamaCppSettingsWidget(QWidget):
             "are not valid llama.cpp model files here."
         )
         scan_help.setWordWrap(True)
-        scan_help.setStyleSheet("color: #9fa6ad; margin-top: 2px;")
+        scan_help.setStyleSheet("color: #A5A5A5; margin-top: 2px;")
         layout.addWidget(scan_help)
 
         self.status_label = QLabel("Choose a GGUF file and save settings.")
@@ -1208,7 +1208,7 @@ class ApiSettingsWidget(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(15, 15, 15, 15)
         
-        layout.addWidget(QLabel("API Provider:", styleSheet="color: #ffffff; font-weight: bold;"))
+        layout.addWidget(QLabel("API Provider:", styleSheet="color: #FFFFFF; font-weight: bold;"))
         self.provider_combo = SettingsComboBox()
         self.provider_combo.addItems([
             config.API_PROVIDER_OPENAI,
@@ -1225,16 +1225,16 @@ class ApiSettingsWidget(QWidget):
             "Choose different models for different tasks, including the chat naming model."
         )
         self.info_label.setWordWrap(True)
-        self.info_label.setStyleSheet("color: #d4d4d4; margin-bottom: 15px; margin-top: 10px;")
+        self.info_label.setStyleSheet("color: #D4D4D4; margin-bottom: 15px; margin-top: 10px;")
         layout.addWidget(self.info_label)
 
         self.base_url_label = QLabel("Base URL:")
-        self.base_url_label.setStyleSheet("color: #ffffff; font-weight: bold;")
+        self.base_url_label.setStyleSheet("color: #FFFFFF; font-weight: bold;")
         layout.addWidget(self.base_url_label)
         self.base_url_input = QLineEdit(self.settings_manager.get_api_base_url(), placeholderText="https://api.openai.com/v1")
         layout.addWidget(self.base_url_input)
 
-        layout.addWidget(QLabel("API Key:", styleSheet="color: #ffffff; font-weight: bold; margin-top: 10px;"))
+        layout.addWidget(QLabel("API Key:", styleSheet="color: #FFFFFF; font-weight: bold; margin-top: 10px;"))
         self.api_key_input = QLineEdit(echoMode=QLineEdit.Password, placeholderText="Enter your API key...")
         layout.addWidget(self.api_key_input)
 
@@ -1243,48 +1243,48 @@ class ApiSettingsWidget(QWidget):
         layout.addWidget(self.load_btn)
         self.discovery_status_label = QLabel("Model catalog has not been refreshed yet.")
         self.discovery_status_label.setWordWrap(True)
-        self.discovery_status_label.setStyleSheet("color: #9fa6ad;")
+        self.discovery_status_label.setStyleSheet("color: #A5A5A5;")
         layout.addWidget(self.discovery_status_label)
 
-        layout.addWidget(QLabel("Model Selection (per task):", styleSheet="color: #ffffff; font-weight: bold; margin-top: 15px;"))
+        layout.addWidget(QLabel("Model Selection (per task):", styleSheet="color: #FFFFFF; font-weight: bold; margin-top: 15px;"))
 
         self.model_combos = {}
-        layout.addWidget(QLabel("Chat Naming / Session Title:", styleSheet="color: #d4d4d4; margin-top: 8px;"))
+        layout.addWidget(QLabel("Chat Naming / Session Title:", styleSheet="color: #D4D4D4; margin-top: 8px;"))
         self.title_combo = SettingsComboBox(placeholder_text="Select model...")
         self.title_combo.setEditable(True)
         self.model_combos[config.TASK_TITLE] = self.title_combo
         layout.addWidget(self.title_combo)
-        layout.addWidget(QLabel("Used when a new chat is named in API Endpoint mode.", styleSheet="color: #9fa6ad; margin-top: 2px;"))
+        layout.addWidget(QLabel("Used when a new chat is named in API Endpoint mode.", styleSheet="color: #A5A5A5; margin-top: 2px;"))
         
-        layout.addWidget(QLabel("Chat, Explain, Takeaways (main model):", styleSheet="color: #d4d4d4; margin-top: 8px;"))
+        layout.addWidget(QLabel("Chat, Explain, Takeaways (main model):", styleSheet="color: #D4D4D4; margin-top: 8px;"))
         self.chat_combo = SettingsComboBox(placeholder_text="Select model...")
         self.chat_combo.setEditable(True)
         self.model_combos[config.TASK_CHAT] = self.chat_combo
         layout.addWidget(self.chat_combo)
 
-        layout.addWidget(QLabel("Chart Generation (code-capable model):", styleSheet="color: #d4d4d4; margin-top: 8px;"))
+        layout.addWidget(QLabel("Chart Generation (code-capable model):", styleSheet="color: #D4D4D4; margin-top: 8px;"))
         self.chart_combo = SettingsComboBox(placeholder_text="Select model...")
         self.chart_combo.setEditable(True)
         self.model_combos[config.TASK_CHART] = self.chart_combo
         layout.addWidget(self.chart_combo)
 
-        layout.addWidget(QLabel("Image Generation:", styleSheet="color: #d4d4d4; margin-top: 8px;"))
+        layout.addWidget(QLabel("Image Generation:", styleSheet="color: #D4D4D4; margin-top: 8px;"))
         self.image_combo = SettingsComboBox(placeholder_text="Select image model...")
         self.image_combo.setEditable(True)
         self.model_combos[config.TASK_IMAGE_GEN] = self.image_combo
         layout.addWidget(self.image_combo)
         self.image_help_label = QLabel("Select an image model if your provider supports image generation.")
         self.image_help_label.setWordWrap(True)
-        self.image_help_label.setStyleSheet("color: #9fa6ad; margin-top: 2px;")
+        self.image_help_label.setStyleSheet("color: #A5A5A5; margin-top: 2px;")
         layout.addWidget(self.image_help_label)
         
-        layout.addWidget(QLabel("Web Content Validation:", styleSheet="color: #d4d4d4; margin-top: 8px;"))
+        layout.addWidget(QLabel("Web Content Validation:", styleSheet="color: #D4D4D4; margin-top: 8px;"))
         self.web_validate_combo = SettingsComboBox(placeholder_text="Select a validation model...")
         self.web_validate_combo.setEditable(True)
         self.model_combos[config.TASK_WEB_VALIDATE] = self.web_validate_combo
         layout.addWidget(self.web_validate_combo)
 
-        layout.addWidget(QLabel("Web Content Summarization:", styleSheet="color: #d4d4d4; margin-top: 8px;"))
+        layout.addWidget(QLabel("Web Content Summarization:", styleSheet="color: #D4D4D4; margin-top: 8px;"))
         self.web_summarize_combo = SettingsComboBox(placeholder_text="Select model...")
         self.web_summarize_combo.setEditable(True)
         self.model_combos[config.TASK_WEB_SUMMARIZE] = self.web_summarize_combo
@@ -1545,10 +1545,10 @@ class IntegrationsSettingsWidget(QWidget):
             "and your authenticated repo list. If you leave this empty, the plugin still works with public repositories."
         )
         intro.setWordWrap(True)
-        intro.setStyleSheet("color: #d4d4d4;")
+        intro.setStyleSheet("color: #D4D4D4;")
         layout.addWidget(intro)
 
-        layout.addWidget(QLabel("GitHub Personal Access Token:", styleSheet="color: #ffffff; font-weight: bold; margin-top: 8px;"))
+        layout.addWidget(QLabel("GitHub Personal Access Token:", styleSheet="color: #FFFFFF; font-weight: bold; margin-top: 8px;"))
         self.github_token_input = QLineEdit(
             self.settings_manager.get_github_token(),
             placeholderText="ghp_... or fine-grained token",
@@ -1561,7 +1561,7 @@ class IntegrationsSettingsWidget(QWidget):
             "`~/.graphlink/session.dat` and is not required for public repositories."
         )
         hint.setWordWrap(True)
-        hint.setStyleSheet("color: #9fa6ad; font-size: 11px;")
+        hint.setStyleSheet("color: #A5A5A5; font-size: 11px;")
         layout.addWidget(hint)
 
         layout.addStretch()
@@ -1597,7 +1597,7 @@ class AppearanceSettingsWidget(QWidget):
         
         theme_row = QHBoxLayout()
         theme_label = QLabel("Theme")
-        theme_label.setStyleSheet("color: #8d8d8d; font-weight: bold;")
+        theme_label.setStyleSheet("color: #8D8D8D; font-weight: bold;")
         theme_row.addWidget(theme_label)
         theme_row.addStretch()
 
@@ -1622,7 +1622,7 @@ class AppearanceSettingsWidget(QWidget):
 
         theme_help = QLabel("Theme changes apply immediately when you click Apply.")
         theme_help.setWordWrap(True)
-        theme_help.setStyleSheet("color: #9ca2a8; font-size: 11px;")
+        theme_help.setStyleSheet("color: #A1A1A1; font-size: 11px;")
         layout.addWidget(theme_help)
 
         self.show_token_counter_checkbox = QCheckBox("Show Token Counter Overlay")
@@ -1643,14 +1643,14 @@ class AppearanceSettingsWidget(QWidget):
         layout.addWidget(notification_divider)
 
         notification_title = QLabel("Notifications")
-        notification_title.setStyleSheet("color: #ffffff; font-weight: bold; margin-top: 2px;")
+        notification_title.setStyleSheet("color: #FFFFFF; font-weight: bold; margin-top: 2px;")
         layout.addWidget(notification_title)
 
         notification_intro = QLabel(
             "Choose which banner flag types should appear. Turn off success banners if you want to hide the automatic chat-saved notice."
         )
         notification_intro.setWordWrap(True)
-        notification_intro.setStyleSheet("color: #d4d4d4;")
+        notification_intro.setStyleSheet("color: #D4D4D4;")
         layout.addWidget(notification_intro)
 
         notification_preferences = self.settings_manager.get_notification_preferences()
@@ -1672,14 +1672,14 @@ class AppearanceSettingsWidget(QWidget):
         layout.addWidget(update_divider)
 
         update_title = QLabel("Updates")
-        update_title.setStyleSheet("color: #ffffff; font-weight: bold; margin-top: 2px;")
+        update_title.setStyleSheet("color: #FFFFFF; font-weight: bold; margin-top: 2px;")
         layout.addWidget(update_title)
 
         update_intro = QLabel(
             f"Current build: {APP_VERSION}. Graphlink can check a GitHub version signal on startup or whenever you request it."
         )
         update_intro.setWordWrap(True)
-        update_intro.setStyleSheet("color: #d4d4d4;")
+        update_intro.setStyleSheet("color: #D4D4D4;")
         layout.addWidget(update_intro)
 
         self.enable_update_notifications_checkbox = QCheckBox("Enable Update Notifications on Startup")
@@ -1698,7 +1698,7 @@ class AppearanceSettingsWidget(QWidget):
 
         self.update_timestamp_label = QLabel()
         self.update_timestamp_label.setWordWrap(True)
-        self.update_timestamp_label.setStyleSheet("color: #8d8d8d; font-size: 11px;")
+        self.update_timestamp_label.setStyleSheet("color: #8D8D8D; font-size: 11px;")
         layout.addWidget(self.update_timestamp_label)
 
         update_button_row = QHBoxLayout()
@@ -1733,7 +1733,7 @@ class AppearanceSettingsWidget(QWidget):
         }
         self.update_status_label.setText(status_message)
         self.update_status_label.setStyleSheet(
-            f"color: {color_map.get(status_level, '#d4d4d4')}; font-size: 12px;"
+            f"color: {color_map.get(status_level, '#D4D4D4')}; font-size: 12px;"
         )
 
         checked_at = self.settings_manager.get_update_last_checked_at()
@@ -1795,7 +1795,7 @@ class SettingsCategoryButton(QPushButton):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setCheckable(True)
         self.setMinimumHeight(42)
-        self.setIcon(qta.icon(icon_name, color="#d9e1ea"))
+        self.setIcon(qta.icon(icon_name, color="#E0E0E0"))
         self.setIconSize(QSize(14, 14))
 
 
@@ -1973,8 +1973,8 @@ class SettingsDialog(QFrame):
         accent = palette.SELECTION.name()
         panel_gray = "rgba(42, 42, 42, 248)"
         line_gray = "rgba(255, 255, 255, 0.08)"
-        muted_text = "#8d8d8d"
-        soft_text = "#bfc4ca"
+        muted_text = "#8D8D8D"
+        soft_text = "#C3C3C3"
         hover_gray = "rgba(255, 255, 255, 0.055)"
         badge_gray = "rgba(255, 255, 255, 0.025)"
 
@@ -2035,12 +2035,12 @@ class SettingsDialog(QFrame):
             QPushButton#settingsCategoryButton:hover {{
                 background-color: {hover_gray};
                 border-color: rgba(255, 255, 255, 0.05);
-                color: #ffffff;
+                color: #FFFFFF;
             }}
             QPushButton#settingsCategoryButton:checked {{
                 background-color: rgba(255, 255, 255, 0.06);
                 border-color: rgba(255, 255, 255, 0.08);
-                color: #ffffff;
+                color: #FFFFFF;
             }}
             QLabel#settingsCategoryIcon {{
                 background-color: {badge_gray};
@@ -2048,7 +2048,7 @@ class SettingsDialog(QFrame):
                 border-radius: 14px;
             }}
             QLabel#settingsPaneTitle {{
-                color: #f3f5f8;
+                color: #F5F5F5;
                 font-size: 15px;
                 font-weight: 700;
                 background-color: transparent;
@@ -2066,16 +2066,16 @@ class SettingsDialog(QFrame):
                 background-color: transparent;
             }}
             QComboBox#settingsComboBox {{
-                background-color: #2d2d2d;
-                border: 1px solid #3f3f3f;
-                color: #ffffff;
+                background-color: #2D2D2D;
+                border: 1px solid #3F3F3F;
+                color: #FFFFFF;
                 padding: 5px;
                 border-radius: 4px;
                 font-family: 'Segoe UI', sans-serif;
                 font-size: 12px;
             }}
             QComboBox#settingsComboBox:hover {{
-                border-color: #4a4a4a;
+                border-color: #4A4A4A;
             }}
             QComboBox#settingsComboBox:focus {{
                 border-color: {accent};
@@ -2085,7 +2085,7 @@ class SettingsDialog(QFrame):
                 subcontrol-position: top right;
                 width: 20px;
                 border-left-width: 1px;
-                border-left-color: #3f3f3f;
+                border-left-color: #3F3F3F;
                 border-left-style: solid;
                 border-top-right-radius: 3px;
                 border-bottom-right-radius: 3px;
@@ -2098,15 +2098,15 @@ class SettingsDialog(QFrame):
             }}
             QComboBox#settingsComboBox QLineEdit {{
                 background-color: transparent;
-                color: #ffffff;
+                color: #FFFFFF;
                 border: none;
                 padding: 0;
-                selection-background-color: #264f78;
-                selection-color: #ffffff;
+                selection-background-color: #494949;
+                selection-color: #FFFFFF;
             }}
             QFrame#settingsFlyoutShell QMenu {{
-                background-color: #2d2d2d;
-                border: 1px solid #3f3f3f;
+                background-color: #2D2D2D;
+                border: 1px solid #3F3F3F;
                 border-radius: 4px;
                 padding: 4px;
             }}
@@ -2114,25 +2114,25 @@ class SettingsDialog(QFrame):
                 background-color: transparent;
                 padding: 8px 24px 8px 24px;
                 border-radius: 4px;
-                color: #ffffff;
+                color: #FFFFFF;
                 font-family: 'Segoe UI', sans-serif;
                 font-size: 12px;
             }}
             QFrame#settingsFlyoutShell QMenu::item:selected {{
                 background-color: {accent};
-                color: #ffffff;
+                color: #FFFFFF;
             }}
             QFrame#settingsFlyoutShell QMenu::item:disabled {{
                 color: #777777;
             }}
             QFrame#settingsFlyoutShell QMenu::separator {{
                 height: 1px;
-                background-color: #3f3f3f;
+                background-color: #3F3F3F;
                 margin: 4px 0px;
             }}
             QPushButton#settingsCloseButton {{
                 background-color: rgba(255, 255, 255, 0.04);
-                color: #f3f5f8;
+                color: #F5F5F5;
                 border: 1px solid rgba(255, 255, 255, 0.08);
                 border-radius: 8px;
                 padding: 8px 14px;

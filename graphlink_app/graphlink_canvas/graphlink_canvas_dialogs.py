@@ -62,7 +62,7 @@ class ColorPickerDialog(QDialog):
 
         def create_section(title, color_type, names_list):
             label = QLabel(title)
-            label.setStyleSheet("color: #cccccc; font-size: 10px; margin-top: 5px;")
+            label.setStyleSheet("color: #CCCCCC; font-size: 10px; margin-top: 5px;")
             main_layout.addWidget(label)
             
             grid_layout = QGridLayout()
@@ -79,18 +79,18 @@ class ColorPickerDialog(QDialog):
                 btn.setCursor(Qt.CursorShape.PointingHandCursor)
                 
                 style = f"""
-                    QPushButton {{ background-color: {color_data["color"]}; border: 2px solid #3f3f3f; border-radius: 14px; }}
-                    QPushButton:hover {{ border: 2px solid #ffffff; }}
+                    QPushButton {{ background-color: {color_data["color"]}; border: 2px solid #3F3F3F; border-radius: 14px; }}
+                    QPushButton:hover {{ border: 2px solid #FFFFFF; }}
                 """
                 if color_type == "header":
                     style = f"""
                         QPushButton {{
                             background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
                                 stop:0 {color_data["color"]}, stop:0.4 {color_data["color"]},
-                                stop:0.41 #3f3f3f, stop:1 #3f3f3f);
-                            border: 2px solid #3f3f3f; border-radius: 14px;
+                                stop:0.41 #3F3F3F, stop:1 #3F3F3F);
+                            border: 2px solid #3F3F3F; border-radius: 14px;
                         }}
-                        QPushButton:hover {{ border: 2px solid #ffffff; }}
+                        QPushButton:hover {{ border: 2px solid #FFFFFF; }}
                     """
                 btn.setStyleSheet(style)
                 btn.clicked.connect(lambda checked, c=color_data: self.color_selected(c["color"], c["type"]))
@@ -113,9 +113,9 @@ class ColorPickerDialog(QDialog):
         
         self.setStyleSheet("""
             QDialog { background: transparent; }
-            QWidget#colorPickerContainer { background-color: #252526; border-radius: 8px; }
-            QLabel#colorPickerTitle { color: #ffffff; font-size: 12px; font-weight: bold; }
-            QPushButton { background-color: #3f3f3f; border-radius: 5px; padding: 8px; }
+            QWidget#colorPickerContainer { background-color: #252525; border-radius: 8px; }
+            QLabel#colorPickerTitle { color: #FFFFFF; font-size: 12px; font-weight: bold; }
+            QPushButton { background-color: #3F3F3F; border-radius: 5px; padding: 8px; }
             QPushButton:hover { background-color: #555555; }
             QPushButton#colorPickerCloseButton {
                 background-color: transparent;
@@ -123,7 +123,7 @@ class ColorPickerDialog(QDialog):
                 padding: 0px;
             }
             QPushButton#colorPickerCloseButton:hover {
-                background-color: #4a4a4a;
+                background-color: #4A4A4A;
             }
         """)
         
@@ -158,61 +158,4 @@ class ColorPickerDialog(QDialog):
     def get_selected_color(self):
         return self.selected_color, self.selected_type
 
-class PinEditDialog(QDialog):
-    """A dialog for editing the title and note of a NavigationPin."""
-    def __init__(self, title="", note="", parent=None):
-        super().__init__(parent)
-        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Dialog)
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setModal(True)
-        self.resize(300, 200)
-        
-        self.container = QWidget(self)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(self.container)
-        
-        container_layout = QVBoxLayout(self.container)
-        container_layout.setSpacing(10)
-        container_layout.setContentsMargins(20, 20, 20, 20)
-        
-        container_layout.addWidget(QLabel("Pin Title"))
-        self.title_input = QLineEdit(title)
-        self.title_input.setPlaceholderText("Enter pin title...")
-        container_layout.addWidget(self.title_input)
-        
-        container_layout.addWidget(QLabel("Note"))
-        self.note_input = QTextEdit()
-        self.note_input.setPlaceholderText("Add a note...")
-        self.note_input.setText(note)
-        self.note_input.setMaximumHeight(80)
-        container_layout.addWidget(self.note_input)
-        
-        button_layout = QHBoxLayout()
-        save_btn = QPushButton("Save")
-        save_btn.clicked.connect(self.accept)
-        cancel_btn = QPushButton("Cancel")
-        cancel_btn.clicked.connect(self.reject)
-        button_layout.addWidget(save_btn)
-        button_layout.addWidget(cancel_btn)
-        container_layout.addLayout(button_layout)
-        
-        shadow = QGraphicsDropShadowEffect(self)
-        shadow.setBlurRadius(20)
-        shadow.setColor(QColor(0, 0, 0, 180))
-        shadow.setOffset(0, 0)
-        self.container.setGraphicsEffect(shadow)
-        
-        self.container.setStyleSheet(f"""
-            QWidget { background-color: #2d2d2d; border-radius: 10px; }
-            QLabel { color: white; font-size: 12px; }
-            QLineEdit, QTextEdit {
-                background-color: #3f3f3f; border: none; border-radius: 5px;
-                padding: 5px; color: white;
-            }
-            QPushButton {
-                background-color: {get_semantic_color("status_success").name()}; border: none; border-radius: 5px;
-                padding: 8px 16px; color: white;
-            }
-            QPushButton:hover {{ background-color: #4b6375; }}
-        """)
+from graphlink_widgets.pins import NavigationPinEditor as PinEditDialog

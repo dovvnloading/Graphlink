@@ -192,8 +192,8 @@ class ChatLibraryDialog(QDialog):
         accent = palette.SELECTION.name()
         panel_gray = "rgba(42, 42, 42, 248)"
         line_gray = "rgba(255, 255, 255, 0.08)"
-        muted_text = "#8d8d8d"
-        soft_text = "#d5d9df"
+        muted_text = "#8D8D8D"
+        soft_text = "#D9D9D9"
         hover_gray = "rgba(255, 255, 255, 0.055)"
         badge_gray = "rgba(255, 255, 255, 0.025)"
 
@@ -229,7 +229,7 @@ class ChatLibraryDialog(QDialog):
                 letter-spacing: 0.14em;
             }}
             QLabel#libraryWindowTitle {{
-                color: #f3f5f8;
+                color: #F5F5F5;
                 font-size: 16px;
                 font-weight: 700;
             }}
@@ -238,22 +238,22 @@ class ChatLibraryDialog(QDialog):
                 font-size: 11px;
             }}
             QLineEdit#librarySearchInput {{
-                background-color: #2d2d2d;
-                border: 1px solid #3f3f3f;
+                background-color: #2D2D2D;
+                border: 1px solid #3F3F3F;
                 border-radius: 9px;
-                color: #ffffff;
+                color: #FFFFFF;
                 padding: 10px 12px;
-                selection-background-color: #264f78;
+                selection-background-color: #494949;
             }}
             QLineEdit#librarySearchInput:hover {{
-                border-color: #4a4a4a;
+                border-color: #4A4A4A;
             }}
             QLineEdit#librarySearchInput:focus {{
                 border-color: {accent};
             }}
             QPushButton#libraryActionButton {{
                 background-color: {button_colors["background"].name()};
-                color: #f3f5f8;
+                color: #F5F5F5;
                 border: 1px solid {button_colors["border"].name()};
                 border-radius: 8px;
                 padding: 8px 12px;
@@ -277,7 +277,7 @@ class ChatLibraryDialog(QDialog):
             }}
             QPushButton#libraryCloseButton {{
                 background-color: rgba(255, 255, 255, 0.04);
-                color: #f3f5f8;
+                color: #F5F5F5;
                 border: 1px solid rgba(255, 255, 255, 0.08);
                 border-radius: 8px;
                 padding: 8px 14px;
@@ -289,7 +289,7 @@ class ChatLibraryDialog(QDialog):
             }}
             QListWidget#libraryList {{
                 background: transparent;
-                color: #ffffff;
+                color: #FFFFFF;
                 border: none;
                 outline: none;
             }}
@@ -307,7 +307,7 @@ class ChatLibraryDialog(QDialog):
             QListWidget#libraryList::item:selected {{
                 background-color: {accent};
                 border-color: {accent};
-                color: #ffffff;
+                color: #FFFFFF;
             }}
             QLabel#libraryStatusLabel {{
                 color: {soft_text};

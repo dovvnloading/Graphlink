@@ -131,19 +131,19 @@ class HtmlPopoutWindow(QDialog):
         ::-webkit-scrollbar {
             width: 10px;
             height: 10px;
-            background-color: #252526;
+            background-color: #252525;
         }
         ::-webkit-scrollbar-track {
-            background-color: #252526;
+            background-color: #252525;
             border-radius: 5px;
         }
         ::-webkit-scrollbar-thumb {
             background-color: #555555;
             border-radius: 5px;
-            border: 1px solid #252526;
+            border: 1px solid #252525;
         }
         ::-webkit-scrollbar-thumb:hover {
-            background-color: #6a6a6a;
+            background-color: #6A6A6A;
         }
         ::-webkit-scrollbar-corner {
             background: transparent;
@@ -219,7 +219,7 @@ class HtmlViewNode(QGraphicsObject, HoverAnimationMixin):
         self.widget.setObjectName("htmlViewMainWidget")
         self.widget.setFixedSize(self.NODE_WIDTH, self.NODE_HEIGHT)
         self.widget.setStyleSheet("""
-            QWidget#htmlViewMainWidget { background-color: transparent; color: #e0e0e0; }
+            QWidget#htmlViewMainWidget { background-color: transparent; color: #E0E0E0; }
             QWidget#htmlViewMainWidget QLabel { background-color: transparent; }
         """)
         
@@ -282,7 +282,7 @@ class HtmlViewNode(QGraphicsObject, HoverAnimationMixin):
         self.splitter.setStyleSheet("""
             QSplitter::handle:vertical {
                 height: 8px;
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3f3f3f, stop:0.5 #555555, stop:1 #3f3f3f);
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3F3F3F, stop:0.5 #555555, stop:1 #3F3F3F);
             }
             QSplitter::handle:vertical:hover {
                 background: %s;
@@ -322,7 +322,7 @@ class HtmlViewNode(QGraphicsObject, HoverAnimationMixin):
         self.popout_button.clicked.connect(self._handle_popout)
         self.popout_button.setStyleSheet("""
             QPushButton { border: 1px solid #555; border-radius: 4px; }
-            QPushButton:hover { background-color: #4f4f4f; }
+            QPushButton:hover { background-color: #4F4F4F; }
         """)
         preview_header_layout.addWidget(self.popout_button)
         
@@ -337,7 +337,7 @@ class HtmlViewNode(QGraphicsObject, HoverAnimationMixin):
             self.web_view = QWebEngineView()
             _harden_preview_web_view(self.web_view)
             self._inject_scrollbar_style()
-            self.web_view.setStyleSheet("background-color: #ffffff; border-radius: 4px;")
+            self.web_view.setStyleSheet("background-color: #FFFFFF; border-radius: 4px;")
             webview_layout.addWidget(self.web_view)
         else:
             self.popout_button.setEnabled(False)
@@ -348,7 +348,7 @@ class HtmlViewNode(QGraphicsObject, HoverAnimationMixin):
             )
             error_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             error_label.setStyleSheet(
-                "background-color: #252526; border: 1px dashed #555;"
+                "background-color: #252525; border: 1px dashed #555;"
                 "color: #888; border-radius: 4px; padding: 20px;"
             )
             webview_layout.addWidget(error_label)
@@ -366,8 +366,8 @@ class HtmlViewNode(QGraphicsObject, HoverAnimationMixin):
         for widget in [self.html_input]:
             widget.setStyleSheet("""
                 QTextEdit {
-                    background-color: #252526; border: 1px solid #3f3f3f;
-                    color: #cccccc; border-radius: 4px; padding: 5px;
+                    background-color: #252525; border: 1px solid #3F3F3F;
+                    color: #CCCCCC; border-radius: 4px; padding: 5px;
                     font-family: Consolas, Monaco, monospace;
                 }
             """)
@@ -393,9 +393,9 @@ class HtmlViewNode(QGraphicsObject, HoverAnimationMixin):
                 border-color: {button_colors["border"].darker(105).name()};
             }}
             QPushButton:disabled {{
-                background-color: #2b2b2b;
+                background-color: #2B2B2B;
                 border-color: #353535;
-                color: #7b7b7b;
+                color: #7B7B7B;
             }}
         """)
         
@@ -404,19 +404,19 @@ class HtmlViewNode(QGraphicsObject, HoverAnimationMixin):
         ::-webkit-scrollbar {
             width: 10px;
             height: 10px;
-            background-color: #252526;
+            background-color: #252525;
         }
         ::-webkit-scrollbar-track {
-            background-color: #252526;
+            background-color: #252525;
             border-radius: 5px;
         }
         ::-webkit-scrollbar-thumb {
             background-color: #555555;
             border-radius: 5px;
-            border: 1px solid #252526;
+            border: 1px solid #252525;
         }
         ::-webkit-scrollbar-thumb:hover {
-            background-color: #6a6a6a;
+            background-color: #6A6A6A;
         }
         ::-webkit-scrollbar-corner {
             background: transparent;
@@ -500,7 +500,7 @@ class HtmlViewNode(QGraphicsObject, HoverAnimationMixin):
         
         path = QPainterPath()
         path.addRoundedRect(0, 0, self.width, self.height, 10, 10)
-        painter.setBrush(QColor("#2d2d2d"))
+        painter.setBrush(QColor("#2D2D2D"))
         
         node_color = node_colors["border"]
         pen = QPen(node_color, 1.5)
@@ -508,7 +508,7 @@ class HtmlViewNode(QGraphicsObject, HoverAnimationMixin):
         if self.isSelected():
             pen = QPen(palette.SELECTION, 2)
         elif self.hovered:
-            pen = QPen(QColor("#ffffff"), 2)
+            pen = QPen(QColor("#FFFFFF"), 2)
         
         painter.setPen(pen)
         painter.drawPath(path)
@@ -545,7 +545,7 @@ class HtmlViewNode(QGraphicsObject, HoverAnimationMixin):
             return
 
         if self.is_collapsed:
-            painter.setPen(QColor("#ffffff"))
+            painter.setPen(QColor("#FFFFFF"))
             font = canvas_font(self.scene(), weight=QFont.Weight.Bold)
             painter.setFont(font)
             painter.drawText(QRectF(40, 0, self.width - 80, self.height), Qt.AlignmentFlag.AlignVCenter, "HTML Renderer")
@@ -554,7 +554,7 @@ class HtmlViewNode(QGraphicsObject, HoverAnimationMixin):
             icon.paint(painter, QRect(10, 10, 20, 20))
             
             self.collapse_button_rect = QRectF(self.width - 35, 5, 30, 30)
-            expand_icon = qta.icon('fa5s.expand-arrows-alt', color='#ffffff' if self.hovered else '#888888')
+            expand_icon = qta.icon('fa5s.expand-arrows-alt', color='#FFFFFF' if self.hovered else '#888888')
             expand_icon.paint(painter, QRect(int(self.width - 30), 10, 20, 20))
         else:
             if self.hovered:
@@ -563,7 +563,7 @@ class HtmlViewNode(QGraphicsObject, HoverAnimationMixin):
                 painter.setPen(QColor(255, 255, 255, 150))
                 painter.drawRoundedRect(self.collapse_button_rect.adjusted(6,6,-6,-6), 4, 4)
                 
-                icon_pen = QPen(QColor("#ffffff"), 2)
+                icon_pen = QPen(QColor("#FFFFFF"), 2)
                 painter.setPen(icon_pen)
                 center = self.collapse_button_rect.center()
                 painter.drawLine(int(center.x() - 4), int(center.y()), int(center.x() + 4), int(center.y()))

@@ -508,8 +508,8 @@ class ComposerBridge(QObject):
             palette = get_current_palette()
             accent = palette.SELECTION.name()
         except (AttributeError, TypeError):
-            accent = "#83a7ff"
-        return {"mode": "dark", "accent": accent, "surface": "#1b1f25"}
+            accent = "#A6A6A6"
+        return {"mode": "dark", "accent": accent, "surface": "#1F1F1F"}
 
     def _state_payload(self) -> dict[str, Any]:
         draft = self.controller.draft

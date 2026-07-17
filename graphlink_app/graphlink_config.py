@@ -21,7 +21,7 @@ def canvas_font(scene=None, delta=0, weight=QFont.Weight.Normal):
     return font
 
 
-def canvas_font_color(scene=None, fallback="#dddddd"):
+def canvas_font_color(scene=None, fallback="#DDDDDD"):
     color = getattr(scene, "font_color", None) if scene else None
     return QColor(color) if color is not None else QColor(fallback)
 
@@ -44,15 +44,15 @@ def get_semantic_color(name: str) -> QColor:
     if name == "status_success":
         return QColor(palette.USER_NODE)
     if name == "status_error":
-        return QColor("#9a9a9a") if is_monochrome_theme() else QColor("#9b8588") if is_muted_theme() else QColor("#9f7d80")
+        return QColor("#9A9A9A") if is_monochrome_theme() else QColor("#8A8A8A") if is_muted_theme() else QColor("#848484")
     if name == "status_warning":
-        return QColor("#b0b0b0") if is_monochrome_theme() else QColor("#9f8a72") if is_muted_theme() else QColor("#a48f6f")
+        return QColor("#B0B0B0") if is_monochrome_theme() else QColor("#8D8D8D") if is_muted_theme() else QColor("#919191")
     if name == "artifact":
-        return QColor("#8f8f8f") if is_monochrome_theme() else QColor(palette.AI_NODE)
+        return QColor("#8F8F8F") if is_monochrome_theme() else QColor(palette.AI_NODE)
     if name == "conversation_user_bubble":
         return QColor("#595959") if is_monochrome_theme() else QColor(palette.USER_NODE).darker(125)
     if name == "conversation_ai_bubble":
-        return QColor("#323232") if is_monochrome_theme() else QColor("#2d333b")
+        return QColor("#323232") if is_monochrome_theme() else QColor("#323232")
     return QColor(palette.SELECTION)
 
 
@@ -61,29 +61,29 @@ def get_neutral_button_colors():
         return {
             "background": QColor("#555555"),
             "hover": QColor("#666666"),
-            "pressed": QColor("#4a4a4a"),
+            "pressed": QColor("#4A4A4A"),
             "border": QColor("#666666"),
-            "icon": QColor("#ffffff"),
-            "muted_icon": QColor("#d5d5d5"),
+            "icon": QColor("#FFFFFF"),
+            "muted_icon": QColor("#D5D5D5"),
         }
 
     if is_muted_theme():
         return {
-            "background": QColor("#333b45"),
-            "hover": QColor("#3f4955"),
-            "pressed": QColor("#2f3741"),
-            "border": QColor("#506071"),
-            "icon": QColor("#d4dce5"),
-            "muted_icon": QColor("#b0bcc9"),
+            "background": QColor("#3A3A3A"),
+            "hover": QColor("#484848"),
+            "pressed": QColor("#363636"),
+            "border": QColor("#5E5E5E"),
+            "icon": QColor("#DBDBDB"),
+            "muted_icon": QColor("#BABABA"),
         }
 
     return {
-        "background": QColor("#323a44"),
-        "hover": QColor("#3f4a55"),
-        "pressed": QColor("#2d353e"),
-        "border": QColor("#4f5965"),
-        "icon": QColor("#edf1f5"),
-        "muted_icon": QColor("#b4bec9"),
+        "background": QColor("#393939"),
+        "hover": QColor("#484848"),
+        "pressed": QColor("#343434"),
+        "border": QColor("#585858"),
+        "icon": QColor("#F0F0F0"),
+        "muted_icon": QColor("#BDBDBD"),
     }
 
 
@@ -97,12 +97,12 @@ def get_graph_node_colors():
             "hover_dot": button_colors["hover"],
             "hover_outline": button_colors["hover"].lighter(112),
             "selected_outline": button_colors["hover"].lighter(124),
-            "body_start": QColor("#2b3138"),
-            "body_end": QColor("#24292f"),
-            "header_start": QColor("#353e48"),
-            "header_end": QColor("#2d343c"),
-            "badge_fill": QColor("#414b56"),
-            "panel_fill": QColor("#191c20"),
+            "body_start": QColor("#303030"),
+            "body_end": QColor("#282828"),
+            "header_start": QColor("#3D3D3D"),
+            "header_end": QColor("#333333"),
+            "badge_fill": QColor("#4A4A4A"),
+            "panel_fill": QColor("#1C1C1C"),
             "panel_border": button_colors["border"],
         }
 
@@ -113,12 +113,12 @@ def get_graph_node_colors():
         "hover_dot": button_colors["hover"],
         "hover_outline": button_colors["hover"].lighter(112),
         "selected_outline": button_colors["hover"].lighter(124),
-        "body_start": QColor("#2b3139"),
-        "body_end": QColor("#252a31"),
-        "header_start": QColor("#353d48"),
-        "header_end": QColor("#2d343d"),
-        "badge_fill": QColor("#3f4954"),
-        "panel_fill": QColor("#1d2024"),
+        "body_start": QColor("#303030"),
+        "body_end": QColor("#292929"),
+        "header_start": QColor("#3C3C3C"),
+        "header_end": QColor("#333333"),
+        "badge_fill": QColor("#484848"),
+        "panel_fill": QColor("#202020"),
         "panel_border": button_colors["border"],
     }
 

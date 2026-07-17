@@ -12,6 +12,7 @@ from graphlink_connections import (
     HtmlConnectionItem, ThinkingConnectionItem
 )
 from graphlink_canvas_items import Frame, Note, NavigationPin, ChartItem, Container
+from graphlink_navigation_pins import NavigationPinStore
 from graphlink_pycoder import PyCoderNode
 from graphlink_plugins.graphlink_plugin_code_sandbox import CodeSandboxNode
 from graphlink_web import WebNode, WebConnectionItem
@@ -49,6 +50,9 @@ class ChatScene(QGraphicsScene):
         self.frames = []
         self.containers = []
         self.pins = []
+        # NavigationPinStore is the authoritative record/order source. ``pins``
+        # remains a compatibility projection for scene code during migration.
+        self.pin_store = NavigationPinStore()
         self.notes = []
         self.code_nodes = []
         self.document_nodes = []
@@ -81,7 +85,7 @@ class ChatScene(QGraphicsScene):
         self.artifact_connections = []
         self.gitlink_connections = []
 
-        self.setBackgroundBrush(QColor("#252526"))
+        self.setBackgroundBrush(QColor("#252525"))
         
         # Parameters for the auto-layout algorithm.
         self.horizontal_spacing = 150
@@ -100,7 +104,7 @@ class ChatScene(QGraphicsScene):
         # Global font properties for nodes that support them.
         self.font_family = "Segoe UI"
         self.font_size = 10
-        self.font_color = QColor("#dddddd")
+        self.font_color = QColor("#DDDDDD")
         
     def setFontFamily(self, family):
         """
@@ -549,7 +553,21 @@ class ChatScene(QGraphicsScene):
 
         self._schedule_scene_changed()
                         
-    def add_navigation_pin(self, pos):
+    def _navigation_pin_item(self, pin_id):
+        return next((pin for pin in self.pins if pin.pin_id == pin_id and pin.scene() == self), None)
+
+    def _on_navigation_pin_edit_requested(self, pin_id):
+        pin = self._navigation_pin_item(pin_id)
+        if pin is not None and self.window and hasattr(self.window, "edit_navigation_pin"):
+            self.window.edit_navigation_pin(pin)
+
+    def _on_navigation_pin_move_committed(self, pin_id, position):
+        if self.pin_store.get(pin_id) is None:
+            return
+        self.pin_store.move(pin_id, position.x(), position.y())
+        self._schedule_scene_changed()
+
+    def add_navigation_pin(self, pos, title="Canvas location", note="", pin_id=None, anchor_item_id=None):
         """
         Adds a new NavigationPin to the scene at the specified position.
 
@@ -559,11 +577,71 @@ class ChatScene(QGraphicsScene):
         Returns:
             NavigationPin: The created pin item.
         """
-        pin = NavigationPin()
+        record = self.pin_store.add(
+            title=title,
+            note=note,
+            x=pos.x(),
+            y=pos.y(),
+            pin_id=pin_id,
+            anchor_item_id=anchor_item_id,
+        )
+        pin = NavigationPin(title=record.title, note=record.note, pin_id=record.pin_id)
+        pin.editRequested.connect(self._on_navigation_pin_edit_requested)
+        pin.contextMenuRequested.connect(self._on_navigation_pin_context_requested)
+        pin.positionCommitted.connect(self._on_navigation_pin_move_committed)
         pin.setPos(pos)
         self.addItem(pin)
         self.pins.append(pin)
+        self.scene_changed.emit()
         return pin
+
+    def _on_navigation_pin_context_requested(self, pin_id, screen_pos):
+        pin = self._navigation_pin_item(pin_id)
+        if pin is not None and self.window and hasattr(self.window, "show_navigation_pin_context_menu"):
+            self.window.show_navigation_pin_context_menu(pin, screen_pos)
+
+    def update_navigation_pin(self, pin, *, title=None, note=None):
+        """Commit validated metadata through the authoritative pin store."""
+        if pin not in self.pins or pin.scene() != self:
+            return None
+        changes = {}
+        if title is not None:
+            changes["title"] = title
+        if note is not None:
+            changes["note"] = note
+        if not changes:
+            return self.pin_store.get(pin.pin_id)
+        record = self.pin_store.update(pin.pin_id, **changes)
+        pin.apply_metadata(record.title, record.note)
+        self.scene_changed.emit()
+        return record
+
+    def remove_navigation_pin(self, pin_or_id):
+        """Remove a pin and its record exactly once."""
+        pin_id = getattr(pin_or_id, "pin_id", pin_or_id)
+        pin = self._navigation_pin_item(pin_id)
+        removed = self.pin_store.remove(pin_id)
+        if pin is not None:
+            pin.setSelected(False)
+            self.removeItem(pin)
+            if pin in self.pins:
+                self.pins.remove(pin)
+        if removed is not None or pin is not None:
+            self.scene_changed.emit()
+        return removed
+
+    def ordered_navigation_pins(self):
+        """Return live graphics items in explicit store order."""
+        by_id = {pin.pin_id: pin for pin in self.pins if pin.scene() == self}
+        return [by_id[record.pin_id] for record in self.pin_store.records if record.pin_id in by_id]
+
+    def clear_navigation_pins(self):
+        for pin in list(self.pins):
+            if pin.scene() == self:
+                self.removeItem(pin)
+        self.pins.clear()
+        self.pin_store.clear()
+        self.scene_changed.emit()
     
     def add_chart(self, data, pos, parent_content_node=None, source_node=None):
         """Adds a new ChartItem to the scene."""
@@ -773,9 +851,15 @@ class ChatScene(QGraphicsScene):
     def _all_layout_nodes(self):
         return self._all_conversational_nodes() + self._all_content_nodes()
 
-    def overview_items(self):
-        """Return visible persistent canvas items suitable for Fit All."""
-        candidates = self._all_layout_nodes() + self.notes + self.frames + self.containers + self.pins
+    def overview_items(self, include_navigation_pins=False):
+        """Return visible graph items suitable for Fit All.
+
+        Navigation pins are orientation aids rather than graph content, so they are
+        excluded by default and cannot distort Fit All because of a distant bookmark.
+        """
+        candidates = self._all_layout_nodes() + self.notes + self.frames + self.containers
+        if include_navigation_pins:
+            candidates += self.ordered_navigation_pins()
         seen = set()
         items = []
         for item in candidates:
@@ -1450,9 +1534,7 @@ class ChatScene(QGraphicsScene):
                 self.removeItem(item)
                 if item in self.chart_nodes: self.chart_nodes.remove(item)
             elif isinstance(item, NavigationPin):
-                if hasattr(self.window, 'pin_overlay') and self.window.pin_overlay: self.window.pin_overlay.remove_pin(item)
-                if item in self.pins: self.pins.remove(item)
-                self.removeItem(item)
+                self.remove_navigation_pin(item)
         self.update_connections()
         self.scene_changed.emit()
 
@@ -1508,7 +1590,7 @@ class ChatScene(QGraphicsScene):
                                 # Draw a visual guide line.
                                 y1, y2 = min(moving_rect.top(), static_rect.top()), max(moving_rect.bottom(), static_rect.bottom())
                                 line = QGraphicsLineItem(s_val, y1, s_val, y2)
-                                line.setPen(QPen(QColor(255, 0, 100, 200), 1, Qt.PenStyle.DashLine))
+                                line.setPen(QPen(QColor(128, 128, 128, 200), 1, Qt.PenStyle.DashLine))
                                 self.addItem(line)
                                 self.smart_guide_lines.append(line)
                                 snapped_x = True
@@ -1524,7 +1606,7 @@ class ChatScene(QGraphicsScene):
                                 snapped_pos.setY(snapped_pos.y() + (s_val - m_val))
                                 x1, x2 = min(moving_rect.left(), static_rect.left()), max(moving_rect.right(), static_rect.right())
                                 line = QGraphicsLineItem(x1, s_val, x2, s_val)
-                                line.setPen(QPen(QColor(255, 0, 100, 200), 1, Qt.PenStyle.DashLine))
+                                line.setPen(QPen(QColor(128, 128, 128, 200), 1, Qt.PenStyle.DashLine))
                                 self.addItem(line)
                                 self.smart_guide_lines.append(line)
                                 snapped_y = True
@@ -1577,6 +1659,7 @@ class ChatScene(QGraphicsScene):
         self.frames.clear()
         self.containers.clear()
         self.pins.clear()
+        self.pin_store.clear()
         self.notes.clear()
         self.code_nodes.clear()
         self.document_nodes.clear()

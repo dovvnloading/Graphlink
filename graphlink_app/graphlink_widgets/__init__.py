@@ -3,7 +3,7 @@
 from .controls import FontControl, GridControl
 from .composer import ComposerWidget
 from .overlays import GhostNodePreview, LoadingAnimation, SearchOverlay
-from .pins import NavigationPin, PinOverlay
+from .pins import NavigationPinEditor, NavigationPinsListModel, PinOverlay
 from .scrolling import CustomScrollArea, CustomScrollBar, ScrollBar, ScrollHandle
 from .splash import AnimatedWordLogo, SplashAnimationWidget, SplashScreen
 from .text_inputs import ChatInputTextEdit, ContextAttachmentPill, SpellCheckLineEdit, _BlackHoleEditor
@@ -22,7 +22,8 @@ __all__ = [
     'GhostNodePreview',
     'GridControl',
     'LoadingAnimation',
-    'NavigationPin',
+    'NavigationPinEditor',
+    'NavigationPinsListModel',
     'PinOverlay',
     'ScrollBar',
     'ScrollHandle',

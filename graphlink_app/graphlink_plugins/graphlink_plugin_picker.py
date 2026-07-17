@@ -26,7 +26,7 @@ class PluginCategoryButton(QPushButton):
         self.setMinimumHeight(42)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setText(category_name)
-        self.setIcon(qta.icon(category_icon, color="#d9e1ea"))
+        self.setIcon(qta.icon(category_icon, color="#E0E0E0"))
         self.setIconSize(QSize(14, 14))
 
 
@@ -72,7 +72,7 @@ class PluginEntryCard(QFrame):
 
         chevron_label = QLabel()
         chevron_label.setObjectName("pluginEntryChevron")
-        chevron_label.setPixmap(qta.icon("fa5s.chevron-right", color="#7b8694").pixmap(12, 12))
+        chevron_label.setPixmap(qta.icon("fa5s.chevron-right", color="#858585").pixmap(12, 12))
         chevron_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         chevron_label.setFixedWidth(18)
         layout.addWidget(chevron_label, 0, Qt.AlignmentFlag.AlignVCenter)
@@ -216,8 +216,8 @@ class PluginFlyoutPanel(QFrame):
         accent = palette.SELECTION.name()
         panel_gray = "rgba(42, 42, 42, 248)"
         line_gray = "rgba(255, 255, 255, 0.08)"
-        muted_text = "#8d8d8d"
-        soft_text = "#bfc4ca"
+        muted_text = "#8D8D8D"
+        soft_text = "#C3C3C3"
         hover_gray = "rgba(255, 255, 255, 0.055)"
         badge_gray = "rgba(255, 255, 255, 0.025)"
 
@@ -254,7 +254,7 @@ class PluginFlyoutPanel(QFrame):
                 border-radius: 12px;
             }}
             QLabel#pluginMenuTitle {{
-                color: #f3f5f8;
+                color: #F5F5F5;
                 font-size: 13px;
                 font-weight: 700;
                 background: transparent;
@@ -280,12 +280,12 @@ class PluginFlyoutPanel(QFrame):
             QPushButton#pluginCategoryButton:hover {{
                 background-color: {hover_gray};
                 border-color: rgba(255, 255, 255, 0.05);
-                color: #ffffff;
+                color: #FFFFFF;
             }}
             QPushButton#pluginCategoryButton:checked {{
                 background-color: rgba(255, 255, 255, 0.05);
                 border-color: rgba(255, 255, 255, 0.06);
-                color: #ffffff;
+                color: #FFFFFF;
             }}
             QScrollArea#pluginScrollArea {{
                 background: transparent;
@@ -308,7 +308,7 @@ class PluginFlyoutPanel(QFrame):
                 border-radius: 14px;
             }}
             QLabel#pluginEntryTitle {{
-                color: #f3f5f8;
+                color: #F5F5F5;
                 font-size: 12px;
                 font-weight: 600;
                 background: transparent;

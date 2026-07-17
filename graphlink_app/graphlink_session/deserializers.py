@@ -24,6 +24,7 @@ from graphlink_plugins.graphlink_plugin_code_sandbox import CodeSandboxConnectio
 from graphlink_plugins.graphlink_plugin_gitlink import GitlinkConnectionItem, GitlinkNode
 from graphlink_pycoder import PyCoderMode, PyCoderNode
 from graphlink_web import WebConnectionItem, WebNode
+from graphlink_navigation_pins import NavigationPinRecord, NavigationPinValidationError
 
 from graphlink_session.content_codec import (
     decode_image_bytes,
@@ -525,10 +526,28 @@ class SceneDeserializer:
         if self.window and hasattr(self.window, "pin_overlay"):
             self.window.pin_overlay.clear_pins()
 
-        for pin_data in pins_data:
-            pin = scene.add_navigation_pin(QPointF(pin_data["position"]["x"], pin_data["position"]["y"]))
-            pin.title = pin_data["title"]
-            pin.note = pin_data.get("note", "")
+        valid_records = []
+        for index, pin_data in enumerate(pins_data or []):
+            try:
+                valid_records.append(NavigationPinRecord.from_mapping(pin_data, fallback_order=index))
+            except NavigationPinValidationError as error:
+                self._set_status_message(f"Skipped invalid navigation pin {index + 1}: {error}", "warning")
+
+        for record in sorted(valid_records, key=lambda item: item.sort_order):
+            try:
+                pin = scene.add_navigation_pin(
+                    QPointF(record.position[0], record.position[1]),
+                    title=record.title,
+                    note=record.note,
+                    pin_id=record.pin_id,
+                    anchor_item_id=record.anchor_item_id,
+                )
+            except NavigationPinValidationError as error:
+                self._set_status_message(
+                    f"Skipped duplicate navigation pin {record.title!r}: {error}",
+                    "warning",
+                )
+                continue
             if self.window and hasattr(self.window, "pin_overlay"):
                 self.window.pin_overlay.add_pin_button(pin)
 

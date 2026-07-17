@@ -144,7 +144,7 @@ class WebNode(QGraphicsObject, HoverAnimationMixin):
         self.widget.setStyleSheet("""
             QWidget#webNodeMainWidget {
                 background-color: transparent;
-                color: #e0e0e0;
+                color: #E0E0E0;
             }
             QWidget#webNodeMainWidget QLabel {
                 background-color: transparent;
@@ -229,7 +229,7 @@ class WebNode(QGraphicsObject, HoverAnimationMixin):
         result_header = QHBoxLayout()
         result_header.addWidget(QLabel("Answer:"))
         self.source_count_label = QLabel("No sources")
-        self.source_count_label.setStyleSheet("color: #9aa6b2; background: transparent;")
+        self.source_count_label.setStyleSheet("color: #A4A4A4; background: transparent;")
         result_header.addWidget(self.source_count_label)
         result_header.addStretch()
         main_layout.addLayout(result_header)
@@ -244,18 +244,18 @@ class WebNode(QGraphicsObject, HoverAnimationMixin):
 
         self.warning_label = QLabel("")
         self.warning_label.setWordWrap(True)
-        self.warning_label.setStyleSheet("color: #c5a86a; background: transparent;")
+        self.warning_label.setStyleSheet("color: #AAAAAA; background: transparent;")
         main_layout.addWidget(self.warning_label)
 
         # Apply common styles to text edit widgets.
         for widget in [self.query_input, self.summary_display]:
             widget.setStyleSheet("""
                 QTextEdit, QTextBrowser {
-                    background-color: #252526; border: 1px solid #3f3f3f;
-                    color: #cccccc; border-radius: 4px; padding: 5px;
+                    background-color: #252525; border: 1px solid #3F3F3F;
+                    color: #CCCCCC; border-radius: 4px; padding: 5px;
                     font-family: 'Segoe UI', sans-serif;
                 }
-                QTextBrowser a { color: #9eb7d0; text-decoration: none; }
+                QTextBrowser a { color: #B3B3B3; text-decoration: none; }
             """)
 
         # Style the run button with a contrasting text color based on background brightness.
@@ -280,9 +280,9 @@ class WebNode(QGraphicsObject, HoverAnimationMixin):
                 border-color: {button_colors["border"].darker(105).name()};
             }}
             QPushButton:disabled {{
-                background-color: #2b2b2b;
+                background-color: #2B2B2B;
                 border-color: #353535;
-                color: #7b7b7b;
+                color: #7B7B7B;
             }}
         """)
         
@@ -480,7 +480,7 @@ class WebNode(QGraphicsObject, HoverAnimationMixin):
         
         path = QPainterPath()
         path.addRoundedRect(0, 0, self.width, self.height, 10, 10)
-        painter.setBrush(QColor("#2d2d2d"))
+        painter.setBrush(QColor("#2D2D2D"))
         
         web_color = node_colors["border"]
         pen = QPen(web_color, 1.5)
@@ -488,7 +488,7 @@ class WebNode(QGraphicsObject, HoverAnimationMixin):
         if self.isSelected():
             pen = QPen(palette.SELECTION, 2)
         elif self.hovered:
-            pen = QPen(QColor("#ffffff"), 2)
+            pen = QPen(QColor("#FFFFFF"), 2)
         
         painter.setPen(pen)
         painter.drawPath(path)
@@ -526,7 +526,7 @@ class WebNode(QGraphicsObject, HoverAnimationMixin):
             return
 
         if self.is_collapsed:
-            painter.setPen(QColor("#ffffff"))
+            painter.setPen(QColor("#FFFFFF"))
             font = canvas_font(self.scene(), weight=QFont.Weight.Bold)
             painter.setFont(font)
             painter.drawText(QRectF(40, 0, self.width - 80, self.height), Qt.AlignmentFlag.AlignVCenter, "Web Search")
@@ -535,7 +535,7 @@ class WebNode(QGraphicsObject, HoverAnimationMixin):
             icon.paint(painter, QRect(10, 10, 20, 20))
             
             self.collapse_button_rect = QRectF(self.width - 35, 5, 30, 30)
-            expand_icon = qta.icon('fa5s.expand-arrows-alt', color='#ffffff' if self.hovered else '#888888')
+            expand_icon = qta.icon('fa5s.expand-arrows-alt', color='#FFFFFF' if self.hovered else '#888888')
             expand_icon.paint(painter, QRect(int(self.width - 30), 10, 20, 20))
         else:
             if self.hovered:
@@ -544,7 +544,7 @@ class WebNode(QGraphicsObject, HoverAnimationMixin):
                 painter.setPen(QColor(255, 255, 255, 150))
                 painter.drawRoundedRect(self.collapse_button_rect.adjusted(6,6,-6,-6), 4, 4)
                 
-                icon_pen = QPen(QColor("#ffffff"), 2)
+                icon_pen = QPen(QColor("#FFFFFF"), 2)
                 painter.setPen(icon_pen)
                 center = self.collapse_button_rect.center()
                 painter.drawLine(int(center.x() - 4), int(center.y()), int(center.x() + 4), int(center.y()))

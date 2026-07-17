@@ -415,7 +415,7 @@ class PluginPortal:
         prompt_note.is_system_prompt = True
         prompt_note.content = "Enter custom system prompt here..."
         prompt_note.header_color = palette.FRAME_COLORS["Purple Header"]["color"]
-        prompt_note.color = "#252526"
+        prompt_note.color = "#252525"
         prompt_note.width = 300
         prompt_note.height = 150
 

@@ -42,19 +42,19 @@ class FontControl(QWidget):
                 border: none;
             }
             QComboBox {
-                color: #d0d0d0; font-size: 11px;
+                color: #D0D0D0; font-size: 11px;
                 border: 1px solid #555;
-                background-color: #4a4a4a;
+                background-color: #4A4A4A;
                 border-radius: 4px;
                 padding: 4px;
             }
             QComboBox::drop-down { border: none; }
-            QComboBox QAbstractItemView { background-color: #3f3f3f; border: 1px solid #555; }
+            QComboBox QAbstractItemView { background-color: #3F3F3F; border: 1px solid #555; }
         """)
 
         font_label = QLabel("Font", self.canvas)
         font_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        font_label.setStyleSheet("background-color: transparent; border: none; font-size: 10px; font-weight: bold; color: #cccccc;")
+        font_label.setStyleSheet("background-color: transparent; border: none; font-size: 10px; font-weight: bold; color: #CCCCCC;")
         main_layout.addWidget(font_label)
 
         self.font_family_combo = QComboBox(self.canvas)
@@ -84,11 +84,11 @@ class FontControl(QWidget):
         color_presets_layout = QHBoxLayout()
         color_presets_layout.setContentsMargins(0, 0, 0, 0)
         color_presets_layout.setSpacing(10)
-        preset_colors = ["#f0f0f0", "#c7c7c7", "#949494", "#6d8599"]
+        preset_colors = ["#F0F0F0", "#C7C7C7", "#949494", "#818181"]
         for color_hex in preset_colors:
             button = QPushButton("", self.canvas)
             button.setFixedSize(32, 20)
-            button.setStyleSheet(f"background-color: {color_hex}; border: 2px solid #2d2d2d; border-radius: 5px;")
+            button.setStyleSheet(f"background-color: {color_hex}; border: 2px solid #2D2D2D; border-radius: 5px;")
             button.clicked.connect(lambda checked, c=color_hex: self.fontColorChanged.emit(QColor(c)))
             color_presets_layout.addWidget(button)
         main_layout.addLayout(color_presets_layout)
@@ -125,7 +125,7 @@ class GridControl(QWidget):
 
         grid_label = QLabel("Grid", self.canvas)
         grid_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        grid_label.setStyleSheet("background-color: transparent; border: none; font-size: 10px; font-weight: bold; color: #cccccc;")
+        grid_label.setStyleSheet("background-color: transparent; border: none; font-size: 10px; font-weight: bold; color: #CCCCCC;")
         main_layout.addWidget(grid_label)
         
         self.opacity_slider = QSlider(Qt.Orientation.Horizontal, self.canvas)
@@ -160,7 +160,7 @@ class GridControl(QWidget):
                     border: none; border-radius: 5px; font-size: 10px; padding: 2px;
                 }
                 QPushButton:hover { background-color: rgba(85, 85, 85, 0.6); }
-                QPushButton:pressed { background-color: rgba(83, 99, 110, 0.35); color: black; }
+                QPushButton:pressed { background-color: rgba(96, 96, 96, 0.35); color: black; }
             """)
             button.clicked.connect(lambda checked, s=size: self._set_grid_size(s))
             grid_presets_layout.addWidget(button)
@@ -192,14 +192,14 @@ class GridControl(QWidget):
         for color_hex in preset_colors:
             button = QPushButton("", self.canvas)
             button.setFixedSize(30, 25)
-            button.setStyleSheet(f"background-color: {color_hex}; border: 2px solid #2d2d2d; border-radius: 5px;")
+            button.setStyleSheet(f"background-color: {color_hex}; border: 2px solid #2D2D2D; border-radius: 5px;")
             button.clicked.connect(lambda checked, c=color_hex: self._set_grid_color(c))
             color_presets_layout.addWidget(button)
         main_layout.addLayout(color_presets_layout)
 
         align_label = QLabel("Alignment & Routing", self.canvas)
         align_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        align_label.setStyleSheet("background-color: transparent; border: none; font-size: 10px; font-weight: bold; color: #cccccc; margin-top: 10px;")
+        align_label.setStyleSheet("background-color: transparent; border: none; font-size: 10px; font-weight: bold; color: #CCCCCC; margin-top: 10px;")
         main_layout.addWidget(align_label)
 
         self.snap_grid_checkbox = QCheckBox("Snap to Grid")
@@ -216,7 +216,7 @@ class GridControl(QWidget):
 
         signals_label = QLabel("Connection Rendering", self.canvas)
         signals_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        signals_label.setStyleSheet("background-color: transparent; border: none; font-size: 10px; font-weight: bold; color: #cccccc; margin-top: 10px;")
+        signals_label.setStyleSheet("background-color: transparent; border: none; font-size: 10px; font-weight: bold; color: #CCCCCC; margin-top: 10px;")
         main_layout.addWidget(signals_label)
 
         self.fade_connections_checkbox = QCheckBox("Faded Connections")
@@ -249,12 +249,12 @@ class GridControl(QWidget):
                 border: none;
             }}
             QCheckBox {{
-                color: #cccccc;
+                color: #CCCCCC;
                 font-size: 11px;
             }}
             QCheckBox::indicator {{ width: 16px; height: 16px; }}
             QCheckBox::indicator:unchecked {{
-                border: 1px solid #555; background-color: #3f3f3f; border-radius: 4px;
+                border: 1px solid #555; background-color: #3F3F3F; border-radius: 4px;
             }}
             QCheckBox::indicator:checked {{
                 background-color: {selection_color}; border: 1px solid {selection_border};
