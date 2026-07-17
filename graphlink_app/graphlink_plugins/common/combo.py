@@ -32,6 +32,17 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QVBoxLayout,
 )
+from shiboken6 import isValid as _is_qt_object_valid
+
+
+def _qt_object_is_alive(obj):
+    """Return whether a Qt wrapper still owns a live C++ object."""
+    if obj is None:
+        return False
+    try:
+        return bool(_is_qt_object_valid(obj))
+    except (RuntimeError, TypeError):
+        return False
 
 
 class ComboPopup(QFrame):
@@ -284,28 +295,49 @@ class PopupComboBox(QComboBox):
         self._popup.item_selected.connect(self._apply_popup_selection)
         self._popup.popup_closed.connect(self._handle_popup_closed)
         self._popup_closing = False
+        self._shutting_down = False
         self.destroyed.connect(self._cleanup_popup)
+        app = QApplication.instance()
+        if app is not None:
+            app.aboutToQuit.connect(self._begin_shutdown)
 
     def apply_popup_style(self, accent_color):
         self._popup.apply_style(accent_color)
 
     def showPopup(self):
+        if self._shutting_down or not _qt_object_is_alive(self):
+            return
         self.about_to_show_popup.emit()
-        if self._popup is not None and self._popup.isVisible():
+        popup = self._live_popup()
+        if popup is not None and popup.isVisible():
             self.hidePopup()
             return
         if not self.isEnabled() or self.count() == 0:
             return
-        self._popup.show_for_combo(self)
+        popup = self._live_popup()
+        if popup is not None:
+            popup.show_for_combo(self)
 
     def hidePopup(self):
-        if self._popup is not None and self._popup.isVisible():
+        if self._shutting_down or not _qt_object_is_alive(self):
+            return
+        popup = self._live_popup()
+        if popup is not None and popup.isVisible():
             self._popup_closing = True
-            self._popup.hide()
-            self._popup_closing = False
-        super().hidePopup()
+            try:
+                popup.hide()
+            finally:
+                self._popup_closing = False
+        try:
+            super().hidePopup()
+        except RuntimeError:
+            # Qt can enter the virtual override after the C++ wrapper begins
+            # teardown. There is no native popup left to close in that state.
+            return
 
     def _apply_popup_selection(self, index, text):
+        if self._shutting_down or not _qt_object_is_alive(self):
+            return
         if 0 <= index < self.count():
             self.setCurrentIndex(index)
         else:
@@ -314,11 +346,35 @@ class PopupComboBox(QComboBox):
         self.setFocus()
 
     def _handle_popup_closed(self):
+        if self._shutting_down or not _qt_object_is_alive(self):
+            return
         if not self._popup_closing:
-            super().hidePopup()
+            try:
+                super().hidePopup()
+            except RuntimeError:
+                return
+
+    def _live_popup(self):
+        popup = getattr(self, "_popup", None)
+        return popup if _qt_object_is_alive(popup) else None
+
+    def _begin_shutdown(self):
+        self._shutting_down = True
+        self._dispose_popup()
+
+    def _dispose_popup(self):
+        popup = getattr(self, "_popup", None)
+        self._popup = None
+        if not _qt_object_is_alive(popup):
+            return
+        try:
+            popup.hide()
+            popup.deleteLater()
+        except RuntimeError:
+            # A parent window may have deleted the popup first. Shiboken has
+            # already told us it is stale; cleanup must remain idempotent.
+            return
 
     def _cleanup_popup(self):
-        if self._popup is not None:
-            self._popup.hide()
-            self._popup.deleteLater()
-            self._popup = None
+        self._shutting_down = True
+        self._dispose_popup()
