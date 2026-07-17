@@ -426,18 +426,26 @@ class OllamaSettingsWidget(QWidget):
         self.scan_summary_label.setStyleSheet("color: #A5A5A5;")
         form_layout.addRow("", self.scan_summary_label)
 
+        # Create both synchronized controls before connecting either signal.
+        # ``setCurrentText(saved_model)`` can emit immediately; connecting the
+        # combo before ``model_input`` exists caused a startup-time AttributeError
+        # and left the settings dialog in a partially initialized Qt state.
+        self.model_input = QLineEdit()
+        self.model_input.setPlaceholderText("Advanced model ID entry")
+        self.model_input.setVisible(False)
+        self.model_input.setText(saved_model)
+
         self.model_combo = SettingsComboBox()
         self.model_combo.setEditable(True)
         self.model_combo.setPlaceholderText("Select an installed model or enter a model ID")
         self.model_combo.addItems([""] + self.models)
-        self.model_combo.currentTextChanged.connect(self.on_combo_change)
+        self.model_combo.blockSignals(True)
         self.model_combo.setCurrentText(saved_model)
+        self.model_combo.blockSignals(False)
+        self.model_combo.currentTextChanged.connect(self.on_combo_change)
         form_layout.addRow("Chat Model:", self.model_combo)
 
-        self.model_input = QLineEdit()
-        self.model_input.setPlaceholderText("Advanced model ID entry")
         self.model_input.textChanged.connect(self.on_text_change)
-        self.model_input.setVisible(False)
         form_layout.addRow("", self.model_input)
 
         self.title_model_combo = SettingsComboBox()
@@ -457,8 +465,6 @@ class OllamaSettingsWidget(QWidget):
         form_layout.addRow("Web Content Summarization Model:", self.web_summarize_model_combo)
 
         layout.addLayout(form_layout)
-
-        self.model_input.setText(saved_model)
 
         naming_help = QLabel("Each task can inherit the chat model, choose Auto, or use an explicit installed/custom model. Missing models stay visible as unavailable instead of silently changing routes.")
         naming_help.setWordWrap(True)
@@ -706,18 +712,21 @@ class OllamaSettingsWidget(QWidget):
         self.status_label.setStyleSheet(f"color: {get_semantic_color('status_success').name()}; min-height: 40px;")
 
     def on_combo_change(self, text):
-        if not text: return
-        self.model_input.textChanged.disconnect(self.on_text_change)
+        if not text or not hasattr(self, "model_input"):
+            return
+        self.model_input.blockSignals(True)
         self.model_input.setText(text)
-        self.model_input.textChanged.connect(self.on_text_change)
+        self.model_input.blockSignals(False)
 
     def on_text_change(self, text):
-        self.model_combo.currentTextChanged.disconnect(self.on_combo_change)
+        if not hasattr(self, "model_combo"):
+            return
+        self.model_combo.blockSignals(True)
         if text in self.models:
             self.model_combo.setCurrentText(text)
         else:
             self.model_combo.setCurrentIndex(0)
-        self.model_combo.currentTextChanged.connect(self.on_combo_change)
+        self.model_combo.blockSignals(False)
 
     def validate_model(self):
         model_name = self.model_input.text().strip()

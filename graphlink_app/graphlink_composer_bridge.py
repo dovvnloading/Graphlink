@@ -147,6 +147,14 @@ class ComposerBridge(QObject):
             attach_file()
 
     @Slot(str)
+    def stageTextAttachment(self, text: str):
+        """Turn a large pasted text payload into a native context attachment."""
+        stage_paste = getattr(self.window, "_handle_large_paste_from_input", None)
+        if callable(stage_paste):
+            stage_paste(str(text or ""))
+            self._publish()
+
+    @Slot(str)
     def removeContextItem(self, item_id: str):
         path = self._attachment_paths.get(str(item_id or ""))
         remove = getattr(self.window, "_handle_attachment_pill_removed", None)

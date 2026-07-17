@@ -8,6 +8,7 @@ from pathlib import Path
 from PySide6.QtCore import QRect, QUrl, Qt, Signal
 from PySide6.QtGui import QColor, QRegion
 from PySide6.QtWidgets import (
+    QApplication,
     QFrame,
     QLabel,
     QPushButton,
@@ -154,6 +155,7 @@ class ComposerWebHost(QFrame):
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self._corner_radius = 14
         self._placeholder = "Ask about this graph…"
+        self._shutdown_started = False
 
         # These hidden controls preserve the existing ChatWindow styling and
         # request-state hooks while all visible interaction belongs to React.
@@ -192,6 +194,10 @@ class ComposerWebHost(QFrame):
             layout.addWidget(fallback)
 
         self._apply_native_mask()
+
+        app = QApplication.instance()
+        if app is not None:
+            app.aboutToQuit.connect(self.prepare_for_shutdown)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -248,6 +254,29 @@ class ComposerWebHost(QFrame):
 
     def on_theme_changed(self):
         self.bridge._publish()
+
+    def prepare_for_shutdown(self):
+        """Stop web content callbacks before Qt tears down the application."""
+        if self._shutdown_started:
+            return
+        self._shutdown_started = True
+        try:
+            self.bridge.dispose()
+        except (AttributeError, RuntimeError, SystemError, TypeError):
+            pass
+        web_view = self.web_view
+        if web_view is None:
+            return
+        try:
+            web_view.stop()
+            web_view.setUpdatesEnabled(False)
+            web_view.hide()
+        except (AttributeError, RuntimeError, SystemError, TypeError):
+            return
+
+    def closeEvent(self, event):
+        self.prepare_for_shutdown()
+        super().closeEvent(event)
 
     def _apply_requested_height(self, height: int):
         bounded = max(COMPOSER_MIN_HEIGHT, min(COMPOSER_MAX_HEIGHT, int(height)))

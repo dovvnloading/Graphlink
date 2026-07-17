@@ -31,6 +31,23 @@ import graphlink_config as config
 from graphlink_licensing import SettingsManager
 
 
+def test_ollama_settings_initializes_model_controls_before_wiring_signals():
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "graphlink_ui_dialogs"
+        / "graphlink_settings_dialogs.py"
+    ).read_text(encoding="utf-8")
+
+    model_input_index = source.index("self.model_input = QLineEdit()")
+    combo_signal_index = source.index(
+        "self.model_combo.currentTextChanged.connect(self.on_combo_change)"
+    )
+
+    assert model_input_index < combo_signal_index
+    assert "self.model_input.textChanged.disconnect(self.on_text_change)" not in source
+    assert "self.model_combo.currentTextChanged.disconnect(self.on_combo_change)" not in source
+
+
 def _make_settings_manager(tmp_path):
     # Bypasses SettingsManager.__init__ (which points state_file at the real
     # ~/.graphlink/session.dat) so these tests never touch real user data.

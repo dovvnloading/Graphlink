@@ -765,6 +765,15 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
             event.ignore()
             return
 
+        self._close_composer_picker()
+        self._close_composer_context_popup()
+        prepare_composer_shutdown = getattr(
+            getattr(self, "composer", None),
+            "prepare_for_shutdown",
+            None,
+        )
+        if callable(prepare_composer_shutdown):
+            prepare_composer_shutdown()
         mark_clean_exit()
         super().closeEvent(event)
 
@@ -1346,12 +1355,20 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         self._refresh_attachment_button()
 
     def _handle_large_paste_from_input(self, pasted_text):
-        self.message_input.insertPlainText(pasted_text)
-        self.notification_banner.show_message(
-            "Large paste kept in the draft. Attach it explicitly when it should be treated as context.",
-            5000,
-            "info",
-        )
+        stage_result, stage_reason = self._stage_large_paste_as_attachment(pasted_text)
+        if stage_result == "added":
+            self.notification_banner.show_message(
+                "Attached pasted text as context.",
+                3000,
+                "success",
+            )
+        elif stage_result == "rejected":
+            self.notification_banner.show_message(
+                stage_reason or "The pasted text could not be attached.",
+                5000,
+                "warning",
+            )
+        self.message_input.setFocus()
 
     def _stage_large_paste_as_attachment(self, pasted_text):
         if not pasted_text or not pasted_text.strip():
@@ -1361,7 +1378,8 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         try:
             os.makedirs(base_dir, exist_ok=True)
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-            temp_file_path = os.path.join(base_dir, f"pasted_text_{timestamp}.txt")
+            suffix = self._guess_text_drop_suffix(pasted_text)
+            temp_file_path = os.path.join(base_dir, f"pasted_text_{timestamp}{suffix}")
             # errors="replace" (not "ignore") - unencodable characters (e.g. an
             # unpaired surrogate from a malformed Windows clipboard/drop payload) become
             # a visible replacement character instead of silently vanishing from the
@@ -1370,7 +1388,8 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
                 temp_file.write(pasted_text)
 
             line_count = pasted_text.count("\n") + 1
-            preview_name = f"Pasted Text ({line_count} lines).txt"
+            kind_label = "Pasted Code" if self._looks_like_code_text(pasted_text, suffix) else "Pasted Text"
+            preview_name = f"{kind_label} ({line_count} lines){suffix}"
             return self._stage_attachment_file(temp_file_path, is_temp=True, display_name=preview_name)
         except OSError:
             return "rejected", "Could not create a temporary attachment file."
