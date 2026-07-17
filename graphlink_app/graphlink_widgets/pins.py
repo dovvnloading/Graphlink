@@ -259,7 +259,7 @@ class PinOverlay(QFrame):
     closed = Signal()
     BASE_WIDTH = 400
     MAX_HEIGHT = 560
-    MIN_HEIGHT = 320
+    MIN_HEIGHT = 276
 
     def __init__(self, canvas_view, parent=None, controller=None):
         super().__init__(parent)
@@ -296,14 +296,14 @@ class PinOverlay(QFrame):
         self.icon_badge.setObjectName("pinFlyoutBadge")
         self.icon_badge.setFixedSize(34, 34)
         self.icon_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        header.addWidget(self.icon_badge, 0, Qt.AlignmentFlag.AlignTop)
+        header.addWidget(self.icon_badge, 0, Qt.AlignmentFlag.AlignVCenter)
 
         heading_column = QVBoxLayout()
         heading_column.setSpacing(4)
         self.header_text = QLabel("Navigation pins")
         self.header_text.setObjectName("pinFlyoutTitle")
         heading_column.addWidget(self.header_text)
-        self.header_body = QLabel("Save and revisit important canvas locations.")
+        self.header_body = QLabel("Revisit saved canvas locations")
         self.header_body.setObjectName("pinFlyoutMeta")
         self.header_body.setWordWrap(False)
         heading_column.addWidget(self.header_body)
@@ -313,7 +313,7 @@ class PinOverlay(QFrame):
         self.close_btn.setObjectName("pinFlyoutCloseButton")
         self.close_btn.setFixedHeight(32)
         self.close_btn.clicked.connect(self.close)
-        header.addWidget(self.close_btn, 0, Qt.AlignmentFlag.AlignTop)
+        header.addWidget(self.close_btn, 0, Qt.AlignmentFlag.AlignVCenter)
         main_layout.addLayout(header)
 
         search_row = QHBoxLayout()
@@ -342,15 +342,16 @@ class PinOverlay(QFrame):
         self.pin_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.pin_list.setSpacing(2)
         self.pin_list.setUniformItemSizes(False)
-        self.pin_list.setMinimumHeight(120)
         self.pin_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.pin_list.clicked.connect(self._navigate_from_index)
         self.pin_list.customContextMenuRequested.connect(self._show_context_menu)
         scene.selectionChanged.connect(self._sync_selection)
         main_layout.addWidget(self.pin_list, 1)
 
-        footer = QHBoxLayout()
-        footer.setContentsMargins(0, 4, 0, 0)
+        footer_shell = QFrame()
+        footer_shell.setObjectName("pinFlyoutFooter")
+        footer = QHBoxLayout(footer_shell)
+        footer.setContentsMargins(12, 6, 10, 6)
         footer.setSpacing(12)
         self.pin_count_label = QLabel("")
         self.pin_count_label.setObjectName("pinFlyoutCount")
@@ -362,7 +363,7 @@ class PinOverlay(QFrame):
         self.add_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.add_btn.clicked.connect(self.create_pin)
         footer.addWidget(self.add_btn)
-        main_layout.addLayout(footer)
+        main_layout.addWidget(footer_shell)
 
         self.pin_model.rowsInserted.connect(self._update_summary)
         self.pin_model.rowsRemoved.connect(self._update_summary)
@@ -401,6 +402,9 @@ class PinOverlay(QFrame):
             }}
             QLabel#pinFlyoutTitle {{ color: #f2f2f2; font-size: 15px; font-weight: 700; }}
             QLabel#pinFlyoutMeta, QLabel#pinFlyoutCount {{ color: #999999; font-size: 11px; }}
+            QFrame#pinFlyoutFooter {{
+                background: #202020; border: 1px solid #383838; border-radius: 10px;
+            }}
             QLineEdit {{
                 background: #202020; color: #eeeeee; border: 1px solid #494949;
                 border-radius: 9px; padding: 8px 12px; min-height: 20px;
@@ -446,9 +450,15 @@ class PinOverlay(QFrame):
         count = self.pin_model.rowCount()
         self.pin_count_label.setText(f"{count} saved location" + ("" if count == 1 else "s"))
         self.add_btn.setEnabled(count < 100)
+        if self.isVisible():
+            self._resize_for_content()
+            self.reposition()
 
     def _filter_changed(self, text):
         self.pin_filter.set_query(text)
+        if self.isVisible():
+            self._resize_for_content()
+            self.reposition()
 
     def _pin_from_proxy_index(self, index):
         if not index.isValid():
@@ -574,8 +584,17 @@ class PinOverlay(QFrame):
 
     def _resize_for_content(self):
         rows = min(max(1, self.pin_filter.rowCount()), 6)
-        list_height = rows * NavigationPinDelegate.ROW_HEIGHT + 18
-        chrome_height = 230
+        list_height = 18
+        for row in range(self.pin_filter.rowCount()):
+            index = self.pin_filter.index(row, 0)
+            has_note = bool(self.pin_filter.data(index, PIN_NOTE_ROLE))
+            list_height += (
+                NavigationPinDelegate.NOTE_ROW_HEIGHT
+                if has_note
+                else NavigationPinDelegate.ROW_HEIGHT
+            )
+        list_height += max(0, rows - 1) * self.pin_list.spacing()
+        chrome_height = 224
         self.resize(self.BASE_WIDTH, min(self.MAX_HEIGHT, max(self.MIN_HEIGHT, chrome_height + list_height)))
 
     def reposition(self):
