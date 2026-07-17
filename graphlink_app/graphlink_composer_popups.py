@@ -253,13 +253,13 @@ class ComposerPickerPopup(QFrame):
         self.setStyleSheet(
             """
             QFrame#composerPickerFrame {
-                background: #20262e;
-                border: 1px solid rgba(143, 161, 184, 0.52);
+                background: #252525;
+                border: 1px solid rgba(159, 159, 159, 0.52);
                 border-radius: 12px;
             }
             QFrame#composerPickerListFrame {
-                background: #151a20;
-                border: 1px solid rgba(143, 161, 184, 0.20);
+                background: #191919;
+                border: 1px solid rgba(159, 159, 159, 0.20);
                 border-radius: 10px;
             }
             QWidget#composerPickerRow {
@@ -269,40 +269,40 @@ class ComposerPickerPopup(QFrame):
                 background: transparent;
             }
             QLabel#pickerEyebrow {
-                color: #8e9db0;
+                color: #9B9B9B;
                 font-size: 9px;
                 font-weight: 700;
                 letter-spacing: 1px;
             }
             QLabel#pickerTitle {
-                color: #eaf0f8;
+                color: #EFEFEF;
                 font-size: 11px;
                 font-weight: 650;
             }
             QPushButton#pickerCloseButton {
-                color: #9aa8ba;
+                color: #A6A6A6;
                 background: transparent;
                 border: 0;
                 border-radius: 7px;
                 font-size: 17px;
             }
             QPushButton#pickerCloseButton:hover {
-                color: #f0f4fa;
+                color: #F4F4F4;
                 background: rgba(255, 255, 255, 0.08);
             }
             QLineEdit#pickerSearch {
-                color: #eef3fa;
-                background: #171c22;
-                border: 1px solid rgba(143, 161, 184, 0.32);
+                color: #F2F2F2;
+                background: #1B1B1B;
+                border: 1px solid rgba(159, 159, 159, 0.32);
                 border-radius: 7px;
                 padding: 0 11px;
-                selection-background-color: #455d83;
+                selection-background-color: #5B5B5B;
             }
             QLineEdit#pickerSearch:focus {
-                border-color: #7e9eee;
+                border-color: #9D9D9D;
             }
             QListWidget#composerPickerList {
-                color: #cad4e0;
+                color: #D3D3D3;
                 background: transparent;
                 border: 0;
                 outline: 0;
@@ -313,11 +313,11 @@ class ComposerPickerPopup(QFrame):
                 padding: 0;
             }
             QListWidget#composerPickerList::item:hover {
-                background: rgba(112, 136, 159, 0.16);
+                background: rgba(133, 133, 133, 0.16);
             }
             QListWidget#composerPickerList::item:selected {
-                background: rgba(112, 136, 159, 0.24);
-                border: 1px solid rgba(126, 158, 238, 0.38);
+                background: rgba(133, 133, 133, 0.24);
+                border: 1px solid rgba(157, 157, 157, 0.38);
             }
             QScrollBar:vertical {
                 background: transparent;
@@ -325,12 +325,12 @@ class ComposerPickerPopup(QFrame):
                 margin: 6px 1px 6px 4px;
             }
             QScrollBar::handle:vertical {
-                background: #526177;
+                background: #5F5F5F;
                 min-height: 28px;
                 border-radius: 4px;
             }
             QScrollBar::handle:vertical:hover {
-                background: #6b7b94;
+                background: #797979;
             }
             QScrollBar::add-line:vertical,
             QScrollBar::sub-line:vertical {
@@ -341,32 +341,32 @@ class ComposerPickerPopup(QFrame):
                 background: transparent;
             }
             QLabel#pickerOptionLabel {
-                color: #e7edf5;
+                color: #ECECEC;
                 background: transparent;
                 font-size: 11px;
                 font-weight: 650;
             }
             QLabel#pickerOptionMeta {
-                color: #8492a5;
+                color: #909090;
                 background: transparent;
                 font-size: 9px;
             }
             QLabel#pickerCurrentBadge {
-                color: #d6e3ff;
-                background: rgba(126, 158, 238, 0.16);
-                border: 1px solid rgba(126, 158, 238, 0.34);
+                color: #E2E2E2;
+                background: rgba(157, 157, 157, 0.16);
+                border: 1px solid rgba(157, 157, 157, 0.34);
                 border-radius: 6px;
                 padding: 0 7px;
                 font-size: 9px;
                 font-weight: 700;
             }
             QLabel#pickerEmptyLabel {
-                color: #8492a5;
+                color: #909090;
                 font-size: 10px;
                 padding: 12px 8px;
             }
             QPushButton#pickerSettingsButton {
-                color: #a9c0ff;
+                color: #C0C0C0;
                 background: transparent;
                 border: 0;
                 padding: 0 8px;
@@ -374,7 +374,7 @@ class ComposerPickerPopup(QFrame):
                 font-weight: 650;
             }
             QPushButton#pickerSettingsButton:hover {
-                color: #d1ddff;
+                color: #DDDDDD;
             }
             """
         )
@@ -647,75 +647,75 @@ class ComposerContextPopup(QFrame):
         self.setStyleSheet(
             """
             QFrame#composerContextFrame {
-                background: #20262e;
-                border: 1px solid rgba(143, 161, 184, 0.52);
+                background: #252525;
+                border: 1px solid rgba(159, 159, 159, 0.52);
                 border-radius: 12px;
             }
             QFrame#composerContextListFrame {
-                background: #151a20;
-                border: 1px solid rgba(143, 161, 184, 0.20);
+                background: #191919;
+                border: 1px solid rgba(159, 159, 159, 0.20);
                 border-radius: 10px;
             }
             QListWidget#composerContextList {
-                color: #cad4e0;
+                color: #D3D3D3;
                 background: transparent;
                 border: 0;
                 outline: 0;
                 padding: 2px 8px 2px 2px;
             }
             QWidget#composerContextRow {
-                background: rgba(112, 136, 159, 0.08);
-                border: 1px solid rgba(143, 161, 184, 0.12);
+                background: rgba(133, 133, 133, 0.08);
+                border: 1px solid rgba(159, 159, 159, 0.12);
                 border-radius: 8px;
             }
             QLabel#composerContextEyebrow {
-                color: #8e9db0;
+                color: #9B9B9B;
                 font-size: 9px;
                 font-weight: 700;
                 letter-spacing: 1px;
             }
             QLabel#composerContextTitle {
-                color: #eaf0f8;
+                color: #EFEFEF;
                 font-size: 12px;
                 font-weight: 650;
             }
             QLabel#composerContextKind {
-                color: #8e9db0;
+                color: #9B9B9B;
                 font-size: 9px;
                 font-weight: 700;
             }
             QLabel#composerContextName {
-                color: #e7edf5;
+                color: #ECECEC;
                 font-size: 11px;
             }
             QLabel#composerContextTotal {
-                color: #8492a5;
+                color: #909090;
                 font-size: 10px;
                 padding: 0 4px;
             }
             QPushButton#composerContextClose {
-                color: #9aa8ba;
+                color: #A6A6A6;
                 background: transparent;
                 border: 0;
                 border-radius: 7px;
                 font-size: 17px;
             }
             QPushButton#composerContextClose:hover {
-                color: #f0f4fa;
+                color: #F4F4F4;
                 background: rgba(255, 255, 255, 0.08);
             }
             QPushButton#composerContextRemove {
-                color: #b9c8df;
-                background: #252d39;
-                border: 1px solid #3a4657;
+                color: #C6C6C6;
+                background: #2C2C2C;
+                border: 1px solid #454545;
                 border-radius: 6px;
                 padding: 0 8px;
                 font-size: 9px;
                 font-weight: 650;
             }
             QPushButton#composerContextRemove:hover {
-                color: #f2f6ff;
-                background: #34445a;
+                color: #F6F6F6;
+                background: #424242;
             }
             QScrollBar:vertical {
                 background: transparent;
@@ -723,7 +723,7 @@ class ComposerContextPopup(QFrame):
                 margin: 6px 1px 6px 4px;
             }
             QScrollBar::handle:vertical {
-                background: #526177;
+                background: #5F5F5F;
                 min-height: 28px;
                 border-radius: 4px;
             }

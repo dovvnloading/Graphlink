@@ -9,9 +9,10 @@ from graphlink_scene import ChatScene
 from graphlink_node import ChatNode, CodeNode, DocumentNode, ImageNode
 from graphlink_connections import ConnectionItem
 from graphlink_canvas_items import Frame, Note, NavigationPin, ChartItem
-from graphlink_widgets import CustomScrollBar, GridControl, SearchOverlay, PinOverlay, FontControl
+from graphlink_widgets import CustomScrollBar, GridControl, SearchOverlay, FontControl
 from graphlink_minimap import MinimapWidget
 from graphlink_config import get_semantic_color
+from graphlink_context_menu import create_context_menu
 
 
 class ChatView(QGraphicsView):
@@ -292,7 +293,7 @@ class ChatView(QGraphicsView):
         label.setStyleSheet("""
             QLabel {
                 background-color: rgba(0, 0, 0, 0); border-radius: 5px; font-size: 10px;
-                font-weight: bold; color: #cccccc;
+                font-weight: bold; color: #CCCCCC;
             }
         """)
         icon_slider_layout.addWidget(label)
@@ -338,7 +339,7 @@ class ChatView(QGraphicsView):
                     border-radius: 5px; font-size: 10px; padding: 2px;
                 }
                 QPushButton:hover { background-color: rgba(85, 85, 85, 0.6); }
-                QPushButton:pressed { background-color: rgba(46, 204, 113, 0.3); color: black; }
+                QPushButton:pressed { background-color: rgba(164, 164, 164, 0.3); color: black; }
             """)
             button.clicked.connect(lambda _, v=value: self._set_slider_value(v))
             notches_layout.addWidget(button)
@@ -385,10 +386,8 @@ class ChatView(QGraphicsView):
             )
 
         # Position left-aligned overlays.
-        current_y_left = padding
-        pin_overlay = self.findChild(PinOverlay)
-        if pin_overlay and pin_overlay.isVisible():
-            pin_overlay.move(padding, current_y_left)
+        # NavigationPinsPanel is owned and positioned by ChatWindow's shared
+        # overlay layer; it is not a child of this QGraphicsView.
 
     def _update_drag(self):
         """Updates the panning speed factor based on the drag slider's value."""
@@ -453,6 +452,20 @@ class ChatView(QGraphicsView):
                 if self.scene():
                     self.scene().is_rubber_band_dragging = True
             super().mousePressEvent(event)
+
+    def contextMenuEvent(self, event):
+        """Offer a location bookmark action on empty canvas space."""
+        if self.itemAt(event.pos()) is None:
+            menu = create_context_menu(self, "Canvas")
+            pin_action = menu.addAction("Pin this location")
+            action = menu.exec(event.globalPos())
+            if action == pin_action:
+                pin = self.scene().add_navigation_pin(self.mapToScene(event.pos()))
+                if hasattr(self.window, "edit_navigation_pin"):
+                    self.window.edit_navigation_pin(pin)
+            event.accept()
+            return
+        super().contextMenuEvent(event)
 
     def mouseMoveEvent(self, event):
         """
@@ -738,7 +751,7 @@ class ChatView(QGraphicsView):
         """
         super().drawBackground(painter, rect)
     
-        painter.fillRect(rect, QColor("#252526"))
+        painter.fillRect(rect, QColor("#252525"))
     
         grid_size = self.grid_control.grid_size
         opacity = self.grid_control.grid_opacity

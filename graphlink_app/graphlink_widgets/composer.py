@@ -87,7 +87,7 @@ class ComposerWidget(QFrame):
         action_row.setSpacing(8)
         self.attach_file_btn = QPushButton(self)
         self.attach_file_btn.setObjectName("composerAttachButton")
-        self.attach_file_btn.setIcon(qta.icon("fa5s.paperclip", color="#cfd6de"))
+        self.attach_file_btn.setIcon(qta.icon("fa5s.paperclip", color="#D5D5D5"))
         self.attach_file_btn.setFixedHeight(34)
         self.attach_file_btn.setMinimumWidth(34)
         self.attach_file_btn.setAccessibleName("Attach context")
@@ -109,7 +109,7 @@ class ComposerWidget(QFrame):
 
         self.send_button = QPushButton(self)
         self.send_button.setObjectName("composerSendButton")
-        self.send_button.setIcon(qta.icon("fa5s.paper-plane", color="#ffffff"))
+        self.send_button.setIcon(qta.icon("fa5s.paper-plane", color="#FFFFFF"))
         self.send_button.setFixedSize(42, 34)
         self.send_button.setAccessibleName("Send message")
         self.send_button.setToolTip("Send message (Enter)")
@@ -214,38 +214,38 @@ class ComposerWidget(QFrame):
         selection = palette.SELECTION.name()
         self.setStyleSheet(f"""
             QFrame#composerShell {{
-                background-color: rgba(30, 34, 40, 245);
-                border: 1px solid rgba(132, 145, 160, 0.34);
+                background-color: rgba(34, 34, 34, 245);
+                border: 1px solid rgba(143, 143, 143, 0.34);
                 border-radius: 14px;
             }}
             QLabel#composerContextLabel {{
-                color: #f1f5f9;
+                color: #F4F4F4;
                 font-size: 12px;
                 font-weight: 600;
             }}
             QLabel#composerMetaLabel {{
-                color: #99a6b4;
+                color: #A4A4A4;
                 font-size: 11px;
             }}
             QLabel#composerStatusLabel {{
-                color: #a9d5ff;
+                color: #CFCFCF;
                 font-size: 11px;
                 padding: 2px 4px;
             }}
             QPushButton#composerSecondaryButton, QPushButton#composerAttachButton {{
-                color: #cdd6df;
+                color: #D5D5D5;
                 background: transparent;
-                border: 1px solid rgba(150, 164, 180, 0.34);
+                border: 1px solid rgba(162, 162, 162, 0.34);
                 border-radius: 8px;
                 padding: 5px 9px;
             }}
             QPushButton#composerSecondaryButton:hover, QPushButton#composerAttachButton:hover {{
-                color: #ffffff;
+                color: #FFFFFF;
                 border-color: {selection};
                 background: rgba(255, 255, 255, 0.06);
             }}
             QPushButton#composerSendButton {{
-                color: #ffffff;
+                color: #FFFFFF;
                 background: {selection};
                 border: 1px solid rgba(255, 255, 255, 0.18);
                 border-radius: 9px;
@@ -255,6 +255,6 @@ class ComposerWidget(QFrame):
                 background: {QColor(palette.SELECTION).lighter(115).name()};
             }}
             QPushButton#composerSendButton:disabled {{
-                background: rgba(100, 110, 122, 0.55);
+                background: rgba(109, 109, 109, 0.55);
             }}
         """)

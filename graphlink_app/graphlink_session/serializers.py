@@ -52,10 +52,16 @@ class SceneSerializer:
         return persistent_id
 
     def serialize_pin(self, pin):
+        scene = self._scene()
+        record = scene.pin_store.get(pin.pin_id) if hasattr(scene, "pin_store") else None
         return {
+            "pin_id": getattr(pin, "pin_id", None),
             "title": pin.title,
             "note": pin.note,
             "position": {"x": pin.pos().x(), "y": pin.pos().y()},
+            "anchor_item_id": getattr(record, "anchor_item_id", None),
+            "sort_order": getattr(record, "sort_order", 0),
+            "created_at": getattr(record, "created_at", None),
         }
 
     def serialize_pin_layout(self, pin):

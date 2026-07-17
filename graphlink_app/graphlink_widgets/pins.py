@@ -1,36 +1,266 @@
-"""Pin-related flyout widgets and placeholders."""
+"""Navigation-pin management panel and editor.
+
+The panel is a projection of ``ChatScene.pin_store``. It intentionally does not
+keep a second authoritative pin list or rebuild an arbitrary widget tree for every
+mutation.
+"""
+
+from __future__ import annotations
 
 import qtawesome as qta
-from PySide6.QtCore import QPoint, Qt, Signal
-from PySide6.QtGui import QColor, QGuiApplication
-from PySide6.QtWidgets import QFrame, QGraphicsDropShadowEffect, QHBoxLayout, QLabel, QPushButton, QScrollArea, QVBoxLayout, QWidget
-from graphlink_config import get_current_palette
+from PySide6.QtCore import (
+    QAbstractListModel,
+    QModelIndex,
+    QPoint,
+    QSortFilterProxyModel,
+    QSize,
+    Qt,
+    Signal,
+)
+from PySide6.QtGui import QColor, QCursor, QFont, QFontMetrics, QPainter
+from PySide6.QtWidgets import (
+    QDialog,
+    QDialogButtonBox,
+    QFrame,
+    QGraphicsDropShadowEffect,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QListView,
+    QPushButton,
+    QTextEdit,
+    QVBoxLayout,
+    QStyledItemDelegate,
+    QStyle,
+)
 
-class NavigationPin:
-    def __init__(self):
-        self.title = "Dummy Pin"
-        self.note = ""
-        self.scene = lambda: None 
+from graphlink_context_menu import create_context_menu
+from graphlink_navigation_pins import (
+    MAX_PIN_NOTE_LENGTH,
+    MAX_PIN_TITLE_LENGTH,
+    NavigationPinValidationError,
+)
+
+
+PIN_ID_ROLE = Qt.ItemDataRole.UserRole
+PIN_NOTE_ROLE = Qt.ItemDataRole.UserRole + 1
+PIN_POSITION_ROLE = Qt.ItemDataRole.UserRole + 2
+
+
+class NavigationPinsListModel(QAbstractListModel):
+    """Qt list model backed by the scene's authoritative pin store."""
+
+    def __init__(self, store, parent=None):
+        super().__init__(parent)
+        self.store = store
+        self._records = list(store.records)
+        store.subscribe(self._store_changed)
+
+    def dispose(self):
+        if self.store is not None:
+            self.store.unsubscribe(self._store_changed)
+            self.store = None
+
+    def reset_from_store(self):
+        """Refresh after a scene/store swap without exposing Qt internals."""
+        if self.store is not None:
+            self._store_changed("reset", self.store.records)
+
+    def rowCount(self, parent=QModelIndex()):
+        return 0 if parent.isValid() else len(self._records)
+
+    def data(self, index, role=Qt.ItemDataRole.DisplayRole):
+        if not index.isValid() or not 0 <= index.row() < len(self._records):
+            return None
+        record = self._records[index.row()]
+        if role == Qt.ItemDataRole.DisplayRole:
+            return record.title
+        if role == Qt.ItemDataRole.ToolTipRole:
+            return record.note or record.title
+        if role == PIN_ID_ROLE:
+            return record.pin_id
+        if role == PIN_NOTE_ROLE:
+            return record.note
+        if role == PIN_POSITION_ROLE:
+            return record.position
+        return None
+
+    def record_at(self, row):
+        return self._records[row] if 0 <= row < len(self._records) else None
+
+    def _store_changed(self, event, payload):
+        if event == "added":
+            row, record = payload
+            self.beginInsertRows(QModelIndex(), row, row)
+            self._records.insert(row, record)
+            self.endInsertRows()
+        elif event == "updated":
+            row, _before, after = payload
+            if 0 <= row < len(self._records):
+                self._records[row] = after
+                index = self.index(row, 0)
+                self.dataChanged.emit(index, index)
+        elif event == "removed":
+            row, _record = payload
+            if 0 <= row < len(self._records):
+                self.beginRemoveRows(QModelIndex(), row, row)
+                self._records.pop(row)
+                self.endRemoveRows()
+        elif event == "reset":
+            self.beginResetModel()
+            self._records = list(payload)
+            self.endResetModel()
+
+
+class NavigationPinsFilterModel(QSortFilterProxyModel):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._query = ""
+
+    def set_query(self, query):
+        self._query = str(query or "").strip().casefold()
+        self.invalidateFilter()
+
+    def filterAcceptsRow(self, source_row, source_parent):
+        if not self._query:
+            return True
+        model = self.sourceModel()
+        index = model.index(source_row, 0, source_parent)
+        title = str(model.data(index, Qt.ItemDataRole.DisplayRole) or "")
+        note = str(model.data(index, PIN_NOTE_ROLE) or "")
+        return self._query in title.casefold() or self._query in note.casefold()
+
+
+class NavigationPinDelegate(QStyledItemDelegate):
+    """Compact grayscale row renderer with deterministic elision."""
+
+    def sizeHint(self, option, index):
+        note = str(index.data(PIN_NOTE_ROLE) or "")
+        line_height = option.fontMetrics.height()
+        height = max(46, line_height * (2 if note else 1) + 18)
+        return QSize(option.rect.width(), height)
+
+    def paint(self, painter, option, index):
+        painter.save()
+        rect = option.rect.adjusted(4, 3, -4, -3)
+        selected = bool(option.state & QStyle.StateFlag.State_Selected)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor("#3d3d3d" if selected else "#292929"))
+        painter.drawRoundedRect(rect, 9, 9)
+
+        painter.setBrush(QColor("#b5b5b5" if selected else "#8c8c8c"))
+        painter.drawEllipse(rect.left() + 12, rect.top() + 12, 8, 8)
+
+        title = str(index.data(Qt.ItemDataRole.DisplayRole) or "")
+        note = str(index.data(PIN_NOTE_ROLE) or "")
+        title_font = QFont(option.font)
+        title_font.setWeight(QFont.Weight.DemiBold)
+        painter.setFont(title_font)
+        painter.setPen(QColor("#f0f0f0"))
+        title_rect = rect.adjusted(30, 7, -12, -rect.height() // 2)
+        painter.drawText(
+            title_rect,
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            QFontMetrics(title_font).elidedText(title, Qt.TextElideMode.ElideRight, title_rect.width()),
+        )
+
+        if note:
+            note_font = QFont(option.font)
+            note_font.setPointSize(max(8, note_font.pointSize() - 1))
+            painter.setFont(note_font)
+            painter.setPen(QColor("#9b9b9b"))
+            note_rect = rect.adjusted(30, rect.height() // 2 - 2, -12, -6)
+            painter.drawText(
+                note_rect,
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                QFontMetrics(note_font).elidedText(note, Qt.TextElideMode.ElideRight, note_rect.width()),
+            )
+        painter.restore()
+
+
+class NavigationPinEditor(QDialog):
+    """Shared, validated editor for creating and editing a navigation pin."""
+
+    def __init__(self, title="Canvas location", note="", parent=None, creating=False):
+        super().__init__(parent)
+        self.setWindowTitle("Add navigation pin" if creating else "Edit navigation pin")
+        self.setModal(True)
+        self.setMinimumWidth(380)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(22, 20, 22, 20)
+        layout.setSpacing(10)
+
+        heading = QLabel("Name this canvas location" if creating else "Update this canvas location")
+        heading.setObjectName("navigationPinEditorHeading")
+        layout.addWidget(heading)
+
+        title_label = QLabel("Title")
+        self.title_input = QLineEdit(str(title))
+        self.title_input.setMaxLength(MAX_PIN_TITLE_LENGTH)
+        self.title_input.setPlaceholderText("e.g. Research checkpoint")
+        self.title_input.setAccessibleName("Navigation pin title")
+        layout.addWidget(title_label)
+        layout.addWidget(self.title_input)
+
+        note_label = QLabel("Note (optional)")
+        self.note_input = QTextEdit()
+        self.note_input.setPlainText(str(note))
+        self.note_input.setMaximumHeight(110)
+        self.note_input.setAccessibleName("Navigation pin note")
+        layout.addWidget(note_label)
+        layout.addWidget(self.note_input)
+
+        self.error_label = QLabel("")
+        self.error_label.setObjectName("navigationPinEditorError")
+        self.error_label.setVisible(False)
+        layout.addWidget(self.error_label)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self._validate_and_accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        self.title_input.selectAll()
+        self.title_input.setFocus()
+
+    def _validate_and_accept(self):
+        title = self.title_input.text().strip()
+        note = self.note_input.toPlainText().strip()
+        try:
+            if not title:
+                raise NavigationPinValidationError("A title is required")
+            if len(title) > MAX_PIN_TITLE_LENGTH:
+                raise NavigationPinValidationError("The title is too long")
+            if len(note) > MAX_PIN_NOTE_LENGTH:
+                raise NavigationPinValidationError("The note is too long")
+        except NavigationPinValidationError as error:
+            self.error_label.setText(str(error))
+            self.error_label.setVisible(True)
+            return
+        self.accept()
+
+    def values(self):
+        return self.title_input.text().strip(), self.note_input.toPlainText().strip()
 
 
 class PinOverlay(QFrame):
+    """Model-driven in-window navigation-pin panel."""
+
     closed = Signal()
     BASE_WIDTH = 360
+    MAX_HEIGHT = 500
 
-    def __init__(self, canvas_view, parent=None):
-        super().__init__(
-            parent,
-            Qt.WindowType.Tool
-            | Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.NoDropShadowWindowHint,
-        )
-        self.window = canvas_view
+    def __init__(self, canvas_view, parent=None, controller=None):
+        super().__init__(parent)
         self.canvas_view = canvas_view
-        self.pins = []
+        self.controller = controller
+        self._anchor_widget = None
         self.setObjectName("pinFlyoutPanel")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.resize(self.BASE_WIDTH, 280)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.resize(self.BASE_WIDTH, 300)
 
         shadow = QGraphicsDropShadowEffect(self)
         shadow.setBlurRadius(24)
@@ -47,340 +277,283 @@ class PinOverlay(QFrame):
         outer_layout.addWidget(self.container)
 
         main_layout = QVBoxLayout(self.container)
-        main_layout.setContentsMargins(12, 12, 12, 12)
+        main_layout.setContentsMargins(14, 14, 14, 14)
         main_layout.setSpacing(10)
 
-        header_widget = QWidget()
-        header_layout = QHBoxLayout(header_widget)
-        header_layout.setContentsMargins(0, 0, 0, 0)
-        header_layout.setSpacing(10)
-
+        header = QHBoxLayout()
+        header.setSpacing(10)
         self.icon_badge = QLabel()
         self.icon_badge.setObjectName("pinFlyoutBadge")
-        self.icon_badge.setFixedSize(28, 28)
+        self.icon_badge.setFixedSize(30, 30)
         self.icon_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        header_layout.addWidget(self.icon_badge, 0, Qt.AlignmentFlag.AlignTop)
+        header.addWidget(self.icon_badge, 0, Qt.AlignmentFlag.AlignTop)
 
-        header_text_column = QVBoxLayout()
-        header_text_column.setContentsMargins(0, 0, 0, 0)
-        header_text_column.setSpacing(2)
-
-        self.header_text = QLabel("Navigation Pins")
+        heading_column = QVBoxLayout()
+        heading_column.setSpacing(2)
+        self.header_text = QLabel("Navigation pins")
         self.header_text.setObjectName("pinFlyoutTitle")
-        header_text_column.addWidget(self.header_text)
-
-        self.header_body = QLabel("Quick-jump bookmarks for important spots on the canvas.")
+        heading_column.addWidget(self.header_text)
+        self.header_body = QLabel("Save and revisit important canvas locations.")
         self.header_body.setObjectName("pinFlyoutMeta")
         self.header_body.setWordWrap(True)
-        header_text_column.addWidget(self.header_body)
-        header_layout.addLayout(header_text_column, 1)
+        heading_column.addWidget(self.header_body)
+        header.addLayout(heading_column, 1)
 
         self.close_btn = QPushButton("Close")
         self.close_btn.setObjectName("pinFlyoutCloseButton")
         self.close_btn.clicked.connect(self.close)
-        header_layout.addWidget(self.close_btn, 0, Qt.AlignmentFlag.AlignTop)
+        header.addWidget(self.close_btn, 0, Qt.AlignmentFlag.AlignTop)
+        main_layout.addLayout(header)
 
-        main_layout.addWidget(header_widget)
-
-        self.scroll = QScrollArea()
-        self.scroll.setObjectName("pinScrollArea")
-        self.scroll.setWidgetResizable(True)
-        self.scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-
-        self.pin_list = QWidget()
-        self.pin_list.setObjectName("pinScrollContent")
-        self.pin_layout = QVBoxLayout(self.pin_list)
-        self.pin_layout.setSpacing(6)
-        self.pin_layout.setContentsMargins(0, 0, 0, 0)
-        self.pin_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-
-        self.scroll.setWidget(self.pin_list)
-        main_layout.addWidget(self.scroll, 1)
-
-        footer_row = QHBoxLayout()
-        footer_row.setContentsMargins(0, 0, 0, 0)
-        footer_row.setSpacing(8)
-
-        self.pin_count_label = QLabel("")
-        self.pin_count_label.setObjectName("pinFlyoutCount")
-        footer_row.addWidget(self.pin_count_label, 1, Qt.AlignmentFlag.AlignVCenter)
-
-        self.add_btn = QPushButton("Drop New Pin")
-        self.add_btn.setObjectName("pinAddButton")
-        self.add_btn.setIcon(qta.icon('fa5s.map-pin', color='white'))
-        self.add_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.add_btn.clicked.connect(self.create_pin)
-        footer_row.addWidget(self.add_btn, 0, Qt.AlignmentFlag.AlignRight)
-
-        main_layout.addLayout(footer_row)
-
-        self.on_theme_changed()
-
-    def on_theme_changed(self):
-        palette = get_current_palette()
-        accent = palette.SELECTION.name()
-        accent_color = QColor(palette.SELECTION)
-        brightness = (accent_color.red() * 299 + accent_color.green() * 587 + accent_color.blue() * 114) / 1000
-        accent_text = "#161616" if brightness > 145 else "#f7f9fb"
-        muted_text = "#8d8d8d"
-        soft_text = "#d9e1ea"
-        hover_gray = "rgba(255, 255, 255, 0.055)"
-        badge_gray = "rgba(255, 255, 255, 0.025)"
-
-        self.icon_badge.setPixmap(qta.icon('fa5s.map-marked-alt', color=accent).pixmap(14, 14))
-        self.add_btn.setIcon(qta.icon('fa5s.map-pin', color=accent_text))
-        self.setStyleSheet(f"""
-            PinOverlay {{
-                background-color: transparent;
-            }}
-            QFrame#pinFlyoutPanel {{
-                background: transparent;
-                border: none;
-            }}
-            QFrame#pinFlyoutShell {{
-                background-color: rgba(42, 42, 42, 248);
-                border: 1px solid rgba(255, 255, 255, 0.08);
-                border-radius: 14px;
-            }}
-            QFrame#pinFlyoutShell QLabel,
-            QFrame#pinFlyoutShell QWidget {{
-                background: transparent;
-            }}
-            QLabel#pinFlyoutBadge {{
-                background-color: {badge_gray};
-                border: 1px solid rgba(255, 255, 255, 0.06);
-                border-radius: 14px;
-            }}
-            QLabel#pinFlyoutTitle {{
-                color: #f3f5f8;
-                font-size: 15px;
-                font-weight: 700;
-            }}
-            QLabel#pinFlyoutMeta, QLabel#pinFlyoutCount {{
-                color: {muted_text};
-                font-size: 11px;
-            }}
-            QPushButton#pinFlyoutCloseButton {{
-                background-color: rgba(255, 255, 255, 0.04);
-                color: #f3f5f8;
-                border: 1px solid rgba(255, 255, 255, 0.08);
-                border-radius: 8px;
-                padding: 8px 14px;
-                font-size: 11px;
-                font-weight: 600;
-            }}
-            QPushButton#pinFlyoutCloseButton:hover {{
-                background-color: rgba(255, 255, 255, 0.08);
-            }}
-            QPushButton#pinAddButton {{
-                background-color: {accent};
-                color: {accent_text};
-                border: none;
-                border-radius: 8px;
-                padding: 9px 14px;
-                font-size: 11px;
-                font-weight: 700;
-            }}
-            QPushButton#pinAddButton:hover {{
-                background-color: {accent_color.lighter(108).name()};
-            }}
-            QPushButton#pinAddButton:disabled {{
-                background-color: #555555;
-                color: #c9c9c9;
-            }}
-            QScrollArea#pinScrollArea, QWidget#pinScrollContent {{
-                background: transparent;
-                border: none;
-            }}
-            QFrame#pinEntryCard {{
-                background-color: transparent;
-                border: 1px solid rgba(255, 255, 255, 0.06);
-                border-radius: 10px;
-            }}
-            QPushButton#pinEntryButton {{
-                background-color: transparent;
-                border: none;
-                border-radius: 8px;
-                padding: 10px 10px 10px 4px;
-                color: #f3f5f8;
-                text-align: left;
-                font-size: 12px;
-                font-weight: 600;
-            }}
-            QPushButton#pinEntryButton:hover {{
-                background-color: {hover_gray};
-            }}
-            QLabel#pinEntryNote {{
-                color: {muted_text};
-                font-size: 11px;
-                padding-left: 6px;
-            }}
-            QPushButton#pinEntryDeleteButton {{
-                background-color: transparent;
-                border: 1px solid transparent;
-                border-radius: 8px;
-                padding: 6px;
-                min-width: 28px;
-                min-height: 28px;
-            }}
-            QPushButton#pinEntryDeleteButton:hover {{
-                background-color: {hover_gray};
-                border-color: rgba(255, 255, 255, 0.06);
-            }}
-            QLabel#pinEmptyState {{
-                color: {soft_text};
-                font-size: 12px;
-                padding: 18px 10px;
-            }}
-            QScrollBar:vertical {{
-                background: transparent;
-                width: 8px;
-                margin: 0px;
-            }}
-            QScrollBar::handle:vertical {{
-                background: rgba(255, 255, 255, 0.18);
-                min-height: 20px;
-                border-radius: 4px;
-            }}
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
-                height: 0px;
-            }}
-        """)
-        self.refresh_pins()
-
-    def refresh_pins(self):
-        self.pins = [pin for pin in self.pins if pin.scene() is not None]
-
-        while self.pin_layout.count():
-            item = self.pin_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-
-        if self.pins:
-            for pin in self.pins:
-                if pin.scene():
-                    self._create_pin_button(pin)
-        else:
-            empty_label = QLabel("No pins yet. Drop one from the current canvas view to make quick return points.")
-            empty_label.setObjectName("pinEmptyState")
-            empty_label.setWordWrap(True)
-            self.pin_layout.addWidget(empty_label)
-
-        self.add_btn.setEnabled(len(self.pins) < 10)
-        self.pin_count_label.setText(f"{len(self.pins)} / 10 pins")
-
-    def _create_pin_button(self, pin):
-        palette = get_current_palette()
-        pin_widget = QFrame()
-        pin_widget.setObjectName("pinEntryCard")
-
-        layout = QHBoxLayout(pin_widget)
-        layout.setContentsMargins(8, 6, 8, 6)
-        layout.setSpacing(8)
-
-        text_column = QVBoxLayout()
-        text_column.setContentsMargins(0, 0, 0, 0)
-        text_column.setSpacing(2)
-
-        btn = QPushButton(pin.title)
-        btn.setObjectName("pinEntryButton")
-        btn.setIcon(qta.icon('fa5s.map-pin', color=palette.NAV_HIGHLIGHT.name()))
-        btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn.clicked.connect(lambda: self.navigate_to_pin(pin))
-        text_column.addWidget(btn)
-
-        if pin.note:
-            note_label = QLabel(pin.note)
-            note_label.setObjectName("pinEntryNote")
-            note_label.setWordWrap(True)
-            text_column.addWidget(note_label)
-
-        layout.addLayout(text_column, 1)
-
-        del_btn = QPushButton()
-        del_btn.setObjectName("pinEntryDeleteButton")
-        del_btn.setIcon(qta.icon('fa5s.times', color='#666666'))
-        del_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        del_btn.clicked.connect(lambda: self.remove_pin(pin))
-        layout.addWidget(del_btn)
-
-        self.pin_layout.addWidget(pin_widget)
-
-    def create_pin(self):
-        if len(self.pins) >= 10:
-            return
+        search_row = QHBoxLayout()
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("Search pins...")
+        self.search_input.setClearButtonEnabled(True)
+        self.search_input.setAccessibleName("Search navigation pins")
+        self.search_input.textChanged.connect(self._filter_changed)
+        search_row.addWidget(self.search_input, 1)
+        main_layout.addLayout(search_row)
 
         scene = self.canvas_view.scene()
+        self.pin_model = NavigationPinsListModel(scene.pin_store, self)
+        self.pin_filter = NavigationPinsFilterModel(self)
+        self.pin_filter.setSourceModel(self.pin_model)
+        self.pin_list = QListView()
+        self.pin_list.setObjectName("pinListView")
+        self.pin_list.setModel(self.pin_filter)
+        self.pin_list.setItemDelegate(NavigationPinDelegate(self.pin_list))
+        self.pin_list.setSelectionMode(QListView.SelectionMode.SingleSelection)
+        self.pin_list.setEditTriggers(QListView.EditTrigger.NoEditTriggers)
+        self.pin_list.setVerticalScrollMode(QListView.ScrollMode.ScrollPerPixel)
+        self.pin_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.pin_list.clicked.connect(self._navigate_from_index)
+        self.pin_list.customContextMenuRequested.connect(self._show_context_menu)
+        scene.selectionChanged.connect(self._sync_selection)
+        main_layout.addWidget(self.pin_list, 1)
+
+        footer = QHBoxLayout()
+        self.pin_count_label = QLabel("")
+        self.pin_count_label.setObjectName("pinFlyoutCount")
+        footer.addWidget(self.pin_count_label, 1)
+        self.add_btn = QPushButton("Add pin here")
+        self.add_btn.setObjectName("pinAddButton")
+        self.add_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.add_btn.clicked.connect(self.create_pin)
+        footer.addWidget(self.add_btn)
+        main_layout.addLayout(footer)
+
+        self.pin_model.rowsInserted.connect(self._update_summary)
+        self.pin_model.rowsRemoved.connect(self._update_summary)
+        self.pin_model.modelReset.connect(self._update_summary)
+        self._apply_style()
+        self._update_summary()
+
+    @property
+    def pins(self):
+        """Compatibility projection; the store remains authoritative."""
+        scene = self.canvas_view.scene()
+        return list(getattr(scene, "ordered_navigation_pins", lambda: scene.pins)())
+
+    def _scene(self):
+        return self.canvas_view.scene()
+
+    def _apply_style(self):
+        # Keep this surface neutral even when a legacy theme palette still has a
+        # chromatic selection color. Pins are navigation chrome, not status.
+        accent = "#8c8c8c"
+        accent_text = "#161616"
+        self.icon_badge.setPixmap(qta.icon("fa5s.map-marked-alt", color="#b8b8b8").pixmap(15, 15))
+        self.add_btn.setIcon(qta.icon("fa5s.map-pin", color=accent_text))
+        self.setStyleSheet(
+            f"""
+            QFrame#pinFlyoutPanel {{ background: transparent; border: none; }}
+            QFrame#pinFlyoutShell {{
+                background: #292929;
+                border: 1px solid #505050;
+                border-radius: 14px;
+            }}
+            QLabel#pinFlyoutBadge {{
+                background: #333333;
+                border: 1px solid #4b4b4b;
+                border-radius: 15px;
+            }}
+            QLabel#pinFlyoutTitle {{ color: #f2f2f2; font-size: 15px; font-weight: 700; }}
+            QLabel#pinFlyoutMeta, QLabel#pinFlyoutCount {{ color: #999999; font-size: 11px; }}
+            QLineEdit {{
+                background: #202020; color: #eeeeee; border: 1px solid #494949;
+                border-radius: 8px; padding: 8px 10px;
+            }}
+            QLineEdit:focus {{ border-color: #858585; }}
+            QListView#pinListView {{ background: #202020; border: 1px solid #454545; border-radius: 10px; padding: 4px; }}
+            QPushButton#pinFlyoutCloseButton {{
+                background: #353535; color: #eeeeee; border: 1px solid #555555;
+                border-radius: 8px; padding: 8px 12px; font-size: 11px; font-weight: 600;
+            }}
+            QPushButton#pinFlyoutCloseButton:hover {{ background: #454545; }}
+            QPushButton#pinAddButton {{
+                background: {accent}; color: {accent_text}; border: none;
+                border-radius: 8px; padding: 9px 14px; font-size: 11px; font-weight: 700;
+            }}
+            QPushButton#pinAddButton:hover {{ background: #a0a0a0; }}
+            QPushButton#pinAddButton:disabled {{ background: #555555; color: #c9c9c9; }}
+            QMenu {{ background: #252525; color: #eeeeee; border: 1px solid #505050; padding: 4px; }}
+            QMenu::item {{ padding: 7px 24px 7px 12px; border-radius: 5px; }}
+            QMenu::item:selected {{ background: #454545; }}
+            QLabel#navigationPinEditorError {{ color: #b5b5b5; font-size: 11px; }}
+            """
+        )
+
+    def on_theme_changed(self):
+        self._apply_style()
+        self.pin_list.viewport().update()
+
+    def _update_summary(self, *args):
+        count = self.pin_model.rowCount()
+        self.pin_count_label.setText(f"{count} saved location" + ("" if count == 1 else "s"))
+        self.add_btn.setEnabled(count < 100)
+
+    def _filter_changed(self, text):
+        self.pin_filter.set_query(text)
+
+    def _pin_from_proxy_index(self, index):
+        if not index.isValid():
+            return None
+        pin_id = self.pin_filter.data(index, PIN_ID_ROLE)
+        return self._scene()._navigation_pin_item(pin_id)
+
+    def _navigate_from_index(self, index):
+        pin = self._pin_from_proxy_index(index)
+        if pin is not None:
+            self.navigate_to_pin(pin)
+
+    def _sync_selection(self):
+        selected_pin = next(
+            (item for item in self._scene().selectedItems() if hasattr(item, "pin_id")),
+            None,
+        )
+        if selected_pin is None:
+            return
+        for row in range(self.pin_model.rowCount()):
+            if self.pin_model.data(self.pin_model.index(row, 0), PIN_ID_ROLE) != selected_pin.pin_id:
+                continue
+            proxy_index = self.pin_filter.mapFromSource(self.pin_model.index(row, 0))
+            if proxy_index.isValid():
+                self.pin_list.setCurrentIndex(proxy_index)
+            break
+
+    def _show_context_menu(self, position):
+        index = self.pin_list.indexAt(position)
+        pin = self._pin_from_proxy_index(index)
+        if pin is None:
+            return
+        self.show_pin_context_menu(pin, self.pin_list.viewport().mapToGlobal(position))
+
+    def show_pin_context_menu(self, pin, global_pos=None):
+        if pin is None or pin.scene() != self._scene():
+            return
+        menu = create_context_menu(self, "Navigation pin")
+        focus_action = menu.addAction("Focus canvas")
+        edit_action = menu.addAction("Edit pin")
+        menu.addSeparator()
+        delete_action = menu.addAction("Delete pin")
+        action = menu.exec(global_pos or QCursor.pos())
+        if action == focus_action:
+            self.navigate_to_pin(pin)
+        elif action == edit_action:
+            self.edit_pin(pin)
+        elif action == delete_action:
+            self.remove_pin(pin)
+
+    def create_pin(self):
         view = self.canvas_view
         center = view.mapToScene(view.viewport().rect().center())
-
-        pin = scene.add_navigation_pin(center)
-        self.pins.append(pin)
-        self.refresh_pins()
+        pin = (
+            self.controller.create_at(center)
+            if self.controller is not None
+            else self._scene().add_navigation_pin(center)
+        )
+        if self.edit_pin(pin, creating=True) is False:
+            if self.controller is not None:
+                self.controller.remove(pin)
+            else:
+                self._scene().remove_navigation_pin(pin)
 
     def remove_pin(self, pin):
-        if pin in self.pins:
-            scene = self.canvas_view.scene()
-
-            if pin in scene.pins:
-                scene.pins.remove(pin)
-
-            if pin.scene() == scene:
-                scene.removeItem(pin)
-
-            self.pins.remove(pin)
-            self.refresh_pins()
+        if self.controller is not None:
+            self.controller.remove(pin)
+        else:
+            self._scene().remove_navigation_pin(pin)
 
     def navigate_to_pin(self, pin):
-        if pin.scene():
+        if pin is None or pin.scene() != self._scene():
+            return
+        if self.controller is not None:
+            self.controller.focus(pin)
+        else:
             view = self.canvas_view
-            view.centerOn(pin)
+            self._scene().clearSelection()
             pin.setSelected(True)
+            view.ensureVisible(pin, 48, 48)
+            view.centerOn(pin)
 
-    def clear_pins(self):
-        self.pins.clear()
-        self.refresh_pins()
+    def edit_pin(self, pin, creating=False):
+        editor = NavigationPinEditor(pin.title, pin.note, self, creating=creating)
+        if editor.exec() != QDialog.DialogCode.Accepted:
+            return False if creating else None
+        title, note = editor.values()
+        if self.controller is not None:
+            self.controller.update(pin, title=title, note=note)
+        else:
+            self._scene().update_navigation_pin(pin, title=title, note=note)
+        return True
+
+    def refresh_pins(self):
+        """Synchronize the model from the current scene store after a scene swap."""
+        scene = self._scene()
+        if self.pin_model.store is scene.pin_store:
+            self.pin_model.reset_from_store()
+        else:
+            self.pin_model.dispose()
+            self.pin_model = NavigationPinsListModel(scene.pin_store, self)
+            self.pin_filter.setSourceModel(self.pin_model)
+        self._update_summary()
 
     def update_pin(self, pin):
-        if pin in self.pins and pin.scene():
-            self.refresh_pins()
-            
-    def add_pin_button(self, pin):
-        if len(self.pins) >= 10 or pin in self.pins:
-            return
+        self.refresh_pins()
 
-        if pin.scene():
-            self.pins.append(pin)
-            self.refresh_pins()
+    def add_pin_button(self, pin):
+        self.refresh_pins()
+
+    def clear_pins(self):
+        self.refresh_pins()
 
     def show_for_anchor(self, anchor_widget):
-        self.on_theme_changed()
-
-        row_count = max(1, min(len(self.pins), 6))
-        target_height = 164 + (row_count * 64)
-        self.resize(self.BASE_WIDTH, max(236, min(target_height, 452)))
-
-        target_global = anchor_widget.mapToGlobal(QPoint(0, anchor_widget.height() + 6))
-        screen = QGuiApplication.screenAt(target_global) or QGuiApplication.primaryScreen()
-        available_geometry = screen.availableGeometry() if screen else None
-
-        x = target_global.x()
-        y = target_global.y()
-
-        if available_geometry is not None:
-            max_x = available_geometry.right() - self.width() - 12
-            max_y = available_geometry.bottom() - self.height() - 12
-            x = max(available_geometry.left() + 12, min(x, max_x))
-            y = max(available_geometry.top() + 12, min(y, max_y))
-
-        self.move(x, y)
+        self._anchor_widget = anchor_widget
+        self.refresh_pins()
+        self._resize_for_content()
+        self.reposition()
         self.show()
         self.raise_()
         self.activateWindow()
+        self.search_input.setFocus()
+
+    def _resize_for_content(self):
+        rows = min(max(1, self.pin_model.rowCount()), 6)
+        self.resize(self.BASE_WIDTH, min(self.MAX_HEIGHT, 226 + rows * 62))
+
+    def reposition(self):
+        if self._anchor_widget is None or self.parentWidget() is None:
+            return
+        target = self._anchor_widget.mapTo(self.parentWidget(), QPoint(0, self._anchor_widget.height() + 6))
+        margin = 12
+        x = max(margin, min(target.x(), self.parentWidget().width() - self.width() - margin))
+        y = max(margin, min(target.y(), self.parentWidget().height() - self.height() - margin))
+        self.move(x, y)
 
     def hideEvent(self, event):
         super().hideEvent(event)
         self.closed.emit()
 
-
+    def closeEvent(self, event):
+        self._anchor_widget = None
+        super().closeEvent(event)

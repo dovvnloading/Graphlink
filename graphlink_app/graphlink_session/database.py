@@ -1,6 +1,7 @@
 import json
 import sqlite3
 from pathlib import Path
+from uuid import uuid4
 
 
 class ChatDatabase:
@@ -70,6 +71,44 @@ class ChatDatabase:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_notes_chat_id ON notes(chat_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_pins_chat_id ON pins(chat_id)")
 
+            cursor.execute("PRAGMA table_info(pins)")
+            pin_columns = [info[1] for info in cursor.fetchall()]
+            added_sort_order = "sort_order" not in pin_columns
+            if "pin_id" not in pin_columns:
+                cursor.execute("ALTER TABLE pins ADD COLUMN pin_id TEXT")
+            if added_sort_order:
+                cursor.execute("ALTER TABLE pins ADD COLUMN sort_order INTEGER DEFAULT 0")
+            if "anchor_item_id" not in pin_columns:
+                cursor.execute("ALTER TABLE pins ADD COLUMN anchor_item_id TEXT")
+            if "created_at" not in pin_columns:
+                cursor.execute("ALTER TABLE pins ADD COLUMN created_at TEXT")
+
+            # Older databases have no stable IDs or ordering. Preserve their row
+            # order while assigning the new fields once, during initialization.
+            cursor.execute("SELECT id, chat_id, pin_id, sort_order FROM pins ORDER BY chat_id, id")
+            next_order_by_chat = {}
+            seen_pin_ids = set()
+            for row_id, chat_id, pin_id, sort_order in cursor.fetchall():
+                order = next_order_by_chat.get(chat_id, 0)
+                next_order_by_chat[chat_id] = order + 1
+                candidate = str(pin_id or uuid4().hex)
+                key = (chat_id, candidate)
+                if key in seen_pin_ids:
+                    candidate = uuid4().hex
+                    key = (chat_id, candidate)
+                seen_pin_ids.add(key)
+                if added_sort_order or sort_order is None or candidate != str(pin_id or ""):
+                    cursor.execute(
+                        "UPDATE pins SET pin_id = ?, sort_order = ? WHERE id = ?",
+                        (candidate, order, row_id),
+                    )
+                elif candidate != str(pin_id):
+                    cursor.execute("UPDATE pins SET pin_id = ? WHERE id = ?", (candidate, row_id))
+
+            cursor.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_pins_chat_pin_id ON pins(chat_id, pin_id)"
+            )
+
             cursor.execute("PRAGMA table_info(notes)")
             columns = [info[1] for info in cursor.fetchall()]
 
@@ -89,19 +128,24 @@ class ChatDatabase:
 
     def _write_pins(self, conn, chat_id, pins_data):
         conn.execute("DELETE FROM pins WHERE chat_id = ?", (chat_id,))
-        for pin_data in pins_data:
+        for index, pin_data in enumerate(pins_data):
             conn.execute(
                 """
                 INSERT INTO pins (
-                    chat_id, title, note, position_x, position_y
-                ) VALUES (?, ?, ?, ?, ?)
+                    chat_id, title, note, position_x, position_y,
+                    pin_id, sort_order, anchor_item_id, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     chat_id,
-                    pin_data["title"],
-                    pin_data["note"],
+                    pin_data.get("title", "Canvas location"),
+                    pin_data.get("note", ""),
                     pin_data["position"]["x"],
                     pin_data["position"]["y"],
+                    pin_data.get("pin_id") or str(uuid4().hex),
+                    pin_data.get("sort_order", index),
+                    pin_data.get("anchor_item_id"),
+                    pin_data.get("created_at"),
                 ),
             )
 
@@ -113,18 +157,24 @@ class ChatDatabase:
         with self._connect() as conn:
             cursor = conn.execute(
                 """
-                SELECT title, note, position_x, position_y
+                SELECT pin_id, title, note, position_x, position_y,
+                       anchor_item_id, sort_order, created_at
                 FROM pins WHERE chat_id = ?
+                ORDER BY sort_order, id
                 """,
                 (chat_id,),
             )
             pins = []
-            for row in cursor.fetchall():
+            for index, row in enumerate(cursor.fetchall()):
                 pins.append(
                     {
-                        "title": row[0],
-                        "note": row[1],
-                        "position": {"x": row[2], "y": row[3]},
+                        "pin_id": row[0],
+                        "title": row[1],
+                        "note": row[2],
+                        "position": {"x": row[3], "y": row[4]},
+                        "anchor_item_id": row[5],
+                        "sort_order": row[6] if row[6] is not None else index,
+                        "created_at": row[7],
                     }
                 )
             return pins

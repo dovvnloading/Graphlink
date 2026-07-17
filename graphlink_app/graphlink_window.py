@@ -51,6 +51,7 @@ from graphlink_paths import asset_path
 from graphlink_crash import mark_clean_exit
 from graphlink_composer import ComposerController
 from graphlink_composer_bridge import COMPOSER_MIN_HEIGHT
+from graphlink_navigation_pins import NavigationPinsController
 from graphlink_composer_popups import (
     ComposerContextPopup,
     ComposerPickerPopup,
@@ -144,6 +145,7 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         self.chat_view.installEventFilter(self)
         self.chat_view.viewport().installEventFilter(self)
         content_layout.addWidget(self.chat_view)
+        self.navigation_pins_controller = NavigationPinsController(self.chat_view.scene(), self.chat_view)
 
         # Notifications share the window overlay parent with the composer so
         # their z-order is meaningful across the graph/content hierarchy.
@@ -151,7 +153,7 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         # fixed composer even when NotificationBanner.raise_() is called.
         self.notification_banner = NotificationBanner(self.composer_overlay_parent)
 
-        self.pin_overlay = PinOverlay(self.chat_view, self)
+        self.pin_overlay = PinOverlay(self.chat_view, self, controller=self.navigation_pins_controller)
         self.pin_overlay.closed.connect(self._handle_pin_overlay_closed)
         self.pin_overlay.setVisible(False)
 
@@ -268,7 +270,7 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
             stop_hover = self._blend_button_color(button_colors["hover"], stop_accent, 0.24)
             stop_pressed = self._blend_button_color(button_colors["pressed"], stop_accent, 0.16)
             stop_border = self._blend_button_color(button_colors["border"], stop_accent, 0.30)
-            stop_icon = button_colors["muted_icon"] if self._main_request_cancel_pending else QColor("#ffffff")
+            stop_icon = button_colors["muted_icon"] if self._main_request_cancel_pending else QColor("#FFFFFF")
             self.send_button.setIcon(qta.icon('fa5s.stop', color=stop_icon.name()))
             self.send_button.setToolTip("Cancelling..." if self._main_request_cancel_pending else "Cancel response")
             background = stop_background
@@ -379,7 +381,17 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
             self.message_input.setText(prompt); QTimer.singleShot(100, self.send_message)
 
     def _handle_pin_overlay_closed(self):
-        pass
+        if hasattr(self, "pins_btn"):
+            self.pins_btn.setChecked(False)
+
+    def edit_navigation_pin(self, pin):
+        """Open the shared navigation-pin editor for a canvas marker."""
+        if hasattr(self, "pin_overlay"):
+            self.pin_overlay.edit_pin(pin)
+
+    def show_navigation_pin_context_menu(self, pin, global_pos):
+        if hasattr(self, "pin_overlay"):
+            self.pin_overlay.show_pin_context_menu(pin, global_pos)
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -439,6 +451,10 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         # other until something else (e.g. a resize) happened to recompute the stack.
         if self.chat_view:
             self.chat_view._update_overlay_positions()
+
+        pin_overlay = getattr(self, "pin_overlay", None)
+        if pin_overlay and pin_overlay.isVisible():
+            pin_overlay.reposition()
 
         self._update_composer_overlay()
 
@@ -846,7 +862,7 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
     def setup_toolbar(self, toolbar):
         toolbar.setIconSize(QSize(20, 20)); toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         toolbar.setStyleSheet("QToolBar { spacing: 4px; padding: 4px; } QToolButton { color: white; background: transparent; border: none; border-radius: 4px; padding: 6px; margin: 2px; font-size: 12px; } QToolButton:hover { background: rgba(255, 255, 255, 0.1); }")
-        self.pins_btn = QToolButton(); self.pins_btn.setText("Pins"); self.pins_btn.clicked.connect(self.toggle_pin_overlay); toolbar.addWidget(self.pins_btn)
+        self.pins_btn = QToolButton(); self.pins_btn.setText("Pins"); self.pins_btn.setCheckable(True); self.pins_btn.setToolTip("Show navigation pins"); self.pins_btn.clicked.connect(self.toggle_pin_overlay); toolbar.addWidget(self.pins_btn)
         organize_btn = QToolButton(); organize_btn.setText("Organize"); organize_btn.setObjectName("actionButton"); organize_btn.clicked.connect(lambda: self.chat_view.scene().organize_nodes()); toolbar.addWidget(organize_btn)
         toolbar.addSeparator()
         zoom_in_btn = QToolButton(); zoom_in_btn.setText("Zoom In"); zoom_in_btn.clicked.connect(lambda: self.chat_view.zoom_by(1.1)); toolbar.addWidget(zoom_in_btn)
@@ -860,7 +876,7 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         self.plugins_button.setText("Plugins")
         self.plugins_button.setObjectName("actionButton")
         self.plugins_button.setPopupMode(QToolButton.ToolButtonPopupMode.DelayedPopup)
-        self.plugins_button.setIcon(qta.icon("fa5s.chevron-down", color="#9aa6b2"))
+        self.plugins_button.setIcon(qta.icon("fa5s.chevron-down", color="#A4A4A4"))
         self.plugins_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self.plugins_button.clicked.connect(self._toggle_plugin_picker)
         toolbar.addWidget(self.plugins_button)
@@ -898,8 +914,7 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
 
     def toggle_pin_overlay(self, checked=False):
         if self.pin_overlay.isVisible():
-            self.pin_overlay.raise_()
-            self.pin_overlay.activateWindow()
+            self.pin_overlay.close()
             return
         self.pin_overlay.show_for_anchor(self.pins_btn)
 
@@ -1282,7 +1297,7 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
             return
 
         if not self.pending_attachments:
-            self.attach_file_btn.setIcon(qta.icon('fa5s.paperclip', color='#cccccc'))
+            self.attach_file_btn.setIcon(qta.icon('fa5s.paperclip', color='#CCCCCC'))
             self.attach_file_btn.setToolTip("Attach images, audio, or readable files")
             if hasattr(self, 'message_input'):
                 self.message_input.set_context_items([])

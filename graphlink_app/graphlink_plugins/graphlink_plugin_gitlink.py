@@ -56,18 +56,18 @@ from graphlink_plugins.common.combo import PopupComboBox
 
 GITLINK_SCROLLBAR_STYLE = """
     QScrollBar:vertical {
-        background: #1a1d20;
+        background: #1D1D1D;
         width: 10px;
         margin: 0px;
         border-radius: 5px;
     }
     QScrollBar::handle:vertical {
-        background-color: #555b63;
+        background-color: #5A5A5A;
         min-height: 25px;
         border-radius: 5px;
     }
     QScrollBar::handle:vertical:hover {
-        background-color: #6a727c;
+        background-color: #717171;
     }
     QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
         height: 0px;
@@ -77,18 +77,18 @@ GITLINK_SCROLLBAR_STYLE = """
         background: none;
     }
     QScrollBar:horizontal {
-        background: #1a1d20;
+        background: #1D1D1D;
         height: 10px;
         margin: 0px;
         border-radius: 5px;
     }
     QScrollBar::handle:horizontal {
-        background-color: #555b63;
+        background-color: #5A5A5A;
         min-width: 25px;
         border-radius: 5px;
     }
     QScrollBar::handle:horizontal:hover {
-        background-color: #6a727c;
+        background-color: #717171;
     }
     QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
         width: 0px;
@@ -274,7 +274,7 @@ class GitlinkNode(QGraphicsObject, HoverAnimationMixin):
             f"""
             QWidget#gitlinkMainWidget {{
                 background-color: transparent;
-                color: #e0e0e0;
+                color: #E0E0E0;
                 font-family: 'Segoe UI', sans-serif;
             }}
             QWidget#gitlinkMainWidget QLabel {{
@@ -282,26 +282,26 @@ class GitlinkNode(QGraphicsObject, HoverAnimationMixin):
             }}
             QFrame#gitlinkHeaderCard,
             QFrame#gitlinkSectionCard {{
-                background-color: #202327;
-                border: 1px solid #353b43;
+                background-color: #232323;
+                border: 1px solid #3A3A3A;
                 border-radius: 10px;
             }}
             QLabel#gitlinkTitle {{
-                color: #ffffff;
+                color: #FFFFFF;
                 font-size: 17px;
                 font-weight: bold;
             }}
             QLabel#gitlinkHint {{
-                color: #9fa6ad;
+                color: #A5A5A5;
                 font-size: 11px;
             }}
             QLabel#gitlinkFieldLabel {{
-                color: #cfd7df;
+                color: #D6D6D6;
                 font-size: 11px;
                 font-weight: bold;
             }}
             QLabel#gitlinkBadge {{
-                color: #e9f7ef;
+                color: #F3F3F3;
                 background-color: rgba({badge_rgba}, 0.14);
                 border: 1px solid rgba({badge_rgba}, 0.28);
                 border-radius: 10px;
@@ -314,9 +314,9 @@ class GitlinkNode(QGraphicsObject, HoverAnimationMixin):
             QListWidget,
             QPlainTextEdit,
             QTextEdit {{
-                background-color: #171a1d;
-                color: #f3f3f3;
-                border: 1px solid #353b43;
+                background-color: #1A1A1A;
+                color: #F3F3F3;
+                border: 1px solid #3A3A3A;
                 border-radius: 8px;
                 padding: 6px 8px;
                 selection-background-color: {node_color.name()};
@@ -329,35 +329,35 @@ class GitlinkNode(QGraphicsObject, HoverAnimationMixin):
                 border-color: {node_color.name()};
             }}
             QPushButton {{
-                background-color: #2b3137;
-                color: #ffffff;
-                border: 1px solid #404854;
+                background-color: #303030;
+                color: #FFFFFF;
+                border: 1px solid #474747;
                 border-radius: 8px;
                 padding: 7px 12px;
                 font-weight: bold;
             }}
             QPushButton:hover {{
-                background-color: #35404a;
+                background-color: #3E3E3E;
                 border-color: {node_color.name()};
             }}
             QPushButton:pressed {{
-                background-color: #243038;
+                background-color: #2E2E2E;
             }}
             QPushButton:disabled {{
-                background-color: #23272b;
-                color: #7d858e;
-                border-color: #2f363d;
+                background-color: #262626;
+                color: #848484;
+                border-color: #353535;
             }}
             QTabWidget::pane {{
-                border: 1px solid #3a4048;
-                background: #1d2024;
+                border: 1px solid #3F3F3F;
+                background: #202020;
                 border-radius: 8px;
             }}
             QTabBar::tab {{
-                background: #25282d;
-                color: #97a1ab;
+                background: #282828;
+                color: #A0A0A0;
                 padding: 7px 12px;
-                border: 1px solid #3a4048;
+                border: 1px solid #3F3F3F;
                 border-bottom: none;
                 border-top-left-radius: 6px;
                 border-top-right-radius: 6px;
@@ -365,10 +365,10 @@ class GitlinkNode(QGraphicsObject, HoverAnimationMixin):
                 font-weight: bold;
             }}
             QTabBar::tab:selected {{
-                background: #1d2024;
-                color: #ffffff;
+                background: #202020;
+                color: #FFFFFF;
                 border-top: 2px solid {node_color.name()};
-                border-bottom: 1px solid #1d2024;
+                border-bottom: 1px solid #202020;
             }}
             QListWidget::item {{
                 padding: 4px 6px;
@@ -376,7 +376,7 @@ class GitlinkNode(QGraphicsObject, HoverAnimationMixin):
             }}
             QListWidget::item:selected {{
                 background: rgba({badge_rgba}, 0.22);
-                color: #ffffff;
+                color: #FFFFFF;
             }}
             """
         )
@@ -456,7 +456,7 @@ class GitlinkNode(QGraphicsObject, HoverAnimationMixin):
         repo_layout.setSpacing(8)
 
         repo_title = QLabel("GitHub Source")
-        repo_title.setStyleSheet("color: #ffffff; font-weight: bold;")
+        repo_title.setStyleSheet("color: #FFFFFF; font-weight: bold;")
         repo_layout.addWidget(repo_title)
 
         self.github_state_label = QLabel("")
@@ -469,7 +469,7 @@ class GitlinkNode(QGraphicsObject, HoverAnimationMixin):
         repo_picker_row.setSpacing(8)
 
         self.load_repos_button = QPushButton("Load Repo List")
-        self.load_repos_button.setIcon(qta.icon("fa5s.sync-alt", color="#ffffff"))
+        self.load_repos_button.setIcon(qta.icon("fa5s.sync-alt", color="#FFFFFF"))
         self.load_repos_button.clicked.connect(self.load_github_repositories)
         repo_picker_row.addWidget(self.load_repos_button)
 
@@ -501,7 +501,7 @@ class GitlinkNode(QGraphicsObject, HoverAnimationMixin):
         branch_row.addWidget(self.branch_input, stretch=1)
 
         self.load_tree_button = QPushButton("Load File Tree")
-        self.load_tree_button.setIcon(qta.icon("fa5s.sitemap", color="#ffffff"))
+        self.load_tree_button.setIcon(qta.icon("fa5s.sitemap", color="#FFFFFF"))
         self.load_tree_button.clicked.connect(self.load_repository_tree)
         branch_row.addWidget(self.load_tree_button)
         repo_layout.addLayout(branch_row)
@@ -515,7 +515,7 @@ class GitlinkNode(QGraphicsObject, HoverAnimationMixin):
         scope_layout.setSpacing(8)
 
         scope_title = QLabel("Access Scope")
-        scope_title.setStyleSheet("color: #ffffff; font-weight: bold;")
+        scope_title.setStyleSheet("color: #FFFFFF; font-weight: bold;")
         scope_layout.addWidget(scope_title)
 
         scope_hint = QLabel(
@@ -572,7 +572,7 @@ class GitlinkNode(QGraphicsObject, HoverAnimationMixin):
         workspace_layout.setSpacing(8)
 
         workspace_title = QLabel("Writable Checkout")
-        workspace_title.setStyleSheet("color: #ffffff; font-weight: bold;")
+        workspace_title.setStyleSheet("color: #FFFFFF; font-weight: bold;")
         workspace_layout.addWidget(workspace_title)
 
         workspace_hint = QLabel(
@@ -596,12 +596,12 @@ class GitlinkNode(QGraphicsObject, HoverAnimationMixin):
         workspace_button_row.setSpacing(8)
 
         self.browse_root_button = QPushButton("Browse")
-        self.browse_root_button.setIcon(qta.icon("fa5s.folder-open", color="#ffffff"))
+        self.browse_root_button.setIcon(qta.icon("fa5s.folder-open", color="#FFFFFF"))
         self.browse_root_button.clicked.connect(self.browse_local_root)
         workspace_button_row.addWidget(self.browse_root_button)
 
         self.import_repo_button = QPushButton("Import Repo Snapshot")
-        self.import_repo_button.setIcon(qta.icon("fa5s.download", color="#ffffff"))
+        self.import_repo_button.setIcon(qta.icon("fa5s.download", color="#FFFFFF"))
         self.import_repo_button.clicked.connect(self.import_repository_snapshot)
         workspace_button_row.addWidget(self.import_repo_button)
         workspace_button_row.addStretch()
@@ -616,7 +616,7 @@ class GitlinkNode(QGraphicsObject, HoverAnimationMixin):
         task_layout.setSpacing(8)
 
         task_title = QLabel("Task Prompt")
-        task_title.setStyleSheet("color: #ffffff; font-weight: bold;")
+        task_title.setStyleSheet("color: #FFFFFF; font-weight: bold;")
         task_layout.addWidget(task_title)
 
         task_hint = QLabel(
@@ -637,17 +637,17 @@ class GitlinkNode(QGraphicsObject, HoverAnimationMixin):
         button_row.setSpacing(8)
 
         self.build_context_button = QPushButton("Build XML Context")
-        self.build_context_button.setIcon(qta.icon("fa5s.file-code", color="#ffffff"))
+        self.build_context_button.setIcon(qta.icon("fa5s.file-code", color="#FFFFFF"))
         self.build_context_button.clicked.connect(self.build_context_preview)
         button_row.addWidget(self.build_context_button)
 
         self.run_button = QPushButton("Generate Change Set")
-        self.run_button.setIcon(qta.icon("fa5s.magic", color="#ffffff"))
+        self.run_button.setIcon(qta.icon("fa5s.magic", color="#FFFFFF"))
         self.run_button.clicked.connect(self._request_gitlink_run)
         button_row.addWidget(self.run_button)
 
         self.apply_button = QPushButton("Apply Approved Changes")
-        self.apply_button.setIcon(qta.icon("fa5s.save", color="#ffffff"))
+        self.apply_button.setIcon(qta.icon("fa5s.save", color="#FFFFFF"))
         self.apply_button.clicked.connect(self.apply_approved_changes)
         self.apply_button.setEnabled(False)
         button_row.addWidget(self.apply_button)
@@ -668,10 +668,10 @@ class GitlinkNode(QGraphicsObject, HoverAnimationMixin):
         self.preview_editor.setReadOnly(True)
         self.preview_editor.setStyleSheet(GITLINK_SCROLLBAR_STYLE)
 
-        self.workspace_tabs.addTab(setup_tab, qta.icon("fa5s.link", color="#cccccc"), "Setup")
-        self.workspace_tabs.addTab(self.context_editor, qta.icon("fa5s.file-code", color="#cccccc"), "Context XML")
-        self.workspace_tabs.addTab(self.proposal_display, qta.icon("fa5s.tasks", color="#cccccc"), "Proposal")
-        self.workspace_tabs.addTab(self.preview_editor, qta.icon("fa5s.columns", color="#cccccc"), "Preview")
+        self.workspace_tabs.addTab(setup_tab, qta.icon("fa5s.link", color="#CCCCCC"), "Setup")
+        self.workspace_tabs.addTab(self.context_editor, qta.icon("fa5s.file-code", color="#CCCCCC"), "Context XML")
+        self.workspace_tabs.addTab(self.proposal_display, qta.icon("fa5s.tasks", color="#CCCCCC"), "Proposal")
+        self.workspace_tabs.addTab(self.preview_editor, qta.icon("fa5s.columns", color="#CCCCCC"), "Preview")
 
     def _get_github_token(self):
         # Delegates to the shared GitHubRestClient (doc/PLUGIN_SYSTEM_REFACTOR_PLAN.md
@@ -1503,7 +1503,7 @@ class GitlinkNode(QGraphicsObject, HoverAnimationMixin):
         elif "ready" in status_text.lower() or "applied" in status_text.lower():
             color = get_semantic_color("status_success")
         else:
-            color = QColor("#9aa3ad")
+            color = QColor("#A2A2A2")
 
         self.status_label.setStyleSheet(
             f"color: {color.name()}; background-color: rgba({color.red()}, {color.green()}, {color.blue()}, 0.1); "
@@ -1590,7 +1590,7 @@ class GitlinkNode(QGraphicsObject, HoverAnimationMixin):
 
         path = QPainterPath()
         path.addRoundedRect(0, 0, self.width, self.height, 10, 10)
-        painter.setBrush(QColor("#2d2d2d"))
+        painter.setBrush(QColor("#2D2D2D"))
 
         pen = QPen(node_color, 1.5)
         if self.isSelected():
@@ -1598,7 +1598,7 @@ class GitlinkNode(QGraphicsObject, HoverAnimationMixin):
         elif self.is_search_match:
             pen = QPen(get_semantic_color("search_highlight"), 2)
         elif self.hovered:
-            pen = QPen(QColor("#ffffff"), 2)
+            pen = QPen(QColor("#FFFFFF"), 2)
 
         painter.setPen(pen)
         painter.drawPath(path)
@@ -1624,14 +1624,14 @@ class GitlinkNode(QGraphicsObject, HoverAnimationMixin):
         painter.drawPie(dot_rect_right, 90 * 16, 180 * 16)
 
         if self.is_collapsed:
-            painter.setPen(QColor("#ffffff"))
+            painter.setPen(QColor("#FFFFFF"))
             painter.setFont(canvas_font(self.scene(), weight=QFont.Weight.Bold))
             painter.drawText(QRectF(42, 0, self.width - 84, self.height), Qt.AlignmentFlag.AlignVCenter, "Gitlink")
             qta.icon("fa5s.link", color=node_color.name()).paint(painter, QRect(12, 10, 20, 20))
             self.collapse_button_rect = QRectF(self.width - 35, 5, 30, 30)
             qta.icon(
                 "fa5s.expand-arrows-alt",
-                color="#ffffff" if self.hovered else "#888888",
+                color="#FFFFFF" if self.hovered else "#888888",
             ).paint(painter, QRect(int(self.width - 30), 10, 20, 20))
         else:
             if self.hovered:
@@ -1639,7 +1639,7 @@ class GitlinkNode(QGraphicsObject, HoverAnimationMixin):
                 painter.setBrush(QColor(255, 255, 255, 30))
                 painter.setPen(QColor(255, 255, 255, 150))
                 painter.drawRoundedRect(self.collapse_button_rect.adjusted(6, 6, -6, -6), 4, 4)
-                painter.setPen(QPen(QColor("#ffffff"), 2))
+                painter.setPen(QPen(QColor("#FFFFFF"), 2))
                 center = self.collapse_button_rect.center()
                 painter.drawLine(int(center.x() - 4), int(center.y()), int(center.x() + 4), int(center.y()))
             else:

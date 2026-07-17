@@ -20,7 +20,7 @@ import api_provider
 
 ARTIFACT_SCROLLBAR_STYLE = """
     QScrollBar:vertical {
-        background: #252526;
+        background: #252525;
         width: 10px;
         margin: 0px;
         border-radius: 5px;
@@ -31,7 +31,7 @@ ARTIFACT_SCROLLBAR_STYLE = """
         border-radius: 5px;
     }
     QScrollBar::handle:vertical:hover {
-        background-color: #6a6a6a;
+        background-color: #6A6A6A;
     }
     QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
         height: 0px;
@@ -41,7 +41,7 @@ ARTIFACT_SCROLLBAR_STYLE = """
         background: none;
     }
     QScrollBar:horizontal {
-        background: #252526;
+        background: #252525;
         height: 10px;
         margin: 0px;
         border-radius: 5px;
@@ -52,7 +52,7 @@ ARTIFACT_SCROLLBAR_STYLE = """
         border-radius: 5px;
     }
     QScrollBar::handle:horizontal:hover {
-        background-color: #6a6a6a;
+        background-color: #6A6A6A;
     }
     QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
         width: 0px;
@@ -225,7 +225,7 @@ class ArtifactNode(QGraphicsObject, HoverAnimationMixin):
         self.widget.setObjectName("artifactMainWidget")
         self.widget.setFixedSize(self.NODE_WIDTH, self.NODE_HEIGHT)
         self.widget.setStyleSheet("""
-            QWidget#artifactMainWidget { background-color: transparent; color: #e0e0e0; font-family: 'Segoe UI', sans-serif; }
+            QWidget#artifactMainWidget { background-color: transparent; color: #E0E0E0; font-family: 'Segoe UI', sans-serif; }
             QWidget#artifactMainWidget QLabel { background-color: transparent; }
         """)
         
@@ -265,7 +265,7 @@ class ArtifactNode(QGraphicsObject, HoverAnimationMixin):
         artifact_color = get_semantic_color("artifact")
         artifact_hover_color = artifact_color.lighter(115)
         artifact_icon_text = artifact_color.name()
-        artifact_button_icon = "#1e1e1e" if artifact_color.lightness() > 150 else "#f3f3f3"
+        artifact_button_icon = "#1E1E1E" if artifact_color.lightness() > 150 else "#F3F3F3"
         main_layout = QVBoxLayout(self.widget)
         main_layout.setContentsMargins(15, 15, 15, 15)
         main_layout.setSpacing(10)
@@ -286,7 +286,7 @@ class ArtifactNode(QGraphicsObject, HoverAnimationMixin):
         # --- Separator Line ---
         line = QFrame()
         line.setFrameShape(QFrame.Shape.HLine)
-        line.setStyleSheet("background-color: #3f3f3f; border: none; height: 1px;")
+        line.setStyleSheet("background-color: #3F3F3F; border: none; height: 1px;")
         main_layout.addWidget(line)
 
         # --- Main Splitter ---
@@ -295,7 +295,7 @@ class ArtifactNode(QGraphicsObject, HoverAnimationMixin):
         self.splitter.setStyleSheet("""
             QSplitter::handle:horizontal {
                 width: 8px;
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #3f3f3f, stop:0.5 #555555, stop:1 #3f3f3f);
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #3F3F3F, stop:0.5 #555555, stop:1 #3F3F3F);
             }
         """ + f"""
             QSplitter::handle:horizontal:hover {{ background: {artifact_icon_text}; }}
@@ -312,16 +312,16 @@ class ArtifactNode(QGraphicsObject, HoverAnimationMixin):
         self.chat_display.setReadOnly(True)
         self.chat_display.setStyleSheet("""
             QTextEdit {
-                background-color: #1e1e1e;
-                border: 1px solid #3f3f3f;
+                background-color: #1E1E1E;
+                border: 1px solid #3F3F3F;
                 border-radius: 6px;
                 padding: 10px;
             }
         """ + ARTIFACT_SCROLLBAR_STYLE)
         self.chat_display.document().setDefaultStyleSheet("""
-            p, ul, ol, li { color: #d4d4d4; font-family: 'Segoe UI', sans-serif; font-size: 13px; line-height: 1.4; margin-top: 2px; margin-bottom: 8px;}
-            pre { background-color: #2d2d2d; padding: 8px; border-radius: 4px; font-family: Consolas, monospace; color: #dcdcaa; }
-            code { background-color: #3f3f3f; padding: 2px 4px; border-radius: 4px; font-family: Consolas, monospace; }
+            p, ul, ol, li { color: #D4D4D4; font-family: 'Segoe UI', sans-serif; font-size: 13px; line-height: 1.4; margin-top: 2px; margin-bottom: 8px;}
+            pre { background-color: #2D2D2D; padding: 8px; border-radius: 4px; font-family: Consolas, monospace; color: #D8D8D8; }
+            code { background-color: #3F3F3F; padding: 2px 4px; border-radius: 4px; font-family: Consolas, monospace; }
         """)
         left_layout.addWidget(self.chat_display, stretch=1)
 
@@ -331,8 +331,8 @@ class ArtifactNode(QGraphicsObject, HoverAnimationMixin):
         input_container.setMinimumHeight(72)
         input_container.setStyleSheet("""
             QWidget {
-                background-color: #1e1e1e;
-                border: 1px solid #3f3f3f;
+                background-color: #1E1E1E;
+                border: 1px solid #3F3F3F;
                 border-radius: 8px;
             }
         """)
@@ -352,7 +352,7 @@ class ArtifactNode(QGraphicsObject, HoverAnimationMixin):
             QTextEdit {
                 background-color: transparent;
                 border: none;
-                color: #ffffff;
+                color: #FFFFFF;
                 font-size: 13px;
                 font-family: 'Segoe UI', sans-serif;
                 padding: 2px 0px;
@@ -384,21 +384,21 @@ class ArtifactNode(QGraphicsObject, HoverAnimationMixin):
 
         self.tabs = QTabWidget()
         self.tabs.setStyleSheet(f"""
-            QTabWidget::pane {{ border: 1px solid #3f3f3f; background: #1e1e1e; border-radius: 6px; border-top-left-radius: 0px; }}
+            QTabWidget::pane {{ border: 1px solid #3F3F3F; background: #1E1E1E; border-radius: 6px; border-top-left-radius: 0px; }}
             QTabBar::tab {{ background: transparent; color: #888888; padding: 6px 16px; border: none; font-weight: bold; font-size: 12px; margin-right: 4px; }}
             QTabBar::tab:selected {{ color: {artifact_icon_text}; border-bottom: 2px solid {artifact_icon_text}; }}
-            QTabBar::tab:hover:!selected {{ color: #ffffff; }}
+            QTabBar::tab:hover:!selected {{ color: #FFFFFF; }}
         """)
 
         self.raw_editor = QPlainTextEdit()
         self.raw_editor.setPlaceholderText("The raw markdown / code will appear here. You can manually edit it.")
         self.raw_editor.setStyleSheet("""
             QPlainTextEdit {
-                background-color: #1e1e1e; 
-                color: #dcdcaa; 
-                font-family: Consolas, Monaco, monospace; 
-                border: none; 
-                padding: 12px; 
+                background-color: #1E1E1E;
+                color: #D8D8D8;
+                font-family: Consolas, Monaco, monospace;
+                border: none;
+                padding: 12px;
                 font-size: 13px;
             }
         """ + ARTIFACT_SCROLLBAR_STYLE)
@@ -409,18 +409,18 @@ class ArtifactNode(QGraphicsObject, HoverAnimationMixin):
         self.preview_display.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.preview_display.setStyleSheet("""
             QTextEdit {
-                background-color: #1e1e1e;
+                background-color: #1E1E1E;
                 border: none;
                 padding: 12px;
                 border-radius: 6px;
             }
         """ + ARTIFACT_SCROLLBAR_STYLE)
         self.preview_display.document().setDefaultStyleSheet("""
-            p, ul, ol, li { color: #e0e0e0; font-family: 'Segoe UI', sans-serif; font-size: 13px; line-height: 1.5; margin-bottom: 10px; }
-            h1, h2, h3, h4 { color: #ffffff; font-weight: bold; margin-top: 15px; margin-bottom: 8px; }
-            pre { background-color: #2d2d2d; padding: 10px; border-radius: 6px; font-family: Consolas, monospace; color: #dcdcaa; }
-            code { background-color: #3f3f3f; color: #dcdcaa; padding: 2px 4px; border-radius: 4px; font-family: Consolas, monospace; }
-            blockquote { border-left: 3px solid #555555; padding-left: 10px; color: #aaaaaa; }
+            p, ul, ol, li { color: #E0E0E0; font-family: 'Segoe UI', sans-serif; font-size: 13px; line-height: 1.5; margin-bottom: 10px; }
+            h1, h2, h3, h4 { color: #FFFFFF; font-weight: bold; margin-top: 15px; margin-bottom: 8px; }
+            pre { background-color: #2D2D2D; padding: 10px; border-radius: 6px; font-family: Consolas, monospace; color: #D8D8D8; }
+            code { background-color: #3F3F3F; color: #D8D8D8; padding: 2px 4px; border-radius: 4px; font-family: Consolas, monospace; }
+            blockquote { border-left: 3px solid #555555; padding-left: 10px; color: #AAAAAA; }
         """)
 
         self.tabs.addTab(self.raw_editor, "Markdown")
@@ -508,12 +508,12 @@ class ArtifactNode(QGraphicsObject, HoverAnimationMixin):
         if is_running:
             self.update_button.setEnabled(True)
             self.update_button.setToolTip("Stop generation")
-            self.update_button.setIcon(qta.icon('fa5s.stop', color='#dddddd'))
+            self.update_button.setIcon(qta.icon('fa5s.stop', color='#DDDDDD'))
             self.update_button.setStyleSheet("QPushButton { background-color: #444444; border: none; border-radius: 20px; margin: 0px; } QPushButton:hover { background-color: #555555; }")
         else:
             artifact_color = get_semantic_color("artifact")
             artifact_hover_color = artifact_color.lighter(115)
-            artifact_button_icon = "#1e1e1e" if artifact_color.lightness() > 150 else "#f3f3f3"
+            artifact_button_icon = "#1E1E1E" if artifact_color.lightness() > 150 else "#F3F3F3"
             self.update_button.setEnabled(True)
             self.update_button.setToolTip("")
             self.update_button.setIcon(qta.icon('fa5s.arrow-up', color=artifact_button_icon))
@@ -531,7 +531,7 @@ class ArtifactNode(QGraphicsObject, HoverAnimationMixin):
         
         path = QPainterPath()
         path.addRoundedRect(0, 0, self.width, self.height, 10, 10)
-        painter.setBrush(QColor("#2d2d2d"))
+        painter.setBrush(QColor("#2D2D2D"))
         
         node_color = get_semantic_color("artifact")
         pen = QPen(node_color, 1.5)
@@ -539,7 +539,7 @@ class ArtifactNode(QGraphicsObject, HoverAnimationMixin):
         if self.isSelected():
             pen = QPen(palette.SELECTION, 2)
         elif self.hovered:
-            pen = QPen(QColor("#ffffff"), 2)
+            pen = QPen(QColor("#FFFFFF"), 2)
         
         painter.setPen(pen)
         painter.drawPath(path)
@@ -576,7 +576,7 @@ class ArtifactNode(QGraphicsObject, HoverAnimationMixin):
             return
 
         if self.is_collapsed:
-            painter.setPen(QColor("#ffffff"))
+            painter.setPen(QColor("#FFFFFF"))
             font = canvas_font(self.scene(), weight=QFont.Weight.Bold)
             painter.setFont(font)
             painter.drawText(QRectF(40, 0, self.width - 80, self.height), Qt.AlignmentFlag.AlignVCenter, "Artifact Drafter")
@@ -585,7 +585,7 @@ class ArtifactNode(QGraphicsObject, HoverAnimationMixin):
             icon.paint(painter, QRectF(10, 10, 20, 20).toRect())
             
             self.collapse_button_rect = QRectF(self.width - 35, 5, 30, 30)
-            expand_icon = qta.icon('fa5s.expand-arrows-alt', color='#ffffff' if self.hovered else '#888888')
+            expand_icon = qta.icon('fa5s.expand-arrows-alt', color='#FFFFFF' if self.hovered else '#888888')
             expand_icon.paint(painter, QRectF(self.width - 30, 10, 20, 20).toRect())
         else:
             if self.hovered:
@@ -594,7 +594,7 @@ class ArtifactNode(QGraphicsObject, HoverAnimationMixin):
                 painter.setPen(QColor(255, 255, 255, 150))
                 painter.drawRoundedRect(self.collapse_button_rect.adjusted(6,6,-6,-6), 4, 4)
                 
-                icon_pen = QPen(QColor("#ffffff"), 2)
+                icon_pen = QPen(QColor("#FFFFFF"), 2)
                 painter.setPen(icon_pen)
                 center = self.collapse_button_rect.center()
                 painter.drawLine(int(center.x() - 4), int(center.y()), int(center.x() + 4), int(center.y()))

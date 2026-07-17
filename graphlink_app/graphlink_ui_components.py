@@ -150,27 +150,27 @@ class _LegacyNotificationBanner(QWidget):
 
         self.setStyleSheet(f"""
             QWidget#notificationBanner {{
-                background-color: #2b2b2b;
+                background-color: #2B2B2B;
                 border: 1px solid #444444;
                 border-left: 4px solid {accent_color};
                 border-radius: 6px;
             }}
             QLabel#notificationLabel {{
-                color: #e0e0e0;
+                color: #E0E0E0;
                 font-size: 13px;
                 background-color: transparent;
             }}
             QPushButton#notificationCopyButton {{
                 background-color: #343434;
-                border: 1px solid #4b4b4b;
-                color: #dcdcdc;
+                border: 1px solid #4B4B4B;
+                color: #DCDCDC;
                 font-size: 11px;
                 padding: 2px 10px;
                 border-radius: 4px;
             }}
             QPushButton#notificationCopyButton:hover {{
-                background-color: #3f3f3f;
-                color: #ffffff;
+                background-color: #3F3F3F;
+                color: #FFFFFF;
             }}
             QPushButton#notificationCloseButton {{
                 background-color: transparent;
@@ -180,8 +180,8 @@ class _LegacyNotificationBanner(QWidget):
                 border-radius: 4px;
             }}
             QPushButton#notificationCloseButton:hover {{
-                background-color: #3f3f3f;
-                color: #ffffff;
+                background-color: #3F3F3F;
+                color: #FFFFFF;
             }}
         """)
 
@@ -248,40 +248,40 @@ class _LegacyNotificationBanner(QWidget):
 class NotificationBanner(QWidget):
     TYPE_STYLES = {
         "info": {
-            "accent": "#4da3ff",
+            "accent": "#979797",
             "title": "Notice",
             "icon": "fa5s.info-circle",
-            "icon_color": "#8fc2ff",
-            "copy_hover": "#274d72",
-            "dismiss_hover": "#394453",
-            "close_hover": "rgba(77, 163, 255, 0.16)",
+            "icon_color": "#BCBCBC",
+            "copy_hover": "#484848",
+            "dismiss_hover": "#434343",
+            "close_hover": "rgba(151, 151, 151, 0.16)",
         },
         "success": {
-            "accent": "#3ecf8e",
+            "accent": "#ABABAB",
             "title": "Success",
             "icon": "fa5s.check-circle",
-            "icon_color": "#7ce7b7",
-            "copy_hover": "#24573f",
-            "dismiss_hover": "#394453",
-            "close_hover": "rgba(62, 207, 142, 0.16)",
+            "icon_color": "#CDCDCD",
+            "copy_hover": "#4A4A4A",
+            "dismiss_hover": "#434343",
+            "close_hover": "rgba(171, 171, 171, 0.16)",
         },
         "warning": {
-            "accent": "#f0a63a",
+            "accent": "#AEAEAE",
             "title": "Warning",
             "icon": "fa5s.exclamation-triangle",
-            "icon_color": "#ffc76f",
-            "copy_hover": "#694723",
-            "dismiss_hover": "#4c4235",
-            "close_hover": "rgba(240, 166, 58, 0.16)",
+            "icon_color": "#CDCDCD",
+            "copy_hover": "#4C4C4C",
+            "dismiss_hover": "#434343",
+            "close_hover": "rgba(174, 174, 174, 0.16)",
         },
         "error": {
-            "accent": "#ef5a5a",
+            "accent": "#7A7A7A",
             "title": "Action Needed",
             "icon": "fa5s.exclamation-circle",
-            "icon_color": "#ff8c8c",
-            "copy_hover": "#6d2d2d",
-            "dismiss_hover": "#523838",
-            "close_hover": "rgba(239, 90, 90, 0.16)",
+            "icon_color": "#A4A4A4",
+            "copy_hover": "#3B3B3B",
+            "dismiss_hover": "#3E3E3E",
+            "close_hover": "rgba(122, 122, 122, 0.16)",
         },
     }
 
@@ -401,19 +401,19 @@ class NotificationBanner(QWidget):
 
         self.setStyleSheet(f"""
             QWidget#notificationBanner {{
-                background-color: #171b22;
-                border: 1px solid #313946;
+                background-color: #1B1B1B;
+                border: 1px solid #383838;
                 border-left: 4px solid {accent_color};
                 border-radius: 12px;
             }}
             QLabel#notificationStatusLabel {{
-                color: #f3f6fb;
+                color: #F6F6F6;
                 font-size: 12px;
                 font-weight: 700;
                 background-color: transparent;
             }}
             QLabel#notificationLabel {{
-                color: #d4dbe6;
+                color: #DADADA;
                 font-size: 13px;
                 background-color: transparent;
             }}
@@ -422,9 +422,9 @@ class NotificationBanner(QWidget):
             }}
             QPushButton#notificationDismissButton,
             QPushButton#notificationCopyButton {{
-                background-color: #212733;
-                border: 1px solid #3a4352;
-                color: #e8edf7;
+                background-color: #272727;
+                border: 1px solid #424242;
+                color: #EDEDED;
                 font-size: 11px;
                 font-weight: 600;
                 padding: 0 12px;
@@ -432,11 +432,11 @@ class NotificationBanner(QWidget):
             }}
             QPushButton#notificationCopyButton:hover {{
                 background-color: {style["copy_hover"]};
-                color: #ffffff;
+                color: #FFFFFF;
             }}
             QPushButton#notificationDismissButton:hover {{
                 background-color: {style["dismiss_hover"]};
-                color: #ffffff;
+                color: #FFFFFF;
             }}
             QPushButton#notificationCloseButton {{
                 background-color: transparent;
@@ -450,8 +450,8 @@ class NotificationBanner(QWidget):
 
         self.status_label.setText(style["title"])
         self.status_icon_label.setPixmap(qta.icon(style["icon"], color=style["icon_color"]).pixmap(16, 16))
-        self.close_button.setIcon(qta.icon("fa5s.times", color="#cfd6e4"))
-        self.copy_button.setIcon(qta.icon("fa5s.copy", color="#e8edf7"))
+        self.close_button.setIcon(qta.icon("fa5s.times", color="#D6D6D6"))
+        self.copy_button.setIcon(qta.icon("fa5s.copy", color="#EDEDED"))
         self.message_label.setText(message)
         self.message_label.setToolTip(message)
         self._reset_copy_feedback()
@@ -565,13 +565,13 @@ class DocumentViewerPanel(QWidget):
         palette = get_current_palette()
         self.setStyleSheet(f"""
             QWidget#documentViewerPanel {{
-                background-color: #252526;
-                border-right: 1px solid #3f3f3f;
+                background-color: #252525;
+                border-right: 1px solid #3F3F3F;
             }}
             QTextEdit {{
-                background-color: #2d2d2d;
-                border: 1px solid #3f3f3f;
-                color: #e0e0e0;
+                background-color: #2D2D2D;
+                border: 1px solid #3F3F3F;
+                color: #E0E0E0;
                 font-size: 13px;
                 padding: 8px;
             }}
@@ -581,6 +581,6 @@ class DocumentViewerPanel(QWidget):
                 border-radius: 4px;
             }}
             QPushButton:hover {{
-                background-color: #3f3f3f;
+                background-color: #3F3F3F;
             }}
         """)

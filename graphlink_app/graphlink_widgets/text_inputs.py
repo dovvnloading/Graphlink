@@ -282,8 +282,8 @@ class ComposerSurface(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._radius = 14.0
-        self._background = QColor("#2a2a2a")
-        self._border = QColor("#3f3f3f")
+        self._background = QColor("#2A2A2A")
+        self._border = QColor("#3F3F3F")
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAutoFillBackground(False)
 
@@ -335,13 +335,13 @@ class ContextAttachmentPill(QFrame):
         layout.addWidget(icon_label)
 
         title_label = QLabel(self._shorten_title(attachment.get('name') or "Context"), self)
-        title_label.setStyleSheet("background: transparent; color: #f2f2f2; font-size: 11px; font-weight: bold;")
+        title_label.setStyleSheet("background: transparent; color: #F2F2F2; font-size: 11px; font-weight: bold;")
         layout.addWidget(title_label)
 
         meta_text = self._meta_text_for_attachment(attachment)
         if meta_text:
             meta_label = QLabel(meta_text, self)
-            meta_label.setStyleSheet("background: transparent; color: #aab4bc; font-size: 10px;")
+            meta_label.setStyleSheet("background: transparent; color: #B2B2B2; font-size: 10px;")
             layout.addWidget(meta_label)
 
         remove_button = QPushButton("x", self)
@@ -351,7 +351,7 @@ class ContextAttachmentPill(QFrame):
         remove_button.setStyleSheet("""
             QPushButton {
                 background: transparent;
-                color: #b8c2cc;
+                color: #C1C1C1;
                 border: none;
                 border-radius: 8px;
                 font-size: 10px;
@@ -360,7 +360,7 @@ class ContextAttachmentPill(QFrame):
             }
             QPushButton:hover {
                 background-color: rgba(255, 255, 255, 0.12);
-                color: #ffffff;
+                color: #FFFFFF;
             }
         """)
         remove_button.clicked.connect(lambda: self.removeRequested.emit(self.attachment_key))
@@ -389,15 +389,15 @@ class ContextAttachmentPill(QFrame):
 
     def _icon_color_for_attachment(self, attachment):
         if attachment.get('kind') == 'image':
-            return '#5dade2'
+            return '#A0A0A0'
         if attachment.get('kind') == 'audio':
-            return '#76d7c4'
+            return '#C1C1C1'
         context_label = (attachment.get('context_label') or "").lower()
         if 'pdf' in context_label:
-            return '#f1948a'
+            return '#A7A7A7'
         if 'code' in context_label:
-            return '#58d68d'
-        return '#f7dc6f'
+            return '#B6B6B6'
+        return '#DADADA'
 
     def _meta_text_for_attachment(self, attachment):
         parts = []
@@ -632,7 +632,7 @@ class ChatInputTextEdit(QWidget):
             border_color = QColor(palette.SELECTION.lighter(115))
             bg_color = QColor(44, 44, 44, 244)
         elif self._is_focused:
-            border_color = QColor("#6a6a6a")
+            border_color = QColor("#6A6A6A")
             bg_color = QColor(43, 43, 43, 238)
         else:
             border_color = QColor(76, 76, 76, 180)
@@ -654,13 +654,13 @@ class ChatInputTextEdit(QWidget):
             }}
             QPlainTextEdit#blackHoleEditor {{
                 background-color: transparent;
-                color: #d4d4d4;
+                color: #D4D4D4;
                 border: none;
                 padding: 4px 6px 4px 6px;
-                selection-background-color: #264f78;
+                selection-background-color: #494949;
             }}
             QPlainTextEdit#blackHoleEditor:disabled {{
-                color: #7b7b7b;
+                color: #7B7B7B;
             }}
         """)
 

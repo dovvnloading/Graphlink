@@ -66,6 +66,8 @@ def get_scene_notes(scene):
 
 
 def get_scene_pins(scene):
+    if hasattr(scene, "ordered_navigation_pins"):
+        return scene.ordered_navigation_pins()
     return [item for item in scene.items() if isinstance(item, NavigationPin)]
 
 

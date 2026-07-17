@@ -132,7 +132,7 @@ class AnimatedWordLogo(QWidget):
             y_offset = (1.0 - ease_p) * 25.0
             
             if i < 5: 
-                color = QColor("#ffffff")
+                color = QColor("#FFFFFF")
             else:
                 color = QColor(palette.SELECTION)
                 
@@ -179,11 +179,11 @@ class SplashScreen(QWidget):
 
         self.setStyleSheet("""
             QWidget#splashContainer {
-                background-color: #1e1e1e;
+                background-color: #1E1E1E;
                 border-radius: 8px;
             }
             QLabel {
-                color: #717573;
+                color: #747474;
             }
         """)
         
