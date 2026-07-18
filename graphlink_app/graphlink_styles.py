@@ -566,24 +566,178 @@ class StyleSheet:
 # Defines the color presets available for Frames and Containers in the Dark theme.
 DARK_FRAME_COLORS = {
     "Green": {"color": "#838383", "type": "full"}, "Blue": {"color": "#828282", "type": "full"},
-    "Purple": {"color": "#7C7C7C", "type": "full"}, "Orange": {"color": "#818181", "type": "full"},
-    "Red": {"color": "#7C7C7C", "type": "full"}, "Yellow": {"color": "#8E8E8E", "type": "full"},
+    "Purple": {"color": "#7c7c7c", "type": "full"}, "Orange": {"color": "#818181", "type": "full"},
+    "Red": {"color": "#7c7c7c", "type": "full"}, "Yellow": {"color": "#8e8e8e", "type": "full"},
     "Mid Gray": {"color": "#595959", "type": "full"}, "Dark Gray": {"color": "#414141", "type": "full"},
     "Green Header": {"color": "#838383", "type": "header"}, "Blue Header": {"color": "#828282", "type": "header"},
-    "Purple Header": {"color": "#7C7C7C", "type": "header"}, "Orange Header": {"color": "#818181", "type": "header"},
-    "Red Header": {"color": "#7C7C7C", "type": "header"}, "Yellow Header": {"color": "#8E8E8E", "type": "header"}
+    "Purple Header": {"color": "#7c7c7c", "type": "header"}, "Orange Header": {"color": "#818181", "type": "header"},
+    "Red Header": {"color": "#7c7c7c", "type": "header"}, "Yellow Header": {"color": "#8e8e8e", "type": "header"}
 }
 
 # Defines the color presets available for Frames and Containers in the Monochromatic theme.
 MONO_FRAME_COLORS = {
     "Green": {"color": "#666666", "type": "full"}, "Blue": {"color": "#777777", "type": "full"},
-    "Purple": {"color": "#6A6A6A", "type": "full"}, "Orange": {"color": "#7A7A7A", "type": "full"},
+    "Purple": {"color": "#6a6a6a", "type": "full"}, "Orange": {"color": "#7a7a7a", "type": "full"},
     "Red": {"color": "#707070", "type": "full"}, "Yellow": {"color": "#808080", "type": "full"},
-    "Mid Gray": {"color": "#555555", "type": "full"}, "Dark Gray": {"color": "#3A3A3A", "type": "full"},
+    "Mid Gray": {"color": "#555555", "type": "full"}, "Dark Gray": {"color": "#3a3a3a", "type": "full"},
     "Green Header": {"color": "#666666", "type": "header"}, "Blue Header": {"color": "#777777", "type": "header"},
-    "Purple Header": {"color": "#6A6A6A", "type": "header"}, "Orange Header": {"color": "#7A7A7A", "type": "header"},
+    "Purple Header": {"color": "#6a6a6a", "type": "header"}, "Orange Header": {"color": "#7a7a7a", "type": "header"},
     "Red Header": {"color": "#707070", "type": "header"}, "Yellow Header": {"color": "#808080", "type": "header"}
 }
+
+MUTED_FRAME_COLORS = {
+    "Green": {"color": "#717171", "type": "full"}, "Blue": {"color": "#6d6d6d", "type": "full"},
+    "Purple": {"color": "#6b6b6b", "type": "full"}, "Orange": {"color": "#707070", "type": "full"},
+    "Red": {"color": "#6c6c6c", "type": "full"}, "Yellow": {"color": "#7c7c7c", "type": "full"},
+    "Mid Gray": {"color": "#4c4c4c", "type": "full"}, "Dark Gray": {"color": "#383838", "type": "full"},
+    "Green Header": {"color": "#717171", "type": "header"}, "Blue Header": {"color": "#6d6d6d", "type": "header"},
+    "Purple Header": {"color": "#6b6b6b", "type": "header"}, "Orange Header": {"color": "#707070", "type": "header"},
+    "Red Header": {"color": "#6c6c6c", "type": "header"}, "Yellow Header": {"color": "#7c7c7c", "type": "header"}
+}
+
+# Per-theme source of truth for the colors this app hands out through
+# ColorPalette / get_semantic_color / get_neutral_button_colors /
+# get_graph_node_colors. Each theme's values here are the exact resolved
+# output of those functions before this table existed (captured from the
+# running app, not retyped from the old per-theme branching logic), so every
+# consumer of those functions keeps seeing byte-identical colors while the
+# functions themselves become table lookups instead of separate per-theme
+# formulas.
+#
+# Not yet covered here: the three hand-written QSS stylesheet strings above
+# (deliberately deferred - see doc/FRONTEND_WEB_MIGRATION_MASTER_PLAN.md) and
+# the frame-color presets (DARK_FRAME_COLORS etc. below - ColorPalette.FRAME_COLORS
+# reads those dicts directly, not this table). This grouping (palette/semantic/
+# neutral_button/graph_node) mirrors the four functions that existed before this
+# table did, kept as-is here to keep this specific change byte-identical and
+# reviewable - it is not the target shape a later Tailwind/schema-codegen pass
+# will want (see the master plan's flatter token list) and should be expected
+# to be reshaped, not just extended, when that work starts.
+#
+# "graph_node" intentionally holds only its 6 members that are independent
+# theme literals (body_start/body_end/header_start/header_end/badge_fill/
+# panel_fill). The other 7 keys get_graph_node_colors() returns
+# (border/header/dot/hover_dot/hover_outline/selected_outline/panel_border)
+# are not independent tokens - they are aliases of, or QColor.lighter()
+# derivations from, get_neutral_button_colors()'s output (this is exactly
+# what the pre-this-table branching logic computed). Storing those 7 as their
+# own flat literals here would silently drift from neutral_button the next
+# time someone edits a theme's button colors without also updating 7 more
+# entries by hand; get_graph_node_colors() below derives them live instead.
+THEME_TOKENS = {
+    "dark": {
+        "palette": {
+            "user_node": "#838383",
+            "ai_node": "#828282",
+            "selection": "#858585",
+            "nav_highlight": "#949494",
+        },
+        "semantic": {
+            "search_highlight": "#949494",
+            "status_info": "#828282",
+            "status_success": "#838383",
+            "status_error": "#848484",
+            "status_warning": "#919191",
+            "artifact": "#828282",
+            "conversation_user_bubble": "#696969",
+            "conversation_ai_bubble": "#323232",
+            "default": "#858585",
+        },
+        "neutral_button": {
+            "background": "#393939",
+            "hover": "#484848",
+            "pressed": "#343434",
+            "border": "#585858",
+            "icon": "#f0f0f0",
+            "muted_icon": "#bdbdbd",
+        },
+        "graph_node": {
+            "body_start": "#303030",
+            "body_end": "#292929",
+            "header_start": "#3c3c3c",
+            "header_end": "#333333",
+            "badge_fill": "#484848",
+            "panel_fill": "#202020",
+        },
+    },
+    "mono": {
+        "palette": {
+            "user_node": "#999999",
+            "ai_node": "#bbbbbb",
+            "selection": "#ffffff",
+            "nav_highlight": "#dddddd",
+        },
+        "semantic": {
+            "search_highlight": "#dddddd",
+            "status_info": "#bbbbbb",
+            "status_success": "#999999",
+            "status_error": "#9a9a9a",
+            "status_warning": "#b0b0b0",
+            "artifact": "#8f8f8f",
+            "conversation_user_bubble": "#595959",
+            "conversation_ai_bubble": "#323232",
+            "default": "#ffffff",
+        },
+        "neutral_button": {
+            "background": "#555555",
+            "hover": "#666666",
+            "pressed": "#4a4a4a",
+            "border": "#666666",
+            "icon": "#ffffff",
+            "muted_icon": "#d5d5d5",
+        },
+        "graph_node": {
+            "body_start": "#303030",
+            "body_end": "#292929",
+            "header_start": "#3c3c3c",
+            "header_end": "#333333",
+            "badge_fill": "#484848",
+            "panel_fill": "#202020",
+        },
+    },
+    "muted": {
+        "palette": {
+            "user_node": "#757575",
+            "ai_node": "#707070",
+            "selection": "#848484",
+            "nav_highlight": "#8c8c8c",
+        },
+        "semantic": {
+            "search_highlight": "#8c8c8c",
+            "status_info": "#707070",
+            "status_success": "#757575",
+            "status_error": "#8a8a8a",
+            "status_warning": "#8d8d8d",
+            "artifact": "#707070",
+            "conversation_user_bubble": "#5e5e5e",
+            "conversation_ai_bubble": "#323232",
+            "default": "#848484",
+        },
+        "neutral_button": {
+            "background": "#3a3a3a",
+            "hover": "#484848",
+            "pressed": "#363636",
+            "border": "#5e5e5e",
+            "icon": "#dbdbdb",
+            "muted_icon": "#bababa",
+        },
+        "graph_node": {
+            "body_start": "#303030",
+            "body_end": "#282828",
+            "header_start": "#3d3d3d",
+            "header_end": "#333333",
+            "badge_fill": "#4a4a4a",
+            "panel_fill": "#1c1c1c",
+        },
+    },
+}
+
+_FRAME_COLORS_BY_THEME = {
+    "dark": DARK_FRAME_COLORS,
+    "mono": MONO_FRAME_COLORS,
+    "muted": MUTED_FRAME_COLORS,
+}
+
 
 class ColorPalette:
     """
@@ -608,56 +762,40 @@ class ColorPalette:
         self.NAV_HIGHLIGHT = QColor(nav_highlight)
         self.FRAME_COLORS = frame_colors
 
-# Concrete instance of the ColorPalette for the default dark theme.
-DARK_PALETTE = ColorPalette(
-    user_node="#838383",
-    ai_node="#828282",
-    selection="#858585",
-    nav_highlight="#949494",
-    frame_colors=DARK_FRAME_COLORS
-)
 
-# Concrete instance of the ColorPalette for the monochromatic theme.
-MONO_PALETTE = ColorPalette(
-    user_node="#999999",
-    ai_node="#BBBBBB",
-    selection="#FFFFFF",
-    nav_highlight="#DDDDDD",
-    frame_colors=MONO_FRAME_COLORS
-)
+def _build_palette(theme_name: str) -> "ColorPalette":
+    tokens = THEME_TOKENS[theme_name]["palette"]
+    return ColorPalette(
+        user_node=tokens["user_node"],
+        ai_node=tokens["ai_node"],
+        selection=tokens["selection"],
+        nav_highlight=tokens["nav_highlight"],
+        frame_colors=_FRAME_COLORS_BY_THEME[theme_name],
+    )
 
-MUTED_FRAME_COLORS = {
-    "Green": {"color": "#717171", "type": "full"}, "Blue": {"color": "#6D6D6D", "type": "full"},
-    "Purple": {"color": "#6B6B6B", "type": "full"}, "Orange": {"color": "#707070", "type": "full"},
-    "Red": {"color": "#6C6C6C", "type": "full"}, "Yellow": {"color": "#7C7C7C", "type": "full"},
-    "Mid Gray": {"color": "#4C4C4C", "type": "full"}, "Dark Gray": {"color": "#383838", "type": "full"},
-    "Green Header": {"color": "#717171", "type": "header"}, "Blue Header": {"color": "#6D6D6D", "type": "header"},
-    "Purple Header": {"color": "#6B6B6B", "type": "header"}, "Orange Header": {"color": "#707070", "type": "header"},
-    "Red Header": {"color": "#6C6C6C", "type": "header"}, "Yellow Header": {"color": "#7C7C7C", "type": "header"}
-}
 
-# Concrete instance of the ColorPalette for the muted theme.
-MUTED_PALETTE = ColorPalette(
-    user_node="#757575",
-    ai_node="#707070",
-    selection="#848484",
-    nav_highlight="#8C8C8C",
-    frame_colors=MUTED_FRAME_COLORS
-)
+# Concrete ColorPalette instance per theme, built from THEME_TOKENS above
+# instead of separately-maintained literals.
+DARK_PALETTE = _build_palette("dark")
+MONO_PALETTE = _build_palette("mono")
+MUTED_PALETTE = _build_palette("muted")
 
 # The main dictionary mapping theme names to their respective stylesheet and palette objects.
 # This is the central point for theme lookup in the application.
 THEMES = {
     "dark": {
         "stylesheet": StyleSheet.DARK_THEME.replace("__ASSET_DOWN_ARROW__", asset_url("down_arrow.png")),
-        "palette": DARK_PALETTE
+        "palette": DARK_PALETTE,
+        "tokens": THEME_TOKENS["dark"],
     },
     "muted": {
         "stylesheet": StyleSheet.MUTED_THEME,
-        "palette": MUTED_PALETTE
+        "palette": MUTED_PALETTE,
+        "tokens": THEME_TOKENS["muted"],
     },
     "mono": {
         "stylesheet": StyleSheet.MONOCHROMATIC_THEME,
-        "palette": MONO_PALETTE
+        "palette": MONO_PALETTE,
+        "tokens": THEME_TOKENS["mono"],
     }
 }

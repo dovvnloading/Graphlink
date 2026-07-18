@@ -90,7 +90,60 @@ export interface ComposerState {
     settingsShortcut: boolean;
     cancellation: boolean;
   };
-  theme: { mode: "dark" | "light"; accent: string; surface: string };
+  theme: ComposerTheme;
+}
+
+export interface ComposerThemePalette {
+  userNode: string;
+  aiNode: string;
+  selection: string;
+  navHighlight: string;
+}
+
+export interface ComposerThemeSemantic {
+  searchHighlight: string;
+  statusInfo: string;
+  statusSuccess: string;
+  statusError: string;
+  statusWarning: string;
+  artifact: string;
+  conversationUserBubble: string;
+  conversationAiBubble: string;
+  default: string;
+}
+
+export interface ComposerThemeNeutralButton {
+  background: string;
+  hover: string;
+  pressed: string;
+  border: string;
+  icon: string;
+  mutedIcon: string;
+}
+
+export interface ComposerThemeGraphNode {
+  border: string;
+  header: string;
+  dot: string;
+  hoverDot: string;
+  hoverOutline: string;
+  selectedOutline: string;
+  bodyStart: string;
+  bodyEnd: string;
+  headerStart: string;
+  headerEnd: string;
+  badgeFill: string;
+  panelFill: string;
+  panelBorder: string;
+}
+
+export interface ComposerTheme {
+  mode: "dark" | "light";
+  name: string;
+  palette: ComposerThemePalette;
+  semantic: ComposerThemeSemantic;
+  neutralButton: ComposerThemeNeutralButton;
+  graphNode: ComposerThemeGraphNode;
 }
 
 export const initialComposerState: ComposerState = {
@@ -144,5 +197,48 @@ export const initialComposerState: ComposerState = {
     settingsShortcut: true,
     cancellation: true,
   },
-  theme: { mode: "dark", accent: "#a0a0a0", surface: "#1d1d1d" },
+  theme: {
+    mode: "dark",
+    name: "dark",
+    palette: {
+      userNode: "#838383",
+      aiNode: "#828282",
+      selection: "#858585",
+      navHighlight: "#949494",
+    },
+    semantic: {
+      searchHighlight: "#949494",
+      statusInfo: "#828282",
+      statusSuccess: "#838383",
+      statusError: "#848484",
+      statusWarning: "#919191",
+      artifact: "#828282",
+      conversationUserBubble: "#696969",
+      conversationAiBubble: "#323232",
+      default: "#858585",
+    },
+    neutralButton: {
+      background: "#393939",
+      hover: "#484848",
+      pressed: "#343434",
+      border: "#585858",
+      icon: "#F0F0F0",
+      mutedIcon: "#BDBDBD",
+    },
+    graphNode: {
+      border: "#585858",
+      header: "#bdbdbd",
+      dot: "#585858",
+      hoverDot: "#484848",
+      hoverOutline: "#515151",
+      selectedOutline: "#595959",
+      bodyStart: "#303030",
+      bodyEnd: "#292929",
+      headerStart: "#3c3c3c",
+      headerEnd: "#333333",
+      badgeFill: "#484848",
+      panelFill: "#202020",
+      panelBorder: "#585858",
+    },
+  },
 };
