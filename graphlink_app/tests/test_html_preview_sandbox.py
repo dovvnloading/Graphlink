@@ -81,8 +81,8 @@ class TestHtmlViewNodeWebengineAvailabilityIsAtomic:
     """
 
     def test_true_and_shared_when_both_import_cleanly(self):
-        import graphlink_composer_web
         import graphlink_html_view
+        import graphlink_web_island_host
         import graphlink_webengine
 
         assert graphlink_html_view.WEBENGINE_AVAILABLE is True
@@ -90,6 +90,9 @@ class TestHtmlViewNodeWebengineAvailabilityIsAtomic:
         assert graphlink_html_view._harden_preview_web_view is (
             graphlink_webengine._harden_preview_web_view
         )
-        assert graphlink_composer_web._harden_preview_web_view is (
+        # graphlink_composer_web.ComposerWebHost no longer imports the hardening
+        # function directly - it inherits WebIslandHost, which does. This checks
+        # the actual current consumer, not a module that only re-exports it.
+        assert graphlink_web_island_host._harden_preview_web_view is (
             graphlink_webengine._harden_preview_web_view
         )

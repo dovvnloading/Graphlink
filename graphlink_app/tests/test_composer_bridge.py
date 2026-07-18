@@ -17,7 +17,7 @@ from graphlink_composer_popups import (
     composer_picker_list_height,
     composer_picker_position,
 )
-from graphlink_composer_web import _inline_bundle, _rounded_region
+from graphlink_web_island_host import _inline_bundle, _rounded_region
 
 
 class _Settings:
