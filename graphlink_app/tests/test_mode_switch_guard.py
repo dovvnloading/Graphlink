@@ -1,6 +1,6 @@
 """Tests for the mode-switch guard during an active main chat request.
 
-Partial coverage for doc/ARCHITECTURE_REVIEW_FINDINGS.md #9: the provider runtime is
+Partial coverage for the unsynchronized provider globals: the provider runtime is
 module-level mutable global state in api_provider, swapped by initialize_* while worker
 threads read it. The most user-reachable race was simply changing the mode combo while
 a response was streaming in - nothing prevented it, so the in-flight request could

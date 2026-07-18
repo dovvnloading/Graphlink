@@ -1,11 +1,11 @@
 """Tests for ChatWindow._iter_shutdown_threads()/_shutdown_background_threads().
 
-Regression coverage for two related bugs (see doc/ARCHITECTURE_REVIEW_FINDINGS.md #24):
+Regression coverage for two related bugs in the hand-maintained shutdown thread list:
 
 1. The shutdown list still named main_window.X_thread attributes (reasoning_thread,
    workflow_thread, graph_diff_thread, quality_gate_thread, code_review_thread,
    sandbox_thread, artifact_thread, gitlink_thread, and - once PyCoder got the same
-   per-node fix, see #21 and test_per_node_worker_threads.py - code_exec_thread and
+   per-node fix, see test_per_node_worker_threads.py - code_exec_thread and
    pycoder_exec_thread) that were removed from the window entirely once those plugins
    moved to a per-node node.worker_thread attribute. They were harmless no-ops
    (getattr(self, name, None) always returned None) but misleading.

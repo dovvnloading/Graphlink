@@ -1,12 +1,12 @@
 """Tests for the Gitlink write-gate's security boundary.
 
 _normalize_repo_path / _safe_local_target are the only thing standing between an
-LLM-proposed file path and a write to the user's local disk (see
-doc/PLUGIN_SYSTEM_REFACTOR_PLAN.md section 2.2 / 4.4).
+LLM-proposed file path and a write to the user's local disk, and they previously had
+zero test coverage despite being that entire security boundary.
 
 These now live in graphlink_plugins.gitlink.agent (extracted out of
-graphlink_plugin_gitlink.py along with GitlinkAgent - see section 4.4), which is what
-makes them directly importable here without any Qt widget or QApplication.
+graphlink_plugin_gitlink.py along with GitlinkAgent), which is what makes them directly
+importable here without any Qt widget or QApplication.
 """
 
 import sys

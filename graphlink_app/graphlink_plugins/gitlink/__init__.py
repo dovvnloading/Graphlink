@@ -1,1 +1,2 @@
-"""Qt-free Gitlink helper package (see doc/PLUGIN_SYSTEM_REFACTOR_PLAN.md section 4.4)."""
+"""Qt-free Gitlink helper package, split out so the agent and path-safety logic is
+testable without Qt."""

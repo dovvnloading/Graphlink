@@ -1,9 +1,8 @@
-"""Tests for three real Artifact plugin bugs fixed together (see
-doc/PLUGIN_SYSTEM_REFACTOR_PLAN.md section 4.1):
+"""Tests for three real Artifact plugin bugs fixed together:
 
 1. The stop button was visibly a "stop" icon while running but stayed disabled the
-   whole time, so clicking it did nothing - stop_artifact_node (wired via task #26)
-   was never reachable from the UI.
+   whole time, so clicking it did nothing - stop_artifact_node was never reachable
+   from the UI.
 2. ArtifactAgent.get_response silently treated the ENTIRE raw LLM response as the new
    document body whenever the model forgot the <artifact> tags, corrupting the
    document with whatever conversational text the model wrote instead.

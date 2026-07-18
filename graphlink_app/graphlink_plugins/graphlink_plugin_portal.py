@@ -23,15 +23,15 @@ from graphlink_memory import clone_history
 class PluginSpec:
     """Declarative metadata for one plugin node type.
 
-    Phase 1 of doc/PLUGIN_SYSTEM_REFACTOR_PLAN.md: introduced additively, alongside the
-    existing hand-written `_register_plugin` calls and `_create_X_node` factories on
-    PluginPortal below, which are unchanged by this. Other hardcoded per-plugin metadata
-    scattered around the app (graphlink_plugin_quality_gate.py's `_node_label`,
-    graphlink_plugin_workflow.py's `WORKFLOW_PLUGIN_ICONS`/`WORKFLOW_ALLOWED_PLUGINS`,
-    graphlink_window_actions.py's `_seed_plugin_prompt` isinstance chain, the isinstance
-    chains in graphlink_scene.py/graphlink_window.py, etc.) are candidates to migrate onto
-    this table one plugin at a time in later phases - this phase only builds the table
-    and does not rewire any existing consumer.
+    Introduced additively, alongside the existing hand-written `_register_plugin` calls
+    and `_create_X_node` factories on PluginPortal below, which are unchanged by this.
+    Other hardcoded per-plugin metadata scattered around the app
+    (graphlink_plugin_quality_gate.py's `_node_label`, graphlink_plugin_workflow.py's
+    `WORKFLOW_PLUGIN_ICONS`/`WORKFLOW_ALLOWED_PLUGINS`, graphlink_window_actions.py's
+    `_seed_plugin_prompt` isinstance chain, the isinstance chains in
+    graphlink_scene.py/graphlink_window.py, etc.) are candidates to migrate onto this
+    table one plugin at a time - so far it only builds the table and does not rewire any
+    existing consumer.
     """
     key: str
     display_name: str
@@ -326,13 +326,13 @@ class PluginPortal:
         no_selection_message,
         invalid_parent_message=None,
     ):
-        """Generic single-parent plugin node factory (Phase 2 of doc/PLUGIN_SYSTEM_REFACTOR_PLAN.md).
+        """Generic single-parent plugin node factory.
 
         Handles the ~15-line skeleton duplicated across most `_create_X_node` methods:
         resolve/validate the parent, construct the node, wire it into the parent's
         children, optionally clone conversation history, position it, and register both
-        the node and its connection with the scene's existing (still hardcoded, see
-        PLUGIN_SYSTEM_REFACTOR_PLAN.md section 3.3) node/connection lists.
+        the node and its connection with the scene's existing (still hardcoded
+        per-plugin) node/connection lists.
 
         Plugins with a genuinely different creation contract don't use this - e.g. System
         Prompt attaches to the graph root rather than branching from a selection - they
@@ -348,8 +348,8 @@ class PluginPortal:
         `scene.artifact_nodes`) rather than looked up by name, since the per-plugin scene
         attribute names don't consistently derive from the plugin's registry key (e.g.
         the "html_renderer" plugin's list is `scene.html_view_nodes`, named after the
-        node class instead) - see PLUGIN_SYSTEM_REFACTOR_PLAN.md section 3.3 for the
-        planned follow-up that would let this be looked up generically too.
+        node class instead). Keying those lists off the plugin key would let this be
+        looked up generically too, but that is a separate scene-wide change.
         """
         scene = self.main_window.chat_view.scene()
         selected_node = self.main_window.current_node

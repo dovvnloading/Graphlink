@@ -1,4 +1,4 @@
-"""Tests for ChatScene's node-list composition helpers (Phase 5).
+"""Tests for ChatScene's node-list composition helpers.
 
 graphlink_scene.py already defined _all_conversational_nodes()/_all_content_nodes()/
 _all_layout_nodes() (a union of the 12 plugin node lists plus self.nodes, content

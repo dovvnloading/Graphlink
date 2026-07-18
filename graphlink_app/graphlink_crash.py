@@ -3,7 +3,7 @@ next-launch "did we crash last time" notice.
 
 Before this, a windowed app with no console meant every unhandled exception and every
 native Qt/llama.cpp fault was invisible - the user saw nothing, and the maintainer had no
-way to know a session died or why (see doc/PRODUCTION_ROADMAP.md #5 "Crash reporting").
+way to know a session died or why.
 
 Three capture channels, installed by install_crash_handlers() as the first thing
 graphlink_app.main() does (before QApplication exists):

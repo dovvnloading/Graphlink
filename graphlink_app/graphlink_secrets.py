@@ -1,9 +1,9 @@
 """Secret-at-rest protection for settings values.
 
 API keys and the GitHub token used to be stored as plaintext JSON in
-~/.graphlink/session.dat (doc/ARCHITECTURE_REVIEW_FINDINGS.md #14). This module wraps
-Windows DPAPI (CryptProtectData/CryptUnprotectData via ctypes - no new dependencies)
-so those values are encrypted at rest, bound to the current Windows user account.
+~/.graphlink/session.dat, world-readable by default. This module wraps Windows DPAPI
+(CryptProtectData/CryptUnprotectData via ctypes - no new dependencies) so those
+values are encrypted at rest, bound to the current Windows user account.
 
 Storage format: "dpapi:" + base64(DPAPI blob), kept in the same JSON string fields as
 before, so the settings file shape and the atomic-write machinery are unchanged.

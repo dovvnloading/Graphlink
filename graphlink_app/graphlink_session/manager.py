@@ -23,7 +23,7 @@ class ChatSessionManager:
         # and the next autosave would then overwrite the wrong chat's row (silent data
         # loss). `_context_epoch` bumps on every switch; `_saving_epoch` records the epoch
         # a save started under, and _on_save_finished only adopts the result if they still
-        # match. See doc/ARCHITECTURE_REVIEW_FINDINGS.md.
+        # match.
         self._context_epoch = 0
         self._saving_epoch = 0
         self.serializer = SceneSerializer(window) if window else None
@@ -51,7 +51,7 @@ class ChatSessionManager:
         the epoch lets _on_save_finished recognize its result as stale so it does not
         restore the previous chat_id over the newly-active one. Callers that reassign
         `current_chat_id` for a context switch (ChatWindow.new_chat, load_chat) must call
-        this. See doc/ARCHITECTURE_REVIEW_FINDINGS.md.
+        this.
         """
         self._context_epoch += 1
         if self.window and hasattr(self.window, "invalidate_chart_requests"):

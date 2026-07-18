@@ -272,8 +272,7 @@ class ChatDatabase:
         """Persist the chat blob, notes, and pins as a single transaction.
 
         save_chat/update_chat/save_notes/save_pins each previously opened their own
-        connection and committed independently (see
-        doc/ARCHITECTURE_REVIEW_FINDINGS.md #52) - a crash between any two of those
+        connection and committed independently - a crash between any two of those
         steps left the chat row, notes, and pins inconsistent with each other. Here
         they share one connection, so Python's sqlite3 context manager commits all
         three together on success or rolls all three back together on any exception.
@@ -332,9 +331,8 @@ class ChatDatabase:
 
     def get_chat_title(self, chat_id):
         # Callers that only need the title (e.g. the window title bar) shouldn't pay
-        # for reading and json.loads()-ing the full chat payload - see
-        # doc/ARCHITECTURE_REVIEW_FINDINGS.md #45/#50 on how large that payload can get
-        # (every node, connection, and base64-inlined image in the chat).
+        # for reading and json.loads()-ing the full chat payload, which can be multiple
+        # megabytes (every node, connection, and base64-inlined image in the chat).
         with self._connect() as conn:
             result = conn.execute(
                 "SELECT title FROM chats WHERE id = ?",

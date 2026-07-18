@@ -33,7 +33,8 @@ dependencies = [
 
 # llama-cpp-python is lazily imported (api_provider._load_llama_cpp_class) only when
 # Llama.cpp local mode is actually used - Ollama is the built-in local path, so it is an
-# opt-in extra rather than a hard dependency. See doc/PRODUCTION_ROADMAP.md Section 4.
+# opt-in extra rather than a hard dependency: it is a heavy native build with no wheels
+# for newer Python versions, so requiring it would break installs for most users.
 [project.optional-dependencies]
 llamacpp = ["llama-cpp-python"]
 dev = ["pytest"]

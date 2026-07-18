@@ -7,10 +7,10 @@ configuration problem. Previously this raised immediately on the first occurrenc
 the identical request is retried up to 3 total attempts before surfacing an error, and
 only the terminal failure (all attempts exhausted) is raised to the caller.
 
-A short backoff now runs between attempts (see doc/ARCHITECTURE_REVIEW_FINDINGS.md #36 -
-previously attempts were re-sent with no delay at all). Every test here patches
-api_provider.time.sleep to a no-op so the suite doesn't actually pause for real -
-test_backoff_between_attempts specifically asserts the backoff is invoked.
+A short backoff now runs between attempts (previously they were re-sent with no delay
+at all). Every test here patches api_provider.time.sleep to a no-op so the suite
+doesn't actually pause for real - test_backoff_between_attempts specifically asserts
+the backoff is invoked.
 """
 
 import sys

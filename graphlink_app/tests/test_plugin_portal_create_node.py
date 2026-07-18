@@ -1,11 +1,10 @@
 """Tests for PluginPortal.create_node() and its first consumer, _create_artifact_node.
 
-doc/PLUGIN_SYSTEM_REFACTOR_PLAN.md Phase 2: create_node() is the generic single-parent
-plugin node factory meant to replace the ~15-line skeleton duplicated across most
-_create_X_node methods (resolve/validate parent, construct, wire into children,
-position, register with the scene). _create_artifact_node is migrated onto it here as
-the first proof; the other 12 _create_X_node methods are migrated one at a time in
-later phases, not all at once.
+create_node() is the generic single-parent plugin node factory meant to replace the
+~15-line skeleton duplicated across most _create_X_node methods (resolve/validate
+parent, construct, wire into children, position, register with the scene).
+_create_artifact_node is migrated onto it here as the first proof; the other 12
+_create_X_node methods are migrated one at a time later, not all at once.
 
 These tests use a lightweight fake scene/main_window rather than real Qt scene/window
 objects (which need a running app with a loaded chat) - only the handful of attributes
@@ -81,8 +80,8 @@ def test_create_artifact_node_wires_artifact_requested_to_main_window():
 
 def test_create_artifact_node_wires_stop_requested_to_main_window():
     # stop_requested is what makes the node's dual-purpose button's "stop" state
-    # actually do something (see doc/PLUGIN_SYSTEM_REFACTOR_PLAN.md section 4.1/§31) -
-    # this locks in that _create_artifact_node wires it alongside artifact_requested.
+    # actually do something (before it existed, the stop icon was cosmetic) - this
+    # locks in that _create_artifact_node wires it alongside artifact_requested.
     portal, main_window, scene, parent = _make_portal_and_parent()
     result = portal._create_artifact_node()
 

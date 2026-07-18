@@ -1,10 +1,10 @@
 """Tests that chat requests resolve the branch system prompt on the GUI thread.
 
-Regression coverage for doc/ARCHITECTURE_REVIEW_FINDINGS.md #20: ChatWorker.run used to
-walk live QGraphicsScene objects (current_node.parent_node -> .scene() ->
-system_prompt_connections -> prompt_note.content) from inside the worker thread. Since
-QGraphicsScene is not thread-safe, a concurrent node deletion / scene.clear() on the GUI
-thread could race that walk and crash or read torn state.
+Regression coverage for a cross-thread scene read: ChatWorker.run used to walk live
+QGraphicsScene objects (current_node.parent_node -> .scene() -> system_prompt_connections
+-> prompt_note.content) from inside the worker thread. Since QGraphicsScene is not
+thread-safe, a concurrent node deletion / scene.clear() on the GUI thread could race that
+walk and crash or read torn state.
 
 The fix resolves the branch system prompt via resolve_branch_system_prompt() on the GUI
 thread (in ChatWorkerThread.__init__, which runs on the caller's thread) and hands the
@@ -56,10 +56,10 @@ class _ExplodingNode:
     """Any scene access on this raises - proves the worker path never touches it."""
     @property
     def parent_node(self):
-        raise AssertionError("worker thread walked the scene graph (#20 regression)")
+        raise AssertionError("worker thread walked the scene graph (regression)")
 
     def scene(self):
-        raise AssertionError("worker thread called scene() (#20 regression)")
+        raise AssertionError("worker thread called scene() (regression)")
 
 
 class TestResolveBranchSystemPrompt:

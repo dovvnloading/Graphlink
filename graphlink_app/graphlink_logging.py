@@ -3,9 +3,9 @@
 Nothing in the app ever configured Python's logging module - the one existing
 logging.exception() call (graphlink_session/content_codec.py, for corrupted image
 data during deserialization) went to Python's "handler of last resort" (stderr),
-which is invisible in a windowed app with no console (see
-doc/ARCHITECTURE_REVIEW_FINDINGS.md #63). This wires up a rotating log file instead so
-anything that does call logging.* has somewhere durable and inspectable to land.
+which is invisible in a windowed app with no console. This wires up a rotating log
+file instead so anything that does call logging.* has somewhere durable and
+inspectable to land.
 
 This is infrastructure only - it does not convert the app's print()/except: pass call
 sites to use logging. That's a much larger, more judgment-heavy change left open.

@@ -10,19 +10,18 @@ whatever main_window.sandbox_thread currently was - meaning clicking "stop" on o
 sandbox node could stop a *different*, more-recently-started concurrent sandbox node's
 execution instead of (or as well as) its own.
 
-Graphlink-Reasoning got the same fix later, as part of its full redesign (see
-doc/PLUGIN_SYSTEM_REFACTOR_PLAN.md section 4.10): it predates graphlink_plugins/ entirely
-so it never got task #26's fix along with the other six - it had the shared
-main_window.reasoning_thread attribute AND no stop capability of any kind (no
-node.worker_thread, no stop_reasoning_node method at all).
+Graphlink-Reasoning got the same fix later, as part of its full redesign: it predates
+graphlink_plugins/ entirely, so it never got fixed along with the other six - it had
+the shared main_window.reasoning_thread attribute AND no stop capability of any kind
+(no node.worker_thread, no stop_reasoning_node method at all).
 
-PyCoderNode had the same bug and was still unfixed as of
-doc/ARCHITECTURE_REVIEW_FINDINGS.md #21: stop_pycoder_node(pycoder_node) took a specific
-node argument but stopped main_window.code_exec_thread/pycoder_exec_thread - single
-attributes shared across every PyCoderNode - so clicking "stop" on one node could stop a
-different, more-recently-started concurrent PyCoderNode's execution instead of (or as
-well as) its own. Fixed the same way as Code Sandbox: both CodeExecutionWorker (MANUAL
-mode) and PyCoderExecutionWorker (AI_DRIVEN mode) are now stored on the owning
+PyCoderNode had the same bug and was the last one still unfixed:
+stop_pycoder_node(pycoder_node) took a specific node argument but stopped
+main_window.code_exec_thread/pycoder_exec_thread - single attributes shared across every
+PyCoderNode - so clicking "stop" on one node could stop a different,
+more-recently-started concurrent PyCoderNode's execution instead of (or as well as) its
+own. Fixed the same way as Code Sandbox: both CodeExecutionWorker (MANUAL mode) and
+PyCoderExecutionWorker (AI_DRIVEN mode) are now stored on the owning
 pycoder_node.worker_thread instead.
 
 These tests use WindowActionsMixin directly (a bare mixin - the methods only need the

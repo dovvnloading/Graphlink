@@ -1,11 +1,10 @@
 """Tests for the HTML Renderer network-egress sandbox (graphlink_html_view).
 
-Regression coverage for the HTML-Renderer arbitrary-egress issue
-(doc/ARCHITECTURE_REVIEW_FINDINGS.md): the HTML Renderer node auto-renders AI-generated
-and session-loaded markup in a QWebEngineView with JavaScript enabled and no restrictions,
-so an injected <script>/onerror payload could exfiltrate page content to a remote host or
-hit the user's localhost/intranet (SSRF/CSRF). A local-only request interceptor now blocks
-every request whose scheme would leave the machine.
+Regression coverage for the HTML-Renderer arbitrary-egress issue: the node auto-renders
+AI-generated and session-loaded markup in a QWebEngineView with JavaScript enabled and
+no restrictions, so an injected <script>/onerror payload could exfiltrate page content
+to a remote host or hit the user's localhost/intranet (SSRF/CSRF). A local-only request
+interceptor now blocks every request whose scheme would leave the machine.
 
 The block/allow decision is factored into the pure function preview_url_is_allowed(QUrl),
 tested here directly so coverage doesn't require a live QtWebEngine/GPU context (which

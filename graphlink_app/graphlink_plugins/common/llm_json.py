@@ -2,18 +2,16 @@
 
 Extracted from independently hand-rolled, near-identical code in
 graphlink_plugin_code_review.py, graphlink_plugin_quality_gate.py,
-graphlink_plugin_workflow.py, and graphlink_plugin_gitlink.py (see
-doc/PLUGIN_SYSTEM_REFACTOR_PLAN.md section 1.6/3.5): all four independently
+graphlink_plugin_workflow.py, and graphlink_plugin_gitlink.py: all four independently
 implemented the exact same regex-based JSON-fence-stripping logic.
 
 This is deliberately a pair of plain functions rather than a shared base class with a
-get_response() template method (as originally sketched in the refactor plan). The three
-plugins that also share the "call the LLM, then parse JSON" shape turned out to differ
-in exactly where fallback/normalization happens relative to the try/except (see
-call_llm_and_parse_json's docstring) - forcing that into one template method would have
-meant parameterizing around the difference or risking a subtle behavior change, so each
-plugin keeps its own try/except/fallback control flow and just calls these functions
-instead of duplicating their bodies.
+get_response() template method. The three plugins that also share the "call the LLM,
+then parse JSON" shape turned out to differ in exactly where fallback/normalization
+happens relative to the try/except (see call_llm_and_parse_json's docstring) - forcing
+that into one template method would have meant parameterizing around the difference or
+risking a subtle behavior change, so each plugin keeps its own try/except/fallback
+control flow and just calls these functions instead of duplicating their bodies.
 """
 
 import json

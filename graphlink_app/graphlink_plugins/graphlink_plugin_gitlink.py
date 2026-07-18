@@ -674,9 +674,9 @@ class GitlinkNode(QGraphicsObject, HoverAnimationMixin):
         self.workspace_tabs.addTab(self.preview_editor, qta.icon("fa5s.columns", color="#CCCCCC"), "Preview")
 
     def _get_github_token(self):
-        # Delegates to the shared GitHubRestClient (doc/PLUGIN_SYSTEM_REFACTOR_PLAN.md
-        # section 1.6/4.2) - kept as a thin wrapper so every existing call site in this
-        # file (load_github_repositories, _resolve_repo_and_branch, etc.) is unchanged.
+        # Delegates to the GitHubRestClient shared with Code Review - kept as a thin
+        # wrapper so every existing call site in this file (load_github_repositories,
+        # _resolve_repo_and_branch, etc.) is unchanged.
         return self._github_client.get_token()
 
     def _github_headers(self):

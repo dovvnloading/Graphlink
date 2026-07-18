@@ -1,6 +1,6 @@
 """Tests for the Py-Coder execution approval gate.
 
-Regression coverage for doc/ARCHITECTURE_REVIEW_FINDINGS.md #15: Py-Coder's AI_DRIVEN
+Regression coverage for ungated AI-generated code execution: Py-Coder's AI_DRIVEN
 mode executed LLM-generated code in a completely unsandboxed REPL subprocess (full
 user-account privileges) with no approval step, while the newer Code Sandbox plugin has
 always had an explicit approval dialog for the same threat - an inconsistent trust model.

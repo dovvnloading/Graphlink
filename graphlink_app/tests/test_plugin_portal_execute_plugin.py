@@ -1,5 +1,4 @@
-"""Tests for PluginPortal.execute_plugin's not-found path (see
-doc/PLUGIN_SYSTEM_REFACTOR_PLAN.md section 3.6/§4.8).
+"""Tests for PluginPortal.execute_plugin's not-found path.
 
 execute_plugin used to handle an unrecognized plugin_name with print() + return None -
 a real, silent failure, since instantiate_seeded_plugin() in graphlink_window_actions.py

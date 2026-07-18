@@ -1,4 +1,4 @@
-"""Regression test for doc/ARCHITECTURE_REVIEW_FINDINGS.md #19: large-paste and
+"""Regression test for silent data mangling in temp attachments: large-paste and
 dropped-text attachments were written to temp files with errors="ignore", which
 silently drops any character Python can't encode to UTF-8 (e.g. an unpaired surrogate
 from a malformed Windows clipboard/drop payload) with no trace in the saved attachment.

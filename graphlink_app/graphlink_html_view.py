@@ -44,7 +44,7 @@ def preview_url_is_allowed(url):
     otherwise exfiltrate page content to a remote host or hit the user's localhost/intranet
     (SSRF/CSRF from their network position). We treat the preview as an offline sandbox:
     only local, self-contained schemes are permitted; any request that would leave the
-    machine is blocked. See doc/ARCHITECTURE_REVIEW_FINDINGS.md.
+    machine is blocked.
     """
     try:
         scheme = (url.scheme() or "").lower()

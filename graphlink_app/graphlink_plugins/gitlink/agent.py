@@ -1,6 +1,5 @@
 """Gitlink's Qt-free path-safety helpers, XML context formatting, and GitlinkAgent
-(the LLM change-proposal agent), extracted out of graphlink_plugin_gitlink.py - see
-doc/PLUGIN_SYSTEM_REFACTOR_PLAN.md section 4.4.
+(the LLM change-proposal agent), extracted out of graphlink_plugin_gitlink.py.
 
 _normalize_repo_path / _safe_local_target are the security boundary between an
 LLM-proposed file path and a write to the user's local disk - keeping them Qt-free and
@@ -117,8 +116,8 @@ def _truncate_for_context(source_text, max_chars=MAX_FILE_CONTEXT_CHARS):
 
 
 def _extract_json_object(raw_text):
-    # Delegates to the shared regex (doc/PLUGIN_SYSTEM_REFACTOR_PLAN.md section
-    # 1.6/3.5) - kept as a wrapper so this function's existing call site is unchanged.
+    # Delegates to the regex shared with the other JSON-returning plugin agents - kept
+    # as a wrapper so this function's existing call site is unchanged.
     return extract_json_object(raw_text)
 
 

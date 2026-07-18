@@ -1,4 +1,4 @@
-"""Tests for the shared GitHubRestClient (Phase 3a of doc/PLUGIN_SYSTEM_REFACTOR_PLAN.md).
+"""Tests for the shared GitHubRestClient.
 
 graphlink_plugin_code_review.py and graphlink_plugin_gitlink.py used to each hand-roll
 their own _get_github_token/_github_headers/_github_request with identical token

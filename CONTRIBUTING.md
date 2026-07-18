@@ -32,6 +32,17 @@ If you prefer Visual Studio, open `graphlink_app.sln`.
 - Treat top-level wrapper modules such as `graphlink_plugin_gitlink.py` as compatibility facades unless the change is specifically about import stability.
 - Keep changes focused. UI cleanup, plugin behavior, persistence updates, and provider changes should be easy to review independently.
 
+## Git & GitHub Workflow
+
+The standing branch → push → PR → merge process for this repository. It codifies what the commit history already does in practice, so it does not have to be re-derived each time.
+
+- **Never commit directly to `main`.** Every change gets a topic branch.
+- **Branch naming:** `agent/<short-kebab-slug>` for AI-agent-authored work (Claude Code, Codex, or similar), or a short descriptive kebab-case slug for human-authored branches. Examples from history: `agent/composer-react-qwebengine`, `agent/sota-model-settings`, `codex/navigation-pins-refactor`.
+- **Scope each branch to one reviewable unit of work** — the same "keep changes focused" rule from Development Rules, applied at the branch level. Large multi-part efforts should land as a sequence of scoped branches and PRs rather than one oversized branch.
+- **Push the branch to `origin`**, then open a pull request against `main` using `.github/pull_request_template.md`.
+- **Run local validation before opening the PR** (see Validation below). There is no automated CI — GitHub Actions and Dependabot were intentionally removed in commit `185143a` — so this local pass is the only gate.
+- **Merge strategy: squash-merge into `main`**, then delete the branch. Merged commit titles carry the PR number, e.g. `Refactor navigation pins and interaction surfaces (#17)`.
+
 ## Pull Request Expectations
 
 Please include:

@@ -1,8 +1,7 @@
 """Shared GitHub REST client for plugins that read repository data.
 
 Extracted from near-identical code independently hand-rolled in
-graphlink_plugin_code_review.py and graphlink_plugin_gitlink.py (see
-doc/PLUGIN_SYSTEM_REFACTOR_PLAN.md section 1.6/4.2/4.4): token retrieval, header
+graphlink_plugin_code_review.py and graphlink_plugin_gitlink.py: token retrieval, header
 construction, and HTTP-status-to-user-facing-error mapping were copy-pasted between
 the two files, so a fix (e.g. to rate-limit handling) in one would not reach the other.
 

@@ -1,8 +1,8 @@
 """Tests for graphlink_crash - crash capture, redaction, and the clean-shutdown sentinel.
 
-Regression coverage for doc/PRODUCTION_ROADMAP.md Section 5 "Crash reporting": a windowed
-app with no console previously made every unhandled exception and native fault invisible.
-This pins down two properties that matter most:
+Regression coverage for silent crashes: a windowed app with no console previously made
+every unhandled exception and native fault invisible. This pins down two properties that
+matter most:
 
 1. Redaction is structural: build_crash_report() only ever reads sys.exc_info()-shaped
    arguments plus an explicit `context` dict the caller passes - it never reaches into app
