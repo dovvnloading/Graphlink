@@ -23,7 +23,7 @@ try:
     from PySide6.QtWebChannel import QWebChannel
     from PySide6.QtWebEngineWidgets import QWebEngineView
 
-    from graphlink_html_view import WEBENGINE_AVAILABLE, _harden_preview_web_view
+    from graphlink_webengine import WEBENGINE_AVAILABLE, _harden_preview_web_view
 except ImportError:
     QWebChannel = None
     QWebEngineView = None
