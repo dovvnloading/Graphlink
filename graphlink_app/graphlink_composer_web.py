@@ -234,16 +234,16 @@ class ComposerWebHost(QFrame):
 
     def set_context_items(self, items):
         self.controller.set_attachments(items or [])
-        self.bridge._publish()
+        self.bridge.publish()
 
     def set_context_anchor(self, node):
-        self.bridge._publish()
+        self.bridge.publish()
 
     def set_provider_status(self, text, tooltip=""):
         # Route is derived from SettingsManager in the bridge; this method is
         # retained for the legacy ChatWindow call site during migration.
         self._provider_status = str(text or "")
-        self.bridge._publish()
+        self.bridge.publish()
 
     def set_request_state(self, active=False, cancel_pending=False, message=""):
         self._request_message = str(message or "")
@@ -253,7 +253,7 @@ class ComposerWebHost(QFrame):
         self._editor_enabled = bool(enabled)
 
     def on_theme_changed(self):
-        self.bridge._publish()
+        self.bridge.publish()
 
     def prepare_for_shutdown(self):
         """Stop web content callbacks before Qt tears down the application."""
