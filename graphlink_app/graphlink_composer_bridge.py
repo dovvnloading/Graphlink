@@ -16,6 +16,7 @@ from PySide6.QtCore import QObject, Signal, Slot
 import graphlink_config as config
 from graphlink_composer import ComposerController
 from graphlink_config import get_current_palette
+from graphlink_island_bridge import IslandBridge
 
 
 _MAX_DRAFT_CHARS = 100_000
@@ -70,45 +71,87 @@ def _model_option(
     }
 
 
-class ComposerBridge(QObject):
-    """QWebChannel object with a stable, versioned state contract."""
+class ComposerBridge(IslandBridge, QObject):
+    """QWebChannel object with a stable, versioned state contract.
+
+    State/lifecycle (publish/dispose, schemaVersion, revision) come from
+    IslandBridge and are transport-agnostic; this class supplies the composer's
+    own state payload plus the Qt-specific wiring QWebChannel requires
+    (Signals for outbound state, Slots for inbound intents).
+
+    IslandBridge only abstracts the outbound *state* channel (publish() ->
+    _transport_send()). It intentionally does not cover: inbound intent
+    dispatch (the @Slot methods below are 100% QWebChannel-shaped - a
+    non-Qt transport would expose the same plain methods with no decorator,
+    which is harmless, since the decorators are additive Qt metadata) or any
+    Qt Signal emitted directly from inside an intent handler rather than
+    through publish(). heightRequested is the one case of the latter with a
+    real consumer (ComposerWebHost.resize -> _apply_requested_height); it is
+    a second, Python-to-Python (not Python-to-JS) Qt-only channel a future
+    non-Qt host will need its own solution for (e.g. CSS/ResizeObserver-based
+    auto-sizing), not something IslandBridge should grow to cover. draftChanged
+    and contextReviewChanged below are unconsumed today (nothing connects to
+    them) but would have the same problem the moment something does.
+    Also out of scope here: ComposerController (self.controller) is itself a
+    QObject emitting Qt Signals - the republish *trigger*, not just the
+    publish path, still assumes Qt underneath this refactor.
+    """
 
     stateChanged = Signal(str)
-    draftChanged = Signal(str)
+    draftChanged = Signal(str)  # unconsumed; see class docstring
     contextReviewChanged = Signal(str)
     streamDelta = Signal(str)
     requestCompleted = Signal(str)
     requestFailed = Signal(str)
     routeChanged = Signal(str)
     themeChanged = Signal(str)
-    heightRequested = Signal(int)
+    heightRequested = Signal(int)  # Qt-only side channel; see class docstring
 
     def __init__(self, window, controller: ComposerController | None = None, parent=None):
-        super().__init__(parent)
+        QObject.__init__(self, parent)
+        IslandBridge.__init__(self)
         self.window = window
         self.controller = controller or getattr(window, "composer_controller", None)
         if self.controller is None:
             self.controller = ComposerController(self)
-        self._revision = 0
         self._attachment_paths: dict[str, str] = {}
         self._last_height = 0
         self.controller.draftChanged.connect(self._on_draft_changed)
         self.controller.stateChanged.connect(self._on_controller_state_changed)
 
+    def _transport_send(self, payload_json: str) -> None:
+        self.stateChanged.emit(payload_json)
+
+    def _after_publish(self, payload, serialized) -> None:
+        # Preserve today's theme broadcast (nothing on the JS side connects to
+        # it yet); scheduled for removal alongside the theme-token-table work,
+        # not this refactor.
+        self.themeChanged.emit(json.dumps(payload["theme"], sort_keys=True))
+
+    def _on_dispose(self) -> None:
+        try:
+            self.controller.draftChanged.disconnect(self._on_draft_changed)
+        except (RuntimeError, TypeError):
+            pass
+        try:
+            self.controller.stateChanged.disconnect(self._on_controller_state_changed)
+        except (RuntimeError, TypeError):
+            pass
+
     @Slot()
     def ready(self):
-        self._publish()
+        self.publish()
 
     @Slot(str)
     def updateDraft(self, text: str):
         normalized = str(text or "")[:_MAX_DRAFT_CHARS]
         self.controller.update_text(normalized)
         self.draftChanged.emit(normalized)
-        self._publish()
+        self.publish()
 
     @Slot()
     def send(self):
-        state = self._state_payload()
+        state = self._build_state_payload()
         if state["request"]["state"] in _ACTIVE_STATES:
             return
         if not state["request"]["canSend"]:
@@ -116,7 +159,7 @@ class ComposerBridge(QObject):
         send_message = getattr(self.window, "send_message", None)
         if callable(send_message):
             send_message()
-            self._publish()
+            self.publish()
 
     @Slot()
     @Slot(str)
@@ -126,14 +169,14 @@ class ComposerBridge(QObject):
         callback = getattr(self.window, "_main_request_cancel_callback", None)
         if callable(callback):
             callback()
-            self._publish()
+            self.publish()
             return
         self.controller.cancel(request_id or None)
-        self._publish()
+        self.publish()
 
     @Slot()
     def reviewContext(self):
-        context = self._state_payload()["context"]
+        context = self._build_state_payload()["context"]
         open_context = getattr(self.window, "open_composer_context_popup", None)
         if callable(open_context):
             open_context(context)
@@ -152,7 +195,7 @@ class ComposerBridge(QObject):
         stage_paste = getattr(self.window, "_handle_large_paste_from_input", None)
         if callable(stage_paste):
             stage_paste(str(text or ""))
-            self._publish()
+            self.publish()
 
     @Slot(str)
     def removeContextItem(self, item_id: str):
@@ -160,12 +203,12 @@ class ComposerBridge(QObject):
         remove = getattr(self.window, "_handle_attachment_pill_removed", None)
         if path and callable(remove):
             remove(path)
-            self._publish()
+            self.publish()
 
     @Slot(str)
     def selectModel(self, model_id: str):
         """Persist and activate the chat model selected in the composer."""
-        if self._state_payload()["request"]["state"] in _ACTIVE_STATES:
+        if self._build_state_payload()["request"]["state"] in _ACTIVE_STATES:
             return
         model_id = str(model_id or "").strip()
         if not model_id:
@@ -197,14 +240,14 @@ class ComposerBridge(QObject):
                 )
 
             self._notify_settings_changed()
-            self._publish()
+            self.publish()
         except Exception as exc:
             self._show_configuration_error(f"Model selection failed: {exc}")
 
     @Slot(str)
     def setReasoningLevel(self, level: str):
         """Persist and activate the composer reasoning level."""
-        if self._state_payload()["request"]["state"] in _ACTIVE_STATES:
+        if self._build_state_payload()["request"]["state"] in _ACTIVE_STATES:
             return
 
         normalized = "Thinking" if str(level or "").strip().lower() == "thinking" else "Quick"
@@ -225,7 +268,7 @@ class ComposerBridge(QObject):
                 api_provider.set_ollama_reasoning_mode(normalized)
 
             self._notify_settings_changed()
-            self._publish()
+            self.publish()
         except Exception as exc:
             self._show_configuration_error(f"Reasoning setting failed: {exc}")
 
@@ -273,10 +316,10 @@ class ComposerBridge(QObject):
         self.heightRequested.emit(bounded)
 
     def _on_draft_changed(self, draft):
-        self._publish()
+        self.publish()
 
     def _on_controller_state_changed(self, state, message):
-        self._publish()
+        self.publish()
 
     def _context_anchor(self) -> dict[str, str] | None:
         node = getattr(self.window, "current_node", None)
@@ -519,7 +562,7 @@ class ComposerBridge(QObject):
             accent = "#A6A6A6"
         return {"mode": "dark", "accent": accent, "surface": "#1F1F1F"}
 
-    def _state_payload(self) -> dict[str, Any]:
+    def _build_state_payload(self) -> dict[str, Any]:
         draft = self.controller.draft
         anchor = self._context_anchor()
         items = self._context_items()
@@ -536,9 +579,8 @@ class ComposerBridge(QObject):
         # anchor. Attachments are valid input; an anchor alone is reviewable
         # context, not a sendable request.
         has_input = bool(str(draft.text or "").strip() or items)
+        # schemaVersion and revision are added by IslandBridge.publish().
         return {
-            "schemaVersion": 1,
-            "revision": self._revision,
             "draft": {
                 "id": draft.draft_id,
                 "text": draft.text,
@@ -567,10 +609,3 @@ class ComposerBridge(QObject):
             },
             "theme": self._theme(),
         }
-
-    def _publish(self):
-        self._revision += 1
-        payload = self._state_payload()
-        serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True)
-        self.stateChanged.emit(serialized)
-        self.themeChanged.emit(json.dumps(payload["theme"], sort_keys=True))

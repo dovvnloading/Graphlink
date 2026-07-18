@@ -199,6 +199,55 @@ def test_bridge_clamps_compact_composer_height_requests():
     assert heights == [COMPOSER_MIN_HEIGHT, COMPOSER_MAX_HEIGHT]
 
 
+class TestDisposeIsRealAndIdempotent:
+    """Regression coverage for a known bug: ComposerWebHost.prepare_for_shutdown
+    called self.bridge.dispose(), but ComposerBridge defined no dispose() at all
+    - the AttributeError was silently swallowed by a broad except clause, so the
+    controller's draftChanged/stateChanged connections outlived the bridge with
+    nothing to ever disconnect them. dispose() now exists on the shared
+    IslandBridge base every future bridge subclasses too.
+    """
+
+    def test_dispose_runs_without_error_and_is_idempotent(self):
+        window = _Window()
+        controller = ComposerController()
+        bridge = ComposerBridge(window, controller)
+
+        assert bridge.disposed is False
+        bridge.dispose()
+        assert bridge.disposed is True
+        bridge.dispose()  # must not raise a second (or third) time
+        bridge.dispose()
+
+    def test_publish_is_a_no_op_after_dispose(self):
+        window = _Window()
+        controller = ComposerController()
+        bridge = ComposerBridge(window, controller)
+        states = []
+        bridge.stateChanged.connect(states.append)
+        bridge.ready()
+        count_before = len(states)
+
+        bridge.dispose()
+        bridge.publish()
+
+        assert len(states) == count_before
+
+    def test_dispose_disconnects_the_controller_so_it_cannot_republish(self):
+        window = _Window()
+        controller = ComposerController()
+        bridge = ComposerBridge(window, controller)
+        states = []
+        bridge.stateChanged.connect(states.append)
+        bridge.ready()
+        count_before = len(states)
+
+        bridge.dispose()
+        controller.update_text("late edit after teardown")
+
+        assert len(states) == count_before
+
+
 def test_composer_native_mask_has_rounded_corners():
     region = _rounded_region(QRect(0, 0, 100, 40), 12)
 
