@@ -1,0 +1,346 @@
+"""Generic QWidget host for a React/QWebEngine island, plus the shared
+shutdown registry every island host participates in.
+
+WebIslandHost owns exactly what every current and future island needs:
+asset loading, WebEngine hardening, QWebChannel wiring to an IslandBridge,
+the loadFinished -> bridge.publish() handshake, rounded-corner native
+masking, negotiated height sizing, and shutdown-registry participation.
+
+It deliberately does NOT own: any per-surface legacy-widget compatibility
+shim (the composer's hidden dummy buttons and unemitted Qt Signals exist
+only because ChatWindow still expects a QWidget-like text-input API from
+its early Qt-composer days; that is ComposerWebHost's problem, explicitly
+kept there until Phase 2 deletes the legacy Qt composer and rewires
+ChatWindow off it), drag-drop capture, or keyboard forwarding (both are
+separate, not-yet-built Phase 1 items - see doc/FRONTEND_WEB_MIGRATION_MASTER_PLAN.md
+if present, otherwise treat as future work).
+"""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+from PySide6.QtCore import QRect, QUrl, Qt, Signal
+from PySide6.QtGui import QColor, QRegion
+from PySide6.QtWidgets import (
+    QApplication,
+    QFrame,
+    QLabel,
+    QSizePolicy,
+    QVBoxLayout,
+)
+
+from graphlink_paths import asset_path
+
+try:
+    from PySide6.QtWebChannel import QWebChannel
+    from PySide6.QtWebEngineWidgets import QWebEngineView
+
+    from graphlink_webengine import WEBENGINE_AVAILABLE, _harden_preview_web_view
+except ImportError:
+    QWebChannel = None
+    QWebEngineView = None
+    WEBENGINE_AVAILABLE = False
+    _harden_preview_web_view = None
+
+
+def _inline_bundle(asset_root: Path) -> str:
+    """Inline the Vite output so the page has no file:// or network dependency."""
+    index_path = asset_root / "index.html"
+    if not index_path.is_file():
+        return (
+            "<!doctype html><html><body><p>Island assets are not installed.</p>"
+            "</body></html>"
+        )
+    document = index_path.read_text(encoding="utf-8")
+
+    # Vite emits one stylesheet and one module. Replacing those tags separately
+    # keeps the generated HTML easy to inspect and prevents accidental path use.
+    css_pattern = re.compile(
+        r'<link[^>]+href=["\'](?P<path>[^"\']+\.css)["\'][^>]*>',
+        re.IGNORECASE,
+    )
+
+    def replace_css(match: re.Match[str]) -> str:
+        candidate = (index_path.parent / match.group("path")).resolve()
+        try:
+            candidate.relative_to(asset_root.resolve())
+        except ValueError:
+            return match.group(0)
+        if not candidate.is_file():
+            return match.group(0)
+        return f"<style>{candidate.read_text(encoding='utf-8')}</style>"
+
+    document = css_pattern.sub(replace_css, document)
+
+    script_pattern = re.compile(
+        r'<script[^>]+src=["\'](?P<path>[^"\']+\.js)["\'][^>]*>\s*</script>',
+        re.IGNORECASE,
+    )
+
+    def replace_script(match: re.Match[str]) -> str:
+        candidate = (index_path.parent / match.group("path")).resolve()
+        try:
+            candidate.relative_to(asset_root.resolve())
+        except ValueError:
+            return match.group(0)
+        if not candidate.is_file():
+            return match.group(0)
+        return f"<script type=\"module\">{candidate.read_text(encoding='utf-8')}</script>"
+
+    document = script_pattern.sub(replace_script, document)
+    csp = (
+        '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; '
+        'script-src \'unsafe-inline\' qrc:; style-src \'unsafe-inline\'; img-src data:; '
+        'connect-src \'none\';">'
+    )
+    document = document.replace("<head>", f"<head>{csp}", 1)
+    channel_script = '<script src="qrc:///qtwebchannel/qwebchannel.js"></script>'
+    document = document.replace("</head>", f"{channel_script}</head>", 1)
+    return document
+
+
+def _rounded_region(rect: QRect, radius: int) -> QRegion:
+    """Return a true rounded-rectangle region for native child clipping."""
+    width = max(0, rect.width())
+    height = max(0, rect.height())
+    if width == 0 or height == 0:
+        return QRegion()
+
+    radius = max(0, min(int(radius), width // 2, height // 2))
+    if radius == 0:
+        return QRegion(QRect(0, 0, width, height), QRegion.RegionType.Rectangle)
+
+    diameter = radius * 2
+    region = QRegion(
+        QRect(radius, 0, max(1, width - diameter), height),
+        QRegion.RegionType.Rectangle,
+    )
+    region = region.united(
+        QRegion(
+            QRect(0, radius, width, max(1, height - diameter)),
+            QRegion.RegionType.Rectangle,
+        )
+    )
+    for x, y in (
+        (0, 0),
+        (width - diameter, 0),
+        (0, height - diameter),
+        (width - diameter, height - diameter),
+    ):
+        region = region.united(
+            QRegion(QRect(x, y, diameter, diameter), QRegion.RegionType.Ellipse)
+        )
+    return region
+
+
+# --- Shutdown registry -------------------------------------------------------
+#
+# Every WebIslandHost registers itself here instead of each host independently
+# hooking QApplication.aboutToQuit. As more islands exist (Phase 2+), each new
+# host participates automatically - nothing else has to know their names, and
+# ChatWindow's shutdown path can tear all of them down through one call instead
+# of duck-typing an attribute lookup per surface.
+#
+# This registry is inherently Qt-specific (QApplication.aboutToQuit has no
+# equivalent outside Qt) - unlike IslandBridge, which is deliberately Qt-free,
+# this module's shutdown mechanism will need a PyWebView-appropriate
+# replacement in Phase 9, not a reusable carry-over.
+
+_hosts: list["WebIslandHost"] = []
+_app_hooked = False
+
+
+def register(host: "WebIslandHost") -> None:
+    if host not in _hosts:
+        _hosts.append(host)
+    _ensure_app_hook()
+
+
+def unregister(host: "WebIslandHost") -> None:
+    try:
+        _hosts.remove(host)
+    except ValueError:
+        pass
+
+
+def shutdown_all() -> None:
+    """Call prepare_for_shutdown() on every still-registered host.
+
+    Each host's own prepare_for_shutdown() already guards against being
+    called more than once, so this is safe to invoke from both
+    QApplication.aboutToQuit and an explicit ChatWindow.closeEvent call.
+    """
+    for host in list(_hosts):
+        prepare = getattr(host, "prepare_for_shutdown", None)
+        if callable(prepare):
+            try:
+                prepare()
+            except (AttributeError, RuntimeError, SystemError, TypeError):
+                pass
+
+
+def _ensure_app_hook() -> None:
+    global _app_hooked
+    if _app_hooked:
+        return
+    app = QApplication.instance()
+    if app is None:
+        return
+    app.aboutToQuit.connect(shutdown_all)
+    _app_hooked = True
+
+
+class WebIslandHost(QFrame):
+    """Generic host widget for one React/QWebEngine island.
+
+    Parametrized by:
+    - bridge: an already-constructed IslandBridge+QObject instance. Reparented
+      under this host (via setParent) so Qt owns its lifetime.
+    - asset_dir_name: the assets/<name> directory this island's Vite build
+      produced (resolved via graphlink_paths.asset_path).
+    - bridge_object_name: the name the bridge is registered under on the
+      QWebChannel (what the JS side's `channel.objects.<name>` resolves to).
+    - corner_radius: native rounded-corner clipping, matches the composer's
+      current visual treatment by default.
+    - min_height / max_height: bounds for negotiated sizing. Pass both for a
+      island whose height the web content can request changes to (via
+      apply_requested_height); pass neither for a host that manages its own
+      size entirely through normal Qt layout.
+    - unavailable_message: shown instead of the web view when WebEngine isn't
+      available in this installation.
+    """
+
+    heightChanged = Signal(int)
+
+    def __init__(
+        self,
+        *,
+        bridge,
+        asset_dir_name: str,
+        bridge_object_name: str,
+        corner_radius: int = 14,
+        min_height: int | None = None,
+        max_height: int | None = None,
+        unavailable_message: str = (
+            "This content is unavailable because QtWebEngine failed to initialize."
+        ),
+        parent=None,
+    ):
+        super().__init__(parent)
+        self.bridge = bridge
+        self.bridge.setParent(self)
+
+        self._corner_radius = corner_radius
+        self._min_height = min_height
+        self._max_height = max_height
+        self._shutdown_started = False
+
+        self.setObjectName(f"{bridge_object_name}Host")
+        if min_height is not None:
+            # Negotiated/fixed sizing: horizontally fills its layout slot, but
+            # height is host-controlled (via setFixedHeight here and later via
+            # apply_requested_height), not left to normal Qt layout sizing.
+            self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            self.setFixedHeight(min_height)
+        # else: no bounds provided, so this host keeps Qt's default size
+        # policy and participates in normal layout sizing - see the class
+        # docstring's "pass neither for a host that manages its own size
+        # entirely through normal Qt layout" contract.
+        self.setStyleSheet(
+            f"QFrame#{self.objectName()} {{ background: transparent; border: 0; }}"
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        self.web_view = None
+        if WEBENGINE_AVAILABLE and QWebEngineView and QWebChannel:
+            self.web_view = QWebEngineView(self)
+            self.web_view.setStyleSheet("background: transparent; border: 0;")
+            self.web_view.page().setBackgroundColor(QColor(0, 0, 0, 0))
+            _harden_preview_web_view(self.web_view)
+            channel = QWebChannel(self.web_view.page())
+            channel.registerObject(bridge_object_name, self.bridge)
+            self.web_view.page().setWebChannel(channel)
+            self.web_view.loadFinished.connect(lambda _ok: self.bridge.publish())
+            self.web_view.setHtml(
+                _inline_bundle(asset_path(asset_dir_name)), QUrl("about:blank")
+            )
+            layout.addWidget(self.web_view)
+        else:
+            fallback = QLabel(unavailable_message, self)
+            fallback.setWordWrap(True)
+            fallback.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            layout.addWidget(fallback)
+
+        self._apply_native_mask()
+        register(self)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._apply_native_mask()
+
+    def _apply_native_mask(self):
+        self.setMask(_rounded_region(self.rect(), self._corner_radius))
+        if self.web_view is not None:
+            self.web_view.setMask(_rounded_region(self.web_view.rect(), self._corner_radius))
+
+    def setFocus(self, reason=Qt.FocusReason.OtherFocusReason):
+        if self.web_view:
+            self.web_view.setFocus(reason)
+        else:
+            super().setFocus(reason)
+
+    def focusWidget(self):
+        return self.web_view or super().focusWidget()
+
+    def on_theme_changed(self):
+        self.bridge.publish()
+
+    def apply_requested_height(self, height: int) -> None:
+        """Negotiate a new height for a "negotiated"-sizing island.
+
+        Bounds the request to [min_height, max_height] (both must have been
+        provided at construction) and does nothing if the bounded value
+        matches the current height, matching how frequent web-side resize
+        requests are expected to behave.
+        """
+        if self._min_height is None or self._max_height is None:
+            raise NotImplementedError(
+                "apply_requested_height() requires min_height and max_height "
+                "to have been provided at construction"
+            )
+        bounded = max(self._min_height, min(self._max_height, int(height)))
+        if self.height() == bounded:
+            return
+        self.setFixedHeight(bounded)
+        self.heightChanged.emit(bounded)
+
+    def prepare_for_shutdown(self):
+        """Stop web content callbacks before Qt tears down the application."""
+        if self._shutdown_started:
+            return
+        self._shutdown_started = True
+        unregister(self)
+        try:
+            self.bridge.dispose()
+        except (AttributeError, RuntimeError, SystemError, TypeError):
+            pass
+        web_view = self.web_view
+        if web_view is None:
+            return
+        try:
+            web_view.stop()
+            web_view.setUpdatesEnabled(False)
+            web_view.hide()
+        except (AttributeError, RuntimeError, SystemError, TypeError):
+            return
+
+    def closeEvent(self, event):
+        self.prepare_for_shutdown()
+        super().closeEvent(event)
