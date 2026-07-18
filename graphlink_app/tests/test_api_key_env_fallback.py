@@ -1,11 +1,10 @@
 """Tests for environment-variable API key fallback in api_provider.initialize_api().
 
-Regression coverage for doc/ARCHITECTURE_REVIEW_FINDINGS.md #37: Anthropic and Gemini
-both fall back to a GRAPHLINK_<PROVIDER>_API_KEY / vendor-standard env var when no key is
-passed in, but the OpenAI-compatible branch didn't - a user with OPENAI_API_KEY set in
-their environment (a very standard thing to have) but nothing saved in Graphlink's own
-Settings would get "API key not configured" instead of it just working, unlike every
-other provider.
+Regression coverage for the OpenAI env-var gap: Anthropic and Gemini both fall back to a
+GRAPHLINK_<PROVIDER>_API_KEY / vendor-standard env var when no key is passed in, but the
+OpenAI-compatible branch didn't - a user with OPENAI_API_KEY set in their environment (a
+very standard thing to have) but nothing saved in Graphlink's own Settings would get
+"API key not configured" instead of it just working, unlike every other provider.
 """
 
 import sys

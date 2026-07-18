@@ -1,6 +1,6 @@
 """Tests for stable node IDs and skip-safe index arithmetic in chat persistence.
 
-Regression coverage for doc/ARCHITECTURE_REVIEW_FINDINGS.md #47: graph references were
+Regression coverage for the index-shift graph corruption: graph references were
 serialized purely as list positions, and the load path re-derived several lookup maps
 from *survivor* counts instead of original payload positions. When any node was skipped
 during load (the documented behavior for node types whose plugins were removed - e.g. a

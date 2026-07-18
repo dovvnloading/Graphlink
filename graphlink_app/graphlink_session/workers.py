@@ -56,7 +56,7 @@ class SaveWorkerThread(QThread):
             # Resolve (title, chat_id_for_save) first - chat_id_for_save is the id to
             # UPDATE, or None to INSERT a new chat - then make exactly one atomic call
             # that writes the chat blob, notes, and pins together (see
-            # save_chat_atomically's docstring / doc/ARCHITECTURE_REVIEW_FINDINGS.md #52).
+            # save_chat_atomically's docstring for why that has to be one transaction).
             chat_id_for_save = None
             if not self.current_chat_id:
                 title = self._generate_title()

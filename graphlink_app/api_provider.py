@@ -57,8 +57,8 @@ _LLAMA_CPP_CLIENT_LOCK = threading.RLock()
 # route the whole request through that snapshot. Previously a mode switch during an
 # in-flight request could interleave with the request's many separate global reads,
 # executing it against a half-swapped provider (e.g. the new provider type with the
-# old client/key) - see doc/ARCHITECTURE_REVIEW_FINDINGS.md #9. The module globals
-# stay authoritative (and monkeypatchable) - the snapshot is a per-request view.
+# old client/key). The module globals stay authoritative (and monkeypatchable) - the
+# snapshot is a per-request view.
 _PROVIDER_STATE_LOCK = threading.Lock()
 
 

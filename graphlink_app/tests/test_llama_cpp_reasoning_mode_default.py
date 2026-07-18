@@ -1,6 +1,6 @@
 """Tests for the llama.cpp reasoning_mode default consistency.
 
-Regression coverage for doc/ARCHITECTURE_REVIEW_FINDINGS.md #12: api_provider.py had two
+Regression coverage for the reasoning_mode default drift: api_provider.py had two
 internal "Quick" placeholder defaults for reasoning_mode (the module-level
 LLAMA_CPP_SETTINGS dict, and _normalize_llama_cpp_settings()'s fallback for a missing
 key), while SettingsManager - the actual source of truth once a real settings dict flows
@@ -9,8 +9,7 @@ through initialize_local_provider() - has always defaulted to "Thinking" everywh
 get_llama_cpp_reasoning_mode()'s own fallback). Traced that this mismatch has no
 observable effect in the current codebase (the "Quick" defaults were always overwritten
 before a real llama.cpp request could read them), but it's still a real internal
-inconsistency worth aligning - so unlike #38/#69/#72, this one is a genuine (if very
-low-impact) fix, not a retraction.
+inconsistency worth aligning - a genuine, if very low-impact, fix.
 """
 
 import sys

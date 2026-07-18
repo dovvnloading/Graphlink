@@ -670,9 +670,9 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
 
     def _iter_shutdown_threads(self):
         # Artifact/Gitlink/Code Sandbox/PyCoder nodes each keep their running worker on
-        # their own node.worker_thread (see doc/ARCHITECTURE_REVIEW_FINDINGS.md #21/#24)
-        # - multiple nodes of the same plugin type can run concurrently, so there is no
-        # single shared main_window attribute to check for them anymore.
+        # their own node.worker_thread - multiple nodes of the same plugin type can run
+        # concurrently, so there is no single shared main_window attribute to check for
+        # them anymore.
         for attr_name, label in (
             ("chat_thread", "active chat request"),
             ("takeaway_thread", "takeaway generation"),
@@ -1128,8 +1128,8 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         # Switching modes calls api_provider.initialize_* which swaps the provider
         # globals (USE_API_MODE, API_CLIENT, API_KEY, ...) that a running chat request
         # is reading from a worker thread - the request could execute against a
-        # half-swapped provider (doc/ARCHITECTURE_REVIEW_FINDINGS.md #9). Block the
-        # switch while a main request is in flight instead of racing it.
+        # half-swapped provider. Block the switch while a main request is in flight
+        # instead of racing it.
         if self._main_request_active and mode_text != previous_mode:
             self._set_mode_combo_silently(previous_mode)
             self.notification_banner.show_message(

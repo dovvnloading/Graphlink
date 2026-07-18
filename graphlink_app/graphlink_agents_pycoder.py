@@ -267,8 +267,8 @@ class PyCoderExecutionWorker(QThread):
     # Emitted with the generated code once it is ready but before anything executes in
     # the REPL. The receiver (main thread) must call approve() or deny() to unblock
     # run(), which is parked on _approval_event.wait(). Same contract as
-    # CodeSandboxExecutionWorker.approval_requested - see
-    # doc/ARCHITECTURE_REVIEW_FINDINGS.md #15 for why Py-Coder needs the same gate.
+    # CodeSandboxExecutionWorker.approval_requested: this path also runs model-generated
+    # code with full user privileges, so it needs the same gate.
     approval_requested = Signal(str)
 
     def __init__(self, user_prompt, conversation_history, repl):

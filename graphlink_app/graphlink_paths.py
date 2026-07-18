@@ -6,7 +6,7 @@ several call sites previously hardcoded an absolute path to one developer's mach
 Also independent of whether the app is running from a source checkout or a PyInstaller
 freeze: __file__-based resolution (assets/ as a sibling of graphlink_app/) only holds in a
 checkout. A frozen onedir/onefile build extracts bundled `datas` under sys._MEIPASS
-instead, so ASSETS_DIR branches on sys.frozen. See doc/PRODUCTION_ROADMAP.md Section 4.
+instead, so ASSETS_DIR branches on sys.frozen.
 """
 
 import sys

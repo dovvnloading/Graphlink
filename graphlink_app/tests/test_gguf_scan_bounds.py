@@ -1,12 +1,11 @@
 """Tests for the bounded GGUF filesystem scan.
 
-Regression coverage for doc/ARCHITECTURE_REVIEW_FINDINGS.md #35: the "system" scan mode
-walks the user's entire Downloads/Documents/Desktop trees (see
-_iter_existing_llama_cpp_scan_roots) with a completely unbounded os.walk - a pathological
-or cloud-synced tree could make the scan run for a very long time. _collect_gguf_files_from_root
-now bails out once it has visited too many directories or spent too long, and reports
-that via a `truncated` flag instead of silently returning an incomplete list as if it
-were complete.
+Regression coverage for an unbounded model scan: the "system" scan mode walks the
+user's entire Downloads/Documents/Desktop trees (see _iter_existing_llama_cpp_scan_roots)
+with a completely unbounded os.walk - a pathological or cloud-synced tree could make the
+scan run for a very long time. _collect_gguf_files_from_root now bails out once it has
+visited too many directories or spent too long, and reports that via a `truncated` flag
+instead of silently returning an incomplete list as if it were complete.
 """
 
 import sys

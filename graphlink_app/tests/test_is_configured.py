@@ -1,12 +1,11 @@
 """Tests for api_provider.is_configured().
 
-Written while investigating doc/ARCHITECTURE_REVIEW_FINDINGS.md #38, which claimed this
-function "falls off the end" and returns None for an unrecognized LOCAL_PROVIDER_TYPE.
-On re-reading the actual source, that claim was wrong: every branch already returns an
-explicit bool, including a catch-all `return False` for an unrecognized local provider.
-The finding was a misreading during the original review, not a real bug - corrected in
-the doc. This file locks in the (already-correct) behavior with tests, since it had no
-coverage at all before (see finding #68's "no tests for api_provider..." note).
+Written while investigating a claim that this function "falls off the end" and returns
+None for an unrecognized LOCAL_PROVIDER_TYPE. On re-reading the actual source, that
+claim was wrong: every branch already returns an explicit bool, including a catch-all
+`return False` for an unrecognized local provider. It was a misreading, not a real bug.
+This file locks in the (already-correct) behavior with tests, since it had no coverage
+at all before.
 """
 
 import sys

@@ -3,7 +3,7 @@
 test_github_client.py covers the client's own logic in isolation; this file guards
 against the node class silently reverting to its own hand-rolled implementation (or the
 wrapper methods and the client instance drifting apart) since that would quietly
-reintroduce the exact duplication Phase 3a removed.
+reintroduce the exact duplication extracting the shared client removed.
 """
 
 import sys

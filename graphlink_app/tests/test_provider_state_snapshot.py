@@ -1,8 +1,9 @@
 """Tests for the per-request provider-state snapshot in api_provider.
 
-Regression coverage for doc/ARCHITECTURE_REVIEW_FINDINGS.md #9's remainder: the provider
-runtime lives in module-level globals mutated by initialize_*() on the UI thread while
-chat()/generate_image() read them from worker threads. chat() and generate_image() now
+Regression coverage for the mid-request provider swap - the half of that race a UI-level
+mode-switch guard can't close, since background plugin requests aren't gated by the UI:
+the provider runtime lives in module-level globals mutated by initialize_*() on the UI
+thread while chat()/generate_image() read them from worker threads. Both functions now
 capture one consistent _ProviderSnapshot at entry (under _PROVIDER_STATE_LOCK, which all
 mutators also take) and route the ENTIRE request through it - branch selection, client,
 key, task models, llama.cpp settings, and, critically, the error-classification handler

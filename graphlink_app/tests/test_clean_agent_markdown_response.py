@@ -1,12 +1,12 @@
 """Tests for clean_agent_markdown_response() and the three agents that delegate to it.
 
-doc/ARCHITECTURE_REVIEW_FINDINGS.md #58: ExplainerAgent, KeyTakeawayAgent, and
-GroupSummaryAgent each carried a near-identical ~40-line clean_text() method. Extracted
-to one shared helper, verified behavior-preserving by capturing golden outputs from the
-three *original* clean_text() implementations against a battery of inputs (plain text,
-markdown noise, bullet lists, extra blank lines, an already-present title, unicode
-arrows/bullets, empty/whitespace-only input) and confirming the refactored delegating
-methods produce byte-identical output for every one of them.
+ExplainerAgent, KeyTakeawayAgent, and GroupSummaryAgent each carried a near-identical
+~40-line clean_text() method. Extracted to one shared helper, verified
+behavior-preserving by capturing golden outputs from the three *original* clean_text()
+implementations against a battery of inputs (plain text, markdown noise, bullet lists,
+extra blank lines, an already-present title, unicode arrows/bullets,
+empty/whitespace-only input) and confirming the refactored delegating methods produce
+byte-identical output for every one of them.
 
 That comparison surfaced one genuine (if narrow) behavioral difference between the three
 original implementations: GroupSummaryAgent explicitly reset its "currently inside a

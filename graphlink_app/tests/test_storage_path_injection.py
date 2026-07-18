@@ -1,10 +1,10 @@
 """Tests for optional path injection on ChatDatabase and SettingsManager.
 
-Regression coverage for doc/ARCHITECTURE_REVIEW_FINDINGS.md #55: both classes hardcoded
-Path.home()/.graphlink/... with no way to redirect them, forcing tests that needed an
-isolated instance to bypass __init__ entirely via __new__ (see
-test_chat_database_get_title.py's original _make_test_db helper). Both constructors now
-accept an optional path parameter; omitting it preserves the exact original behavior.
+Both classes used to hardcode Path.home()/.graphlink/... with no way to redirect them,
+forcing tests that needed an isolated instance to bypass __init__ entirely via __new__
+(see test_chat_database_get_title.py's original _make_test_db helper). Both
+constructors now accept an optional path parameter; omitting it preserves the exact
+original behavior.
 """
 
 import sys

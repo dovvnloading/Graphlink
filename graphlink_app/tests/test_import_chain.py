@@ -1,7 +1,8 @@
-"""Import-chain regression tests (Phase 5).
+"""Import-chain regression tests.
 
 Guards against two classes of bug found while resolving the dual root-shim/package
-import paths (doc/PLUGIN_SYSTEM_REFACTOR_PLAN.md section 1.5):
+import paths, where core files reached plugin classes through root-level shims while
+the portal imported the package directly:
 
 1. A real circular import surfaced when graphlink_plugin_context_menu.py moved into
    graphlink_plugins/: graphlink_plugins/__init__.py used to eagerly import every
@@ -46,7 +47,7 @@ def test_graphlink_plugins_package_has_no_eager_reexports():
     assert not hasattr(graphlink_plugins, "ArtifactNode"), (
         "graphlink_plugins/__init__.py appears to eagerly re-export plugin classes "
         "again - this previously caused a circular import via graphlink_pycoder.py. "
-        "See doc/PLUGIN_SYSTEM_REFACTOR_PLAN.md section 1.5."
+        "The package __init__.py must stay import-free."
     )
 
 
@@ -67,8 +68,7 @@ def test_root_level_plugin_shim_files_are_gone():
         # rather than being a re-export left behind after a package move), but the
         # same "root-level plugin implementation file should no longer exist" check
         # applies now that Graphlink-Reasoning moved into graphlink_plugins/reasoning/
-        # and graphlink_plugins/graphlink_plugin_reasoning.py (see
-        # doc/PLUGIN_SYSTEM_REFACTOR_PLAN.md section 4.10).
+        # and graphlink_plugins/graphlink_plugin_reasoning.py.
         "graphlink_reasoning.py",
         "graphlink_agents_reasoning.py",
     ]

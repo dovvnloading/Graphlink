@@ -1,8 +1,8 @@
 """Tests for the schema_version field added to session.dat and saved chat payloads.
 
-Regression coverage for doc/ARCHITECTURE_REVIEW_FINDINGS.md #49: neither file carried a
-version field at all, so every future format change had no marker to branch a migration
-on. This adds the version field itself (SettingsManager.CURRENT_SCHEMA_VERSION,
+Neither file carried a version field at all, so every future format change had no marker
+to branch a migration on. This adds the version field itself
+(SettingsManager.CURRENT_SCHEMA_VERSION,
 graphlink_session.scene_index.CURRENT_CHAT_SCHEMA_VERSION) - not a migration framework,
 just the groundwork one would need.
 """

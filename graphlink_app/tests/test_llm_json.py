@@ -1,4 +1,5 @@
-"""Tests for the shared LLM-JSON helpers (Phase 3b of doc/PLUGIN_SYSTEM_REFACTOR_PLAN.md).
+"""Tests for the shared LLM-JSON helpers, extracted so the plugins that each
+hand-rolled model-JSON parsing now share one implementation.
 
 graphlink_plugin_code_review.py, graphlink_plugin_quality_gate.py,
 graphlink_plugin_workflow.py, and graphlink_plugin_gitlink.py each independently

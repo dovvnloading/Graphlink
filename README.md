@@ -167,7 +167,7 @@ For a detailed, current map of where behavior lives in the codebase, see [GRAPHL
 
 ## Contributing
 
-Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, development conventions, and pull-request expectations. The repository has a `pytest` suite under `graphlink_app/tests/`; run it with `pytest` from the inner `graphlink_app/` directory, and a GitHub Actions workflow additionally runs a compile smoke check on every push.
+Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, development conventions, branch/PR workflow, and pull-request expectations. The repository has a `pytest` suite under `graphlink_app/tests/`; run it with `pytest` from the inner `graphlink_app/` directory. There is currently no automated CI — validation is a manual local step before opening a PR (see CONTRIBUTING.md).
 
 ## Troubleshooting
 

@@ -17,8 +17,8 @@ def resolve_branch_system_prompt(current_node, default_system_prompt):
     (``parent_node``/``scene()``/``system_prompt_connections``/``prompt_note.content``),
     so it MUST run on the GUI thread - QGraphicsScene is not thread-safe, and doing this
     walk from a worker thread races node deletion / scene.clear() and can crash or read
-    torn state (doc/ARCHITECTURE_REVIEW_FINDINGS.md #20). Callers resolve it here on the
-    UI thread and hand the resulting string to the worker, which never touches the scene.
+    torn state. Callers resolve it here on the UI thread and hand the resulting string
+    to the worker, which never touches the scene.
 
     Returns the final system prompt string (the default if nothing overrides it).
     """
@@ -290,8 +290,7 @@ class ChatAgent:
 def clean_agent_markdown_response(text, required_title, section_markers, reset_bullet_state_on_section_header=False):
     """Strip common markdown noise and normalize bullets/section spacing for a
     structured agent response (Explainer/KeyTakeaway/GroupSummary all used a
-    near-identical ~40-line clean_text() before this was extracted - see
-    doc/ARCHITECTURE_REVIEW_FINDINGS.md #58).
+    near-identical ~40-line clean_text() before this was extracted).
 
     Args:
         text (str): The raw text from the AI model.

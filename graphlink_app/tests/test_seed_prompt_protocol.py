@@ -1,4 +1,5 @@
-"""Tests for the seed_prompt() protocol (Phase 2 of doc/PLUGIN_SYSTEM_REFACTOR_PLAN.md).
+"""Tests for the seed_prompt() protocol - the shared contract that lets any plugin node
+be created pre-filled with a prompt.
 
 graphlink_window_actions.py's _seed_plugin_prompt used to be an 11-branch isinstance
 chain that had to be hand-edited every time a seedable plugin was added - each branch

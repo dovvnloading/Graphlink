@@ -1,9 +1,9 @@
 """Tests for secrets-at-rest encryption (graphlink_secrets + SettingsManager wiring).
 
-Regression coverage for doc/ARCHITECTURE_REVIEW_FINDINGS.md #14: API keys and the
-GitHub token were stored as plaintext JSON in session.dat. They are now DPAPI-protected
-("dpapi:" + base64 blob, bound to the Windows user account) with three hard
-requirements pinned down here:
+Regression coverage for secrets stored in plaintext: API keys and the GitHub token were
+stored as plaintext JSON in session.dat. They are now DPAPI-protected ("dpapi:" +
+base64 blob, bound to the Windows user account) with three hard requirements pinned
+down here:
 
 1. Roundtrip: what you set is what you get back, but the on-disk bytes never contain
    the plaintext.
@@ -180,7 +180,7 @@ class TestGracefulDegradationWithoutDpapi:
 
         assert manager.get_github_token() == "ghp_plain_fallback"
         raw = json.loads(state_file.read_text(encoding="utf-8"))
-        assert raw["github_access_token"] == "ghp_plain_fallback"  # plaintext, as before #14
+        assert raw["github_access_token"] == "ghp_plain_fallback"  # plaintext, as before
 
         # Reload with DPAPI still unavailable: no crash, no rewrite loop, same value.
         mtime_before = state_file.stat().st_mtime_ns

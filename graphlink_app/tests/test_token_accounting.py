@@ -1,11 +1,11 @@
 """Tests for handle_response()'s input-token accounting.
 
-Regression coverage for doc/ARCHITECTURE_REVIEW_FINDINGS.md #41: handle_response() used
-to recompute input_tokens by parsing self.token_counter_widget.input_label.text() (a
-QLabel's *displayed* string, with formatting like "1,234" stripped by hand) instead of
-using the actual integer value already computed in send_message(). A display widget was
-the source of truth for a running token-total calculation. send_message() now passes
-that value straight through the finished-signal connection instead.
+Regression coverage for widget-derived token math: handle_response() used to recompute
+input_tokens by parsing self.token_counter_widget.input_label.text() (a QLabel's
+*displayed* string, with formatting like "1,234" stripped by hand) instead of using the
+actual integer value already computed in send_message(). A display widget was the
+source of truth for a running token-total calculation. send_message() now passes that
+value straight through the finished-signal connection instead.
 
 Uses a MagicMock as `self` for this unbound-method call (matching the pattern in
 test_shutdown_thread_enumeration.py) with token_counter_widget.input_label deliberately

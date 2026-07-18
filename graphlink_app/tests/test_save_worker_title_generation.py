@@ -1,14 +1,13 @@
 """Tests for SaveWorkerThread's title generation on new-chat saves.
 
-Regression coverage for dead TitleGenerator wiring (see
-doc/ARCHITECTURE_REVIEW_FINDINGS.md #53): SaveWorkerThread received a title_generator
-constructor argument but never called it, always falling back to the first five words
-of the first message. TitleGenerator.generate_title() itself was fully implemented
-and already documented in GRAPHLINK_REPO_NAVIGATION.md's "Title generation flow" but had
-zero callers anywhere in the app. SaveWorkerThread.run() now calls it for new chats
-(current_chat_id is falsy, or the referenced chat_id no longer exists) and only drops
-to the plain fallback title if title generation is unavailable, raises, or returns
-nothing usable.
+Regression coverage for dead TitleGenerator wiring: SaveWorkerThread received a
+title_generator constructor argument but never called it, always falling back to the
+first five words of the first message. TitleGenerator.generate_title() itself was fully
+implemented and already documented in GRAPHLINK_REPO_NAVIGATION.md's "Title generation
+flow" but had zero callers anywhere in the app. SaveWorkerThread.run() now calls it for
+new chats (current_chat_id is falsy, or the referenced chat_id no longer exists) and
+only drops to the plain fallback title if title generation is unavailable, raises, or
+returns nothing usable.
 """
 
 import sys
@@ -98,10 +97,10 @@ class TestExistingChatDoesNotRegenerateTitle:
 
 
 class TestFallbackTitleIsUnicodeAware:
-    """Regression coverage for doc/ARCHITECTURE_REVIEW_FINDINGS.md #73: the fallback
-    title regex used to be r"[A-Za-z0-9']+", which strips non-ASCII text entirely -
-    every non-English first message (CJK, Cyrillic, accented Latin, ...) fell through
-    to a bare timestamp title instead of using any of the actual message content."""
+    """Regression coverage for the ASCII-only fallback title regex: it used to be
+    r"[A-Za-z0-9']+", which strips non-ASCII text entirely - every non-English first
+    message (CJK, Cyrillic, accented Latin, ...) fell through to a bare timestamp
+    title instead of using any of the actual message content."""
 
     def _fallback_title_for(self, message):
         worker = SaveWorkerThread(_make_db(), object(), {"nodes": []}, None, message)

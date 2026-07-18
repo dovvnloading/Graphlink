@@ -1,16 +1,16 @@
-"""Tests for the Phase 1 plugin registry (graphlink_plugin_portal.PLUGIN_REGISTRY).
+"""Tests for the plugin registry (graphlink_plugin_portal.PLUGIN_REGISTRY).
 
-doc/PLUGIN_SYSTEM_REFACTOR_PLAN.md documents that plugin metadata is hand-copied in
-several independent places across the app (PluginPortal's _register_plugin calls,
-graphlink_plugin_quality_gate.py's _node_label, graphlink_plugin_workflow.py's
-WORKFLOW_PLUGIN_ICONS) and that this drift already caused a live bug (Workflow's
-allowlist silently omitted Code Review Agent). PLUGIN_REGISTRY is meant to become the
-single source of truth those should eventually read from - these tests cross-check it
-against the existing hand-maintained lists so registry/reality drift is caught
-immediately instead of being discovered by a future audit.
+Plugin metadata is hand-copied in several independent places across the app
+(PluginPortal's _register_plugin calls, graphlink_plugin_quality_gate.py's
+_node_label, graphlink_plugin_workflow.py's WORKFLOW_PLUGIN_ICONS) and that this
+drift already caused a live bug (Workflow's allowlist silently omitted Code Review
+Agent). PLUGIN_REGISTRY is meant to become the single source of truth those should
+eventually read from - these tests cross-check it against the existing
+hand-maintained lists so registry/reality drift is caught immediately instead of
+being discovered by a future audit.
 
-Note: graphlink_window_actions.py's former isinstance-chain dispatcher was replaced in
-Phase 2 by each node class implementing seed_prompt(text) itself (see
+Note: graphlink_window_actions.py's former isinstance-chain dispatcher was replaced
+by each node class implementing seed_prompt(text) itself (see
 tests/test_seed_prompt_protocol.py for the behavioral coverage of that). The
 seedable-flag-vs-reality cross-check below now asserts against that protocol directly
 instead of scraping the old isinstance chain out of the dispatcher's source.
@@ -44,11 +44,11 @@ def test_registry_names_match_the_live_portal_registration():
 
 def test_registry_descriptions_match_the_live_portal_registration():
     # Description text is hand-duplicated between PLUGIN_REGISTRY and
-    # PluginPortal._discover_plugins() (see doc/ARCHITECTURE_REVIEW_FINDINGS.md #61) -
+    # PluginPortal._discover_plugins(), two parallel registries that can drift -
     # this doesn't fix that duplication, but it does catch the two copies drifting out
-    # of sync, which is exactly what happened to Execution Sandbox's description before
-    # #16 was fixed (both copies had to be updated by hand to stay honest about the
-    # sandbox not isolating from the OS).
+    # of sync, which is exactly what happened to Execution Sandbox's description (both
+    # copies had to be updated by hand to stay honest about the sandbox not isolating
+    # from the OS).
     portal = PluginPortal(main_window=None)
     portal_descriptions_by_name = {p["name"]: p["description"] for p in portal.get_plugins()}
     for spec in PLUGIN_REGISTRY.values():
@@ -56,11 +56,11 @@ def test_registry_descriptions_match_the_live_portal_registration():
 
 
 def test_execution_sandbox_description_does_not_oversell_containment():
-    # See doc/ARCHITECTURE_REVIEW_FINDINGS.md #16: the description used to just say
-    # "isolated virtualenv" with no caveat, which a user could easily read as stronger
-    # containment than a venv actually provides. The approval dialog shown before every
-    # run has always been honest about this (_handle_code_sandbox_approval_request);
-    # the picker-level description should say the same thing, not oversell it.
+    # The description used to just say "isolated virtualenv" with no caveat, which a
+    # user could easily read as stronger containment than a venv actually provides. The
+    # approval dialog shown before every run has always been honest about this
+    # (_handle_code_sandbox_approval_request); the picker-level description should say
+    # the same thing, not oversell it.
     spec = get_plugin_spec("code_sandbox")
     assert "not the operating system" in spec.description
 

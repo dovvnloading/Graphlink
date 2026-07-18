@@ -1,9 +1,9 @@
 """Tests for SettingsManager's atomic writes and corrupt-file recovery.
 
-Regression coverage for doc/ARCHITECTURE_REVIEW_FINDINGS.md #48: _save_state used to
-write directly to session.dat, so a crash mid-write left a truncated/corrupt file, and
-_load_state's JSONDecodeError handler then silently replaced it with defaults -
-destroying every saved API key and preference with no backup and no warning.
+Regression coverage for non-atomic settings writes: _save_state used to write directly
+to session.dat, so a crash mid-write left a truncated/corrupt file, and _load_state's
+JSONDecodeError handler then silently replaced it with defaults - destroying every
+saved API key and preference with no backup and no warning.
 
 _save_state now writes to a temp file (fsync'd) and atomically renames it into place, so
 state_file itself is always either the fully-old or fully-new version, never a partial

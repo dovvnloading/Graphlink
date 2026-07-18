@@ -1,12 +1,12 @@
 """Tests for the Code Sandbox approval gate.
 
 Code Sandbox executes AI/user-generated Python with full host-user privileges and
-installs whatever packages are declared in requirements.txt (see
-doc/PLUGIN_SYSTEM_REFACTOR_PLAN.md section 2.1). These tests cover the approval gate
-added to CodeSandboxExecutionWorker.run(): the worker must pause after code is ready
-and before it touches the venv/pip/subprocess, and must only proceed if the main
-thread calls approve() - a call to deny() (or stop()) must short-circuit the run
-without ever installing dependencies or executing code.
+installs whatever packages are declared in requirements.txt, unpinned and unverified.
+These tests cover the approval gate added to CodeSandboxExecutionWorker.run(): the
+worker must pause after code is ready and before it touches the venv/pip/subprocess,
+and must only proceed if the main thread calls approve() - a call to deny() (or
+stop()) must short-circuit the run without ever installing dependencies or executing
+code.
 """
 
 import sys

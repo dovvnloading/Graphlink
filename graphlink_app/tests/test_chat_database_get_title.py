@@ -1,14 +1,14 @@
 """Tests for ChatDatabase.get_chat_title().
 
-Regression coverage for doc/ARCHITECTURE_REVIEW_FINDINGS.md #45: update_title_bar()
-used to call db.load_chat(), which SELECTs both title and data and json.loads()-decodes
-the full chat payload (every node, connection, and base64-inlined image - see #50) just
-to read the title string, on every single save completion. get_chat_title() only SELECTs
-the title column and never touches `data` at all.
+Regression coverage for a synchronous full-payload read on the UI thread:
+update_title_bar() used to call db.load_chat(), which SELECTs both title and data and
+json.loads()-decodes the full chat payload (every node, connection, and base64-inlined
+image) just to read the title string, on every single save completion. get_chat_title()
+only SELECTs the title column and never touches `data` at all.
 
-Uses ChatDatabase(tmp_path / ...) - the constructor's db_path parameter (added by the
-#55 fix) - instead of the real constructor's hardcoded Path.home()/.graphlink/chats.db,
-so this never touches the developer's real chat database.
+Uses ChatDatabase(tmp_path / ...) - the constructor's injectable db_path parameter -
+instead of the real constructor's hardcoded Path.home()/.graphlink/chats.db, so this
+never touches the developer's real chat database.
 """
 
 import sys

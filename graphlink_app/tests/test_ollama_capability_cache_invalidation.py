@@ -1,6 +1,6 @@
 """Tests for the Ollama capability cache and its invalidation.
 
-Regression coverage for doc/ARCHITECTURE_REVIEW_FINDINGS.md #39: _OLLAMA_CAPABILITY_CACHE
+Regression coverage for the never-invalidated capability cache: _OLLAMA_CAPABILITY_CACHE
 never expired or got cleared, so a model pulled/updated mid-session (e.g. gaining audio
 support in a newer build) kept whatever capability answer was cached the first time it
 was seen that session. invalidate_ollama_capability_cache() now exists, and

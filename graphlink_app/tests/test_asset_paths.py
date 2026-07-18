@@ -3,8 +3,9 @@
 Regression coverage for hardcoded developer-machine absolute paths that used to be
 scattered across graphlink_window.py, graphlink_ui_components.py, graphlink_styles.py,
 graphlink_ui_dialogs/graphlink_settings_dialogs.py, and graphlink_widgets/controls.py -
-see doc/ARCHITECTURE_REVIEW_FINDINGS.md #65. Also covers check.png/down_arrow.png,
-which those hardcoded paths referenced but which never actually existed in the repo.
+on any other machine the window icon and checkbox/combo indicators silently vanished.
+Also covers check.png/down_arrow.png, which those hardcoded paths referenced but which
+never actually existed in the repo.
 """
 
 import sys

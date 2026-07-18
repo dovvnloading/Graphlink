@@ -1,12 +1,12 @@
 """Tests for the context-switch guard on background saves (ChatSessionManager).
 
-Regression coverage for the stale-chat_id save race (doc/ARCHITECTURE_REVIEW_FINDINGS.md):
-a background save serializes the chat that was active when it STARTED. If the user
-switches chats (New Chat, or loading another chat) while that save is in flight, the
-save's completion used to unconditionally do `current_chat_id = new_chat_id`, restoring
-the PREVIOUS chat as active. The next autosave then serialized the now-visible scene and
-UPDATE'd it into the previous chat's row - silently overwriting an unrelated conversation
-and never saving the new work under its own id.
+Regression coverage for the stale-chat_id save race: a background save serializes the
+chat that was active when it STARTED. If the user switches chats (New Chat, or loading
+another chat) while that save is in flight, the save's completion used to
+unconditionally do `current_chat_id = new_chat_id`, restoring the PREVIOUS chat as
+active. The next autosave then serialized the now-visible scene and UPDATE'd it into the
+previous chat's row - silently overwriting an unrelated conversation and never saving
+the new work under its own id.
 
 The fix: ChatSessionManager tracks a `_context_epoch` that bumps on every switch
 (mark_context_switch), records the epoch a save started under (`_saving_epoch`), and

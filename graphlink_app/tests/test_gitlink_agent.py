@@ -1,5 +1,5 @@
-"""Tests for graphlink_plugins/gitlink/agent.py (extracted from
-graphlink_plugin_gitlink.py - see doc/PLUGIN_SYSTEM_REFACTOR_PLAN.md section 4.4).
+"""Tests for graphlink_plugins/gitlink/agent.py, the Qt-free half of the Gitlink plugin
+split out of the 1800-line graphlink_plugin_gitlink.py widget module.
 
 Path-safety helpers (_normalize_repo_path, _safe_local_target, _fingerprint_changes)
 already have dedicated coverage in tests/test_gitlink_path_safety.py - this file covers

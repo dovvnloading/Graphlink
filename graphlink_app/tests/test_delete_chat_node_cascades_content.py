@@ -1,18 +1,18 @@
 """Tests confirming ChatScene.delete_chat_node() cascades to attached content nodes.
 
-doc/ARCHITECTURE_REVIEW_FINDINGS.md #72 flagged send_message()'s attachment-failure path
-as a possible orphaned-node bug: if an early attachment (e.g. an image) succeeds and
-creates a child ImageNode/DocumentNode, then a *later* attachment in the same message
-fails to read, send_message() calls delete_chat_node(user_node) and returns - the worry
-was that the already-created child content nodes might be left behind since "whether
-those are cascaded depends on scene delete logic; the cleanup contract is implicit."
+send_message()'s attachment-failure path looked like a possible orphaned-node bug: if an
+early attachment (e.g. an image) succeeds and creates a child ImageNode/DocumentNode,
+then a *later* attachment in the same message fails to read, send_message() calls
+delete_chat_node(user_node) and returns - the worry was that the already-created child
+content nodes might be left behind, since whether they are cascaded depends on scene
+delete logic and the cleanup contract was only implicit.
 
 Traced the actual code: delete_chat_node() calls remove_associated_content_nodes() as
 its first step, which does remove any Code/Document/Image/Thinking node whose
 parent_content_node is the node being deleted (along with the connection linking it) -
-exactly the case send_message() creates. This was already correct; the finding's
-"whether cascaded" question is answered "yes" here, with a test, since it previously had
-none (finding #72's own point about the cleanup contract being implicit/unverified).
+exactly the case send_message() creates. This was already correct; the "whether
+cascaded" question is answered "yes" here, with a test, so the cleanup contract is no
+longer merely implicit and unverified.
 """
 
 import sys

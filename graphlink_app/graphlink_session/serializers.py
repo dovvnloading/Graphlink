@@ -40,7 +40,7 @@ class SceneSerializer:
 
         Graph references used to be serialized purely as list positions
         (all_nodes_list.index(node)), which silently corrupt when a load skips any
-        node and later positions shift (doc/ARCHITECTURE_REVIEW_FINDINGS.md #47).
+        node and later positions shift, silently reattaching links to wrong nodes.
         IDs are assigned lazily, stored on the node object so they stay stable across
         saves within a session, and restored from the payload on load so they stay
         stable across sessions too.

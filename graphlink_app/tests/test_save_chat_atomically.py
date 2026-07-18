@@ -1,6 +1,6 @@
 """Tests for ChatDatabase.save_chat_atomically().
 
-Regression coverage for doc/ARCHITECTURE_REVIEW_FINDINGS.md #52: save_chat/update_chat,
+Regression coverage for non-transactional cross-table saves: save_chat/update_chat,
 save_notes, and save_pins each previously opened their own connection and committed
 independently. A crash (or any exception) between two of those steps left the chat row,
 notes, and pins inconsistent with each other - e.g. a chat saved with notes that were

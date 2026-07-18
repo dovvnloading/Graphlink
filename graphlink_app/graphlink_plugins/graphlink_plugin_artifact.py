@@ -441,9 +441,9 @@ class ArtifactNode(QGraphicsObject, HoverAnimationMixin):
             # Escape literal HTML before markdown-rendering it: the document content is
             # AI/user-controlled text, not trusted markup, so a literal "<img src=... />"
             # or "<div style=...>" typed/generated into the document must not be handed
-            # to QTextEdit.setHtml as real HTML (see doc/PLUGIN_SYSTEM_REFACTOR_PLAN.md
-            # section 4.1). quote=False keeps quote characters literal so normal
-            # Markdown syntax (e.g. link titles) isn't mangled by entity-encoding them.
+            # to QTextEdit.setHtml as real HTML. quote=False keeps quote characters
+            # literal so normal Markdown syntax (e.g. link titles) isn't mangled by
+            # entity-encoding them.
             html = markdown.markdown(escape_html(content, quote=False), extensions=['fenced_code', 'tables'])
             self.preview_display.setHtml(html)
 
@@ -493,8 +493,8 @@ class ArtifactNode(QGraphicsObject, HoverAnimationMixin):
     def _handle_action_button(self):
         # Single dual-purpose button (mirrors ConversationNode._handle_action_button):
         # while a generation is running the icon/tooltip switch to "stop", and this is
-        # what makes that actually clickable - see doc/PLUGIN_SYSTEM_REFACTOR_PLAN.md
-        # section 4.1, this used to stay disabled the whole time it showed a stop icon.
+        # what makes that actually clickable - the button used to stay disabled the
+        # whole time it showed a stop icon.
         if self.is_running:
             self.stop_requested.emit(self)
             return

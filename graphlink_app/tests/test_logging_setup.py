@@ -1,6 +1,6 @@
 """Tests for graphlink_logging.configure_logging().
 
-Regression coverage for doc/ARCHITECTURE_REVIEW_FINDINGS.md #63: nothing in the app ever
+Regression coverage for the app's missing logging setup: nothing in the app ever
 configured Python's logging module, so the one existing logging.exception() call
 (content_codec.py, corrupted image data during deserialization) went to stderr's
 "handler of last resort" - invisible in a windowed app with no console. configure_logging()

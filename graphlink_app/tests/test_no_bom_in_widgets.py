@@ -1,6 +1,6 @@
-"""Regression test for doc/ARCHITECTURE_REVIEW_FINDINGS.md #8: eight files in
-graphlink_widgets/ carried a UTF-8 BOM, which trips up BOM-unaware tooling (naive
-open()/grep/patch flows). Guards against the BOM being reintroduced."""
+"""Regression test for UTF-8 BOMs in source files: eight files in graphlink_widgets/
+carried a UTF-8 BOM, which trips up BOM-unaware tooling (naive open()/grep/patch
+flows). Guards against the BOM being reintroduced."""
 
 import codecs
 import sys

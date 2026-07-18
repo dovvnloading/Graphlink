@@ -1,4 +1,4 @@
-"""Tests for the Phase 4 migration of the standard-shape plugin factories onto
+"""Tests for the standard-shape plugin factories now built on
 PluginPortal.create_node() (Py-Coder, Execution Sandbox, Gitlink, Graphlink-Web,
 Conversation Node, HTML Renderer).
 
@@ -235,8 +235,7 @@ class TestHtmlRendererValidateParent:
         # raising AttributeError instead. Confirmed via direct investigation of
         # graphlink_scene.py's deletion/connection-validity logic that CodeNode was
         # never part of the `.children`-based branch-visibility system anyway, so
-        # skipping that step for a CodeNode parent is safe - see
-        # doc/PLUGIN_SYSTEM_REFACTOR_PLAN.md section 4.8/5.
+        # skipping that step for a CodeNode parent is safe.
         code_node = CodeNode(code="print(42)", language="python", parent_content_node=None)
         portal, main_window, scene = _make_portal(code_node)
 
