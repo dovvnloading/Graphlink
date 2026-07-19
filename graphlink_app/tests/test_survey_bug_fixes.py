@@ -178,7 +178,7 @@ def test_api_button_label_becomes_refresh_after_a_successful_load():
     assert widget.load_btn.text() == "Refresh Available Models"
 
 
-# --- Bug 2 & 3: paint-path fixes, smoke-level (no crash; correct code reached) ---
+# --- Bug 2 & 3: paint-path fixes, exercised through a real paint() that BITES ---
 
 def _paint_once(item):
     image = QImage(400, 400, QImage.Format.Format_ARGB32)
@@ -189,24 +189,60 @@ def _paint_once(item):
         painter.end()
 
 
-def test_image_node_paints_search_ring_without_error_when_matched():
-    from graphlink_nodes.graphlink_node_image import ImageNode
-
-    node = ImageNode(b"", None, prompt="a cat")
-    node.is_search_match = True
-    scene = QGraphicsScene()
-    scene.addItem(node)
-    _paint_once(node)  # must not raise; exercises the new is_search_match branch
-
-
-def test_chat_node_accent_copy_does_not_mutate_the_shared_dict_entry():
-    # The fix copies colors["accent"] before setAlpha(). Prove _surface_colors
-    # hands out an accent QColor whose later mutation can't corrupt a fresh call.
+def test_chat_node_paint_does_not_mutate_the_shared_accent_color(monkeypatch):
+    # Drives the REAL full-detail paint() and proves it no longer mutates the
+    # accent QColor in place. Against the pre-fix code (accent_fill =
+    # colors["accent"]; accent_fill.setAlpha(140)) this fails: the held accent
+    # object's alpha drops to 140.
+    from graphlink_nodes import graphlink_node_chat as chat_mod
     from graphlink_nodes.graphlink_node_chat import ChatNode
 
+    from graphlink_scene import ChatScene
+
+    monkeypatch.setattr(chat_mod, "lod_mode_for_item", lambda item: "full")
     node = ChatNode("hi", is_user=False)
+    # ChatScene (not a bare QGraphicsScene): ChatNode.itemChange reads
+    # scene().font_family on add. Held so it doesn't GC-delete the node.
+    scene = ChatScene(MagicMock())
+    scene.addItem(node)
+
     colors = node._surface_colors()
     accent = colors["accent"]
-    before = accent.alpha()
-    QColor(accent).setAlpha(140)  # mutating a COPY (the fix's shape)
-    assert accent.alpha() == before  # original untouched
+    assert accent.alpha() == 255  # precondition
+    # Make paint() operate on THIS dict (and this accent object) so an in-place
+    # mutation would be observable here.
+    monkeypatch.setattr(node, "_surface_colors", lambda: colors)
+
+    _paint_once(node)
+
+    assert accent.alpha() == 255, "paint() mutated the shared accent QColor in place"
+
+
+def test_image_node_paint_requests_the_search_highlight_only_when_matched(monkeypatch):
+    # Proves the new full-detail search-ring branch actually EXECUTES: it is the
+    # only thing in ImageNode.paint that asks for the "search_highlight" color.
+    # Against the pre-fix code (no ring) this color is never requested even when
+    # matched, so the assertion below fails.
+    from graphlink_nodes import graphlink_node_image as image_mod
+    from graphlink_nodes.graphlink_node_image import ImageNode
+
+    monkeypatch.setattr(image_mod, "lod_mode_for_item", lambda item: "full")
+    real_get = image_mod.get_semantic_color
+    requested = []
+    monkeypatch.setattr(
+        image_mod, "get_semantic_color",
+        lambda name: (requested.append(name), real_get(name))[1],
+    )
+
+    node = ImageNode(b"", None, prompt="a cat")
+    scene = QGraphicsScene()  # held so it doesn't GC-delete the node's C++ object
+    scene.addItem(node)
+
+    node.is_search_match = False
+    _paint_once(node)
+    assert "search_highlight" not in requested  # no ring when not matched
+
+    requested.clear()
+    node.is_search_match = True
+    _paint_once(node)
+    assert "search_highlight" in requested, "matched ImageNode did not draw the search ring"
