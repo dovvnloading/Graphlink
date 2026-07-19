@@ -3,13 +3,17 @@ token work: the three StyleSheet.*_THEME strings are now generated from
 THEME_TOKENS[theme]["qss"] / ["qss_alpha"] filled into a *_THEME_TEMPLATE,
 instead of being hand-maintained literals.
 
-The fixtures under tests/fixtures/qss_golden_*.txt are byte-for-byte copies
-of StyleSheet.DARK_THEME / MONOCHROMATIC_THEME / MUTED_THEME captured from
-the running app BEFORE this refactor (via a script, not retyped by hand) -
-this is the "generated == current, diffs reviewed" golden test called for
-in the master plan's Phase 1 checklist and section 3.4. A future edit that
-silently changes a resolved color fails this test with an actual text diff,
-not just a bespoke hash comparison.
+The fixtures under tests/fixtures/qss_golden_*.txt are copies of
+StyleSheet.DARK_THEME / MONOCHROMATIC_THEME / MUTED_THEME captured from the
+running app BEFORE this refactor (via a script, not retyped by hand) - this
+is the "generated == current, diffs reviewed" golden test called for in the
+master plan's Phase 1 checklist and section 3.4. Compared as text (universal
+newlines), not raw bytes: repo-root .gitattributes forces `*.txt eol=crlf`,
+so a fresh checkout is free to rewrite this file's line endings regardless
+of what was committed, while the generated StyleSheet.* strings are always
+\n-only (Python normalizes source line endings when parsing a string
+literal). A future edit that silently changes a resolved color still fails
+this test with an actual text diff, not just a bespoke hash comparison.
 """
 
 import re
@@ -38,9 +42,20 @@ PLACEHOLDER_RE = re.compile(r"\{\{([a-z0-9_]+)\}\}")
 
 
 def _read_fixture(filename):
-    # newline="" mirrors how the fixture was written: no universal-newline
-    # translation, so the comparison is truly byte-for-byte.
-    with open(FIXTURES / filename, "r", encoding="utf-8", newline="") as f:
+    # Universal-newline text mode (the default - no newline= override), NOT
+    # newline="" byte-exact mode: repo-root .gitattributes forces `*.txt
+    # text eol=crlf`, so a checkout can legitimately materialize this file
+    # with \r\n regardless of what was written or committed. StyleSheet.
+    # DARK_THEME etc. are always \n-only (Python's tokenizer normalizes
+    # source line endings when parsing a string literal, regardless of the
+    # .py file's own on-disk line endings). Comparing raw bytes against a
+    # fixture whose line endings git is free to rewrite was the actual bug
+    # here, caught when this test failed after nothing but a routine
+    # `git checkout`/`git merge --ff-only` re-materialized the fixture as
+    # CRLF. Reading in text mode normalizes \r\n -> \n on the way in, so the
+    # comparison is diff-worthy on real content changes and indifferent to
+    # a line-ending convention neither side of the comparison controls.
+    with open(FIXTURES / filename, "r", encoding="utf-8") as f:
         return f.read()
 
 
