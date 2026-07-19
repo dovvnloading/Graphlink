@@ -23,9 +23,12 @@ import graphlink_frontend_bootstrap as gfb
 
 @pytest.fixture(autouse=True)
 def _clean_dev_env(monkeypatch):
-    # Never let a real GRAPHLINK_FRONTEND_DEV in the test-runner's environment
-    # leak into these tests' expectations.
+    # Never let a real GRAPHLINK_FRONTEND_DEV / GRAPHLINK_FRONTEND_DEV_URL in
+    # the test-runner's environment leak into these tests' expectations, and
+    # reset the warn-once dedup so each test observes its own warnings.
     monkeypatch.delenv(gfb.DEV_MODE_ENV_VAR, raising=False)
+    monkeypatch.delenv(gfb.DEV_SERVER_URL_ENV_VAR, raising=False)
+    gfb._warned_dev_url_issues.clear()
 
 
 @pytest.fixture
@@ -188,6 +191,79 @@ class TestBypassPaths:
         monkeypatch.setattr(gfb, "WEB_UI_DIR", tmp_path / "empty_web_ui")
         monkeypatch.setattr(gfb, "ASSETS_DIR", tmp_path / "assets")
         gfb.ensure_frontend_built()  # must not raise
+
+
+class TestResolveDevServerOrigin:
+    """resolve_dev_server_origin() - the trigger for the live
+    dev-server-in-window path. Pure env-var/frozen logic, no QApplication,
+    matching this file's existing convention."""
+
+    def test_neither_var_set_is_none(self):
+        assert gfb.resolve_dev_server_origin() is None
+
+    def test_dev_flag_alone_is_none_and_silent(self, monkeypatch, caplog):
+        # GRAPHLINK_FRONTEND_DEV alone is today's normal, intentional dev
+        # loop (build-skip only) - it must stay warning-free.
+        monkeypatch.setenv(gfb.DEV_MODE_ENV_VAR, "1")
+        with caplog.at_level("WARNING"):
+            assert gfb.resolve_dev_server_origin() is None
+        assert caplog.records == []
+
+    def test_url_alone_is_none_with_a_warning_naming_both_vars(self, monkeypatch, caplog):
+        monkeypatch.setenv(gfb.DEV_SERVER_URL_ENV_VAR, "http://127.0.0.1:5173")
+        with caplog.at_level("WARNING"):
+            assert gfb.resolve_dev_server_origin() is None
+        assert len(caplog.records) == 1
+        assert gfb.DEV_SERVER_URL_ENV_VAR in caplog.text
+        assert gfb.DEV_MODE_ENV_VAR in caplog.text
+
+    def test_misconfiguration_warning_is_logged_once_not_per_call(self, monkeypatch, caplog):
+        # The request interceptor re-resolves on every intercepted request;
+        # an unguarded warning would repeat once per subresource.
+        monkeypatch.setenv(gfb.DEV_SERVER_URL_ENV_VAR, "http://127.0.0.1:5173")
+        with caplog.at_level("WARNING"):
+            for _ in range(5):
+                assert gfb.resolve_dev_server_origin() is None
+        assert len(caplog.records) == 1
+
+    def test_both_set_validly_returns_exactly_that_origin(self, monkeypatch):
+        monkeypatch.setenv(gfb.DEV_MODE_ENV_VAR, "1")
+        monkeypatch.setenv(gfb.DEV_SERVER_URL_ENV_VAR, "http://127.0.0.1:5173")
+        assert gfb.resolve_dev_server_origin() == "http://127.0.0.1:5173"
+
+    def test_localhost_hostname_is_accepted_and_preserved(self, monkeypatch):
+        monkeypatch.setenv(gfb.DEV_MODE_ENV_VAR, "1")
+        monkeypatch.setenv(gfb.DEV_SERVER_URL_ENV_VAR, "http://localhost:5173")
+        assert gfb.resolve_dev_server_origin() == "http://localhost:5173"
+
+    def test_a_path_suffix_is_normalized_away(self, monkeypatch):
+        monkeypatch.setenv(gfb.DEV_MODE_ENV_VAR, "1")
+        monkeypatch.setenv(gfb.DEV_SERVER_URL_ENV_VAR, "http://127.0.0.1:5173/index.html")
+        assert gfb.resolve_dev_server_origin() == "http://127.0.0.1:5173"
+
+    @pytest.mark.parametrize("bad_url", [
+        "http://evil.example.com:5173",   # non-loopback host
+        "http://192.168.1.50:5173",       # intranet host
+        "https://127.0.0.1:5173",         # wrong scheme
+        "ws://127.0.0.1:5173",            # wrong scheme
+        "file:///C:/x",                   # wrong scheme
+        "http://127.0.0.1",               # missing port - invalid, never defaulted to 80
+        "http://127.0.0.1:0",             # port 0 is not a real listen port
+        "not a url",                       # unparseable
+        "http://127.0.0.1:notaport",      # invalid port digits
+    ])
+    def test_invalid_or_disallowed_urls_fail_closed_with_a_warning(self, monkeypatch, caplog, bad_url):
+        monkeypatch.setenv(gfb.DEV_MODE_ENV_VAR, "1")
+        monkeypatch.setenv(gfb.DEV_SERVER_URL_ENV_VAR, bad_url)
+        with caplog.at_level("WARNING"):
+            assert gfb.resolve_dev_server_origin() is None
+        assert len(caplog.records) == 1
+
+    def test_frozen_build_is_none_even_with_both_vars_validly_set(self, monkeypatch):
+        monkeypatch.setattr(sys, "frozen", True, raising=False)
+        monkeypatch.setenv(gfb.DEV_MODE_ENV_VAR, "1")
+        monkeypatch.setenv(gfb.DEV_SERVER_URL_ENV_VAR, "http://127.0.0.1:5173")
+        assert gfb.resolve_dev_server_origin() is None
 
 
 class TestNodeAndNpmDetection:
