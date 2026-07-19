@@ -37,7 +37,15 @@ dependencies = [
 # for newer Python versions, so requiring it would break installs for most users.
 [project.optional-dependencies]
 llamacpp = ["llama-cpp-python"]
-dev = ["pytest"]
+dev = ["pytest", "pytest-env"]
+
+# The suite constructs real QGraphicsObject/QWidget-based nodes and must run
+# without a display server (CI runners, this pytest-env setting). QApplication
+# picks its platform plugin at construction time from this env var, so it must
+# be set before conftest.py's QApplication([]) - pytest-env applies env changes
+# before test collection/session start, which is early enough.
+[tool.pytest.ini_options]
+env = ["QT_QPA_PLATFORM=offscreen"]
 
 [project.gui-scripts]
 graphlink = "graphlink_app:main"
