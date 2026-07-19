@@ -80,10 +80,15 @@ def _restore_current_theme():
 
 
 class TestThemeTokensStructure:
-    def test_every_theme_has_all_four_token_groups(self):
+    def test_every_theme_has_all_expected_token_groups(self):
+        # "qss"/"qss_alpha" were added by the QSS-generation increment
+        # (see tests/test_qss_generation.py for their coverage); this was
+        # "all four token groups" before that change landed.
         for name in ("dark", "mono", "muted"):
             tokens = gs.THEME_TOKENS[name]
-            assert set(tokens.keys()) == {"palette", "semantic", "neutral_button", "graph_node"}
+            assert set(tokens.keys()) == {
+                "palette", "semantic", "neutral_button", "graph_node", "qss", "qss_alpha",
+            }
 
     def test_themes_dict_exposes_the_matching_token_table(self):
         for name in gs.THEMES:
