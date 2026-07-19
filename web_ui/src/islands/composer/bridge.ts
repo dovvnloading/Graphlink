@@ -1,4 +1,5 @@
 import { ComposerState, initialComposerState } from "./bridgeTypes";
+import { isQWebChannelAvailable, connectQWebChannel } from "../../lib/bridge-core/transport";
 
 type StateListener = (state: ComposerState) => void;
 
@@ -23,14 +24,6 @@ interface QtComposerObject {
   openModelSelector: () => void;
   openReasoningSelector: () => void;
   resize: (height: number) => void;
-}
-
-interface QtWindow extends Window {
-  qt?: { webChannelTransport?: unknown };
-  QWebChannel?: new (
-    transport: unknown,
-    callback: (channel: { objects: { composerBridge: QtComposerObject } }) => void,
-  ) => unknown;
 }
 
 export interface ComposerBridge {
@@ -192,9 +185,8 @@ class MockComposerBridge implements ComposerBridge {
 
 export function createComposerBridge(listener: StateListener): ComposerBridge {
   const fallback = new MockComposerBridge(listener);
-  const globalWindow = window as QtWindow;
 
-  if (!globalWindow.QWebChannel || !globalWindow.qt?.webChannelTransport) {
+  if (!isQWebChannelAvailable()) {
     return fallback;
   }
 
@@ -206,8 +198,8 @@ export function createComposerBridge(listener: StateListener): ComposerBridge {
     if (state) listener(state);
   };
 
-  new globalWindow.QWebChannel(globalWindow.qt.webChannelTransport, (channel) => {
-    remote = channel.objects.composerBridge;
+  connectQWebChannel((objects) => {
+    remote = objects.composerBridge as QtComposerObject;
     remote.stateChanged.connect(stateListener);
     connected = true;
     remote.ready();
