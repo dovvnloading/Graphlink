@@ -173,7 +173,7 @@ class TestSafetyGuards:
         }
         assert reordered_result == original_result
 
-    @pytest.mark.parametrize("bad_char", [";", "{", "}", "\n", "\r"])
+    @pytest.mark.parametrize("bad_char", [";", "{", "}", "\n", "\r", "<", ">"])
     def test_a_css_breaking_character_in_a_token_value_raises(self, monkeypatch, bad_char):
         tampered = dict(gs.THEME_TOKENS["dark"])
         tampered_palette = dict(tampered["palette"])
