@@ -1,159 +1,60 @@
-export type RequestState =
-  | "idle"
-  | "preparing"
-  | "uploading"
-  | "waiting"
-  | "generating"
-  | "finalizing"
-  | "canceled"
-  | "failed"
-  | "succeeded";
+/**
+ * The composer island's state contract.
+ *
+ * The TYPES here are re-exported from lib/bridge-core/generated/composer-state.ts,
+ * which is generated from graphlink_app/graphlink_composer_payload.py - the
+ * Python dataclasses that define what the desktop side actually sends. They are
+ * deliberately NOT declared here anymore: this file previously hand-mirrored
+ * every interface, which is exactly the drift risk the schema pipeline exists
+ * to remove (a Python-side field rename would silently disagree with a mirror
+ * nobody remembered to update, and nothing would fail).
+ *
+ * Re-exporting rather than pointing every consumer at the generated path keeps
+ * `import { ComposerState } from "./bridgeTypes"` working across the island's
+ * existing code and tests, so the generated file stays an implementation
+ * detail of where the contract comes from.
+ *
+ * What legitimately still lives here: `initialComposerState`, the mock snapshot
+ * used for browser-preview/dev and by the jsdom tests. That is fixture DATA,
+ * not contract shape - and it is type-checked against the generated
+ * `ComposerState`, so it cannot drift from the contract without failing the
+ * build.
+ */
+export type {
+  ComposerAttachment,
+  ComposerCapabilities,
+  ComposerContext,
+  ComposerContextAnchor,
+  ComposerDraft,
+  ComposerModelOption,
+  ComposerReasoning,
+  ComposerReasoningOption,
+  ComposerRequest,
+  ComposerRoute,
+  ComposerState,
+  ComposerTheme,
+  ComposerThemeGraphNode,
+  ComposerThemeNeutralButton,
+  ComposerThemePalette,
+  ComposerThemeSemantic,
+} from "../../lib/bridge-core/generated/composer-state";
 
-export interface ComposerAttachment {
-  id: string;
-  name: string;
-  kind: string;
-  tokenCount: number;
-  preparationState: string;
-  contextLabel?: string;
-}
+import type { ComposerState } from "../../lib/bridge-core/generated/composer-state";
 
-export interface ComposerContext {
-  anchor: { id: string; label: string; type: string } | null;
-  items: ComposerAttachment[];
-  totalTokens: number;
-  reviewAvailable: boolean;
-}
-
-export interface ComposerRoute {
-  mode: "cloud" | "ollama" | "llamacpp" | "unknown";
-  provider: string;
-  modelId: string;
-  modelValue?: string;
-  modelLabel: string;
-  modelOptions: ComposerModelOption[];
-  reasoning: ComposerReasoning;
-  label: string;
-  available: boolean;
-  canChange: boolean;
-}
-
-export interface ComposerModelOption {
-  id: string;
-  label: string;
-  provider: string;
-  source: "installed" | "catalog" | "saved" | "configured" | string;
-  active: boolean;
-  ready: boolean;
-  available: boolean;
-  capabilities: string[];
-}
-
-export interface ComposerReasoningOption {
-  id: "Quick" | "Thinking" | string;
-  label: string;
-  description: string;
-}
-
-export interface ComposerReasoning {
-  level: "Quick" | "Thinking" | string;
-  label: string;
-  options: ComposerReasoningOption[];
-}
-
-export interface ComposerState {
-  schemaVersion: 1;
-  revision: number;
-  draft: {
-    id: string;
-    text: string;
-    contextMode: string;
-    sendMode: "enter_to_send" | "ctrl_enter_to_send";
-    restored: boolean;
-  };
-  context: ComposerContext;
-  route: ComposerRoute;
-  request: {
-    id: string | null;
-    state: RequestState;
-    message: string;
-    canSend: boolean;
-    canCancel: boolean;
-    canRetry: boolean;
-  };
-  capabilities: {
-    attachments: boolean;
-    contextReview: boolean;
-    routeSelection: boolean;
-    modelSelection: boolean;
-    reasoningSelection: boolean;
-    settingsShortcut: boolean;
-    cancellation: boolean;
-  };
-  theme: ComposerTheme;
-}
-
-export interface ComposerThemePalette {
-  userNode: string;
-  aiNode: string;
-  selection: string;
-  navHighlight: string;
-}
-
-export interface ComposerThemeSemantic {
-  searchHighlight: string;
-  statusInfo: string;
-  statusSuccess: string;
-  statusError: string;
-  statusWarning: string;
-  artifact: string;
-  conversationUserBubble: string;
-  conversationAiBubble: string;
-  default: string;
-}
-
-export interface ComposerThemeNeutralButton {
-  background: string;
-  hover: string;
-  pressed: string;
-  border: string;
-  icon: string;
-  mutedIcon: string;
-}
-
-export interface ComposerThemeGraphNode {
-  border: string;
-  header: string;
-  dot: string;
-  hoverDot: string;
-  hoverOutline: string;
-  selectedOutline: string;
-  bodyStart: string;
-  bodyEnd: string;
-  headerStart: string;
-  headerEnd: string;
-  badgeFill: string;
-  panelFill: string;
-  panelBorder: string;
-}
-
-export interface ComposerTheme {
-  mode: "dark" | "light";
-  name: string;
-  // Every --gl-* custom property name/value pair for the active theme,
-  // straight from the Python side's css_custom_properties() - the same
-  // function the host's build-time :root injection uses, so this can never
-  // disagree with what first paint already showed. Applied to
-  // document.documentElement on every snapshot; see ComposerApp.tsx.
-  cssVariables: Record<string, string>;
-  palette: ComposerThemePalette;
-  semantic: ComposerThemeSemantic;
-  neutralButton: ComposerThemeNeutralButton;
-  graphNode: ComposerThemeGraphNode;
-}
+/**
+ * RequestState is not a named export of the generated module - the generator
+ * inlines string-literal unions at their use site rather than hoisting them to
+ * named aliases. Deriving it from the generated ComposerRequest keeps it tied
+ * to the generated contract instead of restating the union by hand.
+ */
+export type RequestState = ComposerState["request"]["state"];
 
 export const initialComposerState: ComposerState = {
   schemaVersion: 1,
+  // Mirrors what IslandBridge.publish() actually stamps onto every real
+  // payload, so this fixture stays a faithful stand-in for one rather than a
+  // subtly different shape that only the mock path ever sees.
+  minCompatibleSchemaVersion: 1,
   revision: 0,
   draft: {
     id: "browser-preview",

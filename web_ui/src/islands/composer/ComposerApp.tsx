@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ComposerState, initialComposerState } from "./bridgeTypes";
-import { ComposerBridge, createComposerBridge } from "./bridge";
+import { BridgeRejection, ComposerBridge, createComposerBridge } from "./bridge";
+import { BridgeErrorState } from "./BridgeErrorState";
 import { isBusy, requestLabel } from "./state";
 import { useAppliedThemeCssVariables } from "./theme";
 
@@ -23,6 +24,7 @@ function Icon({ name }: { name: "attach" | "send" | "stop" | "chevron" }) {
 
 function ComposerApp() {
   const [state, setState] = useState<ComposerState>(initialComposerState);
+  const [rejection, setRejection] = useState<BridgeRejection | null>(null);
   const bridgeRef = useRef<ComposerBridge | null>(null);
   const shellRef = useRef<HTMLElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -30,7 +32,7 @@ function ComposerApp() {
   const attachmentCount = state.context.items.length;
 
   useEffect(() => {
-    const bridge = createComposerBridge(setState);
+    const bridge = createComposerBridge(setState, setRejection);
     bridgeRef.current = bridge;
     bridge.ready();
     return () => {
@@ -107,6 +109,14 @@ function ComposerApp() {
 
     event.preventDefault();
     bridgeRef.current?.stageTextAttachment(pastedText);
+  }
+
+  // Replaces the composer entirely rather than annotating it: after a rejected
+  // payload, anything still rendered is stale, and an input box that still
+  // looks usable would invite typing into state the desktop side no longer
+  // shares. Placed after the hooks above so hook order stays unconditional.
+  if (rejection) {
+    return <BridgeErrorState rejection={rejection} />;
   }
 
   return (

@@ -1,7 +1,26 @@
 import { ComposerState, initialComposerState } from "./bridgeTypes";
 import { isQWebChannelAvailable, connectQWebChannel } from "../../lib/bridge-core/transport";
+import { checkSchemaCompatibility } from "../../lib/bridge-core/schemaVersion";
+import { validateComposerState } from "../../lib/bridge-core/generated/composer-state";
 
 type StateListener = (state: ComposerState) => void;
+
+/**
+ * Why a payload was rejected, for the visible error state. `null` means the
+ * last payload was fine.
+ *
+ * This exists because the previous behavior - returning null from parseState()
+ * and letting the caller skip the listener call - meant a malformed or
+ * version-mismatched payload froze the UI silently, with no signal to the user
+ * or to a developer that anything had gone wrong.
+ */
+export interface BridgeRejection {
+  kind: "version" | "shape" | "parse";
+  reason: string;
+  details: string[];
+}
+
+export type RejectionListener = (rejection: BridgeRejection | null) => void;
 
 interface QtSignal<T> {
   connect(listener: (value: T) => void): void;
@@ -44,14 +63,61 @@ export interface ComposerBridge {
   dispose(): void;
 }
 
-function parseState(payload: string): ComposerState | null {
+type ParseOutcome =
+  | { ok: true; state: ComposerState }
+  | { ok: false; rejection: BridgeRejection };
+
+/**
+ * Parse and vet an incoming payload.
+ *
+ * Every rejection path now returns a REASON rather than a bare null, so the
+ * caller can surface it. The old implementation collapsed "not valid JSON",
+ * "wrong schema version", and "missing required fields" into a single `null`
+ * that the caller silently dropped.
+ *
+ * Shape validation uses the generated validator (composer-state.ts), which is
+ * produced from the same Python dataclasses that define the payload - so this
+ * check cannot drift from what the desktop side actually sends without the
+ * staleness pytest failing first.
+ */
+function parseState(payload: string): ParseOutcome {
+  let parsed: unknown;
   try {
-    const state = JSON.parse(payload) as ComposerState;
-    if (state?.schemaVersion !== 1 || !state.draft || !state.request) return null;
-    return state;
-  } catch {
-    return null;
+    parsed = JSON.parse(payload);
+  } catch (error) {
+    return {
+      ok: false,
+      rejection: {
+        kind: "parse",
+        reason: "The desktop app sent an update that could not be read as JSON.",
+        details: [error instanceof Error ? error.message : String(error)],
+      },
+    };
   }
+
+  const version = checkSchemaCompatibility(parsed);
+  if (!version.compatible) {
+    return {
+      ok: false,
+      rejection: { kind: "version", reason: version.reason, details: [] },
+    };
+  }
+
+  const validated = validateComposerState(parsed);
+  if (!validated.ok) {
+    return {
+      ok: false,
+      rejection: {
+        kind: "shape",
+        reason: "The update from the desktop app did not match the expected format.",
+        // Bounded: a badly wrong payload can produce a very long list, and the
+        // error state shows these to a human.
+        details: validated.errors.slice(0, 8),
+      },
+    };
+  }
+
+  return { ok: true, state: validated.value as unknown as ComposerState };
 }
 
 class MockComposerBridge implements ComposerBridge {
@@ -183,7 +249,10 @@ class MockComposerBridge implements ComposerBridge {
   dispose(): void {}
 }
 
-export function createComposerBridge(listener: StateListener): ComposerBridge {
+export function createComposerBridge(
+  listener: StateListener,
+  onRejection?: RejectionListener,
+): ComposerBridge {
   const fallback = new MockComposerBridge(listener);
 
   if (!isQWebChannelAvailable()) {
@@ -194,8 +263,21 @@ export function createComposerBridge(listener: StateListener): ComposerBridge {
   let connected = false;
   let pendingHeight: number | null = null;
   const stateListener = (payload: string) => {
-    const state = parseState(payload);
-    if (state) listener(state);
+    const outcome = parseState(payload);
+    if (outcome.ok) {
+      listener(outcome.state);
+      // Clear any previously-shown error once a good payload arrives, so a
+      // transient bad update doesn't strand the UI in the error state.
+      onRejection?.(null);
+      return;
+    }
+    // Loud in the console for a developer, and surfaced on screen by the
+    // caller for a user - never silently dropped, which was the old behavior.
+    console.error(
+      `[composer bridge] rejected payload (${outcome.rejection.kind}): ${outcome.rejection.reason}`,
+      outcome.rejection.details,
+    );
+    onRejection?.(outcome.rejection);
   };
 
   connectQWebChannel((objects) => {

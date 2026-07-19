@@ -1,0 +1,49 @@
+/* Styling for the visible bridge-failure state (BridgeErrorState.tsx), which
+   replaced the old silent freeze.
+
+   DELIBERATELY A SEPARATE FILE rather than appended to styles.css: that file is
+   guarded by a byte-exact resolution-golden test
+   (graphlink_app/tests/test_composer_token_retrofit.py), which proves every
+   var(--gl-composer-*) in it still resolves to the literal that sat at that
+   exact site before the token retrofit. Appending new rules there would break
+   that comparison, and "just regenerate the fixture" is precisely the reflex
+   that test exists to make expensive. Keeping new CSS out of styles.css
+   preserves the guarantee intact instead of weakening it for convenience.
+
+   Imported from main.tsx (not via an @import in styles.css, which would itself
+   modify the guarded file). Uses only existing --gl-composer-* tokens - no new
+   colors are minted here, so this stays inside the raw-hex ban and themes like
+   the rest of the island. */
+
+.bridge-error {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+}
+
+.bridge-error-title {
+  color: var(--gl-composer-attachment-count-hover-text);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.bridge-error-reason {
+  margin: 0;
+  color: var(--gl-composer-control-value-text);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.bridge-error-details {
+  margin: 0;
+  padding-left: 16px;
+  color: var(--gl-composer-control-kicker-text);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.bridge-error-hint {
+  margin: 0;
+  color: var(--gl-composer-control-icon);
+  font-size: 10px;
+}

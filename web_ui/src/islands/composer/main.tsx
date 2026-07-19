@@ -2,6 +2,9 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import ComposerApp from "./ComposerApp";
 import "./styles.css";
+// Separate file so styles.css stays byte-stable for its resolution-golden
+// test; see bridge-error.css's own header for why.
+import "./bridge-error.css";
 
 // styles.css resolves every color through var(--gl-*). In the real app those
 // values are injected into <head> by the Python host for whichever theme is
