@@ -17,6 +17,8 @@ from graphlink_composer_popups import (
     composer_picker_list_height,
     composer_picker_position,
 )
+import graphlink_config as config
+from graphlink_styles import css_root_block
 from graphlink_web_island_host import _inline_bundle, _rounded_region
 
 
@@ -272,3 +274,34 @@ def test_inline_bundle_is_self_contained_and_keeps_channel_local():
     assert "./assets/" not in document
     assert "qrc:///qtwebchannel/qwebchannel.js" in document
     assert "Content-Security-Policy" in document
+
+
+def test_inline_bundle_embeds_the_current_theme_root_block_byte_exact():
+    root = Path(__file__).resolve().parents[2] / "assets" / "composer"
+    document = _inline_bundle(root)
+
+    assert css_root_block(config.CURRENT_THEME) in document
+
+
+def test_inline_bundle_theme_root_block_precedes_the_built_stylesheet():
+    root = Path(__file__).resolve().parents[2] / "assets" / "composer"
+    document = _inline_bundle(root)
+
+    root_block_index = document.index(css_root_block(config.CURRENT_THEME))
+    built_stylesheet_index = document.index("<style>", root_block_index + 1)
+    assert root_block_index < built_stylesheet_index
+
+
+def test_inline_bundle_follows_current_theme_not_a_hardcoded_one(monkeypatch):
+    root = Path(__file__).resolve().parents[2] / "assets" / "composer"
+
+    monkeypatch.setattr(config, "CURRENT_THEME", "mono")
+    mono_document = _inline_bundle(root)
+
+    monkeypatch.setattr(config, "CURRENT_THEME", "muted")
+    muted_document = _inline_bundle(root)
+
+    assert css_root_block("mono") in mono_document
+    assert css_root_block("mono") not in muted_document
+    assert css_root_block("muted") in muted_document
+    assert css_root_block("muted") not in mono_document

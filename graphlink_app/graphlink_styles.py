@@ -1074,7 +1074,7 @@ def css_custom_properties(theme_name: str) -> dict[str, str]:
     return properties
 
 
-_UNSAFE_CSS_VALUE_CHARS = (";", "{", "}", "\n", "\r")
+_UNSAFE_CSS_VALUE_CHARS = (";", "{", "}", "\n", "\r", "<", ">")
 
 
 def _assert_safe_css_declaration_value(property_name: str, value: str) -> None:
@@ -1082,7 +1082,18 @@ def _assert_safe_css_declaration_value(property_name: str, value: str) -> None:
     with no escaping - internal, self-authored data today (never user
     input), but a typo introducing one of these characters would silently
     produce syntactically broken or CSS-injected output otherwise. Loud
-    failure here beats a broken :root block discovered later at paint time."""
+    failure here beats a broken :root block discovered later at paint time.
+
+    `<`/`>` are included alongside the original CSS-breaking set because
+    css_root_block()'s output is no longer only ever consumed as CSS syntax -
+    graphlink_web_island_host.py's _inline_bundle() now embeds it directly
+    into an HTML <style> raw-text element. A value containing the literal
+    sequence `</style` there would prematurely close the style element in
+    HTML parsing, and this page's CSP (script-src 'unsafe-inline') would let
+    a broken-out inline <script> actually execute rather than render as
+    inert text. Blocking `<`/`>` entirely is simpler and safer than only
+    blocking the exact `</style` substring, and costs nothing today - no
+    THEME_TOKENS value has ever contained either character."""
     if any(char in value for char in _UNSAFE_CSS_VALUE_CHARS):
         raise ValueError(
             f"{property_name} = {value!r} contains a character that would break out "

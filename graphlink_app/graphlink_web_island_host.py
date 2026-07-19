@@ -31,7 +31,9 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+import graphlink_config as config
 from graphlink_paths import asset_path
+from graphlink_styles import css_root_block
 
 try:
     from PySide6.QtWebChannel import QWebChannel
@@ -46,7 +48,22 @@ except ImportError:
 
 
 def _inline_bundle(asset_root: Path) -> str:
-    """Inline the Vite output so the page has no file:// or network dependency."""
+    """Inline the Vite output so the page has no file:// or network dependency.
+
+    Also embeds a `:root { --gl-*: ...; }` block for the current app theme
+    (config.CURRENT_THEME) directly into <head>, ahead of the island's own
+    built stylesheet - so any var(--gl-*) reference in island CSS resolves to
+    a real value from first paint, before QWebChannel connects or the bridge
+    ever calls publish(). Without this, an island CSS rule referencing
+    var(--gl-*) would render unstyled (the property is simply undefined)
+    until some later JS-side mechanism sets it - a gap that still exists
+    separately (nothing today writes --gl-* onto document.documentElement at
+    runtime for live theme switching; this only covers the value present at
+    construction time). Same trust-CURRENT_THEME convention already used
+    throughout the app (e.g. graphlink_composer_bridge.py's _theme()) - not
+    defensive against an invalid theme name, since apply_theme() is the one
+    place that guarantees CURRENT_THEME is valid.
+    """
     index_path = asset_root / "index.html"
     if not index_path.is_file():
         return (
@@ -95,7 +112,8 @@ def _inline_bundle(asset_root: Path) -> str:
         'script-src \'unsafe-inline\' qrc:; style-src \'unsafe-inline\'; img-src data:; '
         'connect-src \'none\';">'
     )
-    document = document.replace("<head>", f"<head>{csp}", 1)
+    theme_root_style = f"<style>{css_root_block(config.CURRENT_THEME)}</style>"
+    document = document.replace("<head>", f"<head>{csp}{theme_root_style}", 1)
     channel_script = '<script src="qrc:///qtwebchannel/qwebchannel.js"></script>'
     document = document.replace("</head>", f"{channel_script}</head>", 1)
     return document
