@@ -47,6 +47,61 @@ except ImportError:
     _harden_preview_web_view = None
 
 
+class MultiChunkBuildError(RuntimeError):
+    """Raised when a Vite build produced more than one CSS or JS chunk.
+
+    `_inline_bundle()`'s whole approach - regex-replace the single `<link>`/
+    `<script src>` tag `index.html` references with the real file's content -
+    assumes exactly one chunk of each kind exists. That assumption can break
+    two ways, neither of which is safe to inline past silently:
+
+    - Vite emits a SECOND `<link>`/`<script src>` tag (e.g. a shared-vendor
+      chunk split out automatically once a second heavy dependency is added).
+      Inlining each tag separately still "succeeds" mechanically, but any
+      `import`/`export` relationship between the original files - resolved via
+      real relative URLs when the browser loads separate <script> files -
+      breaks once both are flattened into bodyless inline <script type=
+      "module"> text with no src to resolve against.
+    - Vite code-splits via a DYNAMIC `import()` inside the entry chunk, with
+      no second <link>/<script src> tag in index.html at all - the browser
+      fetches that chunk on demand at runtime. A regex over index.html's tags
+      can never see this case; the extra .js file just sits on disk,
+      unaccounted for, until a user's action triggers the dynamic import and
+      it fails to fetch (no server - the page is `about:blank` with fully
+      inlined content).
+
+    Both failure modes are silent until someone hits them at runtime, in a
+    shipped build, with no signal pointing back at "the build shape changed."
+    Checking the real file count on disk - not just what index.html's tags
+    reference - catches both.
+    """
+
+
+def _assert_single_chunk_build(asset_root: Path) -> None:
+    assets_dir = asset_root / "assets"
+    if not assets_dir.is_dir():
+        return
+
+    css_files = sorted(p.name for p in assets_dir.glob("*.css"))
+    js_files = sorted(p.name for p in assets_dir.glob("*.js"))
+
+    if len(css_files) > 1 or len(js_files) > 1:
+        raise MultiChunkBuildError(
+            f"{assets_dir} contains {len(css_files)} CSS file(s) {css_files} and "
+            f"{len(js_files)} JS file(s) {js_files} - _inline_bundle() only knows "
+            "how to inline exactly one of each. This means Vite's build for this "
+            "island has code-split into multiple chunks (a new dynamic import(), "
+            "a manualChunks() config, or a new dependency large enough for Vite's "
+            "automatic chunking to kick in). Find what changed in the island's "
+            "source or vite.config.ts and either remove the split (this island's "
+            "single-chunk assumption is a real, load-bearing constraint, not "
+            "incidental) or extend _inline_bundle() deliberately to handle "
+            "multiple chunks correctly, rather than letting this fail silently "
+            "at runtime the first time a dynamically-imported chunk can't be "
+            "fetched from the fully-inlined, server-less page."
+        )
+
+
 def _inline_bundle(asset_root: Path) -> str:
     """Inline the Vite output so the page has no file:// or network dependency.
 
@@ -71,6 +126,8 @@ def _inline_bundle(asset_root: Path) -> str:
             "</body></html>"
         )
     document = index_path.read_text(encoding="utf-8")
+
+    _assert_single_chunk_build(asset_root)
 
     # Vite emits one stylesheet and one module. Replacing those tags separately
     # keeps the generated HTML easy to inspect and prevents accidental path use.
