@@ -15,8 +15,14 @@ from PySide6.QtCore import QObject, Signal, Slot
 
 import graphlink_config as config
 from graphlink_composer import ComposerController
-from graphlink_config import get_current_palette
+from graphlink_config import (
+    get_current_palette,
+    get_graph_node_colors,
+    get_neutral_button_colors,
+    get_semantic_color,
+)
 from graphlink_island_bridge import IslandBridge
+from graphlink_styles import THEME_TOKENS
 
 
 _MAX_DRAFT_CHARS = 100_000
@@ -104,7 +110,6 @@ class ComposerBridge(IslandBridge, QObject):
     requestCompleted = Signal(str)
     requestFailed = Signal(str)
     routeChanged = Signal(str)
-    themeChanged = Signal(str)
     heightRequested = Signal(int)  # Qt-only side channel; see class docstring
 
     def __init__(self, window, controller: ComposerController | None = None, parent=None):
@@ -121,12 +126,6 @@ class ComposerBridge(IslandBridge, QObject):
 
     def _transport_send(self, payload_json: str) -> None:
         self.stateChanged.emit(payload_json)
-
-    def _after_publish(self, payload, serialized) -> None:
-        # Preserve today's theme broadcast (nothing on the JS side connects to
-        # it yet); scheduled for removal alongside the theme-token-table work,
-        # not this refactor.
-        self.themeChanged.emit(json.dumps(payload["theme"], sort_keys=True))
 
     def _on_dispose(self) -> None:
         try:
@@ -554,13 +553,82 @@ class ComposerBridge(IslandBridge, QObject):
             "reasoning": self._reasoning(settings, mode),
         }
 
-    def _theme(self) -> dict[str, str]:
-        try:
-            palette = get_current_palette()
-            accent = palette.SELECTION.name()
-        except (AttributeError, TypeError):
-            accent = "#A6A6A6"
-        return {"mode": "dark", "accent": accent, "surface": "#1F1F1F"}
+    def _theme(self) -> dict[str, Any]:
+        """Serialize the full current-theme color set.
+
+        Goes through the same public lookup functions every other color
+        consumer in the app uses (get_current_palette/get_semantic_color/
+        get_neutral_button_colors/get_graph_node_colors) rather than reading
+        graphlink_styles.THEME_TOKENS directly, for two reasons: every value
+        comes back through QColor.name(), which guarantees consistent
+        lowercase hex regardless of how a theme's literal happened to be
+        cased in the source table; and get_graph_node_colors() derives most
+        of its keys live from get_neutral_button_colors() rather than storing
+        them as independent literals, so reading the table directly here
+        would have silently missed that relationship. THEME_TOKENS is still
+        used for one thing only: the semantic "default" fallback value, which
+        is a table-only concept get_semantic_color() doesn't expose as a
+        queryable role by name.
+
+        Replaces the old {mode, accent, surface} shape, whose "surface" value
+        was a hardcoded literal never actually derived from the active theme.
+        Nothing on the JS side reads state.theme yet (confirmed before this
+        change), so there is no narrower shape to preserve compatibility with.
+        """
+        palette = get_current_palette()
+        neutral_button = get_neutral_button_colors()
+        graph_node = get_graph_node_colors()
+        # Same trust-CURRENT_THEME convention get_current_palette() above already
+        # has (used by 40+ files, never defensive against an invalid theme name) -
+        # apply_theme() is the one place that guarantees CURRENT_THEME is valid.
+        default_semantic = THEME_TOKENS[config.CURRENT_THEME]["semantic"]["default"]
+        return {
+            # All three themes are dark-mode variants today; kept as an
+            # explicit field for a future light theme, not computed from
+            # anything yet.
+            "mode": "dark",
+            "name": config.CURRENT_THEME,
+            "palette": {
+                "userNode": palette.USER_NODE.name(),
+                "aiNode": palette.AI_NODE.name(),
+                "selection": palette.SELECTION.name(),
+                "navHighlight": palette.NAV_HIGHLIGHT.name(),
+            },
+            "semantic": {
+                "searchHighlight": get_semantic_color("search_highlight").name(),
+                "statusInfo": get_semantic_color("status_info").name(),
+                "statusSuccess": get_semantic_color("status_success").name(),
+                "statusError": get_semantic_color("status_error").name(),
+                "statusWarning": get_semantic_color("status_warning").name(),
+                "artifact": get_semantic_color("artifact").name(),
+                "conversationUserBubble": get_semantic_color("conversation_user_bubble").name(),
+                "conversationAiBubble": get_semantic_color("conversation_ai_bubble").name(),
+                "default": default_semantic.lower(),
+            },
+            "neutralButton": {
+                "background": neutral_button["background"].name(),
+                "hover": neutral_button["hover"].name(),
+                "pressed": neutral_button["pressed"].name(),
+                "border": neutral_button["border"].name(),
+                "icon": neutral_button["icon"].name(),
+                "mutedIcon": neutral_button["muted_icon"].name(),
+            },
+            "graphNode": {
+                "border": graph_node["border"].name(),
+                "header": graph_node["header"].name(),
+                "dot": graph_node["dot"].name(),
+                "hoverDot": graph_node["hover_dot"].name(),
+                "hoverOutline": graph_node["hover_outline"].name(),
+                "selectedOutline": graph_node["selected_outline"].name(),
+                "bodyStart": graph_node["body_start"].name(),
+                "bodyEnd": graph_node["body_end"].name(),
+                "headerStart": graph_node["header_start"].name(),
+                "headerEnd": graph_node["header_end"].name(),
+                "badgeFill": graph_node["badge_fill"].name(),
+                "panelFill": graph_node["panel_fill"].name(),
+                "panelBorder": graph_node["panel_border"].name(),
+            },
+        }
 
     def _build_state_payload(self) -> dict[str, Any]:
         draft = self.controller.draft

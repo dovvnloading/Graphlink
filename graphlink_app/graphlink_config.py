@@ -1,6 +1,6 @@
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import QApplication
-from graphlink_styles import THEMES
+from graphlink_styles import THEME_TOKENS, THEMES
 
 CURRENT_THEME = "dark"
 
@@ -35,77 +35,49 @@ def is_muted_theme():
 
 
 def get_semantic_color(name: str) -> QColor:
-    palette = get_current_palette()
+    """Look up a semantic role's color for the current theme.
 
-    if name == "search_highlight":
-        return QColor(palette.NAV_HIGHLIGHT)
-    if name == "status_info":
-        return QColor(palette.AI_NODE)
-    if name == "status_success":
-        return QColor(palette.USER_NODE)
-    if name == "status_error":
-        return QColor("#9A9A9A") if is_monochrome_theme() else QColor("#8A8A8A") if is_muted_theme() else QColor("#848484")
-    if name == "status_warning":
-        return QColor("#B0B0B0") if is_monochrome_theme() else QColor("#8D8D8D") if is_muted_theme() else QColor("#919191")
-    if name == "artifact":
-        return QColor("#8F8F8F") if is_monochrome_theme() else QColor(palette.AI_NODE)
-    if name == "conversation_user_bubble":
-        return QColor("#595959") if is_monochrome_theme() else QColor(palette.USER_NODE).darker(125)
-    if name == "conversation_ai_bubble":
-        return QColor("#323232") if is_monochrome_theme() else QColor("#323232")
-    return QColor(palette.SELECTION)
+    A table lookup against graphlink_styles.THEME_TOKENS, not a per-theme
+    formula: every role's resolved value (whether it used to be derived from
+    a palette color, computed via QColor.darker()/.lighter(), or a plain
+    per-theme literal) is captured once in the token table.
+
+    Known drift risk, documented rather than restructured: four of these
+    roles (search_highlight/status_info/status_success/the unrecognized-name
+    fallback) are pure aliases of a palette color in every theme, and two more
+    (artifact, conversation_user_bubble) alias or derive from a palette color
+    in some themes but not others (mono gets its own independent literal for
+    both). Unlike get_graph_node_colors()'s button-derived keys, this aliasing
+    is theme-conditional rather than uniform, so it is not re-expressed as a
+    live lookup here - edit both THEME_TOKENS["semantic"] and the relevant
+    palette entry together if either changes.
+    """
+    tokens = THEME_TOKENS[CURRENT_THEME]["semantic"]
+    return QColor(tokens.get(name, tokens["default"]))
 
 
 def get_neutral_button_colors():
-    if is_monochrome_theme():
-        return {
-            "background": QColor("#555555"),
-            "hover": QColor("#666666"),
-            "pressed": QColor("#4A4A4A"),
-            "border": QColor("#666666"),
-            "icon": QColor("#FFFFFF"),
-            "muted_icon": QColor("#D5D5D5"),
-        }
-
-    if is_muted_theme():
-        return {
-            "background": QColor("#3A3A3A"),
-            "hover": QColor("#484848"),
-            "pressed": QColor("#363636"),
-            "border": QColor("#5E5E5E"),
-            "icon": QColor("#DBDBDB"),
-            "muted_icon": QColor("#BABABA"),
-        }
-
-    return {
-        "background": QColor("#393939"),
-        "hover": QColor("#484848"),
-        "pressed": QColor("#343434"),
-        "border": QColor("#585858"),
-        "icon": QColor("#F0F0F0"),
-        "muted_icon": QColor("#BDBDBD"),
-    }
+    """Look up the current theme's neutral button color set from THEME_TOKENS."""
+    tokens = THEME_TOKENS[CURRENT_THEME]["neutral_button"]
+    return {key: QColor(value) for key, value in tokens.items()}
 
 
 def get_graph_node_colors():
-    button_colors = get_neutral_button_colors()
-    if is_muted_theme():
-        return {
-            "border": button_colors["border"],
-            "header": button_colors["muted_icon"],
-            "dot": button_colors["border"],
-            "hover_dot": button_colors["hover"],
-            "hover_outline": button_colors["hover"].lighter(112),
-            "selected_outline": button_colors["hover"].lighter(124),
-            "body_start": QColor("#303030"),
-            "body_end": QColor("#282828"),
-            "header_start": QColor("#3D3D3D"),
-            "header_end": QColor("#333333"),
-            "badge_fill": QColor("#4A4A4A"),
-            "panel_fill": QColor("#1C1C1C"),
-            "panel_border": button_colors["border"],
-        }
+    """Return the current theme's graph node color set.
 
+    Only body_start/body_end/header_start/header_end/badge_fill/panel_fill are
+    independent per-theme literals, looked up from THEME_TOKENS. The other
+    seven keys are not independent tokens - in every theme, border/dot/
+    panel_border alias neutral_button's border, header aliases its muted_icon,
+    hover_dot aliases its hover, and hover_outline/selected_outline are
+    QColor.lighter(112)/.lighter(124) of that same hover color. Deriving them
+    live from get_neutral_button_colors() here (matching the original
+    per-theme branching logic exactly) keeps that relationship real instead of
+    flattening it into seven more places a theme edit would need to touch by
+    hand without anything enforcing it.
+    """
+    button_colors = get_neutral_button_colors()
+    tokens = THEME_TOKENS[CURRENT_THEME]["graph_node"]
     return {
         "border": button_colors["border"],
         "header": button_colors["muted_icon"],
@@ -113,12 +85,12 @@ def get_graph_node_colors():
         "hover_dot": button_colors["hover"],
         "hover_outline": button_colors["hover"].lighter(112),
         "selected_outline": button_colors["hover"].lighter(124),
-        "body_start": QColor("#303030"),
-        "body_end": QColor("#292929"),
-        "header_start": QColor("#3C3C3C"),
-        "header_end": QColor("#333333"),
-        "badge_fill": QColor("#484848"),
-        "panel_fill": QColor("#202020"),
+        "body_start": QColor(tokens["body_start"]),
+        "body_end": QColor(tokens["body_end"]),
+        "header_start": QColor(tokens["header_start"]),
+        "header_end": QColor(tokens["header_end"]),
+        "badge_fill": QColor(tokens["badge_fill"]),
+        "panel_fill": QColor(tokens["panel_fill"]),
         "panel_border": button_colors["border"],
     }
 
