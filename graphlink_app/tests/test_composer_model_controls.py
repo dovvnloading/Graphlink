@@ -142,7 +142,7 @@ def test_cloud_route_uses_persisted_catalog_and_selection_updates_chat_task():
 
 
 def test_composer_footer_has_stable_model_width_and_no_status_dot():
-    source_root = Path(__file__).resolve().parents[2] / "composer_ui" / "src"
+    source_root = Path(__file__).resolve().parents[2] / "web_ui" / "src" / "islands" / "composer"
     composer_source = (source_root / "ComposerApp.tsx").read_text(encoding="utf-8")
     styles_source = (source_root / "styles.css").read_text(encoding="utf-8")
 

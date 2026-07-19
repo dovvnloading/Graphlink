@@ -3,7 +3,7 @@
 from pathlib import Path
 
 
-SOURCE_ROOT = Path(__file__).resolve().parents[2] / "composer_ui" / "src"
+SOURCE_ROOT = Path(__file__).resolve().parents[2] / "web_ui" / "src" / "islands" / "composer"
 
 
 def test_context_is_not_rendered_as_a_title_or_summary_in_the_composer():
