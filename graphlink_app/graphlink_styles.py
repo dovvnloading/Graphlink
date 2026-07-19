@@ -973,6 +973,130 @@ _FRAME_COLORS_BY_THEME = {
     "muted": MUTED_FRAME_COLORS,
 }
 
+# The one font-family value used everywhere it's explicit in the three QSS
+# templates above (confirmed via `grep -o "font-family:[^;]*;"` - a single
+# distinct declaration, byte-identical to what's already shipping; no
+# per-theme variation exists to preserve). Not every QSS rule sets
+# font-family explicitly (several inherit Qt's platform default instead),
+# so this is "the app's one explicit font choice," not "every font in use."
+FONT_FAMILY = "'Segoe UI', sans-serif"
+
+
+def css_custom_properties(theme_name: str) -> dict[str, str]:
+    """Flatten THEME_TOKENS + the frame-color presets + FONT_FAMILY into
+    --gl-*-named CSS custom properties, for web/Tailwind consumption
+    (section 3.4: "Tailwind preset maps every utility to var(--gl-*))".
+
+    Key names mirror THEME_TOKENS's own existing group/key names, mostly
+    mechanically (kebab-cased), not a redesigned semantic vocabulary (section
+    3.4's prose names one - surfaces bg-0/1/2, text tiers, accent, focus ring
+    - but inventing that naming now, with zero real web consumer to validate
+    it against, risks the exact "one example isn't enough to generalize
+    correctly from" mistake this migration has already avoided elsewhere:
+    see IslandBridge's id-not-path firewall, and the lib/ui/ deferral). Tried
+    the assignment exercise directly before deciding this: there is no clean
+    3-way "bg-0/1/2" split anywhere in the exported groups, and even counting
+    the excluded qss group there are only two distinct chrome-background
+    values per theme, not three - naming that vocabulary today would mean
+    inventing a value, not renaming one. ("Mostly" mechanical, not entirely:
+    the frame-color export does real, small interpretive work - deduping
+    "X"/"X Header" pairs into one token on the verified assumption their
+    colors match, and slugifying human-readable preset names - reasonable,
+    but worth being precise about rather than claiming zero judgment.)
+
+    Reshaping into a real semantic vocabulary is deferred to whichever
+    increment actually retrofits a real island onto it, with real usage to
+    design against. Until then, these mechanical --gl-* names should NOT
+    become a public surface island CSS/TSX consumes directly (nothing
+    currently stops that, e.g. via Tailwind's arbitrary-value syntax) - once
+    real usage depends on the mechanical names, the eventual semantic rename
+    becomes a breaking, repo-wide find-and-replace instead of an additive
+    layer on top of this function's output.
+
+    The "qss"/"qss_alpha" groups are deliberately excluded - those are
+    QSS-only literals for the hand-written Qt stylesheets (window chrome,
+    scrollbars, native widget states), not colors any island's own UI is
+    expected to reuse. Known real gap in that boundary, confirmed by
+    adversarial review, not fixed here: qlineedit_focus__border_color (in
+    the excluded qss group) is the only "focus ring" color anywhere in this
+    file, and qss also holds the only "surface bg"/"primary text" values -
+    two of section 3.4's named concepts have no source data outside the
+    group this function excludes. Whoever builds the semantic layer needs
+    new curated source data for those, not just a rename of what this
+    function already exports.
+    """
+    tokens = THEME_TOKENS[theme_name]
+    included_groups = ("palette", "semantic", "neutral_button", "graph_node")
+    excluded_groups = ("qss", "qss_alpha")
+    # Self-verifying rather than relying solely on a separate test file to
+    # catch drift: if a future edit adds a new top-level THEME_TOKENS group
+    # without deciding whether it belongs in this export, this raises
+    # immediately instead of silently omitting it forever.
+    assert set(tokens) == set(included_groups) | set(excluded_groups), (
+        f"THEME_TOKENS[{theme_name!r}] has group(s) "
+        f"{set(tokens) - set(included_groups) - set(excluded_groups)} that "
+        "css_custom_properties() doesn't know to include or deliberately "
+        "exclude - decide which before extending THEME_TOKENS further."
+    )
+
+    properties: dict[str, str] = {}
+
+    for group in included_groups:
+        group_slug = group.replace("_", "-")
+        for key, value in tokens[group].items():
+            properties[f"--gl-{group_slug}-{key.replace('_', '-')}"] = value
+
+    # Resolved explicitly from each base ("full"-type) entry, never from
+    # whichever of a "X"/"X Header" pair happens to be encountered first in
+    # dict iteration order - if the two ever diverge, this raises rather
+    # than silently exporting whichever one iteration order favored today.
+    frame_colors = _FRAME_COLORS_BY_THEME[theme_name]
+    frame_base_names = {name.removesuffix(" Header") for name in frame_colors}
+    for base_name in frame_base_names:
+        base_color = frame_colors[base_name]["color"]
+        header_name = f"{base_name} Header"
+        if header_name in frame_colors:
+            header_color = frame_colors[header_name]["color"]
+            assert header_color == base_color, (
+                f"{theme_name}: {header_name!r} color {header_color!r} differs from "
+                f"{base_name!r} color {base_color!r} - css_custom_properties()'s "
+                "dedup assumes these always match; decide which one should "
+                "actually be exported before extending this function to cover "
+                "the divergent case."
+            )
+        slug = base_name.lower().replace(" ", "-")
+        properties[f"--gl-frame-{slug}"] = base_color
+
+    properties["--gl-font-family"] = FONT_FAMILY
+
+    for name, value in properties.items():
+        _assert_safe_css_declaration_value(name, value)
+    return properties
+
+
+_UNSAFE_CSS_VALUE_CHARS = (";", "{", "}", "\n", "\r")
+
+
+def _assert_safe_css_declaration_value(property_name: str, value: str) -> None:
+    """css_root_block() interpolates values directly into a CSS text block
+    with no escaping - internal, self-authored data today (never user
+    input), but a typo introducing one of these characters would silently
+    produce syntactically broken or CSS-injected output otherwise. Loud
+    failure here beats a broken :root block discovered later at paint time."""
+    if any(char in value for char in _UNSAFE_CSS_VALUE_CHARS):
+        raise ValueError(
+            f"{property_name} = {value!r} contains a character that would break out "
+            f"of a CSS declaration ({_UNSAFE_CSS_VALUE_CHARS!r}) - fix the source value."
+        )
+
+
+def css_root_block(theme_name: str) -> str:
+    """Render css_custom_properties(theme_name) as a valid CSS `:root { ... }`
+    block, one declaration per line, sorted for a stable/reviewable diff."""
+    properties = css_custom_properties(theme_name)
+    lines = [f"  {name}: {value};" for name, value in sorted(properties.items())]
+    return ":root {\n" + "\n".join(lines) + "\n}\n"
+
 
 class ColorPalette:
     """
