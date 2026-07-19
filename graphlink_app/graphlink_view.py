@@ -13,6 +13,7 @@ from graphlink_widgets import CustomScrollBar, GridControl, SearchOverlay, FontC
 from graphlink_minimap import MinimapWidget
 from graphlink_config import get_semantic_color
 from graphlink_context_menu import create_context_menu
+from graphlink_web_island_host import any_host_has_text_focus
 
 
 class ChatView(QGraphicsView):
@@ -560,6 +561,22 @@ class ChatView(QGraphicsView):
         Args:
             event (QKeyEvent): The key event.
         """
+        # Defer to any island (composer, and any future in-scene island) that
+        # currently has a text-editable DOM element focused. Checked first,
+        # independent of the two checks below: a QGraphicsScene focusItem()
+        # and a sibling QFrame's own DOM focus can never both be true at once,
+        # so there is no double-handling regardless of order. For today's
+        # composer placement (a sibling QFrame outside chat_view's scene, not
+        # a QGraphicsProxyWidget - see graphlink_window.py) this is cheap,
+        # honest defense-in-depth rather than a fix for a currently-reachable
+        # bug: Qt never calls this method at all while the composer's
+        # QWebEngineView holds focus, since ChatView isn't in its ancestor
+        # chain. It becomes load-bearing the moment a future island is
+        # embedded in-scene via QGraphicsProxyWidget.
+        if any_host_has_text_focus():
+            super().keyPressEvent(event)
+            return
+
         # Ignore keyboard navigation if a text input field in the scene has focus.
         focused_item = self.scene().focusItem() if self.scene() else None
         if focused_item and (

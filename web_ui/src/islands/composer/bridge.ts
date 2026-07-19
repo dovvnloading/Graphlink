@@ -1,5 +1,6 @@
 import { ComposerState, initialComposerState } from "./bridgeTypes";
 import { isQWebChannelAvailable, connectQWebChannel } from "../../lib/bridge-core/transport";
+import { installTextFocusReporting } from "../../lib/bridge-core/textFocus";
 import { validateComposerState } from "../../lib/bridge-core/generated/composer-state";
 import {
   BridgeRejection,
@@ -234,6 +235,11 @@ export function createComposerBridge(
     connected = true;
     remote.ready();
     if (pendingHeight !== null) remote.resize(pendingHeight);
+    // Reuses this same connection - installTextFocusReporting must not open
+    // its own QWebChannel: qwebchannel.js assigns transport.onmessage
+    // directly, so a second `new QWebChannel()` on the same transport would
+    // silently clobber this channel's message handling.
+    installTextFocusReporting(objects);
   });
 
   const call = <K extends keyof QtComposerObject>(

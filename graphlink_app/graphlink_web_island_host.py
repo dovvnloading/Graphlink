@@ -11,9 +11,20 @@ shim (the composer's hidden dummy buttons and unemitted Qt Signals exist
 only because ChatWindow still expects a QWidget-like text-input API from
 its early Qt-composer days; that is ComposerWebHost's problem, explicitly
 kept there until Phase 2 deletes the legacy Qt composer and rewires
-ChatWindow off it), drag-drop capture, or keyboard forwarding (both are
-separate, not-yet-built Phase 1 items - see doc/FRONTEND_WEB_MIGRATION_MASTER_PLAN.md
-if present, otherwise treat as future work).
+ChatWindow off it), or drag-drop capture (still a separate, not-yet-built
+Phase 1 item - see doc/FRONTEND_WEB_MIGRATION_MASTER_PLAN.md if present,
+otherwise treat as future work).
+
+Keyboard/focus arbitration IS owned here: every host publishes whether the
+island's own DOM currently has a text-editable element focused
+(reportTextFocus()/hasTextFocus()/textFocusChanged), and any_host_has_text_
+focus() answers "does ANY registered island want keyboard input right now"
+without naming a specific island. AcceleratorForwardingFilter, below, is the
+consumer that gates global QShortcuts on that answer. This does NOT forward
+individual keystrokes into an island's DOM - Chromium already owns native
+key input the instant its content has focus; this protocol only answers the
+one binary question needed to keep the REST of the app (canvas pan keys,
+global shortcuts) from fighting over keys an island is actively using.
 """
 
 from __future__ import annotations
@@ -21,7 +32,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from PySide6.QtCore import QFile, QIODevice, QRect, QUrl, Qt, Signal
+from PySide6.QtCore import QEvent, QFile, QIODevice, QObject, QRect, QUrl, Qt, Signal, Slot
 from PySide6.QtGui import QColor, QRegion
 from PySide6.QtWidgets import (
     QApplication,
@@ -286,6 +297,35 @@ def unregister(host: "WebIslandHost") -> None:
         pass
 
 
+def any_host_has_text_focus() -> bool:
+    """Whether ANY currently-registered island wants keyboard input right
+    now - the query AcceleratorForwardingFilter and ChatView's keyPressEvent
+    both consult, on every shortcut-eligible keystroke application-wide, for
+    the lifetime of the process. Deliberately answers only the aggregate
+    boolean, never "which island" - nothing today needs per-island routing.
+
+    Queries _hosts live rather than maintaining a second, separately-updated
+    set of "which hosts are focused": unregister() (called from
+    prepare_for_shutdown()) already removes a torn-down host from
+    consideration for free, so there is no separate cleanup path to keep in
+    sync or let go stale.
+
+    Guards each host call the same way shutdown_all() does: a registered
+    host's C++ side can in principle be gone (deleted outside the normal
+    prepare_for_shutdown()/unregister() path) while the Python reference
+    lingers in _hosts. Given this runs on essentially every keystroke, a
+    single stale reference must not turn into "every shortcut in the app
+    throws forever" - treat an inaccessible host as not focused instead.
+    """
+    for host in _hosts:
+        try:
+            if host.hasTextFocus():
+                return True
+        except (AttributeError, RuntimeError, SystemError, TypeError):
+            continue
+    return False
+
+
 def shutdown_all() -> None:
     """Call prepare_for_shutdown() on every still-registered host.
 
@@ -334,6 +374,7 @@ class WebIslandHost(QFrame):
     """
 
     heightChanged = Signal(int)
+    textFocusChanged = Signal(bool)
 
     def __init__(
         self,
@@ -357,6 +398,7 @@ class WebIslandHost(QFrame):
         self._min_height = min_height
         self._max_height = max_height
         self._shutdown_started = False
+        self._has_text_focus = False
         # Resolved once at construction (unlike the request interceptor's
         # per-request re-resolution): a host is not a forever-cached
         # singleton, and its load mode must not change out from under an
@@ -399,6 +441,12 @@ class WebIslandHost(QFrame):
             )
             channel = QWebChannel(self.web_view.page())
             channel.registerObject(bridge_object_name, self.bridge)
+            # "islandHost" is a reserved, well-known QWebChannel object name
+            # every host registers alongside its own named bridge - the JS
+            # side's textFocus reporter (bridge-core, generic) calls
+            # objects.islandHost.reportTextFocus(bool) without needing to know
+            # which specific bridge object this island also exposes.
+            channel.registerObject("islandHost", self)
             self.web_view.page().setWebChannel(channel)
             self.web_view.loadFinished.connect(self._on_load_finished)
             if self._dev_origin is not None:
@@ -439,6 +487,21 @@ class WebIslandHost(QFrame):
 
     def focusWidget(self):
         return self.web_view or super().focusWidget()
+
+    @Slot(bool)
+    def reportTextFocus(self, has_focus: bool) -> None:
+        """Called from JS (via the "islandHost" QWebChannel object) whenever
+        the island's DOM focus moves into or out of a text-editable element.
+        Only emits on a real transition, so a caller doing e.g. tab-between-
+        two-textareas (which reports True, True) doesn't spam listeners."""
+        has_focus = bool(has_focus)
+        if has_focus == self._has_text_focus:
+            return
+        self._has_text_focus = has_focus
+        self.textFocusChanged.emit(has_focus)
+
+    def hasTextFocus(self) -> bool:
+        return self._has_text_focus
 
     def on_theme_changed(self):
         self.bridge.publish()
@@ -519,3 +582,58 @@ class WebIslandHost(QFrame):
     def closeEvent(self, event):
         self.prepare_for_shutdown()
         super().closeEvent(event)
+
+
+class AcceleratorForwardingFilter(QObject):
+    """Gates global QShortcuts off while any island wants keyboard input.
+
+    All of the app's global QShortcuts (graphlink_window.py) use Qt's default
+    WindowShortcut context - active whenever the window has focus, regardless
+    of which child widget currently holds it. That's correct for native
+    widgets (a focused QLineEdit gets first crack at a key via Qt's own
+    ShortcutOverride protocol before the shortcut fires), but a QWebEngineView
+    hosting an island's own text input does not participate in that protocol
+    the same way - nothing today stops e.g. Ctrl+K from firing and yanking
+    focus away while a user is mid-sentence in a composer textarea.
+
+    Installed once, application-wide (not per-QWebEngineView), because the
+    actual focus-holding descendant inside a QWebEngineView's internal
+    Chromium content isn't guaranteed to be the QWebEngineView object itself.
+    Intercepts QEvent.Type.ShortcutOverride - which Qt sends to the focused
+    widget's ancestor chain BEFORE dispatching to any matching QShortcut - and
+    accepts it (claiming the key so the shortcut never fires) when the key
+    combination is in GATED_SHORTCUTS and any_host_has_text_focus() is true.
+
+    Not uniform: Ctrl+S (save_chat) is deliberately exempt. Save is
+    non-destructive, never collides with anything an island's own text input
+    would want, and is the one combo a user reflexively expects to keep
+    working mid-sentence. Every other gated combo (new chat, library, command
+    palette, search, frame/container creation, canvas arrow-nav) is
+    workspace-level, and the island is the more plausible intended owner of
+    that keystroke while it holds focus - so the default for any future
+    shortcut added to GATED_SHORTCUTS is "gated," matching this project's
+    general fail-safe bias; only Ctrl+S has been evaluated and exempted.
+    """
+
+    GATED_SHORTCUTS = {
+        (Qt.Key.Key_T, Qt.KeyboardModifier.ControlModifier),
+        (Qt.Key.Key_L, Qt.KeyboardModifier.ControlModifier),
+        (Qt.Key.Key_K, Qt.KeyboardModifier.ControlModifier),
+        (Qt.Key.Key_F, Qt.KeyboardModifier.ControlModifier),
+        (Qt.Key.Key_G, Qt.KeyboardModifier.ControlModifier),
+        (Qt.Key.Key_G, Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier),
+        (Qt.Key.Key_Up, Qt.KeyboardModifier.ControlModifier),
+        (Qt.Key.Key_Down, Qt.KeyboardModifier.ControlModifier),
+        (Qt.Key.Key_Left, Qt.KeyboardModifier.ControlModifier),
+        (Qt.Key.Key_Right, Qt.KeyboardModifier.ControlModifier),
+    }
+
+    def eventFilter(self, watched, event):
+        if event.type() != QEvent.Type.ShortcutOverride:
+            return False
+        if not any_host_has_text_focus():
+            return False
+        if (event.key(), event.modifiers()) not in self.GATED_SHORTCUTS:
+            return False
+        event.accept()
+        return True
