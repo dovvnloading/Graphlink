@@ -92,6 +92,17 @@ class TestGlVarsDevCssIsDevOnly:
     def test_no_island_imports_it_unconditionally(self):
         # main.tsx is not the only possible importer once a second island
         # exists; scan the whole workspace source tree.
+        #
+        # Matches an actual import/dynamic-import statement, not any file that
+        # merely mentions the filename - e.g. in a comment explaining why some
+        # OTHER file excludes it (this file's own docstring does exactly
+        # that). A prose mention isn't an import; requiring one avoids the
+        # same class of false positive the substring-index version of this
+        # check had before it was rewritten (see PR #40's adversarial review).
+        import_re = re.compile(
+            r"""(?:^\s*import\s+["']|await\s+import\(\s*["'])[^"']*gl-vars-dev\.css["']""",
+            re.MULTILINE,
+        )
         sources = list((_REPO_ROOT / "web_ui" / "src").rglob("*.ts")) + list(
             (_REPO_ROOT / "web_ui" / "src").rglob("*.tsx")
         )
@@ -99,10 +110,10 @@ class TestGlVarsDevCssIsDevOnly:
 
         for path in sources:
             text = _read(path)
-            if "gl-vars-dev.css" not in text:
+            if not import_re.search(text):
                 continue
             assert "import.meta.env.DEV" in text, (
-                f"{path.relative_to(_REPO_ROOT)} references gl-vars-dev.css without "
+                f"{path.relative_to(_REPO_ROOT)} imports gl-vars-dev.css without "
                 "an import.meta.env.DEV guard - it would ship to production"
             )
 

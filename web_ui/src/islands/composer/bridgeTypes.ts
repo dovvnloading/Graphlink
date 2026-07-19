@@ -140,6 +140,12 @@ export interface ComposerThemeGraphNode {
 export interface ComposerTheme {
   mode: "dark" | "light";
   name: string;
+  // Every --gl-* custom property name/value pair for the active theme,
+  // straight from the Python side's css_custom_properties() - the same
+  // function the host's build-time :root injection uses, so this can never
+  // disagree with what first paint already showed. Applied to
+  // document.documentElement on every snapshot; see ComposerApp.tsx.
+  cssVariables: Record<string, string>;
   palette: ComposerThemePalette;
   semantic: ComposerThemeSemantic;
   neutralButton: ComposerThemeNeutralButton;
@@ -200,6 +206,11 @@ export const initialComposerState: ComposerState = {
   theme: {
     mode: "dark",
     name: "dark",
+    // Empty in the browser-preview mock: nothing here needs it, since
+    // `npm run dev` gets its baseline styling from the separately-imported
+    // lib/tokens/gl-vars-dev.css, not from bridge state. The theme-application
+    // effect below is a no-op on an empty object.
+    cssVariables: {},
     palette: {
       userNode: "#838383",
       aiNode: "#828282",
