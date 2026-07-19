@@ -172,13 +172,6 @@ class CodeNode(QGraphicsItem, HoverAnimationMixin):
             return
         painter.drawPath(path)
 
-        if self.is_search_match:
-            highlight_pen = QPen(get_semantic_color("search_highlight"), 2.5)
-            highlight_pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-            painter.setPen(highlight_pen)
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawPath(path)
-
         header_path = QPainterPath()
         header_rect = QRectF(0, 0, self.width, self.HEADER_HEIGHT)
         header_path.addRoundedRect(header_rect, 10, 10)
@@ -211,6 +204,18 @@ class CodeNode(QGraphicsItem, HoverAnimationMixin):
         if self.scrollbar.isVisible():
             self.scrollbar.height = content_rect.height()
             self.scrollbar.setPos(self.width - self.PADDING - self.scrollbar.width, content_rect.top())
+
+        # Drawn LAST, on top of the header and content, so the search ring is
+        # exactly the node's outline. Drawing it right after the body path
+        # (as this did previously) left the 2.5px search pen active for the
+        # header drawPath, painting a spurious full-width tinted line under the
+        # header. Matches ChatNode/ImageNode's ring-last ordering.
+        if self.is_search_match:
+            highlight_pen = QPen(get_semantic_color("search_highlight"), 2.5)
+            highlight_pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            painter.setPen(highlight_pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawPath(path)
 
     def contextMenuEvent(self, event):
         from graphlink_nodes.graphlink_node_code_menu import CodeNodeContextMenu

@@ -246,3 +246,83 @@ def test_image_node_paint_requests_the_search_highlight_only_when_matched(monkey
     node.is_search_match = True
     _paint_once(node)
     assert "search_highlight" in requested, "matched ImageNode did not draw the search ring"
+
+
+# --- Follow-up (increment 18b): CodeNode's identical search-ring scanline ---
+
+def _count_search_colored_pixels_in_header_rows(node, search_color):
+    from PySide6.QtGui import QImage, QPainter, QColor
+
+    img = QImage(int(node.width) + 20, int(node.height) + 20, QImage.Format.Format_ARGB32)
+    img.fill(0)
+    painter = QPainter(img)
+    try:
+        node.paint(painter, QStyleOptionGraphicsItem(), None)
+    finally:
+        painter.end()
+
+    def row_count(y):
+        n = 0
+        for x in range(int(node.width)):
+            c = QColor(img.pixel(x, y))
+            if (abs(c.red() - search_color.red()) < 12
+                    and abs(c.green() - search_color.green()) < 12
+                    and abs(c.blue() - search_color.blue()) < 12):
+                n += 1
+        return n
+
+    hh = int(node.HEADER_HEIGHT)
+    return max(row_count(y) for y in range(hh - 2, hh + 2))
+
+
+def test_code_node_search_ring_does_not_paint_a_header_scanline(monkeypatch):
+    # CodeNode drew its search ring right after the body path, leaving the 2.5px
+    # search pen active for the header drawPath -> a full-width tinted line under
+    # the header on a matched node. Fixed by drawing the ring LAST. Against the
+    # pre-fix code the header-edge row has ~the full node width in search-colored
+    # pixels; after the fix only the ring's two side edges (~2).
+    from graphlink_nodes import graphlink_node_code as code_mod
+    from graphlink_nodes.graphlink_node_code import CodeNode
+    from graphlink_scene import ChatScene
+
+    monkeypatch.setattr(code_mod, "lod_mode_for_item", lambda item: "full")
+    search = code_mod.get_semantic_color("search_highlight")
+
+    node = CodeNode("print(1)", "python", None)
+    scene = ChatScene(MagicMock())
+    scene.addItem(node)
+    node.is_search_match = True
+
+    scanline = _count_search_colored_pixels_in_header_rows(node, search)
+    assert scanline < 40, (
+        f"matched CodeNode painted a {scanline}px search-colored line across the "
+        "header edge (the ring pen bled into the header draw)"
+    )
+
+
+def test_code_node_still_draws_the_search_ring_when_matched(monkeypatch):
+    # Guard the other direction: moving the ring must not have dropped it.
+    from graphlink_nodes import graphlink_node_code as code_mod
+    from graphlink_nodes.graphlink_node_code import CodeNode
+    from graphlink_scene import ChatScene
+
+    monkeypatch.setattr(code_mod, "lod_mode_for_item", lambda item: "full")
+    real_get = code_mod.get_semantic_color
+    requested = []
+    monkeypatch.setattr(
+        code_mod, "get_semantic_color",
+        lambda name: (requested.append(name), real_get(name))[1],
+    )
+
+    node = CodeNode("print(1)", "python", None)
+    scene = ChatScene(MagicMock())
+    scene.addItem(node)
+
+    node.is_search_match = False
+    _paint_once(node)
+    assert "search_highlight" not in requested
+
+    requested.clear()
+    node.is_search_match = True
+    _paint_once(node)
+    assert "search_highlight" in requested, "matched CodeNode did not draw the search ring"
