@@ -1,0 +1,63 @@
+name: CI
+
+# Minimal CI (migration plan §6, decision item 6 - user sign-off "minimal
+# CI" option): re-verifies on every PR exactly what has been run manually
+# before every merge - pytest offscreen, npm run check. Runs on
+# windows-latest specifically because that is the platform this has
+# actually been verified against; PySide6/QtWebEngine's offscreen mode has
+# not been empirically confirmed on Linux runners, and this workflow's job
+# is to match verified-working local behavior, not to guess at a cheaper
+# runner that might diverge.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  python-tests:
+    name: Python tests (offscreen)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Compile check
+        working-directory: graphlink_app
+        run: python -m compileall -q .
+
+      - name: Run pytest
+        working-directory: graphlink_app
+        run: python -m pytest -q
+
+  frontend-checks:
+    name: Frontend checks (npm run check)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # check:schema shells out to the Python codegen script (stdlib-only,
+      # no pip install needed) to prove the generated TS/JSON Schema
+      # artifacts aren't stale relative to the Python dataclasses.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: web_ui/.nvmrc
+
+      - name: Install npm dependencies
+        working-directory: web_ui
+        run: npm ci
+
+      - name: Run checks (schema drift, typecheck, lint, vitest, build)
+        working-directory: web_ui
+        run: npm run check
