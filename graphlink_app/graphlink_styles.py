@@ -1098,6 +1098,38 @@ def css_root_block(theme_name: str) -> str:
     return ":root {\n" + "\n".join(lines) + "\n}\n"
 
 
+def tailwind_theme_css() -> str:
+    """Generate a Tailwind v4 `@theme` block registering every --gl-* custom
+    property NAME (not its per-theme value) as a Tailwind design token, so
+    Tailwind's compiler generates real utility classes (bg-gl-palette-
+    selection, text-gl-semantic-status-error, font-gl, etc.) that resolve
+    via var(--gl-*) at runtime, whatever theme is active. This is the
+    generated Tailwind preset section 3.1's target tree names directly:
+    "lib/tokens/ - generated CSS-variable sheet + Tailwind preset
+    (var(--gl-*))" - Tailwind v4 has no separate JS preset file the way v3
+    did; its config is CSS-native, an @theme block is the whole preset.
+
+    Only names matter here, not values - css_custom_properties() supplies
+    values for a specific theme at runtime (via the still-deferred bridge-
+    to-documentElement wiring) or at build time (via the still-deferred
+    :root embedding); this function only needs to know every token NAME
+    exists, once, so Tailwind's build-time utility generation has something
+    to point var() at regardless of which theme resolves it later. "dark"
+    is used below purely as a representative source of names - every theme
+    has an identical key set (guarded by css_custom_properties()'s own
+    cross-theme key-set test), so which theme is asked is not a decision
+    with color-value consequences here, only a source-data convenience.
+    """
+    names = sorted(css_custom_properties("dark"))
+    lines = []
+    for name in names:
+        if name == "--gl-font-family":
+            lines.append(f"  --font-gl: var({name});")
+        else:
+            lines.append(f"  --color-{name[len('--'):]}: var({name});")
+    return "@theme {\n" + "\n".join(lines) + "\n}\n"
+
+
 class ColorPalette:
     """
     A data class to hold QColor objects for a specific theme palette.
