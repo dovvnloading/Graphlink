@@ -6,7 +6,7 @@ export interface ComposerDraft {
   id: string;
   text: string;
   contextMode: string;
-  sendMode: string;
+  sendMode: "enter_to_send" | "ctrl_enter_to_send";
   restored: boolean;
 }
 
@@ -188,7 +188,7 @@ function checkComposerDraft(value: unknown, path: string, errors: string[]): voi
   {
     const fieldValue = value["sendMode"];
     if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.sendMode: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.sendMode` + ": expected string"); }
+    else { if (!["enter_to_send", "ctrl_enter_to_send"].includes(fieldValue as string)) errors.push(`${path}.sendMode` + `: ${JSON.stringify(fieldValue)} is not one of [` + "enter_to_send, ctrl_enter_to_send" + `]`); }
   }
   {
     const fieldValue = value["restored"];
@@ -500,7 +500,7 @@ function checkComposerTheme(value: unknown, path: string, errors: string[]): voi
     const fieldValue = value["cssVariables"];
     if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.cssVariables: missing required field`);
     else { if (!isRecord(fieldValue)) errors.push(`${path}.cssVariables` + ": expected object");
-    else Object.entries(fieldValue as Record<string, unknown>).forEach(([k, v]) => { if (typeof v !== "string") errors.push(`${path}.cssVariables` + `.${k}` + ": expected string"); }); }
+    else Object.entries(fieldValue as Record<string, unknown>).forEach(([k, v]) => { if (typeof v !== "string") errors.push(`${path}.cssVariables` + `[${JSON.stringify(k)}]` + ": expected string"); }); }
   }
   {
     const fieldValue = value["palette"];

@@ -19,6 +19,7 @@ still match reality is exactly the drift this whole pipeline exists to stop.
 """
 
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -27,7 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import pytest
 
 import graphlink_config as config
-from graphlink_composer import ComposerController
+from graphlink_composer import ComposerController, ComposerRequestState
 from graphlink_composer_bridge import ComposerBridge
 from graphlink_composer_payload import ComposerStatePayload
 from graphlink_island_codegen import schema_json_for, typescript_for
@@ -117,8 +118,21 @@ class _Window:
         self.composer_controller = None
 
 
-def _snapshot(mode: str, *, rich: bool, draft_text: str = "") -> dict:
-    bridge = ComposerBridge(_Window(mode, rich=rich), ComposerController())
+def _snapshot(
+    mode: str,
+    *,
+    rich: bool,
+    draft_text: str = "",
+    request_state: ComposerRequestState | None = None,
+) -> dict:
+    controller = ComposerController()
+    if request_state is not None:
+        # The real public transition API (ComposerController.set_state), not
+        # a raw attribute assignment - a real state machine may reject an
+        # invalid transition, and this snapshot should reflect what the
+        # bridge actually publishes for a state a caller can really reach.
+        controller.set_state(request_state)
+    bridge = ComposerBridge(_Window(mode, rich=rich), controller)
     states: list[str] = []
     bridge.stateChanged.connect(states.append)
     if draft_text:
@@ -129,6 +143,7 @@ def _snapshot(mode: str, *, rich: bool, draft_text: str = "") -> dict:
 
 
 _ALL_MODES = ["Ollama (Local)", config.MODE_API_ENDPOINT, config.MODE_LLAMACPP_LOCAL]
+_ALL_REQUEST_STATES = list(ComposerRequestState)
 
 
 class TestTheContractDescribesTheRealPayload:
@@ -150,6 +165,28 @@ class TestTheContractDescribesTheRealPayload:
         errors = validate_payload(_snapshot(mode, rich=True, draft_text="hello"), ComposerStatePayload)
 
         assert errors == []
+
+    @pytest.mark.parametrize("mode", _ALL_MODES)
+    @pytest.mark.parametrize("rich", [False, True])
+    @pytest.mark.parametrize("request_state", _ALL_REQUEST_STATES)
+    def test_every_route_mode_x_richness_x_request_state_combination_validates(
+        self, mode, rich, request_state
+    ):
+        # Closes a real gap adversarial review found: this exact
+        # 3 modes x 2 richness x 9 request states matrix was verified once by
+        # hand in an ad hoc shell one-liner during development and never
+        # turned into a committed test - so the claim in this increment's own
+        # PR description ("validated across 3 route modes x rich/empty x 6
+        # request states") corresponded to nothing a future change could
+        # break loudly. It is 9 request states, not 6 - ComposerRequestState
+        # has 9 members; the original manual check undercounted it.
+        errors = validate_payload(
+            _snapshot(mode, rich=rich, request_state=request_state), ComposerStatePayload
+        )
+
+        assert errors == [], (
+            f"mode={mode!r} rich={rich} request_state={request_state!r}: {errors}"
+        )
 
     def test_the_id_not_path_firewall_still_holds_in_the_contract(self):
         # ComposerAttachmentPayload deliberately has no `path` field. If someone
@@ -209,6 +246,64 @@ class TestGeneratedArtifactsAreNotStale:
         fresh = typescript_for(ComposerStatePayload, source=_TS_SOURCE_LABEL)
 
         assert _read(_TS_FILE) == fresh, f"{_TS_FILE.name} is stale. {_REGENERATE_HINT}"
+
+
+class TestCheckCliClosesTheNpmRunCheckDriftGap:
+    """`python graphlink_island_codegen.py --check` is what `npm run check`
+    shells out to (via the `check:schema` script) - the mechanism that makes
+    section 3.3's "npm run check fails on drift" clause literally true, not
+    just true of the separate Python pytest suite. Exercised as a real
+    subprocess, not by calling _main() in-process, so this proves the exact
+    command npm invokes actually behaves as claimed."""
+
+    def _run(self, *args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, str(_REPO_ROOT / "graphlink_app" / "graphlink_island_codegen.py"), *args],
+            capture_output=True,
+            text=True,
+            cwd=_REPO_ROOT,
+        )
+
+    def test_check_passes_and_exits_zero_when_artifacts_are_current(self):
+        result = self._run("--check")
+
+        assert result.returncode == 0, result.stderr
+        assert "up to date" in result.stdout
+
+    def test_check_fails_and_exits_nonzero_when_a_generated_file_is_hand_edited(self):
+        original = _read(_TS_FILE)
+        try:
+            _TS_FILE.write_text(original + "\n// hand-edited\n", encoding="utf-8", newline="\n")
+            result = self._run("--check")
+
+            assert result.returncode == 1
+            assert "stale" in result.stderr.lower()
+            assert str(_TS_FILE.name) in result.stderr
+        finally:
+            _TS_FILE.write_text(original, encoding="utf-8", newline="\n")
+
+    def test_check_fails_when_a_generated_file_is_missing(self):
+        original = _read(_SCHEMA_FILE)
+        try:
+            _SCHEMA_FILE.unlink()
+            result = self._run("--check")
+
+            assert result.returncode == 1
+            assert "missing" in result.stderr.lower()
+        finally:
+            _SCHEMA_FILE.write_text(original, encoding="utf-8", newline="\n")
+
+    def test_write_regenerates_a_hand_edited_file_back_to_the_real_contract(self):
+        original = _read(_TS_FILE)
+        try:
+            _TS_FILE.write_text("// corrupted\n", encoding="utf-8", newline="\n")
+
+            result = self._run("--write")
+
+            assert result.returncode == 0, result.stderr
+            assert _read(_TS_FILE) == original
+        finally:
+            _TS_FILE.write_text(original, encoding="utf-8", newline="\n")
 
     def test_schema_is_valid_json_and_declares_its_draft(self):
         schema = json.loads(_read(_SCHEMA_FILE))

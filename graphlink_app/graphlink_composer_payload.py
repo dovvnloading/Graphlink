@@ -46,13 +46,22 @@ RequestState = Literal[
 
 RouteMode = Literal["cloud", "ollama", "llamacpp", "unknown"]
 
+# The only two values anything in the Python codebase ever assigns to
+# ComposerDraft.send_mode (graphlink_composer.py:73,240) - matches what the
+# hand-written TS type declared before this file replaced it. contextMode is
+# genuinely NOT narrowed the same way: its only observed value is "branch",
+# but set_branch()'s own signature accepts an arbitrary str with no
+# enumeration anywhere, so typing it as a closed set here would assert a
+# constraint the producer doesn't actually enforce.
+SendMode = Literal["enter_to_send", "ctrl_enter_to_send"]
+
 
 @dataclass
 class ComposerDraftPayload:
     id: str
     text: str
     contextMode: str
-    sendMode: str
+    sendMode: SendMode
     restored: bool
 
 

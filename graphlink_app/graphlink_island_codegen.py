@@ -15,19 +15,26 @@ freezing the UI. A generated validator that runs on real data is what makes
 the "visible error state" fix possible at all, so it is generated from the same
 single source rather than hand-written alongside it.
 
-Generation is one-directional (Python -> TS) and the output is committed, so a
-single Python-side staleness test is sufficient; there is no TS-side generator
-to drift independently.
+Generation is one-directional (Python -> TS) - there is no TS-side generator
+that could itself drift. That does NOT mean the TS toolchain has no way to
+detect drift, though: `python graphlink_island_codegen.py --check` (see
+_main() below) is what `npm run check` shells out to, so a hand-edit of a
+generated file - the one thing its own header comment forbids - fails the
+same `npm run check` a contributor already runs, not only the separate
+Python pytest suite.
 """
 
 from __future__ import annotations
 
+import importlib
 import json
+import sys
+from pathlib import Path
 from typing import Any
 
 from graphlink_island_schema import json_schema_for
 
-__all__ = ["schema_json_for", "typescript_for"]
+__all__ = ["schema_json_for", "typescript_for", "GENERATED_ARTIFACTS"]
 
 _HEADER = (
     "/* GENERATED - do not hand-edit. Source of truth: {source}.\n"
@@ -51,26 +58,6 @@ def _ts_type_name(dataclass_name: str) -> str:
     same-named domain models; it carries no meaning on the TS side, where the
     wire shape is the only shape there is."""
     return dataclass_name.removesuffix("Payload")
-
-
-def _ts_type_for(schema: dict[str, Any], *, inline_name: str) -> str:
-    kind = schema.get("type")
-    if "enum" in schema:
-        return " | ".join(json.dumps(value) for value in schema["enum"])
-    if kind == "string":
-        return "string"
-    if kind == "boolean":
-        return "boolean"
-    if kind in ("integer", "number"):
-        return "number"
-    if kind == "array":
-        return f"{_ts_type_for(schema['items'], inline_name=inline_name)}[]"
-    if kind == "object":
-        if "additionalProperties" in schema and schema["additionalProperties"] is not False:
-            value_type = _ts_type_for(schema["additionalProperties"], inline_name=inline_name)
-            return f"Record<string, {value_type}>"
-        return inline_name
-    raise ValueError(f"cannot render TS type for schema fragment: {schema!r}")
 
 
 def _collect_object_types(
@@ -276,8 +263,15 @@ def _ts_check_expr(annotation: Any, *, value_expr: str, path_expr: str) -> str:
 
     if origin is dict:
         _, value_type = get_args(annotation)
+        # Bracket notation with a JSON-stringified key, not `.${k}` - a dict
+        # key is arbitrary string data (e.g. --gl-* custom property names
+        # today, but this generator has no way to know that won't ever be a
+        # key containing "." or "[0]"), and dot-appending it would make an
+        # error path indistinguishable from a genuinely deeper nested path.
+        # JSON.stringify also makes the key visible verbatim in the message
+        # rather than silently truncated at a special character.
         inner = _ts_check_expr(
-            value_type, value_expr="v", path_expr=f"{path_expr} + `.${{k}}`"
+            value_type, value_expr="v", path_expr=f"{path_expr} + `[${{JSON.stringify(k)}}]`"
         )
         return (
             f"if (!isRecord({value_expr})) "
@@ -314,3 +308,91 @@ def _validator_for(name: str, fields: dict[str, Any]) -> str:
     body.append("}")
     body.append("")
     return "\n".join(body)
+
+
+# Every generated artifact pair this repo currently ships, as
+# (dataclass, title, source label, output directory) - the registry a `--check`
+# invocation (and, if a second island is ever added, its own codegen call)
+# walks. Deliberately a plain list rather than auto-discovery: an island's
+# payload dataclass is a real design decision each time (see
+# graphlink_composer_payload.py's own module docstring), not something to
+# infer by scanning the filesystem for anything shaped like one.
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+GENERATED_ARTIFACTS = [
+    {
+        "dataclass": None,  # resolved lazily in main() to avoid importing
+        "dataclass_import": ("graphlink_composer_payload", "ComposerStatePayload"),
+        "title": "ComposerState",
+        "source": "graphlink_app/graphlink_composer_payload.py::ComposerStatePayload",
+        "schema_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "composer-state.schema.json",
+        "ts_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "composer-state.ts",
+    },
+]
+
+
+def _main(argv: list[str]) -> int:
+    """CLI entry point: `python graphlink_island_codegen.py [--check | --write]`.
+
+    --check (the one `npm run check` shells out to, closing section 3.3's
+    "npm run check fails on drift" requirement): regenerate every registered
+    artifact in memory and compare against the checked-in files. Exits 1 with
+    a clear diff-free message identifying which file is stale, without
+    touching disk - this is what makes hand-editing a generated file (the one
+    thing its own header comment forbids) a build failure rather than a
+    silent, undetected divergence from graphlink_composer_payload.py.
+
+    --write regenerates and overwrites the checked-in files, for a developer
+    who changed a payload dataclass and needs to update the artifacts.
+
+    Both modes are also independently covered by
+    tests/test_composer_payload_schema.py's pytest suite; this CLI exists
+    specifically so the SAME check is reachable from `npm run check`'s script
+    chain, which cannot invoke pytest fixtures directly.
+    """
+    mode = argv[0] if argv else "--check"
+    if mode not in ("--check", "--write"):
+        print(f"usage: python graphlink_island_codegen.py [--check | --write], got {mode!r}", file=sys.stderr)
+        return 2
+
+    stale: list[str] = []
+    for entry in GENERATED_ARTIFACTS:
+        module_name, class_name = entry["dataclass_import"]
+        module = importlib.import_module(module_name)
+        dataclass_type = getattr(module, class_name)
+
+        fresh_schema = schema_json_for(dataclass_type, title=entry["title"])
+        fresh_ts = typescript_for(dataclass_type, source=entry["source"])
+
+        if mode == "--write":
+            entry["schema_path"].write_text(fresh_schema, encoding="utf-8", newline="\n")
+            entry["ts_path"].write_text(fresh_ts, encoding="utf-8", newline="\n")
+            continue
+
+        for path, fresh in ((entry["schema_path"], fresh_schema), (entry["ts_path"], fresh_ts)):
+            if not path.is_file():
+                stale.append(f"{path} is missing")
+                continue
+            checked_in = path.read_text(encoding="utf-8")
+            if checked_in != fresh:
+                stale.append(f"{path} does not match regenerating it from {entry['source']}")
+
+    if mode == "--write":
+        print(f"wrote {len(GENERATED_ARTIFACTS) * 2} generated file(s)")
+        return 0
+
+    if stale:
+        print("Generated wire-contract artifacts are stale:", file=sys.stderr)
+        for message in stale:
+            print(f"  - {message}", file=sys.stderr)
+        print(
+            "Regenerate with: python graphlink_app/graphlink_island_codegen.py --write",
+            file=sys.stderr,
+        )
+        return 1
+
+    print(f"{len(GENERATED_ARTIFACTS)} generated artifact set(s) up to date")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(_main(sys.argv[1:]))

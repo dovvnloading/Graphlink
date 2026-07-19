@@ -1,26 +1,19 @@
 import { ComposerState, initialComposerState } from "./bridgeTypes";
 import { isQWebChannelAvailable, connectQWebChannel } from "../../lib/bridge-core/transport";
-import { checkSchemaCompatibility } from "../../lib/bridge-core/schemaVersion";
 import { validateComposerState } from "../../lib/bridge-core/generated/composer-state";
+import {
+  BridgeRejection,
+  RejectionListener,
+  parseIslandState,
+} from "../../lib/bridge-core/islandState";
+
+// Re-exported so existing `import { BridgeRejection } from "./bridge"` call
+// sites (ComposerApp.tsx, this file's own tests) keep working unchanged -
+// the type itself now lives in bridge-core/islandState.ts, generic across
+// islands; this module is just composer's specific consumer of it.
+export type { BridgeRejection, RejectionListener };
 
 type StateListener = (state: ComposerState) => void;
-
-/**
- * Why a payload was rejected, for the visible error state. `null` means the
- * last payload was fine.
- *
- * This exists because the previous behavior - returning null from parseState()
- * and letting the caller skip the listener call - meant a malformed or
- * version-mismatched payload froze the UI silently, with no signal to the user
- * or to a developer that anything had gone wrong.
- */
-export interface BridgeRejection {
-  kind: "version" | "shape" | "parse";
-  reason: string;
-  details: string[];
-}
-
-export type RejectionListener = (rejection: BridgeRejection | null) => void;
 
 interface QtSignal<T> {
   connect(listener: (value: T) => void): void;
@@ -63,61 +56,16 @@ export interface ComposerBridge {
   dispose(): void;
 }
 
-type ParseOutcome =
-  | { ok: true; state: ComposerState }
-  | { ok: false; rejection: BridgeRejection };
-
 /**
- * Parse and vet an incoming payload.
- *
- * Every rejection path now returns a REASON rather than a bare null, so the
- * caller can surface it. The old implementation collapsed "not valid JSON",
- * "wrong schema version", and "missing required fields" into a single `null`
- * that the caller silently dropped.
- *
- * Shape validation uses the generated validator (composer-state.ts), which is
- * produced from the same Python dataclasses that define the payload - so this
- * check cannot drift from what the desktop side actually sends without the
- * staleness pytest failing first.
+ * Composer's specific slice of the generic parseIslandState() shell: only the
+ * choice of validator (composer-state.ts's generated validateComposerState)
+ * is composer-specific; JSON-parsing, schema-version negotiation, and the
+ * BridgeRejection shape are shared (bridge-core/islandState.ts), so a second
+ * island's bridge.ts needs only its own one-line equivalent of this function,
+ * not a copy of the whole parse/reject mechanism.
  */
-function parseState(payload: string): ParseOutcome {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(payload);
-  } catch (error) {
-    return {
-      ok: false,
-      rejection: {
-        kind: "parse",
-        reason: "The desktop app sent an update that could not be read as JSON.",
-        details: [error instanceof Error ? error.message : String(error)],
-      },
-    };
-  }
-
-  const version = checkSchemaCompatibility(parsed);
-  if (!version.compatible) {
-    return {
-      ok: false,
-      rejection: { kind: "version", reason: version.reason, details: [] },
-    };
-  }
-
-  const validated = validateComposerState(parsed);
-  if (!validated.ok) {
-    return {
-      ok: false,
-      rejection: {
-        kind: "shape",
-        reason: "The update from the desktop app did not match the expected format.",
-        // Bounded: a badly wrong payload can produce a very long list, and the
-        // error state shows these to a human.
-        details: validated.errors.slice(0, 8),
-      },
-    };
-  }
-
-  return { ok: true, state: validated.value as unknown as ComposerState };
+function parseState(payload: string) {
+  return parseIslandState(payload, validateComposerState);
 }
 
 class MockComposerBridge implements ComposerBridge {

@@ -123,6 +123,10 @@
           "type": "boolean"
         },
         "sendMode": {
+          "enum": [
+            "enter_to_send",
+            "ctrl_enter_to_send"
+          ],
           "type": "string"
         },
         "text": {

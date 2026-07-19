@@ -49,6 +49,19 @@ function ComposerApp() {
   // makes a LIVE theme switch visible; it does not do the initial styling.
   useAppliedThemeCssVariables(document.documentElement, state.theme.cssVariables);
 
+  // Keyed on `rejection`, not `[]`: <main ref={shellRef}> is only rendered
+  // when there is no rejection (see the early return below), so a reject then
+  // recover cycle unmounts and later remounts a NEW <main> DOM node. A `[]`
+  // dependency array would run this effect exactly once for the component's
+  // whole lifetime, leaving the ResizeObserver watching the original,
+  // detached node forever - resize() would never fire again for the new one,
+  // silently freezing the host's negotiated height while composer's real
+  // content keeps growing. Keying on `rejection` makes React tear down and
+  // re-create the observer across every mount/unmount boundary: the cleanup
+  // fires (disconnecting the old observer) as `rejection` transitions to
+  // truthy, and shellRef.current is correctly null at that point since React
+  // nulls refs on unmount before running effects - so the guard below is not
+  // dead code, it is what makes the rejected render a safe no-op here.
   useEffect(() => {
     const shell = shellRef.current;
     if (!shell) return;
@@ -61,7 +74,7 @@ function ComposerApp() {
     observer?.observe(shell);
     reportHeight();
     return () => observer?.disconnect();
-  }, []);
+  }, [rejection]);
 
   useLayoutEffect(() => {
     const input = inputRef.current;
