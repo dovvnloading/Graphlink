@@ -34,7 +34,7 @@
   color-scheme: dark;
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-size: 13px;
-  color: var(--gl-composer-root-text);
+  color: #e7e7e7;
   background: transparent;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -52,16 +52,16 @@ button { color: inherit; }
   min-height: 0;
   padding: 9px 10px 8px;
   overflow: visible;
-  border: 1px solid var(--gl-composer-shell-border);
+  border: 1px solid rgba(150, 150, 150, 0.34);
   border-radius: 14px;
-  background: var(--gl-composer-shell-background);
-  box-shadow: 0 8px 24px var(--gl-composer-shell-shadow-drop), inset 0 1px var(--gl-composer-shell-shadow-inset);
+  background: #1f1f1f;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.20), inset 0 1px rgba(255, 255, 255, 0.035);
   transition: border-color 150ms ease, box-shadow 150ms ease;
 }
 
 .composer-shell:focus-within {
-  border-color: var(--gl-composer-shell-focus-border);
-  box-shadow: 0 8px 26px var(--gl-composer-shell-focus-shadow-drop), 0 0 0 2px var(--gl-composer-shell-focus-ring);
+  border-color: rgba(160, 160, 160, 0.82);
+  box-shadow: 0 8px 26px rgba(0, 0, 0, 0.22), 0 0 0 2px rgba(160, 160, 160, 0.12);
 }
 
 .composer-footer, .footer-left, .footer-right {
@@ -102,13 +102,13 @@ textarea {
   padding: 8px 4px 5px;
   border: 0;
   outline: 0;
-  color: var(--gl-composer-input-text);
+  color: #eeeeee;
   background: transparent;
   line-height: 1.45;
-  scrollbar-color: var(--gl-composer-input-scrollbar-thumb) transparent;
+  scrollbar-color: #555555 transparent;
 }
 
-textarea::placeholder { color: var(--gl-composer-input-placeholder); }
+textarea::placeholder { color: #888888; }
 textarea:disabled { cursor: wait; opacity: 0.7; }
 
 .composer-footer {
@@ -137,16 +137,16 @@ textarea:disabled { cursor: wait; opacity: 0.7; }
   width: 30px;
   height: 30px;
   place-items: center;
-  border: 1px solid var(--gl-composer-attach-button-border);
+  border: 1px solid rgba(150, 150, 150, 0.28);
   border-radius: 8px;
-  color: var(--gl-composer-attach-button-icon);
-  background: var(--gl-composer-attach-button-background);
+  color: #c0c0c0;
+  background: rgba(255, 255, 255, 0.018);
 }
 
 .attach-button:hover:not(:disabled) {
-  border-color: var(--gl-composer-attach-button-hover-border);
-  color: var(--gl-composer-attach-button-hover-icon);
-  background: var(--gl-composer-attach-button-hover-background);
+  border-color: rgba(160, 160, 160, 0.72);
+  color: #f4f4f4;
+  background: rgba(160, 160, 160, 0.10);
 }
 
 .attachment-count {
@@ -159,24 +159,24 @@ textarea:disabled { cursor: wait; opacity: 0.7; }
   height: 18px;
   place-items: center;
   padding: 0 4px;
-  border: 1px solid var(--gl-composer-attachment-count-border);
+  border: 1px solid #1f1f1f;
   border-radius: 999px;
-  color: var(--gl-composer-attachment-count-text);
-  background: var(--gl-composer-attachment-count-background);
+  color: #ededed;
+  background: #555555;
   font-size: 9px;
   font-weight: 750;
   line-height: 1;
 }
 
 .attachment-count:hover:not(:disabled) {
-  color: var(--gl-composer-attachment-count-hover-text);
-  background: var(--gl-composer-attachment-count-hover-background);
+  color: #ffffff;
+  background: #666666;
 }
 
 .attachment-count:disabled { cursor: default; opacity: 0.45; }
 
 button:focus-visible {
-  outline: 2px solid var(--gl-composer-button-focus-outline);
+  outline: 2px solid rgba(156, 156, 156, 0.82);
   outline-offset: 2px;
 }
 
@@ -184,10 +184,10 @@ button:disabled { cursor: default; opacity: 0.38; }
 
 .restored-pill {
   padding: 3px 7px;
-  border: 1px solid var(--gl-composer-restored-pill-border);
+  border: 1px solid rgba(150, 150, 150, 0.28);
   border-radius: 999px;
-  color: var(--gl-composer-restored-pill-text);
-  background: var(--gl-composer-restored-pill-background);
+  color: #c7c7c7;
+  background: rgba(160, 160, 160, 0.08);
   font-size: 9px;
 }
 
@@ -201,7 +201,7 @@ button:disabled { cursor: default; opacity: 0.38; }
   padding: 3px 6px;
   border: 1px solid transparent;
   border-radius: 7px;
-  color: var(--gl-composer-control-text);
+  color: #c0c0c0;
   background: transparent;
   cursor: pointer;
   text-align: left;
@@ -209,16 +209,16 @@ button:disabled { cursor: default; opacity: 0.38; }
 
 .composer-control:hover:not(:disabled),
 .composer-control[aria-expanded="true"] {
-  border-color: var(--gl-composer-control-active-border);
-  color: var(--gl-composer-control-active-text);
-  background: var(--gl-composer-control-active-background);
+  border-color: rgba(160, 160, 160, 0.34);
+  color: #f0f0f0;
+  background: rgba(255, 255, 255, 0.045);
 }
 
 .composer-control .icon {
   width: 11px;
   height: 11px;
   flex: 0 0 auto;
-  color: var(--gl-composer-control-icon);
+  color: #909090;
 }
 
 .control-copy {
@@ -230,7 +230,7 @@ button:disabled { cursor: default; opacity: 0.38; }
 
 .control-kicker {
   overflow: hidden;
-  color: var(--gl-composer-control-kicker-text);
+  color: #8a8a8a;
   font-size: 9px;
   font-weight: 700;
   letter-spacing: 0.04em;
@@ -240,7 +240,7 @@ button:disabled { cursor: default; opacity: 0.38; }
 
 .control-value {
   overflow: hidden;
-  color: var(--gl-composer-control-value-text);
+  color: #dddddd;
   font-size: 10px;
   font-weight: 650;
   text-overflow: ellipsis;
@@ -262,28 +262,28 @@ button:disabled { cursor: default; opacity: 0.38; }
   width: 34px;
   height: 30px;
   place-items: center;
-  border: 1px solid var(--gl-composer-send-button-border);
+  border: 1px solid rgba(255, 255, 255, 0.15);
   border-radius: 9px;
-  color: var(--gl-composer-send-button-icon);
-  background: var(--gl-composer-send-button-background);
-  box-shadow: 0 3px 10px var(--gl-composer-send-button-shadow);
+  color: #ffffff;
+  background: #414141;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.22);
 }
 
-.send-button:hover:not(:disabled) { transform: translateY(-1px); background: var(--gl-composer-send-button-hover-background); }
+.send-button:hover:not(:disabled) { transform: translateY(-1px); background: #555555; }
 .send-button:disabled { box-shadow: none; }
-.send-button.cancel { background: var(--gl-composer-send-button-cancel-background); box-shadow: 0 3px 10px var(--gl-composer-send-button-cancel-shadow); }
+.send-button.cancel { background: #4a4a4a; box-shadow: 0 3px 10px rgba(0, 0, 0, 0.20); }
 
 .request-status {
   display: flex;
   justify-content: space-between;
   gap: 12px;
   margin: 6px 3px 1px;
-  color: var(--gl-composer-status-text);
+  color: #b0b0b0;
   font-size: 10px;
 }
 
-.request-status.failed { color: var(--gl-composer-status-failed-text); }
-.request-status button { padding: 0; border: 0; color: var(--gl-composer-status-action-text); background: transparent; cursor: pointer; font-weight: 650; }
+.request-status.failed { color: #b0b0b0; }
+.request-status button { padding: 0; border: 0; color: #bdbdbd; background: transparent; cursor: pointer; font-weight: 650; }
 
 @media (max-width: 540px) {
   .reasoning-control { display: none; }

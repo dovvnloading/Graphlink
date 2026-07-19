@@ -1,0 +1,97 @@
+/* GENERATED - do not hand-edit. Source of truth: graphlink_styles.py::css_root_block("dark").
+ *
+ * DEV-SERVER ONLY. In the real app these values are injected into the island's
+ * <head> at construction time by graphlink_web_island_host.py::_inline_bundle(),
+ * for whichever theme is actually active. `npm run dev` has no Python in the
+ * loop, so without this file every var(--gl-*) in island CSS would resolve to
+ * nothing and the composer would render unstyled in a browser.
+ *
+ * Imported ONLY behind import.meta.env.DEV so Vite statically drops it from the
+ * production bundle. It must never be imported unconditionally: an always-on
+ * sheet would land later in <head> than the injected block at equal specificity
+ * and silently override the real theme's values with dark's - and would mask a
+ * missing injection instead of letting it fail visibly.
+ *
+ * Values are dark's purely because it is the default theme; this file is a
+ * development convenience, not a statement about what any island should look
+ * like. A pytest fails if it drifts from what regenerating it now would
+ * produce. */
+:root {
+  --gl-composer-attach-button-background: rgba(255, 255, 255, 0.018);
+  --gl-composer-attach-button-border: rgba(150, 150, 150, 0.28);
+  --gl-composer-attach-button-hover-background: rgba(160, 160, 160, 0.10);
+  --gl-composer-attach-button-hover-border: rgba(160, 160, 160, 0.72);
+  --gl-composer-attach-button-hover-icon: #f4f4f4;
+  --gl-composer-attach-button-icon: #c0c0c0;
+  --gl-composer-attachment-count-background: #555555;
+  --gl-composer-attachment-count-border: #1f1f1f;
+  --gl-composer-attachment-count-hover-background: #666666;
+  --gl-composer-attachment-count-hover-text: #ffffff;
+  --gl-composer-attachment-count-text: #ededed;
+  --gl-composer-button-focus-outline: rgba(156, 156, 156, 0.82);
+  --gl-composer-control-active-background: rgba(255, 255, 255, 0.045);
+  --gl-composer-control-active-border: rgba(160, 160, 160, 0.34);
+  --gl-composer-control-active-text: #f0f0f0;
+  --gl-composer-control-icon: #909090;
+  --gl-composer-control-kicker-text: #8a8a8a;
+  --gl-composer-control-text: #c0c0c0;
+  --gl-composer-control-value-text: #dddddd;
+  --gl-composer-input-placeholder: #888888;
+  --gl-composer-input-scrollbar-thumb: #555555;
+  --gl-composer-input-text: #eeeeee;
+  --gl-composer-restored-pill-background: rgba(160, 160, 160, 0.08);
+  --gl-composer-restored-pill-border: rgba(150, 150, 150, 0.28);
+  --gl-composer-restored-pill-text: #c7c7c7;
+  --gl-composer-root-text: #e7e7e7;
+  --gl-composer-send-button-background: #414141;
+  --gl-composer-send-button-border: rgba(255, 255, 255, 0.15);
+  --gl-composer-send-button-cancel-background: #4a4a4a;
+  --gl-composer-send-button-cancel-shadow: rgba(0, 0, 0, 0.20);
+  --gl-composer-send-button-hover-background: #555555;
+  --gl-composer-send-button-icon: #ffffff;
+  --gl-composer-send-button-shadow: rgba(0, 0, 0, 0.22);
+  --gl-composer-shell-background: #1f1f1f;
+  --gl-composer-shell-border: rgba(150, 150, 150, 0.34);
+  --gl-composer-shell-focus-border: rgba(160, 160, 160, 0.82);
+  --gl-composer-shell-focus-ring: rgba(160, 160, 160, 0.12);
+  --gl-composer-shell-focus-shadow-drop: rgba(0, 0, 0, 0.22);
+  --gl-composer-shell-shadow-drop: rgba(0, 0, 0, 0.20);
+  --gl-composer-shell-shadow-inset: rgba(255, 255, 255, 0.035);
+  --gl-composer-status-action-text: #bdbdbd;
+  --gl-composer-status-failed-text: #b0b0b0;
+  --gl-composer-status-text: #b0b0b0;
+  --gl-font-family: 'Segoe UI', sans-serif;
+  --gl-frame-blue: #828282;
+  --gl-frame-dark-gray: #414141;
+  --gl-frame-green: #838383;
+  --gl-frame-mid-gray: #595959;
+  --gl-frame-orange: #818181;
+  --gl-frame-purple: #7c7c7c;
+  --gl-frame-red: #7c7c7c;
+  --gl-frame-yellow: #8e8e8e;
+  --gl-graph-node-badge-fill: #484848;
+  --gl-graph-node-body-end: #292929;
+  --gl-graph-node-body-start: #303030;
+  --gl-graph-node-header-end: #333333;
+  --gl-graph-node-header-start: #3c3c3c;
+  --gl-graph-node-panel-fill: #202020;
+  --gl-neutral-button-background: #393939;
+  --gl-neutral-button-border: #585858;
+  --gl-neutral-button-hover: #484848;
+  --gl-neutral-button-icon: #f0f0f0;
+  --gl-neutral-button-muted-icon: #bdbdbd;
+  --gl-neutral-button-pressed: #343434;
+  --gl-palette-ai-node: #828282;
+  --gl-palette-nav-highlight: #949494;
+  --gl-palette-selection: #858585;
+  --gl-palette-user-node: #838383;
+  --gl-semantic-artifact: #828282;
+  --gl-semantic-conversation-ai-bubble: #323232;
+  --gl-semantic-conversation-user-bubble: #696969;
+  --gl-semantic-default: #858585;
+  --gl-semantic-search-highlight: #949494;
+  --gl-semantic-status-error: #848484;
+  --gl-semantic-status-info: #828282;
+  --gl-semantic-status-success: #838383;
+  --gl-semantic-status-warning: #919191;
+}

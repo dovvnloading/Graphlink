@@ -64,7 +64,21 @@ class TestGlThemeCssStructure:
                 )
 
     def test_every_css_custom_property_name_is_covered_exactly_once(self):
+        # Island-scoped tokens (see graphlink_styles._ISLAND_GROUPS) are
+        # deliberately NOT registered as Tailwind design tokens - exporting
+        # them as utilities would publish one island's private chrome palette
+        # as a workspace-wide surface. The carve-out is subtracted from the
+        # expected set explicitly, so a token dropping out of the @theme block
+        # for any OTHER reason still fails here.
         content = _read_generated_file()
-        referenced = set(re.findall(r"var\((--gl-[a-z-]+)\)", content))
-        expected = set(gs.css_custom_properties("dark"))
+        referenced = set(re.findall(r"var\((--gl-[a-z0-9-]+)\)", content))
+        expected = set(gs.css_custom_properties("dark")) - gs.island_property_names("dark")
         assert referenced == expected
+
+    def test_island_scoped_tokens_are_absent_from_the_theme_block(self):
+        content = _read_generated_file()
+        for name in gs.island_property_names("dark"):
+            assert name not in content, (
+                f"{name} is island-scoped and must not appear in the Tailwind "
+                "@theme block"
+            )

@@ -84,10 +84,13 @@ class TestThemeTokensStructure:
         # "qss"/"qss_alpha" were added by the QSS-generation increment
         # (see tests/test_qss_generation.py for their coverage); this was
         # "all four token groups" before that change landed.
+        # "composer"/"composer_alpha" were added by the composer token
+        # retrofit (see tests/test_composer_token_retrofit.py).
         for name in ("dark", "mono", "muted"):
             tokens = gs.THEME_TOKENS[name]
             assert set(tokens.keys()) == {
                 "palette", "semantic", "neutral_button", "graph_node", "qss", "qss_alpha",
+                "composer", "composer_alpha",
             }
 
     def test_themes_dict_exposes_the_matching_token_table(self):

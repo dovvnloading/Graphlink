@@ -22,6 +22,7 @@ import graphlink_styles as gs
 
 THEMES = ("dark", "mono", "muted")
 HEX_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
+RGBA_RE = re.compile(r"^rgba\(\d{1,3}, \d{1,3}, \d{1,3}, [01](\.\d+)?\)$")
 CSS_VAR_NAME_RE = re.compile(r"^--gl-[a-z0-9]+(-[a-z0-9]+)*$")
 
 
@@ -41,10 +42,22 @@ class TestCssCustomPropertiesStructure:
         assert set(gs.css_custom_properties(theme_name)) == set(gs.css_custom_properties("dark"))
 
     @pytest.mark.parametrize("theme_name", THEMES)
-    def test_every_value_is_a_flat_hex_color_except_font_family(self, theme_name):
+    def test_every_value_is_a_flat_hex_color_except_font_family_and_alpha_groups(
+        self, theme_name
+    ):
+        # The carve-out is enumerated from the composer_alpha group's real key
+        # set rather than widened to "anything that looks like rgba()", so a
+        # NEW non-hex value appearing anywhere else still fails loudly.
         props = gs.css_custom_properties(theme_name)
+        alpha_keys = {
+            f"--gl-composer-{key.replace('_', '-')}"
+            for key in gs.THEME_TOKENS[theme_name]["composer_alpha"]
+        }
         for key, value in props.items():
             if key == "--gl-font-family":
+                continue
+            if key in alpha_keys:
+                assert RGBA_RE.match(value), f"{key} = {value!r} is not an rgba() literal"
                 continue
             assert HEX_RE.match(value), f"{key} = {value!r} is not a flat #RRGGBB hex color"
 
@@ -102,8 +115,11 @@ class TestCssCustomPropertiesRoundTripAgainstThemeTokens:
     def test_total_property_count_has_no_missing_or_extra_keys(self, theme_name):
         tokens = gs.THEME_TOKENS[theme_name]
         expected_group_count = sum(len(tokens[g]) for g in ("palette", "semantic", "neutral_button", "graph_node"))
+        expected_island_count = sum(len(tokens[g]) for g in gs._ISLAND_GROUPS)
         expected_frame_count = len({name.removesuffix(" Header") for name in gs._FRAME_COLORS_BY_THEME[theme_name]})
-        expected_total = expected_group_count + expected_frame_count + 1  # +1 for --gl-font-family
+        expected_total = (
+            expected_group_count + expected_island_count + expected_frame_count + 1
+        )  # +1 for --gl-font-family
         assert len(gs.css_custom_properties(theme_name)) == expected_total
 
 
