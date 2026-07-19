@@ -134,3 +134,65 @@ def test_focus_widget_prefers_the_web_view_when_present():
     # the answer.
     if host.web_view is not None:
         assert host.focusWidget() is host.web_view
+
+
+def test_report_text_focus_updates_state_and_dedupes_signal():
+    host = _make_host()
+    events = []
+    host.textFocusChanged.connect(events.append)
+
+    host.reportTextFocus(True)
+    host.reportTextFocus(True)  # no transition - must not re-emit
+    host.reportTextFocus(False)
+
+    assert host.hasTextFocus() is False
+    assert events == [True, False]
+
+
+def test_any_host_has_text_focus_reflects_any_registered_host():
+    # Genuinely "any island," not composer-specific: two plain WebIslandHost
+    # instances, neither named after any real island.
+    host_a = _make_host()
+    host_b = _make_host()
+
+    assert wih.any_host_has_text_focus() is False
+
+    host_b.reportTextFocus(True)
+    assert wih.any_host_has_text_focus() is True
+
+    host_b.reportTextFocus(False)
+    assert wih.any_host_has_text_focus() is False
+
+    host_a.reportTextFocus(True)
+    assert wih.any_host_has_text_focus() is True
+
+
+def test_prepare_for_shutdown_removes_host_from_focus_query():
+    host = _make_host()
+    host.reportTextFocus(True)
+    assert wih.any_host_has_text_focus() is True
+
+    host.prepare_for_shutdown()
+
+    assert wih.any_host_has_text_focus() is False
+
+
+def test_any_host_has_text_focus_tolerates_a_deleted_host_reference():
+    # Found by adversarial review: this query runs on essentially every
+    # keystroke, application-wide, for the lifetime of the process. A
+    # registered host's C++ side could in principle be gone (deleted outside
+    # the normal prepare_for_shutdown()/unregister() path) while the Python
+    # reference lingers in _hosts - a single stale reference must not turn
+    # into "every shortcut throws forever." Matches shutdown_all()'s own
+    # existing defensive pattern for the identical class of failure.
+    class _DeletedHost:
+        def hasTextFocus(self):
+            raise RuntimeError("Internal C++ object already deleted.")
+
+    good_host = _make_host()
+    wih._hosts.insert(0, _DeletedHost())  # simulate a stale entry ahead of a real one
+
+    assert wih.any_host_has_text_focus() is False  # must not raise
+
+    good_host.reportTextFocus(True)
+    assert wih.any_host_has_text_focus() is True  # still finds the real, live host

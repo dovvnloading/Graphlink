@@ -1,5 +1,5 @@
 from PySide6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QToolBar,
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QToolBar,
     QToolButton, QLineEdit, QPushButton, QMessageBox, QSizePolicy, QLabel, QComboBox,
     QFileDialog
 )
@@ -13,6 +13,7 @@ from datetime import datetime
 
 from graphlink_widgets import PinOverlay, SearchOverlay, TokenCounterWidget, TokenEstimator, ComposerWidget
 from graphlink_ui_components import NotificationBanner, DocumentViewerPanel
+from graphlink_web_island_host import AcceleratorForwardingFilter
 from graphlink_canvas_items import Note, Frame, Container
 from graphlink_node import ChatNode, CodeNode, ThinkingNode
 from graphlink_pycoder import PyCoderNode
@@ -240,6 +241,14 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         self.nav_down_shortcut = QShortcut(QKeySequence("Ctrl+Down"), self); self.nav_down_shortcut.activated.connect(self._navigate_down)
         self.nav_left_shortcut = QShortcut(QKeySequence("Ctrl+Left"), self); self.nav_left_shortcut.activated.connect(self._navigate_left)
         self.nav_right_shortcut = QShortcut(QKeySequence("Ctrl+Right"), self); self.nav_right_shortcut.activated.connect(self._navigate_right)
+
+        # Keeps the 10 workspace-level shortcuts above (all but Ctrl+S) from
+        # firing while an island's own text input has DOM focus - see
+        # AcceleratorForwardingFilter's docstring. Application-wide, not
+        # per-shortcut: covers every current and future QShortcut with one
+        # mechanism instead of per-shortcut bookkeeping.
+        self._accelerator_filter = AcceleratorForwardingFilter(self)
+        QApplication.instance().installEventFilter(self._accelerator_filter)
 
         screen = QGuiApplication.primaryScreen().geometry()
         size = self.geometry(); self.move(int((screen.width() - size.width()) / 2), int((screen.height() - size.height()) / 2))
@@ -774,6 +783,18 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         )
         if callable(prepare_composer_shutdown):
             prepare_composer_shutdown()
+        # Symmetric with installEventFilter in __init__ - matches every other
+        # install/removeEventFilter pair in this codebase (e.g.
+        # graphlink_composer_popups.py, graphlink_context_menu.py). Not
+        # reachable as a live bug today (ChatWindow is constructed exactly
+        # once per process), but a still-live QApplication instance keeps a
+        # removed window's filter installed forever otherwise - real risk the
+        # moment a future multi-window feature reconstructs ChatWindow.
+        accelerator_filter = getattr(self, "_accelerator_filter", None)
+        if accelerator_filter is not None:
+            app = QApplication.instance()
+            if app is not None:
+                app.removeEventFilter(accelerator_filter)
         mark_clean_exit()
         super().closeEvent(event)
 
