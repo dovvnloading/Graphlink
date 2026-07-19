@@ -28,7 +28,6 @@ class NavigationPin(QGraphicsObject):
 
     editRequested = Signal(str)
     contextMenuRequested = Signal(str, object)
-    positionPreviewChanged = Signal(str, object)
     positionCommitted = Signal(str, object)
 
     def __init__(self, title="Waypoint", note="", parent=None, pin_id=None):
@@ -144,14 +143,6 @@ class NavigationPin(QGraphicsObject):
         super().mouseReleaseEvent(event)
         if was_dragging and event.button() == Qt.MouseButton.LeftButton:
             self.positionCommitted.emit(self.pin_id, self.pos())
-
-    def itemChange(self, change, value):
-        if (
-            change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged
-            and self.scene() is not None
-        ):
-            self.positionPreviewChanged.emit(self.pin_id, value)
-        return super().itemChange(change, value)
 
     def apply_metadata(self, title, note):
         """Update display metadata after the store has accepted an edit."""

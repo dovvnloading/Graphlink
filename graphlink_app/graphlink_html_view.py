@@ -391,12 +391,20 @@ class HtmlViewNode(QGraphicsObject, HoverAnimationMixin):
     def set_html_content(self, html_text):
         """
         Sets the HTML content of the input editor and automatically renders it.
-        
+
         Args:
             html_text (str): The HTML string to set.
         """
+        # setPlainText, NOT setHtml: html_input is a plain-text source editor
+        # (setAcceptRichText(False)). setHtml() would parse html_text as rich
+        # text, and the resulting textChanged -> _on_content_changed would
+        # overwrite self.html_content with the tag-stripped plain text, so
+        # render_html() below would render the mangled version instead of the
+        # real markup. setPlainText keeps the raw HTML as source verbatim
+        # (seed_prompt() already uses setPlainText for the same reason); its
+        # textChanged reassigns self.html_content to the identical string.
+        self.html_input.setPlainText(html_text)
         self.html_content = html_text
-        self.html_input.setHtml(html_text)
         self.render_html()
 
     def get_splitter_state(self):

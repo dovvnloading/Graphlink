@@ -29,6 +29,31 @@ def _sync_connection_visibility_mode(item):
     item.setOpacity(1.0 if (not _fade_connections_enabled(item) or is_active) else 0.08)
 
 
+def resolve_collapsed_endpoint(item):
+    """Return the effective endpoint for a connection touching `item`.
+
+    If `item` sits inside a collapsed Container OR Frame, the connection should
+    terminate at the OUTERMOST collapsed grouping ancestor (that's the one still
+    visible on the canvas; anything nested inside it is hidden), otherwise at
+    `item` itself. Walks the full ancestor chain.
+
+    This is the single source of truth for that rule. It exists because the
+    per-node *ConnectionItem classes each carried a copy-pasted version that had
+    drifted: they checked only `Container` (never `Frame`) and only the
+    immediate parent (not the full chain), so a connection into a node inside a
+    collapsed Frame drew to the node's stale, hidden position instead of the
+    Frame's collapsed edge. Every connection class now delegates here so those
+    copies can't diverge again.
+    """
+    effective = item
+    current = item
+    while current:
+        if isinstance(current, (Container, Frame)) and getattr(current, 'is_collapsed', False):
+            effective = current
+        current = current.parentItem()
+    return effective
+
+
 class Pin(QGraphicsItem):
     """
     A draggable point on a ConnectionItem that allows the user to curve the path.
@@ -336,24 +361,8 @@ class ConnectionItem(QGraphicsItem):
         return item.boundingRect()
 
     def _get_effective_endpoint(self, item):
-        """
-        Finds the "effective" endpoint for a connection. If an item is inside a
-        collapsed container or frame, the collapsed grouping item itself becomes
-        the endpoint for drawing.
-
-        Args:
-            item (QGraphicsItem): The original endpoint item.
-
-        Returns:
-            QGraphicsItem: The effective endpoint item (either the original or a parent container).
-        """
-        effective = item
-        current = item
-        while current:
-            if isinstance(current, (Container, Frame)) and getattr(current, 'is_collapsed', False):
-                effective = current
-            current = current.parentItem()
-        return effective
+        """Effective endpoint for drawing; see resolve_collapsed_endpoint()."""
+        return resolve_collapsed_endpoint(item)
 
     @staticmethod
     def _connection_signature(start_item, end_item):
@@ -775,14 +784,12 @@ class ContentConnectionItem(QGraphicsItem):
         return item.boundingRect()
 
     def _get_effective_endpoint(self, item):
-        """Helper to find the effective endpoint if inside a collapsed container."""
-        current = item
-        while current:
-            parent = current.parentItem()
-            if isinstance(parent, Container) and parent.is_collapsed:
-                return parent
-            current = parent
-        return item
+        """Effective endpoint for drawing; see resolve_collapsed_endpoint().
+
+        Previously a copy-paste that only honored collapsed Containers (not
+        Frames) and only the immediate parent - now delegates to the shared
+        helper so it can't drift from the other connection classes again."""
+        return resolve_collapsed_endpoint(item)
 
     def boundingRect(self):
         """Returns the bounding rectangle of the item."""
@@ -954,14 +961,12 @@ class DocumentConnectionItem(QGraphicsItem):
         return item.boundingRect()
 
     def _get_effective_endpoint(self, item):
-        """Helper to find the effective endpoint if inside a collapsed container."""
-        current = item
-        while current:
-            parent = current.parentItem()
-            if isinstance(parent, Container) and parent.is_collapsed:
-                return parent
-            current = parent
-        return item
+        """Effective endpoint for drawing; see resolve_collapsed_endpoint().
+
+        Previously a copy-paste that only honored collapsed Containers (not
+        Frames) and only the immediate parent - now delegates to the shared
+        helper so it can't drift from the other connection classes again."""
+        return resolve_collapsed_endpoint(item)
 
     def boundingRect(self):
         """Returns the bounding rectangle of the item."""
@@ -1136,14 +1141,12 @@ class ImageConnectionItem(QGraphicsItem):
         return item.boundingRect()
 
     def _get_effective_endpoint(self, item):
-        """Helper to find the effective endpoint if inside a collapsed container."""
-        current = item
-        while current:
-            parent = current.parentItem()
-            if isinstance(parent, Container) and parent.is_collapsed:
-                return parent
-            current = parent
-        return item
+        """Effective endpoint for drawing; see resolve_collapsed_endpoint().
+
+        Previously a copy-paste that only honored collapsed Containers (not
+        Frames) and only the immediate parent - now delegates to the shared
+        helper so it can't drift from the other connection classes again."""
+        return resolve_collapsed_endpoint(item)
 
     def boundingRect(self):
         """Returns the bounding rectangle of the item."""
@@ -1349,14 +1352,12 @@ class SystemPromptConnectionItem(QGraphicsItem):
         return item.boundingRect()
 
     def _get_effective_endpoint(self, item):
-        """Helper to find the effective endpoint if inside a collapsed container."""
-        current = item
-        while current:
-            parent = current.parentItem()
-            if isinstance(parent, Container) and parent.is_collapsed:
-                return parent
-            current = parent
-        return item
+        """Effective endpoint for drawing; see resolve_collapsed_endpoint().
+
+        Previously a copy-paste that only honored collapsed Containers (not
+        Frames) and only the immediate parent - now delegates to the shared
+        helper so it can't drift from the other connection classes again."""
+        return resolve_collapsed_endpoint(item)
 
     def boundingRect(self):
         """Returns the bounding rectangle of the item."""
@@ -1481,14 +1482,12 @@ class PyCoderConnectionItem(QGraphicsItem):
         return item.boundingRect()
 
     def _get_effective_endpoint(self, item):
-        """Helper to find the effective endpoint if inside a collapsed container."""
-        current = item
-        while current:
-            parent = current.parentItem()
-            if isinstance(parent, Container) and parent.is_collapsed:
-                return parent
-            current = parent
-        return item
+        """Effective endpoint for drawing; see resolve_collapsed_endpoint().
+
+        Previously a copy-paste that only honored collapsed Containers (not
+        Frames) and only the immediate parent - now delegates to the shared
+        helper so it can't drift from the other connection classes again."""
+        return resolve_collapsed_endpoint(item)
 
     def boundingRect(self):
         """Returns the bounding rectangle of the item."""
