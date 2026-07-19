@@ -37,7 +37,15 @@ dependencies = [
 # for newer Python versions, so requiring it would break installs for most users.
 [project.optional-dependencies]
 llamacpp = ["llama-cpp-python"]
-dev = ["pytest"]
+dev = ["pytest", "pytest-env"]
+
+# The suite constructs real QGraphicsObject/QWidget-based nodes and must run
+# without a display server (CI runners, this pytest-env setting). QApplication
+# picks its platform plugin at construction time from this env var, so it must
+# be set before conftest.py's QApplication([]) - pytest-env applies env changes
+# before test collection/session start, which is early enough.
+[tool.pytest.ini_options]
+env = ["QT_QPA_PLATFORM=offscreen"]
 
 [project.gui-scripts]
 graphlink = "graphlink_app:main"
@@ -68,9 +76,12 @@ py-modules = [
     "graphlink_canvas_groups",
     "graphlink_canvas_items",
     "graphlink_canvas_note_items",
+    "graphlink_chart_data",
     "graphlink_command_palette",
     "graphlink_composer",
     "graphlink_composer_bridge",
+    "graphlink_composer_payload",
+    "graphlink_composer_popups",
     "graphlink_composer_web",
     "graphlink_config",
     "graphlink_context_menu",
@@ -84,12 +95,16 @@ py-modules = [
     "graphlink_frontend_bootstrap",
     "graphlink_html_view",
     "graphlink_island_bridge",
+    "graphlink_island_codegen",
+    "graphlink_island_schema",
     "graphlink_library_dialog",
     "graphlink_licensing",
     "graphlink_lod",
     "graphlink_logging",
     "graphlink_memory",
     "graphlink_minimap",
+    "graphlink_model_catalog",
+    "graphlink_navigation_pins",
     "graphlink_node",
     "graphlink_paths",
     "graphlink_prompts",

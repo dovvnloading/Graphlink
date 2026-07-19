@@ -11,6 +11,7 @@ Pillow
 pygments
 pypdf
 pytest
+pytest-env
 PySide6
 pyspellchecker
 python-docx
