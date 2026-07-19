@@ -1,3 +1,35 @@
+/* Theme variables + utility generation only - deliberately NOT
+   "@import "tailwindcss";" (which also pulls in Tailwind's preflight
+   reset: * { margin:0; padding:0; border:0; box-sizing:border-box },
+   list-style/img/button resets, etc. - a real, visible rendering change,
+   not something this install-only increment should introduce). This
+   island's existing CSS already establishes its own baseline; preflight
+   adoption is a decision for whichever increment actually retrofits THIS
+   island onto Tailwind utilities - it does not generalize to future
+   islands with richer markup (headings/lists/paragraphs from markdown,
+   e.g. help/chat-library/document-viewer), which will need their own
+   reset decision, not an inherited assumption that composer's answer
+   already covers them.
+
+   Tailwind's automatic content scanner has no @source restriction by
+   default - it scans every non-ignored file's raw TEXT for candidate
+   utility names, not just real className="..." usage. Confirmed by
+   adversarial review: plain identifier words that are also valid
+   unprefixed Tailwind utilities (e.g. "border", a TS object key in
+   bridgeTypes.ts; "resize", a method name in bridge.ts) were getting
+   matched and compiled into live (if currently unused, since nothing
+   applies those classNames) CSS. Harmless today, but a real latent
+   collision: the first time a real className="border" is ever added
+   here meaning something else, it would silently pick up Tailwind's
+   utility instead. Scoped scanning to only the file types that can
+   legitimately author a Tailwind className in this workspace. */
+@source not "**/*.ts";
+@source not "**/*.css";
+
+@import "tailwindcss/theme" layer(theme);
+@import "tailwindcss/utilities" layer(utilities);
+@import "../../lib/tokens/gl-theme.css";
+
 :root {
   color-scheme: dark;
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;

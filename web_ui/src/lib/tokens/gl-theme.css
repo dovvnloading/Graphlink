@@ -1,0 +1,41 @@
+/* GENERATED - do not hand-edit. Source of truth: graphlink_styles.py::tailwind_theme_css().
+ * Regenerate whenever THEME_TOKENS/frame-color/FONT_FAMILY token NAMES change (not values -
+ * values are supplied separately, at runtime or build-time, by work this file deliberately
+ * does not do yet). A pytest in graphlink_app/tests/ fails if this file drifts from what
+ * regenerating it now would produce. */
+@theme {
+  --font-gl: var(--gl-font-family);
+  --color-gl-frame-blue: var(--gl-frame-blue);
+  --color-gl-frame-dark-gray: var(--gl-frame-dark-gray);
+  --color-gl-frame-green: var(--gl-frame-green);
+  --color-gl-frame-mid-gray: var(--gl-frame-mid-gray);
+  --color-gl-frame-orange: var(--gl-frame-orange);
+  --color-gl-frame-purple: var(--gl-frame-purple);
+  --color-gl-frame-red: var(--gl-frame-red);
+  --color-gl-frame-yellow: var(--gl-frame-yellow);
+  --color-gl-graph-node-badge-fill: var(--gl-graph-node-badge-fill);
+  --color-gl-graph-node-body-end: var(--gl-graph-node-body-end);
+  --color-gl-graph-node-body-start: var(--gl-graph-node-body-start);
+  --color-gl-graph-node-header-end: var(--gl-graph-node-header-end);
+  --color-gl-graph-node-header-start: var(--gl-graph-node-header-start);
+  --color-gl-graph-node-panel-fill: var(--gl-graph-node-panel-fill);
+  --color-gl-neutral-button-background: var(--gl-neutral-button-background);
+  --color-gl-neutral-button-border: var(--gl-neutral-button-border);
+  --color-gl-neutral-button-hover: var(--gl-neutral-button-hover);
+  --color-gl-neutral-button-icon: var(--gl-neutral-button-icon);
+  --color-gl-neutral-button-muted-icon: var(--gl-neutral-button-muted-icon);
+  --color-gl-neutral-button-pressed: var(--gl-neutral-button-pressed);
+  --color-gl-palette-ai-node: var(--gl-palette-ai-node);
+  --color-gl-palette-nav-highlight: var(--gl-palette-nav-highlight);
+  --color-gl-palette-selection: var(--gl-palette-selection);
+  --color-gl-palette-user-node: var(--gl-palette-user-node);
+  --color-gl-semantic-artifact: var(--gl-semantic-artifact);
+  --color-gl-semantic-conversation-ai-bubble: var(--gl-semantic-conversation-ai-bubble);
+  --color-gl-semantic-conversation-user-bubble: var(--gl-semantic-conversation-user-bubble);
+  --color-gl-semantic-default: var(--gl-semantic-default);
+  --color-gl-semantic-search-highlight: var(--gl-semantic-search-highlight);
+  --color-gl-semantic-status-error: var(--gl-semantic-status-error);
+  --color-gl-semantic-status-info: var(--gl-semantic-status-info);
+  --color-gl-semantic-status-success: var(--gl-semantic-status-success);
+  --color-gl-semantic-status-warning: var(--gl-semantic-status-warning);
+}

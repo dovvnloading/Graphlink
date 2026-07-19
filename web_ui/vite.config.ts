@@ -2,6 +2,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import tailwindcss from "@tailwindcss/vite";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -21,7 +22,7 @@ if (!ISLANDS.includes(island)) {
 }
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [tailwindcss(), react()],
   base: "./",
   root: resolve(__dirname, "src/islands", island),
   build: {
