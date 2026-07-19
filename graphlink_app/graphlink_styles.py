@@ -687,6 +687,32 @@ MUTED_FRAME_COLORS = {
 # Keys use SINGLE underscores, unlike qss's "__" property-separator
 # convention - a double underscore would emit "--gl-composer-shell--background",
 # which fails the CSS custom-property name shape the tests already enforce.
+#
+# DERIVED RELATIONSHIPS THAT PER-OCCURRENCE NAMING DOES NOT ENCODE. Read this
+# before authoring a real per-theme palette - flat capture necessarily discards
+# these, and nothing below will fail if they are broken:
+#
+#   attachment_count_border MUST TRACK shell_background. The badge is
+#   position:absolute at top:-5px/right:-7px on a 30x30 control, so it overhangs
+#   its button and sits on the shell. Its 1px border is exactly the shell color
+#   because it is a cut-out/halo punching the badge visually out of the shell -
+#   not a border color chosen for its own sake. Change shell_background alone
+#   and the badge gains a visible dark ring.
+#
+#   attach_button_background (rgba white 0.018) and control_active_background
+#   (rgba white 0.045) are overlays composited against shell_background, so
+#   their effective color moves with it too - less sharply than the halo above,
+#   but they are not independent choices either.
+#
+# Two probable authoring slips, frozen here as if deliberate, flagged rather
+# than silently normalized (fixing them would be a real visual change, which
+# this capture-only increment is not allowed to make):
+#
+#   shell_focus_border rgba(160,160,160,0.82) vs button_focus_outline
+#   rgba(156,156,156,0.82) - two focus indicators differing by 4/255.
+#
+#   The four drop shadows use two alphas (0.20 and 0.22) that are almost
+#   certainly one conceptual shadow.
 _COMPOSER_CAPTURED = {
     "root_text": "#e7e7e7",
     "shell_background": "#1f1f1f",
@@ -1080,24 +1106,31 @@ FONT_FAMILY = "'Segoe UI', sans-serif"
 # reasoning that keeps qss/qss_alpha out of the --gl-* export entirely, applied
 # one tier down.
 #
-# DELIBERATE TRIPWIRE: the moment a SECOND island lands here, that is the first
-# time there are two real examples to generalize a shared semantic vocabulary
-# from - which is exactly the condition css_custom_properties()'s docstring
-# names as the release condition for the deferred bg-0/1/2-style naming. The
-# assertion below fires then, so that decision gets made on purpose rather than
-# by accreting N private per-island palettes that never converge.
+# NOTE ON SCOPE, stated precisely because the obvious reading overstates it:
+# this carve-out removes island tokens from Tailwind's *paved path*, not from
+# reach. _inline_bundle() injects css_root_block(CURRENT_THEME) - the FULL
+# property set, all 43 composer tokens included - into every island's <head>,
+# so any island's CSS can already resolve var(--gl-composer-*) directly, and
+# Tailwind's arbitrary-value syntax (bg-[var(--gl-composer-shell-background)])
+# still works. What this prevents is the ergonomic default: minting
+# bg-gl-composer-* utilities that make reaching for another island's private
+# chrome the path of least resistance. css_custom_properties()'s docstring is
+# already honest about the same limitation for the mechanical names.
+#
+# When a SECOND island lands here, that is the first time there are two real
+# examples to generalize a shared semantic vocabulary from - the release
+# condition css_custom_properties()'s docstring names for the deferred
+# bg-0/1/2-style naming. That check lives in tests/test_theme_tokens.py rather
+# than as a module-level assert here, deliberately: an import-time assertion
+# would make graphlink_styles unimportable and take the whole app down mid-
+# feature, which punishes the developer who followed the convention and
+# registered their island here, while the developer who instead added it to
+# css_custom_properties()'s included_groups would never trip it at all. A test
+# fails loudly for both without bricking anything.
 _ISLAND_GROUPS = {
     "composer": "--gl-composer-",
     "composer_alpha": "--gl-composer-",
 }
-
-assert len({prefix for prefix in _ISLAND_GROUPS.values()}) <= 1, (
-    "A second island-scoped token group has been added to _ISLAND_GROUPS. That "
-    "means there are now two real islands to generalize from - decide whether a "
-    "shared semantic vocabulary should replace the per-island palettes (see "
-    "css_custom_properties()'s docstring on why that vocabulary was deferred) "
-    "before adding a third."
-)
 
 
 def css_custom_properties(theme_name: str) -> dict[str, str]:

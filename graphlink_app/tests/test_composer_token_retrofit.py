@@ -174,24 +174,14 @@ class TestTokenSurface:
             )
 
 
-class TestDevServerVariables:
-    """The dev path has no Python in the loop to inject :root values.
+class TestDevServerVariablesCoverComposer:
+    """Only the composer-specific half of the dev-variables contract lives here.
 
-    Without a dev-only source for --gl-*, `npm run dev` renders the composer
-    unstyled - and "npm run dev serves the composer in a browser" is a stated
-    Phase 1 exit criterion, so this is a real regression, not a nicety.
+    The file's own staleness/dev-only coverage is in test_gl_vars_dev_css.py,
+    deliberately: gl-vars-dev.css mirrors EVERY dark value, so editing an
+    unrelated palette color makes it stale - and that failure should not be
+    reported by a test named for the composer retrofit.
     """
-
-    def test_file_exists(self):
-        assert _DEV_VARS.is_file(), f"{_DEV_VARS} is missing - regenerate from css_root_block('dark')"
-
-    def test_checked_in_file_matches_regenerating_it_now(self):
-        checked_in = _read(_DEV_VARS)
-        block_start = checked_in.index(":root {")
-        assert checked_in[block_start:] == gs.css_root_block("dark"), (
-            f"{_DEV_VARS} is stale - regenerate it from "
-            "graphlink_styles.py::css_root_block('dark')"
-        )
 
     def test_it_defines_every_token_the_composer_css_references(self):
         referenced = set(_VAR_RE.findall(_read(_STYLES)))
@@ -199,17 +189,3 @@ class TestDevServerVariables:
 
         missing = referenced - defined
         assert not missing, f"gl-vars-dev.css does not define {missing}"
-
-    def test_it_is_imported_only_behind_the_dev_flag(self):
-        # An unconditional import would ship a hardcoded dark :root block that
-        # lands after the host's injected block at equal specificity, silently
-        # overriding the real theme and masking a failed injection.
-        main_tsx = _read(_MAIN_TSX)
-
-        assert "gl-vars-dev.css" in main_tsx, "main.tsx must import the dev variables"
-        import_line_index = main_tsx.index("gl-vars-dev.css")
-        guard_index = main_tsx.index("import.meta.env.DEV")
-        assert guard_index < import_line_index, (
-            "gl-vars-dev.css must be imported behind an import.meta.env.DEV guard "
-            "so Vite eliminates it from the production bundle"
-        )
