@@ -81,6 +81,7 @@ py-modules = [
     "graphlink_dialogs",
     "graphlink_exporter",
     "graphlink_file_handler",
+    "graphlink_frontend_bootstrap",
     "graphlink_html_view",
     "graphlink_island_bridge",
     "graphlink_library_dialog",

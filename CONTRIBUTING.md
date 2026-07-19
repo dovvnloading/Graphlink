@@ -21,6 +21,8 @@ python graphlink_app.py
 
 If you prefer Visual Studio, open `graphlink_app.sln`.
 
+`python graphlink_app.py` also builds `web_ui/`'s frontend assets automatically the first time, or whenever they're stale - install [Node.js](https://nodejs.org/) 22 or newer first (22 is the enforced floor; `web_ui/.nvmrc` pins the specific newer version this project is actually developed and tested against, for anyone using `nvm`/`fnm`). No separate `npm run build` step is needed. Set `GRAPHLINK_FRONTEND_DEV=1` to skip this and launch against whatever's already built, e.g. while running `npm run dev` yourself in `web_ui/` for frontend iteration.
+
 ## Development Rules
 
 - Launch the app from `graphlink_app/`, not from the repo root.
