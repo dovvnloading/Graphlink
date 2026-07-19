@@ -25,6 +25,17 @@ export default defineConfig({
   plugins: [tailwindcss(), react()],
   base: "./",
   root: resolve(__dirname, "src/islands", island),
+  // The desktop app's live dev-server mode (GRAPHLINK_FRONTEND_DEV_URL)
+  // allowlists ONE exact origin in its WebEngine request interceptor. These
+  // three settings keep the real served origin pinned to that expectation:
+  // the literal IP avoids localhost's IPv4/IPv6 resolution split, and
+  // strictPort makes a taken port fail loud at startup instead of silently
+  // drifting to 5174+ where the interceptor would block everything.
+  server: {
+    host: "127.0.0.1",
+    port: 5173,
+    strictPort: true,
+  },
   build: {
     outDir: resolve(__dirname, "../assets", island),
     emptyOutDir: true,

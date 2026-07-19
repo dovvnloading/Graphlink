@@ -9,12 +9,29 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import pytest
+
 from PySide6.QtWidgets import QPushButton
 
+import graphlink_frontend_bootstrap as gfb
+import graphlink_webengine
 from graphlink_composer import ComposerController
 from graphlink_composer_bridge import COMPOSER_MAX_HEIGHT, COMPOSER_MIN_HEIGHT
 from graphlink_composer_web import ComposerWebHost
 import graphlink_web_island_host as wih
+
+
+@pytest.fixture(autouse=True)
+def _force_offline_unless_test_opts_in(monkeypatch):
+    # Without this, a developer running the suite with both live-dev env vars
+    # exported (this feature's own target workflow) would silently construct
+    # every host below in LIVE mode - pointing real QWebEngineViews at a dev
+    # server and swapping which profile they use. Clear both vars so the
+    # default for every test here is deterministically the offline branch;
+    # the two branch-selection tests opt back in by monkeypatching
+    # resolve_dev_server_origin directly.
+    monkeypatch.delenv(gfb.DEV_MODE_ENV_VAR, raising=False)
+    monkeypatch.delenv(gfb.DEV_SERVER_URL_ENV_VAR, raising=False)
 
 
 class _Window:
@@ -26,6 +43,10 @@ class _Window:
 
 def _make_host(window=None, controller=None):
     return ComposerWebHost(window or _Window(), controller or ComposerController(), None)
+
+
+def _dev_scripts(host):
+    return host.web_view.page().scripts().find("qwebchannel-bootstrap")
 
 
 def _clear_registry():
@@ -147,3 +168,48 @@ def test_registry_shutdown_all_tears_down_every_composer_host():
     assert host_b not in wih._hosts
     assert host_a.bridge.disposed is True
     assert host_b.bridge.disposed is True
+
+
+class TestLiveDevServerBranchSelection:
+    """The host's actual load-mode decision - the one thing neither the pure
+    resolve_dev_server_origin tests nor the pure interceptor tests exercise.
+    Proves a frozen/no-env build takes the offline branch (offline profile, no
+    injected script) and a live build takes the dev branch (dedicated dev
+    profile + injected qwebchannel bootstrap)."""
+
+    def test_offline_branch_uses_the_offline_profile_and_injects_no_script(self, monkeypatch):
+        # The default with both env vars cleared; also the exact shape a frozen
+        # build hits (resolve_dev_server_origin returns None when frozen).
+        monkeypatch.setattr(wih, "resolve_dev_server_origin", lambda: None)
+        host = _make_host()
+        if host.web_view is None:
+            pytest.skip("WebEngine unavailable in this environment")
+
+        assert host._dev_origin is None
+        assert host.web_view.page().profile() is graphlink_webengine._get_offline_profile()
+        assert _dev_scripts(host) == []
+
+    def test_live_branch_uses_the_dev_profile_and_injects_the_qwebchannel_bootstrap(self, monkeypatch):
+        monkeypatch.setattr(wih, "resolve_dev_server_origin", lambda: "http://127.0.0.1:5173")
+        host = _make_host()
+        if host.web_view is None:
+            pytest.skip("WebEngine unavailable in this environment")
+
+        assert host._dev_origin == "http://127.0.0.1:5173"
+        assert host.web_view.page().profile() is graphlink_webengine._get_dev_server_profile()
+        # Exactly one qwebchannel bootstrap script, on the PAGE's collection...
+        assert len(_dev_scripts(host)) == 1
+        # ...and never on the shared profile (the isolation invariant the
+        # injection-script docstring leans on - a future move onto the profile
+        # would hand the untrusted HTML-renderer preview the same bootstrap).
+        assert graphlink_webengine._get_dev_server_profile().scripts().find("qwebchannel-bootstrap") == []
+
+    def test_offline_and_live_branches_use_genuinely_different_profiles(self, monkeypatch):
+        monkeypatch.setattr(wih, "resolve_dev_server_origin", lambda: None)
+        offline_host = _make_host()
+        monkeypatch.setattr(wih, "resolve_dev_server_origin", lambda: "http://127.0.0.1:5173")
+        live_host = _make_host()
+        if offline_host.web_view is None or live_host.web_view is None:
+            pytest.skip("WebEngine unavailable in this environment")
+
+        assert offline_host.web_view.page().profile() is not live_host.web_view.page().profile()

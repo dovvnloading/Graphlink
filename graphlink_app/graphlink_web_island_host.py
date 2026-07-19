@@ -21,7 +21,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from PySide6.QtCore import QRect, QUrl, Qt, Signal
+from PySide6.QtCore import QFile, QIODevice, QRect, QUrl, Qt, Signal
 from PySide6.QtGui import QColor, QRegion
 from PySide6.QtWidgets import (
     QApplication,
@@ -32,16 +32,19 @@ from PySide6.QtWidgets import (
 )
 
 import graphlink_config as config
+from graphlink_frontend_bootstrap import resolve_dev_server_origin
 from graphlink_paths import asset_path
 from graphlink_styles import css_root_block
 
 try:
     from PySide6.QtWebChannel import QWebChannel
+    from PySide6.QtWebEngineCore import QWebEngineScript
     from PySide6.QtWebEngineWidgets import QWebEngineView
 
     from graphlink_webengine import WEBENGINE_AVAILABLE, _harden_preview_web_view
 except ImportError:
     QWebChannel = None
+    QWebEngineScript = None
     QWebEngineView = None
     WEBENGINE_AVAILABLE = False
     _harden_preview_web_view = None
@@ -174,6 +177,49 @@ def _inline_bundle(asset_root: Path) -> str:
     channel_script = '<script src="qrc:///qtwebchannel/qwebchannel.js"></script>'
     document = document.replace("</head>", f"{channel_script}</head>", 1)
     return document
+
+
+def _qwebchannel_injection_script():
+    """Live-URL equivalent of _inline_bundle()'s injected
+    <script src="qrc:///qtwebchannel/qwebchannel.js"> tag.
+
+    Vite's own served index.html has no such tag and must not gain one -
+    web_ui/ stays Qt-agnostic. The injection point must be DocumentCreation
+    (before ANY page script runs, including deferred module scripts): the
+    island's bridge.ts checks isQWebChannelAvailable() exactly once,
+    synchronously, when main.tsx's module script executes, and permanently
+    falls back to its mock bridge if window.QWebChannel is absent at that
+    moment. Injecting later (e.g. runJavaScript after loadFinished) would
+    "work" without error while the composer silently ran disconnected from
+    Python forever.
+
+    Returned script must be added to the PAGE's script collection
+    (page().scripts()), never the shared profile's - _PREVIEW_PROFILE is
+    shared with the HTML-renderer node preview, which renders untrusted
+    markup and must never be handed a QWebChannel bootstrap it didn't ask
+    for. Each WebIslandHost constructs its own QWebEnginePage, so
+    page-scoped scripts can't leak across surfaces.
+    """
+    qfile = QFile(":/qtwebchannel/qwebchannel.js")
+    if not qfile.open(QIODevice.OpenModeFlag.ReadOnly):
+        raise RuntimeError(
+            "qrc:///qtwebchannel/qwebchannel.js could not be read from Qt's "
+            "resource system - QtWebChannel appears not to be loaded. The "
+            "live dev-server page cannot be wired to the Python bridge "
+            "without it, and proceeding would silently run the island on "
+            "its mock bridge instead."
+        )
+    try:
+        source = bytes(qfile.readAll()).decode("utf-8")
+    finally:
+        qfile.close()
+    script = QWebEngineScript()
+    script.setName("qwebchannel-bootstrap")
+    script.setSourceCode(source)
+    script.setInjectionPoint(QWebEngineScript.InjectionPoint.DocumentCreation)
+    script.setWorldId(QWebEngineScript.ScriptWorldId.MainWorld)
+    script.setRunsOnSubFrames(False)
+    return script
 
 
 def _rounded_region(rect: QRect, radius: int) -> QRegion:
@@ -311,6 +357,11 @@ class WebIslandHost(QFrame):
         self._min_height = min_height
         self._max_height = max_height
         self._shutdown_started = False
+        # Resolved once at construction (unlike the request interceptor's
+        # per-request re-resolution): a host is not a forever-cached
+        # singleton, and its load mode must not change out from under an
+        # already-loaded page.
+        self._dev_origin = resolve_dev_server_origin()
 
         self.setObjectName(f"{bridge_object_name}Host")
         if min_height is not None:
@@ -338,14 +389,29 @@ class WebIslandHost(QFrame):
             self.web_view = QWebEngineView(self)
             self.web_view.setStyleSheet("background: transparent; border: 0;")
             self.web_view.page().setBackgroundColor(QColor(0, 0, 0, 0))
-            _harden_preview_web_view(self.web_view)
+            # Live-dev hosts get the dedicated dev-server profile; every other
+            # surface (offline composer, HTML-renderer preview) stays on the
+            # unconditionally-offline profile. self._dev_origin is None unless
+            # both opt-in env vars are set and this isn't a frozen build, so a
+            # shipped build always takes the offline profile here.
+            _harden_preview_web_view(
+                self.web_view, allow_dev_server=self._dev_origin is not None
+            )
             channel = QWebChannel(self.web_view.page())
             channel.registerObject(bridge_object_name, self.bridge)
             self.web_view.page().setWebChannel(channel)
-            self.web_view.loadFinished.connect(lambda _ok: self.bridge.publish())
-            self.web_view.setHtml(
-                _inline_bundle(asset_path(asset_dir_name)), QUrl("about:blank")
-            )
+            self.web_view.loadFinished.connect(self._on_load_finished)
+            if self._dev_origin is not None:
+                # Live dev-server mode (developer opt-in, double-gated - see
+                # resolve_dev_server_origin). The request interceptor
+                # independently allowlists exactly this origin; everything
+                # else stays blocked as in the offline path.
+                self.web_view.page().scripts().insert(_qwebchannel_injection_script())
+                self.web_view.setUrl(QUrl(self._dev_origin))
+            else:
+                self.web_view.setHtml(
+                    _inline_bundle(asset_path(asset_dir_name)), QUrl("about:blank")
+                )
             layout.addWidget(self.web_view)
         else:
             fallback = QLabel(unavailable_message, self)
@@ -375,6 +441,40 @@ class WebIslandHost(QFrame):
         return self.web_view or super().focusWidget()
 
     def on_theme_changed(self):
+        self.bridge.publish()
+
+    def _on_load_finished(self, ok: bool) -> None:
+        """Publish on load, or - in live dev-server mode only - replace
+        Chromium's generic error page with an actionable one when the dev
+        server isn't answering.
+
+        Deliberately does NOT exit the process the way a
+        FrontendBootstrapError does: that failure is pre-window and
+        unrecoverable, while this one is mid-session and fixed by starting
+        the server - exiting would make the live path strictly worse than
+        the separate-browser-tab workflow it replaces. No pre-flight TCP
+        probe either; loadFinished is Qt's own single source of truth for
+        whether the load worked. The offline path's behavior is unchanged:
+        publish regardless of ok, exactly as before.
+        """
+        # prepare_for_shutdown() calls web_view.stop(), which aborts an
+        # in-flight load and fires loadFinished(False). Without this guard a
+        # teardown mid-load would kick off a brand-new setHtml() during
+        # shutdown - starting work exactly when the host is being torn down.
+        if self._shutdown_started:
+            return
+        if not ok and self._dev_origin is not None:
+            self.web_view.setHtml(
+                "<!doctype html><html><body style=\"font-family:sans-serif;"
+                "padding:2rem\">"
+                f"<h2>Could not reach {self._dev_origin}</h2>"
+                "<p>GRAPHLINK_FRONTEND_DEV_URL is set but nothing answered "
+                "there. Run <code>npm run dev</code> in web_ui/, then reopen "
+                "this window - or unset GRAPHLINK_FRONTEND_DEV_URL to load "
+                "the offline bundle instead.</p></body></html>",
+                QUrl("about:blank"),
+            )
+            return
         self.bridge.publish()
 
     def apply_requested_height(self, height: int) -> None:

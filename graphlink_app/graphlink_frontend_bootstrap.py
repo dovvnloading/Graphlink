@@ -17,13 +17,17 @@ hard no-op the moment sys.frozen is set, checked before anything else here
 runs.
 """
 
+import logging
 import os
 import subprocess
 import shutil
 import sys
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from graphlink_paths import ASSETS_DIR, REPO_ROOT
+
+logger = logging.getLogger(__name__)
 
 WEB_UI_DIR = REPO_ROOT / "web_ui"
 
@@ -52,6 +56,34 @@ _STALENESS_IGNORED_FILENAME_MARKERS = (
 
 DEV_MODE_ENV_VAR = "GRAPHLINK_FRONTEND_DEV"
 
+# Second, independent opt-in for the live dev-server-in-window path: the exact
+# origin (e.g. "http://127.0.0.1:5173") WebIslandHost should load instead of
+# the offline inlined bundle. Deliberately a SEPARATE variable from
+# DEV_MODE_ENV_VAR rather than derived from it: "skip npm orchestration" and
+# "point the app's own webview at a live local server" are different trust
+# decisions (the second relaxes the WebEngine network sandbox), and a single
+# leaked/inherited env var must never activate both. Both must be set for the
+# live path to engage - see resolve_dev_server_origin().
+DEV_SERVER_URL_ENV_VAR = "GRAPHLINK_FRONTEND_DEV_URL"
+
+# The live path only ever targets a loopback Vite dev server; anything else is
+# a misconfiguration (or an attempt to point the sandboxed webview somewhere
+# it must never go) and fails closed.
+_DEV_SERVER_ALLOWED_HOSTS = frozenset({"127.0.0.1", "localhost"})
+
+# One-shot guard for resolve_dev_server_origin()'s misconfiguration warnings:
+# the WebEngine request interceptor re-resolves the origin on every
+# intercepted request (see graphlink_webengine.py), so an unguarded
+# logger.warning here would repeat once per subresource request.
+_warned_dev_url_issues: set[str] = set()
+
+
+def _warn_once(key: str, message: str, *args) -> None:
+    if key in _warned_dev_url_issues:
+        return
+    _warned_dev_url_issues.add(key)
+    logger.warning(message, *args)
+
 
 class FrontendBootstrapError(RuntimeError):
     """An actionable, user-facing frontend bootstrap failure.
@@ -70,14 +102,71 @@ def _dev_mode_requested() -> bool:
     """True if GRAPHLINK_FRONTEND_DEV is set to a truthy value.
 
     Opt-in escape hatch for a developer already running `npm run dev`
-    themselves in a separate terminal (real HMR, via a real browser tab
-    today - WebIslandHost has no live-dev-server loading mode yet, only
-    the inlined-bundle path `_inline_bundle()` reads from disk). Setting
-    this skips the build-orchestration below entirely, so the app launches
-    immediately against whatever assets/ already has, without this module
-    fighting the developer's own build loop.
+    themselves in a separate terminal. Setting this skips the
+    build-orchestration below entirely, so the app launches immediately
+    against whatever assets/ already has, without this module fighting the
+    developer's own build loop. Set ALONE, the app still loads the offline
+    inlined bundle; additionally setting GRAPHLINK_FRONTEND_DEV_URL points
+    the app's own window at the live dev server for in-app HMR - see
+    resolve_dev_server_origin().
     """
     return os.environ.get(DEV_MODE_ENV_VAR, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def resolve_dev_server_origin() -> str | None:
+    """The exact origin ("http://host:port") a live WebIslandHost load may
+    target, or None if the live-URL path is inactive.
+
+    Requires BOTH env vars: GRAPHLINK_FRONTEND_DEV (its meaning above is
+    unchanged - build-orchestration skip) and GRAPHLINK_FRONTEND_DEV_URL.
+    GRAPHLINK_FRONTEND_DEV alone is today's normal dev loop and stays
+    silent; GRAPHLINK_FRONTEND_DEV_URL alone is a likely misconfiguration
+    and is warned about (once), not guessed at. The URL itself must be a
+    plain http origin on a loopback host with an explicit port - anything
+    else fails closed with a warning. A missing port is invalid rather than
+    defaulted to 80: Vite is never on port 80, so guessing there would fail
+    closed permanently and silently instead of surfacing the real mistake.
+
+    Never returns non-None in a frozen build - checked first, before any
+    env var is even read, mirroring ensure_frontend_built()'s hard bypass.
+    graphlink_webengine.preview_url_is_allowed() independently re-checks
+    sys.frozen on its own side as well; neither module trusts the other to
+    have gated this (same defense-in-depth convention as graphlink_paths'
+    local frozen re-derivation).
+    """
+    if _is_frozen():
+        return None
+    raw_url = os.environ.get(DEV_SERVER_URL_ENV_VAR, "").strip()
+    if not raw_url:
+        return None
+    if not _dev_mode_requested():
+        _warn_once(
+            "url-without-flag",
+            "%s is set but %s is not; both are required to load the live dev "
+            "server in-window. The offline bundle will load instead.",
+            DEV_SERVER_URL_ENV_VAR,
+            DEV_MODE_ENV_VAR,
+        )
+        return None
+    try:
+        parsed = urlsplit(raw_url)
+        host = (parsed.hostname or "").lower()
+        port = parsed.port
+        scheme = parsed.scheme
+    except ValueError:
+        host, port, scheme = "", None, ""
+    # port 0 is not a real listen port; treat it as "no explicit port" so a
+    # stray http://127.0.0.1:0 fails closed rather than yielding a dead origin.
+    if scheme != "http" or host not in _DEV_SERVER_ALLOWED_HOSTS or not port:
+        _warn_once(
+            f"invalid-url:{raw_url}",
+            "%s=%r is not a valid http://127.0.0.1:<port> origin. The offline "
+            "bundle will load instead.",
+            DEV_SERVER_URL_ENV_VAR,
+            raw_url,
+        )
+        return None
+    return f"http://{host}:{port}"
 
 
 def discover_islands() -> list[str]:
