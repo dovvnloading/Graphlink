@@ -117,34 +117,34 @@ class CommandPaletteDialog(QDialog):
         self.canvas.setGraphicsEffect(shadow)
 
         self.setStyleSheet(f"""
-            QDialog {
+            QDialog {{
                 background: transparent;
-            }
-            QWidget#commandPaletteCanvas {
+            }}
+            QWidget#commandPaletteCanvas {{
                 background-color: #252525;
                 color: #FFFFFF;
                 border-radius: 8px;
-            }
-            QLineEdit {
+            }}
+            QLineEdit {{
                 padding: 10px;
                 font-size: 14px;
                 background-color: #1E1E1E;
                 border: 1px solid #3F3F3F;
                 border-radius: 4px;
-            }
-            QListWidget {
+            }}
+            QListWidget {{
                 border: 1px solid #3F3F3F;
                 background-color: #2D2D2D;
                 font-size: 13px;
                 border-radius: 4px;
-            }
-            QListWidget::item {
+            }}
+            QListWidget::item {{
                 padding: 10px;
-            }
-            QListWidget::item:selected {
+            }}
+            QListWidget::item:selected {{
                 background-color: {get_semantic_color("status_success").name()};
                 color: white;
-            }
+            }}
         """)
 
         # Initially populate the list with all available commands.
