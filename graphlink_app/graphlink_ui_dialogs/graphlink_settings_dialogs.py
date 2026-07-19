@@ -1250,6 +1250,12 @@ class ApiSettingsWidget(QWidget):
         self.load_btn = QPushButton("Load Available Models")
         self.load_btn.clicked.connect(self.load_models_from_endpoint)
         layout.addWidget(self.load_btn)
+        # Whether the most recent load actually populated a catalog for the
+        # current provider. Drives the load_btn label in _clear_api_worker:
+        # "Refresh Available Models" only once something has been loaded, so a
+        # FAILED fetch no longer misleadingly relabels the button as if a
+        # catalog existed to refresh.
+        self._api_load_succeeded = False
         self.discovery_status_label = QLabel("Model catalog has not been refreshed yet.")
         self.discovery_status_label.setWordWrap(True)
         self.discovery_status_label.setStyleSheet("color: #A5A5A5;")
@@ -1420,6 +1426,7 @@ class ApiSettingsWidget(QWidget):
             QMessageBox.warning(self, "Missing Information", "Please enter the API Key.")
             return
 
+        self._api_load_succeeded = False
         self.load_btn.setEnabled(False)
         self.load_btn.setText("Loading catalog…")
         self.discovery_status_label.setText("Contacting the provider… You can keep editing other settings.")
@@ -1453,6 +1460,7 @@ class ApiSettingsWidget(QWidget):
             self.image_combo.clear()
             self.image_combo.addItems(api_provider.GEMINI_IMAGE_MODELS_STATIC)
         self.restore_saved_models()
+        self._api_load_succeeded = True
         self.discovery_status_label.setText(f"Catalog refreshed — {len(models)} model(s) available from {provider}.")
         self.discovery_status_label.setStyleSheet(f"color: {get_semantic_color('status_success').name()};")
 
@@ -1466,7 +1474,13 @@ class ApiSettingsWidget(QWidget):
 
     def _clear_api_worker(self, *_args):
         self.load_btn.setEnabled(True)
-        self.load_btn.setText("Refresh Available Models")
+        # Only advertise "Refresh" once a catalog was actually loaded for the
+        # current provider; a failed fetch (or a load whose result was
+        # discarded because the provider was switched mid-flight) leaves the
+        # button as "Load Available Models", since there is nothing to refresh.
+        self.load_btn.setText(
+            "Refresh Available Models" if self._api_load_succeeded else "Load Available Models"
+        )
         self.api_worker = None
         self.api_worker_provider = None
 

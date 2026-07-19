@@ -490,7 +490,11 @@ class ChatNode(QGraphicsItem, HoverAnimationMixin):
 
         painter.save()
         painter.setClipPath(path)
-        accent_fill = colors["accent"]
+        # Copy before mutating: colors["accent"] is reused at full opacity for
+        # the connection dots below (painter.setBrush(colors["accent"])), and
+        # setAlpha() mutates the QColor in place. Without the copy, the dots
+        # would inherit this strip's alpha=140 instead of being fully opaque.
+        accent_fill = QColor(colors["accent"])
         accent_fill.setAlpha(140)
         painter.setBrush(accent_fill)
         painter.setPen(Qt.PenStyle.NoPen)

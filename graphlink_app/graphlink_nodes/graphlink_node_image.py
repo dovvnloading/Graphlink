@@ -4,7 +4,7 @@ from PySide6.QtGui import QColor, QFont, QFontMetrics, QImage, QPainter, QPainte
 from PySide6.QtWidgets import QGraphicsItem
 
 from graphlink_canvas_items import Container, HoverAnimationMixin
-from graphlink_config import canvas_font, canvas_font_color, get_current_palette, get_graph_node_colors
+from graphlink_config import canvas_font, canvas_font_color, get_current_palette, get_graph_node_colors, get_semantic_color
 from graphlink_lod import draw_lod_card, lod_mode_for_item, preview_text
 
 
@@ -83,9 +83,17 @@ class ImageNode(QGraphicsItem, HoverAnimationMixin):
                 mode=lod_mode,
                 selected=self.isSelected() and not is_dragging,
                 hovered=self.hovered,
+                search_match=self.is_search_match,
             )
             return
         painter.drawPath(path)
+
+        if self.is_search_match:
+            highlight_pen = QPen(get_semantic_color("search_highlight"), 2.5)
+            highlight_pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            painter.setPen(highlight_pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawPath(path)
 
         header_path = QPainterPath()
         header_rect = QRectF(0, 0, self.width, self.HEADER_HEIGHT)
