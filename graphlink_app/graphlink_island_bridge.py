@@ -34,7 +34,35 @@ class IslandBridge:
       shutdown can't emit into a torn-down page.
     """
 
+    # The version of the payload shape this bridge EMITS.
     SCHEMA_VERSION = 1
+
+    # The oldest emitted version a reader of this payload can still handle
+    # correctly. Together these implement minimum-compatible versioning:
+    # a reader accepts a payload when
+    #     payload.schemaVersion >= reader.MIN_COMPATIBLE_SCHEMA_VERSION
+    # and rejects it otherwise.
+    #
+    # Concretely, that makes the two kinds of change behave differently:
+    #
+    #   ADDITIVE change (a new optional field, a new enum member a reader can
+    #   ignore): bump SCHEMA_VERSION, leave MIN_COMPATIBLE_SCHEMA_VERSION
+    #   alone. Older readers keep working - they see a higher version number
+    #   and additional keys they don't know about, and both are fine, because
+    #   the generated TS validator deliberately tolerates unknown keys.
+    #
+    #   BREAKING change (a field removed, renamed, retyped, or given new
+    #   semantics under the same name): raise BOTH constants to the new
+    #   SCHEMA_VERSION. Every reader built before that change now sees a
+    #   payload whose version is below its own minimum and refuses it, which
+    #   surfaces as the visible error state rather than as silently wrong
+    #   rendering.
+    #
+    # Note the asymmetry that makes this safe: a reader can accept a payload
+    # NEWER than it understands (additive-only guarantee), but must refuse one
+    # OLDER than its stated minimum, since the missing/changed fields it needs
+    # genuinely aren't there.
+    MIN_COMPATIBLE_SCHEMA_VERSION = 1
 
     def __init__(self) -> None:
         self._revision = 0
@@ -51,6 +79,7 @@ class IslandBridge:
         self._revision += 1
         payload = dict(self._build_state_payload())
         payload["schemaVersion"] = self.SCHEMA_VERSION
+        payload["minCompatibleSchemaVersion"] = self.MIN_COMPATIBLE_SCHEMA_VERSION
         payload["revision"] = self._revision
         serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True)
         self._transport_send(serialized)

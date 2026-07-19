@@ -1,5 +1,17 @@
 import { ComposerState, initialComposerState } from "./bridgeTypes";
 import { isQWebChannelAvailable, connectQWebChannel } from "../../lib/bridge-core/transport";
+import { validateComposerState } from "../../lib/bridge-core/generated/composer-state";
+import {
+  BridgeRejection,
+  RejectionListener,
+  parseIslandState,
+} from "../../lib/bridge-core/islandState";
+
+// Re-exported so existing `import { BridgeRejection } from "./bridge"` call
+// sites (ComposerApp.tsx, this file's own tests) keep working unchanged -
+// the type itself now lives in bridge-core/islandState.ts, generic across
+// islands; this module is just composer's specific consumer of it.
+export type { BridgeRejection, RejectionListener };
 
 type StateListener = (state: ComposerState) => void;
 
@@ -44,14 +56,16 @@ export interface ComposerBridge {
   dispose(): void;
 }
 
-function parseState(payload: string): ComposerState | null {
-  try {
-    const state = JSON.parse(payload) as ComposerState;
-    if (state?.schemaVersion !== 1 || !state.draft || !state.request) return null;
-    return state;
-  } catch {
-    return null;
-  }
+/**
+ * Composer's specific slice of the generic parseIslandState() shell: only the
+ * choice of validator (composer-state.ts's generated validateComposerState)
+ * is composer-specific; JSON-parsing, schema-version negotiation, and the
+ * BridgeRejection shape are shared (bridge-core/islandState.ts), so a second
+ * island's bridge.ts needs only its own one-line equivalent of this function,
+ * not a copy of the whole parse/reject mechanism.
+ */
+function parseState(payload: string) {
+  return parseIslandState(payload, validateComposerState);
 }
 
 class MockComposerBridge implements ComposerBridge {
@@ -183,7 +197,10 @@ class MockComposerBridge implements ComposerBridge {
   dispose(): void {}
 }
 
-export function createComposerBridge(listener: StateListener): ComposerBridge {
+export function createComposerBridge(
+  listener: StateListener,
+  onRejection?: RejectionListener,
+): ComposerBridge {
   const fallback = new MockComposerBridge(listener);
 
   if (!isQWebChannelAvailable()) {
@@ -194,8 +211,21 @@ export function createComposerBridge(listener: StateListener): ComposerBridge {
   let connected = false;
   let pendingHeight: number | null = null;
   const stateListener = (payload: string) => {
-    const state = parseState(payload);
-    if (state) listener(state);
+    const outcome = parseState(payload);
+    if (outcome.ok) {
+      listener(outcome.state);
+      // Clear any previously-shown error once a good payload arrives, so a
+      // transient bad update doesn't strand the UI in the error state.
+      onRejection?.(null);
+      return;
+    }
+    // Loud in the console for a developer, and surfaced on screen by the
+    // caller for a user - never silently dropped, which was the old behavior.
+    console.error(
+      `[composer bridge] rejected payload (${outcome.rejection.kind}): ${outcome.rejection.reason}`,
+      outcome.rejection.details,
+    );
+    onRejection?.(outcome.rejection);
   };
 
   connectQWebChannel((objects) => {

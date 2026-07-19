@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ComposerState, initialComposerState } from "./bridgeTypes";
-import { ComposerBridge, createComposerBridge } from "./bridge";
+import { BridgeRejection, ComposerBridge, createComposerBridge } from "./bridge";
+import { BridgeErrorState } from "./BridgeErrorState";
 import { isBusy, requestLabel } from "./state";
 import { useAppliedThemeCssVariables } from "./theme";
 
@@ -23,6 +24,7 @@ function Icon({ name }: { name: "attach" | "send" | "stop" | "chevron" }) {
 
 function ComposerApp() {
   const [state, setState] = useState<ComposerState>(initialComposerState);
+  const [rejection, setRejection] = useState<BridgeRejection | null>(null);
   const bridgeRef = useRef<ComposerBridge | null>(null);
   const shellRef = useRef<HTMLElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -30,7 +32,7 @@ function ComposerApp() {
   const attachmentCount = state.context.items.length;
 
   useEffect(() => {
-    const bridge = createComposerBridge(setState);
+    const bridge = createComposerBridge(setState, setRejection);
     bridgeRef.current = bridge;
     bridge.ready();
     return () => {
@@ -47,6 +49,19 @@ function ComposerApp() {
   // makes a LIVE theme switch visible; it does not do the initial styling.
   useAppliedThemeCssVariables(document.documentElement, state.theme.cssVariables);
 
+  // Keyed on `rejection`, not `[]`: <main ref={shellRef}> is only rendered
+  // when there is no rejection (see the early return below), so a reject then
+  // recover cycle unmounts and later remounts a NEW <main> DOM node. A `[]`
+  // dependency array would run this effect exactly once for the component's
+  // whole lifetime, leaving the ResizeObserver watching the original,
+  // detached node forever - resize() would never fire again for the new one,
+  // silently freezing the host's negotiated height while composer's real
+  // content keeps growing. Keying on `rejection` makes React tear down and
+  // re-create the observer across every mount/unmount boundary: the cleanup
+  // fires (disconnecting the old observer) as `rejection` transitions to
+  // truthy, and shellRef.current is correctly null at that point since React
+  // nulls refs on unmount before running effects - so the guard below is not
+  // dead code, it is what makes the rejected render a safe no-op here.
   useEffect(() => {
     const shell = shellRef.current;
     if (!shell) return;
@@ -59,7 +74,7 @@ function ComposerApp() {
     observer?.observe(shell);
     reportHeight();
     return () => observer?.disconnect();
-  }, []);
+  }, [rejection]);
 
   useLayoutEffect(() => {
     const input = inputRef.current;
@@ -107,6 +122,14 @@ function ComposerApp() {
 
     event.preventDefault();
     bridgeRef.current?.stageTextAttachment(pastedText);
+  }
+
+  // Replaces the composer entirely rather than annotating it: after a rejected
+  // payload, anything still rendered is stale, and an input box that still
+  // looks usable would invite typing into state the desktop side no longer
+  // shares. Placed after the hooks above so hook order stays unconditional.
+  if (rejection) {
+    return <BridgeErrorState rejection={rejection} />;
   }
 
   return (

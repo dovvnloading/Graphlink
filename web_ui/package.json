@@ -13,7 +13,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "eslint .",
-    "check": "npm run typecheck && npm run lint && npm run test && npm run build"
+    "check:schema": "python ../graphlink_app/graphlink_island_codegen.py --check",
+    "check": "npm run check:schema && npm run typecheck && npm run lint && npm run test && npm run build"
   },
   "dependencies": {
     "react": "^18.3.1",
