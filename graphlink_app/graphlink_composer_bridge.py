@@ -575,6 +575,21 @@ class ComposerBridge(IslandBridge, QObject):
         `cssVariables` (added when composer's own CSS first started consuming
         `var(--gl-*)`) is the one field here nothing on the JS side ignores
         anymore - see ComposerApp.tsx's theme-application effect.
+
+        KNOWN, UNADDRESSED: `palette`/`semantic`/`neutralButton`/`graphNode`
+        below remain genuinely dead on the JS side (confirmed by adversarial
+        review: grepping all of web_ui/src for `state.theme.` finds only the
+        two `cssVariables` reads) and predate this whole retrofit. Not
+        removed here - out of scope for this change, and removal would also
+        need touching test_theme_tokens.py's coverage of this shape - but
+        flagged explicitly rather than left as silent dead weight, since this
+        docstring is the one place that would otherwise let a future reader
+        assume all four fields are load-bearing. They also carry a real,
+        if-currently-dormant lossiness risk `cssVariables` was deliberately
+        built to avoid: every value here round-trips through `QColor.name()`,
+        which drops alpha - harmless today only because none of these four
+        groups happen to hold an alpha value, not because anything prevents
+        one from being added.
         """
         palette = get_current_palette()
         neutral_button = get_neutral_button_colors()

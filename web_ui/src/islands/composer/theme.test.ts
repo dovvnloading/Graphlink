@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { applyThemeCssVariables } from "./theme";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { renderHook } from "@testing-library/react";
+import { applyThemeCssVariables, useAppliedThemeCssVariables } from "./theme";
 
 describe("applyThemeCssVariables", () => {
   afterEach(() => {
@@ -58,5 +59,72 @@ describe("applyThemeCssVariables", () => {
         "--gl-composer-send-button-background",
       ),
     ).toBe("#414141");
+  });
+});
+
+describe("useAppliedThemeCssVariables", () => {
+  afterEach(() => {
+    document.documentElement.removeAttribute("style");
+    vi.restoreAllMocks();
+  });
+
+  it("applies the initial cssVariables on mount", () => {
+    const target = document.createElement("div");
+
+    renderHook(({ vars }) => useAppliedThemeCssVariables(target, vars), {
+      initialProps: { vars: { "--gl-composer-shell-background": "#1f1f1f" } },
+    });
+
+    expect(target.style.getPropertyValue("--gl-composer-shell-background")).toBe("#1f1f1f");
+  });
+
+  it("re-applies when the content genuinely changes across a re-render", () => {
+    const target = document.createElement("div");
+    const { rerender } = renderHook(({ vars }) => useAppliedThemeCssVariables(target, vars), {
+      initialProps: { vars: { "--gl-composer-shell-background": "#1f1f1f" } },
+    });
+
+    rerender({ vars: { "--gl-composer-shell-background": "#222222" } });
+
+    expect(target.style.getPropertyValue("--gl-composer-shell-background")).toBe("#222222");
+  });
+
+  it(
+    "does NOT re-run setProperty on a re-render that supplies a new object " +
+      "with IDENTICAL content - the exact shape every keystroke produces, " +
+      "since bridge.ts's parseState() does a fresh JSON.parse() on every " +
+      "snapshot regardless of whether the theme actually changed",
+    () => {
+      const target = document.createElement("div");
+      const setPropertySpy = vi.spyOn(target.style, "setProperty");
+      const firstVars = { "--gl-composer-shell-background": "#1f1f1f" };
+      const identicalButNewObject = { "--gl-composer-shell-background": "#1f1f1f" };
+      expect(firstVars).not.toBe(identicalButNewObject); // sanity: genuinely different references
+
+      const { rerender } = renderHook(({ vars }) => useAppliedThemeCssVariables(target, vars), {
+        initialProps: { vars: firstVars },
+      });
+      const callsAfterMount = setPropertySpy.mock.calls.length;
+      expect(callsAfterMount).toBeGreaterThan(0);
+
+      rerender({ vars: identicalButNewObject });
+
+      expect(setPropertySpy.mock.calls.length).toBe(callsAfterMount);
+    },
+  );
+
+  it("does re-run when a key's value changes even though the key set is identical", () => {
+    const target = document.createElement("div");
+    const setPropertySpy = vi.spyOn(target.style, "setProperty");
+
+    const { rerender } = renderHook(({ vars }) => useAppliedThemeCssVariables(target, vars), {
+      initialProps: { vars: { "--gl-composer-shell-background": "#1f1f1f" } },
+    });
+    const callsAfterMount = setPropertySpy.mock.calls.length;
+
+    rerender({ vars: { "--gl-composer-shell-background": "#222222" } });
+
+    expect(setPropertySpy.mock.calls.length).toBeGreaterThan(callsAfterMount);
+    expect(target.style.getPropertyValue("--gl-composer-shell-background")).toBe("#222222");
   });
 });
