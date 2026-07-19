@@ -9,22 +9,22 @@ class StyleSheet:
     """A namespace class to hold large QSS string constants for different themes."""
 
     # Stylesheet for the default dark theme, tuned for muted contrast.
-    DARK_THEME = """
+    DARK_THEME_TEMPLATE = """
         QMainWindow, QWidget {
-            background-color: #1E1E1E;
-            color: #DCDCDC;
+            background-color: {{qmainwindow_qwidget__background_color}};
+            color: {{qmainwindow_qwidget__color}};
         }
         
         /* Custom Title Bar Styling */
         #titleBar {
-            background-color: #272727;
-            border-bottom: 1px solid #424242;
+            background-color: {{titlebar__background_color}};
+            border-bottom: 1px solid {{titlebar__border_bottom}};
             padding: 4px;
             min-height: 32px;
         }
         
         #titleBar QLabel {
-            color: #DCDCDC;
+            color: {{titlebar_qlabel__color}};
             font-size: 12px;
             font-weight: bold;
             font-family: 'Segoe UI', sans-serif;
@@ -40,27 +40,27 @@ class StyleSheet:
         }
         
         #titleBarButtons QPushButton:hover {
-            background-color: #424242;
+            background-color: {{titlebarbuttons_qpushbutton_hover__background_color}};
         }
         
         #closeButton:hover {
-            background-color: #656565 !important;
+            background-color: {{closebutton_hover__background_color}} !important;
         }
         
         /* Custom Scrollbar Styling */
         QScrollBar:vertical {
-            background: #272727;
+            background: {{qscrollbar_vertical__background}};
             width: 10px;
             margin: 0px;
             border-radius: 5px;
         }
         QScrollBar::handle:vertical {
-            background-color: #535353;
+            background-color: {{qscrollbar_handle_vertical__background_color}};
             min-height: 25px;
             border-radius: 5px;
         }
         QScrollBar::handle:vertical:hover {
-            background-color: #676767;
+            background-color: {{qscrollbar_handle_vertical_hover__background_color}};
         }
         QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
             height: 0px;
@@ -71,18 +71,18 @@ class StyleSheet:
         }
 
         QScrollBar:horizontal {
-            background: #272727;
+            background: {{qscrollbar_horizontal__background}};
             height: 10px;
             margin: 0px;
             border-radius: 5px;
         }
         QScrollBar::handle:horizontal {
-            background-color: #535353;
+            background-color: {{qscrollbar_handle_horizontal__background_color}};
             min-width: 25px;
             border-radius: 5px;
         }
         QScrollBar::handle:horizontal:hover {
-            background-color: #676767;
+            background-color: {{qscrollbar_handle_horizontal_hover__background_color}};
         }
         QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
             width: 0px;
@@ -94,8 +94,8 @@ class StyleSheet:
 
         /* QMenu styling (Context Menus) - Force opaque background */
         QMenu {
-            background-color: #272727;
-            border: 1px solid #424242;
+            background-color: {{qmenu__background_color}};
+            border: 1px solid {{qmenu__border}};
             border-radius: 4px;
             padding: 4px;
         }
@@ -103,27 +103,27 @@ class StyleSheet:
             background-color: transparent;
             padding: 8px 24px 8px 24px;
             border-radius: 4px;
-            color: #DCDCDC;
+            color: {{qmenu_item__color}};
             font-family: 'Segoe UI', sans-serif;
             font-size: 12px;
         }
         QMenu::item:selected {
-            background-color: #858585;
+            background-color: {{qmenu_item_selected__background_color}};
             color: white;
         }
         QMenu::item:disabled {
-            color: #767676;
+            color: {{qmenu_item_disabled__color}};
         }
         QMenu::separator {
             height: 1px;
-            background-color: #424242;
+            background-color: {{qmenu_separator__background_color}};
             margin: 4px 0px;
         }
 
         /* Toolbar styling */
         QToolBar {
-            background-color: #272727;
-            border-bottom: 1px solid #424242;
+            background-color: {{qtoolbar__background_color}};
+            border-bottom: 1px solid {{qtoolbar__border_bottom}};
             spacing: 8px;
             padding: 8px;
         }
@@ -131,8 +131,8 @@ class StyleSheet:
         /* General styling for buttons placed directly in the toolbar */
         QToolBar > QPushButton {
             background-color: transparent;
-            color: #DCDCDC;
-            border: 1px solid #424242;
+            color: {{qtoolbar_qpushbutton__color}};
+            border: 1px solid {{qtoolbar_qpushbutton__border}};
             padding: 6px 16px;
             border-radius: 6px;
             font-size: 12px;
@@ -142,31 +142,31 @@ class StyleSheet:
         }
         
         QToolBar > QPushButton:hover {
-            background-color: rgba(255, 255, 255, 0.08);
-            border-color: #5F5F5F;
-            color: #F1F1F1;
+            background-color: {{qtoolbar_qpushbutton_hover__background_color}};
+            border-color: {{qtoolbar_qpushbutton_hover__border_color}};
+            color: {{qtoolbar_qpushbutton_hover__color}};
         }
         
         QToolBar > QPushButton:pressed {
-            background-color: rgba(0, 0, 0, 0.2);
+            background-color: {{qtoolbar_qpushbutton_pressed__background_color}};
         }
         
         /* Specific hover effects for different button types */
         QToolBar > QPushButton#actionButton:hover {
-            border-color: #848484;
-            color: #B0B0B0;
+            border-color: {{qtoolbar_qpushbutton_actionbutton_hover__border_color}};
+            color: {{qtoolbar_qpushbutton_actionbutton_hover__color}};
         }
         
         QToolBar > QPushButton#helpButton:hover {
-            border-color: #878787;
-            color: #B1B1B1;
+            border-color: {{qtoolbar_qpushbutton_helpbutton_hover__border_color}};
+            color: {{qtoolbar_qpushbutton_helpbutton_hover__color}};
         }
         
         /* Regular button styling (e.g., Send button) */
         QPushButton {
-            background-color: #393939;
-            color: #F0F0F0;
-            border: 1px solid #505050;
+            background-color: {{qpushbutton__background_color}};
+            color: {{qpushbutton__color}};
+            border: 1px solid {{qpushbutton__border}};
             padding: 8px 16px;
             border-radius: 4px;
             font-weight: bold;
@@ -175,26 +175,26 @@ class StyleSheet:
         }
         
         QPushButton:hover {
-            background-color: #454545;
-            border-color: #5E5E5E;
+            background-color: {{qpushbutton_hover__background_color}};
+            border-color: {{qpushbutton_hover__border_color}};
         }
 
         QPushButton:pressed {
-            background-color: #333333;
-            border-color: #494949;
+            background-color: {{qpushbutton_pressed__background_color}};
+            border-color: {{qpushbutton_pressed__border_color}};
         }
 
         QPushButton:disabled {
-            background-color: #2F2F2F;
-            border-color: #424242;
-            color: #767676;
+            background-color: {{qpushbutton_disabled__background_color}};
+            border-color: {{qpushbutton_disabled__border_color}};
+            color: {{qpushbutton_disabled__color}};
         }
         
         /* Styling for ComboBoxes (dropdown menus) */
         QComboBox {
-            background-color: #272727;
-            border: 1px solid #424242;
-            color: #DCDCDC;
+            background-color: {{qcombobox__background_color}};
+            border: 1px solid {{qcombobox__border}};
+            color: {{qcombobox__color}};
             padding: 5px;
             border-radius: 4px;
             font-family: 'Segoe UI', sans-serif;
@@ -206,7 +206,7 @@ class StyleSheet:
             subcontrol-position: top right;
             width: 20px;
             border-left-width: 1px;
-            border-left-color: #424242;
+            border-left-color: {{qcombobox_drop_down__border_left_color}};
             border-left-style: solid;
             border-top-right-radius: 3px;
             border-bottom-right-radius: 3px;
@@ -219,74 +219,74 @@ class StyleSheet:
         }
 
         QComboBox QAbstractItemView {
-            background-color: #272727;
-            border: 1px solid #424242;
-            selection-background-color: #858585;
+            background-color: {{qcombobox_qabstractitemview__background_color}};
+            border: 1px solid {{qcombobox_qabstractitemview__border}};
+            selection-background-color: {{qcombobox_qabstractitemview__selection_background_color}};
         }
         
         /* Styling for LineEdits (single-line text inputs) */
         QLineEdit {
-            background-color: #272727;
-            color: #DCDCDC;
-            border: 1px solid #424242;
+            background-color: {{qlineedit__background_color}};
+            color: {{qlineedit__color}};
+            border: 1px solid {{qlineedit__border}};
             border-radius: 4px;
             padding: 8px;
-            selection-background-color: #494949;
+            selection-background-color: {{qlineedit__selection_background_color}};
             font-family: 'Segoe UI', sans-serif;
         }
         
         QLineEdit:focus {
-            border-color: #858585;
+            border-color: {{qlineedit_focus__border_color}};
         }
 
         /* Styling for TextEdits (multi-line text inputs) */
         QTextEdit, QPlainTextEdit {
-            background-color: #272727;
-            color: #DCDCDC;
-            border: 1px solid #424242;
+            background-color: {{qtextedit_qplaintextedit__background_color}};
+            color: {{qtextedit_qplaintextedit__color}};
+            border: 1px solid {{qtextedit_qplaintextedit__border}};
             border-radius: 4px;
             padding: 8px;
-            selection-background-color: #494949;
+            selection-background-color: {{qtextedit_qplaintextedit__selection_background_color}};
         }
     """
 
     # Stylesheet for a monochromatic (grayscale) theme for a minimalist look.
-    MONOCHROMATIC_THEME = """
+    MONOCHROMATIC_THEME_TEMPLATE = """
         QMainWindow, QWidget {
-            background-color: #222222;
-            color: #DDDDDD;
+            background-color: {{qmainwindow_qwidget__background_color}};
+            color: {{qmainwindow_qwidget__color}};
         }
         
         /* Custom Title Bar Styling */
         #titleBar {
-            background-color: #2A2A2A;
-            border-bottom: 1px solid #333333;
+            background-color: {{titlebar__background_color}};
+            border-bottom: 1px solid {{titlebar__border_bottom}};
             padding: 4px;
             min-height: 32px;
         }
         
-        #titleBar QLabel { color: #DDDDDD; font-size: 12px; font-weight: bold; }
+        #titleBar QLabel { color: {{titlebar_qlabel__color}}; font-size: 12px; font-weight: bold; }
         #titleBarButtons QPushButton { background-color: transparent; border: none; width: 34px; height: 26px; padding: 4px; border-radius: 4px; }
-        #titleBarButtons QPushButton:hover { background-color: #4A4A4A; }
-        #closeButton:hover { background-color: #6C6C6C !important; }
+        #titleBarButtons QPushButton:hover { background-color: {{titlebarbuttons_qpushbutton_hover__background_color}}; }
+        #closeButton:hover { background-color: {{closebutton_hover__background_color}} !important; }
         
         /* Custom Scrollbar Styling */
-        QScrollBar:vertical { background: #2A2A2A; width: 10px; margin: 0px; border-radius: 5px; }
-        QScrollBar::handle:vertical { background-color: #555555; min-height: 25px; border-radius: 5px; }
-        QScrollBar::handle:vertical:hover { background-color: #6A6A6A; }
+        QScrollBar:vertical { background: {{qscrollbar_vertical__background}}; width: 10px; margin: 0px; border-radius: 5px; }
+        QScrollBar::handle:vertical { background-color: {{qscrollbar_handle_vertical__background_color}}; min-height: 25px; border-radius: 5px; }
+        QScrollBar::handle:vertical:hover { background-color: {{qscrollbar_handle_vertical_hover__background_color}}; }
         QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; background: none; }
         QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: none; }
 
-        QScrollBar:horizontal { background: #2A2A2A; height: 10px; margin: 0px; border-radius: 5px; }
-        QScrollBar::handle:horizontal { background-color: #555555; min-width: 25px; border-radius: 5px; }
-        QScrollBar::handle:horizontal:hover { background-color: #6A6A6A; }
+        QScrollBar:horizontal { background: {{qscrollbar_horizontal__background}}; height: 10px; margin: 0px; border-radius: 5px; }
+        QScrollBar::handle:horizontal { background-color: {{qscrollbar_handle_horizontal__background_color}}; min-width: 25px; border-radius: 5px; }
+        QScrollBar::handle:horizontal:hover { background-color: {{qscrollbar_handle_horizontal_hover__background_color}}; }
         QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0px; background: none; }
         QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background: none; }
 
         /* QMenu styling (Context Menus) */
         QMenu {
-            background-color: #2A2A2A;
-            border: 1px solid #444444;
+            background-color: {{qmenu__background_color}};
+            border: 1px solid {{qmenu__border}};
             border-radius: 4px;
             padding: 4px;
         }
@@ -294,63 +294,63 @@ class StyleSheet:
             background-color: transparent;
             padding: 8px 24px 8px 24px;
             border-radius: 4px;
-            color: #DDDDDD;
+            color: {{qmenu_item__color}};
             font-family: 'Segoe UI', sans-serif;
             font-size: 12px;
         }
         QMenu::item:selected {
-            background-color: #666666;
-            color: #FFFFFF;
+            background-color: {{qmenu_item_selected__background_color}};
+            color: {{qmenu_item_selected__color}};
         }
         QMenu::item:disabled {
-            color: #777777;
+            color: {{qmenu_item_disabled__color}};
         }
         QMenu::separator {
             height: 1px;
-            background-color: #444444;
+            background-color: {{qmenu_separator__background_color}};
             margin: 4px 0px;
         }
 
         /* Toolbar styling */
-        QToolBar { background-color: #2A2A2A; border-bottom: 1px solid #333333; spacing: 8px; padding: 8px; }
-        QToolBar > QPushButton { background-color: transparent; color: #DDDDDD; border: 1px solid #444444; padding: 6px 16px; border-radius: 6px; font-size: 12px; min-width: 80px; min-height: 28px; }
-        QToolBar > QPushButton:hover { background-color: rgba(255, 255, 255, 0.1); border-color: #888888; color: #FFFFFF; }
-        QToolBar > QPushButton:pressed { background-color: rgba(0, 0, 0, 0.2); }
-        QToolBar > QPushButton#actionButton:hover { border-color: #888888; color: #FFFFFF; }
-        QToolBar > QPushButton#helpButton:hover { border-color: #888888; color: #FFFFFF; }
+        QToolBar { background-color: {{qtoolbar__background_color}}; border-bottom: 1px solid {{qtoolbar__border_bottom}}; spacing: 8px; padding: 8px; }
+        QToolBar > QPushButton { background-color: transparent; color: {{qtoolbar_qpushbutton__color}}; border: 1px solid {{qtoolbar_qpushbutton__border}}; padding: 6px 16px; border-radius: 6px; font-size: 12px; min-width: 80px; min-height: 28px; }
+        QToolBar > QPushButton:hover { background-color: {{qtoolbar_qpushbutton_hover__background_color}}; border-color: {{qtoolbar_qpushbutton_hover__border_color}}; color: {{qtoolbar_qpushbutton_hover__color}}; }
+        QToolBar > QPushButton:pressed { background-color: {{qtoolbar_qpushbutton_pressed__background_color}}; }
+        QToolBar > QPushButton#actionButton:hover { border-color: {{qtoolbar_qpushbutton_actionbutton_hover__border_color}}; color: {{qtoolbar_qpushbutton_actionbutton_hover__color}}; }
+        QToolBar > QPushButton#helpButton:hover { border-color: {{qtoolbar_qpushbutton_helpbutton_hover__border_color}}; color: {{qtoolbar_qpushbutton_helpbutton_hover__color}}; }
         
         /* Regular button styling */
-        QPushButton { background-color: #555555; color: white; border: none; padding: 8px 16px; border-radius: 4px; font-weight: bold; font-size: 12px; }
-        QPushButton:hover { background-color: #666666; }
+        QPushButton { background-color: {{qpushbutton__background_color}}; color: white; border: none; padding: 8px 16px; border-radius: 4px; font-weight: bold; font-size: 12px; }
+        QPushButton:hover { background-color: {{qpushbutton_hover__background_color}}; }
         
         /* ComboBox styling */
-        QComboBox { background-color: #2D2D2D; border: 1px solid #444444; color: white; padding: 5px; border-radius: 4px; }
-        QComboBox::drop-down { border-left-color: #444444; }
-        QComboBox QAbstractItemView { background-color: #2D2D2D; border: 1px solid #444444; selection-background-color: #555555; }
+        QComboBox { background-color: {{qcombobox__background_color}}; border: 1px solid {{qcombobox__border}}; color: white; padding: 5px; border-radius: 4px; }
+        QComboBox::drop-down { border-left-color: {{qcombobox_drop_down__border_left_color}}; }
+        QComboBox QAbstractItemView { background-color: {{qcombobox_qabstractitemview__background_color}}; border: 1px solid {{qcombobox_qabstractitemview__border}}; selection-background-color: {{qcombobox_qabstractitemview__selection_background_color}}; }
         
         /* LineEdit and TextEdit styling */
-        QLineEdit { background-color: #2A2A2A; color: #D4D4D4; border: 1px solid #444444; border-radius: 4px; padding: 8px; selection-background-color: #4A4A4A; }
-        QLineEdit:focus { border-color: #888888; }
-        QTextEdit, QPlainTextEdit { background-color: #2A2A2A; color: #D4D4D4; border: 1px solid #444444; border-radius: 4px; padding: 8px; selection-background-color: #4A4A4A; }
+        QLineEdit { background-color: {{qlineedit__background_color}}; color: {{qlineedit__color}}; border: 1px solid {{qlineedit__border}}; border-radius: 4px; padding: 8px; selection-background-color: {{qlineedit__selection_background_color}}; }
+        QLineEdit:focus { border-color: {{qlineedit_focus__border_color}}; }
+        QTextEdit, QPlainTextEdit { background-color: {{qtextedit_qplaintextedit__background_color}}; color: {{qtextedit_qplaintextedit__color}}; border: 1px solid {{qtextedit_qplaintextedit__border}}; border-radius: 4px; padding: 8px; selection-background-color: {{qtextedit_qplaintextedit__selection_background_color}}; }
     """
 
     # Stylesheet for a calm muted theme with reduced chroma and lower contrast jumps.
-    MUTED_THEME = """
+    MUTED_THEME_TEMPLATE = """
         QMainWindow, QWidget {
-            background-color: #1A1A1A;
-            color: #D1D1D1;
+            background-color: {{qmainwindow_qwidget__background_color}};
+            color: {{qmainwindow_qwidget__color}};
         }
         
         /* Custom Title Bar Styling */
         #titleBar {
-            background-color: #232323;
-            border-bottom: 1px solid #383838;
+            background-color: {{titlebar__background_color}};
+            border-bottom: 1px solid {{titlebar__border_bottom}};
             padding: 4px;
             min-height: 32px;
         }
         
         #titleBar QLabel {
-            color: #D1D1D1;
+            color: {{titlebar_qlabel__color}};
             font-size: 12px;
             font-weight: bold;
             font-family: 'Segoe UI', sans-serif;
@@ -366,27 +366,27 @@ class StyleSheet:
         }
         
         #titleBarButtons QPushButton:hover {
-            background-color: #3C3C3C;
+            background-color: {{titlebarbuttons_qpushbutton_hover__background_color}};
         }
         
         #closeButton:hover {
-            background-color: #5E5E5E !important;
+            background-color: {{closebutton_hover__background_color}} !important;
         }
         
         /* Custom Scrollbar Styling */
         QScrollBar:vertical {
-            background: #232323;
+            background: {{qscrollbar_vertical__background}};
             width: 10px;
             margin: 0px;
             border-radius: 5px;
         }
         QScrollBar::handle:vertical {
-            background-color: #494949;
+            background-color: {{qscrollbar_handle_vertical__background_color}};
             min-height: 25px;
             border-radius: 5px;
         }
         QScrollBar::handle:vertical:hover {
-            background-color: #606060;
+            background-color: {{qscrollbar_handle_vertical_hover__background_color}};
         }
         QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
             height: 0px;
@@ -397,18 +397,18 @@ class StyleSheet:
         }
 
         QScrollBar:horizontal {
-            background: #232323;
+            background: {{qscrollbar_horizontal__background}};
             height: 10px;
             margin: 0px;
             border-radius: 5px;
         }
         QScrollBar::handle:horizontal {
-            background-color: #494949;
+            background-color: {{qscrollbar_handle_horizontal__background_color}};
             min-width: 25px;
             border-radius: 5px;
         }
         QScrollBar::handle:horizontal:hover {
-            background-color: #606060;
+            background-color: {{qscrollbar_handle_horizontal_hover__background_color}};
         }
         QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
             width: 0px;
@@ -420,8 +420,8 @@ class StyleSheet:
 
         /* QMenu styling (Context Menus) */
         QMenu {
-            background-color: #232323;
-            border: 1px solid #383838;
+            background-color: {{qmenu__background_color}};
+            border: 1px solid {{qmenu__border}};
             border-radius: 4px;
             padding: 4px;
         }
@@ -429,34 +429,34 @@ class StyleSheet:
             background-color: transparent;
             padding: 8px 24px 8px 24px;
             border-radius: 4px;
-            color: #D1D1D1;
+            color: {{qmenu_item__color}};
             font-family: 'Segoe UI', sans-serif;
             font-size: 12px;
         }
         QMenu::item:selected {
-            background-color: #707070;
-            color: #FFFFFF;
+            background-color: {{qmenu_item_selected__background_color}};
+            color: {{qmenu_item_selected__color}};
         }
         QMenu::item:disabled {
-            color: #707070;
+            color: {{qmenu_item_disabled__color}};
         }
         QMenu::separator {
             height: 1px;
-            background-color: #383838;
+            background-color: {{qmenu_separator__background_color}};
             margin: 4px 0px;
         }
 
         /* Toolbar styling */
         QToolBar {
-            background-color: #232323;
-            border-bottom: 1px solid #383838;
+            background-color: {{qtoolbar__background_color}};
+            border-bottom: 1px solid {{qtoolbar__border_bottom}};
             spacing: 8px;
             padding: 8px;
         }
         QToolBar > QPushButton {
             background-color: transparent;
-            color: #D1D1D1;
-            border: 1px solid #383838;
+            color: {{qtoolbar_qpushbutton__color}};
+            border: 1px solid {{qtoolbar_qpushbutton__border}};
             padding: 6px 16px;
             border-radius: 6px;
             font-size: 12px;
@@ -465,27 +465,27 @@ class StyleSheet:
             min-height: 28px;
         }
         QToolBar > QPushButton:hover {
-            background-color: rgba(255, 255, 255, 0.08);
-            border-color: #545454;
-            color: #F2F2F2;
+            background-color: {{qtoolbar_qpushbutton_hover__background_color}};
+            border-color: {{qtoolbar_qpushbutton_hover__border_color}};
+            color: {{qtoolbar_qpushbutton_hover__color}};
         }
         QToolBar > QPushButton:pressed {
-            background-color: rgba(0, 0, 0, 0.2);
+            background-color: {{qtoolbar_qpushbutton_pressed__background_color}};
         }
         QToolBar > QPushButton#actionButton:hover {
-            border-color: #6F6F6F;
-            color: #A5A5A5;
+            border-color: {{qtoolbar_qpushbutton_actionbutton_hover__border_color}};
+            color: {{qtoolbar_qpushbutton_actionbutton_hover__color}};
         }
         QToolBar > QPushButton#helpButton:hover {
-            border-color: #727272;
-            color: #A2A2A2;
+            border-color: {{qtoolbar_qpushbutton_helpbutton_hover__border_color}};
+            color: {{qtoolbar_qpushbutton_helpbutton_hover__color}};
         }
         
         /* Regular button styling (e.g., Send button) */
         QPushButton {
-            background-color: #343434;
-            color: #E1E1E1;
-            border: 1px solid #494949;
+            background-color: {{qpushbutton__background_color}};
+            color: {{qpushbutton__color}};
+            border: 1px solid {{qpushbutton__border}};
             padding: 8px 16px;
             border-radius: 4px;
             font-weight: bold;
@@ -494,26 +494,26 @@ class StyleSheet:
         }
         
         QPushButton:hover {
-            background-color: #454545;
-            border-color: #595959;
+            background-color: {{qpushbutton_hover__background_color}};
+            border-color: {{qpushbutton_hover__border_color}};
         }
         
         QPushButton:pressed {
-            background-color: #303030;
-            border-color: #424242;
+            background-color: {{qpushbutton_pressed__background_color}};
+            border-color: {{qpushbutton_pressed__border_color}};
         }
 
         QPushButton:disabled {
-            background-color: #2D2D2D;
-            border-color: #424242;
-            color: #757575;
+            background-color: {{qpushbutton_disabled__background_color}};
+            border-color: {{qpushbutton_disabled__border_color}};
+            color: {{qpushbutton_disabled__color}};
         }
         
         /* Styling for ComboBoxes (dropdown menus) */
         QComboBox {
-            background-color: #232323;
-            border: 1px solid #383838;
-            color: #D1D1D1;
+            background-color: {{qcombobox__background_color}};
+            border: 1px solid {{qcombobox__border}};
+            color: {{qcombobox__color}};
             padding: 5px;
             border-radius: 4px;
             font-family: 'Segoe UI', sans-serif;
@@ -525,41 +525,41 @@ class StyleSheet:
             subcontrol-position: top right;
             width: 20px;
             border-left-width: 1px;
-            border-left-color: #383838;
+            border-left-color: {{qcombobox_drop_down__border_left_color}};
             border-left-style: solid;
             border-top-right-radius: 3px;
             border-bottom-right-radius: 3px;
         }
 
         QComboBox QAbstractItemView {
-            background-color: #232323;
-            border: 1px solid #383838;
-            selection-background-color: #707070;
+            background-color: {{qcombobox_qabstractitemview__background_color}};
+            border: 1px solid {{qcombobox_qabstractitemview__border}};
+            selection-background-color: {{qcombobox_qabstractitemview__selection_background_color}};
         }
         
         /* Styling for LineEdits (single-line text inputs) */
         QLineEdit {
-            background-color: #232323;
-            color: #D1D1D1;
-            border: 1px solid #383838;
+            background-color: {{qlineedit__background_color}};
+            color: {{qlineedit__color}};
+            border: 1px solid {{qlineedit__border}};
             border-radius: 4px;
             padding: 8px;
-            selection-background-color: #404040;
+            selection-background-color: {{qlineedit__selection_background_color}};
             font-family: 'Segoe UI', sans-serif;
         }
         
         QLineEdit:focus {
-            border-color: #707070;
+            border-color: {{qlineedit_focus__border_color}};
         }
 
         /* Styling for TextEdits (multi-line text inputs) */
         QTextEdit, QPlainTextEdit {
-            background-color: #232323;
-            color: #D1D1D1;
-            border: 1px solid #383838;
+            background-color: {{qtextedit_qplaintextedit__background_color}};
+            color: {{qtextedit_qplaintextedit__color}};
+            border: 1px solid {{qtextedit_qplaintextedit__border}};
             border-radius: 4px;
             padding: 8px;
-            selection-background-color: #404040;
+            selection-background-color: {{qtextedit_qplaintextedit__selection_background_color}};
         }
     """
 
@@ -604,15 +604,44 @@ MUTED_FRAME_COLORS = {
 # functions themselves become table lookups instead of separate per-theme
 # formulas.
 #
-# Not yet covered here: the three hand-written QSS stylesheet strings above
-# (deliberately deferred - see doc/FRONTEND_WEB_MIGRATION_MASTER_PLAN.md) and
-# the frame-color presets (DARK_FRAME_COLORS etc. below - ColorPalette.FRAME_COLORS
-# reads those dicts directly, not this table). This grouping (palette/semantic/
-# neutral_button/graph_node) mirrors the four functions that existed before this
-# table did, kept as-is here to keep this specific change byte-identical and
-# reviewable - it is not the target shape a later Tailwind/schema-codegen pass
-# will want (see the master plan's flatter token list) and should be expected
-# to be reshaped, not just extended, when that work starts.
+# "qss" and "qss_alpha" (added in the QSS-generation increment) cover the
+# three StyleSheet.*_THEME strings: every literal color the hand-written QSS
+# used that isn't already produced by one of the four functions above, split
+# by value shape (qss = flat hex, qss_alpha = rgba(...) literals, since the
+# rest of this table has no representation for partial-alpha colors). Not
+# deduplicated against palette/semantic/neutral_button/graph_node even where a
+# value happens to coincide - same convention this table already uses
+# elsewhere (palette.selection == semantic.default in every theme): group by
+# original consumer, not by value, since a numeric coincidence today isn't a
+# design relationship the two should be forced to keep in sync tomorrow.
+#
+# That coincidence is NOT rare, and is worth naming precisely rather than by
+# one example: measured directly against the values below, 7 "qss" entries in
+# dark, 7 in muted, and 19 in mono also equal some palette/semantic/
+# neutral_button/graph_node value. Mono's cluster is the one to look at
+# skeptically before trusting "coincidence" going forward - e.g. mono's
+# qpushbutton_hover__background_color, qmenu_item_selected__background_color,
+# and neutral_button.hover/.border all sit on #666666, and three unrelated
+# selection-background properties (QLineEdit/QTextEdit/titlebar-button hover)
+# all equal neutral_button.pressed's #4A4A4A - consistent with mono having
+# originally been hand-authored from a small shared gray ramp rather than
+# fully independent per-rule choices. Unlike the graph_node/neutral_button
+# case above, nothing in the pre-refactor source computed one from the other
+# for any of these pairs (verified: the original hand-written QSS and
+# get_neutral_button_colors() were always two independent literals, even in
+# mono), so leaving them as independent "qss" entries is still the correct
+# call today - not a shortcut. It's flagged this explicitly so a later
+# Tailwind/schema-codegen pass evaluates promoting some of mono's overlaps to
+# real derivations on purpose, instead of rediscovering the pattern cold.
+#
+# The frame-color presets (DARK_FRAME_COLORS etc. below - ColorPalette.FRAME_COLORS
+# reads those dicts directly, not this table) remain out of scope. This grouping
+# (palette/semantic/neutral_button/graph_node/qss/qss_alpha) mirrors the
+# functions/consumers that existed before this table did, kept as-is here to
+# keep changes byte-identical and reviewable - it is not the target shape a
+# later Tailwind/schema-codegen pass will want (see the master plan's flatter
+# token list) and should be expected to be reshaped, not just extended, when
+# that work starts.
 #
 # "graph_node" intentionally holds only its 6 members that are independent
 # theme literals (body_start/body_end/header_start/header_end/badge_fill/
@@ -659,6 +688,67 @@ THEME_TOKENS = {
             "badge_fill": "#484848",
             "panel_fill": "#202020",
         },
+        "qss": {
+            "qmainwindow_qwidget__background_color": "#1E1E1E",
+            "qmainwindow_qwidget__color": "#DCDCDC",
+            "titlebar__background_color": "#272727",
+            "titlebar__border_bottom": "#424242",
+            "titlebar_qlabel__color": "#DCDCDC",
+            "titlebarbuttons_qpushbutton_hover__background_color": "#424242",
+            "closebutton_hover__background_color": "#656565",
+            "qscrollbar_vertical__background": "#272727",
+            "qscrollbar_handle_vertical__background_color": "#535353",
+            "qscrollbar_handle_vertical_hover__background_color": "#676767",
+            "qscrollbar_horizontal__background": "#272727",
+            "qscrollbar_handle_horizontal__background_color": "#535353",
+            "qscrollbar_handle_horizontal_hover__background_color": "#676767",
+            "qmenu__background_color": "#272727",
+            "qmenu__border": "#424242",
+            "qmenu_item__color": "#DCDCDC",
+            "qmenu_item_selected__background_color": "#858585",
+            "qmenu_item_disabled__color": "#767676",
+            "qmenu_separator__background_color": "#424242",
+            "qtoolbar__background_color": "#272727",
+            "qtoolbar__border_bottom": "#424242",
+            "qtoolbar_qpushbutton__color": "#DCDCDC",
+            "qtoolbar_qpushbutton__border": "#424242",
+            "qtoolbar_qpushbutton_hover__border_color": "#5F5F5F",
+            "qtoolbar_qpushbutton_hover__color": "#F1F1F1",
+            "qtoolbar_qpushbutton_actionbutton_hover__border_color": "#848484",
+            "qtoolbar_qpushbutton_actionbutton_hover__color": "#B0B0B0",
+            "qtoolbar_qpushbutton_helpbutton_hover__border_color": "#878787",
+            "qtoolbar_qpushbutton_helpbutton_hover__color": "#B1B1B1",
+            "qpushbutton__background_color": "#393939",
+            "qpushbutton__color": "#F0F0F0",
+            "qpushbutton__border": "#505050",
+            "qpushbutton_hover__background_color": "#454545",
+            "qpushbutton_hover__border_color": "#5E5E5E",
+            "qpushbutton_pressed__background_color": "#333333",
+            "qpushbutton_pressed__border_color": "#494949",
+            "qpushbutton_disabled__background_color": "#2F2F2F",
+            "qpushbutton_disabled__border_color": "#424242",
+            "qpushbutton_disabled__color": "#767676",
+            "qcombobox__background_color": "#272727",
+            "qcombobox__border": "#424242",
+            "qcombobox__color": "#DCDCDC",
+            "qcombobox_drop_down__border_left_color": "#424242",
+            "qcombobox_qabstractitemview__background_color": "#272727",
+            "qcombobox_qabstractitemview__border": "#424242",
+            "qcombobox_qabstractitemview__selection_background_color": "#858585",
+            "qlineedit__background_color": "#272727",
+            "qlineedit__color": "#DCDCDC",
+            "qlineedit__border": "#424242",
+            "qlineedit__selection_background_color": "#494949",
+            "qlineedit_focus__border_color": "#858585",
+            "qtextedit_qplaintextedit__background_color": "#272727",
+            "qtextedit_qplaintextedit__color": "#DCDCDC",
+            "qtextedit_qplaintextedit__border": "#424242",
+            "qtextedit_qplaintextedit__selection_background_color": "#494949",
+        },
+        "qss_alpha": {
+            "qtoolbar_qpushbutton_hover__background_color": "rgba(255, 255, 255, 0.08)",
+            "qtoolbar_qpushbutton_pressed__background_color": "rgba(0, 0, 0, 0.2)",
+        },
     },
     "mono": {
         "palette": {
@@ -693,6 +783,59 @@ THEME_TOKENS = {
             "header_end": "#333333",
             "badge_fill": "#484848",
             "panel_fill": "#202020",
+        },
+        "qss": {
+            "qmainwindow_qwidget__background_color": "#222222",
+            "qmainwindow_qwidget__color": "#DDDDDD",
+            "titlebar__background_color": "#2A2A2A",
+            "titlebar__border_bottom": "#333333",
+            "titlebar_qlabel__color": "#DDDDDD",
+            "titlebarbuttons_qpushbutton_hover__background_color": "#4A4A4A",
+            "closebutton_hover__background_color": "#6C6C6C",
+            "qscrollbar_vertical__background": "#2A2A2A",
+            "qscrollbar_handle_vertical__background_color": "#555555",
+            "qscrollbar_handle_vertical_hover__background_color": "#6A6A6A",
+            "qscrollbar_horizontal__background": "#2A2A2A",
+            "qscrollbar_handle_horizontal__background_color": "#555555",
+            "qscrollbar_handle_horizontal_hover__background_color": "#6A6A6A",
+            "qmenu__background_color": "#2A2A2A",
+            "qmenu__border": "#444444",
+            "qmenu_item__color": "#DDDDDD",
+            "qmenu_item_selected__background_color": "#666666",
+            "qmenu_item_selected__color": "#FFFFFF",
+            "qmenu_item_disabled__color": "#777777",
+            "qmenu_separator__background_color": "#444444",
+            "qtoolbar__background_color": "#2A2A2A",
+            "qtoolbar__border_bottom": "#333333",
+            "qtoolbar_qpushbutton__color": "#DDDDDD",
+            "qtoolbar_qpushbutton__border": "#444444",
+            "qtoolbar_qpushbutton_hover__border_color": "#888888",
+            "qtoolbar_qpushbutton_hover__color": "#FFFFFF",
+            "qtoolbar_qpushbutton_actionbutton_hover__border_color": "#888888",
+            "qtoolbar_qpushbutton_actionbutton_hover__color": "#FFFFFF",
+            "qtoolbar_qpushbutton_helpbutton_hover__border_color": "#888888",
+            "qtoolbar_qpushbutton_helpbutton_hover__color": "#FFFFFF",
+            "qpushbutton__background_color": "#555555",
+            "qpushbutton_hover__background_color": "#666666",
+            "qcombobox__background_color": "#2D2D2D",
+            "qcombobox__border": "#444444",
+            "qcombobox_drop_down__border_left_color": "#444444",
+            "qcombobox_qabstractitemview__background_color": "#2D2D2D",
+            "qcombobox_qabstractitemview__border": "#444444",
+            "qcombobox_qabstractitemview__selection_background_color": "#555555",
+            "qlineedit__background_color": "#2A2A2A",
+            "qlineedit__color": "#D4D4D4",
+            "qlineedit__border": "#444444",
+            "qlineedit__selection_background_color": "#4A4A4A",
+            "qlineedit_focus__border_color": "#888888",
+            "qtextedit_qplaintextedit__background_color": "#2A2A2A",
+            "qtextedit_qplaintextedit__color": "#D4D4D4",
+            "qtextedit_qplaintextedit__border": "#444444",
+            "qtextedit_qplaintextedit__selection_background_color": "#4A4A4A",
+        },
+        "qss_alpha": {
+            "qtoolbar_qpushbutton_hover__background_color": "rgba(255, 255, 255, 0.1)",
+            "qtoolbar_qpushbutton_pressed__background_color": "rgba(0, 0, 0, 0.2)",
         },
     },
     "muted": {
@@ -729,8 +872,100 @@ THEME_TOKENS = {
             "badge_fill": "#4a4a4a",
             "panel_fill": "#1c1c1c",
         },
+        "qss": {
+            "qmainwindow_qwidget__background_color": "#1A1A1A",
+            "qmainwindow_qwidget__color": "#D1D1D1",
+            "titlebar__background_color": "#232323",
+            "titlebar__border_bottom": "#383838",
+            "titlebar_qlabel__color": "#D1D1D1",
+            "titlebarbuttons_qpushbutton_hover__background_color": "#3C3C3C",
+            "closebutton_hover__background_color": "#5E5E5E",
+            "qscrollbar_vertical__background": "#232323",
+            "qscrollbar_handle_vertical__background_color": "#494949",
+            "qscrollbar_handle_vertical_hover__background_color": "#606060",
+            "qscrollbar_horizontal__background": "#232323",
+            "qscrollbar_handle_horizontal__background_color": "#494949",
+            "qscrollbar_handle_horizontal_hover__background_color": "#606060",
+            "qmenu__background_color": "#232323",
+            "qmenu__border": "#383838",
+            "qmenu_item__color": "#D1D1D1",
+            "qmenu_item_selected__background_color": "#707070",
+            "qmenu_item_selected__color": "#FFFFFF",
+            "qmenu_item_disabled__color": "#707070",
+            "qmenu_separator__background_color": "#383838",
+            "qtoolbar__background_color": "#232323",
+            "qtoolbar__border_bottom": "#383838",
+            "qtoolbar_qpushbutton__color": "#D1D1D1",
+            "qtoolbar_qpushbutton__border": "#383838",
+            "qtoolbar_qpushbutton_hover__border_color": "#545454",
+            "qtoolbar_qpushbutton_hover__color": "#F2F2F2",
+            "qtoolbar_qpushbutton_actionbutton_hover__border_color": "#6F6F6F",
+            "qtoolbar_qpushbutton_actionbutton_hover__color": "#A5A5A5",
+            "qtoolbar_qpushbutton_helpbutton_hover__border_color": "#727272",
+            "qtoolbar_qpushbutton_helpbutton_hover__color": "#A2A2A2",
+            "qpushbutton__background_color": "#343434",
+            "qpushbutton__color": "#E1E1E1",
+            "qpushbutton__border": "#494949",
+            "qpushbutton_hover__background_color": "#454545",
+            "qpushbutton_hover__border_color": "#595959",
+            "qpushbutton_pressed__background_color": "#303030",
+            "qpushbutton_pressed__border_color": "#424242",
+            "qpushbutton_disabled__background_color": "#2D2D2D",
+            "qpushbutton_disabled__border_color": "#424242",
+            "qpushbutton_disabled__color": "#757575",
+            "qcombobox__background_color": "#232323",
+            "qcombobox__border": "#383838",
+            "qcombobox__color": "#D1D1D1",
+            "qcombobox_drop_down__border_left_color": "#383838",
+            "qcombobox_qabstractitemview__background_color": "#232323",
+            "qcombobox_qabstractitemview__border": "#383838",
+            "qcombobox_qabstractitemview__selection_background_color": "#707070",
+            "qlineedit__background_color": "#232323",
+            "qlineedit__color": "#D1D1D1",
+            "qlineedit__border": "#383838",
+            "qlineedit__selection_background_color": "#404040",
+            "qlineedit_focus__border_color": "#707070",
+            "qtextedit_qplaintextedit__background_color": "#232323",
+            "qtextedit_qplaintextedit__color": "#D1D1D1",
+            "qtextedit_qplaintextedit__border": "#383838",
+            "qtextedit_qplaintextedit__selection_background_color": "#404040",
+        },
+        "qss_alpha": {
+            "qtoolbar_qpushbutton_hover__background_color": "rgba(255, 255, 255, 0.08)",
+            "qtoolbar_qpushbutton_pressed__background_color": "rgba(0, 0, 0, 0.2)",
+        },
     },
 }
+
+
+def _generate_qss(theme_name: str) -> str:
+    """Fill a StyleSheet *_THEME_TEMPLATE with THEME_TOKENS[theme_name]'s
+    "qss" (flat hex) and "qss_alpha" (rgba literal) groups. Templates use
+    double-brace {{token}} placeholders rather than str.format()'s single-
+    brace fields, since the QSS text itself contains literal single braces
+    (CSS rule delimiters) that str.format() would otherwise misparse.
+    """
+    tokens = THEME_TOKENS[theme_name]
+    merged = {**tokens["qss"], **tokens["qss_alpha"]}
+    result = _QSS_TEMPLATES[theme_name]
+    for name, value in merged.items():
+        result = result.replace("{{" + name + "}}", value)
+    return result
+
+
+_QSS_TEMPLATES = {
+    "dark": StyleSheet.DARK_THEME_TEMPLATE,
+    "mono": StyleSheet.MONOCHROMATIC_THEME_TEMPLATE,
+    "muted": StyleSheet.MUTED_THEME_TEMPLATE,
+}
+
+# Resolved QSS strings, generated from THEME_TOKENS - StyleSheet.DARK_THEME
+# etc. stay plain string class attributes (same external shape as before
+# this refactor), just no longer hand-maintained literals.
+StyleSheet.DARK_THEME = _generate_qss("dark")
+StyleSheet.MONOCHROMATIC_THEME = _generate_qss("mono")
+StyleSheet.MUTED_THEME = _generate_qss("muted")
+
 
 _FRAME_COLORS_BY_THEME = {
     "dark": DARK_FRAME_COLORS,
