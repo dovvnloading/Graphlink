@@ -84,11 +84,43 @@ class TestThemeTokensStructure:
         # "qss"/"qss_alpha" were added by the QSS-generation increment
         # (see tests/test_qss_generation.py for their coverage); this was
         # "all four token groups" before that change landed.
+        # "composer"/"composer_alpha" were added by the composer token
+        # retrofit (see tests/test_composer_token_retrofit.py).
+        expected = {
+            "palette", "semantic", "neutral_button", "graph_node", "qss", "qss_alpha",
+            "composer", "composer_alpha",
+        }
         for name in ("dark", "mono", "muted"):
             tokens = gs.THEME_TOKENS[name]
-            assert set(tokens.keys()) == {
-                "palette", "semantic", "neutral_button", "graph_node", "qss", "qss_alpha",
-            }
+            assert set(tokens.keys()) == expected, (
+                f"THEME_TOKENS[{name!r}] group set changed.\n\n"
+                "IF YOU ARE ADDING A SECOND ISLAND'S TOKEN GROUP: stop and make a "
+                "deliberate decision first. Two islands is exactly the condition "
+                "css_custom_properties()'s docstring names as the release condition "
+                "for the shared semantic vocabulary (bg-0/1/2, text tiers, accent, "
+                "focus ring) it deliberately deferred - the reason it was deferred "
+                "was having only one example to generalize from, and that reason "
+                "expires here. Decide whether that vocabulary should now replace "
+                "per-island private palettes, rather than accreting a third. This "
+                "test fires whether the new group is registered in "
+                "graphlink_styles._ISLAND_GROUPS or in css_custom_properties()'s "
+                "included_groups, so neither route silently skips the decision."
+            )
+
+    def test_island_groups_are_registered_and_share_one_prefix(self):
+        # The companion half of the check above: every group in _ISLAND_GROUPS
+        # must really exist in the table, and today they must all belong to one
+        # island. A second distinct prefix means island #2 has arrived via the
+        # _ISLAND_GROUPS route - see the guidance in the test above.
+        prefixes = set(gs._ISLAND_GROUPS.values())
+        assert len(prefixes) == 1, (
+            f"_ISLAND_GROUPS now spans {len(prefixes)} islands ({sorted(prefixes)}). "
+            "See test_every_theme_has_all_expected_token_groups for the decision "
+            "this is meant to force before a third island is added."
+        )
+        for name in ("dark", "mono", "muted"):
+            missing = set(gs._ISLAND_GROUPS) - set(gs.THEME_TOKENS[name])
+            assert not missing, f"{name}: _ISLAND_GROUPS names non-existent group(s) {missing}"
 
     def test_themes_dict_exposes_the_matching_token_table(self):
         for name in gs.THEMES:

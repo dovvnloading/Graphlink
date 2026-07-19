@@ -653,6 +653,115 @@ MUTED_FRAME_COLORS = {
 # own flat literals here would silently drift from neutral_button the next
 # time someone edits a theme's button colors without also updating 7 more
 # entries by hand; get_graph_node_colors() below derives them live instead.
+# Composer island chrome colors, captured verbatim from
+# web_ui/src/islands/composer/styles.css, where they were hand-authored as
+# literal hex/rgba with their own eyeballed dark palette - never derived from
+# any theme this app actually ships (section 2's own survey already flagged
+# this: "styles.css hardcodes its own dark hex values").
+#
+# Split flat/alpha on exactly the qss/qss_alpha precedent: the rest of this
+# table has no representation for partial-alpha colors, and composer uses 18
+# rgba() literals for borders, overlays, focus rings and drop shadows.
+#
+# These two dicts are the SINGLE source of the values; the per-theme groups
+# below are built from them with dict(), so the same 43 values are not
+# triplicated by hand across three themes. That construction is deliberate and
+# load-bearing in both directions: the per-theme SHAPE is real (a future
+# increment authoring a genuine mono or muted composer palette edits one line
+# per theme, with no restructuring), while the shared VALUES record the honest
+# fact that composer has only ever had one palette. Storing identical values
+# across themes is not a new shape here - graph_node is already byte-identical
+# between "dark" and "mono" across all six of its keys (verified, not assumed).
+#
+# Naming is per-OCCURRENCE, not per-value: 43 tokens for 34 distinct colors.
+# That follows this table's own "group by original consumer, not by value"
+# rule (see the comment above), and needs no interpretation - e.g.
+# status_text/status_failed_text hold the same #b0b0b0 at two different CSS
+# sites, so the fact that .request-status.failed's override is currently a
+# no-op stays visible in the data instead of being silently collapsed away.
+# The one genuinely interpretive act, flagged rather than buried: composer's
+# two box-shadow declarations each carry two colors (a drop shadow plus an
+# inset highlight / focus ring), a case qss_alpha never hit, so those four got
+# explicit part suffixes (*_shadow_drop / *_shadow_inset / *_focus_ring).
+#
+# Keys use SINGLE underscores, unlike qss's "__" property-separator
+# convention - a double underscore would emit "--gl-composer-shell--background",
+# which fails the CSS custom-property name shape the tests already enforce.
+#
+# DERIVED RELATIONSHIPS THAT PER-OCCURRENCE NAMING DOES NOT ENCODE. Read this
+# before authoring a real per-theme palette - flat capture necessarily discards
+# these, and nothing below will fail if they are broken:
+#
+#   attachment_count_border MUST TRACK shell_background. The badge is
+#   position:absolute at top:-5px/right:-7px on a 30x30 control, so it overhangs
+#   its button and sits on the shell. Its 1px border is exactly the shell color
+#   because it is a cut-out/halo punching the badge visually out of the shell -
+#   not a border color chosen for its own sake. Change shell_background alone
+#   and the badge gains a visible dark ring.
+#
+#   attach_button_background (rgba white 0.018) and control_active_background
+#   (rgba white 0.045) are overlays composited against shell_background, so
+#   their effective color moves with it too - less sharply than the halo above,
+#   but they are not independent choices either.
+#
+# Two probable authoring slips, frozen here as if deliberate, flagged rather
+# than silently normalized (fixing them would be a real visual change, which
+# this capture-only increment is not allowed to make):
+#
+#   shell_focus_border rgba(160,160,160,0.82) vs button_focus_outline
+#   rgba(156,156,156,0.82) - two focus indicators differing by 4/255.
+#
+#   The four drop shadows use two alphas (0.20 and 0.22) that are almost
+#   certainly one conceptual shadow.
+_COMPOSER_CAPTURED = {
+    "root_text": "#e7e7e7",
+    "shell_background": "#1f1f1f",
+    "input_text": "#eeeeee",
+    "input_scrollbar_thumb": "#555555",
+    "input_placeholder": "#888888",
+    "attach_button_icon": "#c0c0c0",
+    "attach_button_hover_icon": "#f4f4f4",
+    "attachment_count_border": "#1f1f1f",
+    "attachment_count_text": "#ededed",
+    "attachment_count_background": "#555555",
+    "attachment_count_hover_text": "#ffffff",
+    "attachment_count_hover_background": "#666666",
+    "restored_pill_text": "#c7c7c7",
+    "control_text": "#c0c0c0",
+    "control_active_text": "#f0f0f0",
+    "control_icon": "#909090",
+    "control_kicker_text": "#8a8a8a",
+    "control_value_text": "#dddddd",
+    "send_button_icon": "#ffffff",
+    "send_button_background": "#414141",
+    "send_button_hover_background": "#555555",
+    "send_button_cancel_background": "#4a4a4a",
+    "status_text": "#b0b0b0",
+    "status_failed_text": "#b0b0b0",
+    "status_action_text": "#bdbdbd",
+}
+
+_COMPOSER_ALPHA_CAPTURED = {
+    "shell_border": "rgba(150, 150, 150, 0.34)",
+    "shell_shadow_drop": "rgba(0, 0, 0, 0.20)",
+    "shell_shadow_inset": "rgba(255, 255, 255, 0.035)",
+    "shell_focus_border": "rgba(160, 160, 160, 0.82)",
+    "shell_focus_shadow_drop": "rgba(0, 0, 0, 0.22)",
+    "shell_focus_ring": "rgba(160, 160, 160, 0.12)",
+    "attach_button_border": "rgba(150, 150, 150, 0.28)",
+    "attach_button_background": "rgba(255, 255, 255, 0.018)",
+    "attach_button_hover_border": "rgba(160, 160, 160, 0.72)",
+    "attach_button_hover_background": "rgba(160, 160, 160, 0.10)",
+    "button_focus_outline": "rgba(156, 156, 156, 0.82)",
+    "restored_pill_border": "rgba(150, 150, 150, 0.28)",
+    "restored_pill_background": "rgba(160, 160, 160, 0.08)",
+    "control_active_border": "rgba(160, 160, 160, 0.34)",
+    "control_active_background": "rgba(255, 255, 255, 0.045)",
+    "send_button_border": "rgba(255, 255, 255, 0.15)",
+    "send_button_shadow": "rgba(0, 0, 0, 0.22)",
+    "send_button_cancel_shadow": "rgba(0, 0, 0, 0.20)",
+}
+
 THEME_TOKENS = {
     "dark": {
         "palette": {
@@ -749,6 +858,8 @@ THEME_TOKENS = {
             "qtoolbar_qpushbutton_hover__background_color": "rgba(255, 255, 255, 0.08)",
             "qtoolbar_qpushbutton_pressed__background_color": "rgba(0, 0, 0, 0.2)",
         },
+        "composer": dict(_COMPOSER_CAPTURED),
+        "composer_alpha": dict(_COMPOSER_ALPHA_CAPTURED),
     },
     "mono": {
         "palette": {
@@ -837,6 +948,8 @@ THEME_TOKENS = {
             "qtoolbar_qpushbutton_hover__background_color": "rgba(255, 255, 255, 0.1)",
             "qtoolbar_qpushbutton_pressed__background_color": "rgba(0, 0, 0, 0.2)",
         },
+        "composer": dict(_COMPOSER_CAPTURED),
+        "composer_alpha": dict(_COMPOSER_ALPHA_CAPTURED),
     },
     "muted": {
         "palette": {
@@ -934,6 +1047,8 @@ THEME_TOKENS = {
             "qtoolbar_qpushbutton_hover__background_color": "rgba(255, 255, 255, 0.08)",
             "qtoolbar_qpushbutton_pressed__background_color": "rgba(0, 0, 0, 0.2)",
         },
+        "composer": dict(_COMPOSER_CAPTURED),
+        "composer_alpha": dict(_COMPOSER_ALPHA_CAPTURED),
     },
 }
 
@@ -980,6 +1095,42 @@ _FRAME_COLORS_BY_THEME = {
 # font-family explicitly (several inherit Qt's platform default instead),
 # so this is "the app's one explicit font choice," not "every font in use."
 FONT_FAMILY = "'Segoe UI', sans-serif"
+
+# THEME_TOKENS groups that belong to ONE island's own chrome rather than to the
+# app-wide color vocabulary, mapped to the CSS custom-property prefix they
+# flatten under. These are exported by css_custom_properties() (island CSS has
+# to be able to resolve them) but deliberately kept OUT of tailwind_theme_css()'s
+# @theme block: registering them as Tailwind design tokens would mint utilities
+# like bg-gl-composer-shell-background, i.e. publish one island's private
+# palette as a workspace-wide surface every other island could reach for. Same
+# reasoning that keeps qss/qss_alpha out of the --gl-* export entirely, applied
+# one tier down.
+#
+# NOTE ON SCOPE, stated precisely because the obvious reading overstates it:
+# this carve-out removes island tokens from Tailwind's *paved path*, not from
+# reach. _inline_bundle() injects css_root_block(CURRENT_THEME) - the FULL
+# property set, all 43 composer tokens included - into every island's <head>,
+# so any island's CSS can already resolve var(--gl-composer-*) directly, and
+# Tailwind's arbitrary-value syntax (bg-[var(--gl-composer-shell-background)])
+# still works. What this prevents is the ergonomic default: minting
+# bg-gl-composer-* utilities that make reaching for another island's private
+# chrome the path of least resistance. css_custom_properties()'s docstring is
+# already honest about the same limitation for the mechanical names.
+#
+# When a SECOND island lands here, that is the first time there are two real
+# examples to generalize a shared semantic vocabulary from - the release
+# condition css_custom_properties()'s docstring names for the deferred
+# bg-0/1/2-style naming. That check lives in tests/test_theme_tokens.py rather
+# than as a module-level assert here, deliberately: an import-time assertion
+# would make graphlink_styles unimportable and take the whole app down mid-
+# feature, which punishes the developer who followed the convention and
+# registered their island here, while the developer who instead added it to
+# css_custom_properties()'s included_groups would never trip it at all. A test
+# fails loudly for both without bricking anything.
+_ISLAND_GROUPS = {
+    "composer": "--gl-composer-",
+    "composer_alpha": "--gl-composer-",
+}
 
 
 def css_custom_properties(theme_name: str) -> dict[str, str]:
@@ -1032,10 +1183,12 @@ def css_custom_properties(theme_name: str) -> dict[str, str]:
     # catch drift: if a future edit adds a new top-level THEME_TOKENS group
     # without deciding whether it belongs in this export, this raises
     # immediately instead of silently omitting it forever.
-    assert set(tokens) == set(included_groups) | set(excluded_groups), (
+    assert set(tokens) == set(included_groups) | set(excluded_groups) | set(
+        _ISLAND_GROUPS
+    ), (
         f"THEME_TOKENS[{theme_name!r}] has group(s) "
-        f"{set(tokens) - set(included_groups) - set(excluded_groups)} that "
-        "css_custom_properties() doesn't know to include or deliberately "
+        f"{set(tokens) - set(included_groups) - set(excluded_groups) - set(_ISLAND_GROUPS)} "
+        "that css_custom_properties() doesn't know to include or deliberately "
         "exclude - decide which before extending THEME_TOKENS further."
     )
 
@@ -1045,6 +1198,25 @@ def css_custom_properties(theme_name: str) -> dict[str, str]:
         group_slug = group.replace("_", "-")
         for key, value in tokens[group].items():
             properties[f"--gl-{group_slug}-{key.replace('_', '-')}"] = value
+
+    # Island groups flatten under one prefix per island, deliberately dropping
+    # the flat/alpha distinction the storage split needs - a consumer writing
+    # var(--gl-composer-shell-border) should not have to know whether that
+    # particular color happens to carry alpha. That makes the two groups share
+    # one namespace, so their key sets must not collide.
+    for group, prefix in _ISLAND_GROUPS.items():
+        collisions = set(tokens[group]) & {
+            key for other, other_prefix in _ISLAND_GROUPS.items()
+            if other != group and other_prefix == prefix
+            for key in tokens[other]
+        }
+        assert not collisions, (
+            f"{theme_name}: island group {group!r} shares key(s) {collisions} with "
+            f"another group flattening under the same '{prefix}' prefix - one would "
+            "silently overwrite the other; rename before proceeding."
+        )
+        for key, value in tokens[group].items():
+            properties[f"{prefix}{key.replace('_', '-')}"] = value
 
     # Resolved explicitly from each base ("full"-type) entry, never from
     # whichever of a "X"/"X Header" pair happens to be encountered first in
@@ -1130,8 +1302,17 @@ def tailwind_theme_css() -> str:
     has an identical key set (guarded by css_custom_properties()'s own
     cross-theme key-set test), so which theme is asked is not a decision
     with color-value consequences here, only a source-data convenience.
+
+    Island-scoped groups (see _ISLAND_GROUPS) are excluded: they are exported
+    as resolvable custom properties but must not become Tailwind utilities,
+    since that would publish one island's private chrome palette as a
+    workspace-wide surface. The exclusion is computed from those groups' real
+    key sets rather than by matching the "--gl-composer-" prefix as a string,
+    so a future app-wide token that merely happens to start with an island's
+    prefix cannot be silently swallowed by the carve-out.
     """
-    names = sorted(css_custom_properties("dark"))
+    excluded = island_property_names("dark")
+    names = [name for name in sorted(css_custom_properties("dark")) if name not in excluded]
     lines = []
     for name in names:
         if name == "--gl-font-family":
@@ -1139,6 +1320,20 @@ def tailwind_theme_css() -> str:
         else:
             lines.append(f"  --color-{name[len('--'):]}: var({name});")
     return "@theme {\n" + "\n".join(lines) + "\n}\n"
+
+
+def island_property_names(theme_name: str) -> set[str]:
+    """The exact --gl-* names contributed by island-scoped groups.
+
+    Computed from _ISLAND_GROUPS's real key sets, never by prefix-matching the
+    emitted names, so this stays a precise carve-out rather than a namespace
+    land-grab over everything that happens to start with the same characters.
+    """
+    return {
+        f"{prefix}{key.replace('_', '-')}"
+        for group, prefix in _ISLAND_GROUPS.items()
+        for key in THEME_TOKENS[theme_name][group]
+    }
 
 
 class ColorPalette:
