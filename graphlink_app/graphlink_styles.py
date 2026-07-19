@@ -1164,6 +1164,25 @@ def css_custom_properties(theme_name: str) -> dict[str, str]:
     becomes a breaking, repo-wide find-and-replace instead of an additive
     layer on top of this function's output.
 
+    UPDATE, 2026-07-19, closing this from an open warning to a recorded
+    decision: composer's retrofit made this real for its OWN names
+    (--gl-composer-*), deliberately - island-scoped groups (see
+    _ISLAND_GROUPS below) exist specifically to be consumed directly by
+    their own island's CSS; that consumption is sanctioned, not the risk
+    this paragraph warns about. The risk this paragraph actually names -
+    island CSS reaching into the APP-WIDE names below (--gl-palette-*,
+    --gl-semantic-*, --gl-neutral-button-*, --gl-graph-node-*) ahead of a
+    real semantic vocabulary - has zero live instances as of the retrofit
+    (verified directly: composer's CSS references only --gl-composer-*).
+    No enforcement guardrail was added for that risk, on the same
+    don't-generalize-from-zero-instances reasoning this function's own
+    semantic-vocabulary deferral already uses. Do NOT assume
+    _ISLAND_GROUPS's second-island tripwire (in test_theme_tokens.py)
+    covers this - it fires only when a new top-level THEME_TOKENS group is
+    registered, and has no relationship to whether an island's CSS writes
+    var(--gl-palette-*) or similar directly; nothing currently detects
+    that. Revisit both risks together when island #2 is built.
+
     The "qss"/"qss_alpha" groups are deliberately excluded - those are
     QSS-only literals for the hand-written Qt stylesheets (window chrome,
     scrollbars, native widget states), not colors any island's own UI is

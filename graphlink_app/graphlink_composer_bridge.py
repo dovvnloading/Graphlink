@@ -22,7 +22,7 @@ from graphlink_config import (
     get_semantic_color,
 )
 from graphlink_island_bridge import IslandBridge
-from graphlink_styles import THEME_TOKENS
+from graphlink_styles import THEME_TOKENS, css_custom_properties
 
 
 _MAX_DRAFT_CHARS = 100_000
@@ -572,8 +572,24 @@ class ComposerBridge(IslandBridge, QObject):
 
         Replaces the old {mode, accent, surface} shape, whose "surface" value
         was a hardcoded literal never actually derived from the active theme.
-        Nothing on the JS side reads state.theme yet (confirmed before this
-        change), so there is no narrower shape to preserve compatibility with.
+        `cssVariables` (added when composer's own CSS first started consuming
+        `var(--gl-*)`) is the one field here nothing on the JS side ignores
+        anymore - see ComposerApp.tsx's theme-application effect.
+
+        KNOWN, UNADDRESSED: `palette`/`semantic`/`neutralButton`/`graphNode`
+        below remain genuinely dead on the JS side (confirmed by adversarial
+        review: grepping all of web_ui/src for `state.theme.` finds only the
+        two `cssVariables` reads) and predate this whole retrofit. Not
+        removed here - out of scope for this change, and removal would also
+        need touching test_theme_tokens.py's coverage of this shape - but
+        flagged explicitly rather than left as silent dead weight, since this
+        docstring is the one place that would otherwise let a future reader
+        assume all four fields are load-bearing. They also carry a real,
+        if-currently-dormant lossiness risk `cssVariables` was deliberately
+        built to avoid: every value here round-trips through `QColor.name()`,
+        which drops alpha - harmless today only because none of these four
+        groups happen to hold an alpha value, not because anything prevents
+        one from being added.
         """
         palette = get_current_palette()
         neutral_button = get_neutral_button_colors()
@@ -583,6 +599,21 @@ class ComposerBridge(IslandBridge, QObject):
         # apply_theme() is the one place that guarantees CURRENT_THEME is valid.
         default_semantic = THEME_TOKENS[config.CURRENT_THEME]["semantic"]["default"]
         return {
+            # Every --gl-* custom property name/value pair for the active
+            # theme, straight from css_custom_properties() - the exact
+            # function graphlink_web_island_host.py's _inline_bundle() also
+            # calls for the build-time :root block, so the runtime and
+            # first-paint values can never disagree with each other.
+            #
+            # Deliberately NOT built from palette/neutral_button/graph_node
+            # above: those go through QColor.name(), which silently drops
+            # alpha (QColor(r,g,b,a).name() == "#rrggbb", no "aa"), and
+            # QColor.name(HexArgb) returns "#AARRGGBB", not CSS's
+            # "#RRGGBBAA" - either path would corrupt every composer_alpha
+            # rgba() value on its way to JS. css_custom_properties() reads
+            # THEME_TOKENS directly as strings and never touches QColor, so
+            # this sidesteps that trap structurally rather than by care.
+            "cssVariables": css_custom_properties(config.CURRENT_THEME),
             # All three themes are dark-mode variants today; kept as an
             # explicit field for a future light theme, not computed from
             # anything yet.

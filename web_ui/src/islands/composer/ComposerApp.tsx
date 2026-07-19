@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ComposerState, initialComposerState } from "./bridgeTypes";
 import { ComposerBridge, createComposerBridge } from "./bridge";
 import { isBusy, requestLabel } from "./state";
+import { useAppliedThemeCssVariables } from "./theme";
 
 const LARGE_PASTE_CHAR_THRESHOLD = 1400;
 const LARGE_PASTE_LINE_THRESHOLD = 24;
@@ -37,6 +38,14 @@ function ComposerApp() {
       bridgeRef.current = null;
     };
   }, []);
+
+  // Applies the active theme's --gl-* custom properties to the document root
+  // whenever they genuinely change (content, not object reference - see
+  // theme.ts), so an in-app theme change re-styles composer without a
+  // reload. First paint already has a value for every property (the host
+  // injects a build-time :root block before this ever runs) - this is what
+  // makes a LIVE theme switch visible; it does not do the initial styling.
+  useAppliedThemeCssVariables(document.documentElement, state.theme.cssVariables);
 
   useEffect(() => {
     const shell = shellRef.current;
