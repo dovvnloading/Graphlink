@@ -254,6 +254,7 @@ class SettingsManager:
             "update_last_checked_at": "",
             "update_latest_version": "",
             "update_available": False,
+            "settings_renderer_override": "",
         }
         self._save_state(state)
         return state
@@ -343,6 +344,23 @@ class SettingsManager:
 
     def set_theme(self, theme_name):
         self.state['theme'] = theme_name
+        self._save_state()
+
+    def get_settings_renderer_override(self):
+        """Support-facing override for GRAPHLINK_SETTINGS_RENDERER (plan section 3.6).
+
+        Empty string means "no override" - resolve_renderer_flag() then falls
+        through to the env var or its own default.
+        """
+        return self.state.get("settings_renderer_override", "")
+
+    def set_settings_renderer_override(self, value: str):
+        from graphlink_renderer_flags import VALID_RENDERERS
+
+        normalized = (value or "").strip().lower()
+        if normalized and normalized not in VALID_RENDERERS:
+            raise ValueError(f"set_settings_renderer_override: value must be '' or one of {VALID_RENDERERS}, got {value!r}")
+        self.state['settings_renderer_override'] = normalized
         self._save_state()
 
     def get_show_token_counter(self):
