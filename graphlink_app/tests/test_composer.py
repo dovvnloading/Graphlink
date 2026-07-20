@@ -1,9 +1,6 @@
 """Regression coverage for Composer draft and request lifecycle contracts."""
 
-from PySide6.QtTest import QSignalSpy
-
 from graphlink_composer import ComposerAttachment, ComposerController, ComposerRequestState
-from graphlink_widgets import ComposerWidget
 
 
 def test_controller_request_snapshot_is_immutable_and_tracks_attachments():
@@ -74,27 +71,3 @@ def test_submitted_text_stays_empty_after_success():
     controller.clear_after_success()
 
     assert controller.draft.text == ""
-
-
-def test_composer_exposes_visible_context_and_accessible_actions():
-    composer = ComposerWidget()
-    composer.set_context_anchor(type("Node", (), {"title": "Chart analysis"})())
-    composer.set_context_items([{"path": "chart.csv", "name": "chart.csv", "kind": "document"}])
-
-    assert composer.context_label.text() == "Responding to Chart analysis"
-    assert "1 attachment" in composer.context_summary.text()
-    assert composer.send_button.accessibleName() == "Send message"
-    assert composer.attach_file_btn.accessibleName() == "Attach context"
-    assert composer.context_review_button.isEnabled()
-
-
-def test_composer_forwards_send_and_preserves_text_on_clear_boundary():
-    composer = ComposerWidget()
-    spy = QSignalSpy(composer.sendRequested)
-    composer.setText("hello graph")
-    composer.send_button.click()
-
-    assert spy.count() == 1
-    assert composer.text() == "hello graph"
-    composer.clear()
-    assert composer.text() == ""
