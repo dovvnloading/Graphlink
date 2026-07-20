@@ -16,6 +16,7 @@ from graphlink_token_estimator import TokenEstimator
 from graphlink_token_counter_bridge import TokenCounterBridge
 from graphlink_ui_components import DocumentViewerPanel
 from graphlink_notification_web import NotificationWebHost
+from graphlink_command_palette_web import CommandPaletteWebHost
 from graphlink_web_island_host import AcceleratorForwardingFilter, WebIslandHost
 from graphlink_canvas_items import Note, Frame, Container
 from graphlink_node import ChatNode, CodeNode, ThinkingNode
@@ -237,6 +238,14 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
 
         self.command_manager = CommandManager()
         self._setup_commands()
+        # Not embedded in normal layout, same as notification_banner - a free
+        # child of composer_overlay_parent, shown/raised/positioned directly.
+        # It is meant to be the topmost overlay when open (see
+        # CommandPaletteWebHost.update_position()'s docstring), so it shares
+        # notification's parent for the same z-order reason documented above.
+        self.command_palette_host = CommandPaletteWebHost(
+            self.command_manager, parent=self.composer_overlay_parent
+        )
         self.plugin_picker = PluginFlyoutPanel(self.plugin_portal, self)
         self.plugin_picker.pluginSelected.connect(self._handle_plugin_picker_selection)
 
@@ -253,9 +262,11 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         self.nav_left_shortcut = QShortcut(QKeySequence("Ctrl+Left"), self); self.nav_left_shortcut.activated.connect(self._navigate_left)
         self.nav_right_shortcut = QShortcut(QKeySequence("Ctrl+Right"), self); self.nav_right_shortcut.activated.connect(self._navigate_right)
 
-        # Keeps the 10 workspace-level shortcuts above (all but Ctrl+S) from
-        # firing while an island's own text input has DOM focus - see
-        # AcceleratorForwardingFilter's docstring. Application-wide, not
+        # Keeps the 9 workspace-level shortcuts above (all but Ctrl+S and
+        # Ctrl+K - the palette's own summon key, exempted for real once this
+        # island shipped a real text input to test the tension against; see
+        # AcceleratorForwardingFilter's docstring) from firing while an
+        # island's own text input has DOM focus. Application-wide, not
         # per-shortcut: covers every current and future QShortcut with one
         # mechanism instead of per-shortcut bookkeeping.
         self._accelerator_filter = AcceleratorForwardingFilter(self)
@@ -451,11 +462,14 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         search_overlay = getattr(self, 'search_overlay', None)
         token_counter_widget = getattr(self, 'token_counter_widget', None)
         notification_banner = getattr(self, 'notification_banner', None)
+        command_palette_host = getattr(self, 'command_palette_host', None)
         padding = 10
         viewport = self.chat_view.viewport()
 
         if notification_banner and notification_banner.isVisible():
             notification_banner.update_position()
+        if command_palette_host and command_palette_host.isVisible():
+            command_palette_host.update_position()
         if search_overlay and search_overlay.isVisible():
             search_overlay.move(viewport.width() - search_overlay.width() - padding, padding)
         if token_counter_widget and token_counter_widget.isVisible():
@@ -531,6 +545,13 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         notification_banner = getattr(self, "notification_banner", None)
         if notification_banner is not None and notification_banner.isVisible():
             notification_banner.raise_()
+
+        # The command palette is meant to be the topmost overlay whenever
+        # open - reassert above both composer and notification for the same
+        # reason as the notification reassert just above.
+        command_palette_host = getattr(self, "command_palette_host", None)
+        if command_palette_host is not None and command_palette_host.isVisible():
+            command_palette_host.raise_()
 
         self._position_composer_picker()
         self._position_composer_context_popup()

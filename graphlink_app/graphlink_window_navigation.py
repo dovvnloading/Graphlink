@@ -8,7 +8,6 @@ from graphlink_conversation_node import ConversationNode
 from graphlink_html_view import HtmlViewNode
 from graphlink_plugins.graphlink_plugin_artifact import ArtifactNode
 from graphlink_plugins.graphlink_plugin_gitlink import GitlinkNode
-from graphlink_command_palette import CommandPaletteDialog
 
 class WindowNavigationMixin:
     def _setup_commands(self):
@@ -101,11 +100,30 @@ class WindowNavigationMixin:
             except ValueError: pass
 
     def show_command_palette(self):
-        available_commands = self.command_manager.get_available_commands()
-        dialog = CommandPaletteDialog(available_commands, self)
-        parent_center = self.geometry().center()
-        dialog.move(parent_center.x() - dialog.width() // 2, parent_center.y() - dialog.height() // 2 - 100)
-        if dialog.exec():
-            command = dialog.get_selected_command()
-            if command and 'callback' in command:
-                command['callback']()
+        """Idempotent by design: a second Ctrl+K press while the palette is
+        already open just refocuses its search input rather than
+        re-snapshotting and wiping whatever the user has already typed. This
+        is what makes exempting Ctrl+K from AcceleratorForwardingFilter's
+        GATED_SHORTCUTS safe even when the palette's own search input
+        already has focus - see that class's docstring for the full
+        reasoning.
+
+        The old code blocked on dialog.exec() (a nested Qt event loop) and
+        called command['callback']() synchronously the instant it returned.
+        This function now returns immediately after making the host
+        visible; the callback runs later, asynchronously, from
+        CommandPaletteBridge.executeCommand(), on a QWebChannel round trip
+        Python doesn't control the timing of - the "modal exec() -> async
+        callback" translation the migration plan's checklist named.
+        """
+        if self.command_palette_host.isVisible():
+            self.command_palette_host.setFocus()
+            return
+        self.command_palette_host.update_position()
+        # Drives the host's real Qt visibility via
+        # CommandPaletteBridge.visibilityChanged -> setVisible(), same as
+        # every other show/hide in this island family - not an explicit
+        # setVisible(True) call here.
+        self.command_palette_host.bridge.open()
+        self.command_palette_host.raise_()
+        self.command_palette_host.setFocus()

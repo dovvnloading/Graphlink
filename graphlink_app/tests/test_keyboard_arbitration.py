@@ -122,9 +122,21 @@ class TestAcceleratorForwardingFilter:
 
         assert handled is False
 
+    def test_exempts_ctrl_k_even_while_an_island_has_text_focus(self):
+        # Ctrl+K is the command palette's own summon key, not an action
+        # competing with some other island's use of the key - see
+        # AcceleratorForwardingFilter's docstring.
+        host = _make_host()
+        host.reportTextFocus(True)
+        event = _key_event(QEvent.Type.ShortcutOverride, Qt.Key.Key_K, Qt.KeyboardModifier.ControlModifier)
+
+        handled = self._filter().eventFilter(None, event)
+
+        assert handled is False
+
     def test_passes_through_when_no_island_has_text_focus(self):
         _make_host()  # registered, but never reports focus
-        event = _key_event(QEvent.Type.ShortcutOverride, Qt.Key.Key_K, Qt.KeyboardModifier.ControlModifier)
+        event = _key_event(QEvent.Type.ShortcutOverride, Qt.Key.Key_T, Qt.KeyboardModifier.ControlModifier)
 
         handled = self._filter().eventFilter(None, event)
 
@@ -133,7 +145,7 @@ class TestAcceleratorForwardingFilter:
     def test_ignores_non_shortcut_override_events_entirely(self):
         host = _make_host()
         host.reportTextFocus(True)
-        event = _key_event(QEvent.Type.KeyPress, Qt.Key.Key_K, Qt.KeyboardModifier.ControlModifier)
+        event = _key_event(QEvent.Type.KeyPress, Qt.Key.Key_T, Qt.KeyboardModifier.ControlModifier)
 
         handled = self._filter().eventFilter(None, event)
 
@@ -141,15 +153,15 @@ class TestAcceleratorForwardingFilter:
 
     def test_every_documented_gated_shortcut_is_actually_gated(self):
         # Cross-checks the class's own GATED_SHORTCUTS set against every real
-        # global shortcut in graphlink_window.py except Ctrl+S, rather than
-        # trusting the constant matches the docstring's claim.
+        # global shortcut in graphlink_window.py except Ctrl+S and Ctrl+K
+        # (both exempt), rather than trusting the constant matches the
+        # docstring's claim.
         host = _make_host()
         host.reportTextFocus(True)
         f = self._filter()
         expected_gated = {
             (Qt.Key.Key_T, Qt.KeyboardModifier.ControlModifier),
             (Qt.Key.Key_L, Qt.KeyboardModifier.ControlModifier),
-            (Qt.Key.Key_K, Qt.KeyboardModifier.ControlModifier),
             (Qt.Key.Key_F, Qt.KeyboardModifier.ControlModifier),
             (Qt.Key.Key_G, Qt.KeyboardModifier.ControlModifier),
             (Qt.Key.Key_G, Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier),

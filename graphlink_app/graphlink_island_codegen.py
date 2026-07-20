@@ -343,6 +343,14 @@ GENERATED_ARTIFACTS = [
         "schema_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "notification-state.schema.json",
         "ts_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "notification-state.ts",
     },
+    {
+        "dataclass": None,  # resolved lazily in main() to avoid importing
+        "dataclass_import": ("graphlink_command_palette_payload", "CommandPaletteStatePayload"),
+        "title": "CommandPaletteState",
+        "source": "graphlink_app/graphlink_command_palette_payload.py::CommandPaletteStatePayload",
+        "schema_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "command-palette-state.schema.json",
+        "ts_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "command-palette-state.ts",
+    },
 ]
 
 
