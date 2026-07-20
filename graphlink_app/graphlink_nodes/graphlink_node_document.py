@@ -573,10 +573,13 @@ class DocumentNode(QGraphicsItem, HoverAnimationMixin):
         super().hoverLeaveEvent(event)
 
     def itemChange(self, change, value):
-        if change == QGraphicsItem.ItemSceneHasChanged and self.scene():
-            self._setup_document()
-            if not self.is_collapsed:
-                self._recalculate_geometry()
+        if change == QGraphicsItem.ItemSceneHasChanged:
+            if self.scene():
+                self._setup_document()
+                if not self.is_collapsed:
+                    self._recalculate_geometry()
+            else:
+                self._stop_hover_animation_timer()
         if change == QGraphicsItem.ItemPositionChange and self.scene():
             parent = self.parentItem()
             if parent and isinstance(parent, Container):

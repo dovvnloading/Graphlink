@@ -704,6 +704,8 @@ class CodeSandboxNode(QGraphicsObject, HoverAnimationMixin):
         super().mouseReleaseEvent(event)
 
     def itemChange(self, change, value):
+        if change == QGraphicsItem.GraphicsItemChange.ItemSceneHasChanged and value is None:
+            self._stop_hover_animation_timer()
         if change == QGraphicsItem.GraphicsItemChange.ItemPositionChange and self.scene() and self.scene().is_dragging_item:
             return self.scene().snap_position(self, value)
         if change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged and self.scene():

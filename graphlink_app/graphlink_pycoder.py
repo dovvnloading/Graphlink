@@ -746,6 +746,8 @@ class PyCoderNode(QGraphicsItem, HoverAnimationMixin):
         super().mouseReleaseEvent(event)
 
     def itemChange(self, change, value):
+        if change == QGraphicsItem.ItemSceneHasChanged and value is None:
+            self._stop_hover_animation_timer()
         if change == QGraphicsItem.ItemPositionChange and self.scene() and self.scene().is_dragging_item:
             return self.scene().snap_position(self, value)
         if change == QGraphicsItem.ItemPositionHasChanged and self.scene():

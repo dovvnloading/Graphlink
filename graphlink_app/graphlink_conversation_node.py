@@ -96,16 +96,40 @@ class TypingIndicatorItem(QGraphicsObject):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._dot_opacity = [1.0, 1.0, 1.0]
+        self._disposed = False
         self._timer = QTimer()
         self._timer.timeout.connect(self._animate)
         self._timer.start(300)
         self._counter = 0
 
     def _animate(self):
+        if self._disposed:
+            return
         self._counter = (self._counter + 1) % 4
         for i in range(3):
             self._dot_opacity[i] = 1.0 if self._counter == i + 1 else 0.3
-        self.update()
+        try:
+            self.update()
+        except RuntimeError:
+            self._teardown_async_helpers()
+
+    def itemChange(self, change, value):
+        if change == QGraphicsObject.GraphicsItemChange.ItemSceneHasChanged and value is None:
+            self._teardown_async_helpers()
+        return super().itemChange(change, value)
+
+    def _teardown_async_helpers(self):
+        """Stops _timer so it can't fire after this item's C++ side is
+        destroyed - QGraphicsItem isn't a QObject, so nothing else parents
+        or auto-cleans up this timer. Idempotent."""
+        if self._disposed:
+            return
+        self._disposed = True
+        self._timer.stop()
+        try:
+            self._timer.timeout.disconnect()
+        except (TypeError, RuntimeError):
+            pass
 
     def boundingRect(self):
         return QRectF(0, 0, 60, 30)
@@ -527,6 +551,8 @@ class ConversationNode(QGraphicsObject, HoverAnimationMixin):
         super().mouseReleaseEvent(event)
 
     def itemChange(self, change, value):
+        if change == QGraphicsObject.GraphicsItemChange.ItemSceneHasChanged and value is None:
+            self._stop_hover_animation_timer()
         if change == QGraphicsObject.GraphicsItemChange.ItemPositionChange and self.scene() and self.scene().is_dragging_item:
             return self.scene().snap_position(self, value)
         if change == QGraphicsObject.GraphicsItemChange.ItemPositionHasChanged and self.scene():
