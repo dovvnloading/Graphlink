@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "minCompatibleSchemaVersion": {
+      "type": "integer"
+    },
+    "revision": {
+      "type": "integer"
+    },
+    "schemaVersion": {
+      "type": "integer"
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "revision"
+  ],
+  "title": "HelpState",
+  "type": "object"
+}
