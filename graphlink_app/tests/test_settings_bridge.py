@@ -1,5 +1,9 @@
-"""Contract tests for the settings island bridge (Phase 3 increment 2 -
-shell-only: activeSection navigation, nothing page-specific yet)."""
+"""Contract tests for the settings island bridge.
+
+Increment 2: activeSection navigation. Increment 3: the General/Appearance
+page's real, persisted fields - the only page with no secrets and no
+background workers.
+"""
 
 import json
 import sys
@@ -8,7 +12,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import graphlink_config as config
+from graphlink_licensing import SettingsManager
 from graphlink_settings_bridge import SECTION_NAMES, SettingsBridge
+
+
+def _bridge(tmp_path) -> SettingsBridge:
+    return SettingsBridge(SettingsManager(tmp_path / "session.dat"))
 
 
 def _last_payload(bridge: SettingsBridge) -> dict:
@@ -18,92 +27,190 @@ def _last_payload(bridge: SettingsBridge) -> dict:
     return json.loads(states[-1])
 
 
-def test_section_names_match_settings_dialogs_own_vocabulary():
-    # SettingsDialog.SECTION_DEFS / set_current_section_by_mode already use
-    # this exact vocabulary - a second, drifted set of names here would be a
-    # real bug the moment increment 8 wires this bridge into the real shell.
-    assert SECTION_NAMES == (
-        "General",
-        config.MODE_OLLAMA_LOCAL,
-        config.MODE_LLAMACPP_LOCAL,
-        config.MODE_API_ENDPOINT,
-        "Integrations",
-    )
+class TestActiveSectionNavigation:
+    def test_section_names_match_settings_dialogs_own_vocabulary(self):
+        assert SECTION_NAMES == (
+            "General",
+            config.MODE_OLLAMA_LOCAL,
+            config.MODE_LLAMACPP_LOCAL,
+            config.MODE_API_ENDPOINT,
+            "Integrations",
+        )
+
+    def test_ready_publishes_general_as_the_initial_section(self, tmp_path):
+        bridge = _bridge(tmp_path)
+
+        payload = _last_payload(bridge)
+
+        assert payload["activeSection"] == "General"
+        assert payload["schemaVersion"] == SettingsBridge.SCHEMA_VERSION
+        assert payload["revision"] == 1
+
+    def test_set_active_section_navigates_and_publishes(self, tmp_path):
+        bridge = _bridge(tmp_path)
+        states = []
+        bridge.stateChanged.connect(states.append)
+
+        bridge.setActiveSection(config.MODE_OLLAMA_LOCAL)
+
+        payload = json.loads(states[-1])
+        assert payload["activeSection"] == config.MODE_OLLAMA_LOCAL
+
+    def test_set_active_section_to_the_same_section_is_a_no_op(self, tmp_path):
+        bridge = _bridge(tmp_path)
+        bridge.setActiveSection("Integrations")
+        states = []
+        bridge.stateChanged.connect(states.append)
+
+        bridge.setActiveSection("Integrations")
+
+        assert states == []
+
+    def test_set_active_section_ignores_an_unrecognized_name(self, tmp_path):
+        bridge = _bridge(tmp_path)
+        states = []
+        bridge.stateChanged.connect(states.append)
+
+        bridge.setActiveSection("Not A Real Section")
+
+        assert states == []
+
+    def test_python_side_set_active_section_is_equivalent_to_the_slot(self, tmp_path):
+        bridge = _bridge(tmp_path)
+        states = []
+        bridge.stateChanged.connect(states.append)
+
+        bridge.set_active_section(config.MODE_API_ENDPOINT)
+
+        payload = json.loads(states[-1])
+        assert payload["activeSection"] == config.MODE_API_ENDPOINT
 
 
-def test_ready_publishes_general_as_the_initial_section():
-    bridge = SettingsBridge()
+class TestGeneralAppearancePage:
+    def test_ready_publishes_the_persisted_defaults(self, tmp_path):
+        bridge = _bridge(tmp_path)
 
-    payload = _last_payload(bridge)
+        payload = _last_payload(bridge)
 
-    assert payload["activeSection"] == "General"
-    assert payload["schemaVersion"] == SettingsBridge.SCHEMA_VERSION
-    assert payload["revision"] == 1
+        assert payload["theme"] == "dark"
+        assert payload["showTokenCounter"] is True
+        assert payload["enableSystemPrompt"] is True
+        assert payload["notificationPreferences"] == {
+            "info": True,
+            "success": True,
+            "warning": True,
+            "error": True,
+        }
+        assert payload["updateNotificationsEnabled"] is False
+        assert payload["updateStatusMessage"] == "Automatic update checks are off."
+        assert payload["updateStatusLevel"] == "info"
+        assert payload["updateLastCheckedAt"] == ""
+        assert payload["updateAvailable"] is False
+
+    def test_set_theme_persists_applies_and_republishes(self, tmp_path):
+        # apply_theme() mutates the process-global config.CURRENT_THEME -
+        # same save/restore convention test_theme_tokens.py already uses for
+        # every test that calls it, so this test doesn't leak state into
+        # whatever runs after it.
+        original_theme = config.CURRENT_THEME
+        try:
+            settings_manager = SettingsManager(tmp_path / "session.dat")
+            bridge = SettingsBridge(settings_manager)
+            states = []
+            bridge.stateChanged.connect(states.append)
+
+            bridge.setTheme("muted")
+
+            assert settings_manager.get_theme() == "muted"
+            assert config.CURRENT_THEME == "muted"
+            payload = json.loads(states[-1])
+            assert payload["theme"] == "muted"
+        finally:
+            config.CURRENT_THEME = original_theme
+
+    def test_set_theme_ignores_an_unrecognized_name(self, tmp_path):
+        bridge = _bridge(tmp_path)
+        states = []
+        bridge.stateChanged.connect(states.append)
+
+        bridge.setTheme("not-a-real-theme")
+
+        assert states == []
+
+    def test_set_show_token_counter_persists_and_publishes(self, tmp_path):
+        settings_manager = SettingsManager(tmp_path / "session.dat")
+        bridge = SettingsBridge(settings_manager)
+
+        bridge.setShowTokenCounter(False)
+
+        assert settings_manager.get_show_token_counter() is False
+        payload = _last_payload(bridge)
+        assert payload["showTokenCounter"] is False
+
+    def test_set_enable_system_prompt_persists_and_publishes(self, tmp_path):
+        settings_manager = SettingsManager(tmp_path / "session.dat")
+        bridge = SettingsBridge(settings_manager)
+
+        bridge.setEnableSystemPrompt(False)
+
+        assert settings_manager.get_enable_system_prompt() is False
+        payload = _last_payload(bridge)
+        assert payload["enableSystemPrompt"] is False
+
+    def test_set_notification_preference_is_a_partial_update(self, tmp_path):
+        settings_manager = SettingsManager(tmp_path / "session.dat")
+        bridge = SettingsBridge(settings_manager)
+
+        bridge.setNotificationPreference("warning", False)
+
+        prefs = settings_manager.get_notification_preferences()
+        assert prefs["warning"] is False
+        assert prefs["info"] is True  # untouched
+        payload = _last_payload(bridge)
+        assert payload["notificationPreferences"]["warning"] is False
+
+    def test_set_notification_preference_ignores_an_unrecognized_type(self, tmp_path):
+        bridge = _bridge(tmp_path)
+        states = []
+        bridge.stateChanged.connect(states.append)
+
+        bridge.setNotificationPreference("not-a-real-type", False)
+
+        assert states == []
+
+    def test_set_update_notifications_enabled_persists_and_publishes(self, tmp_path):
+        settings_manager = SettingsManager(tmp_path / "session.dat")
+        bridge = SettingsBridge(settings_manager)
+
+        bridge.setUpdateNotificationsEnabled(True)
+
+        assert settings_manager.get_update_notifications_enabled() is True
+        payload = _last_payload(bridge)
+        assert payload["updateNotificationsEnabled"] is True
+        # set_update_notifications_enabled's own side effect (SettingsManager
+        # updates the status message when toggled on) must be reflected too.
+        assert payload["updateStatusMessage"] == "Automatic update checks are enabled."
 
 
-def test_set_active_section_navigates_and_publishes():
-    bridge = SettingsBridge()
-    states = []
-    bridge.stateChanged.connect(states.append)
+class TestLifecycle:
+    def test_publish_is_a_no_op_after_dispose(self, tmp_path):
+        bridge = _bridge(tmp_path)
+        states = []
+        bridge.stateChanged.connect(states.append)
 
-    bridge.setActiveSection(config.MODE_OLLAMA_LOCAL)
+        bridge.dispose()
+        bridge.setActiveSection(config.MODE_OLLAMA_LOCAL)
 
-    payload = json.loads(states[-1])
-    assert payload["activeSection"] == config.MODE_OLLAMA_LOCAL
-    assert payload["revision"] == 1
+        assert states == []
+        assert bridge.disposed is True
 
+    def test_revision_increments_monotonically_across_calls(self, tmp_path):
+        bridge = _bridge(tmp_path)
+        revisions = []
+        bridge.stateChanged.connect(lambda payload: revisions.append(json.loads(payload)["revision"]))
 
-def test_set_active_section_to_the_same_section_is_a_no_op():
-    bridge = SettingsBridge()
-    bridge.setActiveSection("Integrations")
-    states = []
-    bridge.stateChanged.connect(states.append)
+        bridge.ready()
+        bridge.setActiveSection(config.MODE_OLLAMA_LOCAL)
+        bridge.setActiveSection("Integrations")
 
-    bridge.setActiveSection("Integrations")
-
-    assert states == []
-
-
-def test_set_active_section_ignores_an_unrecognized_name():
-    bridge = SettingsBridge()
-    states = []
-    bridge.stateChanged.connect(states.append)
-
-    bridge.setActiveSection("Not A Real Section")
-
-    assert states == []
-
-
-def test_python_side_set_active_section_is_equivalent_to_the_slot():
-    bridge = SettingsBridge()
-    states = []
-    bridge.stateChanged.connect(states.append)
-
-    bridge.set_active_section(config.MODE_API_ENDPOINT)
-
-    payload = json.loads(states[-1])
-    assert payload["activeSection"] == config.MODE_API_ENDPOINT
-
-
-def test_publish_is_a_no_op_after_dispose():
-    bridge = SettingsBridge()
-    states = []
-    bridge.stateChanged.connect(states.append)
-
-    bridge.dispose()
-    bridge.setActiveSection(config.MODE_OLLAMA_LOCAL)
-
-    assert states == []
-    assert bridge.disposed is True
-
-
-def test_revision_increments_monotonically_across_calls():
-    bridge = SettingsBridge()
-    revisions = []
-    bridge.stateChanged.connect(lambda payload: revisions.append(json.loads(payload)["revision"]))
-
-    bridge.ready()
-    bridge.setActiveSection(config.MODE_OLLAMA_LOCAL)
-    bridge.setActiveSection("Integrations")
-
-    assert revisions == [1, 2, 3]
+        assert revisions == [1, 2, 3]

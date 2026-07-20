@@ -30,6 +30,39 @@ describe("App against the mock bridge", () => {
     expect(screen.getByRole("button", { name: "General" })).not.toHaveAttribute("aria-current");
     expect(screen.getByRole("region", { name: "Integrations" })).toBeInTheDocument();
   });
+
+  it("General renders the theme select and all 4 notification checkboxes, all reflecting initial state", () => {
+    render(<App />);
+
+    expect(screen.getByLabelText("Theme")).toHaveValue("dark");
+    expect(screen.getByRole("checkbox", { name: "Show Token Counter Overlay" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Enable Assistant System Prompt" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Info" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Success" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Warning" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Error" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Enable Update Notifications on Startup" })).not.toBeChecked();
+    expect(screen.getByText("Automatic update checks are off.")).toBeInTheDocument();
+  });
+
+  it("changing the theme select updates state via the mock bridge", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(screen.getByLabelText("Theme"), "muted");
+
+    expect(screen.getByLabelText("Theme")).toHaveValue("muted");
+  });
+
+  it("unchecking a notification type updates only that type", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole("checkbox", { name: "Warning" }));
+
+    expect(screen.getByRole("checkbox", { name: "Warning" })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Info" })).toBeChecked();
+  });
 });
 
 function installFakeQWebChannel() {
@@ -37,6 +70,11 @@ function installFakeQWebChannel() {
     stateChanged: { connect: vi.fn(), disconnect: vi.fn() },
     ready: vi.fn(),
     setActiveSection: vi.fn(),
+    setTheme: vi.fn(),
+    setShowTokenCounter: vi.fn(),
+    setEnableSystemPrompt: vi.fn(),
+    setNotificationPreference: vi.fn(),
+    setUpdateNotificationsEnabled: vi.fn(),
   };
   class FakeQWebChannel {
     constructor(_t: unknown, cb: (channel: { objects: Record<string, unknown> }) => void) {
@@ -82,6 +120,16 @@ describe("App against a real (faked) QWebChannel connection", () => {
     await user.click(screen.getByRole("button", { name: "Ollama (Local)" }));
 
     expect(remote.setActiveSection).toHaveBeenCalledWith("Ollama (Local)");
+  });
+
+  it("toggling a General/Appearance checkbox calls through to the remote", async () => {
+    const remote = installFakeQWebChannel();
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole("checkbox", { name: "Show Token Counter Overlay" }));
+
+    expect(remote.setShowTokenCounter).toHaveBeenCalledWith(false);
   });
 
   // Confirms App.tsx actually reaches the shared lib/ui/BridgeErrorState on

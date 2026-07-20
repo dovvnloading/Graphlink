@@ -5,20 +5,59 @@
     "activeSection": {
       "type": "string"
     },
+    "enableSystemPrompt": {
+      "type": "boolean"
+    },
     "minCompatibleSchemaVersion": {
       "type": "integer"
+    },
+    "notificationPreferences": {
+      "additionalProperties": {
+        "type": "boolean"
+      },
+      "type": "object"
     },
     "revision": {
       "type": "integer"
     },
     "schemaVersion": {
       "type": "integer"
+    },
+    "showTokenCounter": {
+      "type": "boolean"
+    },
+    "theme": {
+      "type": "string"
+    },
+    "updateAvailable": {
+      "type": "boolean"
+    },
+    "updateLastCheckedAt": {
+      "type": "string"
+    },
+    "updateNotificationsEnabled": {
+      "type": "boolean"
+    },
+    "updateStatusLevel": {
+      "type": "string"
+    },
+    "updateStatusMessage": {
+      "type": "string"
     }
   },
   "required": [
     "schemaVersion",
     "revision",
-    "activeSection"
+    "activeSection",
+    "theme",
+    "showTokenCounter",
+    "enableSystemPrompt",
+    "notificationPreferences",
+    "updateNotificationsEnabled",
+    "updateStatusMessage",
+    "updateStatusLevel",
+    "updateLastCheckedAt",
+    "updateAvailable"
   ],
   "title": "SettingsState",
   "type": "object"

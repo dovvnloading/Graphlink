@@ -6,6 +6,15 @@ export interface SettingsState {
   schemaVersion: number;
   revision: number;
   activeSection: string;
+  theme: string;
+  showTokenCounter: boolean;
+  enableSystemPrompt: boolean;
+  notificationPreferences: Record<string, boolean>;
+  updateNotificationsEnabled: boolean;
+  updateStatusMessage: string;
+  updateStatusLevel: string;
+  updateLastCheckedAt: string;
+  updateAvailable: boolean;
   minCompatibleSchemaVersion?: number | null;
 }
 
@@ -40,6 +49,52 @@ function checkSettingsState(value: unknown, path: string, errors: string[]): voi
     const fieldValue = value["activeSection"];
     if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.activeSection: missing required field`);
     else { if (typeof fieldValue !== "string") errors.push(`${path}.activeSection` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["theme"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.theme: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.theme` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["showTokenCounter"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.showTokenCounter: missing required field`);
+    else { if (typeof fieldValue !== "boolean") errors.push(`${path}.showTokenCounter` + ": expected boolean"); }
+  }
+  {
+    const fieldValue = value["enableSystemPrompt"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.enableSystemPrompt: missing required field`);
+    else { if (typeof fieldValue !== "boolean") errors.push(`${path}.enableSystemPrompt` + ": expected boolean"); }
+  }
+  {
+    const fieldValue = value["notificationPreferences"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.notificationPreferences: missing required field`);
+    else { if (!isRecord(fieldValue)) errors.push(`${path}.notificationPreferences` + ": expected object");
+    else Object.entries(fieldValue as Record<string, unknown>).forEach(([k, v]) => { if (typeof v !== "boolean") errors.push(`${path}.notificationPreferences` + `[${JSON.stringify(k)}]` + ": expected boolean"); }); }
+  }
+  {
+    const fieldValue = value["updateNotificationsEnabled"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.updateNotificationsEnabled: missing required field`);
+    else { if (typeof fieldValue !== "boolean") errors.push(`${path}.updateNotificationsEnabled` + ": expected boolean"); }
+  }
+  {
+    const fieldValue = value["updateStatusMessage"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.updateStatusMessage: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.updateStatusMessage` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["updateStatusLevel"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.updateStatusLevel: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.updateStatusLevel` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["updateLastCheckedAt"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.updateLastCheckedAt: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.updateLastCheckedAt` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["updateAvailable"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.updateAvailable: missing required field`);
+    else { if (typeof fieldValue !== "boolean") errors.push(`${path}.updateAvailable` + ": expected boolean"); }
   }
   {
     const fieldValue = value["minCompatibleSchemaVersion"];
