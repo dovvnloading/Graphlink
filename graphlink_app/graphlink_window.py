@@ -30,7 +30,8 @@ from graphlink_plugins.graphlink_plugin_artifact import ArtifactNode
 from graphlink_plugins.graphlink_plugin_gitlink import GitlinkNode
 
 from graphlink_library_dialog import ChatLibraryDialog
-from graphlink_system_dialogs import HelpDialog, AboutDialog
+from graphlink_system_dialogs import HelpDialog
+from graphlink_about_web import AboutWebHost
 from graphlink_settings_web import SettingsWebHost
 
 from graphlink_session import ChatSessionManager
@@ -83,6 +84,7 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         self.library_dialog = None
         self.settings_panel = None
         self.help_panel = None
+        self.about_panel = None
         self._initial_show_complete = False
         self._overlay_update_pending = False
         self._composer_picker = None
@@ -868,7 +870,16 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
             if chat_title: title = f"Graphlink - {chat_title}"
         self.setWindowTitle(title)
 
-    def show_about_dialog(self): AboutDialog(self).exec()
+    def show_about_dialog(self):
+        # Cached once and toggled, replacing the legacy AboutDialog(self).exec()
+        # (modal, constructed fresh every call) - see graphlink_about_web.py's
+        # module docstring for the modal->non-modal rationale.
+        if self.about_panel and self.about_panel.isVisible():
+            self.about_panel.close()
+            return
+        if not self.about_panel:
+            self.about_panel = AboutWebHost(self)
+        self.about_panel.show_centered_over_parent()
     def show_help(self):
         if self.help_panel and self.help_panel.isVisible():
             self.help_panel.close()
