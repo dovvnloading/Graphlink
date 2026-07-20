@@ -14,7 +14,7 @@ from datetime import datetime
 from graphlink_widgets import PinOverlay, SearchOverlay
 from graphlink_token_estimator import TokenEstimator
 from graphlink_token_counter_bridge import TokenCounterBridge
-from graphlink_ui_components import DocumentViewerPanel
+from graphlink_document_viewer_web import DocumentViewerWebHost
 from graphlink_notification_web import NotificationWebHost
 from graphlink_command_palette_web import CommandPaletteWebHost
 from graphlink_composer_web import ComposerWebHost
@@ -30,8 +30,8 @@ from graphlink_plugins.graphlink_plugin_artifact import ArtifactNode
 from graphlink_plugins.graphlink_plugin_gitlink import GitlinkNode
 
 from graphlink_library_dialog import ChatLibraryDialog
-from graphlink_system_dialogs import HelpDialog
 from graphlink_about_web import AboutWebHost
+from graphlink_help_web import HelpWebHost
 from graphlink_settings_web import SettingsWebHost
 
 from graphlink_session import ChatSessionManager
@@ -130,9 +130,11 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         content_layout.setContentsMargins(0, 0, 0, 0)
         content_layout.setSpacing(0)
 
-        self.doc_viewer_panel = DocumentViewerPanel(self)
-        self.doc_viewer_panel.close_requested.connect(self.hide_document_view)
-        self.doc_viewer_panel.setVisible(False)
+        # DocumentViewerWebHost already starts hidden (setVisible(False) in
+        # its own __init__) and its in-DOM Close button reaches
+        # setVisible(False) directly via the bridge's close() intent - no
+        # close_requested signal to connect, unlike the legacy QWidget.
+        self.doc_viewer_panel = DocumentViewerWebHost(self)
         content_layout.addWidget(self.doc_viewer_panel)
 
         self.chat_view = ChatView(self)
@@ -880,13 +882,14 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         if not self.about_panel:
             self.about_panel = AboutWebHost(self)
         self.about_panel.show_centered_over_parent()
+
     def show_help(self):
         if self.help_panel and self.help_panel.isVisible():
             self.help_panel.close()
             return
 
         if not self.help_panel:
-            self.help_panel = HelpDialog(self)
+            self.help_panel = HelpWebHost(self)
 
         self.help_panel.show_for_anchor(self.help_btn if hasattr(self, 'help_btn') else self)
 

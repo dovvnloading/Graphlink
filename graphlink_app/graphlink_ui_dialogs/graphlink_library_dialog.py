@@ -1,31 +1,31 @@
-from datetime import datetime
-
 import qtawesome as qta
-from PySide6.QtCore import QEvent, QSize, Qt
+from PySide6.QtCore import QEvent, Qt
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
-    QAbstractItemView,
     QDialog,
     QFrame,
     QGraphicsDropShadowEffect,
     QHBoxLayout,
-    QInputDialog,
     QLabel,
-    QLineEdit,
-    QListWidget,
-    QListWidgetItem,
-    QMessageBox,
     QPushButton,
     QVBoxLayout,
-    QWidget,
 )
 
-from graphlink_config import get_current_palette, get_neutral_button_colors
+from graphlink_chat_library_web import ChatLibraryWebHost
+from graphlink_config import get_current_palette
 
 
 class ChatLibraryDialog(QDialog):
-    """
-    A custom library window for managing saved chat sessions.
+    """A custom library window for managing saved chat sessions.
+
+    Phase 4 increment 4: a genuine hybrid. This native, frameless, drag-able
+    QDialog shell is retained exactly as it was (window chrome, drop shadow,
+    title bar, eventFilter drag mechanic, Close button, centering, Escape-to-
+    close), but its former content region (search box + New Chat/Rename/Delete
+    toolbar + QListWidget + status label) is replaced by an embedded
+    ChatLibraryWebHost that renders the list/search/CRUD in React. All the DB
+    reads/writes and the new-chat/load intents now live in ChatLibraryBridge;
+    delete/rename confirmation is a two-step in-UI confirm on the web side.
     """
 
     def __init__(self, session_manager, parent=None):
@@ -102,47 +102,9 @@ class ChatLibraryDialog(QDialog):
         title_layout.addWidget(self.close_button, 0, Qt.AlignmentFlag.AlignTop)
         root_layout.addWidget(self.title_bar)
 
-        self.search_input = QLineEdit()
-        self.search_input.setObjectName("librarySearchInput")
-        self.search_input.setPlaceholderText("Search chats...")
-        self.search_input.textChanged.connect(self.filter_chats)
-        root_layout.addWidget(self.search_input)
-
-        toolbar = QHBoxLayout()
-        toolbar.setContentsMargins(0, 0, 0, 0)
-        toolbar.setSpacing(8)
-
-        self.new_chat_btn = self._create_action_button("New Chat")
-        self.new_chat_btn.clicked.connect(self.new_chat)
-        toolbar.addWidget(self.new_chat_btn)
-
-        self.rename_btn = self._create_action_button("Rename")
-        self.rename_btn.clicked.connect(self.rename_selected)
-        toolbar.addWidget(self.rename_btn)
-
-        self.delete_btn = self._create_action_button("Delete", danger=True)
-        self.delete_btn.clicked.connect(self.delete_selected)
-        toolbar.addWidget(self.delete_btn)
-
-        toolbar.addStretch(1)
-        root_layout.addLayout(toolbar)
-
-        self.chat_list = QListWidget()
-        self.chat_list.setObjectName("libraryList")
-        self.chat_list.setFrameShape(QFrame.Shape.NoFrame)
-        self.chat_list.setSpacing(6)
-        self.chat_list.setAlternatingRowColors(False)
-        self.chat_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self.chat_list.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.chat_list.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
-        self.chat_list.itemDoubleClicked.connect(self.load_chat)
-        self.chat_list.itemActivated.connect(self.load_chat)
-        self.chat_list.itemSelectionChanged.connect(self._update_action_states)
-        root_layout.addWidget(self.chat_list, 1)
-
-        self.status_label = QLabel()
-        self.status_label.setObjectName("libraryStatusLabel")
-        root_layout.addWidget(self.status_label)
+        # The former search/toolbar/list/status region, now rendered by React.
+        self.web_host = ChatLibraryWebHost(self.session_manager, self)
+        root_layout.addWidget(self.web_host, 1)
 
         self._drag_widgets = (
             self.title_bar,
@@ -154,14 +116,7 @@ class ChatLibraryDialog(QDialog):
         for widget in self._drag_widgets:
             widget.installEventFilter(self)
 
-        self.refresh_chat_list()
         self.on_theme_changed()
-
-    def _create_action_button(self, text, danger=False):
-        button = QPushButton(text)
-        button.setObjectName("libraryActionButton")
-        button.setProperty("danger", danger)
-        return button
 
     def _position_window(self):
         parent = self.parentWidget()
@@ -184,23 +139,20 @@ class ChatLibraryDialog(QDialog):
         self.show()
         self.raise_()
         self.activateWindow()
-        self.search_input.setFocus()
+        # Give keyboard focus to the web content so its search input (which
+        # autofocuses on mount) can receive typing immediately - the web
+        # equivalent of the legacy search_input.setFocus().
+        self.web_host.setFocus()
 
     def on_theme_changed(self):
         palette = get_current_palette()
-        button_colors = get_neutral_button_colors()
         accent = palette.SELECTION.name()
         panel_gray = "rgba(42, 42, 42, 248)"
         line_gray = "rgba(255, 255, 255, 0.08)"
         muted_text = "#8D8D8D"
-        soft_text = "#D9D9D9"
-        hover_gray = "rgba(255, 255, 255, 0.055)"
         badge_gray = "rgba(255, 255, 255, 0.025)"
 
         self.icon_badge.setPixmap(qta.icon("fa5s.book", color=accent).pixmap(16, 16))
-        self.new_chat_btn.setIcon(qta.icon("fa5s.plus", color=button_colors["icon"].name()))
-        self.rename_btn.setIcon(qta.icon("fa5s.edit", color=button_colors["icon"].name()))
-        self.delete_btn.setIcon(qta.icon("fa5s.trash", color=button_colors["icon"].name()))
 
         self.setStyleSheet(f"""
             QDialog#libraryWindow {{
@@ -237,44 +189,6 @@ class ChatLibraryDialog(QDialog):
                 color: {muted_text};
                 font-size: 11px;
             }}
-            QLineEdit#librarySearchInput {{
-                background-color: #2D2D2D;
-                border: 1px solid #3F3F3F;
-                border-radius: 9px;
-                color: #FFFFFF;
-                padding: 10px 12px;
-                selection-background-color: #494949;
-            }}
-            QLineEdit#librarySearchInput:hover {{
-                border-color: #4A4A4A;
-            }}
-            QLineEdit#librarySearchInput:focus {{
-                border-color: {accent};
-            }}
-            QPushButton#libraryActionButton {{
-                background-color: {button_colors["background"].name()};
-                color: #F5F5F5;
-                border: 1px solid {button_colors["border"].name()};
-                border-radius: 8px;
-                padding: 8px 12px;
-                font-size: 11px;
-                font-weight: 600;
-            }}
-            QPushButton#libraryActionButton:hover {{
-                background-color: {button_colors["hover"].name()};
-                border-color: {button_colors["hover"].lighter(112).name()};
-            }}
-            QPushButton#libraryActionButton:pressed {{
-                background-color: {button_colors["pressed"].name()};
-            }}
-            QPushButton#libraryActionButton:disabled {{
-                color: #818181;
-                border-color: rgba(255, 255, 255, 0.04);
-                background-color: rgba(255, 255, 255, 0.03);
-            }}
-            QPushButton#libraryActionButton[danger="true"] {{
-                border-color: rgba(255, 255, 255, 0.1);
-            }}
             QPushButton#libraryCloseButton {{
                 background-color: rgba(255, 255, 255, 0.04);
                 color: #F5F5F5;
@@ -286,33 +200,6 @@ class ChatLibraryDialog(QDialog):
             }}
             QPushButton#libraryCloseButton:hover {{
                 background-color: rgba(255, 255, 255, 0.08);
-            }}
-            QListWidget#libraryList {{
-                background: transparent;
-                color: #FFFFFF;
-                border: none;
-                outline: none;
-            }}
-            QListWidget#libraryList::item {{
-                background-color: rgba(255, 255, 255, 0.025);
-                border: 1px solid rgba(255, 255, 255, 0.06);
-                border-radius: 10px;
-                margin: 0px;
-                padding: 12px 14px;
-            }}
-            QListWidget#libraryList::item:hover {{
-                background-color: {hover_gray};
-                border-color: rgba(255, 255, 255, 0.08);
-            }}
-            QListWidget#libraryList::item:selected {{
-                background-color: {accent};
-                border-color: {accent};
-                color: #FFFFFF;
-            }}
-            QLabel#libraryStatusLabel {{
-                color: {soft_text};
-                font-size: 11px;
-                padding-left: 2px;
             }}
         """)
 
@@ -331,143 +218,15 @@ class ChatLibraryDialog(QDialog):
 
     def closeEvent(self, event):
         self._drag_offset = None
+        # Construct-per-open (WA_DeleteOnClose): tear the embedded host down on
+        # close so each open/close cycle unregisters it from the shared
+        # shutdown registry instead of leaking a dead reference into _hosts.
+        if self.web_host is not None:
+            self.web_host.prepare_for_shutdown()
         event.accept()
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Escape:
             self.close()
             return
-        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
-            current_item = self.chat_list.currentItem()
-            if current_item and not current_item.isHidden():
-                self.load_chat(current_item)
-                return
         super().keyPressEvent(event)
-
-    def _format_timestamp(self, value):
-        if not value:
-            return "Unknown"
-        try:
-            parsed = datetime.strptime(str(value), "%Y-%m-%d %H:%M:%S")
-            return parsed.strftime("%b %d, %Y %I:%M %p")
-        except ValueError:
-            return str(value)
-
-    def refresh_chat_list(self):
-        self.chat_list.clear()
-        chats = self.session_manager.db.get_all_chats()
-
-        for chat_id, title, created_at, updated_at in chats:
-            created_label = self._format_timestamp(created_at)
-            updated_label = self._format_timestamp(updated_at)
-
-            item = QListWidgetItem()
-            item.setData(Qt.ItemDataRole.UserRole, chat_id)
-            item.setText(
-                f"{title}\n"
-                f"Updated {updated_label}\n"
-                f"Created {created_label}"
-            )
-            item.setSizeHint(QSize(0, 78))
-            self.chat_list.addItem(item)
-
-        if self.chat_list.count():
-            self.chat_list.setCurrentRow(0)
-
-        self.update_status()
-        self._update_action_states()
-
-    def update_status(self):
-        total_count = self.chat_list.count()
-        visible_count = sum(not self.chat_list.item(i).isHidden() for i in range(total_count))
-
-        if total_count == 0:
-            self.status_label.setText("No saved chats yet.")
-        elif visible_count != total_count:
-            noun = "chat" if total_count == 1 else "chats"
-            self.status_label.setText(f"Showing {visible_count} of {total_count} saved {noun}.")
-        else:
-            noun = "chat" if total_count == 1 else "chats"
-            self.status_label.setText(f"{total_count} saved {noun}.")
-
-    def _update_action_states(self):
-        current_item = self.chat_list.currentItem()
-        has_selection = current_item is not None and not current_item.isHidden()
-        self.rename_btn.setEnabled(has_selection)
-        self.delete_btn.setEnabled(has_selection)
-
-    def filter_chats(self, text):
-        query = text.strip().lower()
-        first_visible_row = None
-
-        for row in range(self.chat_list.count()):
-            item = self.chat_list.item(row)
-            is_hidden = query not in item.text().lower()
-            item.setHidden(is_hidden)
-            if not is_hidden and first_visible_row is None:
-                first_visible_row = row
-
-        current_item = self.chat_list.currentItem()
-        if current_item is None or current_item.isHidden():
-            if first_visible_row is not None:
-                self.chat_list.setCurrentRow(first_visible_row)
-            else:
-                self.chat_list.clearSelection()
-
-        self.update_status()
-        self._update_action_states()
-
-    def new_chat(self):
-        if self.parent() and hasattr(self.parent(), "new_chat"):
-            if self.parent().new_chat(parent_for_dialog=self):
-                self.close()
-
-    def delete_selected(self):
-        current_item = self.chat_list.currentItem()
-        if current_item is None or current_item.isHidden():
-            return
-
-        chat_id = current_item.data(Qt.ItemDataRole.UserRole)
-        reply = QMessageBox.question(
-            self,
-            "Delete Chat",
-            "Are you sure you want to delete this chat?\nThis action cannot be undone.",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-        )
-        if reply == QMessageBox.StandardButton.Yes:
-            self.session_manager.db.delete_chat(chat_id)
-            self.refresh_chat_list()
-            self.filter_chats(self.search_input.text())
-
-    def rename_selected(self):
-        current_item = self.chat_list.currentItem()
-        if current_item is None or current_item.isHidden():
-            return
-
-        chat_id = current_item.data(Qt.ItemDataRole.UserRole)
-        current_title = current_item.text().split("\n", 1)[0]
-
-        new_title, ok = QInputDialog.getText(
-            self,
-            "Rename Chat",
-            "Enter new title:",
-            text=current_title,
-        )
-
-        if ok and new_title:
-            self.session_manager.db.rename_chat(chat_id, new_title)
-            self.refresh_chat_list()
-            self.filter_chats(self.search_input.text())
-
-    def load_chat(self, item):
-        if item is None or item.isHidden():
-            return
-
-        chat_id = item.data(Qt.ItemDataRole.UserRole)
-        try:
-            self.session_manager.load_chat(chat_id)
-            if self.session_manager.window:
-                self.session_manager.window.update_title_bar()
-            self.close()
-        except Exception as exc:
-            QMessageBox.critical(self, "Error", f"Failed to load chat: {str(exc)}")

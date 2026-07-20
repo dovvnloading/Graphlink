@@ -367,6 +367,30 @@ GENERATED_ARTIFACTS = [
         "schema_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "about-state.schema.json",
         "ts_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "about-state.ts",
     },
+    {
+        "dataclass": None,  # resolved lazily in main() to avoid importing
+        "dataclass_import": ("graphlink_help_payload", "HelpStatePayload"),
+        "title": "HelpState",
+        "source": "graphlink_app/graphlink_help_payload.py::HelpStatePayload",
+        "schema_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "help-state.schema.json",
+        "ts_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "help-state.ts",
+    },
+    {
+        "dataclass": None,  # resolved lazily in main() to avoid importing
+        "dataclass_import": ("graphlink_document_viewer_payload", "DocumentViewerStatePayload"),
+        "title": "DocumentViewerState",
+        "source": "graphlink_app/graphlink_document_viewer_payload.py::DocumentViewerStatePayload",
+        "schema_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "document-viewer-state.schema.json",
+        "ts_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "document-viewer-state.ts",
+    },
+    {
+        "dataclass": None,  # resolved lazily in main() to avoid importing
+        "dataclass_import": ("graphlink_chat_library_payload", "ChatLibraryStatePayload"),
+        "title": "ChatLibraryState",
+        "source": "graphlink_app/graphlink_chat_library_payload.py::ChatLibraryStatePayload",
+        "schema_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "chat-library-state.schema.json",
+        "ts_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "chat-library-state.ts",
+    },
 ]
 
 
