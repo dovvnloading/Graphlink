@@ -345,9 +345,9 @@ def shutdown_all() -> None:
 def theme_changed_all() -> None:
     """Call on_theme_changed() on every still-registered host.
 
-    apply_theme() (graphlink_config.py) already reaches SettingsDialog and
-    ChatWindow's own top-level widgets via Qt's topLevelWidgets() walk, but
-    that walk only visits widgets that are themselves top-level windows -
+    apply_theme() (graphlink_config.py) already reaches ChatWindow and any
+    other top-level widgets via Qt's topLevelWidgets() walk, but that walk
+    only visits widgets that are themselves top-level windows -
     WebIslandHost is a plain child QFrame, so notification/command-palette
     hosts were never actually reached by it (composer only got a live theme
     republish via one hand-added forward in ChatWindow). This is the generic

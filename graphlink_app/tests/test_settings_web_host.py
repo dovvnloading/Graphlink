@@ -173,3 +173,45 @@ class TestCloseGuard:
         host.closeEvent(event)
 
         assert event.isAccepted() is False
+
+
+class TestCloseIsHideNotTeardown:
+    """Regression guard for the real bug increment 10's drive found: routing
+    close through WebIslandHost.closeEvent ran prepare_for_shutdown(),
+    permanently disposing the bridge and killing the page - so the Settings
+    button's toggle-close left every REOPEN showing a dead panel (reachable
+    as the default path since the increment-9 flip). Close must hide only;
+    true teardown belongs to the shutdown registry at app exit."""
+
+    def test_close_does_not_dispose_the_bridge_or_unregister_the_host(self, tmp_path):
+        _clear_registry()
+        host = _make_host(tmp_path)
+        event = QCloseEvent()
+
+        host.closeEvent(event)
+
+        assert event.isAccepted() is True
+        assert host.bridge.disposed is False
+        assert host in wih._hosts
+
+    def test_the_bridge_still_publishes_after_a_close_reopen_cycle(self, tmp_path):
+        host = _make_host(tmp_path)
+        host.closeEvent(QCloseEvent())
+
+        states = []
+        host.bridge.stateChanged.connect(states.append)
+        host.bridge.ready()
+
+        assert len(states) == 1
+
+    def test_prepare_for_shutdown_still_tears_down_after_a_close(self, tmp_path):
+        # The app-exit path must remain intact: a hide-style close first,
+        # then the registry-driven teardown still disposes for real.
+        _clear_registry()
+        host = _make_host(tmp_path)
+        host.closeEvent(QCloseEvent())
+
+        host.prepare_for_shutdown()
+
+        assert host.bridge.disposed is True
+        assert host not in wih._hosts

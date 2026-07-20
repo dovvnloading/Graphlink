@@ -9,9 +9,10 @@ didn't have qwen3:8b pulled.
 The fix is not to silently cascade the chat model into those tasks (that's still not
 user control, just a different hardcoded assumption) - it's to give Chart Generation,
 Web Content Validation, and Web Content Summarization their own independent,
-persisted settings fields (see OllamaSettingsWidget), each resolved through
-SettingsManager with its own sensible fallback, and to read those into
-config.OLLAMA_MODELS via sync_ollama_task_models() rather than copying TASK_CHAT.
+persisted settings fields (surfaced today by the settings island's Ollama page),
+each resolved through SettingsManager with its own sensible fallback, and to read
+those into config.OLLAMA_MODELS via sync_ollama_task_models() rather than copying
+TASK_CHAT.
 
 These tests cover:
 1. set_current_model() only touches TASK_CHAT - it must not silently overwrite the
@@ -50,23 +51,6 @@ def _restore_ollama_globals():
     config.OLLAMA_MODELS.clear()
     config.OLLAMA_MODELS.update(original_models)
     config.CURRENT_MODEL = original_current_model
-
-
-def test_ollama_settings_initializes_model_controls_before_wiring_signals():
-    source = (
-        Path(__file__).resolve().parents[1]
-        / "graphlink_ui_dialogs"
-        / "graphlink_settings_dialogs.py"
-    ).read_text(encoding="utf-8")
-
-    model_input_index = source.index("self.model_input = QLineEdit()")
-    combo_signal_index = source.index(
-        "self.model_combo.currentTextChanged.connect(self.on_combo_change)"
-    )
-
-    assert model_input_index < combo_signal_index
-    assert "self.model_input.textChanged.disconnect(self.on_text_change)" not in source
-    assert "self.model_combo.currentTextChanged.disconnect(self.on_combo_change)" not in source
 
 
 def _make_settings_manager(tmp_path):

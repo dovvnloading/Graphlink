@@ -1,9 +1,9 @@
 """
 Facade module for Graphlink AI Agents and Workers.
 
-This module re-exports all agents, enums, and background workers from their 
-respective segmented modules to maintain backward compatibility with the rest 
-of the application (e.g., graphlink_window.py, graphlink_settings_dialogs.py).
+This module re-exports all agents, enums, and background workers from their
+respective segmented modules to maintain backward compatibility with the rest
+of the application (e.g., graphlink_window.py, graphlink_settings_bridge.py).
 """
 
 # --- Core Chat & Text Processing Agents ---
