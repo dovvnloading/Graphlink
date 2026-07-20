@@ -43,7 +43,7 @@ If you need to rebuild the mental model quickly, open files in this order:
 2. `graphlink_app/graphlink_window.py`
 3. `graphlink_app/graphlink_window_actions.py`
 4. `graphlink_app/api_provider.py`
-5. `graphlink_app/graphlink_ui_dialogs/graphlink_settings_dialogs.py`
+5. `graphlink_app/graphlink_settings_bridge.py` (settings island bridge; UI in `web_ui/src/islands/settings/`)
 6. `graphlink_app/graphlink_scene.py`
 7. `graphlink_app/graphlink_session/manager.py`
 8. `graphlink_app/graphlink_session/serializers.py`
@@ -73,7 +73,7 @@ That path shows boot, shell ownership, provider/mode initialization, live settin
 
 - `graphlink_config.py` defines task keys and user-facing mode labels.
 - `graphlink_licensing.py` persists per-mode settings, scan caches, update-check state, and current mode.
-- `graphlink_ui_dialogs/graphlink_settings_dialogs.py` is the live configuration surface for Ollama, Llama.cpp, API providers, integrations, and update controls.
+- `graphlink_settings_bridge.py` + `graphlink_settings_web.py` (React UI in `web_ui/src/islands/settings/`) are the live configuration surface for Ollama, Llama.cpp, API providers, integrations, and update controls. The legacy Qt `SettingsDialog` stack was deleted (Phase 3 increment 10; recoverable at the `legacy-settings-final` git tag).
 - `graphlink_window.py` owns startup mode initialization and toolbar mode switching.
 - `api_provider.py` is the real execution authority for:
   - Ollama local runtime
@@ -232,15 +232,12 @@ That path shows boot, shell ownership, provider/mode initialization, live settin
   - Startup now opens `ChatWindow` directly after `SplashScreen`; starter templates and recent chat launch paths are no longer part of startup.
 - `graphlink_app/graphlink_ui_dialogs/graphlink_library_dialog.py`
   - `ChatLibraryDialog`
-- `graphlink_app/graphlink_ui_dialogs/graphlink_settings_dialogs.py`
-  - Real settings surface.
-  - Key sections:
-    - `AppearanceSettingsWidget`
-    - `OllamaSettingsWidget`
-    - `LlamaCppSettingsWidget`
-    - `ApiSettingsWidget`
-    - `IntegrationsSettingsWidget`
-    - `SettingsDialog`
+- Settings surface (the legacy `graphlink_ui_dialogs/graphlink_settings_dialogs.py` Qt stack was deleted in Phase 3 increment 10):
+  - `graphlink_app/graphlink_settings_bridge.py` - all settings intents/state (QWebChannel bridge)
+  - `graphlink_app/graphlink_settings_payload.py` - the wire contract
+  - `graphlink_app/graphlink_settings_web.py` - `SettingsWebHost` (Qt.Tool window shell, close-guard, anchoring)
+  - `graphlink_app/graphlink_settings_workers.py` - scan/catalog QThread workers
+  - `web_ui/src/islands/settings/` - the React UI for all five pages
 - `graphlink_app/graphlink_ui_dialogs/graphlink_system_dialogs.py`
   - `HelpDialog`, `AboutDialog`
 - `graphlink_app/graphlink_widgets/loading_visuals.py`
@@ -343,7 +340,7 @@ skipped gracefully rather than crashing.
 4. If `API Endpoint`:
    - provider/model settings come from `SettingsManager`
    - `api_provider.initialize_api(...)`
-5. The settings flyout mirrors these same seams in `graphlink_ui_dialogs/graphlink_settings_dialogs.py`
+5. The settings island mirrors these same seams in `graphlink_settings_bridge.py` (`saveApiConfiguration` / `saveLlamaCppSettings` / the Ollama intents)
 
 ### 3. Normal prompt send / attachment flow
 
@@ -444,7 +441,6 @@ These top-level files are import-stability shims, not the main implementation.
 ### Dialog wrappers
 
 - `graphlink_app/graphlink_library_dialog.py` -> `graphlink_app/graphlink_ui_dialogs/graphlink_library_dialog.py`
-- `graphlink_app/graphlink_settings_dialogs.py` -> `graphlink_app/graphlink_ui_dialogs/graphlink_settings_dialogs.py`
 - `graphlink_app/graphlink_system_dialogs.py` -> `graphlink_app/graphlink_ui_dialogs/graphlink_system_dialogs.py`
 
 ### Agent facade
@@ -510,14 +506,7 @@ This is the practical lookup map for where code actually lives today.
 
 - `graphlink_library_dialog.py`
   - Recent chat browser.
-- `graphlink_settings_dialogs.py`
-  - Live settings flyout.
-  - This is the real place to edit:
-    - Ollama scans
-    - GGUF scans
-    - API provider/model settings
-    - GitHub token settings
-    - update-check controls
+- (settings moved out of this package: edit `graphlink_settings_bridge.py` / `web_ui/src/islands/settings/` for Ollama scans, GGUF scans, API provider/model settings, GitHub token settings, and update-check controls)
 - `graphlink_system_dialogs.py`
   - About/help UI.
 
@@ -548,20 +537,20 @@ This is the practical lookup map for where code actually lives today.
 - `graphlink_app/graphlink_config.py`
 - `graphlink_app/graphlink_licensing.py`
 - `graphlink_app/api_provider.py`
-- `graphlink_app/graphlink_ui_dialogs/graphlink_settings_dialogs.py`
+- `graphlink_app/graphlink_settings_bridge.py` (+ `web_ui/src/islands/settings/`)
 
 ### You want to change Ollama scanning or default local models
 
 - `graphlink_app/api_provider.py`
 - `graphlink_app/graphlink_config.py`
 - `graphlink_app/graphlink_licensing.py`
-- `graphlink_app/graphlink_ui_dialogs/graphlink_settings_dialogs.py`
+- `graphlink_app/graphlink_settings_bridge.py` (+ `web_ui/src/islands/settings/`)
 
 ### You want to change direct `Llama.cpp` / GGUF behavior
 
 - `graphlink_app/api_provider.py`
 - `graphlink_app/graphlink_licensing.py`
-- `graphlink_app/graphlink_ui_dialogs/graphlink_settings_dialogs.py`
+- `graphlink_app/graphlink_settings_bridge.py` (+ `web_ui/src/islands/settings/`)
 - `graphlink_app/graphlink_window.py`
 - `graphlink_app/graphlink_session/title_generator.py`
 
@@ -640,7 +629,7 @@ This is the practical lookup map for where code actually lives today.
 - `graphlink_app/graphlink_version.py`
 - `graphlink_app/graphlink_licensing.py`
 - `graphlink_app/graphlink_window.py`
-- `graphlink_app/graphlink_ui_dialogs/graphlink_settings_dialogs.py`
+- `graphlink_app/graphlink_settings_bridge.py` (+ `web_ui/src/islands/settings/`)
 
 ### You want to change reusable widgets or loading visuals
 

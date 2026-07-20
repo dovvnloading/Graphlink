@@ -9,6 +9,15 @@ surface without shell access), then the caller's own default. An
 unrecognized value at any tier is treated as absent and falls through to
 the next tier rather than raising - a typo'd env var must not break
 startup, it should just be ignored.
+
+CURRENTLY NO PRODUCTION CONSUMER - and that is deliberate, not dead code:
+settings (this helper's first real consumer, Phase 3) finished its
+migration and deleted its flag in increment 10, exactly as this module's
+own lifecycle prescribes. The helper stays because it IS the section-3.6
+mechanism itself: the next surface swap (Phase 4's content dialogs onward)
+gates its construction through this same function rather than re-inventing
+it. If a future dead-code sweep lands here, the correct question is "is any
+surface currently mid-migration," not "does anything import this today."
 """
 
 import os

@@ -1,12 +1,13 @@
 """Background QThread workers for settings model discovery/scanning.
 
-Extracted from graphlink_ui_dialogs/graphlink_settings_dialogs.py (Phase 3,
-increment 5) so both the legacy Qt widget (until its Phase 3 increment 10
-deletion) and the new SettingsBridge can construct the same workers without
-the bridge depending on the widget file it will eventually outlive. None of
-these three classes ever touched a Qt widget - each wraps exactly one
-api_provider.* blocking call and re-emits the result as a finished/error
-signal, so the extraction is a pure move, not a behavior change.
+Extracted from the legacy Qt settings dialog file (Phase 3, increment 5) so
+both it (until increment 10 deleted it - recoverable at the
+legacy-settings-final git tag) and SettingsBridge could construct the same
+workers without the bridge depending on a file it was built to outlive.
+SettingsBridge is now the only consumer. None of these three classes ever
+touched a Qt widget - each wraps exactly one api_provider.* blocking call
+and re-emits the result as a finished/error signal, so the extraction was a
+pure move, not a behavior change.
 
 ModelPullWorkerThread (the fourth worker the Phase 3 checklist names) is
 NOT here - it already lives in graphlink_agents_tools.py, independent of

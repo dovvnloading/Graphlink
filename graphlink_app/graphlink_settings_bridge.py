@@ -69,9 +69,10 @@ from graphlink_settings_workers import ApiModelLoadWorker, LlamaCppModelScanWork
 from graphlink_styles import THEMES
 from graphlink_update import UPDATE_REPOSITORY_URL
 
-# The 5 settings sections, in rail order - identical vocabulary to
-# SettingsDialog.SECTION_DEFS/set_current_section_by_mode so this bridge and
-# the eventual native shell never need two names for the same section.
+# The 5 settings sections, in rail order - vocabulary carried over verbatim
+# from the deleted legacy SettingsDialog's SECTION_DEFS (see the
+# legacy-settings-final git tag) so mode strings, deep-linking, and the rail
+# never needed two names for the same section across the migration.
 SECTION_NAMES = (
     "General",
     config.MODE_OLLAMA_LOCAL,

@@ -135,47 +135,12 @@ def test_every_connection_class_delegates_endpoint_to_the_shared_helper():
         )
 
 
-# --- Bug 6: ApiSettingsWidget button label never reverted after a failed load ---
-
-def _make_api_settings_widget():
-    from graphlink_ui_dialogs.graphlink_settings_dialogs import ApiSettingsWidget
-
-    # __init__ feeds several settings getters straight into Qt widgets that
-    # reject non-str/-list values, so stub the ones it reads with real types.
-    settings = MagicMock()
-    settings.get_api_base_url.return_value = ""
-    settings.get_api_provider.return_value = ""
-    settings.get_api_models.return_value = {}
-    settings.get_openai_key.return_value = ""
-    settings.get_anthropic_key.return_value = ""
-    settings.get_gemini_key.return_value = ""
-    return ApiSettingsWidget(settings)
-
-
-def test_api_button_label_stays_load_after_a_failed_fetch():
-    widget = _make_api_settings_widget()
-    assert widget.load_btn.text() == "Load Available Models"
-
-    # Simulate a load attempt that fails: load_models_from_endpoint resets the
-    # flag, the error handler does NOT set it, and _clear_api_worker runs.
-    widget._api_load_succeeded = False
-    widget._clear_api_worker()
-
-    assert widget.load_btn.text() == "Load Available Models", (
-        "a failed fetch must not relabel the button as if a catalog exists"
-    )
-    assert widget.load_btn.isEnabled()
-
-
-def test_api_button_label_becomes_refresh_after_a_successful_load():
-    widget = _make_api_settings_widget()
-
-    # Simulate a successful load: handle_models_loaded sets the flag True, then
-    # _clear_api_worker (connected after it) reads it.
-    widget._api_load_succeeded = True
-    widget._clear_api_worker()
-
-    assert widget.load_btn.text() == "Refresh Available Models"
+# Bug 6 (ApiSettingsWidget button label never reverting) was fixed here and
+# regression-tested until Phase 3 increment 10 deleted the legacy
+# ApiSettingsWidget itself along with the rest of the Qt settings stack
+# (recoverable at the legacy-settings-final git tag) - the web settings
+# island's own load-status port is covered by
+# tests/test_settings_bridge_api_page.py instead.
 
 
 # --- Bug 2 & 3: paint-path fixes, exercised through a real paint() that BITES ---

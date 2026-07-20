@@ -69,36 +69,3 @@ class TestResolveRendererFlag:
     def test_invalid_default_raises(self):
         with pytest.raises(ValueError):
             resolve_renderer_flag("settings", "not-a-real-renderer")
-
-
-class TestSettingsRendererDefaultFlip:
-    """Phase 3 increment 9: the settings island became the DEFAULT renderer.
-    These guard the flip durably so an accidental refactor can't silently
-    revert it during the one-release observation window before increment 10
-    deletes the legacy dialog and this flag entirely."""
-
-    def test_settings_default_constant_is_web(self):
-        from graphlink_settings_web import SETTINGS_RENDERER_DEFAULT
-
-        assert SETTINGS_RENDERER_DEFAULT == "web"
-
-    def test_settings_default_resolves_to_web_with_no_env_and_no_override(self, monkeypatch):
-        # The exact call ChatWindow.show_settings() makes when the user has
-        # set neither the env var nor the mirrored settings key: the new
-        # default now yields the web island.
-        from graphlink_settings_web import SETTINGS_RENDERER_DEFAULT
-
-        monkeypatch.delenv("GRAPHLINK_SETTINGS_RENDERER", raising=False)
-
-        assert resolve_renderer_flag("settings", SETTINGS_RENDERER_DEFAULT, settings_override="") == "web"
-
-    def test_legacy_escape_hatch_still_wins_over_the_web_default(self, monkeypatch):
-        # The escape hatch the observation window depends on: a user who
-        # opts back into legacy via either tier still gets it.
-        from graphlink_settings_web import SETTINGS_RENDERER_DEFAULT
-
-        monkeypatch.setenv("GRAPHLINK_SETTINGS_RENDERER", "legacy")
-        assert resolve_renderer_flag("settings", SETTINGS_RENDERER_DEFAULT) == "legacy"
-
-        monkeypatch.delenv("GRAPHLINK_SETTINGS_RENDERER", raising=False)
-        assert resolve_renderer_flag("settings", SETTINGS_RENDERER_DEFAULT, settings_override="legacy") == "legacy"

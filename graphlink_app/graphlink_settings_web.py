@@ -1,37 +1,34 @@
-"""Web host for the settings island - Phase 3 increment 8, the first real
-wiring of any settings page into the actual running app.
+"""Web host for the settings island - the app's ONLY settings surface since
+Phase 3 increment 10 deleted the legacy Qt SettingsDialog stack (recoverable
+at the `legacy-settings-final` git tag).
 
-Unlike every other already-wired island, SettingsWebHost fully replaces
-SettingsDialog's own Qt-side rail/header chrome, not just its content
-pages - the React app already renders its own rail navigation
-(SECTION_NAMES) inside the single QWebEngineView, so there is nothing left
-for a Qt-side QStackedWidget/rail to do. This host is a direct drop-in
-replacement, matching SettingsDialog's own public shape exactly
-(show_for_anchor/set_current_section_by_mode/isVisible/close) so
-ChatWindow.show_settings() can hold either one behind the same variable,
-selected once per session by resolve_renderer_flag("settings", ...).
+Unlike every other island, SettingsWebHost replaced the legacy dialog's
+entire Qt-side rail/header chrome, not just its content pages - the React
+app renders its own rail navigation (SECTION_NAMES) inside the single
+QWebEngineView, so there is nothing for a Qt-side QStackedWidget/rail to
+do. Its public shape (show_for_anchor/set_current_section_by_mode/
+isVisible/close) deliberately matches the deleted SettingsDialog's, which
+is what let ChatWindow.show_settings() hold either behind one variable
+during the increments-8/9 flag-gated coexistence window.
 
-Positioning math in show_for_anchor() is copied verbatim from
-SettingsDialog.show_for_anchor() (graphlink_ui_dialogs/
-graphlink_settings_dialogs.py) - same anchor-relative target point, same
-screen-clamping, same fixed 820x560 size - so switching the flag doesn't
-also change where the panel appears.
+Positioning math in show_for_anchor() was copied verbatim from the legacy
+SettingsDialog.show_for_anchor() - same anchor-relative target point, same
+screen-clamping, same fixed 820x560 size - so the renderer swap never moved
+the panel.
 
-The close-guard (_iter_running_workers/closeEvent) is a from-scratch port
-against this bridge's own worker references, not SettingsDialog's tab-
-widget attributes (self.ollama_tab.scan_worker no longer exists - all four
-workers are bridge-owned now). This also fixes a real pre-existing bug the
-legacy dialog's own close guard had: it never included ApiModelLoadWorker
-in its 3-of-4 tracking list (recorded in this phase's own scope note,
-found during the increment-5 worker-registry extraction) - the port here
-checks all 4.
+The close-guard (_iter_running_workers/closeEvent) is a port against this
+bridge's own worker references, not the legacy tab-widget attributes. It
+also fixed a real pre-existing bug the legacy dialog's close guard had: it
+never included ApiModelLoadWorker in its 3-of-4 tracking list (recorded in
+this phase's scope note, found during the increment-5 worker-registry
+extraction) - this guard checks all 4.
 """
 
 from __future__ import annotations
 
 from PySide6.QtCore import QPoint, Qt
 from PySide6.QtGui import QGuiApplication
-from PySide6.QtWidgets import QMessageBox
+from PySide6.QtWidgets import QFrame, QMessageBox
 
 from graphlink_settings_bridge import SECTION_NAMES, SettingsBridge
 from graphlink_web_island_host import WebIslandHost
@@ -42,16 +39,6 @@ SETTINGS_UNAVAILABLE_MESSAGE = (
 
 SETTINGS_WIDTH = 820
 SETTINGS_HEIGHT = 560
-
-# Phase 3 increment 9: the settings island is now the DEFAULT renderer -
-# every user gets the web settings unless they explicitly opt back into the
-# legacy Qt dialog via GRAPHLINK_SETTINGS_RENDERER=legacy or the mirrored
-# settings key (the escape hatch kept live for the one-release observation
-# window before increment 10 deletes the legacy dialog and this flag
-# entirely). Named here, not inlined at the show_settings() call site, so
-# the flip is one testable constant (test_renderer_flags.py guards it) and
-# so increment 10 has a single named thing to remove.
-SETTINGS_RENDERER_DEFAULT = "web"
 
 
 class SettingsWebHost(WebIslandHost):
@@ -65,19 +52,19 @@ class SettingsWebHost(WebIslandHost):
             parent=parent,
         )
         # A persistent tool window, not a transient popup - same rationale
-        # as SettingsDialog's own comment: stays open during scans, message
-        # boxes, and incidental outside clicks.
+        # the legacy SettingsDialog recorded: stays open during scans,
+        # message boxes, and incidental outside clicks.
         self.setWindowFlags(
             Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint | Qt.WindowType.NoDropShadowWindowHint
         )
         self.resize(SETTINGS_WIDTH, SETTINGS_HEIGHT)
 
     def set_current_section_by_mode(self, mode_text: str) -> None:
-        """Mirrors SettingsDialog.set_current_section_by_mode() - deep-links
-        the settings panel to whichever section corresponds to the app's
-        current provider mode, falling back to General for anything else.
-        Reuses set_active_section(), already added in increment 2 for
-        exactly this future call site."""
+        """Mirrors the legacy SettingsDialog's set_current_section_by_mode()
+        - deep-links the settings panel to whichever section corresponds to
+        the app's current provider mode, falling back to General for
+        anything else. Reuses set_active_section(), added in increment 2 for
+        exactly this call site."""
         section = mode_text if mode_text in SECTION_NAMES else "General"
         self.bridge.set_active_section(section)
 
@@ -150,4 +137,19 @@ class SettingsWebHost(WebIslandHost):
             event.ignore()
             return
 
-        super().closeEvent(event)
+        # Deliberately SKIP WebIslandHost.closeEvent, which treats close as
+        # app teardown (prepare_for_shutdown: dispose the bridge, stop the
+        # web view, unregister). Correct for every other island - they are
+        # permanent child widgets whose closeEvent only fires when the app
+        # is going down - but this host is the one closable, REOPENABLE
+        # top-level window: the user toggles it shut with the Settings
+        # button and expects the next click to bring it back alive. Close
+        # here means hide (exactly what the legacy dialog's closeEvent did
+        # after its own worker guard); real teardown still happens via the
+        # shutdown registry (aboutToQuit -> shutdown_all ->
+        # prepare_for_shutdown) at app exit. Found by increment 10's drive:
+        # routing through the base closeEvent left a disposed bridge and a
+        # dead page behind every reopen - a real bug reachable since the
+        # increment-9 default flip, masked earlier because no prior drive
+        # asserted an EMISSION after a close/reopen cycle.
+        QFrame.closeEvent(self, event)

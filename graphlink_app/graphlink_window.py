@@ -31,9 +31,7 @@ from graphlink_plugins.graphlink_plugin_gitlink import GitlinkNode
 
 from graphlink_library_dialog import ChatLibraryDialog
 from graphlink_system_dialogs import HelpDialog, AboutDialog
-from graphlink_settings_dialogs import SettingsDialog
-from graphlink_settings_web import SETTINGS_RENDERER_DEFAULT, SettingsWebHost
-from graphlink_renderer_flags import resolve_renderer_flag
+from graphlink_settings_web import SettingsWebHost
 
 from graphlink_session import ChatSessionManager
 from graphlink_command_palette import CommandManager
@@ -582,9 +580,7 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         if status_target and hasattr(status_target, "set_update_check_in_progress"):
             status_target.set_update_check_in_progress(False)
 
-        if self.settings_panel and hasattr(self.settings_panel, "appearance_tab"):
-            self.settings_panel.appearance_tab.refresh_update_status()
-        elif self.settings_panel and hasattr(self.settings_panel, "bridge"):
+        if self.settings_panel is not None:
             self.settings_panel.bridge.refresh_update_status()
 
         should_notify = self._update_check_manual or result.get("update_available") or not result.get("success", True)
@@ -998,18 +994,10 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
             return
 
         if not self.settings_panel:
-            # Default flipped legacy->web in Phase 3 increment 9 (see
-            # SETTINGS_RENDERER_DEFAULT). Legacy stays reachable as an escape
-            # hatch via GRAPHLINK_SETTINGS_RENDERER=legacy or the mirrored
-            # settings key, kept live for the one-release observation window.
-            renderer = resolve_renderer_flag(
-                "settings", SETTINGS_RENDERER_DEFAULT,
-                settings_override=self.settings_manager.get_settings_renderer_override(),
-            )
-            if renderer == "web":
-                self.settings_panel = SettingsWebHost(self.settings_manager, main_window=self, parent=self)
-            else:
-                self.settings_panel = SettingsDialog(self.settings_manager, self)
+            # Unconditional since Phase 3 increment 10 deleted the legacy
+            # SettingsDialog and its renderer flag (pre-deletion code is at
+            # the legacy-settings-final git tag).
+            self.settings_panel = SettingsWebHost(self.settings_manager, main_window=self, parent=self)
 
         self.settings_panel.set_current_section_by_mode(self.mode_combo.currentText())
         self.settings_panel.show_for_anchor(self.settings_btn)
