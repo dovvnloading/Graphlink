@@ -604,21 +604,32 @@ class AcceleratorForwardingFilter(QObject):
     accepts it (claiming the key so the shortcut never fires) when the key
     combination is in GATED_SHORTCUTS and any_host_has_text_focus() is true.
 
-    Not uniform: Ctrl+S (save_chat) is deliberately exempt. Save is
-    non-destructive, never collides with anything an island's own text input
-    would want, and is the one combo a user reflexively expects to keep
-    working mid-sentence. Every other gated combo (new chat, library, command
-    palette, search, frame/container creation, canvas arrow-nav) is
-    workspace-level, and the island is the more plausible intended owner of
-    that keystroke while it holds focus - so the default for any future
-    shortcut added to GATED_SHORTCUTS is "gated," matching this project's
-    general fail-safe bias; only Ctrl+S has been evaluated and exempted.
+    Not uniform: Ctrl+S (save_chat) and Ctrl+K (show_command_palette) are
+    deliberately exempt - two different reasons, both evaluated concretely,
+    not assumed. Ctrl+S: save is non-destructive, never collides with
+    anything an island's own text input would want, and is the one combo a
+    user reflexively expects to keep working mid-sentence. Ctrl+K: this is
+    the summon key for the command-palette island ITSELF, not an action
+    competing with some other island's use of the key - gating it off
+    whenever any island has text focus (e.g. mid-sentence in the composer)
+    would make it impossible to open the palette from exactly the situation
+    it exists to serve. Checked directly, not assumed: no shipped island's
+    own JS binds Ctrl+K for anything (grepped web_ui/src - composer only
+    binds Ctrl+Enter/Meta+Enter for send), so there is no real conflict this
+    exemption creates. show_command_palette() is idempotent (a second Ctrl+K
+    while the palette's own search input already has focus just refocuses
+    it rather than resetting state) specifically so this exemption is safe
+    even in that case. Every other gated combo (new chat, library, search,
+    frame/container creation, canvas arrow-nav) is workspace-level, and the
+    island is the more plausible intended owner of that keystroke while it
+    holds focus - so the default for any future shortcut added to
+    GATED_SHORTCUTS is "gated," matching this project's general fail-safe
+    bias; only Ctrl+S and Ctrl+K have been evaluated and exempted.
     """
 
     GATED_SHORTCUTS = {
         (Qt.Key.Key_T, Qt.KeyboardModifier.ControlModifier),
         (Qt.Key.Key_L, Qt.KeyboardModifier.ControlModifier),
-        (Qt.Key.Key_K, Qt.KeyboardModifier.ControlModifier),
         (Qt.Key.Key_F, Qt.KeyboardModifier.ControlModifier),
         (Qt.Key.Key_G, Qt.KeyboardModifier.ControlModifier),
         (Qt.Key.Key_G, Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier),

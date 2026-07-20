@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "commands": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "aliases": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "aliases"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "minCompatibleSchemaVersion": {
+      "type": "integer"
+    },
+    "notice": {
+      "type": "string"
+    },
+    "revision": {
+      "type": "integer"
+    },
+    "schemaVersion": {
+      "type": "integer"
+    },
+    "visible": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "revision",
+    "visible",
+    "commands"
+  ],
+  "title": "CommandPaletteState",
+  "type": "object"
+}
