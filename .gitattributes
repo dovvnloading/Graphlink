@@ -18,6 +18,14 @@
 # working-tree copy to match its own checkout-time normalization. -text
 # opts them out of line-ending normalization entirely, so they stay exactly
 # as their generator wrote them.
-assets/composer/** -text
+#
+# assets/*/** (a wildcard, not one line per island) so a future island's
+# Vite build output is covered automatically - the first version of this
+# rule only covered assets/composer/**, and every island added since had to
+# rediscover and re-fix the exact same spurious-modification symptom before
+# this was generalized. Does not match assets/'s own loose top-level static
+# files (icons/images/audio, already handled by the `binary` rules above) -
+# assets/*/** requires at least one subdirectory level.
+assets/*/** -text
 web_ui/src/lib/bridge-core/generated/** -text
 web_ui/src/lib/tokens/gl-theme.css -text

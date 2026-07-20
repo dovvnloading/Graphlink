@@ -106,19 +106,25 @@ body,
   color: var(--gl-neutral-button-icon);
 }
 
-.palette-error-title {
+.bridge-error-title {
   font-weight: 600;
   margin-bottom: 4px;
 }
 
-.palette-error-reason {
+.bridge-error-reason {
   margin: 0 0 4px 0;
   font-size: 13px;
 }
 
-.palette-error-details {
+.bridge-error-details {
   margin: 0;
   padding-left: 16px;
+  font-size: 12px;
+  color: var(--gl-neutral-button-muted-icon);
+}
+
+.bridge-error-hint {
+  margin: 8px 0 0 0;
   font-size: 12px;
   color: var(--gl-neutral-button-muted-icon);
 }

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CommandPaletteState, initialCommandPaletteState } from "./bridgeTypes";
 import { BridgeRejection, CommandPaletteBridge, createCommandPaletteBridge } from "./bridge";
-import { CommandPaletteErrorState } from "./CommandPaletteErrorState";
+import { BridgeErrorState } from "../../lib/ui/BridgeErrorState";
 
 function App() {
   const [state, setState] = useState<CommandPaletteState>(initialCommandPaletteState);
@@ -62,7 +62,13 @@ function App() {
   const clampedIndex = Math.min(selectedIndex, Math.max(filtered.length - 1, 0));
 
   if (rejection) {
-    return <CommandPaletteErrorState rejection={rejection} />;
+    return (
+      <BridgeErrorState
+        title="Command palette unavailable"
+        rejection={rejection}
+        className="palette-shell palette-error"
+      />
+    );
   }
 
   function onQueryChange(event: React.ChangeEvent<HTMLInputElement>) {

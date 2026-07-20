@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { TokenCounterState, initialTokenCounterState } from "./bridgeTypes";
 import { BridgeRejection, TokenCounterBridge, createTokenCounterBridge } from "./bridge";
-import { TokenCounterErrorState } from "./TokenCounterErrorState";
+import { BridgeErrorState } from "../../lib/ui/BridgeErrorState";
 
 type CountField = "inputTokens" | "outputTokens" | "contextTokens" | "totalTokens";
 
@@ -28,7 +28,13 @@ function App() {
   }, []);
 
   if (rejection) {
-    return <TokenCounterErrorState rejection={rejection} />;
+    return (
+      <BridgeErrorState
+        title="Token counter unavailable"
+        rejection={rejection}
+        className="token-counter-shell bridge-error"
+      />
+    );
   }
 
   return (
