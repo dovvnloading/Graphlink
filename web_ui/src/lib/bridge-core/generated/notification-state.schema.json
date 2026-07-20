@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "message": {
+      "type": "string"
+    },
+    "minCompatibleSchemaVersion": {
+      "type": "integer"
+    },
+    "msgType": {
+      "enum": [
+        "info",
+        "success",
+        "warning",
+        "error"
+      ],
+      "type": "string"
+    },
+    "revision": {
+      "type": "integer"
+    },
+    "schemaVersion": {
+      "type": "integer"
+    },
+    "visible": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "revision",
+    "visible",
+    "message",
+    "msgType"
+  ],
+  "title": "NotificationState",
+  "type": "object"
+}

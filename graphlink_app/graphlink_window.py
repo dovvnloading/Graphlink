@@ -14,7 +14,8 @@ from datetime import datetime
 from graphlink_widgets import PinOverlay, SearchOverlay, ComposerWidget
 from graphlink_token_estimator import TokenEstimator
 from graphlink_token_counter_bridge import TokenCounterBridge
-from graphlink_ui_components import NotificationBanner, DocumentViewerPanel
+from graphlink_ui_components import DocumentViewerPanel
+from graphlink_notification_web import NotificationWebHost
 from graphlink_web_island_host import AcceleratorForwardingFilter, WebIslandHost
 from graphlink_canvas_items import Note, Frame, Container
 from graphlink_node import ChatNode, CodeNode, ThinkingNode
@@ -153,8 +154,8 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         # Notifications share the window overlay parent with the composer so
         # their z-order is meaningful across the graph/content hierarchy.
         # Keeping the banner under ChatView would leave it trapped below the
-        # fixed composer even when NotificationBanner.raise_() is called.
-        self.notification_banner = NotificationBanner(self.composer_overlay_parent)
+        # fixed composer even when NotificationWebHost.raise_() is called.
+        self.notification_banner = NotificationWebHost(self, parent=self.composer_overlay_parent)
 
         self.pin_overlay = PinOverlay(self.chat_view, self, controller=self.navigation_pins_controller)
         self.pin_overlay.closed.connect(self._handle_pin_overlay_closed)

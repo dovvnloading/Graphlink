@@ -1,0 +1,193 @@
+/* Colors reuse EXISTING app-wide --gl-* tokens rather than registering a new
+   island-scoped THEME_TOKENS group. Unlike token-counter's 3-color HUD
+   panel, this island genuinely needs 4-way differentiation (info/success/
+   warning/error) - but that need is already met exactly by the existing
+   app-wide "semantic" group (status_info/status_success/status_warning/
+   status_error, see graphlink_styles.py's THEME_TOKENS), which was named
+   for precisely this purpose. So notification does NOT turn out to be the
+   "island #2" moment css_custom_properties()'s docstring and
+   tests/test_theme_tokens.py's two second-island tripwire tests are
+   watching for - both are left untouched by this island on purpose, same
+   as token-counter.
+
+   Simplifications from the old QWidget, deliberate and recorded rather than
+   silent (same convention as token-counter's dropped box-shadow):
+   - No QGraphicsDropShadowEffect. A flat border reads clearly enough at
+     this size; approximating the shadow would need a CSS box-shadow with a
+     literal rgba() the no-raw-colors lint would reject, for a cosmetic
+     difference not worth a new token.
+   - No slide-in/slide-out QPropertyAnimation. Show/hide is now driven by
+     NotificationWebHost toggling the whole host widget's Qt-level
+     visibility (see graphlink_notification_bridge.py's visibilityChanged
+     signal) - instant, matching how every other Qt-hidden widget in this
+     app behaves. Animating that would mean re-introducing a JS-side delay
+     between "Python says hide" and "widget actually disappears," which is
+     more machinery than this cosmetic polish is worth right now.
+   - One neutral hover/pressed pair for all buttons (copy/dismiss/close)
+     across all 4 types, instead of the old widget's per-type copy_hover/
+     dismiss_hover/close_hover (12 distinct hex/rgba values). Only the
+     accent stripe + icon differ by type now; button chrome reuses the same
+     --gl-neutral-button-* tokens every other island's buttons already use. */
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+}
+
+.notification-shell {
+  box-sizing: border-box;
+  width: 460px;
+  min-height: 108px;
+  max-height: 400px;
+  overflow-y: auto;
+  padding: 14px 14px 14px 16px;
+  border: 1px solid var(--gl-neutral-button-border);
+  border-left: 3px solid var(--gl-semantic-status-info);
+  border-radius: 8px;
+  background-color: var(--gl-graph-node-panel-fill);
+  font-family: var(--gl-font-family, system-ui, sans-serif);
+  color: var(--gl-neutral-button-icon);
+}
+
+.notification-shell[data-msg-type="success"] {
+  border-left-color: var(--gl-semantic-status-success);
+}
+
+.notification-shell[data-msg-type="warning"] {
+  border-left-color: var(--gl-semantic-status-warning);
+}
+
+.notification-shell[data-msg-type="error"] {
+  border-left-color: var(--gl-semantic-status-error);
+}
+
+.notification-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.notification-status-icon {
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  color: var(--gl-semantic-status-info);
+}
+
+.notification-shell[data-msg-type="success"] .notification-status-icon {
+  color: var(--gl-semantic-status-success);
+}
+
+.notification-shell[data-msg-type="warning"] .notification-status-icon {
+  color: var(--gl-semantic-status-warning);
+}
+
+.notification-shell[data-msg-type="error"] .notification-status-icon {
+  color: var(--gl-semantic-status-error);
+}
+
+.notification-status-label {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--gl-neutral-button-icon);
+}
+
+.notification-close-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--gl-neutral-button-muted-icon);
+  cursor: pointer;
+}
+
+.notification-close-button:hover {
+  background-color: var(--gl-neutral-button-hover);
+  color: var(--gl-neutral-button-icon);
+}
+
+.notification-icon {
+  width: 100%;
+  height: 100%;
+  fill: currentColor;
+}
+
+.notification-close-button .notification-icon {
+  width: 14px;
+  height: 14px;
+}
+
+.notification-message {
+  margin: 0 0 12px 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--gl-neutral-button-icon);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.notification-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.notification-dismiss-button,
+.notification-copy-button {
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--gl-neutral-button-border);
+  border-radius: 6px;
+  background-color: var(--gl-neutral-button-background);
+  color: var(--gl-neutral-button-icon);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.notification-dismiss-button:hover,
+.notification-copy-button:hover {
+  background-color: var(--gl-neutral-button-hover);
+}
+
+.notification-dismiss-button:active,
+.notification-copy-button:active {
+  background-color: var(--gl-neutral-button-pressed);
+}
+
+.notification-error {
+  padding: 14px 16px;
+  border: 1px solid var(--gl-neutral-button-border);
+  border-radius: 8px;
+  background-color: var(--gl-graph-node-panel-fill);
+  font-family: var(--gl-font-family, system-ui, sans-serif);
+  color: var(--gl-neutral-button-icon);
+}
+
+.notification-error-title {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.notification-error-reason {
+  margin: 0 0 4px 0;
+  font-size: 13px;
+}
+
+.notification-error-details {
+  margin: 0;
+  padding-left: 16px;
+  font-size: 12px;
+  color: var(--gl-neutral-button-muted-icon);
+}
