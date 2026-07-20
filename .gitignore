@@ -30,6 +30,10 @@ ENV/
 *.userosscache
 *.sln.docstates
 
+# Claude Code local tooling config (e.g. launch.json for the Browser pane's
+# dev-server preview) - per-developer/per-agent, never shared repo config.
+.claude/
+
 # OS files
 .DS_Store
 Thumbs.db
