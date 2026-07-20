@@ -1,0 +1,95 @@
+/* Colors reuse EXISTING app-wide --gl-* tokens, same as every island since
+   token-counter - shell-only content today needs no new tokens, and per the
+   Phase 3 checklist scope note this island still isn't the "island #2"
+   moment css_custom_properties()'s docstring is watching for.
+
+   Sized to match SettingsDialog.show_for_anchor's resize(820, 560) -
+   correct even though nothing constructs this island inside the real
+   dialog yet (Phase 3 increment 8's job), since the size is a property of
+   the content, not of who's hosting it. */
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+}
+
+.settings-shell {
+  box-sizing: border-box;
+  width: 820px;
+  height: 560px;
+  display: flex;
+  flex-direction: row;
+  font-family: var(--gl-font-family, system-ui, sans-serif);
+  background-color: var(--gl-graph-node-panel-fill);
+  border: 1px solid var(--gl-neutral-button-border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.settings-rail {
+  box-sizing: border-box;
+  width: 200px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px;
+  border-right: 1px solid var(--gl-neutral-button-border);
+}
+
+.settings-rail-button {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 10px 12px;
+  text-align: left;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--gl-neutral-button-icon);
+  background-color: transparent;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.settings-rail-button:hover {
+  background-color: var(--gl-neutral-button-background);
+}
+
+.settings-rail-button[aria-current="page"] {
+  background-color: var(--gl-neutral-button-background);
+  color: var(--gl-semantic-status-success);
+}
+
+.settings-page {
+  flex: 1;
+  padding: 16px;
+  overflow-y: auto;
+  color: var(--gl-neutral-button-icon);
+  font-size: 13px;
+}
+
+.bridge-error-title {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.bridge-error-reason {
+  margin: 0 0 4px 0;
+  font-size: 13px;
+}
+
+.bridge-error-details {
+  margin: 0;
+  padding-left: 16px;
+  font-size: 12px;
+  color: var(--gl-neutral-button-muted-icon);
+}
+
+.bridge-error-hint {
+  margin: 8px 0 0 0;
+  font-size: 12px;
+  color: var(--gl-neutral-button-muted-icon);
+}

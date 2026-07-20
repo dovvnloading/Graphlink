@@ -115,6 +115,14 @@ def apply_theme(app: QApplication, theme_name: str):
         if hasattr(widget, 'on_theme_changed'):
             widget.on_theme_changed()
 
+    # topLevelWidgets() above only reaches widgets that are themselves
+    # top-level windows - WebIslandHost is a plain child QFrame, so island
+    # hosts parented inside a window (notification, command-palette, and any
+    # future settings island) were never actually reached by that loop.
+    # theme_changed_all() republishes to every registered host directly.
+    import graphlink_web_island_host
+    graphlink_web_island_host.theme_changed_all()
+
 TASK_TITLE = "task_title"
 TASK_CHAT = "task_chat"
 TASK_CHART = "task_chart"
