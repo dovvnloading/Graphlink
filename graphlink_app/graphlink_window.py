@@ -11,9 +11,11 @@ import os
 import tempfile
 from datetime import datetime
 
-from graphlink_widgets import PinOverlay, SearchOverlay, TokenCounterWidget, TokenEstimator, ComposerWidget
+from graphlink_widgets import PinOverlay, SearchOverlay, ComposerWidget
+from graphlink_token_estimator import TokenEstimator
+from graphlink_token_counter_bridge import TokenCounterBridge
 from graphlink_ui_components import NotificationBanner, DocumentViewerPanel
-from graphlink_web_island_host import AcceleratorForwardingFilter
+from graphlink_web_island_host import AcceleratorForwardingFilter, WebIslandHost
 from graphlink_canvas_items import Note, Frame, Container
 from graphlink_node import ChatNode, CodeNode, ThinkingNode
 from graphlink_pycoder import PyCoderNode
@@ -160,7 +162,15 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
 
         self.token_estimator = TokenEstimator()
         self.total_session_tokens = 0
-        self.token_counter_widget = TokenCounterWidget(self.chat_view)
+        self.token_counter_bridge = TokenCounterBridge()
+        self.token_counter_widget = WebIslandHost(
+            bridge=self.token_counter_bridge,
+            asset_dir_name="token-counter",
+            bridge_object_name="tokenCounterBridge",
+            unavailable_message="Token counter unavailable: QtWebEngine failed to initialize.",
+            parent=self.chat_view,
+        )
+        self.token_counter_widget.setFixedSize(150, 90)
         self.token_counter_widget.setVisible(self.settings_manager.get_show_token_counter())
 
         self.toolbar = QToolBar()
@@ -1557,7 +1567,7 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         return None
 
     def reset_token_counter(self, total_tokens=0):
-        self.total_session_tokens = total_tokens; self.token_counter_widget.reset(); self.token_counter_widget.update_counts(total_tokens=self.total_session_tokens)
+        self.total_session_tokens = total_tokens; self.token_counter_bridge.reset(); self.token_counter_bridge.update_counts(total_tokens=self.total_session_tokens)
 
     def new_chat(self, parent_for_dialog=None):
         scene = self.chat_view.scene()
