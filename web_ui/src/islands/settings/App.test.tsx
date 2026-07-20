@@ -63,6 +63,44 @@ describe("App against the mock bridge", () => {
     expect(screen.getByRole("checkbox", { name: "Warning" })).not.toBeChecked();
     expect(screen.getByRole("checkbox", { name: "Info" })).toBeChecked();
   });
+
+  it("Integrations renders an empty, write-only token field and the not-configured status", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "Integrations" }));
+
+    expect(screen.getByLabelText("GitHub Personal Access Token")).toHaveValue("");
+    expect(screen.getByLabelText("GitHub Personal Access Token")).toHaveAttribute("type", "password");
+    expect(screen.getByText("No GitHub token configured.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save Integrations" })).toBeDisabled();
+  });
+
+  it("typing a token enables Save, and saving clears the draft field via the mock bridge", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "Integrations" }));
+
+    await user.type(screen.getByLabelText("GitHub Personal Access Token"), "ghp_typed");
+    expect(screen.getByRole("button", { name: "Save Integrations" })).toBeEnabled();
+
+    await user.click(screen.getByRole("button", { name: "Save Integrations" }));
+
+    await waitFor(() => expect(screen.getByText("A GitHub token is currently configured.")).toBeInTheDocument());
+    expect(screen.getByLabelText("GitHub Personal Access Token")).toHaveValue("");
+  });
+
+  it("Clear Token resets the status to not-configured via the mock bridge", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "Integrations" }));
+    await user.type(screen.getByLabelText("GitHub Personal Access Token"), "ghp_typed");
+    await user.click(screen.getByRole("button", { name: "Save Integrations" }));
+    await waitFor(() => expect(screen.getByText("A GitHub token is currently configured.")).toBeInTheDocument());
+
+    await user.click(screen.getByRole("button", { name: "Clear Token" }));
+
+    await waitFor(() => expect(screen.getByText("No GitHub token configured.")).toBeInTheDocument());
+  });
 });
 
 function installFakeQWebChannel() {
@@ -75,6 +113,8 @@ function installFakeQWebChannel() {
     setEnableSystemPrompt: vi.fn(),
     setNotificationPreference: vi.fn(),
     setUpdateNotificationsEnabled: vi.fn(),
+    setGithubToken: vi.fn(),
+    clearGithubToken: vi.fn(),
   };
   class FakeQWebChannel {
     constructor(_t: unknown, cb: (channel: { objects: Record<string, unknown> }) => void) {
@@ -130,6 +170,36 @@ describe("App against a real (faked) QWebChannel connection", () => {
     await user.click(screen.getByRole("checkbox", { name: "Show Token Counter Overlay" }));
 
     expect(remote.setShowTokenCounter).toHaveBeenCalledWith(false);
+  });
+
+  it("saving on Integrations calls through to setGithubToken with the typed value", async () => {
+    const remote = installFakeQWebChannel();
+    const user = userEvent.setup();
+    render(<App />);
+    // The fake remote's setActiveSection is a bare vi.fn() - it doesn't push
+    // a new state back the way real Python would, so the rendered page only
+    // actually changes once Python's stateChanged is simulated explicitly.
+    const push = remote.stateChanged.connect.mock.calls[0][0] as (payload: string) => void;
+    push(JSON.stringify({ ...initialSettingsState, activeSection: "Integrations", revision: 1 }));
+    await waitFor(() => expect(screen.getByLabelText("GitHub Personal Access Token")).toBeInTheDocument());
+
+    await user.type(screen.getByLabelText("GitHub Personal Access Token"), "ghp_typed");
+    await user.click(screen.getByRole("button", { name: "Save Integrations" }));
+
+    expect(remote.setGithubToken).toHaveBeenCalledWith("ghp_typed");
+  });
+
+  it("Clear Token on Integrations calls through to clearGithubToken", async () => {
+    const remote = installFakeQWebChannel();
+    const user = userEvent.setup();
+    render(<App />);
+    const push = remote.stateChanged.connect.mock.calls[0][0] as (payload: string) => void;
+    push(JSON.stringify({ ...initialSettingsState, activeSection: "Integrations", revision: 1 }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Clear Token" })).toBeInTheDocument());
+
+    await user.click(screen.getByRole("button", { name: "Clear Token" }));
+
+    expect(remote.clearGithubToken).toHaveBeenCalledTimes(1);
   });
 
   // Confirms App.tsx actually reaches the shared lib/ui/BridgeErrorState on

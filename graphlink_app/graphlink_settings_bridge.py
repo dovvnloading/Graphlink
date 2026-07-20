@@ -2,9 +2,27 @@
 
 Grown one page at a time per the recorded Phase 3 increment sequence in
 doc/FRONTEND_WEB_MIGRATION_MASTER_PLAN.md. Increment 2 shipped
-activeSection navigation alone; increment 3 (this) adds the
-General/Appearance page - the only page with no secrets and no background
-workers, so it's the first to get real, persisted fields.
+activeSection navigation alone; increment 3 added the General/Appearance
+page (no secrets, no workers); increment 4 (this) adds the Integrations
+page - the first page with a real secret, and therefore the first proof of
+the write-only secrets protocol the Phase 3 scope note decided on.
+
+WRITE-ONLY SECRETS, BY DESIGN: IslandBridge.publish() re-serializes the
+FULL snapshot on every mutation, unconditionally - unlike the Qt widget
+this replaces, which safely pre-fills the real decrypted token into a
+masked QLineEdit because that value never leaves process memory as a
+string. A QWebChannel payload is categorically different: it is
+inspectable via Chromium DevTools. So this bridge never emits the token
+itself, only githubTokenConfigured: bool - modeled on the composer's
+existing id-not-path firewall (ComposerBridge._attachment_paths), which
+solved the identical "don't let a sensitive value cross the wire" problem
+for filesystem paths. setGithubToken() is write-only in the same sense a
+password-change form is: JS sends a new value in, Python never echoes the
+current one back out. tests/test_settings_bridge_secrets.py is the
+contract test proving this holds across a full lifecycle, extending
+test_secrets_at_rest.py's own "assert the literal secret is absent from
+every serialized form" pattern to this bridge's publish() output instead
+of session.dat.
 
 Each field-level intent (setTheme/setShowTokenCounter/etc.) applies and
 publishes immediately, one field at a time - a deliberate departure from
@@ -75,6 +93,7 @@ class SettingsBridge(IslandBridge, QObject):
             "updateStatusLevel": sm.get_update_status_level(),
             "updateLastCheckedAt": sm.get_update_last_checked_at(),
             "updateAvailable": sm.get_update_available(),
+            "githubTokenConfigured": bool(sm.get_github_token()),
         }
 
     @Slot()
@@ -135,4 +154,17 @@ class SettingsBridge(IslandBridge, QObject):
     @Slot(bool)
     def setUpdateNotificationsEnabled(self, enabled: bool):
         self.settings_manager.set_update_notifications_enabled(enabled)
+        self.publish()
+
+    @Slot(str)
+    def setGithubToken(self, token: str):
+        """Write-only: persists the token but never echoes it back over the
+        bridge - only githubTokenConfigured's boolean changes in the next
+        snapshot. Matches the original widget's own .strip() before save."""
+        self.settings_manager.set_github_token(token.strip())
+        self.publish()
+
+    @Slot()
+    def clearGithubToken(self):
+        self.settings_manager.set_github_token("")
         self.publish()

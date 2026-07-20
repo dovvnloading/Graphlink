@@ -15,6 +15,7 @@ export interface SettingsState {
   updateStatusLevel: string;
   updateLastCheckedAt: string;
   updateAvailable: boolean;
+  githubTokenConfigured: boolean;
   minCompatibleSchemaVersion?: number | null;
 }
 
@@ -95,6 +96,11 @@ function checkSettingsState(value: unknown, path: string, errors: string[]): voi
     const fieldValue = value["updateAvailable"];
     if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.updateAvailable: missing required field`);
     else { if (typeof fieldValue !== "boolean") errors.push(`${path}.updateAvailable` + ": expected boolean"); }
+  }
+  {
+    const fieldValue = value["githubTokenConfigured"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.githubTokenConfigured: missing required field`);
+    else { if (typeof fieldValue !== "boolean") errors.push(`${path}.githubTokenConfigured` + ": expected boolean"); }
   }
   {
     const fieldValue = value["minCompatibleSchemaVersion"];

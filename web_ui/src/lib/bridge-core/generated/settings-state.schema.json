@@ -8,6 +8,9 @@
     "enableSystemPrompt": {
       "type": "boolean"
     },
+    "githubTokenConfigured": {
+      "type": "boolean"
+    },
     "minCompatibleSchemaVersion": {
       "type": "integer"
     },
@@ -57,7 +60,8 @@
     "updateStatusMessage",
     "updateStatusLevel",
     "updateLastCheckedAt",
-    "updateAvailable"
+    "updateAvailable",
+    "githubTokenConfigured"
   ],
   "title": "SettingsState",
   "type": "object"

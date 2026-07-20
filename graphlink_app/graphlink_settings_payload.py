@@ -4,10 +4,12 @@ THIS IS A WIRE FORMAT, NOT A DOMAIN MODEL - see graphlink_composer_payload.py
 for the fuller rationale. Grown incrementally, one page at a time, per the
 recorded Phase 3 increment sequence in
 doc/FRONTEND_WEB_MIGRATION_MASTER_PLAN.md: increment 2 shipped
-activeSection alone (shell/navigation); increment 3 adds the
-General/Appearance page's real fields below. Each remaining page's own
-fields land in its own later increment rather than being stubbed
-speculatively here.
+activeSection alone (shell/navigation); increment 3 added the
+General/Appearance page; increment 4 (this) adds the Integrations page -
+the first page with a real secret, and deliberately write-only: the
+payload only ever states WHETHER a token is configured, never the token
+value itself. Each remaining page's own fields land in its own later
+increment rather than being stubbed speculatively here.
 
 Field names are camelCase to match the JSON keys
 SettingsBridge._build_state_payload() emits and
@@ -44,6 +46,12 @@ class SettingsStatePayload:
     updateStatusLevel: str
     updateLastCheckedAt: str
     updateAvailable: bool
+
+    # Integrations page (increment 4) - write-only by design: this bridge
+    # never emits the actual GitHub token, only whether one is configured.
+    # See graphlink_settings_bridge.py's module docstring and
+    # tests/test_settings_bridge_secrets.py for the invariant this protects.
+    githubTokenConfigured: bool
 
     # See ComposerStatePayload's identical field for the full negotiation
     # rationale; optional for the same reason (models a sender predating this

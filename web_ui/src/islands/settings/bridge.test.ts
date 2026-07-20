@@ -17,6 +17,8 @@ function installFakeQWebChannel() {
     setEnableSystemPrompt: vi.fn(),
     setNotificationPreference: vi.fn(),
     setUpdateNotificationsEnabled: vi.fn(),
+    setGithubToken: vi.fn(),
+    clearGithubToken: vi.fn(),
   };
 
   class FakeQWebChannel {
@@ -70,6 +72,31 @@ describe("createSettingsBridge with no QWebChannel available", () => {
     bridge.setTheme("muted");
 
     expect(listener).toHaveBeenCalledWith(expect.objectContaining({ theme: "muted" }));
+  });
+
+  it("setGithubToken on the mock bridge reports configured without exposing the value", () => {
+    const listener = vi.fn();
+    const bridge = createSettingsBridge(listener);
+    bridge.ready();
+    listener.mockClear();
+
+    bridge.setGithubToken("ghp_secret");
+
+    const [state] = listener.mock.calls[0];
+    expect(state.githubTokenConfigured).toBe(true);
+    expect(JSON.stringify(state)).not.toContain("ghp_secret");
+  });
+
+  it("clearGithubToken on the mock bridge reports not configured", () => {
+    const listener = vi.fn();
+    const bridge = createSettingsBridge(listener);
+    bridge.ready();
+    bridge.setGithubToken("ghp_secret");
+    listener.mockClear();
+
+    bridge.clearGithubToken();
+
+    expect(listener).toHaveBeenCalledWith(expect.objectContaining({ githubTokenConfigured: false }));
   });
 
   it("setNotificationPreference on the mock bridge is a partial update", () => {
@@ -149,6 +176,21 @@ describe("createSettingsBridge against a real QWebChannel connection", () => {
       expect(remote.setEnableSystemPrompt).toHaveBeenCalledWith(false);
       expect(remote.setNotificationPreference).toHaveBeenCalledWith("error", false);
       expect(remote.setUpdateNotificationsEnabled).toHaveBeenCalledWith(true);
+    } finally {
+      uninstallFakeQWebChannel();
+    }
+  });
+
+  it("setGithubToken and clearGithubToken call through to the remote", () => {
+    const remote = installFakeQWebChannel();
+    try {
+      const bridge = createSettingsBridge(() => {});
+
+      bridge.setGithubToken("ghp_secret");
+      bridge.clearGithubToken();
+
+      expect(remote.setGithubToken).toHaveBeenCalledWith("ghp_secret");
+      expect(remote.clearGithubToken).toHaveBeenCalledTimes(1);
     } finally {
       uninstallFakeQWebChannel();
     }

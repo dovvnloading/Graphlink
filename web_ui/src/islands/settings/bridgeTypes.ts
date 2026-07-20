@@ -35,4 +35,5 @@ export const initialSettingsState: SettingsState = {
   updateStatusLevel: "info",
   updateLastCheckedAt: "",
   updateAvailable: false,
+  githubTokenConfigured: false,
 };
