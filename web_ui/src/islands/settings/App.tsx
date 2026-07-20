@@ -95,6 +95,70 @@ function GeneralPage({ state, bridgeRef }: GeneralPageProps) {
   );
 }
 
+interface IntegrationsPageProps {
+  state: SettingsState;
+  bridgeRef: RefObject<SettingsBridge | null>;
+}
+
+// Write-only, by design (see graphlink_settings_bridge.py's module
+// docstring): the token input always starts empty and is never pre-filled
+// from state, since the bridge structurally cannot send the current value
+// back. draftToken is local-only UI state for what the user is currently
+// typing, cleared immediately after Save/Clear - it never becomes part of
+// the published SettingsState.
+function IntegrationsPage({ state, bridgeRef }: IntegrationsPageProps) {
+  const [draftToken, setDraftToken] = useState("");
+
+  return (
+    <div className="settings-general-page">
+      <p className="settings-integrations-intro">
+        Store optional external-service tokens used by specialized plugins. The Code Review plugin uses a
+        GitHub personal access token to load your private repositories - if you leave this empty, it still
+        works with public repositories.
+      </p>
+
+      <label className="settings-field">
+        <span className="settings-field-label">GitHub Personal Access Token</span>
+        <input
+          type="password"
+          className="settings-select"
+          placeholder="ghp_... or fine-grained token"
+          value={draftToken}
+          onChange={(event) => setDraftToken(event.target.value)}
+        />
+      </label>
+
+      <p className="settings-update-status">
+        {state.githubTokenConfigured ? "A GitHub token is currently configured." : "No GitHub token configured."}
+      </p>
+
+      <div className="settings-button-row">
+        <button
+          type="button"
+          className="settings-button"
+          onClick={() => {
+            bridgeRef.current?.clearGithubToken();
+            setDraftToken("");
+          }}
+        >
+          Clear Token
+        </button>
+        <button
+          type="button"
+          className="settings-button settings-button-primary"
+          disabled={draftToken.trim().length === 0}
+          onClick={() => {
+            bridgeRef.current?.setGithubToken(draftToken);
+            setDraftToken("");
+          }}
+        >
+          Save Integrations
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function App() {
   const [state, setState] = useState<SettingsState>(initialSettingsState);
   const [rejection, setRejection] = useState<BridgeRejection | null>(null);
@@ -138,6 +202,8 @@ function App() {
       <div className="settings-page" role="region" aria-label={state.activeSection}>
         {state.activeSection === "General" ? (
           <GeneralPage state={state} bridgeRef={bridgeRef} />
+        ) : state.activeSection === "Integrations" ? (
+          <IntegrationsPage state={state} bridgeRef={bridgeRef} />
         ) : (
           state.activeSection
         )}

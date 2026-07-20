@@ -106,6 +106,7 @@ class TestGeneralAppearancePage:
         assert payload["updateStatusLevel"] == "info"
         assert payload["updateLastCheckedAt"] == ""
         assert payload["updateAvailable"] is False
+        assert payload["githubTokenConfigured"] is False
 
     def test_set_theme_persists_applies_and_republishes(self, tmp_path):
         # apply_theme() mutates the process-global config.CURRENT_THEME -
@@ -190,6 +191,47 @@ class TestGeneralAppearancePage:
         # set_update_notifications_enabled's own side effect (SettingsManager
         # updates the status message when toggled on) must be reflected too.
         assert payload["updateStatusMessage"] == "Automatic update checks are enabled."
+
+
+class TestIntegrationsPage:
+    def test_set_github_token_persists_and_reports_configured_true(self, tmp_path):
+        settings_manager = SettingsManager(tmp_path / "session.dat")
+        bridge = SettingsBridge(settings_manager)
+
+        bridge.setGithubToken("ghp_realtoken123")
+
+        assert settings_manager.get_github_token() == "ghp_realtoken123"
+        payload = _last_payload(bridge)
+        assert payload["githubTokenConfigured"] is True
+        assert "ghp_realtoken123" not in json.dumps(payload)
+
+    def test_set_github_token_strips_whitespace(self, tmp_path):
+        settings_manager = SettingsManager(tmp_path / "session.dat")
+        bridge = SettingsBridge(settings_manager)
+
+        bridge.setGithubToken("  ghp_realtoken123  ")
+
+        assert settings_manager.get_github_token() == "ghp_realtoken123"
+
+    def test_whitespace_only_token_is_reported_as_not_configured(self, tmp_path):
+        settings_manager = SettingsManager(tmp_path / "session.dat")
+        bridge = SettingsBridge(settings_manager)
+
+        bridge.setGithubToken("   ")
+
+        payload = _last_payload(bridge)
+        assert payload["githubTokenConfigured"] is False
+
+    def test_clear_github_token_reports_configured_false(self, tmp_path):
+        settings_manager = SettingsManager(tmp_path / "session.dat")
+        bridge = SettingsBridge(settings_manager)
+        bridge.setGithubToken("ghp_realtoken123")
+
+        bridge.clearGithubToken()
+
+        assert settings_manager.get_github_token() == ""
+        payload = _last_payload(bridge)
+        assert payload["githubTokenConfigured"] is False
 
 
 class TestLifecycle:

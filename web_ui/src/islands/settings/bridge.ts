@@ -25,6 +25,8 @@ interface QtSettingsObject {
   setEnableSystemPrompt: (enabled: boolean) => void;
   setNotificationPreference: (notificationType: string, enabled: boolean) => void;
   setUpdateNotificationsEnabled: (enabled: boolean) => void;
+  setGithubToken: (token: string) => void;
+  clearGithubToken: () => void;
 }
 
 export interface SettingsBridge {
@@ -35,6 +37,8 @@ export interface SettingsBridge {
   setEnableSystemPrompt(enabled: boolean): void;
   setNotificationPreference(notificationType: string, enabled: boolean): void;
   setUpdateNotificationsEnabled(enabled: boolean): void;
+  setGithubToken(token: string): void;
+  clearGithubToken(): void;
   dispose(): void;
 }
 
@@ -91,6 +95,18 @@ class MockSettingsBridge implements SettingsBridge {
     this.publish({ updateNotificationsEnabled: enabled });
   }
 
+  setGithubToken(token: string): void {
+    // Mirrors the real bridge's write-only contract even in the mock: the
+    // token value itself is never retained in state, only whether one was
+    // set - so a dev-mode/test consumer can't come to rely on getting it
+    // back, a behavior the real bridge structurally cannot provide.
+    this.publish({ githubTokenConfigured: token.trim().length > 0 });
+  }
+
+  clearGithubToken(): void {
+    this.publish({ githubTokenConfigured: false });
+  }
+
   dispose(): void {}
 }
 
@@ -145,6 +161,8 @@ export function createSettingsBridge(
     setNotificationPreference: (notificationType, enabled) =>
       call("setNotificationPreference", notificationType, enabled),
     setUpdateNotificationsEnabled: (enabled) => call("setUpdateNotificationsEnabled", enabled),
+    setGithubToken: (token) => call("setGithubToken", token),
+    clearGithubToken: () => call("clearGithubToken"),
     dispose: () => {
       remote?.stateChanged.disconnect?.(stateListener);
       remote = null;
