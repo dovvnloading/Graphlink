@@ -30,8 +30,8 @@ from graphlink_plugins.graphlink_plugin_artifact import ArtifactNode
 from graphlink_plugins.graphlink_plugin_gitlink import GitlinkNode
 
 from graphlink_library_dialog import ChatLibraryDialog
-from graphlink_system_dialogs import HelpDialog
 from graphlink_about_web import AboutWebHost
+from graphlink_help_web import HelpWebHost
 from graphlink_settings_web import SettingsWebHost
 
 from graphlink_session import ChatSessionManager
@@ -880,13 +880,14 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         if not self.about_panel:
             self.about_panel = AboutWebHost(self)
         self.about_panel.show_centered_over_parent()
+
     def show_help(self):
         if self.help_panel and self.help_panel.isVisible():
             self.help_panel.close()
             return
 
         if not self.help_panel:
-            self.help_panel = HelpDialog(self)
+            self.help_panel = HelpWebHost(self)
 
         self.help_panel.show_for_anchor(self.help_btn if hasattr(self, 'help_btn') else self)
 
