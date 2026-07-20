@@ -178,4 +178,20 @@ describe("App against a real (faked) QWebChannel connection", () => {
 
     expect((screen.getByLabelText("Search commands") as HTMLInputElement).value).toBe("");
   });
+
+  // Confirms App.tsx actually reaches the shared lib/ui/BridgeErrorState on a
+  // rejected payload, with this island's own title/className - the shared
+  // component's own rendering logic is covered by
+  // lib/ui/BridgeErrorState.test.tsx, this only proves the wiring at this
+  // specific call site is correct.
+  it("renders the shared error state on a rejected payload", async () => {
+    const remote = installFakeQWebChannel();
+    render(<App />);
+    const push = remote.stateChanged.connect.mock.calls[0][0] as (payload: string) => void;
+
+    push(JSON.stringify({ ...initialCommandPaletteState, minCompatibleSchemaVersion: 999 }));
+
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+    expect(screen.getByText("Command palette unavailable")).toBeInTheDocument();
+  });
 });

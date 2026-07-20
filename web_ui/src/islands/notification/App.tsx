@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { NotificationState, initialNotificationState } from "./bridgeTypes";
 import { BridgeRejection, NotificationBridge, createNotificationBridge } from "./bridge";
-import { NotificationErrorState } from "./NotificationErrorState";
+import { BridgeErrorState } from "../../lib/ui/BridgeErrorState";
 
 type MsgType = NotificationState["msgType"];
 
@@ -79,7 +79,13 @@ function App() {
   }, []);
 
   if (rejection) {
-    return <NotificationErrorState rejection={rejection} />;
+    return (
+      <BridgeErrorState
+        title="Notifications unavailable"
+        rejection={rejection}
+        className="notification-shell notification-error"
+      />
+    );
   }
 
   function copyDetails() {

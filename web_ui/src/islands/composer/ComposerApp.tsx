@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ComposerState, initialComposerState } from "./bridgeTypes";
 import { BridgeRejection, ComposerBridge, createComposerBridge } from "./bridge";
-import { BridgeErrorState } from "./BridgeErrorState";
+import { BridgeErrorState } from "../../lib/ui/BridgeErrorState";
 import { isBusy, requestLabel } from "./state";
 import { useAppliedThemeCssVariables } from "./theme";
 
@@ -129,7 +129,7 @@ function ComposerApp() {
   // looks usable would invite typing into state the desktop side no longer
   // shares. Placed after the hooks above so hook order stays unconditional.
   if (rejection) {
-    return <BridgeErrorState rejection={rejection} />;
+    return <BridgeErrorState title="Composer unavailable" rejection={rejection} className="composer-shell bridge-error" />;
   }
 
   return (
