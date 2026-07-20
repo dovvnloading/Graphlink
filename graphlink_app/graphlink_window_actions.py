@@ -261,9 +261,7 @@ class WindowActionsMixin:
         # fails.
         self.composer_controller.clear_submitted_text()
 
-        self.message_input.set_editor_enabled(False) if hasattr(self.message_input, 'set_editor_enabled') else self.message_input.setEnabled(False)
-        self.send_button.setEnabled(False)
-        self.attach_file_btn.setEnabled(False)
+        self.message_input.set_editor_enabled(False)
 
         branch_parent = resolve_branch_parent(self.current_node)
         history_context_node = branch_parent if branch_parent else self.current_node
@@ -458,9 +456,7 @@ class WindowActionsMixin:
         self.current_node = last_created_node if last_created_node else user_node
         self.chat_view.reveal_item(self.current_node)
         self.message_input.clear()
-        self.message_input.set_editor_enabled(True) if hasattr(self.message_input, 'set_editor_enabled') else self.message_input.setEnabled(True)
-        self.send_button.setEnabled(True)
-        self.attach_file_btn.setEnabled(True)
+        self.message_input.set_editor_enabled(True)
         self.clear_attachment()
         if request_id:
             self.composer_controller.complete(request_id, "Response ready")
@@ -518,9 +514,7 @@ class WindowActionsMixin:
             return
 
         history_for_worker = get_node_history(node_to_regenerate.parent_node)
-        self.message_input.set_editor_enabled(False) if hasattr(self.message_input, 'set_editor_enabled') else self.message_input.setEnabled(False)
-        self.send_button.setEnabled(False)
-        self.attach_file_btn.setEnabled(False)
+        self.message_input.set_editor_enabled(False)
         self._show_loading_animation(anchor_node=node_to_regenerate)
         worker_thread = ChatWorkerThread(self.agent, history_for_worker, node_to_regenerate.parent_node)
         self.chat_thread = worker_thread
@@ -582,10 +576,8 @@ class WindowActionsMixin:
             self.handle_error(f"An error occurred during regeneration: {str(e)}")
         finally:
             self._clear_loading_animation()
-            self.message_input.set_editor_enabled(True) if hasattr(self.message_input, 'set_editor_enabled') else self.message_input.setEnabled(True)
-            self.send_button.setEnabled(True)
-            self.attach_file_btn.setEnabled(True)
-    
+            self.message_input.set_editor_enabled(True)
+
     def generate_takeaway(self, node):
         try:
             self._show_loading_animation(anchor_node=node)
@@ -1492,9 +1484,7 @@ class WindowActionsMixin:
         self._set_main_request_state(active=False)
         self._clear_loading_animation()
         self._clear_pending_response_preview()
-        self.message_input.set_editor_enabled(True) if hasattr(self.message_input, 'set_editor_enabled') else self.message_input.setEnabled(True)
-        self.send_button.setEnabled(True)
-        self.attach_file_btn.setEnabled(True)
+        self.message_input.set_editor_enabled(True)
         self.save_chat()
         self.notification_banner.show_message("Request cancelled.", 3000, "info")
 
@@ -1503,9 +1493,7 @@ class WindowActionsMixin:
             return
         self._set_main_request_state(active=False)
         self._clear_loading_animation()
-        self.message_input.set_editor_enabled(True) if hasattr(self.message_input, 'set_editor_enabled') else self.message_input.setEnabled(True)
-        self.send_button.setEnabled(True)
-        self.attach_file_btn.setEnabled(True)
+        self.message_input.set_editor_enabled(True)
         self.notification_banner.show_message("Regeneration cancelled.", 3000, "info")
 
     def _cleanup_main_chat_thread(self, worker_thread):

@@ -4,19 +4,20 @@ from PySide6.QtWidgets import (
     QFileDialog
 )
 from PySide6.QtCore import Qt, QSize, QPoint, QRect, QPointF, QTimer, QEvent
-from PySide6.QtGui import QKeySequence, QGuiApplication, QCursor, QShortcut, QIcon, QColor
+from PySide6.QtGui import QKeySequence, QGuiApplication, QCursor, QShortcut, QIcon
 import qtawesome as qta
 import logging
 import os
 import tempfile
 from datetime import datetime
 
-from graphlink_widgets import PinOverlay, SearchOverlay, ComposerWidget
+from graphlink_widgets import PinOverlay, SearchOverlay
 from graphlink_token_estimator import TokenEstimator
 from graphlink_token_counter_bridge import TokenCounterBridge
 from graphlink_ui_components import DocumentViewerPanel
 from graphlink_notification_web import NotificationWebHost
 from graphlink_command_palette_web import CommandPaletteWebHost
+from graphlink_composer_web import ComposerWebHost
 from graphlink_web_island_host import AcceleratorForwardingFilter, WebIslandHost
 from graphlink_canvas_items import Note, Frame, Container
 from graphlink_node import ChatNode, CodeNode, ThinkingNode
@@ -46,7 +47,7 @@ from graphlink_audio import (
 from graphlink_file_handler import FileHandler
 import graphlink_config as config
 import api_provider
-from graphlink_config import get_current_palette, get_neutral_button_colors, get_semantic_color
+from graphlink_config import get_current_palette
 
 from graphlink_prompts import BASE_SYSTEM_PROMPT, THINKING_INSTRUCTIONS_PROMPT
 from graphlink_window_actions import WindowActionsMixin
@@ -65,19 +66,6 @@ from graphlink_composer_popups import (
 
 
 logger = logging.getLogger(__name__)
-
-
-def _composer_renderer_from_env():
-    """Return the production composer renderer, with legacy as an explicit escape hatch.
-
-    The React/QWebEngine composer is the supported default surface. Keeping the
-    legacy QWidget implementation behind an explicit environment value makes the
-    migration reversible without allowing a missing flag to silently ship the old UI.
-    Unknown values also resolve to the production renderer so a stale launcher setting
-    cannot unexpectedly downgrade the user experience.
-    """
-    requested = os.environ.get("GRAPHLINK_COMPOSER_RENDERER", "web").strip().lower()
-    return "legacy" if requested == "legacy" else "web"
 
 
 from graphlink_utility import UtilityOperationController
@@ -188,44 +176,19 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         container_layout.addWidget(content_widget)
 
         self.pending_attachments = []
-        self.composer_renderer = _composer_renderer_from_env()
-        if self.composer_renderer == "web":
-            try:
-                from graphlink_composer_web import ComposerWebHost
-
-                self.composer = ComposerWebHost(
-                    self,
-                    self.composer_controller,
-                    self.composer_overlay_parent,
-                )
-            except Exception:
-                # Keep startup resilient if a machine has a broken WebEngine
-                # installation, but make the failure diagnosable. The normal
-                # installation path now uses React; legacy is only a fallback.
-                logger.exception("React composer failed to initialize; using legacy composer")
-                self.composer_renderer = "legacy"
-                self.composer = ComposerWidget(self.composer_overlay_parent)
-        else:
-            self.composer = ComposerWidget(self.composer_overlay_parent)
-        self.input_widget = self.composer
-        self.attach_file_btn = self.composer.attach_file_btn
+        self.composer = ComposerWebHost(
+            self,
+            self.composer_controller,
+            self.composer_overlay_parent,
+        )
         self.message_input = self.composer
-        self.message_input.sendRequested.connect(self.send_message)
-        self.message_input.largePasteDetected.connect(self._handle_large_paste_from_input)
-        self.message_input.filesDropped.connect(self._handle_input_files_dropped)
-        self.message_input.textDropped.connect(self._handle_input_text_dropped)
-        self.message_input.attachmentRemoved.connect(self._handle_attachment_pill_removed)
         self.message_input.composerHeightChanged.connect(self._sync_footer_height)
-        self.send_button = self.composer.send_button
-        
+
         self.composer.setVisible(True)
         self.composer.raise_()
 
         self.setCentralWidget(self.container)
         self._update_themed_styles()
-        self.send_button.clicked.connect(self._handle_send_button_click)
-        self.composer.textChanged.connect(self.composer_controller.update_text)
-        self.composer_controller.draftChanged.connect(self._handle_composer_draft_changed)
         self.composer_controller.stateChanged.connect(self._handle_composer_state_changed)
         self._sync_footer_height()
 
@@ -294,90 +257,22 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
 
     def _update_themed_styles(self):
         palette = get_current_palette()
-        button_colors = get_neutral_button_colors()
-        if self._main_request_active:
-            stop_accent = get_semantic_color("status_error")
-            stop_background = self._blend_button_color(button_colors["background"], stop_accent, 0.18)
-            stop_hover = self._blend_button_color(button_colors["hover"], stop_accent, 0.24)
-            stop_pressed = self._blend_button_color(button_colors["pressed"], stop_accent, 0.16)
-            stop_border = self._blend_button_color(button_colors["border"], stop_accent, 0.30)
-            stop_icon = button_colors["muted_icon"] if self._main_request_cancel_pending else QColor("#FFFFFF")
-            self.send_button.setIcon(qta.icon('fa5s.stop', color=stop_icon.name()))
-            self.send_button.setToolTip("Cancelling..." if self._main_request_cancel_pending else "Cancel response")
-            background = stop_background
-            hover = stop_hover
-            pressed = stop_pressed
-            border = stop_border
-        else:
-            self.send_button.setIcon(qta.icon('fa5s.paper-plane', color=button_colors["icon"].name()))
-            self.send_button.setToolTip("Send message")
-            background = button_colors["background"]
-            hover = button_colors["hover"]
-            pressed = button_colors["pressed"]
-            border = button_colors["border"]
         if hasattr(self, 'plugins_button'):
             self.plugins_button.setIcon(qta.icon("fa5s.chevron-down", color=palette.SELECTION.lighter(160).name()))
         if hasattr(self, 'plugin_picker'):
             self.plugin_picker.refresh()
         if hasattr(self, 'pin_overlay'):
             self.pin_overlay.on_theme_changed()
-        self.send_button.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {background.name()};
-                border: 1px solid {border.name()};
-                border-radius: 20px;
-                padding: 10px;
-            }}
-            QPushButton:hover {{
-                background-color: {hover.name()};
-                border-color: {hover.lighter(112).name()};
-            }}
-            QPushButton:pressed {{
-                background-color: {pressed.name()};
-                border-color: {border.darker(105).name()};
-            }}
-            QPushButton:disabled {{
-                background-color: {background.darker(108).name()};
-                border-color: {border.darker(112).name()};
-            }}
-        """)
         if hasattr(self, 'message_input'):
             self.message_input.on_theme_changed()
         self._refresh_attachment_button()
-
-    def _blend_button_color(self, base, accent, ratio):
-        base_color = QColor(base)
-        accent_color = QColor(accent)
-        mix = max(0.0, min(1.0, float(ratio)))
-        return QColor(
-            round(base_color.red() + (accent_color.red() - base_color.red()) * mix),
-            round(base_color.green() + (accent_color.green() - base_color.green()) * mix),
-            round(base_color.blue() + (accent_color.blue() - base_color.blue()) * mix),
-        )
-
-    def _handle_send_button_click(self):
-        if self._main_request_active:
-            if self._main_request_cancel_callback and not self._main_request_cancel_pending:
-                self._main_request_cancel_pending = True
-                self.send_button.setEnabled(False)
-                self._update_themed_styles()
-                self._main_request_cancel_callback()
-            return
-        self.send_message()
 
     def _set_main_request_state(self, *, active: bool, cancel_callback=None, cancel_pending: bool = False):
         self._main_request_active = active
         self._main_request_cancel_pending = cancel_pending if active else False
         self._main_request_cancel_callback = cancel_callback if active else None
         if active:
-            self.send_button.setEnabled(not self._main_request_cancel_pending)
-            if hasattr(self.message_input, 'set_editor_enabled'):
-                self.message_input.set_editor_enabled(False)
-            else:
-                self.message_input.setEnabled(False)
-            self.attach_file_btn.setEnabled(False)
-        else:
-            self.send_button.setEnabled(True)
+            self.message_input.set_editor_enabled(False)
         self._update_themed_styles()
 
     def on_theme_changed(self):
@@ -512,10 +407,7 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         composer.show()
         composer.setFixedWidth(target_width)
 
-        if self.composer_renderer == "legacy":
-            composer.setFixedHeight(max(COMPOSER_MIN_HEIGHT, composer.sizeHint().height()))
-        else:
-            composer.setFixedHeight(max(COMPOSER_MIN_HEIGHT, composer.height()))
+        composer.setFixedHeight(max(COMPOSER_MIN_HEIGHT, composer.height()))
 
         overlay_parent = getattr(self, "composer_overlay_parent", None)
         viewport_origin = (
@@ -601,8 +493,6 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
 
     def open_composer_model_picker(self, kind="model"):
         """Open a native model/reasoning picker requested by the React composer."""
-        if self.composer_renderer != "web":
-            return
         bridge = getattr(getattr(self, "composer", None), "bridge", None)
         if bridge is None:
             return
@@ -632,8 +522,6 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
 
     def open_composer_context_popup(self, context):
         """Open context review as a native window-level surface."""
-        if self.composer_renderer != "web":
-            return
         bridge = getattr(getattr(self, "composer", None), "bridge", None)
         if bridge is None:
             return
@@ -845,13 +733,6 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         if not hasattr(self, "composer"):
             return
         self._schedule_overlay_update()
-
-    def _handle_composer_draft_changed(self, draft):
-        """Keep the legacy attachment list and new draft model in sync."""
-        if draft is None:
-            return
-        if self.composer.text() != draft.text:
-            self.composer.setText(draft.text)
 
     def _handle_composer_state_changed(self, state, message):
         if not hasattr(self, 'composer'):
@@ -1355,40 +1236,6 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         return "added", ""
 
     def _refresh_attachment_button(self):
-        if not hasattr(self, 'attach_file_btn'):
-            return
-
-        if not self.pending_attachments:
-            self.attach_file_btn.setIcon(qta.icon('fa5s.paperclip', color='#CCCCCC'))
-            self.attach_file_btn.setToolTip("Attach images, audio, or readable files")
-            if hasattr(self, 'message_input'):
-                self.message_input.set_context_items([])
-            if hasattr(self, 'composer_controller'):
-                self.composer_controller.set_attachments([])
-            return
-
-        palette = get_current_palette()
-        attachment_kinds = {item['kind'] for item in self.pending_attachments}
-        if attachment_kinds == {'image'}:
-            icon_name = 'fa5s.image'
-        elif attachment_kinds == {'audio'}:
-            icon_name = 'fa5s.music'
-        elif attachment_kinds == {'document'}:
-            icon_name = 'fa5s.file-alt'
-        else:
-            icon_name = 'fa5s.paperclip'
-
-        tooltip_lines = ["Ready to send:"]
-        for item in self.pending_attachments[:6]:
-            tooltip_lines.append(f"- {item['name']}")
-        remaining_count = len(self.pending_attachments) - 6
-        if remaining_count > 0:
-            tooltip_lines.append(f"- and {remaining_count} more")
-        tooltip_lines.append("")
-        tooltip_lines.append("Press Esc to clear staged attachments.")
-
-        self.attach_file_btn.setIcon(qta.icon(icon_name, color=palette.SELECTION.name()))
-        self.attach_file_btn.setToolTip("\n".join(tooltip_lines))
         if hasattr(self, 'message_input'):
             self.message_input.set_context_items(self.pending_attachments)
         if hasattr(self, 'composer_controller'):
@@ -1446,19 +1293,6 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
             return self._stage_attachment_file(temp_file_path, is_temp=True, display_name=preview_name)
         except OSError:
             return "rejected", "Could not create a temporary attachment file."
-
-    def _handle_input_files_dropped(self, file_paths):
-        self.stage_dropped_files(file_paths)
-        self.message_input.setFocus()
-
-    def _handle_input_text_dropped(self, dropped_text):
-        self.message_input.insertPlainText(dropped_text)
-        self.notification_banner.show_message(
-            "Dropped text inserted into the draft. Attach it explicitly when it should be sent as context.",
-            5000,
-            "info",
-        )
-        self.message_input.setFocus()
 
     def _handle_attachment_pill_removed(self, attachment_path):
         if not attachment_path:
@@ -1581,7 +1415,7 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         self._clear_loading_animation()
         self._clear_pending_response_preview()
         self.notification_banner.show_message(f"An error occurred:\n{error_message}", 15000, "error")
-        self.message_input.setEnabled(True); self.send_button.setEnabled(True); self.attach_file_btn.setEnabled(True)
+        self.message_input.setEnabled(True)
         
     def _get_single_selected_node(self):
         selected_items = self.chat_view.scene().selectedItems(); valid_types = (ChatNode, PyCoderNode, CodeSandboxNode, WebNode, ConversationNode, HtmlViewNode, GitlinkNode)

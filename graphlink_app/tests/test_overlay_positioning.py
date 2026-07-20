@@ -62,9 +62,7 @@ def test_composer_is_centered_over_the_graph_viewport():
     mock_self = _make_mock_window()
     composer = MagicMock()
     composer.height.return_value = 96
-    composer.sizeHint.return_value.height.return_value = 96
     mock_self.composer = composer
-    mock_self.composer_renderer = "web"
 
     graphlink_window.ChatWindow._update_composer_overlay(mock_self)
 
@@ -82,9 +80,7 @@ def test_composer_position_is_translated_into_window_overlay_coordinates():
     mock_self.composer_overlay_parent = overlay_parent
     composer = MagicMock()
     composer.height.return_value = 96
-    composer.sizeHint.return_value.height.return_value = 96
     mock_self.composer = composer
-    mock_self.composer_renderer = "web"
 
     graphlink_window.ChatWindow._update_composer_overlay(mock_self)
 
@@ -97,9 +93,7 @@ def test_visible_notification_is_raised_above_composer():
     mock_self.notification_banner.isVisible.return_value = True
     composer = MagicMock()
     composer.height.return_value = 96
-    composer.sizeHint.return_value.height.return_value = 96
     mock_self.composer = composer
-    mock_self.composer_renderer = "web"
 
     graphlink_window.ChatWindow._update_composer_overlay(mock_self)
 

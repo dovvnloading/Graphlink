@@ -11,8 +11,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import pytest
 
-from PySide6.QtWidgets import QPushButton
-
 import graphlink_frontend_bootstrap as gfb
 import graphlink_webengine
 from graphlink_composer import ComposerController
@@ -58,34 +56,6 @@ def test_construction_registers_with_the_shared_shutdown_registry():
     host = _make_host()
 
     assert host in wih._hosts
-
-
-def test_legacy_compat_buttons_exist_hidden_and_real():
-    host = _make_host()
-
-    assert isinstance(host.attach_file_btn, QPushButton)
-    assert isinstance(host.send_button, QPushButton)
-    assert host.attach_file_btn.isVisible() is False
-    assert host.send_button.isVisible() is False
-
-
-def test_legacy_signals_exist_and_are_connectable():
-    host = _make_host()
-
-    # ChatWindow.__init__ connects to all of these; none is ever emitted by
-    # ComposerWebHost. This only proves they exist and accept a connection -
-    # deleting them is Phase 2 scope, not something to assert against here.
-    for name in (
-        "sendRequested",
-        "textChanged",
-        "attachRequested",
-        "filesDropped",
-        "textDropped",
-        "attachmentRemoved",
-        "largePasteDetected",
-        "composerHeightChanged",
-    ):
-        getattr(host, name).connect(lambda *args: None)
 
 
 def test_text_editing_methods_round_trip_through_the_bridge():

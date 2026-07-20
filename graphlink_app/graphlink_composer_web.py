@@ -1,20 +1,28 @@
 """Local React composer host for the QWebEngine renderer.
 
-This is the composer-specific island: a thin, legacy-compatible layer on top
-of WebIslandHost. Everything generic (asset loading, WebEngine hardening,
-QWebChannel wiring, height negotiation, shutdown-registry participation)
-lives in graphlink_web_island_host.py. What remains here is exactly the
-legacy Qt composer's widget-impersonation surface ChatWindow still depends
-on - hidden dummy buttons, unemitted compatibility signals, and text-editor-
-style methods - kept because ChatWindow was never rewired off it. All of it
-is explicitly Phase 2 scope to delete (legacy Qt composer removal), not this
-file's problem to fix.
+This is the composer-specific island: a thin layer on top of WebIslandHost.
+Everything generic (asset loading, WebEngine hardening, QWebChannel wiring,
+height negotiation, shutdown-registry participation) lives in
+graphlink_web_island_host.py. What remains here are the text-editor-style
+compatibility methods ChatWindow calls generically (via self.composer /
+self.message_input) - text(), setText(), set_context_items(), etc. These are
+NOT legacy-widget impersonation; they are this island's own real public API,
+used identically whether or not a legacy composer ever existed, so they stay.
+
+The legacy Qt composer's widget-impersonation surface this class used to also
+carry - 7 unemitted compatibility Signals and 2 hidden dummy QPushButtons,
+kept only so ChatWindow.__init__'s .connect()/.attach_file_btn/.send_button
+references (written for the old QWidget composer) didn't raise - was deleted
+in the legacy composer removal (Phase 2 item 4/4), alongside every call site
+that touched it. composerHeightChanged is the one exception: it was never
+part of that impersonation seam (nothing in the old ComposerWidget ever had
+an equivalent), it's a real, live signal ChatWindow._sync_footer_height
+depends on, so it's kept as-is.
 """
 
 from __future__ import annotations
 
 from PySide6.QtCore import Signal
-from PySide6.QtWidgets import QPushButton
 
 from graphlink_composer import ComposerController
 from graphlink_composer_bridge import (
@@ -25,30 +33,15 @@ from graphlink_composer_bridge import (
 from graphlink_web_island_host import WebIslandHost
 
 COMPOSER_UNAVAILABLE_MESSAGE = (
-    "The React composer is unavailable in this installation. "
-    "Set GRAPHLINK_COMPOSER_RENDERER=legacy to use the classic composer."
+    "The composer is unavailable because QtWebEngine failed to initialize."
 )
 
 
 class ComposerWebHost(WebIslandHost):
-    """QWidget-compatible host for the React/QWebEngine composer.
+    """Host for the React/QWebEngine composer, exposing the text-editor-style
+    compatibility API ChatWindow calls generically (self.composer.text(),
+    .setText(), .set_context_items(), etc.)."""
 
-    The compatibility methods let ChatWindow migrate without giving the web
-    surface ownership of request logic or attachment paths.
-    """
-
-    # Legacy-compat signals: ChatWindow.__init__ connects to all seven of
-    # these (graphlink_window.py), but nothing in this class ever emits them -
-    # they exist only so those .connect() calls don't raise AttributeError.
-    # Deleting them is Phase 2 scope (legacy Qt composer removal), not this
-    # extraction's.
-    sendRequested = Signal()
-    textChanged = Signal(str)
-    attachRequested = Signal()
-    filesDropped = Signal(list)
-    textDropped = Signal(str)
-    attachmentRemoved = Signal(str)
-    largePasteDetected = Signal(str)
     composerHeightChanged = Signal(int)
 
     def __init__(self, window, controller: ComposerController | None = None, parent=None):
@@ -73,13 +66,6 @@ class ComposerWebHost(WebIslandHost):
         # call site exercises it; flagging rather than silently changing it.
         self.controller = resolved_controller
         self._placeholder = "Ask about this graph…"
-
-        # These hidden controls preserve the existing ChatWindow styling and
-        # request-state hooks while all visible interaction belongs to React.
-        self.attach_file_btn = QPushButton(self)
-        self.send_button = QPushButton(self)
-        self.attach_file_btn.setVisible(False)
-        self.send_button.setVisible(False)
 
         self.bridge.heightRequested.connect(self.apply_requested_height)
         self.heightChanged.connect(self.composerHeightChanged.emit)
