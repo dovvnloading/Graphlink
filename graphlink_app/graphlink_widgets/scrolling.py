@@ -2,7 +2,7 @@
 
 from PySide6.QtCore import QRectF, Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QPainter
-from PySide6.QtWidgets import QGraphicsObject, QGridLayout, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QGraphicsObject, QWidget
 
 class CustomScrollBar(QWidget):
     valueChanged = Signal(float)
@@ -118,61 +118,6 @@ class CustomScrollBar(QWidget):
     def leaveEvent(self, event):
         self.hover = False
         self.update()
-
-class CustomScrollArea(QWidget):
-    def __init__(self, widget):
-        super().__init__()
-        self.widget = widget
-        
-        layout = QGridLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-        
-        self.viewport = QWidget()
-        self.viewport.setLayout(QVBoxLayout())
-        self.viewport.layout().setContentsMargins(0, 0, 0, 0)
-        self.viewport.layout().addWidget(widget)
-        
-        self.v_scrollbar = CustomScrollBar(Qt.Orientation.Vertical)
-        self.h_scrollbar = CustomScrollBar(Qt.Orientation.Horizontal)
-        
-        layout.addWidget(self.viewport, 0, 0)
-        layout.addWidget(self.v_scrollbar, 0, 1)
-        layout.addWidget(self.h_scrollbar, 1, 0)
-        
-        self.v_scrollbar.valueChanged.connect(self.updateVerticalScroll)
-        self.h_scrollbar.valueChanged.connect(self.updateHorizontalScroll)
-        
-    def updateScrollbars(self):
-        content_height = self.widget.height()
-        viewport_height = self.viewport.height()
-        
-        if content_height > viewport_height:
-            self.v_scrollbar.setRange(0, content_height - viewport_height)
-            self.v_scrollbar.page_step = viewport_height
-            self.v_scrollbar.show()
-        else:
-            self.v_scrollbar.hide()
-            
-        content_width = self.widget.width()
-        viewport_width = self.viewport.width()
-        
-        if content_width > viewport_width:
-            self.h_scrollbar.setRange(0, content_width - viewport_width)
-            self.h_scrollbar.page_step = viewport_width
-            self.h_scrollbar.show()
-        else:
-            self.h_scrollbar.hide()
-            
-    def updateVerticalScroll(self, value):
-        self.viewport.move(self.viewport.x(), -int(value))
-        
-    def updateHorizontalScroll(self, value):
-        self.viewport.move(-int(value), self.viewport.y())
-        
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        self.updateScrollbars()
 
 class ScrollHandle(QGraphicsObject):
     def __init__(self, parent=None):

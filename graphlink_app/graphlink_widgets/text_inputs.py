@@ -1,15 +1,12 @@
 """Text input widgets and attachment pills for chat composition."""
 
-import re
-
 import qtawesome as qta
 from PySide6.QtCore import QRectF, Qt, Signal
-from PySide6.QtGui import QAction, QColor, QPainter, QPainterPath, QPen
+from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
@@ -18,136 +15,6 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 from graphlink_config import get_current_palette
-from graphlink_context_menu import configure_context_menu
-
-try:
-    from spellchecker import SpellChecker
-    SPELLCHECK_AVAILABLE = True
-except ImportError:
-    SPELLCHECK_AVAILABLE = False
-
-class SpellCheckLineEdit(QLineEdit):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        if not SPELLCHECK_AVAILABLE:
-            return
-
-        self.spell = SpellChecker()
-        self.misspelled_words = set()
-        self.error_spans = []
-
-        self.textChanged.connect(self._check_spelling)
-
-    def _check_spelling(self, text):
-        self.misspelled_words.clear()
-        self.error_spans.clear()
-        
-        words = re.finditer(r'\b\w+\b', text)
-        for match in words:
-            word = match.group(0)
-            if self.spell.unknown([word]):
-                self.misspelled_words.add(word)
-                self.error_spans.append((match.start(), match.end()))
-        
-        self.update() 
-
-    def paintEvent(self, event):
-        super().paintEvent(event)
-        if not self.error_spans:
-            return
-
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing, True)
-
-        pen = QPen(Qt.red)
-        pen.setCosmetic(True)
-        painter.setPen(pen)
-
-        fm = self.fontMetrics()
-        text = self.text()
-        
-        from PySide6.QtWidgets import QStyle, QStyleOptionFrame
-        opt = QStyleOptionFrame()
-        self.initStyleOption(opt)
-        contents = self.style().subElementRect(QStyle.SubElement.SE_LineEditContents, opt)
-        left_m, top_m, right_m, bottom_m = self.getTextMargins()
-        text_rect = contents.adjusted(left_m, top_m, -right_m, -bottom_m)
-        
-        vpad = max(0, (text_rect.height() - fm.height()) // 2)
-        cur_idx = self.cursorPosition()
-        cur_left = self.cursorRect().left()
-        x_offset = cur_left - fm.horizontalAdvance(text[:cur_idx])
-        
-        baseline_y = (
-            text_rect.top()
-            + vpad
-            + fm.ascent()
-            + max(2, int(fm.descent() * 0.95))
-        )
-
-        wave_len = 4
-        wave_amp = 1.5
-        clip_left, clip_right = text_rect.left(), text_rect.right()
-
-        for start, end in self.error_spans:
-            sx = text_rect.left() + fm.horizontalAdvance(text[:start]) + x_offset
-            ex = text_rect.left() + fm.horizontalAdvance(text[:end]) + x_offset
-
-            if ex < clip_left or sx > clip_right:
-                continue
-            sx = max(sx, clip_left)
-            ex = min(ex, clip_right)
-
-            path = QPainterPath()
-            x = sx
-            path.moveTo(x, baseline_y)
-            while x < ex:
-                mid = x + wave_len / 2.0
-                nx = min(x + wave_len, ex)
-                path.quadTo(mid, baseline_y + wave_amp, nx, baseline_y)
-                x = nx
-
-            painter.strokePath(path, pen)
-
-    def getStyleOption(self):
-        from PySide6.QtWidgets import QStyleOptionFrame
-        opt = QStyleOptionFrame()
-        self.initStyleOption(opt)
-        return opt
-
-    def contextMenuEvent(self, event):
-        menu = self.createStandardContextMenu()
-        configure_context_menu(menu)
-
-        if not SPELLCHECK_AVAILABLE:
-            menu.exec(event.globalPos())
-            return
-        
-        char_index = self.cursorPositionAt(event.pos())
-        
-        word_span = None
-        clicked_word = ""
-        for start, end in self.error_spans:
-            if start <= char_index < end:
-                word_span = (start, end)
-                clicked_word = self.text()[start:end]
-                break
-
-        if clicked_word:
-            suggestions = self.spell.candidates(clicked_word)
-            if suggestions:
-                menu.addSeparator()
-                for suggestion in sorted(list(suggestions))[:5]:
-                    action = QAction(suggestion, self)
-                    action.triggered.connect(lambda checked=False, s=suggestion, ws=word_span: self._replace_word(s, ws[0], ws[1]))
-                    menu.addAction(action)
-
-        menu.exec(event.globalPos())
-
-    def _replace_word(self, suggestion, start, end):
-        current_text = self.text()
-        new_text = current_text[:start] + suggestion + current_text[end:]
-        self.setText(new_text)
 
 class _BlackHoleEditor(QPlainTextEdit):
     sendRequested = Signal()

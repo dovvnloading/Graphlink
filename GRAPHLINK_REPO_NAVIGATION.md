@@ -227,7 +227,7 @@ That path shows boot, shell ownership, provider/mode initialization, live settin
 ### Shared UI and dialogs
 
 - `graphlink_app/graphlink_ui_components.py`
-  - `NotificationBanner`, `DocumentViewerPanel`, `CustomTitleBar`
+  - `NotificationBanner`, `DocumentViewerPanel`
 - `graphlink_app/graphlink_welcome_screen.py` was removed.
   - Startup now opens `ChatWindow` directly after `SplashScreen`; starter templates and recent chat launch paths are no longer part of startup.
 - `graphlink_app/graphlink_ui_dialogs/graphlink_library_dialog.py`
@@ -538,9 +538,7 @@ This is the practical lookup map for where code actually lives today.
 - `controls.py`
   - `FontControl`, `GridControl`
 - `scrolling.py`
-  - `CustomScrollBar`, `CustomScrollArea`, `ScrollHandle`, `ScrollBar`
-- `tooltips.py`
-  - `CustomTooltip`
+  - `CustomScrollBar`, `ScrollHandle`, `ScrollBar`
 
 ## Where To Edit When...
 
