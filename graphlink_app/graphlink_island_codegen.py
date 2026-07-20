@@ -351,6 +351,14 @@ GENERATED_ARTIFACTS = [
         "schema_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "command-palette-state.schema.json",
         "ts_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "command-palette-state.ts",
     },
+    {
+        "dataclass": None,  # resolved lazily in main() to avoid importing
+        "dataclass_import": ("graphlink_settings_payload", "SettingsStatePayload"),
+        "title": "SettingsState",
+        "source": "graphlink_app/graphlink_settings_payload.py::SettingsStatePayload",
+        "schema_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "settings-state.schema.json",
+        "ts_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "settings-state.ts",
+    },
 ]
 
 

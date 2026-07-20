@@ -177,6 +177,36 @@ def test_prepare_for_shutdown_removes_host_from_focus_query():
     assert wih.any_host_has_text_focus() is False
 
 
+def test_theme_changed_all_republishes_every_registered_host():
+    host_a = _make_host()
+    host_b = _make_host()
+    starting_a = host_a.bridge.publish_count
+    starting_b = host_b.bridge.publish_count
+
+    wih.theme_changed_all()
+
+    assert host_a.bridge.publish_count == starting_a + 1
+    assert host_b.bridge.publish_count == starting_b + 1
+
+
+def test_theme_changed_all_tolerates_a_deleted_host_reference():
+    # Same defensive shape as any_host_has_text_focus's own test above -
+    # apply_theme() calls this on every theme switch, so one stale entry
+    # (C++ side already gone) must not stop every other live island from
+    # repainting.
+    class _DeletedHost:
+        def on_theme_changed(self):
+            raise RuntimeError("Internal C++ object already deleted.")
+
+    good_host = _make_host()
+    wih._hosts.insert(0, _DeletedHost())
+    starting = good_host.bridge.publish_count
+
+    wih.theme_changed_all()  # must not raise
+
+    assert good_host.bridge.publish_count == starting + 1
+
+
 def test_any_host_has_text_focus_tolerates_a_deleted_host_reference():
     # Found by adversarial review: this query runs on essentially every
     # keystroke, application-wide, for the lifetime of the process. A
@@ -196,3 +226,22 @@ def test_any_host_has_text_focus_tolerates_a_deleted_host_reference():
 
     good_host.reportTextFocus(True)
     assert wih.any_host_has_text_focus() is True  # still finds the real, live host
+
+
+def test_apply_theme_reaches_a_registered_host_that_is_not_a_top_level_widget():
+    # The gap this increment fixes: apply_theme()'s own app.topLevelWidgets()
+    # loop only ever reached widgets that are themselves top-level windows.
+    # A plain child QFrame host (matching how notification/command-palette
+    # are actually parented in the real app) was never reached by it before
+    # theme_changed_all() existed.
+    import graphlink_config
+    from PySide6.QtWidgets import QApplication, QWidget
+
+    parent = QWidget()
+    host = _make_host(parent=parent)
+    assert host.isWindow() is False  # not top-level - the exact case that was missed
+    starting = host.bridge.publish_count
+
+    graphlink_config.apply_theme(QApplication.instance(), "dark")
+
+    assert host.bridge.publish_count == starting + 1

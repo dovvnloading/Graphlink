@@ -342,6 +342,32 @@ def shutdown_all() -> None:
                 pass
 
 
+def theme_changed_all() -> None:
+    """Call on_theme_changed() on every still-registered host.
+
+    apply_theme() (graphlink_config.py) already reaches SettingsDialog and
+    ChatWindow's own top-level widgets via Qt's topLevelWidgets() walk, but
+    that walk only visits widgets that are themselves top-level windows -
+    WebIslandHost is a plain child QFrame, so notification/command-palette
+    hosts were never actually reached by it (composer only got a live theme
+    republish via one hand-added forward in ChatWindow). This is the generic
+    replacement: apply_theme() calls this once, and every registered host -
+    present and future, settings included - republishes without a per-host
+    forward needing to be added by hand.
+
+    Same defensive shape as shutdown_all(): a registered host's C++ side can
+    in principle already be gone, so one stale reference must not stop the
+    rest of the hosts from repainting.
+    """
+    for host in list(_hosts):
+        changed = getattr(host, "on_theme_changed", None)
+        if callable(changed):
+            try:
+                changed()
+            except (AttributeError, RuntimeError, SystemError, TypeError):
+                pass
+
+
 def _ensure_app_hook() -> None:
     global _app_hooked
     if _app_hooked:

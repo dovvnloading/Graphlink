@@ -29,3 +29,16 @@
 assets/*/** -text
 web_ui/src/lib/bridge-core/generated/** -text
 web_ui/src/lib/tokens/gl-theme.css -text
+
+# Found 2026-07-20 (Phase 3, settings island increment 2): the assets/*/**
+# rule above only stops GIT from renormalizing the BUILT output - it does not
+# stop Vite from carrying forward whatever line endings the SOURCE
+# web_ui/src/islands/*/index.html happens to have on disk. That source file
+# is plain text, so `* text=auto` + a local core.autocrlf=true keep
+# re-materializing it as CRLF on checkout; Vite's HTML build step then bakes
+# those CRLFs into assets/<island>/index.html, which immediately "modifies"
+# against the LF-committed built file assets/*/** was meant to keep stable.
+# Same root cause as the assets/ rule, one file class further upstream -
+# opting the source index.html out of normalization too closes it for good
+# instead of needing a manual sed fix every time an island is rebuilt.
+web_ui/src/islands/*/index.html -text
