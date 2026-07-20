@@ -4,19 +4,16 @@ from .controls import FontControl, GridControl
 from .composer import ComposerWidget
 from .overlays import GhostNodePreview, LoadingAnimation, SearchOverlay
 from .pins import NavigationPinEditor, NavigationPinsListModel, PinOverlay
-from .scrolling import CustomScrollArea, CustomScrollBar, ScrollBar, ScrollHandle
+from .scrolling import CustomScrollBar, ScrollBar, ScrollHandle
 from .splash import AnimatedWordLogo, SplashAnimationWidget, SplashScreen
-from .text_inputs import ChatInputTextEdit, ContextAttachmentPill, SpellCheckLineEdit, _BlackHoleEditor
+from .text_inputs import ChatInputTextEdit, ContextAttachmentPill, _BlackHoleEditor
 from .tokens import TokenCounterWidget, TokenEstimator
-from .tooltips import CustomTooltip
 
 __all__ = [
     'AnimatedWordLogo',
     'ChatInputTextEdit',
     'ContextAttachmentPill',
-    'CustomScrollArea',
     'CustomScrollBar',
-    'CustomTooltip',
     'ComposerWidget',
     'FontControl',
     'GhostNodePreview',
@@ -28,7 +25,6 @@ __all__ = [
     'ScrollBar',
     'ScrollHandle',
     'SearchOverlay',
-    'SpellCheckLineEdit',
     'SplashAnimationWidget',
     'SplashScreen',
     'TokenCounterWidget',
