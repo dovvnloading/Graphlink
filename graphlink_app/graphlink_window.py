@@ -32,6 +32,8 @@ from graphlink_plugins.graphlink_plugin_gitlink import GitlinkNode
 from graphlink_library_dialog import ChatLibraryDialog
 from graphlink_system_dialogs import HelpDialog, AboutDialog
 from graphlink_settings_dialogs import SettingsDialog
+from graphlink_settings_web import SettingsWebHost
+from graphlink_renderer_flags import resolve_renderer_flag
 
 from graphlink_session import ChatSessionManager
 from graphlink_command_palette import CommandManager
@@ -582,6 +584,8 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
 
         if self.settings_panel and hasattr(self.settings_panel, "appearance_tab"):
             self.settings_panel.appearance_tab.refresh_update_status()
+        elif self.settings_panel and hasattr(self.settings_panel, "bridge"):
+            self.settings_panel.bridge.refresh_update_status()
 
         should_notify = self._update_check_manual or result.get("update_available") or not result.get("success", True)
         if should_notify:
@@ -994,7 +998,14 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
             return
 
         if not self.settings_panel:
-            self.settings_panel = SettingsDialog(self.settings_manager, self)
+            renderer = resolve_renderer_flag(
+                "settings", "legacy",
+                settings_override=self.settings_manager.get_settings_renderer_override(),
+            )
+            if renderer == "web":
+                self.settings_panel = SettingsWebHost(self.settings_manager, main_window=self, parent=self)
+            else:
+                self.settings_panel = SettingsDialog(self.settings_manager, self)
 
         self.settings_panel.set_current_section_by_mode(self.mode_combo.currentText())
         self.settings_panel.show_for_anchor(self.settings_btn)

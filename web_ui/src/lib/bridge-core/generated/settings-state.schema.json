@@ -5,20 +5,113 @@
     "activeSection": {
       "type": "string"
     },
+    "anthropicKeyConfigured": {
+      "type": "boolean"
+    },
+    "apiAvailableModels": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "apiBaseUrl": {
+      "type": "string"
+    },
+    "apiLoadStatus": {
+      "type": "string"
+    },
+    "apiProvider": {
+      "type": "string"
+    },
+    "apiTaskModels": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "type": "object"
+    },
     "enableSystemPrompt": {
+      "type": "boolean"
+    },
+    "geminiKeyConfigured": {
       "type": "boolean"
     },
     "githubTokenConfigured": {
       "type": "boolean"
     },
+    "llamaCppChatFormat": {
+      "type": "string"
+    },
+    "llamaCppChatModelPath": {
+      "type": "string"
+    },
+    "llamaCppNCtx": {
+      "type": "integer"
+    },
+    "llamaCppNGpuLayers": {
+      "type": "integer"
+    },
+    "llamaCppNThreads": {
+      "type": "integer"
+    },
+    "llamaCppReasoningMode": {
+      "type": "string"
+    },
+    "llamaCppScanStatus": {
+      "type": "string"
+    },
+    "llamaCppScanSummary": {
+      "type": "string"
+    },
+    "llamaCppScannedModels": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "llamaCppTitleModelPath": {
+      "type": "string"
+    },
     "minCompatibleSchemaVersion": {
       "type": "integer"
+    },
+    "notice": {
+      "type": "string"
     },
     "notificationPreferences": {
       "additionalProperties": {
         "type": "boolean"
       },
       "type": "object"
+    },
+    "ollamaCurrentModel": {
+      "type": "string"
+    },
+    "ollamaModelAssignments": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "type": "object"
+    },
+    "ollamaPullStatus": {
+      "type": "string"
+    },
+    "ollamaReasoningMode": {
+      "type": "string"
+    },
+    "ollamaScanStatus": {
+      "type": "string"
+    },
+    "ollamaScanSummary": {
+      "type": "string"
+    },
+    "ollamaScannedModels": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "openaiKeyConfigured": {
+      "type": "boolean"
     },
     "revision": {
       "type": "integer"
@@ -35,7 +128,13 @@
     "updateAvailable": {
       "type": "boolean"
     },
+    "updateCheckInProgress": {
+      "type": "boolean"
+    },
     "updateLastCheckedAt": {
+      "type": "string"
+    },
+    "updateLatestVersion": {
       "type": "string"
     },
     "updateNotificationsEnabled": {
@@ -61,7 +160,34 @@
     "updateStatusLevel",
     "updateLastCheckedAt",
     "updateAvailable",
-    "githubTokenConfigured"
+    "updateLatestVersion",
+    "updateCheckInProgress",
+    "githubTokenConfigured",
+    "apiProvider",
+    "apiBaseUrl",
+    "openaiKeyConfigured",
+    "anthropicKeyConfigured",
+    "geminiKeyConfigured",
+    "apiTaskModels",
+    "apiAvailableModels",
+    "apiLoadStatus",
+    "ollamaReasoningMode",
+    "ollamaCurrentModel",
+    "ollamaModelAssignments",
+    "ollamaScannedModels",
+    "ollamaScanSummary",
+    "ollamaScanStatus",
+    "ollamaPullStatus",
+    "llamaCppReasoningMode",
+    "llamaCppChatModelPath",
+    "llamaCppTitleModelPath",
+    "llamaCppChatFormat",
+    "llamaCppNCtx",
+    "llamaCppNGpuLayers",
+    "llamaCppNThreads",
+    "llamaCppScannedModels",
+    "llamaCppScanSummary",
+    "llamaCppScanStatus"
   ],
   "title": "SettingsState",
   "type": "object"

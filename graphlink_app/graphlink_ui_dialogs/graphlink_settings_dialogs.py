@@ -1,7 +1,7 @@
 import os
 import webbrowser
 import qtawesome as qta
-from PySide6.QtCore import QPoint, QSize, Qt, QThread, QTimer, Signal
+from PySide6.QtCore import QPoint, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QComboBox, QFileDialog, QFormLayout,
@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 import api_provider
 import graphlink_config as config
 from graphlink_agents import ModelPullWorkerThread
+from graphlink_settings_workers import ApiModelLoadWorker, LlamaCppModelScanWorker, OllamaModelScanWorker
 from graphlink_styles import THEMES
 from graphlink_config import apply_theme, get_current_palette, get_semantic_color, set_current_model
 from graphlink_update import APP_VERSION, UPDATE_REPOSITORY_URL
@@ -275,73 +276,6 @@ class SettingsSpinBox(QSpinBox):
             super().wheelEvent(event)
             return
         event.ignore()
-
-
-class OllamaModelScanWorker(QThread):
-    finished = Signal(dict)
-    error = Signal(str)
-
-    def __init__(self, scan_path=None, parent=None):
-        super().__init__(parent)
-        self.scan_path = scan_path
-
-    def run(self):
-        try:
-            results = api_provider.scan_local_ollama_models(self.scan_path)
-            self.finished.emit(results)
-        except Exception as exc:
-            self.error.emit(str(exc))
-
-
-class ApiModelLoadWorker(QThread):
-    finished = Signal(list)
-    error = Signal(str)
-
-    def __init__(self, provider, api_key, base_url=None, parent=None):
-        super().__init__(parent)
-        self.provider = provider
-        self.api_key = api_key
-        self.base_url = base_url
-
-    def run(self):
-        try:
-            # Discovery is deliberately isolated from the GUI thread.  It also
-            # exercises the same provider initialization path used by Save, so a
-            # successful catalog load is a useful connection check.
-            api_provider.initialize_api(
-                self.provider,
-                self.api_key,
-                self.base_url if self.provider == config.API_PROVIDER_OPENAI else None,
-            )
-            descriptors = api_provider.get_available_model_descriptors()
-            self.finished.emit([
-                {
-                    "model_id": descriptor.model_id,
-                    "provider": descriptor.provider,
-                    "capabilities": sorted(descriptor.capabilities),
-                    "ready": descriptor.ready,
-                    "available": descriptor.available,
-                }
-                for descriptor in descriptors
-            ])
-        except Exception as exc:
-            self.error.emit(str(exc))
-
-
-class LlamaCppModelScanWorker(QThread):
-    finished = Signal(dict)
-    error = Signal(str)
-
-    def __init__(self, scan_path=None, parent=None):
-        super().__init__(parent)
-        self.scan_path = scan_path
-
-    def run(self):
-        try:
-            results = api_provider.scan_local_llama_cpp_models(self.scan_path)
-            self.finished.emit(results)
-        except Exception as exc:
-            self.error.emit(str(exc))
 
 
 def _settings_file_dialog_parent(widget):
