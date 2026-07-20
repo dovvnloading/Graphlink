@@ -71,6 +71,15 @@ def test_root_level_plugin_shim_files_are_gone():
         # and graphlink_plugins/graphlink_plugin_reasoning.py.
         "graphlink_reasoning.py",
         "graphlink_agents_reasoning.py",
+        # Phase 4 increment 5's shim collapse: root-level compat shims for the
+        # 3 dialog surfaces migrated to WebIslandHost-based islands (About/
+        # Help) or rewritten in place as a native+web hybrid (ChatLibrary).
+        # graphlink_dialogs.py had zero live importers and deleted outright;
+        # the other two had their real implementations repointed to directly
+        # under graphlink_ui_dialogs/.
+        "graphlink_system_dialogs.py",
+        "graphlink_library_dialog.py",
+        "graphlink_dialogs.py",
     ]
     for name in shim_names:
         assert not (app_root / name).exists(), f"{name} should have been removed from the app root"

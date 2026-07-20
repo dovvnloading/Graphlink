@@ -29,7 +29,7 @@ from graphlink_html_view import HtmlViewNode
 from graphlink_plugins.graphlink_plugin_artifact import ArtifactNode
 from graphlink_plugins.graphlink_plugin_gitlink import GitlinkNode
 
-from graphlink_library_dialog import ChatLibraryDialog
+from graphlink_ui_dialogs.graphlink_library_dialog import ChatLibraryDialog
 from graphlink_about_web import AboutWebHost
 from graphlink_help_web import HelpWebHost
 from graphlink_settings_web import SettingsWebHost
