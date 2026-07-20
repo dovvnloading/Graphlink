@@ -149,6 +149,19 @@ class SettingsBridge(IslandBridge, QObject):
         catalog = self.settings_manager.get_api_model_catalog(self._api_provider)
         return [entry["model_id"] for entry in catalog if entry.get("model_id")]
 
+    def _api_image_models(self) -> list[str]:
+        """Gemini's image-generation task takes a DIFFERENT curated list than
+        its chat models (GEMINI_IMAGE_MODELS_STATIC), exactly as the legacy
+        ApiSettingsWidget did (it made the image combo a non-editable dropdown
+        of these two models). Every other provider's image field shares the
+        general apiAvailableModels list, so this returns [] for them and the
+        React side falls back to the shared datalist. Without this, Gemini's
+        Image Generation field would suggest chat models that silently break
+        image generation."""
+        if self._api_provider == config.API_PROVIDER_GEMINI:
+            return list(api_provider.GEMINI_IMAGE_MODELS_STATIC)
+        return []
+
     @staticmethod
     def _flatten_ollama_assignment(assignment: dict) -> str:
         mode = assignment.get("mode", AUTO_MODEL)
@@ -215,6 +228,7 @@ class SettingsBridge(IslandBridge, QObject):
             "geminiKeyConfigured": bool(sm.get_gemini_key()),
             "apiTaskModels": dict(sm.get_api_models(self._api_provider)),
             "apiAvailableModels": self._api_available_models(),
+            "apiImageModels": self._api_image_models(),
             "apiLoadStatus": self._api_load_status,
             "ollamaReasoningMode": sm.get_ollama_reasoning_mode(),
             "ollamaCurrentModel": config.OLLAMA_MODELS.get(config.TASK_CHAT, ""),
@@ -270,6 +284,21 @@ class SettingsBridge(IslandBridge, QObject):
         main_window is None (every test and the mock bridge)."""
         if self._main_window is not None and hasattr(self._main_window, "on_settings_changed"):
             self._main_window.on_settings_changed()
+
+    def _reinitialize_main_window_agent(self):
+        """Targeted equivalent of the legacy Ollama/LlamaCpp save's own
+        main_window.reinitialize_agent() call. The reasoning mode (for
+        whichever local provider is currently active) feeds
+        ChatWindow._get_current_system_prompt(), which is baked into the
+        agent at construction - so a reasoning-mode change is inert in the
+        running session until the agent is rebuilt. Narrower than
+        _notify_main_window_settings_changed() on purpose: a reasoning-mode
+        toggle should not also refresh token-counter visibility / overlay
+        positions / composer status, matching exactly what the legacy save
+        did (reinitialize_agent only). A no-op wherever main_window is None
+        (every test and the mock bridge)."""
+        if self._main_window is not None and hasattr(self._main_window, "reinitialize_agent"):
+            self._main_window.reinitialize_agent()
 
     @Slot(str)
     def setTheme(self, theme_name: str):
@@ -571,6 +600,11 @@ class SettingsBridge(IslandBridge, QObject):
         if mode not in REASONING_MODES:
             return
         self.settings_manager.set_ollama_reasoning_mode(mode)
+        # Reasoning mode feeds the agent's system prompt, so it must take
+        # effect in the running session immediately - the legacy Ollama save
+        # called reinitialize_agent() for exactly this reason. Without it the
+        # new mode is persisted but inert until an app restart.
+        self._reinitialize_main_window_agent()
         self.publish()
 
     @Slot(str, str)
@@ -684,6 +718,11 @@ class SettingsBridge(IslandBridge, QObject):
         if mode not in REASONING_MODES:
             return
         self.settings_manager.set_llama_cpp_reasoning_mode(mode)
+        # Same reasoning as setOllamaReasoningMode: when Llama.cpp is the
+        # active provider its reasoning mode feeds _get_current_system_prompt,
+        # so the running agent must be rebuilt for the change to take effect
+        # live (the legacy Llama.cpp save called reinitialize_agent too).
+        self._reinitialize_main_window_agent()
         self.publish()
 
     @Slot(str)
@@ -732,6 +771,25 @@ class SettingsBridge(IslandBridge, QObject):
         if selected:
             self._llama_title_model_path = selected
             self.publish()
+
+    @Slot(str)
+    def setLlamaCppChatModelPath(self, path: str):
+        """Stage a chat-model path chosen from the scanned-models dropdown -
+        the non-native-dialog counterpart to pickLlamaCppChatModelFile,
+        mirroring the legacy widget's "Scanned Chat Model" combo whose
+        selection filled the chat-model field (on_chat_combo_change). Staged
+        only, exactly like the picker; nothing persists until
+        saveLlamaCppSettings validates it. An empty string clears the staged
+        path, matching the legacy combo's empty first entry."""
+        self._llama_chat_model_path = path.strip()
+        self.publish()
+
+    @Slot(str)
+    def setLlamaCppTitleModelPath(self, path: str):
+        """Staged counterpart of pickLlamaCppTitleModelFile for the scanned
+        naming-model dropdown - see setLlamaCppChatModelPath."""
+        self._llama_title_model_path = path.strip()
+        self.publish()
 
     def _pick_gguf_file(self, caption: str, initial_path: str) -> str:
         initial_location = initial_path or self.settings_manager.get_llama_cpp_model_scan_path() or os.path.expanduser("~")

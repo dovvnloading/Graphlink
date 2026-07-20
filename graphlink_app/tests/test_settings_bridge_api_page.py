@@ -90,6 +90,9 @@ class TestInitialPayload:
         assert payload["geminiKeyConfigured"] is False
         assert payload["apiTaskModels"] == {}
         assert payload["apiAvailableModels"] == []
+        # OpenAI (default): no separate image list - the image field reuses
+        # apiAvailableModels, so this stays empty.
+        assert payload["apiImageModels"] == []
         assert payload["apiLoadStatus"] == "idle"
         assert payload["notice"] is None
 
@@ -105,6 +108,31 @@ class TestSetApiProvider:
         payload = json.loads(states[-1])
         assert payload["apiProvider"] == config.API_PROVIDER_GEMINI
         assert payload["apiAvailableModels"] == list(api_provider.GEMINI_MODELS_STATIC)
+
+    def test_gemini_carries_the_curated_image_model_list_distinct_from_chat(self, tmp_path):
+        # Regression guard for the parity gap found before the increment-9
+        # flip: Gemini's image-generation field must suggest the curated
+        # GEMINI_IMAGE_MODELS_STATIC, not the chat models (which would
+        # silently break image generation).
+        bridge = _bridge(tmp_path)
+        states = []
+        bridge.stateChanged.connect(states.append)
+
+        bridge.setApiProvider(config.API_PROVIDER_GEMINI)
+
+        payload = json.loads(states[-1])
+        assert payload["apiImageModels"] == list(api_provider.GEMINI_IMAGE_MODELS_STATIC)
+        # The image list is genuinely distinct from the chat list.
+        assert payload["apiImageModels"] != payload["apiAvailableModels"]
+
+    def test_non_gemini_providers_have_no_separate_image_list(self, tmp_path):
+        bridge = _bridge(tmp_path)
+        states = []
+        bridge.stateChanged.connect(states.append)
+
+        bridge.setApiProvider(config.API_PROVIDER_ANTHROPIC)
+
+        assert json.loads(states[-1])["apiImageModels"] == []
 
     def test_ignores_an_unrecognized_provider(self, tmp_path):
         bridge = _bridge(tmp_path)

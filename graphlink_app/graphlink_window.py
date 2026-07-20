@@ -32,7 +32,7 @@ from graphlink_plugins.graphlink_plugin_gitlink import GitlinkNode
 from graphlink_library_dialog import ChatLibraryDialog
 from graphlink_system_dialogs import HelpDialog, AboutDialog
 from graphlink_settings_dialogs import SettingsDialog
-from graphlink_settings_web import SettingsWebHost
+from graphlink_settings_web import SETTINGS_RENDERER_DEFAULT, SettingsWebHost
 from graphlink_renderer_flags import resolve_renderer_flag
 
 from graphlink_session import ChatSessionManager
@@ -998,8 +998,12 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
             return
 
         if not self.settings_panel:
+            # Default flipped legacy->web in Phase 3 increment 9 (see
+            # SETTINGS_RENDERER_DEFAULT). Legacy stays reachable as an escape
+            # hatch via GRAPHLINK_SETTINGS_RENDERER=legacy or the mirrored
+            # settings key, kept live for the one-release observation window.
             renderer = resolve_renderer_flag(
-                "settings", "legacy",
+                "settings", SETTINGS_RENDERER_DEFAULT,
                 settings_override=self.settings_manager.get_settings_renderer_override(),
             )
             if renderer == "web":

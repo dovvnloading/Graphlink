@@ -75,6 +75,7 @@ export const initialSettingsState: SettingsState = {
   geminiKeyConfigured: false,
   apiTaskModels: {},
   apiAvailableModels: [],
+  apiImageModels: [],
   apiLoadStatus: "idle",
   ollamaReasoningMode: "Thinking",
   ollamaCurrentModel: "",

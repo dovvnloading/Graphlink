@@ -52,6 +52,8 @@ interface QtSettingsObject {
   setLlamaCppNThreads: (nThreads: number) => void;
   pickLlamaCppChatModelFile: () => void;
   pickLlamaCppTitleModelFile: () => void;
+  setLlamaCppChatModelPath: (path: string) => void;
+  setLlamaCppTitleModelPath: (path: string) => void;
   scanLlamaCppSystem: () => void;
   pickLlamaCppScanFolder: () => void;
   saveLlamaCppSettings: () => void;
@@ -85,6 +87,8 @@ export interface SettingsBridge {
   setLlamaCppNThreads(nThreads: number): void;
   pickLlamaCppChatModelFile(): void;
   pickLlamaCppTitleModelFile(): void;
+  setLlamaCppChatModelPath(path: string): void;
+  setLlamaCppTitleModelPath(path: string): void;
   scanLlamaCppSystem(): void;
   pickLlamaCppScanFolder(): void;
   saveLlamaCppSettings(): void;
@@ -173,11 +177,15 @@ class MockSettingsBridge implements SettingsBridge {
   }
 
   setApiProvider(provider: string): void {
+    const isGemini = provider === "Google Gemini";
     this.publish({
       apiProvider: provider,
       apiLoadStatus: "idle",
       notice: null,
-      apiAvailableModels: provider === "Google Gemini" ? ["gemini-2.5-flash", "gemini-2.5-pro"] : [],
+      apiAvailableModels: isGemini ? ["gemini-2.5-flash", "gemini-2.5-pro"] : [],
+      // Faithful to the real bridge: Gemini's image task takes a distinct
+      // curated list, empty for every other provider.
+      apiImageModels: isGemini ? ["gemini-2.5-flash-image", "gemini-3.1-flash-image-preview"] : [],
       apiTaskModels: {},
     });
   }
@@ -228,6 +236,7 @@ class MockSettingsBridge implements SettingsBridge {
       geminiKeyConfigured: false,
       apiTaskModels: {},
       apiAvailableModels: [],
+      apiImageModels: [],
       apiLoadStatus: "idle",
       notice: null,
     });
@@ -293,6 +302,14 @@ class MockSettingsBridge implements SettingsBridge {
 
   pickLlamaCppTitleModelFile(): void {
     // See pickLlamaCppChatModelFile.
+  }
+
+  setLlamaCppChatModelPath(path: string): void {
+    this.publish({ llamaCppChatModelPath: path.trim() });
+  }
+
+  setLlamaCppTitleModelPath(path: string): void {
+    this.publish({ llamaCppTitleModelPath: path.trim() });
   }
 
   scanLlamaCppSystem(): void {
@@ -392,6 +409,8 @@ export function createSettingsBridge(
     setLlamaCppNThreads: (nThreads) => call("setLlamaCppNThreads", nThreads),
     pickLlamaCppChatModelFile: () => call("pickLlamaCppChatModelFile"),
     pickLlamaCppTitleModelFile: () => call("pickLlamaCppTitleModelFile"),
+    setLlamaCppChatModelPath: (path) => call("setLlamaCppChatModelPath", path),
+    setLlamaCppTitleModelPath: (path) => call("setLlamaCppTitleModelPath", path),
     scanLlamaCppSystem: () => call("scanLlamaCppSystem"),
     pickLlamaCppScanFolder: () => call("pickLlamaCppScanFolder"),
     saveLlamaCppSettings: () => call("saveLlamaCppSettings"),

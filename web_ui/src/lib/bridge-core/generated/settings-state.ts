@@ -25,6 +25,7 @@ export interface SettingsState {
   geminiKeyConfigured: boolean;
   apiTaskModels: Record<string, string>;
   apiAvailableModels: string[];
+  apiImageModels: string[];
   apiLoadStatus: string;
   ollamaReasoningMode: string;
   ollamaCurrentModel: string;
@@ -176,6 +177,12 @@ function checkSettingsState(value: unknown, path: string, errors: string[]): voi
     if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.apiAvailableModels: missing required field`);
     else { if (!Array.isArray(fieldValue)) errors.push(`${path}.apiAvailableModels` + ": expected array");
     else (fieldValue as unknown[]).forEach((item, i) => { if (typeof item !== "string") errors.push(`${path}.apiAvailableModels` + `[${i}]` + ": expected string"); }); }
+  }
+  {
+    const fieldValue = value["apiImageModels"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.apiImageModels: missing required field`);
+    else { if (!Array.isArray(fieldValue)) errors.push(`${path}.apiImageModels` + ": expected array");
+    else (fieldValue as unknown[]).forEach((item, i) => { if (typeof item !== "string") errors.push(`${path}.apiImageModels` + `[${i}]` + ": expected string"); }); }
   }
   {
     const fieldValue = value["apiLoadStatus"];

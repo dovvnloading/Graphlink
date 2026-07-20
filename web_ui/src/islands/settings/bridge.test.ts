@@ -37,6 +37,8 @@ function installFakeQWebChannel() {
     setLlamaCppNThreads: vi.fn(),
     pickLlamaCppChatModelFile: vi.fn(),
     pickLlamaCppTitleModelFile: vi.fn(),
+    setLlamaCppChatModelPath: vi.fn(),
+    setLlamaCppTitleModelPath: vi.fn(),
     scanLlamaCppSystem: vi.fn(),
     pickLlamaCppScanFolder: vi.fn(),
     saveLlamaCppSettings: vi.fn(),
@@ -299,6 +301,17 @@ describe("createSettingsBridge with no QWebChannel available", () => {
     expect(state.llamaCppScanStatus).toBe("done");
     expect(state.llamaCppScannedModels.length).toBeGreaterThan(0);
   });
+
+  it("setLlamaCppChatModelPath on the mock bridge stages the chosen scanned path", () => {
+    const listener = vi.fn();
+    const bridge = createSettingsBridge(listener);
+    bridge.ready();
+    listener.mockClear();
+
+    bridge.setLlamaCppChatModelPath("/models/chat.gguf");
+
+    expect(listener).toHaveBeenCalledWith(expect.objectContaining({ llamaCppChatModelPath: "/models/chat.gguf" }));
+  });
 });
 
 describe("createSettingsBridge against a real QWebChannel connection", () => {
@@ -452,6 +465,8 @@ describe("createSettingsBridge against a real QWebChannel connection", () => {
       bridge.setLlamaCppNThreads(8);
       bridge.pickLlamaCppChatModelFile();
       bridge.pickLlamaCppTitleModelFile();
+      bridge.setLlamaCppChatModelPath("/models/chat.gguf");
+      bridge.setLlamaCppTitleModelPath("/models/title.gguf");
       bridge.scanLlamaCppSystem();
       bridge.pickLlamaCppScanFolder();
       bridge.saveLlamaCppSettings();
@@ -463,6 +478,8 @@ describe("createSettingsBridge against a real QWebChannel connection", () => {
       expect(remote.setLlamaCppNThreads).toHaveBeenCalledWith(8);
       expect(remote.pickLlamaCppChatModelFile).toHaveBeenCalledTimes(1);
       expect(remote.pickLlamaCppTitleModelFile).toHaveBeenCalledTimes(1);
+      expect(remote.setLlamaCppChatModelPath).toHaveBeenCalledWith("/models/chat.gguf");
+      expect(remote.setLlamaCppTitleModelPath).toHaveBeenCalledWith("/models/title.gguf");
       expect(remote.scanLlamaCppSystem).toHaveBeenCalledTimes(1);
       expect(remote.pickLlamaCppScanFolder).toHaveBeenCalledTimes(1);
       expect(remote.saveLlamaCppSettings).toHaveBeenCalledTimes(1);

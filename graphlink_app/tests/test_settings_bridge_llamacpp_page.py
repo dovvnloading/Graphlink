@@ -77,6 +77,54 @@ class TestSetLlamaCppReasoningMode:
 
         assert states == []
 
+    def test_reasoning_change_reinitializes_the_running_agent(self, tmp_path):
+        # Symmetric with the Ollama fix: when Llama.cpp is the active
+        # provider its reasoning mode feeds _get_current_system_prompt, so a
+        # change must rebuild the running agent to take effect live.
+        class _FakeMainWindow:
+            def __init__(self):
+                self.reinit_calls = 0
+
+            def reinitialize_agent(self):
+                self.reinit_calls += 1
+
+        main_window = _FakeMainWindow()
+        bridge = SettingsBridge(SettingsManager(tmp_path / "session.dat"), main_window=main_window)
+
+        bridge.setLlamaCppReasoningMode("Quick")
+
+        assert main_window.reinit_calls == 1
+
+
+class TestStageScannedModelPaths:
+    def test_set_chat_model_path_stages_but_does_not_persist(self, tmp_path):
+        # The scanned-model dropdown's counterpart to the native picker:
+        # stages the chosen path only, committed by saveLlamaCppSettings.
+        settings_manager = SettingsManager(tmp_path / "session.dat")
+        bridge = SettingsBridge(settings_manager)
+
+        bridge.setLlamaCppChatModelPath("/models/scanned-chat.gguf")
+
+        assert _last_payload(bridge)["llamaCppChatModelPath"] == "/models/scanned-chat.gguf"
+        assert settings_manager.get_llama_cpp_chat_model_path() == ""
+
+    def test_set_title_model_path_stages_but_does_not_persist(self, tmp_path):
+        settings_manager = SettingsManager(tmp_path / "session.dat")
+        bridge = SettingsBridge(settings_manager)
+
+        bridge.setLlamaCppTitleModelPath("/models/scanned-title.gguf")
+
+        assert _last_payload(bridge)["llamaCppTitleModelPath"] == "/models/scanned-title.gguf"
+        assert settings_manager.get_llama_cpp_title_model_override_path() == ""
+
+    def test_empty_path_clears_the_staged_chat_model(self, tmp_path):
+        bridge = _bridge(tmp_path)
+        bridge.setLlamaCppChatModelPath("/models/scanned-chat.gguf")
+
+        bridge.setLlamaCppChatModelPath("")
+
+        assert _last_payload(bridge)["llamaCppChatModelPath"] == ""
+
 
 class TestRuntimeTuning:
     def test_set_chat_format_persists_immediately(self, tmp_path):
