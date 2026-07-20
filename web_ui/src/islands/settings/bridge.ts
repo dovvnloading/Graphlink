@@ -20,18 +20,29 @@ interface QtSettingsObject {
   stateChanged: QtSignal<string>;
   ready: () => void;
   setActiveSection: (section: string) => void;
+  setTheme: (theme: string) => void;
+  setShowTokenCounter: (enabled: boolean) => void;
+  setEnableSystemPrompt: (enabled: boolean) => void;
+  setNotificationPreference: (notificationType: string, enabled: boolean) => void;
+  setUpdateNotificationsEnabled: (enabled: boolean) => void;
 }
 
 export interface SettingsBridge {
   ready(): void;
   setActiveSection(section: string): void;
+  setTheme(theme: string): void;
+  setShowTokenCounter(enabled: boolean): void;
+  setEnableSystemPrompt(enabled: boolean): void;
+  setNotificationPreference(notificationType: string, enabled: boolean): void;
+  setUpdateNotificationsEnabled(enabled: boolean): void;
   dispose(): void;
 }
 
 /**
- * Shell-only for now: setActiveSection is the one intent this increment
- * builds. Each page's own intents (secrets, workers, pickers) arrive in
- * their own later increments, following the same createXBridge shape.
+ * Each intent applies and republishes immediately - see
+ * graphlink_settings_bridge.py's module docstring for why this departs
+ * from the original AppearanceSettingsWidget's single batched "Apply"
+ * button.
  */
 function parseState(payload: string) {
   return parseIslandState(payload, validateSettingsState);
@@ -45,13 +56,39 @@ class MockSettingsBridge implements SettingsBridge {
     this.listener = listener;
   }
 
+  private publish(next: Partial<SettingsState>) {
+    this.state = { ...this.state, ...next, revision: this.state.revision + 1 };
+    this.listener(this.state);
+  }
+
   ready(): void {
     this.listener(this.state);
   }
 
   setActiveSection(section: string): void {
-    this.state = { ...this.state, activeSection: section, revision: this.state.revision + 1 };
-    this.listener(this.state);
+    this.publish({ activeSection: section });
+  }
+
+  setTheme(theme: string): void {
+    this.publish({ theme });
+  }
+
+  setShowTokenCounter(enabled: boolean): void {
+    this.publish({ showTokenCounter: enabled });
+  }
+
+  setEnableSystemPrompt(enabled: boolean): void {
+    this.publish({ enableSystemPrompt: enabled });
+  }
+
+  setNotificationPreference(notificationType: string, enabled: boolean): void {
+    this.publish({
+      notificationPreferences: { ...this.state.notificationPreferences, [notificationType]: enabled },
+    });
+  }
+
+  setUpdateNotificationsEnabled(enabled: boolean): void {
+    this.publish({ updateNotificationsEnabled: enabled });
   }
 
   dispose(): void {}
@@ -102,6 +139,12 @@ export function createSettingsBridge(
   return {
     ready: () => call("ready"),
     setActiveSection: (section) => call("setActiveSection", section),
+    setTheme: (theme) => call("setTheme", theme),
+    setShowTokenCounter: (enabled) => call("setShowTokenCounter", enabled),
+    setEnableSystemPrompt: (enabled) => call("setEnableSystemPrompt", enabled),
+    setNotificationPreference: (notificationType, enabled) =>
+      call("setNotificationPreference", notificationType, enabled),
+    setUpdateNotificationsEnabled: (enabled) => call("setUpdateNotificationsEnabled", enabled),
     dispose: () => {
       remote?.stateChanged.disconnect?.(stateListener);
       remote = null;

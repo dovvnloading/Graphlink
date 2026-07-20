@@ -14,6 +14,7 @@ import pytest
 
 from graphlink_island_codegen import schema_json_for, typescript_for
 from graphlink_island_schema import validate_payload
+from graphlink_licensing import SettingsManager
 from graphlink_settings_bridge import SettingsBridge
 from graphlink_settings_payload import SettingsStatePayload
 
@@ -34,8 +35,8 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def _snapshot(section: str | None = None) -> dict:
-    bridge = SettingsBridge()
+def _snapshot(tmp_path, section: str | None = None) -> dict:
+    bridge = SettingsBridge(SettingsManager(tmp_path / "session.dat"))
     states: list[str] = []
     bridge.stateChanged.connect(states.append)
     if section:
@@ -46,13 +47,13 @@ def _snapshot(section: str | None = None) -> dict:
 
 
 class TestTheContractDescribesTheRealPayload:
-    def test_a_real_bridge_snapshot_validates(self):
-        errors = validate_payload(_snapshot(), SettingsStatePayload)
+    def test_a_real_bridge_snapshot_validates(self, tmp_path):
+        errors = validate_payload(_snapshot(tmp_path), SettingsStatePayload)
 
         assert errors == [], errors
 
-    def test_a_snapshot_after_navigating_validates(self):
-        errors = validate_payload(_snapshot(section="Integrations"), SettingsStatePayload)
+    def test_a_snapshot_after_navigating_validates(self, tmp_path):
+        errors = validate_payload(_snapshot(tmp_path, section="Integrations"), SettingsStatePayload)
 
         assert errors == [], errors
 
@@ -66,8 +67,8 @@ class TestValidatorActuallyRejects:
             (lambda p: p.__setitem__("surprise", "x"), "unexpected field"),
         ],
     )
-    def test_mutation_is_caught(self, mutate, expected_fragment):
-        payload = _snapshot()
+    def test_mutation_is_caught(self, mutate, expected_fragment, tmp_path):
+        payload = _snapshot(tmp_path)
         mutate(payload)
 
         errors = validate_payload(payload, SettingsStatePayload)

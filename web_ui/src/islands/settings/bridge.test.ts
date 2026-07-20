@@ -12,6 +12,11 @@ function installFakeQWebChannel() {
     stateChanged: { connect: vi.fn(), disconnect: vi.fn() },
     ready: vi.fn(),
     setActiveSection: vi.fn(),
+    setTheme: vi.fn(),
+    setShowTokenCounter: vi.fn(),
+    setEnableSystemPrompt: vi.fn(),
+    setNotificationPreference: vi.fn(),
+    setUpdateNotificationsEnabled: vi.fn(),
   };
 
   class FakeQWebChannel {
@@ -54,6 +59,30 @@ describe("createSettingsBridge with no QWebChannel available", () => {
     expect(listener).toHaveBeenCalledWith(
       expect.objectContaining({ activeSection: "Integrations" }),
     );
+  });
+
+  it("setTheme on the mock bridge updates state", () => {
+    const listener = vi.fn();
+    const bridge = createSettingsBridge(listener);
+    bridge.ready();
+    listener.mockClear();
+
+    bridge.setTheme("muted");
+
+    expect(listener).toHaveBeenCalledWith(expect.objectContaining({ theme: "muted" }));
+  });
+
+  it("setNotificationPreference on the mock bridge is a partial update", () => {
+    const listener = vi.fn();
+    const bridge = createSettingsBridge(listener);
+    bridge.ready();
+    listener.mockClear();
+
+    bridge.setNotificationPreference("warning", false);
+
+    const [state] = listener.mock.calls[0];
+    expect(state.notificationPreferences.warning).toBe(false);
+    expect(state.notificationPreferences.info).toBe(true);
   });
 
   it("dispose() on the mock bridge does not throw", () => {
@@ -99,6 +128,27 @@ describe("createSettingsBridge against a real QWebChannel connection", () => {
       bridge.setActiveSection("Ollama (Local)");
 
       expect(remote.setActiveSection).toHaveBeenCalledWith("Ollama (Local)");
+    } finally {
+      uninstallFakeQWebChannel();
+    }
+  });
+
+  it("each General/Appearance intent calls through to its own remote method", () => {
+    const remote = installFakeQWebChannel();
+    try {
+      const bridge = createSettingsBridge(() => {});
+
+      bridge.setTheme("mono");
+      bridge.setShowTokenCounter(false);
+      bridge.setEnableSystemPrompt(false);
+      bridge.setNotificationPreference("error", false);
+      bridge.setUpdateNotificationsEnabled(true);
+
+      expect(remote.setTheme).toHaveBeenCalledWith("mono");
+      expect(remote.setShowTokenCounter).toHaveBeenCalledWith(false);
+      expect(remote.setEnableSystemPrompt).toHaveBeenCalledWith(false);
+      expect(remote.setNotificationPreference).toHaveBeenCalledWith("error", false);
+      expect(remote.setUpdateNotificationsEnabled).toHaveBeenCalledWith(true);
     } finally {
       uninstallFakeQWebChannel();
     }
