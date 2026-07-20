@@ -383,6 +383,14 @@ GENERATED_ARTIFACTS = [
         "schema_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "document-viewer-state.schema.json",
         "ts_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "document-viewer-state.ts",
     },
+    {
+        "dataclass": None,  # resolved lazily in main() to avoid importing
+        "dataclass_import": ("graphlink_chat_library_payload", "ChatLibraryStatePayload"),
+        "title": "ChatLibraryState",
+        "source": "graphlink_app/graphlink_chat_library_payload.py::ChatLibraryStatePayload",
+        "schema_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "chat-library-state.schema.json",
+        "ts_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "chat-library-state.ts",
+    },
 ]
 
 
