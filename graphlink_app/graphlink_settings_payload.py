@@ -46,12 +46,80 @@ class SettingsStatePayload:
     updateStatusLevel: str
     updateLastCheckedAt: str
     updateAvailable: bool
+    # Added increment 8, alongside the real checkForUpdates()/
+    # openRepository() intents these two fields support.
+    updateLatestVersion: str
+    updateCheckInProgress: bool
 
     # Integrations page (increment 4) - write-only by design: this bridge
     # never emits the actual GitHub token, only whether one is configured.
     # See graphlink_settings_bridge.py's module docstring and
     # tests/test_settings_bridge_secrets.py for the invariant this protects.
     githubTokenConfigured: bool
+
+    # API page (increment 5) - the 3 provider keys are write-only, same
+    # shape as githubTokenConfigured. apiTaskModels/apiAvailableModels are
+    # scoped to whichever provider is currently selected; switching
+    # apiProvider republishes both from SettingsManager's own
+    # per-provider-keyed storage (get_api_models/get_api_model_catalog).
+    apiProvider: str
+    apiBaseUrl: str
+    openaiKeyConfigured: bool
+    anthropicKeyConfigured: bool
+    geminiKeyConfigured: bool
+    apiTaskModels: dict[str, str]
+    apiAvailableModels: list[str]
+    # idle|running|done|error - a faithful binary port of ApiModelLoadWorker's
+    # existing finished/error signals (Phase 3's Section C design decision),
+    # not real progress.
+    apiLoadStatus: str
+
+    # Ollama page (increment 6). ollamaModelAssignments flattens
+    # SettingsManager's {mode, model_id} dict-of-dicts into one string per
+    # task - "inherit"|"auto"|"<explicit model id>" - a strictly equivalent,
+    # simpler wire shape (same idea as apiTaskModels' flat dict). An
+    # explicit value not present in ollamaScannedModels is preserved
+    # verbatim, never dropped - the "unavailable-model preservation"
+    # behavior the Phase 3 checklist names.
+    ollamaReasoningMode: str
+    ollamaCurrentModel: str
+    ollamaModelAssignments: dict[str, str]
+    ollamaScannedModels: list[str]
+    ollamaScanSummary: str
+    # idle|running|done|error, one faithful binary status port per worker
+    # (Phase 3 Section C) - scan (OllamaModelScanWorker) and pull
+    # (ModelPullWorkerThread) are two independent operations with two
+    # independent statuses.
+    ollamaScanStatus: str
+    ollamaPullStatus: str
+
+    # LlamaCpp page (increment 7) - mechanically parallel to Ollama's scan
+    # half. llamaCppChatModelPath/llamaCppTitleModelPath are STAGED, not yet
+    # persisted - set by the native file pickers, committed to
+    # SettingsManager only by saveLlamaCppSettings() (validated: file
+    # exists, .gguf extension), mirroring the original widget's own
+    # Browse-fills-the-field / Save-persists-and-validates split - the one
+    # LlamaCpp field that couldn't become a live-apply intent like every
+    # other field on this island, since a mid-typing path can't be
+    # meaningfully validated.
+    llamaCppReasoningMode: str
+    llamaCppChatModelPath: str
+    llamaCppTitleModelPath: str
+    llamaCppChatFormat: str
+    llamaCppNCtx: int
+    llamaCppNGpuLayers: int
+    llamaCppNThreads: int
+    llamaCppScannedModels: list[str]
+    llamaCppScanSummary: str
+    llamaCppScanStatus: str
+
+    # Shared across pages, not API-specific: a transient message for an
+    # intent that was rejected (e.g. failed provider init) or a stale
+    # operation. Modeled directly on CommandPaletteBridge's identical
+    # `notice` field - same shape, same "JS renders it, never round-trips
+    # it back" contract - reused rather than inventing a second
+    # error-channel shape, per the Phase 3 design panel's own synthesis.
+    notice: str | None = None
 
     # See ComposerStatePayload's identical field for the full negotiation
     # rationale; optional for the same reason (models a sender predating this

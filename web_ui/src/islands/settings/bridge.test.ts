@@ -17,8 +17,29 @@ function installFakeQWebChannel() {
     setEnableSystemPrompt: vi.fn(),
     setNotificationPreference: vi.fn(),
     setUpdateNotificationsEnabled: vi.fn(),
+    checkForUpdates: vi.fn(),
+    openRepository: vi.fn(),
     setGithubToken: vi.fn(),
     clearGithubToken: vi.fn(),
+    setApiProvider: vi.fn(),
+    saveApiConfiguration: vi.fn(),
+    loadAvailableModels: vi.fn(),
+    resetApiSettings: vi.fn(),
+    setOllamaReasoningMode: vi.fn(),
+    setOllamaModelAssignment: vi.fn(),
+    scanOllamaSystem: vi.fn(),
+    pickOllamaScanFolder: vi.fn(),
+    pullOllamaModel: vi.fn(),
+    setLlamaCppReasoningMode: vi.fn(),
+    setLlamaCppChatFormat: vi.fn(),
+    setLlamaCppNCtx: vi.fn(),
+    setLlamaCppNGpuLayers: vi.fn(),
+    setLlamaCppNThreads: vi.fn(),
+    pickLlamaCppChatModelFile: vi.fn(),
+    pickLlamaCppTitleModelFile: vi.fn(),
+    scanLlamaCppSystem: vi.fn(),
+    pickLlamaCppScanFolder: vi.fn(),
+    saveLlamaCppSettings: vi.fn(),
   };
 
   class FakeQWebChannel {
@@ -99,6 +120,24 @@ describe("createSettingsBridge with no QWebChannel available", () => {
     expect(listener).toHaveBeenCalledWith(expect.objectContaining({ githubTokenConfigured: false }));
   });
 
+  it("checkForUpdates on the mock bridge simulates a finished, successful check", () => {
+    const listener = vi.fn();
+    const bridge = createSettingsBridge(listener);
+    bridge.ready();
+    listener.mockClear();
+
+    bridge.checkForUpdates();
+
+    expect(listener).toHaveBeenCalledWith(
+      expect.objectContaining({ updateCheckInProgress: false, updateStatusLevel: "success" }),
+    );
+  });
+
+  it("openRepository on the mock bridge does not throw", () => {
+    const bridge = createSettingsBridge(() => {});
+    expect(() => bridge.openRepository()).not.toThrow();
+  });
+
   it("setNotificationPreference on the mock bridge is a partial update", () => {
     const listener = vi.fn();
     const bridge = createSettingsBridge(listener);
@@ -112,9 +151,153 @@ describe("createSettingsBridge with no QWebChannel available", () => {
     expect(state.notificationPreferences.info).toBe(true);
   });
 
+  it("setApiProvider on the mock bridge switches provider and resets load state", () => {
+    const listener = vi.fn();
+    const bridge = createSettingsBridge(listener);
+    bridge.ready();
+    listener.mockClear();
+
+    bridge.setApiProvider("Google Gemini");
+
+    const [state] = listener.mock.calls[0];
+    expect(state.apiProvider).toBe("Google Gemini");
+    expect(state.notice).toBeNull();
+  });
+
+  it("saveApiConfiguration on the mock bridge reports configured without exposing the key", () => {
+    const listener = vi.fn();
+    const bridge = createSettingsBridge(listener);
+    bridge.ready();
+    listener.mockClear();
+
+    bridge.saveApiConfiguration({
+      provider: "OpenAI-Compatible",
+      baseUrl: "https://api.openai.com/v1",
+      apiKey: "sk-secret",
+      taskModels: { task_chat: "gpt-4o" },
+    });
+
+    const [state] = listener.mock.calls[0];
+    expect(state.openaiKeyConfigured).toBe(true);
+    expect(JSON.stringify(state)).not.toContain("sk-secret");
+  });
+
+  it("saveApiConfiguration on the mock bridge rejects a missing key with a notice", () => {
+    const listener = vi.fn();
+    const bridge = createSettingsBridge(listener);
+    bridge.ready();
+    listener.mockClear();
+
+    bridge.saveApiConfiguration({
+      provider: "OpenAI-Compatible",
+      baseUrl: "https://api.openai.com/v1",
+      apiKey: "",
+      taskModels: {},
+    });
+
+    expect(listener).toHaveBeenCalledWith(expect.objectContaining({ notice: "Please enter your API Key." }));
+  });
+
+  it("resetApiSettings on the mock bridge clears configured flags", () => {
+    const listener = vi.fn();
+    const bridge = createSettingsBridge(listener);
+    bridge.ready();
+    bridge.saveApiConfiguration({
+      provider: "OpenAI-Compatible",
+      baseUrl: "https://api.openai.com/v1",
+      apiKey: "sk-secret",
+      taskModels: {},
+    });
+    listener.mockClear();
+
+    bridge.resetApiSettings();
+
+    expect(listener).toHaveBeenCalledWith(expect.objectContaining({ openaiKeyConfigured: false }));
+  });
+
+  it("setOllamaReasoningMode on the mock bridge updates state", () => {
+    const listener = vi.fn();
+    const bridge = createSettingsBridge(listener);
+    bridge.ready();
+    listener.mockClear();
+
+    bridge.setOllamaReasoningMode("Quick");
+
+    expect(listener).toHaveBeenCalledWith(expect.objectContaining({ ollamaReasoningMode: "Quick" }));
+  });
+
+  it("setOllamaModelAssignment on the mock bridge is a partial update", () => {
+    const listener = vi.fn();
+    const bridge = createSettingsBridge(listener);
+    bridge.ready();
+    listener.mockClear();
+
+    bridge.setOllamaModelAssignment("task_chart", "llama3:8b");
+
+    const [state] = listener.mock.calls[0];
+    expect(state.ollamaModelAssignments.task_chart).toBe("llama3:8b");
+  });
+
+  it("pullOllamaModel on the mock bridge rejects an empty model name", () => {
+    const listener = vi.fn();
+    const bridge = createSettingsBridge(listener);
+    bridge.ready();
+    listener.mockClear();
+
+    bridge.pullOllamaModel("");
+
+    expect(listener).toHaveBeenCalledWith(expect.objectContaining({ notice: "Model name cannot be empty." }));
+  });
+
   it("dispose() on the mock bridge does not throw", () => {
     const bridge = createSettingsBridge(() => {});
     expect(() => bridge.dispose()).not.toThrow();
+  });
+
+  it("setLlamaCppReasoningMode on the mock bridge updates state", () => {
+    const listener = vi.fn();
+    const bridge = createSettingsBridge(listener);
+    bridge.ready();
+    listener.mockClear();
+
+    bridge.setLlamaCppReasoningMode("Quick");
+
+    expect(listener).toHaveBeenCalledWith(expect.objectContaining({ llamaCppReasoningMode: "Quick" }));
+  });
+
+  it("setLlamaCppNCtx on the mock bridge updates state", () => {
+    const listener = vi.fn();
+    const bridge = createSettingsBridge(listener);
+    bridge.ready();
+    listener.mockClear();
+
+    bridge.setLlamaCppNCtx(8192);
+
+    expect(listener).toHaveBeenCalledWith(expect.objectContaining({ llamaCppNCtx: 8192 }));
+  });
+
+  it("saveLlamaCppSettings on the mock bridge rejects an empty chat model path with a notice", () => {
+    const listener = vi.fn();
+    const bridge = createSettingsBridge(listener);
+    bridge.ready();
+    listener.mockClear();
+
+    bridge.saveLlamaCppSettings();
+
+    expect(listener).toHaveBeenCalledWith(expect.objectContaining({ notice: "Chat Model File cannot be empty." }));
+  });
+
+  it("scanLlamaCppSystem on the mock bridge reports found models", () => {
+    const listener = vi.fn();
+    const bridge = createSettingsBridge(listener);
+    bridge.ready();
+    listener.mockClear();
+
+    bridge.scanLlamaCppSystem();
+
+    const [state] = listener.mock.calls[0];
+    expect(state.llamaCppScanStatus).toBe("done");
+    expect(state.llamaCppScannedModels.length).toBeGreaterThan(0);
   });
 });
 
@@ -170,12 +353,16 @@ describe("createSettingsBridge against a real QWebChannel connection", () => {
       bridge.setEnableSystemPrompt(false);
       bridge.setNotificationPreference("error", false);
       bridge.setUpdateNotificationsEnabled(true);
+      bridge.checkForUpdates();
+      bridge.openRepository();
 
       expect(remote.setTheme).toHaveBeenCalledWith("mono");
       expect(remote.setShowTokenCounter).toHaveBeenCalledWith(false);
       expect(remote.setEnableSystemPrompt).toHaveBeenCalledWith(false);
       expect(remote.setNotificationPreference).toHaveBeenCalledWith("error", false);
       expect(remote.setUpdateNotificationsEnabled).toHaveBeenCalledWith(true);
+      expect(remote.checkForUpdates).toHaveBeenCalledTimes(1);
+      expect(remote.openRepository).toHaveBeenCalledTimes(1);
     } finally {
       uninstallFakeQWebChannel();
     }
@@ -191,6 +378,94 @@ describe("createSettingsBridge against a real QWebChannel connection", () => {
 
       expect(remote.setGithubToken).toHaveBeenCalledWith("ghp_secret");
       expect(remote.clearGithubToken).toHaveBeenCalledTimes(1);
+    } finally {
+      uninstallFakeQWebChannel();
+    }
+  });
+
+  it("setApiProvider and loadAvailableModels and resetApiSettings call through to the remote", () => {
+    const remote = installFakeQWebChannel();
+    try {
+      const bridge = createSettingsBridge(() => {});
+
+      bridge.setApiProvider("Anthropic Claude");
+      bridge.loadAvailableModels("sk-secret");
+      bridge.resetApiSettings();
+
+      expect(remote.setApiProvider).toHaveBeenCalledWith("Anthropic Claude");
+      expect(remote.loadAvailableModels).toHaveBeenCalledWith("sk-secret");
+      expect(remote.resetApiSettings).toHaveBeenCalledTimes(1);
+    } finally {
+      uninstallFakeQWebChannel();
+    }
+  });
+
+  it("saveApiConfiguration serializes its args to JSON for the remote call", () => {
+    const remote = installFakeQWebChannel();
+    try {
+      const bridge = createSettingsBridge(() => {});
+      const args = {
+        provider: "OpenAI-Compatible",
+        baseUrl: "https://api.openai.com/v1",
+        apiKey: "sk-secret",
+        taskModels: { task_chat: "gpt-4o" },
+      };
+
+      bridge.saveApiConfiguration(args);
+
+      expect(remote.saveApiConfiguration).toHaveBeenCalledWith(JSON.stringify(args));
+    } finally {
+      uninstallFakeQWebChannel();
+    }
+  });
+
+  it("Ollama intents call through to their own remote methods", () => {
+    const remote = installFakeQWebChannel();
+    try {
+      const bridge = createSettingsBridge(() => {});
+
+      bridge.setOllamaReasoningMode("Quick");
+      bridge.setOllamaModelAssignment("task_chart", "llama3:8b");
+      bridge.scanOllamaSystem();
+      bridge.pickOllamaScanFolder();
+      bridge.pullOllamaModel("llama3:8b");
+
+      expect(remote.setOllamaReasoningMode).toHaveBeenCalledWith("Quick");
+      expect(remote.setOllamaModelAssignment).toHaveBeenCalledWith("task_chart", "llama3:8b");
+      expect(remote.scanOllamaSystem).toHaveBeenCalledTimes(1);
+      expect(remote.pickOllamaScanFolder).toHaveBeenCalledTimes(1);
+      expect(remote.pullOllamaModel).toHaveBeenCalledWith("llama3:8b");
+    } finally {
+      uninstallFakeQWebChannel();
+    }
+  });
+
+  it("LlamaCpp intents call through to their own remote methods", () => {
+    const remote = installFakeQWebChannel();
+    try {
+      const bridge = createSettingsBridge(() => {});
+
+      bridge.setLlamaCppReasoningMode("Quick");
+      bridge.setLlamaCppChatFormat("chatml");
+      bridge.setLlamaCppNCtx(8192);
+      bridge.setLlamaCppNGpuLayers(-1);
+      bridge.setLlamaCppNThreads(8);
+      bridge.pickLlamaCppChatModelFile();
+      bridge.pickLlamaCppTitleModelFile();
+      bridge.scanLlamaCppSystem();
+      bridge.pickLlamaCppScanFolder();
+      bridge.saveLlamaCppSettings();
+
+      expect(remote.setLlamaCppReasoningMode).toHaveBeenCalledWith("Quick");
+      expect(remote.setLlamaCppChatFormat).toHaveBeenCalledWith("chatml");
+      expect(remote.setLlamaCppNCtx).toHaveBeenCalledWith(8192);
+      expect(remote.setLlamaCppNGpuLayers).toHaveBeenCalledWith(-1);
+      expect(remote.setLlamaCppNThreads).toHaveBeenCalledWith(8);
+      expect(remote.pickLlamaCppChatModelFile).toHaveBeenCalledTimes(1);
+      expect(remote.pickLlamaCppTitleModelFile).toHaveBeenCalledTimes(1);
+      expect(remote.scanLlamaCppSystem).toHaveBeenCalledTimes(1);
+      expect(remote.pickLlamaCppScanFolder).toHaveBeenCalledTimes(1);
+      expect(remote.saveLlamaCppSettings).toHaveBeenCalledTimes(1);
     } finally {
       uninstallFakeQWebChannel();
     }

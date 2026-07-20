@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import graphlink_config as config
 from graphlink_licensing import SettingsManager
 from graphlink_settings_bridge import SECTION_NAMES, SettingsBridge
+from graphlink_update import UPDATE_REPOSITORY_URL
 
 
 def _bridge(tmp_path) -> SettingsBridge:
@@ -232,6 +233,100 @@ class TestIntegrationsPage:
         assert settings_manager.get_github_token() == ""
         payload = _last_payload(bridge)
         assert payload["githubTokenConfigured"] is False
+
+
+class _FakeMainWindow:
+    """Duck-typed stand-in for ChatWindow, matching exactly the surface
+    _notify_main_window_settings_changed()/checkForUpdates() call: an
+    on_settings_changed() call counter and a check_for_updates(manual,
+    status_target) that drives status_target the same way the real
+    ChatWindow.check_for_updates() does (see graphlink_window.py), without
+    a real UpdateCheckWorker QThread."""
+
+    def __init__(self):
+        self.on_settings_changed_calls = 0
+        self.check_for_updates_calls = []
+
+    def on_settings_changed(self):
+        self.on_settings_changed_calls += 1
+
+    def check_for_updates(self, manual=False, status_target=None):
+        self.check_for_updates_calls.append(manual)
+        if status_target is not None and hasattr(status_target, "set_update_check_in_progress"):
+            status_target.set_update_check_in_progress(True)
+
+
+class TestRealShellWiring:
+    def test_general_appearance_intents_notify_the_main_window_when_present(self, tmp_path):
+        main_window = _FakeMainWindow()
+        bridge = SettingsBridge(SettingsManager(tmp_path / "session.dat"), main_window=main_window)
+
+        bridge.setShowTokenCounter(False)
+        bridge.setEnableSystemPrompt(False)
+        bridge.setNotificationPreference("warning", False)
+        bridge.setUpdateNotificationsEnabled(True)
+        bridge.setTheme("muted")
+
+        assert main_window.on_settings_changed_calls == 5
+
+    def test_general_appearance_intents_are_a_no_op_without_a_main_window(self, tmp_path):
+        bridge = _bridge(tmp_path)
+
+        # No main_window was passed - this must not raise.
+        bridge.setShowTokenCounter(False)
+
+        assert _last_payload(bridge)["showTokenCounter"] is False
+
+    def test_check_for_updates_delegates_to_the_main_window_and_sets_in_progress(self, tmp_path):
+        main_window = _FakeMainWindow()
+        bridge = SettingsBridge(SettingsManager(tmp_path / "session.dat"), main_window=main_window)
+
+        bridge.checkForUpdates()
+
+        assert main_window.check_for_updates_calls == [True]
+        assert _last_payload(bridge)["updateCheckInProgress"] is True
+
+    def test_check_for_updates_without_a_main_window_sets_a_notice(self, tmp_path):
+        bridge = _bridge(tmp_path)
+
+        bridge.checkForUpdates()
+
+        assert _last_payload(bridge)["notice"] == "The main window is not available for update checks."
+
+    def test_refresh_update_status_republishes_the_persisted_result(self, tmp_path):
+        settings_manager = SettingsManager(tmp_path / "session.dat")
+        bridge = SettingsBridge(settings_manager)
+        settings_manager.record_update_check_result({
+            "success": True, "message": "You're up to date.", "level": "success",
+            "update_available": False, "remote_version": "1.2.3",
+        })
+
+        bridge.refresh_update_status()
+
+        payload = _last_payload(bridge)
+        assert payload["updateStatusMessage"] == "You're up to date."
+        assert payload["updateLatestVersion"] == "1.2.3"
+
+    def test_set_update_check_in_progress_updates_the_payload(self, tmp_path):
+        bridge = _bridge(tmp_path)
+
+        bridge.set_update_check_in_progress(True)
+        assert _last_payload(bridge)["updateCheckInProgress"] is True
+
+        bridge.set_update_check_in_progress(False)
+        assert _last_payload(bridge)["updateCheckInProgress"] is False
+
+    def test_open_repository_opens_the_real_repository_url(self, tmp_path, monkeypatch):
+        opened = []
+        monkeypatch.setattr(
+            "graphlink_settings_bridge.webbrowser.open",
+            lambda url: opened.append(url),
+        )
+        bridge = _bridge(tmp_path)
+
+        bridge.openRepository()
+
+        assert opened == [UPDATE_REPOSITORY_URL]
 
 
 class TestLifecycle:

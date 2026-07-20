@@ -27,8 +27,29 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import pytest
+
 import graphlink_config as config
 from graphlink_licensing import SettingsManager
+
+
+@pytest.fixture(autouse=True)
+def _restore_ollama_globals():
+    # config.OLLAMA_MODELS/CURRENT_MODEL are process-global module state.
+    # sync_ollama_task_models()/set_current_model() write them directly
+    # (not through monkeypatch), so calling either for real - as
+    # TestSyncOllamaTaskModels does - leaks into every test that runs
+    # afterward in the same pytest session unless explicitly restored here.
+    # Found 2026-07-20 while adding tests/test_settings_bridge_ollama_page.py:
+    # its own default-state assertion failed only when run after this file,
+    # tracing back to test_auto_tasks_stay_unconfigured_until_discovery's
+    # unprotected config.sync_ollama_task_models(manager) call.
+    original_models = dict(config.OLLAMA_MODELS)
+    original_current_model = config.CURRENT_MODEL
+    yield
+    config.OLLAMA_MODELS.clear()
+    config.OLLAMA_MODELS.update(original_models)
+    config.CURRENT_MODEL = original_current_model
 
 
 def test_ollama_settings_initializes_model_controls_before_wiring_signals():

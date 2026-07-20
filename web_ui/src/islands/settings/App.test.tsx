@@ -43,6 +43,23 @@ describe("App against the mock bridge", () => {
     expect(screen.getByRole("checkbox", { name: "Error" })).toBeChecked();
     expect(screen.getByRole("checkbox", { name: "Enable Update Notifications on Startup" })).not.toBeChecked();
     expect(screen.getByText("Automatic update checks are off.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Check for Updates" })).toBeEnabled();
+  });
+
+  it("Check for Updates reports a finished check via the mock bridge", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole("button", { name: "Check for Updates" }));
+
+    await waitFor(() => expect(screen.getByText(/You're up to date\./)).toBeInTheDocument());
+  });
+
+  it("Open Repository does not throw via the mock bridge", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole("button", { name: "Open Repository" }));
   });
 
   it("changing the theme select updates state via the mock bridge", async () => {
@@ -101,6 +118,194 @@ describe("App against the mock bridge", () => {
 
     await waitFor(() => expect(screen.getByText("No GitHub token configured.")).toBeInTheDocument());
   });
+
+  it("API Endpoint defaults to OpenAI-Compatible with the Base URL field visible", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "API Endpoint" }));
+
+    expect(screen.getByLabelText("API Provider")).toHaveValue("OpenAI-Compatible");
+    expect(screen.getByLabelText("Base URL")).toBeInTheDocument();
+    expect(screen.getByText("No key configured for this provider.")).toBeInTheDocument();
+    expect(screen.getByLabelText("Image Generation")).toBeInTheDocument();
+  });
+
+  it("switching provider to Anthropic hides Base URL and the Load button, and excludes image gen", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "API Endpoint" }));
+
+    await user.selectOptions(screen.getByLabelText("API Provider"), "Anthropic Claude");
+
+    expect(screen.queryByLabelText("Base URL")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Load Available Models" })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Image Generation")).not.toBeInTheDocument();
+    expect(screen.getByText("Anthropic Claude does not support image generation in Graphlink yet.")).toBeInTheDocument();
+  });
+
+  it("switching provider to Gemini shows Load button but no Base URL", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "API Endpoint" }));
+
+    await user.selectOptions(screen.getByLabelText("API Provider"), "Google Gemini");
+
+    expect(screen.queryByLabelText("Base URL")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Load Available Models" })).toBeInTheDocument();
+  });
+
+  it("Load Available Models is disabled until a key is typed", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "API Endpoint" }));
+
+    expect(screen.getByRole("button", { name: "Load Available Models" })).toBeDisabled();
+
+    await user.type(screen.getByLabelText("API Key"), "sk-typed");
+
+    expect(screen.getByRole("button", { name: "Load Available Models" })).toBeEnabled();
+  });
+
+  it("Save Configuration reports configured and clears the key field via the mock bridge", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "API Endpoint" }));
+
+    await user.type(screen.getByLabelText("API Key"), "sk-typed");
+    await user.click(screen.getByRole("button", { name: "Save Configuration" }));
+
+    await waitFor(() =>
+      expect(screen.getByText("A key is currently configured for this provider.")).toBeInTheDocument(),
+    );
+    expect(screen.getByLabelText("API Key")).toHaveValue("");
+  });
+
+  it("Reset API Settings clears the configured status via the mock bridge", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "API Endpoint" }));
+    await user.type(screen.getByLabelText("API Key"), "sk-typed");
+    await user.click(screen.getByRole("button", { name: "Save Configuration" }));
+    await waitFor(() =>
+      expect(screen.getByText("A key is currently configured for this provider.")).toBeInTheDocument(),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Reset API Settings" }));
+
+    await waitFor(() =>
+      expect(screen.getByText("No key configured for this provider.")).toBeInTheDocument(),
+    );
+  });
+
+  it("Ollama renders the reasoning mode radios and all 5 task fields defaulting to auto/inherit", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "Ollama (Local)" }));
+
+    expect(screen.getByRole("radio", { name: "Thinking Mode (Enable CoT)" })).toBeChecked();
+    expect(screen.getByLabelText("Chat Model")).toHaveValue("auto");
+    expect(screen.getByLabelText("Chat Naming Model")).toHaveValue("inherit");
+  });
+
+  it("switching reasoning mode calls through to the mock bridge", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "Ollama (Local)" }));
+
+    await user.click(screen.getByRole("radio", { name: "Quick Mode (No CoT)" }));
+
+    expect(screen.getByRole("radio", { name: "Quick Mode (No CoT)" })).toBeChecked();
+  });
+
+  it("choosing Custom for a task field reveals a text input, and typing sets an explicit assignment", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "Ollama (Local)" }));
+
+    await user.selectOptions(screen.getByLabelText("Chart Generation Model"), "explicit");
+    const chartInput = screen.getByLabelText("Chart Generation Model (custom model ID)");
+
+    await user.type(chartInput, "llama3:8b");
+
+    expect(chartInput).toHaveValue("llama3:8b");
+  });
+
+  it("System Scan updates the scan summary and scanned models via the mock bridge", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "Ollama (Local)" }));
+
+    await user.click(screen.getByRole("button", { name: "System Scan" }));
+
+    await waitFor(() =>
+      expect(screen.getByText("Using saved system scan results from local Ollama locations.")).toBeInTheDocument(),
+    );
+  });
+
+  it("Validate and Pull Model is disabled until a model name is typed", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "Ollama (Local)" }));
+
+    expect(screen.getByRole("button", { name: "Validate and Pull Model" })).toBeDisabled();
+
+    await user.type(screen.getByLabelText("Validate and Pull Model"), "llama3:8b");
+
+    expect(screen.getByRole("button", { name: "Validate and Pull Model" })).toBeEnabled();
+  });
+
+  it("LlamaCpp renders the reasoning mode radios and the staged-path placeholders", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "Llama.cpp (Local)" }));
+
+    expect(screen.getByRole("radio", { name: "Thinking Mode (Enable CoT)" })).toBeChecked();
+    expect(screen.getByText("No file selected")).toBeInTheDocument();
+    expect(screen.getByText("Reusing the main chat model")).toBeInTheDocument();
+    expect(screen.getByText("No model selected")).toBeInTheDocument();
+  });
+
+  it("switching LlamaCpp reasoning mode updates the checked radio via the mock bridge", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "Llama.cpp (Local)" }));
+
+    await user.click(screen.getByRole("radio", { name: "Quick Mode (No CoT)" }));
+
+    expect(screen.getByRole("radio", { name: "Quick Mode (No CoT)" })).toBeChecked();
+  });
+
+  it("typing a Chat Format Override updates the field via the mock bridge", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "Llama.cpp (Local)" }));
+
+    await user.type(screen.getByLabelText("Chat Format Override"), "chatml");
+
+    expect(screen.getByLabelText("Chat Format Override")).toHaveValue("chatml");
+  });
+
+  it("LlamaCpp System Scan updates the scan summary via the mock bridge", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "Llama.cpp (Local)" }));
+
+    await user.click(screen.getByRole("button", { name: "System Scan" }));
+
+    await waitFor(() =>
+      expect(screen.getByText("Using saved system scan results from common local model folders.")).toBeInTheDocument(),
+    );
+  });
+
+  it("Save Settings on LlamaCpp with no staged path reports the empty-path notice via the mock bridge", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "Llama.cpp (Local)" }));
+
+    await user.click(screen.getByRole("button", { name: "Save Settings" }));
+
+    await waitFor(() => expect(screen.getByText("Chat Model File cannot be empty.")).toBeInTheDocument());
+  });
 });
 
 function installFakeQWebChannel() {
@@ -113,8 +318,29 @@ function installFakeQWebChannel() {
     setEnableSystemPrompt: vi.fn(),
     setNotificationPreference: vi.fn(),
     setUpdateNotificationsEnabled: vi.fn(),
+    checkForUpdates: vi.fn(),
+    openRepository: vi.fn(),
     setGithubToken: vi.fn(),
     clearGithubToken: vi.fn(),
+    setApiProvider: vi.fn(),
+    saveApiConfiguration: vi.fn(),
+    loadAvailableModels: vi.fn(),
+    resetApiSettings: vi.fn(),
+    setOllamaReasoningMode: vi.fn(),
+    setOllamaModelAssignment: vi.fn(),
+    scanOllamaSystem: vi.fn(),
+    pickOllamaScanFolder: vi.fn(),
+    pullOllamaModel: vi.fn(),
+    setLlamaCppReasoningMode: vi.fn(),
+    setLlamaCppChatFormat: vi.fn(),
+    setLlamaCppNCtx: vi.fn(),
+    setLlamaCppNGpuLayers: vi.fn(),
+    setLlamaCppNThreads: vi.fn(),
+    pickLlamaCppChatModelFile: vi.fn(),
+    pickLlamaCppTitleModelFile: vi.fn(),
+    scanLlamaCppSystem: vi.fn(),
+    pickLlamaCppScanFolder: vi.fn(),
+    saveLlamaCppSettings: vi.fn(),
   };
   class FakeQWebChannel {
     constructor(_t: unknown, cb: (channel: { objects: Record<string, unknown> }) => void) {
@@ -172,6 +398,26 @@ describe("App against a real (faked) QWebChannel connection", () => {
     expect(remote.setShowTokenCounter).toHaveBeenCalledWith(false);
   });
 
+  it("Check for Updates on General calls through to checkForUpdates", async () => {
+    const remote = installFakeQWebChannel();
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole("button", { name: "Check for Updates" }));
+
+    expect(remote.checkForUpdates).toHaveBeenCalledTimes(1);
+  });
+
+  it("Open Repository on General calls through to openRepository", async () => {
+    const remote = installFakeQWebChannel();
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole("button", { name: "Open Repository" }));
+
+    expect(remote.openRepository).toHaveBeenCalledTimes(1);
+  });
+
   it("saving on Integrations calls through to setGithubToken with the typed value", async () => {
     const remote = installFakeQWebChannel();
     const user = userEvent.setup();
@@ -200,6 +446,74 @@ describe("App against a real (faked) QWebChannel connection", () => {
     await user.click(screen.getByRole("button", { name: "Clear Token" }));
 
     expect(remote.clearGithubToken).toHaveBeenCalledTimes(1);
+  });
+
+  it("changing the API provider select calls through to setApiProvider", async () => {
+    const remote = installFakeQWebChannel();
+    const user = userEvent.setup();
+    render(<App />);
+    const push = remote.stateChanged.connect.mock.calls[0][0] as (payload: string) => void;
+    push(JSON.stringify({ ...initialSettingsState, activeSection: "API Endpoint", revision: 1 }));
+    await waitFor(() => expect(screen.getByLabelText("API Provider")).toBeInTheDocument());
+
+    await user.selectOptions(screen.getByLabelText("API Provider"), "Google Gemini");
+
+    expect(remote.setApiProvider).toHaveBeenCalledWith("Google Gemini");
+  });
+
+  it("Save Configuration calls through to saveApiConfiguration with the typed values as JSON", async () => {
+    const remote = installFakeQWebChannel();
+    const user = userEvent.setup();
+    render(<App />);
+    const push = remote.stateChanged.connect.mock.calls[0][0] as (payload: string) => void;
+    push(JSON.stringify({ ...initialSettingsState, activeSection: "API Endpoint", revision: 1 }));
+    await waitFor(() => expect(screen.getByLabelText("API Key")).toBeInTheDocument());
+
+    await user.type(screen.getByLabelText("API Key"), "sk-typed");
+    await user.click(screen.getByRole("button", { name: "Save Configuration" }));
+
+    expect(remote.saveApiConfiguration).toHaveBeenCalledWith(
+      expect.stringContaining("sk-typed"),
+    );
+  });
+
+  it("System Scan on Ollama calls through to scanOllamaSystem", async () => {
+    const remote = installFakeQWebChannel();
+    const user = userEvent.setup();
+    render(<App />);
+    const push = remote.stateChanged.connect.mock.calls[0][0] as (payload: string) => void;
+    push(JSON.stringify({ ...initialSettingsState, activeSection: "Ollama (Local)", revision: 1 }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "System Scan" })).toBeInTheDocument());
+
+    await user.click(screen.getByRole("button", { name: "System Scan" }));
+
+    expect(remote.scanOllamaSystem).toHaveBeenCalledTimes(1);
+  });
+
+  it("Browse for Chat Model File on LlamaCpp calls through to pickLlamaCppChatModelFile", async () => {
+    const remote = installFakeQWebChannel();
+    const user = userEvent.setup();
+    render(<App />);
+    const push = remote.stateChanged.connect.mock.calls[0][0] as (payload: string) => void;
+    push(JSON.stringify({ ...initialSettingsState, activeSection: "Llama.cpp (Local)", revision: 1 }));
+    await waitFor(() => expect(screen.getByText("Chat Model File")).toBeInTheDocument());
+
+    await user.click(screen.getAllByRole("button", { name: "Browse..." })[0]);
+
+    expect(remote.pickLlamaCppChatModelFile).toHaveBeenCalledTimes(1);
+  });
+
+  it("Save Settings on LlamaCpp calls through to saveLlamaCppSettings", async () => {
+    const remote = installFakeQWebChannel();
+    const user = userEvent.setup();
+    render(<App />);
+    const push = remote.stateChanged.connect.mock.calls[0][0] as (payload: string) => void;
+    push(JSON.stringify({ ...initialSettingsState, activeSection: "Llama.cpp (Local)", revision: 1 }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Save Settings" })).toBeInTheDocument());
+
+    await user.click(screen.getByRole("button", { name: "Save Settings" }));
+
+    expect(remote.saveLlamaCppSettings).toHaveBeenCalledTimes(1);
   });
 
   // Confirms App.tsx actually reaches the shared lib/ui/BridgeErrorState on
