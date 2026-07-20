@@ -312,11 +312,11 @@ def _validator_for(name: str, fields: dict[str, Any]) -> str:
 
 # Every generated artifact pair this repo currently ships, as
 # (dataclass, title, source label, output directory) - the registry a `--check`
-# invocation (and, if a second island is ever added, its own codegen call)
-# walks. Deliberately a plain list rather than auto-discovery: an island's
-# payload dataclass is a real design decision each time (see
-# graphlink_composer_payload.py's own module docstring), not something to
-# infer by scanning the filesystem for anything shaped like one.
+# invocation (and each island's own codegen call) walks. Deliberately a plain
+# list rather than auto-discovery: an island's payload dataclass is a real
+# design decision each time (see graphlink_composer_payload.py's own module
+# docstring), not something to infer by scanning the filesystem for anything
+# shaped like one.
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 GENERATED_ARTIFACTS = [
     {
@@ -326,6 +326,14 @@ GENERATED_ARTIFACTS = [
         "source": "graphlink_app/graphlink_composer_payload.py::ComposerStatePayload",
         "schema_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "composer-state.schema.json",
         "ts_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "composer-state.ts",
+    },
+    {
+        "dataclass": None,  # resolved lazily in main() to avoid importing
+        "dataclass_import": ("graphlink_token_counter_payload", "TokenCounterStatePayload"),
+        "title": "TokenCounterState",
+        "source": "graphlink_app/graphlink_token_counter_payload.py::TokenCounterStatePayload",
+        "schema_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "token-counter-state.schema.json",
+        "ts_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "token-counter-state.ts",
     },
 ]
 

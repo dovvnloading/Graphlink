@@ -1,0 +1,72 @@
+/* Colors deliberately reuse EXISTING app-wide --gl-* tokens (graph-node
+   panel fill / neutral-button border / neutral-button muted-icon) rather
+   than capturing a new island-scoped token group, unlike composer's
+   --gl-composer-*. This island's color needs (3 colors, a static HUD-style
+   panel) are too small to be a meaningful second data point for the shared
+   semantic vocabulary graphlink_styles.py's css_custom_properties()
+   docstring defers until "island #2" - generalizing bg-0/1/2 from
+   composer's 43 rich colors plus this panel's 3 utility colors would mostly
+   just encode composer's shape. Deferred again; recorded here rather than
+   silently. See graphlink_styles.py's _ISLAND_GROUPS docstring and
+   tests/test_theme_tokens.py's two second-island tripwire tests, both left
+   untouched by this island on purpose.
+
+   One accepted visual difference from the old QWidget: the old panel had a
+   semi-transparent rgba(45,45,45,0.7) background; solid --gl-graph-node-panel-fill
+   is used instead, since expressing partial transparency through a CSS custom
+   property would need a color-mix() (or similar) that's more machinery than
+   this small a cosmetic difference is worth. */
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+}
+
+.token-counter-shell {
+  width: 150px;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  background-color: var(--gl-graph-node-panel-fill);
+  border: 1px solid var(--gl-neutral-button-border);
+  border-radius: 6px;
+  font-family: var(--gl-font-family, system-ui, sans-serif);
+  font-size: 10px;
+  color: var(--gl-neutral-button-muted-icon);
+}
+
+.token-counter-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  line-height: 1.7;
+}
+
+.token-counter-label {
+  color: var(--gl-neutral-button-muted-icon);
+}
+
+.token-counter-value {
+  color: var(--gl-neutral-button-muted-icon);
+  font-variant-numeric: tabular-nums;
+}
+
+.token-counter-shell.bridge-error {
+  width: 220px;
+}
+
+.bridge-error-title {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.bridge-error-reason {
+  margin: 0 0 4px 0;
+}
+
+.bridge-error-details {
+  margin: 0;
+  padding-left: 16px;
+}

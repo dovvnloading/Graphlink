@@ -5,7 +5,7 @@ import time
 from PySide6.QtCore import QThread, Signal, QPointF
 import graphlink_config as config
 import api_provider
-from graphlink_widgets import TokenEstimator
+from graphlink_token_estimator import TokenEstimator
 from graphlink_memory import trim_history
 
 
