@@ -195,12 +195,13 @@ class ConnectionItem(QGraphicsItem):
         self.click_tolerance = 20.0 # Increased hitbox for easier clicking
         self.hover_path = None # Cached path for hover detection
         self.is_selected = False
-        
+        self._disposed = False
+
         # Timer to delay the start of the arrow animation on long hover
         self.hover_start_timer = QTimer()
         self.hover_start_timer.setSingleShot(True)
         self.hover_start_timer.timeout.connect(self.startArrowAnimation)
-        
+
         # Timer to drive the arrow animation frames
         self.animation_timer = QTimer()
         self.animation_timer.timeout.connect(self.updateArrows)
@@ -242,8 +243,24 @@ class ConnectionItem(QGraphicsItem):
 
     def itemChange(self, change, value):
         if change == QGraphicsItem.GraphicsItemChange.ItemSceneHasChanged:
+            if value is None:
+                self._teardown_async_helpers()
             self.sync_visibility_mode()
         return super().itemChange(change, value)
+
+    def _teardown_async_helpers(self):
+        """Stops both timers so they can't fire after this item's C++ side
+        is destroyed - QGraphicsItem isn't a QObject, so nothing else
+        parents or auto-cleans up these timers. Idempotent."""
+        if self._disposed:
+            return
+        self._disposed = True
+        for timer in (self.hover_start_timer, self.animation_timer):
+            timer.stop()
+            try:
+                timer.timeout.disconnect()
+            except (TypeError, RuntimeError):
+                pass
 
     def create_hover_path(self):
         """
@@ -501,6 +518,8 @@ class ConnectionItem(QGraphicsItem):
 
     def startArrowAnimation(self):
         """Starts the animated arrow flow along the connection path."""
+        if self._disposed:
+            return
         if not self.is_animating:
             self.is_animating = True
             self.arrows = []
@@ -508,7 +527,7 @@ class ConnectionItem(QGraphicsItem):
             if path_length <= 0:
                 self.is_animating = False
                 return
-            
+
             # Pre-populate arrows along the path
             current_distance = 0
             while current_distance < path_length:
@@ -518,39 +537,47 @@ class ConnectionItem(QGraphicsItem):
                     'distance': current_distance
                 })
                 current_distance += self.arrow_spacing
-            
+
             self.animation_timer.start(16) # ~60 FPS
-            self.update()
+            try:
+                self.update()
+            except RuntimeError:
+                self._teardown_async_helpers()
 
     def stopArrowAnimation(self):
         """Stops the arrow animation and clears the arrows."""
+        if self._disposed:
+            return
         self.is_animating = False
         self.animation_timer.stop()
         self.arrows.clear()
-        self.update()
+        try:
+            self.update()
+        except RuntimeError:
+            self._teardown_async_helpers()
 
     def updateArrows(self):
         """Updates the position of each arrow for the next animation frame."""
-        if not self.is_animating:
+        if self._disposed or not self.is_animating:
             return
-            
+
         path_length = self.path.length()
         if path_length <= 0:
             self.stopArrowAnimation()
             return
         arrows_to_remove = []
-        
+
         for arrow in self.arrows:
             arrow['distance'] += self.animation_speed
             arrow['pos'] = arrow['distance'] / path_length
-            
+
             # Mark arrows that have reached the end of the path for removal
             if arrow['pos'] >= 1:
                 arrows_to_remove.append(arrow)
-                
+
         for arrow in arrows_to_remove:
             self.arrows.remove(arrow)
-            
+
         # Add a new arrow at the start if there's space
         if not self.arrows or self.arrows[0]['distance'] >= self.arrow_spacing:
             self.arrows.insert(0, {
@@ -558,8 +585,11 @@ class ConnectionItem(QGraphicsItem):
                 'opacity': 1.0,
                 'distance': 0
             })
-        
-        self.update()
+
+        try:
+            self.update()
+        except RuntimeError:
+            self._teardown_async_helpers()
 
     def drawArrow(self, painter, pos, opacity):
         """
@@ -751,12 +781,13 @@ class ContentConnectionItem(QGraphicsItem):
         self.path = QPainterPath()
         self.setAcceptHoverEvents(True)
         self.hover = False
-        
+        self._disposed = False
+
         # Timers for hover animation
         self.hover_start_timer = QTimer()
         self.hover_start_timer.setSingleShot(True)
         self.hover_start_timer.timeout.connect(self.startArrowAnimation)
-        
+
         self.animation_timer = QTimer()
         self.animation_timer.timeout.connect(self.updateArrows)
         
@@ -797,8 +828,24 @@ class ContentConnectionItem(QGraphicsItem):
 
     def itemChange(self, change, value):
         if change == QGraphicsItem.GraphicsItemChange.ItemSceneHasChanged:
+            if value is None:
+                self._teardown_async_helpers()
             self.sync_visibility_mode()
         return super().itemChange(change, value)
+
+    def _teardown_async_helpers(self):
+        """Stops both timers so they can't fire after this item's C++ side
+        is destroyed - QGraphicsItem isn't a QObject, so nothing else
+        parents or auto-cleans up these timers. Idempotent."""
+        if self._disposed:
+            return
+        self._disposed = True
+        for timer in (self.hover_start_timer, self.animation_timer):
+            timer.stop()
+            try:
+                timer.timeout.disconnect()
+            except (TypeError, RuntimeError):
+                pass
 
     def update_path(self):
         """Recalculates the path, which is a straight line from bottom-center to top-center."""
@@ -833,29 +880,39 @@ class ContentConnectionItem(QGraphicsItem):
 
     def startArrowAnimation(self):
         """Starts the animated arrow flow."""
+        if self._disposed:
+            return
         if not self.is_animating:
             self.is_animating = True
             self.arrows = []
             path_length = self.path.length()
-            
+
             current_distance = 0
             while current_distance < path_length:
                 self.arrows.append({'pos': current_distance / path_length, 'distance': current_distance})
                 current_distance += self.arrow_spacing
-            
+
             self.animation_timer.start(16)
-            self.update()
+            try:
+                self.update()
+            except RuntimeError:
+                self._teardown_async_helpers()
 
     def stopArrowAnimation(self):
         """Stops the animated arrow flow."""
+        if self._disposed:
+            return
         self.is_animating = False
         self.animation_timer.stop()
         self.arrows.clear()
-        self.update()
+        try:
+            self.update()
+        except RuntimeError:
+            self._teardown_async_helpers()
 
     def updateArrows(self):
         """Updates arrow positions for animation."""
-        if not self.is_animating: return
+        if self._disposed or not self.is_animating: return
         path_length = self.path.length()
         for arrow in self.arrows:
             arrow['distance'] += self.animation_speed
@@ -863,7 +920,10 @@ class ContentConnectionItem(QGraphicsItem):
         self.arrows = [a for a in self.arrows if a['pos'] < 1]
         if not self.arrows or self.arrows[0]['distance'] >= self.arrow_spacing:
             self.arrows.insert(0, {'pos': 0, 'distance': 0})
-        self.update()
+        try:
+            self.update()
+        except RuntimeError:
+            self._teardown_async_helpers()
 
     def drawArrow(self, painter, pos, color):
         """Draws a single arrow on the path."""
@@ -930,11 +990,12 @@ class DocumentConnectionItem(QGraphicsItem):
         self.path = QPainterPath()
         self.setAcceptHoverEvents(True)
         self.hover = False
-        
+        self._disposed = False
+
         self.hover_start_timer = QTimer()
         self.hover_start_timer.setSingleShot(True)
         self.hover_start_timer.timeout.connect(self.startArrowAnimation)
-        
+
         self.animation_timer = QTimer()
         self.animation_timer.timeout.connect(self.updateArrows)
         
@@ -974,8 +1035,24 @@ class DocumentConnectionItem(QGraphicsItem):
 
     def itemChange(self, change, value):
         if change == QGraphicsItem.GraphicsItemChange.ItemSceneHasChanged:
+            if value is None:
+                self._teardown_async_helpers()
             self.sync_visibility_mode()
         return super().itemChange(change, value)
+
+    def _teardown_async_helpers(self):
+        """Stops both timers so they can't fire after this item's C++ side
+        is destroyed - QGraphicsItem isn't a QObject, so nothing else
+        parents or auto-cleans up these timers. Idempotent."""
+        if self._disposed:
+            return
+        self._disposed = True
+        for timer in (self.hover_start_timer, self.animation_timer):
+            timer.stop()
+            try:
+                timer.timeout.disconnect()
+            except (TypeError, RuntimeError):
+                pass
 
     def update_path(self):
         """Recalculates the path as a straight line."""
@@ -1013,6 +1090,8 @@ class DocumentConnectionItem(QGraphicsItem):
 
     def startArrowAnimation(self):
         """Starts the arrow animation."""
+        if self._disposed:
+            return
         if not self.is_animating:
             self.is_animating = True
             self.arrows = []
@@ -1022,18 +1101,26 @@ class DocumentConnectionItem(QGraphicsItem):
                 self.arrows.append({'pos': current_distance / path_length, 'distance': current_distance})
                 current_distance += self.arrow_spacing
             self.animation_timer.start(16)
-            self.update()
+            try:
+                self.update()
+            except RuntimeError:
+                self._teardown_async_helpers()
 
     def stopArrowAnimation(self):
         """Stops the arrow animation."""
+        if self._disposed:
+            return
         self.is_animating = False
         self.animation_timer.stop()
         self.arrows.clear()
-        self.update()
+        try:
+            self.update()
+        except RuntimeError:
+            self._teardown_async_helpers()
 
     def updateArrows(self):
         """Updates arrow positions for animation."""
-        if not self.is_animating: return
+        if self._disposed or not self.is_animating: return
         path_length = self.path.length()
         for arrow in self.arrows:
             arrow['distance'] += self.animation_speed
@@ -1041,7 +1128,10 @@ class DocumentConnectionItem(QGraphicsItem):
         self.arrows = [a for a in self.arrows if a['pos'] < 1]
         if not self.arrows or self.arrows[0]['distance'] >= self.arrow_spacing:
             self.arrows.insert(0, {'pos': 0, 'distance': 0})
-        self.update()
+        try:
+            self.update()
+        except RuntimeError:
+            self._teardown_async_helpers()
 
     def drawArrow(self, painter, pos, color):
         """Draws a single arrow on the path."""
@@ -1110,11 +1200,12 @@ class ImageConnectionItem(QGraphicsItem):
         self.path = QPainterPath()
         self.setAcceptHoverEvents(True)
         self.hover = False
-        
+        self._disposed = False
+
         self.hover_start_timer = QTimer()
         self.hover_start_timer.setSingleShot(True)
         self.hover_start_timer.timeout.connect(self.startArrowAnimation)
-        
+
         self.animation_timer = QTimer()
         self.animation_timer.timeout.connect(self.updateArrows)
         
@@ -1154,8 +1245,24 @@ class ImageConnectionItem(QGraphicsItem):
 
     def itemChange(self, change, value):
         if change == QGraphicsItem.GraphicsItemChange.ItemSceneHasChanged:
+            if value is None:
+                self._teardown_async_helpers()
             self.sync_visibility_mode()
         return super().itemChange(change, value)
+
+    def _teardown_async_helpers(self):
+        """Stops both timers so they can't fire after this item's C++ side
+        is destroyed - QGraphicsItem isn't a QObject, so nothing else
+        parents or auto-cleans up these timers. Idempotent."""
+        if self._disposed:
+            return
+        self._disposed = True
+        for timer in (self.hover_start_timer, self.animation_timer):
+            timer.stop()
+            try:
+                timer.timeout.disconnect()
+            except (TypeError, RuntimeError):
+                pass
 
     def update_path(self):
         """Recalculates the path as a straight line."""
@@ -1189,6 +1296,8 @@ class ImageConnectionItem(QGraphicsItem):
 
     def startArrowAnimation(self):
         """Starts the arrow animation."""
+        if self._disposed:
+            return
         if not self.is_animating:
             self.is_animating = True
             self.arrows = []
@@ -1198,18 +1307,26 @@ class ImageConnectionItem(QGraphicsItem):
                 self.arrows.append({'pos': current_distance / path_length, 'distance': current_distance})
                 current_distance += self.arrow_spacing
             self.animation_timer.start(16)
-            self.update()
+            try:
+                self.update()
+            except RuntimeError:
+                self._teardown_async_helpers()
 
     def stopArrowAnimation(self):
         """Stops the arrow animation."""
+        if self._disposed:
+            return
         self.is_animating = False
         self.animation_timer.stop()
         self.arrows.clear()
-        self.update()
+        try:
+            self.update()
+        except RuntimeError:
+            self._teardown_async_helpers()
 
     def updateArrows(self):
         """Updates arrow positions for animation."""
-        if not self.is_animating: return
+        if self._disposed or not self.is_animating: return
         path_length = self.path.length()
         for arrow in self.arrows:
             arrow['distance'] += self.animation_speed
@@ -1217,7 +1334,10 @@ class ImageConnectionItem(QGraphicsItem):
         self.arrows = [a for a in self.arrows if a['pos'] < 1]
         if not self.arrows or self.arrows[0]['distance'] >= self.arrow_spacing:
             self.arrows.insert(0, {'pos': 0, 'distance': 0})
-        self.update()
+        try:
+            self.update()
+        except RuntimeError:
+            self._teardown_async_helpers()
 
     def drawArrow(self, painter, pos, color):
         """Draws a single arrow on the path."""
@@ -1310,6 +1430,7 @@ class SystemPromptConnectionItem(QGraphicsItem):
         self.path = QPainterPath()
         self.hovered = False
         self._pulse_value = 0.0
+        self._disposed = False
 
         # Animation for the pulsing effect
         self.pulse_animation = QVariantAnimation()
@@ -1329,16 +1450,34 @@ class SystemPromptConnectionItem(QGraphicsItem):
 
     def _on_pulse_update(self, value):
         """Slot to update the pulse value from the animation and trigger a repaint."""
+        if self._disposed:
+            return
         self._pulse_value = value
-        self.update()
+        try:
+            self.update()
+        except RuntimeError:
+            self._teardown_async_helpers()
 
     def itemChange(self, change, value):
         """Stops the animation when the item is removed from the scene."""
         if change == QGraphicsItem.ItemSceneHasChanged:
-            if self.pulse_animation:
-                self.pulse_animation.stop()
+            if value is None:
+                self._teardown_async_helpers()
             self.sync_visibility_mode()
         return super().itemChange(change, value)
+
+    def _teardown_async_helpers(self):
+        """Stops the pulse animation so it can't fire after this item's C++
+        side is destroyed - QGraphicsItem isn't a QObject, so nothing else
+        parents or auto-cleans up this QVariantAnimation. Idempotent."""
+        if self._disposed:
+            return
+        self._disposed = True
+        self.pulse_animation.stop()
+        try:
+            self.pulse_animation.valueChanged.disconnect()
+        except (TypeError, RuntimeError):
+            pass
 
     def _get_visual_rect(self, item):
         """Helper to get the visual rectangle of an item."""
@@ -1451,11 +1590,12 @@ class PyCoderConnectionItem(QGraphicsItem):
         self.path = QPainterPath()
         self.setAcceptHoverEvents(True)
         self.hover = False
-        
+        self._disposed = False
+
         self.hover_start_timer = QTimer()
         self.hover_start_timer.setSingleShot(True)
         self.hover_start_timer.timeout.connect(self.startArrowAnimation)
-        
+
         self.animation_timer = QTimer()
         self.animation_timer.timeout.connect(self.updateArrows)
         
@@ -1495,8 +1635,24 @@ class PyCoderConnectionItem(QGraphicsItem):
 
     def itemChange(self, change, value):
         if change == QGraphicsItem.GraphicsItemChange.ItemSceneHasChanged:
+            if value is None:
+                self._teardown_async_helpers()
             self.sync_visibility_mode()
         return super().itemChange(change, value)
+
+    def _teardown_async_helpers(self):
+        """Stops both timers so they can't fire after this item's C++ side
+        is destroyed - QGraphicsItem isn't a QObject, so nothing else
+        parents or auto-cleans up these timers. Idempotent."""
+        if self._disposed:
+            return
+        self._disposed = True
+        for timer in (self.hover_start_timer, self.animation_timer):
+            timer.stop()
+            try:
+                timer.timeout.disconnect()
+            except (TypeError, RuntimeError):
+                pass
 
     def update_path(self):
         """Recalculates the path of the connection."""
@@ -1547,6 +1703,8 @@ class PyCoderConnectionItem(QGraphicsItem):
 
     def startArrowAnimation(self):
         """Starts the arrow animation."""
+        if self._disposed:
+            return
         if not self.is_animating:
             self.is_animating = True
             self.arrows = []
@@ -1556,18 +1714,26 @@ class PyCoderConnectionItem(QGraphicsItem):
                 self.arrows.append({'pos': current_distance / path_length, 'distance': current_distance})
                 current_distance += self.arrow_spacing
             self.animation_timer.start(16)
-            self.update()
+            try:
+                self.update()
+            except RuntimeError:
+                self._teardown_async_helpers()
 
     def stopArrowAnimation(self):
         """Stops the arrow animation."""
+        if self._disposed:
+            return
         self.is_animating = False
         self.animation_timer.stop()
         self.arrows.clear()
-        self.update()
+        try:
+            self.update()
+        except RuntimeError:
+            self._teardown_async_helpers()
 
     def updateArrows(self):
         """Updates arrow positions for animation."""
-        if not self.is_animating: return
+        if self._disposed or not self.is_animating: return
         path_length = self.path.length()
         for arrow in self.arrows:
             arrow['distance'] += self.animation_speed
@@ -1575,7 +1741,10 @@ class PyCoderConnectionItem(QGraphicsItem):
         self.arrows = [a for a in self.arrows if a['pos'] < 1]
         if not self.arrows or self.arrows[0]['distance'] >= self.arrow_spacing:
             self.arrows.insert(0, {'pos': 0, 'distance': 0})
-        self.update()
+        try:
+            self.update()
+        except RuntimeError:
+            self._teardown_async_helpers()
 
     def drawArrow(self, painter, pos, color):
         """Draws a single arrow on the path."""

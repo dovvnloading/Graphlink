@@ -19,11 +19,26 @@ class HoverAnimationMixin:
     def __init__(self):
         """Initializes the HoverAnimationMixin."""
         self.incoming_connection = None # The connection leading *to* this node.
+        self._hover_animation_disposed = False
         # A single-shot timer to detect a "long hover".
         self.long_hover_timer = QTimer()
         self.long_hover_timer.setSingleShot(True)
         self.long_hover_timer.setInterval(750) # 750ms delay before triggering.
         self.long_hover_timer.timeout.connect(self.trigger_ancestor_animation)
+
+    def _stop_hover_animation_timer(self):
+        """Stops long_hover_timer so it can't fire after the host item's C++
+        side is destroyed - QGraphicsItem isn't a QObject, so nothing else
+        parents or auto-cleans up this timer. Idempotent; each host class's
+        itemChange calls this on ItemSceneHasChanged/value is None."""
+        if self._hover_animation_disposed:
+            return
+        self._hover_animation_disposed = True
+        self.long_hover_timer.stop()
+        try:
+            self.long_hover_timer.timeout.disconnect()
+        except (TypeError, RuntimeError):
+            pass
 
     def trigger_ancestor_animation(self):
         """

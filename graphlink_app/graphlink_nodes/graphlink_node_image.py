@@ -174,6 +174,8 @@ class ImageNode(QGraphicsItem, HoverAnimationMixin):
         super().hoverLeaveEvent(event)
 
     def itemChange(self, change, value):
+        if change == QGraphicsItem.ItemSceneHasChanged and value is None:
+            self._stop_hover_animation_timer()
         if change == QGraphicsItem.ItemPositionChange and self.scene():
             parent = self.parentItem()
             if parent and isinstance(parent, Container):

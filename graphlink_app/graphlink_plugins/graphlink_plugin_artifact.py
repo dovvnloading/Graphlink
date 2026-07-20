@@ -624,6 +624,8 @@ class ArtifactNode(QGraphicsObject, HoverAnimationMixin):
         super().mouseReleaseEvent(event)
 
     def itemChange(self, change, value):
+        if change == QGraphicsObject.GraphicsItemChange.ItemSceneHasChanged and value is None:
+            self._stop_hover_animation_timer()
         if change == QGraphicsObject.GraphicsItemChange.ItemPositionChange and self.scene() and self.scene().is_dragging_item:
             return self.scene().snap_position(self, value)
         if change == QGraphicsObject.GraphicsItemChange.ItemPositionHasChanged and self.scene():

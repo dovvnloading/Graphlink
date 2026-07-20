@@ -1652,10 +1652,68 @@ class ChatScene(QGraphicsScene):
                 
         return snapped_pos
 
+    def _teardown_items_before_clear(self):
+        """Stops every tracked item's unparented async timers/animations
+        BEFORE super().clear() deletes their C++ objects.
+
+        QGraphicsScene.clear() does NOT call itemChange(ItemSceneHasChanged,
+        None) for the items it removes - confirmed empirically against this
+        project's PySide6 build: only QGraphicsScene.removeItem() (the
+        individual-delete path, e.g. right-click delete) fires that
+        notification. clear() deletes each item's C++ side directly. Since
+        QGraphicsItem isn't a QObject, nothing else stops a plain QTimer/
+        QVariantAnimation created inside one - the itemChange-based teardown
+        hooks on these classes are correct and necessary for the
+        removeItem() path, but are never invoked for clear(), which is
+        exactly the path chat-switching uses (see
+        graphlink_session/deserializers.py's restore_chat()). This walk is
+        the only way to stop them before clear() destroys the items.
+        """
+        def _try_teardown(item, method_name):
+            method = getattr(item, method_name, None)
+            if callable(method):
+                try:
+                    method()
+                except RuntimeError:
+                    pass
+
+        connection_lists = (
+            self.connections, self.content_connections, self.document_connections,
+            self.image_connections, self.thinking_connections, self.system_prompt_connections,
+            self.pycoder_connections, self.code_sandbox_connections, self.web_connections,
+            self.conversation_connections, self.group_summary_connections, self.html_connections,
+            self.artifact_connections, self.gitlink_connections, self.chart_connections,
+        )
+        for conn_list in connection_lists:
+            for conn in conn_list:
+                _try_teardown(conn, "_teardown_async_helpers")
+
+        hover_animation_node_lists = (
+            self.nodes, self.code_nodes, self.document_nodes, self.image_nodes,
+            self.thinking_nodes, self.pycoder_nodes, self.code_sandbox_nodes,
+            self.web_nodes, self.conversation_nodes, self.html_view_nodes,
+            self.artifact_nodes, self.gitlink_nodes,
+        )
+        for node_list in hover_animation_node_lists:
+            for node in node_list:
+                _try_teardown(node, "_stop_hover_animation_timer")
+
+        for node in self.conversation_nodes:
+            typing_indicator = getattr(node, "_typing_indicator", None)
+            if typing_indicator is not None:
+                _try_teardown(typing_indicator, "_teardown_async_helpers")
+
+        for item in list(self.notes) + list(self.containers) + list(self.frames):
+            _try_teardown(item, "_teardown_async_helpers")
+
+        for chart in self.chart_nodes:
+            _try_teardown(chart, "dispose")  # ChartItem.dispose() is timer/figure-only
+
     def clear(self):
         """
         Clears the entire scene, removing all items and resetting all tracking lists.
         """
+        self._teardown_items_before_clear()
         super().clear()
         self.nodes.clear()
         self.connections.clear()

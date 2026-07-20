@@ -520,9 +520,10 @@ class HtmlViewNode(QGraphicsObject, HoverAnimationMixin):
 
     def itemChange(self, change, value):
         if change == self.GraphicsItemChange.ItemSceneHasChanged and not self.scene():
+            self._stop_hover_animation_timer()
             if self.popout_window:
                 self.popout_window.close()
-        
+
         if change == QGraphicsObject.GraphicsItemChange.ItemPositionChange and self.scene() and self.scene().is_dragging_item:
             return self.scene().snap_position(self, value)
         if change == QGraphicsObject.GraphicsItemChange.ItemPositionHasChanged and self.scene():

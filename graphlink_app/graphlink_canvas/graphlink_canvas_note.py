@@ -77,7 +77,8 @@ class Note(QGraphicsItem):
         
         self.hovered = False
         self.color_button_hovered = False
-        
+        self._disposed = False
+
         self.cursor_timer = QTimer()
         self.cursor_timer.timeout.connect(self.toggle_cursor)
         self.cursor_timer.setInterval(500)
@@ -181,8 +182,26 @@ class Note(QGraphicsItem):
         
     def toggle_cursor(self):
         """Toggles the visibility of the text editing cursor."""
+        if self._disposed:
+            return
         self.cursor_visible = not self.cursor_visible
-        self.update()
+        try:
+            self.update()
+        except RuntimeError:
+            self._teardown_async_helpers()
+
+    def _teardown_async_helpers(self):
+        """Stops cursor_timer so it can't fire after this item's C++ side is
+        destroyed - QGraphicsItem isn't a QObject, so nothing else parents
+        or auto-cleans up this timer. Idempotent."""
+        if self._disposed:
+            return
+        self._disposed = True
+        self.cursor_timer.stop()
+        try:
+            self.cursor_timer.timeout.disconnect()
+        except (TypeError, RuntimeError):
+            pass
 
     def paint(self, painter, option, widget=None):
         """Handles the custom painting of the note."""
@@ -644,6 +663,9 @@ class Note(QGraphicsItem):
         
     def itemChange(self, change, value):
         """Handles item changes."""
+        if change == QGraphicsItem.ItemSceneHasChanged and value is None:
+            self._teardown_async_helpers()
+
         if change == QGraphicsItem.ItemPositionChange and self.scene() and self.scene().is_dragging_item:
             parent = self.parentItem()
             from .graphlink_canvas_container import Container
