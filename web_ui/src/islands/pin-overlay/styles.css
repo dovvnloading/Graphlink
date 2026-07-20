@@ -1,0 +1,248 @@
+/* Colors reuse EXISTING app-wide --gl-* tokens, same convention every
+   island since token-counter follows. Height is content-driven (a
+   ResizeObserver reports it to Python, which bounds it to the legacy
+   panel's own [MIN_HEIGHT, MAX_HEIGHT] range - see App.tsx). */
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+}
+
+.pin-overlay-shell {
+  box-sizing: border-box;
+  width: 400px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  font-family: var(--gl-font-family, system-ui, sans-serif);
+  color: var(--gl-neutral-button-icon);
+  background-color: var(--gl-graph-node-panel-fill);
+  border: 1px solid var(--gl-neutral-button-border);
+  border-radius: 14px;
+}
+
+.pin-overlay-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.pin-overlay-heading {
+  flex: 1;
+  min-width: 0;
+}
+
+.pin-overlay-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.pin-overlay-meta {
+  margin: 4px 0 0 0;
+  font-size: 11px;
+  color: var(--gl-neutral-button-muted-icon);
+}
+
+.pin-overlay-close-btn {
+  flex-shrink: 0;
+  padding: 6px 14px;
+  font-size: 11px;
+  font-weight: 600;
+  font-family: inherit;
+  color: var(--gl-neutral-button-icon);
+  background-color: var(--gl-neutral-button-background);
+  border: 1px solid var(--gl-neutral-button-border);
+  border-radius: 9px;
+  cursor: pointer;
+}
+
+.pin-overlay-close-btn:hover {
+  background-color: var(--gl-neutral-button-hover);
+}
+
+.pin-overlay-search-input {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 8px 12px;
+  min-height: 20px;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--gl-neutral-button-icon);
+  background-color: var(--gl-graph-node-body-start);
+  border: 1px solid var(--gl-neutral-button-border);
+  border-radius: 9px;
+  outline: none;
+}
+
+.pin-overlay-search-input:focus {
+  border-color: var(--gl-palette-selection);
+}
+
+.pin-overlay-list {
+  margin: 0;
+  padding: 7px;
+  list-style: none;
+  max-height: 340px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background-color: var(--gl-graph-node-body-start);
+  border: 1px solid var(--gl-neutral-button-border);
+  border-radius: 11px;
+}
+
+.pin-overlay-empty {
+  padding: 12px;
+  font-size: 12px;
+  color: var(--gl-neutral-button-muted-icon);
+}
+
+.pin-overlay-row {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px;
+  border-radius: 10px;
+  background-color: var(--gl-neutral-button-background);
+}
+
+.pin-overlay-row:hover {
+  background-color: var(--gl-neutral-button-hover);
+}
+
+.pin-overlay-row.selected {
+  background-color: var(--gl-palette-selection);
+}
+
+.pin-overlay-row-main {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  padding: 6px 8px;
+  background: transparent;
+  border: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.pin-overlay-row-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pin-overlay-row-note {
+  margin: 2px 0 0 0;
+  font-size: 11px;
+  color: var(--gl-neutral-button-muted-icon);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pin-overlay-row.selected .pin-overlay-row-note {
+  color: var(--gl-neutral-button-icon);
+}
+
+.pin-overlay-row-actions {
+  flex-shrink: 0;
+  display: flex;
+  gap: 4px;
+  padding-right: 4px;
+}
+
+.pin-overlay-row-action {
+  padding: 4px 8px;
+  font-size: 10px;
+  font-weight: 600;
+  font-family: inherit;
+  color: var(--gl-neutral-button-icon);
+  background-color: transparent;
+  border: 1px solid var(--gl-neutral-button-border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.pin-overlay-row-action:hover {
+  background-color: var(--gl-neutral-button-hover);
+}
+
+.pin-overlay-row-action.danger {
+  color: var(--gl-semantic-status-error);
+  border-color: var(--gl-semantic-status-error);
+}
+
+.pin-overlay-footer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 10px;
+  background-color: var(--gl-graph-node-body-start);
+  border: 1px solid var(--gl-neutral-button-border);
+  border-radius: 10px;
+}
+
+.pin-overlay-count {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: 11px;
+  color: var(--gl-neutral-button-muted-icon);
+}
+
+.pin-overlay-add-btn {
+  flex-shrink: 0;
+  padding: 0 16px;
+  min-height: 36px;
+  font-size: 11px;
+  font-weight: 700;
+  font-family: inherit;
+  color: var(--gl-palette-selection);
+  background-color: var(--gl-neutral-button-background);
+  border: 1px solid var(--gl-palette-selection);
+  border-radius: 9px;
+  cursor: pointer;
+}
+
+.pin-overlay-add-btn:hover:not(:disabled) {
+  background-color: var(--gl-neutral-button-hover);
+}
+
+.pin-overlay-add-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.bridge-error-title {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.bridge-error-reason {
+  margin: 0 0 4px 0;
+  font-size: 13px;
+}
+
+.bridge-error-details {
+  margin: 0;
+  padding-left: 16px;
+  font-size: 12px;
+  color: var(--gl-neutral-button-muted-icon);
+}
+
+.bridge-error-hint {
+  margin: 8px 0 0 0;
+  font-size: 12px;
+  color: var(--gl-neutral-button-muted-icon);
+}

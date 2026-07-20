@@ -16,6 +16,13 @@ panel stayed at whatever Y it was given when it was first shown, and the search 
 Fix: ChatWindow._update_overlay_positions() now also calls
 self.chat_view._update_overlay_positions() so every trigger recalculates the full
 stack, not just the subset ChatWindow's own version knows about.
+
+Phase 5 increment 1: search_overlay's own positioning moved from an inline
+.move() call here to overlay_coordinator.reposition_all() (see
+graphlink_overlay_coordinator.py) - ChatView still needs search_overlay's
+height/visibility to stack control_widget/grid_control/font_control below it,
+now via a direct reference (_search_overlay_host) instead of a findChild()
+probe, but no longer repositions it a second time itself.
 """
 
 import sys
@@ -32,7 +39,6 @@ def _make_mock_window():
     mock_self.chat_view.viewport.return_value = MagicMock(width=lambda: 1000, height=lambda: 800)
     mock_self.composer = None
     mock_self.composer_overlay_parent = None
-    mock_self.search_overlay.isVisible.return_value = False
     mock_self.notification_banner.isVisible.return_value = False
     mock_self.token_counter_widget.isVisible.return_value = False
     return mock_self
@@ -46,12 +52,22 @@ def test_chat_window_overlay_update_delegates_to_chat_view():
     mock_self.chat_view._update_overlay_positions.assert_called_once()
 
 
-def test_delegation_happens_regardless_of_search_overlay_visibility():
-    # The bug specifically manifested when search_overlay's visibility was toggled,
-    # so cover both states explicitly rather than only the default (hidden) case.
+def test_chat_window_overlay_update_delegates_to_the_coordinator():
+    mock_self = _make_mock_window()
+
+    graphlink_window.ChatWindow._update_overlay_positions(mock_self)
+
+    mock_self.overlay_coordinator.reposition_all.assert_called_once()
+
+
+def test_delegation_happens_regardless_of_search_overlay_visibility_in_chat_view():
+    # The original bug specifically manifested when search_overlay's visibility
+    # was toggled, so cover both states explicitly rather than only the default
+    # (hidden) case - now exercised on ChatView's own mock, since that's where
+    # search_overlay's visibility is actually read (via _search_overlay_host).
     for visible in (True, False):
         mock_self = _make_mock_window()
-        mock_self.search_overlay.isVisible.return_value = visible
+        mock_self.chat_view._search_overlay_host.isVisible.return_value = visible
 
         graphlink_window.ChatWindow._update_overlay_positions(mock_self)
 

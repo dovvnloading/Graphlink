@@ -391,6 +391,22 @@ GENERATED_ARTIFACTS = [
         "schema_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "chat-library-state.schema.json",
         "ts_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "chat-library-state.ts",
     },
+    {
+        "dataclass": None,  # resolved lazily in main() to avoid importing
+        "dataclass_import": ("graphlink_search_overlay_payload", "SearchOverlayStatePayload"),
+        "title": "SearchOverlayState",
+        "source": "graphlink_app/graphlink_search_overlay_payload.py::SearchOverlayStatePayload",
+        "schema_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "search-overlay-state.schema.json",
+        "ts_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "search-overlay-state.ts",
+    },
+    {
+        "dataclass": None,  # resolved lazily in main() to avoid importing
+        "dataclass_import": ("graphlink_pin_overlay_payload", "PinOverlayStatePayload"),
+        "title": "PinOverlayState",
+        "source": "graphlink_app/graphlink_pin_overlay_payload.py::PinOverlayStatePayload",
+        "schema_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "pin-overlay-state.schema.json",
+        "ts_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "pin-overlay-state.ts",
+    },
 ]
 
 
