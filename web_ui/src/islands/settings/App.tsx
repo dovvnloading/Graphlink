@@ -190,6 +190,7 @@ interface ApiPageProps {
 }
 
 const API_MODELS_DATALIST_ID = "settings-api-available-models";
+const API_IMAGE_MODELS_DATALIST_ID = "settings-api-image-models";
 
 // Save Configuration is deliberately batched (unlike every other intent on
 // this island) - draftBaseUrl/draftApiKey/draftTaskModels are local-only
@@ -205,16 +206,24 @@ function ApiPage({ state, bridgeRef }: ApiPageProps) {
   const [draftBaseUrl, setDraftBaseUrl] = useState(state.apiBaseUrl);
   const [draftApiKey, setDraftApiKey] = useState("");
   const [draftTaskModels, setDraftTaskModels] = useState<Record<string, string>>(state.apiTaskModels);
+  // Reset is destructive and irreversible (write-only secrets: cleared keys
+  // can never be re-displayed), so it gets a two-step in-UI confirmation -
+  // the web-island equivalent of the legacy widget's "This cannot be undone"
+  // QMessageBox, kept entirely inside React so it doesn't depend on a native
+  // JS-dialog handler in the hardened QWebEngineView.
+  const [confirmingReset, setConfirmingReset] = useState(false);
 
   if (state.apiProvider !== prevProvider) {
     setPrevProvider(state.apiProvider);
     setDraftBaseUrl(state.apiBaseUrl);
     setDraftApiKey("");
     setDraftTaskModels(state.apiTaskModels);
+    setConfirmingReset(false);
   }
 
   const isOpenAi = state.apiProvider === "OpenAI-Compatible";
   const isAnthropic = state.apiProvider === "Anthropic Claude";
+  const isGemini = state.apiProvider === "Google Gemini";
   const keyConfigured = isOpenAi
     ? state.openaiKeyConfigured
     : isAnthropic
@@ -265,7 +274,11 @@ function ApiPage({ state, bridgeRef }: ApiPageProps) {
         {keyConfigured ? "A key is currently configured for this provider." : "No key configured for this provider."}
       </p>
 
-      {!isAnthropic && (
+      {/* Load fetches a live catalog, which only means something where a
+          live fetch happens: OpenAI + Anthropic. Gemini uses a fixed static
+          list (chat + image), so no Load button - matching the legacy
+          widget's own load_btn.setVisible(is_openai or is_anthropic). */}
+      {!isGemini && (
         <div className="settings-button-row">
           <button
             type="button"
@@ -283,6 +296,13 @@ function ApiPage({ state, bridgeRef }: ApiPageProps) {
           <option key={model} value={model} />
         ))}
       </datalist>
+      {/* Gemini's image task takes a distinct curated list, not its chat
+          models - the bridge fills apiImageModels only for Gemini. */}
+      <datalist id={API_IMAGE_MODELS_DATALIST_ID}>
+        {state.apiImageModels.map((model) => (
+          <option key={model} value={model} />
+        ))}
+      </datalist>
 
       {API_TASKS.map((task) => {
         if (task === "task_image_gen" && isAnthropic) {
@@ -292,12 +312,18 @@ function ApiPage({ state, bridgeRef }: ApiPageProps) {
             </p>
           );
         }
+        // Gemini's image field points at the curated image-model datalist;
+        // every other field (and every other provider) uses the general one.
+        const datalistId =
+          task === "task_image_gen" && state.apiImageModels.length > 0
+            ? API_IMAGE_MODELS_DATALIST_ID
+            : API_MODELS_DATALIST_ID;
         return (
           <label className="settings-field" key={task}>
             <span className="settings-field-label">{API_TASK_LABELS[task]}</span>
             <input
               className="settings-select"
-              list={API_MODELS_DATALIST_ID}
+              list={datalistId}
               value={draftTaskModels[task] ?? ""}
               onChange={(event) => setDraftTaskModels({ ...draftTaskModels, [task]: event.target.value })}
             />
@@ -311,10 +337,35 @@ function ApiPage({ state, bridgeRef }: ApiPageProps) {
         </p>
       )}
 
+      {confirmingReset && (
+        <p className="settings-update-status" data-level="error">
+          This clears all saved API keys and model configurations and cannot be undone.
+        </p>
+      )}
+
       <div className="settings-button-row">
-        <button type="button" className="settings-button" onClick={() => bridgeRef.current?.resetApiSettings()}>
-          Reset API Settings
-        </button>
+        {confirmingReset ? (
+          <>
+            <button type="button" className="settings-button" onClick={() => setConfirmingReset(false)}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="settings-button settings-button-primary"
+              onClick={() => {
+                bridgeRef.current?.resetApiSettings();
+                setConfirmingReset(false);
+                setDraftApiKey("");
+              }}
+            >
+              Confirm Reset
+            </button>
+          </>
+        ) : (
+          <button type="button" className="settings-button" onClick={() => setConfirmingReset(true)}>
+            Reset API Settings
+          </button>
+        )}
         <button
           type="button"
           className="settings-button settings-button-primary"
@@ -554,6 +605,30 @@ function LlamaCppPage({ state, bridgeRef }: LlamaCppPageProps) {
       </div>
       <p className="settings-update-status">{state.llamaCppScanSummary}</p>
 
+      {/* Scanned-model dropdowns surface the System Scan / Scan Folder
+          results for selection - the whole payoff of scanning. Mirrors the
+          legacy widget's "Scanned Chat Model" / "Scanned Naming Model"
+          combos: picking one stages its path (bridge-side, like Browse),
+          Save persists+validates. Only shown once a scan has found models;
+          the summary above guides the user to scan otherwise. */}
+      {state.llamaCppScannedModels.length > 0 && (
+        <label className="settings-field">
+          <span className="settings-field-label">Scanned Chat Model</span>
+          <select
+            className="settings-select"
+            value={state.llamaCppScannedModels.includes(state.llamaCppChatModelPath) ? state.llamaCppChatModelPath : ""}
+            onChange={(event) => bridgeRef.current?.setLlamaCppChatModelPath(event.target.value)}
+          >
+            <option value="">Choose a scanned GGUF...</option>
+            {state.llamaCppScannedModels.map((model) => (
+              <option key={model} value={model}>
+                {model.split(/[\\/]/).pop()}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+
       <div className="settings-field">
         <span className="settings-field-label">Chat Model File</span>
         <p className="settings-update-status">{state.llamaCppChatModelPath || "No file selected"}</p>
@@ -567,6 +642,24 @@ function LlamaCppPage({ state, bridgeRef }: LlamaCppPageProps) {
           </button>
         </div>
       </div>
+
+      {state.llamaCppScannedModels.length > 0 && (
+        <label className="settings-field">
+          <span className="settings-field-label">Scanned Naming Model</span>
+          <select
+            className="settings-select"
+            value={state.llamaCppScannedModels.includes(state.llamaCppTitleModelPath) ? state.llamaCppTitleModelPath : ""}
+            onChange={(event) => bridgeRef.current?.setLlamaCppTitleModelPath(event.target.value)}
+          >
+            <option value="">Choose a scanned GGUF...</option>
+            {state.llamaCppScannedModels.map((model) => (
+              <option key={model} value={model}>
+                {model.split(/[\\/]/).pop()}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
 
       <div className="settings-field">
         <span className="settings-field-label">Chat Naming File (optional)</span>

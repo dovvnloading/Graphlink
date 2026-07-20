@@ -43,6 +43,16 @@ SETTINGS_UNAVAILABLE_MESSAGE = (
 SETTINGS_WIDTH = 820
 SETTINGS_HEIGHT = 560
 
+# Phase 3 increment 9: the settings island is now the DEFAULT renderer -
+# every user gets the web settings unless they explicitly opt back into the
+# legacy Qt dialog via GRAPHLINK_SETTINGS_RENDERER=legacy or the mirrored
+# settings key (the escape hatch kept live for the one-release observation
+# window before increment 10 deletes the legacy dialog and this flag
+# entirely). Named here, not inlined at the show_settings() call site, so
+# the flip is one testable constant (test_renderer_flags.py guards it) and
+# so increment 10 has a single named thing to remove.
+SETTINGS_RENDERER_DEFAULT = "web"
+
 
 class SettingsWebHost(WebIslandHost):
     def __init__(self, settings_manager, main_window=None, parent=None):

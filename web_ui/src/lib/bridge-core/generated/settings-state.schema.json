@@ -17,6 +17,12 @@
     "apiBaseUrl": {
       "type": "string"
     },
+    "apiImageModels": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
     "apiLoadStatus": {
       "type": "string"
     },
@@ -170,6 +176,7 @@
     "geminiKeyConfigured",
     "apiTaskModels",
     "apiAvailableModels",
+    "apiImageModels",
     "apiLoadStatus",
     "ollamaReasoningMode",
     "ollamaCurrentModel",

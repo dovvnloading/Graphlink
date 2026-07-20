@@ -89,6 +89,24 @@ class TestSetOllamaReasoningMode:
 
         assert states == []
 
+    def test_reasoning_change_reinitializes_the_running_agent(self, tmp_path):
+        # Regression guard for the parity gap found before the increment-9
+        # flip: reasoning mode feeds the agent's system prompt, so it must
+        # take effect live (legacy Ollama save called reinitialize_agent).
+        class _FakeMainWindow:
+            def __init__(self):
+                self.reinit_calls = 0
+
+            def reinitialize_agent(self):
+                self.reinit_calls += 1
+
+        main_window = _FakeMainWindow()
+        bridge = SettingsBridge(SettingsManager(tmp_path / "session.dat"), main_window=main_window)
+
+        bridge.setOllamaReasoningMode("Quick")
+
+        assert main_window.reinit_calls == 1
+
 
 class TestSetOllamaModelAssignment:
     def test_explicit_value_persists_and_resolves_chat(self, tmp_path):

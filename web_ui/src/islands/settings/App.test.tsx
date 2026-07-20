@@ -130,7 +130,7 @@ describe("App against the mock bridge", () => {
     expect(screen.getByLabelText("Image Generation")).toBeInTheDocument();
   });
 
-  it("switching provider to Anthropic hides Base URL and the Load button, and excludes image gen", async () => {
+  it("switching provider to Anthropic hides Base URL, keeps the Load button (live catalog fetch), and excludes image gen", async () => {
     const user = userEvent.setup();
     render(<App />);
     await user.click(screen.getByRole("button", { name: "API Endpoint" }));
@@ -138,12 +138,14 @@ describe("App against the mock bridge", () => {
     await user.selectOptions(screen.getByLabelText("API Provider"), "Anthropic Claude");
 
     expect(screen.queryByLabelText("Base URL")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Load Available Models" })).not.toBeInTheDocument();
+    // Anthropic performs a real live catalog fetch, so the Load button must
+    // be present (matches legacy load_btn visible for OpenAI or Anthropic).
+    expect(screen.getByRole("button", { name: "Load Available Models" })).toBeInTheDocument();
     expect(screen.queryByLabelText("Image Generation")).not.toBeInTheDocument();
     expect(screen.getByText("Anthropic Claude does not support image generation in Graphlink yet.")).toBeInTheDocument();
   });
 
-  it("switching provider to Gemini shows Load button but no Base URL", async () => {
+  it("switching provider to Gemini hides both Base URL and the Load button (Gemini uses static lists)", async () => {
     const user = userEvent.setup();
     render(<App />);
     await user.click(screen.getByRole("button", { name: "API Endpoint" }));
@@ -151,7 +153,8 @@ describe("App against the mock bridge", () => {
     await user.selectOptions(screen.getByLabelText("API Provider"), "Google Gemini");
 
     expect(screen.queryByLabelText("Base URL")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Load Available Models" })).toBeInTheDocument();
+    // Gemini has no live catalog to fetch, so no Load button (matches legacy).
+    expect(screen.queryByRole("button", { name: "Load Available Models" })).not.toBeInTheDocument();
   });
 
   it("Load Available Models is disabled until a key is typed", async () => {
@@ -180,7 +183,29 @@ describe("App against the mock bridge", () => {
     expect(screen.getByLabelText("API Key")).toHaveValue("");
   });
 
-  it("Reset API Settings clears the configured status via the mock bridge", async () => {
+  it("Reset API Settings requires a confirmation step before clearing", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "API Endpoint" }));
+    await user.type(screen.getByLabelText("API Key"), "sk-typed");
+    await user.click(screen.getByRole("button", { name: "Save Configuration" }));
+    await waitFor(() =>
+      expect(screen.getByText("A key is currently configured for this provider.")).toBeInTheDocument(),
+    );
+
+    // First click only arms the confirmation - nothing is cleared yet.
+    await user.click(screen.getByRole("button", { name: "Reset API Settings" }));
+    expect(screen.getByText(/cannot be undone/)).toBeInTheDocument();
+    expect(screen.getByText("A key is currently configured for this provider.")).toBeInTheDocument();
+
+    // Confirm actually clears.
+    await user.click(screen.getByRole("button", { name: "Confirm Reset" }));
+    await waitFor(() =>
+      expect(screen.getByText("No key configured for this provider.")).toBeInTheDocument(),
+    );
+  });
+
+  it("Cancelling the reset confirmation leaves the configuration intact", async () => {
     const user = userEvent.setup();
     render(<App />);
     await user.click(screen.getByRole("button", { name: "API Endpoint" }));
@@ -191,10 +216,45 @@ describe("App against the mock bridge", () => {
     );
 
     await user.click(screen.getByRole("button", { name: "Reset API Settings" }));
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
 
-    await waitFor(() =>
-      expect(screen.getByText("No key configured for this provider.")).toBeInTheDocument(),
-    );
+    expect(screen.queryByText(/cannot be undone/)).not.toBeInTheDocument();
+    expect(screen.getByText("A key is currently configured for this provider.")).toBeInTheDocument();
+  });
+
+  it("Gemini's Image Generation field points at the curated image-model datalist", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "API Endpoint" }));
+
+    // OpenAI (default): image field uses the shared datalist.
+    expect(screen.getByLabelText("Image Generation")).toHaveAttribute("list", "settings-api-available-models");
+
+    await user.selectOptions(screen.getByLabelText("API Provider"), "Google Gemini");
+
+    // Gemini: image field switches to the separate curated image datalist,
+    // and that datalist carries the Gemini image models (not chat models).
+    expect(screen.getByLabelText("Image Generation")).toHaveAttribute("list", "settings-api-image-models");
+    const imageDatalist = document.getElementById("settings-api-image-models");
+    expect(imageDatalist?.querySelector('option[value="gemini-2.5-flash-image"]')).not.toBeNull();
+    expect(imageDatalist?.querySelector('option[value="gemini-2.5-flash"]')).toBeNull();
+  });
+
+  it("LlamaCpp scanned-model dropdown appears after a scan and staging a pick updates the model path", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "Llama.cpp (Local)" }));
+
+    // No scan yet -> no scanned-model dropdown.
+    expect(screen.queryByLabelText("Scanned Chat Model")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "System Scan" }));
+
+    // The scan published models, so the dropdown now exists and is selectable.
+    const scannedSelect = await screen.findByLabelText("Scanned Chat Model");
+    await user.selectOptions(scannedSelect, "/models/chat.gguf");
+
+    await waitFor(() => expect(screen.getByText("/models/chat.gguf")).toBeInTheDocument());
   });
 
   it("Ollama renders the reasoning mode radios and all 5 task fields defaulting to auto/inherit", async () => {
@@ -338,6 +398,8 @@ function installFakeQWebChannel() {
     setLlamaCppNThreads: vi.fn(),
     pickLlamaCppChatModelFile: vi.fn(),
     pickLlamaCppTitleModelFile: vi.fn(),
+    setLlamaCppChatModelPath: vi.fn(),
+    setLlamaCppTitleModelPath: vi.fn(),
     scanLlamaCppSystem: vi.fn(),
     pickLlamaCppScanFolder: vi.fn(),
     saveLlamaCppSettings: vi.fn(),

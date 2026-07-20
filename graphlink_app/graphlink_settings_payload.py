@@ -69,6 +69,11 @@ class SettingsStatePayload:
     geminiKeyConfigured: bool
     apiTaskModels: dict[str, str]
     apiAvailableModels: list[str]
+    # Gemini's image-generation task takes a distinct curated list
+    # (GEMINI_IMAGE_MODELS_STATIC), not its chat models; empty for every
+    # other provider (they reuse apiAvailableModels for the image field).
+    # Mirrors the legacy ApiSettingsWidget's separate Gemini image dropdown.
+    apiImageModels: list[str]
     # idle|running|done|error - a faithful binary port of ApiModelLoadWorker's
     # existing finished/error signals (Phase 3's Section C design decision),
     # not real progress.
