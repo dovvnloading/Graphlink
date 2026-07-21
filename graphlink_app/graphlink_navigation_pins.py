@@ -227,6 +227,8 @@ class NavigationPinsController:
     def __init__(self, scene, view):
         self.scene = scene
         self.view = view
+        self._draft_pin_id: str | None = None
+        self._draft_is_new = False
 
     def create_at(self, position, *, title=None, note="", anchor_item_id=None):
         return self.scene.add_navigation_pin(
@@ -253,3 +255,83 @@ class NavigationPinsController:
         self.view.ensureVisible(pin, 48, 48)
         self.view.centerOn(pin)
         return True
+
+    @property
+    def draft(self) -> NavigationPinRecord | None:
+        """The record currently being drafted (created or edited), or None
+        when no draft is in progress. A read-only projection of the store -
+        see begin_draft_pin()'s own docstring for the full async-draft
+        rationale this replaces the legacy NavigationPinEditor.exec()
+        choreography with."""
+        if self._draft_pin_id is None:
+            return None
+        return self.scene.pin_store.get(self._draft_pin_id)
+
+    @property
+    def draft_is_new(self) -> bool:
+        return self._draft_is_new
+
+    def begin_draft_pin(self, position=None, *, pin=None):
+        """Start an async draft edit - Phase 5 increment 2's replacement for
+        the legacy PinOverlay.create_pin()/edit_pin()'s blocking
+        NavigationPinEditor.exec() modal.
+
+        Exactly one of `position`/`pin` should be given:
+        - `pin`: draft an EXISTING pin in place. No new record is created;
+          discard_draft() leaves it completely unchanged, matching the
+          legacy edit flow's own "Cancel does nothing" behavior.
+        - `position`: create a brand-new pin at that scene position
+          immediately (matching create_at()'s existing canvas-first
+          semantics - the record exists in the store before any editing
+          happens) and mark it as a draft-in-progress. discard_draft()
+          removes it, matching the legacy create-then-remove-on-cancel
+          choreography exactly - just asynchronous now, not a blocking
+          modal's return value.
+
+        A second call while a draft is already pending discards the first
+        one before starting the new one, so a create-then-never-resolved
+        draft can't silently leak if the caller begins another before
+        resolving the first (the UI itself only ever shows one editor view
+        at a time, so this is a defensive guard, not an expected path).
+        """
+        if self._draft_pin_id is not None:
+            self.discard_draft()
+        if pin is not None:
+            self._draft_pin_id = pin.pin_id
+            self._draft_is_new = False
+            return pin
+        new_pin = self.create_at(position)
+        self._draft_pin_id = new_pin.pin_id
+        self._draft_is_new = True
+        return new_pin
+
+    def commit_draft(self, *, title, note):
+        """Apply the given title/note to the pin currently being drafted and
+        end the draft. May raise NavigationPinValidationError (from the
+        store's own record validation) if title/note fail validation - the
+        caller is expected to have already checked this client-side (see
+        PinOverlayBridge.commitDraft), this is a defense-in-depth guard, not
+        the primary validation path. On a validation failure the draft
+        stays active (not cleared) so a corrected retry still targets the
+        same pin, matching the legacy dialog's own "show an inline error,
+        keep editing" behavior rather than forcing the user to start over."""
+        if self._draft_pin_id is None:
+            return None
+        pin = self.scene._navigation_pin_item(self._draft_pin_id)
+        if pin is not None:
+            self.update(pin, title=title, note=note)
+        self._draft_pin_id = None
+        self._draft_is_new = False
+        return pin
+
+    def discard_draft(self):
+        """Ends the current draft without applying any edits - removes the
+        pin if it was newly created for this draft, otherwise leaves an
+        existing pin exactly as it was before the draft began. A no-op if
+        no draft is pending."""
+        if self._draft_pin_id is None:
+            return
+        if self._draft_is_new:
+            self.remove(self._draft_pin_id)
+        self._draft_pin_id = None
+        self._draft_is_new = False

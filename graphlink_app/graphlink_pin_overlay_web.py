@@ -67,8 +67,21 @@ class PinOverlayHost(WebIslandHost):
         API - ChatWindow.edit_navigation_pin() (a canvas NavigationPin's own
         double-click/edit action, via graphlink_scene.py's
         _on_navigation_pin_edit_requested) calls this exactly as it called
-        the old widget's method of the same name."""
-        self.bridge._open_editor(pin, creating=False)
+        the old widget's method of the same name.
+
+        Unlike the legacy modal (a separate floating window, shown
+        independent of whether the panel itself was open), the async draft
+        editor (Phase 5 increment 2) now lives INSIDE this panel - so a
+        canvas-triggered edit also needs to make the panel itself visible, a
+        real behavior addition the in-panel-view design requires that the
+        legacy call path never needed."""
+        self.bridge.editPin(pin.pin_id)
+        if not self.isVisible():
+            if self._anchor_widget is not None:
+                self.show_for_anchor(self._anchor_widget)
+            else:
+                self.setVisible(True)
+                self.raise_()
 
     def show_pin_context_menu(self, pin, global_pos=None) -> None:
         """Facade preserved verbatim - ChatWindow.

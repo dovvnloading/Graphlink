@@ -46,7 +46,7 @@ class _FakeChatView:
 
 
 class _FakeController:
-    pass
+    draft = None
 
 
 def _clear_registry():

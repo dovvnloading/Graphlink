@@ -8,11 +8,20 @@ export interface PinRow {
   note: string;
 }
 
+export interface PinDraft {
+  pinId: string;
+  title: string;
+  note: string;
+  isNew: boolean;
+}
+
 export interface PinOverlayState {
   schemaVersion: number;
   revision: number;
   rows: PinRow[];
   selectedPinId?: string | null;
+  draft?: PinDraft | null;
+  error?: string | null;
   minCompatibleSchemaVersion?: number | null;
 }
 
@@ -50,6 +59,30 @@ function checkPinRow(value: unknown, path: string, errors: string[]): void {
   }
 }
 
+function checkPinDraft(value: unknown, path: string, errors: string[]): void {
+  if (!isRecord(value)) { errors.push(`${path}: expected object`); return; }
+  {
+    const fieldValue = value["pinId"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.pinId: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.pinId` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["title"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.title: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.title` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["note"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.note: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.note` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["isNew"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.isNew: missing required field`);
+    else { if (typeof fieldValue !== "boolean") errors.push(`${path}.isNew` + ": expected boolean"); }
+  }
+}
+
 function checkPinOverlayState(value: unknown, path: string, errors: string[]): void {
   if (!isRecord(value)) { errors.push(`${path}: expected object`); return; }
   {
@@ -71,6 +104,14 @@ function checkPinOverlayState(value: unknown, path: string, errors: string[]): v
   {
     const fieldValue = value["selectedPinId"];
     if (fieldValue !== undefined && fieldValue !== null) { if (typeof fieldValue !== "string") errors.push(`${path}.selectedPinId` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["draft"];
+    if (fieldValue !== undefined && fieldValue !== null) { checkPinDraft(fieldValue, `${path}.draft`, errors); }
+  }
+  {
+    const fieldValue = value["error"];
+    if (fieldValue !== undefined && fieldValue !== null) { if (typeof fieldValue !== "string") errors.push(`${path}.error` + ": expected string"); }
   }
   {
     const fieldValue = value["minCompatibleSchemaVersion"];

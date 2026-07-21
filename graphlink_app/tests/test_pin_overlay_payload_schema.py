@@ -59,19 +59,28 @@ class _FakeChatView:
 
 
 class _FakeController:
-    pass
+    def __init__(self, draft=None, draft_is_new=False):
+        self.draft = draft
+        self.draft_is_new = draft_is_new
 
 
 def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def _snapshot() -> dict:
-    bridge = PinOverlayBridge(_FakeChatView(), _FakeController())
+def _snapshot(controller=None) -> dict:
+    bridge = PinOverlayBridge(_FakeChatView(), controller or _FakeController())
     states: list[str] = []
     bridge.stateChanged.connect(states.append)
     bridge.ready()
     return json.loads(states[-1])
+
+
+def _snapshot_with_draft() -> dict:
+    store = NavigationPinStore()
+    record = store.add(pin_id="p2", title="Drafted", note="draft note", x=0.0, y=0.0)
+    controller = _FakeController(draft=record, draft_is_new=True)
+    return _snapshot(controller)
 
 
 class TestTheContractDescribesTheRealPayload:
@@ -84,6 +93,18 @@ class TestTheContractDescribesTheRealPayload:
         row = _snapshot()["rows"][0]
 
         assert set(row.keys()) == {"id", "title", "note"}
+
+    def test_a_snapshot_with_an_active_draft_validates(self):
+        payload = _snapshot_with_draft()
+
+        assert payload["draft"] == {
+            "pinId": "p2",
+            "title": "Drafted",
+            "note": "draft note",
+            "isNew": True,
+        }
+        errors = validate_payload(payload, PinOverlayStatePayload)
+        assert errors == [], errors
 
 
 class TestValidatorActuallyRejects:
@@ -107,6 +128,15 @@ class TestValidatorActuallyRejects:
         assert any(expected_fragment in error for error in errors), (
             f"expected an error containing {expected_fragment!r}, got {errors}"
         )
+
+    def test_a_malformed_draft_is_caught(self):
+        payload = _snapshot_with_draft()
+        payload["draft"].pop("isNew")
+
+        errors = validate_payload(payload, PinOverlayStatePayload)
+
+        assert errors, "a malformed nested draft was not caught"
+        assert any("isNew" in error and "missing required field" in error for error in errors)
 
 
 class TestGeneratedArtifactsAreNotStale:
