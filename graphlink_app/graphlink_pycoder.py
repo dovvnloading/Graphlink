@@ -346,6 +346,14 @@ class PyCoderNode(QGraphicsObject, HoverAnimationMixin):
         self.children = []
         self.conversation_history = []
         self.is_user = False
+        # Phase 7 prerequisite (increment 5): plain model attributes mirroring
+        # the editable widgets, synced via textChanged - the WebNode.query /
+        # HtmlViewNode.html_content treatment, so serializers.py and other
+        # readers stop reaching into live widgets.
+        self.prompt = ""
+        self.code = ""
+        self.output = ""
+        self.ai_analysis = ""
         
         self.is_running = False
         self.is_disposed = False
@@ -491,6 +499,7 @@ class PyCoderNode(QGraphicsObject, HoverAnimationMixin):
             }
             QTextEdit:focus { border: 1px solid %s; }
         """ % prompt_focus_color)
+        self.prompt_input.textChanged.connect(self._on_prompt_changed)
         prompt_layout.addWidget(self.prompt_input)
         
         self.generate_button = QPushButton(" Generate & Execute")
@@ -519,6 +528,7 @@ class PyCoderNode(QGraphicsObject, HoverAnimationMixin):
             }
             QPlainTextEdit:focus { border: 1px solid %s; }
         """ % prompt_focus_color)
+        self.code_input.textChanged.connect(self._on_code_changed)
         manual_layout.addWidget(self.code_input)
 
         self.run_button = QPushButton(" Run Code")
@@ -703,7 +713,7 @@ class PyCoderNode(QGraphicsObject, HoverAnimationMixin):
                 selection_color=palette.SELECTION,
                 title=f"Py-Coder ({'AI' if self.mode == PyCoderMode.AI_DRIVEN else 'Manual'})",
                 subtitle="Running" if self.is_running else ("AI-driven execution" if self.mode == PyCoderMode.AI_DRIVEN else "Manual execution"),
-                preview=preview_text(self.get_prompt(), self.get_code(), self.output_display.toPlainText(), fallback="Python workflow"),
+                preview=preview_text(self.get_prompt(), self.get_code(), self.get_output(), fallback="Python workflow"),
                 badge="PY",
                 mode=render_mode,
                 selected=self.isSelected(),
@@ -778,28 +788,50 @@ class PyCoderNode(QGraphicsObject, HoverAnimationMixin):
         self._handle_hover_leave(event)
         super().hoverLeaveEvent(event)
 
+    def _on_prompt_changed(self):
+        self.prompt = self.prompt_input.toPlainText()
+
+    def _on_code_changed(self):
+        self.code = self.code_input.toPlainText()
+
     def get_prompt(self):
-        return self.prompt_input.toPlainText()
+        return self.prompt
 
     def seed_prompt(self, text):
         """Protocol method used by graphlink_window_actions.instantiate_seeded_plugin."""
         self.prompt_input.setPlainText(text)
+        self.prompt = text
 
     def get_code(self):
-        return self.code_input.toPlainText()
+        return self.code
 
     def set_code(self, text):
         self.generated_code_display.setPlainText(text)
         self.code_input.setPlainText(text)
+        self.code = text
+
+    def get_output(self):
+        return self.output
 
     def set_output(self, text):
         self.output_display.setPlainText(text)
+        self.output = text
         if text.strip() and self.mode == PyCoderMode.AI_DRIVEN:
             self.tabs.setCurrentIndex(1)
 
+    def get_ai_analysis(self):
+        return self.ai_analysis
+
     def set_ai_analysis(self, text):
+        # Store the raw markdown source, not a re-extraction of the rendered
+        # HTML below - QTextEdit.toPlainText() after setHtml(markdown.markdown(text))
+        # loses formatting entirely (headers, bold markers, list bullets, code
+        # fences all vanish; verified empirically), so reading the widget back
+        # for this field was a real, pre-existing data-loss bug on every
+        # save/reload - the same class of bug increment 1 fixed for HtmlView.
         html = markdown.markdown(text, extensions=['fenced_code', 'tables'])
         self.ai_analysis_display.setHtml(html)
+        self.ai_analysis = text
         if text.strip():
             self.tabs.setCurrentIndex(2 if self.mode == PyCoderMode.AI_DRIVEN else 1)
         

@@ -303,9 +303,9 @@ class ChatScene(QGraphicsScene):
             elif isinstance(node, GitlinkNode):
                 content = node.get_task_prompt() + "\n" + node.context_xml + "\n" + node.proposal_markdown + "\n" + node.preview_text
             elif isinstance(node, PyCoderNode):
-                content = node.get_prompt() + "\n" + node.get_code() + "\n" + node.output_display.toPlainText()
+                content = node.get_prompt() + "\n" + node.get_code() + "\n" + node.get_output()
             elif isinstance(node, CodeSandboxNode):
-                content = node.get_prompt() + "\n" + node.get_requirements() + "\n" + node.get_code() + "\n" + node.output_display.toPlainText()
+                content = node.get_prompt() + "\n" + node.get_requirements() + "\n" + node.get_code() + "\n" + node.get_output()
             elif isinstance(node, ChartItem):
                 content = node.to_context_text() if hasattr(node, "to_context_text") else str(node.data)
             elif isinstance(node, Note):

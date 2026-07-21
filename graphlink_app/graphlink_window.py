@@ -913,8 +913,8 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
             )
 
         if isinstance(node, PyCoderNode):
-            terminal = node.output_display.toPlainText() if hasattr(node, "output_display") else ""
-            analysis = node.ai_analysis_display.toPlainText() if hasattr(node, "ai_analysis_display") else ""
+            terminal = node.get_output() if hasattr(node, "get_output") else ""
+            analysis = node.get_ai_analysis() if hasattr(node, "get_ai_analysis") else ""
             return self._join_document_sections(
                 self._build_document_section("Task Prompt", node.get_prompt() if hasattr(node, "get_prompt") else ""),
                 self._build_document_section("Code", self._build_code_block(node.get_code() if hasattr(node, "get_code") else "", "python")),
@@ -923,8 +923,8 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
             )
 
         if isinstance(node, CodeSandboxNode):
-            terminal = node.output_display.toPlainText() if hasattr(node, "output_display") else ""
-            analysis = node.ai_analysis_display.toPlainText() if hasattr(node, "ai_analysis_display") else ""
+            terminal = node.get_output() if hasattr(node, "get_output") else ""
+            analysis = node.get_ai_analysis() if hasattr(node, "get_ai_analysis") else ""
             return self._join_document_sections(
                 self._build_document_section("Task Brief", node.get_prompt() if hasattr(node, "get_prompt") else ""),
                 self._build_document_section("Requirements", self._build_code_block(node.get_requirements() if hasattr(node, "get_requirements") else "")),
