@@ -331,3 +331,61 @@ class TestApplyChangeSet:
     def test_delete_on_nonexistent_file_is_a_silent_no_op(self, tmp_path):
         written = apply_change_set(tmp_path, [{"path": "never_existed.py", "operation": "delete"}])
         assert written == 0
+
+
+class TestApplyChangeSetRollback:
+    """Audit finding A1: a mid-loop failure used to leave files 1..N-1 already
+    written/deleted with no way back - the checkout ended half-applied while
+    the UI reported the whole apply as failed. apply_change_set now snapshots
+    every target's pre-state before touching it and rolls back on any
+    exception. The failing item in these tests is a path that resolves to an
+    existing DIRECTORY - reading/writing it as a file raises on every
+    platform, and it passes validate_pending_changes (content present), so it
+    models a genuine mid-write surprise rather than a pre-validated reject."""
+
+    def _blocker(self, tmp_path):
+        (tmp_path / "blocker_dir").mkdir()
+        return {"path": "blocker_dir", "operation": "update", "content": "x"}
+
+    def test_mid_loop_failure_restores_an_earlier_overwrite(self, tmp_path):
+        (tmp_path / "a.py").write_text("ORIGINAL A")
+
+        with pytest.raises(Exception):
+            apply_change_set(tmp_path, [
+                {"path": "a.py", "operation": "update", "content": "NEW A"},
+                self._blocker(tmp_path),
+            ])
+
+        assert (tmp_path / "a.py").read_text() == "ORIGINAL A"
+
+    def test_mid_loop_failure_removes_a_file_created_earlier(self, tmp_path):
+        with pytest.raises(Exception):
+            apply_change_set(tmp_path, [
+                {"path": "brand_new.py", "operation": "create", "content": "print(1)"},
+                self._blocker(tmp_path),
+            ])
+
+        assert not (tmp_path / "brand_new.py").exists()
+
+    def test_mid_loop_failure_restores_an_earlier_delete(self, tmp_path):
+        (tmp_path / "a.py").write_text("KEEP ME")
+
+        with pytest.raises(Exception):
+            apply_change_set(tmp_path, [
+                {"path": "a.py", "operation": "delete"},
+                self._blocker(tmp_path),
+            ])
+
+        assert (tmp_path / "a.py").read_text() == "KEEP ME"
+
+    def test_successful_apply_is_unchanged_by_the_rollback_machinery(self, tmp_path):
+        (tmp_path / "a.py").write_text("old")
+
+        written = apply_change_set(tmp_path, [
+            {"path": "a.py", "operation": "update", "content": "new"},
+            {"path": "b.py", "operation": "create", "content": "made"},
+        ])
+
+        assert written == 2
+        assert (tmp_path / "a.py").read_text() == "new"
+        assert (tmp_path / "b.py").read_text() == "made"

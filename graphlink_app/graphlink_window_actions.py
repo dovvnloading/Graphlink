@@ -1595,18 +1595,27 @@ class WindowActionsMixin:
 
     def _handle_artifact_result(self, new_doc, ai_msg, artifact_node):
         """Processes the finished document and commentary from the Artifact thread."""
+        # These were the only worker result handlers with no disposed-node guard
+        # (audit finding A3): deleting the node mid-generate let the finished
+        # signal mutate a node no longer on the canvas.
+        if not artifact_node or getattr(artifact_node, "is_disposed", False):
+            return
+
         artifact_node.set_artifact_content(new_doc)
         if ai_msg:
             artifact_node.add_chat_message(ai_msg, is_user=False)
         artifact_node.set_running_state(False)
-        
+
         parent_history = self._branch_context_history(artifact_node, artifact_node.parent_node)
         assign_history(artifact_node, append_history(parent_history, artifact_node.local_history))
-        
+
         self.save_chat()
 
     def _handle_artifact_error(self, error_msg, artifact_node):
         """Handles an error within the Artifact thread."""
+        if not artifact_node or getattr(artifact_node, "is_disposed", False):
+            return
+
         artifact_node.add_chat_message(f"Error: {error_msg}", is_user=False)
         artifact_node.set_running_state(False)
 

@@ -1059,6 +1059,13 @@ class GitlinkNode(QGraphicsObject, HoverAnimationMixin):
         return "\n".join(lines)
 
     def _read_original_text_for_preview(self, repo_path):
+        # Returns the original file text, "" for a genuinely-empty-but-readable
+        # file, or None when the original could not be read from EITHER source.
+        # Callers must distinguish None (unknown) from "" (empty): collapsing a
+        # failed fetch to "" made an `update` diff render as a clean full-file
+        # `create` diff - no deletions shown - silently corrupting the human
+        # approval decision, which is the only gate on the disk write (audit
+        # finding A2).
         local_root_text = self.repo_state.get("local_root", "").strip()
         if local_root_text:
             try:
@@ -1073,7 +1080,7 @@ class GitlinkNode(QGraphicsObject, HoverAnimationMixin):
                 return self._repository.fetch_github_file_text(repo_name, branch_name, repo_path)
             except Exception:
                 pass
-        return ""
+        return None
 
     def _build_preview_text(self, files):
         preview_parts = []
@@ -1082,6 +1089,30 @@ class GitlinkNode(QGraphicsObject, HoverAnimationMixin):
             operation = file_item.get("operation", "update")
             original_text = self._read_original_text_for_preview(path_text)
             proposed_text = file_item.get("content", "") if operation in {"update", "create"} else ""
+
+            # None = the original could not be read (as opposed to "" = a real
+            # empty file). For update/delete that means no honest diff exists -
+            # say so explicitly instead of diffing against "" and rendering a
+            # misleading all-additions "create" diff. Creates never need the
+            # original, so they render normally either way.
+            if original_text is None and operation in {"update", "delete"}:
+                preview_parts.append(f"### {path_text} [{operation}]\n")
+                preview_parts.append(
+                    "!! WARNING: the original file could not be read (local checkout "
+                    "and GitHub fetch both failed or are not configured), so no diff "
+                    "can be shown for this change."
+                )
+                if operation == "update":
+                    preview_parts.append(
+                        "!! Applying will OVERWRITE the existing file with the full "
+                        "proposed content below:\n"
+                    )
+                    preview_parts.append(proposed_text if proposed_text else "[No content in proposal]")
+                else:
+                    preview_parts.append("!! Applying will DELETE the file.")
+                preview_parts.append("")
+                continue
+            original_text = original_text or ""
 
             if operation == "create":
                 diff_lines = list(

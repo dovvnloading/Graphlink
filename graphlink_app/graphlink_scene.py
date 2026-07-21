@@ -1485,6 +1485,7 @@ class ChatScene(QGraphicsScene):
                 self._remove_associated_chart_nodes(item)
                 if item.parent_node and item in item.parent_node.children: item.parent_node.children.remove(item)
                 self._remove_connections_for_node(item)
+                if hasattr(item, "dispose"): item.dispose()
                 self.removeItem(item)
                 if item in self.conversation_nodes: self.conversation_nodes.remove(item)
             elif isinstance(item, HtmlViewNode):
@@ -1497,6 +1498,7 @@ class ChatScene(QGraphicsScene):
                 self._remove_associated_chart_nodes(item)
                 if item.parent_node and item in item.parent_node.children: item.parent_node.children.remove(item)
                 self._remove_connections_for_node(item)
+                if hasattr(item, "dispose"): item.dispose()
                 self.removeItem(item)
                 if item in self.artifact_nodes: self.artifact_nodes.remove(item)
             elif isinstance(item, GitlinkNode):
