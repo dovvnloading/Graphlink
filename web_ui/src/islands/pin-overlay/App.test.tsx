@@ -30,6 +30,8 @@ function installFakeQWebChannel() {
     deletePin: vi.fn(),
     createPin: vi.fn(),
     editPin: vi.fn(),
+    commitDraft: vi.fn(),
+    discardDraft: vi.fn(),
     resize: vi.fn(),
     close: vi.fn(),
   };
@@ -173,5 +175,132 @@ describe("App against a real (faked) QWebChannel connection", () => {
 
     expect(await screen.findByRole("alert")).toBeInTheDocument();
     expect(screen.getByText("Navigation pins are unavailable")).toBeInTheDocument();
+  });
+});
+
+describe("App's draft editor view (Phase 5 increment 2)", () => {
+  afterEach(() => {
+    cleanup();
+    uninstall();
+    vi.restoreAllMocks();
+  });
+
+  function pushDraft(remote: Remote, draft: Record<string, unknown> | null, extra: Record<string, unknown> = {}) {
+    push(remote, ROWS, { draft, ...extra });
+  }
+
+  it("replaces the list with the editor view, prefilled, when a new-pin draft begins", async () => {
+    const remote = installFakeQWebChannel();
+    render(<App />);
+
+    pushDraft(remote, { pinId: "new-1", title: "Waypoint 3", note: "", isNew: true });
+
+    expect(await screen.findByText("Add navigation pin")).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Navigation pin title" })).toHaveValue("Waypoint 3");
+    expect(screen.queryByText("First pin")).not.toBeInTheDocument();
+  });
+
+  it("shows Edit copy and the existing values when editing an existing pin", async () => {
+    const remote = installFakeQWebChannel();
+    render(<App />);
+
+    pushDraft(remote, { pinId: "p1", title: "First pin", note: "a note", isNew: false });
+
+    expect(await screen.findByText("Edit navigation pin")).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Navigation pin title" })).toHaveValue("First pin");
+    expect(screen.getByRole("textbox", { name: "Navigation pin note" })).toHaveValue("a note");
+  });
+
+  it("Save calls commitDraft with the (possibly edited) trimmed values", async () => {
+    const remote = installFakeQWebChannel();
+    const user = userEvent.setup();
+    render(<App />);
+    pushDraft(remote, { pinId: "new-1", title: "Waypoint 3", note: "", isNew: true });
+    const titleInput = await screen.findByRole("textbox", { name: "Navigation pin title" });
+
+    await user.clear(titleInput);
+    await user.type(titleInput, "  Named  ");
+    await user.type(screen.getByRole("textbox", { name: "Navigation pin note" }), "  a note  ");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(remote.commitDraft).toHaveBeenCalledWith("Named", "a note");
+  });
+
+  it("Save is disabled and shows an inline error for an empty title, without calling commitDraft", async () => {
+    const remote = installFakeQWebChannel();
+    const user = userEvent.setup();
+    render(<App />);
+    pushDraft(remote, { pinId: "new-1", title: "Waypoint 3", note: "", isNew: true });
+    const titleInput = await screen.findByRole("textbox", { name: "Navigation pin title" });
+
+    await user.clear(titleInput);
+
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(remote.commitDraft).not.toHaveBeenCalled();
+  });
+
+  it("Cancel calls discardDraft", async () => {
+    const remote = installFakeQWebChannel();
+    const user = userEvent.setup();
+    render(<App />);
+    pushDraft(remote, { pinId: "new-1", title: "Waypoint 3", note: "", isNew: true });
+    await screen.findByText("Add navigation pin");
+
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(remote.discardDraft).toHaveBeenCalledTimes(1);
+  });
+
+  it("Escape in the title field calls discardDraft, not close", async () => {
+    const remote = installFakeQWebChannel();
+    const user = userEvent.setup();
+    render(<App />);
+    pushDraft(remote, { pinId: "new-1", title: "Waypoint 3", note: "", isNew: true });
+    const titleInput = await screen.findByRole("textbox", { name: "Navigation pin title" });
+
+    await user.click(titleInput);
+    await user.keyboard("{Escape}");
+
+    expect(remote.discardDraft).toHaveBeenCalledTimes(1);
+    expect(remote.close).not.toHaveBeenCalled();
+  });
+
+  it("Enter in the title field commits the draft", async () => {
+    const remote = installFakeQWebChannel();
+    const user = userEvent.setup();
+    render(<App />);
+    pushDraft(remote, { pinId: "new-1", title: "Waypoint 3", note: "", isNew: true });
+    const titleInput = await screen.findByRole("textbox", { name: "Navigation pin title" });
+
+    await user.click(titleInput);
+    await user.keyboard("{Enter}");
+
+    expect(remote.commitDraft).toHaveBeenCalledWith("Waypoint 3", "");
+  });
+
+  it("a server-side error (state.error) renders inline when there is no local validation error", async () => {
+    const remote = installFakeQWebChannel();
+    render(<App />);
+
+    pushDraft(remote, { pinId: "new-1", title: "Waypoint 3", note: "", isNew: true }, { error: "A title is required" });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("A title is required");
+  });
+
+  it("resets the editable fields when a NEW draft begins after a previous one closed", async () => {
+    const remote = installFakeQWebChannel();
+    const user = userEvent.setup();
+    render(<App />);
+    pushDraft(remote, { pinId: "p1", title: "First pin", note: "a note", isNew: false });
+    const titleInput = await screen.findByRole("textbox", { name: "Navigation pin title" });
+    await user.clear(titleInput);
+    await user.type(titleInput, "Edited but not saved");
+
+    // Draft closes (e.g. committed/discarded), then a genuinely NEW draft
+    // begins for a different pin - the stale local edit must not leak in.
+    push(remote, ROWS);
+    pushDraft(remote, { pinId: "p2", title: "Second pin", note: "", isNew: false });
+
+    expect(await screen.findByRole("textbox", { name: "Navigation pin title" })).toHaveValue("Second pin");
   });
 });

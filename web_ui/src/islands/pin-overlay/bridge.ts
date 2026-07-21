@@ -24,6 +24,8 @@ interface QtPinOverlayObject {
   deletePin: (id: string) => void;
   createPin: () => void;
   editPin: (id: string) => void;
+  commitDraft: (title: string, note: string) => void;
+  discardDraft: () => void;
   resize: (height: number) => void;
   close: () => void;
 }
@@ -34,6 +36,8 @@ export interface PinOverlayBridge {
   deletePin(id: string): void;
   createPin(): void;
   editPin(id: string): void;
+  commitDraft(title: string, note: string): void;
+  discardDraft(): void;
   resize(height: number): void;
   close(): void;
   dispose(): void;
@@ -59,6 +63,8 @@ class MockPinOverlayBridge implements PinOverlayBridge {
   deletePin(): void {}
   createPin(): void {}
   editPin(): void {}
+  commitDraft(): void {}
+  discardDraft(): void {}
   resize(): void {}
   close(): void {}
   dispose(): void {}
@@ -115,6 +121,8 @@ export function createPinOverlayBridge(
     deletePin: (id) => call("deletePin", id),
     createPin: () => call("createPin"),
     editPin: (id) => call("editPin", id),
+    commitDraft: (title, note) => call("commitDraft", title, note),
+    discardDraft: () => call("discardDraft"),
     resize: (height) => call("resize", height),
     close: () => call("close"),
     dispose: () => {

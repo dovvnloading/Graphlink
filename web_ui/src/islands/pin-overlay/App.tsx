@@ -3,13 +3,32 @@ import { PinOverlayState, initialPinOverlayState } from "./bridgeTypes";
 import { BridgeRejection, PinOverlayBridge, createPinOverlayBridge } from "./bridge";
 import { BridgeErrorState } from "../../lib/ui/BridgeErrorState";
 
+// Mirrors graphlink_navigation_pins.py's MAX_PIN_TITLE_LENGTH/
+// MAX_PIN_NOTE_LENGTH exactly - compile-time constants on both sides, not
+// worth a wire round-trip for values that never change at runtime.
+const MAX_PIN_TITLE_LENGTH = 120;
+const MAX_PIN_NOTE_LENGTH = 4000;
+
+function validateDraft(title: string, note: string): string | null {
+  const trimmedTitle = title.trim();
+  if (!trimmedTitle) return "A title is required";
+  if (trimmedTitle.length > MAX_PIN_TITLE_LENGTH) return "The title is too long";
+  if (note.trim().length > MAX_PIN_NOTE_LENGTH) return "The note is too long";
+  return null;
+}
+
 function App() {
   const [state, setState] = useState<PinOverlayState>(initialPinOverlayState);
   const [rejection, setRejection] = useState<BridgeRejection | null>(null);
   const [query, setQuery] = useState("");
+  const [draftTitle, setDraftTitle] = useState("");
+  const [draftNote, setDraftNote] = useState("");
+  const [draftPinId, setDraftPinId] = useState<string | null>(null);
+  const [localDraftError, setLocalDraftError] = useState<string | null>(null);
   const bridgeRef = useRef<PinOverlayBridge | null>(null);
   const shellRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+  const draftTitleRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const bridge = createPinOverlayBridge(setState, setRejection);
@@ -39,6 +58,26 @@ function App() {
     return () => observer.disconnect();
   }, []);
 
+  // Sync the editable draft fields whenever a genuinely NEW draft begins
+  // (keyed on pinId changing), during render rather than an effect -
+  // matches this island family's established set-state-in-effect lint fix
+  // (see command-palette's identical wasVisible pattern). Python never
+  // round-trips what the user is typing - only the draft's STARTING values,
+  // once, when the draft opens.
+  if (state.draft && state.draft.pinId !== draftPinId) {
+    setDraftPinId(state.draft.pinId);
+    setDraftTitle(state.draft.title);
+    setDraftNote(state.draft.note);
+    setLocalDraftError(null);
+  } else if (!state.draft && draftPinId !== null) {
+    setDraftPinId(null);
+  }
+
+  const draftPinIdFromState = state.draft?.pinId;
+  useEffect(() => {
+    if (draftPinIdFromState) draftTitleRef.current?.focus();
+  }, [draftPinIdFromState]);
+
   const filtered = useMemo(() => {
     const term = query.trim().toLowerCase();
     if (!term) return state.rows;
@@ -54,6 +93,112 @@ function App() {
         rejection={rejection}
         className="pin-overlay-shell bridge-error"
       />
+    );
+  }
+
+  function commitDraft() {
+    const validationError = validateDraft(draftTitle, draftNote);
+    if (validationError) {
+      setLocalDraftError(validationError);
+      return;
+    }
+    setLocalDraftError(null);
+    bridgeRef.current?.commitDraft(draftTitle.trim(), draftNote.trim());
+  }
+
+  function cancelDraft() {
+    setLocalDraftError(null);
+    bridgeRef.current?.discardDraft();
+  }
+
+  function onDraftTitleKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      cancelDraft();
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      commitDraft();
+    }
+  }
+
+  function onDraftNoteKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      cancelDraft();
+    }
+    // Enter is left alone here - a note is a multi-line field, so Enter
+    // should insert a newline, not commit (matching the legacy QTextEdit's
+    // own behavior in NavigationPinEditor).
+  }
+
+  if (state.draft) {
+    const isNew = state.draft.isNew;
+    const displayError = localDraftError ?? state.error;
+    return (
+      <div className="pin-overlay-shell" ref={shellRef}>
+        <div className="pin-overlay-header">
+          <div className="pin-overlay-heading">
+            <p className="pin-overlay-title">{isNew ? "Add navigation pin" : "Edit navigation pin"}</p>
+            <p className="pin-overlay-meta">
+              {isNew ? "Name this canvas location" : "Update this canvas location"}
+            </p>
+          </div>
+        </div>
+
+        <div className="pin-overlay-editor">
+          <label className="pin-overlay-editor-label" htmlFor="pin-overlay-title-input">
+            Title
+          </label>
+          <input
+            id="pin-overlay-title-input"
+            ref={draftTitleRef}
+            className="pin-overlay-editor-input"
+            type="text"
+            value={draftTitle}
+            onChange={(event) => setDraftTitle(event.target.value)}
+            onKeyDown={onDraftTitleKeyDown}
+            maxLength={MAX_PIN_TITLE_LENGTH}
+            placeholder="e.g. Research checkpoint"
+            aria-label="Navigation pin title"
+            autoComplete="off"
+            spellCheck={false}
+          />
+
+          <label className="pin-overlay-editor-label" htmlFor="pin-overlay-note-input">
+            Note (optional)
+          </label>
+          <textarea
+            id="pin-overlay-note-input"
+            className="pin-overlay-editor-textarea"
+            value={draftNote}
+            onChange={(event) => setDraftNote(event.target.value)}
+            onKeyDown={onDraftNoteKeyDown}
+            maxLength={MAX_PIN_NOTE_LENGTH}
+            aria-label="Navigation pin note"
+            spellCheck={false}
+          />
+
+          {displayError && (
+            <p className="pin-overlay-editor-error" role="alert">
+              {displayError}
+            </p>
+          )}
+        </div>
+
+        <div className="pin-overlay-footer">
+          <button type="button" className="pin-overlay-button" onClick={cancelDraft}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="pin-overlay-button primary"
+            onClick={commitDraft}
+            disabled={draftTitle.trim().length === 0}
+          >
+            Save
+          </button>
+        </div>
+      </div>
     );
   }
 

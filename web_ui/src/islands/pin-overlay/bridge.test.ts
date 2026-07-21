@@ -15,6 +15,8 @@ function installFakeQWebChannel() {
     deletePin: vi.fn(),
     createPin: vi.fn(),
     editPin: vi.fn(),
+    commitDraft: vi.fn(),
+    discardDraft: vi.fn(),
     resize: vi.fn(),
     close: vi.fn(),
   };
@@ -55,6 +57,8 @@ describe("createPinOverlayBridge with no QWebChannel available", () => {
       bridge.deletePin("p1");
       bridge.createPin();
       bridge.editPin("p1");
+      bridge.commitDraft("t", "n");
+      bridge.discardDraft();
       bridge.resize(300);
       bridge.close();
       bridge.dispose();
@@ -100,6 +104,8 @@ describe("createPinOverlayBridge against a real QWebChannel connection", () => {
       bridge.deletePin("p2");
       bridge.createPin();
       bridge.editPin("p3");
+      bridge.commitDraft("Title", "Note");
+      bridge.discardDraft();
       bridge.resize(321);
       bridge.close();
 
@@ -107,6 +113,8 @@ describe("createPinOverlayBridge against a real QWebChannel connection", () => {
       expect(remote.deletePin).toHaveBeenCalledWith("p2");
       expect(remote.createPin).toHaveBeenCalledTimes(1);
       expect(remote.editPin).toHaveBeenCalledWith("p3");
+      expect(remote.commitDraft).toHaveBeenCalledWith("Title", "Note");
+      expect(remote.discardDraft).toHaveBeenCalledTimes(1);
       expect(remote.resize).toHaveBeenCalledWith(321);
       expect(remote.close).toHaveBeenCalledTimes(1);
     } finally {

@@ -1,19 +1,20 @@
 """Desktop-side state bridge for the pin-overlay island.
 
-Phase 5 increment 1 - list/select/create/delete parity for the legacy
+Phase 5 increment 1 built list/select/create/delete parity for the legacy
 PinOverlay panel, wrapping the SAME NavigationPinsController/
 NavigationPinStore every path already used (nothing moves). Filtering is pure
 client-side (matching ChatLibraryDialog's own precedent) - Python always
 publishes the full row list.
 
-Pin creation/editing still pops the legacy, unchanged NavigationPinEditor
-modal in THIS increment - deferred one event-loop tick via
-QTimer.singleShot(0, ...) out of the QWebChannel slot invocation before
-opening it, the same caution command-palette's executeCommand and
-ChatLibraryBridge's loadChat/newChat already take for callbacks that pop
-dialogs. Phase 5 increment 2 replaces this exec() choreography with an async
-draft-intent flow; this bridge's shape is deliberately NOT pre-built for that
-here, to keep this increment's platform-risk-proving scope tight.
+Phase 5 increment 2 (this revision): pin creation/editing no longer pops the
+legacy NavigationPinEditor modal at all. createPin()/editPin() begin an async
+draft via NavigationPinsController.begin_draft_pin() (synchronous now - no
+QTimer.singleShot deferral needed, since nothing here blocks the Qt event
+loop the way a modal .exec() did) and the state payload's `draft` field tells
+React to render an in-panel editor view instead of the list.
+commitDraft(title, note)/discardDraft() end it. See
+graphlink_navigation_pins.py's own docstrings for the full create-then-
+remove-on-cancel-preserved-but-now-async rationale.
 
 Subscribes directly to NavigationPinStore's already-existing granular
 added/updated/removed/reset events (see graphlink_navigation_pins.py) and to
@@ -24,14 +25,12 @@ anything new invented for this migration.
 
 from __future__ import annotations
 
-from functools import partial
 from typing import Any
 
-from PySide6.QtCore import QObject, QTimer, Signal, Slot
-from PySide6.QtWidgets import QDialog
+from PySide6.QtCore import QObject, Signal, Slot
 
 from graphlink_island_bridge import IslandBridge
-from graphlink_widgets.pins import NavigationPinEditor
+from graphlink_navigation_pins import NavigationPinValidationError
 
 # Old widget: BASE_WIDTH=400, resize(BASE_WIDTH, MIN_HEIGHT) up to MAX_HEIGHT
 # via _resize_for_content(). The web host negotiates the same range via
@@ -50,6 +49,7 @@ class PinOverlayBridge(IslandBridge, QObject):
         self._chat_view = chat_view
         self._controller = controller
         self._selected_pin_id: str | None = None
+        self._error: str | None = None
         self._last_height = 0
         scene = self._scene()
         scene.pin_store.subscribe(self._store_changed)
@@ -66,7 +66,21 @@ class PinOverlayBridge(IslandBridge, QObject):
             {"id": record.pin_id, "title": record.title, "note": record.note}
             for record in self._scene().pin_store.records
         ]
-        return {"rows": rows, "selectedPinId": self._selected_pin_id}
+        draft_record = self._controller.draft
+        draft = None
+        if draft_record is not None:
+            draft = {
+                "pinId": draft_record.pin_id,
+                "title": draft_record.title,
+                "note": draft_record.note,
+                "isNew": self._controller.draft_is_new,
+            }
+        return {
+            "rows": rows,
+            "selectedPinId": self._selected_pin_id,
+            "draft": draft,
+            "error": self._error,
+        }
 
     def _on_dispose(self) -> None:
         scene = self._scene()
@@ -109,35 +123,41 @@ class PinOverlayBridge(IslandBridge, QObject):
 
     @Slot()
     def createPin(self):
-        QTimer.singleShot(0, self._perform_create_pin)
+        view = self._chat_view
+        center = view.mapToScene(view.viewport().rect().center())
+        self._error = None
+        self._controller.begin_draft_pin(position=center)
+        self.publish()
 
     @Slot(str)
     def editPin(self, pin_id: str):
-        QTimer.singleShot(0, partial(self._perform_edit_pin, pin_id))
-
-    def _perform_create_pin(self):
-        if self.disposed:
-            return
-        view = self._chat_view
-        center = view.mapToScene(view.viewport().rect().center())
-        pin = self._controller.create_at(center)
-        if self._open_editor(pin, creating=True) is False:
-            self._controller.remove(pin)
-
-    def _perform_edit_pin(self, pin_id: str):
-        if self.disposed:
-            return
         pin = self._scene()._navigation_pin_item(pin_id)
-        if pin is not None:
-            self._open_editor(pin, creating=False)
+        if pin is None:
+            return
+        self._error = None
+        self._controller.begin_draft_pin(pin=pin)
+        self.publish()
 
-    def _open_editor(self, pin, *, creating: bool):
-        editor = NavigationPinEditor(pin.title, pin.note, self.parent(), creating=creating)
-        if editor.exec() != QDialog.DialogCode.Accepted:
-            return False if creating else None
-        title, note = editor.values()
-        self._controller.update(pin, title=title, note=note)
-        return True
+    @Slot(str, str)
+    def commitDraft(self, title: str, note: str):
+        """The caller (App.tsx) already validates client-side before calling
+        this, matching the legacy dialog's own inline checks - a validation
+        failure here is defense in depth, surfaced via `error` rather than
+        raising through the QWebChannel slot boundary. The draft stays
+        active on failure (see NavigationPinsController.commit_draft's own
+        docstring) so a corrected retry still targets the same pin."""
+        try:
+            self._controller.commit_draft(title=title, note=note)
+            self._error = None
+        except NavigationPinValidationError as exc:
+            self._error = str(exc)
+        self.publish()
+
+    @Slot()
+    def discardDraft(self):
+        self._controller.discard_draft()
+        self._error = None
+        self.publish()
 
     @Slot(int)
     def resize(self, height: int):
@@ -153,7 +173,13 @@ class PinOverlayBridge(IslandBridge, QObject):
         graphlink_pin_overlay_web.py's module docstring for why this host
         never goes through a native closeEvent. self.parent() is the
         PinOverlayHost (set by WebIslandHost.__init__'s own bridge.
-        setParent(self))."""
+        setParent(self)). Discards any in-progress draft first - closing the
+        panel mid-edit is equivalent to cancelling, and without this a
+        newly-created-but-never-resolved pin would silently persist just
+        because the user closed the panel instead of clicking Cancel."""
+        if self._controller.draft is not None:
+            self._controller.discard_draft()
+            self._error = None
         parent = self.parent()
         if parent is not None and hasattr(parent, "setVisible"):
             parent.setVisible(False)
