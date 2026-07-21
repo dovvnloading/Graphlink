@@ -1418,6 +1418,8 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
                 self._set_main_request_state(active=False)
                 self._clear_loading_animation()
                 self._clear_pending_response_preview()
-            if hasattr(self, 'pin_overlay') and self.pin_overlay: self.pin_overlay.clear_pins()
+            # No pin_overlay.clear_pins() (a legacy-PinOverlay method that does
+            # not exist on PinOverlayHost): scene.clear() below empties
+            # scene.pin_store, which the overlay follows reactively.
             self.session_manager.mark_context_switch(); self.session_manager.current_chat_id = None; scene.clear(); self.current_node = None; self.message_input.clear(); self.clear_attachment(); self.message_input.set_context_anchor(None); self.message_input.setPlaceholderText("Type your message..."); self.update_title_bar(); self.reset_token_counter(); return True
         return False

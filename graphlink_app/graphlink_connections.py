@@ -350,11 +350,11 @@ class ConnectionItem(QGraphicsItem):
     def clear(self):
         """
         Clears all pins from the connection. (Note: This is a partial implementation
-        and seems to be a remnant, as the main scene clear handles most cleanup).
+        and seems to be a remnant, as the main scene clear handles most cleanup.
+        The legacy pin_overlay.clear_pins() call was removed with the PinOverlayHost
+        migration - that method no longer exists, and scene.pin_store is the
+        overlay's reactive source of truth.)
         """
-        if self.window and hasattr(self.window, 'pin_overlay'):
-            self.window.pin_overlay.clear_pins()
-        
         self.pins.clear()
         
         self.nodes.clear()
