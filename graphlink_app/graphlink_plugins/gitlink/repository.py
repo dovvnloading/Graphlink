@@ -127,23 +127,56 @@ def validate_pending_changes(pending_changes):
 
 
 def apply_change_set(local_root, pending_changes):
+    # Backup-and-rollback (audit finding A1): previously a mid-loop failure
+    # (permission denied, a directory sitting where a file is expected, disk
+    # full, ...) left files 1..N-1 already written/deleted with no way back -
+    # the checkout ended half-applied while the UI reported the whole apply as
+    # failed. Every target's pre-state is now snapshotted BEFORE it is touched
+    # (so even the failing item's own partial write is restored); on any
+    # exception the applied entries are rolled back in reverse order and the
+    # original error re-raised. Rollback is best-effort: any path that cannot
+    # be restored is named in the raised error so the user knows exactly which
+    # files were left modified. Parent directories created by mkdir are not
+    # removed on rollback - empty leftover dirs are harmless.
     written_files = 0
-    for file_item in pending_changes:
-        path_text = file_item.get("path", "")
-        operation = file_item.get("operation", "update")
-        target_path = _safe_local_target(local_root, path_text)
+    backups = []  # (target_path, original_bytes or None if the file did not exist)
+    try:
+        for file_item in pending_changes:
+            path_text = file_item.get("path", "")
+            operation = file_item.get("operation", "update")
+            target_path = _safe_local_target(local_root, path_text)
 
-        if operation == "delete":
-            if target_path.exists():
-                target_path.unlink()
-                written_files += 1
-            continue
+            if operation == "delete":
+                if target_path.exists():
+                    backups.append((target_path, target_path.read_bytes()))
+                    target_path.unlink()
+                    written_files += 1
+                continue
 
-        target_path.parent.mkdir(parents=True, exist_ok=True)
-        target_path.write_text(file_item.get("content", ""), encoding="utf-8")
-        written_files += 1
+            backups.append((target_path, target_path.read_bytes() if target_path.exists() else None))
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            target_path.write_text(file_item.get("content", ""), encoding="utf-8")
+            written_files += 1
 
-    return written_files
+        return written_files
+    except Exception as exc:
+        failed_restores = []
+        for target_path, original in reversed(backups):
+            try:
+                if original is None:
+                    if target_path.exists():
+                        target_path.unlink()
+                else:
+                    target_path.parent.mkdir(parents=True, exist_ok=True)
+                    target_path.write_bytes(original)
+            except Exception:
+                failed_restores.append(str(target_path))
+        if failed_restores:
+            raise RuntimeError(
+                f"{exc} (rolled back all other changes, but could not restore: "
+                f"{', '.join(failed_restores)})"
+            ) from exc
+        raise
 
 
 class ContextBundleResult(NamedTuple):
