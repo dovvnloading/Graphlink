@@ -738,28 +738,46 @@ class WindowActionsMixin:
             ("Constraints", "constraints"),
             ("Diff Summary", "note_summary"),
         ):
+            # Phase 7 prerequisite (increment 5): PyCoderNode/CodeSandboxNode now
+            # also expose plain self.prompt/self.code mirror attributes (for
+            # serializers.py, not for this function), which this generic
+            # bare-attribute probe - originally meant for other node types like
+            # ImageNode.prompt/CodeNode.code - would otherwise ALSO pick up,
+            # duplicating the get_prompt()/get_code() fragment added below.
+            # Skip the bare read when a dedicated getter exists; the getter's
+            # own fragment covers that content instead.
+            if attr_name in ("prompt", "code") and hasattr(node, f"get_{attr_name}"):
+                continue
             add_fragment(label, getattr(node, attr_name, ""))
 
         if hasattr(node, "get_prompt"):
             add_fragment("Prompt Input", node.get_prompt())
         if hasattr(node, "get_code"):
             add_fragment("Editable Code", node.get_code())
+        if hasattr(node, "get_output"):
+            add_fragment("Execution Output", node.get_output())
+        if hasattr(node, "get_ai_analysis"):
+            add_fragment("AI Analysis", node.get_ai_analysis())
+        if hasattr(node, "get_instruction"):
+            add_fragment("Instructions", node.get_instruction())
         if hasattr(node, "get_artifact_content"):
             add_fragment("Artifact Content", node.get_artifact_content())
         if hasattr(node, "get_html_content"):
             add_fragment("Rendered HTML", node.get_html_content())
 
+        # Phase 7 prerequisite (increment 5): prompt_input/output_display/
+        # ai_analysis_display/instruction_input/raw_editor/generated_code_display
+        # are now all covered by the getter-based fragments above (get_prompt,
+        # get_output, get_ai_analysis, get_instruction, get_artifact_content) -
+        # reading them again here duplicated content, and for ai_analysis_display
+        # specifically reproduced the exact rendered-HTML plaintext-extraction
+        # data-loss bug this increment's serializer fix eliminated elsewhere
+        # (adversarial review caught this: a real, reachable, untested path).
         for label, widget_name in (
-            ("Prompt Input", "prompt_input"),
-            ("Instructions", "instruction_input"),
             ("Query", "query_input"),
             ("Plan Display", "plan_display"),
             ("Summary Display", "summary_display"),
             ("Thought Display", "thought_process_display"),
-            ("Execution Output", "output_display"),
-            ("AI Analysis", "ai_analysis_display"),
-            ("Generated Code", "generated_code_display"),
-            ("Raw Artifact", "raw_editor"),
             ("Diff Display", "diff_display"),
             ("HTML Input", "html_input"),
         ):

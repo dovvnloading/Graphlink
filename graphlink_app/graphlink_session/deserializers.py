@@ -278,7 +278,14 @@ class SceneDeserializer:
             if parent_node:
                 node = PyCoderNode(parent_node, mode=PyCoderMode[data.get("mode", "AI_DRIVEN")])
                 node.setPos(data["position"]["x"], data["position"]["y"])
-                node.prompt_input.setText(data.get("prompt", ""))
+                # setPlainText, not setText: QTextEdit.setText() auto-detects
+                # "might be rich text" and silently strips angle-bracket
+                # substrings it mistakes for HTML tags (e.g. a prompt containing
+                # "<script>" or "<div>") before textChanged ever populates the
+                # prompt mirror - found by adversarial review as a real,
+                # pre-existing hole in this increment's round-trip guarantee.
+                # CodeSandbox/Artifact's restore paths already use setPlainText.
+                node.prompt_input.setPlainText(data.get("prompt", ""))
                 node.set_code(data.get("code", ""))
                 node.set_output(data.get("output", ""))
                 node.set_ai_analysis(data.get("analysis", ""))

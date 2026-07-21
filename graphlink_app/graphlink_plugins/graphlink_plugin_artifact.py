@@ -134,6 +134,12 @@ class ArtifactNode(QGraphicsObject, HoverAnimationMixin):
         self.conversation_history = []
         self.local_history = []
         self.chat_html_cache = ""
+        # Phase 7 prerequisite (increment 5): plain model attributes mirroring
+        # the editable widgets, synced via textChanged - the WebNode.query /
+        # HtmlViewNode.html_content treatment, so serializers.py and other
+        # readers stop reaching into live widgets.
+        self.instruction = ""
+        self.artifact_content = ""
         self.is_running = False
         self.is_collapsed = False
         self.collapse_button_rect = QRectF()
@@ -283,6 +289,7 @@ class ArtifactNode(QGraphicsObject, HoverAnimationMixin):
                 padding: 2px 0px;
             }
         """ + ARTIFACT_SCROLLBAR_STYLE)
+        self.instruction_input.textChanged.connect(self._on_instruction_changed)
         self.instruction_input.submit_requested.connect(lambda: self.artifact_requested.emit(self))
         input_layout.addWidget(self.instruction_input, stretch=1)
 
@@ -327,7 +334,8 @@ class ArtifactNode(QGraphicsObject, HoverAnimationMixin):
                 font-size: 13px;
             }
         """ + ARTIFACT_SCROLLBAR_STYLE)
-        
+        self.raw_editor.textChanged.connect(self._on_content_changed)
+
         self.preview_display = QTextEdit()
         self.preview_display.setReadOnly(True)
         self.preview_display.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
@@ -362,7 +370,7 @@ class ArtifactNode(QGraphicsObject, HoverAnimationMixin):
 
     def _on_tab_changed(self, index):
         if index == 1: # Switching to Live Preview
-            content = self.raw_editor.toPlainText()
+            content = self.get_artifact_content()
             # Escape literal HTML before markdown-rendering it: the document content is
             # AI/user-controlled text, not trusted markup, so a literal "<img src=... />"
             # or "<div style=...>" typed/generated into the document must not be handed
@@ -372,18 +380,26 @@ class ArtifactNode(QGraphicsObject, HoverAnimationMixin):
             html = markdown.markdown(escape_html(content, quote=False), extensions=['fenced_code', 'tables'])
             self.preview_display.setHtml(html)
 
+    def _on_instruction_changed(self):
+        self.instruction = self.instruction_input.toPlainText()
+
+    def _on_content_changed(self):
+        self.artifact_content = self.raw_editor.toPlainText()
+
     def get_instruction(self):
-        return self.instruction_input.toPlainText()
+        return self.instruction
 
     def seed_prompt(self, text):
         """Protocol method used by graphlink_window_actions.instantiate_seeded_plugin."""
         self.instruction_input.setPlainText(text)
+        self.instruction = text
 
     def get_artifact_content(self):
-        return self.raw_editor.toPlainText()
+        return self.artifact_content
 
     def set_artifact_content(self, text):
         self.raw_editor.setPlainText(text)
+        self.artifact_content = text
         if self.tabs.currentIndex() == 1:
             html = markdown.markdown(escape_html(text, quote=False), extensions=['fenced_code', 'tables'])
             self.preview_display.setHtml(html)

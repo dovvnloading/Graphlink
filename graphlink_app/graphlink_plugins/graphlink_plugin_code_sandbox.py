@@ -166,6 +166,15 @@ class CodeSandboxNode(QGraphicsObject, HoverAnimationMixin):
         self.last_run_mode = "generate"
         self.status = "Idle"
         self.sandbox_id = uuid.uuid4().hex[:12]
+        # Phase 7 prerequisite (increment 5): plain model attributes mirroring
+        # the editable widgets, synced via textChanged - the WebNode.query /
+        # HtmlViewNode.html_content treatment, so serializers.py and other
+        # readers stop reaching into live widgets.
+        self.prompt = ""
+        self.requirements = ""
+        self.code = ""
+        self.output = ""
+        self.ai_analysis = ""
         self.collapse_button_rect = QRectF()
 
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable)
@@ -294,6 +303,7 @@ class CodeSandboxNode(QGraphicsObject, HoverAnimationMixin):
             }}
             {SANDBOX_SCROLLBAR_STYLE}
         """)
+        self.prompt_input.textChanged.connect(self._on_prompt_changed)
         prompt_layout.addWidget(self.prompt_input)
         briefing_layout.addWidget(prompt_card, 3)
 
@@ -324,6 +334,7 @@ class CodeSandboxNode(QGraphicsObject, HoverAnimationMixin):
         self.requirements_input.setPlaceholderText("pandas\nnumpy\nmatplotlib")
         self.requirements_input.setFixedHeight(132)
         self.requirements_input.textChanged.connect(self._update_dependency_pill)
+        self.requirements_input.textChanged.connect(self._on_requirements_changed)
         self.requirements_input.setStyleSheet(f"""
             QPlainTextEdit {{
                 background-color: #181818;
@@ -451,6 +462,7 @@ class CodeSandboxNode(QGraphicsObject, HoverAnimationMixin):
             }}
             {SANDBOX_SCROLLBAR_STYLE}
         """)
+        self.code_input.textChanged.connect(self._on_code_changed)
         code_layout.addWidget(self.code_input)
         main_layout.addWidget(code_card)
 
@@ -646,7 +658,7 @@ class CodeSandboxNode(QGraphicsObject, HoverAnimationMixin):
                 selection_color=palette.SELECTION,
                 title="Execution Sandbox",
                 subtitle=self.status or "Idle",
-                preview=preview_text(self.get_prompt(), self.get_code(), self.output_display.toPlainText(), fallback="Generate and run in a venv"),
+                preview=preview_text(self.get_prompt(), self.get_code(), self.get_output(), fallback="Generate and run in a venv"),
                 badge="BOX",
                 mode=render_mode,
                 selected=self.isSelected(),
@@ -749,28 +761,41 @@ class CodeSandboxNode(QGraphicsObject, HoverAnimationMixin):
             worker.stop()
         self.worker_thread = None
 
+    def _on_prompt_changed(self):
+        self.prompt = self.prompt_input.toPlainText()
+
+    def _on_requirements_changed(self):
+        self.requirements = self.requirements_input.toPlainText().strip()
+
+    def _on_code_changed(self):
+        self.code = self.code_input.toPlainText()
+
     def get_prompt(self):
-        return self.prompt_input.toPlainText()
+        return self.prompt
 
     def seed_prompt(self, text):
         """Protocol method used by graphlink_window_actions.instantiate_seeded_plugin."""
         self.prompt_input.setPlainText(text)
+        self.prompt = text
 
     def get_requirements(self):
-        return self.requirements_input.toPlainText().strip()
+        return self.requirements
 
     def get_code(self):
-        return self.code_input.toPlainText()
+        return self.code
 
     def set_requirements(self, text):
         self.requirements_input.setPlainText(text or "")
+        self.requirements = (text or "").strip()
         self._update_dependency_pill()
 
     def set_code(self, text):
         self.code_input.setPlainText(text or "")
+        self.code = text or ""
 
     def clear_terminal_output(self):
         self.output_display.clear()
+        self.output = ""
 
     def append_terminal_output(self, text):
         if not text:
@@ -781,15 +806,29 @@ class CodeSandboxNode(QGraphicsObject, HoverAnimationMixin):
         self.output_display.insertPlainText(text)
         self.output_display.ensureCursorVisible()
         self.results_tabs.setCurrentIndex(0)
+        self.output += text
+
+    def get_output(self):
+        return self.output
 
     def set_output(self, text):
         self.output_display.setPlainText(text or "")
+        self.output = text or ""
         if text and text.strip():
             self.results_tabs.setCurrentIndex(0)
 
+    def get_ai_analysis(self):
+        return self.ai_analysis
+
     def set_ai_analysis(self, text):
+        # Store the raw markdown source, not a re-extraction of the rendered
+        # HTML below - QTextEdit.toPlainText() after setHtml(markdown.markdown(text))
+        # loses formatting entirely (verified empirically), so reading the widget
+        # back for this field was a real, pre-existing data-loss bug on every
+        # save/reload - the same class of bug increment 1 fixed for HtmlView.
         html = markdown.markdown(text or "", extensions=["fenced_code", "tables"])
         self.ai_analysis_display.setHtml(html)
+        self.ai_analysis = text or ""
         if text and text.strip():
             self.results_tabs.setCurrentIndex(1)
 
