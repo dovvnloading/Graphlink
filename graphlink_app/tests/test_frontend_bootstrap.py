@@ -338,7 +338,7 @@ class TestBuildOrchestration:
 
         calls = []
 
-        def fake_run_npm(npm_path, args, *, extra_env=None):
+        def fake_run_npm(npm_path, args, *, extra_env=None, timeout_seconds=None):
             calls.append((args, extra_env))
 
         monkeypatch.setattr(gfb, "_run_npm", fake_run_npm)
