@@ -13,7 +13,8 @@ from graphlink_widgets import CustomScrollBar
 from graphlink_grid_view_settings import GridViewSettings
 from graphlink_grid_control_web import GridControlHost
 from graphlink_font_control_web import FontControlHost
-from graphlink_minimap import MinimapWidget
+from graphlink_drag_speed_web import DragSpeedHost
+from graphlink_minimap_web import MinimapHost
 from graphlink_config import get_semantic_color
 from graphlink_context_menu import create_context_menu
 from graphlink_web_island_host import any_host_has_text_focus
@@ -76,19 +77,15 @@ class ChatView(QGraphicsView):
         self._expand_rect = None
         self._original_transform = None
         
-        self._setup_drag_control()
-        
         self.setMouseTracking(True)
         self.setAcceptDrops(True)
-        
+
         # Initialize overlay control widgets.
         self.grid_settings = GridViewSettings()
         self.grid_control_host = GridControlHost(self, parent=self)
         self.font_control_host = FontControlHost(self, parent=self)
+        self.drag_speed_host = DragSpeedHost(self, parent=self)
 
-        # Hide overlays by default.
-        self.control_widget.setVisible(False)
-        
         self._current_mouse_pos = None
         
         # Set a very large scene rect to allow extensive panning.
@@ -101,10 +98,8 @@ class ChatView(QGraphicsView):
         self.pan_timer.setInterval(16) # approx 60fps
         self.pan_timer.timeout.connect(self._handle_key_pan)
 
-        # Initialize the minimap widget.
-        self.minimap_widget = MinimapWidget(self.scene(), self)
-        self.minimap_widget.nodeSelected.connect(self._on_minimap_node_selected)
-        self.scene().scene_changed.connect(self.minimap_widget.update_nodes)
+        # Initialize the minimap host.
+        self.minimap_host = MinimapHost(self, parent=self)
         self._highlighted_from_nav_node = None
         self._controls_overlay_visible = False
         self._lod_refresh_timer = QTimer(self)
@@ -218,7 +213,6 @@ class ChatView(QGraphicsView):
         # We only need to do this on the very first show event.
         if self._initial_show:
             self._update_overlay_positions()
-            self.minimap_widget.update_nodes()
             self._schedule_scene_lod_refresh()
             self._initial_show = False
 
@@ -263,96 +257,6 @@ class ChatView(QGraphicsView):
             return
         event.ignore()
 
-    def _setup_drag_control(self):
-        """Initializes the UI for the pan speed control widget."""
-        from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSlider, QPushButton
-        self.control_widget = QWidget(self)
-        self.control_widget.setObjectName("dragControlPanel")
-        main_layout = QVBoxLayout(self.control_widget)
-        main_layout.setContentsMargins(10, 10, 10, 10)
-        main_layout.setSpacing(6)
-
-        self.control_widget.setStyleSheet("""
-            QWidget#dragControlPanel {
-                background-color: rgba(24, 24, 24, 0.88);
-                border: 1px solid rgba(255, 255, 255, 0.08);
-                border-radius: 10px;
-            }
-            QLabel, QSlider, QPushButton {
-                background-color: transparent;
-                border: none;
-            }
-        """)
-
-        icon_slider_layout = QHBoxLayout()
-        icon_slider_layout.setContentsMargins(0, 0, 0, 0)
-        icon_slider_layout.setSpacing(10)
-
-        label = QLabel("Drag", self.control_widget)
-        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        label.setFixedWidth(30)
-        label.setStyleSheet("""
-            QLabel {
-                background-color: rgba(0, 0, 0, 0); border-radius: 5px; font-size: 10px;
-                font-weight: bold; color: #CCCCCC;
-            }
-        """)
-        icon_slider_layout.addWidget(label)
-
-        self.drag_slider = QSlider(Qt.Orientation.Horizontal, self.control_widget)
-        self.drag_slider.setFixedWidth(130)
-        self.drag_slider.setMinimum(10)
-        self.drag_slider.setMaximum(100)
-        self.drag_slider.setValue(100)
-        self.drag_slider.valueChanged.connect(self._update_drag)
-        self.drag_slider.setToolTip(f"{self.drag_slider.value()}%")
-        self.drag_slider.valueChanged.connect(
-            lambda: self.drag_slider.setToolTip(f"{self.drag_slider.value()}%")
-        )
-
-        drag_slider_color = get_semantic_color("status_success")
-        self.drag_slider.setStyleSheet(
-            "QSlider::handle:horizontal {\n"
-            f"    background-color: {drag_slider_color.name()}; border-radius: 6px; width: 16px; margin: -6px 0;\n"
-            "}\n"
-            "QSlider::groove:horizontal {\n"
-            "    background-color: rgba(255, 255, 255, 0.16); height: 4px; border-radius: 2px;\n"
-            "}"
-        )
-
-        icon_slider_layout.addWidget(self.drag_slider)
-        main_layout.addLayout(icon_slider_layout)
-
-        notches_layout = QHBoxLayout()
-        notches_layout.setContentsMargins(0, 0, 0, 0)
-        # 4 buttons x 40px + 3 gaps must fit inside the panel's 180px content width
-        # (200px fixed width - 20px margins). At spacing=12 that's 196px, which
-        # overflowed the panel and clipped the rightmost ("100%") button.
-        notches_layout.setSpacing(4)
-
-        button_labels = [(25, "25%"), (50, "50%"), (75, "75%"), (100, "100%")]
-        for value, label in button_labels:
-            button = QPushButton(label, self.control_widget)
-            button.setFixedSize(40, 25)
-            button.setStyleSheet("""
-                QPushButton {
-                    color: white; background-color: rgba(63, 63, 63, 0.4); border: none;
-                    border-radius: 5px; font-size: 10px; padding: 2px;
-                }
-                QPushButton:hover { background-color: rgba(85, 85, 85, 0.6); }
-                QPushButton:pressed { background-color: rgba(164, 164, 164, 0.3); color: black; }
-            """)
-            button.clicked.connect(lambda _, v=value: self._set_slider_value(v))
-            notches_layout.addWidget(button)
-
-        main_layout.addLayout(notches_layout)
-        self.control_widget.setFixedSize(200, 90)
-
-    def _set_slider_value(self, value):
-        """Sets the value of the drag slider and updates the drag factor."""
-        self.drag_slider.setValue(value)
-        self._update_drag()
-
     def set_search_overlay_host(self, host) -> None:
         """Called once by ChatWindow.show_search_overlay() when the host is
         first constructed - see the _search_overlay_host attribute's own
@@ -377,9 +281,9 @@ class ChatView(QGraphicsView):
         if search_overlay and search_overlay.isVisible():
             current_y_right += search_overlay.height() + padding
 
-        if self.control_widget.isVisible():
-            self.control_widget.move(viewport_width - self.control_widget.width() - padding, current_y_right)
-            current_y_right += self.control_widget.height() + padding
+        if self.drag_speed_host.isVisible():
+            self.drag_speed_host.move(viewport_width - self.drag_speed_host.width() - padding, current_y_right)
+            current_y_right += self.drag_speed_host.height() + padding
 
         if self.grid_control_host.isVisible():
             self.grid_control_host.move(viewport_width - self.grid_control_host.width() - padding, current_y_right)
@@ -388,20 +292,16 @@ class ChatView(QGraphicsView):
         if self.font_control_host.isVisible():
             self.font_control_host.move(viewport_width - self.font_control_host.width() - padding, current_y_right)
 
-        if self.minimap_widget.isVisible():
-            self.minimap_widget.setFixedHeight(int(self.viewport().height() * 0.7))
-            self.minimap_widget.move(
-                self.viewport().width() - self.minimap_widget.width() - 5,
-                (self.viewport().height() - self.minimap_widget.height()) // 2
+        if self.minimap_host.isVisible():
+            self.minimap_host.setFixedHeight(int(self.viewport().height() * 0.7))
+            self.minimap_host.move(
+                self.viewport().width() - self.minimap_host.width() - 5,
+                (self.viewport().height() - self.minimap_host.height()) // 2
             )
 
         # Position left-aligned overlays.
         # NavigationPinsPanel is owned and positioned by ChatWindow's shared
         # overlay layer; it is not a child of this QGraphicsView.
-
-    def _update_drag(self):
-        """Updates the panning speed factor based on the drag slider's value."""
-        self._drag_factor = self.drag_slider.value() / 100.0
 
     def toggle_overlays_visibility(self, visible):
         """
@@ -411,12 +311,12 @@ class ChatView(QGraphicsView):
             visible (bool): True to show the overlays, False to hide them.
         """
         self._controls_overlay_visible = visible
-        self.control_widget.setVisible(visible)
+        self.drag_speed_host.setVisible(visible)
         self.grid_control_host.setVisible(visible)
         self.font_control_host.setVisible(visible)
-        self.minimap_widget.setVisible(not visible)
-        self.minimap_widget.setEnabled(not visible)
-        self.minimap_widget.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, visible)
+        self.minimap_host.setVisible(not visible)
+        self.minimap_host.setEnabled(not visible)
+        self.minimap_host.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, visible)
         self._update_overlay_positions()
 
     def updateScrollbars(self):

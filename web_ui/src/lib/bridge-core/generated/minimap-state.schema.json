@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "minCompatibleSchemaVersion": {
+      "type": "integer"
+    },
+    "nodes": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "isUser": {
+            "type": "boolean"
+          },
+          "preview": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "isUser",
+          "preview"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "revision": {
+      "type": "integer"
+    },
+    "schemaVersion": {
+      "type": "integer"
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "revision",
+    "nodes"
+  ],
+  "title": "MinimapState",
+  "type": "object"
+}
