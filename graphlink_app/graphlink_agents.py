@@ -37,7 +37,8 @@ from graphlink_agents_pycoder import (
     PyCoderRepairAgent,
     PyCoderAnalysisAgent,
     PyCoderExecutionWorker,
-    PyCoderAgentWorker
+    PyCoderAgentWorker,
+    PyCoderReplManager
 )
 
 # --- Isolated Sandbox Execution Agents ---
