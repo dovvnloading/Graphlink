@@ -1,0 +1,22 @@
+/* Shared base stylesheet imported by EVERY island's styles.css (first import).
+
+   Qt 6.11's Chromium ships Windows-11 "Fluent" overlay scrollbars: large
+   WHITE rounded pills drawn on any scrollable box the moment it overflows -
+   including the page itself when a host clamps shorter than its content, or
+   when a fixed-width shell overflows the viewport by a sub-pixel at
+   fractional DPI scaling. They ignore the legacy ::-webkit-scrollbar
+   styling; the standard `scrollbar-color` property is what actually themes
+   them (verified empirically against this exact engine: default thumb
+   samples ~rgb(252,x,x) on screen; scrollbar-color'd thumb ~rgb(60,x,x)).
+   `scrollbar-color` inherits, so setting it once on :root covers the page
+   and every inner scroll container of every island.
+
+   --gl-neutral-button-border is the same runtime-injected token island
+   cards already use for their borders; before the bridge's first theme
+   snapshot the declaration is simply invalid-and-ignored, which only
+   matters if something scrolls during the first frames. */
+:root {
+  color-scheme: dark;
+  scrollbar-color: var(--gl-neutral-button-border) transparent;
+  scrollbar-width: thin;
+}
