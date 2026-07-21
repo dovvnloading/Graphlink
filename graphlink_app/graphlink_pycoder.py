@@ -18,7 +18,7 @@ import qtawesome as qta
 from graphlink_config import canvas_font, get_current_palette, get_graph_node_colors, get_neutral_button_colors, get_semantic_color
 from graphlink_lod import draw_lod_card, preview_text, sync_proxy_render_state
 
-from graphlink_agents_pycoder import PyCoderStage, PyCoderStatus, PythonREPL
+from graphlink_agents_pycoder import PyCoderStage, PyCoderStatus
 from graphlink_canvas_items import HoverAnimationMixin
 from graphlink_plugins.graphlink_plugin_context_menu import PluginNodeContextMenu
 
@@ -351,7 +351,6 @@ class PyCoderNode(QGraphicsObject, HoverAnimationMixin):
         self.is_disposed = False
         self.is_collapsed = False
         self.collapse_button_rect = QRectF()
-        self.repl = PythonREPL()
         self.worker_thread = None
 
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable)
@@ -398,12 +397,15 @@ class PyCoderNode(QGraphicsObject, HoverAnimationMixin):
         if worker and worker.isRunning():
             worker.stop()
         self.worker_thread = None
-        if getattr(self, "repl", None):
-            self.repl.stop()
-
-    def __del__(self):
-        if hasattr(self, 'repl') and self.repl:
-            self.repl.stop()
+        # The REPL subprocess is owned by ChatWindow.pycoder_repl_manager, not this
+        # node - stop it here for immediate, deterministic cleanup on this (the
+        # right-click-delete) path. self.scene() is None for nodes never added to a
+        # scene (e.g. headless tests), so this is guarded rather than assumed.
+        scene = self.scene()
+        window = getattr(scene, "window", None) if scene is not None else None
+        manager = getattr(window, "pycoder_repl_manager", None) if window is not None else None
+        if manager is not None:
+            manager.stop(self)
 
     @property
     def width(self):

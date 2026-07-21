@@ -1016,7 +1016,7 @@ class WindowActionsMixin:
                 pycoder_node.set_output("[No code to run]")
                 pycoder_node.set_running_state(False)
                 return
-            worker_thread = CodeExecutionWorker(code, pycoder_node.repl)
+            worker_thread = CodeExecutionWorker(code, self.pycoder_repl_manager.get_repl(pycoder_node))
             pycoder_node.worker_thread = worker_thread
             worker_thread.finished.connect(
                 lambda output, history=self._branch_context_history(pycoder_node, pycoder_node.parent_node): self._handle_code_execution_result(output, pycoder_node, history)
@@ -1035,7 +1035,7 @@ class WindowActionsMixin:
             context_node = pycoder_node.parent_node
             if isinstance(context_node, CodeNode): context_node = context_node.parent_content_node
             history = self._branch_context_history(pycoder_node, context_node)
-            worker_thread = PyCoderExecutionWorker(prompt, history, pycoder_node.repl)
+            worker_thread = PyCoderExecutionWorker(prompt, history, self.pycoder_repl_manager.get_repl(pycoder_node))
             pycoder_node.worker_thread = worker_thread
             worker_thread.log_update.connect(pycoder_node.update_status)
             worker_thread.approval_requested.connect(

@@ -6,6 +6,7 @@ import re
 import json
 import base64
 import threading
+import weakref
 from enum import Enum
 from PySide6.QtCore import QThread, Signal
 import graphlink_config as config
@@ -91,6 +92,46 @@ while True:
             self.process.kill()
             self.process.wait()
             self.process = None
+
+
+class PyCoderReplManager:
+    """Owns the PythonREPL subprocess for each PyCoderNode, keyed by node
+    identity. PyCoderNode used to construct and stop its own REPL directly;
+    ownership moves here so the node no longer manages a live subprocess.
+
+    A weakref.finalize callback registered at REPL-creation time stops the
+    subprocess once the owning node is garbage collected, regardless of
+    whether stop()/dispose() was ever called first. This is load-bearing,
+    not just a safety net: ChatScene.clear() (the "New Chat"/chat-switch
+    path) never calls PyCoderNode.dispose() at all - only Python's own GC,
+    via this finalizer, stops the REPL on that path. dispose() (the
+    individual right-click-delete path) still calls stop() directly for
+    immediate, deterministic cleanup rather than waiting on GC.
+
+    A plain dict keyed by node would keep every node alive forever (the
+    dict entry itself would be a strong reference), which would prevent the
+    very GC this manager relies on - hence WeakKeyDictionary.
+    """
+
+    def __init__(self):
+        self._repls = weakref.WeakKeyDictionary()
+        self._finalizers = weakref.WeakKeyDictionary()
+
+    def get_repl(self, node):
+        repl = self._repls.get(node)
+        if repl is None:
+            repl = PythonREPL()
+            self._repls[node] = repl
+            self._finalizers[node] = weakref.finalize(node, repl.stop)
+        return repl
+
+    def stop(self, node):
+        finalizer = self._finalizers.pop(node, None)
+        if finalizer is not None:
+            finalizer.detach()
+        repl = self._repls.pop(node, None)
+        if repl is not None:
+            repl.stop()
 
 
 class CodeExecutionWorker(QThread):

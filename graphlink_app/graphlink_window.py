@@ -41,7 +41,7 @@ from graphlink_session import ChatSessionManager
 from graphlink_command_palette import CommandManager
 from graphlink_plugins.graphlink_plugin_portal import PluginPortal
 from graphlink_plugin_picker_web import PluginPickerHost
-from graphlink_agents import ChatAgent
+from graphlink_agents import ChatAgent, PyCoderReplManager
 from graphlink_audio import (
     AudioValidationError,
     SUPPORTED_AUDIO_EXTENSIONS,
@@ -115,6 +115,7 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         self.setWindowIcon(QIcon(str(asset_path("graphlink.ico"))))
 
         self.session_manager = ChatSessionManager(self)
+        self.pycoder_repl_manager = PyCoderReplManager()
         self.plugin_portal = PluginPortal(self)
         self.update_title_bar()
         self.reinitialize_agent()
