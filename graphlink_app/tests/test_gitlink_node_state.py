@@ -309,3 +309,69 @@ class TestApplyApprovedChangesOrchestration:
             node.apply_approved_changes()
 
         assert node.change_state == GITLINK_STATE_APPLIED
+
+
+class TestPreviewDistinguishesUnreadableOriginal:
+    """Audit finding A2: _read_original_text_for_preview used to swallow every
+    fetch failure to "" - so an `update` whose original couldn't be read
+    rendered as a clean all-additions "create" diff, silently corrupting the
+    human-approval decision (the only gate on the disk write). The method now
+    returns None for "could not read" (vs "" for a genuinely empty file), and
+    the preview renders an explicit warning instead of a fake diff."""
+
+    def test_read_original_returns_none_when_no_source_is_configured(self):
+        node = GitlinkNode(parent_node=None)
+        # No local_root, no repo/branch - both sources unavailable.
+        assert node._read_original_text_for_preview("a.py") is None
+
+    def test_read_original_returns_empty_string_for_a_real_empty_file(self, tmp_path):
+        (tmp_path / "empty.py").write_text("")
+        node = GitlinkNode(parent_node=None)
+        node.repo_state["local_root"] = str(tmp_path)
+
+        assert node._read_original_text_for_preview("empty.py") == ""
+
+    def test_update_with_unreadable_original_warns_instead_of_faking_a_create_diff(self):
+        node = GitlinkNode(parent_node=None)
+
+        preview = node._build_preview_text(
+            [{"path": "config.py", "operation": "update", "content": "NEW CONTENT"}]
+        )
+
+        assert "could not be read" in preview
+        assert "OVERWRITE" in preview
+        assert "NEW CONTENT" in preview
+        # The misleading unified-diff framing must NOT appear for this entry.
+        assert "+++ b/config.py" not in preview
+
+    def test_update_with_genuinely_empty_original_renders_a_normal_diff(self, tmp_path):
+        (tmp_path / "empty.py").write_text("")
+        node = GitlinkNode(parent_node=None)
+        node.repo_state["local_root"] = str(tmp_path)
+
+        preview = node._build_preview_text(
+            [{"path": "empty.py", "operation": "update", "content": "added line"}]
+        )
+
+        assert "could not be read" not in preview
+        assert "+++ b/empty.py" in preview
+
+    def test_delete_with_unreadable_original_warns(self):
+        node = GitlinkNode(parent_node=None)
+
+        preview = node._build_preview_text([{"path": "gone.py", "operation": "delete"}])
+
+        assert "could not be read" in preview
+        assert "DELETE" in preview
+
+    def test_create_is_unaffected_by_an_unavailable_original(self):
+        # Creates never need the original - they must keep rendering a normal
+        # new-file diff even when nothing is configured.
+        node = GitlinkNode(parent_node=None)
+
+        preview = node._build_preview_text(
+            [{"path": "new.py", "operation": "create", "content": "print(1)"}]
+        )
+
+        assert "could not be read" not in preview
+        assert "+++ b/new.py" in preview
