@@ -40,7 +40,7 @@ from graphlink_settings_web import SettingsWebHost
 from graphlink_session import ChatSessionManager
 from graphlink_command_palette import CommandManager
 from graphlink_plugins.graphlink_plugin_portal import PluginPortal
-from graphlink_plugins.graphlink_plugin_picker import PluginFlyoutPanel
+from graphlink_plugin_picker_web import PluginPickerHost
 from graphlink_agents import ChatAgent
 from graphlink_audio import (
     AudioValidationError,
@@ -51,7 +51,6 @@ from graphlink_audio import (
 from graphlink_file_handler import FileHandler
 import graphlink_config as config
 import api_provider
-from graphlink_config import get_current_palette
 
 from graphlink_prompts import BASE_SYSTEM_PROMPT, THINKING_INSTRUCTIONS_PROMPT
 from graphlink_window_actions import WindowActionsMixin
@@ -279,8 +278,12 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         self.command_palette_host = CommandPaletteWebHost(
             self.command_manager, parent=self.composer_overlay_parent
         )
-        self.plugin_picker = PluginFlyoutPanel(self.plugin_portal, self)
-        self.plugin_picker.pluginSelected.connect(self._handle_plugin_picker_selection)
+        # Phase 6 increment 3: absorbs the native PluginFlyoutPanel entirely.
+        # Anchored via the toolbar's own AnchorRect mechanism (increment 1),
+        # not registered with overlay_coordinator - a one-shot position at
+        # open time, matching the legacy popup's own behavior (never
+        # continuously repositioned during a live resize either).
+        self.plugin_picker = PluginPickerHost(self.plugin_portal, parent=self.composer_overlay_parent)
 
         self.new_chat_shortcut = QShortcut(QKeySequence("Ctrl+T"), self); self.new_chat_shortcut.activated.connect(self.new_chat)
         self.library_shortcut = QShortcut(QKeySequence("Ctrl+L"), self); self.library_shortcut.activated.connect(self.show_library)
@@ -326,9 +329,14 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
             return BASE_SYSTEM_PROMPT
 
     def _update_themed_styles(self):
-        palette = get_current_palette()
-        if hasattr(self, 'plugin_picker'):
-            self.plugin_picker.refresh()
+        # plugin_picker no longer needs an explicit refresh() call - like
+        # every other WebIslandHost, it re-themes automatically via the
+        # shared registry's theme_changed_all() -> on_theme_changed() ->
+        # bridge.publish() chain, since --gl-* CSS custom properties replace
+        # the native widget's own re-styled qtawesome icons/stylesheet. That
+        # was also the last user of this method's own `palette` local (its
+        # other use, plugins_button's icon tint, was removed in increment 1)
+        # - a dead-variable leftover from that edit, cleaned up here.
         if hasattr(self, 'pin_overlay'):
             self.pin_overlay.on_theme_changed()
         if hasattr(self, 'message_input'):
@@ -801,12 +809,14 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
 
     def _toggle_plugin_picker(self):
         if self.plugin_picker.isVisible():
-            self.plugin_picker.close()
+            # setVisible(False), not .close() - PluginPickerHost is a plain
+            # embedded child with no Window flag, never meant to go through
+            # a native closeEvent (see graphlink_plugin_picker_web.py).
+            self.plugin_picker.setVisible(False)
             return
-        self.plugin_picker.show_for_anchor(self.toolbar_host.bridge.get_anchor("plugins"))
-
-    def _handle_plugin_picker_selection(self, plugin_name):
-        self.plugin_portal.execute_plugin(plugin_name)
+        self.plugin_picker.reposition(self.toolbar_host.bridge.get_anchor("plugins"))
+        self.plugin_picker.setVisible(True)
+        self.plugin_picker.raise_()
 
     def toggle_pin_overlay(self, checked=False):
         if self.pin_overlay.isVisible():
