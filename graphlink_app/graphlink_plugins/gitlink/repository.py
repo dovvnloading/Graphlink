@@ -111,7 +111,15 @@ def validate_pending_changes(pending_changes):
     # other write failure, rather than corrupting a file on disk.
     for file_item in pending_changes:
         operation = file_item.get("operation", "update")
-        if operation in ("update", "create"):
+        # Mirror apply_change_set's own dispatch exactly: it skips writing
+        # only when operation == "delete" and writes for every OTHER value,
+        # not just "update"/"create" by name. Enumerating "update"/"create"
+        # here instead of "not delete" let an unrecognized operation value
+        # (a typo, a stale schema value, or a hand-edited/corrupted saved
+        # session) skip this check entirely while still reaching
+        # apply_change_set's write branch below - reproduced end to end:
+        # such an item silently overwrote a real file with an empty string.
+        if operation != "delete":
             content = file_item.get("content")
             if not isinstance(content, str):
                 path_text = file_item.get("path", "<unknown path>")

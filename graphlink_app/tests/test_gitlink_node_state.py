@@ -278,6 +278,28 @@ class TestApplyApprovedChangesOrchestration:
         assert not (tmp_path / "b.py").exists()
         assert node.change_state == GITLINK_STATE_PREVIEWED
 
+    def test_unrecognized_operation_value_does_not_silently_wipe_a_real_file(self, tmp_path):
+        # Adversarial-review finding: validate_pending_changes originally
+        # enumerated "update"/"create" by name, but apply_change_set's real
+        # dispatch treats ANY non-"delete" operation as a write. A
+        # session-restored proposal with a corrupted/unrecognized operation
+        # value (here "modify" - a plausible typo/stale-schema value) used to
+        # sail past validation and reach the write branch, which defaults
+        # missing content to "" and overwrote a real file's real content.
+        important_file = tmp_path / "important.py"
+        important_file.write_text("REAL CONTENT THAT MUST SURVIVE")
+        node = GitlinkNode(parent_node=None)
+        node.restore_saved_state(
+            proposal_data={"files": [{"path": "important.py", "operation": "modify"}]},
+        )
+        node.repo_state["local_root"] = str(tmp_path)
+
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes):
+            node.apply_approved_changes()
+
+        assert important_file.read_text() == "REAL CONTENT THAT MUST SURVIVE"
+        assert node.change_state == GITLINK_STATE_PREVIEWED
+
     def test_delete_of_nonexistent_file_is_a_no_op_within_the_full_flow(self, tmp_path):
         node = GitlinkNode(parent_node=None)
         node.pending_changes = [{"path": "never_existed.py", "operation": "delete"}]

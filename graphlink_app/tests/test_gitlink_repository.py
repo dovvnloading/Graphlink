@@ -294,6 +294,17 @@ class TestValidatePendingChanges:
     def test_delete_needs_no_content(self):
         validate_pending_changes([{"path": "gone.py", "operation": "delete"}])  # must not raise
 
+    def test_unrecognized_operation_value_still_requires_content(self):
+        # Adversarial-review finding: apply_change_set's real dispatch skips
+        # writing ONLY for operation == "delete" and writes for every other
+        # value - not just "update"/"create" by name. A guard that enumerated
+        # "update"/"create" specifically let an unrecognized value (a typo, a
+        # stale schema value, a hand-edited/corrupted saved session) skip
+        # validation while still reaching the write branch, silently
+        # overwriting a real file with an empty string.
+        with pytest.raises(RuntimeError, match="weird.py"):
+            validate_pending_changes([{"path": "weird.py", "operation": "modify"}])
+
 
 class TestApplyChangeSet:
     def test_create_writes_file_and_parent_dirs(self, tmp_path):
