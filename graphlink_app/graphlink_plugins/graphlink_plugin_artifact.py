@@ -130,6 +130,7 @@ class ArtifactNode(QGraphicsObject, HoverAnimationMixin):
         self.parent_node = parent_node
         self.children = []
         self.worker_thread = None
+        self.is_disposed = False
 
         self.conversation_history = []
         self.local_history = []
@@ -161,9 +162,26 @@ class ArtifactNode(QGraphicsObject, HoverAnimationMixin):
         """)
         
         self._setup_ui()
-        
+
         self.proxy = QGraphicsProxyWidget(self)
         self.proxy.setWidget(self.widget)
+
+    def dispose(self):
+        # Called by ChatScene.deleteSelectedItems when this node is removed. Stop the
+        # running worker so deletion doesn't orphan a live QThread: once the node
+        # leaves scene.artifact_nodes, ChatWindow._iter_shutdown_threads can no longer
+        # find that worker at app close, and its finished/error signals would fire
+        # into a node that no longer exists on the canvas. Mirrors
+        # CodeSandboxNode.dispose(); the delete path is hasattr-gated so simply
+        # defining this method wires it up. (Plan-vs-code audit finding A3: this was
+        # the one worker-owning node type with no dispose at all.)
+        if self.is_disposed:
+            return
+        self.is_disposed = True
+        worker = getattr(self, "worker_thread", None)
+        if worker and worker.isRunning():
+            worker.stop()
+        self.worker_thread = None
 
     @property
     def width(self):

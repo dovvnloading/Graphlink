@@ -193,10 +193,32 @@ class ConversationNode(QGraphicsObject, HoverAnimationMixin):
         self._request_active = False
         self._cancel_pending = False
         self.worker_thread = None
+        self.is_disposed = False
 
         self._setup_ui()
         self.proxy = QGraphicsProxyWidget(self)
         self.proxy.setWidget(self.widget)
+
+    def dispose(self):
+        # Called by ChatScene.deleteSelectedItems when this node is removed. Cancel
+        # the in-flight ChatWorkerThread so deletion doesn't orphan a live QThread:
+        # once the node leaves scene.conversation_nodes there is nothing left that
+        # tracks that worker, and its finished/error/cancelled signals would fire
+        # into a node no longer on the canvas. ChatWorkerThread exposes cancel()
+        # (cooperative), not stop() - the existing result handlers already reject
+        # stale threads, so the cancelled callback becomes a no-op after this.
+        # Mirrors the sibling nodes' dispose(); the delete path is hasattr-gated so
+        # defining this method wires it up. (Plan-vs-code audit finding A3.)
+        if self.is_disposed:
+            return
+        self.is_disposed = True
+        worker = getattr(self, "worker_thread", None)
+        try:
+            if worker and worker.isRunning():
+                worker.cancel()
+        except RuntimeError:
+            pass
+        self.worker_thread = None
 
     @property
     def width(self):
