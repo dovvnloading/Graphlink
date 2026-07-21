@@ -1,14 +1,8 @@
-import base64
 import difflib
-import html
-import shutil
-import tempfile
-import zipfile
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from urllib.parse import quote
 
 import qtawesome as qta
-import requests
 from PySide6.QtCore import QRect, QRectF, Qt, QThread, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
@@ -43,13 +37,16 @@ from graphlink_plugins.gitlink.agent import (
     GitlinkAgent,
     _clean_text,
     _compact_label_text,
-    _decode_text_bytes,
     _fingerprint_changes,
     _is_repo_text_path,
     _normalize_repo_path,
-    _safe_local_target,
-    _truncate_for_context,
-    _xml_file_block,
+)
+from graphlink_plugins.gitlink.repository import (
+    GitlinkRepository,
+    apply_change_set,
+    default_import_root,
+    read_local_repo_file,
+    validate_pending_changes,
 )
 from graphlink_plugins.common.combo import PopupComboBox
 
@@ -99,20 +96,6 @@ GITLINK_SCROLLBAR_STYLE = """
     }
 """
 
-IGNORED_LOCAL_DIR_NAMES = {
-    ".git",
-    ".hg",
-    ".svn",
-    "__pycache__",
-    ".venv",
-    "venv",
-    "node_modules",
-    "dist",
-    "build",
-}
-
-MAX_CONTEXT_CHARS = 180000
-MAX_MANIFEST_ENTRIES = 1200
 MAX_REPO_PAGES = 5
 
 
@@ -207,6 +190,7 @@ class GitlinkNode(QGraphicsObject, HoverAnimationMixin):
         self.parent_node = parent_node
         self.settings_manager = settings_manager
         self._github_client = GitHubRestClient(settings_manager)
+        self._repository = GitlinkRepository(self._github_client)
         self.children = []
         self.is_user = False
         self.conversation_history = []
@@ -814,13 +798,18 @@ class GitlinkNode(QGraphicsObject, HoverAnimationMixin):
             self.set_status(f"Error: {exc}")
 
     def _resolve_repo_and_branch(self):
-        repo_name = self.repo_input.text().strip() or self.repo_combo.currentText().strip()
+        # repo_combo has no mirror of its own (it's a convenience dropdown, not
+        # one of the source-of-truth fields), so it stays a direct widget read;
+        # repo/branch themselves now read repo_state, which every write path
+        # (the textChanged handler below and this method's own writeback) keeps
+        # in lockstep with the widgets.
+        repo_name = self.repo_state.get("repo", "").strip() or self.repo_combo.currentText().strip()
         if not repo_name or "/" not in repo_name:
             raise RuntimeError("Enter a repository as `owner/repo`.")
 
         repo_payload = self._github_request(f"https://api.github.com/repos/{repo_name}")
         default_branch = repo_payload.get("default_branch", "")
-        branch_name = self.branch_input.text().strip() or default_branch
+        branch_name = self.repo_state.get("branch", "").strip() or default_branch
         if not branch_name:
             raise RuntimeError("GitHub did not provide a default branch for this repository.")
 
@@ -919,45 +908,9 @@ class GitlinkNode(QGraphicsObject, HoverAnimationMixin):
             self.repo_state["local_root"] = chosen_dir
             self._mark_context_dirty()
 
-    def _default_import_root(self, repo_name, branch_name):
-        safe_repo = repo_name.replace("/", "__")
-        safe_branch = branch_name.replace("/", "__")
-        return Path.home() / ".graphlink" / "gitlink_repos" / safe_repo / safe_branch
-
-    def _download_repository_snapshot(self, repo_name, branch_name, target_root):
-        if target_root.exists() and any(target_root.iterdir()):
-            return target_root
-
-        target_root.parent.mkdir(parents=True, exist_ok=True)
-        archive_bytes = self._github_request(
-            f"https://api.github.com/repos/{repo_name}/zipball/{quote(branch_name, safe='')}",
-            expect_json=False,
-            timeout=60,
-        )
-
-        with tempfile.TemporaryDirectory(prefix="gitlink_import_") as temp_dir:
-            temp_path = Path(temp_dir)
-            archive_path = temp_path / "repo.zip"
-            extract_root = temp_path / "extract"
-            extract_root.mkdir(parents=True, exist_ok=True)
-            archive_path.write_bytes(archive_bytes)
-
-            with zipfile.ZipFile(archive_path) as archive:
-                archive.extractall(extract_root)
-
-            extracted_dirs = [item for item in extract_root.iterdir() if item.is_dir()]
-            extracted_root = extracted_dirs[0] if extracted_dirs else extract_root
-
-            if target_root.exists():
-                return target_root
-
-            shutil.move(str(extracted_root), str(target_root))
-
-        return target_root
-
     def _ensure_repository_snapshot(self):
         repo_name, branch_name = self._resolve_repo_and_branch()
-        local_root_text = self.local_root_input.text().strip()
+        local_root_text = self.repo_state.get("local_root", "").strip()
         if local_root_text:
             root_path = Path(local_root_text).expanduser()
             if root_path.exists():
@@ -974,8 +927,8 @@ class GitlinkNode(QGraphicsObject, HoverAnimationMixin):
                 self.repo_state["local_root"] = str(imported_path)
                 return imported_path
 
-        target_root = self._default_import_root(repo_name, branch_name)
-        target_path = self._download_repository_snapshot(repo_name, branch_name, target_root)
+        target_root = default_import_root(repo_name, branch_name)
+        target_path = self._repository.download_repository_snapshot(repo_name, branch_name, target_root)
         self.repo_state["imported_root"] = str(target_path)
         self.repo_state["local_root"] = str(target_path)
         self._suppress_ui_updates = True
@@ -991,193 +944,43 @@ class GitlinkNode(QGraphicsObject, HoverAnimationMixin):
         except Exception as exc:
             self.set_status(f"Error: {exc}")
 
-    def _read_local_repo_file(self, local_root, repo_path):
-        file_path = _safe_local_target(local_root, repo_path)
-        if not file_path.exists():
-            raise RuntimeError(f"Local checkout is missing `{repo_path}`.")
-        if file_path.is_dir():
-            raise RuntimeError(f"`{repo_path}` resolves to a directory, not a file.")
-        return _decode_text_bytes(file_path.read_bytes())
-
-    def _fetch_github_file_text(self, repo_name, branch_name, repo_path):
-        content_payload = self._github_request(
-            f"https://api.github.com/repos/{repo_name}/contents/{quote(repo_path, safe='/')}",
-            params={"ref": branch_name},
-        )
-        if isinstance(content_payload, list):
-            raise RuntimeError(f"`{repo_path}` resolves to a directory, not a file.")
-
-        if content_payload.get("encoding") == "base64" and content_payload.get("content"):
-            return _decode_text_bytes(base64.b64decode(content_payload["content"]))
-
-        download_url = content_payload.get("download_url")
-        if download_url:
-            response = requests.get(download_url, timeout=25)
-            response.raise_for_status()
-            return response.text
-
-        raise RuntimeError(f"GitHub did not return file contents for `{repo_path}`.")
-
-    def _scan_local_repo_paths(self, local_root):
-        root_path = Path(local_root).expanduser()
-        if not root_path.exists():
-            raise RuntimeError("The selected local repo path does not exist.")
-
-        collected = []
-        for file_path in root_path.rglob("*"):
-            if not file_path.is_file():
-                continue
-            relative = file_path.relative_to(root_path).as_posix()
-            if any(part in IGNORED_LOCAL_DIR_NAMES for part in PurePosixPath(relative).parts):
-                continue
-            if not _is_repo_text_path(relative):
-                continue
-            collected.append(relative)
-        return sorted(collected, key=str.lower)
-
-    def _resolve_scope_paths(self, local_root=None):
-        scope_mode = self.scope_combo.currentData() or "selected"
-        if scope_mode == "selected":
-            selected_paths = self.get_selected_paths()
-            if not selected_paths:
-                raise RuntimeError("Select one or more files or switch to Full Repo Access.")
-            return selected_paths
-
-        if self.repo_file_paths:
-            return list(self.repo_file_paths)
-        if local_root:
-            return self._scan_local_repo_paths(local_root)
-        raise RuntimeError("Load the file tree first so Gitlink knows which repository files to stitch together.")
-
     def build_context_bundle(self):
+        # Phase 7 prerequisite (increment 6): the ~130-line pure file-loading/
+        # budget-trimming/XML-assembly core now lives Qt-free in
+        # gitlink/repository.py's GitlinkRepository.build_context_bundle - this
+        # method is left as the thin Qt-facing wrapper: resolve repo/branch,
+        # read the now-consistently-authoritative repo_state mirror for
+        # local_root/scope_mode (and self.selected_paths/self.repo_file_paths,
+        # both already correctly synced), delegate, then push the result into
+        # widgets.
         repo_name, branch_name = self._resolve_repo_and_branch()
-        local_root_text = self.local_root_input.text().strip()
+        local_root_text = self.repo_state.get("local_root", "").strip()
         local_root = Path(local_root_text).expanduser() if local_root_text else None
         if local_root and not local_root.exists():
             raise RuntimeError("The selected local repo path does not exist.")
 
-        if (self.scope_combo.currentData() or "selected") == "full" and local_root is None:
+        scope_mode = self.repo_state.get("scope_mode") or "selected"
+        if scope_mode == "full" and local_root is None:
             local_root = self._ensure_repository_snapshot()
 
-        scope_paths = self._resolve_scope_paths(local_root=local_root)
-        records = []
-        included_file_count = 0
-        omitted_for_budget = 0
-        load_errors = 0
+        result = self._repository.build_context_bundle(
+            repo_name=repo_name,
+            branch_name=branch_name,
+            scope_mode=scope_mode,
+            selected_paths=self.selected_paths,
+            repo_file_paths=self.repo_file_paths,
+            local_root=local_root,
+        )
 
-        for repo_path in scope_paths:
-            normalized_path = _normalize_repo_path(repo_path)
-            source_origin = "github"
-            try:
-                if local_root is not None:
-                    source_text = self._read_local_repo_file(local_root, normalized_path)
-                    source_origin = "local"
-                else:
-                    source_text = self._fetch_github_file_text(repo_name, branch_name, normalized_path)
-                visible_text, source_truncated = _truncate_for_context(source_text)
-                records.append({
-                    "path": normalized_path,
-                    "source": source_origin,
-                    "content": visible_text,
-                    "original_chars": len(source_text),
-                    "source_truncated": source_truncated,
-                    "included": False,
-                })
-            except Exception as exc:
-                load_errors += 1
-                records.append({
-                    "path": normalized_path,
-                    "source": source_origin,
-                    "error": _clean_text(exc, limit=180) or "Unknown file load error.",
-                })
-
-        current_chars = 0
-        file_blocks = []
-        for record in records:
-            if record.get("error"):
-                continue
-            candidate_block = _xml_file_block(
-                record["path"],
-                record["content"],
-                truncated=record.get("source_truncated", False),
-                original_chars=record.get("original_chars", 0),
-            )
-            if file_blocks and (current_chars + len(candidate_block) > MAX_CONTEXT_CHARS):
-                omitted_for_budget += 1
-                continue
-            record["included"] = True
-            file_blocks.append(candidate_block)
-            current_chars += len(candidate_block)
-            included_file_count += 1
-
-        manifest_lines = []
-        for index, record in enumerate(records):
-            if index >= MAX_MANIFEST_ENTRIES:
-                break
-            attrs = [
-                f'path="{html.escape(record["path"], quote=True)}"',
-                f'source="{html.escape(record.get("source", "unknown"), quote=True)}"',
-            ]
-            if record.get("error"):
-                attrs.append(f'error="{html.escape(record["error"], quote=True)}"')
-            else:
-                attrs.append(f'included="{str(bool(record.get("included"))).lower()}"')
-                attrs.append(f'chars="{max(0, int(record.get("original_chars", 0)))}"')
-                attrs.append(f'truncated="{str(bool(record.get("source_truncated"))).lower()}"')
-                if not record.get("included"):
-                    attrs.append('omitted="true"')
-                    attrs.append('reason="context_budget"')
-            manifest_lines.append(f"    <file {' '.join(attrs)} />")
-
-        manifest_omitted = max(0, len(records) - MAX_MANIFEST_ENTRIES)
-        if manifest_omitted:
-            manifest_lines.append(f'    <more count="{manifest_omitted}" reason="manifest_budget" />')
-
-        scope_mode = self.scope_combo.currentData() or "selected"
-        scope_label = "full_repo" if scope_mode == "full" else "selected_files"
-        xml_parts = [
-            f'<gitlink_context repository="{html.escape(repo_name, quote=True)}" branch="{html.escape(branch_name, quote=True)}" scope="{scope_label}">',
-            f"  <summary scanned_files=\"{len(records)}\" loaded_files=\"{len(records) - load_errors}\" included_files=\"{included_file_count}\" load_errors=\"{load_errors}\" context_omissions=\"{omitted_for_budget}\" />",
-            "  <manifest>",
-            *manifest_lines,
-            "  </manifest>",
-            "  <files>",
-            *file_blocks,
-            "  </files>",
-            "</gitlink_context>",
-        ]
-        context_xml = "\n".join(xml_parts)
-
-        source_root = str(local_root) if local_root is not None else "github"
-        summary_parts = [
-            f"Scanned {len(records)} files",
-            f"loaded {len(records) - load_errors}",
-            f"included {included_file_count}",
-        ]
-        if omitted_for_budget:
-            summary_parts.append(f"omitted {omitted_for_budget} for context budget")
-        if load_errors:
-            summary_parts.append(f"hit {load_errors} load errors")
-        summary_parts.append(f"source={source_root}")
-        context_summary = ", ".join(summary_parts) + "."
-
-        self.context_xml = context_xml
-        self.context_stats = {
-            "scanned_files": len(records),
-            "loaded_files": len(records) - load_errors,
-            "included_files": included_file_count,
-            "load_errors": load_errors,
-            "context_omissions": omitted_for_budget,
-            "source_root": source_root,
-            "summary": context_summary,
-        }
-        self.context_summary = context_summary
-        self.last_context_paths = [record["path"] for record in records if record.get("included")]
-        self.context_editor.setPlainText(context_xml)
+        self.context_xml = result.context_xml
+        self.context_stats = result.context_stats
+        self.context_summary = result.context_summary
+        self.last_context_paths = result.included_paths
+        self.context_editor.setPlainText(result.context_xml)
         self.workspace_tabs.setCurrentIndex(1)
         self._context_dirty = False
         self._update_badges()
-        return context_xml
+        return result.context_xml
 
     def build_context_preview(self):
         try:
@@ -1187,15 +990,20 @@ class GitlinkNode(QGraphicsObject, HoverAnimationMixin):
             self.set_status(f"Error: {exc}")
 
     def get_task_prompt(self):
-        return self.task_input.toPlainText()
+        # Phase 7 prerequisite (increment 6): self.task_prompt was already a
+        # correctly-synced mirror (kept in sync by _on_task_changed/seed_prompt/
+        # restore_saved_state) - this getter simply bypassed it and re-read the
+        # widget every time. Matches the identical fix already applied to every
+        # other node type's get_prompt()/get_code()/etc. in increments 1/5.
+        return self.task_prompt
 
     def build_change_request(self):
         if not self.context_xml.strip():
             raise RuntimeError("Build the XML context before generating a change set.")
         return {
-            "repo": self.repo_state.get("repo") or self.repo_input.text().strip(),
-            "branch": self.repo_state.get("branch") or self.branch_input.text().strip(),
-            "scope_label": "Full Repo Access" if (self.scope_combo.currentData() == "full") else "Selected Files",
+            "repo": self.repo_state.get("repo", ""),
+            "branch": self.repo_state.get("branch", ""),
+            "scope_label": "Full Repo Access" if (self.repo_state.get("scope_mode") == "full") else "Selected Files",
             "task_prompt": self.get_task_prompt(),
             "context_xml": self.context_xml,
             "context_summary": self.context_summary,
@@ -1214,8 +1022,8 @@ class GitlinkNode(QGraphicsObject, HoverAnimationMixin):
             self.set_error(str(exc))
 
     def _build_proposal_markdown(self, proposal):
-        repo_name = self.repo_state.get("repo") or self.repo_input.text().strip()
-        branch_name = self.repo_state.get("branch") or self.branch_input.text().strip()
+        repo_name = self.repo_state.get("repo", "")
+        branch_name = self.repo_state.get("branch", "")
         summary = _clean_text(proposal.get("summary"), limit=500)
         rationale = _clean_text(proposal.get("rationale"), limit=1200)
         notes = proposal.get("notes", []) if isinstance(proposal.get("notes"), list) else []
@@ -1251,18 +1059,18 @@ class GitlinkNode(QGraphicsObject, HoverAnimationMixin):
         return "\n".join(lines)
 
     def _read_original_text_for_preview(self, repo_path):
-        local_root_text = self.local_root_input.text().strip()
+        local_root_text = self.repo_state.get("local_root", "").strip()
         if local_root_text:
             try:
-                return self._read_local_repo_file(local_root_text, repo_path)
+                return read_local_repo_file(local_root_text, repo_path)
             except Exception:
                 pass
 
-        repo_name = self.repo_state.get("repo") or self.repo_input.text().strip()
-        branch_name = self.repo_state.get("branch") or self.branch_input.text().strip()
+        repo_name = self.repo_state.get("repo", "")
+        branch_name = self.repo_state.get("branch", "")
         if repo_name and branch_name:
             try:
-                return self._fetch_github_file_text(repo_name, branch_name, repo_path)
+                return self._repository.fetch_github_file_text(repo_name, branch_name, repo_path)
             except Exception:
                 pass
         return ""
@@ -1394,7 +1202,7 @@ class GitlinkNode(QGraphicsObject, HoverAnimationMixin):
             self.set_error("There is no approved change set to write.")
             return
 
-        local_root_text = self.local_root_input.text().strip()
+        local_root_text = self.repo_state.get("local_root", "").strip()
         if not local_root_text:
             self.set_error("Select or import a local repository path before applying changes.")
             return
@@ -1431,23 +1239,18 @@ class GitlinkNode(QGraphicsObject, HoverAnimationMixin):
             self.set_error("The proposed change set changed after approval. Review it again before applying.")
             return
 
-        written_files = 0
         try:
-            for file_item in self.pending_changes:
-                path_text = file_item.get("path", "")
-                operation = file_item.get("operation", "update")
-                target_path = _safe_local_target(local_root, path_text)
-
-                if operation == "delete":
-                    if target_path.exists():
-                        target_path.unlink()
-                        written_files += 1
-                    continue
-
-                target_path.parent.mkdir(parents=True, exist_ok=True)
-                target_path.write_text(file_item.get("content", ""), encoding="utf-8")
-                written_files += 1
-
+            # validate_pending_changes is a new pre-flight guard (Phase 7
+            # prerequisite increment 6): a session-restored proposal skips
+            # GitlinkAgent._normalize_files' content-key validation (that only
+            # runs for freshly-generated proposals), so a restored change item
+            # could otherwise reach apply_change_set's write_text(content, "")
+            # and silently write an EMPTY file over real content. This fails
+            # loud instead, caught by the same except block below that already
+            # handles every other write failure - it cannot weaken the gate,
+            # only surface one more failure mode as a reported error.
+            validate_pending_changes(self.pending_changes)
+            written_files = apply_change_set(local_root, self.pending_changes)
             self.change_state = GITLINK_STATE_APPLIED
             self.set_status(f"Applied {written_files} file changes.")
         except Exception as exc:
