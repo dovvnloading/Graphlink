@@ -363,7 +363,7 @@ class WindowActionsMixin:
             system_prompt_estimate=500 if self.settings_manager.get_enable_system_prompt() else 0,
             reserve_tokens=input_tokens,
         )
-        self.token_counter_bridge.update_counts(input_tokens=input_tokens, context_tokens=context_tokens)
+        self.token_counter_widget.bridge.update_counts(input_tokens=input_tokens, context_tokens=context_tokens)
 
         history_for_worker = append_history(trimmed_history, [input_msg_for_token])
         assign_history(user_node, history_for_worker)
@@ -415,7 +415,7 @@ class WindowActionsMixin:
         
         output_tokens = self.token_estimator.count_tokens(response_text)
         self.total_session_tokens += input_tokens + output_tokens
-        self.token_counter_bridge.update_counts(output_tokens=output_tokens, total_tokens=self.total_session_tokens)
+        self.token_counter_widget.bridge.update_counts(output_tokens=output_tokens, total_tokens=self.total_session_tokens)
 
         parsed_parts = self._parse_response(response_text)
         text_content_parts = [part['content'] for part in parsed_parts if part['type'] == 'text']

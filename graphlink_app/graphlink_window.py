@@ -15,12 +15,12 @@ from graphlink_overlay_coordinator import OverlayCoordinator
 from graphlink_search_overlay_web import SearchOverlayHost
 from graphlink_pin_overlay_web import PinOverlayHost
 from graphlink_token_estimator import TokenEstimator
-from graphlink_token_counter_bridge import TokenCounterBridge
+from graphlink_token_counter_web import TokenCounterWebHost
 from graphlink_document_viewer_web import DocumentViewerWebHost
 from graphlink_notification_web import NotificationWebHost
 from graphlink_command_palette_web import CommandPaletteWebHost
 from graphlink_composer_web import ComposerWebHost
-from graphlink_web_island_host import AcceleratorForwardingFilter, WebIslandHost
+from graphlink_web_island_host import AcceleratorForwardingFilter
 from graphlink_canvas_items import Note, Frame, Container
 from graphlink_node import ChatNode, CodeNode, ThinkingNode
 from graphlink_pycoder import PyCoderNode
@@ -141,18 +141,30 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         content_layout.addWidget(self.chat_view)
         self.navigation_pins_controller = NavigationPinsController(self.chat_view.scene(), self.chat_view)
 
-        # Notifications share the window overlay parent with the composer so
-        # their z-order is meaningful across the graph/content hierarchy.
-        # Keeping the banner under ChatView would leave it trapped below the
-        # fixed composer even when NotificationWebHost.raise_() is called.
-        self.notification_banner = NotificationWebHost(self, parent=self.composer_overlay_parent)
-
         # Phase 5 increment 1: the single arbiter for reposition/raise ordering
         # across the overlay hosts below, replacing the scattered raise_()
         # calls and duplicate positioning methods recon found. Registered
         # islands are re-homed onto it as each one migrates (see
         # graphlink_overlay_coordinator.py's own module docstring).
         self.overlay_coordinator = OverlayCoordinator()
+
+        # Notifications share the window overlay parent with the composer so
+        # their z-order is meaningful across the graph/content hierarchy.
+        # Keeping the banner under ChatView would leave it trapped below the
+        # fixed composer even when NotificationWebHost.raise_() is called.
+        # Phase 5 increment 4: registered with the coordinator at the highest
+        # z_priority of the group - a notification's whole point is to
+        # interrupt and stay readable over every other transient overlay.
+        # update_position() takes no arguments, so it registers directly as
+        # the reposition_fn with no wrapping lambda needed. The composer's
+        # own raise_() still runs in a separate, always-later method
+        # (_update_composer_overlay), so that method keeps its own explicit
+        # notification_banner.raise_() reassert - the coordinator's raise
+        # pass alone can't guarantee ordering relative to the composer.
+        self.notification_banner = NotificationWebHost(self, parent=self.composer_overlay_parent)
+        self.overlay_coordinator.register(
+            self.notification_banner, self.notification_banner.update_position, z_priority=40
+        )
 
         # Parented to self (ChatWindow), not chat_view, exactly matching the
         # legacy PinOverlay's own parenting - reposition()'s clamping math
@@ -165,16 +177,18 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
 
         self.token_estimator = TokenEstimator()
         self.total_session_tokens = 0
-        self.token_counter_bridge = TokenCounterBridge()
-        self.token_counter_widget = WebIslandHost(
-            bridge=self.token_counter_bridge,
-            asset_dir_name="token-counter",
-            bridge_object_name="tokenCounterBridge",
-            unavailable_message="Token counter unavailable: QtWebEngine failed to initialize.",
-            parent=self.chat_view,
-        )
-        self.token_counter_widget.setFixedSize(150, 90)
+        # Phase 5 increment 4: TokenCounterWebHost gives this island the same
+        # self-owned reposition() shape every other island already has (see
+        # graphlink_token_counter_web.py's module docstring). Lowest
+        # z_priority of the group - a passive corner HUD never meant to
+        # render above anything else.
+        self.token_counter_widget = TokenCounterWebHost(parent=self.chat_view)
         self.token_counter_widget.setVisible(self.settings_manager.get_show_token_counter())
+        self.overlay_coordinator.register(
+            self.token_counter_widget,
+            lambda: self.token_counter_widget.reposition(self.chat_view.viewport()),
+            z_priority=5,
+        )
 
         self.toolbar = QToolBar()
         container_layout.addWidget(self.toolbar)
@@ -385,24 +399,21 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         self._update_overlay_positions()
 
     def _update_overlay_positions(self):
-        token_counter_widget = getattr(self, 'token_counter_widget', None)
-        notification_banner = getattr(self, 'notification_banner', None)
         command_palette_host = getattr(self, 'command_palette_host', None)
-        padding = 10
-        viewport = self.chat_view.viewport()
-
-        if notification_banner and notification_banner.isVisible():
-            notification_banner.update_position()
         if command_palette_host and command_palette_host.isVisible():
             command_palette_host.update_position()
-        if token_counter_widget and token_counter_widget.isVisible():
-            token_y = viewport.height() - token_counter_widget.height() - padding
-            token_counter_widget.move(padding, max(padding, token_y))
 
-        # search_overlay and pin_overlay are both registered with
-        # overlay_coordinator (Phase 5 increment 1) - it positions and raises
-        # each in one pass, replacing what used to be inline .move() calls
-        # here plus a separate pin_overlay.reposition() call.
+        # search_overlay, pin_overlay, composer_picker_host,
+        # composer_context_host, token_counter_widget, and notification_banner
+        # are all registered with overlay_coordinator (Phase 5 increments
+        # 1-4) - it positions and raises each in one pass, replacing what
+        # used to be inline .move() calls and hand-called
+        # .update_position()/.raise_() here. command_palette_host stays
+        # hand-managed above deliberately - it predates Phase 5 entirely
+        # (Phase 2) and already had its own correct open-time
+        # position+raise pattern (show_command_palette() calls
+        # update_position()+raise_() itself), unlike the newly-added
+        # surfaces this phase's own recon found dueling over positioning.
         self.overlay_coordinator.reposition_all()
 
         # ChatView stacks control_widget/grid_control/font_control/
@@ -1402,7 +1413,7 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         return None
 
     def reset_token_counter(self, total_tokens=0):
-        self.total_session_tokens = total_tokens; self.token_counter_bridge.reset(); self.token_counter_bridge.update_counts(total_tokens=self.total_session_tokens)
+        self.total_session_tokens = total_tokens; self.token_counter_widget.bridge.reset(); self.token_counter_widget.bridge.update_counts(total_tokens=self.total_session_tokens)
 
     def new_chat(self, parent_for_dialog=None):
         scene = self.chat_view.scene()
