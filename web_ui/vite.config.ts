@@ -12,7 +12,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // CSS file + one JS module per island into a single offline HTML document.
 // Registering an island here does not build it; GRAPHLINK_ISLAND below
 // selects which one this invocation builds.
-const ISLANDS = ["composer", "token-counter", "notification", "command-palette", "settings", "about", "help", "document-viewer", "chat-library", "search-overlay", "pin-overlay", "composer-picker", "composer-context", "toolbar", "plugin-picker", "grid-control", "font-control"];
+const ISLANDS = ["composer", "token-counter", "notification", "command-palette", "settings", "about", "help", "document-viewer", "chat-library", "search-overlay", "pin-overlay", "composer-picker", "composer-context", "toolbar", "plugin-picker", "grid-control", "font-control", "drag-speed", "minimap"];
 
 const island = process.env.GRAPHLINK_ISLAND || "composer";
 if (!ISLANDS.includes(island)) {

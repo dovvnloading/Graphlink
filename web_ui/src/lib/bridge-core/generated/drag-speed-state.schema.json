@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "minCompatibleSchemaVersion": {
+      "type": "integer"
+    },
+    "percentMax": {
+      "type": "integer"
+    },
+    "percentMin": {
+      "type": "integer"
+    },
+    "percentPresets": {
+      "items": {
+        "type": "integer"
+      },
+      "type": "array"
+    },
+    "revision": {
+      "type": "integer"
+    },
+    "schemaVersion": {
+      "type": "integer"
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "revision",
+    "percentPresets",
+    "percentMin",
+    "percentMax"
+  ],
+  "title": "DragSpeedState",
+  "type": "object"
+}
