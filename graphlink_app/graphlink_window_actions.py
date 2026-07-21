@@ -1005,6 +1005,12 @@ class WindowActionsMixin:
             self._clear_loading_animation()
 
     def execute_pycoder_node(self, pycoder_node):
+        # The `node=pycoder_node` capture on the finished/error lambdas below (both
+        # branches) is load-bearing beyond cleanup: it keeps pycoder_node reachable
+        # for as long as this worker_thread is alive, which in turn keeps
+        # PyCoderReplManager's weakref.finalize for this node from firing mid-execution
+        # - do not drop that capture without another way to keep the node alive for
+        # the run's duration.
         if pycoder_node.is_running:
             self.stop_pycoder_node(pycoder_node)
             return
