@@ -9,7 +9,7 @@ from graphlink_scene import ChatScene
 from graphlink_node import ChatNode, CodeNode, DocumentNode, ImageNode
 from graphlink_connections import ConnectionItem
 from graphlink_canvas_items import Frame, Note, NavigationPin, ChartItem
-from graphlink_widgets import CustomScrollBar, GridControl, SearchOverlay, FontControl
+from graphlink_widgets import CustomScrollBar, GridControl, FontControl
 from graphlink_minimap import MinimapWidget
 from graphlink_config import get_semantic_color
 from graphlink_context_menu import create_context_menu
@@ -55,6 +55,12 @@ class ChatView(QGraphicsView):
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         
+        # Direct reference to the search-overlay host (Phase 5 increment 1),
+        # set once by ChatWindow.show_search_overlay() on first construction -
+        # replaces a findChild(SearchOverlay) probe this view used to need
+        # because it never held a reference of its own.
+        self._search_overlay_host = None
+
         # State attributes for panning and zooming.
         self._panning = False
         self._last_mouse_pos = None
@@ -353,6 +359,12 @@ class ChatView(QGraphicsView):
         self.drag_slider.setValue(value)
         self._update_drag()
 
+    def set_search_overlay_host(self, host) -> None:
+        """Called once by ChatWindow.show_search_overlay() when the host is
+        first constructed - see the _search_overlay_host attribute's own
+        comment in __init__."""
+        self._search_overlay_host = host
+
     def _update_overlay_positions(self):
         """
         Calculates and sets the positions of all floating overlay widgets
@@ -360,12 +372,15 @@ class ChatView(QGraphicsView):
         """
         padding = 10
         viewport_width = self.viewport().width()
-        
+
         # Position right-aligned overlays, stacking them vertically.
+        # search_overlay's own position is owned by OverlayCoordinator
+        # (Phase 5 increment 1, see ChatWindow._update_overlay_positions) -
+        # this only reads its height to make room for the stack below it,
+        # rather than re-positioning it a second time.
         current_y_right = padding
-        search_overlay = self.findChild(SearchOverlay)
+        search_overlay = self._search_overlay_host
         if search_overlay and search_overlay.isVisible():
-            search_overlay.move(viewport_width - search_overlay.width() - padding, current_y_right)
             current_y_right += search_overlay.height() + padding
 
         if self.control_widget.isVisible():

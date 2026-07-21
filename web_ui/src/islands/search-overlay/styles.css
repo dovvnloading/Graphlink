@@ -1,0 +1,108 @@
+/* Colors reuse EXISTING app-wide --gl-* tokens, same convention every
+   island since token-counter follows. Compact toolbar-like bar (300x44,
+   matching the legacy SearchOverlay's fixed size exactly) - a corner
+   widget, not a floating card, hence the smaller corner radius than
+   every other island's default. */
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: transparent;
+}
+
+.search-overlay-shell {
+  box-sizing: border-box;
+  width: 300px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px;
+  font-family: var(--gl-font-family, system-ui, sans-serif);
+  color: var(--gl-neutral-button-icon);
+  background-color: var(--gl-graph-node-panel-fill);
+  border: 1px solid var(--gl-neutral-button-border);
+  border-radius: 5px;
+  overflow: hidden;
+}
+
+.search-overlay-input {
+  box-sizing: border-box;
+  flex: 1;
+  min-width: 0;
+  height: 24px;
+  padding: 0 6px;
+  font-size: 12px;
+  font-family: inherit;
+  color: var(--gl-neutral-button-icon);
+  background-color: var(--gl-neutral-button-background);
+  border: 1px solid var(--gl-neutral-button-border);
+  border-radius: 3px;
+  outline: none;
+}
+
+.search-overlay-input:focus {
+  border-color: var(--gl-palette-selection);
+}
+
+.search-overlay-count {
+  flex-shrink: 0;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.search-overlay-count[data-tone="active"] {
+  color: var(--gl-neutral-button-icon);
+}
+
+.search-overlay-count[data-tone="idle"] {
+  color: var(--gl-neutral-button-muted-icon);
+}
+
+.search-overlay-count[data-tone="error"] {
+  color: var(--gl-semantic-status-error);
+}
+
+.search-overlay-icon-btn {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--gl-neutral-button-icon);
+  background-color: transparent;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.search-overlay-icon-btn:hover {
+  background-color: var(--gl-neutral-button-hover);
+}
+
+.bridge-error-title {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.bridge-error-reason {
+  margin: 0 0 4px 0;
+  font-size: 13px;
+}
+
+.bridge-error-details {
+  margin: 0;
+  padding-left: 16px;
+  font-size: 12px;
+  color: var(--gl-neutral-button-muted-icon);
+}
+
+.bridge-error-hint {
+  margin: 8px 0 0 0;
+  font-size: 12px;
+  color: var(--gl-neutral-button-muted-icon);
+}

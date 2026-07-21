@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "minCompatibleSchemaVersion": {
+      "type": "integer"
+    },
+    "revision": {
+      "type": "integer"
+    },
+    "rows": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "note": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "note"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "schemaVersion": {
+      "type": "integer"
+    },
+    "selectedPinId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "revision",
+    "rows"
+  ],
+  "title": "PinOverlayState",
+  "type": "object"
+}

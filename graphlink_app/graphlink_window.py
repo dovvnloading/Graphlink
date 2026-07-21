@@ -11,7 +11,9 @@ import os
 import tempfile
 from datetime import datetime
 
-from graphlink_widgets import PinOverlay, SearchOverlay
+from graphlink_overlay_coordinator import OverlayCoordinator
+from graphlink_search_overlay_web import SearchOverlayHost
+from graphlink_pin_overlay_web import PinOverlayHost
 from graphlink_token_estimator import TokenEstimator
 from graphlink_token_counter_bridge import TokenCounterBridge
 from graphlink_document_viewer_web import DocumentViewerWebHost
@@ -150,9 +152,21 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         # fixed composer even when NotificationWebHost.raise_() is called.
         self.notification_banner = NotificationWebHost(self, parent=self.composer_overlay_parent)
 
-        self.pin_overlay = PinOverlay(self.chat_view, self, controller=self.navigation_pins_controller)
+        # Phase 5 increment 1: the single arbiter for reposition/raise ordering
+        # across the overlay hosts below, replacing the scattered raise_()
+        # calls and duplicate positioning methods recon found. Registered
+        # islands are re-homed onto it as each one migrates (see
+        # graphlink_overlay_coordinator.py's own module docstring).
+        self.overlay_coordinator = OverlayCoordinator()
+
+        # Parented to self (ChatWindow), not chat_view, exactly matching the
+        # legacy PinOverlay's own parenting - reposition()'s clamping math
+        # bounds itself to parentWidget(), which must be the whole window,
+        # not just the graph viewport.
+        self.pin_overlay = PinOverlayHost(self.chat_view, self.navigation_pins_controller, parent=self)
         self.pin_overlay.closed.connect(self._handle_pin_overlay_closed)
         self.pin_overlay.setVisible(False)
+        self.overlay_coordinator.register(self.pin_overlay, self.pin_overlay.reposition, z_priority=10)
 
         self.token_estimator = TokenEstimator()
         self.total_session_tokens = 0
@@ -200,8 +214,6 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         self.loading_animation = None
         self.pending_response_preview = None
         self.search_overlay = None
-        self.search_results = []
-        self.current_search_index = -1
 
         self.command_manager = CommandManager()
         self._setup_commands()
@@ -358,7 +370,6 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         self._update_overlay_positions()
 
     def _update_overlay_positions(self):
-        search_overlay = getattr(self, 'search_overlay', None)
         token_counter_widget = getattr(self, 'token_counter_widget', None)
         notification_banner = getattr(self, 'notification_banner', None)
         command_palette_host = getattr(self, 'command_palette_host', None)
@@ -369,25 +380,28 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
             notification_banner.update_position()
         if command_palette_host and command_palette_host.isVisible():
             command_palette_host.update_position()
-        if search_overlay and search_overlay.isVisible():
-            search_overlay.move(viewport.width() - search_overlay.width() - padding, padding)
         if token_counter_widget and token_counter_widget.isVisible():
             token_y = viewport.height() - token_counter_widget.height() - padding
             token_counter_widget.move(padding, max(padding, token_y))
 
-        # ChatView stacks search_overlay/control_widget/grid_control/font_control/
-        # minimap_widget in its own _update_overlay_positions(), which accounts for
-        # search_overlay's current visibility when placing the rest of that stack.
-        # Without this, toggling search while the Controls panel is already open left
-        # the panel at its old Y (calculated before search became visible) while the
-        # search bar always renders at the top - the two would render on top of each
-        # other until something else (e.g. a resize) happened to recompute the stack.
+        # search_overlay and pin_overlay are both registered with
+        # overlay_coordinator (Phase 5 increment 1) - it positions and raises
+        # each in one pass, replacing what used to be inline .move() calls
+        # here plus a separate pin_overlay.reposition() call.
+        self.overlay_coordinator.reposition_all()
+
+        # ChatView stacks control_widget/grid_control/font_control/
+        # minimap_widget in its own _update_overlay_positions(), which
+        # accounts for the search overlay host's current height/visibility
+        # (via ChatView's own direct reference, not a findChild probe - see
+        # ChatView.set_search_overlay_host) when placing the rest of that
+        # stack. Without this, toggling search while the Controls panel is
+        # already open left the panel at its old Y (calculated before search
+        # became visible) while the search bar always renders at the top -
+        # the two would render on top of each other until something else
+        # (e.g. a resize) happened to recompute the stack.
         if self.chat_view:
             self.chat_view._update_overlay_positions()
-
-        pin_overlay = getattr(self, "pin_overlay", None)
-        if pin_overlay and pin_overlay.isVisible():
-            pin_overlay.reposition()
 
         self._update_composer_overlay()
 
@@ -745,36 +759,21 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         self.composer.set_request_state(state in active_states, self._main_request_cancel_pending, message)
         
     def show_search_overlay(self):
+        # Query/next/previous/close all live in SearchOverlayBridge now (see
+        # graphlink_search_overlay_bridge.py) - reopening always starts with
+        # an empty query client-side, matching the legacy widget's own
+        # search_input.clear() on every show, so there's nothing to reset
+        # here beyond visibility/registration.
         if not self.search_overlay:
-            self.search_overlay = SearchOverlay(self.chat_view)
-            self.search_overlay.textChanged.connect(self._handle_search_changed)
-            self.search_overlay.findNext.connect(self._find_next_match)
-            self.search_overlay.findPrevious.connect(self._find_previous_match)
-            self.search_overlay.closed.connect(self._close_search)
-        self.search_overlay.search_input.clear(); self.search_overlay.show(); self.search_overlay.raise_(); self.search_overlay.focus_input(); self._update_overlay_positions()
-
-    def _close_search(self):
-        if self.search_overlay: self.search_overlay.hide()
-        self.chat_view.scene().update_search_highlight([]); self.search_results = []; self.current_search_index = -1; self._update_overlay_positions()
-
-    def _handle_search_changed(self, text: str):
-        scene = self.chat_view.scene()
-        if not text: self.search_results = []; self.current_search_index = -1; scene.update_search_highlight([])
-        else: self.search_results = scene.find_items(text); self.current_search_index = -1; scene.update_search_highlight(self.search_results)
-        self.search_overlay.update_results_label(0, len(self.search_results))
-
-    def _find_next_match(self):
-        if not self.search_results: return
-        self.current_search_index = (self.current_search_index + 1) % len(self.search_results); self._focus_on_current_match()
-
-    def _find_previous_match(self):
-        if not self.search_results: return
-        self.current_search_index = (self.current_search_index - 1 + len(self.search_results)) % len(self.search_results); self._focus_on_current_match()
-        
-    def _focus_on_current_match(self):
-        if not (0 <= self.current_search_index < len(self.search_results)): return
-        target_node = self.search_results[self.current_search_index]
-        self.chat_view.scene().clearSelection(); target_node.setSelected(True); self.chat_view.centerOn(target_node); self.search_overlay.update_results_label(self.current_search_index + 1, len(self.search_results))
+            self.search_overlay = SearchOverlayHost(self.chat_view, parent=self.chat_view)
+            self.chat_view.set_search_overlay_host(self.search_overlay)
+            self.overlay_coordinator.register(
+                self.search_overlay,
+                lambda: self.search_overlay.reposition(self.chat_view.viewport()),
+                z_priority=20,
+            )
+        self.search_overlay.setVisible(True)
+        self._update_overlay_positions()
 
     def show_library(self):
         if self.library_dialog and self.library_dialog.isVisible():
@@ -861,7 +860,10 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
 
     def toggle_pin_overlay(self, checked=False):
         if self.pin_overlay.isVisible():
-            self.pin_overlay.close()
+            # setVisible(False), not .close() - PinOverlayHost is a plain
+            # embedded child with no Window flag, never meant to go through
+            # a native closeEvent (see graphlink_pin_overlay_web.py).
+            self.pin_overlay.setVisible(False)
             return
         self.pin_overlay.show_for_anchor(self.pins_btn)
 
