@@ -32,10 +32,13 @@ GENERATED_RESPONSE = "[TOOL:PYTHON]print('hello')[/TOOL]"
 
 
 class _FakeRepl:
-    def __init__(self, output="ok"):
+    def __init__(self, output="ok", last_run_failed=False):
         self.executed = []
         self.output = output
         self.stopped = False
+        # The worker reads failure structurally from this flag (audit B2) -
+        # NOT by scanning the output text for error keywords.
+        self.last_run_failed = last_run_failed
 
     def execute(self, code):
         self.executed.append(code)
@@ -113,7 +116,7 @@ class TestApprovalGateApproved:
     def test_repair_iterations_run_under_the_same_single_approval(self):
         # First execution fails, repair produces new code, which then executes without
         # a second approval prompt - the documented (sandbox-matching) behavior.
-        repl = _FakeRepl(output="Traceback (most recent call last): boom")
+        repl = _FakeRepl(output="Traceback (most recent call last): boom", last_run_failed=True)
         worker = _make_worker(repl)
         worker.repair_agent.get_response = lambda code, error, is_final: "print('repaired')"
 

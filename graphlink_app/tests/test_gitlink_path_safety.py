@@ -46,16 +46,20 @@ class TestNormalizeRepoPath:
         with pytest.raises(RuntimeError):
             _normalize_repo_path("src/../../outside.py")
 
-    def test_leading_slash_is_stripped_to_a_relative_path(self):
-        # `lstrip("/")` runs before the PurePosixPath absolute-path check, so a
-        # leading-slash input never actually reaches that check as "absolute" -
-        # it's silently rewritten to a relative path instead of being rejected.
-        # That's still safe (containment is enforced downstream by
-        # _safe_local_target), but it means the `is_absolute()` guard in
-        # _normalize_repo_path is effectively unreachable for POSIX-style input.
-        # This test documents the real behavior so a future refactor doesn't
-        # accidentally rely on the dead branch.
-        assert _normalize_repo_path("/etc/passwd") == "etc/passwd"
+    def test_absolute_posix_path_is_rejected(self):
+        # Previously an lstrip("/") ran before the is_absolute() check, making
+        # that guard dead code: "/etc/passwd" was silently rewritten to the
+        # repo-relative "etc/passwd" and written INSIDE the repo instead of
+        # being rejected with the "must stay inside the repository" error the
+        # guard was written to raise (audit finding B1). Absolute-looking
+        # input now fails loud at the semantic boundary; byte-level
+        # containment remains independently enforced by _safe_local_target.
+        with pytest.raises(RuntimeError):
+            _normalize_repo_path("/etc/passwd")
+
+    def test_unc_style_path_is_rejected(self):
+        with pytest.raises(RuntimeError):
+            _normalize_repo_path("//server/share/evil.txt")
 
 
 class TestSafeLocalTarget:
@@ -74,10 +78,12 @@ class TestSafeLocalTarget:
         resolved_root = tmp_path.resolve()
         assert target == resolved_root or resolved_root in target.parents
 
-    def test_unc_style_path_stays_contained(self, tmp_path):
-        target = _safe_local_target(tmp_path, "//server/share/evil.txt")
-        resolved_root = tmp_path.resolve()
-        assert target == resolved_root or resolved_root in target.parents
+    def test_unc_style_path_is_rejected_at_normalization(self, tmp_path):
+        # _safe_local_target normalizes first, and normalization now rejects
+        # absolute-looking input outright (see TestNormalizeRepoPath) instead
+        # of silently rewriting it to a contained relative path.
+        with pytest.raises(RuntimeError):
+            _safe_local_target(tmp_path, "//server/share/evil.txt")
 
     def test_root_itself_is_a_valid_target(self, tmp_path):
         # repo_path resolving to the root exactly (e.g. a single-segment name)

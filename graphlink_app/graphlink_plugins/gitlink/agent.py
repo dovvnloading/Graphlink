@@ -72,10 +72,17 @@ def _is_repo_text_path(path_text):
 
 def _normalize_repo_path(path_text):
     raw_path = (path_text or "").strip().replace("\\", "/")
-    raw_path = raw_path.lstrip("/")
     if not raw_path:
         raise RuntimeError("Repository file path cannot be empty.")
 
+    # No lstrip("/") before this check: stripping first made the
+    # is_absolute() clause dead code, so absolute-looking input like
+    # "/etc/passwd" (or a UNC "//server/share") was silently reinterpreted as
+    # repo-relative and written INSIDE the repo instead of being rejected
+    # with the error this guard was written to raise (audit finding B1).
+    # Containment is still independently enforced downstream by
+    # _safe_local_target's resolve() check - this restores the loud,
+    # intended rejection at the semantic boundary.
     normalized = PurePosixPath(raw_path)
     if normalized.is_absolute() or ".." in normalized.parts:
         raise RuntimeError("Repository paths must stay inside the selected repository.")

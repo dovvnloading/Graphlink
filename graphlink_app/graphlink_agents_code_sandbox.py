@@ -195,7 +195,15 @@ class VirtualEnvSandbox:
                 try:
                     line = output_queue.get(timeout=0.1)
                 except queue.Empty:
-                    if process.poll() is not None:
+                    if process.poll() is None:
+                        continue
+                    # The process has exited. The reader thread owns
+                    # process.stdout exclusively (audit finding B3: a direct
+                    # stdout.read() here used to race the reader's readline on
+                    # the same pipe, garbling/duplicating captured output) -
+                    # let it drain to EOF and post done_signal instead.
+                    reader_thread.join(timeout=5)
+                    if not reader_thread.is_alive() and output_queue.empty():
                         break
                     continue
 
@@ -206,23 +214,16 @@ class VirtualEnvSandbox:
                 if emit_line:
                     emit_line(line)
 
-            while True:
-                try:
-                    remaining_line = output_queue.get_nowait()
-                except queue.Empty:
-                    break
-
-                if remaining_line is done_signal:
-                    break
-                output_chunks.append(remaining_line)
-                if emit_line:
-                    emit_line(remaining_line)
-
-            remainder = process.stdout.read() if process.stdout else ""
-            if remainder:
-                output_chunks.append(remainder)
-                if emit_line:
-                    emit_line(remainder)
+            # done_signal received (or the reader finished with an empty
+            # queue): stdout has been consumed to EOF by the reader, so no
+            # direct read is needed - or safe - here. Reap the process so
+            # returncode is real rather than a still-None poll() snapshot.
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                # Pathological: the child closed stdout but kept running.
+                process.kill()
+                process.wait()
 
             return "".join(output_chunks), process.returncode
         except Exception:

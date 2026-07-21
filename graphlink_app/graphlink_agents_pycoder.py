@@ -6,6 +6,7 @@ import re
 import json
 import base64
 import threading
+import uuid
 import weakref
 from enum import Enum
 from PySide6.QtCore import QThread, Signal
@@ -34,23 +35,39 @@ class PythonREPL:
     Variables and imports survive between executions.
     Communicates via base64-encoded strings over stdin/stdout (encoding for safe IPC
     framing, not a security mechanism).
+
+    After every execute() call, last_run_failed reports whether the executed
+    code raised - the wrapper reports it structurally on the boundary line, so
+    callers no longer scan stdout for English error keywords (which
+    misclassified correct programs that merely printed words like "failed";
+    audit finding B2). The boundary line carries a per-session nonce and is
+    matched as an exact full line, so program output that happens to contain
+    the marker text can no longer truncate the result or desync every
+    subsequent call (audit finding B4).
     """
     def __init__(self):
         self.process = None
+        self.last_run_failed = False
+        self._boundary_prefix = ""
 
     def start(self):
-        script = """
+        nonce = uuid.uuid4().hex
+        self._boundary_prefix = f"---GRAPHLINK_EXEC_BOUNDARY:{nonce}:"
+        script = f"""
 import sys, traceback, base64
-env = {}
+env = {{}}
 while True:
     line = sys.stdin.readline()
     if not line: break
+    failed = False
     try:
         code = base64.b64decode(line.strip()).decode('utf-8')
         exec(code, env)
     except Exception:
+        failed = True
         traceback.print_exc()
-    print("\\n---GRAPHLINK_EXEC_BOUNDARY---", flush=True)
+    status = "ERROR" if failed else "OK"
+    print("\\n---GRAPHLINK_EXEC_BOUNDARY:{nonce}:" + status + "---", flush=True)
 """
         kwargs = {}
         # Hide the console window on Windows
@@ -76,15 +93,31 @@ while True:
             self.process.stdin.write(encoded_code + "\n")
             self.process.stdin.flush()
         except Exception as e:
+            self.last_run_failed = True
             return f"Failed to send code to REPL: {e}"
 
         output = []
         while True:
             line = self.process.stdout.readline()
-            if not line or "---GRAPHLINK_EXEC_BOUNDARY---" in line:
+            if not line:
+                # EOF with no boundary line: the REPL process died mid-run
+                # (e.g. the executed code called sys.exit() or hard-crashed
+                # the interpreter). Reap it now - stdout EOF can arrive
+                # before poll() reports the exit, and without this the next
+                # execute() could write into the dying process's stdin
+                # (EINVAL) instead of restarting.
+                self.last_run_failed = True
+                self.stop()
+                break
+            stripped = line.strip()
+            if stripped == self._boundary_prefix + "OK---":
+                self.last_run_failed = False
+                break
+            if stripped == self._boundary_prefix + "ERROR---":
+                self.last_run_failed = True
                 break
             output.append(line)
-        
+
         return "".join(output).strip()
 
     def stop(self):
@@ -339,10 +372,6 @@ class PyCoderExecutionWorker(QThread):
         if self.repl:
             self.repl.stop()
 
-    def _is_error(self, output):
-        error_keywords = ["traceback (most recent call last)", "error:", "exception:", "failed"]
-        return any(keyword in output.lower() for keyword in error_keywords)
-
     def run(self):
         try:
             retry_count = 0
@@ -393,14 +422,22 @@ class PyCoderExecutionWorker(QThread):
                 if not self._is_running: return
                 self.log_update.emit(PyCoderStage.EXECUTE, PyCoderStatus.RUNNING)
                 
+                # Failure is reported structurally by the REPL wrapper
+                # (repl.last_run_failed) instead of keyword-scanning stdout,
+                # which used to mark correct programs that merely printed
+                # words like "failed" as errors and "repair" working code
+                # (audit finding B2). getattr keeps duck-typed test fakes
+                # without the attribute working.
                 execution_output = ""
                 try:
                     execution_output = self.repl.execute(current_code)
+                    execution_failed = getattr(self.repl, "last_run_failed", False)
                 except Exception as e:
                     execution_output = f"\n--- EXECUTION FAILED ---\n{type(e).__name__}: {e}"
+                    execution_failed = True
 
                 if not self._is_running: return
-                if not self._is_error(execution_output):
+                if not execution_failed:
                     self.log_update.emit(PyCoderStage.EXECUTE, PyCoderStatus.SUCCESS)
                     self.log_update.emit(PyCoderStage.ANALYZE_RESULT, PyCoderStatus.RUNNING)
                     final_analysis = self.analysis_agent.get_response(
