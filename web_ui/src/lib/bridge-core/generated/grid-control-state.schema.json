@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "colorPresets": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "gridColor": {
+      "type": "string"
+    },
+    "gridOpacityPercent": {
+      "type": "integer"
+    },
+    "gridSize": {
+      "type": "integer"
+    },
+    "gridStyle": {
+      "type": "string"
+    },
+    "minCompatibleSchemaVersion": {
+      "type": "integer"
+    },
+    "revision": {
+      "type": "integer"
+    },
+    "schemaVersion": {
+      "type": "integer"
+    },
+    "sizePresets": {
+      "items": {
+        "type": "integer"
+      },
+      "type": "array"
+    },
+    "stylePresets": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "revision",
+    "gridSize",
+    "gridOpacityPercent",
+    "gridStyle",
+    "gridColor",
+    "sizePresets",
+    "stylePresets",
+    "colorPresets"
+  ],
+  "title": "GridControlState",
+  "type": "object"
+}

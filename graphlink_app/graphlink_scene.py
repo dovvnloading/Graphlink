@@ -1644,7 +1644,7 @@ class ChatScene(QGraphicsScene):
             snapped_pos = guide_snapped_pos
 
         if self.snap_to_grid:
-            grid_size = self.views()[0].grid_control.grid_size
+            grid_size = self.views()[0].grid_settings.grid_size
             if not x_was_snapped:
                 snapped_pos.setX(round(new_pos.x() / grid_size) * grid_size)
             if not y_was_snapped:

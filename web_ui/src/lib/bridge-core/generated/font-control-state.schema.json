@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "colorPresets": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "fontFamilies": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "minCompatibleSchemaVersion": {
+      "type": "integer"
+    },
+    "revision": {
+      "type": "integer"
+    },
+    "schemaVersion": {
+      "type": "integer"
+    },
+    "sizeMax": {
+      "type": "integer"
+    },
+    "sizeMin": {
+      "type": "integer"
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "revision",
+    "fontFamilies",
+    "colorPresets",
+    "sizeMin",
+    "sizeMax"
+  ],
+  "title": "FontControlState",
+  "type": "object"
+}

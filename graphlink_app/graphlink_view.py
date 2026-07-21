@@ -9,7 +9,10 @@ from graphlink_scene import ChatScene
 from graphlink_node import ChatNode, CodeNode, DocumentNode, ImageNode
 from graphlink_connections import ConnectionItem
 from graphlink_canvas_items import Frame, Note, NavigationPin, ChartItem
-from graphlink_widgets import CustomScrollBar, GridControl, FontControl
+from graphlink_widgets import CustomScrollBar
+from graphlink_grid_view_settings import GridViewSettings
+from graphlink_grid_control_web import GridControlHost
+from graphlink_font_control_web import FontControlHost
 from graphlink_minimap import MinimapWidget
 from graphlink_config import get_semantic_color
 from graphlink_context_menu import create_context_menu
@@ -79,21 +82,12 @@ class ChatView(QGraphicsView):
         self.setAcceptDrops(True)
         
         # Initialize overlay control widgets.
-        self.grid_control = GridControl(self)
-        self.grid_control.snapToGridChanged.connect(self._on_snap_toggled)
-        self.grid_control.orthogonalConnectionsChanged.connect(self._on_ortho_toggled)
-        self.grid_control.smartGuidesChanged.connect(self._on_guides_toggled)
-        self.grid_control.fadeConnectionsChanged.connect(self._on_fade_connections_toggled)
-        
-        self.font_control = FontControl(self)
-        self.font_control.fontFamilyChanged.connect(self.scene().setFontFamily)
-        self.font_control.fontSizeChanged.connect(self.scene().setFontSize)
-        self.font_control.fontColorChanged.connect(self.scene().setFontColor)
-        
+        self.grid_settings = GridViewSettings()
+        self.grid_control_host = GridControlHost(self, parent=self)
+        self.font_control_host = FontControlHost(self, parent=self)
+
         # Hide overlays by default.
         self.control_widget.setVisible(False)
-        self.grid_control.setVisible(False)
-        self.font_control.setVisible(False)
         
         self._current_mouse_pos = None
         
@@ -387,12 +381,12 @@ class ChatView(QGraphicsView):
             self.control_widget.move(viewport_width - self.control_widget.width() - padding, current_y_right)
             current_y_right += self.control_widget.height() + padding
 
-        if self.grid_control.isVisible():
-            self.grid_control.move(viewport_width - self.grid_control.width() - padding, current_y_right)
-            current_y_right += self.grid_control.height() + padding
-        
-        if self.font_control.isVisible():
-            self.font_control.move(viewport_width - self.font_control.width() - padding, current_y_right)
+        if self.grid_control_host.isVisible():
+            self.grid_control_host.move(viewport_width - self.grid_control_host.width() - padding, current_y_right)
+            current_y_right += self.grid_control_host.height() + padding
+
+        if self.font_control_host.isVisible():
+            self.font_control_host.move(viewport_width - self.font_control_host.width() - padding, current_y_right)
 
         if self.minimap_widget.isVisible():
             self.minimap_widget.setFixedHeight(int(self.viewport().height() * 0.7))
@@ -418,8 +412,8 @@ class ChatView(QGraphicsView):
         """
         self._controls_overlay_visible = visible
         self.control_widget.setVisible(visible)
-        self.grid_control.setVisible(visible)
-        self.font_control.setVisible(visible)
+        self.grid_control_host.setVisible(visible)
+        self.font_control_host.setVisible(visible)
         self.minimap_widget.setVisible(not visible)
         self.minimap_widget.setEnabled(not visible)
         self.minimap_widget.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, visible)
@@ -785,10 +779,10 @@ class ChatView(QGraphicsView):
     
         painter.fillRect(rect, QColor("#252525"))
     
-        grid_size = self.grid_control.grid_size
-        opacity = self.grid_control.grid_opacity
-        style = self.grid_control.grid_style
-        base_color = self.grid_control.grid_color
+        grid_size = self.grid_settings.grid_size
+        opacity = self.grid_settings.grid_opacity
+        style = self.grid_settings.grid_style
+        base_color = QColor(self.grid_settings.grid_color)
     
         if opacity <= 0:
             return
