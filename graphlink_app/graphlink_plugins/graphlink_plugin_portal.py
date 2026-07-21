@@ -429,11 +429,16 @@ class PluginPortal:
 
     def _create_pycoder_node(self):
         scene = self.main_window.chat_view.scene()
+
+        def _wire(node):
+            node.run_clicked.connect(self.main_window.execute_pycoder_node)
+
         return self.create_node(
             node_cls=PyCoderNode,
             connection_cls=PyCoderConnectionItem,
             scene_nodes=scene.pycoder_nodes,
             scene_connections=scene.pycoder_connections,
+            wire=_wire,
             no_selection_message="Please select a node to branch from before adding Py-Coder.",
             invalid_parent_message="Py-Coder can only branch from a valid conversational node.",
         )
