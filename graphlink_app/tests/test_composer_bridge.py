@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QPoint, QRect, QSize
+from PySide6.QtCore import QPoint, QRect, QSize
 
 from graphlink_composer import ComposerController, ComposerRequestState
 from graphlink_composer_bridge import (
@@ -11,12 +11,7 @@ from graphlink_composer_bridge import (
     COMPOSER_MIN_HEIGHT,
     ComposerBridge,
 )
-from graphlink_composer_popups import (
-    ComposerContextPopup,
-    ComposerPickerPopup,
-    composer_picker_list_height,
-    composer_picker_position,
-)
+from graphlink_composer_popup_positioning import composer_picker_position
 import graphlink_config as config
 from graphlink_styles import css_root_block
 from graphlink_web_island_host import _inline_bundle, _rounded_region
@@ -146,24 +141,6 @@ def test_context_review_is_delegated_to_a_native_desktop_popup():
     assert calls[0]["items"][0]["name"] == "analysis.csv"
 
 
-def test_context_popup_is_a_native_window_surface_with_bounded_content():
-    popup = ComposerContextPopup(
-        {
-            "anchor": {"type": "ChatNode", "label": "Chart analysis"},
-            "items": [
-                {"id": "attachment-0", "kind": "document", "name": "analysis.csv"},
-            ],
-            "totalTokens": 42,
-        }
-    )
-
-    assert popup.isWindow()
-    assert popup.list_widget.count() == 2
-    assert "42" in popup.total_label.text()
-    popup.close()
-    popup.deleteLater()
-
-
 def test_picker_position_prefers_space_above_and_clamps_horizontally():
     position = composer_picker_position(
         QRect(0, 0, 1000, 800),
@@ -182,12 +159,6 @@ def test_picker_position_falls_back_to_viewport_margin_when_popup_is_tall():
     )
 
     assert position == QPoint(8, 8)
-
-
-def test_picker_list_height_is_content_sized_and_capped_for_catalogs():
-    assert composer_picker_list_height([]) == 0
-    assert composer_picker_list_height([50, 50]) == 120
-    assert composer_picker_list_height([50] * 6) == 300
 
 
 def test_bridge_clamps_compact_composer_height_requests():
@@ -256,15 +227,6 @@ def test_composer_native_mask_has_rounded_corners():
     assert region.contains(QPoint(50, 20))
     assert not region.contains(QPoint(0, 0))
     assert region.contains(QPoint(12, 0))
-
-
-def test_picker_event_filter_is_safe_for_reasoning_popup_without_search_control():
-    popup = ComposerPickerPopup("reasoning", {"reasoning": {"options": []}})
-
-    assert popup.eventFilter(object(), QEvent(QEvent.Type.MouseMove)) is False
-
-    popup.close()
-    popup.deleteLater()
 
 
 def test_inline_bundle_is_self_contained_and_keeps_channel_local():

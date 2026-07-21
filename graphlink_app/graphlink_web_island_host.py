@@ -397,6 +397,17 @@ class WebIslandHost(QFrame):
       size entirely through normal Qt layout.
     - unavailable_message: shown instead of the web view when WebEngine isn't
       available in this installation.
+    - dismiss_on_outside_focus: auto-hide (setVisible(False)) whenever Qt
+      focus moves to a widget outside this host. Opt-in (default False) -
+      built for Phase 5 increment 3's composer picker/context-review hosts,
+      which need "outside-click close" parity with the native Qt.Tool popups
+      they replace. QApplication.focusChanged is used rather than an app-wide
+      mouse-event filter (what the old popups relied on) because a
+      QWebEngineView is a foreign/native child window - Chromium's own
+      compositor can consume mouse input before a QApplication-level
+      eventFilter ever sees it, but Qt's own focus-widget bookkeeping is
+      tracked above that boundary and fires reliably regardless of which
+      widget - native or another QWebEngineView - focus lands on.
     """
 
     heightChanged = Signal(int)
@@ -414,6 +425,7 @@ class WebIslandHost(QFrame):
         unavailable_message: str = (
             "This content is unavailable because QtWebEngine failed to initialize."
         ),
+        dismiss_on_outside_focus: bool = False,
         parent=None,
     ):
         super().__init__(parent)
@@ -425,6 +437,8 @@ class WebIslandHost(QFrame):
         self._max_height = max_height
         self._shutdown_started = False
         self._has_text_focus = False
+        self._dismiss_on_outside_focus = dismiss_on_outside_focus
+        self._outside_focus_installed = False
         # Resolved once at construction (unlike the request interceptor's
         # per-request re-resolution): a host is not a forever-cached
         # singleton, and its load mode must not change out from under an
@@ -499,6 +513,36 @@ class WebIslandHost(QFrame):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._apply_native_mask()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self._dismiss_on_outside_focus and not self._outside_focus_installed:
+            app = QApplication.instance()
+            if app is not None:
+                app.focusChanged.connect(self._on_outside_focus_changed)
+                self._outside_focus_installed = True
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        if self._outside_focus_installed:
+            app = QApplication.instance()
+            if app is not None:
+                try:
+                    app.focusChanged.disconnect(self._on_outside_focus_changed)
+                except (RuntimeError, TypeError):
+                    pass
+            self._outside_focus_installed = False
+
+    def _on_outside_focus_changed(self, old, now):
+        """Auto-hide once focus lands on a widget outside this host's own
+        tree - see the class docstring's dismiss_on_outside_focus entry for
+        why focusChanged is used instead of a mouse-event filter. `now is
+        None` (nothing has keyboard focus, e.g. a transient mid-teardown
+        blip) deliberately does NOT dismiss - only a genuine move to another
+        widget counts."""
+        if now is None or now is self or self.isAncestorOf(now):
+            return
+        self.setVisible(False)
 
     def _apply_native_mask(self):
         self.setMask(_rounded_region(self.rect(), self._corner_radius))

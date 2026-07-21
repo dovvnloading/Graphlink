@@ -3,7 +3,7 @@ from PySide6.QtWidgets import (
     QToolButton, QLineEdit, QPushButton, QMessageBox, QSizePolicy, QLabel, QComboBox,
     QFileDialog
 )
-from PySide6.QtCore import Qt, QSize, QPoint, QRect, QPointF, QTimer, QEvent
+from PySide6.QtCore import Qt, QSize, QPoint, QPointF, QTimer, QEvent
 from PySide6.QtGui import QKeySequence, QGuiApplication, QCursor, QShortcut, QIcon
 import qtawesome as qta
 import logging
@@ -61,11 +61,8 @@ from graphlink_crash import mark_clean_exit
 from graphlink_composer import ComposerController
 from graphlink_composer_bridge import COMPOSER_MIN_HEIGHT
 from graphlink_navigation_pins import NavigationPinsController
-from graphlink_composer_popups import (
-    ComposerContextPopup,
-    ComposerPickerPopup,
-    composer_picker_position,
-)
+from graphlink_composer_picker_web import ComposerPickerHost
+from graphlink_composer_context_web import ComposerContextHost
 
 
 logger = logging.getLogger(__name__)
@@ -89,8 +86,6 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         self.about_panel = None
         self._initial_show_complete = False
         self._overlay_update_pending = False
-        self._composer_picker = None
-        self._composer_context_popup = None
         self._startup_update_check_ran = False
         self.update_check_worker = None
         self._update_check_status_target = None
@@ -204,6 +199,26 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
 
         self.composer.setVisible(True)
         self.composer.raise_()
+
+        # Phase 5 increment 3: composer pickers/context review join the
+        # overlay coordinator, replacing the native Qt.Tool
+        # ComposerPickerPopup/ComposerContextPopup (graphlink_composer_popups.
+        # py, deleted this increment). Parented to composer_overlay_parent,
+        # same reasoning as notification_banner/command_palette_host above -
+        # real screen geometry via mapToGlobal for positioning, shared
+        # z-order pool with the rest of the window's floating chrome.
+        self.composer_picker_host = ComposerPickerHost(self.composer.bridge, parent=self.composer_overlay_parent)
+        self.overlay_coordinator.register(
+            self.composer_picker_host,
+            lambda: self.composer_picker_host.reposition(self.composer, self.chat_view.viewport()),
+            z_priority=30,
+        )
+        self.composer_context_host = ComposerContextHost(self.composer.bridge, parent=self.composer_overlay_parent)
+        self.overlay_coordinator.register(
+            self.composer_context_host,
+            lambda: self.composer_context_host.reposition(self.composer, self.chat_view.viewport()),
+            z_priority=30,
+        )
 
         self.setCentralWidget(self.container)
         self._update_themed_styles()
@@ -463,103 +478,50 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         if command_palette_host is not None and command_palette_host.isVisible():
             command_palette_host.raise_()
 
-        self._position_composer_picker()
-        self._position_composer_context_popup()
-
-    def _position_composer_popup(self, popup):
-        composer = getattr(self, "composer", None)
-        chat_view = getattr(self, "chat_view", None)
-        if popup is None or composer is None or chat_view is None:
-            return
-
-        viewport = chat_view.viewport()
-        viewport_origin = viewport.mapToGlobal(QPoint(0, 0))
-        viewport_rect = QRect(viewport_origin, viewport.size())
-        composer_origin = composer.mapToGlobal(QPoint(0, 0))
-        composer_rect = QRect(composer_origin, composer.size())
-        popup.move(composer_picker_position(viewport_rect, composer_rect, popup.size()))
-
-    def _position_composer_picker(self):
-        """Keep the native model/reasoning picker above the graph."""
-        self._position_composer_popup(getattr(self, "_composer_picker", None))
-
-    def _position_composer_context_popup(self):
-        """Keep context review outside the clipped QWebEngine document."""
-        self._position_composer_popup(getattr(self, "_composer_context_popup", None))
-
-    def _clear_composer_picker(self, picker=None):
-        if picker is None or picker is getattr(self, "_composer_picker", None):
-            self._composer_picker = None
-
-    def _close_composer_picker(self):
-        picker = getattr(self, "_composer_picker", None)
-        self._composer_picker = None
-        if picker is not None:
-            picker.close()
-            picker.deleteLater()
-
-    def _clear_composer_context_popup(self, popup=None):
-        if popup is None or popup is getattr(self, "_composer_context_popup", None):
-            self._composer_context_popup = None
-
-    def _close_composer_context_popup(self):
-        popup = getattr(self, "_composer_context_popup", None)
-        self._composer_context_popup = None
-        if popup is not None:
-            popup.close()
-            popup.deleteLater()
+        # Composer pickers/context review are registered with
+        # overlay_coordinator (Phase 5 increment 3) for auto-repositioning;
+        # they still need an explicit raise_() here (not from the
+        # coordinator's own raise_ pass, which runs earlier in
+        # _update_overlay_positions - before composer/notification/command-
+        # palette are raised just above) since they must render topmost of
+        # every overlay surface - the most modal-like of the bunch, matching
+        # their legacy Qt.Tool "always above the app window" behavior.
+        if self.composer_picker_host.isVisible():
+            self.composer_picker_host.raise_()
+        if self.composer_context_host.isVisible():
+            self.composer_context_host.raise_()
 
     def open_composer_model_picker(self, kind="model"):
-        """Open a native model/reasoning picker requested by the React composer."""
-        bridge = getattr(getattr(self, "composer", None), "bridge", None)
-        if bridge is None:
+        """Open the model/reasoning picker requested by the React composer."""
+        composer_bridge = getattr(getattr(self, "composer", None), "bridge", None)
+        if composer_bridge is None:
             return
 
-        self._close_composer_context_popup()
+        self.composer_context_host.setVisible(False)
 
         requested_kind = "reasoning" if kind == "reasoning" else "model"
-        current = getattr(self, "_composer_picker", None)
-        if current is not None:
-            if current.kind == requested_kind and current.isVisible():
-                self._close_composer_picker()
-                return
-            self._close_composer_picker()
+        if self.composer_picker_host.isVisible() and self.composer_picker_host.bridge.kind == requested_kind:
+            self.composer_picker_host.setVisible(False)
+            return
 
-        picker = ComposerPickerPopup(requested_kind, bridge.route_snapshot(), self)
-        picker.modelSelected.connect(bridge.selectModel)
-        picker.reasoningSelected.connect(bridge.setReasoningLevel)
-        picker.settingsRequested.connect(self.show_settings)
-        picker.destroyed.connect(lambda: self._clear_composer_picker(picker))
-        self._composer_picker = picker
-        picker.adjustSize()
-        self._position_composer_picker()
-        picker.show()
-        self._position_composer_picker()
-        picker.raise_()
-        picker.activateWindow()
+        self.composer_picker_host.bridge.open(requested_kind)
+        self.composer_picker_host.reposition(self.composer, self.chat_view.viewport())
+        self.composer_picker_host.setVisible(True)
+        self.composer_picker_host.raise_()
+        self.composer_picker_host.setFocus()
 
     def open_composer_context_popup(self, context):
-        """Open context review as a native window-level surface."""
-        bridge = getattr(getattr(self, "composer", None), "bridge", None)
-        if bridge is None:
+        """Open context review requested by the React composer."""
+        if self.composer_context_host.isVisible():
+            self.composer_context_host.setVisible(False)
             return
 
-        current = getattr(self, "_composer_context_popup", None)
-        if current is not None and current.isVisible():
-            self._close_composer_context_popup()
-            return
-
-        self._close_composer_picker()
-        popup = ComposerContextPopup(context, self)
-        popup.contextItemRemoved.connect(bridge.removeContextItem)
-        popup.destroyed.connect(lambda: self._clear_composer_context_popup(popup))
-        self._composer_context_popup = popup
-        popup.adjustSize()
-        self._position_composer_context_popup()
-        popup.show()
-        self._position_composer_context_popup()
-        popup.raise_()
-        popup.activateWindow()
+        self.composer_picker_host.setVisible(False)
+        self.composer_context_host.bridge.open(context)
+        self.composer_context_host.reposition(self.composer, self.chat_view.viewport())
+        self.composer_context_host.setVisible(True)
+        self.composer_context_host.raise_()
+        self.composer_context_host.setFocus()
 
     def _schedule_startup_update_check(self):
         if self._startup_update_check_ran:
@@ -712,8 +674,6 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
             event.ignore()
             return
 
-        self._close_composer_picker()
-        self._close_composer_context_popup()
         prepare_composer_shutdown = getattr(
             getattr(self, "composer", None),
             "prepare_for_shutdown",
