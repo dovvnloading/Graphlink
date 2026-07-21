@@ -1302,6 +1302,17 @@ class WindowActionsMixin:
         sandbox_node.set_running_state(False)
         sandbox_node.set_error(error_message)
 
+    def execute_html_view_node(self, html_node):
+        """Window slot for HtmlViewNode.render_requested (Phase 7 prerequisite,
+        increment 1). Unlike the other execute_* handlers, HTML rendering needs
+        no worker thread or window-owned resource - the work is pure in-node
+        Qt (web_view.setHtml). So this slot simply calls back into the node's
+        own render_html(); the value is the request-signal SEAM itself (a
+        window-mediated entry point a future web island's "Render" intent can
+        target), not access to a window-only capability."""
+        if html_node is not None and hasattr(html_node, "render_html"):
+            html_node.render_html()
+
     def execute_web_node(self, web_node):
         if not web_node or getattr(web_node, "is_disposed", False):
             return

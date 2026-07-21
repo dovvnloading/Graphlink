@@ -526,6 +526,7 @@ class PluginPortal:
         valid_parents = (ChatNode, CodeNode, PyCoderNode, CodeSandboxNode, WebNode, ConversationNode, GitlinkNode)
 
         def _wire(node):
+            node.render_requested.connect(self.main_window.execute_html_view_node)
             if isinstance(selected_node, CodeNode):
                 node.set_html_content(selected_node.code)
 

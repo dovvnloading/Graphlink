@@ -250,7 +250,17 @@ class SceneSerializer:
             return {
                 "node_type": "html",
                 "position": {"x": node.pos().x(), "y": node.pos().y()},
-                "html_content": node.html_input.toHtml(),
+                # Phase 7 prerequisite (increment 1): read the raw-source model
+                # attribute (get_html_content() -> self.html_content), NOT the
+                # widget's toHtml(). toHtml() on this setAcceptRichText(False)
+                # editor returns a full Qt rich-text DOCUMENT wrapper with the
+                # user's markup HTML-ESCAPED (<h1> -> &lt;h1&gt;); on reload
+                # set_html_content(setPlainText) then rendered that wrapper
+                # instead of the user's HTML, corrupting the node on the first
+                # save/reload cycle (verified empirically). Reading the model
+                # mirror both fixes that round-trip bug and clears one of the
+                # 14 widget-reads the Phase 7 gate exists to eliminate.
+                "html_content": node.get_html_content(),
                 "splitter_state": node.get_splitter_state(),
                 "conversation_history": serialize_history(getattr(node, "conversation_history", [])),
                 "is_collapsed": node.is_collapsed,

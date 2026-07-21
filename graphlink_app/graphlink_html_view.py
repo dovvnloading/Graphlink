@@ -97,6 +97,18 @@ class HtmlViewNode(QGraphicsObject, HoverAnimationMixin):
     A specialized QGraphicsItem that provides an interface for rendering HTML code.
     This node features a resizable splitter to adjust the code and preview panes.
     """
+    # Phase 7 prerequisite (increment 1): the user-initiated render is now a
+    # request Signal the window connects to (execute_html_view_node), matching
+    # every other plugin node's request-signal contract (WebNode.run_clicked,
+    # CodeSandboxNode.sandbox_requested, etc.). The node no longer wires its
+    # Render button straight to render_html - it emits, and the window slot
+    # drives the work. This is the seam a future web island's "Render" intent
+    # will land on. The programmatic set_html_content() restore/seed path still
+    # renders directly (not a user "request"), matching WebNode.set_result's
+    # own "restore writes directly, only the button goes through the signal"
+    # precedent.
+    render_requested = Signal(object)
+
     NODE_WIDTH = 600
     NODE_HEIGHT = 850
     COLLAPSED_WIDTH = 250
@@ -219,7 +231,7 @@ class HtmlViewNode(QGraphicsObject, HoverAnimationMixin):
         self.html_input.textChanged.connect(self._on_content_changed)
         input_layout.addWidget(self.html_input)
         self.render_button = QPushButton("Render")
-        self.render_button.clicked.connect(self.render_html)
+        self.render_button.clicked.connect(self._handle_render_button)
         input_layout.addWidget(self.render_button)
         self.splitter.addWidget(input_container)
 
@@ -372,6 +384,13 @@ class HtmlViewNode(QGraphicsObject, HoverAnimationMixin):
 
     def _on_content_changed(self):
         self.html_content = self.html_input.toPlainText()
+
+    def _handle_render_button(self):
+        """Render-button click handler: emits the request Signal the window
+        connects to, matching WebNode._handle_run_button's own emit-helper
+        shape. The window slot (execute_html_view_node) calls back into
+        render_html() to do the work."""
+        self.render_requested.emit(self)
 
     def render_html(self):
         """Renders the current HTML content in the web view."""

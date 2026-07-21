@@ -356,6 +356,11 @@ class SceneDeserializer:
                 node.conversation_history = deserialize_history(data.get("conversation_history", []))
                 if data.get("is_collapsed", False):
                     node.set_collapsed(True)
+                # Phase 7 prerequisite (increment 1): wire the render-request
+                # signal on restore, matching every other node type's own
+                # _connect_if_available call in this function (html was the one
+                # branch that connected nothing).
+                self._connect_if_available(node.render_requested, "execute_html_view_node")
                 scene.addItem(node)
                 scene.html_view_nodes.append(node)
 
