@@ -67,7 +67,7 @@ def _make_portal(current_node):
 # (factory_method, node_cls, connection_cls, scene_node_attr, scene_connection_attr,
 #  signal_name, handler_name, clones_history)
 STANDARD_CASES = [
-    ("_create_pycoder_node", PyCoderNode, PyCoderConnectionItem, "pycoder_nodes", "pycoder_connections", None, None, False),
+    ("_create_pycoder_node", PyCoderNode, PyCoderConnectionItem, "pycoder_nodes", "pycoder_connections", "run_clicked", "execute_pycoder_node", False),
     ("_create_code_sandbox_node", CodeSandboxNode, CodeSandboxConnectionItem, "code_sandbox_nodes", "code_sandbox_connections", "sandbox_requested", "execute_code_sandbox_node", True),
     ("_create_gitlink_node", GitlinkNode, GitlinkConnectionItem, "gitlink_nodes", "gitlink_connections", "gitlink_requested", "execute_gitlink_node", True),
     ("_create_web_node", WebNode, WebConnectionItem, "web_nodes", "web_connections", "run_clicked", "execute_web_node", False),

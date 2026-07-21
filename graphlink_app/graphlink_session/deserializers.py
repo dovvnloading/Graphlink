@@ -286,6 +286,11 @@ class SceneDeserializer:
                 node.include_branch_context = data.get("include_branch_context", True)
                 if data.get("is_collapsed", False):
                     node.set_collapsed(True)
+                # Phase 7 prerequisite (increment 3): wire the run-request
+                # signal on restore, matching every other node type's own
+                # _connect_if_available call in this function (pycoder was the
+                # one branch connecting nothing).
+                self._connect_if_available(node.run_clicked, "execute_pycoder_node")
                 scene.addItem(node)
                 scene.pycoder_nodes.append(node)
 

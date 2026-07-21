@@ -8,11 +8,11 @@ import markdown
 from enum import Enum
 
 from PySide6.QtWidgets import (
-    QGraphicsItem, QGraphicsProxyWidget, QWidget, QVBoxLayout,
+    QGraphicsItem, QGraphicsObject, QGraphicsProxyWidget, QWidget, QVBoxLayout,
     QTextEdit, QPushButton, QLabel, QFrame, QHBoxLayout, QGridLayout,
     QTabWidget, QPlainTextEdit
 )
-from PySide6.QtCore import QRectF, Qt, Property, QPropertyAnimation, QEasingCurve, QPointF, QRegularExpression, QSize, QRect
+from PySide6.QtCore import QRectF, Qt, Signal, Property, QPropertyAnimation, QEasingCurve, QPointF, QRegularExpression, QSize, QRect
 from PySide6.QtGui import QPainter, QColor, QBrush, QPen, QPainterPath, QIcon, QSyntaxHighlighter, QTextCharFormat, QFont
 import qtawesome as qta
 from graphlink_config import canvas_font, get_current_palette, get_graph_node_colors, get_neutral_button_colors, get_semantic_color
@@ -309,11 +309,26 @@ class StatusTrackerWidget(QWidget):
             stage_widget.set_status(PyCoderStatus.PENDING)
 
 
-class PyCoderNode(QGraphicsItem, HoverAnimationMixin):
+class PyCoderNode(QGraphicsObject, HoverAnimationMixin):
     """
     A specialized QGraphicsItem that provides a UI for both AI-driven code generation
     and manual code execution, styled like a modern IDE pane.
     """
+    # Phase 7 prerequisite (increment 3): the run/generate dispatch is now a
+    # request Signal the window connects to (matching WebNode.run_clicked and
+    # every other plugin node's request-signal contract), instead of the
+    # direct scene().window.execute_pycoder_node(self) reach-through this node
+    # used to be the one exception for. A plain Signal class attribute
+    # requires the base class to be QGraphicsObject (a QObject), not the
+    # plain QGraphicsItem this class used before - every OTHER plugin node
+    # already extends QGraphicsObject for exactly this reason; PyCoderNode was
+    # the one inconsistency, discovered while implementing this increment
+    # (the initial recon assumed a bare Signal(object) would just work).
+    # QGraphicsItem stays imported below for the itemChange()/GraphicsItemFlag
+    # enum references, which resolve identically regardless of which of the
+    # two classes this node itself extends.
+    run_clicked = Signal(object)
+
     supports_branch_context_toggle = True
 
     NODE_WIDTH = 550
@@ -635,10 +650,9 @@ class PyCoderNode(QGraphicsItem, HoverAnimationMixin):
             self.tabs.setCurrentIndex(1) # Default to Terminal tab
 
     def _on_run_clicked(self):
-        if self.scene() and hasattr(self.scene(), 'window'):
-            if not self.is_running:
-                self.tabs.setCurrentIndex(1 if self.mode == PyCoderMode.MANUAL else 0)
-            self.scene().window.execute_pycoder_node(self)
+        if not self.is_running:
+            self.tabs.setCurrentIndex(1 if self.mode == PyCoderMode.MANUAL else 0)
+        self.run_clicked.emit(self)
 
     def boundingRect(self):
         padding = self.CONNECTION_DOT_OFFSET + self.CONNECTION_DOT_RADIUS
