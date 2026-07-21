@@ -407,6 +407,22 @@ GENERATED_ARTIFACTS = [
         "schema_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "pin-overlay-state.schema.json",
         "ts_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "pin-overlay-state.ts",
     },
+    {
+        "dataclass": None,  # resolved lazily in main() to avoid importing
+        "dataclass_import": ("graphlink_composer_picker_payload", "ComposerPickerStatePayload"),
+        "title": "ComposerPickerState",
+        "source": "graphlink_app/graphlink_composer_picker_payload.py::ComposerPickerStatePayload",
+        "schema_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "composer-picker-state.schema.json",
+        "ts_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "composer-picker-state.ts",
+    },
+    {
+        "dataclass": None,  # resolved lazily in main() to avoid importing
+        "dataclass_import": ("graphlink_composer_context_payload", "ComposerContextStatePayload"),
+        "title": "ComposerContextState",
+        "source": "graphlink_app/graphlink_composer_context_payload.py::ComposerContextStatePayload",
+        "schema_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "composer-context-state.schema.json",
+        "ts_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "composer-context-state.ts",
+    },
 ]
 
 
