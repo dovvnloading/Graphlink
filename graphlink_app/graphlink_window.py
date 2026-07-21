@@ -1,6 +1,6 @@
 from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QToolBar,
-    QToolButton, QLineEdit, QPushButton, QMessageBox, QSizePolicy, QLabel, QComboBox,
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QLineEdit, QPushButton, QMessageBox, QSizePolicy, QLabel,
     QFileDialog
 )
 from PySide6.QtCore import Qt, QSize, QPoint, QPointF, QTimer, QEvent
@@ -16,6 +16,7 @@ from graphlink_search_overlay_web import SearchOverlayHost
 from graphlink_pin_overlay_web import PinOverlayHost
 from graphlink_token_estimator import TokenEstimator
 from graphlink_token_counter_web import TokenCounterWebHost
+from graphlink_toolbar_web import ToolbarHost
 from graphlink_document_viewer_web import DocumentViewerWebHost
 from graphlink_notification_web import NotificationWebHost
 from graphlink_command_palette_web import CommandPaletteWebHost
@@ -190,15 +191,18 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
             z_priority=5,
         )
 
-        self.toolbar = QToolBar()
-        container_layout.addWidget(self.toolbar)
+        # Phase 6 increment 1: absorbs the native QToolBar/setup_toolbar()
+        # entirely (14 intents) - see graphlink_toolbar_web.py's module
+        # docstring for why this host is full-width permanent chrome rather
+        # than a small anchored overlay, and graphlink_toolbar_bridge.py's
+        # own docstring for the AnchorRect mechanism that replaces the 4
+        # native QToolButton references (pins_btn/plugins_button/
+        # settings_btn/help_btn) every other flyout's show_for_anchor() call
+        # used to depend on.
+        self.toolbar_host = ToolbarHost(self, parent=self.container)
+        container_layout.addWidget(self.toolbar_host)
 
-        library_btn = QToolButton(); library_btn.setText("Library"); library_btn.setObjectName("actionButton")
-        library_btn.clicked.connect(self.show_library); self.toolbar.addWidget(library_btn)
-        save_btn = QToolButton(); save_btn.setText("Save"); save_btn.setObjectName("actionButton")
-        save_btn.clicked.connect(self.save_chat); self.toolbar.addWidget(save_btn)
-        self.toolbar.addSeparator()
-        self.setup_toolbar(self.toolbar)
+        self._initialize_saved_mode_on_startup()
 
         container_layout.addWidget(content_widget)
 
@@ -302,8 +306,6 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
 
     def _update_themed_styles(self):
         palette = get_current_palette()
-        if hasattr(self, 'plugins_button'):
-            self.plugins_button.setIcon(qta.icon("fa5s.chevron-down", color=palette.SELECTION.lighter(160).name()))
         if hasattr(self, 'plugin_picker'):
             self.plugin_picker.refresh()
         if hasattr(self, 'pin_overlay'):
@@ -352,8 +354,8 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
             self.message_input.setText(prompt); QTimer.singleShot(100, self.send_message)
 
     def _handle_pin_overlay_closed(self):
-        if hasattr(self, "pins_btn"):
-            self.pins_btn.setChecked(False)
+        if hasattr(self, "toolbar_host"):
+            self.toolbar_host.bridge.publish()
 
     def edit_navigation_pin(self, pin):
         """Open the shared navigation-pin editor for a canvas marker."""
@@ -776,55 +778,11 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
             return True
         return self.settings_manager.get_notification_type_enabled(msg_type)
 
-    def setup_toolbar(self, toolbar):
-        toolbar.setIconSize(QSize(20, 20)); toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
-        toolbar.setStyleSheet("QToolBar { spacing: 4px; padding: 4px; } QToolButton { color: white; background: transparent; border: none; border-radius: 4px; padding: 6px; margin: 2px; font-size: 12px; } QToolButton:hover { background: rgba(255, 255, 255, 0.1); }")
-        self.pins_btn = QToolButton(); self.pins_btn.setText("Pins"); self.pins_btn.setCheckable(True); self.pins_btn.setToolTip("Show navigation pins"); self.pins_btn.clicked.connect(self.toggle_pin_overlay); toolbar.addWidget(self.pins_btn)
-        organize_btn = QToolButton(); organize_btn.setText("Organize"); organize_btn.setObjectName("actionButton"); organize_btn.clicked.connect(lambda: self.chat_view.scene().organize_nodes()); toolbar.addWidget(organize_btn)
-        toolbar.addSeparator()
-        zoom_in_btn = QToolButton(); zoom_in_btn.setText("Zoom In"); zoom_in_btn.clicked.connect(lambda: self.chat_view.zoom_by(1.1)); toolbar.addWidget(zoom_in_btn)
-        zoom_out_btn = QToolButton(); zoom_out_btn.setText("Zoom Out"); zoom_out_btn.clicked.connect(lambda: self.chat_view.zoom_by(0.9)); toolbar.addWidget(zoom_out_btn)
-        toolbar.addSeparator()
-        reset_btn = QToolButton(); reset_btn.setText("Reset"); reset_btn.clicked.connect(self.chat_view.reset_zoom); toolbar.addWidget(reset_btn)
-        fit_btn = QToolButton(); fit_btn.setText("Fit All"); fit_btn.clicked.connect(self.chat_view.fit_all); toolbar.addWidget(fit_btn)
-        toggle_overlays_btn = QToolButton(); toggle_overlays_btn.setText("Controls"); toggle_overlays_btn.setCheckable(True); toggle_overlays_btn.toggled.connect(self.chat_view.toggle_overlays_visibility); toolbar.addWidget(toggle_overlays_btn)
-
-        self.plugins_button = QToolButton()
-        self.plugins_button.setText("Plugins")
-        self.plugins_button.setObjectName("actionButton")
-        self.plugins_button.setPopupMode(QToolButton.ToolButtonPopupMode.DelayedPopup)
-        self.plugins_button.setIcon(qta.icon("fa5s.chevron-down", color="#A4A4A4"))
-        self.plugins_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        self.plugins_button.clicked.connect(self._toggle_plugin_picker)
-        toolbar.addWidget(self.plugins_button)
-        
-        spacer = QWidget(); spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred); toolbar.addWidget(spacer)
-        
-        self.mode_combo = QComboBox()
-        self.mode_combo.addItem(config.MODE_OLLAMA_LOCAL, config.LOCAL_PROVIDER_OLLAMA)
-        self.mode_combo.addItem(config.MODE_LLAMACPP_LOCAL, config.LOCAL_PROVIDER_LLAMACPP)
-        self.mode_combo.addItem(config.MODE_API_ENDPOINT, config.API_PROVIDER_OPENAI)
-        self.mode_combo.setMinimumWidth(150)
-        
-        current_mode = self.settings_manager.get_current_mode()
-        idx = self.mode_combo.findText(current_mode)
-        if idx >= 0:
-            self.mode_combo.setCurrentIndex(idx)
-            
-        self.mode_combo.currentIndexChanged.connect(self.on_mode_changed)
-        toolbar.addWidget(self.mode_combo)
-        
-        self.settings_btn = QToolButton(); self.settings_btn.setText("Settings"); self.settings_btn.clicked.connect(self.show_settings); toolbar.addWidget(self.settings_btn)
-        about_btn = QToolButton(); about_btn.setText("About"); about_btn.clicked.connect(self.show_about_dialog); toolbar.addWidget(about_btn)
-        self.help_btn = QToolButton(); self.help_btn.setText("Help"); self.help_btn.setObjectName("helpButton"); self.help_btn.clicked.connect(self.show_help); toolbar.addWidget(self.help_btn)
-        
-        self._initialize_saved_mode_on_startup()
-
     def _toggle_plugin_picker(self):
         if self.plugin_picker.isVisible():
             self.plugin_picker.close()
             return
-        self.plugin_picker.show_for_anchor(self.plugins_button)
+        self.plugin_picker.show_for_anchor(self.toolbar_host.bridge.get_anchor("plugins"))
 
     def _handle_plugin_picker_selection(self, plugin_name):
         self.plugin_portal.execute_plugin(plugin_name)
@@ -836,7 +794,7 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
             # a native closeEvent (see graphlink_pin_overlay_web.py).
             self.pin_overlay.setVisible(False)
             return
-        self.pin_overlay.show_for_anchor(self.pins_btn)
+        self.pin_overlay.show_for_anchor(self.toolbar_host.bridge.get_anchor("pins"))
 
     def update_title_bar(self):
         title = "Graphlink"
@@ -864,7 +822,7 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         if not self.help_panel:
             self.help_panel = HelpWebHost(self)
 
-        self.help_panel.show_for_anchor(self.help_btn if hasattr(self, 'help_btn') else self)
+        self.help_panel.show_for_anchor(self.toolbar_host.bridge.get_anchor("help"))
 
     def _build_document_section(self, title, body):
         text = str(body or "").strip()
@@ -986,18 +944,8 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
             # the legacy-settings-final git tag).
             self.settings_panel = SettingsWebHost(self.settings_manager, main_window=self, parent=self)
 
-        self.settings_panel.set_current_section_by_mode(self.mode_combo.currentText())
-        self.settings_panel.show_for_anchor(self.settings_btn)
-
-    def _set_mode_combo_silently(self, mode_text):
-        if not hasattr(self, "mode_combo"):
-            return
-        target_index = self.mode_combo.findText(mode_text)
-        if target_index < 0:
-            return
-        self.mode_combo.blockSignals(True)
-        self.mode_combo.setCurrentIndex(target_index)
-        self.mode_combo.blockSignals(False)
+        self.settings_panel.set_current_section_by_mode(self.settings_manager.get_current_mode())
+        self.settings_panel.show_for_anchor(self.toolbar_host.bridge.get_anchor("settings"))
 
     def _initialize_mode(self, mode_text, *, show_dialogs):
         if mode_text == config.MODE_OLLAMA_LOCAL:
@@ -1005,7 +953,6 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
                 config.LOCAL_PROVIDER_OLLAMA,
                 {"reasoning_mode": self.settings_manager.get_ollama_reasoning_mode()},
             )
-            self.settings_btn.setEnabled(True)
             return True
 
         if mode_text == config.MODE_LLAMACPP_LOCAL:
@@ -1014,7 +961,6 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
                 self.settings_manager.get_llama_cpp_settings(),
                 preload_model=False,
             )
-            self.settings_btn.setEnabled(True)
             return True
 
         if mode_text == config.MODE_API_ENDPOINT:
@@ -1034,7 +980,6 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
             else:
                 api_key = self.settings_manager.get_gemini_key()
                 api_provider.initialize_api(provider, api_key)
-            self.settings_btn.setEnabled(True)
             return True
 
         if show_dialogs:
@@ -1045,9 +990,8 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
             )
         return False
     
-    def on_mode_changed(self, index):
+    def on_mode_changed(self, mode_text):
         previous_mode = self.settings_manager.get_current_mode()
-        mode_text = self.mode_combo.itemText(index)
 
         # Switching modes calls api_provider.initialize_* which swaps the provider
         # globals (USE_API_MODE, API_CLIENT, API_KEY, ...) that a running chat request
@@ -1055,13 +999,18 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         # half-swapped provider. Block the switch while a main request is in flight
         # instead of racing it.
         if self._main_request_active and mode_text != previous_mode:
-            self._set_mode_combo_silently(previous_mode)
             self.notification_banner.show_message(
                 "Can't switch modes while a response is being generated. "
                 "Cancel the request or wait for it to finish, then switch.",
                 6000,
                 "warning",
             )
+            # No native combo to silently revert anymore - the toolbar's
+            # mode selector is a controlled element that only ever displays
+            # settings_manager.get_current_mode()'s own value, so simply
+            # republishing it here (unchanged, since set_current_mode was
+            # never called) is what "reverts" the display.
+            self.toolbar_host.bridge.publish()
             return
 
         try:
@@ -1077,7 +1026,6 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
                 )
         except Exception as e:
             if previous_mode and previous_mode != mode_text:
-                self._set_mode_combo_silently(previous_mode)
                 self.settings_manager.set_current_mode(previous_mode)
                 try:
                     self._initialize_mode(previous_mode, show_dialogs=False)
@@ -1096,15 +1044,15 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
                 title,
                 f"{mode_text} could not be initialized:\n\n{str(e)}"
             )
+        self.toolbar_host.bridge.publish()
 
     def _initialize_saved_mode_on_startup(self):
-        mode_text = self.mode_combo.currentText()
+        mode_text = self.settings_manager.get_current_mode()
         try:
             self._initialize_mode(mode_text, show_dialogs=False)
             self.settings_manager.set_current_mode(mode_text)
         except Exception:
             fallback_mode = config.MODE_OLLAMA_LOCAL
-            self._set_mode_combo_silently(fallback_mode)
             self.settings_manager.set_current_mode(fallback_mode)
             api_provider.initialize_local_provider(config.LOCAL_PROVIDER_OLLAMA)
         self.reinitialize_agent()

@@ -5,9 +5,20 @@ module-level mutable global state in api_provider, swapped by initialize_* while
 threads read it. The most user-reachable race was simply changing the mode combo while
 a response was streaming in - nothing prevented it, so the in-flight request could
 execute against a half-swapped provider. on_mode_changed() now refuses the switch while
-_main_request_active, reverts the combo, and tells the user why. (Full encapsulation of
-the provider globals remains open - this closes the one race a user can trigger from
-the toolbar with no special timing.)
+_main_request_active, reverts the toolbar's displayed mode, and tells the user why. (Full
+encapsulation of the provider globals remains open - this closes the one race a user can
+trigger from the toolbar with no special timing.)
+
+Phase 6 increment 1: on_mode_changed() now takes the mode text directly (there is no more
+QComboBox to call .itemText(index) on - the toolbar island reports the mode string chosen
+by the user straight from its own bridge Slot). "Reverting" no longer means silently
+resetting a native widget's selection - the toolbar's mode selector is a controlled
+element that only ever displays settings_manager.get_current_mode()'s own value, so a
+rejected switch reverts for free simply by republishing that unchanged value via
+toolbar_host.bridge.publish(). The busy-guard predicate/behavior itself is otherwise
+UNCHANGED this increment - the full request/confirm/reject protocol upgrade and this
+file's own deeper rewrite are deferred to increment 2, per the plan doc's own recorded
+scope.
 
 Uses a MagicMock as `self` for the unbound-method call, with the small set of real
 attributes the guard reads set explicitly.
@@ -26,11 +37,10 @@ _APP = QApplication.instance() or QApplication([])
 import graphlink_window
 
 
-def _make_window(active, current_mode="Ollama (Local)", selected_mode="API Endpoint"):
+def _make_window(active, current_mode="Ollama (Local)"):
     window = MagicMock()
     window._main_request_active = active
     window.settings_manager.get_current_mode.return_value = current_mode
-    window.mode_combo.itemText.return_value = selected_mode
     return window
 
 
@@ -38,23 +48,24 @@ class TestSwitchBlockedWhileRequestActive:
     def test_switch_is_reverted_and_never_reinitializes_the_provider(self):
         window = _make_window(active=True)
 
-        graphlink_window.ChatWindow.on_mode_changed(window, 2)
+        graphlink_window.ChatWindow.on_mode_changed(window, "API Endpoint")
 
-        window._set_mode_combo_silently.assert_called_once_with("Ollama (Local)")
         window._initialize_mode.assert_not_called()
         window.settings_manager.set_current_mode.assert_not_called()
         window.notification_banner.show_message.assert_called_once()
         message = window.notification_banner.show_message.call_args[0][0]
         assert "switch" in message.lower()
+        # No native combo to revert anymore - republishing the toolbar's
+        # unchanged currentMode is what "reverts" the displayed selection.
+        window.toolbar_host.bridge.publish.assert_called_once()
 
     def test_reselecting_the_current_mode_while_active_is_a_no_op_not_a_warning(self):
-        # Qt can fire currentIndexChanged for a programmatic re-set of the same mode;
-        # that is not a switch and must not nag the user.
-        window = _make_window(active=True, selected_mode="Ollama (Local)")
+        # A re-selection of the same mode is not a switch and must not nag the user.
+        window = _make_window(active=True, current_mode="Ollama (Local)")
 
-        graphlink_window.ChatWindow.on_mode_changed(window, 0)
+        graphlink_window.ChatWindow.on_mode_changed(window, "Ollama (Local)")
 
-        window._set_mode_combo_silently.assert_not_called()
+        window.notification_banner.show_message.assert_not_called()
         # Falls through to the normal path (same mode re-initialization is the
         # pre-existing behavior and stays unchanged).
         window._initialize_mode.assert_called_once()
@@ -64,8 +75,9 @@ class TestSwitchAllowedWhenIdle:
     def test_switch_proceeds_normally_when_no_request_is_active(self):
         window = _make_window(active=False)
 
-        graphlink_window.ChatWindow.on_mode_changed(window, 2)
+        graphlink_window.ChatWindow.on_mode_changed(window, "API Endpoint")
 
         window._initialize_mode.assert_called_once_with("API Endpoint", show_dialogs=True)
         window.settings_manager.set_current_mode.assert_called_once_with("API Endpoint")
         window.reinitialize_agent.assert_called_once()
+        window.toolbar_host.bridge.publish.assert_called_once()

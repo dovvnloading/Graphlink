@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "currentMode": {
+      "type": "string"
+    },
+    "minCompatibleSchemaVersion": {
+      "type": "integer"
+    },
+    "modeOptions": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "pinsChecked": {
+      "type": "boolean"
+    },
+    "revision": {
+      "type": "integer"
+    },
+    "schemaVersion": {
+      "type": "integer"
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "revision",
+    "pinsChecked",
+    "modeOptions",
+    "currentMode"
+  ],
+  "title": "ToolbarState",
+  "type": "object"
+}
