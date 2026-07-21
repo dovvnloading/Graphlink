@@ -23,6 +23,14 @@ graphlink_overlay_coordinator.py) - ChatView still needs search_overlay's
 height/visibility to stack control_widget/grid_control/font_control below it,
 now via a direct reference (_search_overlay_host) instead of a findChild()
 probe, but no longer repositions it a second time itself.
+
+Phase 5 increment 4: notification_banner and token_counter_widget are also
+now registered with overlay_coordinator (see graphlink_window.py's __init__),
+so ChatWindow._update_overlay_positions() no longer touches either directly -
+only command_palette_host stays hand-managed here (it predates Phase 5 and
+already had its own correct open-time position+raise pattern). That one
+remaining direct call was previously never asserted on by this file at all -
+closed below by test_command_palette_is_repositioned_directly_when_visible.
 """
 
 import sys
@@ -114,3 +122,26 @@ def test_visible_notification_is_raised_above_composer():
     graphlink_window.ChatWindow._update_composer_overlay(mock_self)
 
     mock_self.notification_banner.raise_.assert_called_once()
+
+
+def test_command_palette_is_repositioned_directly_when_visible():
+    """command_palette_host stays hand-managed in _update_overlay_positions
+    (Phase 5 increment 4 deliberately left it out of overlay_coordinator -
+    see the module docstring) - this was never actually asserted on before,
+    a real gap a refactor could have silently broken without any test
+    noticing."""
+    mock_self = _make_mock_window()
+    mock_self.command_palette_host.isVisible.return_value = True
+
+    graphlink_window.ChatWindow._update_overlay_positions(mock_self)
+
+    mock_self.command_palette_host.update_position.assert_called_once()
+
+
+def test_command_palette_is_not_repositioned_when_hidden():
+    mock_self = _make_mock_window()
+    mock_self.command_palette_host.isVisible.return_value = False
+
+    graphlink_window.ChatWindow._update_overlay_positions(mock_self)
+
+    mock_self.command_palette_host.update_position.assert_not_called()

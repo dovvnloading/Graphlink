@@ -136,6 +136,7 @@ py-modules = [
     "graphlink_styles",
     "graphlink_token_counter_bridge",
     "graphlink_token_counter_payload",
+    "graphlink_token_counter_web",
     "graphlink_token_estimator",
     "graphlink_ui_components",
     "graphlink_utility",
