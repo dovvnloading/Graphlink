@@ -540,9 +540,15 @@ class SceneDeserializer:
         return notes_map
 
     def _load_pins(self, scene, pins_data):
-        if self.window and hasattr(self.window, "pin_overlay"):
-            self.window.pin_overlay.clear_pins()
-
+        # No imperative pin_overlay sync here: the legacy PinOverlay's
+        # clear_pins()/add_pin_button() calls this method used to make do not
+        # exist on PinOverlayHost (Phase 5), and are unnecessary with the
+        # store-based design - restore_chat's scene.clear() already emptied
+        # scene.pin_store, add_navigation_pin() below registers each restored
+        # pin in it, and the overlay follows the store reactively. The stale
+        # calls crashed the ENTIRE chat restore (AttributeError) the first
+        # time a saved session actually contained pins - the app then exited
+        # with no window, looking like a silent startup hang.
         valid_records = []
         for index, pin_data in enumerate(pins_data or []):
             try:
@@ -552,7 +558,7 @@ class SceneDeserializer:
 
         for record in sorted(valid_records, key=lambda item: item.sort_order):
             try:
-                pin = scene.add_navigation_pin(
+                scene.add_navigation_pin(
                     QPointF(record.position[0], record.position[1]),
                     title=record.title,
                     note=record.note,
@@ -565,8 +571,6 @@ class SceneDeserializer:
                     "warning",
                 )
                 continue
-            if self.window and hasattr(self.window, "pin_overlay"):
-                self.window.pin_overlay.add_pin_button(pin)
 
     def _restore_view_state(self, chat_data):
         view_state = chat_data.get("view_state")
@@ -602,8 +606,11 @@ class SceneDeserializer:
             self.window.message_input.setPlaceholderText("Type your message...")
             self.window.update_title_bar()
             self.window.reset_token_counter()
-            if hasattr(self.window, "pin_overlay") and self.window.pin_overlay:
-                self.window.pin_overlay.clear_pins()
+            # No pin_overlay.clear_pins() here: the method was the legacy
+            # PinOverlay's - PinOverlayHost has no such facade, so this
+            # RECOVERY path itself crashed with the same AttributeError it
+            # was recovering from. scene.clear() above already emptied
+            # scene.pin_store, which the overlay follows reactively.
 
     def restore_chat(self, chat, notes_data, pins_data):
         scene = self._scene()
