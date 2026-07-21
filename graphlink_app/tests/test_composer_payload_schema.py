@@ -19,6 +19,7 @@ still match reality is exactly the drift this whole pipeline exists to stop.
 """
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -264,6 +265,18 @@ class TestCheckCliClosesTheNpmRunCheckDriftGap:
             cwd=_REPO_ROOT,
         )
 
+    @staticmethod
+    def _restore(path: Path, original_text: str, stat_before: os.stat_result) -> None:
+        """Restore a generated file's content AND its mtime. The restore
+        write alone bumps mtime, and graphlink_frontend_bootstrap's island
+        staleness check is mtime-based - a suite run that leaves generated
+        files looking newer than the built assets makes the next real app
+        launch rebuild islands for no reason (the 19-island npm storm that
+        presented as the app looping at startup without ever showing a
+        window)."""
+        path.write_text(original_text, encoding="utf-8", newline="\n")
+        os.utime(path, ns=(stat_before.st_atime_ns, stat_before.st_mtime_ns))
+
     def test_check_passes_and_exits_zero_when_artifacts_are_current(self):
         result = self._run("--check")
 
@@ -272,6 +285,7 @@ class TestCheckCliClosesTheNpmRunCheckDriftGap:
 
     def test_check_fails_and_exits_nonzero_when_a_generated_file_is_hand_edited(self):
         original = _read(_TS_FILE)
+        stat_before = _TS_FILE.stat()
         try:
             _TS_FILE.write_text(original + "\n// hand-edited\n", encoding="utf-8", newline="\n")
             result = self._run("--check")
@@ -280,10 +294,11 @@ class TestCheckCliClosesTheNpmRunCheckDriftGap:
             assert "stale" in result.stderr.lower()
             assert str(_TS_FILE.name) in result.stderr
         finally:
-            _TS_FILE.write_text(original, encoding="utf-8", newline="\n")
+            self._restore(_TS_FILE, original, stat_before)
 
     def test_check_fails_when_a_generated_file_is_missing(self):
         original = _read(_SCHEMA_FILE)
+        stat_before = _SCHEMA_FILE.stat()
         try:
             _SCHEMA_FILE.unlink()
             result = self._run("--check")
@@ -291,10 +306,11 @@ class TestCheckCliClosesTheNpmRunCheckDriftGap:
             assert result.returncode == 1
             assert "missing" in result.stderr.lower()
         finally:
-            _SCHEMA_FILE.write_text(original, encoding="utf-8", newline="\n")
+            self._restore(_SCHEMA_FILE, original, stat_before)
 
     def test_write_regenerates_a_hand_edited_file_back_to_the_real_contract(self):
         original = _read(_TS_FILE)
+        stat_before = _TS_FILE.stat()
         try:
             _TS_FILE.write_text("// corrupted\n", encoding="utf-8", newline="\n")
 
@@ -303,7 +319,21 @@ class TestCheckCliClosesTheNpmRunCheckDriftGap:
             assert result.returncode == 0, result.stderr
             assert _read(_TS_FILE) == original
         finally:
-            _TS_FILE.write_text(original, encoding="utf-8", newline="\n")
+            self._restore(_TS_FILE, original, stat_before)
+
+    def test_write_leaves_up_to_date_files_untouched(self):
+        # The root cause of the rebuild storm: --write used to rewrite every
+        # generated file for every island unconditionally, bumping ~38 mtimes
+        # per run even when the content was byte-identical. It must now leave
+        # an already-current file's mtime alone.
+        mtime_before = _TS_FILE.stat().st_mtime_ns
+        schema_mtime_before = _SCHEMA_FILE.stat().st_mtime_ns
+
+        result = self._run("--write")
+
+        assert result.returncode == 0, result.stderr
+        assert _TS_FILE.stat().st_mtime_ns == mtime_before
+        assert _SCHEMA_FILE.stat().st_mtime_ns == schema_mtime_before
 
     def test_schema_is_valid_json_and_declares_its_draft(self):
         schema = json.loads(_read(_SCHEMA_FILE))

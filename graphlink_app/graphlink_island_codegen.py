@@ -508,8 +508,16 @@ def _main(argv: list[str]) -> int:
         fresh_ts = typescript_for(dataclass_type, source=entry["source"])
 
         if mode == "--write":
-            entry["schema_path"].write_text(fresh_schema, encoding="utf-8", newline="\n")
-            entry["ts_path"].write_text(fresh_ts, encoding="utf-8", newline="\n")
+            # Write-if-changed, not unconditional: rewriting a byte-identical
+            # file still bumps its mtime, and graphlink_frontend_bootstrap's
+            # staleness check is mtime-based - an unconditional rewrite of all
+            # ~38 generated files marked EVERY island stale, so one full
+            # pytest run (whose CLI tests invoke --write) turned the next app
+            # launch into a 19-island npm rebuild storm that looked like the
+            # app hanging in a npm loop before any window appeared.
+            for path, fresh in ((entry["schema_path"], fresh_schema), (entry["ts_path"], fresh_ts)):
+                if not path.is_file() or path.read_text(encoding="utf-8") != fresh:
+                    path.write_text(fresh, encoding="utf-8", newline="\n")
             continue
 
         for path, fresh in ((entry["schema_path"], fresh_schema), (entry["ts_path"], fresh_ts)):

@@ -94,6 +94,24 @@ class FrontendBootstrapError(RuntimeError):
     """
 
 
+# Generous ceilings so a wedged npm can never hang startup forever with no
+# window and no error - `subprocess.run` without a timeout blocks
+# indefinitely, which presented as the app "looping" at launch. A clean
+# `vite build` is sub-second per island; `npm ci` is minutes at worst.
+_NPM_INSTALL_TIMEOUT_SECONDS = 600
+_NPM_BUILD_TIMEOUT_SECONDS = 180
+
+
+def _subprocess_no_window_kwargs() -> dict:
+    # A windowed (pythonw / desktop-shortcut) launch otherwise flashes one
+    # visible console window PER subprocess call - with every island stale
+    # that strobed 19 consoles in a row before any app window appeared,
+    # which read as the app stuck in an npm loop.
+    if sys.platform == "win32":
+        return {"creationflags": subprocess.CREATE_NO_WINDOW}
+    return {}
+
+
 def _is_frozen() -> bool:
     return bool(getattr(sys, "frozen", False))
 
@@ -264,8 +282,9 @@ def _require_node_and_npm() -> tuple[str, str]:
     try:
         version_output = subprocess.run(
             [node_path, "--version"], capture_output=True, text=True, check=True,
+            timeout=30, **_subprocess_no_window_kwargs(),
         ).stdout.strip()
-    except (subprocess.CalledProcessError, OSError) as exc:
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
         raise FrontendBootstrapError(
             f"Found Node.js at {node_path} but `node --version` failed: {exc}"
         ) from exc
@@ -289,17 +308,42 @@ def _require_node_and_npm() -> tuple[str, str]:
     return node_path, npm_path
 
 
-def _run_npm(npm_path: str, args: list[str], *, extra_env: dict[str, str] | None = None) -> None:
+def _run_npm(
+    npm_path: str,
+    args: list[str],
+    *,
+    extra_env: dict[str, str] | None = None,
+    timeout_seconds: int = _NPM_BUILD_TIMEOUT_SECONDS,
+) -> None:
     env = os.environ.copy()
     if extra_env:
         env.update(extra_env)
+    command = " ".join(["npm", *args])
     try:
         subprocess.run(
             [npm_path, *args], cwd=WEB_UI_DIR, env=env, check=True,
-            capture_output=True, text=True,
+            capture_output=True, text=True, timeout=timeout_seconds,
+            **_subprocess_no_window_kwargs(),
         )
+    except subprocess.TimeoutExpired as exc:
+        # Without this, a wedged npm blocked startup forever with no window
+        # and no error. Decode captured output defensively - TimeoutExpired
+        # can carry bytes or None even in text mode.
+        def _as_text(stream) -> str:
+            if stream is None:
+                return ""
+            return stream.decode("utf-8", errors="replace") if isinstance(stream, bytes) else str(stream)
+
+        raise FrontendBootstrapError(
+            f"`{command}` did not finish within {timeout_seconds}s while building "
+            f"Graphlink's frontend in {WEB_UI_DIR} - npm appears hung.\n\n"
+            f"Try running the command manually in web_ui/ (deleting node_modules/ "
+            f"and re-running often clears a wedged install), or set "
+            f"{DEV_MODE_ENV_VAR}=1 to skip build orchestration if you manage the "
+            f"frontend build yourself.\n\n--- partial stdout ---\n{_as_text(exc.stdout)}"
+            f"\n--- partial stderr ---\n{_as_text(exc.stderr)}"
+        ) from exc
     except subprocess.CalledProcessError as exc:
-        command = " ".join(["npm", *args])
         raise FrontendBootstrapError(
             f"`{command}` failed (exit code {exc.returncode}) while building Graphlink's "
             f"frontend in {WEB_UI_DIR}.\n\n--- stdout ---\n{exc.stdout}\n--- stderr ---\n{exc.stderr}"
@@ -328,8 +372,17 @@ def ensure_frontend_built() -> None:
 
     node_path, npm_path = _require_node_and_npm()
 
-    if _node_modules_needs_install():
-        _run_npm(npm_path, ["ci"])
+    logger.info(
+        "Frontend bootstrap: rebuilding %d stale island(s): %s",
+        len(stale), ", ".join(stale),
+    )
 
-    for island in stale:
+    if _node_modules_needs_install():
+        logger.info("Frontend bootstrap: running `npm ci` first (node_modules missing or outdated)")
+        _run_npm(npm_path, ["ci"], timeout_seconds=_NPM_INSTALL_TIMEOUT_SECONDS)
+
+    for index, island in enumerate(stale, start=1):
+        logger.info("Frontend bootstrap: building island %d/%d: %s", index, len(stale), island)
         _run_npm(npm_path, ["run", "build"], extra_env={"GRAPHLINK_ISLAND": island})
+
+    logger.info("Frontend bootstrap: all %d island build(s) finished", len(stale))
