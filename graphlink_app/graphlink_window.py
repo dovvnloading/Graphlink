@@ -71,6 +71,27 @@ logger = logging.getLogger(__name__)
 
 from graphlink_utility import UtilityOperationController
 
+
+def mode_switch_rejection_reason(*, request_active: bool, requested_mode: str, current_mode: str) -> str | None:
+    """Pure predicate: why a mode-switch request should be rejected, or None
+    if it's allowed to proceed - Phase 6 increment 2's own named "guard logic
+    extracted from the combo handler first" requirement. Directly unit-
+    testable with no Qt/mock machinery at all, unlike the inline check it
+    replaces inside on_mode_changed().
+
+    Switching modes calls api_provider.initialize_* which swaps the provider
+    globals (USE_API_MODE, API_CLIENT, API_KEY, ...) that a running chat
+    request is reading from a worker thread - the request could execute
+    against a half-swapped provider. Blocking while a request is active
+    avoids racing it. Re-selecting the CURRENT mode is deliberately not a
+    switch and must never be rejected, even while busy - it's a no-op either
+    way (see test_mode_switch_guard.py's own "no-op not a warning" case).
+    """
+    if request_active and requested_mode != current_mode:
+        return "busy"
+    return None
+
+
 class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
     def __init__(self, settings_manager):
         super().__init__()
@@ -983,22 +1004,22 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
             return True
 
         if show_dialogs:
-            QMessageBox.warning(
-                self,
-                "Unknown Mode",
+            self.notification_banner.show_message(
                 f"Graphlink does not recognize the saved mode '{mode_text}'.",
+                6000,
+                "error",
             )
         return False
-    
+
     def on_mode_changed(self, mode_text):
         previous_mode = self.settings_manager.get_current_mode()
 
-        # Switching modes calls api_provider.initialize_* which swaps the provider
-        # globals (USE_API_MODE, API_CLIENT, API_KEY, ...) that a running chat request
-        # is reading from a worker thread - the request could execute against a
-        # half-swapped provider. Block the switch while a main request is in flight
-        # instead of racing it.
-        if self._main_request_active and mode_text != previous_mode:
+        rejection = mode_switch_rejection_reason(
+            request_active=self._main_request_active,
+            requested_mode=mode_text,
+            current_mode=previous_mode,
+        )
+        if rejection == "busy":
             self.notification_banner.show_message(
                 "Can't switch modes while a response is being generated. "
                 "Cancel the request or wait for it to finish, then switch.",
@@ -1014,7 +1035,16 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
             return
 
         try:
-            self._initialize_mode(mode_text, show_dialogs=True)
+            # A real, pre-existing gap caught while removing the QMessageBox
+            # this branch used to pop: _initialize_mode's own True/False
+            # return (False only for an unrecognized mode_text, which
+            # doesn't raise) was never checked here, so an unknown mode still
+            # got persisted via set_current_mode below regardless of the
+            # warning shown. Bail out before persisting/reinitializing
+            # anything when initialization explicitly reported failure.
+            if not self._initialize_mode(mode_text, show_dialogs=True):
+                self.toolbar_host.bridge.publish()
+                return
             self.settings_manager.set_current_mode(mode_text)
             self.reinitialize_agent()
             self._refresh_composer_provider_status()
@@ -1025,6 +1055,9 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
                     "info",
                 )
         except Exception as e:
+            # Roll back to the pre-switch snapshot (previous_mode, captured
+            # before any mutation above) rather than leaving persisted state
+            # pointing at a mode that never actually initialized.
             if previous_mode and previous_mode != mode_text:
                 self.settings_manager.set_current_mode(previous_mode)
                 try:
@@ -1032,17 +1065,17 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
                     self.reinitialize_agent()
                 except Exception:
                     pass
-            title = (
-                "Llama.cpp Configuration Required"
+            label = (
+                "Llama.cpp"
                 if mode_text == config.MODE_LLAMACPP_LOCAL
-                else "API Configuration Required"
+                else "API"
                 if mode_text == config.MODE_API_ENDPOINT
-                else "Ollama Initialization Error"
+                else "Ollama"
             )
-            QMessageBox.warning(
-                self,
-                title,
-                f"{mode_text} could not be initialized:\n\n{str(e)}"
+            self.notification_banner.show_message(
+                f"{label} configuration failed - {mode_text} could not be initialized:\n\n{str(e)}",
+                8000,
+                "error",
             )
         self.toolbar_host.bridge.publish()
 
