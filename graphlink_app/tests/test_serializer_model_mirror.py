@@ -33,6 +33,7 @@ from graphlink_plugins.graphlink_plugin_code_sandbox import CodeSandboxNode
 from graphlink_pycoder import PyCoderMode, PyCoderNode
 from graphlink_scene import ChatScene
 from graphlink_session.deserializers import SceneDeserializer
+from graphlink_window_actions import WindowActionsMixin
 from graphlink_session.serializers import SceneSerializer
 
 _MARKDOWN_ANALYSIS = "# Heading\n\nSome **bold** text and a list:\n\n- item one\n- item two"
@@ -314,3 +315,108 @@ class TestFindItemsUsesGettersNotWidgets:
         scene.code_sandbox_nodes.append(node)
 
         assert node in scene.find_items("unique needle")
+
+
+class TestChartContextExtractionUsesGetters:
+    """Adversarial review of this increment caught a missed call site: the
+    chart-generation context builder (WindowActionsMixin._extract_chart_node_content,
+    reachable from the real 'Generate Chart' context-menu action and the
+    command palette) still read ai_analysis_display.toPlainText() directly,
+    reproducing this increment's own markdown-loss bug in a completely
+    untested path. Fixed by routing through get_ai_analysis()/get_output()/
+    get_instruction() like every other getter-based fragment here already did.
+
+    A second, distinct issue the review also caught: this same function has a
+    separate, generic bare-attribute probe (originally for other node types,
+    e.g. ImageNode.prompt/CodeNode.code) checking getattr(node, "prompt", "")/
+    getattr(node, "code", ""). Before this increment, PyCoderNode/CodeSandboxNode
+    had no such attributes, so this always silently resolved to "" for them.
+    Adding self.prompt/self.code as mirror attributes activated that dormant
+    branch, producing duplicate content alongside the get_prompt()/get_code()
+    fragment a few lines below - a real regression this increment's own diff
+    introduced. Fixed by skipping the bare-attribute probe when a dedicated
+    getter exists."""
+
+    def _extract(self, node):
+        class FakeWindow(WindowActionsMixin):
+            pass
+
+        return FakeWindow()._extract_chart_node_content(node)
+
+    def test_pycoder_ai_analysis_preserves_markdown_in_chart_context(self):
+        node = PyCoderNode(parent_node=None)
+        node.set_ai_analysis(_MARKDOWN_ANALYSIS)
+
+        content = self._extract(node)
+
+        assert "# Heading" in content
+        assert "**bold**" in content
+
+    def test_code_sandbox_ai_analysis_preserves_markdown_in_chart_context(self):
+        node = CodeSandboxNode(parent_node=None)
+        node.set_ai_analysis(_MARKDOWN_ANALYSIS)
+
+        content = self._extract(node)
+
+        assert "# Heading" in content
+        assert "**bold**" in content
+
+    def test_pycoder_prompt_and_code_appear_exactly_once(self):
+        node = PyCoderNode(parent_node=None)
+        node.seed_prompt("a unique prompt fragment")
+        node.set_code("a_unique_code_fragment()")
+
+        content = self._extract(node)
+
+        assert content.count("a unique prompt fragment") == 1
+        assert content.count("a_unique_code_fragment()") == 1
+
+    def test_code_sandbox_prompt_and_code_appear_exactly_once(self):
+        node = CodeSandboxNode(parent_node=None)
+        node.seed_prompt("another unique prompt fragment")
+        node.set_code("another_unique_code_fragment()")
+
+        content = self._extract(node)
+
+        assert content.count("another unique prompt fragment") == 1
+        assert content.count("another_unique_code_fragment()") == 1
+
+    def test_artifact_instruction_and_content_appear_exactly_once(self):
+        node = ArtifactNode(parent_node=None)
+        node.seed_prompt("a unique instruction fragment")
+        node.set_artifact_content("a unique artifact content fragment")
+
+        content = self._extract(node)
+
+        assert content.count("a unique instruction fragment") == 1
+        assert content.count("a unique artifact content fragment") == 1
+
+
+class TestDeserializerUsesSetPlainTextForPrompt:
+    """Adversarial review also caught a pre-existing (not introduced by this
+    increment, but directly relevant to the round-trip fidelity this capstone
+    targets) bug: the pycoder restore branch called prompt_input.setText(...)
+    instead of .setPlainText(). QTextEdit.setText() auto-detects "might be
+    rich text" and silently strips angle-bracket substrings it mistakes for
+    HTML tags - so a saved prompt containing something like "<script>" would
+    come back mangled on restore."""
+
+    def test_restoring_a_prompt_with_angle_bracket_text_is_not_mangled(self):
+        window, scene = _make_window_and_scene()
+        parent = scene.add_chat_node("parent", is_user=True)
+        node = PyCoderNode(parent, mode=PyCoderMode.MANUAL)
+        tricky_prompt = "compare <script>alert(1)</script> usage patterns"
+        node.seed_prompt(tricky_prompt)
+        scene.addItem(node)
+        scene.pycoder_nodes.append(node)
+
+        parent_payload = SceneSerializer(window).serialize_node(parent, [parent, node])
+        node_payload = SceneSerializer(window).serialize_node(node, [parent, node])
+        assert node_payload["prompt"] == tricky_prompt
+
+        target_window, target_scene = _make_window_and_scene()
+        deserializer = SceneDeserializer(target_window)
+        restored_parent = deserializer.deserialize_node(0, parent_payload, {})
+        restored_node = deserializer.deserialize_node(1, node_payload, {0: restored_parent})
+
+        assert restored_node.get_prompt() == tricky_prompt
