@@ -204,7 +204,19 @@ class CodeSandboxNode(QGraphicsObject, HoverAnimationMixin):
         self.proxy.setWidget(self.widget)
 
     def __del__(self):
-        self.dispose()
+        # GC-time last resort for the ChatScene.clear() path (New Chat /
+        # chat-switch), which never calls dispose() on plugin nodes - without
+        # this, a still-running sandbox worker would outlive its node with
+        # nothing left to stop it. Guarded because during interpreter
+        # shutdown the underlying C++ QThread/QObject may already be deleted,
+        # making dispose()'s worker.isRunning() raise inside __del__ (audit
+        # finding B5). Kept rather than dropped: unlike PyCoderNode (whose
+        # REPL manager registers a weakref.finalize), the sandbox worker has
+        # no other GC-time cleanup hook.
+        try:
+            self.dispose()
+        except Exception:
+            pass
 
     @property
     def width(self):
