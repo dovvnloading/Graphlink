@@ -1547,7 +1547,7 @@ class WindowActionsMixin:
         # Update the internal node state with the latest history before AI replies
         assign_history(artifact_node, append_history(parent_history, artifact_node.local_history))
 
-        from graphlink_plugins.graphlink_plugin_artifact import ArtifactWorkerThread
+        from graphlink_agents_artifact import ArtifactWorkerThread
         worker_thread = ArtifactWorkerThread(current_doc, trimmed_history)
         artifact_node.worker_thread = worker_thread
         worker_thread.finished.connect(lambda doc, msg, node=artifact_node: self._handle_artifact_result(doc, msg, node))
