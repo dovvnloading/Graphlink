@@ -27,7 +27,8 @@ from PySide6.QtWidgets import QApplication
 
 _APP = QApplication.instance() or QApplication([])
 
-from graphlink_plugins.graphlink_plugin_artifact import ArtifactAgent, ArtifactNode
+from graphlink_agents_artifact import ArtifactAgent
+from graphlink_plugins.graphlink_plugin_artifact import ArtifactNode
 
 
 class TestArtifactAgentTagParsing:
@@ -36,7 +37,7 @@ class TestArtifactAgentTagParsing:
         raw_text = "<artifact>\n# Title\n\nBody text.\n</artifact>\nHere's the update."
 
         with patch(
-            "graphlink_plugins.graphlink_plugin_artifact.api_provider.chat",
+            "graphlink_agents_artifact.api_provider.chat",
             return_value={"message": {"content": raw_text}},
         ):
             new_doc, ai_message = agent.get_response("old doc", [])
@@ -49,7 +50,7 @@ class TestArtifactAgentTagParsing:
         raw_text = "Sorry, I can't help with that right now."
 
         with patch(
-            "graphlink_plugins.graphlink_plugin_artifact.api_provider.chat",
+            "graphlink_agents_artifact.api_provider.chat",
             return_value={"message": {"content": raw_text}},
         ):
             with pytest.raises(RuntimeError):
