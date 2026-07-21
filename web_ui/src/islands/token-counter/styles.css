@@ -1,4 +1,3 @@
-@import "../../lib/ui/base.css";
 /* Colors deliberately reuse EXISTING app-wide --gl-* tokens (graph-node
    panel fill / neutral-button border / neutral-button muted-icon) rather
    than capturing a new island-scoped token group, unlike composer's

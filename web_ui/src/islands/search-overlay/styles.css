@@ -1,4 +1,3 @@
-@import "../../lib/ui/base.css";
 /* Colors reuse EXISTING app-wide --gl-* tokens, same convention every
    island since token-counter follows. Compact toolbar-like bar (300x44,
    matching the legacy SearchOverlay's fixed size exactly) - a corner

@@ -1,4 +1,3 @@
-@import "../../lib/ui/base.css";
 /* Colors reuse EXISTING app-wide --gl-* tokens, same convention every
    island since token-counter follows. Height is content-driven (a
    ResizeObserver reports it to Python, which bounds it to the legacy

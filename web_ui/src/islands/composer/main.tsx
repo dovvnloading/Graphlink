@@ -1,6 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import ComposerApp from "./ComposerApp";
+import "../../lib/ui/base.css";
 import "./styles.css";
 // Separate file so styles.css stays byte-stable for its resolution-golden
 // test; see bridge-error.css's own header for why.

@@ -1,4 +1,3 @@
-@import "../../lib/ui/base.css";
 /* Colors reuse EXISTING app-wide --gl-* tokens, same convention every
    island since token-counter follows. Flush side panel (border-right
    only, no rounded corners - see graphlink_document_viewer_web.py's

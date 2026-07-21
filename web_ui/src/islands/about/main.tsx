@@ -1,6 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
+import "../../lib/ui/base.css";
 import "./styles.css";
 
 // See composer/main.tsx for the full rationale: styles.css resolves colors
