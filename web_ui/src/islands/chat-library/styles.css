@@ -1,3 +1,4 @@
+@import "../../lib/ui/base.css";
 /* Colors reuse EXISTING app-wide --gl-* tokens, same convention every
    island since token-counter follows. This island is the CONTENT region
    embedded inside the native ChatLibraryDialog shell (which keeps its own

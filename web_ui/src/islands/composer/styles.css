@@ -1,3 +1,4 @@
+@import "../../lib/ui/base.css";
 /* Theme variables + utility generation only - deliberately NOT
    "@import "tailwindcss";" (which also pulls in Tailwind's preflight
    reset: * { margin:0; padding:0; border:0; box-sizing:border-box },

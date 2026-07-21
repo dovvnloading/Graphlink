@@ -1,3 +1,4 @@
+@import "../../lib/ui/base.css";
 /* Colors reuse EXISTING app-wide --gl-* tokens, same convention every
    island since token-counter follows. Sized to match the legacy
    HelpDialog's resize(900, 620). */

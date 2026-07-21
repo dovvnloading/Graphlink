@@ -1,3 +1,4 @@
+@import "../../lib/ui/base.css";
 /* Colors reuse EXISTING app-wide --gl-* tokens, same convention every
    island since token-counter follows. Height is content-driven (a
    ResizeObserver reports it to Python, which bounds it to
@@ -15,7 +16,12 @@ body,
 
 .plugin-picker-shell {
   box-sizing: border-box;
-  width: 520px;
+  /* 100% of the host viewport, not a fixed 520px: the host is exactly
+     520 wide, and at fractional DPI scaling a fixed 520 can overflow
+     the rounded-down CSS viewport by a sub-pixel, summoning a
+     horizontal overlay scrollbar across the popup bottom. */
+  width: 100%;
+  max-width: 520px;
   display: flex;
   flex-direction: row;
   gap: 0;

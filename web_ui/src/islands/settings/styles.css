@@ -1,3 +1,4 @@
+@import "../../lib/ui/base.css";
 /* Colors reuse EXISTING app-wide --gl-* tokens, same as every island since
    token-counter - shell-only content today needs no new tokens, and per the
    Phase 3 checklist scope note this island still isn't the "island #2"

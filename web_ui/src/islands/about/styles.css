@@ -1,3 +1,4 @@
+@import "../../lib/ui/base.css";
 /* Colors reuse EXISTING app-wide --gl-* tokens, same convention every
    island since token-counter follows. The legacy AboutDialog was
    dark-mode-only (hardcoded #1E1E1E background, near-all-literal colors) -

@@ -1,3 +1,4 @@
+@import "../../lib/ui/base.css";
 /* Colors reuse EXISTING app-wide --gl-* tokens, same convention every
    island since token-counter follows. This host has a fixed height
    (TOOLBAR_HEIGHT in graphlink_toolbar_web.py) but stretches to the full
