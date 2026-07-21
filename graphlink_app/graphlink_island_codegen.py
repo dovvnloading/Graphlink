@@ -439,6 +439,22 @@ GENERATED_ARTIFACTS = [
         "schema_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "plugin-picker-state.schema.json",
         "ts_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "plugin-picker-state.ts",
     },
+    {
+        "dataclass": None,  # resolved lazily in main() to avoid importing
+        "dataclass_import": ("graphlink_grid_control_payload", "GridControlStatePayload"),
+        "title": "GridControlState",
+        "source": "graphlink_app/graphlink_grid_control_payload.py::GridControlStatePayload",
+        "schema_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "grid-control-state.schema.json",
+        "ts_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "grid-control-state.ts",
+    },
+    {
+        "dataclass": None,  # resolved lazily in main() to avoid importing
+        "dataclass_import": ("graphlink_font_control_payload", "FontControlStatePayload"),
+        "title": "FontControlState",
+        "source": "graphlink_app/graphlink_font_control_payload.py::FontControlStatePayload",
+        "schema_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "font-control-state.schema.json",
+        "ts_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "font-control-state.ts",
+    },
 ]
 
 

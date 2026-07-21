@@ -139,7 +139,7 @@ class ChartItem(QGraphicsItem):
             grid_size = self.RESIZE_GRID
             views = scene.views()
             if views:
-                grid_size = max(8, int(getattr(views[0].grid_control, "grid_size", self.RESIZE_GRID)))
+                grid_size = max(8, int(getattr(views[0].grid_settings, "grid_size", self.RESIZE_GRID)))
             return max(grid_size, round(value / grid_size) * grid_size)
         return value
 
