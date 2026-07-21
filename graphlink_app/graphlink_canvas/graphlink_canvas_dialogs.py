@@ -157,5 +157,3 @@ class ColorPickerDialog(QDialog):
         
     def get_selected_color(self):
         return self.selected_color, self.selected_type
-
-from graphlink_widgets.pins import NavigationPinEditor as PinEditDialog
