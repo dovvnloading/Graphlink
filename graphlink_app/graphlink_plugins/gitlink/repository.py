@@ -155,7 +155,14 @@ def apply_change_set(local_root, pending_changes):
 
             backups.append((target_path, target_path.read_bytes() if target_path.exists() else None))
             target_path.parent.mkdir(parents=True, exist_ok=True)
-            target_path.write_text(file_item.get("content", ""), encoding="utf-8")
+            # newline="" writes the approved content byte-for-byte. The default
+            # (newline=None) translates on write - on Windows \n becomes \r\n
+            # and an existing \r\n becomes \r\r\n - so the file on disk would
+            # diverge from exactly what the user approved in the preview, which
+            # diffs via splitlines() (line-ending-agnostic) and so never
+            # surfaces the drift. The rollback path below already restores
+            # byte-exact via write_bytes; the forward write must match it.
+            target_path.write_text(file_item.get("content", ""), encoding="utf-8", newline="")
             written_files += 1
 
         return written_files

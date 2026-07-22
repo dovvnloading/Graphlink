@@ -332,6 +332,29 @@ class TestApplyChangeSet:
         written = apply_change_set(tmp_path, [{"path": "never_existed.py", "operation": "delete"}])
         assert written == 0
 
+    def test_write_preserves_content_bytes_exactly_including_line_endings(self, tmp_path):
+        # Regression: the default write_text newline translated content on
+        # write - on Windows \n -> \r\n and an existing \r\n -> \r\r\n - so the
+        # on-disk bytes diverged from what the user approved in the preview
+        # (which diffs line-ending-agnostically via splitlines and never showed
+        # it). Assert byte-exact: read_text() would MASK this by translating
+        # newlines back on read, so this must read_bytes().
+        content = "a\nb\r\nc\n"
+        written = apply_change_set(tmp_path, [
+            {"path": "mixed.txt", "operation": "create", "content": content},
+        ])
+        assert written == 1
+        on_disk = (tmp_path / "mixed.txt").read_bytes()
+        assert on_disk == content.encode("utf-8")
+        assert b"\r\r\n" not in on_disk, "an existing CRLF must not be doubled to CR-CR-LF"
+
+    def test_update_preserves_lf_only_content_byte_for_byte(self, tmp_path):
+        (tmp_path / "a.py").write_text("old")
+        apply_change_set(tmp_path, [
+            {"path": "a.py", "operation": "update", "content": "x = 1\ny = 2\n"},
+        ])
+        assert (tmp_path / "a.py").read_bytes() == b"x = 1\ny = 2\n"
+
 
 class TestApplyChangeSetRollback:
     """Audit finding A1: a mid-loop failure used to leave files 1..N-1 already
