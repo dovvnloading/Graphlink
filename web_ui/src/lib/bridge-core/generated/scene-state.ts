@@ -11,6 +11,8 @@ export interface SceneNodeRow {
   content: string;
   isUser: boolean;
   isCollapsed: boolean;
+  code: string;
+  language: string;
 }
 
 export interface SceneEdgeRow {
@@ -97,6 +99,16 @@ function checkSceneNodeRow(value: unknown, path: string, errors: string[]): void
     const fieldValue = value["isCollapsed"];
     if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.isCollapsed: missing required field`);
     else { if (typeof fieldValue !== "boolean") errors.push(`${path}.isCollapsed` + ": expected boolean"); }
+  }
+  {
+    const fieldValue = value["code"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.code: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.code` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["language"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.language: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.language` + ": expected string"); }
   }
 }
 

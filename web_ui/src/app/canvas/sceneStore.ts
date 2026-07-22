@@ -132,6 +132,15 @@ export class SceneStore {
     this.transport.intent("scene", "deleteChatNode", [id]);
   }
 
+  // R3.5: real code nodes - deletion has no dedicated intent (code nodes are
+  // never branch points/reparented, so the generic removeNodes intent below
+  // already covers it).
+  addCodeNode(x: number, y: number, code: string, language: string, parentId?: string): void {
+    const args: unknown[] = [x, y, code, language];
+    if (parentId !== undefined) args.push(parentId);
+    this.transport.intent("scene", "addCodeNode", args);
+  }
+
   setChatCollapsed(id: string, collapsed: boolean): void {
     this.transport.intent("scene", "setChatCollapsed", [id, collapsed]);
   }

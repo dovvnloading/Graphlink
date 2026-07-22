@@ -25,7 +25,18 @@ function validScenePayload(overrides: Record<string, unknown> = {}) {
     minCompatibleSchemaVersion: 1,
     revision: 3,
     nodes: [
-      { id: "n0", x: 1, y: 2, title: "A", kind: "placeholder", content: "", isUser: false, isCollapsed: false },
+      {
+        id: "n0",
+        x: 1,
+        y: 2,
+        title: "A",
+        kind: "placeholder",
+        content: "",
+        isUser: false,
+        isCollapsed: false,
+        code: "",
+        language: "",
+      },
     ],
     edges: [],
     pins: [],
@@ -115,6 +126,17 @@ describe("SceneStore", () => {
       { topic: "scene", intent: "addChatNode", args: [30, 40, "hi back", false, "n1"] },
       { topic: "scene", intent: "setChatCollapsed", args: ["n1", true] },
       { topic: "scene", intent: "deleteChatNode", args: ["n1"] },
+    ]);
+  });
+
+  it("sends code-node intents with the backend's registered names and shapes", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.addCodeNode(10, 20, "print('hi')", "python");
+    store.addCodeNode(30, 40, "console.log('hi')", "javascript", "n1");
+    expect(intents).toEqual([
+      { topic: "scene", intent: "addCodeNode", args: [10, 20, "print('hi')", "python"] },
+      { topic: "scene", intent: "addCodeNode", args: [30, 40, "console.log('hi')", "javascript", "n1"] },
     ]);
   });
 

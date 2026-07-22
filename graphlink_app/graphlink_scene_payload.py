@@ -14,6 +14,9 @@ R3.1 adds the `chat` kind's fields (content/isUser/isCollapsed - the real
 persisted shape from the legacy ChatNode's serializer, minus everything
 Qt-only): populated for kind=="chat" rows, defaulted (empty/false) for every
 other kind, so the schema stays additive-only as new kinds land.
+
+R3.5 adds the `code` kind's fields (code/language): populated for kind=="code"
+rows, defaulted (empty string) for every other kind, same additive rule.
 """
 
 from __future__ import annotations
@@ -31,6 +34,10 @@ class SceneNodeRow:
     content: str = ""
     isUser: bool = False
     isCollapsed: bool = False
+    # R3.5: the code node's real persisted shape - populated for kind=="code"
+    # rows, defaulted (empty string) for every other kind.
+    code: str = ""
+    language: str = ""
 
 
 @dataclass

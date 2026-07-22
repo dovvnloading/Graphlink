@@ -549,6 +549,38 @@ body,
   color: var(--gl-semantic-status-error, currentColor);
 }
 
+/* -- R3.5/R3.6 code node --------------------------------------------------- */
+
+.chat-node,
+.code-node {
+  width: 420px;
+  max-height: 640px;
+  min-height: 110px;
+}
+
+.code-node.collapsed {
+  width: 290px;
+  min-height: 58px;
+}
+
+.code-node-language {
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  text-transform: lowercase;
+}
+
+.code-node-content {
+  max-height: 560px;
+  overflow-y: auto;
+}
+
+.code-node-content > :first-child {
+  margin-top: 0;
+}
+
+.code-node-content > :last-child {
+  margin-bottom: 0;
+}
+
 /* -- R2 app bar + overlay system ----------------------------------------- */
 
 .app-topbar {

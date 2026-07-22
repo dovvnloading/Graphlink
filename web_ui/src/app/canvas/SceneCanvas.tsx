@@ -18,6 +18,7 @@ import "@xyflow/react/dist/style.css";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { SceneState } from "../../lib/bridge-core/generated/scene-state";
 import { ChatNodeView, type ChatFlowNode } from "./ChatNodeView";
+import { CodeNodeView, type CodeFlowNode } from "./CodeNodeView";
 import { LOD_ZOOM_THRESHOLD } from "./canvasConstants";
 import { SceneStore, scaleDragPosition } from "./sceneStore";
 
@@ -26,7 +27,8 @@ import { SceneStore, scaleDragPosition } from "./sceneStore";
  * successor. R1 scope: pan/zoom, model-driven grid (size/style/color/opacity
  * + snap), node drag with the drag-speed factor, edges, selection + delete,
  * minimap, an LOD threshold, navigation pins. R3.1/R3.2 add the first real
- * node type (chat); every other kind still renders as a placeholder.
+ * node type (chat); R3.5/R3.6 add code. Every other kind still renders as a
+ * placeholder.
  */
 
 const GRID_VARIANTS: Record<string, BackgroundVariant> = {
@@ -36,7 +38,7 @@ const GRID_VARIANTS: Record<string, BackgroundVariant> = {
 };
 
 type PlaceholderNode = Node<{ title: string }, "placeholder">;
-type SceneFlowNode = PlaceholderNode | ChatFlowNode;
+type SceneFlowNode = PlaceholderNode | ChatFlowNode | CodeFlowNode;
 
 function PlaceholderNodeView({ data, selected }: NodeProps<PlaceholderNode>) {
   const zoom = useStore((s) => s.transform[2]);
@@ -54,7 +56,7 @@ function PlaceholderNodeView({ data, selected }: NodeProps<PlaceholderNode>) {
   );
 }
 
-const NODE_TYPES = { placeholder: PlaceholderNodeView, chat: ChatNodeView };
+const NODE_TYPES = { placeholder: PlaceholderNodeView, chat: ChatNodeView, code: CodeNodeView };
 
 function toFlowNodes(scene: SceneState, store: SceneStore): SceneFlowNode[] {
   return scene.nodes.map((n) => {
@@ -69,6 +71,18 @@ function toFlowNodes(scene: SceneState, store: SceneStore): SceneFlowNode[] {
           isCollapsed: n.isCollapsed,
           onToggleCollapse: () => store.setChatCollapsed(n.id, !n.isCollapsed),
           onDelete: () => store.deleteChatNode(n.id),
+        },
+      };
+    }
+    if (n.kind === "code") {
+      return {
+        id: n.id,
+        type: "code" as const,
+        position: { x: n.x, y: n.y },
+        data: {
+          code: n.code,
+          language: n.language,
+          onDelete: () => store.removeNodes([n.id]),
         },
       };
     }

@@ -77,6 +77,9 @@ class SceneError(ValueError):
 
 
 CHAT_TITLE_PREVIEW_LENGTH = 60
+# R3.5: code titles are a language label plus first line, not prose, so a
+# shorter preview than chat's 60 is plenty.
+CODE_TITLE_PREVIEW_LENGTH = 40
 
 
 @dataclass
@@ -93,6 +96,10 @@ class SceneNode:
     content: str = ""
     is_user: bool = False
     is_collapsed: bool = False
+    # R3.5: the code node's real persisted shape - unused/defaulted for
+    # every other kind.
+    code: str = ""
+    language: str = ""
 
 
 @dataclass
@@ -157,6 +164,41 @@ class SceneDocument:
             kind="chat",
             content=str(content),
             is_user=bool(is_user),
+        )
+        self.nodes[node_id] = node
+        if parent_id is not None:
+            self.connect(parent_id, node_id)
+        return node
+
+    def add_code_node(
+        self,
+        x: float,
+        y: float,
+        code: str,
+        language: str,
+        parent_id: str | None = None,
+    ) -> SceneNode:
+        """R3.5's code-node equivalent of add_chat_node: a real code-block
+        node, optionally connected to a parent. Mirrors add_chat_node's
+        id/dict bookkeeping and parent-edge behavior exactly. Code nodes are
+        NOT branch points - nothing ever gets reparented through them - so
+        unlike chat there is no delete_code_node; deletion goes entirely
+        through the existing generic remove_nodes."""
+        if parent_id is not None and parent_id not in self.nodes:
+            raise SceneError(f"unknown parent node: {parent_id}")
+        node_id = f"n{next(self._counter)}"
+        label = str(language) or "code"
+        first_line = str(code).split("\n", 1)[0]
+        preview = first_line[:CODE_TITLE_PREVIEW_LENGTH]
+        title = f"{label}: {preview}" if preview else label
+        node = SceneNode(
+            id=node_id,
+            x=float(x),
+            y=float(y),
+            title=title,
+            kind="code",
+            code=str(code),
+            language=str(language),
         )
         self.nodes[node_id] = node
         if parent_id is not None:
@@ -290,6 +332,8 @@ class SceneDocument:
                     "content": n.content,
                     "isUser": n.is_user,
                     "isCollapsed": n.is_collapsed,
+                    "code": n.code,
+                    "language": n.language,
                 }
                 for n in self.nodes.values()
             ],
@@ -377,6 +421,11 @@ def register_canvas(bus: SessionBus, notifications: NotificationState) -> SceneD
         await publish_scene()
         return node.id
 
+    async def add_code_node(x, y, code, language, parent_id=None):
+        node = document.add_code_node(x, y, code, language, parent_id)
+        await publish_scene()
+        return node.id
+
     async def delete_chat_node(node_id):
         document.delete_chat_node(node_id)
         await publish_scene()
@@ -447,6 +496,7 @@ def register_canvas(bus: SessionBus, notifications: NotificationState) -> SceneD
 
     bus.register_intent("scene", "addNode", add_node)
     bus.register_intent("scene", "addChatNode", add_chat_node)
+    bus.register_intent("scene", "addCodeNode", add_code_node)
     bus.register_intent("scene", "deleteChatNode", delete_chat_node)
     bus.register_intent("scene", "setChatCollapsed", set_chat_collapsed)
     bus.register_intent("scene", "sendMessage", send_message)
