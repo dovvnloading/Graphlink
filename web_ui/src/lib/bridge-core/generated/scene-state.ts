@@ -32,6 +32,9 @@ export interface SceneState {
   pins: ScenePinRow[];
   snapToGrid: boolean;
   dragFactor: number;
+  fontFamily: string;
+  fontSizePt: number;
+  fontColor: string;
   minCompatibleSchemaVersion?: number | null;
 }
 
@@ -166,6 +169,21 @@ function checkSceneState(value: unknown, path: string, errors: string[]): void {
     const fieldValue = value["dragFactor"];
     if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.dragFactor: missing required field`);
     else { if (typeof fieldValue !== "number") errors.push(`${path}.dragFactor` + ": expected number"); }
+  }
+  {
+    const fieldValue = value["fontFamily"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.fontFamily: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.fontFamily` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["fontSizePt"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.fontSizePt: missing required field`);
+    else { if (typeof fieldValue !== "number") errors.push(`${path}.fontSizePt` + ": expected number"); }
+  }
+  {
+    const fieldValue = value["fontColor"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.fontColor: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.fontColor` + ": expected string"); }
   }
   {
     const fieldValue = value["minCompatibleSchemaVersion"];

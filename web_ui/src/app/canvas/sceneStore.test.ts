@@ -29,6 +29,9 @@ function validScenePayload(overrides: Record<string, unknown> = {}) {
     pins: [],
     snapToGrid: true,
     dragFactor: 0.5,
+    fontFamily: "Segoe UI",
+    fontSizePt: 9,
+    fontColor: "#F0F0F0",
     ...overrides,
   };
 }
@@ -110,7 +113,7 @@ describe("SceneStore", () => {
     const { transport, listeners } = makeFakeTransport();
     const store = new SceneStore(transport);
     store.connect();
-    expect(listeners.size).toBe(2);
+    expect(listeners.size).toBe(4);
     store.dispose();
     expect(listeners.size).toBe(0);
   });

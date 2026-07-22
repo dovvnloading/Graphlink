@@ -5,7 +5,6 @@ import {
   MiniMap,
   Position,
   ReactFlow,
-  ReactFlowProvider,
   useReactFlow,
   useStore,
   type Connection,
@@ -74,7 +73,6 @@ function toFlowEdges(scene: SceneState): Edge[] {
 function CanvasInner({ store }: { store: SceneStore }) {
   const scene = useSyncExternalStore(store.subscribe, store.getScene);
   const grid = useSyncExternalStore(store.subscribe, store.getGrid);
-  const { setCenter } = useReactFlow();
 
   // Local node state exists so dragging is fluid; backend snapshots are the
   // truth and reconcile in whenever nothing is being dragged. dragStartRef
@@ -153,11 +151,6 @@ function CanvasInner({ store }: { store: SceneStore }) {
     [screenToFlowPosition, store],
   );
 
-  const jumpToPin = useCallback(
-    (x: number, y: number) => setCenter(x, y, { zoom: 1, duration: 300 }),
-    [setCenter],
-  );
-
   return (
     <div className="scene-canvas" onDoubleClick={onDoubleClick}>
       <ReactFlow
@@ -187,72 +180,14 @@ function CanvasInner({ store }: { store: SceneStore }) {
         />
         <MiniMap pannable zoomable className="scene-minimap" />
       </ReactFlow>
-      <PinsPanel store={store} onJump={jumpToPin} />
     </div>
   );
 }
 
-function PinsPanel({
-  store,
-  onJump,
-}: {
-  store: SceneStore;
-  onJump: (x: number, y: number) => void;
-}) {
-  const scene = useSyncExternalStore(store.subscribe, store.getScene);
-  const { getViewport } = useReactFlow();
-
-  const addPinHere = useCallback(() => {
-    // Pin the current view center - the R1 equivalent of the Qt canvas's
-    // "Pin this location" context-menu verb.
-    const viewport = getViewport();
-    const centerX = (window.innerWidth / 2 - viewport.x) / viewport.zoom;
-    const centerY = (window.innerHeight / 2 - viewport.y) / viewport.zoom;
-    store.addPin(`Pin ${scene.pins.length + 1}`, centerX, centerY);
-  }, [getViewport, scene.pins.length, store]);
-
-  return (
-    <aside className="scene-pins" aria-label="Navigation pins">
-      <div className="scene-pins-header">
-        <span className="scene-pins-title">PINS</span>
-        <button type="button" className="scene-pins-add" onClick={addPinHere}>
-          + Pin view
-        </button>
-      </div>
-      {scene.pins.length === 0 ? (
-        <p className="scene-pins-empty">No pins yet.</p>
-      ) : (
-        <ul className="scene-pins-list">
-          {scene.pins.map((pin) => (
-            <li key={pin.id} className="scene-pins-row">
-              <button
-                type="button"
-                className="scene-pins-jump"
-                onClick={() => onJump(pin.x, pin.y)}
-                title={pin.note || pin.title}
-              >
-                {pin.title}
-              </button>
-              <button
-                type="button"
-                className="scene-pins-remove"
-                aria-label={`Remove ${pin.title}`}
-                onClick={() => store.removePin(pin.id)}
-              >
-                ×
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </aside>
-  );
-}
-
+// The ReactFlowProvider lives in App (R2): the app bar's zoom/fit buttons and
+// the R2.4 PinOverlay (jump-to-pin via setCenter) need the same React Flow
+// instance the canvas renders into - pins moved out to their own overlay,
+// ported with real search + rename/note editing (R2.4).
 export function SceneCanvas({ store }: { store: SceneStore }) {
-  return (
-    <ReactFlowProvider>
-      <CanvasInner store={store} />
-    </ReactFlowProvider>
-  );
+  return <CanvasInner store={store} />;
 }

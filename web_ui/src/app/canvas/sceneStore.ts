@@ -11,6 +11,8 @@
 import { TOPIC_VALIDATORS } from "../../lib/api-contract/topics";
 import type { SceneState } from "../../lib/bridge-core/generated/scene-state";
 import type { GridControlState } from "../../lib/bridge-core/generated/grid-control-state";
+import type { DragSpeedState } from "../../lib/bridge-core/generated/drag-speed-state";
+import type { FontControlState } from "../../lib/bridge-core/generated/font-control-state";
 import type { WsTransport } from "../../lib/ws/transport";
 
 export const initialSceneState: SceneState = {
@@ -22,6 +24,28 @@ export const initialSceneState: SceneState = {
   pins: [],
   snapToGrid: false,
   dragFactor: 1,
+  fontFamily: "Segoe UI",
+  fontSizePt: 9,
+  fontColor: "#F0F0F0",
+};
+
+export const initialDragSpeedState: DragSpeedState = {
+  schemaVersion: 1,
+  minCompatibleSchemaVersion: 1,
+  revision: 0,
+  percentPresets: [25, 50, 75, 100],
+  percentMin: 5,
+  percentMax: 100,
+};
+
+export const initialFontControlState: FontControlState = {
+  schemaVersion: 1,
+  minCompatibleSchemaVersion: 1,
+  revision: 0,
+  fontFamilies: ["Segoe UI"],
+  colorPresets: [],
+  sizeMin: 8,
+  sizeMax: 16,
 };
 
 export const initialGridState: GridControlState = {
@@ -42,31 +66,31 @@ type Listener = () => void;
 export class SceneStore {
   private scene: SceneState = initialSceneState;
   private grid: GridControlState = initialGridState;
+  private dragConfig: DragSpeedState = initialDragSpeedState;
+  private fontConfig: FontControlState = initialFontControlState;
   private readonly listeners = new Set<Listener>();
   private readonly unsubscribers: Array<() => void> = [];
 
   constructor(private readonly transport: WsTransport) {}
 
+  private bind<T>(topic: keyof typeof TOPIC_VALIDATORS, assign: (value: T) => void): () => void {
+    return this.transport.subscribe(topic, (payload) => {
+      const validated = TOPIC_VALIDATORS[topic](payload);
+      if (validated.ok) {
+        assign(validated.value as T);
+        this.emit();
+      } else {
+        console.error(`[${topic}] rejected snapshot:`, validated.errors);
+      }
+    });
+  }
+
   connect(): void {
     this.unsubscribers.push(
-      this.transport.subscribe("scene", (payload) => {
-        const validated = TOPIC_VALIDATORS["scene"](payload);
-        if (validated.ok) {
-          this.scene = validated.value;
-          this.emit();
-        } else {
-          console.error("[scene] rejected snapshot:", validated.errors);
-        }
-      }),
-      this.transport.subscribe("grid-control", (payload) => {
-        const validated = TOPIC_VALIDATORS["grid-control"](payload);
-        if (validated.ok) {
-          this.grid = validated.value;
-          this.emit();
-        } else {
-          console.error("[grid-control] rejected snapshot:", validated.errors);
-        }
-      }),
+      this.bind<SceneState>("scene", (v) => (this.scene = v)),
+      this.bind<GridControlState>("grid-control", (v) => (this.grid = v)),
+      this.bind<DragSpeedState>("drag-speed", (v) => (this.dragConfig = v)),
+      this.bind<FontControlState>("font-control", (v) => (this.fontConfig = v)),
     );
   }
 
@@ -82,6 +106,8 @@ export class SceneStore {
 
   getScene = (): SceneState => this.scene;
   getGrid = (): GridControlState => this.grid;
+  getDragConfig = (): DragSpeedState => this.dragConfig;
+  getFontConfig = (): FontControlState => this.fontConfig;
 
   private emit(): void {
     for (const listener of [...this.listeners]) listener();
@@ -113,6 +139,10 @@ export class SceneStore {
     this.transport.intent("scene", "addPin", [title, x, y, note]);
   }
 
+  updatePin(id: string, title: string, note: string): void {
+    this.transport.intent("scene", "updatePin", [id, title, note]);
+  }
+
   removePin(id: string): void {
     this.transport.intent("scene", "removePin", [id]);
   }
@@ -123,6 +153,40 @@ export class SceneStore {
 
   setDragFactor(factor: number): void {
     this.transport.intent("scene", "setDragFactor", [factor]);
+  }
+
+  organizeNodes(): void {
+    this.transport.intent("scene", "organizeNodes", []);
+  }
+
+  // Grid intents ride the grid-control topic; font intents ride scene - both
+  // keep the legacy bridges' @Slot names 1:1 (backend/canvas.py contract).
+  setGridSize(size: number): void {
+    this.transport.intent("grid-control", "setGridSize", [size]);
+  }
+
+  setGridOpacityPercent(percent: number): void {
+    this.transport.intent("grid-control", "setGridOpacityPercent", [percent]);
+  }
+
+  setGridStyle(style: string): void {
+    this.transport.intent("grid-control", "setGridStyle", [style]);
+  }
+
+  setGridColor(hex: string): void {
+    this.transport.intent("grid-control", "setGridColor", [hex]);
+  }
+
+  setFontFamily(family: string): void {
+    this.transport.intent("scene", "setFontFamily", [family]);
+  }
+
+  setFontSize(sizePt: number): void {
+    this.transport.intent("scene", "setFontSize", [sizePt]);
+  }
+
+  setFontColor(hex: string): void {
+    this.transport.intent("scene", "setFontColor", [hex]);
   }
 }
 

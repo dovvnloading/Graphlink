@@ -482,6 +482,53 @@ GENERATED_ARTIFACTS = [
         "schema_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "scene-state.schema.json",
         "ts_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "scene-state.ts",
     },
+    {
+        # Qt-removal plan R2.3: the SPA composer topic (backend/composer.py)
+        # - deliberately distinct from ComposerStatePayload (no `theme`
+        # field; see graphlink_app_composer_payload.py's docstring).
+        "dataclass": None,  # resolved lazily in main() to avoid importing
+        "dataclass_import": ("graphlink_app_composer_payload", "AppComposerStatePayload"),
+        "title": "AppComposerState",
+        "source": "graphlink_app/graphlink_app_composer_payload.py::AppComposerStatePayload",
+        "schema_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "app-composer-state.schema.json",
+        "ts_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "app-composer-state.ts",
+    },
+    {
+        # Qt-removal plan R2.5: the SPA about topic (backend/about.py).
+        "dataclass": None,  # resolved lazily in main() to avoid importing
+        "dataclass_import": ("graphlink_app_about_payload", "AppAboutStatePayload"),
+        "title": "AppAboutState",
+        "source": "graphlink_app/graphlink_app_about_payload.py::AppAboutStatePayload",
+        "schema_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "app-about-state.schema.json",
+        "ts_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "app-about-state.ts",
+    },
+    {
+        # Qt-removal plan R2.5: the SPA plugins topic (backend/plugins.py).
+        "dataclass": None,  # resolved lazily in main() to avoid importing
+        "dataclass_import": ("graphlink_app_plugins_payload", "AppPluginsStatePayload"),
+        "title": "AppPluginsState",
+        "source": "graphlink_app/graphlink_app_plugins_payload.py::AppPluginsStatePayload",
+        "schema_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "app-plugins-state.schema.json",
+        "ts_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "app-plugins-state.ts",
+    },
+    {
+        # Qt-removal plan R2.5d: the SPA settings topic (backend/settings.py).
+        "dataclass": None,  # resolved lazily in main() to avoid importing
+        "dataclass_import": ("graphlink_app_settings_payload", "AppSettingsStatePayload"),
+        "title": "AppSettingsState",
+        "source": "graphlink_app/graphlink_app_settings_payload.py::AppSettingsStatePayload",
+        "schema_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "app-settings-state.schema.json",
+        "ts_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "app-settings-state.ts",
+    },
+    {
+        # Qt-removal plan R2.5e: the SPA chat-library topic (backend/chat_library.py).
+        "dataclass": None,  # resolved lazily in main() to avoid importing
+        "dataclass_import": ("graphlink_app_chat_library_payload", "AppChatLibraryStatePayload"),
+        "title": "AppChatLibraryState",
+        "source": "graphlink_app/graphlink_app_chat_library_payload.py::AppChatLibraryStatePayload",
+        "schema_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "app-chat-library-state.schema.json",
+        "ts_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "app-chat-library-state.ts",
+    },
 ]
 
 

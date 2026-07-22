@@ -132,6 +132,20 @@ def test_pin_intents_round_trip_through_the_store():
     asyncio.run(run())
 
 
+def test_update_pin_intent_renames_and_validates():
+    async def run():
+        bus, document, _ = make_bus()
+        pin_id = await bus.dispatch_intent("scene", "addPin", ["Original", 0, 0])
+        await bus.dispatch_intent("scene", "updatePin", [pin_id, "Renamed", "a note"])
+        pin = document.scene_payload()["pins"][0]
+        assert pin["title"] == "Renamed"
+        assert pin["note"] == "a note"
+        with pytest.raises(Exception):
+            await bus.dispatch_intent("scene", "updatePin", [pin_id, "   ", ""])
+
+    asyncio.run(run())
+
+
 def test_grid_intents_use_the_bridge_slot_names_and_publish_grid_topic():
     async def run():
         bus, document, recorder = make_bus()
@@ -152,6 +166,51 @@ def test_unknown_grid_style_is_rejected():
         bus, _, _ = make_bus()
         with pytest.raises(SceneError):
             await bus.dispatch_intent("grid-control", "setGridStyle", ["Sparkles"])
+
+    asyncio.run(run())
+
+
+def test_font_intents_use_bridge_slot_names_and_bound_values():
+    async def run():
+        bus, document, _ = make_bus()
+        await bus.dispatch_intent("scene", "setFontFamily", ["Consolas"])
+        await bus.dispatch_intent("scene", "setFontSize", [99])
+        await bus.dispatch_intent("scene", "setFontColor", ["#C7C7C7"])
+        payload = document.scene_payload()
+        assert payload["fontFamily"] == "Consolas"
+        assert payload["fontSizePt"] == 16, "size clamps to FONT_SIZE_MAX"
+        assert payload["fontColor"] == "#C7C7C7"
+        with pytest.raises(SceneError):
+            await bus.dispatch_intent("scene", "setFontFamily", ["Comic Sans MS"])
+
+    asyncio.run(run())
+
+
+def test_organize_arranges_nodes_in_a_stable_grid():
+    async def run():
+        bus, document, _ = make_bus()
+        for i in range(5):
+            await bus.dispatch_intent("scene", "addNode", [500 - i * 37, i * 91])
+        await bus.dispatch_intent("scene", "organizeNodes", [])
+        positions = {n.id: (n.x, n.y) for n in document.nodes.values()}
+        # 5 nodes -> 3 columns; stable id order fills rows left-to-right.
+        assert positions["n0"] == (0.0, 0.0)
+        assert positions["n1"] == (260.0, 0.0)
+        assert positions["n2"] == (520.0, 0.0)
+        assert positions["n3"] == (0.0, 180.0)
+        assert positions["n4"] == (260.0, 180.0)
+
+    asyncio.run(run())
+
+
+def test_preset_topics_match_generated_validator_shapes():
+    async def run():
+        bus, _, recorder = make_bus()
+        drag = await bus.publish("drag-speed")
+        font = await bus.publish("font-control")
+        assert set(drag) >= {"percentPresets", "percentMin", "percentMax"}
+        assert set(font) >= {"fontFamilies", "colorPresets", "sizeMin", "sizeMax"}
+        assert len(font["fontFamilies"]) == 16
 
     asyncio.run(run())
 

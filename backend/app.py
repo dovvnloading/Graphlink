@@ -30,9 +30,18 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from graphlink_licensing import SettingsManager
+
 from backend import BACKEND_VERSION
+from backend.about import register_about
 from backend.canvas import register_canvas
+from backend.chat_library import register_chat_library
+from backend.composer import register_composer
 from backend.events import EventBus, SessionBus, UnknownIntentError, UnknownTopicError
+from backend.notifications import register_notifications
+from backend.plugins import register_plugins
+from backend.settings import register_settings
+from backend.token_counter import register_token_counter
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +49,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 SPA_DIST_DIR = REPO_ROOT / "web_ui" / "dist" / "app"
 
 
-def _configure_session(bus: SessionBus) -> None:
+def _configure_session(bus: SessionBus, settings_manager: SettingsManager, chat_db_path: Path | None) -> None:
     """Give every session the R0 topic surface. Later phases extend this
     with canvas/chrome/node topics - one registrar, one place to read the
     whole API surface."""
@@ -60,10 +69,31 @@ def _configure_session(bus: SessionBus) -> None:
     # R1 (doc/QT_REMOVAL_PLAN.md): scene document + grid topics.
     register_canvas(bus)
 
+    # R2: composer draft/reasoning, token counter, notifications.
+    token_counter = register_token_counter(bus)
+    register_composer(bus, token_counter)
+    notifications_state = register_notifications(bus)
 
-def create_app(spa_dir: Path | None = None) -> FastAPI:
+    # R2.5: about, plugins, settings, chat library.
+    register_about(bus)
+    register_plugins(bus, notifications_state)
+    register_settings(bus, settings_manager)
+    register_chat_library(bus, chat_db_path)
+
+
+def create_app(
+    spa_dir: Path | None = None,
+    settings_state_file: Path | None = None,
+    chat_db_path: Path | None = None,
+) -> FastAPI:
     app = FastAPI(title="Graphlink backend", version=BACKEND_VERSION)
-    bus = EventBus(configure_session=_configure_session)
+    # ONE SettingsManager for the whole app (it owns a single shared
+    # ~/.graphlink/session.dat file), shared across every session rather
+    # than reconstructed per-session - see backend/settings.py's docstring.
+    settings_manager = SettingsManager(settings_state_file)
+    bus = EventBus(
+        configure_session=lambda session_bus: _configure_session(session_bus, settings_manager, chat_db_path)
+    )
     app.state.bus = bus
 
     @app.get("/api/health")

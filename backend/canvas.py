@@ -21,6 +21,7 @@ document IS the source of truth the window can reload against.
 from __future__ import annotations
 
 import itertools
+import math
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -41,6 +42,27 @@ GRID_COLOR_PRESETS = ["#404040", "#555555", "#4a90d9", "#2f5b3c", "#5b2f4f"]
 
 DRAG_FACTOR_MIN = 0.05
 DRAG_FACTOR_MAX = 1.0
+
+# R2: the View popover's Drag/Font sections. Values carried over verbatim
+# from graphlink_drag_speed_bridge.py / graphlink_font_control_bridge.py
+# (both Qt modules scheduled for deletion; these constants are pure data).
+DRAG_PERCENT_PRESETS = [25, 50, 75, 100]
+DRAG_PERCENT_MIN = 5
+DRAG_PERCENT_MAX = 100
+FONT_FAMILIES = [
+    "Segoe UI", "Arial", "Verdana", "Tahoma", "Consolas",
+    "Calibri", "Cambria", "Lucida Grande", "Trebuchet MS",
+    "Courier New", "Times New Roman", "Georgia", "System UI",
+    "DejaVu Sans", "Segoe UI Variable", "Arial Rounded MT Bold",
+]
+FONT_COLOR_PRESETS = ["#F0F0F0", "#C7C7C7", "#949494", "#818181"]
+FONT_SIZE_MIN = 8
+FONT_SIZE_MAX = 16
+
+# Organize: the R2 tidy-layout for placeholder nodes (the Qt organize used
+# node-size-aware packing; that returns with real nodes in R3).
+ORGANIZE_SPACING_X = 260
+ORGANIZE_SPACING_Y = 180
 
 
 class SceneError(ValueError):
@@ -75,6 +97,11 @@ class SceneDocument:
     grid: GridViewSettings = field(default_factory=GridViewSettings)
     snap_to_grid: bool = False
     drag_factor: float = 1.0
+    # Canvas font (ChatScene's setFontFamily/-Size/-Color state, R2): defaults
+    # match the legacy scene's own construction-time values.
+    font_family: str = "Segoe UI"
+    font_size_pt: int = 9
+    font_color: str = "#F0F0F0"
     _counter: itertools.count = field(default_factory=itertools.count, repr=False)
 
     # -- nodes -------------------------------------------------------------
@@ -127,6 +154,26 @@ class SceneDocument:
     def set_drag_factor(self, factor: float) -> None:
         self.drag_factor = max(DRAG_FACTOR_MIN, min(DRAG_FACTOR_MAX, float(factor)))
 
+    def set_font(self, *, family: str | None = None, size_pt: int | None = None, color: str | None = None) -> None:
+        if family is not None:
+            if family not in FONT_FAMILIES:
+                raise SceneError(f"unknown font family: {family}")
+            self.font_family = family
+        if size_pt is not None:
+            self.font_size_pt = max(FONT_SIZE_MIN, min(FONT_SIZE_MAX, int(size_pt)))
+        if color is not None:
+            self.font_color = str(color)
+
+    def organize(self) -> None:
+        """Tidy layout: nodes into a near-square grid, stable id order."""
+        ordered = sorted(self.nodes.values(), key=lambda n: n.id)
+        if not ordered:
+            return
+        columns = max(1, math.ceil(math.sqrt(len(ordered))))
+        for index, node in enumerate(ordered):
+            node.x = float((index % columns) * ORGANIZE_SPACING_X)
+            node.y = float((index // columns) * ORGANIZE_SPACING_Y)
+
     # -- snapshots ---------------------------------------------------------
 
     def scene_payload(self) -> dict[str, Any]:
@@ -151,6 +198,9 @@ class SceneDocument:
             ],
             "snapToGrid": self.snap_to_grid,
             "dragFactor": self.drag_factor,
+            "fontFamily": self.font_family,
+            "fontSizePt": self.font_size_pt,
+            "fontColor": self.font_color,
         }
 
     def grid_payload(self) -> dict[str, Any]:
@@ -177,6 +227,26 @@ def register_canvas(bus: SessionBus) -> SceneDocument:
 
     bus.register_topic("scene", document.scene_payload)
     bus.register_topic("grid-control", document.grid_payload)
+    # Static preset topics, field-for-field the DragSpeedStatePayload /
+    # FontControlStatePayload shapes so the generated validators apply
+    # unchanged (same reuse as grid-control).
+    bus.register_topic(
+        "drag-speed",
+        lambda: {
+            "percentPresets": list(DRAG_PERCENT_PRESETS),
+            "percentMin": DRAG_PERCENT_MIN,
+            "percentMax": DRAG_PERCENT_MAX,
+        },
+    )
+    bus.register_topic(
+        "font-control",
+        lambda: {
+            "fontFamilies": list(FONT_FAMILIES),
+            "colorPresets": list(FONT_COLOR_PRESETS),
+            "sizeMin": FONT_SIZE_MIN,
+            "sizeMax": FONT_SIZE_MAX,
+        },
+    )
 
     async def publish_scene():
         await bus.publish("scene")
@@ -222,6 +292,15 @@ def register_canvas(bus: SessionBus) -> SceneDocument:
         document.pins.remove(pin_id)
         await publish_scene()
 
+    async def update_pin(pin_id, title, note):
+        # NavigationPinRecord.create() validation (non-empty/length-bounded
+        # title, length-bounded note) runs via with_updates -> create's own
+        # field validators, same as add_pin's path - a bad edit raises
+        # NavigationPinValidationError, which is a ValueError subclass and
+        # therefore already reported to the caller as an intent error.
+        document.pins.update(pin_id, title=str(title), note=str(note))
+        await publish_scene()
+
     async def set_snap_to_grid(enabled):
         document.snap_to_grid = bool(enabled)
         await publish_scene()
@@ -238,8 +317,32 @@ def register_canvas(bus: SessionBus) -> SceneDocument:
     bus.register_intent("scene", "addPin", add_pin)
     bus.register_intent("scene", "movePin", move_pin)
     bus.register_intent("scene", "removePin", remove_pin)
+    bus.register_intent("scene", "updatePin", update_pin)
     bus.register_intent("scene", "setSnapToGrid", set_snap_to_grid)
     bus.register_intent("scene", "setDragFactor", set_drag_factor)
+
+    async def organize_nodes():
+        document.organize()
+        await publish_scene()
+
+    async def set_font_family(family):
+        document.set_font(family=family)
+        await publish_scene()
+
+    async def set_font_size(size_pt):
+        document.set_font(size_pt=size_pt)
+        await publish_scene()
+
+    async def set_font_color(color_hex):
+        document.set_font(color=color_hex)
+        await publish_scene()
+
+    bus.register_intent("scene", "organizeNodes", organize_nodes)
+    # Font intent names == FontControlBridge's @Slot names, same 1:1 rule as
+    # grid; they live on the scene topic because the VALUES are scene state.
+    bus.register_intent("scene", "setFontFamily", set_font_family)
+    bus.register_intent("scene", "setFontSize", set_font_size)
+    bus.register_intent("scene", "setFontColor", set_font_color)
 
     # -- grid intents (names == GridControlBridge @Slot names) -------------
 

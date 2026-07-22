@@ -1,14 +1,32 @@
+import { ReactFlowProvider } from "@xyflow/react";
 import { useEffect, useMemo, useState } from "react";
 import { ConnectionStatus, WsTransport, defaultWsUrl } from "../lib/ws/transport";
 import { SceneCanvas } from "./canvas/SceneCanvas";
 import { SceneStore } from "./canvas/sceneStore";
+import { AboutDialog } from "./chrome/AboutDialog";
+import { AppBar } from "./chrome/AppBar";
+import { ChatLibraryDialog } from "./chrome/ChatLibraryDialog";
+import { CommandPalette } from "./chrome/CommandPalette";
+import { Composer } from "./chrome/Composer";
+import { ComposerStore } from "./chrome/composerStore";
+import { HelpDialog } from "./chrome/HelpDialog";
+import { NotificationBanner } from "./chrome/NotificationBanner";
+import { PinOverlay } from "./chrome/PinOverlay";
+import { PluginPicker } from "./chrome/PluginPicker";
+import { SearchOverlay } from "./chrome/SearchOverlay";
+import { SettingsDialog } from "./chrome/SettingsDialog";
+import { TokenCounter } from "./chrome/TokenCounter";
+import { ViewPopover } from "./chrome/ViewPopover";
+import { OverlayProvider, useOverlays } from "./overlays/overlays";
 
 /**
- * The single-app shell (Qt-removal plan R0).
+ * The single-app shell (Qt-removal plan R0-R2).
  *
- * R0 scope on purpose: layout regions where the real surfaces land in later
- * phases (R1 canvas, R2 chrome, R3 nodes), plus the live system panel that
- * proves the Python backend round-trip - the R0 acceptance criterion.
+ * R0 laid the transport + layout; R1 put the React Flow canvas in the
+ * middle; R2 replaces the placeholder header with the real app bar, mounts
+ * the overlay system, and consolidates the chrome surfaces. The
+ * ReactFlowProvider wraps the WHOLE shell so the app bar's viewport
+ * controls and the canvas share one React Flow instance.
  */
 
 interface SystemState {
@@ -18,88 +36,114 @@ interface SystemState {
   revision?: number;
 }
 
+interface SettingsVisibilityState {
+  showTokenCounter?: boolean;
+}
+
+// Ctrl/Cmd+K opens the command palette, Ctrl/Cmd+F the canvas search -
+// the conventional bindings the legacy islands' own keyPressEvent handlers
+// used. Lives inside OverlayProvider (needs useOverlays()), so it is its
+// own small component rather than inline in App().
+function GlobalShortcuts() {
+  const overlays = useOverlays();
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      const mod = event.ctrlKey || event.metaKey;
+      if (mod && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        overlays.toggle("palette", "dialog");
+      } else if (mod && event.key.toLowerCase() === "f") {
+        event.preventDefault();
+        overlays.toggle("search", "popover");
+      }
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [overlays]);
+  return null;
+}
+
 function App() {
   const [status, setStatus] = useState<ConnectionStatus>("closed");
   const [system, setSystem] = useState<SystemState>({});
-  const [pingMs, setPingMs] = useState<number | null>(null);
-  const [pingError, setPingError] = useState<string | null>(null);
+  // showTokenCounter defaults true (matches AppSettingsStatePayload's
+  // default and the legacy AppearanceSettingsWidget's own initial state)
+  // until the real snapshot arrives, so the overlay doesn't flash hidden.
+  const [settingsVisibility, setSettingsVisibility] = useState<SettingsVisibilityState>({ showTokenCounter: true });
 
   const transport = useMemo(() => new WsTransport(defaultWsUrl()), []);
   const sceneStore = useMemo(() => new SceneStore(transport), [transport]);
+  const composerStore = useMemo(() => new ComposerStore(transport), [transport]);
 
   useEffect(() => {
     const offStatus = transport.onStatus(setStatus);
     const offSystem = transport.subscribe("system", (payload) => {
       setSystem(payload as SystemState);
     });
+    const offSettings = transport.subscribe("app-settings", (payload) => {
+      setSettingsVisibility(payload as SettingsVisibilityState);
+    });
     sceneStore.connect();
+    composerStore.connect();
     transport.connect();
     return () => {
       offStatus();
       offSystem();
+      offSettings();
       sceneStore.dispose();
+      composerStore.dispose();
       transport.dispose();
     };
-  }, [transport, sceneStore]);
-
-  async function ping() {
-    setPingError(null);
-    const started = performance.now();
-    try {
-      await transport.request("system", "ping", ["r0-acceptance"]);
-      setPingMs(Math.round((performance.now() - started) * 10) / 10);
-    } catch (error) {
-      setPingMs(null);
-      setPingError(error instanceof Error ? error.message : String(error));
-    }
-  }
+  }, [transport, sceneStore, composerStore]);
 
   return (
-    <div className="app-shell">
-      <header className="app-topbar">
-        <span className="app-title">Graphlink</span>
-        <span className="app-topbar-note">app bar lands in R2</span>
-        <span className={`app-conn app-conn-${status}`}>
-          {status === "open" ? "backend connected" : status}
-        </span>
-      </header>
+    <OverlayProvider>
+      <ReactFlowProvider>
+        <GlobalShortcuts />
+        <div className="app-shell">
+          <header className="app-topbar">
+            <span className="app-title">Graphlink</span>
+            <AppBar store={sceneStore} />
+            <span className={`app-conn app-conn-${status}`} title={`backend ${system.backendVersion ?? ""}`}>
+              {status === "open" ? "connected" : status}
+            </span>
+          </header>
 
-      <main className="app-canvas-region">
-        <SceneCanvas store={sceneStore} />
+          <main className="app-canvas-region">
+            <SceneCanvas store={sceneStore} />
+            <div className="app-search-layer">
+              <SearchOverlay store={sceneStore} />
+            </div>
+            <div className="app-pins-layer">
+              <PinOverlay store={sceneStore} />
+            </div>
+            <div className="app-popover-layer">
+              <ViewPopover store={sceneStore} />
+            </div>
+            <div className="app-plugins-layer">
+              <PluginPicker transport={transport} />
+            </div>
+            {settingsVisibility.showTokenCounter !== false && (
+              <div className="app-token-counter-layer">
+                <TokenCounter store={composerStore} />
+              </div>
+            )}
+            <div className="app-notification-layer">
+              <NotificationBanner store={composerStore} />
+            </div>
+            <CommandPalette store={sceneStore} />
+            <AboutDialog transport={transport} />
+            <HelpDialog />
+            <SettingsDialog transport={transport} />
+            <ChatLibraryDialog transport={transport} />
+          </main>
 
-        <section className="app-system-panel" aria-label="Backend status">
-          <p className="app-system-title">SYSTEM</p>
-          <dl className="app-system-rows">
-            <div className="app-system-row">
-              <dt>Backend</dt>
-              <dd>{system.backendVersion ?? "—"}</dd>
-            </div>
-            <div className="app-system-row">
-              <dt>Session</dt>
-              <dd>{system.sessionId ?? "—"}</dd>
-            </div>
-            <div className="app-system-row">
-              <dt>Revision</dt>
-              <dd>{system.revision ?? "—"}</dd>
-            </div>
-          </dl>
-          <button
-            type="button"
-            className="app-ping-button"
-            onClick={ping}
-            disabled={status !== "open"}
-          >
-            Ping backend
-          </button>
-          {pingMs !== null && <p className="app-ping-result">round-trip {pingMs} ms</p>}
-          {pingError !== null && <p className="app-ping-error">{pingError}</p>}
-        </section>
-      </main>
-
-      <footer className="app-composer-region">
-        <div className="app-composer-placeholder">Composer dock lands in R2.</div>
-      </footer>
-    </div>
+          <footer className="app-composer-region">
+            <Composer store={composerStore} />
+          </footer>
+        </div>
+      </ReactFlowProvider>
+    </OverlayProvider>
   );
 }
 
