@@ -86,6 +86,19 @@ def _normalize_repo_path(path_text):
     normalized = PurePosixPath(raw_path)
     if normalized.is_absolute() or ".." in normalized.parts:
         raise RuntimeError("Repository paths must stay inside the selected repository.")
+    # A Windows drive letter ("C:/config/app.txt", "C:app.txt") or an NTFS
+    # Alternate Data Stream ("file.txt:hidden") isn't "absolute" by POSIX's
+    # is_absolute() (no leading '/'), so it slipped past the check above -
+    # not as a real escape (_safe_local_target's resolve()+containment check
+    # still catches a genuine cross-drive path), but as silent aliasing:
+    # Windows pathlib treats a same-drive "C:" path segment as a no-op
+    # drive-relative reference rather than a literal folder, so
+    # "C:/config/app.txt" resolved to the exact same target as the plain
+    # "config/app.txt" - not rejected as "absolute-looking input" the way
+    # this guard's own contract says it should be. Reject any ':' in a path
+    # segment loudly instead of letting it collapse silently.
+    if any(":" in part for part in normalized.parts):
+        raise RuntimeError("Repository paths must stay inside the selected repository.")
     return normalized.as_posix()
 
 
