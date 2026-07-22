@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "appName": {
+      "type": "string"
+    },
+    "appVersion": {
+      "type": "string"
+    },
+    "copyrightText": {
+      "type": "string"
+    },
+    "developerGithubUrl": {
+      "type": "string"
+    },
+    "developerName": {
+      "type": "string"
+    },
+    "developerWebsiteUrl": {
+      "type": "string"
+    },
+    "minCompatibleSchemaVersion": {
+      "type": "integer"
+    },
+    "repositoryUrl": {
+      "type": "string"
+    },
+    "revision": {
+      "type": "integer"
+    },
+    "schemaVersion": {
+      "type": "integer"
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "revision",
+    "appName",
+    "appVersion",
+    "repositoryUrl",
+    "developerName",
+    "developerWebsiteUrl",
+    "developerGithubUrl",
+    "copyrightText"
+  ],
+  "title": "AppAboutState",
+  "type": "object"
+}

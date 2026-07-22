@@ -139,5 +139,12 @@ export function buildCommands(
       run: () => overlays.open("about", "dialog"),
       enabled: () => true,
     },
+    {
+      id: "open-plugins",
+      name: "Open Plugins",
+      aliases: ["plugin picker", "add node"],
+      run: () => overlays.open("plugins", "popover"),
+      enabled: () => true,
+    },
   ];
 }

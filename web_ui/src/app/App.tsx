@@ -3,13 +3,18 @@ import { useEffect, useMemo, useState } from "react";
 import { ConnectionStatus, WsTransport, defaultWsUrl } from "../lib/ws/transport";
 import { SceneCanvas } from "./canvas/SceneCanvas";
 import { SceneStore } from "./canvas/sceneStore";
+import { AboutDialog } from "./chrome/AboutDialog";
 import { AppBar } from "./chrome/AppBar";
+import { ChatLibraryDialog } from "./chrome/ChatLibraryDialog";
 import { CommandPalette } from "./chrome/CommandPalette";
 import { Composer } from "./chrome/Composer";
 import { ComposerStore } from "./chrome/composerStore";
+import { HelpDialog } from "./chrome/HelpDialog";
 import { NotificationBanner } from "./chrome/NotificationBanner";
 import { PinOverlay } from "./chrome/PinOverlay";
+import { PluginPicker } from "./chrome/PluginPicker";
 import { SearchOverlay } from "./chrome/SearchOverlay";
+import { SettingsDialog } from "./chrome/SettingsDialog";
 import { TokenCounter } from "./chrome/TokenCounter";
 import { ViewPopover } from "./chrome/ViewPopover";
 import { OverlayProvider, useOverlays } from "./overlays/overlays";
@@ -29,6 +34,10 @@ interface SystemState {
   backendVersion?: string;
   sessionId?: string;
   revision?: number;
+}
+
+interface SettingsVisibilityState {
+  showTokenCounter?: boolean;
 }
 
 // Ctrl/Cmd+K opens the command palette, Ctrl/Cmd+F the canvas search -
@@ -57,6 +66,10 @@ function GlobalShortcuts() {
 function App() {
   const [status, setStatus] = useState<ConnectionStatus>("closed");
   const [system, setSystem] = useState<SystemState>({});
+  // showTokenCounter defaults true (matches AppSettingsStatePayload's
+  // default and the legacy AppearanceSettingsWidget's own initial state)
+  // until the real snapshot arrives, so the overlay doesn't flash hidden.
+  const [settingsVisibility, setSettingsVisibility] = useState<SettingsVisibilityState>({ showTokenCounter: true });
 
   const transport = useMemo(() => new WsTransport(defaultWsUrl()), []);
   const sceneStore = useMemo(() => new SceneStore(transport), [transport]);
@@ -67,12 +80,16 @@ function App() {
     const offSystem = transport.subscribe("system", (payload) => {
       setSystem(payload as SystemState);
     });
+    const offSettings = transport.subscribe("app-settings", (payload) => {
+      setSettingsVisibility(payload as SettingsVisibilityState);
+    });
     sceneStore.connect();
     composerStore.connect();
     transport.connect();
     return () => {
       offStatus();
       offSystem();
+      offSettings();
       sceneStore.dispose();
       composerStore.dispose();
       transport.dispose();
@@ -103,13 +120,22 @@ function App() {
             <div className="app-popover-layer">
               <ViewPopover store={sceneStore} />
             </div>
-            <div className="app-token-counter-layer">
-              <TokenCounter store={composerStore} />
+            <div className="app-plugins-layer">
+              <PluginPicker transport={transport} />
             </div>
+            {settingsVisibility.showTokenCounter !== false && (
+              <div className="app-token-counter-layer">
+                <TokenCounter store={composerStore} />
+              </div>
+            )}
             <div className="app-notification-layer">
               <NotificationBanner store={composerStore} />
             </div>
             <CommandPalette store={sceneStore} />
+            <AboutDialog transport={transport} />
+            <HelpDialog />
+            <SettingsDialog transport={transport} />
+            <ChatLibraryDialog transport={transport} />
           </main>
 
           <footer className="app-composer-region">

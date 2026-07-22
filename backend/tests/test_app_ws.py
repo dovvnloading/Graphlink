@@ -2,6 +2,7 @@
 subscribe snapshots, the system/ping acceptance round-trip, and error paths.
 Runs the real ASGI app through Starlette's TestClient - no network, no Qt."""
 
+import tempfile
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -14,7 +15,18 @@ def make_client(tmp_path: Path | None = None) -> TestClient:
     # Point spa_dir at a guaranteed-missing directory: R0 tests exercise the
     # API surface, not the static build (the acceptance drive covers that).
     spa = tmp_path if tmp_path is not None else Path("__no_such_dir__")
-    return TestClient(create_app(spa_dir=spa))
+    # R2.5d/e: create_app() now builds a real SettingsManager and a real
+    # chats.db path - always point both at a fresh temp dir so tests never
+    # read or mutate the developer's actual ~/.graphlink/session.dat or
+    # ~/.graphlink/chats.db.
+    temp_dir = Path(tempfile.mkdtemp())
+    return TestClient(
+        create_app(
+            spa_dir=spa,
+            settings_state_file=temp_dir / "session.dat",
+            chat_db_path=temp_dir / "chats.db",
+        )
+    )
 
 
 def test_health_reports_ok_and_version():
@@ -44,11 +56,15 @@ def test_subscribe_without_topics_sends_every_registered_topic():
     client = make_client()
     with client.websocket_connect("/ws") as ws:
         ws.send_json({"kind": "subscribe"})
-        # R2 surface: canvas + View-popover + composer/counter/notification
-        # topics, sorted.
-        topics = [ws.receive_json()["topic"] for _ in range(8)]
+        # R2 surface: canvas + View-popover + composer/counter/notification +
+        # R2.5 about/plugins/settings/chat-library topics, sorted.
+        topics = [ws.receive_json()["topic"] for _ in range(12)]
         assert topics == [
+            "app-about",
+            "app-chat-library",
             "app-composer",
+            "app-plugins",
+            "app-settings",
             "drag-speed",
             "font-control",
             "grid-control",

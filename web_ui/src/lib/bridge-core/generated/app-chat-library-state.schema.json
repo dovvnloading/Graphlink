@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "minCompatibleSchemaVersion": {
+      "type": "integer"
+    },
+    "notice": {
+      "type": "string"
+    },
+    "revision": {
+      "type": "integer"
+    },
+    "rows": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "createdLabel": {
+            "type": "string"
+          },
+          "id": {
+            "type": "integer"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updatedLabel": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "createdLabel",
+          "updatedLabel"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "schemaVersion": {
+      "type": "integer"
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "revision",
+    "rows"
+  ],
+  "title": "AppChatLibraryState",
+  "type": "object"
+}
