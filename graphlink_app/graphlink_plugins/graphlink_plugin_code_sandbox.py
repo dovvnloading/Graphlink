@@ -769,9 +769,34 @@ class CodeSandboxNode(QGraphicsObject, HoverAnimationMixin):
             return
         self.is_disposed = True
         worker = getattr(self, "worker_thread", None)
-        if worker and worker.isRunning():
-            worker.stop()
         self.worker_thread = None
+        if worker:
+            try:
+                if worker.isRunning():
+                    worker.stop()
+            except Exception:
+                pass
+            # The run path (graphlink_window_actions.py) wires this worker's
+            # own finished/error/log_update/terminal_chunk/approval_requested
+            # to lambdas carrying node=/thread= default args - PySide6's GC
+            # does not reclaim a lambda connected to a custom Signal
+            # (empirically confirmed), so as long as those connections stand,
+            # this worker and this node are BOTH immortal for the rest of the
+            # process. Disconnecting here breaks that cycle. Mirrors
+            # GitlinkNode.dispose(), the one sibling that already did this.
+            for signal in (worker.finished, worker.error, worker.log_update,
+                           worker.terminal_chunk, worker.approval_requested):
+                try:
+                    signal.disconnect()
+                except (TypeError, RuntimeError):
+                    pass
+            try:
+                if worker.isRunning():
+                    worker.finished.connect(worker.deleteLater)
+                else:
+                    worker.deleteLater()
+            except RuntimeError:
+                pass
 
     def _on_prompt_changed(self):
         self.prompt = self.prompt_input.toPlainText()

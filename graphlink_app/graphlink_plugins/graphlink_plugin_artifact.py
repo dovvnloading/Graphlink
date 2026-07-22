@@ -179,9 +179,50 @@ class ArtifactNode(QGraphicsObject, HoverAnimationMixin):
             return
         self.is_disposed = True
         worker = getattr(self, "worker_thread", None)
-        if worker and worker.isRunning():
-            worker.stop()
         self.worker_thread = None
+        if worker:
+            try:
+                if worker.isRunning():
+                    worker.stop()
+            except Exception:
+                pass
+            # execute_artifact_node (graphlink_window_actions.py) wires this
+            # worker's own finished/error to lambdas carrying node=/thread=
+            # default args - PySide6's GC does not reclaim a lambda connected
+            # to a custom Signal (empirically confirmed; a bound-method
+            # connection is fine), so as long as those connections stand, this
+            # worker and this node are BOTH immortal for the rest of the
+            # process - dispose()'s own is_disposed=True guard never even runs
+            # again because __del__/dispose can no longer fire. Disconnecting
+            # here breaks that cycle. Mirrors GitlinkNode.dispose(), the one
+            # sibling that already did this correctly.
+            for signal in (worker.finished, worker.error):
+                try:
+                    signal.disconnect()
+                except (TypeError, RuntimeError):
+                    pass
+            try:
+                if worker.isRunning():
+                    worker.finished.connect(worker.deleteLater)
+                else:
+                    worker.deleteLater()
+            except RuntimeError:
+                pass
+
+    def __del__(self):
+        # GC-time last resort. ChatScene._teardown_items_before_clear() now
+        # also calls dispose() deterministically on every clear() (New Chat /
+        # chat-switch) - this is defense-in-depth for any path that somehow
+        # bypasses both that and deleteSelectedItems(). Guarded because during
+        # interpreter shutdown the underlying C++ QThread/QObject may already
+        # be deleted,
+        # making dispose()'s worker.isRunning() raise inside __del__ (same
+        # hazard as CodeSandboxNode.__del__, audit finding B5). Mirrors
+        # CodeSandboxNode exactly.
+        try:
+            self.dispose()
+        except Exception:
+            pass
 
     @property
     def width(self):
@@ -308,7 +349,7 @@ class ArtifactNode(QGraphicsObject, HoverAnimationMixin):
             }
         """ + ARTIFACT_SCROLLBAR_STYLE)
         self.instruction_input.textChanged.connect(self._on_instruction_changed)
-        self.instruction_input.submit_requested.connect(lambda: self.artifact_requested.emit(self))
+        self.instruction_input.submit_requested.connect(self._on_instruction_submit_requested)
         input_layout.addWidget(self.instruction_input, stretch=1)
 
         self.update_button = QPushButton()
@@ -400,6 +441,16 @@ class ArtifactNode(QGraphicsObject, HoverAnimationMixin):
 
     def _on_instruction_changed(self):
         self.instruction = self.instruction_input.toPlainText()
+
+    def _on_instruction_submit_requested(self):
+        # Was `submit_requested.connect(lambda: self.artifact_requested.emit(self))`.
+        # A lambda closing over self, connected to a custom (non-widget) Signal,
+        # is NOT a cycle PySide6's GC can break (confirmed empirically - unlike
+        # a signal connected to a bound method, which it collects fine); it held
+        # every ArtifactNode alive forever, silently defeating __del__'s
+        # GC-time dispose() below no matter what New Chat / chat-switch did.
+        # A plain bound method reaches the same target with no such trap.
+        self.artifact_requested.emit(self)
 
     def _on_content_changed(self):
         self.artifact_content = self.raw_editor.toPlainText()

@@ -1711,6 +1711,24 @@ class ChatScene(QGraphicsScene):
         for chart in self.chart_nodes:
             _try_teardown(chart, "dispose")  # ChartItem.dispose() is timer/figure-only
 
+        # Bug-scan finding: dispose() (stops the node's background QThread
+        # worker, and - for the 4 that wire it via a lambda closing over the
+        # node/thread, see each dispose()'s own comment - disconnects the
+        # worker's own signals so neither the worker nor the node is pinned
+        # alive forever) was only ever invoked from deleteSelectedItems(),
+        # never from clear(). New Chat / chat-switching mid-generation left
+        # the worker running with nothing to stop it, for every worker-owning
+        # node type, not just the one (ArtifactNode) this was first noticed
+        # on. GitlinkNode's dispose() already disconnected correctly - it was
+        # equally never being called here either.
+        worker_owning_node_lists = (
+            self.pycoder_nodes, self.code_sandbox_nodes,
+            self.conversation_nodes, self.artifact_nodes, self.gitlink_nodes,
+        )
+        for node_list in worker_owning_node_lists:
+            for node in node_list:
+                _try_teardown(node, "dispose")
+
     def clear(self):
         """
         Clears the entire scene, removing all items and resetting all tracking lists.
