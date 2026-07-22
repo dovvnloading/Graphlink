@@ -149,77 +149,41 @@ def apply_theme(app: QApplication, theme_name: str):
     import graphlink_web_island_host
     graphlink_web_island_host.theme_changed_all()
 
-TASK_TITLE = "task_title"
-TASK_CHAT = "task_chat"
-TASK_CHART = "task_chart"
-TASK_IMAGE_GEN = "task_image_gen"
-TASK_WEB_VALIDATE = "task_web_validate"
-TASK_WEB_SUMMARIZE = "task_web_summarize"
-
-API_PROVIDER_OPENAI = "OpenAI-Compatible"
-API_PROVIDER_ANTHROPIC = "Anthropic Claude"
-API_PROVIDER_GEMINI = "Google Gemini"
-
-LOCAL_PROVIDER_OLLAMA = "Ollama"
-LOCAL_PROVIDER_LLAMACPP = "Llama.cpp"
-
-MODE_OLLAMA_LOCAL = "Ollama (Local)"
-MODE_LLAMACPP_LOCAL = "Llama.cpp (Local)"
-MODE_API_ENDPOINT = "API Endpoint"
-
-OLLAMA_MODELS = {
-    # These are runtime-resolved selections, not product defaults.  An empty
-    # value means the user has not selected a ready local model yet.
-    TASK_TITLE: '',
-    TASK_CHAT: '',
-    TASK_CHART: '',
-    TASK_WEB_VALIDATE: '',
-    TASK_WEB_SUMMARIZE: ''
-}
-
-CURRENT_MODEL = ''
-
-def set_current_model(model_name: str):
-    global CURRENT_MODEL
-    if model_name:
-        CURRENT_MODEL = model_name
-        OLLAMA_MODELS[TASK_CHAT] = model_name
+# Qt-removal plan R4.1: the task/provider/model half of this module moved to
+# the Qt-free graphlink_task_config so api_provider and the new backend can
+# import it without pulling PySide6 into the process. Legacy call sites keep
+# reading everything through this module unchanged:
+# - the constants are immutable strings (safe to re-export by from-import),
+# - OLLAMA_MODELS is the SAME dict object (mutations flow both ways),
+# - set_current_model/sync_ollama_task_models are the same function objects
+#   and mutate graphlink_task_config's own globals,
+# - CURRENT_MODEL is a rebound str global, so a from-import would go stale
+#   the moment set_current_model reassigns it; the module __getattr__ below
+#   delegates reads live instead. (PEP 562 __getattr__ only fires for names
+#   missing from this module's dict - do not from-import CURRENT_MODEL here.)
+from graphlink_task_config import (
+    TASK_TITLE,
+    TASK_CHAT,
+    TASK_CHART,
+    TASK_IMAGE_GEN,
+    TASK_WEB_VALIDATE,
+    TASK_WEB_SUMMARIZE,
+    API_PROVIDER_OPENAI,
+    API_PROVIDER_ANTHROPIC,
+    API_PROVIDER_GEMINI,
+    LOCAL_PROVIDER_OLLAMA,
+    LOCAL_PROVIDER_LLAMACPP,
+    MODE_OLLAMA_LOCAL,
+    MODE_LLAMACPP_LOCAL,
+    MODE_API_ENDPOINT,
+    OLLAMA_MODELS,
+    set_current_model,
+    sync_ollama_task_models,
+)
 
 
-def sync_ollama_task_models(settings_manager):
-    """Populate runtime selections from explicit/inherited/Auto settings.
-
-    The compatibility table remains for callers that already pass a task to
-    :func:`api_provider.chat`, but it no longer contains product-authored model
-    IDs.  Cached discovery is intentionally best-effort; an empty result leaves
-    an Auto task unconfigured until the provider is reachable and the user picks
-    or discovers a model.
-    """
-    from graphlink_model_catalog import ModelDescriptor, resolve_task_model
-
-    if hasattr(settings_manager, "get_ollama_model_assignments"):
-        assignments = settings_manager.get_ollama_model_assignments()
-    else:
-        assignments = {
-            TASK_CHAT: settings_manager.get_ollama_chat_model(),
-            TASK_TITLE: settings_manager.get_ollama_title_model(),
-            TASK_CHART: settings_manager.get_ollama_chart_model(),
-            TASK_WEB_VALIDATE: settings_manager.get_ollama_web_validate_model(),
-            TASK_WEB_SUMMARIZE: settings_manager.get_ollama_web_summarize_model(),
-        }
-
-    cached_models = []
-    if hasattr(settings_manager, "get_ollama_scanned_models"):
-        cached_models = settings_manager.get_ollama_scanned_models()
-    catalog = [ModelDescriptor(model_id=model, provider=LOCAL_PROVIDER_OLLAMA) for model in cached_models]
-    chat_model = resolve_task_model(TASK_CHAT, assignments, catalog)
-    for task in (TASK_CHAT, TASK_TITLE, TASK_CHART, TASK_WEB_VALIDATE, TASK_WEB_SUMMARIZE):
-        OLLAMA_MODELS[task] = resolve_task_model(
-            task,
-            assignments,
-            catalog,
-            chat_model=chat_model,
-        )
-
-    global CURRENT_MODEL
-    CURRENT_MODEL = OLLAMA_MODELS[TASK_CHAT]
+def __getattr__(name):
+    if name == "CURRENT_MODEL":
+        import graphlink_task_config
+        return graphlink_task_config.CURRENT_MODEL
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

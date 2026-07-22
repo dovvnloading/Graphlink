@@ -26,12 +26,16 @@ def _restore_ollama_globals():
     # config.set_current_model()/sync_ollama_task_models(), same class of
     # leak test_theme_tokens.py's own save/restore convention already
     # guards against for config.CURRENT_THEME.
-    original_models = dict(config.OLLAMA_MODELS)
-    original_current_model = config.CURRENT_MODEL
+    # R4.1: the state itself now lives in graphlink_task_config; restore it
+    # THERE - assigning graphlink_config.CURRENT_MODEL would only create a
+    # shadowing attribute on the re-export shim, not restore the real global.
+    import graphlink_task_config
+    original_models = dict(graphlink_task_config.OLLAMA_MODELS)
+    original_current_model = graphlink_task_config.CURRENT_MODEL
     yield
-    config.OLLAMA_MODELS.clear()
-    config.OLLAMA_MODELS.update(original_models)
-    config.CURRENT_MODEL = original_current_model
+    graphlink_task_config.OLLAMA_MODELS.clear()
+    graphlink_task_config.OLLAMA_MODELS.update(original_models)
+    graphlink_task_config.CURRENT_MODEL = original_current_model
 
 
 def _bridge(tmp_path) -> SettingsBridge:

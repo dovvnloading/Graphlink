@@ -31,6 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import pytest
 
 import graphlink_config as config
+import graphlink_task_config
 from graphlink_licensing import SettingsManager
 
 
@@ -45,12 +46,15 @@ def _restore_ollama_globals():
     # its own default-state assertion failed only when run after this file,
     # tracing back to test_auto_tasks_stay_unconfigured_until_discovery's
     # unprotected config.sync_ollama_task_models(manager) call.
-    original_models = dict(config.OLLAMA_MODELS)
-    original_current_model = config.CURRENT_MODEL
+    # R4.1: the state itself now lives in graphlink_task_config; restore it
+    # THERE - assigning graphlink_config.CURRENT_MODEL would only create a
+    # shadowing attribute on the re-export shim, not restore the real global.
+    original_models = dict(graphlink_task_config.OLLAMA_MODELS)
+    original_current_model = graphlink_task_config.CURRENT_MODEL
     yield
-    config.OLLAMA_MODELS.clear()
-    config.OLLAMA_MODELS.update(original_models)
-    config.CURRENT_MODEL = original_current_model
+    graphlink_task_config.OLLAMA_MODELS.clear()
+    graphlink_task_config.OLLAMA_MODELS.update(original_models)
+    graphlink_task_config.CURRENT_MODEL = original_current_model
 
 
 def _make_settings_manager(tmp_path):

@@ -19,7 +19,9 @@ except ImportError:
     requests = None
     REQUESTS_AVAILABLE = False
 
-import graphlink_config as config
+# Qt-removal plan R4.1: import the Qt-free split, not graphlink_config -
+# this module must be importable from backend/ without PySide6 loading.
+import graphlink_task_config as config
 from graphlink_audio import guess_audio_mime_type
 from graphlink_model_catalog import ModelDescriptor, ollama_descriptor, sort_descriptors
 

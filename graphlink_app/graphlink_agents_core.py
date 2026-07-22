@@ -3,7 +3,8 @@ import re
 import threading
 import time
 from PySide6.QtCore import QThread, Signal, QPointF
-import graphlink_config as config
+# Qt-removal plan R4.1: only the Qt-free task-config half is needed here.
+import graphlink_task_config as config
 import api_provider
 from graphlink_token_estimator import TokenEstimator
 from graphlink_memory import trim_history
