@@ -195,6 +195,15 @@ describe("SceneStore", () => {
     ]);
   });
 
+  it("sends html-node intents with the backend's registered names and shapes", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.addHtmlNode(10, 20, "<p>hello</p>", "n1");
+    expect(intents).toEqual([
+      { topic: "scene", intent: "addHtmlNode", args: [10, 20, "<p>hello</p>", "n1"] },
+    ]);
+  });
+
   it("suppresses empty removal intents", () => {
     const { transport, intents } = makeFakeTransport();
     const store = new SceneStore(transport);

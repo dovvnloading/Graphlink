@@ -83,6 +83,10 @@ CODE_TITLE_PREVIEW_LENGTH = 40
 # R3.13: thinking-node titles are prose (a preview of the reasoning text),
 # same as chat's, so it reuses chat's 60-char length rather than code's 40.
 THINKING_TITLE_PREVIEW_LENGTH = 60
+# R3.17: html-node titles preview the raw HTML source, which is prose-like
+# text for truncation purposes (not code), so it reuses chat/thinking's
+# 60-char length rather than code's 40.
+HTML_TITLE_PREVIEW_LENGTH = 60
 
 
 @dataclass
@@ -96,6 +100,9 @@ class SceneNode:
     # graphlink_session/serializers.py's raw_content/is_user/is_collapsed,
     # minus everything Qt-only (paint state, scroll position, docked-child
     # widgets). Unused (default) for every other kind.
+    # R3.17: also reused verbatim as the html node's raw HTML source string -
+    # no separate field, same reuse pattern as R3.5's code text and R3.13's
+    # thinking text living in this same field.
     content: str = ""
     is_user: bool = False
     is_collapsed: bool = False
@@ -375,6 +382,48 @@ class SceneDocument:
         self.connect(parent_id, node_id)
         return node
 
+    def add_html_node(
+        self,
+        x: float,
+        y: float,
+        html_content: str,
+        parent_id: str,
+    ) -> SceneNode:
+        """R3.17's HtmlViewNode equivalent of add_document_node/
+        add_thinking_node: a real raw-HTML-source node. Same as
+        add_document_node/add_thinking_node (and unlike chat/code), parent_id
+        is REQUIRED, not optional - an HtmlViewNode never exists unparented -
+        so this unconditionally connects to its parent, no `if parent_id`
+        guard.
+
+        The raw HTML source reuses the existing `content` field rather than a
+        new one - there is no separate html-content field, same reuse pattern
+        as R3.5's code text and R3.13's thinking text. The backend stores it
+        VERBATIM as an opaque string: it never parses, sanitizes, validates,
+        or otherwise interprets the HTML - that is the frontend's job (the
+        preview render is a 100% client-side action that never round-trips
+        here).
+
+        Html nodes are also NOT branch points (same as code/document/
+        thinking): there is no delete_html_node; deletion goes entirely
+        through the existing generic remove_nodes.
+        """
+        if parent_id not in self.nodes:
+            raise SceneError(f"unknown parent node: {parent_id}")
+        node_id = f"n{next(self._counter)}"
+        title = str(html_content)[:HTML_TITLE_PREVIEW_LENGTH] or "HTML"
+        node = SceneNode(
+            id=node_id,
+            x=float(x),
+            y=float(y),
+            title=title,
+            kind="html",
+            content=str(html_content),
+        )
+        self.nodes[node_id] = node
+        self.connect(parent_id, node_id)
+        return node
+
     def delete_chat_node(self, node_id: str) -> None:
         """Delete one chat node WITHOUT orphaning its branch: children are
         re-parented to the deleted node's own parent (or become roots if it
@@ -647,6 +696,11 @@ def register_canvas(bus: SessionBus, notifications: NotificationState) -> SceneD
         await publish_scene()
         return node.id
 
+    async def add_html_node(x, y, html_content, parent_id):
+        node = document.add_html_node(x, y, html_content, parent_id)
+        await publish_scene()
+        return node.id
+
     async def set_node_docked(node_id, docked):
         document.set_node_docked(node_id, docked)
         await publish_scene()
@@ -724,6 +778,7 @@ def register_canvas(bus: SessionBus, notifications: NotificationState) -> SceneD
     bus.register_intent("scene", "addCodeNode", add_code_node)
     bus.register_intent("scene", "addDocumentNode", add_document_node)
     bus.register_intent("scene", "addThinkingNode", add_thinking_node)
+    bus.register_intent("scene", "addHtmlNode", add_html_node)
     bus.register_intent("scene", "setNodeDocked", set_node_docked)
     bus.register_intent("scene", "deleteChatNode", delete_chat_node)
     bus.register_intent("scene", "setChatCollapsed", set_chat_collapsed)

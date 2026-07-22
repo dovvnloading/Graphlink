@@ -20,6 +20,7 @@ import type { SceneState } from "../../lib/bridge-core/generated/scene-state";
 import { ChatNodeView, type ChatFlowNode } from "./ChatNodeView";
 import { CodeNodeView, type CodeFlowNode } from "./CodeNodeView";
 import { DocumentNodeView, type DocumentFlowNode } from "./DocumentNodeView";
+import { HtmlNodeView, type HtmlFlowNode } from "./HtmlNodeView";
 import { ThinkingNodeView, type ThinkingFlowNode } from "./ThinkingNodeView";
 import { LOD_ZOOM_THRESHOLD } from "./canvasConstants";
 import { SceneStore, scaleDragPosition } from "./sceneStore";
@@ -40,7 +41,13 @@ const GRID_VARIANTS: Record<string, BackgroundVariant> = {
 };
 
 type PlaceholderNode = Node<{ title: string }, "placeholder">;
-type SceneFlowNode = PlaceholderNode | ChatFlowNode | CodeFlowNode | DocumentFlowNode | ThinkingFlowNode;
+type SceneFlowNode =
+  | PlaceholderNode
+  | ChatFlowNode
+  | CodeFlowNode
+  | DocumentFlowNode
+  | ThinkingFlowNode
+  | HtmlFlowNode;
 
 function PlaceholderNodeView({ data, selected }: NodeProps<PlaceholderNode>) {
   const zoom = useStore((s) => s.transform[2]);
@@ -64,6 +71,7 @@ const NODE_TYPES = {
   code: CodeNodeView,
   document: DocumentNodeView,
   thinking: ThinkingNodeView,
+  html: HtmlNodeView,
 };
 
 function toFlowNodes(scene: SceneState, store: SceneStore): SceneFlowNode[] {
@@ -168,6 +176,31 @@ function toFlowNodes(scene: SceneState, store: SceneStore): SceneFlowNode[] {
         data: {
           thinkingText: n.content,
           onDock: () => store.setNodeDocked(n.id, true),
+          onDelete: () => store.removeNodes([n.id]),
+        },
+      });
+      continue;
+    }
+    if (n.kind === "html") {
+      // No onDock here (unlike thinking/document) - HtmlNodeView never
+      // offers a "dock into parent" action, so this kind never sets
+      // isDocked=true through any UI path of its own. It still passes
+      // through the generic `if (n.isDocked) continue` guard above
+      // untouched: that check is is_docked-field-generic, not kind-gated,
+      // so an html node docked via a direct WS call (setNodeDocked has no
+      // kind restriction backend-side) would still be omitted correctly -
+      // it would just have no UI-driven way back (no "Reveal Docked Items"
+      // entry exists on this node's own header, and ChatNodeView's own
+      // dockedChildren/undock badge is kind-agnostic already, so undocking
+      // it is still possible from the parent chat node's side).
+      flowNodes.push({
+        id: n.id,
+        type: "html" as const,
+        position: { x: n.x, y: n.y },
+        data: {
+          htmlContent: n.content,
+          isCollapsed: n.isCollapsed,
+          onToggleCollapse: () => store.setChatCollapsed(n.id, !n.isCollapsed),
           onDelete: () => store.removeNodes([n.id]),
         },
       });
