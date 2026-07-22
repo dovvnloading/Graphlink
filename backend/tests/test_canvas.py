@@ -140,6 +140,67 @@ def test_scene_payload_includes_chat_fields_defaulted_for_placeholders():
     assert chat_row["isUser"] is True
 
 
+# -- R3.5: code nodes --------------------------------------------------------
+
+
+def test_add_code_node_creates_a_real_code_kind_node():
+    doc = SceneDocument()
+    node = doc.add_code_node(10, 20, "print('hi')", "python")
+    assert node.kind == "code"
+    assert node.code == "print('hi')"
+    assert node.language == "python"
+    assert node.title == "python: print('hi')"
+
+
+def test_add_code_node_falls_back_to_language_only_title_for_empty_code():
+    doc = SceneDocument()
+    node = doc.add_code_node(0, 0, "", "python")
+    assert node.title == "python"
+
+
+def test_add_code_node_falls_back_to_code_label_when_language_and_code_are_empty():
+    doc = SceneDocument()
+    node = doc.add_code_node(0, 0, "", "")
+    assert node.title == "code"
+
+
+def test_add_code_node_connects_to_a_real_parent():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    child = doc.add_code_node(10, 10, "x = 1", "python", parent_id=parent.id)
+    assert any(e.source == parent.id and e.target == child.id for e in doc.edges.values())
+
+
+def test_add_code_node_rejects_unknown_parent():
+    doc = SceneDocument()
+    with pytest.raises(SceneError):
+        doc.add_code_node(0, 0, "x = 1", "python", parent_id="ghost")
+
+
+def test_scene_payload_includes_code_fields_defaulted_for_other_kinds():
+    doc = SceneDocument()
+    doc.add_node(0, 0, "plain")
+    doc.add_code_node(1, 1, "x = 1", "python")
+    rows = {n["title"]: n for n in doc.scene_payload()["nodes"]}
+    assert rows["plain"]["kind"] == "placeholder"
+    assert rows["plain"]["code"] == ""
+    assert rows["plain"]["language"] == ""
+    code_row = rows["python: x = 1"]
+    assert code_row["kind"] == "code"
+    assert code_row["code"] == "x = 1"
+    assert code_row["language"] == "python"
+
+
+def test_code_node_deletion_goes_through_the_generic_remove_nodes_path():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_code_node(10, 10, "x = 1", "python", parent_id=parent.id)
+    assert not hasattr(doc, "delete_code_node"), "code nodes are not branch points - no special delete method"
+    doc.remove_nodes([node.id])
+    assert node.id not in doc.nodes
+    assert not any(e.target == node.id or e.source == node.id for e in doc.edges.values())
+
+
 def test_send_message_starts_a_root_branch():
     doc = SceneDocument()
     node = doc.send_message("hello there")
@@ -250,6 +311,20 @@ def test_chat_node_intents_mutate_and_publish():
         assert parent_id not in document.nodes
         assert child_id in document.nodes, "deleting the parent must not cascade-delete the child"
         assert recorder.topics_seen().count("scene") == 4, "every mutation publishes"
+
+    asyncio.run(run())
+
+
+def test_add_code_node_intent_creates_a_real_node_and_publishes():
+    async def run():
+        bus, document, recorder = make_bus()
+        node_id = await bus.dispatch_intent(
+            "scene", "addCodeNode", [0, 0, "def f(): pass", "python"]
+        )
+        assert document.nodes[node_id].kind == "code"
+        assert document.nodes[node_id].code == "def f(): pass"
+        assert document.nodes[node_id].language == "python"
+        assert recorder.topics_seen().count("scene") == 1, "the mutation publishes"
 
     asyncio.run(run())
 

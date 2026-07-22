@@ -44,6 +44,9 @@
       "items": {
         "additionalProperties": false,
         "properties": {
+          "code": {
+            "type": "string"
+          },
           "content": {
             "type": "string"
           },
@@ -57,6 +60,9 @@
             "type": "boolean"
           },
           "kind": {
+            "type": "string"
+          },
+          "language": {
             "type": "string"
           },
           "title": {
@@ -77,7 +83,9 @@
           "kind",
           "content",
           "isUser",
-          "isCollapsed"
+          "isCollapsed",
+          "code",
+          "language"
         ],
         "type": "object"
       },
