@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { ConnectionStatus, WsTransport, defaultWsUrl } from "../lib/ws/transport";
+import { SceneCanvas } from "./canvas/SceneCanvas";
+import { SceneStore } from "./canvas/sceneStore";
 
 /**
  * The single-app shell (Qt-removal plan R0).
@@ -23,19 +25,22 @@ function App() {
   const [pingError, setPingError] = useState<string | null>(null);
 
   const transport = useMemo(() => new WsTransport(defaultWsUrl()), []);
+  const sceneStore = useMemo(() => new SceneStore(transport), [transport]);
 
   useEffect(() => {
     const offStatus = transport.onStatus(setStatus);
     const offSystem = transport.subscribe("system", (payload) => {
       setSystem(payload as SystemState);
     });
+    sceneStore.connect();
     transport.connect();
     return () => {
       offStatus();
       offSystem();
+      sceneStore.dispose();
       transport.dispose();
     };
-  }, [transport]);
+  }, [transport, sceneStore]);
 
   async function ping() {
     setPingError(null);
@@ -60,10 +65,7 @@ function App() {
       </header>
 
       <main className="app-canvas-region">
-        <div className="app-canvas-placeholder">
-          <p className="app-canvas-placeholder-title">Canvas</p>
-          <p className="app-canvas-placeholder-body">React Flow node graph lands in R1.</p>
-        </div>
+        <SceneCanvas store={sceneStore} />
 
         <section className="app-system-panel" aria-label="Backend status">
           <p className="app-system-title">SYSTEM</p>
