@@ -1120,6 +1120,13 @@ class WindowActionsMixin:
         pycoder_node.set_ai_analysis("Execution manually stopped.")
         
     def _handle_code_execution_result(self, output, pycoder_node, parent_history):
+        # Manual-mode stage 1 (execution) finishing kicks off stage 2 (AI
+        # analysis) below as a SEPARATE, window-level thread (self.pycoder_agent_thread,
+        # not node-scoped) - dispose() has no way to reach or stop it. Guarding here
+        # stops a disposed node from being touched further AND stops a pointless
+        # second-stage thread from ever starting for a node that's already gone.
+        if not pycoder_node or getattr(pycoder_node, "is_disposed", False):
+            return
         pycoder_node.set_output(output)
         code = pycoder_node.get_code()
         user_msg = f"--- EXECUTED PYTHON CODE ---\n```python\n{code}\n```\n\n--- EXECUTION OUTPUT ---\n{output}"
@@ -1132,6 +1139,14 @@ class WindowActionsMixin:
         self.pycoder_agent_thread.start()
 
     def _handle_pycoder_analysis_result(self, analysis, pycoder_node, parent_history, user_msg):
+        # Bug-scan finding: stage 2 (self.pycoder_agent_thread, a window-level
+        # PyCoderAgentWorker with no stop() of its own - an in-flight LLM call
+        # can't be cancelled early) used to run unconditionally. Deleting
+        # pycoder_node mid-analysis let this handler mutate/reselect/save a
+        # node no longer on the canvas. Matches the guard every sibling result
+        # handler already has (_handle_artifact_result, _handle_code_sandbox_result).
+        if not pycoder_node or getattr(pycoder_node, "is_disposed", False):
+            return
         # We explicitly bundle the code, the output, and the analysis so downstream nodes inherit them.
         assign_history(pycoder_node, append_history(parent_history, [
             {'role': 'user', 'content': user_msg},
@@ -1143,6 +1158,8 @@ class WindowActionsMixin:
         self.save_chat()
 
     def _handle_ai_pycoder_result(self, result_dict, pycoder_node, parent_history):
+        if not pycoder_node or getattr(pycoder_node, "is_disposed", False):
+            return
         analysis_text = result_dict.get('analysis', '')
         code = result_dict.get('code', '')
         output = result_dict.get('output', '')
@@ -1164,6 +1181,11 @@ class WindowActionsMixin:
         self.save_chat()
 
     def _handle_pycoder_error(self, error_message, pycoder_node):
+        # Shared by every PyCoder worker stage (manual execution, AI-driven
+        # generation, and the manual-mode analysis follow-up) - all three can
+        # report an error after the node was disposed.
+        if not pycoder_node or getattr(pycoder_node, "is_disposed", False):
+            return
         pycoder_node.set_ai_analysis(f"An error occurred: {error_message}"); pycoder_node.set_running_state(False)
 
     def execute_code_sandbox_node(self, sandbox_node):
