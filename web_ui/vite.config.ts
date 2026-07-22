@@ -14,17 +14,25 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // selects which one this invocation builds.
 const ISLANDS = ["composer", "token-counter", "notification", "command-palette", "settings", "about", "help", "document-viewer", "chat-library", "search-overlay", "pin-overlay", "composer-picker", "composer-context", "toolbar", "plugin-picker", "grid-control", "font-control", "drag-speed", "minimap"];
 
+// Qt-removal plan R0 (doc/QT_REMOVAL_PLAN.md): "app" is the single-SPA
+// target that consolidates the islands. Unlike islands it is SERVED by the
+// Python backend (not inlined into a Qt webview), so it has no single-chunk
+// constraint and builds to dist/app instead of ../assets/<island>. The
+// island targets stay buildable until the R7 cutover deletes the Qt hosts.
+const APP_TARGET = "app";
+
 const island = process.env.GRAPHLINK_ISLAND || "composer";
-if (!ISLANDS.includes(island)) {
+const isApp = island === APP_TARGET;
+if (!isApp && !ISLANDS.includes(island)) {
   throw new Error(
-    `Unknown island "${island}" (set via GRAPHLINK_ISLAND). Known islands: ${ISLANDS.join(", ")}`,
+    `Unknown island "${island}" (set via GRAPHLINK_ISLAND). Known islands: ${[APP_TARGET, ...ISLANDS].join(", ")}`,
   );
 }
 
 export default defineConfig({
   plugins: [tailwindcss(), react()],
   base: "./",
-  root: resolve(__dirname, "src/islands", island),
+  root: resolve(__dirname, isApp ? "src/app" : `src/islands/${island}`),
   // The desktop app's live dev-server mode (GRAPHLINK_FRONTEND_DEV_URL)
   // allowlists ONE exact origin in its WebEngine request interceptor. These
   // three settings keep the real served origin pinned to that expectation:
@@ -35,9 +43,17 @@ export default defineConfig({
     host: "127.0.0.1",
     port: 5173,
     strictPort: true,
+    // App-target dev mode talks to a locally running backend; islands never
+    // proxy (their transport is QWebChannel, not HTTP).
+    proxy: isApp
+      ? {
+          "/api": "http://127.0.0.1:8765",
+          "/ws": { target: "ws://127.0.0.1:8765", ws: true },
+        }
+      : undefined,
   },
   build: {
-    outDir: resolve(__dirname, "../assets", island),
+    outDir: resolve(__dirname, isApp ? "dist/app" : `../assets/${island}`),
     emptyOutDir: true,
     sourcemap: false,
   },
