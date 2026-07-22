@@ -735,6 +735,140 @@ body,
   border-radius: 999px;
 }
 
+/* -- R3.17/R3.18 html view node -------------------------------------------- */
+
+.html-node {
+  width: 420px;
+  max-height: 640px;
+  min-height: 110px;
+}
+
+.html-node.collapsed {
+  width: 290px;
+  min-height: 58px;
+}
+
+/* Card controls live inline in the header (no context menu for this node -
+   see HtmlNodeView.tsx's doc comment for why). Reuses .chat-node-role's
+   space-between layout so the label sits left and the button row sits
+   right, same as every sibling node's title bar. */
+.html-node-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.html-node-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.html-node-header-btn {
+  font-size: 10px;
+  font-weight: 600;
+  font-family: inherit;
+  padding: 3px 7px;
+  color: var(--gl-surface-text-muted);
+  background: transparent;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.html-node-header-btn:hover:not(:disabled) {
+  color: var(--gl-surface-text);
+  background-color: var(--gl-neutral-button-hover);
+}
+
+.html-node-header-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.html-node-delete-btn {
+  color: var(--gl-semantic-status-error, currentColor);
+}
+
+.html-node-content {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.html-node-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.html-node-section-label {
+  margin: 0;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--gl-surface-text-muted);
+}
+
+/* Fixed-height source/preview panes, deliberately not resizable by drag in
+   either direction. Legacy graphlink_html_view.py's QSplitter (splitter_state)
+   was pure Qt UI state with no domain meaning - never in scene_payload/the DB
+   row (confirmed by backend/tests/test_canvas.py's
+   test_html_node_scene_payload_needs_no_new_key) - so it's a scope cut here,
+   not an oversight. `resize: none` on the textarea keeps the browser from
+   offering its own native drag handle as an accidental substitute. */
+.html-node-source {
+  box-sizing: border-box;
+  width: 100%;
+  height: 140px;
+  resize: none;
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 11px;
+  padding: 8px 10px;
+  color: var(--gl-surface-text);
+  background-color: var(--gl-surface-inset, var(--gl-surface-window));
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 6px;
+}
+
+.html-node-source:focus {
+  outline: none;
+  border-color: var(--gl-surface-text-muted);
+}
+
+.html-node-render-btn {
+  align-self: flex-start;
+  font-size: 10px;
+  font-weight: 600;
+  font-family: inherit;
+  padding: 4px 10px;
+  color: var(--gl-surface-text);
+  background-color: var(--gl-neutral-button-background);
+  border: 1px solid var(--gl-neutral-button-border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.html-node-render-btn:hover {
+  background-color: var(--gl-neutral-button-hover);
+}
+
+/* A visible border matters here specifically - it's the visual cue that
+   this rectangle is a distinct, sandboxed embedded document, not part of
+   the card's own chrome. */
+.html-node-preview {
+  box-sizing: border-box;
+  display: block;
+  width: 100%;
+  height: 140px;
+  background-color: var(--gl-surface-window);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 6px;
+}
+
 /* -- R2 app bar + overlay system ----------------------------------------- */
 
 .app-topbar {

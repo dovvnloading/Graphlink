@@ -436,6 +436,91 @@ def test_set_node_docked_intent_flips_is_docked_and_publishes():
     asyncio.run(run())
 
 
+# -- R3.17: html nodes --------------------------------------------------------
+
+
+def test_add_html_node_creates_a_real_html_kind_node():
+    doc = SceneDocument()
+    parent = doc.add_chat_node(0, 0, "show me a preview", True)
+    node = doc.add_html_node(10, 20, "<h1>Hello</h1><p>world</p>", parent.id)
+    assert node.kind == "html"
+    assert node.content == "<h1>Hello</h1><p>world</p>"
+    assert node.title == "<h1>Hello</h1><p>world</p>"[:60]
+    assert any(e.source == parent.id and e.target == node.id for e in doc.edges.values())
+
+
+def test_add_html_node_stores_script_content_as_an_opaque_string():
+    # The backend never parses, sanitizes, or interprets HTML content - it is
+    # stored verbatim, exactly like any other opaque text field.
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    raw = "<script>alert(1)</script>"
+    node = doc.add_html_node(0, 0, raw, parent.id)
+    assert node.content == raw
+    assert node.title == raw
+
+
+def test_add_html_node_falls_back_to_html_title_for_empty_content():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_html_node(0, 0, "", parent.id)
+    assert node.title == "HTML"
+
+
+def test_add_html_node_rejects_unknown_parent():
+    doc = SceneDocument()
+    with pytest.raises(SceneError):
+        doc.add_html_node(0, 0, "<div>orphan</div>", "ghost")
+
+
+def test_add_html_node_requires_a_parent_id():
+    # Same as add_document_node/add_thinking_node - parent_id has no default
+    # in add_html_node's signature, so calling without one is a TypeError
+    # (missing required argument), not a SceneError.
+    doc = SceneDocument()
+    with pytest.raises(TypeError):
+        doc.add_html_node(0, 0, "<div>orphan</div>")
+
+
+def test_html_node_scene_payload_needs_no_new_key():
+    # The raw HTML source reuses the existing `content` field - scene_payload
+    # gets no html-specific key at all.
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    doc.add_html_node(1, 1, "<b>bold</b>", parent.id)
+    rows = {n["kind"]: n for n in doc.scene_payload()["nodes"]}
+    html_row = rows["html"]
+    assert html_row["content"] == "<b>bold</b>"
+    assert "html" not in html_row, "no html-specific key - content already carries it"
+
+
+def test_html_node_deletion_goes_through_the_generic_remove_nodes_path():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_html_node(10, 10, "<p>doomed</p>", parent.id)
+    assert not hasattr(doc, "delete_html_node"), "html nodes are not branch points - no special delete method"
+    doc.remove_nodes([node.id])
+    assert node.id not in doc.nodes
+    assert not any(e.target == node.id or e.source == node.id for e in doc.edges.values())
+
+
+def test_add_html_node_intent_creates_a_real_node_and_publishes():
+    async def run():
+        bus, document, recorder = make_bus()
+        parent_id = await bus.dispatch_intent("scene", "addChatNode", [0, 0, "hi", True])
+        node_id = await bus.dispatch_intent(
+            "scene", "addHtmlNode", [10, 10, "<h1>preview</h1>", parent_id]
+        )
+        assert document.nodes[node_id].kind == "html"
+        assert document.nodes[node_id].content == "<h1>preview</h1>"
+        assert any(
+            e.source == parent_id and e.target == node_id for e in document.edges.values()
+        )
+        assert recorder.topics_seen().count("scene") == 2, "both mutations publish"
+
+    asyncio.run(run())
+
+
 def test_send_message_starts_a_root_branch():
     doc = SceneDocument()
     node = doc.send_message("hello there")

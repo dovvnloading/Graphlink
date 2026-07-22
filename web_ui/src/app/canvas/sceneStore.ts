@@ -208,6 +208,15 @@ export class SceneStore {
     this.transport.intent("scene", "addThinkingNode", [x, y, thinkingText, parentId]);
   }
 
+  // R3.17/R3.18: real HTML view nodes. Same posture as addThinkingNode/
+  // addDocumentNode - parentId is REQUIRED (the backend's add_html_node has
+  // no default for it), and there is no real UI creation trigger yet (R4's
+  // agent/plugin layer). The html source string rides the same `content`
+  // field every other node kind's text lives in - no new wire field.
+  addHtmlNode(x: number, y: number, htmlContent: string, parentId: string): void {
+    this.transport.intent("scene", "addHtmlNode", [x, y, htmlContent, parentId]);
+  }
+
   setNodeDocked(id: string, docked: boolean): void {
     this.transport.intent("scene", "setNodeDocked", [id, docked]);
   }
