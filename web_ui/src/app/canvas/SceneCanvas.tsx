@@ -19,6 +19,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import type { SceneState } from "../../lib/bridge-core/generated/scene-state";
 import { ChatNodeView, type ChatFlowNode } from "./ChatNodeView";
 import { CodeNodeView, type CodeFlowNode } from "./CodeNodeView";
+import { DocumentNodeView, type DocumentFlowNode } from "./DocumentNodeView";
 import { LOD_ZOOM_THRESHOLD } from "./canvasConstants";
 import { SceneStore, scaleDragPosition } from "./sceneStore";
 
@@ -38,7 +39,7 @@ const GRID_VARIANTS: Record<string, BackgroundVariant> = {
 };
 
 type PlaceholderNode = Node<{ title: string }, "placeholder">;
-type SceneFlowNode = PlaceholderNode | ChatFlowNode | CodeFlowNode;
+type SceneFlowNode = PlaceholderNode | ChatFlowNode | CodeFlowNode | DocumentFlowNode;
 
 function PlaceholderNodeView({ data, selected }: NodeProps<PlaceholderNode>) {
   const zoom = useStore((s) => s.transform[2]);
@@ -56,7 +57,12 @@ function PlaceholderNodeView({ data, selected }: NodeProps<PlaceholderNode>) {
   );
 }
 
-const NODE_TYPES = { placeholder: PlaceholderNodeView, chat: ChatNodeView, code: CodeNodeView };
+const NODE_TYPES = {
+  placeholder: PlaceholderNodeView,
+  chat: ChatNodeView,
+  code: CodeNodeView,
+  document: DocumentNodeView,
+};
 
 function toFlowNodes(scene: SceneState, store: SceneStore): SceneFlowNode[] {
   return scene.nodes.map((n) => {
@@ -82,6 +88,37 @@ function toFlowNodes(scene: SceneState, store: SceneStore): SceneFlowNode[] {
         data: {
           code: n.code,
           language: n.language,
+          onDelete: () => store.removeNodes([n.id]),
+        },
+      };
+    }
+    if (n.kind === "document") {
+      return {
+        id: n.id,
+        type: "document" as const,
+        position: { x: n.x, y: n.y },
+        data: {
+          title: n.title,
+          content: n.content,
+          attachmentKind: n.attachmentKind,
+          filePath: n.filePath,
+          mimeType: n.mimeType,
+          // Generated SceneNodeRow marks these `?: number | null` (optional
+          // Python field), so the read can be `undefined`; DocumentNodeData
+          // is strictly `number | null` (matches the wire value, which is
+          // always present - the backend dataclass always serializes both
+          // keys). Coalesce here rather than loosening DocumentNodeData.
+          durationSeconds: n.durationSeconds ?? null,
+          byteSize: n.byteSize ?? null,
+          previewLabel: n.previewLabel,
+          isCollapsed: n.isCollapsed,
+          // setChatCollapsed's backend handler (backend/canvas.py) looks up
+          // ANY node by id and sets is_collapsed - it does not special-case
+          // "chat" kind despite the intent's name - so it is reused here
+          // as-is rather than inventing a setDocumentCollapsed intent the
+          // backend doesn't register. See this increment's report for the
+          // full reasoning.
+          onToggleCollapse: () => store.setChatCollapsed(n.id, !n.isCollapsed),
           onDelete: () => store.removeNodes([n.id]),
         },
       };

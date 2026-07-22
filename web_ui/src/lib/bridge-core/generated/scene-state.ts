@@ -13,6 +13,12 @@ export interface SceneNodeRow {
   isCollapsed: boolean;
   code: string;
   language: string;
+  attachmentKind: string;
+  filePath: string;
+  mimeType: string;
+  durationSeconds?: number | null;
+  byteSize?: number | null;
+  previewLabel: string;
 }
 
 export interface SceneEdgeRow {
@@ -109,6 +115,34 @@ function checkSceneNodeRow(value: unknown, path: string, errors: string[]): void
     const fieldValue = value["language"];
     if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.language: missing required field`);
     else { if (typeof fieldValue !== "string") errors.push(`${path}.language` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["attachmentKind"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.attachmentKind: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.attachmentKind` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["filePath"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.filePath: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.filePath` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["mimeType"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.mimeType: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.mimeType` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["durationSeconds"];
+    if (fieldValue !== undefined && fieldValue !== null) { if (typeof fieldValue !== "number") errors.push(`${path}.durationSeconds` + ": expected number"); }
+  }
+  {
+    const fieldValue = value["byteSize"];
+    if (fieldValue !== undefined && fieldValue !== null) { if (typeof fieldValue !== "number") errors.push(`${path}.byteSize` + ": expected number"); }
+  }
+  {
+    const fieldValue = value["previewLabel"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.previewLabel: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.previewLabel` + ": expected string"); }
   }
 }
 

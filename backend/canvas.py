@@ -100,6 +100,62 @@ class SceneNode:
     # every other kind.
     code: str = ""
     language: str = ""
+    # R3.9 (doc/QT_REMOVAL_PLAN.md): the document node's real persisted shape -
+    # graphlink_scene.py's add_document_node()/graphlink_node_document.py's
+    # DocumentNode.__init__ attachment metadata (title/content above, plus
+    # these six fields). The backend stores these VERBATIM, exactly as
+    # passed in - none of the legacy view-layer formatting below happens
+    # here; reproducing it is the frontend's job (same as the paint()/menu
+    # code it replaces). Formatting rules extracted from
+    # graphlink_nodes/graphlink_node_document.py + graphlink_audio.py, for
+    # the frontend to reproduce exactly in TypeScript:
+    #
+    # - Byte-size formatting (DocumentNode._format_byte_size): if byte_size
+    #   is falsy (None or 0) -> "Unknown". Else repeatedly divide by 1024.0
+    #   walking units ("B","KB","MB","GB","TB"), stopping at the first unit
+    #   where size < 1024.0 (or unit == "TB"); "B" formats as a bare integer
+    #   ("512 B"), every other unit formats with exactly one decimal place
+    #   ("1.5 MB").
+    # - Duration formatting (graphlink_audio.format_duration): None ->
+    #   "Unknown". Else round(seconds) to the nearest whole second, clamp
+    #   negative to 0, divmod into hours/minutes/seconds; if hours > 0 format
+    #   "H:MM:SS" (hours unpadded, minutes/seconds zero-padded to 2 digits),
+    #   else "M:SS" (minutes unpadded, seconds zero-padded).
+    # - Metadata rows (DocumentNode._build_metadata_rows), in this exact
+    #   order, each omitted entirely when its value is empty/None: Type
+    #   ("Audio file" if attachment_kind=="audio" else "Document", always
+    #   present) / Duration (formatted, only if duration_seconds is not
+    #   None) / Format (mime_type, only if truthy) / Size (formatted byte
+    #   size, only if byte_size is truthy) / Path (file_path, only if
+    #   truthy).
+    # - preview_label auto-fill (DocumentNode._build_preview_label), used
+    #   only when the caller didn't supply one: for attachment_kind=="audio"
+    #   -> "Audio | {duration formatted, or 'Audio' if duration_seconds is
+    #   None}"; otherwise derived from title's file extension via
+    #   os.path.splitext: ".pdf" -> "PDF", ".docx" -> "DOCX", any other
+    #   extension -> that extension uppercased without its dot, no extension
+    #   -> "Document".
+    # - Audio-preview-suppression heuristic
+    #   (DocumentNode._should_show_audio_preview): normalize both `content`
+    #   and the auto-built `audio_details` block the same way (join
+    #   right-stripped lines with "\n", strip the whole string, lowercase).
+    #   Hide the content-preview panel (show only the metadata table) when:
+    #   normalized content is empty; OR normalized content == normalized
+    #   audio_details (content is nothing but the auto-generated metadata
+    #   block); OR normalized content startswith "audio attachment" AND
+    #   contains "duration:" (catches legacy-saved sessions whose persisted
+    #   content is an older/differently-valued metadata block). Otherwise
+    #   show the preview. `audio_details` itself is the joined lines: "Audio
+    #   attachment", then "Duration: {formatted}" if duration_seconds is not
+    #   None, "Format: {mime_type}" if truthy, "Size: {formatted byte size}"
+    #   if byte_size truthy, "Path: {file_path}" if truthy - same
+    #   presence/order rules as the metadata rows above.
+    attachment_kind: str = ""
+    file_path: str = ""
+    mime_type: str = ""
+    duration_seconds: float | None = None
+    byte_size: int | None = None
+    preview_label: str = ""
 
 
 @dataclass
@@ -203,6 +259,72 @@ class SceneDocument:
         self.nodes[node_id] = node
         if parent_id is not None:
             self.connect(parent_id, node_id)
+        return node
+
+    def add_document_node(
+        self,
+        x: float,
+        y: float,
+        title: str,
+        content: str,
+        attachment_kind: str,
+        parent_id: str,
+        *,
+        file_path: str = "",
+        mime_type: str = "",
+        duration_seconds: float | None = None,
+        byte_size: int | None = None,
+        preview_label: str = "",
+    ) -> SceneNode:
+        """R3.9's document-node equivalent of add_chat_node/add_code_node: a
+        real file-attachment node (a document or an audio file), for the
+        legacy DocumentNode / ChatScene.add_document_node pair. UNLIKE
+        chat/code, parent_id is REQUIRED here, not optional: read fresh from
+        graphlink_scene.py, add_document_node(title, content,
+        parent_user_node, ...) takes parent_user_node as a plain required
+        positional with no default, and unconditionally constructs a
+        DocumentConnectionItem(parent_user_node, node) - there is no `if
+        parent_id` guard around that connection the way chat/code have
+        around theirs - so a DocumentNode can never exist unparented.
+        Document nodes are also NOT branch points (same as code): there is
+        no delete_document_node; deletion goes entirely through the
+        existing generic remove_nodes.
+
+        The six attachment fields are stored verbatim - no title-preview
+        truncation (DocumentNode.title in the legacy app is just whatever
+        descriptive title/filename was passed in, confirmed by reading
+        DocumentNode.__init__: `self.title = title`, no slicing), and none
+        of the legacy view-layer formatting (byte-size/duration strings,
+        preview_label auto-fill, audio-preview suppression) happens here -
+        see the R3.9 comment on the SceneNode dataclass fields for those
+        exact rules.
+        """
+        if parent_id not in self.nodes:
+            raise SceneError(f"unknown parent node: {parent_id}")
+        node_id = f"n{next(self._counter)}"
+        # Mirrors DocumentNode.__init__'s `(attachment_kind or
+        # "document").lower()` normalization - the attachment_kind param has
+        # no default in this signature (per spec), but an empty/None value
+        # still needs to fall back to "document" and casing still needs to
+        # normalize, since "audio" vs "Audio" is a real behavioral branch
+        # (metadata "Type" row, preview label, badge text all key off it).
+        normalized_kind = str(attachment_kind or "document").lower()
+        node = SceneNode(
+            id=node_id,
+            x=float(x),
+            y=float(y),
+            title=str(title),
+            kind="document",
+            content=str(content),
+            attachment_kind=normalized_kind,
+            file_path=str(file_path),
+            mime_type=str(mime_type),
+            duration_seconds=duration_seconds,
+            byte_size=byte_size,
+            preview_label=str(preview_label),
+        )
+        self.nodes[node_id] = node
+        self.connect(parent_id, node_id)
         return node
 
     def delete_chat_node(self, node_id: str) -> None:
@@ -334,6 +456,12 @@ class SceneDocument:
                     "isCollapsed": n.is_collapsed,
                     "code": n.code,
                     "language": n.language,
+                    "attachmentKind": n.attachment_kind,
+                    "filePath": n.file_path,
+                    "mimeType": n.mime_type,
+                    "durationSeconds": n.duration_seconds,
+                    "byteSize": n.byte_size,
+                    "previewLabel": n.preview_label,
                 }
                 for n in self.nodes.values()
             ],
@@ -426,6 +554,35 @@ def register_canvas(bus: SessionBus, notifications: NotificationState) -> SceneD
         await publish_scene()
         return node.id
 
+    async def add_document_node(
+        x,
+        y,
+        title,
+        content,
+        attachment_kind,
+        parent_id,
+        file_path="",
+        mime_type="",
+        duration_seconds=None,
+        byte_size=None,
+        preview_label="",
+    ):
+        node = document.add_document_node(
+            x,
+            y,
+            title,
+            content,
+            attachment_kind,
+            parent_id,
+            file_path=file_path,
+            mime_type=mime_type,
+            duration_seconds=duration_seconds,
+            byte_size=byte_size,
+            preview_label=preview_label,
+        )
+        await publish_scene()
+        return node.id
+
     async def delete_chat_node(node_id):
         document.delete_chat_node(node_id)
         await publish_scene()
@@ -497,6 +654,7 @@ def register_canvas(bus: SessionBus, notifications: NotificationState) -> SceneD
     bus.register_intent("scene", "addNode", add_node)
     bus.register_intent("scene", "addChatNode", add_chat_node)
     bus.register_intent("scene", "addCodeNode", add_code_node)
+    bus.register_intent("scene", "addDocumentNode", add_document_node)
     bus.register_intent("scene", "deleteChatNode", delete_chat_node)
     bus.register_intent("scene", "setChatCollapsed", set_chat_collapsed)
     bus.register_intent("scene", "sendMessage", send_message)

@@ -17,6 +17,11 @@ other kind, so the schema stays additive-only as new kinds land.
 
 R3.5 adds the `code` kind's fields (code/language): populated for kind=="code"
 rows, defaulted (empty string) for every other kind, same additive rule.
+
+R3.9 adds the `document` kind's fields (attachmentKind/filePath/mimeType/
+durationSeconds/byteSize/previewLabel - the DocumentNode attachment
+metadata): populated for kind=="document" rows, defaulted (empty
+string/None) for every other kind, same additive rule.
 """
 
 from __future__ import annotations
@@ -38,6 +43,15 @@ class SceneNodeRow:
     # rows, defaulted (empty string) for every other kind.
     code: str = ""
     language: str = ""
+    # R3.9: the document node's real persisted shape (attachment metadata) -
+    # populated for kind=="document" rows, defaulted (empty string/None) for
+    # every other kind.
+    attachmentKind: str = ""
+    filePath: str = ""
+    mimeType: str = ""
+    durationSeconds: float | None = None
+    byteSize: int | None = None
+    previewLabel: str = ""
 
 
 @dataclass

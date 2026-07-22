@@ -44,10 +44,22 @@
       "items": {
         "additionalProperties": false,
         "properties": {
+          "attachmentKind": {
+            "type": "string"
+          },
+          "byteSize": {
+            "type": "integer"
+          },
           "code": {
             "type": "string"
           },
           "content": {
+            "type": "string"
+          },
+          "durationSeconds": {
+            "type": "number"
+          },
+          "filePath": {
             "type": "string"
           },
           "id": {
@@ -63,6 +75,12 @@
             "type": "string"
           },
           "language": {
+            "type": "string"
+          },
+          "mimeType": {
+            "type": "string"
+          },
+          "previewLabel": {
             "type": "string"
           },
           "title": {
@@ -85,7 +103,11 @@
           "isUser",
           "isCollapsed",
           "code",
-          "language"
+          "language",
+          "attachmentKind",
+          "filePath",
+          "mimeType",
+          "previewLabel"
         ],
         "type": "object"
       },

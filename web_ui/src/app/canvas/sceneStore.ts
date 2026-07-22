@@ -145,6 +145,58 @@ export class SceneStore {
     this.transport.intent("scene", "setChatCollapsed", [id, collapsed]);
   }
 
+  // R3.9/R3.10: real document nodes (attachments). Unlike chat/code,
+  // parentId is REQUIRED - the backend's add_document_node signature has no
+  // default for it (a document node can never exist without a parent chat
+  // node in the legacy app). The five backend keyword-only fields
+  // (file_path/mime_type/duration_seconds/byte_size/preview_label) are
+  // bundled into one optional `options` object rather than five trailing
+  // optional parameters: unlike addChatNode/addCodeNode's single optional
+  // trailing parentId (conditionally omitted from the wire args so the
+  // backend's own default kicks in), omitting only SOME of five trailing
+  // positional slots while supplying a later one is not well-formed over
+  // dispatch_intent's plain `handler(*args)` positional call - so this
+  // always sends the full 11-arg positional list, filling any field the
+  // caller didn't supply with the exact same default the backend method
+  // itself uses. Same intent name reused for collapse - see setChatCollapsed
+  // below this method's call sites in SceneCanvas.tsx for why.
+  addDocumentNode(
+    x: number,
+    y: number,
+    title: string,
+    content: string,
+    attachmentKind: string,
+    parentId: string,
+    options: {
+      filePath?: string;
+      mimeType?: string;
+      durationSeconds?: number | null;
+      byteSize?: number | null;
+      previewLabel?: string;
+    } = {},
+  ): void {
+    const {
+      filePath = "",
+      mimeType = "",
+      durationSeconds = null,
+      byteSize = null,
+      previewLabel = "",
+    } = options;
+    this.transport.intent("scene", "addDocumentNode", [
+      x,
+      y,
+      title,
+      content,
+      attachmentKind,
+      parentId,
+      filePath,
+      mimeType,
+      durationSeconds,
+      byteSize,
+      previewLabel,
+    ]);
+  }
+
   // R3.3: the Composer's real Send action - a real user ChatNode. The
   // assistant's reply is deferred to R4 (graphlink_config.py's Qt/non-Qt
   // split is a prerequisite for calling the real agent layer); the backend
