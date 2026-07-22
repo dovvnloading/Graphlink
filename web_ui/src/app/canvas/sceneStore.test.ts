@@ -41,6 +41,7 @@ function validScenePayload(overrides: Record<string, unknown> = {}) {
         mimeType: "",
         previewLabel: "",
         isDocked: false,
+        imageAssetId: "",
       },
     ],
     edges: [],
@@ -201,6 +202,25 @@ describe("SceneStore", () => {
     store.addHtmlNode(10, 20, "<p>hello</p>", "n1");
     expect(intents).toEqual([
       { topic: "scene", intent: "addHtmlNode", args: [10, 20, "<p>hello</p>", "n1"] },
+    ]);
+  });
+
+  it("sends image-node intents with the backend's registered names and shapes", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.addImageNode(10, 20, "base64bytes==", "a red fox in the snow", "n1");
+    store.addImageNode(30, 40, "base64bytes2==", "a mountain lake", "n1", "image/jpeg");
+    expect(intents).toEqual([
+      {
+        topic: "scene",
+        intent: "addImageNode",
+        args: [10, 20, "base64bytes==", "a red fox in the snow", "n1", "image/png"],
+      },
+      {
+        topic: "scene",
+        intent: "addImageNode",
+        args: [30, 40, "base64bytes2==", "a mountain lake", "n1", "image/jpeg"],
+      },
     ]);
   });
 

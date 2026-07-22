@@ -21,6 +21,7 @@ import { ChatNodeView, type ChatFlowNode } from "./ChatNodeView";
 import { CodeNodeView, type CodeFlowNode } from "./CodeNodeView";
 import { DocumentNodeView, type DocumentFlowNode } from "./DocumentNodeView";
 import { HtmlNodeView, type HtmlFlowNode } from "./HtmlNodeView";
+import { ImageNodeView, type ImageFlowNode } from "./ImageNodeView";
 import { ThinkingNodeView, type ThinkingFlowNode } from "./ThinkingNodeView";
 import { LOD_ZOOM_THRESHOLD } from "./canvasConstants";
 import { SceneStore, scaleDragPosition } from "./sceneStore";
@@ -47,7 +48,8 @@ type SceneFlowNode =
   | CodeFlowNode
   | DocumentFlowNode
   | ThinkingFlowNode
-  | HtmlFlowNode;
+  | HtmlFlowNode
+  | ImageFlowNode;
 
 function PlaceholderNodeView({ data, selected }: NodeProps<PlaceholderNode>) {
   const zoom = useStore((s) => s.transform[2]);
@@ -72,6 +74,7 @@ const NODE_TYPES = {
   document: DocumentNodeView,
   thinking: ThinkingNodeView,
   html: HtmlNodeView,
+  image: ImageNodeView,
 };
 
 function toFlowNodes(scene: SceneState, store: SceneStore): SceneFlowNode[] {
@@ -201,6 +204,24 @@ function toFlowNodes(scene: SceneState, store: SceneStore): SceneFlowNode[] {
           htmlContent: n.content,
           isCollapsed: n.isCollapsed,
           onToggleCollapse: () => store.setChatCollapsed(n.id, !n.isCollapsed),
+          onDelete: () => store.removeNodes([n.id]),
+        },
+      });
+      continue;
+    }
+    if (n.kind === "image") {
+      // No onDock here either (same reasoning as the html branch above) -
+      // ImageNodeView never offers a "dock into parent" action, so this kind
+      // never sets isDocked=true through any UI path of its own. The generic
+      // `if (n.isDocked) continue` guard above still covers it correctly if
+      // it were ever docked via a direct WS call, same as html.
+      flowNodes.push({
+        id: n.id,
+        type: "image" as const,
+        position: { x: n.x, y: n.y },
+        data: {
+          imageAssetId: n.imageAssetId,
+          prompt: n.content,
           onDelete: () => store.removeNodes([n.id]),
         },
       });

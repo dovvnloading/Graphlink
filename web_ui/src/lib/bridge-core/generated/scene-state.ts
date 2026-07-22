@@ -20,6 +20,7 @@ export interface SceneNodeRow {
   byteSize?: number | null;
   previewLabel: string;
   isDocked: boolean;
+  imageAssetId: string;
 }
 
 export interface SceneEdgeRow {
@@ -149,6 +150,11 @@ function checkSceneNodeRow(value: unknown, path: string, errors: string[]): void
     const fieldValue = value["isDocked"];
     if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.isDocked: missing required field`);
     else { if (typeof fieldValue !== "boolean") errors.push(`${path}.isDocked` + ": expected boolean"); }
+  }
+  {
+    const fieldValue = value["imageAssetId"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.imageAssetId: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.imageAssetId` + ": expected string"); }
   }
 }
 

@@ -34,6 +34,7 @@ from graphlink_licensing import SettingsManager
 
 from backend import BACKEND_VERSION
 from backend.about import register_about
+from backend.assets import register_assets
 from backend.canvas import register_canvas
 from backend.chat_library import register_chat_library
 from backend.composer import register_composer
@@ -71,7 +72,14 @@ def _configure_session(bus: SessionBus, settings_manager: SettingsManager, chat_
     notifications_state = register_notifications(bus)
 
     # R1 (doc/QT_REMOVAL_PLAN.md): scene document + grid topics.
-    register_canvas(bus, notifications_state)
+    # R3.21: stash the document on its own SessionBus so backend/assets.py's
+    # GET /api/assets/{id} route (registered once, globally, on the app) can
+    # reach the SAME per-session SceneDocument register_canvas() built here -
+    # there was previously no way to get from a session id back to its
+    # canvas document outside this closure. SessionBus has no fixed attribute
+    # set (no __slots__), so this is a plain, minimal bolt-on attribute, not
+    # a SessionBus API change.
+    bus.canvas_document = register_canvas(bus, notifications_state)
 
     # R2: composer draft/reasoning, token counter.
     token_counter = register_token_counter(bus)
@@ -102,6 +110,10 @@ def create_app(
     @app.get("/api/health")
     async def health() -> JSONResponse:
         return JSONResponse({"status": "ok", "app": "graphlink", "version": BACKEND_VERSION})
+
+    # R3.21: GET /api/assets/{id} - the image-node byte-serving route (see
+    # backend/assets.py's docstring for the transport decision behind it).
+    register_assets(app, bus)
 
     @app.websocket("/ws")
     async def ws_endpoint(websocket: WebSocket) -> None:

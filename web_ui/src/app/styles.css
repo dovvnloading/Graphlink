@@ -869,6 +869,56 @@ body,
   border-radius: 6px;
 }
 
+/* -- R3.21/R3.22 image node ------------------------------------------------ */
+
+.image-node {
+  width: 420px;
+  max-height: 640px;
+  min-height: 110px;
+}
+
+.image-node.collapsed {
+  width: 290px;
+  min-height: 58px;
+}
+
+.image-node-content {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  max-height: 560px;
+  overflow: hidden;
+}
+
+/* max-width/max-height + object-fit: contain so a large source image never
+   blows out the card layout - it scales down to fit the card, never up. */
+.image-node-img {
+  display: block;
+  max-width: 100%;
+  max-height: 480px;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  border-radius: 6px;
+}
+
+/* The broken/unknown-asset fallback (onError-driven, see ImageNodeView.tsx) -
+   a dashed box is the deliberate visual cue that this is a "missing content"
+   placeholder, not real card chrome. */
+.image-node-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 120px;
+  padding: 16px;
+  color: var(--gl-surface-text-muted);
+  font-size: 11px;
+  text-align: center;
+  border: 1px dashed var(--gl-surface-border);
+  border-radius: 8px;
+}
+
 /* -- R2 app bar + overlay system ----------------------------------------- */
 
 .app-topbar {

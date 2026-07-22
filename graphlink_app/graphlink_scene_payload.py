@@ -27,6 +27,11 @@ R3.13 adds `isDocked` (the ThinkingNode/docked-child increment): true when a
 node is currently docked into its parent's docked-child slot, populated for
 any kind that has been docked, defaulted false otherwise - same additive
 rule.
+
+R3.21 adds `imageAssetId` (the ImageNode increment): the opaque asset-store
+key an image-kind node's bytes live under (fetched separately over HTTP,
+never inlined here), populated for kind=="image" rows, defaulted (empty
+string) for every other kind, same additive rule.
 """
 
 from __future__ import annotations
@@ -61,6 +66,12 @@ class SceneNodeRow:
     # that has been docked into its parent's docked-child slot, defaulted
     # false for every other node.
     isDocked: bool = False
+    # R3.21: the image node's opaque reference key into the asset store
+    # (backend/assets.py's GET /api/assets/{id}) - populated for kind=="image"
+    # rows, defaulted (empty string) for every other kind. The image bytes
+    # themselves never appear in this payload - see the transport-decision
+    # comment on backend/canvas.py's SceneDocument.image_assets.
+    imageAssetId: str = ""
 
 
 @dataclass
