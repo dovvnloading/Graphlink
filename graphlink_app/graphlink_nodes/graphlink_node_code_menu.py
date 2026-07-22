@@ -7,7 +7,17 @@ from graphlink_exporter import Exporter
 
 
 class CodeNodeContextMenu(QMenu):
-    """Context menu for CodeNode, providing copy, export, and regenerate actions."""
+    """Context menu for CodeNode, providing copy, export, and regenerate actions.
+
+    Bug-scan finding: the export actions used to connect QAction.triggered to
+    a lambda closing over self (e.g. `lambda: self._handle_export('txt')`).
+    PySide6's GC does not reclaim a self-capturing lambda connected to a
+    widget-owned signal (confirmed empirically - a bound-method connection is
+    reclaimed fine), so this menu - and the CodeNode it stores via self.node -
+    leaked forever on EVERY right-click. Fixed by storing the format via
+    QAction.setData() and connecting every export action to one shared
+    bound-method dispatcher that reads self.sender().data().
+    """
 
     def __init__(self, node, parent=None):
         super().__init__(parent)
@@ -49,26 +59,34 @@ class CodeNodeContextMenu(QMenu):
         export_menu.setIcon(qta.icon('fa5s.file-export', color='white'))
 
         py_action = QAction("Python Script (.py)", self)
-        py_action.triggered.connect(lambda: self._handle_export('py'))
+        py_action.setData('py')
+        py_action.triggered.connect(self._on_export_action_triggered)
         export_menu.addAction(py_action)
 
         txt_action = QAction("Text File (.txt)", self)
-        txt_action.triggered.connect(lambda: self._handle_export('txt'))
+        txt_action.setData('txt')
+        txt_action.triggered.connect(self._on_export_action_triggered)
         export_menu.addAction(txt_action)
 
         md_action = QAction("Markdown File (.md)", self)
-        md_action.triggered.connect(lambda: self._handle_export('md'))
+        md_action.setData('md')
+        md_action.triggered.connect(self._on_export_action_triggered)
         export_menu.addAction(md_action)
 
         html_action = QAction("HTML Document (.html)", self)
-        html_action.triggered.connect(lambda: self._handle_export('html'))
+        html_action.setData('html')
+        html_action.triggered.connect(self._on_export_action_triggered)
         export_menu.addAction(html_action)
 
         pdf_action = QAction("PDF Document (.pdf)", self)
-        pdf_action.triggered.connect(lambda: self._handle_export('pdf'))
+        pdf_action.setData('pdf')
+        pdf_action.triggered.connect(self._on_export_action_triggered)
         export_menu.addAction(pdf_action)
 
         return export_menu
+
+    def _on_export_action_triggered(self):
+        self._handle_export(self.sender().data())
 
     def _handle_export(self, file_format):
         exporter = Exporter()
