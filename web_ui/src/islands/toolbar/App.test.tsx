@@ -126,7 +126,7 @@ describe("App against a real (faked) QWebChannel connection", () => {
     expect(pinsButton).toHaveAttribute("aria-pressed", "false");
   });
 
-  it("Controls toggles purely client-side and calls toggleControls with the new value", async () => {
+  it("clicking Controls fires toggleControls but never flips itself locally", async () => {
     const remote = installFakeQWebChannel();
     const user = userEvent.setup();
     render(<App />);
@@ -136,11 +136,57 @@ describe("App against a real (faked) QWebChannel connection", () => {
 
     await user.click(controlsButton);
     expect(remote.toggleControls).toHaveBeenCalledWith(true);
-    expect(controlsButton).toHaveAttribute("aria-pressed", "true");
+    // Server-authoritative: no payload arrived, so the chip stays unpressed.
+    expect(controlsButton).toHaveAttribute("aria-pressed", "false");
+
+    push(remote, { activeSurface: "controls" });
+    await waitFor(() => expect(controlsButton).toHaveAttribute("aria-pressed", "true"));
 
     await user.click(controlsButton);
-    expect(remote.toggleControls).toHaveBeenCalledWith(false);
-    expect(controlsButton).toHaveAttribute("aria-pressed", "false");
+    expect(remote.toggleControls).toHaveBeenLastCalledWith(false);
+    // Still pressed until the server republishes the close.
+    expect(controlsButton).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("a chip shows active when activeSurface matches and clears when it goes back to empty", async () => {
+    const remote = installFakeQWebChannel();
+    render(<App />);
+    push(remote, { activeSurface: "" });
+
+    const chips: Array<[string, RegExp | string]> = [
+      ["library", "Library"],
+      ["controls", "Controls"],
+      ["plugins", /Plugins/],
+      ["settings", "Settings"],
+      ["about", "About"],
+      ["help", "Help"],
+    ];
+
+    for (const [surface, label] of chips) {
+      const chip = await screen.findByRole("button", { name: label });
+      expect(chip).toHaveAttribute("aria-pressed", "false");
+
+      push(remote, { activeSurface: surface });
+      await waitFor(() => expect(chip).toHaveAttribute("aria-pressed", "true"));
+      expect(chip.className).toContain("checked");
+
+      push(remote, { activeSurface: "" });
+      await waitFor(() => expect(chip).toHaveAttribute("aria-pressed", "false"));
+      expect(chip.className).not.toContain("checked");
+    }
+  });
+
+  it("only the chip matching activeSurface is pressed, never its siblings", async () => {
+    const remote = installFakeQWebChannel();
+    render(<App />);
+    push(remote, { activeSurface: "settings" });
+
+    const settings = await screen.findByRole("button", { name: "Settings" });
+    await waitFor(() => expect(settings).toHaveAttribute("aria-pressed", "true"));
+    for (const label of ["Library", "Controls", "About", "Help"]) {
+      expect(screen.getByRole("button", { name: label })).toHaveAttribute("aria-pressed", "false");
+    }
+    expect(screen.getByRole("button", { name: /Plugins/ })).toHaveAttribute("aria-pressed", "false");
   });
 
   it("the mode select shows the real options and calls selectMode on change", async () => {

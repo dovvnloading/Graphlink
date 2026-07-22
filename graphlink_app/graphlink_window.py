@@ -36,6 +36,8 @@ from graphlink_ui_dialogs.graphlink_library_dialog import ChatLibraryDialog
 from graphlink_about_web import AboutWebHost
 from graphlink_help_web import HelpWebHost
 from graphlink_settings_web import SettingsWebHost
+from graphlink_dialog_frame import DialogFrame
+from graphlink_overlay_manager import DIALOG, OverlayManager, POPOVER
 
 from graphlink_session import ChatSessionManager
 from graphlink_command_palette import CommandManager
@@ -103,6 +105,7 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         self.setGeometry(100, 100, 1200, 800)
         self.library_dialog = None
         self.settings_panel = None
+        self.settings_frame = None
         self.help_panel = None
         self.about_panel = None
         self._initial_show_complete = False
@@ -286,6 +289,26 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         # continuously repositioned during a live resize either).
         self.plugin_picker = PluginPickerHost(self.plugin_portal, parent=self.composer_overlay_parent)
 
+        # UI-refactor P1 (doc/UI_QA_AUDIT.md section 7): every transient
+        # surface's open/dismiss lifecycle routes through ONE manager -
+        # single-open, Escape + outside-click dismissal, scrimmed clamped
+        # dialogs, chip state from real visibility. Lazy dialogs register
+        # accessor closures; the manager tolerates not-yet-created panels.
+        self.overlay_manager = OverlayManager(self)
+        self._register_overlay_surfaces()
+        self.overlay_manager.visibility_changed.connect(self._on_overlay_visibility_changed)
+        # Escape must dismiss the open surface no matter WHICH island owns
+        # keyboard focus at press time (e.g. the toolbar webview right after
+        # a chip click) - every existing host's page-side Escape relay routes
+        # to close_all. Later-created hosts are hooked by the manager's
+        # open()-time descendant pass.
+        import graphlink_web_island_host as _wih
+        for _host in list(getattr(_wih, "_hosts", [])):
+            signal = getattr(_host, "escape_pressed", None)
+            if signal is not None and not getattr(_host, "_gl_escape_hooked", False):
+                signal.connect(self.overlay_manager.close_all)
+                _host._gl_escape_hooked = True
+
         self.new_chat_shortcut = QShortcut(QKeySequence("Ctrl+T"), self); self.new_chat_shortcut.activated.connect(self.new_chat)
         self.library_shortcut = QShortcut(QKeySequence("Ctrl+L"), self); self.library_shortcut.activated.connect(self.show_library)
         self.save_shortcut = QShortcut(QKeySequence("Ctrl+S"), self); self.save_shortcut.activated.connect(self.save_chat)
@@ -406,6 +429,10 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._update_overlay_positions()
+        # P1: keep the scrim full-window and re-clamp any open dialog so no
+        # pixel ever leaves the window during a live resize (audit B4).
+        if getattr(self, "overlay_manager", None) is not None:
+            self.overlay_manager.reposition_for_resize()
 
     def eventFilter(self, watched, event):
         chat_view = getattr(self, 'chat_view', None)
@@ -778,15 +805,119 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         self.search_overlay.setVisible(True)
         self._update_overlay_positions()
 
-    def show_library(self):
-        if self.library_dialog and self.library_dialog.isVisible():
-            self.library_dialog.raise_()
-            self.library_dialog.activateWindow()
-            return
+    def _register_overlay_surfaces(self):
+        manager = self.overlay_manager
 
-        self.library_dialog = ChatLibraryDialog(self.session_manager, self)
-        self.library_dialog.destroyed.connect(lambda *_: setattr(self, "library_dialog", None))
+        manager.register(
+            "plugins", POPOVER,
+            widget_fn=lambda: self.plugin_picker,
+            open_fn=self._open_plugin_picker,
+            close_fn=lambda: self.plugin_picker.setVisible(False),
+            is_open_fn=lambda: self.plugin_picker.isVisible(),
+        )
+        manager.register(
+            "pins", POPOVER,
+            widget_fn=lambda: self.pin_overlay,
+            open_fn=lambda: self.pin_overlay.show_for_anchor(self.toolbar_host.bridge.get_anchor("pins")),
+            close_fn=lambda: self.pin_overlay.setVisible(False),
+            is_open_fn=lambda: self.pin_overlay.isVisible(),
+        )
+        manager.register(
+            "help", POPOVER,
+            widget_fn=lambda: self.help_panel,
+            open_fn=self._open_help_panel,
+            close_fn=lambda: self.help_panel.close() if self.help_panel else None,
+            is_open_fn=lambda: bool(self.help_panel and self.help_panel.isVisible()),
+        )
+        manager.register(
+            "controls", POPOVER,
+            # The three view-control hosts toggle as ONE logical surface;
+            # outside-click hit-testing uses the grid panel (largest). The
+            # single-popover approximation is acceptable until P5 merges
+            # them into one real View popover.
+            widget_fn=lambda: self.chat_view.grid_control_host,
+            open_fn=lambda: self.chat_view.toggle_overlays_visibility(True),
+            close_fn=lambda: self.chat_view.toggle_overlays_visibility(False),
+            is_open_fn=lambda: self.chat_view.grid_control_host.isVisible(),
+        )
+        manager.register(
+            "about", DIALOG,
+            widget_fn=lambda: self.about_panel,
+            open_fn=self._open_about_panel,
+            close_fn=lambda: self.about_panel.close() if self.about_panel else None,
+            is_open_fn=lambda: bool(self.about_panel and self.about_panel.isVisible()),
+        )
+        manager.register(
+            "settings", DIALOG,
+            widget_fn=lambda: self.settings_frame,
+            open_fn=self._open_settings_frame,
+            close_fn=lambda: self.settings_frame.setVisible(False) if self.settings_frame else None,
+            is_open_fn=lambda: bool(self.settings_frame and self.settings_frame.isVisible()),
+        )
+        manager.register(
+            "library", DIALOG,
+            widget_fn=lambda: self.library_dialog,
+            open_fn=self._open_library_dialog,
+            close_fn=lambda: self.library_dialog.setVisible(False) if self.library_dialog else None,
+            is_open_fn=lambda: bool(self.library_dialog and self.library_dialog.isVisible()),
+        )
+
+    def _on_overlay_visibility_changed(self, name, is_open):
+        # Chip active-state binds to REAL visibility (audit B6) - the toolbar
+        # island republishes its payload with the live surface name.
+        bridge = getattr(self.toolbar_host, "bridge", None)
+        if bridge is not None:
+            bridge.publish()
+
+    def _open_plugin_picker(self):
+        self.plugin_picker.reposition(self.toolbar_host.bridge.get_anchor("plugins"))
+        self.plugin_picker.setVisible(True)
+
+    def _open_help_panel(self):
+        if not self.help_panel:
+            self.help_panel = HelpWebHost(self)
+        self.help_panel.show_for_anchor(self.toolbar_host.bridge.get_anchor("help"))
+
+    def _open_about_panel(self):
+        if not self.about_panel:
+            self.about_panel = AboutWebHost(self)
+        self.about_panel.show_centered_over_parent()
+        # P1 (audit B4): show_centered_over_parent uses frame-geometry math
+        # that can land partially outside a small window - re-clamp inside.
+        self._clamp_child_in_window(self.about_panel)
+
+    def _clamp_child_in_window(self, widget, margin=16):
+        width = min(widget.width(), self.width() - 2 * margin)
+        height = min(widget.height(), self.height() - 2 * margin)
+        widget.resize(max(width, 0), max(height, 0))
+        x = (self.width() - widget.width()) // 2
+        y = (self.height() - widget.height()) // 2
+        widget.move(max(margin, x), max(margin, y))
+
+    def _open_settings_frame(self):
+        if self.settings_panel is None:
+            self.settings_panel = SettingsWebHost(self.settings_manager, main_window=self)
+            self.settings_frame = DialogFrame("Settings", self.settings_panel, parent=self)
+            self.settings_frame.resize(
+                self.settings_panel.width() + 40, self.settings_panel.height() + 80
+            )
+            self.settings_frame.close_requested.connect(lambda: self.overlay_manager.close("settings"))
+        self.settings_panel.set_current_section_by_mode(self.settings_manager.get_current_mode())
+        self.settings_frame.center_in_parent()
+        self.settings_frame.setVisible(True)
+
+    def _open_library_dialog(self):
+        if self.library_dialog is None:
+            # Cached once, plain embedded child (P1): the fresh-top-level-
+            # window-per-open construction was the audit-B3 first-click
+            # no-op; an embedded cached widget has no first-show race.
+            self.library_dialog = ChatLibraryDialog(self.session_manager, self)
+            self.library_dialog.close_button.clicked.disconnect()
+            self.library_dialog.close_button.clicked.connect(lambda: self.overlay_manager.close("library"))
         self.library_dialog.show_centered()
+
+    def show_library(self):
+        self.overlay_manager.toggle("library")
         
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Escape:
@@ -809,24 +940,10 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         return self.settings_manager.get_notification_type_enabled(msg_type)
 
     def _toggle_plugin_picker(self):
-        if self.plugin_picker.isVisible():
-            # setVisible(False), not .close() - PluginPickerHost is a plain
-            # embedded child with no Window flag, never meant to go through
-            # a native closeEvent (see graphlink_plugin_picker_web.py).
-            self.plugin_picker.setVisible(False)
-            return
-        self.plugin_picker.reposition(self.toolbar_host.bridge.get_anchor("plugins"))
-        self.plugin_picker.setVisible(True)
-        self.plugin_picker.raise_()
+        self.overlay_manager.toggle("plugins")
 
     def toggle_pin_overlay(self, checked=False):
-        if self.pin_overlay.isVisible():
-            # setVisible(False), not .close() - PinOverlayHost is a plain
-            # embedded child with no Window flag, never meant to go through
-            # a native closeEvent (see graphlink_pin_overlay_web.py).
-            self.pin_overlay.setVisible(False)
-            return
-        self.pin_overlay.show_for_anchor(self.toolbar_host.bridge.get_anchor("pins"))
+        self.overlay_manager.toggle("pins")
 
     def update_title_bar(self):
         title = "Graphlink"
@@ -836,25 +953,10 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         self.setWindowTitle(title)
 
     def show_about_dialog(self):
-        # Cached once and toggled, replacing the legacy AboutDialog(self).exec()
-        # (modal, constructed fresh every call) - see graphlink_about_web.py's
-        # module docstring for the modal->non-modal rationale.
-        if self.about_panel and self.about_panel.isVisible():
-            self.about_panel.close()
-            return
-        if not self.about_panel:
-            self.about_panel = AboutWebHost(self)
-        self.about_panel.show_centered_over_parent()
+        self.overlay_manager.toggle("about")
 
     def show_help(self):
-        if self.help_panel and self.help_panel.isVisible():
-            self.help_panel.close()
-            return
-
-        if not self.help_panel:
-            self.help_panel = HelpWebHost(self)
-
-        self.help_panel.show_for_anchor(self.toolbar_host.bridge.get_anchor("help"))
+        self.overlay_manager.toggle("help")
 
     def _build_document_section(self, title, body):
         text = str(body or "").strip()
@@ -966,18 +1068,7 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
     def hide_document_view(self): self.doc_viewer_panel.setVisible(False)
 
     def show_settings(self):
-        if self.settings_panel and self.settings_panel.isVisible():
-            self.settings_panel.close()
-            return
-
-        if not self.settings_panel:
-            # Unconditional since Phase 3 increment 10 deleted the legacy
-            # SettingsDialog and its renderer flag (pre-deletion code is at
-            # the legacy-settings-final git tag).
-            self.settings_panel = SettingsWebHost(self.settings_manager, main_window=self, parent=self)
-
-        self.settings_panel.set_current_section_by_mode(self.settings_manager.get_current_mode())
-        self.settings_panel.show_for_anchor(self.toolbar_host.bridge.get_anchor("settings"))
+        self.overlay_manager.toggle("settings")
 
     def _initialize_mode(self, mode_text, *, show_dialogs):
         if mode_text == config.MODE_OLLAMA_LOCAL:

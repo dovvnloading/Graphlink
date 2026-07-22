@@ -51,12 +51,15 @@ class SettingsWebHost(WebIslandHost):
             unavailable_message=SETTINGS_UNAVAILABLE_MESSAGE,
             parent=parent,
         )
-        # A persistent tool window, not a transient popup - same rationale
-        # the legacy SettingsDialog recorded: stays open during scans,
-        # message boxes, and incidental outside clicks.
-        self.setWindowFlags(
-            Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint | Qt.WindowType.NoDropShadowWindowHint
-        )
+        # UI-refactor P1 (audit B4/B5): no longer a top-level Tool window
+        # positioned/clamped against the SCREEN - that let it hang past the
+        # main window's edge onto the desktop, z-order under other dialogs,
+        # and ship without any close affordance. It is now a plain child
+        # widget embedded in a DialogFrame (title + close button) that
+        # OverlayManager centers, clamps INSIDE the window, and scrims.
+        # The legacy "stays open during scans" rationale is preserved by
+        # the manager's dialog policy: dialogs ignore incidental outside
+        # clicks (only scrim click / close button / Escape dismiss).
         self.resize(SETTINGS_WIDTH, SETTINGS_HEIGHT)
 
     def set_current_section_by_mode(self, mode_text: str) -> None:
@@ -68,28 +71,9 @@ class SettingsWebHost(WebIslandHost):
         section = mode_text if mode_text in SECTION_NAMES else "General"
         self.bridge.set_active_section(section)
 
-    def show_for_anchor(self, anchor_widget) -> None:
-        self.resize(SETTINGS_WIDTH, SETTINGS_HEIGHT)
-
-        target_global = anchor_widget.mapToGlobal(
-            QPoint(anchor_widget.width() - self.width(), anchor_widget.height() + 6)
-        )
-        screen = QGuiApplication.screenAt(target_global) or QGuiApplication.primaryScreen()
-        available_geometry = screen.availableGeometry() if screen else None
-
-        x = target_global.x()
-        y = target_global.y()
-
-        if available_geometry is not None:
-            max_x = available_geometry.right() - self.width() - 12
-            max_y = available_geometry.bottom() - self.height() - 12
-            x = max(available_geometry.left() + 12, min(x, max_x))
-            y = max(available_geometry.top() + 12, min(y, max_y))
-
-        self.move(x, y)
-        self.show()
-        self.raise_()
-        self.activateWindow()
+    # P1: show_for_anchor (screen-coordinate positioning) deleted - the host
+    # is embedded in a DialogFrame that OverlayManager centers and clamps
+    # inside the main window. Positioning is no longer this class's job.
 
     def _iter_running_workers(self):
         bridge = self.bridge

@@ -13,7 +13,6 @@ type AnchorName = (typeof ANCHOR_NAMES)[number];
 function App() {
   const [state, setState] = useState<ToolbarState>(initialToolbarState);
   const [rejection, setRejection] = useState<BridgeRejection | null>(null);
-  const [controlsChecked, setControlsChecked] = useState(false);
   const bridgeRef = useRef<ToolbarBridge | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const pinsAnchorRef = useRef<HTMLButtonElement>(null);
@@ -90,15 +89,23 @@ function App() {
     );
   }
 
-  function onToggleControls() {
-    const next = !controlsChecked;
-    setControlsChecked(next);
-    bridgeRef.current?.toggleControls(next);
-  }
+  // UI-refactor P1 (audit B6): every chip's active visual derives from the
+  // server-published activeSurface ("" when nothing is open) - never from
+  // island-local latched click state. Clicks only fire intents; the bridge
+  // republishes on every open/close, so the visual follows real visibility
+  // (including surfaces closed via Esc, their own Close button, etc.).
+  const isActive = (surface: string) => state.activeSurface === surface;
+  const chipClass = (surface: string) =>
+    "toolbar-btn toolbar-btn-checkable" + (isActive(surface) ? " checked" : "");
 
   return (
     <div className="toolbar-shell" ref={rootRef}>
-      <button type="button" className="toolbar-btn" onClick={() => bridgeRef.current?.openLibrary()}>
+      <button
+        type="button"
+        className={chipClass("library")}
+        aria-pressed={isActive("library")}
+        onClick={() => bridgeRef.current?.openLibrary()}
+      >
         Library
       </button>
       <button type="button" className="toolbar-btn" onClick={() => bridgeRef.current?.saveChat()}>
@@ -137,9 +144,9 @@ function App() {
       </button>
       <button
         type="button"
-        className={"toolbar-btn toolbar-btn-checkable" + (controlsChecked ? " checked" : "")}
-        aria-pressed={controlsChecked}
-        onClick={onToggleControls}
+        className={chipClass("controls")}
+        aria-pressed={isActive("controls")}
+        onClick={() => bridgeRef.current?.toggleControls(!isActive("controls"))}
       >
         Controls
       </button>
@@ -147,7 +154,8 @@ function App() {
       <button
         type="button"
         ref={pluginsAnchorRef}
-        className="toolbar-btn toolbar-btn-plugins"
+        className={chipClass("plugins") + " toolbar-btn-plugins"}
+        aria-pressed={isActive("plugins")}
         onClick={() => bridgeRef.current?.togglePlugins()}
       >
         Plugins <span className="toolbar-chevron">&#9662;</span>
@@ -171,18 +179,25 @@ function App() {
       <button
         type="button"
         ref={settingsAnchorRef}
-        className="toolbar-btn"
+        className={chipClass("settings")}
+        aria-pressed={isActive("settings")}
         onClick={() => bridgeRef.current?.openSettings()}
       >
         Settings
       </button>
-      <button type="button" className="toolbar-btn" onClick={() => bridgeRef.current?.openAbout()}>
+      <button
+        type="button"
+        className={chipClass("about")}
+        aria-pressed={isActive("about")}
+        onClick={() => bridgeRef.current?.openAbout()}
+      >
         About
       </button>
       <button
         type="button"
         ref={helpAnchorRef}
-        className="toolbar-btn"
+        className={chipClass("help")}
+        aria-pressed={isActive("help")}
         onClick={() => bridgeRef.current?.openHelp()}
       >
         Help

@@ -34,6 +34,10 @@ class ToolbarStatePayload:
     schemaVersion: int
     revision: int
     pinsChecked: bool
+    # UI-refactor P1 (audit B6): the name of the surface currently open
+    # ("" when none) - chips render active from THIS, never from island-local
+    # latched click state.
+    activeSurface: str
     modeOptions: list[str]
     currentMode: str
     # See ComposerStatePayload's identical field for the full negotiation

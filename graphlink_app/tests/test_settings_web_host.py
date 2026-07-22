@@ -59,13 +59,18 @@ def test_construction_registers_with_the_shared_shutdown_registry(tmp_path):
     assert host in wih._hosts
 
 
-def test_window_flags_are_a_persistent_frameless_tool_window(tmp_path):
+def test_host_is_a_plain_embedded_child_not_a_tool_window(tmp_path):
+    # UI-refactor P1 (audit B4/B5): the Tool-window flags are GONE - the host
+    # embeds in a DialogFrame that OverlayManager centers, clamps inside the
+    # main window, and scrims. A Tool flag reappearing here would resurrect
+    # the dialog-escapes-the-window bug.
     host = _make_host(tmp_path)
 
     flags = host.windowFlags()
 
-    assert flags & Qt.WindowType.Tool
-    assert flags & Qt.WindowType.FramelessWindowHint
+    # Bitwise note: Tool INCLUDES the Window bit, so `flags & Tool` is
+    # truthy for any parentless default widget - compare the masked type.
+    assert (flags & Qt.WindowType.WindowType_Mask) != Qt.WindowType.Tool
 
 
 def test_construction_sizes_to_820x560(tmp_path):
@@ -116,16 +121,13 @@ class TestSetCurrentSectionByMode:
 
 
 class TestShowForAnchor:
-    def test_shows_the_panel_and_resizes_to_820x560(self, tmp_path):
+    def test_screen_coordinate_positioning_is_gone(self, tmp_path):
+        # P1: show_for_anchor (screen-coordinate positioning) was deleted -
+        # positioning belongs to OverlayManager/DialogFrame now. Its
+        # resurrection would bypass the window-clamp guarantee.
         host = _make_host(tmp_path)
-        anchor = QWidget()
-        anchor.resize(80, 24)
 
-        host.show_for_anchor(anchor)
-
-        assert host.isVisible() is True
-        assert host.width() == 820
-        assert host.height() == 560
+        assert not hasattr(host, "show_for_anchor")
 
 
 class TestCloseGuard:

@@ -6,6 +6,7 @@ export interface ToolbarState {
   schemaVersion: number;
   revision: number;
   pinsChecked: boolean;
+  activeSurface: string;
   modeOptions: string[];
   currentMode: string;
   minCompatibleSchemaVersion?: number | null;
@@ -42,6 +43,11 @@ function checkToolbarState(value: unknown, path: string, errors: string[]): void
     const fieldValue = value["pinsChecked"];
     if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.pinsChecked: missing required field`);
     else { if (typeof fieldValue !== "boolean") errors.push(`${path}.pinsChecked` + ": expected boolean"); }
+  }
+  {
+    const fieldValue = value["activeSurface"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.activeSurface: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.activeSurface` + ": expected string"); }
   }
   {
     const fieldValue = value["modeOptions"];

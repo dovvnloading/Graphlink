@@ -35,13 +35,15 @@ class ChatLibraryDialog(QDialog):
 
         self.setObjectName("libraryWindow")
         self.setWindowTitle("Chat Library")
-        self.setWindowFlags(
-            Qt.WindowType.Dialog
-            | Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.NoDropShadowWindowHint
-            | Qt.WindowType.WindowStaysOnTopHint
-        )
-        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        # UI-refactor P1 (audit B3/B4): no longer a fresh top-level frameless
+        # stay-on-top window per open (whose first-show race was the
+        # first-click no-op) - a plain embedded child widget, cached once,
+        # opened/scrimmed/clamped by OverlayManager. WA_DeleteOnClose dropped
+        # for the same reason: the instance persists.
+        # QDialog sets the Dialog WINDOW flag by default even with a parent -
+        # without this explicit Widget flag it still opens as a top-level
+        # window (translucent + frameless-stripped = an INVISIBLE one).
+        self.setWindowFlags(Qt.WindowType.Widget)
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setModal(False)
@@ -51,14 +53,15 @@ class ChatLibraryDialog(QDialog):
         outer_layout.setContentsMargins(12, 12, 12, 14)
         outer_layout.setSpacing(0)
 
-        shadow = QGraphicsDropShadowEffect(self)
-        shadow.setBlurRadius(24)
-        shadow.setOffset(0, 10)
-        shadow.setColor(Qt.GlobalColor.black)
-
+        # UI-refactor P1: the QGraphicsDropShadowEffect that used to sit on
+        # this shell WAS audit finding B7 - the "library body is a black
+        # void". A QGraphicsEffect on an ancestor forces software rendering
+        # that the GPU-composited ChatLibraryWebHost inside cannot join, so
+        # the entire web region painted as a solid black rectangle while the
+        # native header rendered fine. No ancestor of a webview may carry a
+        # QGraphicsEffect, ever.
         self.shell = QFrame()
         self.shell.setObjectName("libraryShell")
-        self.shell.setGraphicsEffect(shadow)
         outer_layout.addWidget(self.shell)
 
         root_layout = QVBoxLayout(self.shell)
@@ -119,26 +122,24 @@ class ChatLibraryDialog(QDialog):
         self.on_theme_changed()
 
     def _position_window(self):
+        # P1: parent-RELATIVE centering with a clamp inside the parent rect
+        # (this is a plain child widget now - audit B4's "no dialog pixel
+        # outside the window" applies here too).
         parent = self.parentWidget()
-        if parent is not None and parent.isVisible():
-            parent_geometry = parent.frameGeometry()
-            target = parent_geometry.center() - self.rect().center()
-            self.move(target)
+        if parent is None:
             return
-
-        screen = QGuiApplication.primaryScreen()
-        available_geometry = screen.availableGeometry() if screen else None
-        if available_geometry is None:
-            return
-
-        target = available_geometry.center() - self.rect().center()
-        self.move(target)
+        margin = 16
+        width = min(self.width(), parent.width() - 2 * margin)
+        height = min(self.height(), parent.height() - 2 * margin)
+        self.resize(max(width, 0), max(height, 0))
+        x = (parent.width() - self.width()) // 2
+        y = (parent.height() - self.height()) // 2
+        self.move(max(margin, x), max(margin, y))
 
     def show_centered(self):
         self._position_window()
         self.show()
         self.raise_()
-        self.activateWindow()
         # Give keyboard focus to the web content so its search input (which
         # autofocuses on mount) can receive typing immediately - the web
         # equivalent of the legacy search_input.setFocus().

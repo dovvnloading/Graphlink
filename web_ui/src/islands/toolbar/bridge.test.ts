@@ -99,10 +99,10 @@ describe("createToolbarBridge against a real QWebChannel connection", () => {
       createToolbarBridge(listener);
       const push = remote.stateChanged.connect.mock.calls[0][0] as (payload: string) => void;
 
-      push(stateJson({ revision: 2, pinsChecked: true, currentMode: "API Endpoint" }));
+      push(stateJson({ revision: 2, pinsChecked: true, activeSurface: "settings", currentMode: "API Endpoint" }));
 
       expect(listener).toHaveBeenCalledWith(
-        expect.objectContaining({ pinsChecked: true, currentMode: "API Endpoint" }),
+        expect.objectContaining({ pinsChecked: true, activeSurface: "settings", currentMode: "API Endpoint" }),
       );
     } finally {
       uninstallFakeQWebChannel();
