@@ -86,9 +86,15 @@ class TestThemeTokensStructure:
         # "all four token groups" before that change landed.
         # "composer"/"composer_alpha" were added by the composer token
         # retrofit (see tests/test_composer_token_retrofit.py).
+        # "surface" was added by UI-refactor P0 (doc/UI_QA_AUDIT.md section
+        # 7): the clean neutral role set the hex-literal sweep migrated
+        # native painting/stylesheet code onto, exported to islands like
+        # palette/semantic (see test_ui_token_acceptance.py for the gate).
+        # "syntax" (same increment, sweep adjudication): PythonHighlighter's
+        # palette relocated from graphlink_pycoder.py.
         expected = {
-            "palette", "semantic", "neutral_button", "graph_node", "qss", "qss_alpha",
-            "composer", "composer_alpha",
+            "palette", "semantic", "neutral_button", "graph_node", "surface",
+            "syntax", "qss", "qss_alpha", "composer", "composer_alpha",
         }
         for name in ("dark", "mono", "muted"):
             tokens = gs.THEME_TOKENS[name]

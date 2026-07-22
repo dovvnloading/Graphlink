@@ -7,7 +7,8 @@ from PySide6.QtCore import QTimer, Qt, Signal, QRectF, QPointF, QDateTime, QRect
 from PySide6.QtGui import QPainter, QColor, QBrush, QPen, QPainterPath, QTextDocument, QAction, QCursor, QFont
 import qtawesome as qta
 import markdown
-from graphlink_config import canvas_font, get_current_palette, get_graph_node_colors, get_neutral_button_colors, get_semantic_color
+from graphlink_config import canvas_font, get_current_palette, get_graph_node_colors, get_neutral_button_colors, get_semantic_color, get_surface_color
+from graphlink_styles import FONT_FAMILY
 from graphlink_canvas_items import HoverAnimationMixin
 from graphlink_lod import draw_lod_card, preview_text, sync_proxy_render_state
 from graphlink_plugins.graphlink_plugin_context_menu import PluginNodeContextMenu
@@ -29,12 +30,12 @@ class ChatMessageBubbleItem(QGraphicsObject):
         
         self.document = QTextDocument()
         palette = get_current_palette()
-        self.document.setDefaultStyleSheet("""
-            p, ul, ol, li, blockquote { color: #e0e0e0; margin: 0; font-family: 'Segoe UI'; font-size: 12px; }
-            pre { background-color: #1e1e1e; padding: 8px; border-radius: 4px; white-space: pre-wrap; font-family: Consolas, monospace; }
-            a { color: %s; }
-            .timestamp { color: #666666; font-size: 9px; }
-        """ % palette.AI_NODE.name())
+        self.document.setDefaultStyleSheet(f"""
+            p, ul, ol, li, blockquote {{ color: {get_surface_color("text_primary")}; margin: 0; font-family: {FONT_FAMILY}; font-size: 12px; }}
+            pre {{ background-color: {get_surface_color("window")}; padding: 8px; border-radius: 4px; white-space: pre-wrap; font-family: Consolas, monospace; }}
+            a {{ color: {palette.AI_NODE.name()}; }}
+            .timestamp {{ color: {get_surface_color("handle_hover")}; font-size: 9px; }}
+        """)
         
         html_content = markdown.markdown(text, extensions=['fenced_code', 'tables'])
         # Append timestamp to the HTML
@@ -138,7 +139,7 @@ class TypingIndicatorItem(QGraphicsObject):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         path = QPainterPath()
         path.addRoundedRect(self.boundingRect(), 15, 15)
-        painter.setBrush(QColor("#323232"))
+        painter.setBrush(get_semantic_color("conversation_ai_bubble"))
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawPath(path)
 
@@ -182,9 +183,9 @@ class ConversationNode(QGraphicsObject, HoverAnimationMixin):
         self.widget = QWidget()
         self.widget.setObjectName("conversationMainWidget")
         self.widget.setFixedSize(self.NODE_WIDTH, self.NODE_HEIGHT)
-        self.widget.setStyleSheet("""
-            QWidget#conversationMainWidget { background-color: transparent; color: #e0e0e0; }
-            QWidget#conversationMainWidget QLabel { background-color: transparent; }
+        self.widget.setStyleSheet(f"""
+            QWidget#conversationMainWidget {{ background-color: transparent; color: {get_surface_color("text_primary")}; }}
+            QWidget#conversationMainWidget QLabel {{ background-color: transparent; }}
         """)
 
         self._message_items = []
@@ -305,7 +306,7 @@ class ConversationNode(QGraphicsObject, HoverAnimationMixin):
         self.internal_view.setRenderHint(QPainter.RenderHint.Antialiasing)
         self.internal_view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.internal_view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self.internal_view.setStyleSheet("background-color: #1a1a1a; border: 1px solid #333; border-radius: 6px;")
+        self.internal_view.setStyleSheet(f"background-color: {get_surface_color('window')}; border: 1px solid {get_surface_color('border')}; border-radius: 6px;")
         main_layout.addWidget(self.internal_view)
 
         input_layout = QHBoxLayout()
@@ -340,7 +341,7 @@ class ConversationNode(QGraphicsObject, HoverAnimationMixin):
             hover = self._blend_color(button_colors["hover"], accent, 0.30)
             pressed = self._blend_color(button_colors["pressed"], accent, 0.24)
             border = self._blend_color(button_colors["border"], accent, 0.42)
-            icon_color = button_colors["muted_icon"] if self._cancel_pending else QColor("#ffffff")
+            icon_color = button_colors["muted_icon"] if self._cancel_pending else QColor(get_surface_color("text_bright"))
             icon_name = 'fa5s.stop'
             tooltip = "Cancelling..." if self._cancel_pending else "Cancel response"
         else:
@@ -516,13 +517,13 @@ class ConversationNode(QGraphicsObject, HoverAnimationMixin):
         
         path = QPainterPath()
         path.addRoundedRect(0, 0, self.width, self.height, 10, 10)
-        painter.setBrush(QColor("#2d2d2d"))
-        
+        painter.setBrush(QColor(get_surface_color("field")))
+
         node_color = node_colors["border"]
         pen = QPen(node_color, 1.5)
         
         if self.isSelected(): pen = QPen(palette.SELECTION, 2)
-        elif self.hovered: pen = QPen(QColor("#ffffff"), 2)
+        elif self.hovered: pen = QPen(QColor(get_surface_color("text_bright")), 2)
         
         painter.setPen(pen)
         painter.drawPath(path)
@@ -561,7 +562,7 @@ class ConversationNode(QGraphicsObject, HoverAnimationMixin):
             return
 
         if self.is_collapsed:
-            painter.setPen(QColor("#ffffff"))
+            painter.setPen(QColor(get_surface_color("text_bright")))
             font = canvas_font(self.scene(), weight=QFont.Weight.Bold)
             painter.setFont(font)
             painter.drawText(QRectF(40, 0, self.width - 80, self.height), Qt.AlignmentFlag.AlignVCenter, "Conversation")
@@ -570,7 +571,7 @@ class ConversationNode(QGraphicsObject, HoverAnimationMixin):
             icon.paint(painter, QRect(10, 10, 20, 20))
             
             self.collapse_button_rect = QRectF(self.width - 35, 5, 30, 30)
-            expand_icon = qta.icon('fa5s.expand-arrows-alt', color='#ffffff' if self.hovered else '#888888')
+            expand_icon = qta.icon('fa5s.expand-arrows-alt', color=get_surface_color("text_bright") if self.hovered else get_surface_color("chrome_inactive"))
             expand_icon.paint(painter, QRect(int(self.width - 30), 10, 20, 20))
         else:
             if self.hovered:
@@ -579,7 +580,7 @@ class ConversationNode(QGraphicsObject, HoverAnimationMixin):
                 painter.setPen(QColor(255, 255, 255, 150))
                 painter.drawRoundedRect(self.collapse_button_rect.adjusted(6,6,-6,-6), 4, 4)
                 
-                icon_pen = QPen(QColor("#ffffff"), 2)
+                icon_pen = QPen(QColor(get_surface_color("text_bright")), 2)
                 painter.setPen(icon_pen)
                 center = self.collapse_button_rect.center()
                 painter.drawLine(int(center.x() - 4), int(center.y()), int(center.x() + 4), int(center.y()))

@@ -8,7 +8,15 @@ from PySide6.QtGui import QPainter, QColor, QBrush, QPen, QFont, QPainterPath, Q
 
 from .graphlink_canvas_base import CanvasHeaderLineEdit, GhostFrame, update_connections_for_items
 from .graphlink_canvas_dialogs import ColorPickerDialog
-from graphlink_config import canvas_font, get_current_palette, get_graph_node_colors
+from graphlink_config import canvas_font, get_current_palette, get_graph_node_colors, get_surface_color
+
+# The container's user-facing body color DEFAULT. Persisted scene DATA (saved
+# into and restored from chat JSON, see graphlink_session/serializers +
+# deserializers), not theme chrome - deliberately NOT a THEME_TOKENS lookup:
+# a saved container must keep its color across theme switches, exactly like
+# DEFAULT_GRID_COLOR in graphlink_grid_view_settings. The one allowed literal
+# home for this value (see tests/test_ui_token_acceptance.py's allowlist).
+DEFAULT_CONTAINER_COLOR = "#3a3a3a"
 
 
 class Container(QGraphicsItem):
@@ -46,7 +54,7 @@ class Container(QGraphicsItem):
         self.expanded_rect = QRectF() # Caches the size before collapsing.
         
         self.rect = QRectF()
-        self.color = "#3a3a3a"
+        self.color = DEFAULT_CONTAINER_COLOR
         self.header_color = None 
         
         # Rects for hover detection of UI buttons in the header.
@@ -351,7 +359,7 @@ class Container(QGraphicsItem):
             self.collapse_button_rect = QRectF(self.rect.right() - 34, self.rect.top() + 10, 24, 24)
 
             # Draw the title text in collapsed mode.
-            painter.setPen(QColor("#ffffff"))
+            painter.setPen(QColor(get_surface_color("text_bright")))
             font = canvas_font(self.scene(), delta=2, weight=QFont.Weight.Bold)
             painter.setFont(font)
             title_rect = QRectF(self.rect.left() + 14, self.rect.top(), self.rect.width() - 56, self.rect.height())
@@ -360,7 +368,7 @@ class Container(QGraphicsItem):
 
             expand_icon = qta.icon(
                 'fa5s.expand-arrows-alt',
-                color='#ffffff' if self.collapse_button_hovered or self.hovered else '#9a9a9a',
+                color=get_surface_color("text_bright") if self.collapse_button_hovered or self.hovered else get_surface_color("text_label"),
             )
             expand_icon.paint(painter, self.collapse_button_rect.adjusted(3, 3, -3, -3).toRect())
             return
@@ -407,7 +415,7 @@ class Container(QGraphicsItem):
         icon.paint(painter, self.collapse_button_rect.adjusted(4, 4, -4, -4).toRect())
 
         # Draw Color Button
-        painter.setPen(QPen(QColor("#ffffff") if self.color_button_hovered else node_colors["border"]))
+        painter.setPen(QPen(QColor(get_surface_color("text_bright")) if self.color_button_hovered else node_colors["border"]))
         painter.setBrush(QBrush(header_base_color))
         painter.drawEllipse(self.color_button_rect)
 
@@ -419,7 +427,7 @@ class Container(QGraphicsItem):
         painter.drawEllipse(center + QPointF(6, 0), 2, 2)
 
         # Draw the title, either in display or editing mode.
-        painter.setPen(QPen(QColor("#ffffff")))
+        painter.setPen(QPen(QColor(get_surface_color("text_bright"))))
         font = canvas_font(self.scene(), weight=QFont.Weight.Bold)
         painter.setFont(font)
         text_rect = self._header_text_rect()
@@ -522,7 +530,7 @@ class Container(QGraphicsItem):
         if dialog.exec() == QDialog.DialogCode.Accepted:
             color, color_type = dialog.get_selected_color()
             if color_type == "default":
-                self.color = "#3a3a3a"
+                self.color = DEFAULT_CONTAINER_COLOR
                 self.header_color = None
             elif color_type == "full":
                 self.color = color

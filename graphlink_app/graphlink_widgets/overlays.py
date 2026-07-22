@@ -4,7 +4,8 @@ import qtawesome as qta
 from PySide6.QtCore import QPointF, Property, QEasingCurve, QParallelAnimationGroup, QPropertyAnimation, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QBrush, QFont, QFontMetrics, QKeySequence, QLinearGradient, QPainter, QPainterPath, QPen, QShortcut
 from PySide6.QtWidgets import QGraphicsObject, QHBoxLayout, QLabel, QLineEdit, QPushButton, QWidget
-from graphlink_config import get_current_palette, get_semantic_color, is_monochrome_theme
+from graphlink_config import get_current_palette, get_graph_node_colors, get_semantic_color, get_surface_color, is_monochrome_theme
+from graphlink_styles import FONT_FAMILY_NAME
 from .loading_visuals import paint_orbital_loading_spinner
 
 class LoadingAnimation(QGraphicsObject):
@@ -136,19 +137,19 @@ class GhostNodePreview(QGraphicsObject):
         accent = QColor(palette.AI_NODE)
         monochrome = is_monochrome_theme()
 
-        body_start = self._mix_color(QColor("#282828"), accent, 0.04 if not monochrome else 0.02)
+        body_start = self._mix_color(QColor(get_surface_color("field")), accent, 0.04 if not monochrome else 0.02)
         body_start.setAlpha(210)
-        body_end = self._mix_color(QColor("#1A1A1A"), accent, 0.02 if not monochrome else 0.01)
+        body_end = self._mix_color(QColor(get_surface_color("window")), accent, 0.02 if not monochrome else 0.01)
         body_end.setAlpha(192)
-        header_start = self._mix_color(QColor("#323232"), accent, 0.30 if not monochrome else 0.08)
+        header_start = self._mix_color(get_graph_node_colors()["header_end"], accent, 0.30 if not monochrome else 0.08)
         header_start.setAlpha(188)
-        header_end = self._mix_color(QColor("#1C1C1C"), accent, 0.18 if not monochrome else 0.04)
+        header_end = self._mix_color(QColor(get_surface_color("window")), accent, 0.18 if not monochrome else 0.04)
         header_end.setAlpha(170)
-        badge_fill = self._mix_color(QColor("#2B2B2B"), accent, 0.58 if not monochrome else 0.12)
+        badge_fill = self._mix_color(QColor(get_surface_color("field")), accent, 0.58 if not monochrome else 0.12)
         badge_fill.setAlpha(138)
-        descriptor_text = self._mix_color(QColor("#A5A5A5"), accent, 0.14 if not monochrome else 0.04)
+        descriptor_text = self._mix_color(QColor(get_surface_color("text_label")), accent, 0.14 if not monochrome else 0.04)
         descriptor_text.setAlpha(175)
-        content_panel_border = self._mix_color(QColor("#393939"), accent, 0.08 if not monochrome else 0.03)
+        content_panel_border = self._mix_color(QColor(get_surface_color("border")), accent, 0.08 if not monochrome else 0.03)
         content_panel_border.setAlpha(135)
 
         return {
@@ -158,7 +159,7 @@ class GhostNodePreview(QGraphicsObject):
             "header_start": header_start,
             "header_end": header_end,
             "badge_fill": badge_fill,
-            "badge_text": QColor("#F6F6F6"),
+            "badge_text": QColor(get_surface_color("text_bright")),
             "descriptor_text": descriptor_text,
             "content_panel_fill": QColor(17, 20, 23, 182),
             "content_panel_border": content_panel_border,
@@ -237,7 +238,7 @@ class GhostNodePreview(QGraphicsObject):
                 QPointF(self.width - 10, self.HEADER_HEIGHT),
             )
 
-            badge_font = QFont("Segoe UI", 8, QFont.Weight.DemiBold)
+            badge_font = QFont(FONT_FAMILY_NAME, 8, QFont.Weight.DemiBold)
             painter.setFont(badge_font)
             badge_text = "Assistant"
             badge_metrics = QFontMetrics(badge_font)
@@ -254,7 +255,7 @@ class GhostNodePreview(QGraphicsObject):
             painter.setPen(badge_text_color)
             painter.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, badge_text)
 
-            descriptor_font = QFont("Segoe UI", 8)
+            descriptor_font = QFont(FONT_FAMILY_NAME, 8)
             painter.setFont(descriptor_font)
             painter.setPen(colors["descriptor_text"])
             painter.drawText(
@@ -273,9 +274,9 @@ class GhostNodePreview(QGraphicsObject):
             text_left = content_rect.left() + 68
             text_width = max(80.0, content_rect.width() - 84.0)
 
-            title_font = QFont("Segoe UI", 10, QFont.Weight.DemiBold)
+            title_font = QFont(FONT_FAMILY_NAME, 10, QFont.Weight.DemiBold)
             painter.setFont(title_font)
-            title_color = QColor("#F5F5F5")
+            title_color = QColor(get_surface_color("text_bright"))
             title_color.setAlpha(220)
             painter.setPen(title_color)
             painter.drawText(
@@ -285,9 +286,9 @@ class GhostNodePreview(QGraphicsObject):
             )
 
             if self.subtitle:
-                subtitle_font = QFont("Segoe UI", 8)
+                subtitle_font = QFont(FONT_FAMILY_NAME, 8)
                 painter.setFont(subtitle_font)
-                subtitle_color = QColor("#B6B6B6")
+                subtitle_color = QColor(get_surface_color("text_secondary"))
                 subtitle_color.setAlpha(165)
                 painter.setPen(subtitle_color)
                 painter.drawText(

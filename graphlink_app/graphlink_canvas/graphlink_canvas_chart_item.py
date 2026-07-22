@@ -19,9 +19,10 @@ from PySide6.QtWidgets import QGraphicsItem, QFileDialog
 from PySide6.QtCore import Qt, QRectF, QPointF, QSizeF, QTimer, QStandardPaths
 from PySide6.QtGui import QPainter, QColor, QBrush, QPen, QFont, QPainterPath, QImage, QLinearGradient
 
-from graphlink_config import get_current_palette, get_graph_node_colors
+from graphlink_config import get_current_palette, get_graph_node_colors, get_surface_color
 from graphlink_chart_data import ChartDataError, canonicalize_chart_data
 from graphlink_context_menu import create_context_menu
+from graphlink_styles import FONT_FAMILY_NAME
 
 
 class ChartItem(QGraphicsItem):
@@ -79,9 +80,9 @@ class ChartItem(QGraphicsItem):
         self.aspect_ratio_locked = True
         self._base_aspect_ratio = self.DEFAULT_WIDTH / self.DEFAULT_HEIGHT
         self.resize_start_aspect_ratio = self._base_aspect_ratio
-        self.font_family = "Segoe UI"
+        self.font_family = FONT_FAMILY_NAME
         self.font_size = 10
-        self.font_color = QColor("#DDDDDD")
+        self.font_color = QColor(get_surface_color("text_primary"))
 
         self.figure = Figure(figsize=(6, 4), dpi=160)
         self.canvas = FigureCanvasAgg(self.figure)
@@ -216,12 +217,12 @@ class ChartItem(QGraphicsItem):
         return (color.redF(), color.greenF(), color.blueF(), alpha)
 
     def _build_theme(self, palette):
-        surface = QColor("#1B1B1B")
-        panel = QColor("#151515")
-        border = QColor("#474747")
-        text = QColor("#F7F7F7")
-        muted = QColor("#A5A5A5")
-        grid = QColor("#9A9A9A")
+        surface = QColor(get_surface_color("window"))
+        panel = QColor(get_surface_color("inset_deep"))
+        border = QColor(get_surface_color("divider"))
+        text = QColor(get_surface_color("text_bright"))
+        muted = QColor(get_surface_color("text_label"))
+        grid = QColor(get_surface_color("text_label"))
         primary = QColor(palette.AI_NODE)
         secondary = QColor(palette.USER_NODE)
         selection = QColor(palette.SELECTION)
@@ -810,7 +811,7 @@ class ChartItem(QGraphicsItem):
             return self.chart_image
 
     def update_font_settings(self, family, size, color):
-        self.font_family = str(family or "Segoe UI")
+        self.font_family = str(family or FONT_FAMILY_NAME)
         self.font_size = max(6, min(32, int(size)))
         self.font_color = QColor(color)
         self.generate_chart()
@@ -925,7 +926,7 @@ class ChartItem(QGraphicsItem):
         painter.drawText(header_rect.adjusted(12, 0, -120, 0), Qt.AlignmentFlag.AlignVCenter, self.title)
 
         badge_rect = QRectF(self.width - 102, 8, 90, 24)
-        painter.setPen(QPen(self._with_alpha(QColor("#FFFFFF"), 65), 1))
+        painter.setPen(QPen(self._with_alpha(QColor(get_surface_color("text_bright")), 65), 1))
         painter.setBrush(QBrush(node_colors["badge_fill"]))
         painter.drawRoundedRect(badge_rect, 12, 12)
         painter.setPen(QPen(self.font_color))
@@ -943,7 +944,7 @@ class ChartItem(QGraphicsItem):
         if self.hovered or self.isSelected():
             handle_size = 10
             handle_rect = QRectF(self.width - handle_size, self.height - handle_size, handle_size, handle_size)
-            painter.setPen(QPen(QColor("#FFFFFF")))
+            painter.setPen(QPen(QColor(get_surface_color("text_bright"))))
             painter.drawLine(handle_rect.topLeft(), handle_rect.bottomRight())
             painter.drawLine(
                 handle_rect.topLeft() + QPointF(0, handle_size / 2),

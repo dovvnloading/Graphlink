@@ -5,8 +5,9 @@ from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath, Q
 from PySide6.QtWidgets import QGraphicsItem
 
 from graphlink_canvas_items import Container, HoverAnimationMixin
-from graphlink_config import canvas_font, get_current_palette, get_graph_node_colors
+from graphlink_config import canvas_font, get_current_palette, get_graph_node_colors, get_surface_color
 from graphlink_lod import draw_lod_card, lod_mode_for_item, preview_text
+from graphlink_styles import FONT_FAMILY_NAME
 from graphlink_widgets import ScrollBar
 
 
@@ -52,9 +53,9 @@ class ThinkingNode(QGraphicsItem, HoverAnimationMixin):
         self._recalculate_geometry()
 
     def _setup_document(self):
-        font_family = "Segoe UI"
+        font_family = FONT_FAMILY_NAME
         font_size = 9
-        color = "#B0B0B0"
+        color = get_surface_color("text_secondary")
 
         if self.scene():
             font_family = self.scene().font_family
@@ -64,10 +65,10 @@ class ThinkingNode(QGraphicsItem, HoverAnimationMixin):
         stylesheet = (
             f"body {{ color: {color}; font-family: '{font_family}'; font-size: {font_size}pt; margin: 0; }}"
             f"p {{ color: {color}; margin: 0 0 0.6em 0; }}"
-            "p.thinking-kicker { color: #9E9E9E; font-size: 8.5pt; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; margin: 0 0 8px 0; }"
-            "blockquote { border-left: 3px solid #545454; padding-left: 10px; margin: 0.35em 0 0.8em 0; color: #CCCCCC; }"
-            "pre { background: #121212; border: 1px solid #393939; border-radius: 8px; padding: 10px 12px; margin: 0.35em 0 0.8em 0; color: #DCDCDC; }"
-            "code { background: #121212; border-radius: 4px; padding: 1px 4px; color: #DCDCDC; }"
+            f"p.thinking-kicker {{ color: {get_surface_color('text_label')}; font-size: 8.5pt; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; margin: 0 0 8px 0; }}"
+            f"blockquote {{ border-left: 3px solid {get_surface_color('border_strong')}; padding-left: 10px; margin: 0.35em 0 0.8em 0; color: {get_surface_color('text_soft')}; }}"
+            f"pre {{ background: {get_surface_color('inset_deep')}; border: 1px solid {get_surface_color('border')}; border-radius: 8px; padding: 10px 12px; margin: 0.35em 0 0.8em 0; color: {get_surface_color('text_primary')}; }}"
+            f"code {{ background: {get_surface_color('inset_deep')}; border-radius: 4px; padding: 1px 4px; color: {get_surface_color('text_primary')}; }}"
             "pre code { background: transparent; padding: 0; }"
             "ul, ol { margin: 0 0 0.75em 0; padding-left: 20px; }"
             "li { margin-bottom: 0.2em; }"
@@ -166,7 +167,7 @@ class ThinkingNode(QGraphicsItem, HoverAnimationMixin):
 
         path = QPainterPath()
         path.addRoundedRect(0, 0, self.width, self.height, 10, 10)
-        painter.setBrush(QColor("#2D2D2D"))
+        painter.setBrush(QColor(get_surface_color("field")))
 
         is_dragging = self.scene() and getattr(self.scene(), 'is_rubber_band_dragging', False)
 
@@ -204,10 +205,10 @@ class ThinkingNode(QGraphicsItem, HoverAnimationMixin):
         painter.setBrush(node_colors["header_start"])
         painter.drawPath(header_path)
 
-        icon = qta.icon('fa5s.brain', color='#CCCCCC')
+        icon = qta.icon('fa5s.brain', color=get_surface_color("text_soft"))
         icon.paint(painter, QRectF(10, 7, 16, 16).toRect())
 
-        painter.setPen(QColor("#CCCCCC"))
+        painter.setPen(QColor(get_surface_color("text_soft")))
         font = canvas_font(self.scene(), delta=-1, weight=QFont.Weight.Bold)
         painter.setFont(font)
         title_metrics = QFontMetrics(font)
@@ -217,17 +218,17 @@ class ThinkingNode(QGraphicsItem, HoverAnimationMixin):
         title_text = title_metrics.elidedText("Assistant's Thoughts", Qt.TextElideMode.ElideRight, int(title_rect.width()))
         painter.drawText(title_rect, Qt.AlignmentFlag.AlignVCenter, title_text)
 
-        button_bg_color = QColor("#555") if self.dock_button_hovered else QColor("#444")
+        button_bg_color = QColor(get_surface_color("handle")) if self.dock_button_hovered else QColor(get_surface_color("divider"))
         painter.setBrush(button_bg_color)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawRoundedRect(self.dock_button_rect, 4, 4)
-        dock_icon_color = "#FFFFFF" if self.dock_button_hovered else "#AAAAAA"
+        dock_icon_color = get_surface_color("text_bright") if self.dock_button_hovered else get_surface_color("text_label")
         dock_icon = qta.icon('fa5s.arrow-up', color=dock_icon_color)
         dock_icon.paint(painter, self.dock_button_rect.adjusted(3, 3, -3, -3).toRect())
 
         panel_rect = self._content_panel_rect()
-        painter.setBrush(QColor("#1C1C1C"))
-        painter.setPen(QPen(QColor("#404040"), 1))
+        painter.setBrush(QColor(get_surface_color("window")))
+        painter.setPen(QPen(QColor(get_surface_color("border")), 1))
         painter.drawRoundedRect(panel_rect, 11, 11)
 
         painter.save()

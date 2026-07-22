@@ -21,6 +21,8 @@ from graphlink_html_view import HtmlViewNode
 from graphlink_plugins.graphlink_plugin_artifact import ArtifactNode, ArtifactConnectionItem
 from graphlink_plugins.graphlink_plugin_gitlink import GitlinkNode, GitlinkConnectionItem
 from graphlink_memory import clone_history, resolve_branch_parent
+from graphlink_config import get_surface_color
+from graphlink_styles import FONT_FAMILY_NAME
 
 class ChatScene(QGraphicsScene):
     BRANCH_DIM_OPACITY = 0.18
@@ -85,7 +87,7 @@ class ChatScene(QGraphicsScene):
         self.artifact_connections = []
         self.gitlink_connections = []
 
-        self.setBackgroundBrush(QColor("#252525"))
+        self.setBackgroundBrush(QColor(get_surface_color("node_body")))
         
         # Parameters for the auto-layout algorithm.
         self.horizontal_spacing = 150
@@ -102,9 +104,9 @@ class ChatScene(QGraphicsScene):
         self.is_rubber_band_dragging = False
 
         # Global font properties for nodes that support them.
-        self.font_family = "Segoe UI"
+        self.font_family = FONT_FAMILY_NAME
         self.font_size = 10
-        self.font_color = QColor("#DDDDDD")
+        self.font_color = QColor(get_surface_color("text_primary"))
         
     def setFontFamily(self, family):
         """

@@ -24,35 +24,37 @@ from PySide6.QtWidgets import (
 from graphlink_agents_code_sandbox import SandboxStage
 from graphlink_agents_pycoder import PyCoderStatus
 from graphlink_canvas_items import HoverAnimationMixin
-from graphlink_config import canvas_font, get_current_palette, get_semantic_color
+from graphlink_config import canvas_font, get_current_palette, get_semantic_color, get_surface_color
+from graphlink_styles import FONT_FAMILY
 from graphlink_connections import ConnectionItem
 from graphlink_lod import draw_lod_card, preview_text, sync_proxy_render_state
 from graphlink_plugins.graphlink_plugin_context_menu import PluginNodeContextMenu
 from graphlink_pycoder import CodeEditor, PythonHighlighter, StatusItemWidget
 
 
-SANDBOX_SCROLLBAR_STYLE = """
-    QScrollBar:vertical {
-        background: #1E1E1E;
+def sandbox_scrollbar_style():
+    return f"""
+    QScrollBar:vertical {{
+        background: {get_surface_color("window")};
         width: 10px;
         margin: 0px;
         border-radius: 5px;
-    }
-    QScrollBar::handle:vertical {
-        background-color: #606060;
+    }}
+    QScrollBar::handle:vertical {{
+        background-color: {get_surface_color("handle")};
         min-height: 24px;
         border-radius: 5px;
-    }
-    QScrollBar::handle:vertical:hover {
-        background-color: #797979;
-    }
-    QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    }}
+    QScrollBar::handle:vertical:hover {{
+        background-color: {get_surface_color("handle_hover")};
+    }}
+    QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
         height: 0px;
         background: none;
-    }
-    QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+    }}
+    QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
         background: none;
-    }
+    }}
 """
 
 
@@ -78,15 +80,15 @@ class SandboxStatusTracker(QWidget):
         layout.addWidget(self.stages[SandboxStage.EXECUTE], 1, 0)
         layout.addWidget(self.stages[SandboxStage.ANALYZE], 1, 1)
 
-        self.setStyleSheet("""
-            SandboxStatusTracker {
-                background-color: #212121;
-                border: 1px solid #3A3A3A;
+        self.setStyleSheet(f"""
+            SandboxStatusTracker {{
+                background-color: {get_surface_color("inset")};
+                border: 1px solid {get_surface_color("border")};
                 border-radius: 8px;
-            }
-            QLabel {
+            }}
+            QLabel {{
                 background: transparent;
-            }
+            }}
         """)
 
     def update_status(self, stage, status):
@@ -187,15 +189,15 @@ class CodeSandboxNode(QGraphicsObject, HoverAnimationMixin):
         self.widget = QWidget()
         self.widget.setObjectName("codeSandboxWidget")
         self.widget.setFixedSize(self.NODE_WIDTH, self.NODE_HEIGHT)
-        self.widget.setStyleSheet("""
-            QWidget#codeSandboxWidget {
+        self.widget.setStyleSheet(f"""
+            QWidget#codeSandboxWidget {{
                 background: transparent;
-                color: #E7E7E7;
-                font-family: 'Segoe UI', sans-serif;
-            }
-            QWidget#codeSandboxWidget QLabel {
+                color: {get_surface_color("text_primary")};
+                font-family: {FONT_FAMILY};
+            }}
+            QWidget#codeSandboxWidget QLabel {{
                 background: transparent;
-            }
+            }}
         """)
 
         self._setup_ui()
@@ -252,7 +254,7 @@ class CodeSandboxNode(QGraphicsObject, HoverAnimationMixin):
 
         subtitle_label = QLabel("Runs Python with per-node requirements in a virtualenv. Isolates installed packages only - not a security boundary; code runs with your full account privileges.")
         subtitle_label.setWordWrap(True)
-        subtitle_label.setStyleSheet("font-size: 11px; color: #A4A4A4;")
+        subtitle_label.setStyleSheet(f"font-size: 11px; color: {get_surface_color('text_label')};")
         title_column.addWidget(subtitle_label)
 
         header_layout.addLayout(title_column, 1)
@@ -277,7 +279,7 @@ class CodeSandboxNode(QGraphicsObject, HoverAnimationMixin):
 
         divider = QFrame()
         divider.setFrameShape(QFrame.Shape.HLine)
-        divider.setStyleSheet("background-color: #3A3A3A; border: none; height: 1px;")
+        divider.setStyleSheet(f"background-color: {get_surface_color('border')}; border: none; height: 1px;")
         main_layout.addWidget(divider)
 
         briefing_layout = QHBoxLayout()
@@ -290,12 +292,12 @@ class CodeSandboxNode(QGraphicsObject, HoverAnimationMixin):
         prompt_layout.setSpacing(8)
 
         prompt_header = QLabel("Task Brief")
-        prompt_header.setStyleSheet("font-size: 12px; font-weight: 700; color: #FFFFFF;")
+        prompt_header.setStyleSheet(f"font-size: 12px; font-weight: 700; color: {get_surface_color('text_bright')};")
         prompt_layout.addWidget(prompt_header)
 
         prompt_hint = QLabel("Describe what to build, test, analyze, or transform. The sandbox agent will generate code against the branch context.")
         prompt_hint.setWordWrap(True)
-        prompt_hint.setStyleSheet("font-size: 11px; color: #A4A4A4;")
+        prompt_hint.setStyleSheet(f"font-size: 11px; color: {get_surface_color('text_label')};")
         prompt_layout.addWidget(prompt_hint)
 
         self.prompt_input = QTextEdit()
@@ -303,17 +305,17 @@ class CodeSandboxNode(QGraphicsObject, HoverAnimationMixin):
         self.prompt_input.setFixedHeight(132)
         self.prompt_input.setStyleSheet(f"""
             QTextEdit {{
-                background-color: #181818;
-                border: 1px solid #393939;
+                background-color: {get_surface_color("window")};
+                border: 1px solid {get_surface_color("border")};
                 border-radius: 8px;
                 padding: 10px;
-                color: #F6F6F6;
+                color: {get_surface_color("text_bright")};
                 font-size: 12px;
             }}
             QTextEdit:focus {{
                 border: 1px solid {accent.name()};
             }}
-            {SANDBOX_SCROLLBAR_STYLE}
+            {sandbox_scrollbar_style()}
         """)
         self.prompt_input.textChanged.connect(self._on_prompt_changed)
         prompt_layout.addWidget(self.prompt_input)
@@ -329,7 +331,7 @@ class CodeSandboxNode(QGraphicsObject, HoverAnimationMixin):
         deps_header_layout.setSpacing(8)
 
         deps_header = QLabel("requirements.txt")
-        deps_header.setStyleSheet("font-size: 12px; font-weight: 700; color: #FFFFFF;")
+        deps_header.setStyleSheet(f"font-size: 12px; font-weight: 700; color: {get_surface_color('text_bright')};")
         deps_header_layout.addWidget(deps_header)
         deps_header_layout.addStretch()
 
@@ -339,7 +341,7 @@ class CodeSandboxNode(QGraphicsObject, HoverAnimationMixin):
 
         deps_hint = QLabel("One dependency per line. The sandbox automatically rebuilds the environment when this manifest changes.")
         deps_hint.setWordWrap(True)
-        deps_hint.setStyleSheet("font-size: 11px; color: #A4A4A4;")
+        deps_hint.setStyleSheet(f"font-size: 11px; color: {get_surface_color('text_label')};")
         deps_layout.addWidget(deps_hint)
 
         self.requirements_input = QPlainTextEdit()
@@ -349,18 +351,18 @@ class CodeSandboxNode(QGraphicsObject, HoverAnimationMixin):
         self.requirements_input.textChanged.connect(self._on_requirements_changed)
         self.requirements_input.setStyleSheet(f"""
             QPlainTextEdit {{
-                background-color: #181818;
-                border: 1px solid #393939;
+                background-color: {get_surface_color("window")};
+                border: 1px solid {get_surface_color("border")};
                 border-radius: 8px;
                 padding: 10px;
-                color: #E0E0E0;
+                color: {get_surface_color("text_primary")};
                 font-family: Consolas, Monaco, monospace;
                 font-size: 12px;
             }}
             QPlainTextEdit:focus {{
                 border: 1px solid {accent.name()};
             }}
-            {SANDBOX_SCROLLBAR_STYLE}
+            {sandbox_scrollbar_style()}
         """)
         deps_layout.addWidget(self.requirements_input)
         briefing_layout.addWidget(deps_card, 2)
@@ -393,15 +395,15 @@ class CodeSandboxNode(QGraphicsObject, HoverAnimationMixin):
                 background-color: {accent.darker(115).name()};
             }}
             QPushButton:disabled {{
-                background-color: #474747;
-                color: #868686;
+                background-color: {get_surface_color("divider")};
+                color: {get_surface_color("chrome_inactive")};
             }}
         """
         self._default_secondary_style = f"""
             QPushButton {{
-                background-color: #252525;
-                color: #E3E3E3;
-                border: 1px solid #404040;
+                background-color: {get_surface_color("node_body")};
+                color: {get_surface_color("text_primary")};
+                border: 1px solid {get_surface_color("border")};
                 border-radius: 8px;
                 padding: 10px 14px;
                 font-size: 12px;
@@ -409,28 +411,28 @@ class CodeSandboxNode(QGraphicsObject, HoverAnimationMixin):
             }}
             QPushButton:hover {{
                 border: 1px solid {accent.name()};
-                color: #FFFFFF;
+                color: {get_surface_color("text_bright")};
             }}
             QPushButton:pressed {{
-                background-color: #1B1B1B;
+                background-color: {get_surface_color("window")};
             }}
             QPushButton:disabled {{
-                background-color: #232323;
-                color: #767676;
-                border: 1px solid #373737;
+                background-color: {get_surface_color("node_body")};
+                color: {get_surface_color("text_muted")};
+                border: 1px solid {get_surface_color("border")};
             }}
         """
         self.generate_button.setStyleSheet(self._default_primary_style)
         self.run_button.setStyleSheet(self._default_secondary_style)
         self.generate_button.setIcon(qta.icon("fa5s.magic", color="white"))
-        self.run_button.setIcon(qta.icon("fa5s.play", color="#E3E3E3"))
+        self.run_button.setIcon(qta.icon("fa5s.play", color=get_surface_color("text_primary")))
 
         action_layout.addWidget(self.generate_button)
         action_layout.addWidget(self.run_button)
 
         action_hint = QLabel("Use the prompt for agent-driven generation, or run the current script directly with the declared dependencies.")
         action_hint.setWordWrap(True)
-        action_hint.setStyleSheet("font-size: 11px; color: #989898;")
+        action_hint.setStyleSheet(f"font-size: 11px; color: {get_surface_color('text_label')};")
         action_layout.addWidget(action_hint, 1)
         main_layout.addLayout(action_layout)
 
@@ -447,12 +449,12 @@ class CodeSandboxNode(QGraphicsObject, HoverAnimationMixin):
         code_header_layout.setSpacing(8)
 
         code_header = QLabel("Sandbox Script")
-        code_header.setStyleSheet("font-size: 12px; font-weight: 700; color: #FFFFFF;")
+        code_header.setStyleSheet(f"font-size: 12px; font-weight: 700; color: {get_surface_color('text_bright')};")
         code_header_layout.addWidget(code_header)
         code_header_layout.addStretch()
 
         code_hint = QLabel("Editable execution file")
-        code_hint.setStyleSheet("font-size: 11px; color: #989898;")
+        code_hint.setStyleSheet(f"font-size: 11px; color: {get_surface_color('text_label')};")
         code_header_layout.addWidget(code_hint)
         code_layout.addLayout(code_header_layout)
 
@@ -461,18 +463,18 @@ class CodeSandboxNode(QGraphicsObject, HoverAnimationMixin):
         self.code_input.setFixedHeight(250)
         self.code_input.setStyleSheet(f"""
             QPlainTextEdit {{
-                background-color: #141414;
-                border: 1px solid #393939;
+                background-color: {get_surface_color("window")};
+                border: 1px solid {get_surface_color("border")};
                 border-radius: 8px;
                 padding: 8px;
-                color: #E5E5E5;
+                color: {get_surface_color("text_primary")};
                 font-family: Consolas, Monaco, monospace;
                 font-size: 12px;
             }}
             QPlainTextEdit:focus {{
                 border: 1px solid {accent.name()};
             }}
-            {SANDBOX_SCROLLBAR_STYLE}
+            {sandbox_scrollbar_style()}
         """)
         self.code_input.textChanged.connect(self._on_code_changed)
         code_layout.addWidget(self.code_input)
@@ -481,15 +483,15 @@ class CodeSandboxNode(QGraphicsObject, HoverAnimationMixin):
         self.results_tabs = QTabWidget()
         self.results_tabs.setStyleSheet(f"""
             QTabWidget::pane {{
-                border: 1px solid #3A3A3A;
-                background: #1B1B1B;
+                border: 1px solid {get_surface_color("border")};
+                background: {get_surface_color("window")};
                 border-radius: 8px;
             }}
             QTabBar::tab {{
-                background: #232323;
-                color: #A4A4A4;
+                background: {get_surface_color("node_body")};
+                color: {get_surface_color("text_label")};
                 padding: 8px 14px;
-                border: 1px solid #3A3A3A;
+                border: 1px solid {get_surface_color("border")};
                 border-bottom: none;
                 border-top-left-radius: 8px;
                 border-top-right-radius: 8px;
@@ -497,13 +499,13 @@ class CodeSandboxNode(QGraphicsObject, HoverAnimationMixin):
                 font-weight: 700;
             }}
             QTabBar::tab:selected {{
-                background: #1B1B1B;
-                color: #FFFFFF;
+                background: {get_surface_color("window")};
+                color: {get_surface_color("text_bright")};
                 border-top: 2px solid {accent.name()};
             }}
             QTabBar::tab:hover:!selected {{
-                background: #2A2A2A;
-                color: #FFFFFF;
+                background: {get_surface_color("field")};
+                color: {get_surface_color("text_bright")};
             }}
         """)
 
@@ -512,16 +514,16 @@ class CodeSandboxNode(QGraphicsObject, HoverAnimationMixin):
         self.output_display.setPlaceholderText("Virtualenv setup, dependency install logs, and execution output will appear here...")
         self.output_display.setStyleSheet(f"""
             QTextEdit {{
-                background-color: #121212;
-                color: #CACACA;
+                background-color: {get_surface_color("inset_deep")};
+                color: {get_surface_color("text_soft")};
                 border: none;
                 padding: 12px;
                 font-family: Consolas, Monaco, monospace;
                 font-size: 11px;
             }}
-            {SANDBOX_SCROLLBAR_STYLE}
+            {sandbox_scrollbar_style()}
         """)
-        self.results_tabs.addTab(self.output_display, qta.icon("fa5s.terminal", color="#D2D2D2"), "Terminal")
+        self.results_tabs.addTab(self.output_display, qta.icon("fa5s.terminal", color=get_surface_color("text_soft")), "Terminal")
 
         self.ai_analysis_display = QTextEdit()
         self.ai_analysis_display.setReadOnly(True)
@@ -532,18 +534,18 @@ class CodeSandboxNode(QGraphicsObject, HoverAnimationMixin):
                 border: none;
                 padding: 12px;
                 font-size: 12px;
-                color: #ECECEC;
+                color: {get_surface_color("text_strong")};
             }}
-            {SANDBOX_SCROLLBAR_STYLE}
+            {sandbox_scrollbar_style()}
         """)
-        self.ai_analysis_display.document().setDefaultStyleSheet("""
-            p, ul, ol, li { color: #ECECEC; font-family: 'Segoe UI', sans-serif; font-size: 13px; line-height: 1.5; }
-            h1, h2, h3, h4 { color: #FFFFFF; font-weight: bold; margin-bottom: 5px; }
-            pre { background-color: #292929; padding: 10px; border-radius: 6px; font-family: Consolas, monospace; color: #E1E1E1; }
-            code { background-color: #353535; color: #E1E1E1; padding: 2px 4px; border-radius: 4px; font-family: Consolas, monospace; }
-            blockquote { border-left: 3px solid #666666; padding-left: 10px; color: #B5B5B5; }
+        self.ai_analysis_display.document().setDefaultStyleSheet(f"""
+            p, ul, ol, li {{ color: {get_surface_color("text_strong")}; font-family: {FONT_FAMILY}; font-size: 13px; line-height: 1.5; }}
+            h1, h2, h3, h4 {{ color: {get_surface_color("text_bright")}; font-weight: bold; margin-bottom: 5px; }}
+            pre {{ background-color: {get_surface_color("field")}; padding: 10px; border-radius: 6px; font-family: Consolas, monospace; color: {get_surface_color("text_primary")}; }}
+            code {{ background-color: {get_surface_color("border")}; color: {get_surface_color("text_primary")}; padding: 2px 4px; border-radius: 4px; font-family: Consolas, monospace; }}
+            blockquote {{ border-left: 3px solid {get_surface_color("handle_hover")}; padding-left: 10px; color: {get_surface_color("text_secondary")}; }}
         """)
-        self.results_tabs.addTab(self.ai_analysis_display, qta.icon("fa5s.search", color="#D2D2D2"), "Review")
+        self.results_tabs.addTab(self.ai_analysis_display, qta.icon("fa5s.search", color=get_surface_color("text_soft")), "Review")
         main_layout.addWidget(self.results_tabs, 1)
 
         self.highlighter_code = PythonHighlighter(self.code_input.document())
@@ -553,12 +555,12 @@ class CodeSandboxNode(QGraphicsObject, HoverAnimationMixin):
     def _create_surface_card(self):
         card = QWidget()
         card.setObjectName("sandboxSurfaceCard")
-        card.setStyleSheet("""
-            QWidget#sandboxSurfaceCard {
-                background-color: #1E1E1E;
-                border: 1px solid #3A3A3A;
+        card.setStyleSheet(f"""
+            QWidget#sandboxSurfaceCard {{
+                background-color: {get_surface_color("window")};
+                border: 1px solid {get_surface_color("border")};
                 border-radius: 10px;
-            }
+            }}
         """)
         return card
 
@@ -629,13 +631,13 @@ class CodeSandboxNode(QGraphicsObject, HoverAnimationMixin):
 
         path = QPainterPath()
         path.addRoundedRect(0, 0, self.width, self.height, 12, 12)
-        painter.setBrush(QColor("#2B2B2B"))
+        painter.setBrush(QColor(get_surface_color("field")))
 
         pen = QPen(accent, 1.6)
         if self.isSelected():
             pen = QPen(palette.SELECTION, 2.2)
         elif self.hovered:
-            pen = QPen(QColor("#FFFFFF"), 2.0)
+            pen = QPen(QColor(get_surface_color("text_bright")), 2.0)
 
         painter.setPen(pen)
         painter.drawPath(path)
@@ -681,14 +683,14 @@ class CodeSandboxNode(QGraphicsObject, HoverAnimationMixin):
             return
 
         if self.is_collapsed:
-            painter.setPen(QColor("#FFFFFF"))
+            painter.setPen(QColor(get_surface_color("text_bright")))
             painter.setFont(canvas_font(self.scene(), weight=QFont.Weight.Bold))
             painter.drawText(QRectF(42, 0, self.width - 84, self.height), Qt.AlignmentFlag.AlignVCenter, "Execution Sandbox")
             qta.icon("fa5s.shield-alt", color=accent.name()).paint(painter, QRect(12, 11, 18, 18))
             self.collapse_button_rect = QRectF(self.width - 34, 6, 28, 28)
             expand_icon = qta.icon(
                 "fa5s.expand-arrows-alt",
-                color="#FFFFFF" if self.hovered else "#979797",
+                color=get_surface_color("text_bright") if self.hovered else get_surface_color("text_label"),
             )
             expand_icon.paint(painter, QRect(int(self.width - 30), 10, 18, 18))
             return
@@ -699,7 +701,7 @@ class CodeSandboxNode(QGraphicsObject, HoverAnimationMixin):
             painter.setPen(QColor(255, 255, 255, 120))
             painter.drawRoundedRect(self.collapse_button_rect.adjusted(5, 5, -5, -5), 4, 4)
             center = self.collapse_button_rect.center()
-            painter.setPen(QPen(QColor("#FFFFFF"), 2))
+            painter.setPen(QPen(QColor(get_surface_color("text_bright")), 2))
             painter.drawLine(int(center.x() - 4), int(center.y()), int(center.x() + 4), int(center.y()))
         else:
             self.collapse_button_rect = QRectF()
@@ -896,22 +898,22 @@ class CodeSandboxNode(QGraphicsObject, HoverAnimationMixin):
         self.requirements_input.setReadOnly(is_running)
         self.code_input.setReadOnly(is_running)
 
-        stop_style = """
-            QPushButton {
-                background-color: #646464;
+        stop_style = f"""
+            QPushButton {{
+                background-color: {get_surface_color("handle_hover")};
                 color: white;
                 border: none;
                 border-radius: 8px;
                 padding: 10px 14px;
                 font-size: 12px;
                 font-weight: 700;
-            }
-            QPushButton:hover {
-                background-color: #727272;
-            }
-            QPushButton:pressed {
-                background-color: #535353;
-            }
+            }}
+            QPushButton:hover {{
+                background-color: {get_surface_color("text_muted")};
+            }}
+            QPushButton:pressed {{
+                background-color: {get_surface_color("handle")};
+            }}
         """
 
         if is_running:
@@ -931,7 +933,7 @@ class CodeSandboxNode(QGraphicsObject, HoverAnimationMixin):
             self.generate_button.setStyleSheet(self._default_primary_style)
             self.run_button.setStyleSheet(self._default_secondary_style)
             self.generate_button.setIcon(qta.icon("fa5s.magic", color="white"))
-            self.run_button.setIcon(qta.icon("fa5s.play", color="#E3E3E3"))
+            self.run_button.setIcon(qta.icon("fa5s.play", color=get_surface_color("text_primary")))
 
             tone = "success" if self.status == "Ready" else "info"
             self._update_status_pill(tone)

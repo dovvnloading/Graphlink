@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import QRectF, Qt, Signal, QPoint, QRect
 from PySide6.QtGui import QPainter, QColor, QBrush, QPen, QPainterPath, QCursor, QFont
 import qtawesome as qta
-from graphlink_config import canvas_font, get_current_palette, get_graph_node_colors, get_neutral_button_colors, get_semantic_color
+from graphlink_config import canvas_font, get_current_palette, get_graph_node_colors, get_neutral_button_colors, get_semantic_color, get_surface_color
 from graphlink_canvas_items import HoverAnimationMixin
 from graphlink_lod import draw_lod_card, preview_text, sync_proxy_render_state
 from graphlink_plugins.graphlink_plugin_context_menu import PluginNodeContextMenu
@@ -45,27 +45,27 @@ class HtmlPopoutWindow(QDialog):
         layout.addWidget(self.web_view)
 
     def _inject_scrollbar_style(self):
-        css = """
-        ::-webkit-scrollbar {
+        css = f"""
+        ::-webkit-scrollbar {{
             width: 10px;
             height: 10px;
-            background-color: #252525;
-        }
-        ::-webkit-scrollbar-track {
-            background-color: #252525;
+            background-color: {get_surface_color("node_body")};
+        }}
+        ::-webkit-scrollbar-track {{
+            background-color: {get_surface_color("node_body")};
             border-radius: 5px;
-        }
-        ::-webkit-scrollbar-thumb {
-            background-color: #555555;
+        }}
+        ::-webkit-scrollbar-thumb {{
+            background-color: {get_surface_color("handle")};
             border-radius: 5px;
-            border: 1px solid #252525;
-        }
-        ::-webkit-scrollbar-thumb:hover {
-            background-color: #6A6A6A;
-        }
-        ::-webkit-scrollbar-corner {
+            border: 1px solid {get_surface_color("node_body")};
+        }}
+        ::-webkit-scrollbar-thumb:hover {{
+            background-color: {get_surface_color("handle_hover")};
+        }}
+        ::-webkit-scrollbar-corner {{
             background: transparent;
-        }
+        }}
         """
         js = f"""
         (function() {{
@@ -148,9 +148,9 @@ class HtmlViewNode(QGraphicsObject, HoverAnimationMixin):
         self.widget = QWidget()
         self.widget.setObjectName("htmlViewMainWidget")
         self.widget.setFixedSize(self.NODE_WIDTH, self.NODE_HEIGHT)
-        self.widget.setStyleSheet("""
-            QWidget#htmlViewMainWidget { background-color: transparent; color: #E0E0E0; }
-            QWidget#htmlViewMainWidget QLabel { background-color: transparent; }
+        self.widget.setStyleSheet(f"""
+            QWidget#htmlViewMainWidget {{ background-color: transparent; color: {get_surface_color("text_primary")}; }}
+            QWidget#htmlViewMainWidget QLabel {{ background-color: transparent; }}
         """)
         
         self._setup_ui()
@@ -209,15 +209,15 @@ class HtmlViewNode(QGraphicsObject, HoverAnimationMixin):
 
         self.splitter = QSplitter(Qt.Orientation.Vertical)
         self.splitter.splitterMoved.connect(self._on_splitter_moved)
-        self.splitter.setStyleSheet("""
-            QSplitter::handle:vertical {
+        self.splitter.setStyleSheet(f"""
+            QSplitter::handle:vertical {{
                 height: 8px;
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3F3F3F, stop:0.5 #555555, stop:1 #3F3F3F);
-            }
-            QSplitter::handle:vertical:hover {
-                background: %s;
-            }
-        """ % get_semantic_color("status_success").name())
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {get_surface_color("border")}, stop:0.5 {get_surface_color("handle")}, stop:1 {get_surface_color("border")});
+            }}
+            QSplitter::handle:vertical:hover {{
+                background: {get_semantic_color("status_success").name()};
+            }}
+        """)
 
         # --- HTML Input Pane ---
         input_container = QWidget()
@@ -246,13 +246,13 @@ class HtmlViewNode(QGraphicsObject, HoverAnimationMixin):
         preview_header_layout.addStretch()
         
         self.popout_button = QPushButton()
-        self.popout_button.setIcon(qta.icon('fa5s.external-link-alt', color='#ccc'))
+        self.popout_button.setIcon(qta.icon('fa5s.external-link-alt', color=get_surface_color("text_soft")))
         self.popout_button.setFixedSize(28, 28)
         self.popout_button.setToolTip("Open Preview in a New Window")
         self.popout_button.clicked.connect(self._handle_popout)
-        self.popout_button.setStyleSheet("""
-            QPushButton { border: 1px solid #555; border-radius: 4px; }
-            QPushButton:hover { background-color: #4F4F4F; }
+        self.popout_button.setStyleSheet(f"""
+            QPushButton {{ border: 1px solid {get_surface_color("handle")}; border-radius: 4px; }}
+            QPushButton:hover {{ background-color: {get_surface_color("border_strong")}; }}
         """)
         preview_header_layout.addWidget(self.popout_button)
         
@@ -267,7 +267,7 @@ class HtmlViewNode(QGraphicsObject, HoverAnimationMixin):
             self.web_view = QWebEngineView()
             _harden_preview_web_view(self.web_view)
             self._inject_scrollbar_style()
-            self.web_view.setStyleSheet("background-color: #FFFFFF; border-radius: 4px;")
+            self.web_view.setStyleSheet("background-color: white; border-radius: 4px;")
             webview_layout.addWidget(self.web_view)
         else:
             self.popout_button.setEnabled(False)
@@ -278,8 +278,8 @@ class HtmlViewNode(QGraphicsObject, HoverAnimationMixin):
             )
             error_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             error_label.setStyleSheet(
-                "background-color: #252525; border: 1px dashed #555;"
-                "color: #888; border-radius: 4px; padding: 20px;"
+                f"background-color: {get_surface_color('node_body')}; border: 1px dashed {get_surface_color('handle')};"
+                f"color: {get_surface_color('chrome_inactive')}; border-radius: 4px; padding: 20px;"
             )
             webview_layout.addWidget(error_label)
             self.render_button.setEnabled(False)
@@ -294,12 +294,12 @@ class HtmlViewNode(QGraphicsObject, HoverAnimationMixin):
         self.splitter_state = self.splitter.sizes()
 
         for widget in [self.html_input]:
-            widget.setStyleSheet("""
-                QTextEdit {
-                    background-color: #252525; border: 1px solid #3F3F3F;
-                    color: #CCCCCC; border-radius: 4px; padding: 5px;
+            widget.setStyleSheet(f"""
+                QTextEdit {{
+                    background-color: {get_surface_color("node_body")}; border: 1px solid {get_surface_color("border")};
+                    color: {get_surface_color("text_soft")}; border-radius: 4px; padding: 5px;
                     font-family: Consolas, Monaco, monospace;
-                }
+                }}
             """)
         
         button_colors = get_neutral_button_colors()
@@ -323,34 +323,34 @@ class HtmlViewNode(QGraphicsObject, HoverAnimationMixin):
                 border-color: {button_colors["border"].darker(105).name()};
             }}
             QPushButton:disabled {{
-                background-color: #2B2B2B;
-                border-color: #353535;
-                color: #7B7B7B;
+                background-color: {get_surface_color("field")};
+                border-color: {get_surface_color("border")};
+                color: {get_surface_color("text_muted")};
             }}
         """)
         
     def _inject_scrollbar_style(self):
-        css = """
-        ::-webkit-scrollbar {
+        css = f"""
+        ::-webkit-scrollbar {{
             width: 10px;
             height: 10px;
-            background-color: #252525;
-        }
-        ::-webkit-scrollbar-track {
-            background-color: #252525;
+            background-color: {get_surface_color("node_body")};
+        }}
+        ::-webkit-scrollbar-track {{
+            background-color: {get_surface_color("node_body")};
             border-radius: 5px;
-        }
-        ::-webkit-scrollbar-thumb {
-            background-color: #555555;
+        }}
+        ::-webkit-scrollbar-thumb {{
+            background-color: {get_surface_color("handle")};
             border-radius: 5px;
-            border: 1px solid #252525;
-        }
-        ::-webkit-scrollbar-thumb:hover {
-            background-color: #6A6A6A;
-        }
-        ::-webkit-scrollbar-corner {
+            border: 1px solid {get_surface_color("node_body")};
+        }}
+        ::-webkit-scrollbar-thumb:hover {{
+            background-color: {get_surface_color("handle_hover")};
+        }}
+        ::-webkit-scrollbar-corner {{
             background: transparent;
-        }
+        }}
         """
         js = f"""
         (function() {{
@@ -445,16 +445,16 @@ class HtmlViewNode(QGraphicsObject, HoverAnimationMixin):
         
         path = QPainterPath()
         path.addRoundedRect(0, 0, self.width, self.height, 10, 10)
-        painter.setBrush(QColor("#2D2D2D"))
-        
+        painter.setBrush(QColor(get_surface_color("field")))
+
         node_color = node_colors["border"]
         pen = QPen(node_color, 1.5)
 
         if self.isSelected():
             pen = QPen(palette.SELECTION, 2)
         elif self.hovered:
-            pen = QPen(QColor("#FFFFFF"), 2)
-        
+            pen = QPen(QColor(get_surface_color("text_bright")), 2)
+
         painter.setPen(pen)
         painter.drawPath(path)
         
@@ -490,7 +490,7 @@ class HtmlViewNode(QGraphicsObject, HoverAnimationMixin):
             return
 
         if self.is_collapsed:
-            painter.setPen(QColor("#FFFFFF"))
+            painter.setPen(QColor(get_surface_color("text_bright")))
             font = canvas_font(self.scene(), weight=QFont.Weight.Bold)
             painter.setFont(font)
             painter.drawText(QRectF(40, 0, self.width - 80, self.height), Qt.AlignmentFlag.AlignVCenter, "HTML Renderer")
@@ -499,7 +499,7 @@ class HtmlViewNode(QGraphicsObject, HoverAnimationMixin):
             icon.paint(painter, QRect(10, 10, 20, 20))
             
             self.collapse_button_rect = QRectF(self.width - 35, 5, 30, 30)
-            expand_icon = qta.icon('fa5s.expand-arrows-alt', color='#FFFFFF' if self.hovered else '#888888')
+            expand_icon = qta.icon('fa5s.expand-arrows-alt', color=get_surface_color("text_bright") if self.hovered else get_surface_color("chrome_inactive"))
             expand_icon.paint(painter, QRect(int(self.width - 30), 10, 20, 20))
         else:
             if self.hovered:
@@ -508,7 +508,7 @@ class HtmlViewNode(QGraphicsObject, HoverAnimationMixin):
                 painter.setPen(QColor(255, 255, 255, 150))
                 painter.drawRoundedRect(self.collapse_button_rect.adjusted(6,6,-6,-6), 4, 4)
                 
-                icon_pen = QPen(QColor("#FFFFFF"), 2)
+                icon_pen = QPen(QColor(get_surface_color("text_bright")), 2)
                 painter.setPen(icon_pen)
                 center = self.collapse_button_rect.center()
                 painter.drawLine(int(center.x() - 4), int(center.y()), int(center.x() + 4), int(center.y()))

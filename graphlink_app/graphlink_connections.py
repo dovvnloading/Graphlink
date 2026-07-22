@@ -9,7 +9,7 @@ from PySide6.QtGui import (
 
 from graphlink_canvas.graphlink_canvas_base import iter_scene_connection_lists
 from graphlink_canvas_items import Container, Frame, Note
-from graphlink_config import get_current_palette
+from graphlink_config import get_current_palette, get_surface_color
 from graphlink_pycoder import PyCoderNode
 from graphlink_conversation_node import ConversationNode
 from graphlink_html_view import HtmlViewNode
@@ -103,7 +103,7 @@ class Pin(QGraphicsItem):
         elif self.hover:
             color = palette.AI_NODE
         else:
-            color = QColor("#FFFFFF")
+            color = QColor(get_surface_color("text_bright"))
             
         painter.setPen(QPen(color.darker(120), 1))
         painter.setBrush(QBrush(color))
@@ -947,13 +947,13 @@ class ContentConnectionItem(QGraphicsItem):
     def paint(self, painter, option, widget=None):
         """Paints the dashed connection line."""
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        pen = QPen(QColor("#888888"), 1.5, Qt.PenStyle.DashLine)
+        pen = QPen(QColor(get_surface_color("chrome_inactive")), 1.5, Qt.PenStyle.DashLine)
         painter.setPen(pen)
         painter.drawPath(self.path)
 
         if self.is_animating:
             for arrow in self.arrows:
-                self.drawArrow(painter, arrow['pos'], QColor("#888888"))
+                self.drawArrow(painter, arrow['pos'], QColor(get_surface_color("chrome_inactive")))
 
     def hoverEnterEvent(self, event):
         """Handles hover enter event."""
@@ -1396,7 +1396,7 @@ class ThinkingConnectionItem(ContentConnectionItem):
         palette = get_current_palette()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         
-        pen_color = QColor("#A2A2A2") # A soft gray-blue
+        pen_color = QColor(get_surface_color("text_label"))
         if self.hover:
             pen_color = pen_color.lighter(130)
 
@@ -1928,7 +1928,7 @@ class GroupSummaryConnectionItem(ConnectionItem):
     def paint(self, painter, option, widget=None):
         """Paints the gray dashed line for the summary connection."""
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        pen = QPen(QColor("#888888"), 1.5, Qt.PenStyle.DashLine)
+        pen = QPen(QColor(get_surface_color("chrome_inactive")), 1.5, Qt.PenStyle.DashLine)
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         painter.setPen(pen)
         painter.drawPath(self.path)
@@ -1954,9 +1954,9 @@ class GroupSummaryConnectionItem(ConnectionItem):
         painter.translate(point)
         painter.rotate(-angle)
         
-        color = QColor("#888888")
+        color = QColor(get_surface_color("chrome_inactive"))
         if self.hover:
-            color = QColor("#BBBBBB")
+            color = QColor(get_surface_color("text_secondary"))
         color.setAlphaF(opacity)
         
         painter.setBrush(color)

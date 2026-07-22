@@ -4,7 +4,7 @@ from PySide6.QtGui import QColor, QFont, QFontMetrics, QImage, QPainter, QPainte
 from PySide6.QtWidgets import QGraphicsItem
 
 from graphlink_canvas_items import Container, HoverAnimationMixin
-from graphlink_config import canvas_font, canvas_font_color, get_current_palette, get_graph_node_colors, get_semantic_color
+from graphlink_config import canvas_font, canvas_font_color, get_current_palette, get_graph_node_colors, get_semantic_color, get_surface_color
 from graphlink_lod import draw_lod_card, lod_mode_for_item, preview_text
 
 
@@ -59,7 +59,7 @@ class ImageNode(QGraphicsItem, HoverAnimationMixin):
         path = QPainterPath()
         path.addRoundedRect(0, 0, self.width, self.height, 10, 10)
 
-        painter.setBrush(QColor("#2D2D2D"))
+        painter.setBrush(QColor(get_surface_color("field")))
 
         is_dragging = self.scene() and getattr(self.scene(), 'is_rubber_band_dragging', False)
 
@@ -94,10 +94,10 @@ class ImageNode(QGraphicsItem, HoverAnimationMixin):
         painter.setBrush(node_colors["header_start"])
         painter.drawPath(header_path)
 
-        icon = qta.icon('fa5s.image', color='#CCCCCC')
+        icon = qta.icon('fa5s.image', color=get_surface_color("text_soft"))
         icon.paint(painter, QRectF(10, 7, 16, 16).toRect())
 
-        painter.setPen(QColor("#CCCCCC"))
+        painter.setPen(QColor(get_surface_color("text_soft")))
         font = canvas_font(self.scene(), delta=-1)
         painter.setFont(font)
         metrics = QFontMetrics(font)
@@ -126,7 +126,7 @@ class ImageNode(QGraphicsItem, HoverAnimationMixin):
             painter.drawImage(target_rect, self.image)
         else:
             painter.save()
-            placeholder_color = canvas_font_color(self.scene(), "#B1B1B1")
+            placeholder_color = canvas_font_color(self.scene(), get_surface_color("text_secondary"))
             placeholder_color.setAlpha(180)
             painter.setPen(QPen(placeholder_color, 1, Qt.PenStyle.DashLine))
             painter.setBrush(QColor(255, 255, 255, 10))

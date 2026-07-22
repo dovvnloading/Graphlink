@@ -53,8 +53,19 @@ class TestCssCustomPropertiesStructure:
             f"--gl-composer-{key.replace('_', '-')}"
             for key in gs.THEME_TOKENS[theme_name]["composer_alpha"]
         }
+        # UI-refactor P0: structure tokens are px/ms/shadow/easing values,
+        # not colors - carved out by their real group names, mirroring the
+        # alpha carve-out's enumerate-don't-pattern-match approach.
+        structure_keys = {
+            f"--gl-{group}-{key}"
+            for group, entries in gs.STRUCTURE_TOKENS.items()
+            for key in entries
+        }
         for key, value in props.items():
             if key == "--gl-font-family":
+                continue
+            if key in structure_keys:
+                assert value, f"{key} is empty"
                 continue
             if key in alpha_keys:
                 assert RGBA_RE.match(value), f"{key} = {value!r} is not an rgba() literal"
@@ -114,11 +125,17 @@ class TestCssCustomPropertiesRoundTripAgainstThemeTokens:
     @pytest.mark.parametrize("theme_name", THEMES)
     def test_total_property_count_has_no_missing_or_extra_keys(self, theme_name):
         tokens = gs.THEME_TOKENS[theme_name]
-        expected_group_count = sum(len(tokens[g]) for g in ("palette", "semantic", "neutral_button", "graph_node"))
+        # "surface"/"syntax" joined the included groups in UI-refactor P0.
+        expected_group_count = sum(
+            len(tokens[g])
+            for g in ("palette", "semantic", "neutral_button", "graph_node", "surface", "syntax")
+        )
         expected_island_count = sum(len(tokens[g]) for g in gs._ISLAND_GROUPS)
         expected_frame_count = len({name.removesuffix(" Header") for name in gs._FRAME_COLORS_BY_THEME[theme_name]})
+        expected_structure_count = sum(len(entries) for entries in gs.STRUCTURE_TOKENS.values())
         expected_total = (
-            expected_group_count + expected_island_count + expected_frame_count + 1
+            expected_group_count + expected_island_count + expected_frame_count
+            + expected_structure_count + 1
         )  # +1 for --gl-font-family
         assert len(gs.css_custom_properties(theme_name)) == expected_total
 
