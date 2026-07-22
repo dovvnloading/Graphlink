@@ -36,6 +36,10 @@ function validScenePayload(overrides: Record<string, unknown> = {}) {
         isCollapsed: false,
         code: "",
         language: "",
+        attachmentKind: "",
+        filePath: "",
+        mimeType: "",
+        previewLabel: "",
       },
     ],
     edges: [],
@@ -137,6 +141,43 @@ describe("SceneStore", () => {
     expect(intents).toEqual([
       { topic: "scene", intent: "addCodeNode", args: [10, 20, "print('hi')", "python"] },
       { topic: "scene", intent: "addCodeNode", args: [30, 40, "console.log('hi')", "javascript", "n1"] },
+    ]);
+  });
+
+  it("sends document-node intents with the backend's registered names and shapes", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.addDocumentNode(10, 20, "notes.pdf", "some content", "document", "n1");
+    store.addDocumentNode(30, 40, "clip.mp3", "", "audio", "n1", {
+      filePath: "C:/audio/clip.mp3",
+      mimeType: "audio/mpeg",
+      durationSeconds: 125,
+      byteSize: 48000,
+      previewLabel: "Audio | 2:05",
+    });
+    expect(intents).toEqual([
+      {
+        topic: "scene",
+        intent: "addDocumentNode",
+        args: [10, 20, "notes.pdf", "some content", "document", "n1", "", "", null, null, ""],
+      },
+      {
+        topic: "scene",
+        intent: "addDocumentNode",
+        args: [
+          30,
+          40,
+          "clip.mp3",
+          "",
+          "audio",
+          "n1",
+          "C:/audio/clip.mp3",
+          "audio/mpeg",
+          125,
+          48000,
+          "Audio | 2:05",
+        ],
+      },
     ]);
   });
 

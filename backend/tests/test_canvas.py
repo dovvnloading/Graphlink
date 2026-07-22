@@ -201,6 +201,131 @@ def test_code_node_deletion_goes_through_the_generic_remove_nodes_path():
     assert not any(e.target == node.id or e.source == node.id for e in doc.edges.values())
 
 
+# -- R3.9: document nodes -----------------------------------------------------
+
+
+def test_add_document_node_creates_a_real_document_kind_node():
+    doc = SceneDocument()
+    parent = doc.add_chat_node(0, 0, "the message that attached a file", True)
+    node = doc.add_document_node(
+        10,
+        20,
+        "report.pdf",
+        "some extracted text",
+        "document",
+        parent.id,
+        file_path="C:/files/report.pdf",
+        mime_type="application/pdf",
+        duration_seconds=None,
+        byte_size=2048,
+        preview_label="PDF",
+    )
+    assert node.kind == "document"
+    assert node.title == "report.pdf"
+    assert node.content == "some extracted text"
+    assert node.attachment_kind == "document"
+    assert node.file_path == "C:/files/report.pdf"
+    assert node.mime_type == "application/pdf"
+    assert node.duration_seconds is None
+    assert node.byte_size == 2048
+    assert node.preview_label == "PDF"
+    assert any(e.source == parent.id and e.target == node.id for e in doc.edges.values())
+
+
+def test_add_document_node_normalizes_attachment_kind_casing():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_document_node(0, 0, "voice.wav", "", "Audio", parent.id)
+    assert node.attachment_kind == "audio"
+
+
+def test_add_document_node_requires_a_parent_id():
+    # Unlike chat/code, parent_id has no default in add_document_node's
+    # signature - the legacy DocumentNode can never exist unparented - so
+    # calling without one is a TypeError (missing required argument), same
+    # as any other required positional in this codebase.
+    doc = SceneDocument()
+    with pytest.raises(TypeError):
+        doc.add_document_node(0, 0, "file.txt", "content", "document")
+
+
+def test_add_document_node_rejects_unknown_parent():
+    doc = SceneDocument()
+    with pytest.raises(SceneError):
+        doc.add_document_node(0, 0, "file.txt", "content", "document", "ghost")
+
+
+def test_scene_payload_includes_document_fields_defaulted_for_other_kinds():
+    doc = SceneDocument()
+    doc.add_node(0, 0, "plain")
+    parent = doc.add_chat_node(1, 1, "parent message", True)
+    doc.add_document_node(
+        2,
+        2,
+        "notes.txt",
+        "hello",
+        "document",
+        parent.id,
+        file_path="/tmp/notes.txt",
+        mime_type="text/plain",
+        byte_size=512,
+        preview_label="TXT",
+    )
+    rows = {n["title"]: n for n in doc.scene_payload()["nodes"]}
+    plain_row = rows["plain"]
+    assert plain_row["kind"] == "placeholder"
+    assert plain_row["attachmentKind"] == ""
+    assert plain_row["filePath"] == ""
+    assert plain_row["mimeType"] == ""
+    assert plain_row["durationSeconds"] is None
+    assert plain_row["byteSize"] is None
+    assert plain_row["previewLabel"] == ""
+
+    doc_row = rows["notes.txt"]
+    assert doc_row["kind"] == "document"
+    assert doc_row["attachmentKind"] == "document"
+    assert doc_row["filePath"] == "/tmp/notes.txt"
+    assert doc_row["mimeType"] == "text/plain"
+    assert doc_row["byteSize"] == 512
+    assert doc_row["previewLabel"] == "TXT"
+
+
+def test_add_document_node_intent_creates_a_real_node_and_publishes():
+    async def run():
+        bus, document, recorder = make_bus()
+        parent_id = await bus.dispatch_intent("scene", "addChatNode", [0, 0, "hi", True])
+        # dispatch_intent only ever forwards a positional args list (see
+        # SessionBus.dispatch_intent: `handler(*args)`), so every argument -
+        # including the wrapper's keyword-defaulted ones - is passed
+        # positionally here, in add_document_node's declared order.
+        node_id = await bus.dispatch_intent(
+            "scene",
+            "addDocumentNode",
+            [10, 10, "audio.mp3", "", "audio", parent_id, "", "audio/mpeg", 125.4, 4096, ""],
+        )
+        assert document.nodes[node_id].kind == "document"
+        assert document.nodes[node_id].attachment_kind == "audio"
+        assert document.nodes[node_id].mime_type == "audio/mpeg"
+        assert document.nodes[node_id].duration_seconds == 125.4
+        assert document.nodes[node_id].byte_size == 4096
+        assert any(
+            e.source == parent_id and e.target == node_id for e in document.edges.values()
+        )
+        assert recorder.topics_seen().count("scene") == 2, "both mutations publish"
+
+    asyncio.run(run())
+
+
+def test_document_node_deletion_goes_through_the_generic_remove_nodes_path():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_document_node(10, 10, "file.txt", "content", "document", parent.id)
+    assert not hasattr(doc, "delete_document_node"), "document nodes are not branch points - no special delete method"
+    doc.remove_nodes([node.id])
+    assert node.id not in doc.nodes
+    assert not any(e.target == node.id or e.source == node.id for e in doc.edges.values())
+
+
 def test_send_message_starts_a_root_branch():
     doc = SceneDocument()
     node = doc.send_message("hello there")
