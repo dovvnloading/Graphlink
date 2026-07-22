@@ -9,6 +9,11 @@ JSON shape and generates the TS type + runtime validator the SPA consumes.
 
 R1 nodes are placeholders (`kind: "placeholder"`); R3 extends `kind` per
 migrated node type - additive only, per the schema-versioning contract.
+
+R3.1 adds the `chat` kind's fields (content/isUser/isCollapsed - the real
+persisted shape from the legacy ChatNode's serializer, minus everything
+Qt-only): populated for kind=="chat" rows, defaulted (empty/false) for every
+other kind, so the schema stays additive-only as new kinds land.
 """
 
 from __future__ import annotations
@@ -23,6 +28,9 @@ class SceneNodeRow:
     y: float
     title: str
     kind: str
+    content: str = ""
+    isUser: bool = False
+    isCollapsed: bool = False
 
 
 @dataclass

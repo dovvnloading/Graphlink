@@ -44,8 +44,17 @@
       "items": {
         "additionalProperties": false,
         "properties": {
+          "content": {
+            "type": "string"
+          },
           "id": {
             "type": "string"
+          },
+          "isCollapsed": {
+            "type": "boolean"
+          },
+          "isUser": {
+            "type": "boolean"
           },
           "kind": {
             "type": "string"
@@ -65,7 +74,10 @@
           "x",
           "y",
           "title",
-          "kind"
+          "kind",
+          "content",
+          "isUser",
+          "isCollapsed"
         ],
         "type": "object"
       },

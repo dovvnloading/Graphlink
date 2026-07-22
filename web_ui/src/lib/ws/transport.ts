@@ -71,13 +71,25 @@ export class WsTransport {
     this.requestTimeout = options.requestTimeoutMs ?? 10_000;
   }
 
+  // Calling connect() always re-arms a disposed transport rather than
+  // leaving it permanently inert. React 18 StrictMode's dev-only
+  // mount->cleanup->mount cycle calls dispose() then connect() again on the
+  // SAME memoized instance to check the component survives a remount; a
+  // one-way disposed flag would leave the app stuck "closed" forever after
+  // the very first render.
   connect(): void {
-    if (this.disposed || this.socket) return;
+    if (this.socket) return;
+    this.disposed = false;
     this.setStatus("connecting");
     const socket = this.factory(this.url);
     this.socket = socket;
 
+    // Every handler checks it's still the current socket before touching
+    // shared state - a superseded socket's belated close/message (e.g. the
+    // one dispose() just closed, right before this same connect() call
+    // re-armed and opened a fresh one) must not clobber the live connection.
     socket.onopen = () => {
+      if (this.socket !== socket) return;
       this.attempts = 0;
       this.setStatus("open");
       const topics = [...this.stateListeners.keys()];
@@ -85,11 +97,15 @@ export class WsTransport {
         socket.send(JSON.stringify({ kind: "subscribe", topics }));
       }
     };
-    socket.onmessage = (event) => this.handleMessage(event.data);
+    socket.onmessage = (event) => {
+      if (this.socket !== socket) return;
+      this.handleMessage(event.data);
+    };
     socket.onerror = () => {
       // onclose always follows; reconnect logic lives there.
     };
     socket.onclose = () => {
+      if (this.socket !== socket) return;
       this.socket = null;
       this.setStatus("closed");
       this.failAllPending(new Error("connection closed"));

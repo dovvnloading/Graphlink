@@ -14,6 +14,7 @@ from backend.canvas import (
     register_canvas,
 )
 from backend.events import SessionBus
+from backend.notifications import NotificationState
 
 
 # -- document invariants ----------------------------------------------------
@@ -52,6 +53,118 @@ def test_removing_a_node_removes_its_edges():
     keep = doc.connect(b.id, c.id)
     doc.remove_nodes([a.id])
     assert list(doc.edges) == [keep.id], "edges die with either endpoint"
+
+
+# -- R3.1: chat nodes --------------------------------------------------------
+
+
+def test_add_chat_node_creates_a_real_chat_kind_node():
+    doc = SceneDocument()
+    node = doc.add_chat_node(10, 20, "Hello there, this is a real message", True)
+    assert node.kind == "chat"
+    assert node.content == "Hello there, this is a real message"
+    assert node.is_user is True
+    assert node.is_collapsed is False
+    assert node.title == "Hello there, this is a real message"[:60]
+
+
+def test_add_chat_node_falls_back_to_role_title_for_empty_content():
+    doc = SceneDocument()
+    node = doc.add_chat_node(0, 0, "", False)
+    assert node.title == "Assistant"
+
+
+def test_add_chat_node_connects_to_a_real_parent():
+    doc = SceneDocument()
+    parent = doc.add_chat_node(0, 0, "question", True)
+    child = doc.add_chat_node(10, 10, "answer", False, parent_id=parent.id)
+    assert any(e.source == parent.id and e.target == child.id for e in doc.edges.values())
+
+
+def test_add_chat_node_rejects_unknown_parent():
+    doc = SceneDocument()
+    with pytest.raises(SceneError):
+        doc.add_chat_node(0, 0, "orphaned", True, parent_id="ghost")
+
+
+def test_delete_chat_node_reparents_children_to_the_deleted_nodes_parent():
+    doc = SceneDocument()
+    a = doc.add_chat_node(0, 0, "a", True)
+    b = doc.add_chat_node(1, 1, "b", False, parent_id=a.id)
+    c = doc.add_chat_node(2, 2, "c", True, parent_id=b.id)
+
+    doc.delete_chat_node(b.id)
+
+    assert b.id not in doc.nodes
+    assert any(e.source == a.id and e.target == c.id for e in doc.edges.values())
+    assert not any(e.target == b.id or e.source == b.id for e in doc.edges.values())
+
+
+def test_delete_chat_node_at_the_root_makes_children_new_roots():
+    doc = SceneDocument()
+    root = doc.add_chat_node(0, 0, "root", True)
+    child = doc.add_chat_node(1, 1, "child", False, parent_id=root.id)
+
+    doc.delete_chat_node(root.id)
+
+    assert root.id not in doc.nodes
+    assert not any(e.target == child.id for e in doc.edges.values()), "child has no parent edge left"
+
+
+def test_delete_chat_node_unknown_raises():
+    with pytest.raises(SceneError):
+        SceneDocument().delete_chat_node("ghost")
+
+
+def test_set_chat_collapsed():
+    doc = SceneDocument()
+    node = doc.add_chat_node(0, 0, "hi", True)
+    doc.set_chat_collapsed(node.id, True)
+    assert doc.nodes[node.id].is_collapsed is True
+    with pytest.raises(SceneError):
+        doc.set_chat_collapsed("ghost", True)
+
+
+def test_scene_payload_includes_chat_fields_defaulted_for_placeholders():
+    doc = SceneDocument()
+    doc.add_node(0, 0, "plain")
+    doc.add_chat_node(1, 1, "real content", True)
+    rows = {n["title"]: n for n in doc.scene_payload()["nodes"]}
+    assert rows["plain"]["kind"] == "placeholder"
+    assert rows["plain"]["content"] == ""
+    assert rows["plain"]["isUser"] is False
+    assert rows["plain"]["isCollapsed"] is False
+    chat_row = rows["real content"]
+    assert chat_row["kind"] == "chat"
+    assert chat_row["content"] == "real content"
+    assert chat_row["isUser"] is True
+
+
+def test_send_message_starts_a_root_branch():
+    doc = SceneDocument()
+    node = doc.send_message("hello there")
+    assert node.kind == "chat"
+    assert node.is_user is True
+    assert node.content == "hello there"
+    assert doc.last_chat_node_id == node.id
+
+
+def test_send_message_continues_the_active_branch():
+    doc = SceneDocument()
+    first = doc.send_message("first message")
+    second = doc.send_message("second message")
+    assert any(e.source == first.id and e.target == second.id for e in doc.edges.values())
+    assert doc.last_chat_node_id == second.id
+
+
+def test_send_message_after_deleting_the_active_node_continues_from_its_parent():
+    doc = SceneDocument()
+    first = doc.send_message("first")
+    second = doc.send_message("second")
+    doc.delete_chat_node(second.id)
+    assert doc.last_chat_node_id == first.id
+    third = doc.send_message("third")
+    assert any(e.source == first.id and e.target == third.id for e in doc.edges.values())
 
 
 def test_drag_factor_is_bounded():
@@ -95,7 +208,9 @@ class Recorder:
 
 def make_bus():
     bus = SessionBus("canvas-test")
-    document = register_canvas(bus)
+    notifications = NotificationState()
+    bus.register_topic("notification", notifications.payload)
+    document = register_canvas(bus, notifications)
     recorder = Recorder()
     bus.attach(recorder)
     return bus, document, recorder
@@ -112,6 +227,44 @@ def test_scene_intents_mutate_and_publish():
         await bus.dispatch_intent("scene", "moveNode", [node_id, 1, 2])
         assert (document.nodes[node_id].x, document.nodes[node_id].y) == (1, 2)
         assert recorder.topics_seen().count("scene") == 4, "every mutation publishes"
+
+    asyncio.run(run())
+
+
+def test_chat_node_intents_mutate_and_publish():
+    async def run():
+        bus, document, recorder = make_bus()
+        parent_id = await bus.dispatch_intent("scene", "addChatNode", [0, 0, "hi", True])
+        child_id = await bus.dispatch_intent(
+            "scene", "addChatNode", [10, 10, "reply", False, parent_id]
+        )
+        assert document.nodes[child_id].kind == "chat"
+        assert any(
+            e.source == parent_id and e.target == child_id for e in document.edges.values()
+        )
+
+        await bus.dispatch_intent("scene", "setChatCollapsed", [child_id, True])
+        assert document.nodes[child_id].is_collapsed is True
+
+        await bus.dispatch_intent("scene", "deleteChatNode", [parent_id])
+        assert parent_id not in document.nodes
+        assert child_id in document.nodes, "deleting the parent must not cascade-delete the child"
+        assert recorder.topics_seen().count("scene") == 4, "every mutation publishes"
+
+    asyncio.run(run())
+
+
+def test_send_message_intent_creates_a_real_node_and_an_honest_deferred_notification():
+    async def run():
+        bus, document, recorder = make_bus()
+        node_id = await bus.dispatch_intent("scene", "sendMessage", ["what is this graph about?"])
+        assert document.nodes[node_id].content == "what is this graph about?"
+        assert document.nodes[node_id].is_user is True
+
+        notice = await bus.publish("notification")
+        assert notice["visible"] is True
+        assert notice["message"] == "AI response generation lands in R4."
+        assert recorder.topics_seen().count("scene") == 1
 
     asyncio.run(run())
 

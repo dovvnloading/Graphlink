@@ -149,7 +149,7 @@ function App() {
           </main>
 
           <footer className="app-composer-region">
-            <Composer store={composerStore} />
+            <Composer store={composerStore} sceneStore={sceneStore} />
           </footer>
         </div>
       </ReactFlowProvider>
