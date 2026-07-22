@@ -119,6 +119,32 @@ export class SceneStore {
     this.transport.intent("scene", "addNode", [x, y, title]);
   }
 
+  // R3.1: real chat nodes - createChatNode/deleteChatNode/setChatCollapsed
+  // mirror backend/canvas.py's intent names 1:1 (same convention as every
+  // other scene intent above).
+  addChatNode(x: number, y: number, content: string, isUser: boolean, parentId?: string): void {
+    const args: unknown[] = [x, y, content, isUser];
+    if (parentId !== undefined) args.push(parentId);
+    this.transport.intent("scene", "addChatNode", args);
+  }
+
+  deleteChatNode(id: string): void {
+    this.transport.intent("scene", "deleteChatNode", [id]);
+  }
+
+  setChatCollapsed(id: string, collapsed: boolean): void {
+    this.transport.intent("scene", "setChatCollapsed", [id, collapsed]);
+  }
+
+  // R3.3: the Composer's real Send action - a real user ChatNode. The
+  // assistant's reply is deferred to R4 (graphlink_config.py's Qt/non-Qt
+  // split is a prerequisite for calling the real agent layer); the backend
+  // surfaces that honestly via the existing notification topic, no fake
+  // response synthesized here.
+  sendMessage(text: string): void {
+    this.transport.intent("scene", "sendMessage", [text]);
+  }
+
   moveNode(id: string, x: number, y: number): void {
     this.transport.intent("scene", "moveNode", [id, x, y]);
   }

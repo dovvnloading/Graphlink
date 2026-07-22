@@ -1,18 +1,23 @@
 import { useLayoutEffect, useMemo, useRef, useSyncExternalStore } from "react";
+import type { SceneStore } from "../canvas/sceneStore";
 import { Popover, useOverlays } from "../overlays/overlays";
 import type { ComposerStore } from "./composerStore";
 
 /**
- * The composer dock (Qt-removal plan R2.3) - ComposerApp's SPA successor.
+ * The composer dock (Qt-removal plan R2.3/R3.3) - ComposerApp's SPA
+ * successor.
  *
  * Real here: draft text editing, reasoning-level selection (a stored
  * preference popover, reusing the overlay system rather than a dedicated
- * picker island). Visibly deferred, per backend/composer.py's capability
+ * picker island), and (R3.3) Send - a real user ChatNode via
+ * sceneStore.sendMessage. The assistant's reply is NOT generated here (see
+ * backend/canvas.py's send_message docstring): the backend gives an honest
+ * "lands in R4" notice over the existing notification topic instead of a
+ * fake response. Visibly deferred, per backend/composer.py's capability
  * flags: attach (file-staging pipeline is an R4 concern), context review
  * (nothing to review until attachments exist), model/provider selection
- * (R4 - needs real provider wiring), send/cancel (R4 - needs the agent
- * layer). Each renders disabled with a title naming its phase, exactly the
- * app bar's Save/provider-select precedent.
+ * (R4 - needs real provider wiring). Each renders disabled with a title
+ * naming its phase, exactly the app bar's Save/provider-select precedent.
  *
  * Theme is NOT read from this payload (see backend/composer.py's docstring
  * for why) - the SPA's tokens are already global CSS.
@@ -32,7 +37,7 @@ function Icon({ name }: { name: "attach" | "send" | "chevron" }) {
   );
 }
 
-export function Composer({ store }: { store: ComposerStore }) {
+export function Composer({ store, sceneStore }: { store: ComposerStore; sceneStore: SceneStore }) {
   const composer = useSyncExternalStore(store.subscribe, store.getComposer);
   const overlays = useOverlays();
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -46,6 +51,13 @@ export function Composer({ store }: { store: ComposerStore }) {
 
   const modelLabel = composer.route.modelLabel || composer.route.modelId || "Select a model";
 
+  function send() {
+    const text = composer.draft.text.trim();
+    if (!text) return;
+    sceneStore.sendMessage(text);
+    store.updateDraft("");
+  }
+
   return (
     <div className="composer-dock">
       <div className="composer-input-wrap">
@@ -54,6 +66,12 @@ export function Composer({ store }: { store: ComposerStore }) {
           className="composer-input"
           value={composer.draft.text}
           onChange={(e) => store.updateDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              send();
+            }
+          }}
           placeholder="Ask about this graph…"
           aria-label="Message composer"
           rows={1}
@@ -103,9 +121,10 @@ export function Composer({ store }: { store: ComposerStore }) {
         <button
           type="button"
           className="composer-send-button"
-          disabled
-          title="Send lands in R4 (agent layer)"
+          disabled={!composer.draft.text.trim()}
+          title="Sends a real message; the AI response lands in R4 (agent layer)"
           aria-label="Send message"
+          onClick={send}
         >
           <Icon name="send" />
         </button>

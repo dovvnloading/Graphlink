@@ -33,6 +33,7 @@ from graphlink_grid_view_settings import (
 from graphlink_navigation_pins import NavigationPinRecord, NavigationPinStore
 
 from backend.events import SessionBus
+from backend.notifications import NotificationState
 
 # Dark-theme grid swatches. The Qt bridge derived 3 of 5 from the live
 # QPalette; the backend is Qt-free by law (test_no_qt_anywhere.py), so until
@@ -64,10 +65,18 @@ FONT_SIZE_MAX = 16
 ORGANIZE_SPACING_X = 260
 ORGANIZE_SPACING_Y = 180
 
+# R3.3: the Composer's Send action stacks each new message below its parent
+# by this much - a simple deterministic layout, not the legacy
+# find_branch_position packing algorithm (a later refinement).
+MESSAGE_VERTICAL_SPACING = 160
+
 
 class SceneError(ValueError):
     """A scene intent referenced something that does not exist or is invalid.
     Raised so the WS layer reports it to the caller instead of crashing."""
+
+
+CHAT_TITLE_PREVIEW_LENGTH = 60
 
 
 @dataclass
@@ -77,6 +86,13 @@ class SceneNode:
     y: float
     title: str
     kind: str = "placeholder"
+    # R3.1 (doc/QT_REMOVAL_PLAN.md): the chat node's real persisted shape -
+    # graphlink_session/serializers.py's raw_content/is_user/is_collapsed,
+    # minus everything Qt-only (paint state, scroll position, docked-child
+    # widgets). Unused (default) for every other kind.
+    content: str = ""
+    is_user: bool = False
+    is_collapsed: bool = False
 
 
 @dataclass
@@ -102,6 +118,10 @@ class SceneDocument:
     font_family: str = "Segoe UI"
     font_size_pt: int = 9
     font_color: str = "#F0F0F0"
+    # R3.3: which chat node the Composer's next Send continues from - the
+    # Qt-free stand-in for "the currently active branch" until real node
+    # selection exists. None means the next message starts a fresh root.
+    last_chat_node_id: str | None = None
     _counter: itertools.count = field(default_factory=itertools.count, repr=False)
 
     # -- nodes -------------------------------------------------------------
@@ -111,6 +131,88 @@ class SceneDocument:
         node = SceneNode(id=node_id, x=float(x), y=float(y), title=title or f"Node {node_id[1:]}")
         self.nodes[node_id] = node
         return node
+
+    def add_chat_node(
+        self,
+        x: float,
+        y: float,
+        content: str,
+        is_user: bool,
+        parent_id: str | None = None,
+    ) -> SceneNode:
+        """The Qt-free ChatScene.add_chat_node equivalent: a real message-
+        bubble node, optionally connected to a parent (the branch it
+        continues). Mirrors add_node's id/dict bookkeeping; the only new
+        behavior is the parent-edge, ported from the legacy scene's own
+        ConnectionItem creation."""
+        if parent_id is not None and parent_id not in self.nodes:
+            raise SceneError(f"unknown parent node: {parent_id}")
+        node_id = f"n{next(self._counter)}"
+        title = content[:CHAT_TITLE_PREVIEW_LENGTH] or ("You" if is_user else "Assistant")
+        node = SceneNode(
+            id=node_id,
+            x=float(x),
+            y=float(y),
+            title=title,
+            kind="chat",
+            content=str(content),
+            is_user=bool(is_user),
+        )
+        self.nodes[node_id] = node
+        if parent_id is not None:
+            self.connect(parent_id, node_id)
+        return node
+
+    def delete_chat_node(self, node_id: str) -> None:
+        """Delete one chat node WITHOUT orphaning its branch: children are
+        re-parented to the deleted node's own parent (or become roots if it
+        had none), mirroring ChatScene.delete_chat_node's load-bearing
+        reparent rule - a plain remove_nodes cascade-delete would sever every
+        child branch instead of splicing them back together."""
+        if node_id not in self.nodes:
+            raise SceneError(f"unknown node: {node_id}")
+        parent_edge = next((e for e in self.edges.values() if e.target == node_id), None)
+        parent_id = parent_edge.source if parent_edge is not None else None
+        child_edges = [e for e in self.edges.values() if e.source == node_id]
+
+        for edge in [parent_edge, *child_edges]:
+            if edge is not None:
+                self.edges.pop(edge.id, None)
+        if parent_id is not None:
+            for edge in child_edges:
+                self.connect(parent_id, edge.target)
+
+        if self.last_chat_node_id == node_id:
+            # The active branch continues from wherever it now ends: the
+            # deleted node's own parent (None if it had none either).
+            self.last_chat_node_id = parent_id
+
+        del self.nodes[node_id]
+
+    def send_message(self, text: str) -> SceneNode:
+        """The Composer's real Send action (R3.3): create a real user
+        ChatNode continuing the current branch (last_chat_node_id), or
+        start a fresh root if none exists yet. Positioning is a simple
+        deterministic stack, not the legacy find_branch_position packing
+        algorithm - real auto-layout is a later refinement; "Organize
+        Nodes" already exists as a fallback."""
+        parent_id = self.last_chat_node_id
+        if parent_id is not None and parent_id in self.nodes:
+            parent = self.nodes[parent_id]
+            x, y = parent.x, parent.y + MESSAGE_VERTICAL_SPACING
+        else:
+            parent_id = None
+            chat_node_count = sum(1 for n in self.nodes.values() if n.kind == "chat")
+            x, y = 0.0, chat_node_count * MESSAGE_VERTICAL_SPACING
+        node = self.add_chat_node(x, y, text, True, parent_id=parent_id)
+        self.last_chat_node_id = node.id
+        return node
+
+    def set_chat_collapsed(self, node_id: str, collapsed: bool) -> None:
+        node = self.nodes.get(node_id)
+        if node is None:
+            raise SceneError(f"unknown node: {node_id}")
+        node.is_collapsed = bool(collapsed)
 
     def move_node(self, node_id: str, x: float, y: float) -> SceneNode:
         node = self.nodes.get(node_id)
@@ -179,7 +281,16 @@ class SceneDocument:
     def scene_payload(self) -> dict[str, Any]:
         return {
             "nodes": [
-                {"id": n.id, "x": n.x, "y": n.y, "title": n.title, "kind": n.kind}
+                {
+                    "id": n.id,
+                    "x": n.x,
+                    "y": n.y,
+                    "title": n.title,
+                    "kind": n.kind,
+                    "content": n.content,
+                    "isUser": n.is_user,
+                    "isCollapsed": n.is_collapsed,
+                }
                 for n in self.nodes.values()
             ],
             "edges": [
@@ -218,7 +329,7 @@ class SceneDocument:
         }
 
 
-def register_canvas(bus: SessionBus) -> SceneDocument:
+def register_canvas(bus: SessionBus, notifications: NotificationState) -> SceneDocument:
     """Give a session its canvas document + the scene/grid topics and every
     R1 intent. Intent names for grid mirror GridControlBridge's @Slot names
     1:1 so the R2 island port is a transport swap, not a redesign."""
@@ -259,6 +370,31 @@ def register_canvas(bus: SessionBus) -> SceneDocument:
     async def add_node(x, y, title=""):
         node = document.add_node(x, y, title)
         await publish_scene()
+        return node.id
+
+    async def add_chat_node(x, y, content, is_user, parent_id=None):
+        node = document.add_chat_node(x, y, content, is_user, parent_id)
+        await publish_scene()
+        return node.id
+
+    async def delete_chat_node(node_id):
+        document.delete_chat_node(node_id)
+        await publish_scene()
+
+    async def set_chat_collapsed(node_id, collapsed):
+        document.set_chat_collapsed(node_id, collapsed)
+        await publish_scene()
+
+    async def send_message(text):
+        # R3.3: the real Send action - a real user ChatNode, continuing the
+        # active branch. The assistant's reply needs the agent layer
+        # (graphlink_config.py's Qt/non-Qt split is an R4 prerequisite - see
+        # doc/QT_REMOVAL_PLAN.md's R3 scoping note), so this is an honest
+        # deferred notice rather than a fake/stubbed response.
+        node = document.send_message(text)
+        await publish_scene()
+        notifications.show("AI response generation lands in R4.", "info")
+        await bus.publish("notification")
         return node.id
 
     async def move_node(node_id, x, y):
@@ -310,6 +446,10 @@ def register_canvas(bus: SessionBus) -> SceneDocument:
         await publish_scene()
 
     bus.register_intent("scene", "addNode", add_node)
+    bus.register_intent("scene", "addChatNode", add_chat_node)
+    bus.register_intent("scene", "deleteChatNode", delete_chat_node)
+    bus.register_intent("scene", "setChatCollapsed", set_chat_collapsed)
+    bus.register_intent("scene", "sendMessage", send_message)
     bus.register_intent("scene", "moveNode", move_node)
     bus.register_intent("scene", "removeNodes", remove_nodes)
     bus.register_intent("scene", "connectNodes", connect_nodes)

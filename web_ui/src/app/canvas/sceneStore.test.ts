@@ -24,7 +24,9 @@ function validScenePayload(overrides: Record<string, unknown> = {}) {
     schemaVersion: 1,
     minCompatibleSchemaVersion: 1,
     revision: 3,
-    nodes: [{ id: "n0", x: 1, y: 2, title: "A", kind: "placeholder" }],
+    nodes: [
+      { id: "n0", x: 1, y: 2, title: "A", kind: "placeholder", content: "", isUser: false, isCollapsed: false },
+    ],
     edges: [],
     pins: [],
     snapToGrid: true,
@@ -98,6 +100,21 @@ describe("SceneStore", () => {
       { topic: "scene", intent: "addPin", args: ["P", 5, 6, "note"] },
       { topic: "scene", intent: "setSnapToGrid", args: [true] },
       { topic: "scene", intent: "setDragFactor", args: [0.25] },
+    ]);
+  });
+
+  it("sends chat-node intents with the backend's registered names and shapes", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.addChatNode(10, 20, "hello", true);
+    store.addChatNode(30, 40, "hi back", false, "n1");
+    store.setChatCollapsed("n1", true);
+    store.deleteChatNode("n1");
+    expect(intents).toEqual([
+      { topic: "scene", intent: "addChatNode", args: [10, 20, "hello", true] },
+      { topic: "scene", intent: "addChatNode", args: [30, 40, "hi back", false, "n1"] },
+      { topic: "scene", intent: "setChatCollapsed", args: ["n1", true] },
+      { topic: "scene", intent: "deleteChatNode", args: ["n1"] },
     ]);
   });
 

@@ -32,6 +32,11 @@ function makeStore(overrides: { composer?: object; tokenCounter?: object; notifi
   return { store, updateDraft, setReasoningLevel, dismissNotification };
 }
 
+function makeSceneStore() {
+  const sendMessage = vi.fn();
+  return { sceneStore: { sendMessage }, sendMessage };
+}
+
 describe("Composer", () => {
   it("renders the draft text and forwards edits", async () => {
     const user = userEvent.setup();
@@ -39,7 +44,7 @@ describe("Composer", () => {
     render(
       <OverlayProvider>
         {/* @ts-expect-error - test double, not the real ComposerStore class */}
-        <Composer store={store} />
+        <Composer store={store} sceneStore={makeSceneStore().sceneStore} />
       </OverlayProvider>,
     );
     const input = screen.getByLabelText("Message composer") as HTMLTextAreaElement;
@@ -48,17 +53,63 @@ describe("Composer", () => {
     expect(updateDraft).toHaveBeenCalledWith("hi!");
   });
 
-  it("send/attach/model controls are visibly disabled with their deferred phase named", () => {
+  it("attach/model controls stay visibly disabled with their deferred phase named; Send starts disabled on an empty draft", () => {
     const { store } = makeStore();
     render(
       <OverlayProvider>
         {/* @ts-expect-error - test double */}
-        <Composer store={store} />
+        <Composer store={store} sceneStore={makeSceneStore().sceneStore} />
       </OverlayProvider>,
     );
     expect(screen.getByLabelText("Send message")).toBeDisabled();
     expect(screen.getByLabelText("Attach context")).toBeDisabled();
     expect(screen.getByTitle("Model/provider selection lands in R4")).toBeDisabled();
+  });
+
+  it("Send is enabled once there's text, calls sceneStore.sendMessage, and clears the draft", async () => {
+    const user = userEvent.setup();
+    const { store, updateDraft } = makeStore({ composer: { draft: { ...initialComposerState.draft, text: "hi" } } });
+    const { sceneStore, sendMessage } = makeSceneStore();
+    render(
+      <OverlayProvider>
+        {/* @ts-expect-error - test double */}
+        <Composer store={store} sceneStore={sceneStore} />
+      </OverlayProvider>,
+    );
+    const sendButton = screen.getByLabelText("Send message");
+    expect(sendButton).not.toBeDisabled();
+    await user.click(sendButton);
+    expect(sendMessage).toHaveBeenCalledWith("hi");
+    expect(updateDraft).toHaveBeenCalledWith("");
+  });
+
+  it("Enter sends (and clears the draft); Shift+Enter does not", async () => {
+    const user = userEvent.setup();
+    const { store, updateDraft } = makeStore({ composer: { draft: { ...initialComposerState.draft, text: "hi" } } });
+    const { sceneStore, sendMessage } = makeSceneStore();
+    render(
+      <OverlayProvider>
+        {/* @ts-expect-error - test double */}
+        <Composer store={store} sceneStore={sceneStore} />
+      </OverlayProvider>,
+    );
+    const input = screen.getByLabelText("Message composer");
+    await user.type(input, "{Shift>}{Enter}{/Shift}");
+    expect(sendMessage).not.toHaveBeenCalled();
+    await user.type(input, "{Enter}");
+    expect(sendMessage).toHaveBeenCalledWith("hi");
+    expect(updateDraft).toHaveBeenCalledWith("");
+  });
+
+  it("whitespace-only text does not enable Send", () => {
+    const { store } = makeStore({ composer: { draft: { ...initialComposerState.draft, text: "   " } } });
+    render(
+      <OverlayProvider>
+        {/* @ts-expect-error - test double */}
+        <Composer store={store} sceneStore={makeSceneStore().sceneStore} />
+      </OverlayProvider>,
+    );
+    expect(screen.getByLabelText("Send message")).toBeDisabled();
   });
 
   it("opens the reasoning popover and selecting an option calls the intent and closes it", async () => {

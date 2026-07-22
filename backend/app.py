@@ -66,13 +66,16 @@ def _configure_session(bus: SessionBus, settings_manager: SettingsManager, chat_
 
     bus.register_intent("system", "ping", ping)
 
-    # R1 (doc/QT_REMOVAL_PLAN.md): scene document + grid topics.
-    register_canvas(bus)
+    # R2: notifications, moved ahead of canvas - R3.3's sendMessage intent
+    # needs a real NotificationState to give an honest "lands in R4" notice.
+    notifications_state = register_notifications(bus)
 
-    # R2: composer draft/reasoning, token counter, notifications.
+    # R1 (doc/QT_REMOVAL_PLAN.md): scene document + grid topics.
+    register_canvas(bus, notifications_state)
+
+    # R2: composer draft/reasoning, token counter.
     token_counter = register_token_counter(bus)
     register_composer(bus, token_counter)
-    notifications_state = register_notifications(bus)
 
     # R2.5: about, plugins, settings, chat library.
     register_about(bus)

@@ -160,6 +160,29 @@ describe("WsTransport", () => {
     expect(FakeSocket.instances).toHaveLength(1);
   });
 
+  it("connect() after dispose() re-arms the transport (StrictMode remount safety)", () => {
+    const t = makeTransport();
+    t.subscribe("system", () => {});
+    t.connect();
+    const first = FakeSocket.instances[0];
+    t.dispose();
+    expect(first.closed).toBe(true);
+
+    t.connect();
+    expect(FakeSocket.instances).toHaveLength(2);
+    const second = FakeSocket.instances[1];
+    second.open();
+    expect(t.getStatus()).toBe("open");
+    expect(second.lastSent()).toEqual({ kind: "subscribe", topics: ["system"] });
+
+    // The first socket's close was already delivered synchronously by
+    // dispose() above; simulate it arriving again (a real WebSocket can
+    // still fire a queued close event after .close() was called) and
+    // confirm it doesn't clobber the second, live connection.
+    first.onclose?.();
+    expect(t.getStatus()).toBe("open");
+  });
+
   it("notifies status listeners through the lifecycle", () => {
     const t = makeTransport();
     const statuses: string[] = [];

@@ -17,19 +17,17 @@ import {
 import "@xyflow/react/dist/style.css";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { SceneState } from "../../lib/bridge-core/generated/scene-state";
+import { ChatNodeView, type ChatFlowNode } from "./ChatNodeView";
+import { LOD_ZOOM_THRESHOLD } from "./canvasConstants";
 import { SceneStore, scaleDragPosition } from "./sceneStore";
 
 /**
  * The React Flow canvas (Qt-removal plan R1) - the QGraphicsScene/ChatView
  * successor. R1 scope: pan/zoom, model-driven grid (size/style/color/opacity
  * + snap), node drag with the drag-speed factor, edges, selection + delete,
- * minimap, an LOD threshold, navigation pins. Placeholder nodes only; real
- * node types land per-increment in R3.
+ * minimap, an LOD threshold, navigation pins. R3.1/R3.2 add the first real
+ * node type (chat); every other kind still renders as a placeholder.
  */
-
-// Below this zoom the node body collapses to its title bar - the R1 seed of
-// the Qt canvas's LOD thresholds (full LOD tiers return with real nodes).
-const LOD_ZOOM_THRESHOLD = 0.5;
 
 const GRID_VARIANTS: Record<string, BackgroundVariant> = {
   Dots: BackgroundVariant.Dots,
@@ -38,6 +36,7 @@ const GRID_VARIANTS: Record<string, BackgroundVariant> = {
 };
 
 type PlaceholderNode = Node<{ title: string }, "placeholder">;
+type SceneFlowNode = PlaceholderNode | ChatFlowNode;
 
 function PlaceholderNodeView({ data, selected }: NodeProps<PlaceholderNode>) {
   const zoom = useStore((s) => s.transform[2]);
@@ -55,15 +54,31 @@ function PlaceholderNodeView({ data, selected }: NodeProps<PlaceholderNode>) {
   );
 }
 
-const NODE_TYPES = { placeholder: PlaceholderNodeView };
+const NODE_TYPES = { placeholder: PlaceholderNodeView, chat: ChatNodeView };
 
-function toFlowNodes(scene: SceneState): PlaceholderNode[] {
-  return scene.nodes.map((n) => ({
-    id: n.id,
-    type: "placeholder" as const,
-    position: { x: n.x, y: n.y },
-    data: { title: n.title },
-  }));
+function toFlowNodes(scene: SceneState, store: SceneStore): SceneFlowNode[] {
+  return scene.nodes.map((n) => {
+    if (n.kind === "chat") {
+      return {
+        id: n.id,
+        type: "chat" as const,
+        position: { x: n.x, y: n.y },
+        data: {
+          content: n.content,
+          isUser: n.isUser,
+          isCollapsed: n.isCollapsed,
+          onToggleCollapse: () => store.setChatCollapsed(n.id, !n.isCollapsed),
+          onDelete: () => store.deleteChatNode(n.id),
+        },
+      };
+    }
+    return {
+      id: n.id,
+      type: "placeholder" as const,
+      position: { x: n.x, y: n.y },
+      data: { title: n.title },
+    };
+  });
 }
 
 function toFlowEdges(scene: SceneState): Edge[] {
@@ -77,18 +92,18 @@ function CanvasInner({ store }: { store: SceneStore }) {
   // Local node state exists so dragging is fluid; backend snapshots are the
   // truth and reconcile in whenever nothing is being dragged. dragStartRef
   // powers the drag-speed scaling contract (see scaleDragPosition).
-  const [nodes, setNodes] = useState<PlaceholderNode[]>([]);
+  const [nodes, setNodes] = useState<SceneFlowNode[]>([]);
   const dragStartRef = useRef<Map<string, { x: number; y: number }>>(new Map());
   const draggingRef = useRef(false);
 
   useEffect(() => {
-    if (!draggingRef.current) setNodes(toFlowNodes(scene));
-  }, [scene]);
+    if (!draggingRef.current) setNodes(toFlowNodes(scene, store));
+  }, [scene, store]);
 
   const edges = useMemo(() => toFlowEdges(scene), [scene]);
 
   const onNodesChange = useCallback(
-    (changes: NodeChange<PlaceholderNode>[]) => {
+    (changes: NodeChange<SceneFlowNode>[]) => {
       const scaled = changes.map((change) => {
         if (change.type !== "position" || !change.position) return change;
         if (change.dragging) {
@@ -127,14 +142,27 @@ function CanvasInner({ store }: { store: SceneStore }) {
 
   const onDelete = useCallback(
     ({ nodes: deletedNodes, edges: deletedEdges }: { nodes: Node[]; edges: Edge[] }) => {
-      store.removeNodes(deletedNodes.map((n) => n.id));
-      // Skip edges an already-deleted node takes with it server-side.
+      // Chat nodes delete through their own reparent-preserving intent
+      // (backend/canvas.py's delete_chat_node) so the Delete key matches the
+      // context menu's "Delete Node" exactly - a plain cascade-delete would
+      // orphan every child branch instead of splicing it back to the
+      // grandparent. Every other kind still uses the generic cascade-delete.
+      const chatNodeIds: string[] = [];
+      const otherNodeIds: string[] = [];
+      for (const deleted of deletedNodes) {
+        const flowNode = nodes.find((n) => n.id === deleted.id);
+        (flowNode?.type === "chat" ? chatNodeIds : otherNodeIds).push(deleted.id);
+      }
+      for (const id of chatNodeIds) store.deleteChatNode(id);
+      store.removeNodes(otherNodeIds);
+      // Skip edges an already-deleted node takes with it server-side
+      // (cascade-delete or the chat reparent both manage their own edges).
       const dying = new Set(deletedNodes.map((n) => n.id));
       store.removeEdges(
         deletedEdges.filter((e) => !dying.has(e.source) && !dying.has(e.target)).map((e) => e.id),
       );
     },
-    [store],
+    [store, nodes],
   );
 
   const { screenToFlowPosition } = useReactFlow();
