@@ -18,6 +18,7 @@ import { type MinimapState, validateMinimapState } from "../bridge-core/generate
 import { type NotificationState, validateNotificationState } from "../bridge-core/generated/notification-state";
 import { type PinOverlayState, validatePinOverlayState } from "../bridge-core/generated/pin-overlay-state";
 import { type PluginPickerState, validatePluginPickerState } from "../bridge-core/generated/plugin-picker-state";
+import { type SceneState, validateSceneState } from "../bridge-core/generated/scene-state";
 import { type SearchOverlayState, validateSearchOverlayState } from "../bridge-core/generated/search-overlay-state";
 import { type SettingsState, validateSettingsState } from "../bridge-core/generated/settings-state";
 import { type TokenCounterState, validateTokenCounterState } from "../bridge-core/generated/token-counter-state";
@@ -39,6 +40,7 @@ export const TOPIC_VALIDATORS = {
   "notification": validateNotificationState,
   "pin-overlay": validatePinOverlayState,
   "plugin-picker": validatePluginPickerState,
+  "scene": validateSceneState,
   "search-overlay": validateSearchOverlayState,
   "settings": validateSettingsState,
   "token-counter": validateTokenCounterState,
@@ -63,6 +65,7 @@ export interface TopicStates {
   "notification": NotificationState;
   "pin-overlay": PinOverlayState;
   "plugin-picker": PluginPickerState;
+  "scene": SceneState;
   "search-overlay": SearchOverlayState;
   "settings": SettingsState;
   "token-counter": TokenCounterState;

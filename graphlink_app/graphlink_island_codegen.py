@@ -471,6 +471,17 @@ GENERATED_ARTIFACTS = [
         "schema_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "minimap-state.schema.json",
         "ts_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "minimap-state.ts",
     },
+    {
+        # Qt-removal plan R1: the scene topic (backend/canvas.py's
+        # SceneDocument) - the first payload born for the WS bus rather than
+        # a QWebChannel island; same registry, same pipeline.
+        "dataclass": None,  # resolved lazily in main() to avoid importing
+        "dataclass_import": ("graphlink_scene_payload", "SceneStatePayload"),
+        "title": "SceneState",
+        "source": "graphlink_app/graphlink_scene_payload.py::SceneStatePayload",
+        "schema_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "scene-state.schema.json",
+        "ts_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "scene-state.ts",
+    },
 ]
 
 

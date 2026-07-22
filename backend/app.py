@@ -31,6 +31,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from backend import BACKEND_VERSION
+from backend.canvas import register_canvas
 from backend.events import EventBus, SessionBus, UnknownIntentError, UnknownTopicError
 
 logger = logging.getLogger(__name__)
@@ -55,6 +56,9 @@ def _configure_session(bus: SessionBus) -> None:
         return {"echo": list(args), "serverTime": time.time()}
 
     bus.register_intent("system", "ping", ping)
+
+    # R1 (doc/QT_REMOVAL_PLAN.md): scene document + grid topics.
+    register_canvas(bus)
 
 
 def create_app(spa_dir: Path | None = None) -> FastAPI:

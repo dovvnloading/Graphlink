@@ -1,0 +1,117 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "dragFactor": {
+      "type": "number"
+    },
+    "edges": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "source",
+          "target"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "minCompatibleSchemaVersion": {
+      "type": "integer"
+    },
+    "nodes": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "x": {
+            "type": "number"
+          },
+          "y": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "x",
+          "y",
+          "title",
+          "kind"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "pins": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "note": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "x": {
+            "type": "number"
+          },
+          "y": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "note",
+          "x",
+          "y"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "revision": {
+      "type": "integer"
+    },
+    "schemaVersion": {
+      "type": "integer"
+    },
+    "snapToGrid": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "revision",
+    "nodes",
+    "edges",
+    "pins",
+    "snapToGrid",
+    "dragFactor"
+  ],
+  "title": "SceneState",
+  "type": "object"
+}
