@@ -62,8 +62,22 @@ class _FakeChatView:
     def fit_all(self):
         self.fit_calls += 1
 
-    def toggle_overlays_visibility(self, visible):
-        self.overlays_visible = visible
+
+class _FakeOverlayManager:
+    """Mirrors the real OverlayManager's toggle()/open_surface_name() contract:
+    toggle opens a closed surface, closes the same surface, and swaps to a
+    different one; open_surface_name() returns the open name or None."""
+
+    def __init__(self):
+        self.toggle_calls = []
+        self._open = None
+
+    def toggle(self, name):
+        self.toggle_calls.append(name)
+        self._open = None if self._open == name else name
+
+    def open_surface_name(self):
+        return self._open
 
 
 class _FakeWindow:
@@ -71,6 +85,7 @@ class _FakeWindow:
         self.pin_overlay = _FakePinOverlay()
         self.settings_manager = _FakeSettingsManager()
         self.chat_view = _FakeChatView()
+        self.overlay_manager = _FakeOverlayManager()
         self.calls = []
 
     def show_library(self):
@@ -188,13 +203,38 @@ def test_organize_zoom_reset_fit_all_reach_the_real_chat_view():
     assert window.chat_view.fit_calls == 1
 
 
-def test_toggle_controls_forwards_the_bool_to_chat_view():
+def test_toggle_controls_routes_through_the_overlay_manager_ignoring_the_bool():
+    # P1 (audit B6): the island's bool is ignored - the OverlayManager owns
+    # open/close truth; the slot only asks it to toggle the controls surface.
     window = _FakeWindow()
     bridge = ToolbarBridge(window)
 
     bridge.toggleControls(True)
+    bridge.toggleControls(True)
 
-    assert window.chat_view.overlays_visible is True
+    assert window.overlay_manager.toggle_calls == ["controls", "controls"]
+
+
+def test_active_surface_publishes_the_open_surface_and_empty_when_none():
+    window = _FakeWindow()
+    bridge = ToolbarBridge(window)
+    assert _snapshot(bridge)["activeSurface"] == ""
+
+    window.overlay_manager.toggle("settings")
+    assert _snapshot(bridge)["activeSurface"] == "settings"
+
+    window.overlay_manager.toggle("settings")
+    assert _snapshot(bridge)["activeSurface"] == ""
+
+
+def test_active_surface_falls_back_to_empty_without_an_overlay_manager():
+    # Models the startup window before the manager attribute exists -
+    # _build_state_payload getattr-guards it rather than crashing publish.
+    window = _FakeWindow()
+    del window.overlay_manager
+    bridge = ToolbarBridge(window)
+
+    assert _snapshot(bridge)["activeSurface"] == ""
 
 
 class TestAnchorRect:

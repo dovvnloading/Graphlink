@@ -75,8 +75,11 @@ class ToolbarBridge(IslandBridge, QObject):
         return self._anchors.get(name, self.window)
 
     def _build_state_payload(self) -> dict[str, Any]:
+        manager = getattr(self.window, "overlay_manager", None)
+        active = manager.open_surface_name() if manager is not None else None
         return {
             "pinsChecked": self.window.pin_overlay.isVisible(),
+            "activeSurface": active or "",
             "modeOptions": MODE_OPTIONS,
             "currentMode": self.window.settings_manager.get_current_mode(),
         }
@@ -128,7 +131,9 @@ class ToolbarBridge(IslandBridge, QObject):
 
     @Slot(bool)
     def toggleControls(self, visible: bool):
-        self.window.chat_view.toggle_overlays_visibility(bool(visible))
+        # P1: the island bool (its old latched state) is ignored - the
+        # OverlayManager owns open/close truth and republishes chip state.
+        self.window.overlay_manager.toggle("controls")
 
     @Slot()
     def togglePlugins(self):

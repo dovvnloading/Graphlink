@@ -184,7 +184,21 @@ def _inline_bundle(asset_root: Path) -> str:
         'connect-src \'none\';">'
     )
     theme_root_style = f"<style>{css_root_block(config.CURRENT_THEME)}</style>"
-    document = document.replace("<head>", f"<head>{csp}{theme_root_style}", 1)
+    # UI-refactor P1: the Escape relay. QtWebEngine delivers key input
+    # straight into the render process for the focused web content - the
+    # QApplication event filter, application QShortcuts, and even
+    # ShortcutOverride interception never see Escape while an island owns
+    # the keyboard (all three verified live). The page itself is therefore
+    # the only reliable observer; it signals the host through titleChanged,
+    # the one always-available page->host channel that needs no bridge
+    # schema, no per-island code, and no rebuild. Capture-phase listener so
+    # island code cannot swallow it first.
+    escape_relay = (
+        "<script>window.addEventListener('keydown',function(e){"
+        "if(e.key==='Escape'){document.title='__gl_escape__'+Date.now();}"
+        "},true);</script>"
+    )
+    document = document.replace("<head>", f"<head>{csp}{theme_root_style}{escape_relay}", 1)
     channel_script = '<script src="qrc:///qtwebchannel/qwebchannel.js"></script>'
     document = document.replace("</head>", f"{channel_script}</head>", 1)
     return document
@@ -410,6 +424,8 @@ class WebIslandHost(QFrame):
       widget - native or another QWebEngineView - focus lands on.
     """
 
+    escape_pressed = Signal()
+
     heightChanged = Signal(int)
     textFocusChanged = Signal(bool)
 
@@ -489,6 +505,7 @@ class WebIslandHost(QFrame):
             channel.registerObject("islandHost", self)
             self.web_view.page().setWebChannel(channel)
             self.web_view.loadFinished.connect(self._on_load_finished)
+            self.web_view.titleChanged.connect(self._on_title_changed)
             if self._dev_origin is not None:
                 # Live dev-server mode (developer opt-in, double-gated - see
                 # resolve_dev_server_origin). The request interceptor
@@ -509,6 +526,24 @@ class WebIslandHost(QFrame):
 
         self._apply_native_mask()
         register(self)
+        self._install_escape_shortcut()
+
+    def _on_title_changed(self, title):
+        # The page-side Escape relay (see _inline_bundle) signals through the
+        # title - the unique-suffix scheme keeps repeat presses distinct.
+        if title.startswith("__gl_escape__"):
+            self.escape_pressed.emit()
+
+    def _install_escape_shortcut(self):
+        # UI-refactor P1: Escape must dismiss whatever surface is open even
+        # while keyboard focus sits inside this host's webview, where the
+        # QApplication event filter may never see the key (Chromium accepts
+        # the ShortcutOverride). A widget-with-children shortcut scoped to
+        # the host fires ahead of normal delivery for the host's subtree.
+        from PySide6.QtGui import QKeySequence, QShortcut
+        shortcut = QShortcut(QKeySequence(Qt.Key.Key_Escape), self)
+        shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        shortcut.activated.connect(self.escape_pressed.emit)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
