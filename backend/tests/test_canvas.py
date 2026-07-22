@@ -132,6 +132,20 @@ def test_pin_intents_round_trip_through_the_store():
     asyncio.run(run())
 
 
+def test_update_pin_intent_renames_and_validates():
+    async def run():
+        bus, document, _ = make_bus()
+        pin_id = await bus.dispatch_intent("scene", "addPin", ["Original", 0, 0])
+        await bus.dispatch_intent("scene", "updatePin", [pin_id, "Renamed", "a note"])
+        pin = document.scene_payload()["pins"][0]
+        assert pin["title"] == "Renamed"
+        assert pin["note"] == "a note"
+        with pytest.raises(Exception):
+            await bus.dispatch_intent("scene", "updatePin", [pin_id, "   ", ""])
+
+    asyncio.run(run())
+
+
 def test_grid_intents_use_the_bridge_slot_names_and_publish_grid_topic():
     async def run():
         bus, document, recorder = make_bus()

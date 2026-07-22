@@ -9,7 +9,7 @@ import { useOverlays } from "../overlays/overlays";
  * - zoomIn/zoomOut/resetZoom/fitAll -> React Flow viewport ops (they were
  *   pure ChatView viewport calls; the viewport lives HERE now)
  * - organizeNodes -> scene intent (backend tidy layout)
- * - togglePins -> pins panel visibility (App state, chip reflects it)
+ * - togglePins -> the pins overlay (R2.4: full search + rename/note editing)
  * - toggleControls -> the View popover (audit P5: ONE popover for
  *   drag/grid/font instead of three stacked cards)
  * - library/settings/about/help/plugins -> overlay dialogs; chips read REAL
@@ -19,15 +19,7 @@ import { useOverlays } from "../overlays/overlays";
  *   never silently dropped.
  */
 
-export function AppBar({
-  store,
-  pinsVisible,
-  onTogglePins,
-}: {
-  store: SceneStore;
-  pinsVisible: boolean;
-  onTogglePins: () => void;
-}) {
+export function AppBar({ store }: { store: SceneStore }) {
   const overlays = useOverlays();
   const { zoomIn, zoomOut, setViewport, fitView, getViewport } = useReactFlow();
 
@@ -55,10 +47,11 @@ export function AppBar({
       </button>
       <button
         type="button"
-        className={"appbar-btn appbar-btn-checkable" + (pinsVisible ? " checked" : "")}
-        aria-pressed={pinsVisible}
-        title="Show navigation pins"
-        onClick={onTogglePins}
+        className={chip("pins")}
+        data-overlay-trigger="pins"
+        aria-pressed={overlays.isOpen("pins")}
+        title="Navigation pins"
+        onClick={() => overlays.toggle("pins", "popover")}
       >
         Pins
       </button>

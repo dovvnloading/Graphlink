@@ -833,3 +833,297 @@ body,
 .notification-dismiss:hover {
   color: var(--gl-surface-text);
 }
+
+/* -- R2.4 pin overlay ------------------------------------------------------ */
+
+.app-pins-layer {
+  position: absolute;
+  top: 8px;
+  left: 16px;
+  z-index: 20;
+}
+
+.pins-popover {
+  width: 240px;
+}
+
+.pins-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.pins-title {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  color: var(--gl-surface-text-muted);
+}
+
+.pins-add {
+  font-size: 10px;
+  font-weight: 600;
+  font-family: inherit;
+  padding: 3px 8px;
+  color: var(--gl-surface-text);
+  background-color: var(--gl-neutral-button-background);
+  border: 1px solid var(--gl-neutral-button-border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.pins-add:hover {
+  background-color: var(--gl-neutral-button-hover);
+}
+
+.pins-search {
+  width: 100%;
+  font-size: 11px;
+  font-family: inherit;
+  padding: 5px 8px;
+  margin-bottom: 6px;
+  color: var(--gl-surface-text);
+  background-color: var(--gl-surface-inset, var(--gl-surface-node-body));
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 6px;
+}
+
+.pins-empty {
+  margin: 4px 0 0;
+  font-size: 11px;
+  color: var(--gl-surface-text-muted);
+}
+
+.pins-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.pins-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 0;
+}
+
+.pins-jump {
+  flex: 1;
+  text-align: left;
+  font-size: 11px;
+  font-family: inherit;
+  padding: 4px 6px;
+  color: var(--gl-surface-text);
+  background: transparent;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pins-jump:hover {
+  background-color: var(--gl-neutral-button-hover);
+}
+
+.pins-edit-button,
+.pins-remove {
+  font-size: 11px;
+  font-family: inherit;
+  line-height: 1;
+  padding: 4px 6px;
+  color: var(--gl-surface-text-muted);
+  background: transparent;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.pins-edit-button:hover,
+.pins-remove:hover {
+  color: var(--gl-surface-text);
+  background-color: var(--gl-neutral-button-hover);
+}
+
+.pins-edit-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+  margin: 2px 0;
+  background-color: var(--gl-surface-inset, var(--gl-surface-node-body));
+  border-radius: 7px;
+}
+
+.pins-edit-title {
+  font-size: 11px;
+  font-weight: 600;
+  font-family: inherit;
+  padding: 4px 6px;
+  color: var(--gl-surface-text);
+  background-color: var(--gl-surface-node-body);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 5px;
+}
+
+.pins-edit-note {
+  font-size: 11px;
+  font-family: inherit;
+  resize: vertical;
+  padding: 4px 6px;
+  color: var(--gl-surface-text);
+  background-color: var(--gl-surface-node-body);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 5px;
+}
+
+.pins-edit-error {
+  margin: 0;
+  font-size: 10px;
+  color: var(--gl-status-error, var(--gl-surface-text));
+}
+
+.pins-edit-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.pins-edit-actions button {
+  font-size: 10px;
+  font-weight: 600;
+  font-family: inherit;
+  padding: 4px 8px;
+  color: var(--gl-surface-text);
+  background-color: var(--gl-neutral-button-background);
+  border: 1px solid var(--gl-neutral-button-border);
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.pins-edit-actions button:hover {
+  background-color: var(--gl-neutral-button-hover);
+}
+
+.pins-edit-save {
+  background-color: var(--gl-neutral-button-pressed, var(--gl-neutral-button-hover)) !important;
+}
+
+/* -- R2.4 command palette + search overlay -------------------------------- */
+
+.palette-shell {
+  width: 480px;
+  max-width: calc(100vw - 64px);
+  max-height: calc(100vh - 120px);
+  display: flex;
+  flex-direction: column;
+  background-color: var(--gl-surface-node-body);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 12px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
+  overflow: hidden;
+}
+
+.palette-search-input {
+  font-size: 14px;
+  font-family: inherit;
+  padding: 14px 16px;
+  color: var(--gl-surface-text);
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--gl-surface-border);
+}
+
+.palette-search-input:focus {
+  outline: none;
+}
+
+.palette-results {
+  margin: 0;
+  padding: 6px;
+  list-style: none;
+  overflow-y: auto;
+}
+
+.palette-result {
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--gl-surface-text);
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.palette-result.selected {
+  background-color: var(--gl-neutral-button-background);
+}
+
+.palette-empty {
+  padding: 12px 10px;
+  font-size: 12px;
+  color: var(--gl-surface-text-muted);
+}
+
+.app-search-layer {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 22;
+}
+
+.search-overlay-shell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  background-color: var(--gl-surface-node-body);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 9px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+}
+
+.search-overlay-input {
+  width: 200px;
+  font-size: 12px;
+  font-family: inherit;
+  padding: 5px 8px;
+  color: var(--gl-surface-text);
+  background-color: var(--gl-surface-inset, var(--gl-surface-window));
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 6px;
+}
+
+.search-overlay-count {
+  font-size: 11px;
+  min-width: 44px;
+  text-align: center;
+  color: var(--gl-surface-text-muted);
+}
+
+.search-overlay-count[data-tone="active"] {
+  color: var(--gl-surface-text);
+}
+
+.search-overlay-count[data-tone="error"] {
+  color: var(--gl-status-error, var(--gl-surface-text-muted));
+}
+
+.search-overlay-icon-btn {
+  font-size: 10px;
+  line-height: 1;
+  padding: 5px 7px;
+  color: var(--gl-surface-text-muted);
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.search-overlay-icon-btn:hover {
+  color: var(--gl-surface-text);
+  background-color: var(--gl-neutral-button-hover);
+}

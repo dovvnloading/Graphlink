@@ -292,6 +292,15 @@ def register_canvas(bus: SessionBus) -> SceneDocument:
         document.pins.remove(pin_id)
         await publish_scene()
 
+    async def update_pin(pin_id, title, note):
+        # NavigationPinRecord.create() validation (non-empty/length-bounded
+        # title, length-bounded note) runs via with_updates -> create's own
+        # field validators, same as add_pin's path - a bad edit raises
+        # NavigationPinValidationError, which is a ValueError subclass and
+        # therefore already reported to the caller as an intent error.
+        document.pins.update(pin_id, title=str(title), note=str(note))
+        await publish_scene()
+
     async def set_snap_to_grid(enabled):
         document.snap_to_grid = bool(enabled)
         await publish_scene()
@@ -308,6 +317,7 @@ def register_canvas(bus: SessionBus) -> SceneDocument:
     bus.register_intent("scene", "addPin", add_pin)
     bus.register_intent("scene", "movePin", move_pin)
     bus.register_intent("scene", "removePin", remove_pin)
+    bus.register_intent("scene", "updatePin", update_pin)
     bus.register_intent("scene", "setSnapToGrid", set_snap_to_grid)
     bus.register_intent("scene", "setDragFactor", set_drag_factor)
 

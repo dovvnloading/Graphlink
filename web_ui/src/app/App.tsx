@@ -4,12 +4,15 @@ import { ConnectionStatus, WsTransport, defaultWsUrl } from "../lib/ws/transport
 import { SceneCanvas } from "./canvas/SceneCanvas";
 import { SceneStore } from "./canvas/sceneStore";
 import { AppBar } from "./chrome/AppBar";
+import { CommandPalette } from "./chrome/CommandPalette";
 import { Composer } from "./chrome/Composer";
 import { ComposerStore } from "./chrome/composerStore";
 import { NotificationBanner } from "./chrome/NotificationBanner";
+import { PinOverlay } from "./chrome/PinOverlay";
+import { SearchOverlay } from "./chrome/SearchOverlay";
 import { TokenCounter } from "./chrome/TokenCounter";
 import { ViewPopover } from "./chrome/ViewPopover";
-import { OverlayProvider } from "./overlays/overlays";
+import { OverlayProvider, useOverlays } from "./overlays/overlays";
 
 /**
  * The single-app shell (Qt-removal plan R0-R2).
@@ -28,10 +31,32 @@ interface SystemState {
   revision?: number;
 }
 
+// Ctrl/Cmd+K opens the command palette, Ctrl/Cmd+F the canvas search -
+// the conventional bindings the legacy islands' own keyPressEvent handlers
+// used. Lives inside OverlayProvider (needs useOverlays()), so it is its
+// own small component rather than inline in App().
+function GlobalShortcuts() {
+  const overlays = useOverlays();
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      const mod = event.ctrlKey || event.metaKey;
+      if (mod && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        overlays.toggle("palette", "dialog");
+      } else if (mod && event.key.toLowerCase() === "f") {
+        event.preventDefault();
+        overlays.toggle("search", "popover");
+      }
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [overlays]);
+  return null;
+}
+
 function App() {
   const [status, setStatus] = useState<ConnectionStatus>("closed");
   const [system, setSystem] = useState<SystemState>({});
-  const [pinsVisible, setPinsVisible] = useState(true);
 
   const transport = useMemo(() => new WsTransport(defaultWsUrl()), []);
   const sceneStore = useMemo(() => new SceneStore(transport), [transport]);
@@ -57,21 +82,24 @@ function App() {
   return (
     <OverlayProvider>
       <ReactFlowProvider>
+        <GlobalShortcuts />
         <div className="app-shell">
           <header className="app-topbar">
             <span className="app-title">Graphlink</span>
-            <AppBar
-              store={sceneStore}
-              pinsVisible={pinsVisible}
-              onTogglePins={() => setPinsVisible((v) => !v)}
-            />
+            <AppBar store={sceneStore} />
             <span className={`app-conn app-conn-${status}`} title={`backend ${system.backendVersion ?? ""}`}>
               {status === "open" ? "connected" : status}
             </span>
           </header>
 
           <main className="app-canvas-region">
-            <SceneCanvas store={sceneStore} pinsVisible={pinsVisible} />
+            <SceneCanvas store={sceneStore} />
+            <div className="app-search-layer">
+              <SearchOverlay store={sceneStore} />
+            </div>
+            <div className="app-pins-layer">
+              <PinOverlay store={sceneStore} />
+            </div>
             <div className="app-popover-layer">
               <ViewPopover store={sceneStore} />
             </div>
@@ -81,6 +109,7 @@ function App() {
             <div className="app-notification-layer">
               <NotificationBanner store={composerStore} />
             </div>
+            <CommandPalette store={sceneStore} />
           </main>
 
           <footer className="app-composer-region">

@@ -139,6 +139,10 @@ export class SceneStore {
     this.transport.intent("scene", "addPin", [title, x, y, note]);
   }
 
+  updatePin(id: string, title: string, note: string): void {
+    this.transport.intent("scene", "updatePin", [id, title, note]);
+  }
+
   removePin(id: string): void {
     this.transport.intent("scene", "removePin", [id]);
   }

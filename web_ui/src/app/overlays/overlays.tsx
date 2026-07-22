@@ -30,7 +30,7 @@ import {
 
 export type OverlayTier = "popover" | "dialog";
 
-interface OverlayContextValue {
+export interface OverlayContextValue {
   openSurface: string | null;
   open: (name: string, tier: OverlayTier) => void;
   close: () => void;
