@@ -56,14 +56,14 @@ describe("ChatNodeView", () => {
     expect(onToggleCollapse).toHaveBeenCalledOnce();
   });
 
-  it("right-click opens a menu with real Copy/Collapse/Delete and deferred Regenerate/Export", async () => {
+  it("right-click opens a menu with real Copy/Collapse/Delete and every deferred item honestly disabled+titled", async () => {
     const user = userEvent.setup();
-    const { onDelete } = renderChatNode();
+    const { onDelete } = renderChatNode({ isUser: false });
 
     const writeText = vi.fn();
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
 
-    const role = screen.getByText("You");
+    const role = screen.getByText("Assistant");
     fireEvent.contextMenu(role);
     expect(screen.getByRole("menu")).toBeInTheDocument();
 
@@ -73,6 +73,16 @@ describe("ChatNodeView", () => {
     const exportItem = screen.getByRole("menuitem", { name: "Export" });
     expect(exportItem).toBeDisabled();
     expect(exportItem).toHaveAttribute("title", "Export lands in R6");
+    const hideBranches = screen.getByRole("menuitem", { name: "Hide Other Branches" });
+    expect(hideBranches).toBeDisabled();
+    expect(hideBranches).toHaveAttribute("title", "Branch visibility isn't built yet");
+    const docView = screen.getByRole("menuitem", { name: "Open Document View" });
+    expect(docView).toBeDisabled();
+    for (const name of ["Generate Key Takeaway", "Generate Explainer Note", "Generate Chart", "Generate Image"]) {
+      const item = screen.getByRole("menuitem", { name });
+      expect(item).toBeDisabled();
+      expect(item).toHaveAttribute("title", "AI generation lands in R4");
+    }
 
     await user.click(screen.getByRole("menuitem", { name: "Copy Text" }));
     expect(writeText).toHaveBeenCalledWith("Hello **world**");
@@ -80,6 +90,12 @@ describe("ChatNodeView", () => {
     fireEvent.contextMenu(role);
     await user.click(screen.getByRole("menuitem", { name: "Delete Node" }));
     expect(onDelete).toHaveBeenCalledOnce();
+  });
+
+  it("Regenerate Response only appears for assistant messages, matching the legacy is_user guard", () => {
+    renderChatNode({ isUser: true });
+    fireEvent.contextMenu(screen.getByText("You"));
+    expect(screen.queryByRole("menuitem", { name: "Regenerate Response" })).toBeNull();
   });
 
   it("Escape and outside-click both close the menu", async () => {

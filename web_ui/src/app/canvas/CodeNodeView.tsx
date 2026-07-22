@@ -14,8 +14,12 @@ import { LOD_ZOOM_THRESHOLD } from "./canvasConstants";
  * via the same react-markdown + rehype-highlight pipeline chat nodes already
  * pull in - no new highlighter dependency), delete (generic cascade-delete;
  * code nodes are never branch points, so there's no reparent rule to honor),
- * copy. Deferred, with an honest disabled+title label: Regenerate (R4) and
- * Export (R6).
+ * copy. Deferred, with an honest disabled+title label rather than a silent
+ * drop (an R3.4 live-drive audit found the legacy CodeNode menu's branch-
+ * visibility item had been dropped with zero acknowledgment - fixed here):
+ * Regenerate (R4), Export (R6), and Hide Other Branches (the legacy scene's
+ * branch-visibility toggle has no backend/frontend equivalent at all yet -
+ * unscoped, not owned by any R-phase).
  */
 
 export interface CodeNodeData extends Record<string, unknown> {
@@ -85,11 +89,14 @@ function CodeNodeMenu({
       >
         Copy Code
       </button>
-      <button type="button" role="menuitem" disabled title="Agent regeneration lands in R4">
-        Regenerate Response
-      </button>
       <button type="button" role="menuitem" disabled title="Export lands in R6">
         Export
+      </button>
+      <button type="button" role="menuitem" disabled title="Branch visibility isn't built yet">
+        Hide Other Branches
+      </button>
+      <button type="button" role="menuitem" disabled title="Agent regeneration lands in R4">
+        Regenerate Response
       </button>
       <button
         type="button"
