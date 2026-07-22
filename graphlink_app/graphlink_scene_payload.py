@@ -53,4 +53,7 @@ class SceneStatePayload:
     pins: list[ScenePinRow]
     snapToGrid: bool
     dragFactor: float
+    fontFamily: str
+    fontSizePt: int
+    fontColor: str
     minCompatibleSchemaVersion: int | None = None

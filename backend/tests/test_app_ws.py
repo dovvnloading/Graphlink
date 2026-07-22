@@ -44,9 +44,9 @@ def test_subscribe_without_topics_sends_every_registered_topic():
     client = make_client()
     with client.websocket_connect("/ws") as ws:
         ws.send_json({"kind": "subscribe"})
-        # R1 surface: grid-control + scene (canvas) alongside system, sorted.
-        topics = [ws.receive_json()["topic"] for _ in range(3)]
-        assert topics == ["grid-control", "scene", "system"]
+        # R2 surface: canvas topics + the View popover's preset topics, sorted.
+        topics = [ws.receive_json()["topic"] for _ in range(5)]
+        assert topics == ["drag-speed", "font-control", "grid-control", "scene", "system"]
 
 
 def test_ping_round_trip_returns_echo_and_server_time():

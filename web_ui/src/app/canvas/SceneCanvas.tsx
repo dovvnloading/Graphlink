@@ -71,7 +71,7 @@ function toFlowEdges(scene: SceneState): Edge[] {
   return scene.edges.map((e) => ({ id: e.id, source: e.source, target: e.target }));
 }
 
-function CanvasInner({ store }: { store: SceneStore }) {
+function CanvasInner({ store, pinsVisible }: { store: SceneStore; pinsVisible: boolean }) {
   const scene = useSyncExternalStore(store.subscribe, store.getScene);
   const grid = useSyncExternalStore(store.subscribe, store.getGrid);
   const { setCenter } = useReactFlow();
@@ -187,7 +187,7 @@ function CanvasInner({ store }: { store: SceneStore }) {
         />
         <MiniMap pannable zoomable className="scene-minimap" />
       </ReactFlow>
-      <PinsPanel store={store} onJump={jumpToPin} />
+      {pinsVisible && <PinsPanel store={store} onJump={jumpToPin} />}
     </div>
   );
 }
@@ -249,10 +249,8 @@ function PinsPanel({
   );
 }
 
-export function SceneCanvas({ store }: { store: SceneStore }) {
-  return (
-    <ReactFlowProvider>
-      <CanvasInner store={store} />
-    </ReactFlowProvider>
-  );
+// The ReactFlowProvider lives in App (R2): the app bar's zoom/fit buttons
+// need the same React Flow instance the canvas renders into.
+export function SceneCanvas({ store, pinsVisible }: { store: SceneStore; pinsVisible: boolean }) {
+  return <CanvasInner store={store} pinsVisible={pinsVisible} />;
 }

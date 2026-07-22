@@ -28,6 +28,15 @@
       },
       "type": "array"
     },
+    "fontColor": {
+      "type": "string"
+    },
+    "fontFamily": {
+      "type": "string"
+    },
+    "fontSizePt": {
+      "type": "integer"
+    },
     "minCompatibleSchemaVersion": {
       "type": "integer"
     },
@@ -110,7 +119,10 @@
     "edges",
     "pins",
     "snapToGrid",
-    "dragFactor"
+    "dragFactor",
+    "fontFamily",
+    "fontSizePt",
+    "fontColor"
   ],
   "title": "SceneState",
   "type": "object"
