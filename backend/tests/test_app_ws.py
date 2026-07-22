@@ -18,15 +18,21 @@ def make_client(tmp_path: Path | None = None) -> TestClient:
     # R2.5d/e: create_app() now builds a real SettingsManager and a real
     # chats.db path - always point both at a fresh temp dir so tests never
     # read or mutate the developer's actual ~/.graphlink/session.dat or
-    # ~/.graphlink/chats.db.
-    temp_dir = Path(tempfile.mkdtemp())
-    return TestClient(
+    # ~/.graphlink/chats.db. TemporaryDirectory (not mkdtemp) so its
+    # finalizer removes the dir when the client is garbage collected instead
+    # of accumulating litter in %TEMP% run after run; pinned to the client
+    # so it lives exactly as long as the app that writes into it.
+    state_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+    state_path = Path(state_dir.name)
+    client = TestClient(
         create_app(
             spa_dir=spa,
-            settings_state_file=temp_dir / "session.dat",
-            chat_db_path=temp_dir / "chats.db",
+            settings_state_file=state_path / "session.dat",
+            chat_db_path=state_path / "chats.db",
         )
     )
+    client._state_tmpdir = state_dir  # type: ignore[attr-defined]
+    return client
 
 
 def test_health_reports_ok_and_version():

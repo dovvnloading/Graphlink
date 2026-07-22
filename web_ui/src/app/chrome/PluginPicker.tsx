@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import type { WsTransport } from "../../lib/ws/transport";
 import { TOPIC_VALIDATORS } from "../../lib/api-contract/topics";
 import type { AppPluginsState } from "../../lib/bridge-core/generated/app-plugins-state";
-import { Popover } from "../overlays/overlays";
+import { Popover, useOverlays } from "../overlays/overlays";
 
 /**
  * The plugin picker popover (Qt-removal plan R2.5) - plugin-picker island's
@@ -20,6 +20,7 @@ const initialState: AppPluginsState = {
 };
 
 export function PluginPicker({ transport }: { transport: WsTransport }) {
+  const overlays = useOverlays();
   const [state, setState] = useState<AppPluginsState>(initialState);
   const [activeCategoryName, setActiveCategoryName] = useState<string | null>(null);
 
@@ -75,7 +76,13 @@ export function PluginPicker({ transport }: { transport: WsTransport }) {
                   <button
                     type="button"
                     className="plugin-picker-row"
-                    onClick={() => transport.intent("app-plugins", "executePlugin", [plugin.name])}
+                    onClick={() => {
+                      transport.intent("app-plugins", "executePlugin", [plugin.name]);
+                      // Close on select, matching the legacy popup's own
+                      // post-execute dismiss - and so the resulting
+                      // notification banner is seen unobstructed.
+                      overlays.close();
+                    }}
                   >
                     <span className="plugin-picker-row-copy">
                       <span className="plugin-picker-row-label">{plugin.name}</span>
