@@ -11,6 +11,16 @@ class ChatNodeContextMenu(QMenu):
     """
     A comprehensive context menu for ChatNode, providing access to text manipulation,
     AI actions (summaries, explainers, charts), and organizational tools.
+
+    Bug-scan finding: the export/reveal/chart-type actions used to connect
+    QAction.triggered to a lambda closing over self (e.g.
+    `lambda: self._handle_export('txt')`). PySide6's GC does not reclaim a
+    self-capturing lambda connected to a widget-owned signal (confirmed
+    empirically - a bound-method connection is reclaimed fine), so this menu
+    - and the ChatNode it stores via self.node - leaked forever on EVERY
+    right-click. Fixed by storing the per-action variant via
+    QAction.setData() and connecting every action to one shared bound-method
+    dispatcher that reads self.sender().data().
     """
 
     def __init__(self, node, parent=None):
@@ -54,7 +64,8 @@ class ChatNodeContextMenu(QMenu):
                 node_label = docked_node.docked_label() if hasattr(docked_node, "docked_label") else docked_node.__class__.__name__
                 reveal_action = QAction(node_label, undock_menu)
                 reveal_action.setIcon(qta.icon('fa5s.expand-arrows-alt', color='white'))
-                reveal_action.triggered.connect(lambda checked=False, target=docked_node: self.undock_node(target))
+                reveal_action.setData(docked_node)
+                reveal_action.triggered.connect(self._on_reveal_action_triggered)
                 undock_menu.addAction(reveal_action)
             self.addMenu(undock_menu)
 
@@ -98,7 +109,8 @@ class ChatNodeContextMenu(QMenu):
             for title, chart_type, icon in chart_types:
                 action = QAction(title, chart_menu)
                 action.setIcon(qta.icon(icon, color='white'))
-                action.triggered.connect(lambda checked, t=chart_type: self.generate_chart(t))
+                action.setData(chart_type)
+                action.triggered.connect(self._on_chart_action_triggered)
                 chart_menu.addAction(action)
 
             self.addMenu(chart_menu)
@@ -133,26 +145,40 @@ class ChatNodeContextMenu(QMenu):
         export_menu.setIcon(qta.icon('fa5s.file-export', color='white'))
 
         txt_action = QAction("Text File (.txt)", self)
-        txt_action.triggered.connect(lambda: self._handle_export('txt'))
+        txt_action.setData('txt')
+        txt_action.triggered.connect(self._on_export_action_triggered)
         export_menu.addAction(txt_action)
 
         md_action = QAction("Markdown File (.md)", self)
-        md_action.triggered.connect(lambda: self._handle_export('md'))
+        md_action.setData('md')
+        md_action.triggered.connect(self._on_export_action_triggered)
         export_menu.addAction(md_action)
 
         html_action = QAction("HTML Document (.html)", self)
-        html_action.triggered.connect(lambda: self._handle_export('html'))
+        html_action.setData('html')
+        html_action.triggered.connect(self._on_export_action_triggered)
         export_menu.addAction(html_action)
 
         docx_action = QAction("Word Document (.docx)", self)
-        docx_action.triggered.connect(lambda: self._handle_export('docx'))
+        docx_action.setData('docx')
+        docx_action.triggered.connect(self._on_export_action_triggered)
         export_menu.addAction(docx_action)
 
         pdf_action = QAction("PDF Document (.pdf)", self)
-        pdf_action.triggered.connect(lambda: self._handle_export('pdf'))
+        pdf_action.setData('pdf')
+        pdf_action.triggered.connect(self._on_export_action_triggered)
         export_menu.addAction(pdf_action)
 
         return export_menu
+
+    def _on_reveal_action_triggered(self):
+        self.undock_node(self.sender().data())
+
+    def _on_chart_action_triggered(self):
+        self.generate_chart(self.sender().data())
+
+    def _on_export_action_triggered(self):
+        self._handle_export(self.sender().data())
 
     def _handle_export(self, file_format):
         exporter = Exporter()

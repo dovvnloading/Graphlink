@@ -11,6 +11,18 @@ class ColorPickerDialog(QDialog):
     """
     A small, frameless pop-up dialog for selecting a color from a predefined palette.
     It automatically closes when the user clicks outside of it.
+
+    Bug-scan finding: the reset/swatch buttons used to connect QPushButton.clicked
+    to a lambda closing over self (e.g. `lambda: self.color_selected(None, "default")`).
+    PySide6's GC does not reclaim a self-capturing lambda connected to a
+    widget-owned signal - confirmed empirically, and notably NOT limited to
+    custom Signals or worker threads: a stock QPushButton.clicked calling a
+    plain method (not even a Signal.emit) forms the identical GC-invisible
+    cycle - so this dialog leaked forever every time it was opened. Fixed by
+    connecting the default button to a small dedicated bound method, and
+    storing each swatch's color data via QWidget.setProperty() so every swatch
+    button can share one bound-method dispatcher that reads
+    self.sender().property(...).
     """
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -57,7 +69,7 @@ class ColorPickerDialog(QDialog):
 
         default_btn = QPushButton("Reset to Default")
         default_btn.setIcon(qta.icon('fa5s.undo', color='white'))
-        default_btn.clicked.connect(lambda: self.color_selected(None, "default"))
+        default_btn.clicked.connect(self._on_default_clicked)
         main_layout.addWidget(default_btn)
 
         def create_section(title, color_type, names_list):
@@ -93,8 +105,9 @@ class ColorPickerDialog(QDialog):
                         QPushButton:hover {{ border: 2px solid #FFFFFF; }}
                     """
                 btn.setStyleSheet(style)
-                btn.clicked.connect(lambda checked, c=color_data: self.color_selected(c["color"], c["type"]))
-                
+                btn.setProperty("frame_color_data", color_data)
+                btn.clicked.connect(self._on_swatch_clicked)
+
                 grid_layout.addWidget(btn, row, col)
                 col = (col + 1) % 5
                 if col == 0: row += 1
@@ -150,6 +163,13 @@ class ColorPickerDialog(QDialog):
             self.close()
         super().changeEvent(event)
         
+    def _on_default_clicked(self):
+        self.color_selected(None, "default")
+
+    def _on_swatch_clicked(self):
+        color_data = self.sender().property("frame_color_data")
+        self.color_selected(color_data["color"], color_data["type"])
+
     def color_selected(self, color, color_type):
         self.selected_color = color
         self.selected_type = color_type
