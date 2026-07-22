@@ -15,7 +15,7 @@ from graphlink_grid_control_web import GridControlHost
 from graphlink_font_control_web import FontControlHost
 from graphlink_drag_speed_web import DragSpeedHost
 from graphlink_minimap_web import MinimapHost
-from graphlink_config import get_semantic_color
+from graphlink_config import get_semantic_color, get_surface_color
 from graphlink_context_menu import create_context_menu
 from graphlink_web_island_host import any_host_has_text_focus
 
@@ -677,7 +677,7 @@ class ChatView(QGraphicsView):
         """
         super().drawBackground(painter, rect)
     
-        painter.fillRect(rect, QColor("#252525"))
+        painter.fillRect(rect, QColor(get_surface_color("node_body")))
     
         grid_size = self.grid_settings.grid_size
         opacity = self.grid_settings.grid_opacity

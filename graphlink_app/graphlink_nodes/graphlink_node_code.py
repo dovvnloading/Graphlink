@@ -4,8 +4,9 @@ from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath, Q
 from PySide6.QtWidgets import QApplication, QGraphicsItem
 
 from graphlink_canvas_items import Container, HoverAnimationMixin
-from graphlink_config import canvas_font, canvas_font_color, get_current_palette, get_graph_node_colors, get_semantic_color
+from graphlink_config import canvas_font, canvas_font_color, get_current_palette, get_graph_node_colors, get_semantic_color, get_surface_color
 from graphlink_lod import draw_lod_card, lod_mode_for_item, preview_text
+from graphlink_styles import FONT_FAMILY_NAME
 from graphlink_widgets import ScrollBar
 
 try:
@@ -28,7 +29,7 @@ class CodeHighlighter:
 
     def highlight(self, code, language):
         if not PYGMENTS_AVAILABLE:
-            return f'<pre style="color: #ffffff; white-space: pre-wrap;">{code}</pre>'
+            return f'<pre style="color: {get_surface_color("text_bright")}; white-space: pre-wrap;">{code}</pre>'
         try:
             if not language:
                 lexer = guess_lexer(code)
@@ -83,9 +84,9 @@ class CodeNode(QGraphicsItem, HoverAnimationMixin):
 
     def _set_document_style(self):
         scene = self.scene()
-        family = getattr(scene, "font_family", "Segoe UI")
+        family = getattr(scene, "font_family", FONT_FAMILY_NAME)
         size = max(1, int(getattr(scene, "font_size", 10)))
-        color = canvas_font_color(scene, "#dddddd").name()
+        color = canvas_font_color(scene, get_surface_color("text_primary")).name()
         stylesheet = self.highlighter.get_stylesheet()
         stylesheet += f" body, pre {{ font-family: '{family}'; font-size: {size}pt; color: {color}; }}"
         self.document.setDefaultStyleSheet(stylesheet)
@@ -143,7 +144,7 @@ class CodeNode(QGraphicsItem, HoverAnimationMixin):
         path = QPainterPath()
         path.addRoundedRect(0, 0, self.width, self.height, 10, 10)
 
-        painter.setBrush(QColor("#1e1e1e"))
+        painter.setBrush(QColor(get_surface_color("window")))
 
         is_dragging = self.scene() and getattr(self.scene(), 'is_rubber_band_dragging', False)
 
@@ -178,7 +179,7 @@ class CodeNode(QGraphicsItem, HoverAnimationMixin):
         painter.setBrush(node_colors["header_start"])
         painter.drawPath(header_path)
 
-        painter.setPen(QColor("#cccccc"))
+        painter.setPen(QColor(get_surface_color("text_soft")))
         font = canvas_font(self.scene(), delta=-1)
         painter.setFont(font)
         metrics = QFontMetrics(font)
@@ -190,7 +191,7 @@ class CodeNode(QGraphicsItem, HoverAnimationMixin):
         )
         painter.drawText(label_rect, Qt.AlignmentFlag.AlignVCenter, label_text)
 
-        copy_icon = qta.icon('fa5s.copy', color='#cccccc')
+        copy_icon = qta.icon('fa5s.copy', color=get_surface_color("text_soft"))
         copy_icon.paint(painter, QRectF(self.width - 28, 7, 16, 16).toRect())
 
         painter.save()

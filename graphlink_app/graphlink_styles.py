@@ -797,6 +797,44 @@ THEME_TOKENS = {
             "badge_fill": "#484848",
             "panel_fill": "#202020",
         },
+        # UI-refactor P0 (doc/UI_QA_AUDIT.md section 7): the clean neutral
+        # role set for native painting/stylesheet code. Values are the exact
+        # hexes that dominated the swept files (node cards, canvas items,
+        # widget chrome) so the migration is byte-neutral in this theme;
+        # mono/muted values are derived from each theme's existing qss
+        # neutrals so themed rendering stays coherent.
+        "surface": {
+            "window": "#1E1E1E",
+            "node_body": "#252525",
+            "inset": "#202020",
+            "inset_deep": "#121212",
+            "field": "#272727",
+            "border": "#3F3F3F",
+            "border_strong": "#505050",
+            "divider": "#424242",
+            "handle": "#555555",
+            "handle_hover": "#6A6A6A",
+            "chrome_inactive": "#888888",
+            "text_primary": "#E0E0E0",
+            "text_strong": "#F1F1F1",
+            "text_soft": "#CCCCCC",
+            "text_label": "#A4A4A4",
+            "text_secondary": "#BDBDBD",
+            "text_muted": "#767676",
+            "text_bright": "#FFFFFF",
+        },
+        # Sweep-adjudicated (2026-07-22): PythonHighlighter's palette moved
+        # here from graphlink_pycoder.py so code-node syntax colors theme with
+        # everything else. Identical across themes today - a deliberate
+        # starting point, not a constraint.
+        "syntax": {
+            "keyword": "#909090",
+            "builtin": "#A2A2A2",
+            "number": "#A2A2A2",
+            "string": "#B5B5B5",
+            "comment": "#626262",
+            "function": "#A3A3A3",
+        },
         "qss": {
             "qmainwindow_qwidget__background_color": "#1E1E1E",
             "qmainwindow_qwidget__color": "#DCDCDC",
@@ -895,6 +933,34 @@ THEME_TOKENS = {
             "badge_fill": "#484848",
             "panel_fill": "#202020",
         },
+        "surface": {
+            "window": "#222222",
+            "node_body": "#292929",
+            "inset": "#202020",
+            "inset_deep": "#161616",
+            "field": "#2A2A2A",
+            "border": "#444444",
+            "border_strong": "#555555",
+            "divider": "#444444",
+            "handle": "#555555",
+            "handle_hover": "#6A6A6A",
+            "chrome_inactive": "#999999",
+            "text_primary": "#DDDDDD",
+            "text_strong": "#F1F1F1",
+            "text_soft": "#CFCFCF",
+            "text_label": "#ABABAB",
+            "text_secondary": "#D5D5D5",
+            "text_muted": "#8A8A8A",
+            "text_bright": "#FFFFFF",
+        },
+        "syntax": {
+            "keyword": "#909090",
+            "builtin": "#A2A2A2",
+            "number": "#A2A2A2",
+            "string": "#B5B5B5",
+            "comment": "#626262",
+            "function": "#A3A3A3",
+        },
         "qss": {
             "qmainwindow_qwidget__background_color": "#222222",
             "qmainwindow_qwidget__color": "#DDDDDD",
@@ -984,6 +1050,34 @@ THEME_TOKENS = {
             "header_end": "#333333",
             "badge_fill": "#4a4a4a",
             "panel_fill": "#1c1c1c",
+        },
+        "surface": {
+            "window": "#1A1A1A",
+            "node_body": "#222222",
+            "inset": "#1C1C1C",
+            "inset_deep": "#101010",
+            "field": "#232323",
+            "border": "#383838",
+            "border_strong": "#494949",
+            "divider": "#383838",
+            "handle": "#494949",
+            "handle_hover": "#5E5E5E",
+            "chrome_inactive": "#7E7E7E",
+            "text_primary": "#D1D1D1",
+            "text_strong": "#E8E8E8",
+            "text_soft": "#C4C4C4",
+            "text_label": "#9C9C9C",
+            "text_secondary": "#BABABA",
+            "text_muted": "#6E6E6E",
+            "text_bright": "#F5F5F5",
+        },
+        "syntax": {
+            "keyword": "#909090",
+            "builtin": "#A2A2A2",
+            "number": "#A2A2A2",
+            "string": "#B5B5B5",
+            "comment": "#626262",
+            "function": "#A3A3A3",
         },
         "qss": {
             "qmainwindow_qwidget__background_color": "#1A1A1A",
@@ -1096,6 +1190,87 @@ _FRAME_COLORS_BY_THEME = {
 # so this is "the app's one explicit font choice," not "every font in use."
 FONT_FAMILY = "'Segoe UI', sans-serif"
 
+# Bare family name for QFont construction (QFont wants "Segoe UI", not the
+# CSS-quoted stack above). UI-refactor P0: every widget/painting file that
+# used to string-paste "Segoe UI" imports this instead - the acceptance gate
+# (tests/test_ui_token_acceptance.py) enforces that this module is the only
+# place the literal appears.
+FONT_FAMILY_NAME = "Segoe UI"
+
+# ---------------------------------------------------------------------------
+# UI-refactor P0: structure tokens (doc/UI_QA_AUDIT.md section 7, P0).
+#
+# Theme-INDEPENDENT scales - spacing on a 4px grid, three radii, a type ramp
+# with nothing under 12px (audit finding D2: 9-10px microtext), three
+# elevation levels (audit finding B9: no elevation model), and motion
+# durations/easing (audit finding F4: zero transitions). One source, two
+# consumers: css_custom_properties() flattens these into --gl-* custom
+# properties for every island (and tailwind_theme_css() registers them under
+# Tailwind's proper non-color namespaces), while the *_PX/ELEVATION_PARAMS
+# accessors below give Qt-side code integer values for the same scales so
+# native painting/QSS derives from the identical source of truth.
+#
+# RECORDED DECISION (2026-07-22): the audit's P0 text sketched "one token
+# source (JSON)". This codebase already HAS the single token source - this
+# module: THEME_TOKENS feeds runtime island injection (css_root_block ->
+# _inline_bundle) and the generated Tailwind theme. A parallel JSON file
+# would fork truth into two places, so P0 extends THIS module instead; the
+# audit doc's P0 entry is updated to match. "Token modules" for the
+# acceptance grep = this file alone.
+STRUCTURE_TOKENS = {
+    "space": {
+        "1": "4px",
+        "2": "8px",
+        "3": "12px",
+        "4": "16px",
+        "5": "20px",
+        "6": "24px",
+        "8": "32px",
+    },
+    "radius": {
+        "sm": "4px",
+        "md": "8px",
+        "lg": "12px",
+    },
+    "text": {
+        "xs": "12px",
+        "sm": "13px",
+        "base": "14px",
+        "lg": "16px",
+        "xl": "20px",
+    },
+    "weight": {
+        "regular": "400",
+        "semibold": "600",
+    },
+    "shadow": {
+        "1": "0 1px 3px rgba(0, 0, 0, 0.40)",
+        "2": "0 4px 12px rgba(0, 0, 0, 0.45)",
+        "3": "0 8px 28px rgba(0, 0, 0, 0.55)",
+    },
+    "motion": {
+        "fast": "150ms",
+        "base": "200ms",
+        "ease": "cubic-bezier(0.2, 0, 0, 1)",
+    },
+}
+
+# Qt-side integer views of the same scales (QFont/QMargins/QRect math wants
+# ints, not "13px" strings). Derived, not duplicated: parsed from
+# STRUCTURE_TOKENS so the two representations cannot drift.
+SPACE_PX = {int(key): int(value[:-2]) for key, value in STRUCTURE_TOKENS["space"].items()}
+RADIUS_PX = {key: int(value[:-2]) for key, value in STRUCTURE_TOKENS["radius"].items()}
+TEXT_PX = {key: int(value[:-2]) for key, value in STRUCTURE_TOKENS["text"].items()}
+
+# QGraphicsDropShadowEffect parameters (blur_radius, y_offset, alpha) matching
+# the three CSS shadow levels closely enough that a native popover and a web
+# popover read as the same elevation tier on screen.
+ELEVATION_PARAMS = {
+    1: (12, 2, 110),
+    2: (24, 4, 120),
+    3: (40, 8, 140),
+}
+
 # THEME_TOKENS groups that belong to ONE island's own chrome rather than to the
 # app-wide color vocabulary, mapped to the CSS custom-property prefix they
 # flatten under. These are exported by css_custom_properties() (island CSS has
@@ -1196,7 +1371,7 @@ def css_custom_properties(theme_name: str) -> dict[str, str]:
     function already exports.
     """
     tokens = THEME_TOKENS[theme_name]
-    included_groups = ("palette", "semantic", "neutral_button", "graph_node")
+    included_groups = ("palette", "semantic", "neutral_button", "graph_node", "surface", "syntax")
     excluded_groups = ("qss", "qss_alpha")
     # Self-verifying rather than relying solely on a separate test file to
     # catch drift: if a future edit adds a new top-level THEME_TOKENS group
@@ -1259,6 +1434,14 @@ def css_custom_properties(theme_name: str) -> dict[str, str]:
         properties[f"--gl-frame-{slug}"] = base_color
 
     properties["--gl-font-family"] = FONT_FAMILY
+
+    # UI-refactor P0: theme-independent structure scales, emitted identically
+    # for every theme (so the cross-theme key-set guard holds by
+    # construction). Names: --gl-space-N, --gl-radius-K, --gl-text-K,
+    # --gl-weight-K, --gl-shadow-N, --gl-motion-K.
+    for group, entries in STRUCTURE_TOKENS.items():
+        for key, value in entries.items():
+            properties[f"--gl-{group}-{key}"] = value
 
     for name, value in properties.items():
         _assert_safe_css_declaration_value(name, value)
@@ -1332,12 +1515,43 @@ def tailwind_theme_css() -> str:
     """
     excluded = island_property_names("dark")
     names = [name for name in sorted(css_custom_properties("dark")) if name not in excluded]
+    # UI-refactor P0: structure tokens register under Tailwind v4's proper
+    # non-color namespaces so the compiler mints the RIGHT kind of utility
+    # (p-gl-2 / rounded-gl-md / text-gl-sm / shadow-gl-1 / duration-gl-fast),
+    # not a bogus bg-gl-space-2 color utility. Routed by emitted-name prefix;
+    # prefixes are derived from STRUCTURE_TOKENS's real group names so a new
+    # group cannot silently fall through to the color namespace.
+    structure_namespace = {
+        "space": "--spacing-gl-",
+        "radius": "--radius-gl-",
+        "text": "--text-gl-",
+        "weight": "--font-weight-gl-",
+        "shadow": "--shadow-gl-",
+    }
+    assert set(structure_namespace) | {"motion"} == set(STRUCTURE_TOKENS), (
+        "STRUCTURE_TOKENS gained a group tailwind_theme_css() doesn't route - "
+        "add it to structure_namespace (or the motion special-case) before "
+        "extending the scales."
+    )
     lines = []
     for name in names:
         if name == "--gl-font-family":
             lines.append(f"  --font-gl: var({name});")
+            continue
+        for group, tw_prefix in structure_namespace.items():
+            gl_prefix = f"--gl-{group}-"
+            if name.startswith(gl_prefix):
+                lines.append(f"  {tw_prefix}{name[len(gl_prefix):]}: var({name});")
+                break
         else:
-            lines.append(f"  --color-{name[len('--'):]}: var({name});")
+            if name.startswith("--gl-motion-"):
+                key = name[len("--gl-motion-"):]
+                if key == "ease":
+                    lines.append(f"  --ease-gl: var({name});")
+                else:
+                    lines.append(f"  --duration-gl-{key}: var({name});")
+            else:
+                lines.append(f"  --color-{name[len('--'):]}: var({name});")
     return "@theme {\n" + "\n".join(lines) + "\n}\n"
 
 

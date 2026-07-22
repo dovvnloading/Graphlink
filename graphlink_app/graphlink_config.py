@@ -1,6 +1,6 @@
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import QApplication
-from graphlink_styles import THEME_TOKENS, THEMES
+from graphlink_styles import FONT_FAMILY_NAME, THEME_TOKENS, THEMES
 
 CURRENT_THEME = "dark"
 
@@ -15,15 +15,41 @@ def canvas_font(scene=None, delta=0, weight=QFont.Weight.Normal):
     reach their headers. Keeping this small helper in the shared config module
     makes those headers follow the same family and scale as document-backed nodes.
     """
-    family = getattr(scene, "font_family", "Segoe UI") if scene else "Segoe UI"
+    family = getattr(scene, "font_family", FONT_FAMILY_NAME) if scene else FONT_FAMILY_NAME
     base_size = getattr(scene, "font_size", 10) if scene else 10
     font = QFont(family, max(1, int(base_size) + int(delta)), weight)
     return font
 
 
-def canvas_font_color(scene=None, fallback="#DDDDDD"):
+def canvas_font_color(scene=None, fallback=None):
     color = getattr(scene, "font_color", None) if scene else None
-    return QColor(color) if color is not None else QColor(fallback)
+    if color is not None:
+        return QColor(color)
+    if fallback is not None:
+        return QColor(fallback)
+    # UI-refactor P0: the default falls back to the theme's primary text
+    # surface role instead of a hardcoded literal.
+    return QColor(get_surface_color("text_primary"))
+
+
+def get_syntax_color(name: str):
+    """Look up a syntax-highlight role's hex string for the current theme
+    (keyword/builtin/number/string/comment/function). Sweep adjudication
+    moved PythonHighlighter's palette into THEME_TOKENS; this is its lookup."""
+    return THEME_TOKENS[CURRENT_THEME]["syntax"][name]
+
+
+def get_surface_color(name: str):
+    """Look up a neutral surface/text role's hex string for the current theme.
+
+    UI-refactor P0 (doc/UI_QA_AUDIT.md section 7): the lookup the hex-literal
+    sweep migrated node/canvas/widget chrome onto. Mirrors
+    get_semantic_color()'s table-lookup shape but returns the raw hex string
+    rather than a QColor - the dominant call sites are f-string stylesheets,
+    and QColor construction is one wrap away for the painting sites that
+    need it."""
+    tokens = THEME_TOKENS[CURRENT_THEME]["surface"]
+    return tokens[name]
 
 
 def is_monochrome_theme():

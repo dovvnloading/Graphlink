@@ -3,7 +3,8 @@
 from PySide6.QtCore import QPointF, Property, QEasingCurve, QParallelAnimationGroup, QPropertyAnimation, Qt, QTimer
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QGuiApplication, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QGraphicsDropShadowEffect, QLabel, QVBoxLayout, QWidget
-from graphlink_config import get_current_palette
+from graphlink_config import get_current_palette, get_surface_color
+from graphlink_styles import FONT_FAMILY_NAME
 from graphlink_version import APP_VERSION
 from .loading_visuals import paint_orbital_loading_spinner
 
@@ -99,7 +100,7 @@ class AnimatedWordLogo(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
 
-        font = QFont("Segoe UI", 34, QFont.Weight.Bold)
+        font = QFont(FONT_FAMILY_NAME, 34, QFont.Weight.Bold)
         font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 2)
         painter.setFont(font)
         metrics = QFontMetrics(font)
@@ -131,8 +132,8 @@ class AnimatedWordLogo(QWidget):
             
             y_offset = (1.0 - ease_p) * 25.0
             
-            if i < 5: 
-                color = QColor("#FFFFFF")
+            if i < 5:
+                color = QColor(get_surface_color("text_bright"))
             else:
                 color = QColor(palette.SELECTION)
                 
@@ -177,14 +178,14 @@ class SplashScreen(QWidget):
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         content_layout.addWidget(self.status_label)
 
-        self.setStyleSheet("""
-            QWidget#splashContainer {
-                background-color: #1E1E1E;
+        self.setStyleSheet(f"""
+            QWidget#splashContainer {{
+                background-color: {get_surface_color("window")};
                 border-radius: 8px;
-            }
-            QLabel {
-                color: #747474;
-            }
+            }}
+            QLabel {{
+                color: {get_surface_color("text_muted")};
+            }}
         """)
         
         screen = QGuiApplication.primaryScreen().geometry()

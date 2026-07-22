@@ -3,6 +3,7 @@
 from PySide6.QtCore import QRectF, Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QPainter
 from PySide6.QtWidgets import QGraphicsObject, QWidget
+from graphlink_config import get_surface_color
 
 class CustomScrollBar(QWidget):
     valueChanged = Signal(float)
@@ -43,7 +44,7 @@ class CustomScrollBar(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         
-        track_color = QColor("#2A2A2A")
+        track_color = QColor(get_surface_color("field"))
         track_color.setAlpha(100)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(track_color)
@@ -76,7 +77,7 @@ class CustomScrollBar(QWidget):
             else:
                 handle_position = 0
             
-        handle_color = QColor("#6a6a6a") if self.hover else QColor("#555555")
+        handle_color = QColor(get_surface_color("handle_hover")) if self.hover else QColor(get_surface_color("handle"))
         painter.setBrush(handle_color)
         
         if self.orientation == Qt.Orientation.Vertical:
@@ -137,7 +138,7 @@ class ScrollHandle(QGraphicsObject):
     def paint(self, painter, option, widget=None):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
     
-        color = QColor("#6a6a6a") if self.hover else QColor("#555555")
+        color = QColor(get_surface_color("handle_hover")) if self.hover else QColor(get_surface_color("handle"))
         
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QBrush(color))
@@ -171,7 +172,7 @@ class ScrollBar(QGraphicsObject):
     def paint(self, painter, option, widget=None):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         
-        track_color = QColor("#2A2A2A")
+        track_color = QColor(get_surface_color("field"))
         track_color.setAlpha(100)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QBrush(track_color))

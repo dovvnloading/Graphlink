@@ -50,14 +50,36 @@ class TestGlThemeCssStructure:
 
     def test_every_declaration_references_the_matching_gl_custom_property(self):
         content = _read_generated_file()
-        declarations = re.findall(r"--([a-z-]+):\s*var\((--gl-[a-z-]+)\);", content)
+        declarations = re.findall(r"--([a-z0-9-]+):\s*var\((--gl-[a-z0-9-]+)\);", content)
         assert len(declarations) > 0
+        # UI-refactor P0: structure tokens route to Tailwind v4's proper
+        # non-color namespaces (spacing/radius/text/font-weight/shadow/
+        # duration/ease); everything else stays "color-gl-..." except the
+        # original "font-gl" special case. Mirrors tailwind_theme_css()'s
+        # own routing table.
+        structure_routes = {
+            "--gl-space-": "spacing-gl-",
+            "--gl-radius-": "radius-gl-",
+            "--gl-text-": "text-gl-",
+            "--gl-weight-": "font-weight-gl-",
+            "--gl-shadow-": "shadow-gl-",
+        }
         for tailwind_name, gl_var in declarations:
-            # Every Tailwind theme key is either "color-gl-..." (mirroring
-            # the referenced --gl-... name exactly) or the one special-cased
-            # "font-gl" for --gl-font-family.
             if tailwind_name == "font-gl":
                 assert gl_var == "--gl-font-family"
+                continue
+            if gl_var == "--gl-motion-ease":
+                assert tailwind_name == "ease-gl"
+                continue
+            if gl_var.startswith("--gl-motion-"):
+                assert tailwind_name == f"duration-gl-{gl_var[len('--gl-motion-'):]}"
+                continue
+            for gl_prefix, tw_prefix in structure_routes.items():
+                if gl_var.startswith(gl_prefix):
+                    assert tailwind_name == f"{tw_prefix}{gl_var[len(gl_prefix):]}", (
+                        f"--{tailwind_name} does not mirror {gl_var} as expected"
+                    )
+                    break
             else:
                 assert tailwind_name == f"color-{gl_var[len('--'):]}", (
                     f"--{tailwind_name} does not mirror {gl_var} as expected"

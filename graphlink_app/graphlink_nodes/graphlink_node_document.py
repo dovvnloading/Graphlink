@@ -8,8 +8,9 @@ from PySide6.QtWidgets import QGraphicsItem
 
 from graphlink_audio import format_duration
 from graphlink_canvas_items import Container, HoverAnimationMixin
-from graphlink_config import canvas_font, get_current_palette, get_graph_node_colors
+from graphlink_config import canvas_font, get_current_palette, get_graph_node_colors, get_surface_color
 from graphlink_lod import draw_lod_card, lod_mode_for_item, preview_text
+from graphlink_styles import FONT_FAMILY_NAME
 from graphlink_widgets import ScrollBar
 
 
@@ -178,9 +179,9 @@ class DocumentNode(QGraphicsItem, HoverAnimationMixin):
         return True
 
     def _setup_document(self):
-        font_family = "Segoe UI"
+        font_family = FONT_FAMILY_NAME
         font_size = 10
-        color = "#DDDDDD"
+        color = get_surface_color("text_primary")
 
         if self.scene():
             font_family = self.scene().font_family
@@ -192,13 +193,13 @@ class DocumentNode(QGraphicsItem, HoverAnimationMixin):
             f"p {{ margin: 0 0 0.45em 0; }}"
             "table.meta { width: 100%; border-collapse: collapse; margin: 0 0 12px 0; }"
             "table.meta td { padding: 6px 0; vertical-align: top; }"
-            "td.meta-label { color: #979797; font-size: 9pt; font-weight: 600; width: 88px; min-width: 88px; max-width: 88px; padding-right: 18px; white-space: nowrap; }"
-            "td.meta-value { color: #F1F1F1; font-size: 9.5pt; }"
-            "p.attachment-kicker { color: #A0A0A0; font-size: 8.5pt; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; margin: 0 0 4px 0; }"
-            "p.attachment-title { color: #F7F7F7; font-size: 12pt; font-weight: 700; margin: 0 0 12px 0; }"
-            "p.section-label { color: #979797; font-size: 8.5pt; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; margin: 6px 0 8px 0; }"
-            "div.preview { background: #121212; border: 1px solid #393939; border-radius: 10px; padding: 10px 12px; }"
-            "pre.preview-text { margin: 0; color: #DDDDDD; font-family: 'Consolas', 'Courier New', monospace; white-space: pre-wrap; }"
+            f"td.meta-label {{ color: {get_surface_color('text_label')}; font-size: 9pt; font-weight: 600; width: 88px; min-width: 88px; max-width: 88px; padding-right: 18px; white-space: nowrap; }}"
+            f"td.meta-value {{ color: {get_surface_color('text_strong')}; font-size: 9.5pt; }}"
+            f"p.attachment-kicker {{ color: {get_surface_color('text_label')}; font-size: 8.5pt; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; margin: 0 0 4px 0; }}"
+            f"p.attachment-title {{ color: {get_surface_color('text_bright')}; font-size: 12pt; font-weight: 700; margin: 0 0 12px 0; }}"
+            f"p.section-label {{ color: {get_surface_color('text_label')}; font-size: 8.5pt; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; margin: 6px 0 8px 0; }}"
+            f"div.preview {{ background: {get_surface_color('inset_deep')}; border: 1px solid {get_surface_color('border')}; border-radius: 10px; padding: 10px 12px; }}"
+            f"pre.preview-text {{ margin: 0; color: {get_surface_color('text_primary')}; font-family: 'Consolas', 'Courier New', monospace; white-space: pre-wrap; }}"
         )
         self.document.setDefaultStyleSheet(stylesheet)
         self.document.setHtml(self._build_attachment_html())
@@ -376,29 +377,29 @@ class DocumentNode(QGraphicsItem, HoverAnimationMixin):
         painter.setBrush(button_bg)
         painter.setPen(button_border)
         painter.drawRoundedRect(rect, 4, 4)
-        icon = qta.icon(icon_name, color="#FFFFFF" if hovered else "#D7D7D7")
+        icon = qta.icon(icon_name, color=get_surface_color("text_bright") if hovered else get_surface_color("text_primary"))
         icon.paint(painter, rect.adjusted(3, 3, -3, -3).toRect())
 
     def _paint_collapsed_state(self, painter, current_width, current_height, pen):
         node_colors = get_graph_node_colors()
-        painter.setBrush(QColor("#272727"))
+        painter.setBrush(QColor(get_surface_color("field")))
         painter.setPen(pen)
         painter.drawRoundedRect(0, 0, current_width, current_height, current_height / 2, current_height / 2)
 
-        icon = qta.icon(self._icon_name(), color="#D9D9D9")
+        icon = qta.icon(self._icon_name(), color=get_surface_color("text_primary"))
         icon.paint(painter, QRectF(12, 14, 16, 16).toRect())
 
-        title_font = QFont(self.scene().font_family if self.scene() else "Segoe UI", 9, QFont.Weight.Bold)
+        title_font = QFont(self.scene().font_family if self.scene() else FONT_FAMILY_NAME, 9, QFont.Weight.Bold)
         painter.setFont(title_font)
-        painter.setPen(QColor("#F3F3F3"))
+        painter.setPen(QColor(get_surface_color("text_strong")))
         title_metrics = QFontMetrics(title_font)
         title_width = current_width - 84
         elided_title = title_metrics.elidedText(self.title or self._subtitle_text(), Qt.TextElideMode.ElideRight, title_width)
         painter.drawText(QRectF(36, 9, title_width, 16), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, elided_title)
 
-        subtitle_font = QFont(self.scene().font_family if self.scene() else "Segoe UI", 8)
+        subtitle_font = QFont(self.scene().font_family if self.scene() else FONT_FAMILY_NAME, 8)
         painter.setFont(subtitle_font)
-        painter.setPen(QColor("#B1B1B1"))
+        painter.setPen(QColor(get_surface_color("text_secondary")))
         subtitle_metrics = QFontMetrics(subtitle_font)
         subtitle_text = subtitle_metrics.elidedText(self.preview_label or self._subtitle_text(), Qt.TextElideMode.ElideRight, title_width)
         painter.drawText(QRectF(36, 26, title_width, 14), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, subtitle_text)
@@ -444,7 +445,7 @@ class DocumentNode(QGraphicsItem, HoverAnimationMixin):
         else:
             path = QPainterPath()
             path.addRoundedRect(0, 0, self.width, self.height, 10, 10)
-            painter.setBrush(QColor("#2D2D2D"))
+            painter.setBrush(QColor(get_surface_color("field")))
             painter.setPen(pen)
             painter.drawPath(path)
 
@@ -454,10 +455,10 @@ class DocumentNode(QGraphicsItem, HoverAnimationMixin):
             painter.setBrush(node_colors["header_start"])
             painter.drawPath(header_path)
 
-            icon = qta.icon(self._icon_name(), color="#CCCCCC")
+            icon = qta.icon(self._icon_name(), color=get_surface_color("text_soft"))
             icon.paint(painter, QRectF(10, 7, 16, 16).toRect())
 
-            painter.setPen(QColor("#CCCCCC"))
+            painter.setPen(QColor(get_surface_color("text_soft")))
             title_font = canvas_font(self.scene(), delta=-1, weight=QFont.Weight.Bold)
             painter.setFont(title_font)
             title_metrics = QFontMetrics(title_font)
@@ -473,12 +474,12 @@ class DocumentNode(QGraphicsItem, HoverAnimationMixin):
             painter.setBrush(QColor(255, 255, 255, 18))
             painter.setPen(Qt.PenStyle.NoPen)
             painter.drawRoundedRect(badge_rect, 8, 8)
-            painter.setPen(QColor("#D9D9D9"))
+            painter.setPen(QColor(get_surface_color("text_primary")))
             painter.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, badge_metrics.elidedText(badge_text, Qt.TextElideMode.ElideRight, int(badge_rect.width() - 10)))
 
             panel_rect = self._content_panel_rect()
-            painter.setBrush(QColor("#1C1C1C"))
-            painter.setPen(QPen(QColor("#404040"), 1))
+            painter.setBrush(QColor(get_surface_color("window")))
+            painter.setPen(QPen(QColor(get_surface_color("border")), 1))
             painter.drawRoundedRect(panel_rect, 11, 11)
 
             painter.save()

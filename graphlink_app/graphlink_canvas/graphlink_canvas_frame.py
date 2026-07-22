@@ -10,7 +10,7 @@ from PySide6.QtGui import (
 
 from .graphlink_canvas_base import CanvasHeaderLineEdit, update_connections_for_items
 from .graphlink_canvas_dialogs import ColorPickerDialog
-from graphlink_config import canvas_font, get_current_palette, get_semantic_color
+from graphlink_config import canvas_font, get_current_palette, get_semantic_color, get_surface_color
 
 
 class Frame(QGraphicsItem):
@@ -47,8 +47,8 @@ class Frame(QGraphicsItem):
         # Load icons for the lock/unlock button.
         # QtAwesome's legacy ``fa`` prefix is not installed in current releases;
         # use the Font Awesome 5 solid set used by the rest of the canvas.
-        self.lock_icon = qta.icon('fa5s.lock', color='#ffffff')
-        self.unlock_icon = qta.icon('fa5s.unlock-alt', color='#ffffff')
+        self.lock_icon = qta.icon('fa5s.lock', color=get_surface_color("text_bright"))
+        self.unlock_icon = qta.icon('fa5s.unlock-alt', color=get_surface_color("text_bright"))
         self.lock_icon_hover = qta.icon('fa5s.lock', color=get_semantic_color("status_info").name())
         self.unlock_icon_hover = qta.icon('fa5s.unlock-alt', color=get_semantic_color("status_success").name())
         
@@ -57,7 +57,7 @@ class Frame(QGraphicsItem):
         self.is_collapsed = False
         self.expanded_rect = QRectF()
         self.rect = QRectF()
-        self.color = "#2d2d2d"
+        self.color = get_surface_color("node_body")
         self.header_color = None 
         
         self.collapse_button_rect = QRectF(0, 0, 24, 24)
@@ -557,7 +557,7 @@ class Frame(QGraphicsItem):
         if dialog.exec() == QDialog.DialogCode.Accepted:
             color, color_type = dialog.get_selected_color()
             if color_type == "default":
-                self.color = "#2d2d2d"
+                self.color = get_surface_color("node_body")
                 self.header_color = None
             elif color_type == "full":
                 self.color = color
@@ -615,7 +615,7 @@ class Frame(QGraphicsItem):
 
         if self.is_collapsed:
             base_color = QColor(self.color)
-            outline_color = palette.SELECTION if self.isSelected() else palette.AI_NODE if self.hovered else QColor("#555555")
+            outline_color = palette.SELECTION if self.isSelected() else palette.AI_NODE if self.hovered else QColor(get_surface_color("handle"))
             path = QPainterPath()
             path.addRoundedRect(self.rect, 10, 10)
 
@@ -627,7 +627,7 @@ class Frame(QGraphicsItem):
             self.lock_button_rect = QRectF()
             self.color_button_rect = QRectF()
 
-            painter.setPen(QPen(QColor("#ffffff")))
+            painter.setPen(QPen(QColor(get_surface_color("text_bright"))))
             font = canvas_font(self.scene(), delta=1, weight=QFont.Weight.Bold)
             painter.setFont(font)
             title_rect = QRectF(self.rect.left() + 14, self.rect.top(), self.rect.width() - 56, self.rect.height())
@@ -636,7 +636,7 @@ class Frame(QGraphicsItem):
 
             expand_icon = qta.icon(
                 'fa5s.expand-arrows-alt',
-                color='#ffffff' if self.collapse_button_hovered or self.hovered else '#9a9a9a',
+                color=get_surface_color("text_bright") if self.collapse_button_hovered or self.hovered else get_surface_color("text_label"),
             )
             expand_icon.paint(painter, self.collapse_button_rect.adjusted(3, 3, -3, -3).toRect())
             return
@@ -653,7 +653,7 @@ class Frame(QGraphicsItem):
         elif self.hovered:
             outline_color = palette.AI_NODE
         else:
-            outline_color = QColor("#555555")
+            outline_color = QColor(get_surface_color("handle"))
         
         path = QPainterPath()
         path.addRoundedRect(self.rect, 10, 10)
@@ -688,19 +688,19 @@ class Frame(QGraphicsItem):
 
         # Draw collapse button.
         self.collapse_button_rect = QRectF(self.rect.right() - 102, self.rect.top() + 8, 24, 24)
-        painter.setPen(QPen(QColor("#ffffff") if self.collapse_button_hovered else QColor("#555555")))
-        painter.setBrush(QBrush(QColor("#3f3f3f")))
+        painter.setPen(QPen(QColor(get_surface_color("text_bright")) if self.collapse_button_hovered else QColor(get_surface_color("handle"))))
+        painter.setBrush(QBrush(QColor(get_surface_color("border"))))
         painter.drawEllipse(self.collapse_button_rect)
         collapse_icon = qta.icon(
             'fa5s.compress-arrows-alt',
-            color='#ffffff' if self.collapse_button_hovered else '#bbbbbb',
+            color=get_surface_color("text_bright") if self.collapse_button_hovered else get_surface_color("text_secondary"),
         )
         collapse_icon.paint(painter, self.collapse_button_rect.adjusted(4, 4, -4, -4).toRect())
     
         # Draw lock button.
         self.lock_button_rect = QRectF(self.rect.right() - 68, self.rect.top() + 8, 24, 24)
-        painter.setPen(QPen(palette.USER_NODE if self.lock_button_hovered else QColor("#555555")))
-        painter.setBrush(QBrush(QColor("#3f3f3f")))
+        painter.setPen(QPen(palette.USER_NODE if self.lock_button_hovered else QColor(get_surface_color("handle"))))
+        painter.setBrush(QBrush(QColor(get_surface_color("border"))))
         painter.drawEllipse(self.lock_button_rect)
         icon = self.lock_icon_hover if self.is_locked and self.lock_button_hovered else self.lock_icon if self.is_locked else self.unlock_icon_hover if self.lock_button_hovered else self.unlock_icon
         icon_size = 18
@@ -711,10 +711,10 @@ class Frame(QGraphicsItem):
     
         # Draw color button.
         self.color_button_rect = QRectF(self.rect.right() - 34, self.rect.top() + 8, 24, 24)
-        painter.setPen(QPen(QColor("#ffffff") if self.color_button_hovered else QColor("#555555")))
+        painter.setPen(QPen(QColor(get_surface_color("text_bright")) if self.color_button_hovered else QColor(get_surface_color("handle"))))
         painter.setBrush(QBrush(QColor(self.header_color if self.header_color else self.color)))
         painter.drawEllipse(self.color_button_rect)
-        icon_color = QColor("#ffffff"); icon_color.setAlpha(180)
+        icon_color = QColor(get_surface_color("text_bright")); icon_color.setAlpha(180)
         painter.setPen(QPen(icon_color))
         circle_size, spacing = 4, 3
         total_width = (circle_size * 3) + (spacing * 2)
@@ -725,7 +725,7 @@ class Frame(QGraphicsItem):
             painter.drawEllipse(QRectF(x_pos, y_pos, circle_size, circle_size))
     
         # Draw title (note).
-        painter.setPen(QPen(QColor("#ffffff")))
+        painter.setPen(QPen(QColor(get_surface_color("text_bright"))))
         font = canvas_font(self.scene())
         painter.setFont(font)
         text_rect = self._header_text_rect()

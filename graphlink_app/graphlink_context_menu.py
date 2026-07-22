@@ -15,35 +15,36 @@ from PySide6.QtCore import QEvent, QObject, QTimer, Qt
 from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import QApplication, QMenu, QWidget
 
-from graphlink_config import get_current_palette, is_monochrome_theme, is_muted_theme
+from graphlink_config import get_current_palette, get_surface_color, is_monochrome_theme, is_muted_theme
+from graphlink_styles import FONT_FAMILY
 
 
 def _colors() -> dict[str, str]:
     """Return the menu colors for the active Graphlink theme."""
     if is_monochrome_theme():
         return {
-            "surface": "#2A2A2A",
-            "text": "#DDDDDD",
-            "border": "#444444",
+            "surface": get_surface_color("field"),
+            "text": get_surface_color("text_primary"),
+            "border": get_surface_color("border"),
             "hover": "#666666",
             "disabled": "#777777",
         }
 
     if is_muted_theme():
         return {
-            "surface": "#232323",
-            "text": "#D1D1D1",
-            "border": "#383838",
+            "surface": get_surface_color("field"),
+            "text": get_surface_color("text_primary"),
+            "border": get_surface_color("border"),
             "hover": "#707070",
             "disabled": "#707070",
         }
 
     return {
-        "surface": "#272727",
-        "text": "#DCDCDC",
-        "border": "#424242",
+        "surface": get_surface_color("field"),
+        "text": get_surface_color("text_primary"),
+        "border": get_surface_color("divider"),
         "hover": get_current_palette().SELECTION.name(),
-        "disabled": "#767676",
+        "disabled": get_surface_color("text_muted"),
     }
 
 
@@ -57,7 +58,7 @@ def context_menu_stylesheet() -> str:
             border: 1px solid {colors['border']};
             border-radius: 8px;
             padding: 4px;
-            font-family: 'Segoe UI', sans-serif;
+            font-family: {FONT_FAMILY};
             font-size: 12px;
         }}
         QMenu::item {{

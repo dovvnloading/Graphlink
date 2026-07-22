@@ -15,8 +15,9 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import QGraphicsItem
 
 from graphlink_canvas_items import Container, Frame, HoverAnimationMixin
-from graphlink_config import get_current_palette, get_semantic_color, is_monochrome_theme
+from graphlink_config import get_current_palette, get_graph_node_colors, get_semantic_color, get_surface_color, is_monochrome_theme
 from graphlink_lod import draw_lod_card, lod_mode_for_item, preview_text
+from graphlink_styles import FONT_FAMILY_NAME
 from graphlink_widgets import ScrollBar
 
 
@@ -143,15 +144,15 @@ class ChatNode(QGraphicsItem, HoverAnimationMixin):
         accent = self._role_accent()
         monochrome = is_monochrome_theme()
 
-        body_start = self._mix_color(QColor("#282828"), accent, 0.04 if not monochrome else 0.02)
-        body_end = self._mix_color(QColor("#1A1A1A"), accent, 0.02 if not monochrome else 0.01)
-        header_start = self._mix_color(QColor("#323232"), accent, 0.30 if not monochrome else 0.08)
-        header_end = self._mix_color(QColor("#1C1C1C"), accent, 0.18 if not monochrome else 0.04)
-        badge_fill = self._mix_color(QColor("#2B2B2B"), accent, 0.58 if not monochrome else 0.12)
-        badge_text = QColor("#FCFCFC") if self.is_user else QColor("#F6F6F6")
-        descriptor_text = self._mix_color(QColor("#A5A5A5"), accent, 0.14 if not monochrome else 0.04)
-        content_panel_fill = QColor("#141414")
-        content_panel_border = self._mix_color(QColor("#393939"), accent, 0.08 if not monochrome else 0.03)
+        body_start = self._mix_color(QColor(get_surface_color("field")), accent, 0.04 if not monochrome else 0.02)
+        body_end = self._mix_color(QColor(get_surface_color("window")), accent, 0.02 if not monochrome else 0.01)
+        header_start = self._mix_color(get_graph_node_colors()["header_end"], accent, 0.30 if not monochrome else 0.08)
+        header_end = self._mix_color(QColor(get_surface_color("window")), accent, 0.18 if not monochrome else 0.04)
+        badge_fill = self._mix_color(QColor(get_surface_color("field")), accent, 0.58 if not monochrome else 0.12)
+        badge_text = QColor(get_surface_color("text_bright"))
+        descriptor_text = self._mix_color(QColor(get_surface_color("text_label")), accent, 0.14 if not monochrome else 0.04)
+        content_panel_fill = QColor(get_surface_color("window"))
+        content_panel_border = self._mix_color(QColor(get_surface_color("border")), accent, 0.08 if not monochrome else 0.03)
 
         return {
             "accent": accent,
@@ -169,11 +170,11 @@ class ChatNode(QGraphicsItem, HoverAnimationMixin):
     def _get_default_stylesheet(self, color, font_family, font_size):
         base_text = QColor(color)
         accent = self._role_accent()
-        muted_text = self._mix_color(base_text, QColor("#CFCFCF"), 0.18 if not is_monochrome_theme() else 0.04)
+        muted_text = self._mix_color(base_text, QColor(get_surface_color("text_soft")), 0.18 if not is_monochrome_theme() else 0.04)
         link_color = accent.lighter(125)
-        quote_border = self._mix_color(QColor("#545454"), accent, 0.55 if not is_monochrome_theme() else 0.10)
-        code_bg = self._mix_color(QColor("#141414"), accent, 0.10 if not is_monochrome_theme() else 0.03)
-        table_border = self._mix_color(QColor("#404040"), accent, 0.26 if not is_monochrome_theme() else 0.06)
+        quote_border = self._mix_color(QColor(get_surface_color("border_strong")), accent, 0.55 if not is_monochrome_theme() else 0.10)
+        code_bg = self._mix_color(QColor(get_surface_color("window")), accent, 0.10 if not is_monochrome_theme() else 0.03)
+        table_border = self._mix_color(QColor(get_surface_color("border")), accent, 0.26 if not is_monochrome_theme() else 0.06)
 
         return f"""
             body {{
@@ -199,7 +200,7 @@ class ChatNode(QGraphicsItem, HoverAnimationMixin):
                 margin-bottom: 0.2em;
             }}
             h1, h2, h3, h4, h5, h6 {{
-                color: #FFFFFF;
+                color: {get_surface_color("text_bright")};
                 font-family: '{font_family}';
                 font-weight: bold;
                 margin-top: 0.2em;
@@ -260,9 +261,9 @@ class ChatNode(QGraphicsItem, HoverAnimationMixin):
         """
 
     def _setup_document(self):
-        font_family = "Segoe UI"
+        font_family = FONT_FAMILY_NAME
         font_size = 10
-        color = "#DDDDDD"
+        color = get_surface_color("text_primary")
 
         if self.scene():
             font_family = self.scene().font_family
@@ -394,7 +395,7 @@ class ChatNode(QGraphicsItem, HoverAnimationMixin):
         painter.setPen(QPen(colors["content_panel_border"], 1))
         painter.drawLine(10, self.HEADER_HEIGHT, current_width - 10, self.HEADER_HEIGHT)
 
-        font_family = self.scene().font_family if self.scene() else "Segoe UI"
+        font_family = self.scene().font_family if self.scene() else FONT_FAMILY_NAME
         badge_font = QFont(font_family, 8, QFont.Weight.DemiBold)
         painter.setFont(badge_font)
         badge_metrics = QFontMetrics(badge_font)
@@ -424,7 +425,7 @@ class ChatNode(QGraphicsItem, HoverAnimationMixin):
         painter.setPen(QColor(255, 255, 255, 110))
         painter.drawRoundedRect(self.collapse_button_rect, 4, 4)
 
-        icon_pen = QPen(QColor("#FFFFFF"), 1.8)
+        icon_pen = QPen(QColor(get_surface_color("text_bright")), 1.8)
         painter.setPen(icon_pen)
         center = self.collapse_button_rect.center()
         painter.drawLine(int(center.x() - 4), int(center.y()), int(center.x() + 4), int(center.y()))
@@ -483,7 +484,7 @@ class ChatNode(QGraphicsItem, HoverAnimationMixin):
         if self.isSelected() and not is_dragging:
             pen = QPen(palette.SELECTION, 2.2)
         elif self.hovered:
-            pen = QPen(QColor("#FFFFFF"), 2)
+            pen = QPen(QColor(get_surface_color("text_bright")), 2)
 
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawPath(path)
@@ -529,14 +530,14 @@ class ChatNode(QGraphicsItem, HoverAnimationMixin):
 
         docked_child_count = self.docked_child_count()
         if docked_child_count:
-            indicator_color = QColor("#A2A2A2").lighter(130)
+            indicator_color = QColor(get_surface_color("text_label")).lighter(130)
             painter.setBrush(indicator_color)
             painter.setPen(Qt.PenStyle.NoPen)
             badge_width = 26 if docked_child_count < 10 else 32
             badge_rect = QRectF(current_width - badge_width - 38, 8, badge_width, 18)
             painter.drawRoundedRect(badge_rect, 9, 9)
-            painter.setPen(QColor("#141414"))
-            count_font = QFont(self.scene().font_family if self.scene() else "Segoe UI", 8, QFont.Weight.Bold)
+            painter.setPen(QColor(get_surface_color("window")))
+            count_font = QFont(self.scene().font_family if self.scene() else FONT_FAMILY_NAME, 8, QFont.Weight.Bold)
             painter.setFont(count_font)
             painter.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, str(docked_child_count))
 
@@ -569,10 +570,10 @@ class ChatNode(QGraphicsItem, HoverAnimationMixin):
             painter.drawPath(path)
 
         if self.is_collapsed:
-            font_family = self.scene().font_family if self.scene() else "Segoe UI"
+            font_family = self.scene().font_family if self.scene() else FONT_FAMILY_NAME
             snippet_font = QFont(font_family, 9)
             painter.setFont(snippet_font)
-            painter.setPen(QColor("#F3F3F3"))
+            painter.setPen(QColor(get_surface_color("text_strong")))
             metrics = QFontMetrics(snippet_font)
             text_to_show = self.text.split('\n')[0].strip() or "[Empty]"
             elided_text = metrics.elidedText(text_to_show, Qt.TextElideMode.ElideRight, current_width - 26)

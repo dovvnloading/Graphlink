@@ -5,9 +5,10 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import QRectF, Qt, QPointF, Signal, QTimer, QRect, QUrl
 from PySide6.QtGui import QPainter, QColor, QBrush, QPen, QPainterPath, QFont, QDesktopServices
 import qtawesome as qta
-from graphlink_config import canvas_font, get_current_palette, get_graph_node_colors, get_neutral_button_colors, get_semantic_color
+from graphlink_config import canvas_font, get_current_palette, get_graph_node_colors, get_neutral_button_colors, get_semantic_color, get_surface_color
 from graphlink_connections import ConnectionItem
 from graphlink_canvas_items import HoverAnimationMixin
+from graphlink_styles import FONT_FAMILY
 from graphlink_lod import draw_lod_card, preview_text, sync_proxy_render_state
 from graphlink_memory import append_history, get_node_history
 from graphlink_plugins.graphlink_plugin_context_menu import PluginNodeContextMenu
@@ -141,14 +142,14 @@ class WebNode(QGraphicsObject, HoverAnimationMixin):
         self.widget = QWidget()
         self.widget.setObjectName("webNodeMainWidget")
         self.widget.setFixedSize(self.NODE_WIDTH, self.NODE_HEIGHT)
-        self.widget.setStyleSheet("""
-            QWidget#webNodeMainWidget {
+        self.widget.setStyleSheet(f"""
+            QWidget#webNodeMainWidget {{
                 background-color: transparent;
-                color: #E0E0E0;
-            }
-            QWidget#webNodeMainWidget QLabel {
+                color: {get_surface_color("text_primary")};
+            }}
+            QWidget#webNodeMainWidget QLabel {{
                 background-color: transparent;
-            }
+            }}
         """)
         
         self._setup_ui()
@@ -222,14 +223,14 @@ class WebNode(QGraphicsObject, HoverAnimationMixin):
 
         # --- Status Label ---
         self.status_label = QLabel("Status: Idle")
-        self.status_label.setStyleSheet("color: #888; font-style: italic; background: transparent;")
+        self.status_label.setStyleSheet(f"color: {get_surface_color('chrome_inactive')}; font-style: italic; background: transparent;")
         main_layout.addWidget(self.status_label)
 
         # --- Result Display Section ---
         result_header = QHBoxLayout()
         result_header.addWidget(QLabel("Answer:"))
         self.source_count_label = QLabel("No sources")
-        self.source_count_label.setStyleSheet("color: #A4A4A4; background: transparent;")
+        self.source_count_label.setStyleSheet(f"color: {get_surface_color('text_label')}; background: transparent;")
         result_header.addWidget(self.source_count_label)
         result_header.addStretch()
         main_layout.addLayout(result_header)
@@ -244,18 +245,18 @@ class WebNode(QGraphicsObject, HoverAnimationMixin):
 
         self.warning_label = QLabel("")
         self.warning_label.setWordWrap(True)
-        self.warning_label.setStyleSheet("color: #AAAAAA; background: transparent;")
+        self.warning_label.setStyleSheet(f"color: {get_surface_color('text_label')}; background: transparent;")
         main_layout.addWidget(self.warning_label)
 
         # Apply common styles to text edit widgets.
         for widget in [self.query_input, self.summary_display]:
-            widget.setStyleSheet("""
-                QTextEdit, QTextBrowser {
-                    background-color: #252525; border: 1px solid #3F3F3F;
-                    color: #CCCCCC; border-radius: 4px; padding: 5px;
-                    font-family: 'Segoe UI', sans-serif;
-                }
-                QTextBrowser a { color: #B3B3B3; text-decoration: none; }
+            widget.setStyleSheet(f"""
+                QTextEdit, QTextBrowser {{
+                    background-color: {get_surface_color("node_body")}; border: 1px solid {get_surface_color("border")};
+                    color: {get_surface_color("text_soft")}; border-radius: 4px; padding: 5px;
+                    font-family: {FONT_FAMILY};
+                }}
+                QTextBrowser a {{ color: {get_surface_color("text_secondary")}; text-decoration: none; }}
             """)
 
         # Style the run button with a contrasting text color based on background brightness.
@@ -280,9 +281,9 @@ class WebNode(QGraphicsObject, HoverAnimationMixin):
                 border-color: {button_colors["border"].darker(105).name()};
             }}
             QPushButton:disabled {{
-                background-color: #2B2B2B;
-                border-color: #353535;
-                color: #7B7B7B;
+                background-color: {get_surface_color("field")};
+                border-color: {get_surface_color("border")};
+                color: {get_surface_color("text_muted")};
             }}
         """)
         
@@ -480,16 +481,16 @@ class WebNode(QGraphicsObject, HoverAnimationMixin):
         
         path = QPainterPath()
         path.addRoundedRect(0, 0, self.width, self.height, 10, 10)
-        painter.setBrush(QColor("#2D2D2D"))
-        
+        painter.setBrush(QColor(get_surface_color("field")))
+
         web_color = node_colors["border"]
         pen = QPen(web_color, 1.5)
 
         if self.isSelected():
             pen = QPen(palette.SELECTION, 2)
         elif self.hovered:
-            pen = QPen(QColor("#FFFFFF"), 2)
-        
+            pen = QPen(QColor(get_surface_color("text_bright")), 2)
+
         painter.setPen(pen)
         painter.drawPath(path)
         
@@ -526,7 +527,7 @@ class WebNode(QGraphicsObject, HoverAnimationMixin):
             return
 
         if self.is_collapsed:
-            painter.setPen(QColor("#FFFFFF"))
+            painter.setPen(QColor(get_surface_color("text_bright")))
             font = canvas_font(self.scene(), weight=QFont.Weight.Bold)
             painter.setFont(font)
             painter.drawText(QRectF(40, 0, self.width - 80, self.height), Qt.AlignmentFlag.AlignVCenter, "Web Search")
@@ -535,7 +536,7 @@ class WebNode(QGraphicsObject, HoverAnimationMixin):
             icon.paint(painter, QRect(10, 10, 20, 20))
             
             self.collapse_button_rect = QRectF(self.width - 35, 5, 30, 30)
-            expand_icon = qta.icon('fa5s.expand-arrows-alt', color='#FFFFFF' if self.hovered else '#888888')
+            expand_icon = qta.icon('fa5s.expand-arrows-alt', color=get_surface_color("text_bright") if self.hovered else get_surface_color("chrome_inactive"))
             expand_icon.paint(painter, QRect(int(self.width - 30), 10, 20, 20))
         else:
             if self.hovered:
@@ -544,7 +545,7 @@ class WebNode(QGraphicsObject, HoverAnimationMixin):
                 painter.setPen(QColor(255, 255, 255, 150))
                 painter.drawRoundedRect(self.collapse_button_rect.adjusted(6,6,-6,-6), 4, 4)
                 
-                icon_pen = QPen(QColor("#FFFFFF"), 2)
+                icon_pen = QPen(QColor(get_surface_color("text_bright")), 2)
                 painter.setPen(icon_pen)
                 center = self.collapse_button_rect.center()
                 painter.drawLine(int(center.x() - 4), int(center.y()), int(center.x() + 4), int(center.y()))

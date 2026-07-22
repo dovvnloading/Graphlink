@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
 )
 
 from graphlink_chat_library_web import ChatLibraryWebHost
-from graphlink_config import get_current_palette
+from graphlink_config import get_current_palette, get_surface_color
 
 
 class ChatLibraryDialog(QDialog):
@@ -149,7 +149,7 @@ class ChatLibraryDialog(QDialog):
         accent = palette.SELECTION.name()
         panel_gray = "rgba(42, 42, 42, 248)"
         line_gray = "rgba(255, 255, 255, 0.08)"
-        muted_text = "#8D8D8D"
+        muted_text = get_surface_color("chrome_inactive")
         badge_gray = "rgba(255, 255, 255, 0.025)"
 
         self.icon_badge.setPixmap(qta.icon("fa5s.book", color=accent).pixmap(16, 16))
@@ -181,7 +181,7 @@ class ChatLibraryDialog(QDialog):
                 letter-spacing: 0.14em;
             }}
             QLabel#libraryWindowTitle {{
-                color: #F5F5F5;
+                color: {get_surface_color("text_strong")};
                 font-size: 16px;
                 font-weight: 700;
             }}
@@ -191,7 +191,7 @@ class ChatLibraryDialog(QDialog):
             }}
             QPushButton#libraryCloseButton {{
                 background-color: rgba(255, 255, 255, 0.04);
-                color: #F5F5F5;
+                color: {get_surface_color("text_strong")};
                 border: 1px solid rgba(255, 255, 255, 0.08);
                 border-radius: 8px;
                 padding: 8px 14px;

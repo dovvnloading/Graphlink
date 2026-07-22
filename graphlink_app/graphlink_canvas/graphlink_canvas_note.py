@@ -12,7 +12,8 @@ from PySide6.QtGui import (
 )
 
 from .graphlink_canvas_dialogs import ColorPickerDialog
-from graphlink_config import canvas_font, get_current_palette
+from graphlink_config import canvas_font, get_current_palette, get_surface_color
+from graphlink_styles import FONT_FAMILY_NAME
 from graphlink_widgets import ScrollBar
 
 
@@ -58,7 +59,7 @@ class Note(QGraphicsItem):
         # Geometry and appearance
         self.width = self.DEFAULT_WIDTH
         self.height = self.DEFAULT_HEIGHT
-        self.color = "#2d2d2d"
+        self.color = get_surface_color("node_body")
         self.header_color = None
         
         # State for in-place text editing
@@ -119,7 +120,7 @@ class Note(QGraphicsItem):
         Configures the QTextDocument for rendering, applying styles from the
         scene and converting the Markdown content to HTML.
         """
-        font_family, font_size, color = "Segoe UI", 10, "#dddddd"
+        font_family, font_size, color = FONT_FAMILY_NAME, 10, get_surface_color("text_primary")
         
         if self.scene():
             font_family = self.scene().font_family
@@ -128,7 +129,7 @@ class Note(QGraphicsItem):
 
         stylesheet = f"""
             p, ul, ol, li, blockquote {{ color: {color}; font-family: '{font_family}'; font-size: {font_size}pt; }}
-            pre {{ background-color: #1e1e1e; padding: 8px; border-radius: 4px; white-space: pre-wrap; font-family: Consolas, monospace; }}
+            pre {{ background-color: {get_surface_color("window")}; padding: 8px; border-radius: 4px; white-space: pre-wrap; font-family: Consolas, monospace; }}
         """
         self.document.setDefaultStyleSheet(stylesheet)
         
@@ -219,9 +220,9 @@ class Note(QGraphicsItem):
         path = QPainterPath()
         path.addRoundedRect(0, 0, self.width, self.height, 10, 10)
         
-        pen = QPen(QColor("#555555"))
+        pen = QPen(QColor(get_surface_color("handle")))
         if self.isSelected(): pen = QPen(palette.SELECTION, 2)
-        elif self.hovered: pen = QPen(QColor("#ffffff"), 2)
+        elif self.hovered: pen = QPen(QColor(get_surface_color("text_bright")), 2)
 
         # Special outline for system prompt notes.
         if self.is_system_prompt:
@@ -231,8 +232,8 @@ class Note(QGraphicsItem):
         painter.setPen(pen)
             
         gradient = QLinearGradient(QPointF(0, 0), QPointF(0, self.height))
-        gradient.setColorAt(0, QColor("#4a4a4a"))
-        gradient.setColorAt(1, QColor("#2d2d2d"))
+        gradient.setColorAt(0, QColor(get_surface_color("border_strong")))
+        gradient.setColorAt(1, QColor(get_surface_color("node_body")))
         painter.setBrush(QBrush(gradient))
         painter.drawPath(path)
         
@@ -256,16 +257,16 @@ class Note(QGraphicsItem):
         # Draw header icons for special note types.
         icon_rect = QRectF(10, (self.HEADER_HEIGHT - 16) / 2, 16, 16)
         if self.is_system_prompt:
-            qta.icon('fa5s.cog', color='#ffffff').paint(painter, icon_rect.toRect())
+            qta.icon('fa5s.cog', color=get_surface_color("text_bright")).paint(painter, icon_rect.toRect())
         elif self.is_summary_note:
-            qta.icon('fa5s.object-group', color='#ffffff').paint(painter, icon_rect.toRect())
+            qta.icon('fa5s.object-group', color=get_surface_color("text_bright")).paint(painter, icon_rect.toRect())
         
         # Draw the color picker button.
         self.color_button_rect = QRectF(self.width - 34, 8, 24, 24)
-        painter.setPen(QPen(QColor("#ffffff") if self.color_button_hovered else QColor("#555555")))
+        painter.setPen(QPen(QColor(get_surface_color("text_bright")) if self.color_button_hovered else QColor(get_surface_color("handle"))))
         painter.setBrush(QBrush(header_base_color))
         painter.drawEllipse(self.color_button_rect)
-        icon_color = QColor("#ffffff"); icon_color.setAlpha(180)
+        icon_color = QColor(get_surface_color("text_bright")); icon_color.setAlpha(180)
         painter.setPen(QPen(icon_color))
         circle_size, spacing = 4, 3
         total_width = (circle_size * 3) + (spacing * 2)
@@ -276,7 +277,7 @@ class Note(QGraphicsItem):
             painter.drawEllipse(QRectF(x_pos, y_pos, circle_size, circle_size))
             
         # --- Content Rendering ---
-        painter.setPen(QPen(QColor("#ffffff")))
+        painter.setPen(QPen(QColor(get_surface_color("text_bright"))))
         font = canvas_font(self.scene())
         painter.setFont(font)
         

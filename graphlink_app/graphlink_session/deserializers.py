@@ -3,6 +3,7 @@ import traceback
 from PySide6.QtCore import QPointF, QRectF
 from PySide6.QtGui import QTransform
 
+from graphlink_canvas.graphlink_canvas_container import DEFAULT_CONTAINER_COLOR
 from graphlink_canvas_items import Container, Frame
 from graphlink_connections import (
     ConnectionItem,
@@ -466,7 +467,7 @@ class SceneDeserializer:
             container.persistent_id = data["id"]
         container.setPos(data["position"]["x"], data["position"]["y"])
         container.title = data.get("title", "Container")
-        container.color = data.get("color", "#3a3a3a")
+        container.color = data.get("color", DEFAULT_CONTAINER_COLOR)
         container.header_color = data.get("header_color")
 
         rect_data = data.get("expanded_rect")

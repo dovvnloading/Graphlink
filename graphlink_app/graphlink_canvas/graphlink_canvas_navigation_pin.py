@@ -9,6 +9,9 @@ from PySide6.QtWidgets import QGraphicsItem, QGraphicsObject
 from PySide6.QtCore import Qt, QRectF, Signal
 from PySide6.QtGui import QPainter, QColor, QPen, QFont, QFontMetrics, QPainterPath
 
+from graphlink_config import get_surface_color
+from graphlink_styles import FONT_FAMILY_NAME
+
 
 class NavigationPin(QGraphicsObject):
     """
@@ -75,15 +78,15 @@ class NavigationPin(QGraphicsObject):
 
         selected = self.isSelected()
         active = selected or self.hovered
-        marker_fill = QColor("#c8c8c8" if selected else "#a0a0a0" if self.hovered else "#777777")
-        marker_border = QColor("#f2f2f2" if selected else "#bdbdbd" if self.hovered else "#555555")
-        surface = QColor("#252525")
+        marker_fill = QColor(get_surface_color("text_soft") if selected else get_surface_color("text_label") if self.hovered else get_surface_color("text_muted"))
+        marker_border = QColor(get_surface_color("text_strong") if selected else get_surface_color("text_secondary") if self.hovered else get_surface_color("handle"))
+        surface = QColor(get_surface_color("node_body"))
 
         # A beacon-style marker makes navigation pins visually distinct from
         # connection pins: rounded square body, inset waypoint core, stem, and
         # ground contact. It deliberately uses grayscale only.
         if active:
-            halo = QColor("#d8d8d8")
+            halo = QColor(get_surface_color("text_primary"))
             halo.setAlpha(35 if not selected else 55)
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(halo)
@@ -104,8 +107,8 @@ class NavigationPin(QGraphicsObject):
         painter.drawEllipse(QRectF(-5.0, 25.0, 10.0, 7.0))
 
         if active:
-            label_surface = QColor("#242424")
-            label_border = QColor("#777777" if selected else "#555555")
+            label_surface = QColor(get_surface_color("node_body"))
+            label_border = QColor(get_surface_color("text_muted") if selected else get_surface_color("handle"))
             painter.setPen(QPen(label_border, 1.0))
             painter.setBrush(label_surface)
             painter.drawRoundedRect(self._LABEL_RECT, 10.0, 10.0)
@@ -114,10 +117,10 @@ class NavigationPin(QGraphicsObject):
             painter.setPen(QPen(label_border, 1.0))
             painter.drawLine(0.0, self._LABEL_RECT.bottom(), 0.0, -15.0)
 
-            font = QFont("Segoe UI", 8)
+            font = QFont(FONT_FAMILY_NAME, 8)
             font.setWeight(QFont.Weight.DemiBold if selected else QFont.Weight.Normal)
             painter.setFont(font)
-            painter.setPen(QColor("#f0f0f0"))
+            painter.setPen(QColor(get_surface_color("text_strong")))
             title = QFontMetrics(font).elidedText(
                 str(self.title or "Waypoint"), Qt.TextElideMode.ElideRight, 142
             )

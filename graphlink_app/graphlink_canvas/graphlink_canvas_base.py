@@ -4,7 +4,7 @@ from PySide6.QtWidgets import QGraphicsItem, QLineEdit
 from PySide6.QtCore import Qt, QRectF, QTimer, Signal
 from PySide6.QtGui import QPainter, QColor, QBrush, QPen
 
-from graphlink_config import get_current_palette
+from graphlink_config import get_current_palette, get_surface_color
 
 
 class HoverAnimationMixin:
@@ -145,19 +145,19 @@ class CanvasHeaderLineEdit(QLineEdit):
         self.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setStyleSheet(
-            """
-            QLineEdit {
+            f"""
+            QLineEdit {{
                 background-color: rgba(26, 26, 26, 0.96);
-                color: #f1f1f1;
-                border: 1px solid #5a5a5a;
+                color: {get_surface_color("text_strong")};
+                border: 1px solid {get_surface_color("handle")};
                 border-radius: 5px;
                 padding: 4px 8px;
-                selection-background-color: #5a5a5a;
-                selection-color: #ffffff;
-            }
-            QLineEdit:focus {
-                border-color: #7a7a7a;
-            }
+                selection-background-color: {get_surface_color("handle")};
+                selection-color: {get_surface_color("text_bright")};
+            }}
+            QLineEdit:focus {{
+                border-color: {get_surface_color("text_muted")};
+            }}
             """
         )
         self.editingFinished.connect(self._emit_commit_if_needed)

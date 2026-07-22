@@ -7,7 +7,7 @@ from graphlink_connections import (
     SystemPromptConnectionItem, PyCoderConnectionItem, ConversationConnectionItem,
     HtmlConnectionItem
 )
-from graphlink_config import get_current_palette
+from graphlink_config import get_current_palette, get_surface_color
 from graphlink_pycoder import PyCoderNode
 from graphlink_plugins.graphlink_plugin_code_sandbox import CodeSandboxNode, CodeSandboxConnectionItem
 from graphlink_node import ChatNode, CodeNode
@@ -415,7 +415,7 @@ class PluginPortal:
         prompt_note.is_system_prompt = True
         prompt_note.content = "Enter custom system prompt here..."
         prompt_note.header_color = palette.FRAME_COLORS["Purple Header"]["color"]
-        prompt_note.color = "#252525"
+        prompt_note.color = get_surface_color("node_body")
         prompt_note.width = 300
         prompt_note.height = 150
 

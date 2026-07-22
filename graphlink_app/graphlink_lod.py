@@ -3,6 +3,9 @@ import re
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QBrush, QColor, QFont, QFontMetrics, QLinearGradient, QPainter, QPainterPath, QPen
 
+from graphlink_config import get_surface_color
+from graphlink_styles import FONT_FAMILY_NAME
+
 
 LOD_FULL_THRESHOLD = 0.72
 LOD_SUMMARY_THRESHOLD = 0.3
@@ -291,14 +294,14 @@ def draw_lod_card(
     panel_path.addRoundedRect(panel_rect, border_radius, border_radius)
 
     gradient = QLinearGradient(QPointF(panel_rect.left(), panel_rect.top()), QPointF(panel_rect.left(), panel_rect.bottom()))
-    gradient.setColorAt(0, QColor("#2B2B2B"))
-    gradient.setColorAt(1, QColor("#1B1B1B"))
+    gradient.setColorAt(0, QColor(get_surface_color("field")))
+    gradient.setColorAt(1, QColor(get_surface_color("window")))
     painter.setBrush(QBrush(gradient))
 
     border_color = accent.lighter(110)
     border_width = 1.35
     if hovered:
-        border_color = QColor("#FFFFFF")
+        border_color = QColor(get_surface_color("text_bright"))
         border_width = 1.9
     if selected:
         border_color = selection_color
@@ -346,7 +349,7 @@ def draw_lod_card(
         chip_block_height = 0.0
         if badge:
             badge_font = _fit_font_to_height(
-                _scaled_font("Segoe UI", 7, scale=min(detail_scale, 1.42), weight=QFont.Weight.DemiBold, max_scale=1.42),
+                _scaled_font(FONT_FAMILY_NAME, 7, scale=min(detail_scale, 1.42), weight=QFont.Weight.DemiBold, max_scale=1.42),
                 _lod_font_height_limit(
                     panel_rect.height(),
                     zoom,
@@ -365,11 +368,11 @@ def draw_lod_card(
             painter.setBrush(QColor(accent.red(), accent.green(), accent.blue(), 64))
             painter.setPen(QPen(QColor(accent.red(), accent.green(), accent.blue(), 116), 1.0))
             painter.drawRoundedRect(chip_rect, chip_height / 2, chip_height / 2)
-            painter.setPen(QColor("#FAFAFA"))
+            painter.setPen(QColor(get_surface_color("text_bright")))
             painter.drawText(chip_rect, Qt.AlignmentFlag.AlignCenter, badge)
 
         footer_font = _fit_font_to_height(
-            _scaled_font("Segoe UI", 9, scale=min(detail_scale, 2.05), weight=QFont.Weight.DemiBold, max_scale=2.05),
+            _scaled_font(FONT_FAMILY_NAME, 9, scale=min(detail_scale, 2.05), weight=QFont.Weight.DemiBold, max_scale=2.05),
             _lod_font_height_limit(
                 panel_rect.height(),
                 zoom,
@@ -417,7 +420,7 @@ def draw_lod_card(
         )
 
         glyph_font = _fit_font_to_height(
-            _scaled_font("Segoe UI", 16, scale=detail_scale, weight=QFont.Weight.DemiBold, max_scale=2.8),
+            _scaled_font(FONT_FAMILY_NAME, 16, scale=detail_scale, weight=QFont.Weight.DemiBold, max_scale=2.8),
             _lod_font_height_limit(
                 orb_rect.height(),
                 zoom,
@@ -428,7 +431,7 @@ def draw_lod_card(
             min_point_size=8.0,
         )
         painter.setFont(glyph_font)
-        painter.setPen(QColor("#F7F7F7"))
+        painter.setPen(QColor(get_surface_color("text_bright")))
         painter.drawText(orb_rect, Qt.AlignmentFlag.AlignCenter, initials_for_title(title))
 
         painter.setBrush(QColor(255, 255, 255, 18))
@@ -439,7 +442,7 @@ def draw_lod_card(
             footer_rect.adjusted(10.0, 0.0, -10.0, 0.0),
             title,
             font=footer_font,
-            color=QColor("#F6F6F6"),
+            color=QColor(get_surface_color("text_bright")),
             max_lines=1,
             alignment=Qt.AlignmentFlag.AlignHCenter,
         )
@@ -467,7 +470,7 @@ def draw_lod_card(
         meta_text_x = content_left
         if badge:
             badge_font = _fit_font_to_height(
-                _scaled_font("Segoe UI", 7, scale=min(detail_scale, 1.5), weight=QFont.Weight.DemiBold, max_scale=1.5),
+                _scaled_font(FONT_FAMILY_NAME, 7, scale=min(detail_scale, 1.5), weight=QFont.Weight.DemiBold, max_scale=1.5),
                 _lod_font_height_limit(
                     panel_rect.height(),
                     zoom,
@@ -490,13 +493,13 @@ def draw_lod_card(
             painter.setBrush(QColor(accent.red(), accent.green(), accent.blue(), 74))
             painter.setPen(QPen(QColor(accent.red(), accent.green(), accent.blue(), 116), 1.0))
             painter.drawRoundedRect(badge_rect, badge_height / 2, badge_height / 2)
-            painter.setPen(QColor("#F7F7F7"))
+            painter.setPen(QColor(get_surface_color("text_bright")))
             painter.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, badge)
             meta_text_x = badge_rect.right() + 10.0
 
         if subtitle:
             subtitle_font = _fit_font_to_height(
-                _scaled_font("Segoe UI", 8, scale=min(detail_scale, 1.52), weight=QFont.Weight.Medium, max_scale=1.52),
+                _scaled_font(FONT_FAMILY_NAME, 8, scale=min(detail_scale, 1.52), weight=QFont.Weight.Medium, max_scale=1.52),
                 _lod_font_height_limit(
                     panel_rect.height(),
                     zoom,
@@ -511,7 +514,7 @@ def draw_lod_card(
                 QRectF(meta_text_x, header_rect.top(), max(18.0, content_right - meta_text_x), header_rect.height()),
                 subtitle,
                 font=subtitle_font,
-                color=QColor("#B6B6B6"),
+                color=QColor(get_surface_color("text_secondary")),
                 max_lines=1,
             )
 
@@ -521,7 +524,7 @@ def draw_lod_card(
 
         title_font = _fit_font_to_height(
             _scaled_font(
-                "Segoe UI",
+                FONT_FAMILY_NAME,
                 12 if compact_summary else 13,
                 scale=min(detail_scale, 2.45 if compact_summary else 2.1),
                 weight=QFont.Weight.DemiBold,
@@ -545,7 +548,7 @@ def draw_lod_card(
             title_rect,
             title,
             font=title_font,
-            color=QColor("#FAFAFA"),
+            color=QColor(get_surface_color("text_bright")),
             max_lines=title_line_limit,
             line_gap=2.0,
         )
@@ -560,7 +563,7 @@ def draw_lod_card(
 
         preview_font = _fit_font_to_height(
             _scaled_font(
-                "Segoe UI",
+                FONT_FAMILY_NAME,
                 9 if compact_summary else 10,
                 scale=min(detail_scale, 1.9 if compact_summary else 1.7),
                 max_scale=1.9 if compact_summary else 1.7,
@@ -586,7 +589,7 @@ def draw_lod_card(
             preview_inner_rect,
             preview or " ",
             font=preview_font,
-            color=QColor("#DCDCDC"),
+            color=QColor(get_surface_color("text_primary")),
             max_lines=preview_line_limit,
             line_gap=2.0,
         )
@@ -622,7 +625,7 @@ def draw_lod_card(
         painter.drawPath(panel_path)
 
     if search_match:
-        search_pen = QPen(QColor("#C6C6C6"), 2.2)
+        search_pen = QPen(QColor(get_surface_color("text_secondary")), 2.2)
         search_pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
         painter.setPen(search_pen)
         painter.setBrush(Qt.BrushStyle.NoBrush)

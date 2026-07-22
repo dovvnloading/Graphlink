@@ -34,6 +34,8 @@ from PySide6.QtWidgets import (
 )
 from shiboken6 import isValid as _is_qt_object_valid
 
+from graphlink_config import get_surface_color
+
 
 def _qt_object_is_alive(obj):
     """Return whether a Qt wrapper still owns a live C++ object."""
@@ -92,8 +94,8 @@ class ComboPopup(QFrame):
         self.setStyleSheet(
             f"""
             QFrame#pluginComboPopupFrame {{
-                background-color: #222222;
-                border: 1px solid #3A3A3A;
+                background-color: {get_surface_color("node_body")};
+                border: 1px solid {get_surface_color("border")};
                 border-radius: 10px;
             }}
             QFrame#pluginComboPopupShell {{
@@ -102,29 +104,29 @@ class ComboPopup(QFrame):
             }}
             QListWidget#pluginComboPopupList {{
                 background: transparent;
-                color: #FFFFFF;
+                color: {get_surface_color("text_bright")};
                 border: none;
                 outline: none;
                 padding: 2px;
             }}
             QListWidget#pluginComboPopupList::item {{
                 background: transparent;
-                color: #FFFFFF;
+                color: {get_surface_color("text_bright")};
                 border: none;
                 border-radius: 6px;
                 min-height: 26px;
                 padding: 6px 10px;
             }}
             QListWidget#pluginComboPopupList::item:hover {{
-                background-color: #2F2F2F;
+                background-color: {get_surface_color("field")};
             }}
             QListWidget#pluginComboPopupList::item:selected {{
                 background-color: {accent_color};
-                color: #FFFFFF;
+                color: {get_surface_color("text_bright")};
             }}
             QListWidget#pluginComboPopupList::item:selected:hover {{
                 background-color: {accent_color};
-                color: #FFFFFF;
+                color: {get_surface_color("text_bright")};
             }}
             """
         )

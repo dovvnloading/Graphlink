@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QWidget, QHBoxLayout, QLineEdit, QLabel, QPushButton,
     QGraphicsDropShadowEffect, QTextEdit, QGridLayout, QApplication
 )
-from graphlink_config import get_current_palette, get_semantic_color
+from graphlink_config import get_current_palette, get_semantic_color, get_surface_color
 
 class ColorPickerDialog(QDialog):
     """
@@ -74,7 +74,7 @@ class ColorPickerDialog(QDialog):
 
         def create_section(title, color_type, names_list):
             label = QLabel(title)
-            label.setStyleSheet("color: #CCCCCC; font-size: 10px; margin-top: 5px;")
+            label.setStyleSheet(f"color: {get_surface_color('text_soft')}; font-size: 10px; margin-top: 5px;")
             main_layout.addWidget(label)
             
             grid_layout = QGridLayout()
@@ -91,18 +91,18 @@ class ColorPickerDialog(QDialog):
                 btn.setCursor(Qt.CursorShape.PointingHandCursor)
                 
                 style = f"""
-                    QPushButton {{ background-color: {color_data["color"]}; border: 2px solid #3F3F3F; border-radius: 14px; }}
-                    QPushButton:hover {{ border: 2px solid #FFFFFF; }}
+                    QPushButton {{ background-color: {color_data["color"]}; border: 2px solid {get_surface_color("border")}; border-radius: 14px; }}
+                    QPushButton:hover {{ border: 2px solid {get_surface_color("text_bright")}; }}
                 """
                 if color_type == "header":
                     style = f"""
                         QPushButton {{
                             background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
                                 stop:0 {color_data["color"]}, stop:0.4 {color_data["color"]},
-                                stop:0.41 #3F3F3F, stop:1 #3F3F3F);
-                            border: 2px solid #3F3F3F; border-radius: 14px;
+                                stop:0.41 {get_surface_color("border")}, stop:1 {get_surface_color("border")});
+                            border: 2px solid {get_surface_color("border")}; border-radius: 14px;
                         }}
-                        QPushButton:hover {{ border: 2px solid #FFFFFF; }}
+                        QPushButton:hover {{ border: 2px solid {get_surface_color("text_bright")}; }}
                     """
                 btn.setStyleSheet(style)
                 btn.setProperty("frame_color_data", color_data)
@@ -124,20 +124,20 @@ class ColorPickerDialog(QDialog):
         
         main_layout.addStretch()
         
-        self.setStyleSheet("""
-            QDialog { background: transparent; }
-            QWidget#colorPickerContainer { background-color: #252525; border-radius: 8px; }
-            QLabel#colorPickerTitle { color: #FFFFFF; font-size: 12px; font-weight: bold; }
-            QPushButton { background-color: #3F3F3F; border-radius: 5px; padding: 8px; }
-            QPushButton:hover { background-color: #555555; }
-            QPushButton#colorPickerCloseButton {
+        self.setStyleSheet(f"""
+            QDialog {{ background: transparent; }}
+            QWidget#colorPickerContainer {{ background-color: {get_surface_color("node_body")}; border-radius: 8px; }}
+            QLabel#colorPickerTitle {{ color: {get_surface_color("text_bright")}; font-size: 12px; font-weight: bold; }}
+            QPushButton {{ background-color: {get_surface_color("border")}; border-radius: 5px; padding: 8px; }}
+            QPushButton:hover {{ background-color: {get_surface_color("handle")}; }}
+            QPushButton#colorPickerCloseButton {{
                 background-color: transparent;
                 border-radius: 12px;
                 padding: 0px;
-            }
-            QPushButton#colorPickerCloseButton:hover {
-                background-color: #4A4A4A;
-            }
+            }}
+            QPushButton#colorPickerCloseButton:hover {{
+                background-color: {get_surface_color("border_strong")};
+            }}
         """)
         
         self.selected_color = None
