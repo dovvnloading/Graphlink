@@ -22,6 +22,11 @@ R3.9 adds the `document` kind's fields (attachmentKind/filePath/mimeType/
 durationSeconds/byteSize/previewLabel - the DocumentNode attachment
 metadata): populated for kind=="document" rows, defaulted (empty
 string/None) for every other kind, same additive rule.
+
+R3.13 adds `isDocked` (the ThinkingNode/docked-child increment): true when a
+node is currently docked into its parent's docked-child slot, populated for
+any kind that has been docked, defaulted false otherwise - same additive
+rule.
 """
 
 from __future__ import annotations
@@ -52,6 +57,10 @@ class SceneNodeRow:
     durationSeconds: float | None = None
     byteSize: int | None = None
     previewLabel: str = ""
+    # R3.13: the ThinkingNode/docked-child increment - populated for any node
+    # that has been docked into its parent's docked-child slot, defaulted
+    # false for every other node.
+    isDocked: bool = False
 
 
 @dataclass

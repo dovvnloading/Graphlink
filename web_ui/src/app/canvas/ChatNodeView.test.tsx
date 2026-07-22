@@ -15,6 +15,7 @@ import { ChatNodeView, type ChatFlowNode } from "./ChatNodeView";
 function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}) {
   const onToggleCollapse = vi.fn();
   const onDelete = vi.fn();
+  const onUndockChild = vi.fn();
   const props = {
     id: "n0",
     selected: false,
@@ -22,8 +23,10 @@ function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}) {
       content: "Hello **world**",
       isUser: true,
       isCollapsed: false,
+      dockedChildren: [],
       onToggleCollapse,
       onDelete,
+      onUndockChild,
       ...overrides,
     },
   } as unknown as NodeProps<ChatFlowNode>;
@@ -33,7 +36,7 @@ function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}) {
       <ChatNodeView {...props} />
     </ReactFlowProvider>,
   );
-  return { onToggleCollapse, onDelete };
+  return { onToggleCollapse, onDelete, onUndockChild };
 }
 
 describe("ChatNodeView", () => {
@@ -112,5 +115,46 @@ describe("ChatNodeView", () => {
     expect(screen.getByRole("menu")).toBeInTheDocument();
     await user.click(document.body);
     expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("hides the docked-count badge when dockedChildren is empty (the default)", () => {
+    renderChatNode();
+    expect(screen.queryByTitle("Docked items")).toBeNull();
+  });
+
+  it("shows the docked-count badge with the correct count when dockedChildren has entries", () => {
+    renderChatNode({
+      dockedChildren: [
+        { id: "t1", label: "Thinking" },
+        { id: "t2", label: "Thinking" },
+      ],
+    });
+    expect(screen.getByTitle("Docked items")).toHaveTextContent("2");
+  });
+
+  it("omits the 'Reveal Docked Items' menu section entirely when dockedChildren is empty", () => {
+    renderChatNode();
+    fireEvent.contextMenu(screen.getByText("You"));
+    expect(screen.queryByText("Reveal Docked Items")).toBeNull();
+  });
+
+  it("shows one labeled 'Reveal Docked Items' entry per docked child, and clicking one calls onUndockChild with its id", async () => {
+    const user = userEvent.setup();
+    const { onUndockChild } = renderChatNode({
+      dockedChildren: [
+        { id: "t1", label: "Thinking" },
+        { id: "t2", label: "Thinking" },
+      ],
+    });
+
+    fireEvent.contextMenu(screen.getByText("You"));
+    expect(screen.getByText("Reveal Docked Items")).toBeInTheDocument();
+    const entries = screen.getAllByRole("menuitem", { name: "Thinking" });
+    expect(entries).toHaveLength(2);
+
+    await user.click(entries[0]);
+    expect(onUndockChild).toHaveBeenCalledOnce();
+    expect(onUndockChild).toHaveBeenCalledWith("t1");
+    expect(screen.queryByRole("menu")).toBeNull(); // the menu closes after any item fires
   });
 });

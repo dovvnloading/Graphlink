@@ -666,6 +666,75 @@ body,
   background-color: var(--gl-surface-border);
 }
 
+/* Small uppercase divider label ChatNodeMenu's "Reveal Docked Items" section
+   uses ahead of its per-child buttons (R3.13/R3.14). */
+.chat-node-menu-section-label {
+  padding: 6px 10px 2px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--gl-surface-text-muted);
+}
+
+/* -- R3.13/R3.14 thinking node + docked-child badge ------------------------ */
+
+.thinking-node {
+  width: 420px;
+  max-height: 640px;
+  min-height: 110px;
+}
+
+.thinking-node.collapsed {
+  width: 290px;
+  min-height: 58px;
+}
+
+.thinking-node-label {
+  font-style: italic;
+  color: var(--gl-surface-text-muted);
+}
+
+.thinking-node-content {
+  max-height: 560px;
+  overflow-y: auto;
+}
+
+.thinking-node-content > :first-child {
+  margin-top: 0;
+}
+
+.thinking-node-content > :last-child {
+  margin-bottom: 0;
+}
+
+/* Groups the role label with its docked-count badge so the pair sits
+   together on the left of .chat-node-role's space-between layout, instead
+   of the badge landing in the middle (a 3rd flex child would otherwise get
+   pushed to the center by space-between). */
+.chat-node-role-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Small pill on ChatNodeView showing how many thinking-node children are
+   currently docked to this chat node - only rendered when count > 0. */
+.chat-node-docked-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 5px;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--gl-surface-window);
+  background-color: var(--gl-surface-text-muted);
+  border-radius: 999px;
+}
+
 /* -- R2 app bar + overlay system ----------------------------------------- */
 
 .app-topbar {

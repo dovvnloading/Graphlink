@@ -14,6 +14,7 @@ import {
 // ChatNodeView.test.tsx for why a bare ReactFlowProvider is enough here too.
 function renderDocumentNode(overrides: Partial<DocumentFlowNode["data"]> = {}) {
   const onToggleCollapse = vi.fn();
+  const onDock = vi.fn();
   const onDelete = vi.fn();
   const props = {
     id: "n0",
@@ -29,6 +30,7 @@ function renderDocumentNode(overrides: Partial<DocumentFlowNode["data"]> = {}) {
       previewLabel: "",
       isCollapsed: false,
       onToggleCollapse,
+      onDock,
       onDelete,
       ...overrides,
     },
@@ -39,7 +41,7 @@ function renderDocumentNode(overrides: Partial<DocumentFlowNode["data"]> = {}) {
       <DocumentNodeView {...props} />
     </ReactFlowProvider>,
   );
-  return { onToggleCollapse, onDelete };
+  return { onToggleCollapse, onDock, onDelete };
 }
 
 describe("formatByteSize (ported DocumentNode._format_byte_size)", () => {
@@ -172,9 +174,9 @@ describe("DocumentNodeView", () => {
     expect(screen.queryByText("Quarterly figures attached.")).toBeNull();
   });
 
-  it("right-click opens a menu with real Copy Details/Collapse/Delete Attachment and honest disabled placeholders", async () => {
+  it("right-click opens a menu with real Copy Details/Dock/Collapse/Delete Attachment and honest disabled placeholders", async () => {
     const user = userEvent.setup();
-    const { onDelete } = renderDocumentNode({ attachmentKind: "document", filePath: "" });
+    const { onDelete, onDock } = renderDocumentNode({ attachmentKind: "document", filePath: "" });
 
     const writeText = vi.fn();
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
@@ -183,10 +185,10 @@ describe("DocumentNodeView", () => {
     fireEvent.contextMenu(title);
     expect(screen.getByRole("menu")).toBeInTheDocument();
 
-    const dock = screen.getByRole("menuitem", { name: "Dock into Parent Node" });
-    expect(dock).toBeDisabled();
-    expect(dock).toHaveAttribute("title", "Docking into the parent node's badge isn't built yet");
+    await user.click(screen.getByRole("menuitem", { name: "Dock into Parent Node" }));
+    expect(onDock).toHaveBeenCalledOnce();
 
+    fireEvent.contextMenu(title);
     const hideBranches = screen.getByRole("menuitem", { name: "Hide Other Branches" });
     expect(hideBranches).toBeDisabled();
     expect(hideBranches).toHaveAttribute("title", "Branch visibility isn't built yet");
