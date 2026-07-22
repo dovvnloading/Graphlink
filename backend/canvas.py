@@ -183,6 +183,15 @@ class SceneNode:
     # never live on the node itself (see the transport-decision comment on
     # image_assets below). Unused (default) for every other kind.
     image_asset_id: str = ""
+    # R3.25 (doc/QT_REMOVAL_PLAN.md): the ConversationNode's real persisted
+    # shape - graphlink_conversation_node.py's conversation_history, a
+    # growing list of {"role": "user"|"assistant", "content": text} dicts
+    # rendered as multiple bubbles inside one node card. This is the one R3
+    # kind whose OWN field is a LIST rather than a scalar - every prior kind
+    # (chat/code/document/thinking/html/image) stores one scalar value per
+    # node; a conversation node instead owns a whole message history. Unused
+    # (default empty list) for every other kind.
+    history: list[dict[str, str]] = field(default_factory=list)
 
 
 @dataclass
@@ -514,6 +523,89 @@ class SceneDocument:
         GET /api/assets/{id} route calls to serve the raw bytes + mime type."""
         return self.image_assets.get(asset_id)
 
+    def add_conversation_node(self, x: float, y: float, parent_id: str) -> SceneNode:
+        """R3.25's ConversationNode equivalent of add_document_node/
+        add_thinking_node/add_html_node/add_image_node: a real multi-message
+        conversation node. Same as document/thinking/html/image (and unlike
+        chat/code), parent_id is REQUIRED, not optional - a ConversationNode
+        never exists unparented - so this unconditionally connects to its
+        parent, no `if parent_id` guard.
+
+        Title is always the fixed literal "Conversation" - never derived or
+        truncated from any content, unlike every scalar-content kind before
+        it (chat/thinking/html/image all preview their own text). There is
+        no natural single preview string for a node whose content is a
+        growing LIST of messages, so the title never changes as messages are
+        appended (see append_conversation_user_message/
+        append_conversation_assistant_message below - neither touches
+        title). Mirrors graphlink_conversation_node.py's `title_label =
+        QLabel("Conversation")`, a hardcoded literal, not derived state.
+
+        `history` starts empty - a freshly-created conversation node has no
+        messages yet, same posture as `is_docked` defaulting False on a
+        freshly-created thinking node.
+
+        Conversation nodes are also NOT branch points (same as code/document/
+        thinking/html/image): there is no delete_conversation_node; deletion
+        goes entirely through the existing generic remove_nodes.
+        """
+        if parent_id not in self.nodes:
+            raise SceneError(f"unknown parent node: {parent_id}")
+        node_id = f"n{next(self._counter)}"
+        node = SceneNode(
+            id=node_id,
+            x=float(x),
+            y=float(y),
+            title="Conversation",
+            kind="conversation",
+        )
+        self.nodes[node_id] = node
+        self.connect(parent_id, node_id)
+        return node
+
+    def append_conversation_user_message(self, node_id: str, text: str) -> SceneNode:
+        """Append a real user message to a conversation node's history -
+        mirrors graphlink_conversation_node.py's add_user_message, minus the
+        view-layer bubble creation (the frontend's job)."""
+        node = self.nodes.get(node_id)
+        if node is None:
+            raise SceneError(f"unknown node: {node_id}")
+        node.history.append({"role": "user", "content": str(text)})
+        return node
+
+    def append_conversation_assistant_message(self, node_id: str, text: str) -> SceneNode:
+        """Append a real assistant message to a conversation node's history -
+        mirrors graphlink_conversation_node.py's add_ai_message, minus the
+        view-layer bubble creation. No live caller yet in this increment -
+        this exists for R4 to call once real agent dispatch lands, same
+        posture as every prior kind's method built ahead of its trigger."""
+        node = self.nodes.get(node_id)
+        if node is None:
+            raise SceneError(f"unknown node: {node_id}")
+        node.history.append({"role": "assistant", "content": str(text)})
+        return node
+
+    def delete_conversation_message(self, node_id: str, message_index: int) -> None:
+        """Prune one message out of a conversation node's history by index -
+        mirrors graphlink_conversation_node.py's _remove_message's index-
+        synced pop, minus the view-layer bubble removal/re-layout (the
+        frontend's job)."""
+        node = self.nodes.get(node_id)
+        if node is None:
+            raise SceneError(f"unknown node: {node_id}")
+        if message_index < 0 or message_index >= len(node.history):
+            raise SceneError(f"message index out of range: {message_index}")
+        node.history.pop(message_index)
+
+    def send_conversation_message(self, node_id: str, text: str) -> SceneNode:
+        """The Conversation node's own Send action (R3.25): a thin wrapper
+        over append_conversation_user_message, kept as a separate method
+        (rather than only calling append_conversation_user_message directly
+        from the WS wrapper) so the WS intent name lines up 1:1 with the
+        domain method, the same way sendMessage/send_message already do for
+        ChatNode."""
+        return self.append_conversation_user_message(node_id, text)
+
     def delete_chat_node(self, node_id: str) -> None:
         """Delete one chat node WITHOUT orphaning its branch: children are
         re-parented to the deleted node's own parent (or become roots if it
@@ -667,6 +759,9 @@ class SceneDocument:
                     "previewLabel": n.preview_label,
                     "isDocked": n.is_docked,
                     "imageAssetId": n.image_asset_id,
+                    "history": [
+                        {"role": m["role"], "content": m["content"]} for m in n.history
+                    ],
                 }
                 for n in self.nodes.values()
             ],
@@ -808,6 +903,34 @@ def register_canvas(bus: SessionBus, notifications: NotificationState) -> SceneD
         await publish_scene()
         return node.id
 
+    async def add_conversation_node(x, y, parent_id):
+        node = document.add_conversation_node(x, y, parent_id)
+        await publish_scene()
+        return node.id
+
+    async def send_conversation_message(node_id, text):
+        # R3.25: the real user-message-send action for a conversation node -
+        # appends a real user message. The assistant's reply needs the agent
+        # layer (same R4 prerequisite as ChatNode's send_message), so this is
+        # an honest deferred notice rather than a fake/stubbed response -
+        # same exact notification text/level/publish call as send_message.
+        node = document.send_conversation_message(node_id, text)
+        await publish_scene()
+        notifications.show("AI response generation lands in R4.", "info")
+        await bus.publish("notification")
+        return node.id
+
+    async def append_conversation_assistant_message(node_id, text):
+        # Unlike send_conversation_message, this represents a real reply
+        # landing once R4 exists, not a deferral - so no notification fires.
+        node = document.append_conversation_assistant_message(node_id, text)
+        await publish_scene()
+        return node.id
+
+    async def delete_conversation_message(node_id, message_index):
+        document.delete_conversation_message(node_id, message_index)
+        await publish_scene()
+
     async def set_node_docked(node_id, docked):
         document.set_node_docked(node_id, docked)
         await publish_scene()
@@ -887,6 +1010,12 @@ def register_canvas(bus: SessionBus, notifications: NotificationState) -> SceneD
     bus.register_intent("scene", "addThinkingNode", add_thinking_node)
     bus.register_intent("scene", "addHtmlNode", add_html_node)
     bus.register_intent("scene", "addImageNode", add_image_node)
+    bus.register_intent("scene", "addConversationNode", add_conversation_node)
+    bus.register_intent("scene", "sendConversationMessage", send_conversation_message)
+    bus.register_intent(
+        "scene", "appendConversationAssistantMessage", append_conversation_assistant_message
+    )
+    bus.register_intent("scene", "deleteConversationMessage", delete_conversation_message)
     bus.register_intent("scene", "setNodeDocked", set_node_docked)
     bus.register_intent("scene", "deleteChatNode", delete_chat_node)
     bus.register_intent("scene", "setChatCollapsed", set_chat_collapsed)

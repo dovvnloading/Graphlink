@@ -32,11 +32,23 @@ R3.21 adds `imageAssetId` (the ImageNode increment): the opaque asset-store
 key an image-kind node's bytes live under (fetched separately over HTTP,
 never inlined here), populated for kind=="image" rows, defaulted (empty
 string) for every other kind, same additive rule.
+
+R3.25 adds `history` (the ConversationNode increment): a growing list of
+role/content messages - the one R3 kind whose own field is a LIST rather
+than a scalar. Populated for kind=="conversation" rows, defaulted (empty
+list) for every other kind, same additive rule.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Literal
+
+
+@dataclass
+class ConversationMessageRow:
+    role: Literal["user", "assistant"]
+    content: str
 
 
 @dataclass
@@ -72,6 +84,11 @@ class SceneNodeRow:
     # themselves never appear in this payload - see the transport-decision
     # comment on backend/canvas.py's SceneDocument.image_assets.
     imageAssetId: str = ""
+    # R3.25: the ConversationNode's real persisted shape - a growing list of
+    # role/content messages, populated for kind=="conversation" rows,
+    # defaulted (empty list) for every other kind. The one R3 kind whose own
+    # field is a list rather than a scalar.
+    history: list[ConversationMessageRow] = field(default_factory=list)
 
 
 @dataclass

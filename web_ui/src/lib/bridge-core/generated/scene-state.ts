@@ -21,6 +21,12 @@ export interface SceneNodeRow {
   previewLabel: string;
   isDocked: boolean;
   imageAssetId: string;
+  history: ConversationMessageRow[];
+}
+
+export interface ConversationMessageRow {
+  role: "user" | "assistant";
+  content: string;
 }
 
 export interface SceneEdgeRow {
@@ -155,6 +161,26 @@ function checkSceneNodeRow(value: unknown, path: string, errors: string[]): void
     const fieldValue = value["imageAssetId"];
     if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.imageAssetId: missing required field`);
     else { if (typeof fieldValue !== "string") errors.push(`${path}.imageAssetId` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["history"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.history: missing required field`);
+    else { if (!Array.isArray(fieldValue)) errors.push(`${path}.history` + ": expected array");
+    else (fieldValue as unknown[]).forEach((item, i) => { checkConversationMessageRow(item, `${path}.history` + `[${i}]`, errors); }); }
+  }
+}
+
+function checkConversationMessageRow(value: unknown, path: string, errors: string[]): void {
+  if (!isRecord(value)) { errors.push(`${path}: expected object`); return; }
+  {
+    const fieldValue = value["role"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.role: missing required field`);
+    else { if (!["user", "assistant"].includes(fieldValue as string)) errors.push(`${path}.role` + `: ${JSON.stringify(fieldValue)} is not one of [` + "user, assistant" + `]`); }
+  }
+  {
+    const fieldValue = value["content"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.content: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.content` + ": expected string"); }
   }
 }
 

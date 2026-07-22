@@ -19,6 +19,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import type { SceneState } from "../../lib/bridge-core/generated/scene-state";
 import { ChatNodeView, type ChatFlowNode } from "./ChatNodeView";
 import { CodeNodeView, type CodeFlowNode } from "./CodeNodeView";
+import { ConversationNodeView, type ConversationFlowNode } from "./ConversationNodeView";
 import { DocumentNodeView, type DocumentFlowNode } from "./DocumentNodeView";
 import { HtmlNodeView, type HtmlFlowNode } from "./HtmlNodeView";
 import { ImageNodeView, type ImageFlowNode } from "./ImageNodeView";
@@ -49,7 +50,8 @@ type SceneFlowNode =
   | DocumentFlowNode
   | ThinkingFlowNode
   | HtmlFlowNode
-  | ImageFlowNode;
+  | ImageFlowNode
+  | ConversationFlowNode;
 
 function PlaceholderNodeView({ data, selected }: NodeProps<PlaceholderNode>) {
   const zoom = useStore((s) => s.transform[2]);
@@ -75,6 +77,7 @@ const NODE_TYPES = {
   thinking: ThinkingNodeView,
   html: HtmlNodeView,
   image: ImageNodeView,
+  conversation: ConversationNodeView,
 };
 
 function toFlowNodes(scene: SceneState, store: SceneStore): SceneFlowNode[] {
@@ -223,6 +226,30 @@ function toFlowNodes(scene: SceneState, store: SceneStore): SceneFlowNode[] {
           imageAssetId: n.imageAssetId,
           prompt: n.content,
           onDelete: () => store.removeNodes([n.id]),
+        },
+      });
+      continue;
+    }
+    if (n.kind === "conversation") {
+      // No onDock here either (same reasoning as the html/image branches
+      // above) - ConversationNodeView never offers a dock-into-parent
+      // action, so this kind never sets isDocked=true through any UI path
+      // of its own; the generic `if (n.isDocked) continue` guard above still
+      // covers it correctly if it were ever docked via a direct WS call.
+      flowNodes.push({
+        id: n.id,
+        type: "conversation" as const,
+        position: { x: n.x, y: n.y },
+        data: {
+          history: n.history,
+          isCollapsed: n.isCollapsed,
+          // Reuses the existing generic setChatCollapsed intent - same
+          // reasoning as every other non-chat node kind's onToggleCollapse
+          // above (the backend handler looks up ANY node by id).
+          onToggleCollapse: () => store.setChatCollapsed(n.id, !n.isCollapsed),
+          onDelete: () => store.removeNodes([n.id]),
+          onSend: (text: string) => store.sendConversationMessage(n.id, text),
+          onDeleteMessage: (index: number) => store.deleteConversationMessage(n.id, index),
         },
       });
       continue;
