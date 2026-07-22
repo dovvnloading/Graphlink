@@ -65,6 +65,9 @@
           "id": {
             "type": "string"
           },
+          "imageAssetId": {
+            "type": "string"
+          },
           "isCollapsed": {
             "type": "boolean"
           },
@@ -111,7 +114,8 @@
           "filePath",
           "mimeType",
           "previewLabel",
-          "isDocked"
+          "isDocked",
+          "imageAssetId"
         ],
         "type": "object"
       },

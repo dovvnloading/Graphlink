@@ -3,6 +3,7 @@ intent surface, grid payload compatibility with the generated validator's
 shape, and snapshot publishing."""
 
 import asyncio
+import base64
 
 import pytest
 
@@ -513,6 +514,120 @@ def test_add_html_node_intent_creates_a_real_node_and_publishes():
         )
         assert document.nodes[node_id].kind == "html"
         assert document.nodes[node_id].content == "<h1>preview</h1>"
+        assert any(
+            e.source == parent_id and e.target == node_id for e in document.edges.values()
+        )
+        assert recorder.topics_seen().count("scene") == 2, "both mutations publish"
+
+    asyncio.run(run())
+
+
+# -- R3.21: image nodes -------------------------------------------------------
+
+
+def test_add_image_node_creates_a_real_image_kind_node():
+    doc = SceneDocument()
+    parent = doc.add_chat_node(0, 0, "generate a picture of a cat", True)
+    node = doc.add_image_node(10, 20, b"\x89PNG raw bytes", "a cat wearing a hat", parent.id)
+    assert node.kind == "image"
+    assert node.content == "a cat wearing a hat"
+    assert node.title == "a cat wearing a hat"
+    assert node.image_asset_id != ""
+    assert any(e.source == parent.id and e.target == node.id for e in doc.edges.values())
+
+
+def test_add_image_node_falls_back_to_image_title_for_empty_prompt():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_image_node(0, 0, b"bytes", "", parent.id)
+    assert node.title == "Image"
+
+
+def test_add_image_node_stores_the_asset_retrievable_with_correct_bytes_and_mime_type():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_image_node(0, 0, b"raw-png-bytes", "prompt", parent.id, mime_type="image/png")
+    asset = doc.get_image_asset(node.image_asset_id)
+    assert asset == (b"raw-png-bytes", "image/png")
+
+
+def test_get_image_asset_returns_none_for_unknown_id():
+    doc = SceneDocument()
+    assert doc.get_image_asset("ghost") is None
+
+
+def test_add_image_node_rejects_unknown_parent():
+    doc = SceneDocument()
+    with pytest.raises(SceneError):
+        doc.add_image_node(0, 0, b"bytes", "orphaned image", "ghost")
+
+
+def test_add_image_node_requires_a_parent_id():
+    # Same as add_document_node/add_thinking_node/add_html_node - parent_id
+    # has no default in add_image_node's signature, so calling without one is
+    # a TypeError (missing required argument), not a SceneError.
+    doc = SceneDocument()
+    with pytest.raises(TypeError):
+        doc.add_image_node(0, 0, b"bytes", "orphaned image")
+
+
+def test_scene_payload_includes_image_asset_id_defaulted_for_other_kinds():
+    doc = SceneDocument()
+    doc.add_node(0, 0, "plain")
+    parent = doc.add_node(1, 1, "parent")
+    image_node = doc.add_image_node(2, 2, b"bytes", "a real prompt", parent.id)
+    rows = {n["id"]: n for n in doc.scene_payload()["nodes"]}
+    assert rows["n0"]["imageAssetId"] == ""
+    assert rows[parent.id]["imageAssetId"] == ""
+    assert rows[image_node.id]["imageAssetId"] == image_node.image_asset_id
+    assert rows[image_node.id]["imageAssetId"] != ""
+
+
+def test_image_node_deletion_goes_through_remove_nodes_and_evicts_the_asset():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_image_node(10, 10, b"doomed bytes", "doomed image", parent.id)
+    asset_id = node.image_asset_id
+    assert not hasattr(doc, "delete_image_node"), "image nodes are not branch points - no special delete method"
+
+    assert doc.get_image_asset(asset_id) is not None
+    doc.remove_nodes([node.id])
+
+    assert node.id not in doc.nodes
+    assert not any(e.target == node.id or e.source == node.id for e in doc.edges.values())
+    assert doc.get_image_asset(asset_id) is None, "deleting the node must evict its asset-store entry too"
+    assert doc.image_assets == {}, "no leftover entries linger after the owning node is gone"
+
+
+def test_non_image_node_deletion_does_not_touch_image_assets():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    image_node = doc.add_image_node(0, 0, b"keep me", "keep this image", parent.id)
+    code_node = doc.add_code_node(1, 1, "x = 1", "python", parent_id=parent.id)
+
+    doc.remove_nodes([code_node.id])
+
+    assert code_node.id not in doc.nodes
+    assert doc.get_image_asset(image_node.image_asset_id) == (b"keep me", "image/png"), (
+        "deleting a node with no image_asset_id must not touch image_assets at all"
+    )
+
+
+def test_add_image_node_intent_creates_a_real_node_and_publishes():
+    async def run():
+        bus, document, recorder = make_bus()
+        parent_id = await bus.dispatch_intent("scene", "addChatNode", [0, 0, "hi", True])
+        image_bytes = b"\x89PNG\r\n\x1a\nfake-but-real-bytes"
+        encoded = base64.b64encode(image_bytes).decode("ascii")
+        node_id = await bus.dispatch_intent(
+            "scene",
+            "addImageNode",
+            [10, 10, encoded, "a generated image", parent_id, "image/jpeg"],
+        )
+        assert document.nodes[node_id].kind == "image"
+        assert document.nodes[node_id].content == "a generated image"
+        asset = document.get_image_asset(document.nodes[node_id].image_asset_id)
+        assert asset == (image_bytes, "image/jpeg"), "base64 payload must decode back to the exact original bytes"
         assert any(
             e.source == parent_id and e.target == node_id for e in document.edges.values()
         )

@@ -217,6 +217,25 @@ export class SceneStore {
     this.transport.intent("scene", "addHtmlNode", [x, y, htmlContent, parentId]);
   }
 
+  // R3.21/R3.22: real image nodes. Same posture as addThinkingNode/
+  // addHtmlNode - no real UI creation trigger yet (R4's agent/plugin layer);
+  // this method exists so the intent shape is testable now. The image bytes
+  // themselves are never sent over this (or any) WS topic - only the small
+  // imageAssetId reference string SceneNodeRow carries rides the wire; the
+  // caller is responsible for having already uploaded/generated the bytes
+  // and obtained imageBytesBase64 some other way (out of scope here).
+  // mimeType defaults to "image/png" to match the backend's own default.
+  addImageNode(
+    x: number,
+    y: number,
+    imageBytesBase64: string,
+    prompt: string,
+    parentId: string,
+    mimeType = "image/png",
+  ): void {
+    this.transport.intent("scene", "addImageNode", [x, y, imageBytesBase64, prompt, parentId, mimeType]);
+  }
+
   setNodeDocked(id: string, docked: boolean): void {
     this.transport.intent("scene", "setNodeDocked", [id, docked]);
   }

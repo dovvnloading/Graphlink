@@ -20,8 +20,10 @@ document IS the source of truth the window can reload against.
 
 from __future__ import annotations
 
+import base64
 import itertools
 import math
+import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -87,6 +89,10 @@ THINKING_TITLE_PREVIEW_LENGTH = 60
 # text for truncation purposes (not code), so it reuses chat/thinking's
 # 60-char length rather than code's 40.
 HTML_TITLE_PREVIEW_LENGTH = 60
+# R3.21: image-node titles preview the generation prompt, which is prose
+# like chat/thinking/html, so it reuses their 60-char length rather than
+# code's 40.
+IMAGE_TITLE_PREVIEW_LENGTH = 60
 
 
 @dataclass
@@ -172,6 +178,11 @@ class SceneNode:
     # time from this flag (scan nodes whose parent edge points at it), never
     # stored on the parent itself. Unused (default) for every other kind.
     is_docked: bool = False
+    # R3.21 (doc/QT_REMOVAL_PLAN.md): the image node's real persisted shape -
+    # an opaque reference key into SceneDocument.image_assets. Image bytes
+    # never live on the node itself (see the transport-decision comment on
+    # image_assets below). Unused (default) for every other kind.
+    image_asset_id: str = ""
 
 
 @dataclass
@@ -201,6 +212,18 @@ class SceneDocument:
     # Qt-free stand-in for "the currently active branch" until real node
     # selection exists. None means the next message starts a fresh root.
     last_chat_node_id: str | None = None
+    # R3.21: in-memory, session-scoped store for image-node bytes, keyed by
+    # asset id (see SceneNode.image_asset_id) -> (raw_bytes, mime_type).
+    # TRANSPORT DECISION: images travel to the client via a dedicated GET
+    # /api/assets/{id} HTTP route (backend/assets.py), NEVER inlined into
+    # scene_payload(). scene_payload() resends every node on every
+    # publish_scene() call - roughly 20 different intents trigger it, none
+    # of them debounced - so inlining image bytes there would compound in
+    # size on every unrelated mutation for the rest of the session. No disk
+    # persistence yet: there is zero live creation trigger for this
+    # increment, same posture as every prior node-type increment before its
+    # real trigger landed.
+    image_assets: dict[str, tuple[bytes, str]] = field(default_factory=dict)
     _counter: itertools.count = field(default_factory=itertools.count, repr=False)
 
     # -- nodes -------------------------------------------------------------
@@ -424,6 +447,73 @@ class SceneDocument:
         self.connect(parent_id, node_id)
         return node
 
+    def add_image_node(
+        self,
+        x: float,
+        y: float,
+        image_bytes: bytes,
+        prompt: str,
+        parent_id: str,
+        *,
+        mime_type: str = "image/png",
+    ) -> SceneNode:
+        """R3.21's image-node equivalent of add_document_node/
+        add_thinking_node/add_html_node: a real generated-image node. Same as
+        document/thinking/html (and unlike chat/code), parent_id is
+        REQUIRED, not optional - an image node never exists unparented - so
+        this unconditionally connects to its parent, no `if parent_id` guard.
+
+        Image bytes do NOT live on SceneNode (see the transport-decision
+        comment on SceneDocument.image_assets) - they go into that
+        session-scoped store, keyed by a SEPARATE id. Unlike node/edge ids
+        (which only need to be unique within their own SceneDocument, since
+        nothing ever looks a node up across sessions), asset ids are read
+        back through GET /api/assets/{id}, a route that takes a bare id plus
+        an independent session query param - so a per-document counter here
+        would let two sessions mint the identical "imgN" id for unrelated
+        images (guaranteed, not just probabilistic, for sessions that create
+        nodes in the same order), and a caller that omits/mis-supplies the
+        session param would silently be served someone else's image instead
+        of a 404. A uuid4 hex keeps the id globally unique so cross-session
+        collision is not possible regardless of session query correctness.
+        image_asset_id on the node is just the opaque reference key into
+        that store.
+
+        There is no natural title-preview text for an image the way there is
+        for text-based kinds, so the title is the prompt (truncated, same
+        60-char convention as chat/thinking/html) when non-empty, else a
+        literal "Image".
+
+        Image nodes are also NOT branch points (same as code/document/
+        thinking/html): there is no delete_image_node; deletion goes
+        entirely through the existing generic remove_nodes, which
+        additionally evicts this node's image_assets entry so bytes never
+        outlive the node (see remove_nodes).
+        """
+        if parent_id not in self.nodes:
+            raise SceneError(f"unknown parent node: {parent_id}")
+        node_id = f"n{next(self._counter)}"
+        asset_id = f"img{uuid.uuid4().hex}"
+        self.image_assets[asset_id] = (image_bytes, mime_type)
+        title = str(prompt)[:IMAGE_TITLE_PREVIEW_LENGTH] or "Image"
+        node = SceneNode(
+            id=node_id,
+            x=float(x),
+            y=float(y),
+            title=title,
+            kind="image",
+            content=str(prompt),
+            image_asset_id=asset_id,
+        )
+        self.nodes[node_id] = node
+        self.connect(parent_id, node_id)
+        return node
+
+    def get_image_asset(self, asset_id: str) -> tuple[bytes, str] | None:
+        """The read-side of image_assets - the same lookup backend/assets.py's
+        GET /api/assets/{id} route calls to serve the raw bytes + mime type."""
+        return self.image_assets.get(asset_id)
+
     def delete_chat_node(self, node_id: str) -> None:
         """Delete one chat node WITHOUT orphaning its branch: children are
         re-parented to the deleted node's own parent (or become roots if it
@@ -494,7 +584,8 @@ class SceneDocument:
 
     def remove_nodes(self, node_ids: list[str]) -> None:
         for node_id in node_ids:
-            if self.nodes.pop(node_id, None) is not None:
+            node = self.nodes.pop(node_id, None)
+            if node is not None:
                 # Edges die with either endpoint - same invariant ChatScene
                 # enforced on node removal.
                 self.edges = {
@@ -502,6 +593,11 @@ class SceneDocument:
                     for eid, e in self.edges.items()
                     if e.source != node_id and e.target != node_id
                 }
+                # R3.21: an image node's bytes must not outlive the node -
+                # evict its image_assets entry too, or a long session's
+                # deleted images would accumulate in memory forever.
+                if node.image_asset_id:
+                    self.image_assets.pop(node.image_asset_id, None)
 
     # -- edges -------------------------------------------------------------
 
@@ -570,6 +666,7 @@ class SceneDocument:
                     "byteSize": n.byte_size,
                     "previewLabel": n.preview_label,
                     "isDocked": n.is_docked,
+                    "imageAssetId": n.image_asset_id,
                 }
                 for n in self.nodes.values()
             ],
@@ -701,6 +798,16 @@ def register_canvas(bus: SessionBus, notifications: NotificationState) -> SceneD
         await publish_scene()
         return node.id
 
+    async def add_image_node(x, y, image_bytes_base64, prompt, parent_id, mime_type="image/png"):
+        # Unlike every prior wrapper, the WS intent transport is JSON, which
+        # cannot carry raw bytes - the caller sends base64 text, decoded here
+        # before it ever reaches SceneDocument (which only ever deals in real
+        # bytes, same as the HTTP asset route on the read side).
+        image_bytes = base64.b64decode(image_bytes_base64)
+        node = document.add_image_node(x, y, image_bytes, prompt, parent_id, mime_type=mime_type)
+        await publish_scene()
+        return node.id
+
     async def set_node_docked(node_id, docked):
         document.set_node_docked(node_id, docked)
         await publish_scene()
@@ -779,6 +886,7 @@ def register_canvas(bus: SessionBus, notifications: NotificationState) -> SceneD
     bus.register_intent("scene", "addDocumentNode", add_document_node)
     bus.register_intent("scene", "addThinkingNode", add_thinking_node)
     bus.register_intent("scene", "addHtmlNode", add_html_node)
+    bus.register_intent("scene", "addImageNode", add_image_node)
     bus.register_intent("scene", "setNodeDocked", set_node_docked)
     bus.register_intent("scene", "deleteChatNode", delete_chat_node)
     bus.register_intent("scene", "setChatCollapsed", set_chat_collapsed)
