@@ -156,7 +156,8 @@ describe("WsTransport", () => {
     t.dispose();
     await assertion;
     vi.advanceTimersByTime(1000);
-    expect(FakeSocket.instances).toHaveLength(1), "no reconnect after dispose";
+    // No reconnect after dispose: still exactly the one original socket.
+    expect(FakeSocket.instances).toHaveLength(1);
   });
 
   it("notifies status listeners through the lifecycle", () => {

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ConnectionStatus, WsTransport, defaultWsUrl } from "../lib/ws/transport";
 
 /**
@@ -17,17 +17,12 @@ interface SystemState {
 }
 
 function App() {
-  const transportRef = useRef<WsTransport | null>(null);
   const [status, setStatus] = useState<ConnectionStatus>("closed");
   const [system, setSystem] = useState<SystemState>({});
   const [pingMs, setPingMs] = useState<number | null>(null);
   const [pingError, setPingError] = useState<string | null>(null);
 
-  const transport = useMemo(() => {
-    const t = new WsTransport(defaultWsUrl());
-    transportRef.current = t;
-    return t;
-  }, []);
+  const transport = useMemo(() => new WsTransport(defaultWsUrl()), []);
 
   useEffect(() => {
     const offStatus = transport.onStatus(setStatus);

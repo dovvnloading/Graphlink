@@ -121,7 +121,18 @@ class TestGlVarsDevCssIsDevOnly:
         )
         assert sources, "expected to find TypeScript sources to scan"
 
+        app_root = _REPO_ROOT / "web_ui" / "src" / "app"
         for path in sources:
+            # Qt-removal plan R0 carve-out: the single-SPA target (src/app)
+            # imports the token values UNCONDITIONALLY, deliberately. The
+            # dev-only rule exists because island pages get their :root
+            # tokens injected by the Qt host at build time, so a shipped
+            # copy would silently override the active theme. The SPA has no
+            # Qt host and no injector - the shipped file IS its token source
+            # until R2 lands the backend-served theme topic. Islands remain
+            # fully guarded.
+            if path.is_relative_to(app_root):
+                continue
             code = _strip_js_comments(_read(path))
             if "gl-vars-dev.css" not in code:
                 continue
