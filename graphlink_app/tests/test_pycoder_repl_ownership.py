@@ -15,9 +15,23 @@ right-click-delete path) was the only *deterministic* stop.
 PyCoderReplManager preserves both guarantees without an explicit
 __del__: a weakref.finalize registered at REPL-creation time stops the
 subprocess when the node is garbage collected regardless of whether
-stop()/dispose() was ever called (covering the clear()-only path), and
-dispose() still calls manager.stop() directly for immediate, deterministic
-cleanup on the right-click-delete path.
+stop()/dispose() was ever called, and dispose() still calls manager.stop()
+directly for immediate, deterministic cleanup on the right-click-delete path.
+
+Follow-up bug-scan finding: ChatScene._teardown_items_before_clear() now ALSO
+calls dispose() on pycoder_nodes (and every other worker-owning node list),
+exactly like it already did for chart_nodes - clear() is no longer a
+dispose()-free path. This was found while fixing the identical gap for
+ArtifactNode/ConversationNode/CodeSandboxNode/GitlinkNode: none of them had
+dispose() invoked on the clear() path either, and for the four whose
+worker-thread wiring in graphlink_window_actions.py uses a lambda closing
+over the node/thread on a custom Signal, the node was not just left running
+a beat longer - it was made permanently uncollectable by Python's GC (the
+finalizer/​__del__ backstop those nodes rely on never even fires), because
+disconnecting those signals only happens inside dispose(). The
+weakref.finalize here still fires as a backstop for any path that somehow
+bypasses both dispose() call sites, but it is no longer the only thing
+protecting the clear() path.
 """
 
 import gc
@@ -130,10 +144,18 @@ class TestRealPyCoderNodeIntegration:
 
         assert not hasattr(node, "repl")
 
-    def test_pycoder_node_has_no_del_method_of_its_own(self):
-        # __del__'s only content was self.repl.stop() - now dead once ownership
-        # moved to the manager, so it was deleted rather than left as a no-op.
-        assert "__del__" not in PyCoderNode.__dict__
+    def test_pycoder_node_del_method_does_not_touch_the_repl(self):
+        # At increment 4, __del__'s only content was self.repl.stop() - dead
+        # once REPL ownership moved to the manager, so it was deleted rather
+        # than left as a no-op. A bug-scan follow-up later reintroduced
+        # __del__ for a DIFFERENT reason (a GC-time backstop for
+        # worker_thread, mirroring CodeSandboxNode/ArtifactNode) - it must
+        # stay REPL-agnostic; the manager's own weakref.finalize is still the
+        # only thing that stops the REPL subprocess at GC time.
+        assert not hasattr(PyCoderNode, "repl")
+        node = PyCoderNode(parent_node=None)
+        assert not hasattr(node, "repl")
+        node.__del__()  # must not raise - no self.repl to call .stop() on
 
     def test_dispose_calls_through_to_the_real_manager_via_scene_window(self):
         window = MagicMock()
@@ -165,12 +187,15 @@ class TestRealPyCoderNodeIntegration:
         node.dispose()  # must not raise even though get_repl() was never called
 
 
-class TestClearPathReliesOnTheFinalizerNotDispose:
-    """Directly proves the pivotal recon finding behind this whole increment:
-    ChatScene.clear() does not call dispose(), so only the finalizer protects
-    the New Chat / chat-switch path."""
+class TestClearPathNowCallsDisposeDeterministically:
+    """Bug-scan follow-up: ChatScene.clear() now calls dispose() on
+    pycoder_nodes (matching the pre-existing chart_nodes treatment), so the
+    REPL stops synchronously when New Chat happens - it no longer depends on
+    Python's GC ever running the finalizer, non-deterministic timing that
+    could leave a REPL subprocess (and, for the sibling node types, the whole
+    node) alive far longer than the user's screen suggested."""
 
-    def test_scene_clear_skips_dispose_but_gc_afterwards_still_stops_the_repl(self):
+    def test_scene_clear_calls_dispose_and_stops_the_repl_synchronously(self):
         with patch.object(PythonREPL, "stop") as mock_stop:
             window = MagicMock()
             window.pycoder_repl_manager = PyCoderReplManager()
@@ -180,15 +205,23 @@ class TestClearPathReliesOnTheFinalizerNotDispose:
             scene.addItem(node)
             scene.pycoder_nodes.append(node)
             window.pycoder_repl_manager.get_repl(node)
-            node.dispose = MagicMock()
 
             scene.clear()
 
-            node.dispose.assert_not_called()
-            mock_stop.assert_not_called()  # not yet - node/parent are still referenced locally
+            assert node.is_disposed is True
+            mock_stop.assert_called_once()  # synchronous - no del/gc.collect() needed
+
+    def test_the_finalizer_still_backstops_a_node_that_never_goes_through_clear_or_dispose(self):
+        # Defense-in-depth check: the finalizer must still work standalone
+        # (e.g. a node dropped without ever being added to a scene, as in a
+        # headless test) - clear()-calling-dispose() is an additional
+        # guarantee, not a replacement for this one.
+        with patch.object(PythonREPL, "stop") as mock_stop:
+            manager = PyCoderReplManager()
+            node = PyCoderNode(parent_node=None)
+            manager.get_repl(node)
 
             del node
-            del parent
             gc.collect()
 
             mock_stop.assert_called_once()

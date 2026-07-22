@@ -390,6 +390,20 @@ class PyCoderNode(QGraphicsObject, HoverAnimationMixin):
 
         self._update_ui_for_mode()
 
+    def __del__(self):
+        # GC-time last resort, mirroring CodeSandboxNode.__del__ /
+        # ArtifactNode.__del__: dispose() is now also called deterministically
+        # from ChatScene._teardown_items_before_clear() on every clear() (New
+        # Chat / chat-switch), so this is defense-in-depth for any path that
+        # somehow bypasses both that and deleteSelectedItems(). Guarded
+        # because during interpreter shutdown the underlying C++ QThread/
+        # QObject may already be gone, making dispose()'s worker.isRunning()
+        # raise inside __del__.
+        try:
+            self.dispose()
+        except Exception:
+            pass
+
     def dispose(self):
         # Called by ChatScene.deleteSelectedItems when this node is removed. Stop the
         # running worker so deletion doesn't orphan a live QThread: once the node
@@ -402,9 +416,37 @@ class PyCoderNode(QGraphicsObject, HoverAnimationMixin):
             return
         self.is_disposed = True
         worker = getattr(self, "worker_thread", None)
-        if worker and worker.isRunning():
-            worker.stop()
         self.worker_thread = None
+        if worker:
+            try:
+                if worker.isRunning():
+                    worker.stop()
+            except Exception:
+                pass
+            # run_pycoder_node (graphlink_window_actions.py) wires this
+            # worker's own finished/error(/log_update/approval_requested for
+            # the AI-driven worker type) to lambdas carrying node=/thread=
+            # default args - PySide6's GC does not reclaim a lambda connected
+            # to a custom Signal (empirically confirmed), so as long as those
+            # connections stand, this worker and this node are BOTH immortal
+            # for the rest of the process. Disconnecting here breaks that
+            # cycle. Mirrors GitlinkNode.dispose(). getattr-guarded because
+            # the two worker types (CodeExecutionWorker for MANUAL,
+            # PyCoderExecutionWorker for AI_DRIVEN) don't share every signal.
+            for signal_name in ("finished", "error", "log_update", "approval_requested"):
+                signal = getattr(worker, signal_name, None)
+                if signal is not None:
+                    try:
+                        signal.disconnect()
+                    except (TypeError, RuntimeError):
+                        pass
+            try:
+                if worker.isRunning():
+                    worker.finished.connect(worker.deleteLater)
+                else:
+                    worker.deleteLater()
+            except RuntimeError:
+                pass
         # The REPL subprocess is owned by ChatWindow.pycoder_repl_manager, not this
         # node - stop it here for immediate, deterministic cleanup on this (the
         # right-click-delete) path. self.scene() is None for nodes never added to a

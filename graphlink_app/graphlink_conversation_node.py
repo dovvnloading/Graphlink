@@ -199,6 +199,20 @@ class ConversationNode(QGraphicsObject, HoverAnimationMixin):
         self.proxy = QGraphicsProxyWidget(self)
         self.proxy.setWidget(self.widget)
 
+    def __del__(self):
+        # GC-time last resort, mirroring CodeSandboxNode.__del__ /
+        # ArtifactNode.__del__: dispose() is now also called deterministically
+        # from ChatScene._teardown_items_before_clear() on every clear() (New
+        # Chat / chat-switch), so this is defense-in-depth for any path that
+        # somehow bypasses both that and deleteSelectedItems(). Guarded
+        # because during interpreter shutdown the underlying C++ QThread/
+        # QObject may already be gone, making dispose()'s worker.isRunning()
+        # raise inside __del__.
+        try:
+            self.dispose()
+        except Exception:
+            pass
+
     def dispose(self):
         # Called by ChatScene.deleteSelectedItems when this node is removed. Cancel
         # the in-flight ChatWorkerThread so deletion doesn't orphan a live QThread:
@@ -213,12 +227,33 @@ class ConversationNode(QGraphicsObject, HoverAnimationMixin):
             return
         self.is_disposed = True
         worker = getattr(self, "worker_thread", None)
-        try:
-            if worker and worker.isRunning():
-                worker.cancel()
-        except RuntimeError:
-            pass
         self.worker_thread = None
+        if worker:
+            try:
+                if worker.isRunning():
+                    worker.cancel()
+            except RuntimeError:
+                pass
+            # handle_conversation_node_request (graphlink_window_actions.py)
+            # wires this worker's own finished/error/cancelled to lambdas
+            # carrying node=/thread= default args - PySide6's GC does not
+            # reclaim a lambda connected to a custom Signal (empirically
+            # confirmed; a bound-method connection, like `status` below, is
+            # fine), so as long as those connections stand, this worker and
+            # this node are BOTH immortal for the rest of the process.
+            # Disconnecting here breaks that cycle. Mirrors GitlinkNode.dispose().
+            for signal in (worker.finished, worker.error, worker.status, worker.cancelled):
+                try:
+                    signal.disconnect()
+                except (TypeError, RuntimeError):
+                    pass
+            try:
+                if worker.isRunning():
+                    worker.finished.connect(worker.deleteLater)
+                else:
+                    worker.deleteLater()
+            except RuntimeError:
+                pass
 
     @property
     def width(self):
