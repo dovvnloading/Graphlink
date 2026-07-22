@@ -4,6 +4,10 @@ import { ConnectionStatus, WsTransport, defaultWsUrl } from "../lib/ws/transport
 import { SceneCanvas } from "./canvas/SceneCanvas";
 import { SceneStore } from "./canvas/sceneStore";
 import { AppBar } from "./chrome/AppBar";
+import { Composer } from "./chrome/Composer";
+import { ComposerStore } from "./chrome/composerStore";
+import { NotificationBanner } from "./chrome/NotificationBanner";
+import { TokenCounter } from "./chrome/TokenCounter";
 import { ViewPopover } from "./chrome/ViewPopover";
 import { OverlayProvider } from "./overlays/overlays";
 
@@ -31,6 +35,7 @@ function App() {
 
   const transport = useMemo(() => new WsTransport(defaultWsUrl()), []);
   const sceneStore = useMemo(() => new SceneStore(transport), [transport]);
+  const composerStore = useMemo(() => new ComposerStore(transport), [transport]);
 
   useEffect(() => {
     const offStatus = transport.onStatus(setStatus);
@@ -38,14 +43,16 @@ function App() {
       setSystem(payload as SystemState);
     });
     sceneStore.connect();
+    composerStore.connect();
     transport.connect();
     return () => {
       offStatus();
       offSystem();
       sceneStore.dispose();
+      composerStore.dispose();
       transport.dispose();
     };
-  }, [transport, sceneStore]);
+  }, [transport, sceneStore, composerStore]);
 
   return (
     <OverlayProvider>
@@ -68,10 +75,16 @@ function App() {
             <div className="app-popover-layer">
               <ViewPopover store={sceneStore} />
             </div>
+            <div className="app-token-counter-layer">
+              <TokenCounter store={composerStore} />
+            </div>
+            <div className="app-notification-layer">
+              <NotificationBanner store={composerStore} />
+            </div>
           </main>
 
           <footer className="app-composer-region">
-            <div className="app-composer-placeholder">Composer dock lands in R2.3.</div>
+            <Composer store={composerStore} />
           </footer>
         </div>
       </ReactFlowProvider>

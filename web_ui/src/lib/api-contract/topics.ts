@@ -4,6 +4,7 @@
 
 
 import { type AboutState, validateAboutState } from "../bridge-core/generated/about-state";
+import { type AppComposerState, validateAppComposerState } from "../bridge-core/generated/app-composer-state";
 import { type ChatLibraryState, validateChatLibraryState } from "../bridge-core/generated/chat-library-state";
 import { type CommandPaletteState, validateCommandPaletteState } from "../bridge-core/generated/command-palette-state";
 import { type ComposerState, validateComposerState } from "../bridge-core/generated/composer-state";
@@ -26,6 +27,7 @@ import { type ToolbarState, validateToolbarState } from "../bridge-core/generate
 
 export const TOPIC_VALIDATORS = {
   "about": validateAboutState,
+  "app-composer": validateAppComposerState,
   "chat-library": validateChatLibraryState,
   "command-palette": validateCommandPaletteState,
   "composer": validateComposerState,
@@ -51,6 +53,7 @@ export type TopicName = keyof typeof TOPIC_VALIDATORS;
 
 export interface TopicStates {
   "about": AboutState;
+  "app-composer": AppComposerState;
   "chat-library": ChatLibraryState;
   "command-palette": CommandPaletteState;
   "composer": ComposerState;

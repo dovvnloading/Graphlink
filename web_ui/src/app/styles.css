@@ -557,3 +557,279 @@ body,
   border: 1px solid var(--gl-neutral-button-border);
   border-radius: 6px;
 }
+
+/* -- R2.3 composer + token counter + notification ------------------------ */
+
+.app-composer-region {
+  padding: 10px 14px;
+}
+
+.composer-dock {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.composer-input-wrap {
+  display: flex;
+}
+
+.composer-input {
+  flex: 1;
+  resize: none;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.4;
+  padding: 10px 12px;
+  color: var(--gl-surface-text);
+  background-color: var(--gl-surface-inset, var(--gl-surface-node-body));
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 8px;
+}
+
+.composer-input:focus {
+  outline: none;
+  border-color: var(--gl-surface-text-muted);
+}
+
+.composer-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.composer-icon-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  color: var(--gl-neutral-button-icon);
+  background-color: var(--gl-neutral-button-background);
+  border: 1px solid var(--gl-neutral-button-border);
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.composer-icon-button:hover:enabled {
+  background-color: var(--gl-neutral-button-hover);
+}
+
+.composer-icon-button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.composer-icon-button .icon {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.composer-control {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  font-family: inherit;
+  color: var(--gl-surface-text);
+  background-color: var(--gl-neutral-button-background);
+  border: 1px solid var(--gl-neutral-button-border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.composer-control:hover:enabled {
+  background-color: var(--gl-neutral-button-hover);
+}
+
+.composer-control:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.composer-control .icon {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.control-kicker {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: var(--gl-surface-text-muted);
+  text-transform: uppercase;
+}
+
+.control-value {
+  font-size: 11px;
+  font-weight: 600;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.control-copy {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+}
+
+.composer-send-button {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  color: var(--gl-surface-window);
+  background-color: var(--gl-surface-text-muted);
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.composer-send-button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.composer-send-button .icon {
+  width: 15px;
+  height: 15px;
+  fill: currentColor;
+}
+
+.reasoning-popover {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 240px;
+}
+
+.reasoning-option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 8px 10px;
+  text-align: left;
+  font-family: inherit;
+  color: var(--gl-surface-text);
+  background: transparent;
+  border: none;
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.reasoning-option:hover {
+  background-color: var(--gl-neutral-button-hover);
+}
+
+.reasoning-option.active {
+  background-color: var(--gl-neutral-button-background);
+}
+
+.reasoning-option-label {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.reasoning-option-description {
+  font-size: 10px;
+  color: var(--gl-surface-text-muted);
+}
+
+.app-token-counter-layer {
+  position: absolute;
+  bottom: 16px;
+  left: 16px;
+  z-index: 5;
+}
+
+.token-counter {
+  display: flex;
+  gap: 12px;
+  padding: 6px 12px;
+  background-color: var(--gl-surface-node-body);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 8px;
+}
+
+.token-counter-row {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+}
+
+.token-counter-label {
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--gl-surface-text-muted);
+}
+
+.token-counter-value {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--gl-surface-text);
+}
+
+.token-counter-total .token-counter-value {
+  color: var(--gl-surface-text);
+}
+
+.app-notification-layer {
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 30;
+}
+
+.notification-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--gl-surface-border);
+  background-color: var(--gl-surface-node-body);
+  font-size: 12px;
+  color: var(--gl-surface-text);
+}
+
+.notification-error {
+  border-color: var(--gl-status-error, var(--gl-surface-border));
+}
+
+.notification-dismiss {
+  font-size: 14px;
+  font-family: inherit;
+  line-height: 1;
+  color: var(--gl-surface-text-muted);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+
+.notification-dismiss:hover {
+  color: var(--gl-surface-text);
+}

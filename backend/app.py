@@ -32,7 +32,10 @@ from fastapi.staticfiles import StaticFiles
 
 from backend import BACKEND_VERSION
 from backend.canvas import register_canvas
+from backend.composer import register_composer
 from backend.events import EventBus, SessionBus, UnknownIntentError, UnknownTopicError
+from backend.notifications import register_notifications
+from backend.token_counter import register_token_counter
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +62,11 @@ def _configure_session(bus: SessionBus) -> None:
 
     # R1 (doc/QT_REMOVAL_PLAN.md): scene document + grid topics.
     register_canvas(bus)
+
+    # R2: composer draft/reasoning, token counter, notifications.
+    token_counter = register_token_counter(bus)
+    register_composer(bus, token_counter)
+    register_notifications(bus)
 
 
 def create_app(spa_dir: Path | None = None) -> FastAPI:

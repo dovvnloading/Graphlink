@@ -482,6 +482,17 @@ GENERATED_ARTIFACTS = [
         "schema_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "scene-state.schema.json",
         "ts_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "scene-state.ts",
     },
+    {
+        # Qt-removal plan R2.3: the SPA composer topic (backend/composer.py)
+        # - deliberately distinct from ComposerStatePayload (no `theme`
+        # field; see graphlink_app_composer_payload.py's docstring).
+        "dataclass": None,  # resolved lazily in main() to avoid importing
+        "dataclass_import": ("graphlink_app_composer_payload", "AppComposerStatePayload"),
+        "title": "AppComposerState",
+        "source": "graphlink_app/graphlink_app_composer_payload.py::AppComposerStatePayload",
+        "schema_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "app-composer-state.schema.json",
+        "ts_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "app-composer-state.ts",
+    },
 ]
 
 
