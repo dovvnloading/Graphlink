@@ -68,6 +68,9 @@
           "isCollapsed": {
             "type": "boolean"
           },
+          "isDocked": {
+            "type": "boolean"
+          },
           "isUser": {
             "type": "boolean"
           },
@@ -107,7 +110,8 @@
           "attachmentKind",
           "filePath",
           "mimeType",
-          "previewLabel"
+          "previewLabel",
+          "isDocked"
         ],
         "type": "object"
       },

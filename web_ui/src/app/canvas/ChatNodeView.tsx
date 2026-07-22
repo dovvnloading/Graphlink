@@ -18,20 +18,27 @@ import { LOD_ZOOM_THRESHOLD } from "./canvasConstants";
  * work), Open Document View (the document-viewer island isn't wired into the
  * SPA overlay system yet), and Hide Other Branches (the legacy scene's
  * branch-visibility toggle has no backend/frontend equivalent at all yet -
- * unscoped, not owned by any R-phase). Two legacy items are deliberately NOT
- * listed even as disabled: "Reveal Docked Items" and "Generate Group Summary"
- * are themselves conditionally hidden in the legacy menu (only when docked
- * children or a multi-selection exist), and neither precondition can occur
- * yet in the new stack (no docking, no multi-select model) - showing them
- * unconditionally would be a behavior regression, not parity.
+ * unscoped, not owned by any R-phase). One legacy item is still deliberately
+ * NOT listed even as disabled: "Generate Group Summary" is itself
+ * conditionally hidden in the legacy menu (only when a multi-selection
+ * exists), and that precondition can't occur yet in the new stack (no
+ * multi-select model) - showing it unconditionally would be a behavior
+ * regression, not parity. "Reveal Docked Items" WAS in that same boat until
+ * R3.13/R3.14 (ThinkingNode + generic docking): its precondition - one or
+ * more docked children - can now be real (a thinking node docks via its own
+ * "Dock to Parent Node" action), so it's implemented for real below, gated
+ * on dockedChildren.length > 0 exactly like the legacy's own `if
+ * docked_children:` guard.
  */
 
 export interface ChatNodeData extends Record<string, unknown> {
   content: string;
   isUser: boolean;
   isCollapsed: boolean;
+  dockedChildren: { id: string; label: string }[];
   onToggleCollapse: () => void;
   onDelete: () => void;
+  onUndockChild: (childId: string) => void;
 }
 
 export type ChatFlowNode = Node<ChatNodeData, "chat">;
@@ -46,16 +53,20 @@ function ChatNodeMenu({
   content,
   isUser,
   isCollapsed,
+  dockedChildren,
   onToggleCollapse,
   onDelete,
+  onUndockChild,
   onClose,
 }: {
   position: MenuPosition;
   content: string;
   isUser: boolean;
   isCollapsed: boolean;
+  dockedChildren: { id: string; label: string }[];
   onToggleCollapse: () => void;
   onDelete: () => void;
+  onUndockChild: (childId: string) => void;
   onClose: () => void;
 }) {
   const menuRef = useRef<HTMLDivElement>(null);
@@ -110,6 +121,28 @@ function ChatNodeMenu({
       <button type="button" role="menuitem" disabled title="Branch visibility isn't built yet">
         Hide Other Branches
       </button>
+      {/* Real (not disabled) - matches the legacy's own `if docked_children:`
+          guard exactly. One button per docked child, each undocking that
+          specific child back onto the canvas via the shared setNodeDocked
+          intent (docked=false). */}
+      {dockedChildren.length > 0 && (
+        <>
+          <div className="chat-node-menu-section-label">Reveal Docked Items</div>
+          {dockedChildren.map((child) => (
+            <button
+              key={child.id}
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                onUndockChild(child.id);
+                onClose();
+              }}
+            >
+              {child.label}
+            </button>
+          ))}
+        </>
+      )}
       <button type="button" role="menuitem" disabled title="Document view integration isn't wired into the SPA yet">
         Open Document View
       </button>
@@ -161,7 +194,14 @@ export function ChatNodeView({ data, selected }: NodeProps<ChatFlowNode>) {
     >
       <Handle type="target" position={Position.Top} className="scene-node-handle" />
       <div className="scene-node-title chat-node-role">
-        <span>{data.isUser ? "You" : "Assistant"}</span>
+        <span className="chat-node-role-group">
+          <span>{data.isUser ? "You" : "Assistant"}</span>
+          {data.dockedChildren.length > 0 && (
+            <span className="chat-node-docked-badge" title="Docked items">
+              {data.dockedChildren.length}
+            </span>
+          )}
+        </span>
         <button
           type="button"
           className="chat-node-collapse-btn"
@@ -185,8 +225,10 @@ export function ChatNodeView({ data, selected }: NodeProps<ChatFlowNode>) {
           content={data.content}
           isUser={data.isUser}
           isCollapsed={data.isCollapsed}
+          dockedChildren={data.dockedChildren}
           onToggleCollapse={data.onToggleCollapse}
           onDelete={data.onDelete}
+          onUndockChild={data.onUndockChild}
           onClose={() => setMenuPosition(null)}
         />
       )}

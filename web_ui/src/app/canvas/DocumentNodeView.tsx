@@ -11,13 +11,17 @@ import { LOD_ZOOM_THRESHOLD } from "./canvasConstants";
  * backend's add_document_node requires parent_id.
  *
  * Real: render (metadata rows + gated content preview), collapse/expand,
- * delete, copy. Deferred, with an honest disabled+title label rather than a
+ * delete, copy, and (as of R3.13's shared docked-child mechanism) dock -
+ * "Dock into Parent Node" now calls the same generic setNodeDocked(id, true)
+ * intent ThinkingNodeView uses; SceneCanvas.tsx's node/edge filtering and
+ * ChatNodeView's badge/"Reveal Docked Items" are already kind-agnostic, so
+ * no further wiring was needed beyond this file and SceneCanvas's document
+ * branch. Deferred, with an honest disabled+title label rather than a
  * silently-dropped action (see the R3.7-era audit this increment is
- * following up on): Dock into Parent Node (needs the shared parent-badge/
- * docking mechanism - not built), Open File (needs a new backend endpoint;
- * browsers cannot open arbitrary local paths), Export (R6, document-kind
- * only - matches the legacy menu's own conditional), Hide Other Branches
- * (branch visibility isn't built yet).
+ * following up on): Open File (needs a new backend endpoint; browsers
+ * cannot open arbitrary local paths), Export (R6, document-kind only -
+ * matches the legacy menu's own conditional), Hide Other Branches (branch
+ * visibility isn't built yet).
  */
 
 export interface DocumentNodeData extends Record<string, unknown> {
@@ -40,6 +44,7 @@ export interface DocumentNodeData extends Record<string, unknown> {
   previewLabel: string;
   isCollapsed: boolean;
   onToggleCollapse: () => void;
+  onDock: () => void;
   onDelete: () => void;
 }
 
@@ -164,6 +169,7 @@ function DocumentNodeMenu({
   filePath,
   isCollapsed,
   onToggleCollapse,
+  onDock,
   onDelete,
   onClose,
 }: {
@@ -173,6 +179,7 @@ function DocumentNodeMenu({
   filePath: string;
   isCollapsed: boolean;
   onToggleCollapse: () => void;
+  onDock: () => void;
   onDelete: () => void;
   onClose: () => void;
 }) {
@@ -237,8 +244,10 @@ function DocumentNodeMenu({
       <button
         type="button"
         role="menuitem"
-        disabled
-        title="Docking into the parent node's badge isn't built yet"
+        onClick={() => {
+          onDock();
+          onClose();
+        }}
       >
         Dock into Parent Node
       </button>
@@ -348,6 +357,7 @@ export function DocumentNodeView({ data, selected }: NodeProps<DocumentFlowNode>
           filePath={data.filePath}
           isCollapsed={data.isCollapsed}
           onToggleCollapse={data.onToggleCollapse}
+          onDock={data.onDock}
           onDelete={data.onDelete}
           onClose={() => setMenuPosition(null)}
         />

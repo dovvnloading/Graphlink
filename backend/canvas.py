@@ -80,6 +80,9 @@ CHAT_TITLE_PREVIEW_LENGTH = 60
 # R3.5: code titles are a language label plus first line, not prose, so a
 # shorter preview than chat's 60 is plenty.
 CODE_TITLE_PREVIEW_LENGTH = 40
+# R3.13: thinking-node titles are prose (a preview of the reasoning text),
+# same as chat's, so it reuses chat's 60-char length rather than code's 40.
+THINKING_TITLE_PREVIEW_LENGTH = 60
 
 
 @dataclass
@@ -156,6 +159,12 @@ class SceneNode:
     duration_seconds: float | None = None
     byte_size: int | None = None
     preview_label: str = ""
+    # R3.13 (doc/QT_REMOVAL_PLAN.md): the ThinkingNode/docked-child increment -
+    # whether this node is currently docked into its parent's collapsed
+    # docked-child slot. A parent's set of docked children is derived at read
+    # time from this flag (scan nodes whose parent edge points at it), never
+    # stored on the parent itself. Unused (default) for every other kind.
+    is_docked: bool = False
 
 
 @dataclass
@@ -327,6 +336,45 @@ class SceneDocument:
         self.connect(parent_id, node_id)
         return node
 
+    def add_thinking_node(
+        self,
+        x: float,
+        y: float,
+        thinking_text: str,
+        parent_id: str,
+    ) -> SceneNode:
+        """R3.13's ThinkingNode equivalent of add_chat_node/add_code_node/
+        add_document_node: a real reasoning-panel node. Same as
+        add_document_node (and unlike chat/code), parent_id is REQUIRED, not
+        optional - a ThinkingNode never exists unparented - so this
+        unconditionally connects to its parent, no `if parent_id` guard.
+
+        Thinking text reuses the existing `content` field rather than a new
+        one - there is no separate thinking-text field. `is_docked` defaults
+        to False: a freshly-created thinking node is never pre-docked: dock()
+        is only ever invoked by explicit user action or on session-load
+        restore, never at construction time.
+
+        Thinking nodes are also NOT branch points (same as code/document):
+        there is no delete_thinking_node; deletion goes entirely through the
+        existing generic remove_nodes.
+        """
+        if parent_id not in self.nodes:
+            raise SceneError(f"unknown parent node: {parent_id}")
+        node_id = f"n{next(self._counter)}"
+        title = str(thinking_text)[:THINKING_TITLE_PREVIEW_LENGTH] or "Thinking"
+        node = SceneNode(
+            id=node_id,
+            x=float(x),
+            y=float(y),
+            title=title,
+            kind="thinking",
+            content=str(thinking_text),
+        )
+        self.nodes[node_id] = node
+        self.connect(parent_id, node_id)
+        return node
+
     def delete_chat_node(self, node_id: str) -> None:
         """Delete one chat node WITHOUT orphaning its branch: children are
         re-parented to the deleted node's own parent (or become roots if it
@@ -377,6 +425,16 @@ class SceneDocument:
         if node is None:
             raise SceneError(f"unknown node: {node_id}")
         node.is_collapsed = bool(collapsed)
+
+    def set_node_docked(self, node_id: str, docked: bool) -> None:
+        """R3.13: a single generic setter handling both dock (docked=True)
+        and undock (docked=False) - mirrors set_chat_collapsed's generic-
+        setter shape (despite its kind-specific name, it looks up ANY node by
+        id with no kind restriction)."""
+        node = self.nodes.get(node_id)
+        if node is None:
+            raise SceneError(f"unknown node: {node_id}")
+        node.is_docked = bool(docked)
 
     def move_node(self, node_id: str, x: float, y: float) -> SceneNode:
         node = self.nodes.get(node_id)
@@ -462,6 +520,7 @@ class SceneDocument:
                     "durationSeconds": n.duration_seconds,
                     "byteSize": n.byte_size,
                     "previewLabel": n.preview_label,
+                    "isDocked": n.is_docked,
                 }
                 for n in self.nodes.values()
             ],
@@ -583,6 +642,15 @@ def register_canvas(bus: SessionBus, notifications: NotificationState) -> SceneD
         await publish_scene()
         return node.id
 
+    async def add_thinking_node(x, y, thinking_text, parent_id):
+        node = document.add_thinking_node(x, y, thinking_text, parent_id)
+        await publish_scene()
+        return node.id
+
+    async def set_node_docked(node_id, docked):
+        document.set_node_docked(node_id, docked)
+        await publish_scene()
+
     async def delete_chat_node(node_id):
         document.delete_chat_node(node_id)
         await publish_scene()
@@ -655,6 +723,8 @@ def register_canvas(bus: SessionBus, notifications: NotificationState) -> SceneD
     bus.register_intent("scene", "addChatNode", add_chat_node)
     bus.register_intent("scene", "addCodeNode", add_code_node)
     bus.register_intent("scene", "addDocumentNode", add_document_node)
+    bus.register_intent("scene", "addThinkingNode", add_thinking_node)
+    bus.register_intent("scene", "setNodeDocked", set_node_docked)
     bus.register_intent("scene", "deleteChatNode", delete_chat_node)
     bus.register_intent("scene", "setChatCollapsed", set_chat_collapsed)
     bus.register_intent("scene", "sendMessage", send_message)

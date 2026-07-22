@@ -326,6 +326,116 @@ def test_document_node_deletion_goes_through_the_generic_remove_nodes_path():
     assert not any(e.target == node.id or e.source == node.id for e in doc.edges.values())
 
 
+# -- R3.13: thinking nodes + docking -----------------------------------------
+
+
+def test_add_thinking_node_creates_a_real_thinking_kind_node():
+    doc = SceneDocument()
+    parent = doc.add_chat_node(0, 0, "the message that triggered reasoning", True)
+    node = doc.add_thinking_node(10, 20, "step one, then step two, then a conclusion", parent.id)
+    assert node.kind == "thinking"
+    assert node.content == "step one, then step two, then a conclusion"
+    assert node.title == "step one, then step two, then a conclusion"[:60]
+    assert node.is_docked is False
+    assert any(e.source == parent.id and e.target == node.id for e in doc.edges.values())
+
+
+def test_add_thinking_node_falls_back_to_thinking_title_for_empty_text():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_thinking_node(0, 0, "", parent.id)
+    assert node.title == "Thinking"
+
+
+def test_add_thinking_node_rejects_unknown_parent():
+    doc = SceneDocument()
+    with pytest.raises(SceneError):
+        doc.add_thinking_node(0, 0, "orphaned reasoning", "ghost")
+
+
+def test_add_thinking_node_requires_a_parent_id():
+    # Same as add_document_node - parent_id has no default in
+    # add_thinking_node's signature, so calling without one is a TypeError
+    # (missing required argument), not a SceneError.
+    doc = SceneDocument()
+    with pytest.raises(TypeError):
+        doc.add_thinking_node(0, 0, "orphaned reasoning")
+
+
+def test_set_node_docked_toggles_true_then_false():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_thinking_node(1, 1, "reasoning", parent.id)
+
+    doc.set_node_docked(node.id, True)
+    assert doc.nodes[node.id].is_docked is True
+    row = {n["id"]: n for n in doc.scene_payload()["nodes"]}[node.id]
+    assert row["isDocked"] is True
+
+    doc.set_node_docked(node.id, False)
+    assert doc.nodes[node.id].is_docked is False
+    row = {n["id"]: n for n in doc.scene_payload()["nodes"]}[node.id]
+    assert row["isDocked"] is False
+
+
+def test_set_node_docked_unknown_node_raises():
+    with pytest.raises(SceneError):
+        SceneDocument().set_node_docked("ghost", True)
+
+
+def test_scene_payload_includes_is_docked_defaulted_for_other_kinds():
+    doc = SceneDocument()
+    doc.add_node(0, 0, "plain")
+    doc.add_chat_node(1, 1, "a chat message", True)
+    rows = {n["title"]: n for n in doc.scene_payload()["nodes"]}
+    assert rows["plain"]["isDocked"] is False
+    assert rows["a chat message"]["isDocked"] is False
+
+
+def test_thinking_node_deletion_goes_through_the_generic_remove_nodes_path():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_thinking_node(10, 10, "reasoning", parent.id)
+    assert not hasattr(doc, "delete_thinking_node"), "thinking nodes are not branch points - no special delete method"
+    doc.remove_nodes([node.id])
+    assert node.id not in doc.nodes
+    assert not any(e.target == node.id or e.source == node.id for e in doc.edges.values())
+
+
+def test_add_thinking_node_intent_creates_a_real_node_and_publishes():
+    async def run():
+        bus, document, recorder = make_bus()
+        parent_id = await bus.dispatch_intent("scene", "addChatNode", [0, 0, "hi", True])
+        node_id = await bus.dispatch_intent(
+            "scene", "addThinkingNode", [10, 10, "reasoning text", parent_id]
+        )
+        assert document.nodes[node_id].kind == "thinking"
+        assert document.nodes[node_id].content == "reasoning text"
+        assert document.nodes[node_id].is_docked is False
+        assert any(
+            e.source == parent_id and e.target == node_id for e in document.edges.values()
+        )
+        assert recorder.topics_seen().count("scene") == 2, "both mutations publish"
+
+    asyncio.run(run())
+
+
+def test_set_node_docked_intent_flips_is_docked_and_publishes():
+    async def run():
+        bus, document, recorder = make_bus()
+        parent_id = await bus.dispatch_intent("scene", "addNode", [0, 0, "parent"])
+        node_id = await bus.dispatch_intent(
+            "scene", "addThinkingNode", [10, 10, "reasoning", parent_id]
+        )
+        await bus.dispatch_intent("scene", "setNodeDocked", [node_id, True])
+        assert document.nodes[node_id].is_docked is True
+        await bus.dispatch_intent("scene", "setNodeDocked", [node_id, False])
+        assert document.nodes[node_id].is_docked is False
+        assert recorder.topics_seen().count("scene") == 4, "every mutation publishes"
+
+    asyncio.run(run())
+
+
 def test_send_message_starts_a_root_branch():
     doc = SceneDocument()
     node = doc.send_message("hello there")

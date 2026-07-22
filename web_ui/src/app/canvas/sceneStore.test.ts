@@ -40,6 +40,7 @@ function validScenePayload(overrides: Record<string, unknown> = {}) {
         filePath: "",
         mimeType: "",
         previewLabel: "",
+        isDocked: false,
       },
     ],
     edges: [],
@@ -178,6 +179,19 @@ describe("SceneStore", () => {
           "Audio | 2:05",
         ],
       },
+    ]);
+  });
+
+  it("sends thinking-node and docking intents with the backend's registered names and shapes", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.addThinkingNode(10, 20, "Weighing the options...", "n1");
+    store.setNodeDocked("n2", true);
+    store.setNodeDocked("n2", false);
+    expect(intents).toEqual([
+      { topic: "scene", intent: "addThinkingNode", args: [10, 20, "Weighing the options...", "n1"] },
+      { topic: "scene", intent: "setNodeDocked", args: ["n2", true] },
+      { topic: "scene", intent: "setNodeDocked", args: ["n2", false] },
     ]);
   });
 

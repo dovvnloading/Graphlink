@@ -197,6 +197,21 @@ export class SceneStore {
     ]);
   }
 
+  // R3.13/R3.14: real thinking nodes + generic docking. addThinkingNode has
+  // no real UI creation trigger yet - same situation addCodeNode/
+  // addDocumentNode were in when they landed; real creation is R4's agent
+  // layer. setNodeDocked is intentionally generic (any node kind, either
+  // direction) rather than a thinking-node-specific intent - it backs both
+  // ThinkingNodeView's "Dock to Parent Node" and ChatNodeView's per-child
+  // "Reveal Docked Items" undock action.
+  addThinkingNode(x: number, y: number, thinkingText: string, parentId: string): void {
+    this.transport.intent("scene", "addThinkingNode", [x, y, thinkingText, parentId]);
+  }
+
+  setNodeDocked(id: string, docked: boolean): void {
+    this.transport.intent("scene", "setNodeDocked", [id, docked]);
+  }
+
   // R3.3: the Composer's real Send action - a real user ChatNode. The
   // assistant's reply is deferred to R4 (graphlink_config.py's Qt/non-Qt
   // split is a prerequisite for calling the real agent layer); the backend

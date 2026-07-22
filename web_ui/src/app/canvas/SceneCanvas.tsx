@@ -20,6 +20,7 @@ import type { SceneState } from "../../lib/bridge-core/generated/scene-state";
 import { ChatNodeView, type ChatFlowNode } from "./ChatNodeView";
 import { CodeNodeView, type CodeFlowNode } from "./CodeNodeView";
 import { DocumentNodeView, type DocumentFlowNode } from "./DocumentNodeView";
+import { ThinkingNodeView, type ThinkingFlowNode } from "./ThinkingNodeView";
 import { LOD_ZOOM_THRESHOLD } from "./canvasConstants";
 import { SceneStore, scaleDragPosition } from "./sceneStore";
 
@@ -39,7 +40,7 @@ const GRID_VARIANTS: Record<string, BackgroundVariant> = {
 };
 
 type PlaceholderNode = Node<{ title: string }, "placeholder">;
-type SceneFlowNode = PlaceholderNode | ChatFlowNode | CodeFlowNode | DocumentFlowNode;
+type SceneFlowNode = PlaceholderNode | ChatFlowNode | CodeFlowNode | DocumentFlowNode | ThinkingFlowNode;
 
 function PlaceholderNodeView({ data, selected }: NodeProps<PlaceholderNode>) {
   const zoom = useStore((s) => s.transform[2]);
@@ -62,12 +63,39 @@ const NODE_TYPES = {
   chat: ChatNodeView,
   code: CodeNodeView,
   document: DocumentNodeView,
+  thinking: ThinkingNodeView,
 };
 
 function toFlowNodes(scene: SceneState, store: SceneStore): SceneFlowNode[] {
-  return scene.nodes.map((n) => {
+  // Looked up per-chat-node below to build dockedChildren - a docked node is
+  // omitted from the returned array entirely (see the "thinking" branch), so
+  // this is the only remaining way a chat node's dock badge/menu can find it.
+  const nodesById = new Map(scene.nodes.map((n) => [n.id, n]));
+  const flowNodes: SceneFlowNode[] = [];
+
+  for (const n of scene.nodes) {
+    // A docked node (any kind) is fully removed from the canvas (mirrors the
+    // legacy scene's own behavior for both ThinkingNode and DocumentNode,
+    // which the legacy code lets dock via the same attachment_kind-routed
+    // mechanism) - not rendered-but-hidden. This check is deliberately
+    // generic rather than "thinking"-only: backend/canvas.py's
+    // setNodeDocked has no kind restriction, and toFlowEdges below already
+    // filters a docked node's edges generically - a kind-specific check here
+    // would leave a docked non-thinking node rendered with no edge to it the
+    // moment any future node type wires up a real onDock action.
+    if (n.isDocked) continue;
     if (n.kind === "chat") {
-      return {
+      // dockedChildren: this chat node's own edges whose target is currently
+      // docked - the new stack's equivalent of the legacy scene's per-node
+      // docked-children list. title is the closest faithful stand-in for a
+      // per-node-type "docked label" concept (none exists in the new stack).
+      const dockedChildren: { id: string; label: string }[] = [];
+      for (const e of scene.edges) {
+        if (e.source !== n.id) continue;
+        const target = nodesById.get(e.target);
+        if (target?.isDocked) dockedChildren.push({ id: target.id, label: target.title });
+      }
+      flowNodes.push({
         id: n.id,
         type: "chat" as const,
         position: { x: n.x, y: n.y },
@@ -75,13 +103,16 @@ function toFlowNodes(scene: SceneState, store: SceneStore): SceneFlowNode[] {
           content: n.content,
           isUser: n.isUser,
           isCollapsed: n.isCollapsed,
+          dockedChildren,
           onToggleCollapse: () => store.setChatCollapsed(n.id, !n.isCollapsed),
           onDelete: () => store.deleteChatNode(n.id),
+          onUndockChild: (childId: string) => store.setNodeDocked(childId, false),
         },
-      };
+      });
+      continue;
     }
     if (n.kind === "code") {
-      return {
+      flowNodes.push({
         id: n.id,
         type: "code" as const,
         position: { x: n.x, y: n.y },
@@ -90,10 +121,11 @@ function toFlowNodes(scene: SceneState, store: SceneStore): SceneFlowNode[] {
           language: n.language,
           onDelete: () => store.removeNodes([n.id]),
         },
-      };
+      });
+      continue;
     }
     if (n.kind === "document") {
-      return {
+      flowNodes.push({
         id: n.id,
         type: "document" as const,
         position: { x: n.x, y: n.y },
@@ -119,21 +151,46 @@ function toFlowNodes(scene: SceneState, store: SceneStore): SceneFlowNode[] {
           // backend doesn't register. See this increment's report for the
           // full reasoning.
           onToggleCollapse: () => store.setChatCollapsed(n.id, !n.isCollapsed),
+          onDock: () => store.setNodeDocked(n.id, true),
           onDelete: () => store.removeNodes([n.id]),
         },
-      };
+      });
+      continue;
     }
-    return {
+    if (n.kind === "thinking") {
+      // Docked-hiding is handled by the generic check above; once undocked,
+      // it resurfaces as a badge + "Reveal Docked Items" entry on its parent
+      // chat node (dockedChildren above).
+      flowNodes.push({
+        id: n.id,
+        type: "thinking" as const,
+        position: { x: n.x, y: n.y },
+        data: {
+          thinkingText: n.content,
+          onDock: () => store.setNodeDocked(n.id, true),
+          onDelete: () => store.removeNodes([n.id]),
+        },
+      });
+      continue;
+    }
+    flowNodes.push({
       id: n.id,
       type: "placeholder" as const,
       position: { x: n.x, y: n.y },
       data: { title: n.title },
-    };
-  });
+    });
+  }
+
+  return flowNodes;
 }
 
 function toFlowEdges(scene: SceneState): Edge[] {
-  return scene.edges.map((e) => ({ id: e.id, source: e.source, target: e.target }));
+  // An edge pointing at a docked node must not render either - mirrors the
+  // legacy connection-item self-suppression when its end node is docked.
+  const dockedNodeIds = new Set(scene.nodes.filter((n) => n.isDocked).map((n) => n.id));
+  return scene.edges
+    .filter((e) => !dockedNodeIds.has(e.target))
+    .map((e) => ({ id: e.id, source: e.source, target: e.target }));
 }
 
 function CanvasInner({ store }: { store: SceneStore }) {
