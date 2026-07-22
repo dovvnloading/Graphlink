@@ -19,6 +19,7 @@ runs.
 
 import logging
 import os
+import signal
 import subprocess
 import shutil
 import sys
@@ -282,6 +283,7 @@ def _require_node_and_npm() -> tuple[str, str]:
     try:
         version_output = subprocess.run(
             [node_path, "--version"], capture_output=True, text=True, check=True,
+            encoding="utf-8", errors="replace",
             timeout=30, **_subprocess_no_window_kwargs(),
         ).stdout.strip()
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
@@ -308,6 +310,50 @@ def _require_node_and_npm() -> tuple[str, str]:
     return node_path, npm_path
 
 
+def _terminate_process_tree(process: subprocess.Popen) -> None:
+    """Kill `process` AND every descendant it spawned.
+
+    `subprocess`'s own kill (what `run(timeout=...)` does internally) signals
+    only the *direct* child. Here that child is `cmd.exe` (npm ships as
+    `npm.CMD`) and the real `node`/vite build is a grandchild that inherited
+    our stdout pipe - so killing just `cmd.exe` leaves `node` running and
+    holding the pipe open, and the post-kill read then blocks forever waiting
+    for an EOF that never comes. That was the whole defect: the timeout never
+    actually bounded launch on Windows. Killing the tree closes the pipe and
+    lets the drain read finish.
+    """
+    if process.poll() is not None:
+        return
+    if sys.platform == "win32":
+        # taskkill /T walks the child tree by parent-PID; /F forces it. Always
+        # present on Windows. CREATE_NO_WINDOW so this cleanup does not itself
+        # flash a console window in a windowed (pythonw) launch.
+        try:
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(process.pid)],
+                capture_output=True, timeout=10,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+            return
+        except (OSError, subprocess.SubprocessError):
+            pass  # fall through to the direct-child best effort below
+    else:
+        # _run_npm starts the child in its own session (start_new_session),
+        # so the whole build tree shares one process group we can signal at
+        # once. getpgid can race the process exiting - treat that as done.
+        try:
+            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+            return
+        except (OSError, ProcessLookupError):
+            pass
+    # Last resort if the tree-kill was unavailable: at least signal the direct
+    # child. Better than nothing, though a grandchild may still linger.
+    try:
+        process.kill()
+    except OSError:
+        pass
+
+
 def _run_npm(
     npm_path: str,
     args: list[str],
@@ -319,35 +365,53 @@ def _run_npm(
     if extra_env:
         env.update(extra_env)
     command = " ".join(["npm", *args])
-    try:
-        subprocess.run(
-            [npm_path, *args], cwd=WEB_UI_DIR, env=env, check=True,
-            capture_output=True, text=True, timeout=timeout_seconds,
-            **_subprocess_no_window_kwargs(),
-        )
-    except subprocess.TimeoutExpired as exc:
-        # Without this, a wedged npm blocked startup forever with no window
-        # and no error. Decode captured output defensively - TimeoutExpired
-        # can carry bytes or None even in text mode.
-        def _as_text(stream) -> str:
-            if stream is None:
-                return ""
-            return stream.decode("utf-8", errors="replace") if isinstance(stream, bytes) else str(stream)
 
+    popen_kwargs = dict(
+        cwd=WEB_UI_DIR, env=env,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        # Decode explicitly as UTF-8: the OS default on Windows is cp1252,
+        # which mojibakes npm's UTF-8 output and can raise an uncaught
+        # UnicodeDecodeError on its undefined bytes - aborting launch with a
+        # bare traceback. errors="replace" keeps the message readable no
+        # matter what npm emits.
+        text=True, encoding="utf-8", errors="replace",
+        **_subprocess_no_window_kwargs(),
+    )
+    if sys.platform != "win32":
+        # Own session/process group so _terminate_process_tree can take down
+        # the whole build tree at once via killpg. On Windows taskkill /T
+        # walks the PID tree directly, so no group is needed there.
+        popen_kwargs["start_new_session"] = True
+
+    process = subprocess.Popen([npm_path, *args], **popen_kwargs)
+    try:
+        stdout, stderr = process.communicate(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired:
+        # This used to be subprocess.run's job, but its timeout kills only the
+        # direct child (cmd.exe) and then re-blocks on the pipe the surviving
+        # node grandchild still holds - so the timeout never fired and launch
+        # hung forever with no window and no error. Kill the entire tree, then
+        # drain with a hard cap so a wedged grandchild can't re-hang the read.
+        _terminate_process_tree(process)
+        try:
+            stdout, stderr = process.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            stdout, stderr = "", ""
         raise FrontendBootstrapError(
             f"`{command}` did not finish within {timeout_seconds}s while building "
             f"Graphlink's frontend in {WEB_UI_DIR} - npm appears hung.\n\n"
             f"Try running the command manually in web_ui/ (deleting node_modules/ "
             f"and re-running often clears a wedged install), or set "
             f"{DEV_MODE_ENV_VAR}=1 to skip build orchestration if you manage the "
-            f"frontend build yourself.\n\n--- partial stdout ---\n{_as_text(exc.stdout)}"
-            f"\n--- partial stderr ---\n{_as_text(exc.stderr)}"
-        ) from exc
-    except subprocess.CalledProcessError as exc:
+            f"frontend build yourself.\n\n--- partial stdout ---\n{stdout or ''}"
+            f"\n--- partial stderr ---\n{stderr or ''}"
+        )
+
+    if process.returncode != 0:
         raise FrontendBootstrapError(
-            f"`{command}` failed (exit code {exc.returncode}) while building Graphlink's "
-            f"frontend in {WEB_UI_DIR}.\n\n--- stdout ---\n{exc.stdout}\n--- stderr ---\n{exc.stderr}"
-        ) from exc
+            f"`{command}` failed (exit code {process.returncode}) while building Graphlink's "
+            f"frontend in {WEB_UI_DIR}.\n\n--- stdout ---\n{stdout or ''}\n--- stderr ---\n{stderr or ''}"
+        )
 
 
 def ensure_frontend_built() -> None:

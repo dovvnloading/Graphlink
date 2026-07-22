@@ -374,14 +374,13 @@ class TestBuildOrchestration:
         assert called["run_npm"] is False
 
     def test_npm_failure_raises_an_actionable_error_with_command_output(self, monkeypatch):
-        monkeypatch.setattr(
-            gfb.subprocess, "run",
-            lambda *a, **k: (_ for _ in ()).throw(
-                subprocess.CalledProcessError(1, ["npm", "run", "build"], output="stdout text", stderr="stderr text")
-            ),
-        )
-        with pytest.raises(gfb.FrontendBootstrapError, match="npm run build"):
+        fake = _FakePopen(returncode=1, stdout="stdout text", stderr="stderr text")
+        monkeypatch.setattr(gfb.subprocess, "Popen", lambda *a, **k: fake)
+        with pytest.raises(gfb.FrontendBootstrapError, match="npm run build") as exc_info:
             gfb._run_npm("npm", ["run", "build"])
+        message = str(exc_info.value)
+        assert "exit code 1" in message
+        assert "stdout text" in message and "stderr text" in message
 
 
 class TestGraphlinkAppBootstrapFailureWiring:
@@ -426,3 +425,139 @@ class TestGraphlinkAppBootstrapFailureWiring:
         )
         assert "Node.js was not found" in str(calls[0][1])
         assert "Node.js was not found" in calls[1][1][2]  # QMessageBox.critical(parent, title, text)
+
+
+class _FakePopen:
+    """Deterministic subprocess.Popen stand-in for _run_npm control-flow tests.
+
+    Real Popen sets .returncode after communicate(); this mirrors that and can
+    be told to raise TimeoutExpired on the first and/or second communicate() so
+    the timeout -> tree-kill -> drain path is exercised without a real
+    subprocess.
+    """
+
+    def __init__(self, *, returncode=0, stdout="", stderr="",
+                 timeout_first=False, timeout_second=False):
+        self.pid = 424242
+        self.returncode = returncode
+        self._stdout = stdout
+        self._stderr = stderr
+        self._timeout_first = timeout_first
+        self._timeout_second = timeout_second
+        self._calls = 0
+
+    def communicate(self, timeout=None):
+        self._calls += 1
+        if self._calls == 1 and self._timeout_first:
+            raise subprocess.TimeoutExpired(cmd="npm", timeout=timeout)
+        if self._calls == 2 and self._timeout_second:
+            raise subprocess.TimeoutExpired(cmd="npm", timeout=timeout)
+        return self._stdout, self._stderr
+
+    def poll(self):
+        return self.returncode
+
+
+class TestRunNpm:
+    """_run_npm's timeout is the fix for the launch hang: subprocess.run's own
+    timeout killed only the direct child (cmd.exe, since npm is npm.CMD) and
+    then re-blocked on the pipe the surviving node grandchild still held, so it
+    never fired. These pin the corrected control flow."""
+
+    def test_success_returns_none(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(gfb, "WEB_UI_DIR", tmp_path)
+        monkeypatch.setattr(gfb.subprocess, "Popen", lambda *a, **k: _FakePopen(returncode=0))
+        assert gfb._run_npm("npm", ["run", "build"]) is None
+
+    def test_timeout_kills_the_whole_tree_and_raises_instead_of_hanging(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(gfb, "WEB_UI_DIR", tmp_path)
+        fake = _FakePopen(timeout_first=True, stdout="partial-out", stderr="partial-err")
+        monkeypatch.setattr(gfb.subprocess, "Popen", lambda *a, **k: fake)
+        killed = []
+        monkeypatch.setattr(gfb, "_terminate_process_tree", lambda p: killed.append(p))
+        with pytest.raises(gfb.FrontendBootstrapError, match="did not finish within 1s") as exc_info:
+            gfb._run_npm("npm", ["run", "build"], timeout_seconds=1)
+        assert killed == [fake], "the whole process tree must be killed on timeout, not just cmd.exe"
+        message = str(exc_info.value)
+        assert "partial-out" in message and "partial-err" in message
+
+    def test_timeout_still_raises_when_the_drain_read_also_hangs(self, monkeypatch, tmp_path):
+        # Belt-and-suspenders: even if the post-kill drain times out too,
+        # _run_npm must raise the actionable error, never propagate a raw
+        # TimeoutExpired or block indefinitely on the second read.
+        monkeypatch.setattr(gfb, "WEB_UI_DIR", tmp_path)
+        fake = _FakePopen(timeout_first=True, timeout_second=True)
+        monkeypatch.setattr(gfb.subprocess, "Popen", lambda *a, **k: fake)
+        monkeypatch.setattr(gfb, "_terminate_process_tree", lambda p: None)
+        with pytest.raises(gfb.FrontendBootstrapError, match="npm appears hung"):
+            gfb._run_npm("npm", ["run", "build"], timeout_seconds=1)
+
+    def test_nonzero_exit_raises_with_command_and_output(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(gfb, "WEB_UI_DIR", tmp_path)
+        fake = _FakePopen(returncode=2, stdout="out-x", stderr="err-y")
+        monkeypatch.setattr(gfb.subprocess, "Popen", lambda *a, **k: fake)
+        with pytest.raises(gfb.FrontendBootstrapError, match="npm ci") as exc_info:
+            gfb._run_npm("npm", ["ci"])
+        message = str(exc_info.value)
+        assert "exit code 2" in message
+        assert "out-x" in message and "err-y" in message
+
+    def test_output_is_decoded_as_utf8_not_the_windows_default_codec(self, monkeypatch, tmp_path):
+        # text=True with no encoding decodes as cp1252 on Windows, which raises
+        # UnicodeDecodeError on its undefined bytes (0x81/0x8d/...) - a bare
+        # traceback that aborts launch. A real subprocess emits exactly those
+        # bytes; _run_npm must decode them (replacement chars) and raise the
+        # actionable error rather than crash on the decode.
+        monkeypatch.setattr(gfb, "WEB_UI_DIR", tmp_path)
+        script = (
+            "import sys; "
+            "sys.stdout.buffer.write(b'\\x81\\x8d cafe \\xe2\\x9c\\x93'); "
+            "sys.stdout.flush(); sys.exit(3)"
+        )
+        with pytest.raises(gfb.FrontendBootstrapError, match="exit code 3"):
+            gfb._run_npm(sys.executable, ["-c", script])
+
+
+class TestTerminateProcessTree:
+    def test_kills_grandchildren_not_just_the_direct_child(self, tmp_path):
+        # The crux of the launch-hang fix: killing the direct child is not
+        # enough - the grandchild (real npm's node process) must die too, or it
+        # keeps the stdout pipe open and the drain read blocks forever. A parent
+        # spawns a grandchild that writes a "finished" marker after a short
+        # sleep; a correct tree-kill prevents that marker from ever appearing.
+        started = tmp_path / "gc_started"
+        finished = tmp_path / "gc_finished"
+        grandchild = (
+            "import sys, time, pathlib; "
+            "pathlib.Path(sys.argv[1]).write_text('x'); "
+            "time.sleep(3); "
+            "pathlib.Path(sys.argv[2]).write_text('x')"
+        )
+        parent = (
+            "import subprocess, sys, time; "
+            "subprocess.Popen([sys.executable, '-c', sys.argv[1], sys.argv[2], sys.argv[3]]); "
+            "time.sleep(30)"
+        )
+        popen_kwargs = {}
+        if sys.platform != "win32":
+            # Mirror _run_npm: own session so killpg reaches the whole tree.
+            popen_kwargs["start_new_session"] = True
+        proc = subprocess.Popen(
+            [sys.executable, "-c", parent, grandchild, str(started), str(finished)],
+            **popen_kwargs,
+        )
+        try:
+            deadline = time.time() + 10
+            while not started.exists() and time.time() < deadline:
+                time.sleep(0.05)
+            assert started.exists(), "grandchild never started; test setup failed"
+
+            gfb._terminate_process_tree(proc)
+            proc.wait(timeout=10)
+
+            # Well past when a surviving grandchild would have written its
+            # marker (it sleeps 3s; we killed it within ~0.2s of its start).
+            time.sleep(5)
+            assert not finished.exists(), "grandchild survived the tree-kill (its pipe would hang launch)"
+        finally:
+            gfb._terminate_process_tree(proc)
