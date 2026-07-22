@@ -22,6 +22,8 @@ as disabled controls with an explicit R6 label rather than faking them.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import sqlite3
 from datetime import datetime
 from pathlib import Path
@@ -71,7 +73,10 @@ def _ensure_chats_table(conn: sqlite3.Connection) -> None:
 
 
 def get_all_chats(db_path: Path) -> list[dict[str, Any]]:
-    with _connect(db_path) as conn:
+    # closing() + the connection's own transaction context: sqlite3's
+    # `with conn:` commits/rolls back but does NOT close the connection -
+    # without closing() the handle would linger until garbage collection.
+    with contextlib.closing(_connect(db_path)) as conn, conn:
         _ensure_chats_table(conn)
         rows = conn.execute(
             "SELECT id, title, created_at, updated_at FROM chats ORDER BY updated_at DESC"
@@ -88,7 +93,7 @@ def get_all_chats(db_path: Path) -> list[dict[str, Any]]:
 
 
 def rename_chat(db_path: Path, chat_id: int, new_title: str) -> None:
-    with _connect(db_path) as conn:
+    with contextlib.closing(_connect(db_path)) as conn, conn:
         _ensure_chats_table(conn)
         conn.execute(
             "UPDATE chats SET title = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
@@ -97,7 +102,7 @@ def rename_chat(db_path: Path, chat_id: int, new_title: str) -> None:
 
 
 def delete_chat(db_path: Path, chat_id: int) -> None:
-    with _connect(db_path) as conn:
+    with contextlib.closing(_connect(db_path)) as conn, conn:
         _ensure_chats_table(conn)
         conn.execute("DELETE FROM chats WHERE id = ?", (chat_id,))
 
@@ -120,6 +125,13 @@ def register_chat_library(bus: SessionBus, db_path: Path | None = None) -> None:
 
     bus.register_topic("app-chat-library", lambda: chat_library_payload(resolved_path))
 
+    # Writes run in worker threads (asyncio.to_thread) so a slow disk/WAL
+    # commit never stalls the event loop. No Python-side lock is needed:
+    # each call opens, uses, and closes its own connection inside one thread
+    # (satisfying check_same_thread), and sqlite's file locking (timeout=30
+    # in _connect) serializes concurrent writers. The topic builder's read
+    # stays on the loop - a few-row SELECT, negligible.
+
     async def rename(chat_id: int, new_title: str):
         # Non-empty guard matches the legacy `if ok and new_title:` - an
         # empty/whitespace title is ignored, no mutation, no error (the SPA
@@ -127,13 +139,13 @@ def register_chat_library(bus: SessionBus, db_path: Path | None = None) -> None:
         title = str(new_title or "").strip()
         if not title:
             return
-        rename_chat(resolved_path, int(chat_id), title)
+        await asyncio.to_thread(rename_chat, resolved_path, int(chat_id), title)
         await bus.publish("app-chat-library")
 
     async def delete(chat_id: int):
         # The SPA only calls this after its own two-step confirm, so no
         # confirmation happens here - same contract as the legacy bridge.
-        delete_chat(resolved_path, int(chat_id))
+        await asyncio.to_thread(delete_chat, resolved_path, int(chat_id))
         await bus.publish("app-chat-library")
 
     bus.register_intent("app-chat-library", "renameChat", rename)

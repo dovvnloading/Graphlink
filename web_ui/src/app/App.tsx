@@ -1,5 +1,7 @@
 import { ReactFlowProvider } from "@xyflow/react";
 import { useEffect, useMemo, useState } from "react";
+import { TOPIC_VALIDATORS } from "../lib/api-contract/topics";
+import type { AppSettingsState } from "../lib/bridge-core/generated/app-settings-state";
 import { ConnectionStatus, WsTransport, defaultWsUrl } from "../lib/ws/transport";
 import { SceneCanvas } from "./canvas/SceneCanvas";
 import { SceneStore } from "./canvas/sceneStore";
@@ -81,7 +83,15 @@ function App() {
       setSystem(payload as SystemState);
     });
     const offSettings = transport.subscribe("app-settings", (payload) => {
-      setSettingsVisibility(payload as SettingsVisibilityState);
+      // Same validate-before-trust discipline as every other subscriber -
+      // this one only reads a single boolean, but an unvalidated cast here
+      // was the one inconsistent gap in the pattern.
+      const validated = TOPIC_VALIDATORS["app-settings"](payload);
+      if (validated.ok) {
+        setSettingsVisibility({ showTokenCounter: (validated.value as AppSettingsState).showTokenCounter });
+      } else {
+        console.error("[app-settings] rejected snapshot:", validated.errors);
+      }
     });
     sceneStore.connect();
     composerStore.connect();

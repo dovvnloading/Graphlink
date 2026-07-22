@@ -25,11 +25,28 @@ independently and stomp on each other's in-memory copy.
 
 from __future__ import annotations
 
-from typing import Any
+import asyncio
+import threading
+from typing import Any, Callable
 
 from graphlink_licensing import SettingsManager
 
 from backend.events import SessionBus
+
+# Every persistence-touching mutation runs in a worker thread
+# (asyncio.to_thread) so SettingsManager._save_state's json-dump + fsync +
+# atomic-replace never stalls the event loop (and with it, every session's
+# WS traffic). The manager's mutations are unsynchronized read-modify-writes
+# on shared state, so this lock restores the serialization that running them
+# on the single-threaded loop used to provide for free. Module-level rather
+# than per-manager: a real process has exactly one manager, and the
+# throwaway managers tests create can share it harmlessly.
+_manager_lock = threading.Lock()
+
+
+def _apply(mutation: Callable[..., None], *args: Any) -> None:
+    with _manager_lock:
+        mutation(*args)
 
 
 def settings_payload(manager: SettingsManager) -> dict[str, Any]:
@@ -60,28 +77,34 @@ def register_settings(bus: SessionBus, manager: SettingsManager) -> None:
         active_section["value"] = str(section)
         await bus.publish("app-settings")
 
+    # The topic builder (read path) stays on the loop, unlocked: field reads
+    # are GIL-atomic, and every mutation republishes on completion, so a
+    # snapshot that races a write is immediately superseded by a settled one.
+
     async def set_theme(theme: str):
-        manager.set_theme(str(theme))
+        await asyncio.to_thread(_apply, manager.set_theme, str(theme))
         await bus.publish("app-settings")
 
     async def set_show_token_counter(enabled: bool):
-        manager.set_show_token_counter(bool(enabled))
+        await asyncio.to_thread(_apply, manager.set_show_token_counter, bool(enabled))
         await bus.publish("app-settings")
 
     async def set_enable_system_prompt(enabled: bool):
-        manager.set_enable_system_prompt(bool(enabled))
+        await asyncio.to_thread(_apply, manager.set_enable_system_prompt, bool(enabled))
         await bus.publish("app-settings")
 
     async def set_notification_preference(notification_type: str, enabled: bool):
-        manager.set_notification_preferences({str(notification_type): bool(enabled)})
+        await asyncio.to_thread(
+            _apply, manager.set_notification_preferences, {str(notification_type): bool(enabled)}
+        )
         await bus.publish("app-settings")
 
     async def set_github_token(token: str):
-        manager.set_github_token(str(token))
+        await asyncio.to_thread(_apply, manager.set_github_token, str(token))
         await bus.publish("app-settings")
 
     async def clear_github_token():
-        manager.set_github_token("")
+        await asyncio.to_thread(_apply, manager.set_github_token, "")
         await bus.publish("app-settings")
 
     bus.register_intent("app-settings", "setActiveSection", set_active_section)
