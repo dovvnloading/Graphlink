@@ -43,9 +43,24 @@ def test_settings_payload_reflects_real_manager_defaults(manager):
 
 
 def test_settings_never_imports_qt():
-    import sys
+    # A plain `assert "PySide6" not in sys.modules` is only meaningful in a
+    # process where nothing else has imported PySide6 - running under the
+    # full repo-wide pytest suite (alongside graphlink_app/tests' real Qt
+    # widget tests), sys.modules is already contaminated regardless of what
+    # this module itself imports. Only a fresh subprocess importing ONLY
+    # backend.settings actually answers "does this transitively pull in Qt".
+    import subprocess
+    import sys as _sys
+    from pathlib import Path
 
-    assert "PySide6" not in sys.modules
+    repo_root = Path(__file__).resolve().parents[2]
+    result = subprocess.run(
+        [_sys.executable, "-c", "import backend.settings, sys; assert 'PySide6' not in sys.modules"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_register_settings_publishes_active_section_alongside_manager_state(manager):

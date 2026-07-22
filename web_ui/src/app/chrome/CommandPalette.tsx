@@ -51,9 +51,15 @@ export function CommandPalette({ store }: { store: SceneStore }) {
   if (!isOpen) return null;
 
   function execute(id: string) {
+    // Close the palette FIRST, then run the command. The overlay system is
+    // single-open: closing sets openSurface to null, so if the command's
+    // own effect is to open a different surface (e.g. "Open Settings"),
+    // that open() call - which runs second - is the one that wins. Doing
+    // it in the other order let close() always run last and silently
+    // undo whatever the command had just opened.
     const command = commands.find((c) => c.id === id);
-    command?.run();
     overlays.close();
+    command?.run();
   }
 
   function onKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {

@@ -24,6 +24,11 @@ function OpenPaletteButton() {
   );
 }
 
+function AboutOpenProbe() {
+  const overlays = useOverlays();
+  return <span data-testid="about-open">{String(overlays.isOpen("about"))}</span>;
+}
+
 function setup() {
   const user = userEvent.setup();
   const store = makeStore();
@@ -31,6 +36,7 @@ function setup() {
     <OverlayProvider>
       <ReactFlowProvider>
         <OpenPaletteButton />
+        <AboutOpenProbe />
         {/* @ts-expect-error - test double */}
         <CommandPalette store={store} />
       </ReactFlowProvider>
@@ -66,5 +72,19 @@ describe("CommandPalette", () => {
     // "Zoom In" then "Zoom Out" per the registry order.
     await user.keyboard("{ArrowDown}{Enter}");
     expect(screen.queryByLabelText("Search commands")).toBeNull();
+  });
+
+  it("executing an 'open X' command leaves that surface open, not just closed", async () => {
+    // Regression: execute() used to call command.run() (which opens the
+    // target overlay) THEN overlays.close() unconditionally - since the
+    // overlay system is single-open, that close() always won and silently
+    // undid the open. Every "Open ..." command was affected.
+    const user = setup();
+    expect(screen.getByTestId("about-open")).toHaveTextContent("false");
+    await user.click(screen.getByText("open palette"));
+    await user.type(screen.getByLabelText("Search commands"), "About");
+    await user.click(screen.getByText("Open About"));
+    expect(screen.queryByLabelText("Search commands")).toBeNull();
+    expect(screen.getByTestId("about-open")).toHaveTextContent("true");
   });
 });

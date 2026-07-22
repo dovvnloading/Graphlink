@@ -97,9 +97,26 @@ def test_chat_library_payload_shape(db_path):
 
 
 def test_chat_library_never_imports_qt():
-    import sys
+    # A plain `assert "PySide6" not in sys.modules` is only meaningful in a
+    # process where nothing else has imported PySide6 - running under the
+    # full repo-wide pytest suite (alongside graphlink_app/tests' real Qt
+    # widget tests), sys.modules is already contaminated regardless of what
+    # this module itself imports. Only a fresh subprocess importing ONLY
+    # backend.chat_library actually answers "does this transitively pull in
+    # Qt" - exactly the graphlink_session/__init__.py hazard this module's
+    # own docstring exists to route around.
+    import subprocess
+    import sys as _sys
+    from pathlib import Path
 
-    assert "PySide6" not in sys.modules
+    repo_root = Path(__file__).resolve().parents[2]
+    result = subprocess.run(
+        [_sys.executable, "-c", "import backend.chat_library, sys; assert 'PySide6' not in sys.modules"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_register_chat_library_publishes_on_the_app_chat_library_topic(db_path):
