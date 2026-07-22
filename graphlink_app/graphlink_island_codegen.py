@@ -474,6 +474,53 @@ GENERATED_ARTIFACTS = [
 ]
 
 
+_API_CONTRACT_PATH = _REPO_ROOT / "web_ui" / "src" / "lib" / "api-contract" / "topics.ts"
+
+
+def api_contract_ts() -> str:
+    """Qt-removal plan R0 (doc/QT_REMOVAL_PLAN.md): the single-SPA API
+    contract, derived from the SAME registry as the per-island artifacts.
+
+    The SPA consumes state over one WebSocket instead of nineteen
+    QWebChannels, so it needs one place answering "which topics exist, what
+    type does each carry, and how do I validate a payload at runtime" - this
+    barrel maps topic names (the island names, unchanged, so backend topics
+    and frontend subscriptions agree by construction) onto the already-
+    generated types and validators. Topics gain entries here automatically
+    when their payload joins GENERATED_ARTIFACTS; nothing is hand-maintained.
+    """
+    entries = []
+    for entry in GENERATED_ARTIFACTS:
+        stem = entry["ts_path"].stem  # e.g. "grid-control-state"
+        topic = stem.removesuffix("-state")  # topic name == island name
+        title = entry["title"]  # e.g. "GridControlState"
+        entries.append((topic, stem, title))
+    entries.sort()
+
+    lines = [
+        _HEADER.format(source="graphlink_app/graphlink_island_codegen.py::GENERATED_ARTIFACTS"),
+        "",
+    ]
+    for topic, stem, title in entries:
+        lines.append(
+            f'import {{ type {title}, validate{title} }} from "../bridge-core/generated/{stem}";'
+        )
+    lines.append("")
+    lines.append("export const TOPIC_VALIDATORS = {")
+    for topic, _stem, title in entries:
+        lines.append(f'  "{topic}": validate{title},')
+    lines.append("} as const;")
+    lines.append("")
+    lines.append("export type TopicName = keyof typeof TOPIC_VALIDATORS;")
+    lines.append("")
+    lines.append("export interface TopicStates {")
+    for topic, _stem, title in entries:
+        lines.append(f'  "{topic}": {title};')
+    lines.append("}")
+    lines.append("")
+    return "\n".join(lines)
+
+
 def _main(argv: list[str]) -> int:
     """CLI entry point: `python graphlink_island_codegen.py [--check | --write]`.
 
@@ -528,9 +575,18 @@ def _main(argv: list[str]) -> int:
             if checked_in != fresh:
                 stale.append(f"{path} does not match regenerating it from {entry['source']}")
 
+    fresh_contract = api_contract_ts()
     if mode == "--write":
-        print(f"wrote {len(GENERATED_ARTIFACTS) * 2} generated file(s)")
+        if not _API_CONTRACT_PATH.is_file() or _API_CONTRACT_PATH.read_text(encoding="utf-8") != fresh_contract:
+            _API_CONTRACT_PATH.parent.mkdir(parents=True, exist_ok=True)
+            _API_CONTRACT_PATH.write_text(fresh_contract, encoding="utf-8", newline="\n")
+        print(f"wrote {len(GENERATED_ARTIFACTS) * 2 + 1} generated file(s)")
         return 0
+
+    if not _API_CONTRACT_PATH.is_file():
+        stale.append(f"{_API_CONTRACT_PATH} is missing")
+    elif _API_CONTRACT_PATH.read_text(encoding="utf-8") != fresh_contract:
+        stale.append(f"{_API_CONTRACT_PATH} does not match regenerating it from GENERATED_ARTIFACTS")
 
     if stale:
         print("Generated wire-contract artifacts are stale:", file=sys.stderr)

@@ -1,0 +1,6 @@
+{
+  "comment": "Qt-removal burn-down pin (doc/QT_REMOVAL_PLAN.md section 3). The number of Python files importing PySide6/PyQt anywhere in the repo, source AND tests. tests/test_no_qt_anywhere.py fails if the real count deviates from this pin in EITHER direction: an increase is a regression toward Qt; a decrease means Qt files were removed and this pin must be lowered in the same commit (the ledger in the plan doc records each drop). The project is done when this reads 0 and PySide6 is uninstalled.",
+  "source_files": 90,
+  "test_files": 78,
+  "total": 168
+}

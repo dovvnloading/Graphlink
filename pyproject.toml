@@ -12,6 +12,12 @@ requires-python = ">=3.10"
 dependencies = [
     "anthropic",
     "beautifulsoup4",
+    # Qt-removal target architecture (doc/QT_REMOVAL_PLAN.md): Python backend
+    # + native pywebview shell. PySide6/qtawesome below are scheduled for
+    # REMOVAL at the R7 cutover - do not add new Qt dependencies.
+    "fastapi",
+    "uvicorn",
+    "pywebview",
     "ddgs",
     "Markdown",
     "matplotlib",
