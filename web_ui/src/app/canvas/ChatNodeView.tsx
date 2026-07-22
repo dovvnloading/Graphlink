@@ -10,8 +10,20 @@ import { LOD_ZOOM_THRESHOLD } from "./canvasConstants";
  * a single message-bubble card, push-only (content arrives via the scene
  * document, never generated here). Real: render, collapse/expand, delete
  * (with the backend's reparent-children rule), copy. Deferred, with an
- * honest disabled+title label rather than a fake action: Regenerate (needs
- * the R4 agent layer) and Export (R6 session/export work).
+ * honest disabled+title label rather than a fake action or a silent drop
+ * (an R3.4 live-drive audit found several legacy ChatNode menu items had
+ * been dropped with zero acknowledgment - fixed here): Regenerate (assistant
+ * nodes only, needs the R4 agent layer), Key Takeaway/Explainer Note/Chart/
+ * Image generation (R4, same agent-layer blocker), Export (R6 session/export
+ * work), Open Document View (the document-viewer island isn't wired into the
+ * SPA overlay system yet), and Hide Other Branches (the legacy scene's
+ * branch-visibility toggle has no backend/frontend equivalent at all yet -
+ * unscoped, not owned by any R-phase). Two legacy items are deliberately NOT
+ * listed even as disabled: "Reveal Docked Items" and "Generate Group Summary"
+ * are themselves conditionally hidden in the legacy menu (only when docked
+ * children or a multi-selection exist), and neither precondition can occur
+ * yet in the new stack (no docking, no multi-select model) - showing them
+ * unconditionally would be a behavior regression, not parity.
  */
 
 export interface ChatNodeData extends Record<string, unknown> {
@@ -32,6 +44,7 @@ interface MenuPosition {
 function ChatNodeMenu({
   position,
   content,
+  isUser,
   isCollapsed,
   onToggleCollapse,
   onDelete,
@@ -39,6 +52,7 @@ function ChatNodeMenu({
 }: {
   position: MenuPosition;
   content: string;
+  isUser: boolean;
   isCollapsed: boolean;
   onToggleCollapse: () => void;
   onDelete: () => void;
@@ -90,11 +104,26 @@ function ChatNodeMenu({
       >
         {isCollapsed ? "Expand" : "Collapse"}
       </button>
-      <button type="button" role="menuitem" disabled title="Agent regeneration lands in R4">
-        Regenerate Response
-      </button>
       <button type="button" role="menuitem" disabled title="Export lands in R6">
         Export
+      </button>
+      <button type="button" role="menuitem" disabled title="Branch visibility isn't built yet">
+        Hide Other Branches
+      </button>
+      <button type="button" role="menuitem" disabled title="Document view integration isn't wired into the SPA yet">
+        Open Document View
+      </button>
+      <button type="button" role="menuitem" disabled title="AI generation lands in R4">
+        Generate Key Takeaway
+      </button>
+      <button type="button" role="menuitem" disabled title="AI generation lands in R4">
+        Generate Explainer Note
+      </button>
+      <button type="button" role="menuitem" disabled title="AI generation lands in R4">
+        Generate Chart
+      </button>
+      <button type="button" role="menuitem" disabled title="AI generation lands in R4">
+        Generate Image
       </button>
       <button
         type="button"
@@ -107,6 +136,11 @@ function ChatNodeMenu({
       >
         Delete Node
       </button>
+      {!isUser && (
+        <button type="button" role="menuitem" disabled title="Agent regeneration lands in R4">
+          Regenerate Response
+        </button>
+      )}
     </div>
   );
 }
@@ -149,6 +183,7 @@ export function ChatNodeView({ data, selected }: NodeProps<ChatFlowNode>) {
         <ChatNodeMenu
           position={menuPosition}
           content={data.content}
+          isUser={data.isUser}
           isCollapsed={data.isCollapsed}
           onToggleCollapse={data.onToggleCollapse}
           onDelete={data.onDelete}

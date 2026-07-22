@@ -59,6 +59,9 @@ describe("CodeNodeView", () => {
     const exportItem = screen.getByRole("menuitem", { name: "Export" });
     expect(exportItem).toBeDisabled();
     expect(exportItem).toHaveAttribute("title", "Export lands in R6");
+    const hideBranches = screen.getByRole("menuitem", { name: "Hide Other Branches" });
+    expect(hideBranches).toBeDisabled();
+    expect(hideBranches).toHaveAttribute("title", "Branch visibility isn't built yet");
 
     await user.click(screen.getByRole("menuitem", { name: "Copy Code" }));
     expect(writeText).toHaveBeenCalledWith("def add(a, b):\n    return a + b");
