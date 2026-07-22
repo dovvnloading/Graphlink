@@ -62,6 +62,29 @@
           "filePath": {
             "type": "string"
           },
+          "history": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "content": {
+                  "type": "string"
+                },
+                "role": {
+                  "enum": [
+                    "user",
+                    "assistant"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "role",
+                "content"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
           "id": {
             "type": "string"
           },
@@ -115,7 +138,8 @@
           "mimeType",
           "previewLabel",
           "isDocked",
-          "imageAssetId"
+          "imageAssetId",
+          "history"
         ],
         "type": "object"
       },

@@ -2391,3 +2391,126 @@ body,
   font-size: 11px;
   color: var(--gl-surface-text-muted);
 }
+
+/* -- R3.25/R3.26 conversation node ------------------------------------------ */
+
+.conversation-node {
+  width: 420px;
+  max-height: 640px;
+  min-height: 110px;
+}
+
+.conversation-node.collapsed {
+  width: 290px;
+  min-height: 58px;
+}
+
+.conversation-node-content {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 560px;
+}
+
+/* The scrollable message list - only this scrolls, not the input row below
+   it (unlike every scalar-content sibling's single `-content` block, this
+   node's body is two stacked regions: a growing list, then a fixed input
+   row that must stay put). */
+.conversation-node-messages {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* Per-message bubble - the role modifier reuses ChatNodeView's own
+   `.chat-node.user` token (var(--gl-neutral-button-hover)), applied here per
+   bubble instead of per node: ConversationNode is the only R3 kind shaped
+   like a message list rather than one flat text block. */
+.conversation-node-bubble {
+  padding: 8px 10px;
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 8px;
+  background-color: var(--gl-surface-inset, var(--gl-surface-window));
+}
+
+.conversation-node-bubble.user {
+  background-color: var(--gl-neutral-button-hover);
+}
+
+/* Reuses .chat-node-content's full markdown-body rule set (headings, lists,
+   code, tables, hljs) verbatim rather than duplicating it - the same
+   shared-class convention .chat-node-menu already establishes across every
+   sibling node's context menu, applied here to markdown styling instead.
+   Only overrides the max-height/overflow-y a single bubble should never
+   take on its own - the message LIST scrolls (.conversation-node-messages
+   above), not each bubble individually. */
+.conversation-node-bubble-content {
+  max-height: none;
+  overflow: visible;
+}
+
+.conversation-node-input-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.conversation-node-input {
+  box-sizing: border-box;
+  width: 100%;
+  resize: none;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 8px 10px;
+  color: var(--gl-surface-text);
+  background-color: var(--gl-surface-inset, var(--gl-surface-window));
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 6px;
+}
+
+.conversation-node-input:focus {
+  outline: none;
+  border-color: var(--gl-surface-text-muted);
+}
+
+.conversation-node-input-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.conversation-node-send-btn,
+.conversation-node-cancel-btn {
+  font-size: 11px;
+  font-weight: 600;
+  font-family: inherit;
+  padding: 5px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.conversation-node-send-btn {
+  color: var(--gl-surface-window);
+  background-color: var(--gl-surface-text-muted);
+  border: none;
+}
+
+.conversation-node-send-btn:hover:enabled {
+  filter: brightness(1.1);
+}
+
+.conversation-node-send-btn:disabled,
+.conversation-node-cancel-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.conversation-node-cancel-btn {
+  color: var(--gl-surface-text);
+  background-color: var(--gl-neutral-button-background);
+  border: 1px solid var(--gl-neutral-button-border);
+}

@@ -42,6 +42,7 @@ function validScenePayload(overrides: Record<string, unknown> = {}) {
         previewLabel: "",
         isDocked: false,
         imageAssetId: "",
+        history: [],
       },
     ],
     edges: [],
@@ -221,6 +222,21 @@ describe("SceneStore", () => {
         intent: "addImageNode",
         args: [30, 40, "base64bytes2==", "a mountain lake", "n1", "image/jpeg"],
       },
+    ]);
+  });
+
+  it("sends conversation-node intents with the backend's registered names and shapes", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.addConversationNode(10, 20, "n1");
+    store.sendConversationMessage("n2", "hello there");
+    store.appendConversationAssistantMessage("n2", "hi back");
+    store.deleteConversationMessage("n2", 0);
+    expect(intents).toEqual([
+      { topic: "scene", intent: "addConversationNode", args: [10, 20, "n1"] },
+      { topic: "scene", intent: "sendConversationMessage", args: ["n2", "hello there"] },
+      { topic: "scene", intent: "appendConversationAssistantMessage", args: ["n2", "hi back"] },
+      { topic: "scene", intent: "deleteConversationMessage", args: ["n2", 0] },
     ]);
   });
 

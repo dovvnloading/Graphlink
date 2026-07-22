@@ -236,6 +236,40 @@ export class SceneStore {
     this.transport.intent("scene", "addImageNode", [x, y, imageBytesBase64, prompt, parentId, mimeType]);
   }
 
+  // R3.25/R3.26: real conversation nodes - the only R3 kind shaped like a
+  // growing message LIST (data.history) rather than one scalar content
+  // field. addConversationNode has no real UI creation trigger yet, same
+  // posture as addThinkingNode/addHtmlNode/addImageNode before it. Deletion
+  // has no dedicated intent (a conversation node is never a branch
+  // point/reparented, so the generic removeNodes intent below already
+  // covers it, same as code/thinking/html/image); collapse reuses the
+  // existing generic setChatCollapsed intent below (see its own comment)
+  // rather than inventing a setConversationCollapsed the backend doesn't
+  // register.
+  addConversationNode(x: number, y: number, parentId: string): void {
+    this.transport.intent("scene", "addConversationNode", [x, y, parentId]);
+  }
+
+  // sendConversationMessage appends a real user message AND triggers the
+  // existing app-wide deferred notification ("AI response generation lands
+  // in R4.") over the same notification WS topic the Composer/ChatNode's
+  // own sendMessage already flows through - nothing new to wire on the
+  // frontend for that half of it.
+  sendConversationMessage(id: string, text: string): void {
+    this.transport.intent("scene", "sendConversationMessage", [id, text]);
+  }
+
+  // No live caller yet this increment (same posture as addThinkingNode when
+  // it first landed) - exists so the intent shape is testable now. Will
+  // back the real agent reply once R4's agent layer can call it.
+  appendConversationAssistantMessage(id: string, text: string): void {
+    this.transport.intent("scene", "appendConversationAssistantMessage", [id, text]);
+  }
+
+  deleteConversationMessage(id: string, messageIndex: number): void {
+    this.transport.intent("scene", "deleteConversationMessage", [id, messageIndex]);
+  }
+
   setNodeDocked(id: string, docked: boolean): void {
     this.transport.intent("scene", "setNodeDocked", [id, docked]);
   }

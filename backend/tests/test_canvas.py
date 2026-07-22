@@ -636,6 +636,265 @@ def test_add_image_node_intent_creates_a_real_node_and_publishes():
     asyncio.run(run())
 
 
+# -- R3.25: conversation nodes -----------------------------------------------
+
+
+def test_add_conversation_node_creates_a_real_conversation_kind_node():
+    doc = SceneDocument()
+    parent = doc.add_chat_node(0, 0, "let's have a back-and-forth", True)
+    node = doc.add_conversation_node(10, 20, parent.id)
+    assert node.kind == "conversation"
+    assert node.title == "Conversation"
+    assert node.history == []
+    assert any(e.source == parent.id and e.target == node.id for e in doc.edges.values())
+
+
+def test_add_conversation_node_title_never_changes_after_messages_are_appended():
+    # Unlike every scalar-content kind before it (chat/thinking/html/image all
+    # preview their own text), a conversation node's title is a fixed literal
+    # - there is no natural single preview string for a growing message list.
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_conversation_node(0, 0, parent.id)
+    doc.append_conversation_user_message(node.id, "hello there, a whole essay of text")
+    doc.append_conversation_assistant_message(node.id, "a long reply that would have been truncated as a title")
+    assert node.title == "Conversation"
+
+
+def test_add_conversation_node_rejects_unknown_parent():
+    doc = SceneDocument()
+    with pytest.raises(SceneError):
+        doc.add_conversation_node(0, 0, "ghost")
+
+
+def test_add_conversation_node_requires_a_parent_id():
+    # Same as add_document_node/add_thinking_node/add_html_node/
+    # add_image_node - parent_id has no default in add_conversation_node's
+    # signature, so calling without one is a TypeError (missing required
+    # argument), not a SceneError.
+    doc = SceneDocument()
+    with pytest.raises(TypeError):
+        doc.add_conversation_node(0, 0)
+
+
+def test_append_conversation_user_message_appends_role_and_content():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_conversation_node(0, 0, parent.id)
+    returned = doc.append_conversation_user_message(node.id, "hi there")
+    assert returned is node
+    assert node.history == [{"role": "user", "content": "hi there"}]
+
+
+def test_append_conversation_assistant_message_appends_role_and_content():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_conversation_node(0, 0, parent.id)
+    returned = doc.append_conversation_assistant_message(node.id, "hello, how can I help?")
+    assert returned is node
+    assert node.history == [{"role": "assistant", "content": "hello, how can I help?"}]
+
+
+def test_append_conversation_message_unknown_node_raises():
+    doc = SceneDocument()
+    with pytest.raises(SceneError):
+        doc.append_conversation_user_message("ghost", "hi")
+    with pytest.raises(SceneError):
+        doc.append_conversation_assistant_message("ghost", "hi")
+
+
+def test_send_conversation_message_is_equivalent_to_append_conversation_user_message():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_conversation_node(0, 0, parent.id)
+    returned = doc.send_conversation_message(node.id, "what's up")
+    assert returned is node
+    assert node.history == [{"role": "user", "content": "what's up"}]
+
+
+def test_delete_conversation_message_removes_the_correct_index():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_conversation_node(0, 0, parent.id)
+    doc.append_conversation_user_message(node.id, "first")
+    doc.append_conversation_assistant_message(node.id, "second")
+    doc.append_conversation_user_message(node.id, "third")
+
+    doc.delete_conversation_message(node.id, 1)
+
+    assert node.history == [
+        {"role": "user", "content": "first"},
+        {"role": "user", "content": "third"},
+    ]
+
+
+def test_delete_conversation_message_out_of_range_raises():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_conversation_node(0, 0, parent.id)
+    doc.append_conversation_user_message(node.id, "only message")
+    with pytest.raises(SceneError):
+        doc.delete_conversation_message(node.id, 5)
+    with pytest.raises(SceneError):
+        doc.delete_conversation_message(node.id, -1)
+
+
+def test_delete_conversation_message_unknown_node_raises():
+    with pytest.raises(SceneError):
+        SceneDocument().delete_conversation_message("ghost", 0)
+
+
+def test_conversation_node_deletion_goes_through_the_generic_remove_nodes_path():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_conversation_node(10, 10, parent.id)
+    doc.append_conversation_user_message(node.id, "doomed message")
+    assert not hasattr(doc, "delete_conversation_node"), (
+        "conversation nodes are not branch points - no special delete method"
+    )
+    doc.remove_nodes([node.id])
+    assert node.id not in doc.nodes
+    assert not any(e.target == node.id or e.source == node.id for e in doc.edges.values())
+
+
+def test_set_chat_collapsed_works_generically_against_a_conversation_node():
+    # setChatCollapsed is already fully generic (looks up any node by id
+    # regardless of kind) - ConversationNode reuses it with zero backend
+    # change, same as document/html already do.
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_conversation_node(0, 0, parent.id)
+    doc.set_chat_collapsed(node.id, True)
+    assert doc.nodes[node.id].is_collapsed is True
+
+
+def test_no_bulk_replace_or_cancel_methods_exist_this_increment():
+    # Deliberate omissions, documented the same way other kinds' tests
+    # document intentional gaps: no set_history (no clone-on-create/session
+    # persistence call site yet) and no delete_conversation_node (leaf
+    # deletion goes through the generic remove_nodes).
+    doc = SceneDocument()
+    assert not hasattr(doc, "set_history")
+    assert not hasattr(doc, "delete_conversation_node")
+
+
+def test_scene_payload_includes_history_defaulted_for_other_kinds():
+    doc = SceneDocument()
+    doc.add_node(0, 0, "plain")
+    parent = doc.add_node(1, 1, "parent")
+    node = doc.add_conversation_node(2, 2, parent.id)
+    doc.append_conversation_user_message(node.id, "hi")
+    doc.append_conversation_assistant_message(node.id, "hello!")
+
+    rows = {n["id"]: n for n in doc.scene_payload()["nodes"]}
+    assert rows["n0"]["history"] == []
+    assert rows[parent.id]["history"] == []
+    assert rows[node.id]["history"] == [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "hello!"},
+    ]
+
+
+def test_add_conversation_node_intent_creates_a_real_node_and_publishes():
+    async def run():
+        bus, document, recorder = make_bus()
+        parent_id = await bus.dispatch_intent("scene", "addChatNode", [0, 0, "hi", True])
+        node_id = await bus.dispatch_intent(
+            "scene", "addConversationNode", [10, 10, parent_id]
+        )
+        assert document.nodes[node_id].kind == "conversation"
+        assert document.nodes[node_id].title == "Conversation"
+        assert document.nodes[node_id].history == []
+        assert any(
+            e.source == parent_id and e.target == node_id for e in document.edges.values()
+        )
+        assert recorder.topics_seen().count("scene") == 2, "both mutations publish"
+
+    asyncio.run(run())
+
+
+def test_send_conversation_message_intent_appends_and_fires_the_same_deferred_notice():
+    async def run():
+        bus, document, recorder = make_bus()
+        parent_id = await bus.dispatch_intent("scene", "addNode", [0, 0, "parent"])
+        node_id = await bus.dispatch_intent("scene", "addConversationNode", [10, 10, parent_id])
+
+        returned_id = await bus.dispatch_intent(
+            "scene", "sendConversationMessage", [node_id, "what is this graph about?"]
+        )
+        assert returned_id == node_id
+        assert document.nodes[node_id].history == [
+            {"role": "user", "content": "what is this graph about?"}
+        ]
+
+        notice = await bus.publish("notification")
+        assert notice["visible"] is True
+        assert notice["message"] == "AI response generation lands in R4."
+        assert recorder.topics_seen().count("scene") == 3, "all three mutations publish (addNode, addConversationNode, sendConversationMessage)"
+
+    asyncio.run(run())
+
+
+def test_append_conversation_assistant_message_intent_publishes_with_no_notification():
+    async def run():
+        bus, document, recorder = make_bus()
+        parent_id = await bus.dispatch_intent("scene", "addNode", [0, 0, "parent"])
+        node_id = await bus.dispatch_intent("scene", "addConversationNode", [10, 10, parent_id])
+
+        returned_id = await bus.dispatch_intent(
+            "scene", "appendConversationAssistantMessage", [node_id, "here is my answer"]
+        )
+        assert returned_id == node_id
+        assert document.nodes[node_id].history == [
+            {"role": "assistant", "content": "here is my answer"}
+        ]
+
+        notice = await bus.publish("notification")
+        assert notice["visible"] is False, "a real reply landing is not a deferral - no notification fires"
+        assert recorder.topics_seen().count("scene") == 3, "all three mutations publish (addNode, addConversationNode, appendConversationAssistantMessage)"
+
+    asyncio.run(run())
+
+
+def test_delete_conversation_message_intent_mutates_and_publishes():
+    async def run():
+        bus, document, recorder = make_bus()
+        parent_id = await bus.dispatch_intent("scene", "addNode", [0, 0, "parent"])
+        node_id = await bus.dispatch_intent("scene", "addConversationNode", [10, 10, parent_id])
+        await bus.dispatch_intent("scene", "sendConversationMessage", [node_id, "first"])
+        await bus.dispatch_intent(
+            "scene", "appendConversationAssistantMessage", [node_id, "second"]
+        )
+
+        result = await bus.dispatch_intent("scene", "deleteConversationMessage", [node_id, 0])
+        assert result is None
+        assert document.nodes[node_id].history == [{"role": "assistant", "content": "second"}]
+
+    asyncio.run(run())
+
+
+def test_conversation_node_removed_generically_through_remove_nodes_intent():
+    async def run():
+        bus, document, recorder = make_bus()
+        parent_id = await bus.dispatch_intent("scene", "addNode", [0, 0, "parent"])
+        node_id = await bus.dispatch_intent("scene", "addConversationNode", [10, 10, parent_id])
+        await bus.dispatch_intent("scene", "removeNodes", [[node_id]])
+        assert node_id not in document.nodes
+
+    asyncio.run(run())
+
+
+def test_set_chat_collapsed_intent_works_generically_against_a_conversation_node():
+    async def run():
+        bus, document, recorder = make_bus()
+        parent_id = await bus.dispatch_intent("scene", "addNode", [0, 0, "parent"])
+        node_id = await bus.dispatch_intent("scene", "addConversationNode", [10, 10, parent_id])
+        await bus.dispatch_intent("scene", "setChatCollapsed", [node_id, True])
+        assert document.nodes[node_id].is_collapsed is True
+
+    asyncio.run(run())
+
+
 def test_send_message_starts_a_root_branch():
     doc = SceneDocument()
     node = doc.send_message("hello there")
