@@ -38,6 +38,12 @@ from backend.agents import AgentDispatcher
 from backend.composer import ComposerDocument
 from backend.events import SessionBus
 from backend.notifications import NotificationState
+from backend.response_parsing import (
+    parse_response,
+    PLACEHOLDER_GENERATED_CONTENT,
+    PLACEHOLDER_ASSISTANT_REASONING,
+    PLACEHOLDER_EMPTY_RESPONSE,
+)
 
 # Dark-theme grid swatches. The Qt bridge derived 3 of 5 from the live
 # QPalette; the backend is Qt-free by law (test_no_qt_anywhere.py), so until
@@ -962,6 +968,17 @@ def register_canvas(
         await publish_scene()
 
         def _on_reply(reply_text):
+            # R4.3b: deliberate, confirmed-correct omission, NOT an oversight -
+            # ConversationNode is exempt from the response_parsing retrofit
+            # applied to send_message's _on_reply above. The true legacy
+            # handler for a conversation node's reply is
+            # graphlink_window_actions.py's WindowActionsMixin.
+            # handle_conversation_node_response (NOT handle_response), which
+            # just calls target_node.add_ai_message(response_text) directly -
+            # it never calls self._parse_response and never creates any
+            # child node. A ConversationNode is a self-contained mega-node
+            # with a flat plain-text-only history and no child-node concept
+            # at all in legacy.
             document.append_conversation_assistant_message(node_id, reply_text)
 
         await agent_dispatcher.start_conversation_reply(
@@ -1006,10 +1023,73 @@ def register_canvas(
         history = document.chat_branch_history(node.id)
 
         def _on_reply(reply_text):
-            reply_node = document.add_chat_node(
-                node.x, node.y + MESSAGE_VERTICAL_SPACING, reply_text, False, parent_id=node.id
-            )
-            document.last_chat_node_id = reply_node.id
+            # R4.3b: port legacy handle_response's _parse_response retrofit -
+            # split the flat reply into thinking/text/code parts and create
+            # separate thinking-kind/code-kind CHILD nodes instead of
+            # dumping the raw, unparsed reply into one flat node.
+            parsed_parts = parse_response(reply_text)
+            if not parsed_parts:
+                # Mirrors legacy handle_response's own outer gate
+                # (`if text_content or parsed_parts:`) - a genuinely empty/
+                # whitespace-only reply creates NO node at all, not a
+                # "[Empty Response]" placeholder node. Currently unreachable
+                # in practice (api_provider._compose_reasoned_response raises
+                # rather than returning blank content), but the gate is kept
+                # so a future provider path can never silently diverge from
+                # legacy here. last_chat_node_id is deliberately left
+                # untouched - it already points at the user's own message
+                # node (set by send_message just above), matching legacy's
+                # own fallback of leaving current_node at user_node when no
+                # assistant node gets created.
+                return
+
+            text_parts = [p["content"] for p in parsed_parts if p["type"] == "text"]
+            text_content = "\n\n".join(text_parts)
+
+            placeholder_text = text_content
+            if not placeholder_text:
+                if any(p["type"] == "code" for p in parsed_parts):
+                    placeholder_text = PLACEHOLDER_GENERATED_CONTENT
+                elif any(p["type"] == "thinking" for p in parsed_parts):
+                    placeholder_text = PLACEHOLDER_ASSISTANT_REASONING
+                else:
+                    # Unreachable given parse_response's own invariants (a
+                    # non-empty parts list with no text/code part must
+                    # contain a thinking part) - legacy's handle_response has
+                    # this exact same dead branch; kept verbatim for
+                    # structural parity rather than optimized away.
+                    placeholder_text = PLACEHOLDER_EMPTY_RESPONSE
+
+            ax, ay = node.x, node.y + MESSAGE_VERTICAL_SPACING
+            ai_node = document.add_chat_node(ax, ay, placeholder_text, False, parent_id=node.id)
+
+            # NOTE: these two calls MUST use the `document.` prefix. Bare
+            # `add_code_node(...)` / `add_thinking_node(...)` would silently
+            # resolve to this enclosing register_canvas scope's own async WS-
+            # intent wrapper closures of the same name (defined earlier,
+            # above send_message) instead of raising a NameError - producing
+            # an unawaited coroutine that never runs and never errors, so no
+            # node would be created and nothing would look wrong until the
+            # scene state was actually inspected.
+            for part in parsed_parts:
+                if part["type"] == "thinking":
+                    document.add_thinking_node(
+                        ax - MESSAGE_VERTICAL_SPACING, ay + MESSAGE_VERTICAL_SPACING,
+                        part["content"], parent_id=ai_node.id,
+                    )
+                elif part["type"] == "code":
+                    document.add_code_node(
+                        ax + MESSAGE_VERTICAL_SPACING, ay + MESSAGE_VERTICAL_SPACING,
+                        part["content"], part["language"], parent_id=ai_node.id,
+                    )
+
+            # Always the real chat node's id, never a code/thinking child's -
+            # add_code_node/add_thinking_node are documented above (see their
+            # own docstrings) as NOT branch points, and last_chat_node_id
+            # specifically drives the next real send's branch-continuation
+            # (chat_branch_history), which only makes sense pointed at a real
+            # chat node.
+            document.last_chat_node_id = ai_node.id
 
         await agent_dispatcher.start_chat_reply(
             bus=bus,
