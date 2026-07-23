@@ -100,6 +100,7 @@ py-modules = [
     "graphlink_composer_web",
     "graphlink_config",
     "graphlink_task_config",
+    "graphlink_chat_agent",
     "graphlink_context_menu",
     "graphlink_connections",
     "graphlink_conversation_node",

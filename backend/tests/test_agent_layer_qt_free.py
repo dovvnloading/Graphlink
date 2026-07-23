@@ -52,3 +52,14 @@ def test_api_provider_imports_qt_free():
     # any backend chat dispatch a Qt process. This is the machine-checked
     # fact that that chain is severed.
     _assert_import_is_qt_free("api_provider")
+
+
+def test_chat_agent_imports_qt_free():
+    # R4.2 prerequisite: graphlink_agents_core.py (home of ChatWorker/
+    # ChatAgent/resolve_branch_system_prompt before this split) has its own
+    # unconditional `from PySide6.QtCore import ...` at module level, needed
+    # only by its *WorkerThread classes - importing anything from it,
+    # including these three Qt-free symbols, pulled Qt in regardless. This
+    # is the machine-checked fact that the real chat-agent path backend/
+    # needs no longer does.
+    _assert_import_is_qt_free("graphlink_chat_agent")
