@@ -42,6 +42,13 @@ R4.3 adds `pendingRequestId` (ConversationNode real-reply + per-node cancel):
 the id of the AgentDispatcher request currently generating a reply for a
 node, or None when idle. Generic across any kind that ever gets its own real
 dispatch slot, defaulted None for every other kind, same additive rule.
+
+R5.1 adds the Web Research node's six `research*` fields (query text reuses
+the existing `content` field, same as code/thinking/html): populated for
+kind=="web_research" rows, defaulted (empty string/0/None) for every other
+kind, same additive rule. `researchResult`, when present, is a nested
+ResearchResultRow - the one field here (besides R3.25's `history`) whose
+shape is a structured object rather than a scalar.
 """
 
 from __future__ import annotations
@@ -54,6 +61,58 @@ from typing import Literal
 class ConversationMessageRow:
     role: Literal["user", "assistant"]
     content: str
+
+
+@dataclass
+class ResearchSourceRow:
+    sourceId: str
+    title: str
+    url: str
+    canonicalUrl: str
+    snippet: str
+    rank: int
+    provider: str
+    finalUrl: str
+    status: str
+    errorCode: str
+    errorMessage: str
+    truncated: bool
+    contentHash: str
+    citationCount: int
+
+
+@dataclass
+class ResearchCitationRow:
+    sourceId: str
+    marker: str
+    claimContext: str
+
+
+@dataclass
+class ResearchResultRow:
+    requestId: str
+    originalQuery: str
+    effectiveQuery: str
+    answerMarkdown: str
+    sources: list[ResearchSourceRow]
+    citations: list[ResearchCitationRow]
+    warnings: list[str]
+    # DEVIATION from the R5.1 spec text (which said a bare `dict`): the
+    # codegen's schema generator (graphlink_island_schema.py) has a closed,
+    # deliberately-narrow supported-type set that does NOT include a bare
+    # `dict` or `dict[str, Any]` (there is no catch-all/`Any` case - see that
+    # module's own docstring) - only `dict[str, X]` for X itself in the
+    # supported set. provider_snapshot is genuinely free-form diagnostics at
+    # the domain layer (graphlink_plugins/web_research/domain.py's
+    # WebResearchRequest/ResearchResult.provider_snapshot: dict[str, Any]),
+    # but nothing in this increment ever populates it (agents.py's
+    # WebResearchRequest(...) call site never passes provider_snapshot, so it
+    # is always {} at runtime here) - dict[str, str] is the narrowest
+    # accurate supertype of "empty dict" that the generator supports, so it
+    # is used here rather than blocking codegen. A future increment that
+    # starts populating this with non-string values needs its own explicit
+    # schema-generator extension, not a silent workaround here.
+    providerSnapshot: dict[str, str]
 
 
 @dataclass
@@ -100,6 +159,17 @@ class SceneNodeRow:
     # dispatch slot (not conversation-only), defaulted None for every other
     # kind.
     pendingRequestId: str | None = None
+    # R5.1: the Web Research node's real persisted shape - query text reuses
+    # `content` above (same pattern as code/thinking/html); these six fields
+    # track one research run's live progress/outcome, populated for
+    # kind=="web_research" rows, defaulted (empty string/0/None) for every
+    # other kind.
+    researchStage: str = ""
+    researchCompleted: int = 0
+    researchTotal: int = 0
+    researchActiveSourceId: str | None = None
+    researchError: str = ""
+    researchResult: ResearchResultRow | None = None
 
 
 @dataclass

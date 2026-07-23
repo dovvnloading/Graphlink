@@ -24,6 +24,7 @@ import { DocumentNodeView, type DocumentFlowNode } from "./DocumentNodeView";
 import { HtmlNodeView, type HtmlFlowNode } from "./HtmlNodeView";
 import { ImageNodeView, type ImageFlowNode } from "./ImageNodeView";
 import { ThinkingNodeView, type ThinkingFlowNode } from "./ThinkingNodeView";
+import { WebResearchNodeView, type WebResearchFlowNode } from "./WebResearchNodeView";
 import { LOD_ZOOM_THRESHOLD } from "./canvasConstants";
 import { SceneStore, scaleDragPosition } from "./sceneStore";
 
@@ -51,7 +52,8 @@ type SceneFlowNode =
   | ThinkingFlowNode
   | HtmlFlowNode
   | ImageFlowNode
-  | ConversationFlowNode;
+  | ConversationFlowNode
+  | WebResearchFlowNode;
 
 function PlaceholderNodeView({ data, selected }: NodeProps<PlaceholderNode>) {
   const zoom = useStore((s) => s.transform[2]);
@@ -78,6 +80,7 @@ const NODE_TYPES = {
   html: HtmlNodeView,
   image: ImageNodeView,
   conversation: ConversationNodeView,
+  web_research: WebResearchNodeView,
 };
 
 // Exported standalone for direct unit testing (same posture as
@@ -283,6 +286,41 @@ export function toFlowNodes(scene: SceneState, store: SceneStore): SceneFlowNode
       });
       continue;
     }
+    if (n.kind === "web_research") {
+      // No onDock here either (same reasoning as the html/image/conversation
+      // branches above) - WebResearchNodeView never offers a dock-into-parent
+      // action; the generic `if (n.isDocked) continue` guard above still
+      // covers it correctly if it were ever docked via a direct WS call.
+      flowNodes.push({
+        id: n.id,
+        type: "web_research" as const,
+        position: { x: n.x, y: n.y },
+        data: {
+          query: n.content,
+          isCollapsed: n.isCollapsed,
+          pendingRequestId: n.pendingRequestId ?? null,
+          researchStage: n.researchStage,
+          researchCompleted: n.researchCompleted,
+          researchTotal: n.researchTotal,
+          researchActiveSourceId: n.researchActiveSourceId ?? null,
+          researchError: n.researchError,
+          researchResult: n.researchResult ?? null,
+          // Reuses the existing generic setChatCollapsed intent - same
+          // reasoning as every other non-chat node kind's onToggleCollapse
+          // above (the backend handler looks up ANY node by id).
+          onToggleCollapse: () => store.setChatCollapsed(n.id, !n.isCollapsed),
+          onDelete: () => store.removeNodes([n.id]),
+          onRun: (query: string) => store.runWebResearch(n.id, query),
+          // Same null-guard pattern as the conversation node's own analogous
+          // cancel call site above - only fire the intent if there is
+          // genuinely a non-null request id to target.
+          onCancel: () => {
+            if (n.pendingRequestId) store.cancelWebResearchRequest(n.pendingRequestId);
+          },
+        },
+      });
+      continue;
+    }
     flowNodes.push({
       id: n.id,
       type: "placeholder" as const,
@@ -292,6 +330,15 @@ export function toFlowNodes(scene: SceneState, store: SceneStore): SceneFlowNode
   }
 
   return flowNodes;
+}
+
+// R5.1: the onSelectionChange callback's actual logic, pulled out standalone
+// for direct unit testing (same posture as toFlowNodes/scaleDragPosition
+// above) - a full <ReactFlow> mount's own drag-select interaction isn't
+// something this codebase drives in tests anywhere else, so this is what
+// gets covered instead of the mount.
+export function handleSelectionChange(store: SceneStore, nodes: { id: string }[]): void {
+  store.setSelectedNodeId(nodes[0]?.id ?? null);
 }
 
 function toFlowEdges(scene: SceneState): Edge[] {
@@ -406,6 +453,10 @@ function CanvasInner({ store }: { store: SceneStore }) {
         onNodesChange={onNodesChange}
         onConnect={onConnect}
         onDelete={onDelete}
+        // R5.1: mirrors React Flow's own selection state into the store so
+        // PluginPicker can attach "which node was selected" to executePlugin
+        // without either component reaching into the other's internals.
+        onSelectionChange={({ nodes: sel }) => handleSelectionChange(store, sel)}
         snapToGrid={scene.snapToGrid}
         snapGrid={[grid.gridSize, grid.gridSize]}
         // Double-click is the R1 create-node gesture (wrapper onDoubleClick);

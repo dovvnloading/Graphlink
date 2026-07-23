@@ -2548,3 +2548,210 @@ body,
   background-color: var(--gl-neutral-button-background);
   border: 1px solid var(--gl-neutral-button-border);
 }
+
+/* -- R5.1 web research node -------------------------------------------------- */
+
+.web-research-node {
+  width: 420px;
+  max-height: 640px;
+  min-height: 110px;
+}
+
+.web-research-node.collapsed {
+  width: 290px;
+  min-height: 58px;
+}
+
+.web-research-node-content {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 560px;
+  overflow-y: auto;
+}
+
+.web-research-node-query-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.web-research-node-query-input {
+  box-sizing: border-box;
+  width: 100%;
+  font-family: inherit;
+  font-size: 12px;
+  padding: 8px 10px;
+  color: var(--gl-surface-text);
+  background-color: var(--gl-surface-inset, var(--gl-surface-window));
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 6px;
+}
+
+.web-research-node-query-input:focus {
+  outline: none;
+  border-color: var(--gl-surface-text-muted);
+}
+
+.web-research-node-query-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+/* Reuses conversation-node's send/cancel button chrome verbatim (same
+   shared-token convention .chat-node-content's markdown rules already
+   establish across sibling node views) rather than duplicating the two
+   declarations under a new name. */
+.web-research-node-run-btn,
+.web-research-node-cancel-btn {
+  font-size: 11px;
+  font-weight: 600;
+  font-family: inherit;
+  padding: 5px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.web-research-node-run-btn {
+  color: var(--gl-surface-window);
+  background-color: var(--gl-surface-text-muted);
+  border: none;
+}
+
+.web-research-node-run-btn:hover:enabled {
+  filter: brightness(1.1);
+}
+
+.web-research-node-run-btn:disabled,
+.web-research-node-cancel-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.web-research-node-cancel-btn {
+  color: var(--gl-surface-text);
+  background-color: var(--gl-neutral-button-background);
+  border: 1px solid var(--gl-neutral-button-border);
+}
+
+/* Stage stepper - pending/active/done, one pill per STAGE_STEPS entry. */
+.web-research-node-stepper {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.web-research-node-step {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--gl-surface-border);
+  color: var(--gl-surface-text-muted);
+}
+
+.web-research-node-step.active {
+  color: var(--gl-surface-text);
+  border-color: var(--gl-semantic-status-info, currentColor);
+}
+
+.web-research-node-step.done {
+  color: var(--gl-semantic-status-success, currentColor);
+  border-color: var(--gl-semantic-status-success, currentColor);
+}
+
+.web-research-node-progress {
+  margin: 0;
+  font-size: 11px;
+  color: var(--gl-surface-text-muted);
+}
+
+/* Terminal-state banner - failed reuses the same error token every other
+   danger surface in this file uses; cancelled is deliberately neutral/muted
+   rather than error-colored (a user-initiated cancel is not a failure). */
+.web-research-node-banner {
+  padding: 8px 10px;
+  font-size: 11px;
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 8px;
+}
+
+.web-research-node-banner-failed {
+  color: var(--gl-semantic-status-error, currentColor);
+  border-color: var(--gl-semantic-status-error, currentColor);
+}
+
+.web-research-node-banner-cancelled {
+  color: var(--gl-surface-text-muted);
+}
+
+.web-research-node-result {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Reuses .chat-node-content's full markdown-body rule set (headings, lists,
+   code, tables, hljs) verbatim - same shared-class convention
+   .conversation-node-bubble-content already establishes for this pipeline.
+   Only overrides the max-height/overflow-y a nested answer pane should never
+   take on its own (the outer .web-research-node-content already scrolls). */
+.web-research-node-answer {
+  max-height: none;
+  overflow: visible;
+}
+
+.web-research-node-warnings {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 11px;
+  color: var(--gl-semantic-status-warning, currentColor);
+}
+
+.web-research-node-sources {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.web-research-node-source {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  font-size: 11px;
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 6px;
+}
+
+.web-research-node-source-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--gl-surface-text);
+}
+
+.web-research-node-source-status {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--gl-surface-text-muted);
+}
+
+.web-research-node-source-status-accepted {
+  color: var(--gl-semantic-status-success, currentColor);
+}
+
+.web-research-node-source-status-rejected,
+.web-research-node-source-status-failed {
+  color: var(--gl-semantic-status-error, currentColor);
+}
+
+.web-research-node-source-status-fetching {
+  color: var(--gl-semantic-status-info, currentColor);
+}

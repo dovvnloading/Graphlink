@@ -68,6 +68,14 @@ import api_provider
 import graphlink_task_config as config
 from graphlink_chat_agent import ChatAgent
 from graphlink_licensing import SettingsManager  # type hint only
+from graphlink_plugins.web_research.domain import (
+    CancellationToken,
+    ProgressEvent,
+    RequestCancelled,
+    ResearchFailure,
+    WebResearchRequest,
+)
+from graphlink_plugins.web_research.service import WebResearchService
 from graphlink_prompts import BASE_SYSTEM_PROMPT
 
 from backend.events import SessionBus  # type hint only
@@ -77,6 +85,15 @@ logger = logging.getLogger(__name__)
 # The single fixed hard timeout for this increment - see the module
 # docstring for why there is no intermediate stall-notice tier here.
 WATCHDOG_TIMEOUT_SECONDS = 420
+
+# R5.1: Web Research gets its own, longer watchdog rather than reusing
+# WATCHDOG_TIMEOUT_SECONDS=420 - a research run can involve up to 4
+# sequential source fetches (each individually capped by
+# FetchPolicy.total_timeout_seconds, ~30s) plus up to 6 sequential LLM round
+# trips (refine_query + up to 4x assess_source + summarize), none of which
+# has its own outer timeout beyond this one. Realistic worst-case legitimate
+# duration is roughly 660s, so 900s gives headroom without being unbounded.
+WEB_RESEARCH_WATCHDOG_TIMEOUT_SECONDS = 900
 
 
 def bootstrap_provider_state(settings_manager: SettingsManager) -> None:
@@ -166,6 +183,13 @@ class AgentDispatcher:
         # "cancel_event" key here, unlike self._requests: image generation
         # has no cancellation at all (see start_image_reply's own docstring).
         self._image_requests: dict[str, dict] = {}
+        # R5.1: a THIRD independent in-flight-request slot, separate from both
+        # self._requests (chat/conversation) and self._image_requests - a web
+        # research run and a chat/image request must be able to run
+        # concurrently, same reasoning R4.4a used for _image_requests being
+        # independent from _requests. request_id -> {"cancel_token":
+        # CancellationToken, "task": asyncio.Task}.
+        self._web_research_requests: dict[str, dict] = {}
 
     def persona(self) -> str:
         """Mirror legacy graphlink_window.py's `_get_current_system_prompt`:
@@ -201,6 +225,20 @@ class AgentDispatcher:
         next checkpoint, same as the timeout path already does."""
         for entry in self._requests.values():
             entry["cancel_event"].set()
+
+    def cancel_web_research(self, request_id: str) -> bool:
+        entry = self._web_research_requests.get(request_id)
+        if entry is None:
+            return False
+        entry["cancel_token"].cancel()
+        return True
+
+    def is_web_research_busy(self) -> bool:
+        """Lets callers check the single-slot guard before mutating scene
+        state, so a Run click on a node other than the one already running
+        doesn't reset that node's progress/error fields only to be rejected
+        a moment later by start_web_research's own busy check."""
+        return bool(self._web_research_requests)
 
     async def _dispatch(
         self,
@@ -561,6 +599,138 @@ class AgentDispatcher:
         # keep reading further messages on this same socket while a
         # generation is in flight.
         self._image_requests[request_id] = {"task": asyncio.create_task(_run())}
+
+    async def start_web_research(
+        self,
+        *,
+        bus: SessionBus,
+        notifications_state,
+        node,
+        node_id: str,
+        query: str,
+        branch_history: list,
+        on_progress,
+        on_success,
+        on_failure,
+    ) -> None:
+        """R5.1: the Web Research independent-slot counterpart to
+        start_image_reply above - NOT a variant of _dispatch, since there is
+        exactly one caller (backend/canvas.py's run_web_research), so
+        on_begin/on_end are inlined here directly rather than taking
+        _dispatch's generic parameters. Guarded by self._web_research_requests,
+        a dict kept fully SEPARATE from both self._requests (chat/
+        conversation) and self._image_requests - see that field's own
+        comment in __init__ for why this must stay independent.
+
+        Cooperative cancellation only, via a CancellationToken (not a
+        threading.Event, since WebResearchService.run's own pipeline stages
+        already accept `token: CancellationToken` - see
+        graphlink_plugins/web_research/domain.py) - same honestly-documented
+        limitation as existing chat/image dispatch: this does not force-kill
+        a call already blocked inside a single blocking call with no
+        checkpoint until it returns."""
+        if self._web_research_requests:
+            notifications_state.show("A web research request is already running.", "info")
+            await bus.publish("notification")
+            return
+
+        request_id = uuid.uuid4().hex
+        cancel_token = CancellationToken()
+        request = WebResearchRequest(
+            request_id=request_id,
+            node_id=node_id,
+            chat_epoch=0,
+            original_query=query,
+            branch_history=list(branch_history),
+        )
+
+        async def _invoke(fn, *a):
+            if inspect.iscoroutinefunction(fn):
+                await fn(*a)
+            else:
+                fn(*a)
+
+        async def _run():
+            node.pending_request_id = request_id
+            await bus.publish("scene")
+            loop = asyncio.get_running_loop()
+            service = WebResearchService()
+
+            async def _guarded_progress(event) -> None:
+                # asyncio.to_thread's underlying thread is NOT actually
+                # killed by wait_for's timeout (Future.cancel() on an
+                # already-running thread is a no-op - see the watchdog
+                # comment on WATCHDOG_TIMEOUT_SECONDS above for the chat
+                # path's identical limitation), so a slow service.run() can
+                # keep calling progress() well after this request's own
+                # finally block has already popped _web_research_requests
+                # and cleared node.pending_request_id. Re-check liveness here
+                # (on the loop thread, so no race with the pop above) and
+                # drop the event if this request is no longer the active one
+                # - otherwise a stale progress tick can resurrect a
+                # since-failed/cancelled node's stage, or clobber a brand
+                # new run started on the same node in the meantime.
+                if request_id not in self._web_research_requests:
+                    return
+                await _invoke(on_progress, event)
+
+            def _thread_on_progress(event) -> None:
+                # Runs on the WORKER THREAD (inside asyncio.to_thread). Given
+                # the low event frequency (<=16 events per run), this
+                # deliberately does NOT need the token-streaming pipeline's
+                # Queue+_pump batching machinery - a single
+                # run_coroutine_threadsafe per event is simpler and still
+                # correctly ordered, because service.run() calls progress()
+                # synchronously and single-threaded, and each event's
+                # coroutine mutates SceneNode fields synchronously before its
+                # first await, so asyncio's FIFO call_soon scheduling
+                # preserves emission order even if the subsequent
+                # bus.publish("scene") awaits interleave.
+                asyncio.run_coroutine_threadsafe(_guarded_progress(event), loop)
+
+            try:
+                result = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        service.run, request, token=cancel_token, progress=_thread_on_progress
+                    ),
+                    timeout=WEB_RESEARCH_WATCHDOG_TIMEOUT_SECONDS,
+                )
+                await _invoke(on_success, result)
+                await bus.publish("scene")
+            except asyncio.TimeoutError:
+                cancel_token.cancel()
+                message = (
+                    "Web research stopped responding before the request completed. "
+                    "Please try again."
+                )
+                await _invoke(on_failure, ResearchFailure(message, code="watchdog_timeout"))
+                notifications_state.show(message, "error")
+                await bus.publish("notification")
+                await bus.publish("scene")
+            except RequestCancelled as exc:
+                await _invoke(on_failure, exc)
+                notifications_state.show("Web research cancelled.", "info")
+                await bus.publish("notification")
+                await bus.publish("scene")
+            except ResearchFailure as exc:
+                await _invoke(on_failure, exc)
+                notifications_state.show(f"Web research failed: {exc}", "error")
+                await bus.publish("notification")
+                await bus.publish("scene")
+            except Exception as exc:
+                logger.exception("web research dispatch failed")
+                await _invoke(on_failure, exc)
+                notifications_state.show(f"Web research failed: {exc}", "error")
+                await bus.publish("notification")
+                await bus.publish("scene")
+            finally:
+                self._web_research_requests.pop(request_id, None)
+                node.pending_request_id = None
+                await bus.publish("scene")
+
+        self._web_research_requests[request_id] = {
+            "cancel_token": cancel_token, "task": asyncio.create_task(_run())
+        }
 
 
 def _call_chat_agent(conversation_history, persona_text, cancel_event) -> str:

@@ -101,7 +101,10 @@ def _configure_session(bus: SessionBus, settings_manager: SettingsManager, chat_
 
     # R2.5: about, plugins, settings, chat library.
     register_about(bus)
-    register_plugins(bus, notifications_state)
+    # R5.1: register_plugins needs the same session's canvas_document (built
+    # just above) so "Web Research" can create a real node - this ordering
+    # (canvas_document exists before register_plugins runs) is load-bearing.
+    register_plugins(bus, notifications_state, bus.canvas_document)
     register_settings(bus, settings_manager)
     register_chat_library(bus, chat_db_path)
 
