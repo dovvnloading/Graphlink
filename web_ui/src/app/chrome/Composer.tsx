@@ -4,31 +4,35 @@ import { Popover, useOverlays } from "../overlays/overlays";
 import type { ComposerStore } from "./composerStore";
 
 /**
- * The composer dock (Qt-removal plan R2.3/R3.3) - ComposerApp's SPA
+ * The composer dock (Qt-removal plan R2.3/R3.3/R4.3) - ComposerApp's SPA
  * successor.
  *
  * Real here: draft text editing, reasoning-level selection (a stored
  * preference popover, reusing the overlay system rather than a dedicated
- * picker island), and (R3.3) Send - a real user ChatNode via
- * sceneStore.sendMessage. The assistant's reply is NOT generated here (see
- * backend/canvas.py's send_message docstring): the backend gives an honest
- * "lands in R4" notice over the existing notification topic instead of a
- * fake response. Visibly deferred, per backend/composer.py's capability
- * flags: attach (file-staging pipeline is an R4 concern), context review
- * (nothing to review until attachments exist), model/provider selection
- * (R4 - needs real provider wiring). Each renders disabled with a title
- * naming its phase, exactly the app bar's Save/provider-select precedent.
+ * picker island), Send - a real user ChatNode via sceneStore.sendMessage,
+ * and (R4.3) the agent-dispatch request lifecycle: the assistant's reply
+ * is generated asynchronously by the backend agent layer and lands over
+ * the existing scene topic republish, exactly like any other node-creation
+ * path this app already handles. Send is gated on request.canSend (so a
+ * second send can't be issued mid-flight) and Cancel is rendered only
+ * while request.canCancel is true, per backend/composer.py's request
+ * capability flags. Still visibly deferred, per those same flags: attach
+ * (file-staging pipeline), context review (nothing to review until
+ * attachments exist), model/provider selection (needs real provider
+ * wiring). Each renders disabled with a title naming its phase, exactly
+ * the app bar's Save/provider-select precedent.
  *
  * Theme is NOT read from this payload (see backend/composer.py's docstring
  * for why) - the SPA's tokens are already global CSS.
  */
 
-function Icon({ name }: { name: "attach" | "send" | "chevron" }) {
+function Icon({ name }: { name: "attach" | "send" | "chevron" | "stop" }) {
   const paths: Record<string, string> = {
     attach:
       "M12 5.5 6.4 11.1a3.6 3.6 0 0 0 5.1 5.1l6-6a2.5 2.5 0 0 0-3.5-3.5l-6.1 6.1a1.35 1.35 0 0 0 1.9 1.9l5.5-5.5",
     send: "M3.5 4.6 20.5 12 3.5 19.4l2.2-6.2L15 12 5.7 10.8 3.5 4.6Z",
     chevron: "m7 10 5 5 5-5",
+    stop: "M7 7h10v10H7z",
   };
   return (
     <svg aria-hidden="true" viewBox="0 0 24 24" className="icon">
@@ -53,7 +57,7 @@ export function Composer({ store, sceneStore }: { store: ComposerStore; sceneSto
 
   function send() {
     const text = composer.draft.text.trim();
-    if (!text) return;
+    if (!text || !composer.request.canSend) return;
     sceneStore.sendMessage(text);
     store.updateDraft("");
   }
@@ -80,6 +84,12 @@ export function Composer({ store, sceneStore }: { store: ComposerStore; sceneSto
       </div>
 
       <div className="composer-controls">
+        {composer.request.state === "generating" && (
+          <span className="composer-generating-indicator" role="status">
+            Generating…
+          </span>
+        )}
+
         <button
           type="button"
           className="composer-icon-button"
@@ -118,16 +128,32 @@ export function Composer({ store, sceneStore }: { store: ComposerStore; sceneSto
           <Icon name="chevron" />
         </button>
 
-        <button
-          type="button"
-          className="composer-send-button"
-          disabled={!composer.draft.text.trim()}
-          title="Sends a real message; the AI response lands in R4 (agent layer)"
-          aria-label="Send message"
-          onClick={send}
-        >
-          <Icon name="send" />
-        </button>
+        <div className="composer-send-group">
+          {composer.request.canCancel && (
+            <button
+              type="button"
+              className="composer-icon-button composer-cancel-button"
+              onClick={() => {
+                if (composer.request.id) store.cancelChatRequest(composer.request.id);
+              }}
+              title="Cancel response"
+              aria-label="Cancel response"
+            >
+              <Icon name="stop" />
+            </button>
+          )}
+
+          <button
+            type="button"
+            className="composer-send-button"
+            disabled={!composer.draft.text.trim() || !composer.request.canSend}
+            title="Send message"
+            aria-label="Send message"
+            onClick={send}
+          >
+            <Icon name="send" />
+          </button>
+        </div>
       </div>
 
       <Reasoning store={store} />

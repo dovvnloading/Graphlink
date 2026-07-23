@@ -16,6 +16,7 @@ function makeStore(overrides: { composer?: object; tokenCounter?: object; notifi
   };
   const updateDraft = vi.fn();
   const setReasoningLevel = vi.fn();
+  const cancelChatRequest = vi.fn();
   const dismissNotification = vi.fn();
   const store = {
     subscribe: (listener: () => void) => {
@@ -27,9 +28,10 @@ function makeStore(overrides: { composer?: object; tokenCounter?: object; notifi
     getNotification: () => state.notification,
     updateDraft,
     setReasoningLevel,
+    cancelChatRequest,
     dismissNotification,
   };
-  return { store, updateDraft, setReasoningLevel, dismissNotification };
+  return { store, updateDraft, setReasoningLevel, cancelChatRequest, dismissNotification };
 }
 
 function makeSceneStore() {
@@ -68,7 +70,12 @@ describe("Composer", () => {
 
   it("Send is enabled once there's text, calls sceneStore.sendMessage, and clears the draft", async () => {
     const user = userEvent.setup();
-    const { store, updateDraft } = makeStore({ composer: { draft: { ...initialComposerState.draft, text: "hi" } } });
+    const { store, updateDraft } = makeStore({
+      composer: {
+        draft: { ...initialComposerState.draft, text: "hi" },
+        request: { ...initialComposerState.request, canSend: true },
+      },
+    });
     const { sceneStore, sendMessage } = makeSceneStore();
     render(
       <OverlayProvider>
@@ -85,7 +92,12 @@ describe("Composer", () => {
 
   it("Enter sends (and clears the draft); Shift+Enter does not", async () => {
     const user = userEvent.setup();
-    const { store, updateDraft } = makeStore({ composer: { draft: { ...initialComposerState.draft, text: "hi" } } });
+    const { store, updateDraft } = makeStore({
+      composer: {
+        draft: { ...initialComposerState.draft, text: "hi" },
+        request: { ...initialComposerState.request, canSend: true },
+      },
+    });
     const { sceneStore, sendMessage } = makeSceneStore();
     render(
       <OverlayProvider>
@@ -110,6 +122,82 @@ describe("Composer", () => {
       </OverlayProvider>,
     );
     expect(screen.getByLabelText("Send message")).toBeDisabled();
+  });
+
+  it("Send stays disabled when request.canSend is false even with non-empty draft text", () => {
+    const { store } = makeStore({
+      composer: {
+        draft: { ...initialComposerState.draft, text: "hi" },
+        request: { ...initialComposerState.request, canSend: false },
+      },
+    });
+    render(
+      <OverlayProvider>
+        {/* @ts-expect-error - test double */}
+        <Composer store={store} sceneStore={makeSceneStore().sceneStore} />
+      </OverlayProvider>,
+    );
+    expect(screen.getByLabelText("Send message")).toBeDisabled();
+  });
+
+  it("Cancel control is absent when request.canCancel is false", () => {
+    const { store } = makeStore({
+      composer: { request: { ...initialComposerState.request, canCancel: false } },
+    });
+    render(
+      <OverlayProvider>
+        {/* @ts-expect-error - test double */}
+        <Composer store={store} sceneStore={makeSceneStore().sceneStore} />
+      </OverlayProvider>,
+    );
+    expect(screen.queryByLabelText("Cancel response")).toBeNull();
+  });
+
+  it("Cancel control is present when request.canCancel is true and calls cancelChatRequest with the request id", async () => {
+    const user = userEvent.setup();
+    const { store, cancelChatRequest } = makeStore({
+      composer: {
+        request: { id: "req-42", state: "generating", message: "", canSend: false, canCancel: true, canRetry: false },
+      },
+    });
+    render(
+      <OverlayProvider>
+        {/* @ts-expect-error - test double */}
+        <Composer store={store} sceneStore={makeSceneStore().sceneStore} />
+      </OverlayProvider>,
+    );
+    const cancelButton = screen.getByLabelText("Cancel response");
+    expect(cancelButton).toBeInTheDocument();
+    await user.click(cancelButton);
+    expect(cancelChatRequest).toHaveBeenCalledWith("req-42");
+  });
+
+  it("shows the generating indicator only when request.state is 'generating'", () => {
+    const { store } = makeStore({
+      composer: {
+        request: { id: "req-1", state: "generating", message: "", canSend: false, canCancel: true, canRetry: false },
+      },
+    });
+    render(
+      <OverlayProvider>
+        {/* @ts-expect-error - test double */}
+        <Composer store={store} sceneStore={makeSceneStore().sceneStore} />
+      </OverlayProvider>,
+    );
+    expect(screen.getByText("Generating…")).toBeInTheDocument();
+  });
+
+  it("hides the generating indicator when request.state is 'idle'", () => {
+    const { store } = makeStore({
+      composer: { request: { ...initialComposerState.request, state: "idle" } },
+    });
+    render(
+      <OverlayProvider>
+        {/* @ts-expect-error - test double */}
+        <Composer store={store} sceneStore={makeSceneStore().sceneStore} />
+      </OverlayProvider>,
+    );
+    expect(screen.queryByText("Generating…")).toBeNull();
   });
 
   it("opens the reasoning popover and selecting an option calls the intent and closes it", async () => {

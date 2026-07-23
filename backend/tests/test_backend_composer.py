@@ -40,7 +40,7 @@ def test_default_payload_matches_generated_validator_shape():
     assert set(payload["draft"]) == {"id", "text", "contextMode", "sendMode", "restored"}
     assert payload["capabilities"]["reasoningSelection"] is True
     assert payload["capabilities"]["attachments"] is False, "attachment staging is deferred, not faked"
-    assert payload["request"]["canSend"] is False, "send needs R4 agents"
+    assert payload["request"]["canSend"] is True, "idle state can send now that R4 agent dispatch has landed"
 
 
 def test_update_draft_intent_updates_text_and_publishes_composer_and_tokens():
@@ -66,6 +66,61 @@ def test_set_reasoning_level_intent_updates_and_rejects_unknown():
             await bus.dispatch_intent("app-composer", "setReasoningLevel", ["nonsense"])
 
     asyncio.run(run())
+
+
+# -- R4: request lifecycle (begin_request/end_request) ------------------------
+
+
+def test_request_defaults_to_idle_and_can_send():
+    document = ComposerDocument()
+    request = document.payload()["request"]
+    assert request == {
+        "id": None,
+        "state": "idle",
+        "message": "",
+        "canSend": True,
+        "canCancel": False,
+        "canRetry": False,
+    }
+
+
+def test_begin_request_flips_to_generating():
+    document = ComposerDocument()
+    document.begin_request("req-1")
+
+    assert document.request_id == "req-1"
+    assert document.request_state == "generating"
+
+    request = document.payload()["request"]
+    assert request["id"] == "req-1"
+    assert request["state"] == "generating"
+    assert request["canSend"] is False
+    assert request["canCancel"] is True
+    assert request["canRetry"] is False
+
+
+def test_end_request_returns_to_idle():
+    document = ComposerDocument()
+    document.begin_request("req-1")
+    document.end_request()
+
+    assert document.request_id is None
+    assert document.request_state == "idle"
+
+    request = document.payload()["request"]
+    assert request == {
+        "id": None,
+        "state": "idle",
+        "message": "",
+        "canSend": True,
+        "canCancel": False,
+        "canRetry": False,
+    }
+
+
+def test_capabilities_cancellation_is_a_genuine_permanent_capability():
+    document = ComposerDocument()
+    assert document.payload()["capabilities"]["cancellation"] is True
 
 
 # -- token counter -------------------------------------------------------------

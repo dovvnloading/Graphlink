@@ -118,6 +118,10 @@ export class ComposerStore {
     this.transport.intent("app-composer", "setReasoningLevel", [level]);
   }
 
+  cancelChatRequest(requestId: string): void {
+    this.transport.intent("app-composer", "cancelChatRequest", [requestId]);
+  }
+
   dismissNotification(): void {
     this.transport.intent("notification", "dismiss", []);
   }

@@ -1285,8 +1285,24 @@ body,
   gap: 1px;
 }
 
-.composer-send-button {
+.composer-generating-indicator {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--gl-surface-text-muted);
+}
+
+.composer-send-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   margin-left: auto;
+}
+
+.composer-cancel-button {
+  color: var(--gl-status-error, var(--gl-neutral-button-icon));
+}
+
+.composer-send-button {
   display: flex;
   align-items: center;
   justify-content: center;

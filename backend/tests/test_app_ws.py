@@ -3,12 +3,20 @@ subscribe snapshots, the system/ping acceptance round-trip, and error paths.
 Runs the real ASGI app through Starlette's TestClient - no network, no Qt."""
 
 import tempfile
+import threading
+import time
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 
 from backend import BACKEND_VERSION
 from backend.app import create_app
+
+# Importing any backend.* submodule (above) runs backend/__init__.py first,
+# which puts graphlink_app/ on sys.path - these bare top-level imports must
+# come after it, same ordering rule backend/tests/test_agents.py documents.
+import api_provider
+import graphlink_task_config as config
 
 
 def make_client(tmp_path: Path | None = None) -> TestClient:
@@ -128,3 +136,56 @@ def test_sessions_do_not_share_connections():
             ws_b.send_json({"kind": "subscribe", "topics": ["system"]})
             assert ws_a.receive_json()["payload"]["sessionId"] == "a"
             assert ws_b.receive_json()["payload"]["sessionId"] == "b"
+
+
+def test_disconnect_cancels_any_in_flight_chat_request(monkeypatch):
+    # R4 concurrency-review finding: a client that sends a message and then
+    # closes its tab must not leave the real outbound LLM call running
+    # server-side forever with no way to ever cancel it. ws_endpoint's
+    # disconnect handler should trip the session's AgentDispatcher cancel
+    # event once its last connection drops - this exercises that through the
+    # real ASGI app, not just AgentDispatcher in isolation (test_agents.py
+    # already covers cancel()/cancel_all() unit-level).
+    call_started = threading.Event()
+
+    def fake_chat(task, messages, cancellation_event=None, **kwargs):
+        call_started.set()
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if cancellation_event is not None and cancellation_event.is_set():
+                raise api_provider.RequestCancelledError("cancelled")
+            time.sleep(0.01)
+        raise AssertionError("cancel_event was never set after disconnect")
+
+    # make_client() -> create_app() runs bootstrap_provider_state() against
+    # a fresh (unconfigured) SettingsManager - monkeypatching BEFORE that
+    # would just get overwritten, so the client comes first.
+    client = make_client()
+    monkeypatch.setattr(api_provider, "USE_API_MODE", False)
+    monkeypatch.setattr(api_provider, "LOCAL_PROVIDER_TYPE", config.LOCAL_PROVIDER_OLLAMA)
+    monkeypatch.setitem(config.OLLAMA_MODELS, config.TASK_CHAT, "test-model")
+    monkeypatch.setattr(api_provider, "chat", fake_chat)
+
+    with client.websocket_connect("/ws?session=cancel-test") as ws:
+        ws.send_json({"kind": "subscribe", "topics": ["scene"]})
+        ws.receive_json()  # initial scene snapshot
+        ws.send_json({"kind": "intent", "topic": "scene", "intent": "sendMessage", "args": ["hello"]})
+        ws.receive_json()  # scene republish after the user node is created
+
+        deadline = time.monotonic() + 5
+        while not call_started.is_set() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert call_started.is_set(), "fake_chat never started - dispatch did not fire"
+
+        session = client.app.state.bus.session("cancel-test")
+        in_flight = list(session.agent_dispatcher._requests.values())
+        assert len(in_flight) == 1
+        cancel_event = in_flight[0]["cancel_event"]
+        assert not cancel_event.is_set()
+    # Exiting the `with` block closes the websocket, running ws_endpoint's
+    # finally - this is the disconnect this test exists to exercise.
+
+    deadline = time.monotonic() + 5
+    while not cancel_event.is_set() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert cancel_event.is_set()

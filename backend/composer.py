@@ -65,6 +65,11 @@ class ComposerDocument:
 
     draft: ComposerDraft = field(default_factory=ComposerDraft)
     reasoning_level: str = DEFAULT_REASONING_LEVEL
+    # R4: the in-flight agent-dispatch request, if any - set by
+    # backend/agents.py's AgentDispatcher around a real chat call so the
+    # composer UI can reflect generating/idle state and offer cancellation.
+    request_id: str | None = None
+    request_state: str = "idle"
 
     def update_draft_text(self, text: str) -> None:
         self.draft.text = str(text)
@@ -74,6 +79,14 @@ class ComposerDocument:
         if level not in valid_ids:
             raise ComposerError(f"unknown reasoning level: {level}")
         self.reasoning_level = level
+
+    def begin_request(self, request_id: str) -> None:
+        self.request_id = request_id
+        self.request_state = "generating"
+
+    def end_request(self) -> None:
+        self.request_id = None
+        self.request_state = "idle"
 
     def _reasoning_label(self) -> str:
         return next(o["label"] for o in REASONING_OPTIONS if o["id"] == self.reasoning_level)
@@ -109,11 +122,11 @@ class ComposerDocument:
                 "canChange": False,
             },
             "request": {
-                "id": None,
-                "state": "idle",
+                "id": self.request_id,
+                "state": self.request_state,
                 "message": "",
-                "canSend": False,
-                "canCancel": False,
+                "canSend": self.request_state == "idle",
+                "canCancel": self.request_state == "generating",
                 "canRetry": False,
             },
             "capabilities": {
@@ -123,7 +136,7 @@ class ComposerDocument:
                 "modelSelection": False,
                 "reasoningSelection": True,
                 "settingsShortcut": True,
-                "cancellation": False,
+                "cancellation": True,
             },
         }
 

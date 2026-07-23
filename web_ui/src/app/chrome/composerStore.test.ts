@@ -104,10 +104,12 @@ describe("ComposerStore", () => {
     const store = new ComposerStore(transport);
     store.updateDraft("hello world");
     store.setReasoningLevel("thinking");
+    store.cancelChatRequest("req-42");
     store.dismissNotification();
     expect(intents).toEqual([
       { topic: "app-composer", intent: "updateDraft", args: ["hello world"] },
       { topic: "app-composer", intent: "setReasoningLevel", args: ["thinking"] },
+      { topic: "app-composer", intent: "cancelChatRequest", args: ["req-42"] },
       { topic: "notification", intent: "dismiss", args: [] },
     ]);
   });

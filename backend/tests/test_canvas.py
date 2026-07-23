@@ -4,9 +4,16 @@ shape, and snapshot publishing."""
 
 import asyncio
 import base64
+from unittest.mock import patch
 
 import pytest
 
+# Importing any backend.* submodule runs backend/__init__.py first, which
+# puts graphlink_app/ on sys.path - these must come before the bare
+# top-level graphlink_app imports below (api_provider, graphlink_task_config)
+# for this module to import cleanly when run standalone, not just as part of
+# a larger session where some earlier-collected module already did this.
+from backend.agents import AgentDispatcher
 from backend.canvas import (
     DRAG_FACTOR_MAX,
     DRAG_FACTOR_MIN,
@@ -14,8 +21,12 @@ from backend.canvas import (
     SceneError,
     register_canvas,
 )
+from backend.composer import ComposerDocument
 from backend.events import SessionBus
 from backend.notifications import NotificationState
+
+import api_provider
+import graphlink_task_config as task_config
 
 
 # -- document invariants ----------------------------------------------------
@@ -829,7 +840,7 @@ def test_send_conversation_message_intent_appends_and_fires_the_same_deferred_no
 
         notice = await bus.publish("notification")
         assert notice["visible"] is True
-        assert notice["message"] == "AI response generation lands in R4."
+        assert notice["message"] == "AI response generation lands in a follow-up increment."
         assert recorder.topics_seen().count("scene") == 3, "all three mutations publish (addNode, addConversationNode, sendConversationMessage)"
 
     asyncio.run(run())
@@ -922,6 +933,35 @@ def test_send_message_after_deleting_the_active_node_continues_from_its_parent()
     assert any(e.source == first.id and e.target == third.id for e in doc.edges.values())
 
 
+# -- R4: chat_branch_history --------------------------------------------------
+
+
+def test_chat_branch_history_returns_root_to_leaf_for_a_multi_hop_branch():
+    doc = SceneDocument()
+    root = doc.add_chat_node(0, 0, "root question", True)
+    reply = doc.add_chat_node(0, 160, "root answer", False, parent_id=root.id)
+    follow_up = doc.add_chat_node(0, 320, "follow up", True, parent_id=reply.id)
+
+    history = doc.chat_branch_history(follow_up.id)
+
+    assert history == [
+        {"role": "user", "content": "root question"},
+        {"role": "assistant", "content": "root answer"},
+        {"role": "user", "content": "follow up"},
+    ]
+
+
+def test_chat_branch_history_for_a_single_root_node_returns_one_entry():
+    doc = SceneDocument()
+    root = doc.add_chat_node(0, 0, "only message", True)
+    assert doc.chat_branch_history(root.id) == [{"role": "user", "content": "only message"}]
+
+
+def test_chat_branch_history_does_not_error_on_an_unknown_node_id():
+    doc = SceneDocument()
+    assert doc.chat_branch_history("ghost") == []
+
+
 def test_drag_factor_is_bounded():
     doc = SceneDocument()
     doc.set_drag_factor(99)
@@ -961,13 +1001,29 @@ class Recorder:
         return [m["topic"] for m in self.messages if m["kind"] == "state"]
 
 
-def make_bus():
+class _FakeSettingsManager:
+    """Stand-in for AgentDispatcher's settings_manager - canvas tests only
+    need persona() to resolve, not real settings persistence."""
+
+    def get_enable_system_prompt(self):
+        return True
+
+
+def make_bus_with_dispatcher():
     bus = SessionBus("canvas-test")
     notifications = NotificationState()
     bus.register_topic("notification", notifications.payload)
-    document = register_canvas(bus, notifications)
+    composer_document = ComposerDocument()
+    bus.register_topic("app-composer", composer_document.payload)
+    agent_dispatcher = AgentDispatcher(_FakeSettingsManager())
+    document = register_canvas(bus, notifications, agent_dispatcher, composer_document)
     recorder = Recorder()
     bus.attach(recorder)
+    return bus, document, recorder, agent_dispatcher
+
+
+def make_bus():
+    bus, document, recorder, _ = make_bus_with_dispatcher()
     return bus, document, recorder
 
 
@@ -1023,17 +1079,39 @@ def test_add_code_node_intent_creates_a_real_node_and_publishes():
     asyncio.run(run())
 
 
-def test_send_message_intent_creates_a_real_node_and_an_honest_deferred_notification():
+def test_send_message_intent_dispatches_a_real_agent_reply():
+    # R4: sendMessage's deferred "lands in R4" notice is gone - the real
+    # intent now dispatches through AgentDispatcher. Same monkeypatch seam as
+    # test_agents.py (api_provider.chat directly), validating the real
+    # wiring end to end through the WS intent layer.
     async def run():
-        bus, document, recorder = make_bus()
-        node_id = await bus.dispatch_intent("scene", "sendMessage", ["what is this graph about?"])
+        bus, document, recorder, dispatcher = make_bus_with_dispatcher()
+
+        def fake_chat(task, messages, **kwargs):
+            return {"message": {"content": "a real agent reply"}}
+
+        with patch.object(api_provider, "USE_API_MODE", False), \
+                patch.object(api_provider, "LOCAL_PROVIDER_TYPE", task_config.LOCAL_PROVIDER_OLLAMA), \
+                patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
+                patch.object(api_provider, "chat", fake_chat):
+            node_id = await bus.dispatch_intent("scene", "sendMessage", ["what is this graph about?"])
+            # The reply lands inside a scheduled (not awaited) background
+            # task - grab it from the dispatcher's registry and await it
+            # directly rather than assuming the intent itself blocks for it.
+            entry = next(iter(dispatcher._requests.values()))
+            await entry["task"]
+
         assert document.nodes[node_id].content == "what is this graph about?"
         assert document.nodes[node_id].is_user is True
 
-        notice = await bus.publish("notification")
-        assert notice["visible"] is True
-        assert notice["message"] == "AI response generation lands in R4."
-        assert recorder.topics_seen().count("scene") == 1
+        reply_nodes = [n for n in document.nodes.values() if n.kind == "chat" and n.id != node_id]
+        assert len(reply_nodes) == 1
+        reply_node = reply_nodes[0]
+        assert reply_node.content == "a real agent reply"
+        assert reply_node.is_user is False
+        assert any(e.source == node_id and e.target == reply_node.id for e in document.edges.values())
+        assert document.last_chat_node_id == reply_node.id
+        assert recorder.topics_seen().count("scene") >= 2, "user node + reply node both publish scene"
 
     asyncio.run(run())
 
