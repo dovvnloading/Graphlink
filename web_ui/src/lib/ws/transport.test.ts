@@ -183,6 +183,70 @@ describe("WsTransport", () => {
     expect(t.getStatus()).toBe("open");
   });
 
+  it("a truly unrecognized kind still logs the existing 'unknown message kind' error (contrast with stream's silent drop)", () => {
+    const t = makeTransport();
+    t.connect();
+    const socket = FakeSocket.instances[0];
+    socket.open();
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    socket.receive({ kind: "not-a-real-kind" });
+    expect(consoleError).toHaveBeenCalledWith("[ws] unknown message kind:", "not-a-real-kind");
+    consoleError.mockRestore();
+  });
+
+  it("subscribeStream: a stream frame with no matching requestId subscriber is silently dropped", () => {
+    const t = makeTransport();
+    t.connect();
+    const socket = FakeSocket.instances[0];
+    socket.open();
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    socket.receive({ kind: "stream", topic: "app-composer", requestId: "no-such-request", seq: 0, delta: "hi", done: false, reset: false });
+    expect(consoleError).not.toHaveBeenCalled();
+    consoleError.mockRestore();
+  });
+
+  it("subscribeStream: routes deltas only to the matching requestId and fans out to every listener on it", () => {
+    const t = makeTransport();
+    t.connect();
+    const socket = FakeSocket.instances[0];
+    socket.open();
+    const forA1: unknown[] = [];
+    const forA2: unknown[] = [];
+    const forB: unknown[] = [];
+    t.subscribeStream("req-a", (delta, done, reset, seq) => forA1.push({ delta, done, reset, seq }));
+    t.subscribeStream("req-a", (delta, done, reset, seq) => forA2.push({ delta, done, reset, seq }));
+    t.subscribeStream("req-b", (delta, done, reset, seq) => forB.push({ delta, done, reset, seq }));
+
+    socket.receive({ kind: "stream", topic: "app-composer", requestId: "req-a", seq: 0, delta: "Hel", done: false, reset: false });
+    socket.receive({ kind: "stream", topic: "app-composer", requestId: "req-a", seq: 1, delta: "lo", done: true, reset: false });
+
+    expect(forA1).toEqual([
+      { delta: "Hel", done: false, reset: false, seq: 0 },
+      { delta: "lo", done: true, reset: false, seq: 1 },
+    ]);
+    expect(forA2).toEqual(forA1);
+    expect(forB).toEqual([]);
+  });
+
+  it("subscribeStream: the returned unsubscribe stops further delivery and cleans up an empty requestId entry", () => {
+    const t = makeTransport();
+    t.connect();
+    const socket = FakeSocket.instances[0];
+    socket.open();
+    const seen: unknown[] = [];
+    const unsub = t.subscribeStream("req-a", (delta) => seen.push(delta));
+    socket.receive({ kind: "stream", topic: "app-composer", requestId: "req-a", seq: 0, delta: "one", done: false, reset: false });
+    unsub();
+    socket.receive({ kind: "stream", topic: "app-composer", requestId: "req-a", seq: 1, delta: "two", done: false, reset: false });
+    expect(seen).toEqual(["one"]);
+
+    // Now that no listener remains, this must silently drop (not error).
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    socket.receive({ kind: "stream", topic: "app-composer", requestId: "req-a", seq: 2, delta: "three", done: true, reset: false });
+    expect(consoleError).not.toHaveBeenCalled();
+    consoleError.mockRestore();
+  });
+
   it("notifies status listeners through the lifecycle", () => {
     const t = makeTransport();
     const statuses: string[] = [];

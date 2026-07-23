@@ -30,6 +30,30 @@ Two separate jobs live here:
    either, it only stops waiting for it - same limitation here: the
    worker-thread call to `api_provider.chat()` keeps running in its thread
    pool slot after a timeout fires, it is simply no longer awaited.
+
+R4.4 ("true token streaming") adds a `stream: bool` keyword-only parameter to
+`_dispatch`, used ONLY by `start_chat_reply` (the Composer/ChatNode reply
+path - see backend/composer.py's `app-composer` topic).
+`start_conversation_reply` (ConversationNode) is completely unchanged: it
+passes no `stream` kwarg at all and keeps calling the plain blocking
+`_call_chat_agent` driver, exactly as R4.3 shipped it - streaming that
+surface is a deliberately deferred follow-up (see the R4.4 design spec).
+
+When streaming, `_run()` hands raw `on_chunk(delta, reset)` callbacks arriving
+on a worker OS thread (inside `asyncio.to_thread`) back to the event loop via
+`loop.call_soon_threadsafe(queue.put_nowait, ...)` feeding an `asyncio.Queue`
+- the only safe way to cross that thread boundary. A `_pump()` coroutine
+drains that queue and batches deltas into `bus.publish_stream(...)` calls
+(new sibling to `bus.publish()` on `backend.events.SessionBus`, see that
+module) under a fixed flush policy: every ~60ms if anything is buffered, or
+immediately once 40 characters have accumulated, whichever comes first - plus
+an unconditional final flush the instant the underlying call finishes, on
+EVERY exit path (success, cancel, timeout, or any other exception), so the
+pump can never leave a stream hanging without its final `done: true` frame.
+The completion hand-off (`on_reply(reply_text)` with the full accumulated
+text, then `await bus.publish("scene")`) is byte-identical to the
+non-streaming path - callers never know or care whether their reply arrived
+in one blocking call or was assembled from many small chunks.
 """
 
 from __future__ import annotations
@@ -188,6 +212,7 @@ class AgentDispatcher:
         on_begin,
         on_end,
         state_topic: str,
+        stream: bool = False,
     ) -> None:
         """The shared real-dispatch pipeline behind both start_chat_reply
         (Composer, state_topic="app-composer") and start_conversation_reply
@@ -197,7 +222,18 @@ class AgentDispatcher:
         state (ComposerDocument.begin_request/end_request, or a
         ConversationNode's pending_request_id) without this method knowing
         which; `state_topic` is the topic republished around that state
-        change so the right part of the UI refreshes."""
+        change so the right part of the UI refreshes.
+
+        `stream` (R4.4, keyword-only, default False): when True, the reply is
+        assembled from incremental `on_chunk` callbacks - see `_run`'s own
+        streaming branch below - and broadcast live via
+        `bus.publish_stream(...)` as it arrives, instead of waiting for one
+        blocking call to return the full text. start_chat_reply is the ONLY
+        caller that passes stream=True; start_conversation_reply omits the
+        kwarg entirely and is completely unchanged by this addition. Either
+        way, the completion hand-off below (`on_reply(reply_text)` then
+        `await bus.publish("scene")`) is identical - callers never see a
+        difference once the reply is ready."""
         if self._requests:
             # Single-request-per-session guard: never start a second
             # concurrent request while one is already in flight.
@@ -223,10 +259,118 @@ class AgentDispatcher:
             on_begin(request_id)
             await bus.publish(state_topic)
             try:
-                reply_text = await asyncio.wait_for(
-                    asyncio.to_thread(_call_chat_agent, conversation_history, self.persona(), cancel_event),
-                    timeout=WATCHDOG_TIMEOUT_SECONDS,
-                )
+                if stream:
+                    loop = asyncio.get_running_loop()
+                    queue: asyncio.Queue = asyncio.Queue()
+                    _STREAM_DONE = object()
+
+                    def _thread_on_chunk(delta: str, reset: bool) -> None:
+                        # Runs on the WORKER THREAD inside asyncio.to_thread -
+                        # this is the only safe way to hand data to the event
+                        # loop from another OS thread; never touch
+                        # `queue`/`bus` directly here, only via
+                        # call_soon_threadsafe.
+                        loop.call_soon_threadsafe(queue.put_nowait, (delta, reset))
+
+                    async def _pump() -> None:
+                        # Batches raw on_chunk deltas into WS "stream" frames:
+                        # flush every FLUSH_INTERVAL_S if anything is
+                        # buffered, or immediately once FLUSH_CHARS is
+                        # reached, whichever comes first. A `reset` item
+                        # (discarding a failed reasoning-retry attempt) always
+                        # flushes whatever is buffered first, then emits its
+                        # own reset frame immediately - never batched away.
+                        seq = 0
+                        buffer = ""
+                        FLUSH_INTERVAL_S, FLUSH_CHARS = 0.06, 40
+                        finished = False
+                        last_flush = loop.time()
+
+                        async def _emit(text: str, *, done: bool = False, reset: bool = False) -> None:
+                            nonlocal seq
+                            await bus.publish_stream(
+                                topic=state_topic,
+                                request_id=request_id,
+                                seq=seq,
+                                delta=text,
+                                done=done,
+                                reset=reset,
+                            )
+                            seq += 1
+
+                        while not finished:
+                            got = False
+                            try:
+                                item = await asyncio.wait_for(queue.get(), timeout=FLUSH_INTERVAL_S)
+                                got = True
+                            except asyncio.TimeoutError:
+                                pass
+                            if got:
+                                pending = [item]
+                                while not queue.empty():  # drain a burst without waiting
+                                    pending.append(queue.get_nowait())
+                                for it in pending:
+                                    if finished:
+                                        # A delta queued essentially
+                                        # concurrently with _STREAM_DONE (the
+                                        # background thread is never actually
+                                        # interrupted on timeout - see this
+                                        # module's own docstring) could still
+                                        # land in the same drained burst AFTER
+                                        # the done marker. Discard it rather
+                                        # than buffering a stray, cosmetic
+                                        # trailing update that would arrive
+                                        # after the request already ended.
+                                        continue
+                                    if it is _STREAM_DONE:
+                                        finished = True
+                                    else:
+                                        delta, reset = it
+                                        if reset:
+                                            if buffer:
+                                                await _emit(buffer)
+                                                buffer = ""
+                                            await _emit("", reset=True)
+                                            last_flush = loop.time()
+                                        else:
+                                            buffer += delta
+                            now = loop.time()
+                            if buffer and (
+                                finished or len(buffer) >= FLUSH_CHARS or (now - last_flush) >= FLUSH_INTERVAL_S
+                            ):
+                                await _emit(buffer)
+                                buffer = ""
+                                last_flush = now
+                        # Guaranteed final flush, unconditional and always
+                        # last, on EVERY exit path (success, cancel, timeout,
+                        # other error) - see the `finally` below that always
+                        # queues _STREAM_DONE before awaiting this task.
+                        await _emit("", done=True)
+
+                    pump_task = asyncio.create_task(_pump())
+                    try:
+                        reply_text = await asyncio.wait_for(
+                            asyncio.to_thread(
+                                _call_chat_agent_stream,
+                                conversation_history,
+                                self.persona(),
+                                cancel_event,
+                                _thread_on_chunk,
+                            ),
+                            timeout=WATCHDOG_TIMEOUT_SECONDS,
+                        )
+                    finally:
+                        # Guarantees the pump always terminates and sends its
+                        # final done:true frame, on EVERY exit path - success,
+                        # timeout, cancel, or any other exception raised out
+                        # of the to_thread call above.
+                        queue.put_nowait(_STREAM_DONE)
+                        await pump_task
+                else:
+                    reply_text = await asyncio.wait_for(
+                        asyncio.to_thread(_call_chat_agent, conversation_history, self.persona(), cancel_event),
+                        timeout=WATCHDOG_TIMEOUT_SECONDS,
+                    )
                 if inspect.iscoroutinefunction(on_reply):
                     await on_reply(reply_text)
                 else:
@@ -273,7 +417,21 @@ class AgentDispatcher:
         composer_document,
         conversation_history,
         on_reply,
+        stream: bool = True,
     ) -> None:
+        # R4.4: defaults to True for send_message's Composer-send call site
+        # (the only surface this increment's design intends to stream), but
+        # is a real, caller-controlled parameter, NOT hardcoded - regenerate_
+        # response's own call site below passes stream=False explicitly,
+        # since it REPLACES an existing node's content rather than creating
+        # a new one, and the design spec's own deferral list explicitly
+        # scoped Regenerate Response streaming out of this increment ("a
+        # small follow-up once this mechanism is proven"). Hardcoding
+        # stream=True here would have silently activated the Composer's live
+        # preview UI for every Regenerate click too, with no way for the
+        # frontend to distinguish "a send is in flight" from "a regenerate
+        # elsewhere in the canvas is in flight" - a real, confusing surprise
+        # this parameter exists specifically to prevent.
         return await self._dispatch(
             bus=bus,
             notifications_state=notifications_state,
@@ -282,6 +440,7 @@ class AgentDispatcher:
             on_begin=composer_document.begin_request,
             on_end=composer_document.end_request,
             state_topic="app-composer",
+            stream=stream,
         )
 
     async def start_conversation_reply(
@@ -298,7 +457,13 @@ class AgentDispatcher:
         ConversationNode itself (`node.pending_request_id`, duck-typed - this
         module does not import canvas.py's SceneNode) rather than on
         ComposerDocument, and "scene" (not "app-composer") is republished
-        around that change so the node's own in-flight state refreshes."""
+        around that change so the node's own in-flight state refreshes.
+
+        R4.4: deliberately UNCHANGED by the new streaming addition - no
+        `stream` kwarg is passed here, so _dispatch's default (False) applies
+        and this keeps calling the plain blocking `_call_chat_agent` driver
+        exactly as before. Streaming ConversationNode replies is an explicit,
+        separate deferral (see the R4.4 design spec)."""
         return await self._dispatch(
             bus=bus,
             notifications_state=notifications_state,
@@ -421,6 +586,33 @@ def _call_chat_agent(conversation_history, persona_text, cancel_event) -> str:
         # backwards would silently drop the "You are Graphlink Assistant. "
         # prefix.
         resolved_system_prompt=agent.system_prompt,
+    )
+
+
+def _call_chat_agent_stream(conversation_history, persona_text, cancel_event, on_chunk) -> str:
+    """Runs inside asyncio.to_thread - a real OS thread, not the event loop.
+    Streaming counterpart to _call_chat_agent (R4.4) - same persona/
+    current_node/resolved_system_prompt quirks and guarantees as that
+    function (see its own docstring for the "(default persona)" note, which
+    applies identically here since both build the ChatAgent the same way).
+
+    The only difference is the trailing `on_chunk` argument, forwarded
+    straight through to ChatAgent.get_response's additive `on_chunk` kwarg
+    (see graphlink_app/graphlink_chat_agent.py): when non-None, get_response
+    routes the call through api_provider.chat_stream instead of
+    api_provider.chat, invoking `on_chunk(delta, reset)` zero or more times
+    before returning the same full-text shape `_call_chat_agent` returns.
+    `on_chunk` itself is `_dispatch`'s `_thread_on_chunk` closure - a plain
+    callable safe to invoke from this worker thread, since it only ever does
+    `loop.call_soon_threadsafe(...)` internally rather than touching the
+    event loop directly."""
+    agent = ChatAgent("Graphlink Assistant", persona_text)
+    return agent.get_response(
+        conversation_history,
+        current_node=None,
+        cancellation_event=cancel_event,
+        resolved_system_prompt=agent.system_prompt,
+        on_chunk=on_chunk,
     )
 
 

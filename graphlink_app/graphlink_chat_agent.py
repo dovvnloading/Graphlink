@@ -74,7 +74,8 @@ class ChatWorker:
         self.token_estimator = TokenEstimator()
         self.MAX_TOKENS = 8000
 
-    def run(self, conversation_history, current_node, cancellation_event=None, resolved_system_prompt=None):
+    def run(self, conversation_history, current_node, cancellation_event=None, resolved_system_prompt=None,
+            on_chunk=None):
         """
         Executes the chat logic for a single turn.
 
@@ -85,6 +86,11 @@ class ChatWorker:
             resolved_system_prompt (str, optional): The branch system prompt already
                 resolved on the GUI thread. When provided, the scene is NOT walked here -
                 this is how the worker-thread path avoids touching QGraphicsScene (#20).
+            on_chunk (callable, optional): Qt-removal R4.4 token streaming. When provided,
+                routes through api_provider.chat_stream(...) instead of api_provider.chat(...),
+                invoking on_chunk(delta, reset) as incremental text arrives. Additive and
+                default-None: every existing call site (this legacy Qt path included) that
+                omits it gets byte-identical behavior via the unchanged chat() call below.
 
         Returns:
             str: The AI-generated response text.
@@ -115,11 +121,19 @@ class ChatWorker:
 
             messages.extend(trimmed_history)
 
-            response = api_provider.chat(
-                task=config.TASK_CHAT,
-                messages=messages,
-                cancellation_event=cancellation_event,
-            )
+            if on_chunk is not None:
+                response = api_provider.chat_stream(
+                    task=config.TASK_CHAT,
+                    messages=messages,
+                    on_chunk=on_chunk,
+                    cancellation_event=cancellation_event,
+                )
+            else:
+                response = api_provider.chat(
+                    task=config.TASK_CHAT,
+                    messages=messages,
+                    cancellation_event=cancellation_event,
+                )
             ai_message = response['message']['content']
             return ai_message
         except Exception as e:
@@ -144,7 +158,8 @@ class ChatAgent:
         self.persona = persona or "(default persona)"
         self.system_prompt = f"You are {self.name}. {self.persona}"
 
-    def get_response(self, conversation_history, current_node, cancellation_event=None, resolved_system_prompt=None):
+    def get_response(self, conversation_history, current_node, cancellation_event=None, resolved_system_prompt=None,
+                      on_chunk=None):
         """
         Gets an AI response for a given conversation history.
 
@@ -154,6 +169,8 @@ class ChatAgent:
             resolved_system_prompt (str, optional): Branch system prompt already resolved
                 on the GUI thread; passed straight through so the worker never walks the
                 scene itself (#20).
+            on_chunk (callable, optional): Qt-removal R4.4 token streaming; passed straight
+                through to ChatWorker.run (see its docstring). Additive, default-None.
 
         Returns:
             str: The AI-generated response text.
@@ -166,5 +183,6 @@ class ChatAgent:
             current_node,
             cancellation_event=cancellation_event,
             resolved_system_prompt=resolved_system_prompt,
+            on_chunk=on_chunk,
         )
         return ai_response

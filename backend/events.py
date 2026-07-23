@@ -132,6 +132,46 @@ class SessionBus:
             raise UnknownTopicError(topic)
         await conn.send_json({"kind": "state", "topic": topic, "payload": t.snapshot()})
 
+    async def publish_stream(
+        self,
+        *,
+        topic: str,
+        request_id: str,
+        seq: int,
+        delta: str,
+        done: bool,
+        reset: bool = False,
+    ) -> None:
+        """Broadcast one streaming delta chunk (Qt-removal plan R4.4).
+        Sibling to publish()/send_snapshot(), deliberately NOT a topic
+        snapshot: bypasses _Topic entirely - no revision bump, no
+        schemaVersion stamp. This is a brand-new `kind: "stream"` wire
+        message living outside the versioned-snapshot contract, for a
+        15-17Hz delta channel that would otherwise force `_Topic.snapshot()`
+        to falsely bump `revision` dozens of times per reply.
+
+        `topic` is informational only (which UI surface's request this is) -
+        unlike publish()/send_snapshot(), it is never looked up in
+        self._topics, so an unregistered/arbitrary topic name here is not an
+        error. Same broadcast/dead-connection-detach shape as publish()."""
+        message = {
+            "kind": "stream",
+            "topic": topic,
+            "requestId": request_id,
+            "seq": seq,
+            "delta": delta,
+            "done": done,
+            "reset": reset,
+        }
+        # Snapshot the set: a failed send detaches the connection mid-loop -
+        # same defensive shape as publish() above.
+        for conn in list(self._connections):
+            try:
+                await conn.send_json(message)
+            except Exception:
+                logger.warning("dropping dead connection on session %s", self.session_id)
+                self.detach(conn)
+
     def topic_names(self) -> list[str]:
         return sorted(self._topics)
 

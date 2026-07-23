@@ -43,6 +43,7 @@ function Icon({ name }: { name: "attach" | "send" | "chevron" | "stop" }) {
 
 export function Composer({ store, sceneStore }: { store: ComposerStore; sceneStore: SceneStore }) {
   const composer = useSyncExternalStore(store.subscribe, store.getComposer);
+  const streamText = useSyncExternalStore(store.subscribe, store.getStreamText);
   const overlays = useOverlays();
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -85,9 +86,9 @@ export function Composer({ store, sceneStore }: { store: ComposerStore; sceneSto
 
       <div className="composer-controls">
         {composer.request.state === "generating" && (
-          <span className="composer-generating-indicator" role="status">
-            Generating…
-          </span>
+          <div className="composer-stream-preview" role="status" aria-live="polite">
+            {streamText || "Thinking…"}
+          </div>
         )}
 
         <button

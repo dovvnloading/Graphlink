@@ -65,6 +65,8 @@ export class ComposerStore {
   private composer: AppComposerState = initialComposerState;
   private tokenCounter: TokenCounterState = initialTokenCounterState;
   private notification: NotificationState = initialNotificationState;
+  private streamText = "";
+  private streamUnsub: (() => void) | null = null;
   private readonly listeners = new Set<Listener>();
   private readonly unsubscribers: Array<() => void> = [];
 
@@ -84,7 +86,11 @@ export class ComposerStore {
 
   connect(): void {
     this.unsubscribers.push(
-      this.bind<AppComposerState>("app-composer", (v) => (this.composer = v)),
+      this.bind<AppComposerState>("app-composer", (v) => {
+        const prevId = this.composer.request.id;
+        this.composer = v;
+        this.syncStream(prevId, v.request.id);
+      }),
       this.bind<TokenCounterState>("token-counter", (v) => (this.tokenCounter = v)),
       this.bind<NotificationState>("notification", (v) => (this.notification = v)),
     );
@@ -93,6 +99,26 @@ export class ComposerStore {
   dispose(): void {
     for (const unsubscribe of this.unsubscribers) unsubscribe();
     this.unsubscribers.length = 0;
+    this.streamUnsub?.();
+    this.streamUnsub = null;
+  }
+
+  /** Keeps `streamText` bound to whichever request is currently in flight -
+   * a fresh request.id subscribes to its own stream frames; the id
+   * dropping back to null (idle/cancelled/errored) unsubscribes and clears
+   * the buffer. See transport.ts's subscribeStream()/`kind:"stream"`. */
+  private syncStream(prevId: string | null | undefined, nextId: string | null | undefined): void {
+    if (nextId === prevId) return;
+    this.streamUnsub?.();
+    this.streamUnsub = null;
+    this.streamText = "";
+    if (nextId) {
+      this.streamUnsub = this.transport.subscribeStream(nextId, (delta, _done, reset) => {
+        if (reset) this.streamText = "";
+        else this.streamText += delta;
+        this.emit();
+      });
+    }
   }
 
   subscribe = (listener: Listener): (() => void) => {
@@ -103,6 +129,7 @@ export class ComposerStore {
   getComposer = (): AppComposerState => this.composer;
   getTokenCounter = (): TokenCounterState => this.tokenCounter;
   getNotification = (): NotificationState => this.notification;
+  getStreamText = (): string => this.streamText;
 
   private emit(): void {
     for (const listener of [...this.listeners]) listener();

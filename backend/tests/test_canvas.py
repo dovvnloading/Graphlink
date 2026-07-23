@@ -1220,6 +1220,49 @@ def test_regenerate_response_intent_mutates_the_existing_node_in_place_not_a_new
     asyncio.run(run())
 
 
+def test_regenerate_response_does_not_stream_unlike_an_ordinary_send():
+    # R4.4 regression: start_chat_reply's stream=True default is for
+    # send_message's Composer-send surface only. regenerate_response passes
+    # stream=False explicitly (see canvas.py's own call site) - an
+    # adversarial reviewer found the first R4.4 cut hardcoded stream=True
+    # unconditionally, silently activating the Composer dock's live preview
+    # for a Regenerate click on some unrelated node in the canvas, with no
+    # way for the frontend to distinguish that from a real Send in flight.
+    async def run():
+        bus, document, recorder, dispatcher = make_bus_with_dispatcher()
+
+        def first_reply(task, messages, **kwargs):
+            return {"message": {"content": "original reply"}}
+
+        with patch.object(api_provider, "USE_API_MODE", False), \
+                patch.object(api_provider, "LOCAL_PROVIDER_TYPE", task_config.LOCAL_PROVIDER_OLLAMA), \
+                patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
+                patch.object(api_provider, "chat", first_reply):
+            user_id = await bus.dispatch_intent("scene", "sendMessage", ["hi"])
+            entry = next(iter(dispatcher._requests.values()))
+            await entry["task"]
+
+        assistant_node = next(n for n in document.nodes.values() if n.kind == "chat" and n.id != user_id)
+        recorder.messages.clear()  # only care about messages from the regenerate call below
+
+        def regenerated_reply(task, messages, **kwargs):
+            return {"message": {"content": "regenerated reply"}}
+
+        with patch.object(api_provider, "USE_API_MODE", False), \
+                patch.object(api_provider, "LOCAL_PROVIDER_TYPE", task_config.LOCAL_PROVIDER_OLLAMA), \
+                patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
+                patch.object(api_provider, "chat", regenerated_reply):
+            await bus.dispatch_intent("scene", "regenerateResponse", [assistant_node.id])
+            entry = next(iter(dispatcher._requests.values()))
+            await entry["task"]
+
+        stream_frames = [m for m in recorder.messages if m.get("kind") == "stream"]
+        assert stream_frames == [], "regenerate_response must never emit stream frames"
+        assert document.nodes[assistant_node.id].content == "regenerated reply"
+
+    asyncio.run(run())
+
+
 def test_regenerate_response_replaces_code_child_not_accumulates():
     async def run():
         bus, document, recorder, dispatcher = make_bus_with_dispatcher()
