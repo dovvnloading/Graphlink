@@ -893,6 +893,43 @@ def test_send_conversation_message_intent_dispatches_a_real_agent_reply():
     asyncio.run(run())
 
 
+def test_send_conversation_message_reply_with_code_fence_lands_raw_and_unparsed():
+    # R4.3b: ConversationNode is EXEMPT from the response_parsing retrofit -
+    # this is the machine-checked proof, not just the documenting comment in
+    # backend/canvas.py's send_conversation_message _on_reply. A reply
+    # containing a fenced code block must land verbatim in the conversation
+    # node's plain-text history, with no code/thinking child node created.
+    async def run():
+        bus, document, recorder, dispatcher = make_bus_with_dispatcher()
+        parent_id = await bus.dispatch_intent("scene", "addNode", [0, 0, "parent"])
+        node_id = await bus.dispatch_intent("scene", "addConversationNode", [10, 10, parent_id])
+
+        raw_reply = "Sure thing:\n\n```python\nprint('unparsed')\n```"
+
+        def fake_chat(task, messages, **kwargs):
+            return {"message": {"content": raw_reply}}
+
+        with patch.object(api_provider, "USE_API_MODE", False), \
+                patch.object(api_provider, "LOCAL_PROVIDER_TYPE", task_config.LOCAL_PROVIDER_OLLAMA), \
+                patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
+                patch.object(api_provider, "chat", fake_chat):
+            await bus.dispatch_intent(
+                "scene", "sendConversationMessage", [node_id, "show me some code"]
+            )
+            entry = next(iter(dispatcher._requests.values()))
+            await entry["task"]
+
+        assert document.nodes[node_id].history == [
+            {"role": "user", "content": "show me some code"},
+            {"role": "assistant", "content": raw_reply},
+        ], "the raw reply (fences and all) lands verbatim - no parsing happened"
+        assert not any(n.kind in ("code", "thinking") for n in document.nodes.values()), (
+            "no child node of any kind was created for this reply"
+        )
+
+    asyncio.run(run())
+
+
 def test_cancel_chat_request_intent_on_scene_topic_calls_agent_dispatcher_cancel():
     # A lightweight fake dispatcher is sufficient here - no real LLM call
     # needed, this just confirms the intent forwards to cancel().
@@ -1187,6 +1224,176 @@ def test_send_message_intent_dispatches_a_real_agent_reply():
         assert any(e.source == node_id and e.target == reply_node.id for e in document.edges.values())
         assert document.last_chat_node_id == reply_node.id
         assert recorder.topics_seen().count("scene") >= 2, "user node + reply node both publish scene"
+
+    asyncio.run(run())
+
+
+def test_send_message_reply_that_is_genuinely_empty_creates_no_assistant_node():
+    # R4.3b regression: mirrors legacy handle_response's own outer gate
+    # (`if text_content or parsed_parts:`) - a reply that parse_response
+    # reduces to an empty parts list (whitespace-only) must create NO
+    # assistant node at all, not a "[Empty Response]" placeholder node, and
+    # must leave last_chat_node_id pointed at the user's own message (set by
+    # send_message's domain method), not touch it again.
+    async def run():
+        bus, document, recorder, dispatcher = make_bus_with_dispatcher()
+
+        def fake_chat(task, messages, **kwargs):
+            return {"message": {"content": "   \n\n   "}}
+
+        with patch.object(api_provider, "USE_API_MODE", False), \
+                patch.object(api_provider, "LOCAL_PROVIDER_TYPE", task_config.LOCAL_PROVIDER_OLLAMA), \
+                patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
+                patch.object(api_provider, "chat", fake_chat):
+            node_id = await bus.dispatch_intent("scene", "sendMessage", ["hello"])
+            entry = next(iter(dispatcher._requests.values()))
+            await entry["task"]
+
+        reply_nodes = [n for n in document.nodes.values() if n.id != node_id]
+        assert reply_nodes == [], "a genuinely empty reply must create no assistant/child nodes at all"
+        assert document.last_chat_node_id == node_id
+
+    asyncio.run(run())
+
+
+def test_send_message_reply_with_code_fence_creates_code_child_and_edge():
+    # R4.3b: a reply with leading text plus a fenced code block must split
+    # into a real code-kind child node (correct language/content) connected
+    # to the assistant node by a real edge - the assistant node's own
+    # content is just the text portion, not the raw unparsed reply.
+    async def run():
+        bus, document, recorder, dispatcher = make_bus_with_dispatcher()
+
+        def fake_chat(task, messages, **kwargs):
+            return {"message": {"content": "Here is the fix:\n\n```python\nprint('hi')\n```"}}
+
+        with patch.object(api_provider, "USE_API_MODE", False), \
+                patch.object(api_provider, "LOCAL_PROVIDER_TYPE", task_config.LOCAL_PROVIDER_OLLAMA), \
+                patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
+                patch.object(api_provider, "chat", fake_chat):
+            user_node_id = await bus.dispatch_intent("scene", "sendMessage", ["write me a hello world"])
+            entry = next(iter(dispatcher._requests.values()))
+            await entry["task"]
+
+        assistant_nodes = [
+            n for n in document.nodes.values() if n.kind == "chat" and n.id != user_node_id
+        ]
+        assert len(assistant_nodes) == 1
+        assistant_node = assistant_nodes[0]
+        assert assistant_node.content == "Here is the fix:"
+
+        code_nodes = [n for n in document.nodes.values() if n.kind == "code"]
+        assert len(code_nodes) == 1
+        code_node = code_nodes[0]
+        assert code_node.language == "python"
+        assert code_node.code == "print('hi')"
+
+        assert any(
+            e.source == assistant_node.id and e.target == code_node.id
+            for e in document.edges.values()
+        ), "a real edge connects the assistant node to its code child"
+        assert document.last_chat_node_id == assistant_node.id
+
+    asyncio.run(run())
+
+
+def test_send_message_reply_that_is_only_thinking_uses_reasoning_placeholder():
+    # R4.3b: a reply that is nothing but a <think> block has no text
+    # content at all - the assistant node's content must fall back to the
+    # literal "[Assistant Reasoning]" placeholder, with the actual reasoning
+    # text living on a real thinking-kind child node instead.
+    async def run():
+        bus, document, recorder, dispatcher = make_bus_with_dispatcher()
+
+        def fake_chat(task, messages, **kwargs):
+            return {"message": {"content": "<think>pondering deeply</think>"}}
+
+        with patch.object(api_provider, "USE_API_MODE", False), \
+                patch.object(api_provider, "LOCAL_PROVIDER_TYPE", task_config.LOCAL_PROVIDER_OLLAMA), \
+                patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
+                patch.object(api_provider, "chat", fake_chat):
+            user_node_id = await bus.dispatch_intent("scene", "sendMessage", ["what are you thinking?"])
+            entry = next(iter(dispatcher._requests.values()))
+            await entry["task"]
+
+        assistant_nodes = [
+            n for n in document.nodes.values() if n.kind == "chat" and n.id != user_node_id
+        ]
+        assert len(assistant_nodes) == 1
+        assistant_node = assistant_nodes[0]
+        assert assistant_node.content == "[Assistant Reasoning]"
+
+        thinking_nodes = [n for n in document.nodes.values() if n.kind == "thinking"]
+        assert len(thinking_nodes) == 1
+        thinking_node = thinking_nodes[0]
+        assert thinking_node.content == "pondering deeply"
+        assert any(
+            e.source == assistant_node.id and e.target == thinking_node.id
+            for e in document.edges.values()
+        )
+
+        code_nodes = [n for n in document.nodes.values() if n.kind == "code"]
+        assert code_nodes == [], "no code node was created"
+
+    asyncio.run(run())
+
+
+def test_send_message_reply_with_thinking_text_and_code_creates_both_children_on_same_parent():
+    # R4.3b: thinking + surrounding text + one code fence must produce
+    # exactly one thinking child and one code child, both parented to the
+    # SAME assistant node (never chained to each other), with the assistant
+    # node's own content being the real text portion, not a placeholder.
+    async def run():
+        bus, document, recorder, dispatcher = make_bus_with_dispatcher()
+
+        def fake_chat(task, messages, **kwargs):
+            return {
+                "message": {
+                    "content": (
+                        "<think>working it out</think>\n"
+                        "Here's the plan.\n"
+                        "```python\nprint('plan')\n```"
+                    )
+                }
+            }
+
+        with patch.object(api_provider, "USE_API_MODE", False), \
+                patch.object(api_provider, "LOCAL_PROVIDER_TYPE", task_config.LOCAL_PROVIDER_OLLAMA), \
+                patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
+                patch.object(api_provider, "chat", fake_chat):
+            user_node_id = await bus.dispatch_intent("scene", "sendMessage", ["plan it out"])
+            entry = next(iter(dispatcher._requests.values()))
+            await entry["task"]
+
+        assistant_nodes = [
+            n for n in document.nodes.values() if n.kind == "chat" and n.id != user_node_id
+        ]
+        assert len(assistant_nodes) == 1
+        assistant_node = assistant_nodes[0]
+        assert assistant_node.content == "Here's the plan."
+
+        thinking_nodes = [n for n in document.nodes.values() if n.kind == "thinking"]
+        code_nodes = [n for n in document.nodes.values() if n.kind == "code"]
+        assert len(thinking_nodes) == 1
+        assert len(code_nodes) == 1
+
+        assert any(
+            e.source == assistant_node.id and e.target == thinking_nodes[0].id
+            for e in document.edges.values()
+        )
+        assert any(
+            e.source == assistant_node.id and e.target == code_nodes[0].id
+            for e in document.edges.values()
+        )
+        assert not any(
+            e.source == thinking_nodes[0].id and e.target == code_nodes[0].id
+            for e in document.edges.values()
+        ), "thinking and code children are not chained to each other"
+        assert not any(
+            e.source == code_nodes[0].id and e.target == thinking_nodes[0].id
+            for e in document.edges.values()
+        )
+        assert document.last_chat_node_id == assistant_node.id
 
     asyncio.run(run())
 
