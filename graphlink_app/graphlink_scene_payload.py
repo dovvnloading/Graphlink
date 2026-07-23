@@ -37,6 +37,11 @@ R3.25 adds `history` (the ConversationNode increment): a growing list of
 role/content messages - the one R3 kind whose own field is a LIST rather
 than a scalar. Populated for kind=="conversation" rows, defaulted (empty
 list) for every other kind, same additive rule.
+
+R4.3 adds `pendingRequestId` (ConversationNode real-reply + per-node cancel):
+the id of the AgentDispatcher request currently generating a reply for a
+node, or None when idle. Generic across any kind that ever gets its own real
+dispatch slot, defaulted None for every other kind, same additive rule.
 """
 
 from __future__ import annotations
@@ -89,6 +94,12 @@ class SceneNodeRow:
     # defaulted (empty list) for every other kind. The one R3 kind whose own
     # field is a list rather than a scalar.
     history: list[ConversationMessageRow] = field(default_factory=list)
+    # R4.3: transient per-node in-flight-request marker - the id of the
+    # AgentDispatcher request currently generating a reply for this node, or
+    # None when idle. Generic across any kind that ever gets its own real
+    # dispatch slot (not conversation-only), defaulted None for every other
+    # kind.
+    pendingRequestId: str | None = None
 
 
 @dataclass

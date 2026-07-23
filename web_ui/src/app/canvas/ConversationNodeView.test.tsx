@@ -12,6 +12,7 @@ function renderConversationNode(overrides: Partial<ConversationFlowNode["data"]>
   const onDelete = vi.fn();
   const onSend = vi.fn();
   const onDeleteMessage = vi.fn();
+  const onCancel = vi.fn();
   const props = {
     id: "n0",
     selected: false,
@@ -21,10 +22,12 @@ function renderConversationNode(overrides: Partial<ConversationFlowNode["data"]>
         { role: "assistant" as const, content: "Hi there" },
       ],
       isCollapsed: false,
+      pendingRequestId: null,
       onToggleCollapse,
       onDelete,
       onSend,
       onDeleteMessage,
+      onCancel,
       ...overrides,
     },
   } as unknown as NodeProps<ConversationFlowNode>;
@@ -34,7 +37,7 @@ function renderConversationNode(overrides: Partial<ConversationFlowNode["data"]>
       <ConversationNodeView {...props} />
     </ReactFlowProvider>,
   );
-  return { onToggleCollapse, onDelete, onSend, onDeleteMessage };
+  return { onToggleCollapse, onDelete, onSend, onDeleteMessage, onCancel };
 }
 
 // Directly sets the React Flow internal Zustand store's transform/zoom
@@ -57,16 +60,19 @@ function renderConversationNodeAtZoom(zoom: number, overrides: Partial<Conversat
   const onDelete = vi.fn();
   const onSend = vi.fn();
   const onDeleteMessage = vi.fn();
+  const onCancel = vi.fn();
   const props = {
     id: "n0",
     selected: false,
     data: {
       history: [{ role: "user" as const, content: "Hello" }],
       isCollapsed: false,
+      pendingRequestId: null,
       onToggleCollapse,
       onDelete,
       onSend,
       onDeleteMessage,
+      onCancel,
       ...overrides,
     },
   } as unknown as NodeProps<ConversationFlowNode>;
@@ -267,11 +273,28 @@ describe("ConversationNodeView", () => {
     expect(input).toHaveValue("");
   });
 
-  it("the Cancel button is always disabled with the exact R4 title string", () => {
-    renderConversationNode();
+  it("the Cancel button is absent when pendingRequestId is null", () => {
+    renderConversationNode({ pendingRequestId: null });
+    expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
+  });
+
+  it("the Cancel button is present and calls onCancel when pendingRequestId is set", async () => {
+    const user = userEvent.setup();
+    const { onCancel } = renderConversationNode({ pendingRequestId: "req-42" });
     const cancelButton = screen.getByRole("button", { name: "Cancel" });
-    expect(cancelButton).toBeDisabled();
-    expect(cancelButton).toHaveAttribute("title", "Agent cancellation lands in R4");
+    expect(cancelButton).toBeInTheDocument();
+    await user.click(cancelButton);
+    expect(onCancel).toHaveBeenCalledOnce();
+  });
+
+  it("the Send button is disabled while pendingRequestId is set, even with non-empty draft text", async () => {
+    const user = userEvent.setup();
+    renderConversationNode({ pendingRequestId: "req-42" });
+    const input = screen.getByRole("textbox", { name: "Message" });
+    const sendButton = screen.getByRole("button", { name: "Send" });
+
+    await user.type(input, "real text");
+    expect(sendButton).toBeDisabled();
   });
 
   it("Escape and outside-click both close the node-level menu", async () => {

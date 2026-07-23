@@ -270,6 +270,16 @@ export class SceneStore {
     this.transport.intent("scene", "deleteConversationMessage", [id, messageIndex]);
   }
 
+  // R4.3: real per-node Cancel for a conversation node's own in-flight reply.
+  // A second, independent registration of the same "cancelChatRequest" intent
+  // name the Composer already sends on the "app-composer" topic (see
+  // composerStore.ts's own cancelChatRequest) - not the same call site, just
+  // two topics sharing one action name, so this is named distinctly
+  // (cancelConversationRequest) to avoid implying otherwise.
+  cancelConversationRequest(requestId: string): void {
+    this.transport.intent("scene", "cancelChatRequest", [requestId]);
+  }
+
   setNodeDocked(id: string, docked: boolean): void {
     this.transport.intent("scene", "setNodeDocked", [id, docked]);
   }

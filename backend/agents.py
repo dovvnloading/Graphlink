@@ -158,15 +158,26 @@ class AgentDispatcher:
         for entry in self._requests.values():
             entry["cancel_event"].set()
 
-    async def start_chat_reply(
+    async def _dispatch(
         self,
         *,
         bus: SessionBus,
         notifications_state,
-        composer_document,
         conversation_history,
         on_reply,
+        on_begin,
+        on_end,
+        state_topic: str,
     ) -> None:
+        """The shared real-dispatch pipeline behind both start_chat_reply
+        (Composer, state_topic="app-composer") and start_conversation_reply
+        (ConversationNode, state_topic="scene", R4.3) - one in-flight-request
+        slot per session regardless of which caller occupies it. `on_begin`/
+        `on_end` let each caller record the in-flight request_id on its own
+        state (ComposerDocument.begin_request/end_request, or a
+        ConversationNode's pending_request_id) without this method knowing
+        which; `state_topic` is the topic republished around that state
+        change so the right part of the UI refreshes."""
         if self._requests:
             # Single-request-per-session guard: never start a second
             # concurrent request while one is already in flight.
@@ -189,8 +200,8 @@ class AgentDispatcher:
         cancel_event = threading.Event()
 
         async def _run():
-            composer_document.begin_request(request_id)
-            await bus.publish("app-composer")
+            on_begin(request_id)
+            await bus.publish(state_topic)
             try:
                 reply_text = await asyncio.wait_for(
                     asyncio.to_thread(_call_chat_agent, conversation_history, self.persona(), cancel_event),
@@ -215,21 +226,65 @@ class AgentDispatcher:
                 await bus.publish("notification")
             finally:
                 # Unconditional on every exit path (success, timeout, cancel,
-                # other error) so the composer always returns to a usable
-                # idle state.
+                # other error) so the caller's state always returns to a
+                # usable idle state.
                 self._requests.pop(request_id, None)
-                composer_document.end_request()
-                await bus.publish("app-composer")
+                on_end()
+                await bus.publish(state_topic)
 
-        # NOT awaited here - start_chat_reply returns immediately after
-        # scheduling the task. This is load-bearing: the WS connection this
-        # session serves runs a plain sequential
+        # NOT awaited here - start_chat_reply/start_conversation_reply return
+        # immediately after scheduling the task. This is load-bearing: the WS
+        # connection this session serves runs a plain sequential
         # `while True: message = await websocket.receive_json(); ...` read
         # loop (backend/app.py) - if this handler awaited the full chat call
         # inline, no further message on that same socket (including a
         # cancelChatRequest intent) would even be read off the wire until the
         # handler returned, making cooperative cancellation impossible.
         self._requests[request_id] = {"cancel_event": cancel_event, "task": asyncio.create_task(_run())}
+
+    async def start_chat_reply(
+        self,
+        *,
+        bus: SessionBus,
+        notifications_state,
+        composer_document,
+        conversation_history,
+        on_reply,
+    ) -> None:
+        return await self._dispatch(
+            bus=bus,
+            notifications_state=notifications_state,
+            conversation_history=conversation_history,
+            on_reply=on_reply,
+            on_begin=composer_document.begin_request,
+            on_end=composer_document.end_request,
+            state_topic="app-composer",
+        )
+
+    async def start_conversation_reply(
+        self,
+        *,
+        bus: SessionBus,
+        notifications_state,
+        node,
+        conversation_history,
+        on_reply,
+    ) -> None:
+        """R4.3's ConversationNode equivalent of start_chat_reply: same
+        _dispatch pipeline, but the in-flight request_id lives on the
+        ConversationNode itself (`node.pending_request_id`, duck-typed - this
+        module does not import canvas.py's SceneNode) rather than on
+        ComposerDocument, and "scene" (not "app-composer") is republished
+        around that change so the node's own in-flight state refreshes."""
+        return await self._dispatch(
+            bus=bus,
+            notifications_state=notifications_state,
+            conversation_history=conversation_history,
+            on_reply=on_reply,
+            on_begin=lambda request_id: setattr(node, "pending_request_id", request_id),
+            on_end=lambda: setattr(node, "pending_request_id", None),
+            state_topic="scene",
+        )
 
 
 def _call_chat_agent(conversation_history, persona_text, cancel_event) -> str:

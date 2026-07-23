@@ -240,6 +240,13 @@ describe("SceneStore", () => {
     ]);
   });
 
+  it("cancelConversationRequest fires the scene-topic cancelChatRequest intent", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.cancelConversationRequest("req-42");
+    expect(intents).toEqual([{ topic: "scene", intent: "cancelChatRequest", args: ["req-42"] }]);
+  });
+
   it("suppresses empty removal intents", () => {
     const { transport, intents } = makeFakeTransport();
     const store = new SceneStore(transport);
