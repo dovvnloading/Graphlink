@@ -284,6 +284,13 @@ export class SceneStore {
     this.transport.intent("scene", "setNodeDocked", [id, docked]);
   }
 
+  // R4.3c: real Regenerate Response, for both ChatNodeView's own menu and
+  // CodeNodeView's menu (which resolves to its parent chat node's id before
+  // calling this - see toFlowNodes below; the backend never kind-sniffs).
+  regenerateResponse(chatNodeId: string): void {
+    this.transport.intent("scene", "regenerateResponse", [chatNodeId]);
+  }
+
   // R3.3: the Composer's real Send action - a real user ChatNode. The
   // assistant's reply is deferred to R4 (graphlink_config.py's Qt/non-Qt
   // split is a prerequisite for calling the real agent layer); the backend

@@ -35,6 +35,7 @@ Two separate jobs live here:
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import threading
 import uuid
@@ -207,7 +208,10 @@ class AgentDispatcher:
                     asyncio.to_thread(_call_chat_agent, conversation_history, self.persona(), cancel_event),
                     timeout=WATCHDOG_TIMEOUT_SECONDS,
                 )
-                on_reply(reply_text)
+                if inspect.iscoroutinefunction(on_reply):
+                    await on_reply(reply_text)
+                else:
+                    on_reply(reply_text)
                 await bus.publish("scene")
             except asyncio.TimeoutError:
                 cancel_event.set()

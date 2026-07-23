@@ -10,11 +10,12 @@ thinking-kind and code-kind CHILD nodes for the rest - instead of dumping the
 model's raw, unprocessed reply (complete with <think> tags, <code_block>
 wrappers, and/or ```fenced``` code) into a single flat node.
 
-Only the ordinary send path (backend/canvas.py's send_message) is retrofitted
-onto this module for now; the regenerate path and ConversationNode remain
-out of scope for this increment (ConversationNode never called
-_parse_response in legacy either - see backend/canvas.py's
-send_conversation_message for that confirmed exemption).
+Both real paths now depend on this module: the ordinary send path
+(backend/canvas.py's send_message, R4.3b) and the regenerate path
+(backend/canvas.py's regenerate_response, R4.3c) each call parse_response
+directly. ConversationNode remains the one confirmed exemption -
+ConversationNode never called _parse_response in legacy either, see
+backend/canvas.py's send_conversation_message for that.
 """
 
 from __future__ import annotations

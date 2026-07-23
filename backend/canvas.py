@@ -689,6 +689,63 @@ class SceneDocument:
         history.reverse()
         return history
 
+    def regenerate_response(self, node_id: str) -> tuple[SceneNode, str]:
+        """Validate + resolve a regenerate target. Mirrors legacy's regenerate_node
+        single precondition (window_actions.py:512-514: no parent -> can't
+        regenerate), extended with two defensive checks legacy cannot hit (it
+        always holds a live scene-graph object, never a string id to resolve):
+        unknown node_id, and a non-chat-kind node_id (code/document/etc. can
+        never be regenerate targets directly - see Q2, the frontend always
+        resolves to a chat-node id before calling in). All three raise
+        SceneError; the WS-intent wrapper in register_canvas catches it and
+        shows ONE friendly notification for all three cases - see that wrapper
+        for why."""
+        node = self.nodes.get(node_id)
+        if node is None:
+            raise SceneError(f"unknown node: {node_id}")
+        if node.kind != "chat":
+            raise SceneError(f"node is not a chat node: {node_id}")
+        parent_edge = next((e for e in self.edges.values() if e.target == node_id), None)
+        if parent_edge is None:
+            raise SceneError(f"node has no parent and cannot be regenerated: {node_id}")
+        return node, parent_edge.source
+
+    def update_chat_node_content(self, node_id: str, content: str) -> SceneNode:
+        """The regenerate primitive: mutate an EXISTING chat node's content in
+        place - the first in-place mutation of a content-bearing field in this
+        file (move_node/set_chat_collapsed/set_node_docked all mutate a
+        position/flag, never displayed text). Scope confirmed against legacy's
+        ChatNode.update_content (graphlink_nodes/graphlink_node_chat.py:677-686):
+        sets content ONLY. Does not touch title (legacy's update_content never
+        recomputes any title-like state either, and every other in-place mutator
+        here already leaves title untouched post-creation - consistent, not a
+        new carve-out). Does not touch is_user/is_collapsed/kind."""
+        node = self.nodes.get(node_id)
+        if node is None:
+            raise SceneError(f"unknown node: {node_id}")
+        node.content = str(content)
+        return node
+
+    def remove_associated_content_children(self, chat_node_id: str) -> None:
+        """The regenerate teardown: remove every code/document/image/thinking
+        node ONE HOP directly off chat_node_id. Built entirely on the existing
+        generic remove_nodes (edge cleanup + image-asset eviction come free).
+        Mirrors graphlink_scene.py's remove_associated_content_nodes exactly in
+        SCOPE (one-hop only, same four kinds, no cascade to any grandchild) but
+        resolved via this backend's one edge-encoded parent/child relationship
+        instead of legacy's four parallel per-kind lists. html/conversation
+        kinds are excluded on purpose - grep confirms neither ever has a
+        parent_content_node attribute in legacy, so they structurally can never
+        attach to a ChatNode this way."""
+        child_ids = []
+        for edge in self.edges.values():
+            if edge.source != chat_node_id:
+                continue
+            child = self.nodes.get(edge.target)
+            if child is not None and child.kind in ("code", "document", "image", "thinking"):
+                child_ids.append(child.id)
+        self.remove_nodes(child_ids)
+
     def set_chat_collapsed(self, node_id: str, collapsed: bool) -> None:
         node = self.nodes.get(node_id)
         if node is None:
@@ -1100,6 +1157,93 @@ def register_canvas(
         )
         return node.id
 
+    async def regenerate_response(node_id):
+        try:
+            node_to_regenerate, parent_id = document.regenerate_response(node_id)
+        except SceneError:
+            # Deliberate: ALL THREE of regenerate_response's SceneErrors funnel
+            # into this ONE legacy-parity message. app.py's _handle_message
+            # would otherwise turn a raised SceneError into a generic
+            # "intent failed" WS error - and transport.ts's intent() is
+            # fire-and-forget (no id), so that error is ONLY ever
+            # console.error'd, never shown to the user (confirmed by reading
+            # transport.ts's handleMessage). A stale click racing a delete, or
+            # a future caller passing a bad kind, must never go silently to the
+            # console when legacy's real, reachable case shows a visible
+            # banner - so this is the one deliberate divergence from every
+            # other register_canvas wrapper's convention of letting SceneError
+            # bubble to the generic WS error path.
+            notifications.show("This node has no parent and cannot be regenerated.", "warning")
+            await bus.publish("notification")
+            return None
+
+        history = document.chat_branch_history(parent_id)
+
+        async def _on_reply(reply_text):
+            # (1) Empty/whitespace reply: keep ORIGINAL content, notify, stop.
+            # Checked FIRST - exact legacy order (window_actions.py:544-546),
+            # even before the liveness check below (see its own comment).
+            if not reply_text or not reply_text.strip():
+                notifications.show(
+                    "The model returned an empty response. The original response has been kept.",
+                    "warning",
+                )
+                await bus.publish("notification")
+                return
+
+            # (2) Deleted mid-flight: silent no-op, matches
+            # window_actions.py:548 (`if not old_node or not old_node.scene():
+            # return` - no notification_banner call there either).
+            if node_to_regenerate.id not in document.nodes:
+                return
+
+            # (3) Teardown BEFORE parse/mutate - exact legacy step order.
+            # Runs unconditionally on any non-empty, still-alive reply, even if
+            # the new reply has no code/thinking parts at all - this is why
+            # document/image children are deleted but never recreated
+            # (parse_response structurally only emits thinking/text/code).
+            document.remove_associated_content_children(node_to_regenerate.id)
+
+            parsed_parts = parse_response(reply_text)
+            text_parts = [p["content"] for p in parsed_parts if p["type"] == "text"]
+            text_content = "\n\n".join(text_parts)
+
+            # THE SIMPLE 1-WAY TERNARY - NOT send_message's 3-way priority
+            # chain. PLACEHOLDER_ASSISTANT_REASONING is NEVER touched by this
+            # path. Exact match to legacy line 561:
+            # `text_content if text_content else "[Generated Content]"`.
+            placeholder_text = text_content if text_content else PLACEHOLDER_GENERATED_CONTENT
+            document.update_chat_node_content(node_to_regenerate.id, placeholder_text)
+
+            # NOTE: `document.` prefix is REQUIRED - bare add_code_node/
+            # add_thinking_node would silently resolve to this same
+            # register_canvas scope's own WS-intent wrapper closures instead of
+            # raising (identical hazard already documented on send_message's
+            # own _on_reply above this function).
+            bx, by = node_to_regenerate.x, node_to_regenerate.y
+            for part in parsed_parts:
+                if part["type"] == "thinking":
+                    document.add_thinking_node(
+                        bx - MESSAGE_VERTICAL_SPACING, by + MESSAGE_VERTICAL_SPACING,
+                        part["content"], parent_id=node_to_regenerate.id,
+                    )
+                elif part["type"] == "code":
+                    document.add_code_node(
+                        bx + MESSAGE_VERTICAL_SPACING, by + MESSAGE_VERTICAL_SPACING,
+                        part["content"], part["language"], parent_id=node_to_regenerate.id,
+                    )
+
+            # last_chat_node_id: DELIBERATELY untouched. See §5.
+
+        await agent_dispatcher.start_chat_reply(
+            bus=bus,
+            notifications_state=notifications,
+            composer_document=composer_document,
+            conversation_history=history,
+            on_reply=_on_reply,
+        )
+        return node_to_regenerate.id
+
     async def move_node(node_id, x, y):
         document.move_node(node_id, x, y)
         await publish_scene()
@@ -1165,6 +1309,7 @@ def register_canvas(
     bus.register_intent("scene", "deleteChatNode", delete_chat_node)
     bus.register_intent("scene", "setChatCollapsed", set_chat_collapsed)
     bus.register_intent("scene", "sendMessage", send_message)
+    bus.register_intent("scene", "regenerateResponse", regenerate_response)
     bus.register_intent("scene", "moveNode", move_node)
     bus.register_intent("scene", "removeNodes", remove_nodes)
     bus.register_intent("scene", "connectNodes", connect_nodes)

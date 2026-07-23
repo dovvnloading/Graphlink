@@ -247,6 +247,13 @@ describe("SceneStore", () => {
     expect(intents).toEqual([{ topic: "scene", intent: "cancelChatRequest", args: ["req-42"] }]);
   });
 
+  it("regenerateResponse sends the scene-topic regenerateResponse intent with the chat node id", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.regenerateResponse("n1");
+    expect(intents).toEqual([{ topic: "scene", intent: "regenerateResponse", args: ["n1"] }]);
+  });
+
   it("suppresses empty removal intents", () => {
     const { transport, intents } = makeFakeTransport();
     const store = new SceneStore(transport);
