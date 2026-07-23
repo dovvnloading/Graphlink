@@ -29,6 +29,7 @@ export interface SceneNodeRow {
   researchActiveSourceId?: string | null;
   researchError: string;
   researchResult?: ResearchResultRow | null;
+  artifactContent: string;
 }
 
 export interface ConversationMessageRow {
@@ -240,6 +241,11 @@ function checkSceneNodeRow(value: unknown, path: string, errors: string[]): void
   {
     const fieldValue = value["researchResult"];
     if (fieldValue !== undefined && fieldValue !== null) { checkResearchResultRow(fieldValue, `${path}.researchResult`, errors); }
+  }
+  {
+    const fieldValue = value["artifactContent"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.artifactContent: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.artifactContent` + ": expected string"); }
   }
 }
 

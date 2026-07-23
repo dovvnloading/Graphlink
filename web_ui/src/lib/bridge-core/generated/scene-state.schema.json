@@ -44,6 +44,9 @@
       "items": {
         "additionalProperties": false,
         "properties": {
+          "artifactContent": {
+            "type": "string"
+          },
           "attachmentKind": {
             "type": "string"
           },
@@ -291,7 +294,8 @@
           "researchStage",
           "researchCompleted",
           "researchTotal",
-          "researchError"
+          "researchError",
+          "artifactContent"
         ],
         "type": "object"
       },

@@ -237,6 +237,15 @@ class SceneNode:
     # answer stays visible until this run replaces it on success, or
     # fails/cancels (leaving the stale result annotated by research_error).
     research_result: dict[str, Any] | None = None
+    # R5.2: the Artifact/Drafter node's real persisted shape - the model
+    # returns the WHOLE document every turn (whole-document replace, never a
+    # diff/patch - see complete_artifact_generation), so this field is
+    # bounded by the model's own per-turn output ceiling, not by session
+    # length. The turn-by-turn conversation reuses the existing generic
+    # `history` list field above (already used by ConversationNode) rather
+    # than a new list-typed field - only this one new scalar is needed.
+    # Unused (default) for every other kind.
+    artifact_content: str = ""
 
 
 @dataclass
@@ -737,6 +746,67 @@ class SceneDocument:
         node.research_active_source_id = None
         return node
 
+    # -- R5.2: artifact/drafter node -----------------------------------------
+
+    def add_artifact_node(self, x: float, y: float, parent_id: str) -> SceneNode:
+        """The Artifact/Drafter node's creation primitive - same required-
+        parent posture as document/thinking/html/image/conversation/
+        web_research nodes (never exists unparented). Title is always the
+        fixed literal "Artifact" (mirrors conversation/web_research's own
+        fixed titles - there is no meaningful single preview string before a
+        document has ever been drafted). artifact_content starts empty; the
+        document text only lands once complete_artifact_generation is
+        called."""
+        if parent_id not in self.nodes:
+            raise SceneError(f"unknown parent node: {parent_id}")
+        node_id = f"n{next(self._counter)}"
+        node = SceneNode(
+            id=node_id,
+            x=float(x),
+            y=float(y),
+            title="Artifact",
+            kind="artifact",
+        )
+        self.nodes[node_id] = node
+        self.connect(parent_id, node_id)
+        return node
+
+    def append_artifact_user_message(self, node_id: str, text: str) -> SceneNode:
+        """Append a real user instruction to an artifact node's history -
+        mirrors append_conversation_user_message exactly (same shape, same
+        error-handling style)."""
+        node = self.nodes.get(node_id)
+        if node is None:
+            raise SceneError(f"unknown node: {node_id}")
+        node.history.append({"role": "user", "content": str(text)})
+        return node
+
+    def send_artifact_message(self, node_id: str, text: str) -> SceneNode:
+        """The Artifact node's own Send action: a thin wrapper over
+        append_artifact_user_message, kept as a separate method (rather than
+        only calling append_artifact_user_message directly from the WS
+        wrapper) so the WS intent name lines up 1:1 with the domain method,
+        the same way send_conversation_message/append_conversation_user_message
+        already do for ConversationNode."""
+        return self.append_artifact_user_message(node_id, text)
+
+    def complete_artifact_generation(self, node_id: str, new_content, ai_message: str) -> SceneNode:
+        """Land a successful generation turn: WHOLE-DOCUMENT REPLACE (never an
+        append/merge - the model returns the entire document every turn, see
+        the artifact_content field's own comment on SceneNode), plus append a
+        real assistant turn to history. Raises SceneError if the node is
+        gone - this WS wrapper does NOT pre-check liveness before calling
+        this, same posture as send_conversation_message's own _on_reply, not
+        web_research's more defensive pre-check pattern (there is no
+        stage-stepper/persisted-error field here for a mid-flight delete to
+        race against)."""
+        node = self.nodes.get(node_id)
+        if node is None:
+            raise SceneError(f"unknown node: {node_id}")
+        node.artifact_content = str(new_content)
+        node.history.append({"role": "assistant", "content": str(ai_message)})
+        return node
+
     def delete_chat_node(self, node_id: str) -> None:
         """Delete one chat node WITHOUT orphaning its branch: children are
         re-parented to the deleted node's own parent (or become roots if it
@@ -1070,6 +1140,7 @@ class SceneDocument:
                     "researchActiveSourceId": n.research_active_source_id,
                     "researchError": n.research_error,
                     "researchResult": n.research_result,
+                    "artifactContent": n.artifact_content,
                 }
                 for n in self.nodes.values()
             ],
@@ -1613,6 +1684,39 @@ def register_canvas(
     async def cancel_web_research_request(request_id):
         agent_dispatcher.cancel_web_research(request_id)
 
+    async def send_artifact_message(node_id, text):
+        # R5.2: the Artifact node's own Send action - appends a real user
+        # instruction, then dispatches a real agent reply through
+        # AgentDispatcher.start_artifact_reply. No try/except SceneError guard
+        # here (an unknown node_id propagates as a generic WS intent error) -
+        # same posture as send_conversation_message above, not
+        # run_web_research's defensive pre-check pattern: there is no
+        # persisted progress/error state on this node that an unguarded call
+        # could corrupt, so a stale click racing a delete has nothing
+        # destructive to protect against.
+        node = document.send_artifact_message(node_id, text)
+        await publish_scene()
+
+        parent_edge = next((e for e in document.edges.values() if e.target == node_id), None)
+        branch_history = document.chat_branch_history(parent_edge.source) if parent_edge else []
+        full_history = branch_history + node.history
+
+        def _on_reply(new_content, ai_message):
+            document.complete_artifact_generation(node_id, new_content, ai_message)
+
+        await agent_dispatcher.start_artifact_reply(
+            bus=bus,
+            notifications_state=notifications,
+            node=node,
+            current_artifact=node.artifact_content,
+            history=full_history,
+            on_reply=_on_reply,
+        )
+        return node.id
+
+    async def cancel_artifact_request(request_id):
+        agent_dispatcher.cancel_artifact(request_id)
+
     async def move_node(node_id, x, y):
         document.move_node(node_id, x, y)
         await publish_scene()
@@ -1690,6 +1794,13 @@ def register_canvas(
     # here; these two intents drive an EXISTING web_research-kind node.
     bus.register_intent("scene", "runWebResearch", run_web_research)
     bus.register_intent("scene", "cancelWebResearchRequest", cancel_web_research_request)
+    # R5.2: Artifact/Drafter Send/cancel - node creation itself lives in
+    # backend/plugins.py's executePlugin (the "Artifact / Drafter" branch),
+    # not here; these two intents drive an EXISTING artifact-kind node, same
+    # posture as Web Research's own runWebResearch/cancelWebResearchRequest
+    # pair above.
+    bus.register_intent("scene", "sendArtifactMessage", send_artifact_message)
+    bus.register_intent("scene", "cancelArtifactRequest", cancel_artifact_request)
     bus.register_intent("scene", "moveNode", move_node)
     bus.register_intent("scene", "removeNodes", remove_nodes)
     bus.register_intent("scene", "connectNodes", connect_nodes)

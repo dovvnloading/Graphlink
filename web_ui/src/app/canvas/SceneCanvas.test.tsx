@@ -42,6 +42,7 @@ function baseNode(overrides: Partial<SceneNodeRow> = {}): SceneNodeRow {
     researchActiveSourceId: null,
     researchError: "",
     researchResult: null,
+    artifactContent: "",
     ...overrides,
   };
 }
@@ -288,6 +289,106 @@ describe("toFlowNodes (R5.1 web_research node)", () => {
 
     (wrFlowNode!.data as { onDelete: () => void }).onDelete();
     expect(removeSpy).toHaveBeenCalledWith(["wr-1"]);
+  });
+});
+
+describe("toFlowNodes (R5.2 artifact node)", () => {
+  it("maps an artifact scene node's artifactContent/history/isCollapsed onto the flow node's data", () => {
+    const history = [
+      { role: "user" as const, content: "Draft a project proposal" },
+      { role: "assistant" as const, content: "# Proposal\n\nHere is a draft." },
+    ];
+    const scene = baseScene({
+      nodes: [
+        baseNode({
+          id: "art-1",
+          kind: "artifact",
+          artifactContent: "# Proposal\n\nHere is a draft.",
+          history,
+          isCollapsed: true,
+          pendingRequestId: "req-1",
+        }),
+      ],
+      edges: [],
+    });
+    const store = makeStore();
+
+    const flowNodes = toFlowNodes(scene, store);
+    const artifactFlowNode = flowNodes.find((n) => n.id === "art-1");
+    expect(artifactFlowNode).toBeDefined();
+    expect(artifactFlowNode!.type).toBe("artifact");
+    expect(artifactFlowNode!.data).toMatchObject({
+      artifactContent: "# Proposal\n\nHere is a draft.",
+      history,
+      isCollapsed: true,
+      pendingRequestId: "req-1",
+    });
+  });
+
+  it("coalesces a null-ish pendingRequestId to null", () => {
+    const scene = baseScene({
+      nodes: [baseNode({ id: "art-2", kind: "artifact", artifactContent: "", history: [] })],
+      edges: [],
+    });
+    const store = makeStore();
+
+    const flowNodes = toFlowNodes(scene, store);
+    const artifactFlowNode = flowNodes.find((n) => n.id === "art-2");
+    expect(artifactFlowNode).toBeDefined();
+    expect(artifactFlowNode!.data).toMatchObject({ pendingRequestId: null });
+  });
+
+  it("onSubmit calls store.sendArtifactMessage with this node's id and the given text", () => {
+    const scene = baseScene({ nodes: [baseNode({ id: "art-1", kind: "artifact" })], edges: [] });
+    const store = makeStore();
+    const intentSpy = vi.spyOn(store, "sendArtifactMessage");
+
+    const flowNodes = toFlowNodes(scene, store);
+    const artifactFlowNode = flowNodes.find((n) => n.id === "art-1");
+
+    (artifactFlowNode!.data as { onSubmit: (text: string) => void }).onSubmit("Refine the intro");
+    expect(intentSpy).toHaveBeenCalledWith("art-1", "Refine the intro");
+  });
+
+  it("onCancel fires cancelArtifactRequest with pendingRequestId when set, and is a no-op otherwise", () => {
+    const scene = baseScene({
+      nodes: [
+        baseNode({ id: "art-pending", kind: "artifact", pendingRequestId: "req-77" }),
+        baseNode({ id: "art-idle", kind: "artifact", pendingRequestId: null }),
+      ],
+      edges: [],
+    });
+    const store = makeStore();
+    const intentSpy = vi.spyOn(store, "cancelArtifactRequest");
+
+    const flowNodes = toFlowNodes(scene, store);
+    const pendingNode = flowNodes.find((n) => n.id === "art-pending");
+    const idleNode = flowNodes.find((n) => n.id === "art-idle");
+
+    (pendingNode!.data as { onCancel: () => void }).onCancel();
+    expect(intentSpy).toHaveBeenCalledWith("req-77");
+
+    (idleNode!.data as { onCancel: () => void }).onCancel();
+    expect(intentSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("onToggleCollapse/onDelete reuse the generic setChatCollapsed/removeNodes intents", () => {
+    const scene = baseScene({
+      nodes: [baseNode({ id: "art-1", kind: "artifact", isCollapsed: false })],
+      edges: [],
+    });
+    const store = makeStore();
+    const collapseSpy = vi.spyOn(store, "setChatCollapsed");
+    const removeSpy = vi.spyOn(store, "removeNodes");
+
+    const flowNodes = toFlowNodes(scene, store);
+    const artifactFlowNode = flowNodes.find((n) => n.id === "art-1");
+
+    (artifactFlowNode!.data as { onToggleCollapse: () => void }).onToggleCollapse();
+    expect(collapseSpy).toHaveBeenCalledWith("art-1", true);
+
+    (artifactFlowNode!.data as { onDelete: () => void }).onDelete();
+    expect(removeSpy).toHaveBeenCalledWith(["art-1"]);
   });
 });
 

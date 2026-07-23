@@ -2866,3 +2866,196 @@ def test_run_web_research_on_a_different_node_while_one_is_busy_does_not_clobber
         assert node_a.research_result["answerMarkdown"] == "node a's result"
 
     asyncio.run(run())
+
+
+# -- R5.2: artifact/drafter node ----------------------------------------------
+
+
+def test_add_artifact_node_creates_a_real_artifact_kind_node():
+    doc = SceneDocument()
+    parent = doc.add_chat_node(0, 0, "draft this for me", True)
+    node = doc.add_artifact_node(10, 20, parent.id)
+    assert node.kind == "artifact"
+    assert node.title == "Artifact"
+    assert node.artifact_content == ""
+    assert node.history == []
+    assert any(e.source == parent.id and e.target == node.id for e in doc.edges.values())
+
+
+def test_add_artifact_node_rejects_unknown_parent():
+    doc = SceneDocument()
+    with pytest.raises(SceneError):
+        doc.add_artifact_node(0, 0, "ghost")
+
+
+def test_add_artifact_node_requires_a_parent_id():
+    # Same as add_document_node/add_thinking_node/add_html_node/add_image_node/
+    # add_conversation_node/add_web_research_node - parent_id has no default in
+    # add_artifact_node's signature, so calling without one is a TypeError
+    # (missing required argument), not a SceneError.
+    doc = SceneDocument()
+    with pytest.raises(TypeError):
+        doc.add_artifact_node(0, 0)
+
+
+def test_artifact_node_deletion_goes_through_the_generic_remove_nodes_path():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_artifact_node(10, 10, parent.id)
+    assert not hasattr(doc, "delete_artifact_node"), (
+        "artifact nodes are not branch points - no special delete method"
+    )
+    doc.remove_nodes([node.id])
+    assert node.id not in doc.nodes
+    assert not any(e.target == node.id or e.source == node.id for e in doc.edges.values())
+
+
+def test_append_artifact_user_message_appends_a_user_turn():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_artifact_node(0, 0, parent.id)
+    returned = doc.append_artifact_user_message(node.id, "add a conclusion section")
+    assert returned is node
+    assert node.history == [{"role": "user", "content": "add a conclusion section"}]
+
+
+def test_append_artifact_user_message_unknown_node_raises_scene_error():
+    with pytest.raises(SceneError):
+        SceneDocument().append_artifact_user_message("ghost", "hi")
+
+
+def test_send_artifact_message_is_a_thin_wrapper_over_append_artifact_user_message():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_artifact_node(0, 0, parent.id)
+    returned = doc.send_artifact_message(node.id, "start drafting")
+    assert returned is node
+    assert node.history == [{"role": "user", "content": "start drafting"}]
+
+
+def test_complete_artifact_generation_replaces_content_and_appends_assistant_turn():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_artifact_node(0, 0, parent.id)
+    doc.append_artifact_user_message(node.id, "draft a project brief")
+
+    returned = doc.complete_artifact_generation(
+        node.id, "# Project Brief\n\nDraft content.", "Here's a first draft."
+    )
+
+    assert returned is node
+    assert node.artifact_content == "# Project Brief\n\nDraft content."
+    assert node.history == [
+        {"role": "user", "content": "draft a project brief"},
+        {"role": "assistant", "content": "Here's a first draft."},
+    ]
+
+
+def test_complete_artifact_generation_unknown_node_raises_scene_error():
+    with pytest.raises(SceneError):
+        SceneDocument().complete_artifact_generation("ghost", "doc", "message")
+
+
+def test_scene_payload_includes_artifact_content_for_artifact_kind_rows():
+    doc = SceneDocument()
+    doc.add_node(0, 0, "plain")
+    parent = doc.add_node(1, 1, "parent")
+    node = doc.add_artifact_node(2, 2, parent.id)
+
+    rows = {n["id"]: n for n in doc.scene_payload()["nodes"]}
+    assert rows["n0"]["artifactContent"] == ""
+
+    doc.complete_artifact_generation(node.id, "the drafted document", "done")
+    row = {n["id"]: n for n in doc.scene_payload()["nodes"]}[node.id]
+    assert row["kind"] == "artifact"
+    assert row["artifactContent"] == "the drafted document"
+
+
+# -- R5.2: artifact/drafter node - WS-intent level ----------------------------
+#
+# Beyond the spec's enumerated SceneDocument-level tests above, these two
+# exercise register_canvas's own sendArtifactMessage/cancelArtifactRequest
+# closures - the new production code path in canvas.py itself - mirroring
+# Web Research's own WS-intent-level coverage
+# (test_run_web_research_intent_publishes_scene_and_calls_start_web_research_with_correct_branch_history/
+# test_cancel_web_research_request_intent_calls_agent_dispatcher_cancel_web_research)
+# so that wiring is not left untested just because it wasn't spelled out
+# alongside the SceneDocument-level list.
+
+
+def test_send_artifact_message_intent_dispatches_a_real_agent_reply_with_correct_branch_history():
+    class _FakeDispatcher:
+        def __init__(self):
+            self.calls = []
+
+        async def start_artifact_reply(self, **kwargs):
+            self.calls.append(kwargs)
+
+        def cancel_artifact(self, request_id):
+            return False
+
+    async def run():
+        bus = SessionBus("send-artifact-message-intent-test")
+        notifications = NotificationState()
+        bus.register_topic("notification", notifications.payload)
+        composer_document = ComposerDocument()
+        bus.register_topic("app-composer", composer_document.payload)
+        fake_dispatcher = _FakeDispatcher()
+        document = register_canvas(bus, notifications, fake_dispatcher, composer_document)
+        recorder = Recorder()
+        bus.attach(recorder)
+
+        root = await bus.dispatch_intent("scene", "addChatNode", [0, 0, "draft me a brief", True])
+        # add_artifact_node itself always requires a real parent - here we
+        # parent the artifact node off the CHAT node so branch_history is
+        # meaningfully non-trivial (mirrors run_web_research's own test).
+        art_node = document.add_artifact_node(0, 0, root)
+        recorder.messages.clear()  # only care about messages from sendArtifactMessage below
+
+        result = await bus.dispatch_intent(
+            "scene", "sendArtifactMessage", [art_node.id, "draft the introduction"]
+        )
+
+        assert result == art_node.id
+        assert document.nodes[art_node.id].history == [
+            {"role": "user", "content": "draft the introduction"}
+        ]
+        assert recorder.topics_seen().count("scene") == 1, "send_artifact_message publishes scene once"
+        assert len(fake_dispatcher.calls) == 1
+        call = fake_dispatcher.calls[0]
+        assert call["bus"] is bus
+        assert call["notifications_state"] is notifications
+        assert call["node"] is art_node
+        assert call["current_artifact"] == ""
+        assert call["history"] == document.chat_branch_history(root) + [
+            {"role": "user", "content": "draft the introduction"}
+        ]
+        assert callable(call["on_reply"])
+
+    asyncio.run(run())
+
+
+def test_cancel_artifact_request_intent_calls_agent_dispatcher_cancel_artifact():
+    class _FakeDispatcher:
+        def __init__(self):
+            self.cancel_calls = []
+
+        def cancel_artifact(self, request_id):
+            self.cancel_calls.append(request_id)
+            return True
+
+    async def run():
+        bus = SessionBus("cancel-artifact-request-intent-test")
+        notifications = NotificationState()
+        bus.register_topic("notification", notifications.payload)
+        composer_document = ComposerDocument()
+        bus.register_topic("app-composer", composer_document.payload)
+        fake_dispatcher = _FakeDispatcher()
+        register_canvas(bus, notifications, fake_dispatcher, composer_document)
+
+        result = await bus.dispatch_intent("scene", "cancelArtifactRequest", ["req-123"])
+
+        assert result is None
+        assert fake_dispatcher.cancel_calls == ["req-123"]
+
+    asyncio.run(run())

@@ -335,6 +335,20 @@ export class SceneStore {
     this.transport.intent("scene", "cancelWebResearchRequest", [requestId]);
   }
 
+  // R5.2: real Artifact/Drafter plugin - sendArtifactMessage appends a real
+  // user instruction AND triggers ArtifactAgent.get_response(current_artifact,
+  // history) for an existing artifact node; cancelArtifactRequest targets it
+  // by its own in-flight requestId, the same requestId-not-nodeId shape
+  // cancelConversationRequest/cancelWebResearchRequest above already
+  // established for their own per-node cancel.
+  sendArtifactMessage(nodeId: string, text: string): void {
+    this.transport.intent("scene", "sendArtifactMessage", [nodeId, text]);
+  }
+
+  cancelArtifactRequest(requestId: string): void {
+    this.transport.intent("scene", "cancelArtifactRequest", [requestId]);
+  }
+
   // R3.3: the Composer's real Send action - a real user ChatNode. The
   // assistant's reply is deferred to R4 (graphlink_config.py's Qt/non-Qt
   // split is a prerequisite for calling the real agent layer); the backend

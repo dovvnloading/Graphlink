@@ -66,6 +66,7 @@ import uuid
 
 import api_provider
 import graphlink_task_config as config
+from graphlink_artifact_agent import ArtifactAgent
 from graphlink_chat_agent import ChatAgent
 from graphlink_licensing import SettingsManager  # type hint only
 from graphlink_plugins.web_research.domain import (
@@ -190,6 +191,13 @@ class AgentDispatcher:
         # independent from _requests. request_id -> {"cancel_token":
         # CancellationToken, "task": asyncio.Task}.
         self._web_research_requests: dict[str, dict] = {}
+        # R5.2: a FOURTH independent in-flight-request slot, separate from
+        # self._requests (chat/conversation), self._image_requests, and
+        # self._web_research_requests - an artifact-generation request must be
+        # able to run concurrently with any of those three, same reasoning as
+        # every prior independent slot above. request_id -> {"cancel_event":
+        # threading.Event, "task": asyncio.Task}.
+        self._artifact_requests: dict[str, dict] = {}
 
     def persona(self) -> str:
         """Mirror legacy graphlink_window.py's `_get_current_system_prompt`:
@@ -239,6 +247,13 @@ class AgentDispatcher:
         doesn't reset that node's progress/error fields only to be rejected
         a moment later by start_web_research's own busy check."""
         return bool(self._web_research_requests)
+
+    def cancel_artifact(self, request_id: str) -> bool:
+        entry = self._artifact_requests.get(request_id)
+        if entry is None:
+            return False
+        entry["cancel_event"].set()
+        return True
 
     async def _dispatch(
         self,
@@ -732,6 +747,88 @@ class AgentDispatcher:
             "cancel_token": cancel_token, "task": asyncio.create_task(_run())
         }
 
+    async def start_artifact_reply(
+        self,
+        *,
+        bus: SessionBus,
+        notifications_state,
+        node,
+        current_artifact: str,
+        history: list,
+        on_reply,
+    ) -> None:
+        """R5.2: the Artifact/Drafter independent-slot counterpart to
+        start_image_reply/start_web_research above - NOT a variant of
+        _dispatch, since _dispatch is hardcoded to a single-string on_reply
+        contract and a fixed driver function, while _call_artifact_agent
+        returns a two-element tuple and must run its own fail-closed
+        tag-parsing/raise (see ArtifactAgent.get_response) before any
+        mutation callback fires. Guarded by self._artifact_requests, a dict
+        kept fully SEPARATE from self._requests (chat/conversation),
+        self._image_requests, and self._web_research_requests - see that
+        field's own comment in __init__ for why this must stay independent.
+
+        Cooperative cancellation only, via a threading.Event (not the
+        CancellationToken web-research uses - ArtifactAgent has no such
+        primitive) - same honestly-documented limitation as every other
+        dispatch surface: ArtifactAgent.get_response has no cancellation
+        checkpoint of its own. The checkpoint is deliberately placed AFTER
+        the blocking call returns: if cancel_event is set by then, on_reply
+        is simply never called, so the document is left untouched.
+
+        Reuses WATCHDOG_TIMEOUT_SECONDS (420s), not a new constant:
+        ArtifactAgent.get_response makes exactly ONE blocking
+        api_provider.chat() call (see _call_artifact_agent below), the same
+        call-count as chat's own _call_chat_agent - Web Research's own 900s
+        bump exists specifically because WebResearchService.run chains ~10
+        sequential calls inside one outer timeout, which does not apply
+        here."""
+        if self._artifact_requests:
+            notifications_state.show("An artifact request is already running.", "info")
+            await bus.publish("notification")
+            return
+
+        request_id = uuid.uuid4().hex
+        cancel_event = threading.Event()
+
+        async def _run():
+            node.pending_request_id = request_id
+            await bus.publish("scene")
+            try:
+                new_content, ai_message = await asyncio.wait_for(
+                    asyncio.to_thread(_call_artifact_agent, current_artifact, history),
+                    timeout=WATCHDOG_TIMEOUT_SECONDS,
+                )
+                if cancel_event.is_set():
+                    notifications_state.show("Artifact generation cancelled.", "info")
+                    await bus.publish("notification")
+                else:
+                    if inspect.iscoroutinefunction(on_reply):
+                        await on_reply(new_content, ai_message)
+                    else:
+                        on_reply(new_content, ai_message)
+                    await bus.publish("scene")
+            except asyncio.TimeoutError:
+                cancel_event.set()
+                notifications_state.show(
+                    "Artifact generation stopped responding before the request completed. "
+                    "Please try again.",
+                    "error",
+                )
+                await bus.publish("notification")
+            except Exception as exc:
+                logger.exception("artifact dispatch failed")
+                notifications_state.show(f"Artifact generation failed: {exc}", "error")
+                await bus.publish("notification")
+            finally:
+                self._artifact_requests.pop(request_id, None)
+                node.pending_request_id = None
+                await bus.publish("scene")
+
+        self._artifact_requests[request_id] = {
+            "cancel_event": cancel_event, "task": asyncio.create_task(_run())
+        }
+
 
 def _call_chat_agent(conversation_history, persona_text, cancel_event) -> str:
     """Runs inside asyncio.to_thread - a real OS thread, not the event loop."""
@@ -784,6 +881,18 @@ def _call_chat_agent_stream(conversation_history, persona_text, cancel_event, on
         resolved_system_prompt=agent.system_prompt,
         on_chunk=on_chunk,
     )
+
+
+def _call_artifact_agent(current_artifact, history):
+    """Runs inside asyncio.to_thread - a real OS thread, not the event loop.
+    Reuses ArtifactAgent.get_response verbatim - same regex/raise
+    artifact-tag contract, completely unmodified. Returns
+    (new_document, ai_message); the tag-parsing RuntimeError, when raised,
+    propagates straight out of this call and is caught by
+    start_artifact_reply's own `except Exception` below - the document is
+    never touched in that case since mutation only happens in the success
+    branch."""
+    return ArtifactAgent().get_response(current_artifact, history)
 
 
 def register_agents(bus, composer_document, notifications_state, settings_manager) -> AgentDispatcher:

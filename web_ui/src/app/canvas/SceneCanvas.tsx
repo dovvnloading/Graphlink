@@ -17,6 +17,7 @@ import {
 import "@xyflow/react/dist/style.css";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { SceneState } from "../../lib/bridge-core/generated/scene-state";
+import { ArtifactNodeView, type ArtifactFlowNode } from "./ArtifactNodeView";
 import { ChatNodeView, type ChatFlowNode } from "./ChatNodeView";
 import { CodeNodeView, type CodeFlowNode } from "./CodeNodeView";
 import { ConversationNodeView, type ConversationFlowNode } from "./ConversationNodeView";
@@ -53,7 +54,8 @@ type SceneFlowNode =
   | HtmlFlowNode
   | ImageFlowNode
   | ConversationFlowNode
-  | WebResearchFlowNode;
+  | WebResearchFlowNode
+  | ArtifactFlowNode;
 
 function PlaceholderNodeView({ data, selected }: NodeProps<PlaceholderNode>) {
   const zoom = useStore((s) => s.transform[2]);
@@ -81,6 +83,7 @@ const NODE_TYPES = {
   image: ImageNodeView,
   conversation: ConversationNodeView,
   web_research: WebResearchNodeView,
+  artifact: ArtifactNodeView,
 };
 
 // Exported standalone for direct unit testing (same posture as
@@ -316,6 +319,37 @@ export function toFlowNodes(scene: SceneState, store: SceneStore): SceneFlowNode
           // genuinely a non-null request id to target.
           onCancel: () => {
             if (n.pendingRequestId) store.cancelWebResearchRequest(n.pendingRequestId);
+          },
+        },
+      });
+      continue;
+    }
+    if (n.kind === "artifact") {
+      // No onDock here either (same reasoning as the html/image/conversation/
+      // web_research branches above) - ArtifactNodeView never offers a
+      // dock-into-parent action; the generic `if (n.isDocked) continue` guard
+      // above still covers it correctly if it were ever docked via a direct
+      // WS call.
+      flowNodes.push({
+        id: n.id,
+        type: "artifact" as const,
+        position: { x: n.x, y: n.y },
+        data: {
+          artifactContent: n.artifactContent,
+          history: n.history,
+          isCollapsed: n.isCollapsed,
+          pendingRequestId: n.pendingRequestId ?? null,
+          // Reuses the existing generic setChatCollapsed intent - same
+          // reasoning as every other non-chat node kind's onToggleCollapse
+          // above (the backend handler looks up ANY node by id).
+          onToggleCollapse: () => store.setChatCollapsed(n.id, !n.isCollapsed),
+          onDelete: () => store.removeNodes([n.id]),
+          onSubmit: (text: string) => store.sendArtifactMessage(n.id, text),
+          // Same null-guard pattern as the conversation/web_research nodes'
+          // own analogous cancel call sites above - only fire the intent if
+          // there is genuinely a non-null request id to target.
+          onCancel: () => {
+            if (n.pendingRequestId) store.cancelArtifactRequest(n.pendingRequestId);
           },
         },
       });

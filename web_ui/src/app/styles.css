@@ -2755,3 +2755,142 @@ body,
 .web-research-node-source-status-fetching {
   color: var(--gl-semantic-status-info, currentColor);
 }
+
+/* -- R5.2 artifact node ------------------------------------------------- */
+
+.artifact-node {
+  width: 420px;
+  max-height: 640px;
+  min-height: 110px;
+}
+
+.artifact-node.collapsed {
+  width: 290px;
+  min-height: 58px;
+}
+
+.artifact-node-content {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 560px;
+  overflow-y: auto;
+}
+
+.artifact-node-document {
+  display: flex;
+  flex-direction: column;
+}
+
+.artifact-node-empty {
+  margin: 0;
+  font-size: 12px;
+  font-style: italic;
+  color: var(--gl-surface-text-muted);
+}
+
+/* Reuses .chat-node-content's full markdown-body rule set (headings, lists,
+   code, tables, hljs) verbatim - same shared-class convention
+   .conversation-node-bubble-content/.web-research-node-answer already
+   establish for this pipeline. Only overrides the max-height/overflow-y a
+   nested preview pane should never take on its own (the outer
+   .artifact-node-content already scrolls). */
+.artifact-node-document-content {
+  max-height: none;
+  overflow: visible;
+}
+
+/* The turn history - same scrollable-list posture as
+   .conversation-node-messages, applied here below the document preview
+   rather than as the node's only content region. */
+.artifact-node-messages {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Per-turn bubble - reuses conversation-node-bubble's own role-modifier
+   convention (var(--gl-neutral-button-hover) for the user variant) under
+   this node kind's own class name. */
+.artifact-node-bubble {
+  padding: 8px 10px;
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 8px;
+  background-color: var(--gl-surface-inset, var(--gl-surface-window));
+}
+
+.artifact-node-bubble.user {
+  background-color: var(--gl-neutral-button-hover);
+}
+
+.artifact-node-bubble-content {
+  max-height: none;
+  overflow: visible;
+}
+
+.artifact-node-input-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.artifact-node-input {
+  box-sizing: border-box;
+  width: 100%;
+  resize: none;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 8px 10px;
+  color: var(--gl-surface-text);
+  background-color: var(--gl-surface-inset, var(--gl-surface-window));
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 6px;
+}
+
+.artifact-node-input:focus {
+  outline: none;
+  border-color: var(--gl-surface-text-muted);
+}
+
+.artifact-node-input-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+/* Reuses conversation-node/web-research-node's send/cancel button chrome
+   verbatim (same shared-token convention already established across sibling
+   node views) rather than duplicating the two declarations under a new
+   name. */
+.artifact-node-submit-btn,
+.artifact-node-cancel-btn {
+  font-size: 11px;
+  font-weight: 600;
+  font-family: inherit;
+  padding: 5px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.artifact-node-submit-btn {
+  color: var(--gl-surface-window);
+  background-color: var(--gl-surface-text-muted);
+  border: none;
+}
+
+.artifact-node-submit-btn:hover:enabled {
+  filter: brightness(1.1);
+}
+
+.artifact-node-submit-btn:disabled,
+.artifact-node-cancel-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.artifact-node-cancel-btn {
+  color: var(--gl-surface-text);
+  background-color: var(--gl-neutral-button-background);
+  border: 1px solid var(--gl-neutral-button-border);
+}

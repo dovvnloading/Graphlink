@@ -146,6 +146,26 @@ def register_plugins(
             await bus.publish("scene")
             return node.id
 
+        if name == "Artifact / Drafter":
+            # R5.2: the second real node-creation plugin, same posture as
+            # Web Research above - an Artifact node is a branch-point child
+            # (same as thinking/html/image/conversation/web_research nodes),
+            # so it always requires a real, valid parent to branch from -
+            # there is no unparented/root form.
+            if not parent_node_id or parent_node_id not in canvas_document.nodes:
+                notifications.show(
+                    "Please select a valid node to branch from before adding an Artifact node.",
+                    "warning",
+                )
+                await bus.publish("notification")
+                return None
+            parent = canvas_document.nodes[parent_node_id]
+            node = canvas_document.add_artifact_node(
+                parent.x, parent.y + MESSAGE_VERTICAL_SPACING, parent_node_id
+            )
+            await bus.publish("scene")
+            return node.id
+
         notifications.show(f'"{name}" node creation lands in R3/R5.', "info")
         await bus.publish("notification")
         return None
