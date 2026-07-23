@@ -18,17 +18,20 @@ import { LOD_ZOOM_THRESHOLD } from "./canvasConstants";
  * in this codebase already uses), collapse/expand (manual toggle OR-ed with
  * LOD auto-collapse, same as Chat/Document), delete (generic - a conversation
  * node is never a branch point/reparented, same as code/thinking/html/image),
- * per-bubble copy + delete-from-history, and Send (appends a real user
- * message; the assistant's reply is deferred to R4 - see sendConversationMessage's
- * own backend docstring - the backend surfaces that honestly over the
- * existing notification topic, no fake response synthesized here, matching
- * the Composer's own sendMessage precedent). Deferred, with an honest
- * disabled+title label rather than a silent drop (same audit convention
- * every prior node kind in this plan has followed): Open Document View (the
- * document-viewer island isn't wired into the SPA overlay system yet - same
- * reason ChatNodeView's own menu defers it) and Cancel (there is no in-flight
- * request concept anywhere in this frontend yet for it to ever act on -
- * agent cancellation lands in R4 alongside the agent layer itself).
+ * per-bubble copy + delete-from-history, Send (appends a real user message
+ * and triggers the real agent reply via the backend agent layer - see
+ * sendConversationMessage's own backend docstring), and (R4.3) Cancel: a
+ * real per-node cancel affordance, the exact same conditional-render pattern
+ * as the Composer's own Cancel button (Composer.tsx) applied one level down
+ * - per-node instead of per-session. Cancel is rendered only while this
+ * node's own data.pendingRequestId is non-null (this node has an in-flight
+ * reply of its own), and Send is additionally disabled while that same
+ * field is set, so a second send can't be issued mid-flight for this node.
+ * Still deferred, with an honest disabled+title label rather than a silent
+ * drop (same audit convention every prior node kind in this plan has
+ * followed): Open Document View (the document-viewer island isn't wired
+ * into the SPA overlay system yet - same reason ChatNodeView's own menu
+ * defers it).
  *
  * Card menu deliberately does NOT include "Hide Other Branches" or "Include
  * Previous Branch Context": the legacy PluginNodeContextMenu for this node
@@ -46,10 +49,12 @@ export interface ConversationMessage {
 export interface ConversationNodeData extends Record<string, unknown> {
   history: ConversationMessage[];
   isCollapsed: boolean;
+  pendingRequestId: string | null;
   onToggleCollapse: () => void;
   onDelete: () => void;
   onSend: (text: string) => void;
   onDeleteMessage: (index: number) => void;
+  onCancel: () => void;
 }
 
 export type ConversationFlowNode = Node<ConversationNodeData, "conversation">;
@@ -305,19 +310,21 @@ export function ConversationNodeView({ data, selected }: NodeProps<ConversationF
               <button
                 type="button"
                 className="conversation-node-send-btn"
-                disabled={!draft.trim()}
+                disabled={!draft.trim() || !!data.pendingRequestId}
                 onClick={send}
               >
                 Send
               </button>
-              <button
-                type="button"
-                className="conversation-node-cancel-btn"
-                disabled
-                title="Agent cancellation lands in R4"
-              >
-                Cancel
-              </button>
+              {data.pendingRequestId && (
+                <button
+                  type="button"
+                  className="conversation-node-cancel-btn"
+                  onClick={() => data.onCancel()}
+                  title="Cancel response"
+                >
+                  Cancel
+                </button>
+              )}
             </div>
           </div>
         </div>

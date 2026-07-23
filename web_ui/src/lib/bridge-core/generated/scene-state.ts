@@ -22,6 +22,7 @@ export interface SceneNodeRow {
   isDocked: boolean;
   imageAssetId: string;
   history: ConversationMessageRow[];
+  pendingRequestId?: string | null;
 }
 
 export interface ConversationMessageRow {
@@ -167,6 +168,10 @@ function checkSceneNodeRow(value: unknown, path: string, errors: string[]): void
     if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.history: missing required field`);
     else { if (!Array.isArray(fieldValue)) errors.push(`${path}.history` + ": expected array");
     else (fieldValue as unknown[]).forEach((item, i) => { checkConversationMessageRow(item, `${path}.history` + `[${i}]`, errors); }); }
+  }
+  {
+    const fieldValue = value["pendingRequestId"];
+    if (fieldValue !== undefined && fieldValue !== null) { if (typeof fieldValue !== "string") errors.push(`${path}.pendingRequestId` + ": expected string"); }
   }
 }
 

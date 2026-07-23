@@ -4,6 +4,7 @@ shape, and snapshot publishing."""
 
 import asyncio
 import base64
+import threading
 from unittest.mock import patch
 
 import pytest
@@ -804,6 +805,14 @@ def test_scene_payload_includes_history_defaulted_for_other_kinds():
         {"role": "user", "content": "hi"},
         {"role": "assistant", "content": "hello!"},
     ]
+    # R4.3: pendingRequestId defaults to None for every kind - including a
+    # conversation node with no in-flight dispatch (it is only ever set by
+    # AgentDispatcher.start_conversation_reply while a reply is generating -
+    # see test_agents.py and test_send_conversation_message_intent_dispatches_a_real_agent_reply
+    # below for the non-None in-flight case).
+    assert rows["n0"]["pendingRequestId"] is None
+    assert rows[parent.id]["pendingRequestId"] is None
+    assert rows[node.id]["pendingRequestId"] is None
 
 
 def test_add_conversation_node_intent_creates_a_real_node_and_publishes():
@@ -824,24 +833,90 @@ def test_add_conversation_node_intent_creates_a_real_node_and_publishes():
     asyncio.run(run())
 
 
-def test_send_conversation_message_intent_appends_and_fires_the_same_deferred_notice():
+def test_send_conversation_message_intent_dispatches_a_real_agent_reply():
+    # R4.3: sendConversationMessage's deferred "lands in a follow-up
+    # increment" notice is gone - the real intent now dispatches through
+    # AgentDispatcher.start_conversation_reply, same monkeypatch seam as
+    # test_send_message_intent_dispatches_a_real_agent_reply and
+    # test_agents.py (api_provider.chat directly). Uses a blocking fake chat
+    # (started/release threading.Events, same convention as test_agents.py's
+    # mid-flight tests) so the in-flight pendingRequestId state can actually
+    # be observed, not just the before/after idle states.
     async def run():
-        bus, document, recorder = make_bus()
+        bus, document, recorder, dispatcher = make_bus_with_dispatcher()
         parent_id = await bus.dispatch_intent("scene", "addNode", [0, 0, "parent"])
         node_id = await bus.dispatch_intent("scene", "addConversationNode", [10, 10, parent_id])
 
-        returned_id = await bus.dispatch_intent(
-            "scene", "sendConversationMessage", [node_id, "what is this graph about?"]
-        )
-        assert returned_id == node_id
+        started = threading.Event()
+        release = threading.Event()
+
+        def blocking_chat(task, messages, **kwargs):
+            started.set()
+            release.wait(5)
+            return {"message": {"content": "a real conversation reply"}}
+
+        with patch.object(api_provider, "USE_API_MODE", False), \
+                patch.object(api_provider, "LOCAL_PROVIDER_TYPE", task_config.LOCAL_PROVIDER_OLLAMA), \
+                patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
+                patch.object(api_provider, "chat", blocking_chat):
+            returned_id = await bus.dispatch_intent(
+                "scene", "sendConversationMessage", [node_id, "what is this graph about?"]
+            )
+            assert returned_id == node_id
+            assert document.nodes[node_id].history == [
+                {"role": "user", "content": "what is this graph about?"}
+            ]
+
+            await asyncio.to_thread(started.wait, 5)
+            # Mid-flight: pendingRequestId surfaces as non-None both on the
+            # domain node and in scene_payload.
+            assert document.nodes[node_id].pending_request_id is not None
+            rows = {n["id"]: n for n in document.scene_payload()["nodes"]}
+            assert rows[node_id]["pendingRequestId"] is not None
+            assert rows[node_id]["pendingRequestId"] == document.nodes[node_id].pending_request_id
+
+            release.set()
+            entry = next(iter(dispatcher._requests.values()))
+            await entry["task"]
+
         assert document.nodes[node_id].history == [
-            {"role": "user", "content": "what is this graph about?"}
+            {"role": "user", "content": "what is this graph about?"},
+            {"role": "assistant", "content": "a real conversation reply"},
         ]
 
         notice = await bus.publish("notification")
-        assert notice["visible"] is True
-        assert notice["message"] == "AI response generation lands in a follow-up increment."
-        assert recorder.topics_seen().count("scene") == 3, "all three mutations publish (addNode, addConversationNode, sendConversationMessage)"
+        assert notice["visible"] is False, "a real reply landing is not a deferral - no notification fires"
+        assert document.nodes[node_id].pending_request_id is None, "cleared again once the reply lands"
+        rows = {n["id"]: n for n in document.scene_payload()["nodes"]}
+        assert rows[node_id]["pendingRequestId"] is None
+
+    asyncio.run(run())
+
+
+def test_cancel_chat_request_intent_on_scene_topic_calls_agent_dispatcher_cancel():
+    # A lightweight fake dispatcher is sufficient here - no real LLM call
+    # needed, this just confirms the intent forwards to cancel().
+    class _FakeDispatcher:
+        def __init__(self):
+            self.cancel_calls = []
+
+        def cancel(self, request_id):
+            self.cancel_calls.append(request_id)
+            return True
+
+    async def run():
+        bus = SessionBus("cancel-intent-test")
+        notifications = NotificationState()
+        bus.register_topic("notification", notifications.payload)
+        composer_document = ComposerDocument()
+        bus.register_topic("app-composer", composer_document.payload)
+        fake_dispatcher = _FakeDispatcher()
+        register_canvas(bus, notifications, fake_dispatcher, composer_document)
+
+        result = await bus.dispatch_intent("scene", "cancelChatRequest", ["req-123"])
+
+        assert result is True
+        assert fake_dispatcher.cancel_calls == ["req-123"]
 
     asyncio.run(run())
 

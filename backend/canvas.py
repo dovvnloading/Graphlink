@@ -194,6 +194,13 @@ class SceneNode:
     # node; a conversation node instead owns a whole message history. Unused
     # (default empty list) for every other kind.
     history: list[dict[str, str]] = field(default_factory=list)
+    # R4.3 (doc/QT_REMOVAL_PLAN.md): transient per-node in-flight-request
+    # marker - the id of the AgentDispatcher request currently generating a
+    # reply for this node, or None when idle. Generic across any kind that
+    # ever gets its own real dispatch slot (not conversation-only, the same
+    # way is_docked/image_asset_id are generic fields even though today only
+    # one kind populates them); unused (default None) for every other kind.
+    pending_request_id: str | None = None
 
 
 @dataclass
@@ -787,6 +794,7 @@ class SceneDocument:
                     "history": [
                         {"role": m["role"], "content": m["content"]} for m in n.history
                     ],
+                    "pendingRequestId": n.pending_request_id,
                 }
                 for n in self.nodes.values()
             ],
@@ -943,19 +951,26 @@ def register_canvas(
         return node.id
 
     async def send_conversation_message(node_id, text):
-        # R3.25: the real user-message-send action for a conversation node -
-        # appends a real user message. ConversationNode is deliberately NOT
-        # wired to agent_dispatcher this increment (R4 landed real dispatch
-        # for ChatNode's send_message only, above) - reserved for a
-        # follow-up increment, so this remains an honest deferred notice
-        # rather than a fake/stubbed response. The wording below was updated
-        # from "lands in R4" since R4 has now partially landed (just not for
-        # this node type yet) - leaving the old text unchanged would be
-        # actively misleading.
+        # R4.3: the real user-message-send action for a conversation node -
+        # appends a real user message, then dispatches a real agent reply
+        # through AgentDispatcher.start_conversation_reply, the ConversationNode
+        # counterpart of send_message's ChatNode dispatch above. The reply
+        # lands via _on_reply calling document.append_conversation_assistant_message
+        # directly - same established relationship as send_message's own
+        # _on_reply calling document.add_chat_node directly.
         node = document.send_conversation_message(node_id, text)
         await publish_scene()
-        notifications.show("AI response generation lands in a follow-up increment.", "info")
-        await bus.publish("notification")
+
+        def _on_reply(reply_text):
+            document.append_conversation_assistant_message(node_id, reply_text)
+
+        await agent_dispatcher.start_conversation_reply(
+            bus=bus,
+            notifications_state=notifications,
+            node=node,
+            conversation_history=node.history,
+            on_reply=_on_reply,
+        )
         return node.id
 
     async def append_conversation_assistant_message(node_id, text):
@@ -1080,6 +1095,14 @@ def register_canvas(
     bus.register_intent("scene", "updatePin", update_pin)
     bus.register_intent("scene", "setSnapToGrid", set_snap_to_grid)
     bus.register_intent("scene", "setDragFactor", set_drag_factor)
+    # R4.3: per-node cancel for a ConversationNode's in-flight reply. Reuses
+    # the exact intent NAME "cancelChatRequest" already registered on the
+    # "app-composer" topic by R4.2 - SessionBus keys handlers by the
+    # (topic, intent) tuple (see backend/events.py), so this is a second,
+    # independent registration on a different topic, not a collision. It
+    # points at the same underlying agent_dispatcher.cancel, which is purely
+    # request_id-keyed and does not care which topic invoked it.
+    bus.register_intent("scene", "cancelChatRequest", lambda request_id: agent_dispatcher.cancel(request_id))
 
     async def organize_nodes():
         document.organize()

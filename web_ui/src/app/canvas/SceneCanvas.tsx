@@ -243,6 +243,7 @@ function toFlowNodes(scene: SceneState, store: SceneStore): SceneFlowNode[] {
         data: {
           history: n.history,
           isCollapsed: n.isCollapsed,
+          pendingRequestId: n.pendingRequestId ?? null,
           // Reuses the existing generic setChatCollapsed intent - same
           // reasoning as every other non-chat node kind's onToggleCollapse
           // above (the backend handler looks up ANY node by id).
@@ -250,6 +251,12 @@ function toFlowNodes(scene: SceneState, store: SceneStore): SceneFlowNode[] {
           onDelete: () => store.removeNodes([n.id]),
           onSend: (text: string) => store.sendConversationMessage(n.id, text),
           onDeleteMessage: (index: number) => store.deleteConversationMessage(n.id, index),
+          // Same null-guard pattern as Composer.tsx's own analogous cancel
+          // call site - only fire the intent if there is genuinely a
+          // non-null request id to target.
+          onCancel: () => {
+            if (n.pendingRequestId) store.cancelConversationRequest(n.pendingRequestId);
+          },
         },
       });
       continue;

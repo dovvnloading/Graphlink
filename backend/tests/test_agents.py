@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -453,5 +454,357 @@ def test_rapid_fire_double_send_same_session_second_is_rejected(monkeypatch):
         release.set()
         await next(iter(dispatcher._requests.values()))["task"]
         assert replies == ["first"]
+
+    asyncio.run(run())
+
+
+# -- R4.3: start_conversation_reply (ConversationNode real reply + per-node
+# cancel) - mirrors the start_chat_reply tests above one-for-one, using a
+# small stand-in node object in place of composer_document. -----------------
+
+
+class _Recorder:
+    """Minimal connection stand-in recording which topics got published, in
+    order - used here to confirm start_conversation_reply republishes
+    "scene" (never "app-composer") around its state change, unlike
+    start_chat_reply's "app-composer"."""
+
+    def __init__(self):
+        self.topics: list[str] = []
+
+    async def send_json(self, data):
+        if data.get("kind") == "state":
+            self.topics.append(data["topic"])
+
+
+def _make_node():
+    return SimpleNamespace(pending_request_id=None)
+
+
+def test_conversation_reply_sets_then_clears_pending_request_id_and_calls_on_reply(monkeypatch):
+    started = threading.Event()
+    release = threading.Event()
+
+    def blocking_chat(task, messages, **kwargs):
+        started.set()
+        release.wait(5)
+        return {"message": {"content": "canned reply"}}
+
+    _configure_fake_ollama(monkeypatch, blocking_chat)
+
+    async def run():
+        bus, notifications, composer_document, dispatcher = _make_dispatch_env()
+        node = _make_node()
+        replies = []
+
+        await dispatcher.start_conversation_reply(
+            bus=bus,
+            notifications_state=notifications,
+            node=node,
+            conversation_history=[{"role": "user", "content": "hi"}],
+            on_reply=replies.append,
+        )
+        await asyncio.to_thread(started.wait, 5)
+        assert node.pending_request_id is not None, "set mid-flight, before the blocking call returns"
+
+        release.set()
+        entry = next(iter(dispatcher._requests.values()))
+        await entry["task"]
+
+        assert replies == ["canned reply"]
+        assert dispatcher._requests == {}
+        assert node.pending_request_id is None
+
+    asyncio.run(run())
+
+
+def test_conversation_reply_publishes_scene_not_app_composer_on_begin_and_end(monkeypatch):
+    _configure_fake_ollama(monkeypatch, lambda task, messages, **kwargs: {"message": {"content": "canned reply"}})
+
+    async def run():
+        bus, notifications, composer_document, dispatcher = _make_dispatch_env()
+        recorder = _Recorder()
+        bus.attach(recorder)
+        node = _make_node()
+
+        await dispatcher.start_conversation_reply(
+            bus=bus,
+            notifications_state=notifications,
+            node=node,
+            conversation_history=[{"role": "user", "content": "hi"}],
+            on_reply=lambda text: None,
+        )
+        entry = next(iter(dispatcher._requests.values()))
+        await entry["task"]
+
+        assert "app-composer" not in recorder.topics
+        # Once after on_begin, once after on_reply (hardcoded "scene" in
+        # _dispatch regardless of state_topic), once after on_end.
+        assert recorder.topics.count("scene") == 3
+        assert composer_document.request_state == "idle", "a conversation reply must never touch composer state"
+
+    asyncio.run(run())
+
+
+def test_conversation_reply_provider_not_configured_returns_quickly_with_an_error_notification(monkeypatch):
+    chat_calls = []
+    _configure_fake_ollama(
+        monkeypatch,
+        lambda task, messages, **kwargs: chat_calls.append(1),
+        model="",  # empty -> is_configured() is False
+    )
+
+    async def run():
+        bus, notifications, composer_document, dispatcher = _make_dispatch_env()
+        node = _make_node()
+
+        await dispatcher.start_conversation_reply(
+            bus=bus,
+            notifications_state=notifications,
+            node=node,
+            conversation_history=[],
+            on_reply=lambda text: None,
+        )
+
+        assert dispatcher._requests == {}, "no task/thread work started"
+        assert chat_calls == [], "api_provider.chat was never reached"
+        assert node.pending_request_id is None, "never touched on the fail-fast path"
+        assert notifications.visible is True
+        assert notifications.msg_type == "error"
+        assert notifications.message == (
+            "No AI provider is configured yet. Open Settings to choose Ollama, "
+            "Llama.cpp, or an API provider."
+        )
+
+    asyncio.run(run())
+
+
+def test_conversation_reply_cancellation_mid_flight_fires_info_notification_and_clears_registry(monkeypatch):
+    started = threading.Event()
+
+    def blocking_then_cancelled(task, messages, cancellation_event=None, **kwargs):
+        started.set()
+        while not cancellation_event.is_set():
+            time.sleep(0.01)
+        raise api_provider.RequestCancelledError("Request cancelled.")
+
+    _configure_fake_ollama(monkeypatch, blocking_then_cancelled)
+
+    async def run():
+        bus, notifications, composer_document, dispatcher = _make_dispatch_env()
+        node = _make_node()
+
+        await dispatcher.start_conversation_reply(
+            bus=bus,
+            notifications_state=notifications,
+            node=node,
+            conversation_history=[{"role": "user", "content": "hi"}],
+            on_reply=lambda text: None,
+        )
+        request_id, entry = next(iter(dispatcher._requests.items()))
+
+        await asyncio.to_thread(started.wait, 5)
+        assert dispatcher.cancel(request_id) is True
+
+        await entry["task"]
+
+        assert dispatcher._requests == {}
+        assert node.pending_request_id is None
+        assert notifications.visible is True
+        assert notifications.msg_type == "info"
+        assert notifications.message == "Request cancelled."
+
+    asyncio.run(run())
+
+
+def test_conversation_reply_timeout_fires_the_exact_message_and_clears_registry(monkeypatch):
+    monkeypatch.setattr(agents_module, "WATCHDOG_TIMEOUT_SECONDS", 0.05)
+
+    def slow_chat(task, messages, **kwargs):
+        time.sleep(0.3)
+        return {"message": {"content": "too late"}}
+
+    _configure_fake_ollama(monkeypatch, slow_chat)
+
+    async def run():
+        bus, notifications, composer_document, dispatcher = _make_dispatch_env()
+        node = _make_node()
+
+        await dispatcher.start_conversation_reply(
+            bus=bus,
+            notifications_state=notifications,
+            node=node,
+            conversation_history=[{"role": "user", "content": "hi"}],
+            on_reply=lambda text: None,
+        )
+        entry = next(iter(dispatcher._requests.values()))
+        await entry["task"]
+
+        assert dispatcher._requests == {}
+        assert node.pending_request_id is None
+        assert notifications.visible is True
+        assert notifications.msg_type == "error"
+        assert notifications.message == (
+            "The model stopped responding before the request completed. "
+            "Please try again or choose a faster model."
+        )
+
+    asyncio.run(run())
+
+
+def test_conversation_on_reply_raising_still_clears_pending_request_id_and_frees_the_registry(monkeypatch):
+    """Simulates a node deleted mid-flight: on_reply (which in production
+    calls document.append_conversation_assistant_message) raises. This must
+    surface via the existing "AI response failed: ..." notification path
+    (same as any other _dispatch exception, e.g. api_provider.chat itself
+    raising), and the registry must still free up - node.pending_request_id
+    cleared, and a subsequent call admitted normally."""
+    _configure_fake_ollama(monkeypatch, lambda task, messages, **kwargs: {"message": {"content": "reply text"}})
+
+    async def run():
+        bus, notifications, composer_document, dispatcher = _make_dispatch_env()
+        node = _make_node()
+
+        def raising_on_reply(text):
+            raise KeyError("node deleted mid-flight")
+
+        await dispatcher.start_conversation_reply(
+            bus=bus,
+            notifications_state=notifications,
+            node=node,
+            conversation_history=[{"role": "user", "content": "hi"}],
+            on_reply=raising_on_reply,
+        )
+        entry = next(iter(dispatcher._requests.values()))
+        await entry["task"]
+
+        assert dispatcher._requests == {}
+        assert node.pending_request_id is None
+        assert notifications.visible is True
+        assert notifications.msg_type == "error"
+        assert notifications.message.startswith("AI response failed:")
+
+        # The registry actually frees up: a subsequent call is admitted.
+        monkeypatch.setattr(
+            api_provider, "chat", lambda task, messages, **kwargs: {"message": {"content": "next reply"}}
+        )
+        replies = []
+        await dispatcher.start_conversation_reply(
+            bus=bus,
+            notifications_state=notifications,
+            node=node,
+            conversation_history=[{"role": "user", "content": "hi again"}],
+            on_reply=replies.append,
+        )
+        entry = next(iter(dispatcher._requests.values()))
+        await entry["task"]
+        assert replies == ["next reply"]
+        assert node.pending_request_id is None
+
+    asyncio.run(run())
+
+
+# -- cross-channel guard: Composer and ConversationNode share ONE in-flight
+# slot per dispatcher - this locks in that shared-single-slot design
+# decision explicitly, not just implied by the same-channel tests above. ----
+
+
+def test_composer_call_in_flight_blocks_a_concurrent_conversation_call_on_the_same_dispatcher(monkeypatch):
+    started = threading.Event()
+    release = threading.Event()
+
+    def blocking_chat(task, messages, **kwargs):
+        started.set()
+        release.wait(5)
+        return {"message": {"content": "composer reply"}}
+
+    _configure_fake_ollama(monkeypatch, blocking_chat)
+
+    async def run():
+        bus, notifications, composer_document, dispatcher = _make_dispatch_env()
+        node = _make_node()
+        composer_replies = []
+        conversation_replies = []
+
+        await dispatcher.start_chat_reply(
+            bus=bus,
+            notifications_state=notifications,
+            composer_document=composer_document,
+            conversation_history=[{"role": "user", "content": "composer msg"}],
+            on_reply=composer_replies.append,
+        )
+        await asyncio.to_thread(started.wait, 5)
+
+        await dispatcher.start_conversation_reply(
+            bus=bus,
+            notifications_state=notifications,
+            node=node,
+            conversation_history=[{"role": "user", "content": "conversation msg"}],
+            on_reply=conversation_replies.append,
+        )
+
+        assert notifications.visible is True
+        assert notifications.message == "A response is already being generated."
+        assert node.pending_request_id is None, "the bounced call must never touch the node"
+        assert len(dispatcher._requests) == 1, "only the composer's original request stays in flight"
+
+        release.set()
+        entry = next(iter(dispatcher._requests.values()))
+        await entry["task"]
+
+        assert composer_replies == ["composer reply"]
+        assert conversation_replies == [], "the bounced call never ran at all"
+        assert dispatcher._requests == {}
+
+    asyncio.run(run())
+
+
+def test_conversation_call_in_flight_blocks_a_concurrent_composer_call_on_the_same_dispatcher(monkeypatch):
+    started = threading.Event()
+    release = threading.Event()
+
+    def blocking_chat(task, messages, **kwargs):
+        started.set()
+        release.wait(5)
+        return {"message": {"content": "conversation reply"}}
+
+    _configure_fake_ollama(monkeypatch, blocking_chat)
+
+    async def run():
+        bus, notifications, composer_document, dispatcher = _make_dispatch_env()
+        node = _make_node()
+        composer_replies = []
+        conversation_replies = []
+
+        await dispatcher.start_conversation_reply(
+            bus=bus,
+            notifications_state=notifications,
+            node=node,
+            conversation_history=[{"role": "user", "content": "conversation msg"}],
+            on_reply=conversation_replies.append,
+        )
+        await asyncio.to_thread(started.wait, 5)
+
+        await dispatcher.start_chat_reply(
+            bus=bus,
+            notifications_state=notifications,
+            composer_document=composer_document,
+            conversation_history=[{"role": "user", "content": "composer msg"}],
+            on_reply=composer_replies.append,
+        )
+
+        assert notifications.visible is True
+        assert notifications.message == "A response is already being generated."
+        assert composer_document.request_state == "idle", "the bounced call must never touch composer state"
+        assert len(dispatcher._requests) == 1, "only the conversation node's original request stays in flight"
+
+        release.set()
+        entry = next(iter(dispatcher._requests.values()))
+        await entry["task"]
+
+        assert conversation_replies == ["conversation reply"]
+        assert composer_replies == [], "the bounced call never ran at all"
+        assert dispatcher._requests == {}
+        assert node.pending_request_id is None
 
     asyncio.run(run())

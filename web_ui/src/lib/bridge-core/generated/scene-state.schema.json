@@ -109,6 +109,9 @@
           "mimeType": {
             "type": "string"
           },
+          "pendingRequestId": {
+            "type": "string"
+          },
           "previewLabel": {
             "type": "string"
           },
