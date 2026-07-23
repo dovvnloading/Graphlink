@@ -219,11 +219,18 @@ class ChatLibraryDialog(QDialog):
 
     def closeEvent(self, event):
         self._drag_offset = None
-        # Construct-per-open (WA_DeleteOnClose): tear the embedded host down on
-        # close so each open/close cycle unregisters it from the shared
-        # shutdown registry instead of leaking a dead reference into _hosts.
-        if self.web_host is not None:
-            self.web_host.prepare_for_shutdown()
+        # CACHED lifecycle (P1): this dialog is constructed once and reused
+        # across opens - close() means HIDE, never teardown. The old
+        # construct-per-open comment here ("tear the embedded host down on
+        # close") survived the P1 switch away from WA_DeleteOnClose and was a
+        # real shipped bug: the chat-library bridge's load/new-chat success
+        # path calls dialog.close() directly, prepare_for_shutdown() then
+        # irreversibly disposed the embedded web host (bridge disposed, page
+        # stopped), and every REOPEN of the library showed a dead, blank
+        # panel for the rest of the session. The host stays registered in the
+        # shared registry and is torn down exactly once, at real application
+        # exit, by web_island_host.shutdown_all() - same as every other
+        # long-lived cached host.
         event.accept()
 
     def keyPressEvent(self, event):

@@ -296,3 +296,40 @@ class TestRealChatWindowAcceptanceDrive:
         assert window.library_dialog is not None
         assert window.library_dialog.isVisible()
         manager.close("library")
+
+    def test_library_reopen_after_direct_close_is_not_a_dead_host(self, window):
+        # Regression (2026-07-23 user report, second symptom): the bridge's
+        # load-chat success path calls dialog.close() directly, and the
+        # cached dialog's closeEvent still ran the pre-P1 construct-per-open
+        # teardown (prepare_for_shutdown on the embedded web host) - so the
+        # NEXT open of the library showed a permanently dead, blank panel.
+        # close() must now mean hide for the cached dialog: the host stays
+        # alive and undisposed across open/close cycles.
+        manager = window.overlay_manager
+        manager.close_all()
+        manager.open("library")
+        dialog = window.library_dialog
+        assert dialog is not None and dialog.isVisible()
+        host = dialog.web_host
+        assert not host._shutdown_started
+
+        # The exact direct-close the bridge's _perform_load_chat issues.
+        dialog.close()
+        QApplication.processEvents()  # deferred scrim release tick
+        assert not dialog.isVisible()
+        assert not host._shutdown_started, (
+            "closing the cached library dialog must not dispose its web host"
+        )
+        assert not manager._scrim.isVisible()
+
+        # The reopen the user actually performs next - same dialog, same
+        # host, still alive.
+        manager.open("library")
+        assert dialog.isVisible()
+        assert dialog.web_host is host
+        assert not host._shutdown_started
+        assert not getattr(host.bridge, "disposed", False), (
+            "the bridge must still be live on reopen - a disposed bridge is "
+            "exactly the blank-dark-panel the user reported"
+        )
+        manager.close("library")
