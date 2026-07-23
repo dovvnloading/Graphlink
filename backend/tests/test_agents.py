@@ -808,3 +808,246 @@ def test_conversation_call_in_flight_blocks_a_concurrent_composer_call_on_the_sa
         assert node.pending_request_id is None
 
     asyncio.run(run())
+
+
+# -- R4.4a: start_image_reply - the independent image-generation slot --------
+#
+# Unlike start_chat_reply/start_conversation_reply above, these tests never
+# touch Ollama/api_provider.chat plumbing at all - start_image_reply's only
+# real dependency is api_provider.generate_image, monkeypatched directly.
+
+
+def _make_image_env():
+    bus = SessionBus("agents-image-test")
+    notifications = NotificationState()
+    bus.register_topic("notification", notifications.payload)
+    bus.register_topic("scene", lambda: {})
+    dispatcher = AgentDispatcher(_FakeSettingsManager())
+    return bus, notifications, dispatcher
+
+
+def test_start_image_reply_calls_on_reply_with_the_image_bytes(monkeypatch):
+    monkeypatch.setattr(api_provider, "generate_image", lambda prompt, **kwargs: b"canned-image-bytes")
+
+    async def run():
+        bus, notifications, dispatcher = _make_image_env()
+        replies = []
+        await dispatcher.start_image_reply(
+            bus=bus, notifications_state=notifications, prompt="a cat", on_reply=replies.append,
+        )
+        entry = next(iter(dispatcher._image_requests.values()))
+        await entry["task"]
+
+        assert replies == [b"canned-image-bytes"]
+        assert dispatcher._image_requests == {}
+        assert notifications.visible is False
+
+    asyncio.run(run())
+
+
+def test_start_image_reply_second_call_while_in_flight_is_rejected_with_info_notification(monkeypatch):
+    started = threading.Event()
+    release = threading.Event()
+
+    def blocking_generate_image(prompt, **kwargs):
+        started.set()
+        release.wait(5)
+        return b"first-image-bytes"
+
+    monkeypatch.setattr(api_provider, "generate_image", blocking_generate_image)
+
+    async def run():
+        bus, notifications, dispatcher = _make_image_env()
+        replies = []
+
+        await dispatcher.start_image_reply(
+            bus=bus, notifications_state=notifications, prompt="first prompt", on_reply=replies.append,
+        )
+        await asyncio.to_thread(started.wait, 5)
+
+        # Second call while the first is still in flight must be rejected
+        # and must not disturb the first request.
+        await dispatcher.start_image_reply(
+            bus=bus, notifications_state=notifications, prompt="second prompt", on_reply=replies.append,
+        )
+        assert notifications.visible is True
+        assert notifications.msg_type == "info"
+        assert notifications.message == "An image is already being generated."
+        assert len(dispatcher._image_requests) == 1
+
+        release.set()
+        entry = next(iter(dispatcher._image_requests.values()))
+        await entry["task"]
+        assert replies == [b"first-image-bytes"]
+        assert dispatcher._image_requests == {}
+
+    asyncio.run(run())
+
+
+def test_image_request_and_chat_request_run_concurrently_both_dicts_non_empty(monkeypatch):
+    """THE key concurrency-slot regression guard (R4.4a): a chat/composer
+    request occupies self._requests while an image-generation request
+    occupies the SEPARATE self._image_requests dict at the same time -
+    neither blocks nor is blocked by the other, and both dicts are
+    simultaneously non-empty at least once, proving these are two genuinely
+    independent slots rather than aliases of the same guard (the whole point
+    of AgentDispatcher._image_requests existing as its own field - see its
+    comment in backend/agents.py)."""
+    chat_started = threading.Event()
+    chat_release = threading.Event()
+    image_started = threading.Event()
+    image_release = threading.Event()
+
+    def blocking_chat(task, messages, **kwargs):
+        chat_started.set()
+        chat_release.wait(5)
+        return {"message": {"content": "chat reply"}}
+
+    def blocking_generate_image(prompt, **kwargs):
+        image_started.set()
+        image_release.wait(5)
+        return b"image-bytes"
+
+    _configure_fake_ollama(monkeypatch, blocking_chat)
+    monkeypatch.setattr(api_provider, "generate_image", blocking_generate_image)
+
+    async def run():
+        bus, notifications, composer_document, dispatcher = _make_dispatch_env()
+        chat_replies = []
+        image_replies = []
+
+        await dispatcher.start_chat_reply(
+            bus=bus,
+            notifications_state=notifications,
+            composer_document=composer_document,
+            conversation_history=[{"role": "user", "content": "hi"}],
+            on_reply=chat_replies.append,
+        )
+        await dispatcher.start_image_reply(
+            bus=bus, notifications_state=notifications, prompt="a cat", on_reply=image_replies.append,
+        )
+
+        await asyncio.to_thread(chat_started.wait, 5)
+        await asyncio.to_thread(image_started.wait, 5)
+
+        # THE key assertion: both slots are genuinely occupied at the same
+        # time - neither request bounced the other, and neither notification
+        # fired.
+        assert len(dispatcher._requests) == 1
+        assert len(dispatcher._image_requests) == 1
+        assert notifications.visible is False, "neither call should have been rejected"
+
+        chat_release.set()
+        chat_entry = next(iter(dispatcher._requests.values()))
+        await chat_entry["task"]
+        image_release.set()
+        image_entry = next(iter(dispatcher._image_requests.values()))
+        await image_entry["task"]
+
+        assert chat_replies == ["chat reply"]
+        assert image_replies == [b"image-bytes"]
+        assert dispatcher._requests == {}
+        assert dispatcher._image_requests == {}
+        assert composer_document.request_state == "idle"
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("error_message", [
+    "Image generation is only available in API Endpoint mode.",
+    "API client not initialized. Configure API settings first.",
+    "Image generation is not available for Anthropic Claude in Graphlink yet.",
+    "No image generation model configured.\nPlease select one in API Settings.",
+    "Image generation quota exceeded.\n\nPlease use a lower-cost image model or "
+    "verify billing is enabled for the selected provider.",
+])
+def test_start_image_reply_runtime_error_cases_forward_the_exact_message_verbatim(monkeypatch, error_message):
+    """Each of api_provider.generate_image's real RuntimeError gating
+    messages (not API mode / no client / Anthropic unsupported / no model
+    configured / quota exceeded) must be forwarded to the user VERBATIM
+    after one shared "Image generation failed: " prefix - the WS/dispatch
+    layer never duplicates api_provider.py's own gating knowledge."""
+    def raising_generate_image(prompt, **kwargs):
+        raise RuntimeError(error_message)
+
+    monkeypatch.setattr(api_provider, "generate_image", raising_generate_image)
+
+    async def run():
+        bus, notifications, dispatcher = _make_image_env()
+        await dispatcher.start_image_reply(
+            bus=bus, notifications_state=notifications, prompt="a cat", on_reply=lambda image_bytes: None,
+        )
+        entry = next(iter(dispatcher._image_requests.values()))
+        await entry["task"]
+
+        assert dispatcher._image_requests == {}
+        assert notifications.visible is True
+        assert notifications.msg_type == "error"
+        assert notifications.message == f"Image generation failed: {error_message}"
+
+    asyncio.run(run())
+
+
+def test_start_image_reply_timeout_fires_the_exact_message_and_clears_the_slot(monkeypatch):
+    monkeypatch.setattr(agents_module, "WATCHDOG_TIMEOUT_SECONDS", 0.05)
+
+    def slow_generate_image(prompt, **kwargs):
+        time.sleep(0.3)
+        return b"too-late-bytes"
+
+    monkeypatch.setattr(api_provider, "generate_image", slow_generate_image)
+
+    async def run():
+        bus, notifications, dispatcher = _make_image_env()
+        await dispatcher.start_image_reply(
+            bus=bus, notifications_state=notifications, prompt="a cat", on_reply=lambda image_bytes: None,
+        )
+        entry = next(iter(dispatcher._image_requests.values()))
+        await entry["task"]
+
+        assert dispatcher._image_requests == {}, "the slot must not leak/deadlock future requests"
+        assert notifications.visible is True
+        assert notifications.msg_type == "error"
+        assert notifications.message == (
+            "Image generation stopped responding before the request completed. Please try again."
+        )
+
+    asyncio.run(run())
+
+
+def test_start_image_reply_slot_does_not_leak_a_subsequent_request_is_admitted_after_failure(monkeypatch):
+    def raising_generate_image(prompt, **kwargs):
+        raise RuntimeError("No image generation model configured.")
+
+    monkeypatch.setattr(api_provider, "generate_image", raising_generate_image)
+
+    async def run():
+        bus, notifications, dispatcher = _make_image_env()
+        await dispatcher.start_image_reply(
+            bus=bus, notifications_state=notifications, prompt="a cat", on_reply=lambda image_bytes: None,
+        )
+        entry = next(iter(dispatcher._image_requests.values()))
+        await entry["task"]
+        assert dispatcher._image_requests == {}
+
+        monkeypatch.setattr(api_provider, "generate_image", lambda prompt, **kwargs: b"next-bytes")
+        replies = []
+        await dispatcher.start_image_reply(
+            bus=bus, notifications_state=notifications, prompt="a dog", on_reply=replies.append,
+        )
+        entry = next(iter(dispatcher._image_requests.values()))
+        await entry["task"]
+        assert replies == [b"next-bytes"]
+
+    asyncio.run(run())
+
+
+def test_no_cancel_image_method_or_intent_exists():
+    """Deliberate absence-of-API test (R4.4a design spec §3): image
+    generation has zero cancellation, matching legacy's real, complete
+    absence of a working cancel affordance for image generation
+    (ImageGenerationWorkerThread.stop() exists but is never called from any
+    UI path). A cancel_image method/intent must never be added for as long
+    as this design decision holds."""
+    dispatcher = AgentDispatcher(_FakeSettingsManager())
+    assert not hasattr(dispatcher, "cancel_image")

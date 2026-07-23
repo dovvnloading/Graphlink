@@ -86,6 +86,15 @@ class SceneError(ValueError):
     Raised so the WS layer reports it to the caller instead of crashing."""
 
 
+class SceneEmptyPromptError(SceneError):
+    """R4.4a: a distinct SceneError subclass carrying one extra bit of
+    information - the resolved node had no non-whitespace text to use as an
+    image-generation prompt. Kept as a real subclass (not a shared message
+    string on the base SceneError) so the WS wrapper in register_canvas can
+    tell "empty prompt" apart from "wrong kind/unknown node" via isinstance,
+    without string-sniffing exception text in production code."""
+
+
 CHAT_TITLE_PREVIEW_LENGTH = 60
 # R3.5: code titles are a language label plus first line, not prose, so a
 # shorter preview than chat's 60 is plenty.
@@ -746,6 +755,96 @@ class SceneDocument:
                 child_ids.append(child.id)
         self.remove_nodes(child_ids)
 
+    def resolve_generate_image(self, chat_node_id: str) -> tuple[str, str]:
+        """'Generate Image from Text' target resolution (R4.4a). Returns
+        (parent_chat_node_id, prompt) = (chat_node_id, node.content) - the
+        selected ChatNode's own id becomes the new image's parent chat node,
+        and its own text becomes the prompt, mirroring legacy's real
+        "Generate Image from Text" entry point (window_actions.py's
+        generate_image(chat_node), called with node.text as the prompt).
+        Raises SceneError for an unknown node id or a non-chat kind
+        (defensive - the frontend always resolves this from a real ChatNode's
+        own menu, same posture as regenerate_response's own defensive checks
+        above), and the SceneEmptyPromptError subclass specifically for
+        empty/whitespace content - mirrors legacy's own "no text to use as a
+        prompt" guard (window_actions.py:989-991), kept as a DISTINCT
+        SceneError subclass (not a plain SceneError) so the WS wrapper in
+        register_canvas can show a distinct message for this case without
+        string-sniffing."""
+        node = self.nodes.get(chat_node_id)
+        if node is None:
+            raise SceneError(f"unknown node: {chat_node_id}")
+        if node.kind != "chat":
+            raise SceneError(f"node is not a chat node: {chat_node_id}")
+        if not node.content or not node.content.strip():
+            raise SceneEmptyPromptError(f"node has no text to use as a prompt: {chat_node_id}")
+        return chat_node_id, node.content
+
+    def resolve_regenerate_image(self, image_node_id: str) -> tuple[str, str]:
+        """'Regenerate Image' target resolution (R4.4a). Returns
+        (parent_chat_node_id, prompt) = (the ImageNode's own parent chat node
+        id via one-hop edge lookup, node.content - the ImageNode's OWN stored
+        prompt). This is the deliberate improvement over legacy's real
+        regenerate mechanism, which instead re-derives the prompt from the
+        parent ChatNode's live .text - a real, reproducible legacy quirk that
+        re-wraps its own wrapped "Generated image for prompt: ..." string on
+        every subsequent regenerate. Raises SceneError for an unknown node
+        id, a non-image kind, or a missing parent edge (defensive only -
+        add_image_node requires parent_id, so an unparented image node can
+        never actually be constructed; this exists purely so a future bug
+        elsewhere fails loud instead of crashing downstream), and the
+        SceneEmptyPromptError subclass for empty/whitespace content
+        (defensive - mirrors legacy's own conditional-visibility guard `if
+        parent_content_node and prompt` around showing the menu action at
+        all)."""
+        node = self.nodes.get(image_node_id)
+        if node is None:
+            raise SceneError(f"unknown node: {image_node_id}")
+        if node.kind != "image":
+            raise SceneError(f"node is not an image node: {image_node_id}")
+        parent_edge = next((e for e in self.edges.values() if e.target == image_node_id), None)
+        if parent_edge is None:
+            raise SceneError(f"image node has no parent: {image_node_id}")
+        if not node.content or not node.content.strip():
+            raise SceneEmptyPromptError(f"image node has no prompt to regenerate from: {image_node_id}")
+        return parent_edge.source, node.content
+
+    def add_generated_image_reply(
+        self,
+        parent_chat_node_id: str,
+        prompt: str,
+        image_bytes: bytes,
+        mime_type: str = "image/png",
+    ) -> tuple[SceneNode, SceneNode]:
+        """The Generate/Regenerate Image success primitive (R4.4a) - mirrors
+        legacy's handle_image_response exactly: unconditionally creates a NEW
+        assistant ChatNode (content=f'Generated image for prompt: "{prompt}"',
+        is_user=False, parent_id=parent_chat_node_id) then a NEW ImageNode
+        (content=prompt, parent_id=<the new ChatNode's id>) - built entirely
+        from the existing add_chat_node/add_image_node primitives, zero new
+        mutation-in-place logic, matching this feature's create-new-nodes
+        scope decision. Positions via the same MESSAGE_VERTICAL_SPACING
+        offset convention send_message/regenerate_response's own new-child
+        placement already uses. last_chat_node_id is DELIBERATELY untouched
+        - mirrors legacy: handle_image_response never assigns
+        self.current_node either, since image generation is side content,
+        not a branch-continuation point (same posture as
+        regenerate_response's own documented "last_chat_node_id:
+        DELIBERATELY untouched"). Raises SceneError if parent_chat_node_id is
+        unknown - defensive: a delete could race the in-flight generation
+        request (see the mid-flight-delete handling in the WS wrapper in
+        register_canvas)."""
+        parent = self.nodes.get(parent_chat_node_id)
+        if parent is None:
+            raise SceneError(f"unknown parent node: {parent_chat_node_id}")
+        ax, ay = parent.x, parent.y + MESSAGE_VERTICAL_SPACING
+        chat_node = self.add_chat_node(
+            ax, ay, f'Generated image for prompt: "{prompt}"', False, parent_id=parent_chat_node_id,
+        )
+        ix, iy = ax, ay + MESSAGE_VERTICAL_SPACING
+        image_node = self.add_image_node(ix, iy, image_bytes, prompt, chat_node.id, mime_type=mime_type)
+        return chat_node, image_node
+
     def set_chat_collapsed(self, node_id: str, collapsed: bool) -> None:
         node = self.nodes.get(node_id)
         if node is None:
@@ -1244,6 +1343,60 @@ def register_canvas(
         )
         return node_to_regenerate.id
 
+    async def _dispatch_image(parent_chat_node_id, prompt):
+        # R4.4a: shared internal path for both generateImage and
+        # regenerateImage below - each resolves its own (parent_chat_node_id,
+        # prompt) pair from a different source-node kind, then both funnel
+        # through this one dispatch + success-primitive call. Runs on
+        # agent_dispatcher's INDEPENDENT self._image_requests slot, never
+        # self._requests - see backend/agents.py's AgentDispatcher docstring
+        # for why chat and image generation must be able to run concurrently.
+        async def _on_reply(image_bytes):
+            if parent_chat_node_id not in document.nodes:
+                # Mid-flight delete, silent no-op - same posture as
+                # regenerate_response's own liveness check above.
+                return
+            document.add_generated_image_reply(parent_chat_node_id, prompt, image_bytes)
+            await bus.publish("scene")
+
+        await agent_dispatcher.start_image_reply(
+            bus=bus,
+            notifications_state=notifications,
+            prompt=prompt,
+            on_reply=_on_reply,
+        )
+
+    async def generate_image(chat_node_id):
+        try:
+            parent_chat_node_id, prompt = document.resolve_generate_image(chat_node_id)
+        except SceneError as exc:
+            # Two genuinely distinct SceneErrors here, NOT collapsed into one
+            # generic message: SceneEmptyPromptError lets this wrapper tell
+            # "empty prompt" apart from "wrong kind/unknown node" via
+            # isinstance, without string-sniffing exc's own text.
+            if isinstance(exc, SceneEmptyPromptError):
+                notifications.show("The selected node has no text to use as a prompt.", "warning")
+            else:
+                notifications.show("This node can't be used to generate an image.", "warning")
+            await bus.publish("notification")
+            return None
+        await _dispatch_image(parent_chat_node_id, prompt)
+        return None
+
+    async def regenerate_image(image_node_id):
+        try:
+            parent_chat_node_id, prompt = document.resolve_regenerate_image(image_node_id)
+        except SceneError:
+            # Unlike generate_image above, both of resolve_regenerate_image's
+            # SceneErrors (unknown/wrong-kind/no-parent, and the
+            # SceneEmptyPromptError empty-content variant) share ONE message
+            # here - the exact wording this feature's design spec settled on.
+            notifications.show("This image has no prompt to regenerate from.", "warning")
+            await bus.publish("notification")
+            return None
+        await _dispatch_image(parent_chat_node_id, prompt)
+        return None
+
     async def move_node(node_id, x, y):
         document.move_node(node_id, x, y)
         await publish_scene()
@@ -1310,6 +1463,12 @@ def register_canvas(
     bus.register_intent("scene", "setChatCollapsed", set_chat_collapsed)
     bus.register_intent("scene", "sendMessage", send_message)
     bus.register_intent("scene", "regenerateResponse", regenerate_response)
+    # R4.4a: "Generate Image from Text" (ChatNode) and "Regenerate Image"
+    # (ImageNode) - two intents because the two entry points resolve from
+    # genuinely different source-node kinds with different validation rules,
+    # both funneling through the shared _dispatch_image helper above.
+    bus.register_intent("scene", "generateImage", generate_image)
+    bus.register_intent("scene", "regenerateImage", regenerate_image)
     bus.register_intent("scene", "moveNode", move_node)
     bus.register_intent("scene", "removeNodes", remove_nodes)
     bus.register_intent("scene", "connectNodes", connect_nodes)

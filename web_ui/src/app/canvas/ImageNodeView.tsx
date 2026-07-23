@@ -30,17 +30,20 @@ import { LOD_ZOOM_THRESHOLD } from "./canvasConstants";
  * -> navigator.clipboard.write with a real ClipboardItem - NOT a data URI or
  * an <img>, Clipboard API image writes require an actual Blob), Export Image
  * (fetch -> blob -> object URL -> a temporary anchor's programmatic download,
- * revoked immediately after). Deferred, with an honest disabled+title label
- * rather than a silent drop (same posture every sibling node menu takes):
- * Hide Other Branches (branch visibility isn't built yet - unscoped, not
- * owned by any R-phase) and Regenerate Image (R4's agent layer - same
- * agent-layer-blocked semantics as Chat's "Regenerate Response").
+ * revoked immediately after). "Regenerate Image" is likewise no longer
+ * deferred as of R4.4a: it now calls the real regenerateImage intent -
+ * unlike CodeNodeView's own onRegenerate, no client-side parent-lookup/
+ * null-guard is needed here, since the backend resolves the ImageNode's
+ * parent chat node internally (see sceneStore.ts's regenerateImage). Still
+ * deferred, with an honest disabled+title label: Hide Other Branches (branch
+ * visibility isn't built yet - unscoped, not owned by any R-phase).
  */
 
 export interface ImageNodeData extends Record<string, unknown> {
   imageAssetId: string;
   prompt: string;
   onDelete: () => void;
+  onRegenerate: () => void;
 }
 
 export type ImageFlowNode = Node<ImageNodeData, "image">;
@@ -112,13 +115,17 @@ function ImageNodeMenu({
   position,
   imageAssetId,
   filename,
+  prompt,
   onDelete,
+  onRegenerate,
   onClose,
 }: {
   position: MenuPosition;
   imageAssetId: string;
   filename: string;
+  prompt: string;
   onDelete: () => void;
+  onRegenerate: () => void;
   onClose: () => void;
 }) {
   const menuRef = useRef<HTMLDivElement>(null);
@@ -173,9 +180,18 @@ function ImageNodeMenu({
       <button type="button" role="menuitem" disabled title="Branch visibility isn't built yet">
         Hide Other Branches
       </button>
-      <button type="button" role="menuitem" disabled title="Agent regeneration lands in R4">
-        Regenerate Image
-      </button>
+      {prompt.trim() && (
+        <button
+          type="button"
+          role="menuitem"
+          onClick={() => {
+            onRegenerate();
+            onClose();
+          }}
+        >
+          Regenerate Image
+        </button>
+      )}
       <button
         type="button"
         role="menuitem"
@@ -231,7 +247,9 @@ export function ImageNodeView({ id, data, selected }: NodeProps<ImageFlowNode>) 
           position={menuPosition}
           imageAssetId={data.imageAssetId}
           filename={buildDownloadFilename(id, data.prompt)}
+          prompt={data.prompt}
           onDelete={data.onDelete}
+          onRegenerate={data.onRegenerate}
           onClose={() => setMenuPosition(null)}
         />
       )}

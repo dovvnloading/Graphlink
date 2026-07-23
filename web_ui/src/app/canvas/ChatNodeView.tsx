@@ -30,7 +30,11 @@ import { LOD_ZOOM_THRESHOLD } from "./canvasConstants";
  * on dockedChildren.length > 0 exactly like the legacy's own `if
  * docked_children:` guard. "Regenerate Response" is likewise no longer
  * deferred as of R4.3c: it now calls the real regenerateResponse intent,
- * still gated on !isUser (matching the legacy is_user guard).
+ * still gated on !isUser (matching the legacy is_user guard). "Generate
+ * Image" is likewise no longer deferred as of R4.4a: it now calls the real
+ * generateImage intent, with no visibility/enablement gating beyond what
+ * already existed - matches legacy's own unconditional enablement (the
+ * empty-content case is caught server-side with a warning banner instead).
  */
 
 export interface ChatNodeData extends Record<string, unknown> {
@@ -42,6 +46,7 @@ export interface ChatNodeData extends Record<string, unknown> {
   onDelete: () => void;
   onUndockChild: (childId: string) => void;
   onRegenerate: () => void;
+  onGenerateImage: () => void;
 }
 
 export type ChatFlowNode = Node<ChatNodeData, "chat">;
@@ -61,6 +66,7 @@ function ChatNodeMenu({
   onDelete,
   onUndockChild,
   onRegenerate,
+  onGenerateImage,
   onClose,
 }: {
   position: MenuPosition;
@@ -72,6 +78,7 @@ function ChatNodeMenu({
   onDelete: () => void;
   onUndockChild: (childId: string) => void;
   onRegenerate: () => void;
+  onGenerateImage: () => void;
   onClose: () => void;
 }) {
   const menuRef = useRef<HTMLDivElement>(null);
@@ -160,7 +167,14 @@ function ChatNodeMenu({
       <button type="button" role="menuitem" disabled title="AI generation lands in R4">
         Generate Chart
       </button>
-      <button type="button" role="menuitem" disabled title="AI generation lands in R4">
+      <button
+        type="button"
+        role="menuitem"
+        onClick={() => {
+          onGenerateImage();
+          onClose();
+        }}
+      >
         Generate Image
       </button>
       <button
@@ -242,6 +256,7 @@ export function ChatNodeView({ data, selected }: NodeProps<ChatFlowNode>) {
           onDelete={data.onDelete}
           onUndockChild={data.onUndockChild}
           onRegenerate={data.onRegenerate}
+          onGenerateImage={data.onGenerateImage}
           onClose={() => setMenuPosition(null)}
         />
       )}

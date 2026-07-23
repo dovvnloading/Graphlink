@@ -101,3 +101,40 @@ describe("toFlowNodes (R4.3c parentChatNodeId derivation)", () => {
     expect(intentSpy).toHaveBeenCalledWith("chat-1");
   });
 });
+
+describe("toFlowNodes (R4.4a Generate/Regenerate Image wiring)", () => {
+  it("a chat node's onGenerateImage calls generateImage with its own id", () => {
+    const scene = baseScene({
+      nodes: [baseNode({ id: "chat-1", kind: "chat", content: "Hello", isUser: true })],
+      edges: [],
+    });
+    const store = makeStore();
+    const intentSpy = vi.spyOn(store, "generateImage");
+
+    const flowNodes = toFlowNodes(scene, store);
+    const chatFlowNode = flowNodes.find((n) => n.id === "chat-1");
+    expect(chatFlowNode).toBeDefined();
+
+    (chatFlowNode!.data as { onGenerateImage: () => void }).onGenerateImage();
+    expect(intentSpy).toHaveBeenCalledWith("chat-1");
+  });
+
+  it("an image node's onRegenerate calls regenerateImage with its own id - no client-side parent lookup, unlike CodeNode's onRegenerate", () => {
+    const scene = baseScene({
+      nodes: [
+        baseNode({ id: "chat-1", kind: "chat", content: "Hello" }),
+        baseNode({ id: "image-1", kind: "image", imageAssetId: "asset-1", content: "a red fox" }),
+      ],
+      edges: [{ id: "e1", source: "chat-1", target: "image-1" }],
+    });
+    const store = makeStore();
+    const intentSpy = vi.spyOn(store, "regenerateImage");
+
+    const flowNodes = toFlowNodes(scene, store);
+    const imageFlowNode = flowNodes.find((n) => n.id === "image-1");
+    expect(imageFlowNode).toBeDefined();
+
+    (imageFlowNode!.data as { onRegenerate: () => void }).onRegenerate();
+    expect(intentSpy).toHaveBeenCalledWith("image-1");
+  });
+});

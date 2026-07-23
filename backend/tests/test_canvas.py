@@ -19,6 +19,7 @@ from backend.canvas import (
     DRAG_FACTOR_MAX,
     DRAG_FACTOR_MIN,
     SceneDocument,
+    SceneEmptyPromptError,
     SceneError,
     register_canvas,
 )
@@ -2037,5 +2038,302 @@ def test_snap_and_drag_factor_intents_publish_scene():
         payload = document.scene_payload()
         assert payload["snapToGrid"] is True
         assert payload["dragFactor"] == 0.5
+
+    asyncio.run(run())
+
+
+# -- R4.4a: Generate/Regenerate Image - domain-level resolvers ---------------
+
+
+def test_resolve_generate_image_returns_chat_node_id_and_its_own_content():
+    doc = SceneDocument()
+    chat = doc.add_chat_node(0, 0, "a cat wearing a wizard hat", True)
+    parent_id, prompt = doc.resolve_generate_image(chat.id)
+    assert parent_id == chat.id
+    assert prompt == "a cat wearing a wizard hat"
+
+
+def test_resolve_generate_image_unknown_node_raises_scene_error():
+    with pytest.raises(SceneError):
+        SceneDocument().resolve_generate_image("ghost")
+
+
+def test_resolve_generate_image_non_chat_node_raises_scene_error():
+    doc = SceneDocument()
+    parent = doc.add_chat_node(0, 0, "question", True)
+    code_node = doc.add_code_node(10, 10, "x = 1", "python", parent_id=parent.id)
+    with pytest.raises(SceneError):
+        doc.resolve_generate_image(code_node.id)
+
+
+def test_resolve_generate_image_empty_content_raises_the_empty_prompt_variant():
+    doc = SceneDocument()
+    chat = doc.add_chat_node(0, 0, "   ", True)
+    with pytest.raises(SceneEmptyPromptError):
+        doc.resolve_generate_image(chat.id)
+    # The empty-prompt variant IS a SceneError too - callers that only check
+    # for the base class must still catch it.
+    with pytest.raises(SceneError):
+        doc.resolve_generate_image(chat.id)
+
+
+def test_resolve_regenerate_image_returns_parent_id_and_the_image_nodes_own_content_not_the_parents():
+    doc = SceneDocument()
+    # The parent chat node's content is deliberately DIFFERENT from the
+    # image's own stored prompt - regression-guards the R4.4a fix: regenerate
+    # must read the ImageNode's OWN content, never the parent ChatNode's,
+    # even though legacy's real mechanism reuses the (wrapped) parent text.
+    chat = doc.add_chat_node(0, 0, 'Generated image for prompt: "a cat"', False)
+    image_node = doc.add_image_node(0, 160, b"bytes", "a cat", chat.id)
+    parent_id, prompt = doc.resolve_regenerate_image(image_node.id)
+    assert parent_id == chat.id
+    assert prompt == "a cat"
+    assert prompt != chat.content
+
+
+def test_resolve_regenerate_image_unknown_node_raises_scene_error():
+    with pytest.raises(SceneError):
+        SceneDocument().resolve_regenerate_image("ghost")
+
+
+def test_resolve_regenerate_image_non_image_node_raises_scene_error():
+    doc = SceneDocument()
+    chat = doc.add_chat_node(0, 0, "question", True)
+    with pytest.raises(SceneError):
+        doc.resolve_regenerate_image(chat.id)
+
+
+def test_resolve_regenerate_image_empty_content_raises_the_empty_prompt_variant():
+    doc = SceneDocument()
+    chat = doc.add_chat_node(0, 0, "assistant reply", False)
+    image_node = doc.add_image_node(0, 160, b"bytes", "", chat.id)
+    with pytest.raises(SceneEmptyPromptError):
+        doc.resolve_regenerate_image(image_node.id)
+
+
+# -- R4.4a: Generate/Regenerate Image - the success primitive -----------------
+
+
+def test_add_generated_image_reply_creates_two_new_nodes_with_the_correct_parent_chain():
+    doc = SceneDocument()
+    chat = doc.add_chat_node(0, 0, "draw a cat", True)
+    node_count_before = len(doc.nodes)
+
+    new_chat_node, new_image_node = doc.add_generated_image_reply(chat.id, "a cat", b"png-bytes")
+
+    assert len(doc.nodes) == node_count_before + 2
+    assert new_chat_node.kind == "chat"
+    assert new_image_node.kind == "image"
+
+    def parent_of(node_id):
+        edge = next((e for e in doc.edges.values() if e.target == node_id), None)
+        return edge.source if edge is not None else None
+
+    assert parent_of(new_image_node.id) == new_chat_node.id
+    assert parent_of(new_chat_node.id) == chat.id
+
+
+def test_add_generated_image_reply_new_chat_node_content_is_the_exact_wrapper_string():
+    doc = SceneDocument()
+    chat = doc.add_chat_node(0, 0, "draw a cat", True)
+    new_chat_node, new_image_node = doc.add_generated_image_reply(chat.id, "a cat wearing a hat", b"png-bytes")
+    assert new_chat_node.content == 'Generated image for prompt: "a cat wearing a hat"'
+    assert new_chat_node.is_user is False
+    assert new_image_node.content == "a cat wearing a hat"
+
+
+def test_add_generated_image_reply_gains_exactly_one_image_asset_entry():
+    doc = SceneDocument()
+    chat = doc.add_chat_node(0, 0, "draw a cat", True)
+    assets_before = dict(doc.image_assets)
+    _, new_image_node = doc.add_generated_image_reply(chat.id, "a cat", b"png-bytes", mime_type="image/jpeg")
+    assert len(doc.image_assets) == len(assets_before) + 1
+    assert doc.get_image_asset(new_image_node.image_asset_id) == (b"png-bytes", "image/jpeg")
+
+
+def test_add_generated_image_reply_leaves_last_chat_node_id_untouched():
+    doc = SceneDocument()
+    node = doc.send_message("hello")
+    assert doc.last_chat_node_id == node.id
+    doc.add_generated_image_reply(node.id, "a cat", b"png-bytes")
+    assert doc.last_chat_node_id == node.id, "image generation is side content, not a branch-continuation point"
+
+
+def test_add_generated_image_reply_unknown_parent_raises_scene_error():
+    doc = SceneDocument()
+    with pytest.raises(SceneError):
+        doc.add_generated_image_reply("ghost", "a cat", b"png-bytes")
+
+
+# -- R4.4a: Generate/Regenerate Image - WS-intent level -----------------------
+
+
+def test_generate_image_intent_empty_content_shows_warning_and_never_dispatches():
+    async def run():
+        bus, document, recorder, dispatcher = make_bus_with_dispatcher()
+        chat = document.add_chat_node(0, 0, "   ", True)
+
+        calls = []
+
+        def recording_generate_image(prompt, **kwargs):
+            calls.append(prompt)
+            return b"bytes"
+
+        with patch.object(api_provider, "generate_image", recording_generate_image):
+            result = await bus.dispatch_intent("scene", "generateImage", [chat.id])
+
+        assert result is None
+        assert calls == [], "api_provider.generate_image must never be reached"
+        assert dispatcher._image_requests == {}
+        notice = await bus.publish("notification")
+        assert notice["visible"] is True
+        assert notice["msgType"] == "warning"
+        assert notice["message"] == "The selected node has no text to use as a prompt."
+
+    asyncio.run(run())
+
+
+def test_generate_image_intent_unknown_node_shows_the_wrong_kind_message():
+    async def run():
+        bus, document, recorder, dispatcher = make_bus_with_dispatcher()
+        result = await bus.dispatch_intent("scene", "generateImage", ["ghost"])
+        assert result is None
+        assert dispatcher._image_requests == {}
+        notice = await bus.publish("notification")
+        assert notice["visible"] is True
+        assert notice["msgType"] == "warning"
+        assert notice["message"] == "This node can't be used to generate an image."
+
+    asyncio.run(run())
+
+
+def test_generate_image_intent_non_chat_node_shows_the_wrong_kind_message():
+    async def run():
+        bus, document, recorder, dispatcher = make_bus_with_dispatcher()
+        parent = document.add_chat_node(0, 0, "question", True)
+        code_node = document.add_code_node(10, 10, "x = 1", "python", parent_id=parent.id)
+        result = await bus.dispatch_intent("scene", "generateImage", [code_node.id])
+        assert result is None
+        notice = await bus.publish("notification")
+        assert notice["message"] == "This node can't be used to generate an image."
+
+    asyncio.run(run())
+
+
+def test_regenerate_image_intent_unknown_node_shows_the_no_prompt_message():
+    async def run():
+        bus, document, recorder, dispatcher = make_bus_with_dispatcher()
+        result = await bus.dispatch_intent("scene", "regenerateImage", ["ghost"])
+        assert result is None
+        assert dispatcher._image_requests == {}
+        notice = await bus.publish("notification")
+        assert notice["visible"] is True
+        assert notice["msgType"] == "warning"
+        assert notice["message"] == "This image has no prompt to regenerate from."
+
+    asyncio.run(run())
+
+
+def test_regenerate_image_intent_non_image_node_shows_the_no_prompt_message():
+    async def run():
+        bus, document, recorder, dispatcher = make_bus_with_dispatcher()
+        chat = document.add_chat_node(0, 0, "a chat node", True)
+        result = await bus.dispatch_intent("scene", "regenerateImage", [chat.id])
+        assert result is None
+        notice = await bus.publish("notification")
+        assert notice["message"] == "This image has no prompt to regenerate from."
+
+    asyncio.run(run())
+
+
+def test_regenerate_image_intent_empty_content_shows_the_no_prompt_message():
+    async def run():
+        bus, document, recorder, dispatcher = make_bus_with_dispatcher()
+        chat = document.add_chat_node(0, 0, "assistant reply", False)
+        image_node = document.add_image_node(0, 160, b"bytes", "", chat.id)
+        result = await bus.dispatch_intent("scene", "regenerateImage", [image_node.id])
+        assert result is None
+        notice = await bus.publish("notification")
+        assert notice["message"] == "This image has no prompt to regenerate from."
+
+    asyncio.run(run())
+
+
+def test_generate_image_intent_full_success_round_trip_creates_two_nodes_and_republishes_scene():
+    async def run():
+        bus, document, recorder, dispatcher = make_bus_with_dispatcher()
+        chat = document.add_chat_node(0, 0, "a cat wearing a hat", True)
+        node_count_before = len(document.nodes)
+        scene_publishes_before = recorder.topics_seen().count("scene")
+
+        with patch.object(api_provider, "generate_image", lambda prompt, **kwargs: b"real-png-bytes"):
+            result = await bus.dispatch_intent("scene", "generateImage", [chat.id])
+            assert result is None
+            entry = next(iter(dispatcher._image_requests.values()))
+            await entry["task"]
+
+        assert len(document.nodes) == node_count_before + 2
+        new_chat = next(n for n in document.nodes.values() if n.kind == "chat" and n.id != chat.id)
+        new_image = next(n for n in document.nodes.values() if n.kind == "image")
+        assert new_chat.content == 'Generated image for prompt: "a cat wearing a hat"'
+        assert new_image.content == "a cat wearing a hat"
+        assert document.get_image_asset(new_image.image_asset_id) == (b"real-png-bytes", "image/png")
+        assert recorder.topics_seen().count("scene") > scene_publishes_before
+        assert dispatcher._image_requests == {}
+
+    asyncio.run(run())
+
+
+def test_regenerate_image_intent_full_success_round_trip_creates_two_nodes_using_the_image_nodes_own_prompt():
+    async def run():
+        bus, document, recorder, dispatcher = make_bus_with_dispatcher()
+        chat = document.add_chat_node(0, 0, 'Generated image for prompt: "a cat"', False)
+        old_image = document.add_image_node(0, 160, b"old-bytes", "a cat", chat.id)
+        node_count_before = len(document.nodes)
+
+        with patch.object(api_provider, "generate_image", lambda prompt, **kwargs: b"new-png-bytes"):
+            result = await bus.dispatch_intent("scene", "regenerateImage", [old_image.id])
+            assert result is None
+            entry = next(iter(dispatcher._image_requests.values()))
+            await entry["task"]
+
+        assert len(document.nodes) == node_count_before + 2, "old image node is left untouched, not replaced"
+        assert old_image.id in document.nodes
+        new_image = next(n for n in document.nodes.values() if n.kind == "image" and n.id != old_image.id)
+        assert new_image.content == "a cat"
+        assert document.get_image_asset(new_image.image_asset_id) == (b"new-png-bytes", "image/png")
+
+    asyncio.run(run())
+
+
+def test_dispatch_image_mid_flight_delete_of_the_parent_is_a_silent_noop():
+    async def run():
+        bus, document, recorder, dispatcher = make_bus_with_dispatcher()
+        chat = document.add_chat_node(0, 0, "a cat wearing a hat", True)
+
+        started = threading.Event()
+        release = threading.Event()
+
+        def blocking_generate_image(prompt, **kwargs):
+            started.set()
+            release.wait(5)
+            return b"png-bytes"
+
+        with patch.object(api_provider, "generate_image", blocking_generate_image):
+            result = await bus.dispatch_intent("scene", "generateImage", [chat.id])
+            assert result is None
+
+            await asyncio.to_thread(started.wait, 5)
+            document.remove_nodes([chat.id])
+
+            release.set()
+            entry = next(iter(dispatcher._image_requests.values()))
+            await entry["task"]
+
+        assert chat.id not in document.nodes
+        assert not any(n.kind == "image" for n in document.nodes.values()), "no new nodes were created"
+        assert dispatcher._image_requests == {}
+        notice = await bus.publish("notification")
+        assert notice["visible"] is False, "deleted-mid-flight is a silent no-op - no notification fires"
 
     asyncio.run(run())

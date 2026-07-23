@@ -291,6 +291,22 @@ export class SceneStore {
     this.transport.intent("scene", "regenerateResponse", [chatNodeId]);
   }
 
+  // R4.4a: real "Generate Image from Text", for ChatNodeView's own menu -
+  // resolves purely from the ChatNode's id (backend reads its own .content
+  // as the prompt, mirroring legacy's node.text).
+  generateImage(chatNodeId: string): void {
+    this.transport.intent("scene", "generateImage", [chatNodeId]);
+  }
+
+  // R4.4a: real "Regenerate Image", for ImageNodeView's own menu - resolves
+  // purely from the ImageNode's id (backend reads ITS OWN .content as the
+  // prompt and its parent chat node as the new sibling's parent - see
+  // backend/canvas.py's resolve_regenerate_image docstring for why this is a
+  // deliberate improvement over legacy's parent-.text reuse).
+  regenerateImage(imageNodeId: string): void {
+    this.transport.intent("scene", "regenerateImage", [imageNodeId]);
+  }
+
   // R3.3: the Composer's real Send action - a real user ChatNode. The
   // assistant's reply is deferred to R4 (graphlink_config.py's Qt/non-Qt
   // split is a prerequisite for calling the real agent layer); the backend
