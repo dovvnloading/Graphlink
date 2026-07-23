@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { WsTransport } from "../../lib/ws/transport";
 import { TOPIC_VALIDATORS } from "../../lib/api-contract/topics";
 import type { AppPluginsState } from "../../lib/bridge-core/generated/app-plugins-state";
+import type { SceneStore } from "../canvas/sceneStore";
 import { Popover, useOverlays } from "../overlays/overlays";
 
 /**
@@ -10,6 +11,14 @@ import { Popover, useOverlays } from "../overlays/overlays";
  * backend (backend/plugins.py); selecting a plugin fires the real
  * `executePlugin` intent, which surfaces an honest "lands in R3/R5"
  * notification instead of creating a node - node types don't exist yet.
+ *
+ * R5.1: every plugin's click now also sends the canvas's currently-selected
+ * node id (store.getSelectedNodeId()) as executePlugin's second argument -
+ * future plugin-node-creation wiring built once, here, rather than
+ * special-cased per plugin. Most plugins (including Web Research itself)
+ * don't read this argument yet; it rides along regardless, same posture the
+ * backend's own execute_plugin(plugin_name, parent_node_id=None) already
+ * takes.
  */
 
 const initialState: AppPluginsState = {
@@ -19,7 +28,7 @@ const initialState: AppPluginsState = {
   categories: [],
 };
 
-export function PluginPicker({ transport }: { transport: WsTransport }) {
+export function PluginPicker({ transport, store }: { transport: WsTransport; store: SceneStore }) {
   const overlays = useOverlays();
   const [state, setState] = useState<AppPluginsState>(initialState);
   const [activeCategoryName, setActiveCategoryName] = useState<string | null>(null);
@@ -77,7 +86,10 @@ export function PluginPicker({ transport }: { transport: WsTransport }) {
                     type="button"
                     className="plugin-picker-row"
                     onClick={() => {
-                      transport.intent("app-plugins", "executePlugin", [plugin.name]);
+                      transport.intent("app-plugins", "executePlugin", [
+                        plugin.name,
+                        store.getSelectedNodeId(),
+                      ]);
                       // Close on select, matching the legacy popup's own
                       // post-execute dismiss - and so the resulting
                       // notification banner is seen unobstructed.

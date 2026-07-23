@@ -29,6 +29,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from backend.canvas import MESSAGE_VERTICAL_SPACING, SceneDocument
 from backend.events import SessionBus
 from backend.notifications import NotificationState
 
@@ -108,20 +109,45 @@ def plugins_payload() -> dict[str, Any]:
     return {"categories": get_plugin_categories()}
 
 
-def register_plugins(bus: SessionBus, notifications: NotificationState) -> None:
+def register_plugins(
+    bus: SessionBus, notifications: NotificationState, canvas_document: SceneDocument
+) -> None:
     # Topic name "app-plugins" (matching the codegen artifact's derived
     # name - same reasoning as "app-composer"/"app-about"): no existing
     # "plugins" schema collision today, but the pattern is now consistent
     # across every R2.3-R2.5 topic that has a distinct SPA payload.
     bus.register_topic("app-plugins", plugins_payload)
 
-    async def execute_plugin(plugin_name: str):
+    async def execute_plugin(plugin_name: str, parent_node_id: str | None = None):
         name = str(plugin_name).strip()
         valid_names = {p[0] for p in _PLUGINS}
-        if name in valid_names:
-            notifications.show(f'"{name}" node creation lands in R3/R5.', "info")
-        else:
+        if name not in valid_names:
             notifications.show(f'Unknown plugin: "{name}"', "warning")
+            await bus.publish("notification")
+            return None
+
+        if name == "Web Research":
+            # R5.1: the first real node-creation plugin - every other plugin
+            # name below is still an honest deferred notice. A Web Research
+            # node is a branch-point child (same posture as thinking/html/
+            # image/conversation nodes), so it always requires a real, valid
+            # parent to branch from - there is no unparented/root form.
+            if not parent_node_id or parent_node_id not in canvas_document.nodes:
+                notifications.show(
+                    "Please select a valid node to branch from before adding a Web Node.",
+                    "warning",
+                )
+                await bus.publish("notification")
+                return None
+            parent = canvas_document.nodes[parent_node_id]
+            node = canvas_document.add_web_research_node(
+                parent.x, parent.y + MESSAGE_VERTICAL_SPACING, parent_node_id
+            )
+            await bus.publish("scene")
+            return node.id
+
+        notifications.show(f'"{name}" node creation lands in R3/R5.', "info")
         await bus.publish("notification")
+        return None
 
     bus.register_intent("app-plugins", "executePlugin", execute_plugin)

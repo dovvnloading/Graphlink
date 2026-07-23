@@ -1,8 +1,9 @@
 import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { PluginPicker } from "./PluginPicker";
 import { OverlayProvider, useOverlays } from "../overlays/overlays";
+import { SceneStore } from "../canvas/sceneStore";
 import type { WsTransport } from "../../lib/ws/transport";
 
 const snapshot = {
@@ -56,17 +57,17 @@ function OpenPluginsButton() {
   );
 }
 
-function setup() {
+function setup(store: SceneStore = new SceneStore({ subscribe: vi.fn(), intent: vi.fn() } as unknown as WsTransport)) {
   const user = userEvent.setup();
   const fake = makeTransport();
   render(
     <OverlayProvider>
       <OpenPluginsButton />
-      <PluginPicker transport={fake.transport} />
+      <PluginPicker transport={fake.transport} store={store} />
     </OverlayProvider>,
   );
   act(() => fake.push(snapshot));
-  return { user, ...fake };
+  return { user, store, ...fake };
 }
 
 describe("PluginPicker", () => {
@@ -83,14 +84,35 @@ describe("PluginPicker", () => {
     expect(screen.getByText("Py-Coder")).toBeInTheDocument();
   });
 
-  it("selecting a plugin fires executePlugin and closes the popover", async () => {
+  it("selecting a plugin fires executePlugin with [name, null] when nothing is selected, and closes the popover", async () => {
     const { user, intents } = setup();
     await user.click(screen.getByText("open plugins"));
 
     await user.click(screen.getByText("System Prompt"));
-    expect(intents).toContainEqual(["app-plugins", "executePlugin", ["System Prompt"]]);
+    expect(intents).toContainEqual(["app-plugins", "executePlugin", ["System Prompt", null]]);
     // Close-on-select: the popover dismisses so the resulting notification
     // banner is seen unobstructed (matching the legacy popup's behavior).
     expect(screen.queryByText("Categories")).toBeNull();
+  });
+
+  it("selecting a plugin fires executePlugin with the currently-selected node id", async () => {
+    const store = new SceneStore({ subscribe: vi.fn(), intent: vi.fn() } as unknown as WsTransport);
+    store.setSelectedNodeId("node-42");
+    const { user, intents } = setup(store);
+    await user.click(screen.getByText("open plugins"));
+
+    await user.click(screen.getByText("System Prompt"));
+    expect(intents).toContainEqual(["app-plugins", "executePlugin", ["System Prompt", "node-42"]]);
+  });
+
+  it("every plugin's click sends the selected node id, not just Web Research's", async () => {
+    const store = new SceneStore({ subscribe: vi.fn(), intent: vi.fn() } as unknown as WsTransport);
+    store.setSelectedNodeId("node-7");
+    const { user, intents } = setup(store);
+    await user.click(screen.getByText("open plugins"));
+    await user.click(screen.getByRole("button", { name: /Build & Execution/ }));
+
+    await user.click(screen.getByText("Py-Coder"));
+    expect(intents).toContainEqual(["app-plugins", "executePlugin", ["Py-Coder", "node-7"]]);
   });
 });

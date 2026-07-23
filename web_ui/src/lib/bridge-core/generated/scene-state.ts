@@ -23,11 +23,51 @@ export interface SceneNodeRow {
   imageAssetId: string;
   history: ConversationMessageRow[];
   pendingRequestId?: string | null;
+  researchStage: string;
+  researchCompleted: number;
+  researchTotal: number;
+  researchActiveSourceId?: string | null;
+  researchError: string;
+  researchResult?: ResearchResultRow | null;
 }
 
 export interface ConversationMessageRow {
   role: "user" | "assistant";
   content: string;
+}
+
+export interface ResearchResultRow {
+  requestId: string;
+  originalQuery: string;
+  effectiveQuery: string;
+  answerMarkdown: string;
+  sources: ResearchSourceRow[];
+  citations: ResearchCitationRow[];
+  warnings: string[];
+  providerSnapshot: Record<string, string>;
+}
+
+export interface ResearchSourceRow {
+  sourceId: string;
+  title: string;
+  url: string;
+  canonicalUrl: string;
+  snippet: string;
+  rank: number;
+  provider: string;
+  finalUrl: string;
+  status: string;
+  errorCode: string;
+  errorMessage: string;
+  truncated: boolean;
+  contentHash: string;
+  citationCount: number;
+}
+
+export interface ResearchCitationRow {
+  sourceId: string;
+  marker: string;
+  claimContext: string;
 }
 
 export interface SceneEdgeRow {
@@ -173,6 +213,34 @@ function checkSceneNodeRow(value: unknown, path: string, errors: string[]): void
     const fieldValue = value["pendingRequestId"];
     if (fieldValue !== undefined && fieldValue !== null) { if (typeof fieldValue !== "string") errors.push(`${path}.pendingRequestId` + ": expected string"); }
   }
+  {
+    const fieldValue = value["researchStage"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.researchStage: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.researchStage` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["researchCompleted"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.researchCompleted: missing required field`);
+    else { if (typeof fieldValue !== "number") errors.push(`${path}.researchCompleted` + ": expected number"); }
+  }
+  {
+    const fieldValue = value["researchTotal"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.researchTotal: missing required field`);
+    else { if (typeof fieldValue !== "number") errors.push(`${path}.researchTotal` + ": expected number"); }
+  }
+  {
+    const fieldValue = value["researchActiveSourceId"];
+    if (fieldValue !== undefined && fieldValue !== null) { if (typeof fieldValue !== "string") errors.push(`${path}.researchActiveSourceId` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["researchError"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.researchError: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.researchError` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["researchResult"];
+    if (fieldValue !== undefined && fieldValue !== null) { checkResearchResultRow(fieldValue, `${path}.researchResult`, errors); }
+  }
 }
 
 function checkConversationMessageRow(value: unknown, path: string, errors: string[]): void {
@@ -186,6 +254,147 @@ function checkConversationMessageRow(value: unknown, path: string, errors: strin
     const fieldValue = value["content"];
     if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.content: missing required field`);
     else { if (typeof fieldValue !== "string") errors.push(`${path}.content` + ": expected string"); }
+  }
+}
+
+function checkResearchResultRow(value: unknown, path: string, errors: string[]): void {
+  if (!isRecord(value)) { errors.push(`${path}: expected object`); return; }
+  {
+    const fieldValue = value["requestId"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.requestId: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.requestId` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["originalQuery"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.originalQuery: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.originalQuery` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["effectiveQuery"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.effectiveQuery: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.effectiveQuery` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["answerMarkdown"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.answerMarkdown: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.answerMarkdown` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["sources"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.sources: missing required field`);
+    else { if (!Array.isArray(fieldValue)) errors.push(`${path}.sources` + ": expected array");
+    else (fieldValue as unknown[]).forEach((item, i) => { checkResearchSourceRow(item, `${path}.sources` + `[${i}]`, errors); }); }
+  }
+  {
+    const fieldValue = value["citations"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.citations: missing required field`);
+    else { if (!Array.isArray(fieldValue)) errors.push(`${path}.citations` + ": expected array");
+    else (fieldValue as unknown[]).forEach((item, i) => { checkResearchCitationRow(item, `${path}.citations` + `[${i}]`, errors); }); }
+  }
+  {
+    const fieldValue = value["warnings"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.warnings: missing required field`);
+    else { if (!Array.isArray(fieldValue)) errors.push(`${path}.warnings` + ": expected array");
+    else (fieldValue as unknown[]).forEach((item, i) => { if (typeof item !== "string") errors.push(`${path}.warnings` + `[${i}]` + ": expected string"); }); }
+  }
+  {
+    const fieldValue = value["providerSnapshot"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.providerSnapshot: missing required field`);
+    else { if (!isRecord(fieldValue)) errors.push(`${path}.providerSnapshot` + ": expected object");
+    else Object.entries(fieldValue as Record<string, unknown>).forEach(([k, v]) => { if (typeof v !== "string") errors.push(`${path}.providerSnapshot` + `[${JSON.stringify(k)}]` + ": expected string"); }); }
+  }
+}
+
+function checkResearchSourceRow(value: unknown, path: string, errors: string[]): void {
+  if (!isRecord(value)) { errors.push(`${path}: expected object`); return; }
+  {
+    const fieldValue = value["sourceId"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.sourceId: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.sourceId` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["title"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.title: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.title` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["url"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.url: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.url` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["canonicalUrl"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.canonicalUrl: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.canonicalUrl` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["snippet"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.snippet: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.snippet` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["rank"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.rank: missing required field`);
+    else { if (typeof fieldValue !== "number") errors.push(`${path}.rank` + ": expected number"); }
+  }
+  {
+    const fieldValue = value["provider"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.provider: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.provider` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["finalUrl"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.finalUrl: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.finalUrl` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["status"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.status: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.status` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["errorCode"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.errorCode: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.errorCode` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["errorMessage"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.errorMessage: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.errorMessage` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["truncated"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.truncated: missing required field`);
+    else { if (typeof fieldValue !== "boolean") errors.push(`${path}.truncated` + ": expected boolean"); }
+  }
+  {
+    const fieldValue = value["contentHash"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.contentHash: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.contentHash` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["citationCount"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.citationCount: missing required field`);
+    else { if (typeof fieldValue !== "number") errors.push(`${path}.citationCount` + ": expected number"); }
+  }
+}
+
+function checkResearchCitationRow(value: unknown, path: string, errors: string[]): void {
+  if (!isRecord(value)) { errors.push(`${path}: expected object`); return; }
+  {
+    const fieldValue = value["sourceId"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.sourceId: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.sourceId` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["marker"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.marker: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.marker` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["claimContext"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.claimContext: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.claimContext` + ": expected string"); }
   }
 }
 

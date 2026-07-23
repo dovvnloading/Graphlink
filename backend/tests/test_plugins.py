@@ -1,7 +1,10 @@
-"""Plugin picker topic tests (Qt-removal plan R2.5)."""
+"""Plugin picker topic tests (Qt-removal plan R2.5, extended R5.1)."""
 
 import asyncio
 
+import pytest
+
+from backend.canvas import SceneDocument
 from backend.events import SessionBus
 from backend.notifications import NotificationState
 from backend.plugins import _CATEGORY_META, _PLUGINS, get_plugin_categories, plugins_payload, register_plugins
@@ -68,7 +71,7 @@ def test_plugins_never_imports_qt():
 def test_register_plugins_publishes_on_the_app_plugins_topic():
     bus = SessionBus("plugins-test")
     notifications = NotificationState()
-    register_plugins(bus, notifications)
+    register_plugins(bus, notifications, SceneDocument())
 
     class Recorder:
         def __init__(self):
@@ -88,7 +91,7 @@ def test_execute_plugin_shows_info_notification_for_known_plugin():
     bus = SessionBus("plugins-exec-test")
     notifications = NotificationState()
     bus.register_topic("notification", notifications.payload)
-    register_plugins(bus, notifications)
+    register_plugins(bus, notifications, SceneDocument())
 
     asyncio.run(bus.dispatch_intent("app-plugins", "executePlugin", ["Gitlink"]))
     assert notifications.visible is True
@@ -101,9 +104,103 @@ def test_execute_plugin_shows_warning_notification_for_unknown_plugin():
     bus = SessionBus("plugins-exec-unknown-test")
     notifications = NotificationState()
     bus.register_topic("notification", notifications.payload)
-    register_plugins(bus, notifications)
+    register_plugins(bus, notifications, SceneDocument())
 
     asyncio.run(bus.dispatch_intent("app-plugins", "executePlugin", ["Not A Real Plugin"]))
     assert notifications.visible is True
     assert notifications.msg_type == "warning"
     assert "Not A Real Plugin" in notifications.message
+
+
+# -- R5.1: "Web Research" - the first real node-creation plugin --------------
+
+
+def _make_plugins_bus():
+    bus = SessionBus("plugins-web-research-test")
+    notifications = NotificationState()
+    bus.register_topic("notification", notifications.payload)
+    canvas_document = SceneDocument()
+    bus.register_topic("scene", canvas_document.scene_payload)
+    register_plugins(bus, notifications, canvas_document)
+    return bus, notifications, canvas_document
+
+
+def test_execute_plugin_web_research_with_no_parent_shows_the_exact_warning():
+    bus, notifications, canvas_document = _make_plugins_bus()
+
+    result = asyncio.run(bus.dispatch_intent("app-plugins", "executePlugin", ["Web Research"]))
+
+    assert result is None
+    assert notifications.visible is True
+    assert notifications.msg_type == "warning"
+    assert notifications.message == (
+        "Please select a valid node to branch from before adding a Web Node."
+    )
+    assert not any(n.kind == "web_research" for n in canvas_document.nodes.values())
+
+
+def test_execute_plugin_web_research_with_unknown_parent_shows_the_same_warning():
+    bus, notifications, canvas_document = _make_plugins_bus()
+
+    result = asyncio.run(
+        bus.dispatch_intent("app-plugins", "executePlugin", ["Web Research", "ghost-node-id"])
+    )
+
+    assert result is None
+    assert notifications.visible is True
+    assert notifications.msg_type == "warning"
+    assert notifications.message == (
+        "Please select a valid node to branch from before adding a Web Node."
+    )
+    assert not any(n.kind == "web_research" for n in canvas_document.nodes.values())
+
+
+def test_execute_plugin_web_research_with_a_valid_parent_creates_a_real_node_and_publishes_scene():
+    bus, notifications, canvas_document = _make_plugins_bus()
+    parent = canvas_document.add_node(10, 20, "parent")
+
+    class Recorder:
+        def __init__(self):
+            self.messages = []
+
+        async def send_json(self, data):
+            self.messages.append(data)
+
+        def topics_seen(self):
+            return [m["topic"] for m in self.messages if m["kind"] == "state"]
+
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    result = asyncio.run(
+        bus.dispatch_intent("app-plugins", "executePlugin", ["Web Research", parent.id])
+    )
+
+    assert result is not None
+    node = canvas_document.nodes[result]
+    assert node.kind == "web_research"
+    assert node.title == "Web Research"
+    assert any(
+        e.source == parent.id and e.target == node.id for e in canvas_document.edges.values()
+    )
+    assert notifications.visible is False, "success is not a deferral - no notification fires"
+    assert "scene" in recorder.topics_seen()
+
+
+# -- R5.1: non-regression - every OTHER plugin name is still an honest,
+# unchanged deferred notice ---------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "name", [n for n in (p[0] for p in _PLUGINS) if n != "Web Research"]
+)
+def test_execute_plugin_every_other_plugin_name_still_shows_the_unchanged_deferred_notice(name):
+    bus, notifications, canvas_document = _make_plugins_bus()
+
+    result = asyncio.run(bus.dispatch_intent("app-plugins", "executePlugin", [name]))
+
+    assert result is None
+    assert notifications.visible is True
+    assert notifications.msg_type == "info"
+    assert notifications.message == f'"{name}" node creation lands in R3/R5.'
+    assert not any(n.kind == "web_research" for n in canvas_document.nodes.values())

@@ -216,6 +216,27 @@ class SceneNode:
     # way is_docked/image_asset_id are generic fields even though today only
     # one kind populates them); unused (default None) for every other kind.
     pending_request_id: str | None = None
+    # R5.1: the Web Research node's real persisted shape - `content` (reused,
+    # same pattern as code/thinking/html) holds the query text; these six
+    # fields track one research run's live progress/outcome. Unused
+    # (default) for every other kind.
+    #
+    # research_stage is one of the empty-string sentinel ("" - never run) or
+    # the 9 ResearchStage enum values from
+    # graphlink_plugins/web_research/domain.py's own .value strings:
+    # "preparing" | "searching" | "fetching" | "extracting" | "validating" |
+    # "synthesizing" | "completed" | "cancelled" | "failed".
+    research_stage: str = ""
+    research_completed: int = 0
+    research_total: int = 0
+    research_active_source_id: str | None = None
+    research_error: str = ""
+    # The wire-shaped (camelCase) ResearchResult, or None before the first
+    # run ever completes. Deliberate stale-while-revalidate: a NEW run does
+    # NOT clear this on start (see start_web_research_run) - the previous
+    # answer stays visible until this run replaces it on success, or
+    # fails/cancels (leaving the stale result annotated by research_error).
+    research_result: dict[str, Any] | None = None
 
 
 @dataclass
@@ -630,6 +651,92 @@ class SceneDocument:
         ChatNode."""
         return self.append_conversation_user_message(node_id, text)
 
+    # -- R5.1: web research node ---------------------------------------------
+
+    def add_web_research_node(self, x: float, y: float, parent_id: str) -> SceneNode:
+        """The Web Research node's creation primitive - same required-parent
+        posture as document/thinking/html/image/conversation nodes (never
+        exists unparented). Title is always the fixed literal "Web Research"
+        (mirrors conversation node's own fixed "Conversation" title - there
+        is no meaningful single preview string before a query has ever been
+        run). Content starts empty; the query text only lands once
+        start_web_research_run is called."""
+        if parent_id not in self.nodes:
+            raise SceneError(f"unknown parent node: {parent_id}")
+        node_id = f"n{next(self._counter)}"
+        node = SceneNode(
+            id=node_id,
+            x=float(x),
+            y=float(y),
+            title="Web Research",
+            kind="web_research",
+        )
+        self.nodes[node_id] = node
+        self.connect(parent_id, node_id)
+        return node
+
+    def start_web_research_run(self, node_id: str, query: str) -> SceneNode:
+        """Begin one research run: stores the query text and resets this
+        run's progress fields. Deliberately does NOT clear research_result -
+        stale-while-revalidate: the previous run's answer stays visible until
+        this run replaces it on success, or fails/cancels (leaving the stale
+        result annotated by the new research_error)."""
+        node = self.nodes.get(node_id)
+        if node is None:
+            raise SceneError(f"unknown node: {node_id}")
+        if node.kind != "web_research":
+            raise SceneError(f"node is not a web_research node: {node_id}")
+        node.content = str(query)
+        node.research_stage = ""
+        node.research_completed = 0
+        node.research_total = 0
+        node.research_active_source_id = None
+        node.research_error = ""
+        return node
+
+    def apply_web_research_progress(self, node_id: str, event) -> SceneNode | None:
+        """Apply one duck-typed ProgressEvent-shaped update (.stage/.completed/
+        .total/.source_id) - canvas.py deliberately does NOT import anything
+        from graphlink_plugins.web_research (mirrors how
+        start_conversation_reply's node param is duck-typed without
+        agents.py importing backend.canvas.SceneNode). Silent no-op (returns
+        None, never raises) if node_id is no longer in self.nodes - the node
+        may have been deleted while a background run was still in flight."""
+        node = self.nodes.get(node_id)
+        if node is None:
+            return None
+        node.research_stage = event.stage.value
+        node.research_completed = event.completed
+        node.research_total = event.total
+        node.research_active_source_id = event.source_id
+        return node
+
+    def complete_web_research_run(self, node_id: str, result_wire: dict) -> SceneNode:
+        """Land a successful run's result. Raises SceneError if the node is
+        gone - the WS wrapper's own liveness check (in register_canvas)
+        guards the actual mid-flight-delete race; this stays a hard
+        precondition here, same posture as update_chat_node_content."""
+        node = self.nodes.get(node_id)
+        if node is None:
+            raise SceneError(f"unknown node: {node_id}")
+        node.research_stage = "completed"
+        node.research_error = ""
+        node.research_active_source_id = None
+        node.research_result = result_wire
+        return node
+
+    def fail_web_research_run(self, node_id: str, *, cancelled: bool, message: str) -> SceneNode:
+        """Land a failed or cancelled run. research_result is deliberately
+        left untouched (stale-while-revalidate - see start_web_research_run's
+        own docstring)."""
+        node = self.nodes.get(node_id)
+        if node is None:
+            raise SceneError(f"unknown node: {node_id}")
+        node.research_stage = "cancelled" if cancelled else "failed"
+        node.research_error = message
+        node.research_active_source_id = None
+        return node
+
     def delete_chat_node(self, node_id: str) -> None:
         """Delete one chat node WITHOUT orphaning its branch: children are
         re-parented to the deleted node's own parent (or become roots if it
@@ -957,6 +1064,12 @@ class SceneDocument:
                         {"role": m["role"], "content": m["content"]} for m in n.history
                     ],
                     "pendingRequestId": n.pending_request_id,
+                    "researchStage": n.research_stage,
+                    "researchCompleted": n.research_completed,
+                    "researchTotal": n.research_total,
+                    "researchActiveSourceId": n.research_active_source_id,
+                    "researchError": n.research_error,
+                    "researchResult": n.research_result,
                 }
                 for n in self.nodes.values()
             ],
@@ -994,6 +1107,45 @@ class SceneDocument:
             "stylePresets": list(GRID_STYLE_PRESETS),
             "colorPresets": list(GRID_COLOR_PRESETS),
         }
+
+
+def _research_result_wire(result) -> dict[str, Any]:
+    """Camel-cases a ResearchResult (graphlink_plugins/web_research/domain.py)
+    for the wire - a pure mapping function, NOT a SceneDocument method.
+    Duck-typed on purpose: canvas.py imports nothing from
+    graphlink_plugins.web_research (same posture as apply_web_research_progress
+    above)."""
+    return {
+        "requestId": result.request_id,
+        "originalQuery": result.original_query,
+        "effectiveQuery": result.effective_query,
+        "answerMarkdown": result.answer_markdown,
+        "sources": [
+            {
+                "sourceId": s.source_id,
+                "title": s.title,
+                "url": s.url,
+                "canonicalUrl": s.canonical_url,
+                "snippet": s.snippet,
+                "rank": s.rank,
+                "provider": s.provider,
+                "finalUrl": s.final_url,
+                "status": s.status,
+                "errorCode": s.error_code,
+                "errorMessage": s.error_message,
+                "truncated": s.truncated,
+                "contentHash": s.content_hash,
+                "citationCount": s.citation_count,
+            }
+            for s in result.sources
+        ],
+        "citations": [
+            {"sourceId": c.source_id, "marker": c.marker, "claimContext": c.claim_context}
+            for c in result.citations
+        ],
+        "warnings": list(result.warnings),
+        "providerSnapshot": dict(result.provider_snapshot),
+    }
 
 
 def register_canvas(
@@ -1404,6 +1556,63 @@ def register_canvas(
         await _dispatch_image(parent_chat_node_id, prompt)
         return None
 
+    async def run_web_research(node_id, query_text):
+        if agent_dispatcher.is_web_research_busy():
+            # Checked BEFORE touching document state: start_web_research_run
+            # resets a node's progress/error fields unconditionally, and the
+            # dispatcher only allows one web-research run at a time anyway -
+            # without this early check, clicking Run on a different node
+            # while one is already in flight would silently wipe that node's
+            # prior result/error banner even though no new run actually starts.
+            notifications.show("A web research request is already running.", "info")
+            await bus.publish("notification")
+            return None
+        try:
+            node = document.start_web_research_run(node_id, query_text)
+        except SceneError:
+            notifications.show("This node no longer exists.", "warning")
+            await bus.publish("notification")
+            return None
+        await publish_scene()
+
+        parent_edge = next((e for e in document.edges.values() if e.target == node_id), None)
+        branch_history = document.chat_branch_history(parent_edge.source) if parent_edge else []
+
+        async def _on_progress(event):
+            if node_id not in document.nodes:
+                return
+            document.apply_web_research_progress(node_id, event)
+            await bus.publish("scene")
+
+        async def _on_success(result):
+            if node_id not in document.nodes:
+                return
+            document.complete_web_research_run(node_id, _research_result_wire(result))
+            await bus.publish("scene")
+
+        async def _on_failure(exc):
+            if node_id not in document.nodes:
+                return
+            cancelled = type(exc).__name__ == "RequestCancelled"
+            document.fail_web_research_run(node_id, cancelled=cancelled, message=str(exc))
+            await bus.publish("scene")
+
+        await agent_dispatcher.start_web_research(
+            bus=bus,
+            notifications_state=notifications,
+            node=node,
+            node_id=node_id,
+            query=query_text,
+            branch_history=branch_history,
+            on_progress=_on_progress,
+            on_success=_on_success,
+            on_failure=_on_failure,
+        )
+        return node_id
+
+    async def cancel_web_research_request(request_id):
+        agent_dispatcher.cancel_web_research(request_id)
+
     async def move_node(node_id, x, y):
         document.move_node(node_id, x, y)
         await publish_scene()
@@ -1476,6 +1685,11 @@ def register_canvas(
     # both funneling through the shared _dispatch_image helper above.
     bus.register_intent("scene", "generateImage", generate_image)
     bus.register_intent("scene", "regenerateImage", regenerate_image)
+    # R5.1: Web Research node run/cancel - node creation itself lives in
+    # backend/plugins.py's executePlugin (the "Web Research" branch), not
+    # here; these two intents drive an EXISTING web_research-kind node.
+    bus.register_intent("scene", "runWebResearch", run_web_research)
+    bus.register_intent("scene", "cancelWebResearchRequest", cancel_web_research_request)
     bus.register_intent("scene", "moveNode", move_node)
     bus.register_intent("scene", "removeNodes", remove_nodes)
     bus.register_intent("scene", "connectNodes", connect_nodes)

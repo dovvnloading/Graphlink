@@ -5,6 +5,7 @@ shape, and snapshot publishing."""
 import asyncio
 import base64
 import threading
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -14,6 +15,7 @@ import pytest
 # top-level graphlink_app imports below (api_provider, graphlink_task_config)
 # for this module to import cleanly when run standalone, not just as part of
 # a larger session where some earlier-collected module already did this.
+import backend.agents as agents_module
 from backend.agents import AgentDispatcher
 from backend.canvas import (
     DRAG_FACTOR_MAX,
@@ -21,6 +23,7 @@ from backend.canvas import (
     SceneDocument,
     SceneEmptyPromptError,
     SceneError,
+    _research_result_wire,
     register_canvas,
 )
 from backend.composer import ComposerDocument
@@ -29,6 +32,7 @@ from backend.notifications import NotificationState
 
 import api_provider
 import graphlink_task_config as task_config
+from graphlink_plugins.web_research.domain import ResearchCitation, ResearchResult, ResearchSource
 
 
 # -- document invariants ----------------------------------------------------
@@ -2378,5 +2382,487 @@ def test_dispatch_image_mid_flight_delete_of_the_parent_is_a_silent_noop():
         assert dispatcher._image_requests == {}
         notice = await bus.publish("notification")
         assert notice["visible"] is False, "deleted-mid-flight is a silent no-op - no notification fires"
+
+    asyncio.run(run())
+
+
+# -- R5.1: web research node - domain-level ----------------------------------
+
+
+def test_add_web_research_node_creates_a_real_web_research_kind_node():
+    doc = SceneDocument()
+    parent = doc.add_chat_node(0, 0, "research this for me", True)
+    node = doc.add_web_research_node(10, 20, parent.id)
+    assert node.kind == "web_research"
+    assert node.title == "Web Research"
+    assert node.content == ""
+    assert any(e.source == parent.id and e.target == node.id for e in doc.edges.values())
+
+
+def test_add_web_research_node_rejects_unknown_parent():
+    doc = SceneDocument()
+    with pytest.raises(SceneError):
+        doc.add_web_research_node(0, 0, "ghost")
+
+
+def test_add_web_research_node_requires_a_parent_id():
+    # Same as add_document_node/add_thinking_node/add_html_node/add_image_node/
+    # add_conversation_node - parent_id has no default in add_web_research_node's
+    # signature, so calling without one is a TypeError (missing required
+    # argument), not a SceneError.
+    doc = SceneDocument()
+    with pytest.raises(TypeError):
+        doc.add_web_research_node(0, 0)
+
+
+def test_web_research_node_deletion_goes_through_the_generic_remove_nodes_path():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_web_research_node(10, 10, parent.id)
+    assert not hasattr(doc, "delete_web_research_node"), (
+        "web_research nodes are not branch points - no special delete method"
+    )
+    doc.remove_nodes([node.id])
+    assert node.id not in doc.nodes
+    assert not any(e.target == node.id or e.source == node.id for e in doc.edges.values())
+
+
+def test_start_web_research_run_sets_content_and_resets_progress_fields():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_web_research_node(0, 0, parent.id)
+    # Simulate a previous run's leftover progress state.
+    node.research_stage = "fetching"
+    node.research_completed = 2
+    node.research_total = 4
+    node.research_active_source_id = "s1-old"
+    node.research_error = "stale error"
+
+    returned = doc.start_web_research_run(node.id, "what is the capital of France?")
+
+    assert returned is node
+    assert node.content == "what is the capital of France?"
+    assert node.research_stage == ""
+    assert node.research_completed == 0
+    assert node.research_total == 0
+    assert node.research_active_source_id is None
+    assert node.research_error == ""
+
+
+def test_start_web_research_run_does_not_clear_a_stale_previous_result():
+    # Deliberate stale-while-revalidate (see the method's own docstring): the
+    # previous run's answer stays visible until THIS run replaces it on
+    # success, or fails/cancels (leaving the stale result annotated by the
+    # new research_error).
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_web_research_node(0, 0, parent.id)
+    node.research_result = {"answerMarkdown": "a previous stale answer"}
+
+    doc.start_web_research_run(node.id, "a follow-up question")
+
+    assert node.research_result == {"answerMarkdown": "a previous stale answer"}
+
+
+def test_start_web_research_run_unknown_node_raises_scene_error():
+    with pytest.raises(SceneError):
+        SceneDocument().start_web_research_run("ghost", "a query")
+
+
+def test_start_web_research_run_wrong_kind_raises_scene_error():
+    doc = SceneDocument()
+    chat = doc.add_chat_node(0, 0, "not a web research node", True)
+    with pytest.raises(SceneError):
+        doc.start_web_research_run(chat.id, "a query")
+
+
+def test_apply_web_research_progress_updates_stage_completed_total_source_id_from_a_duck_typed_event():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_web_research_node(0, 0, parent.id)
+    fake_event = SimpleNamespace(
+        stage=SimpleNamespace(value="fetching"), completed=1, total=4, source_id="s1-abc123"
+    )
+
+    returned = doc.apply_web_research_progress(node.id, fake_event)
+
+    assert returned is node
+    assert node.research_stage == "fetching"
+    assert node.research_completed == 1
+    assert node.research_total == 4
+    assert node.research_active_source_id == "s1-abc123"
+
+
+def test_apply_web_research_progress_is_a_silent_noop_for_a_deleted_or_unknown_node():
+    doc = SceneDocument()
+    fake_event = SimpleNamespace(
+        stage=SimpleNamespace(value="searching"), completed=0, total=1, source_id=None
+    )
+    assert doc.apply_web_research_progress("ghost", fake_event) is None
+
+
+def test_complete_web_research_run_sets_result_and_clears_error_and_active_source():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_web_research_node(0, 0, parent.id)
+    node.research_error = "a previous error"
+    node.research_active_source_id = "s1-still-active"
+    result_wire = {"answerMarkdown": "the answer", "sources": []}
+
+    returned = doc.complete_web_research_run(node.id, result_wire)
+
+    assert returned is node
+    assert node.research_stage == "completed"
+    assert node.research_error == ""
+    assert node.research_active_source_id is None
+    assert node.research_result == result_wire
+
+
+def test_complete_web_research_run_unknown_node_raises_scene_error():
+    with pytest.raises(SceneError):
+        SceneDocument().complete_web_research_run("ghost", {"answerMarkdown": "x"})
+
+
+def test_fail_web_research_run_sets_cancelled_stage_and_message():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_web_research_node(0, 0, parent.id)
+    node.research_active_source_id = "s1-in-flight"
+
+    returned = doc.fail_web_research_run(node.id, cancelled=True, message="Web research cancelled.")
+
+    assert returned is node
+    assert node.research_stage == "cancelled"
+    assert node.research_error == "Web research cancelled."
+    assert node.research_active_source_id is None
+
+
+def test_fail_web_research_run_sets_failed_stage_and_message():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_web_research_node(0, 0, parent.id)
+
+    returned = doc.fail_web_research_run(node.id, cancelled=False, message="The search provider failed.")
+
+    assert returned is node
+    assert node.research_stage == "failed"
+    assert node.research_error == "The search provider failed."
+
+
+def test_fail_web_research_run_does_not_clear_a_stale_previous_result():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_web_research_node(0, 0, parent.id)
+    node.research_result = {"answerMarkdown": "a previous stale answer"}
+
+    doc.fail_web_research_run(node.id, cancelled=False, message="boom")
+
+    assert node.research_result == {"answerMarkdown": "a previous stale answer"}
+
+
+def test_fail_web_research_run_unknown_node_raises_scene_error():
+    with pytest.raises(SceneError):
+        SceneDocument().fail_web_research_run("ghost", cancelled=False, message="boom")
+
+
+def test_scene_payload_includes_research_fields_defaulted_for_other_kinds():
+    doc = SceneDocument()
+    doc.add_node(0, 0, "plain")
+    parent = doc.add_node(1, 1, "parent")
+    node = doc.add_web_research_node(2, 2, parent.id)
+
+    rows = {n["id"]: n for n in doc.scene_payload()["nodes"]}
+    assert rows["n0"]["researchStage"] == ""
+    assert rows["n0"]["researchCompleted"] == 0
+    assert rows["n0"]["researchTotal"] == 0
+    assert rows["n0"]["researchActiveSourceId"] is None
+    assert rows["n0"]["researchError"] == ""
+    assert rows["n0"]["researchResult"] is None
+
+    doc.start_web_research_run(node.id, "a query")
+    fake_event = SimpleNamespace(
+        stage=SimpleNamespace(value="fetching"), completed=1, total=2, source_id="s1-x"
+    )
+    doc.apply_web_research_progress(node.id, fake_event)
+    row = {n["id"]: n for n in doc.scene_payload()["nodes"]}[node.id]
+    assert row["kind"] == "web_research"
+    assert row["content"] == "a query"
+    assert row["researchStage"] == "fetching"
+    assert row["researchCompleted"] == 1
+    assert row["researchTotal"] == 2
+    assert row["researchActiveSourceId"] == "s1-x"
+
+
+def test_research_result_wire_camel_cases_a_research_result():
+    result = ResearchResult(
+        request_id="req-1",
+        original_query="what is the capital of France?",
+        effective_query="capital of France",
+        answer_markdown="Paris is the capital of France [s1-abc].",
+        sources=[
+            ResearchSource(
+                source_id="s1-abc",
+                title="France - Wikipedia",
+                url="https://example.test/france",
+                canonical_url="https://example.test/france",
+                snippet="France is a country...",
+                rank=1,
+                provider="DuckDuckGo",
+                final_url="https://example.test/france",
+                status="accepted",
+                error_code="",
+                error_message="",
+                truncated=False,
+                content_hash="deadbeef",
+                citation_count=1,
+            )
+        ],
+        citations=[ResearchCitation(source_id="s1-abc", marker="[s1-abc]", claim_context="")],
+        warnings=["Source 2 was not used (low_quality)."],
+        provider_snapshot={},
+    )
+
+    wire = _research_result_wire(result)
+
+    assert wire == {
+        "requestId": "req-1",
+        "originalQuery": "what is the capital of France?",
+        "effectiveQuery": "capital of France",
+        "answerMarkdown": "Paris is the capital of France [s1-abc].",
+        "sources": [
+            {
+                "sourceId": "s1-abc",
+                "title": "France - Wikipedia",
+                "url": "https://example.test/france",
+                "canonicalUrl": "https://example.test/france",
+                "snippet": "France is a country...",
+                "rank": 1,
+                "provider": "DuckDuckGo",
+                "finalUrl": "https://example.test/france",
+                "status": "accepted",
+                "errorCode": "",
+                "errorMessage": "",
+                "truncated": False,
+                "contentHash": "deadbeef",
+                "citationCount": 1,
+            }
+        ],
+        "citations": [{"sourceId": "s1-abc", "marker": "[s1-abc]", "claimContext": ""}],
+        "warnings": ["Source 2 was not used (low_quality)."],
+        "providerSnapshot": {},
+    }
+
+
+# -- R5.1: web research node - WS-intent level -------------------------------
+
+
+def test_run_web_research_intent_publishes_scene_and_calls_start_web_research_with_correct_branch_history():
+    class _FakeDispatcher:
+        def __init__(self):
+            self.calls = []
+
+        async def start_web_research(self, **kwargs):
+            self.calls.append(kwargs)
+
+        def cancel_web_research(self, request_id):
+            return False
+
+        def is_web_research_busy(self):
+            return False
+
+    async def run():
+        bus = SessionBus("run-web-research-intent-test")
+        notifications = NotificationState()
+        bus.register_topic("notification", notifications.payload)
+        composer_document = ComposerDocument()
+        bus.register_topic("app-composer", composer_document.payload)
+        fake_dispatcher = _FakeDispatcher()
+        document = register_canvas(bus, notifications, fake_dispatcher, composer_document)
+        recorder = Recorder()
+        bus.attach(recorder)
+
+        root = await bus.dispatch_intent("scene", "addChatNode", [0, 0, "root question", True])
+        # add_web_research_node itself always requires a real parent - here we
+        # parent the web_research node off the CHAT node so branch_history is
+        # meaningfully non-trivial (mirrors how a real Web Research node
+        # branches from a chat node in production).
+        wr_node = document.add_web_research_node(0, 0, root)
+        recorder.messages.clear()  # only care about messages from runWebResearch below
+
+        result = await bus.dispatch_intent(
+            "scene", "runWebResearch", [wr_node.id, "what is this about?"]
+        )
+
+        assert result == wr_node.id
+        assert document.nodes[wr_node.id].content == "what is this about?"
+        assert recorder.topics_seen().count("scene") == 1, "start_web_research_run publishes scene once"
+
+        assert len(fake_dispatcher.calls) == 1
+        call = fake_dispatcher.calls[0]
+        assert call["bus"] is bus
+        assert call["notifications_state"] is notifications
+        assert call["node"] is wr_node
+        assert call["node_id"] == wr_node.id
+        assert call["query"] == "what is this about?"
+        assert call["branch_history"] == document.chat_branch_history(root)
+        assert callable(call["on_progress"])
+        assert callable(call["on_success"])
+        assert callable(call["on_failure"])
+
+    asyncio.run(run())
+
+
+def test_run_web_research_intent_unknown_node_shows_notification_not_a_crash():
+    async def run():
+        bus, document, recorder, dispatcher = make_bus_with_dispatcher()
+
+        result = await bus.dispatch_intent("scene", "runWebResearch", ["ghost", "a query"])
+
+        assert result is None
+        assert dispatcher._web_research_requests == {}
+        notice = await bus.publish("notification")
+        assert notice["visible"] is True
+        assert notice["msgType"] == "warning"
+        assert notice["message"] == "This node no longer exists."
+
+    asyncio.run(run())
+
+
+def test_cancel_web_research_request_intent_calls_agent_dispatcher_cancel_web_research():
+    class _FakeDispatcher:
+        def __init__(self):
+            self.cancel_calls = []
+
+        def cancel_web_research(self, request_id):
+            self.cancel_calls.append(request_id)
+            return True
+
+        def is_web_research_busy(self):
+            return False
+
+    async def run():
+        bus = SessionBus("cancel-web-research-intent-test")
+        notifications = NotificationState()
+        bus.register_topic("notification", notifications.payload)
+        composer_document = ComposerDocument()
+        bus.register_topic("app-composer", composer_document.payload)
+        fake_dispatcher = _FakeDispatcher()
+        register_canvas(bus, notifications, fake_dispatcher, composer_document)
+
+        result = await bus.dispatch_intent("scene", "cancelWebResearchRequest", ["req-123"])
+
+        assert result is None
+        assert fake_dispatcher.cancel_calls == ["req-123"]
+
+    asyncio.run(run())
+
+
+def test_run_web_research_mid_flight_delete_of_the_node_is_a_silent_noop():
+    # Mirrors test_dispatch_image_mid_flight_delete_of_the_parent_is_a_silent_noop's
+    # own pattern: block the underlying call with threading Events, delete the
+    # node between dispatch and callback invocation, and confirm _on_progress/
+    # _on_success/_on_failure inside run_web_research's closure all no-op
+    # silently rather than raising or recreating anything.
+    async def run():
+        bus, document, recorder, dispatcher = make_bus_with_dispatcher()
+        parent = document.add_chat_node(0, 0, "research this please", True)
+        node = document.add_web_research_node(0, 160, parent.id)
+
+        started = threading.Event()
+        release = threading.Event()
+
+        def blocking_run(self, request, *, token=None, progress=None):
+            started.set()
+            release.wait(5)
+            return SimpleNamespace()  # never actually read - node is gone by then
+
+        with patch.object(agents_module.WebResearchService, "run", blocking_run):
+            result = await bus.dispatch_intent(
+                "scene", "runWebResearch", [node.id, "what is this about?"]
+            )
+            assert result == node.id
+
+            await asyncio.to_thread(started.wait, 5)
+            document.remove_nodes([node.id])
+
+            release.set()
+            entry = next(iter(dispatcher._web_research_requests.values()))
+            await entry["task"]
+
+        assert node.id not in document.nodes
+        assert dispatcher._web_research_requests == {}
+        notice = await bus.publish("notification")
+        assert notice["visible"] is False, "deleted-mid-flight is a silent no-op - no notification fires"
+
+    asyncio.run(run())
+
+
+def test_run_web_research_on_a_different_node_while_one_is_busy_does_not_clobber_its_state():
+    # Review-found regression guard: run_web_research used to call
+    # start_web_research_run (which unconditionally resets research_stage/
+    # research_error/progress fields and republishes scene) BEFORE checking
+    # whether AgentDispatcher's single in-flight slot was already busy - so
+    # clicking Run on node B while node A was mid-research would silently wipe
+    # B's existing failure/cancelled banner even though no new run for B ever
+    # actually started. The busy check must happen first.
+    async def run():
+        bus, document, recorder, dispatcher = make_bus_with_dispatcher()
+        parent = document.add_chat_node(0, 0, "research this please", True)
+        node_a = document.add_web_research_node(0, 160, parent.id)
+        node_b = document.add_web_research_node(200, 160, parent.id)
+
+        # Give node_b a pre-existing failed state to prove it survives.
+        document.start_web_research_run(node_b.id, "node b's original query")
+        document.fail_web_research_run(node_b.id, cancelled=False, message="node b failed earlier")
+        assert node_b.research_stage == "failed"
+        assert node_b.research_error == "node b failed earlier"
+
+        started = threading.Event()
+        release = threading.Event()
+        fake_result = ResearchResult(
+            request_id="req-a",
+            original_query="node a's query",
+            effective_query="node a's query",
+            answer_markdown="node a's result",
+            sources=[],
+            citations=[],
+            warnings=[],
+            provider_snapshot={},
+        )
+
+        def blocking_run(self, request, *, token=None, progress=None):
+            started.set()
+            release.wait(5)
+            return fake_result
+
+        with patch.object(agents_module.WebResearchService, "run", blocking_run):
+            result_a = await bus.dispatch_intent(
+                "scene", "runWebResearch", [node_a.id, "node a's query"]
+            )
+            assert result_a == node_a.id
+            await asyncio.to_thread(started.wait, 5)
+
+            # node_a is now in flight (the single web-research slot is busy).
+            # Clicking Run on node_b must be rejected up front, WITHOUT
+            # touching node_b's stage/error/content at all.
+            result_b = await bus.dispatch_intent(
+                "scene", "runWebResearch", [node_b.id, "a brand new query for b"]
+            )
+            assert result_b is None
+            assert node_b.research_stage == "failed", "node_b's terminal state must survive the bounce"
+            assert node_b.research_error == "node b failed earlier"
+            assert node_b.content == "node b's original query", "node_b's content must not be overwritten"
+
+            notice = await bus.publish("notification")
+            assert notice["visible"] is True
+            assert notice["msgType"] == "info"
+            assert notice["message"] == "A web research request is already running."
+
+            release.set()
+            entry = next(iter(dispatcher._web_research_requests.values()))
+            await entry["task"]
+
+        assert node_a.research_stage == "completed"
+        assert node_a.research_result["answerMarkdown"] == "node a's result"
 
     asyncio.run(run())

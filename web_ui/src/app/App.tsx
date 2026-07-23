@@ -131,7 +131,7 @@ function App() {
               <ViewPopover store={sceneStore} />
             </div>
             <div className="app-plugins-layer">
-              <PluginPicker transport={transport} />
+              <PluginPicker transport={transport} store={sceneStore} />
             </div>
             {settingsVisibility.showTokenCounter !== false && (
               <div className="app-token-counter-layer">

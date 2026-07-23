@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { toFlowNodes } from "./SceneCanvas";
+import { handleSelectionChange, toFlowNodes } from "./SceneCanvas";
 import { SceneStore, initialSceneState } from "./sceneStore";
 import type { WsTransport } from "../../lib/ws/transport";
 import type { SceneNodeRow, SceneState } from "../../lib/bridge-core/generated/scene-state";
@@ -36,6 +36,12 @@ function baseNode(overrides: Partial<SceneNodeRow> = {}): SceneNodeRow {
     imageAssetId: "",
     history: [],
     pendingRequestId: null,
+    researchStage: "",
+    researchCompleted: 0,
+    researchTotal: 0,
+    researchActiveSourceId: null,
+    researchError: "",
+    researchResult: null,
     ...overrides,
   };
 }
@@ -136,5 +142,167 @@ describe("toFlowNodes (R4.4a Generate/Regenerate Image wiring)", () => {
 
     (imageFlowNode!.data as { onRegenerate: () => void }).onRegenerate();
     expect(intentSpy).toHaveBeenCalledWith("image-1");
+  });
+});
+
+describe("toFlowNodes (R5.1 web_research node)", () => {
+  it("maps a web_research scene node's all 6 new fields onto the flow node's data", () => {
+    const researchResult = {
+      requestId: "req-1",
+      originalQuery: "who won the 2019 world series",
+      effectiveQuery: "2019 world series winner",
+      answerMarkdown: "The **Washington Nationals** won.",
+      sources: [
+        {
+          sourceId: "src-1",
+          title: "2019 World Series",
+          url: "https://example.com/2019-ws",
+          canonicalUrl: "https://example.com/2019-ws",
+          snippet: "...",
+          rank: 1,
+          provider: "search",
+          finalUrl: "https://example.com/2019-ws",
+          status: "accepted",
+          errorCode: "",
+          errorMessage: "",
+          truncated: false,
+          contentHash: "abc",
+          citationCount: 1,
+        },
+      ],
+      citations: [{ sourceId: "src-1", marker: "[1]", claimContext: "won the series" }],
+      warnings: ["One source was truncated."],
+      providerSnapshot: {},
+    };
+    const scene = baseScene({
+      nodes: [
+        baseNode({
+          id: "wr-1",
+          kind: "web_research",
+          content: "who won the 2019 world series",
+          isCollapsed: true,
+          pendingRequestId: "req-1",
+          researchStage: "fetching",
+          researchCompleted: 2,
+          researchTotal: 5,
+          researchActiveSourceId: "src-2",
+          researchError: "",
+          researchResult,
+        }),
+      ],
+      edges: [],
+    });
+    const store = makeStore();
+
+    const flowNodes = toFlowNodes(scene, store);
+    const wrFlowNode = flowNodes.find((n) => n.id === "wr-1");
+    expect(wrFlowNode).toBeDefined();
+    expect(wrFlowNode!.type).toBe("web_research");
+    expect(wrFlowNode!.data).toMatchObject({
+      query: "who won the 2019 world series",
+      isCollapsed: true,
+      pendingRequestId: "req-1",
+      researchStage: "fetching",
+      researchCompleted: 2,
+      researchTotal: 5,
+      researchActiveSourceId: "src-2",
+      researchError: "",
+      researchResult,
+    });
+  });
+
+  it("coalesces null-ish optional fields (pendingRequestId/researchActiveSourceId/researchResult) to null", () => {
+    const scene = baseScene({
+      nodes: [
+        baseNode({
+          id: "wr-2",
+          kind: "web_research",
+          content: "a fresh query",
+          researchStage: "",
+          researchCompleted: 0,
+          researchTotal: 0,
+        }),
+      ],
+      edges: [],
+    });
+    const store = makeStore();
+
+    const flowNodes = toFlowNodes(scene, store);
+    const wrFlowNode = flowNodes.find((n) => n.id === "wr-2");
+    expect(wrFlowNode).toBeDefined();
+    expect(wrFlowNode!.data).toMatchObject({
+      pendingRequestId: null,
+      researchActiveSourceId: null,
+      researchResult: null,
+    });
+  });
+
+  it("onRun calls store.runWebResearch with this node's id and the given query", () => {
+    const scene = baseScene({ nodes: [baseNode({ id: "wr-1", kind: "web_research" })], edges: [] });
+    const store = makeStore();
+    const intentSpy = vi.spyOn(store, "runWebResearch");
+
+    const flowNodes = toFlowNodes(scene, store);
+    const wrFlowNode = flowNodes.find((n) => n.id === "wr-1");
+
+    (wrFlowNode!.data as { onRun: (query: string) => void }).onRun("a new question");
+    expect(intentSpy).toHaveBeenCalledWith("wr-1", "a new question");
+  });
+
+  it("onCancel fires cancelWebResearchRequest with pendingRequestId when set, and is a no-op otherwise", () => {
+    const scene = baseScene({
+      nodes: [
+        baseNode({ id: "wr-pending", kind: "web_research", pendingRequestId: "req-77" }),
+        baseNode({ id: "wr-idle", kind: "web_research", pendingRequestId: null }),
+      ],
+      edges: [],
+    });
+    const store = makeStore();
+    const intentSpy = vi.spyOn(store, "cancelWebResearchRequest");
+
+    const flowNodes = toFlowNodes(scene, store);
+    const pendingNode = flowNodes.find((n) => n.id === "wr-pending");
+    const idleNode = flowNodes.find((n) => n.id === "wr-idle");
+
+    (pendingNode!.data as { onCancel: () => void }).onCancel();
+    expect(intentSpy).toHaveBeenCalledWith("req-77");
+
+    (idleNode!.data as { onCancel: () => void }).onCancel();
+    expect(intentSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("onToggleCollapse/onDelete reuse the generic setChatCollapsed/removeNodes intents", () => {
+    const scene = baseScene({
+      nodes: [baseNode({ id: "wr-1", kind: "web_research", isCollapsed: false })],
+      edges: [],
+    });
+    const store = makeStore();
+    const collapseSpy = vi.spyOn(store, "setChatCollapsed");
+    const removeSpy = vi.spyOn(store, "removeNodes");
+
+    const flowNodes = toFlowNodes(scene, store);
+    const wrFlowNode = flowNodes.find((n) => n.id === "wr-1");
+
+    (wrFlowNode!.data as { onToggleCollapse: () => void }).onToggleCollapse();
+    expect(collapseSpy).toHaveBeenCalledWith("wr-1", true);
+
+    (wrFlowNode!.data as { onDelete: () => void }).onDelete();
+    expect(removeSpy).toHaveBeenCalledWith(["wr-1"]);
+  });
+});
+
+describe("handleSelectionChange (R5.1 onSelectionChange wiring)", () => {
+  it("calls store.setSelectedNodeId with the first selected node's id", () => {
+    const store = makeStore();
+    const spy = vi.spyOn(store, "setSelectedNodeId");
+    handleSelectionChange(store, [{ id: "n1" }, { id: "n2" }]);
+    expect(spy).toHaveBeenCalledWith("n1");
+  });
+
+  it("calls store.setSelectedNodeId with null when nothing is selected", () => {
+    const store = makeStore();
+    const spy = vi.spyOn(store, "setSelectedNodeId");
+    handleSelectionChange(store, []);
+    expect(spy).toHaveBeenCalledWith(null);
   });
 });

@@ -115,6 +115,151 @@
           "previewLabel": {
             "type": "string"
           },
+          "researchActiveSourceId": {
+            "type": "string"
+          },
+          "researchCompleted": {
+            "type": "integer"
+          },
+          "researchError": {
+            "type": "string"
+          },
+          "researchResult": {
+            "additionalProperties": false,
+            "properties": {
+              "answerMarkdown": {
+                "type": "string"
+              },
+              "citations": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "claimContext": {
+                      "type": "string"
+                    },
+                    "marker": {
+                      "type": "string"
+                    },
+                    "sourceId": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "sourceId",
+                    "marker",
+                    "claimContext"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "effectiveQuery": {
+                "type": "string"
+              },
+              "originalQuery": {
+                "type": "string"
+              },
+              "providerSnapshot": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              "requestId": {
+                "type": "string"
+              },
+              "sources": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "canonicalUrl": {
+                      "type": "string"
+                    },
+                    "citationCount": {
+                      "type": "integer"
+                    },
+                    "contentHash": {
+                      "type": "string"
+                    },
+                    "errorCode": {
+                      "type": "string"
+                    },
+                    "errorMessage": {
+                      "type": "string"
+                    },
+                    "finalUrl": {
+                      "type": "string"
+                    },
+                    "provider": {
+                      "type": "string"
+                    },
+                    "rank": {
+                      "type": "integer"
+                    },
+                    "snippet": {
+                      "type": "string"
+                    },
+                    "sourceId": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "truncated": {
+                      "type": "boolean"
+                    },
+                    "url": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "sourceId",
+                    "title",
+                    "url",
+                    "canonicalUrl",
+                    "snippet",
+                    "rank",
+                    "provider",
+                    "finalUrl",
+                    "status",
+                    "errorCode",
+                    "errorMessage",
+                    "truncated",
+                    "contentHash",
+                    "citationCount"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "warnings": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "requestId",
+              "originalQuery",
+              "effectiveQuery",
+              "answerMarkdown",
+              "sources",
+              "citations",
+              "warnings",
+              "providerSnapshot"
+            ],
+            "type": "object"
+          },
+          "researchStage": {
+            "type": "string"
+          },
+          "researchTotal": {
+            "type": "integer"
+          },
           "title": {
             "type": "string"
           },
@@ -142,7 +287,11 @@
           "previewLabel",
           "isDocked",
           "imageAssetId",
-          "history"
+          "history",
+          "researchStage",
+          "researchCompleted",
+          "researchTotal",
+          "researchError"
         ],
         "type": "object"
       },

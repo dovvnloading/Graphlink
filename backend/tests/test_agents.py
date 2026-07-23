@@ -33,6 +33,7 @@ from backend.notifications import NotificationState
 import api_provider
 import graphlink_task_config as config
 from graphlink_licensing import SettingsManager
+from graphlink_plugins.web_research.domain import RequestCancelled, ResearchFailure
 
 
 class _FakeSettingsManager:
@@ -1412,3 +1413,519 @@ def test_image_request_runs_independently_while_a_chat_stream_is_paused_mid_flig
         assert recorder.frames[-1]["done"] is True, "stream frames kept recording throughout the image request"
 
     asyncio.run(run())
+
+
+# -- R5.1: start_web_research - the independent web-research slot ------------
+#
+# Unlike start_chat_reply/start_conversation_reply above, these tests never
+# touch Ollama/api_provider.chat plumbing (except the two dedicated
+# concurrency tests) - start_web_research's only real dependency is
+# WebResearchService.run, monkeypatched directly on the class (agents.py
+# constructs a fresh WebResearchService() instance per call, so patching the
+# class method is the seam, mirroring how api_provider.chat/chat_stream are
+# patched as module-level seams for the chat path).
+
+
+def _make_web_research_env():
+    bus = SessionBus("agents-web-research-test")
+    notifications = NotificationState()
+    bus.register_topic("notification", notifications.payload)
+    bus.register_topic("scene", lambda: {})
+    dispatcher = AgentDispatcher(_FakeSettingsManager())
+    return bus, notifications, dispatcher
+
+
+def test_start_web_research_calls_on_success_with_the_result_then_clears_the_slot(monkeypatch):
+    fake_result = SimpleNamespace(answer_markdown="the answer")
+
+    def fake_run(self, request, *, token=None, progress=None):
+        return fake_result
+
+    monkeypatch.setattr(agents_module.WebResearchService, "run", fake_run)
+
+    async def run():
+        bus, notifications, dispatcher = _make_web_research_env()
+        node = _make_node()
+        successes = []
+
+        await dispatcher.start_web_research(
+            bus=bus,
+            notifications_state=notifications,
+            node=node,
+            node_id="n1",
+            query="what is this about?",
+            branch_history=[],
+            on_progress=lambda event: None,
+            on_success=successes.append,
+            on_failure=lambda exc: None,
+        )
+        entry = next(iter(dispatcher._web_research_requests.values()))
+        await entry["task"]
+
+        assert successes == [fake_result]
+        assert dispatcher._web_research_requests == {}
+        assert node.pending_request_id is None
+        assert notifications.visible is False
+
+    asyncio.run(run())
+
+
+def test_start_web_research_second_call_while_in_flight_is_rejected_first_still_completes(monkeypatch):
+    started = threading.Event()
+    release = threading.Event()
+
+    def blocking_run(self, request, *, token=None, progress=None):
+        started.set()
+        release.wait(5)
+        return SimpleNamespace(answer_markdown="first result")
+
+    monkeypatch.setattr(agents_module.WebResearchService, "run", blocking_run)
+
+    async def run():
+        bus, notifications, dispatcher = _make_web_research_env()
+        node1 = _make_node()
+        node2 = _make_node()
+        successes = []
+
+        await dispatcher.start_web_research(
+            bus=bus,
+            notifications_state=notifications,
+            node=node1,
+            node_id="n1",
+            query="first query",
+            branch_history=[],
+            on_progress=lambda event: None,
+            on_success=successes.append,
+            on_failure=lambda exc: None,
+        )
+        await asyncio.to_thread(started.wait, 5)
+
+        # Second call while the first is still in flight must be rejected and
+        # must not disturb the first request.
+        await dispatcher.start_web_research(
+            bus=bus,
+            notifications_state=notifications,
+            node=node2,
+            node_id="n2",
+            query="second query",
+            branch_history=[],
+            on_progress=lambda event: None,
+            on_success=successes.append,
+            on_failure=lambda exc: None,
+        )
+        assert notifications.visible is True
+        assert notifications.msg_type == "info"
+        assert notifications.message == "A web research request is already running."
+        assert len(dispatcher._web_research_requests) == 1
+        assert node2.pending_request_id is None, "the bounced call must never touch node2"
+
+        release.set()
+        entry = next(iter(dispatcher._web_research_requests.values()))
+        await entry["task"]
+
+        assert successes == [SimpleNamespace(answer_markdown="first result")]
+        assert dispatcher._web_research_requests == {}
+
+    asyncio.run(run())
+
+
+def test_start_web_research_research_failure_forwards_via_on_failure_and_shows_error_notification(monkeypatch):
+    failure = ResearchFailure("The search provider failed.", code="search_failed")
+
+    def raising_run(self, request, *, token=None, progress=None):
+        raise failure
+
+    monkeypatch.setattr(agents_module.WebResearchService, "run", raising_run)
+
+    async def run():
+        bus, notifications, dispatcher = _make_web_research_env()
+        node = _make_node()
+        failures = []
+
+        await dispatcher.start_web_research(
+            bus=bus,
+            notifications_state=notifications,
+            node=node,
+            node_id="n1",
+            query="q",
+            branch_history=[],
+            on_progress=lambda event: None,
+            on_success=lambda result: None,
+            on_failure=failures.append,
+        )
+        entry = next(iter(dispatcher._web_research_requests.values()))
+        await entry["task"]
+
+        assert failures == [failure]
+        assert dispatcher._web_research_requests == {}
+        assert node.pending_request_id is None
+        assert notifications.visible is True
+        assert notifications.msg_type == "error"
+        assert notifications.message == "Web research failed: The search provider failed."
+
+    asyncio.run(run())
+
+
+def test_start_web_research_request_cancelled_forwards_via_on_failure_and_shows_info_notification(monkeypatch):
+    cancelled_exc = RequestCancelled("Web research was cancelled.")
+
+    def raising_run(self, request, *, token=None, progress=None):
+        raise cancelled_exc
+
+    monkeypatch.setattr(agents_module.WebResearchService, "run", raising_run)
+
+    async def run():
+        bus, notifications, dispatcher = _make_web_research_env()
+        node = _make_node()
+        failures = []
+
+        await dispatcher.start_web_research(
+            bus=bus,
+            notifications_state=notifications,
+            node=node,
+            node_id="n1",
+            query="q",
+            branch_history=[],
+            on_progress=lambda event: None,
+            on_success=lambda result: None,
+            on_failure=failures.append,
+        )
+        entry = next(iter(dispatcher._web_research_requests.values()))
+        await entry["task"]
+
+        assert failures == [cancelled_exc]
+        assert dispatcher._web_research_requests == {}
+        assert node.pending_request_id is None
+        assert notifications.visible is True
+        assert notifications.msg_type == "info"
+        assert notifications.message == "Web research cancelled."
+
+    asyncio.run(run())
+
+
+def test_start_web_research_generic_exception_forwards_via_on_failure_and_shows_error_notification(monkeypatch):
+    def raising_run(self, request, *, token=None, progress=None):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(agents_module.WebResearchService, "run", raising_run)
+
+    async def run():
+        bus, notifications, dispatcher = _make_web_research_env()
+        node = _make_node()
+        failures = []
+
+        await dispatcher.start_web_research(
+            bus=bus,
+            notifications_state=notifications,
+            node=node,
+            node_id="n1",
+            query="q",
+            branch_history=[],
+            on_progress=lambda event: None,
+            on_success=lambda result: None,
+            on_failure=failures.append,
+        )
+        entry = next(iter(dispatcher._web_research_requests.values()))
+        await entry["task"]
+
+        assert len(failures) == 1
+        assert isinstance(failures[0], RuntimeError)
+        assert str(failures[0]) == "boom"
+        assert dispatcher._web_research_requests == {}
+        assert node.pending_request_id is None
+        assert notifications.visible is True
+        assert notifications.msg_type == "error"
+        assert notifications.message == "Web research failed: boom"
+
+    asyncio.run(run())
+
+
+def test_start_web_research_timeout_fires_the_exact_message_and_clears_the_slot(monkeypatch):
+    monkeypatch.setattr(agents_module, "WEB_RESEARCH_WATCHDOG_TIMEOUT_SECONDS", 0.05)
+
+    def slow_run(self, request, *, token=None, progress=None):
+        time.sleep(0.3)
+        return SimpleNamespace(answer_markdown="too late")
+
+    monkeypatch.setattr(agents_module.WebResearchService, "run", slow_run)
+
+    async def run():
+        bus, notifications, dispatcher = _make_web_research_env()
+        node = _make_node()
+        failures = []
+
+        await dispatcher.start_web_research(
+            bus=bus,
+            notifications_state=notifications,
+            node=node,
+            node_id="n1",
+            query="q",
+            branch_history=[],
+            on_progress=lambda event: None,
+            on_success=lambda result: None,
+            on_failure=failures.append,
+        )
+        entry = next(iter(dispatcher._web_research_requests.values()))
+        await entry["task"]
+
+        assert len(failures) == 1
+        assert isinstance(failures[0], ResearchFailure)
+        expected_message = (
+            "Web research stopped responding before the request completed. Please try again."
+        )
+        assert str(failures[0]) == expected_message
+        assert failures[0].code == "watchdog_timeout"
+        assert dispatcher._web_research_requests == {}, "the slot must not leak/deadlock future requests"
+        assert node.pending_request_id is None
+        assert notifications.visible is True
+        assert notifications.msg_type == "error"
+        assert notifications.message == expected_message
+
+    asyncio.run(run())
+
+
+def test_start_web_research_stale_progress_event_after_timeout_is_dropped(monkeypatch):
+    """Review-found regression guard: asyncio.to_thread's underlying thread is
+    not actually killed when wait_for's timeout fires (Future.cancel() on an
+    already-running thread is a no-op), so a slow WebResearchService.run()
+    can keep calling progress() well after this request's own finally block
+    has already popped _web_research_requests and cleared
+    node.pending_request_id. That stale event must be dropped, not delivered
+    to on_progress - otherwise it can resurrect a since-failed node's stage
+    or clobber a new run started on the same node afterward."""
+    monkeypatch.setattr(agents_module, "WEB_RESEARCH_WATCHDOG_TIMEOUT_SECONDS", 0.05)
+    late_event = SimpleNamespace(
+        stage=SimpleNamespace(value="fetching"), completed=1, total=4, source_id="s1"
+    )
+
+    def slow_run(self, request, *, token=None, progress=None):
+        time.sleep(0.3)  # past the watchdog timeout, so the timeout branch already ran
+        progress(late_event)  # the "zombie" thread still calling back afterward
+        return SimpleNamespace(answer_markdown="too late")
+
+    monkeypatch.setattr(agents_module.WebResearchService, "run", slow_run)
+
+    async def run():
+        bus, notifications, dispatcher = _make_web_research_env()
+        node = _make_node()
+        progress_events = []
+
+        await dispatcher.start_web_research(
+            bus=bus,
+            notifications_state=notifications,
+            node=node,
+            node_id="n1",
+            query="q",
+            branch_history=[],
+            on_progress=progress_events.append,
+            on_success=lambda result: None,
+            on_failure=lambda exc: None,
+        )
+        entry = next(iter(dispatcher._web_research_requests.values()))
+        await entry["task"]
+        assert dispatcher._web_research_requests == {}, "slot must already be cleared by the timeout branch"
+
+        # Give the still-running background thread time to reach its
+        # progress() call and for run_coroutine_threadsafe's scheduled
+        # coroutine to actually execute on this loop.
+        await asyncio.sleep(0.4)
+
+        assert progress_events == [], (
+            "a progress event emitted after this request's slot was cleared "
+            "must be dropped, not delivered to on_progress"
+        )
+
+    asyncio.run(run())
+
+
+def test_cancel_web_research_returns_false_for_an_unknown_request_id():
+    dispatcher = AgentDispatcher(_FakeSettingsManager())
+    assert dispatcher.cancel_web_research("no-such-request") is False
+
+
+def test_web_research_request_and_chat_request_run_concurrently_both_dicts_non_empty(monkeypatch):
+    """THE key concurrency-slot regression guard (R5.1, mirrors R4.4a's own
+    chat/image guard test): a chat/composer request occupies self._requests
+    while a web-research request occupies the SEPARATE
+    self._web_research_requests dict at the same time - neither blocks nor is
+    blocked by the other, and both dicts are simultaneously non-empty at
+    least once."""
+    chat_started = threading.Event()
+    chat_release = threading.Event()
+    research_started = threading.Event()
+    research_release = threading.Event()
+
+    def blocking_chat(task, messages, **kwargs):
+        chat_started.set()
+        chat_release.wait(5)
+        return {"message": {"content": "chat reply"}}
+
+    def blocking_run(self, request, *, token=None, progress=None):
+        research_started.set()
+        research_release.wait(5)
+        return SimpleNamespace(answer_markdown="research result")
+
+    _configure_fake_ollama(monkeypatch, blocking_chat)
+    monkeypatch.setattr(agents_module.WebResearchService, "run", blocking_run)
+
+    async def run():
+        bus, notifications, composer_document, dispatcher = _make_dispatch_env()
+        node = _make_node()
+        chat_replies = []
+        research_successes = []
+
+        await dispatcher.start_chat_reply(
+            bus=bus,
+            notifications_state=notifications,
+            composer_document=composer_document,
+            conversation_history=[{"role": "user", "content": "hi"}],
+            on_reply=chat_replies.append,
+        )
+        await dispatcher.start_web_research(
+            bus=bus,
+            notifications_state=notifications,
+            node=node,
+            node_id="n1",
+            query="q",
+            branch_history=[],
+            on_progress=lambda event: None,
+            on_success=research_successes.append,
+            on_failure=lambda exc: None,
+        )
+
+        await asyncio.to_thread(chat_started.wait, 5)
+        await asyncio.to_thread(research_started.wait, 5)
+
+        # THE key assertion: both slots are genuinely occupied at the same
+        # time - neither request bounced the other, and neither notification
+        # fired.
+        assert len(dispatcher._requests) == 1
+        assert len(dispatcher._web_research_requests) == 1
+        assert notifications.visible is False, "neither call should have been rejected"
+
+        chat_release.set()
+        chat_entry = next(iter(dispatcher._requests.values()))
+        await chat_entry["task"]
+        research_release.set()
+        research_entry = next(iter(dispatcher._web_research_requests.values()))
+        await research_entry["task"]
+
+        assert chat_replies == ["chat reply"]
+        assert research_successes == [SimpleNamespace(answer_markdown="research result")]
+        assert dispatcher._requests == {}
+        assert dispatcher._web_research_requests == {}
+        assert composer_document.request_state == "idle"
+
+    asyncio.run(run())
+
+
+def test_start_web_research_progress_ordering_on_progress_invoked_in_the_same_order(monkeypatch):
+    """Validates the run_coroutine_threadsafe handoff preserves emission
+    order (see start_web_research's own docstring for why this holds even
+    though on_progress is invoked from a worker thread)."""
+    events = [
+        SimpleNamespace(stage=SimpleNamespace(value=f"stage{i}"), completed=i, total=5, source_id=None)
+        for i in range(5)
+    ]
+
+    def fake_run(self, request, *, token=None, progress=None):
+        for event in events:
+            progress(event)
+        return SimpleNamespace(answer_markdown="done")
+
+    monkeypatch.setattr(agents_module.WebResearchService, "run", fake_run)
+
+    async def run():
+        bus, notifications, dispatcher = _make_web_research_env()
+        node = _make_node()
+        progress_calls = []
+
+        await dispatcher.start_web_research(
+            bus=bus,
+            notifications_state=notifications,
+            node=node,
+            node_id="n1",
+            query="q",
+            branch_history=[],
+            on_progress=progress_calls.append,
+            on_success=lambda result: None,
+            on_failure=lambda exc: None,
+        )
+        entry = next(iter(dispatcher._web_research_requests.values()))
+        await entry["task"]
+
+        assert progress_calls == events
+
+    asyncio.run(run())
+
+
+def test_start_web_research_constructs_web_research_service_with_no_override_the_ssrf_safety_default(monkeypatch):
+    """Confirms AgentDispatcher.start_web_research always constructs a
+    default WebResearchService() - no fetcher/policy override - so the
+    SSRF-safe RequestsDocumentFetcher()/FetchPolicy() defaults are always in
+    effect for every dispatch. The dedicated SSRF/redirect/byte-cap tests
+    themselves live in graphlink_app/tests/test_web_research_service.py and
+    test_web_research_lifecycle.py (unchanged, untouched by this increment) -
+    this is only the construction-site confirmation."""
+    captured_args = []
+    captured_kwargs = []
+    original_init = agents_module.WebResearchService.__init__
+
+    def spy_init(self, *args, **kwargs):
+        captured_args.append(args)
+        captured_kwargs.append(kwargs)
+        return original_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(agents_module.WebResearchService, "__init__", spy_init)
+    monkeypatch.setattr(
+        agents_module.WebResearchService,
+        "run",
+        lambda self, request, *, token=None, progress=None: SimpleNamespace(answer_markdown="x"),
+    )
+
+    async def run():
+        bus, notifications, dispatcher = _make_web_research_env()
+        node = _make_node()
+
+        await dispatcher.start_web_research(
+            bus=bus,
+            notifications_state=notifications,
+            node=node,
+            node_id="n1",
+            query="q",
+            branch_history=[],
+            on_progress=lambda event: None,
+            on_success=lambda result: None,
+            on_failure=lambda exc: None,
+        )
+        entry = next(iter(dispatcher._web_research_requests.values()))
+        await entry["task"]
+
+    asyncio.run(run())
+
+    assert captured_args == [()]
+    assert captured_kwargs == [{}]
+
+
+def test_agents_never_imports_qt():
+    # This is the regression gate for Step 0's providers.py fix - mirrors
+    # test_plugins.py's own test_plugins_never_imports_qt's exact
+    # subprocess-invocation style (a plain in-process assert is meaningless
+    # once anything else in a shared pytest run has already imported
+    # PySide6; only a fresh subprocess importing ONLY backend.agents actually
+    # answers "does this transitively pull in Qt"). Before Step 0's fix,
+    # `import backend.agents` -> WebResearchService -> providers.py ->
+    # `import graphlink_config as config` -> PySide6.QtGui/QtWidgets at
+    # module scope - a real regression this test would have caught.
+    import subprocess
+    import sys as _sys
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[2]
+    result = subprocess.run(
+        [_sys.executable, "-c", "import backend.agents, sys; assert 'PySide6' not in sys.modules"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr

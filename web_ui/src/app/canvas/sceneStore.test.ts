@@ -43,6 +43,10 @@ function validScenePayload(overrides: Record<string, unknown> = {}) {
         isDocked: false,
         imageAssetId: "",
         history: [],
+        researchStage: "",
+        researchCompleted: 0,
+        researchTotal: 0,
+        researchError: "",
       },
     ],
     edges: [],
@@ -268,12 +272,65 @@ describe("SceneStore", () => {
     expect(intents).toEqual([{ topic: "scene", intent: "regenerateImage", args: ["img1"] }]);
   });
 
+  it("runWebResearch sends the scene-topic runWebResearch intent with [nodeId, queryText]", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.runWebResearch("n1", "who won the 2019 world series");
+    expect(intents).toEqual([
+      { topic: "scene", intent: "runWebResearch", args: ["n1", "who won the 2019 world series"] },
+    ]);
+  });
+
+  it("cancelWebResearchRequest sends the scene-topic cancelWebResearchRequest intent with the requestId", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.cancelWebResearchRequest("req-99");
+    expect(intents).toEqual([
+      { topic: "scene", intent: "cancelWebResearchRequest", args: ["req-99"] },
+    ]);
+  });
+
   it("suppresses empty removal intents", () => {
     const { transport, intents } = makeFakeTransport();
     const store = new SceneStore(transport);
     store.removeNodes([]);
     store.removeEdges([]);
     expect(intents).toEqual([]);
+  });
+
+  it("setSelectedNodeId/getSelectedNodeId update state and notify listeners", () => {
+    const { transport } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    const seen = vi.fn();
+    store.subscribe(seen);
+
+    expect(store.getSelectedNodeId()).toBeNull();
+    store.setSelectedNodeId("n1");
+    expect(store.getSelectedNodeId()).toBe("n1");
+    expect(seen).toHaveBeenCalledTimes(1);
+
+    store.setSelectedNodeId(null);
+    expect(store.getSelectedNodeId()).toBeNull();
+    expect(seen).toHaveBeenCalledTimes(2);
+  });
+
+  it("setSelectedNodeId is a no-op (no re-emit) when the id is unchanged", () => {
+    const { transport } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    const seen = vi.fn();
+
+    // Baseline no-op: already null -> null, before subscribing even matters.
+    store.setSelectedNodeId(null);
+    expect(store.getSelectedNodeId()).toBeNull();
+
+    store.subscribe(seen);
+    store.setSelectedNodeId("n1");
+    expect(seen).toHaveBeenCalledTimes(1);
+
+    // Re-selecting the SAME id must not re-emit.
+    store.setSelectedNodeId("n1");
+    expect(seen).toHaveBeenCalledTimes(1);
+    expect(store.getSelectedNodeId()).toBe("n1");
   });
 
   it("dispose() unsubscribes every topic", () => {

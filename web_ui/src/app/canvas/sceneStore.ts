@@ -70,6 +70,12 @@ export class SceneStore {
   private fontConfig: FontControlState = initialFontControlState;
   private readonly listeners = new Set<Listener>();
   private readonly unsubscribers: Array<() => void> = [];
+  // R5.1: the currently-selected canvas node id, mirrored from React Flow's
+  // own onSelectionChange (see SceneCanvas.tsx) - local UI state only, never
+  // sent over the wire on its own. Exists so PluginPicker can attach "which
+  // node was selected when a plugin was launched" to executePlugin without
+  // either component reaching into the other's internals.
+  private selectedNodeId: string | null = null;
 
   constructor(private readonly transport: WsTransport) {}
 
@@ -108,6 +114,15 @@ export class SceneStore {
   getGrid = (): GridControlState => this.grid;
   getDragConfig = (): DragSpeedState => this.dragConfig;
   getFontConfig = (): FontControlState => this.fontConfig;
+  getSelectedNodeId = (): string | null => this.selectedNodeId;
+
+  // R5.1: no-op-if-unchanged, same discipline as every other setter here that
+  // guards a redundant assignment before paying for an emit() fan-out.
+  setSelectedNodeId(id: string | null): void {
+    if (id === this.selectedNodeId) return;
+    this.selectedNodeId = id;
+    this.emit();
+  }
 
   private emit(): void {
     for (const listener of [...this.listeners]) listener();
@@ -305,6 +320,19 @@ export class SceneStore {
   // deliberate improvement over legacy's parent-.text reuse).
   regenerateImage(imageNodeId: string): void {
     this.transport.intent("scene", "regenerateImage", [imageNodeId]);
+  }
+
+  // R5.1: real Web Research plugin - runWebResearch starts (or restarts) a
+  // research run for an existing web_research node; cancelWebResearchRequest
+  // targets it by its own in-flight requestId, the same
+  // requestId-not-nodeId shape cancelConversationRequest above already
+  // established for the conversation node's own per-node cancel.
+  runWebResearch(nodeId: string, query: string): void {
+    this.transport.intent("scene", "runWebResearch", [nodeId, query]);
+  }
+
+  cancelWebResearchRequest(requestId: string): void {
+    this.transport.intent("scene", "cancelWebResearchRequest", [requestId]);
   }
 
   // R3.3: the Composer's real Send action - a real user ChatNode. The

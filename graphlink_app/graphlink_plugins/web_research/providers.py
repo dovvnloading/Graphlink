@@ -12,7 +12,7 @@ from typing import Sequence
 from urllib.parse import urljoin, urlsplit
 
 import api_provider
-import graphlink_config as config
+import graphlink_task_config as config
 
 from .domain import (
     CancellationToken,
