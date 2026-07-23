@@ -1340,6 +1340,13 @@ def register_canvas(
             composer_document=composer_document,
             conversation_history=history,
             on_reply=_on_reply,
+            # R4.4: deliberately NOT streamed - see the design spec's own
+            # deferral list. Regenerate replaces an EXISTING node's content
+            # rather than creating a new one, and streaming it would light
+            # up the Composer dock's live preview for a click on some other
+            # node in the canvas, with no way for the frontend to tell that
+            # apart from an actual Composer send.
+            stream=False,
         )
         return node_to_regenerate.id
 

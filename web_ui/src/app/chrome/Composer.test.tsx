@@ -7,12 +7,15 @@ import { NotificationBanner } from "./NotificationBanner";
 import { initialComposerState, initialNotificationState, initialTokenCounterState } from "./composerStore";
 import { OverlayProvider } from "../overlays/overlays";
 
-function makeStore(overrides: { composer?: object; tokenCounter?: object; notification?: object } = {}) {
+function makeStore(
+  overrides: { composer?: object; tokenCounter?: object; notification?: object; streamText?: string } = {},
+) {
   const listeners = new Set<() => void>();
   const state = {
     composer: { ...initialComposerState, ...overrides.composer },
     tokenCounter: { ...initialTokenCounterState, ...overrides.tokenCounter },
     notification: { ...initialNotificationState, ...overrides.notification },
+    streamText: overrides.streamText ?? "",
   };
   const updateDraft = vi.fn();
   const setReasoningLevel = vi.fn();
@@ -26,6 +29,7 @@ function makeStore(overrides: { composer?: object; tokenCounter?: object; notifi
     getComposer: () => state.composer,
     getTokenCounter: () => state.tokenCounter,
     getNotification: () => state.notification,
+    getStreamText: () => state.streamText,
     updateDraft,
     setReasoningLevel,
     cancelChatRequest,
@@ -172,11 +176,12 @@ describe("Composer", () => {
     expect(cancelChatRequest).toHaveBeenCalledWith("req-42");
   });
 
-  it("shows the generating indicator only when request.state is 'generating'", () => {
+  it("shows 'Thinking…' while generating and streamText is still empty", () => {
     const { store } = makeStore({
       composer: {
         request: { id: "req-1", state: "generating", message: "", canSend: false, canCancel: true, canRetry: false },
       },
+      streamText: "",
     });
     render(
       <OverlayProvider>
@@ -184,10 +189,27 @@ describe("Composer", () => {
         <Composer store={store} sceneStore={makeSceneStore().sceneStore} />
       </OverlayProvider>,
     );
-    expect(screen.getByText("Generating…")).toBeInTheDocument();
+    expect(screen.getByText("Thinking…")).toBeInTheDocument();
   });
 
-  it("hides the generating indicator when request.state is 'idle'", () => {
+  it("shows the raw growing stream text once streamText is non-empty", () => {
+    const { store } = makeStore({
+      composer: {
+        request: { id: "req-1", state: "generating", message: "", canSend: false, canCancel: true, canRetry: false },
+      },
+      streamText: "Hello, wor",
+    });
+    render(
+      <OverlayProvider>
+        {/* @ts-expect-error - test double */}
+        <Composer store={store} sceneStore={makeSceneStore().sceneStore} />
+      </OverlayProvider>,
+    );
+    expect(screen.getByText("Hello, wor")).toBeInTheDocument();
+    expect(screen.queryByText("Thinking…")).toBeNull();
+  });
+
+  it("hides the stream preview when request.state is 'idle'", () => {
     const { store } = makeStore({
       composer: { request: { ...initialComposerState.request, state: "idle" } },
     });
@@ -197,7 +219,8 @@ describe("Composer", () => {
         <Composer store={store} sceneStore={makeSceneStore().sceneStore} />
       </OverlayProvider>,
     );
-    expect(screen.queryByText("Generating…")).toBeNull();
+    expect(screen.queryByText("Thinking…")).toBeNull();
+    expect(screen.queryByRole("status")).toBeNull();
   });
 
   it("opens the reasoning popover and selecting an option calls the intent and closes it", async () => {

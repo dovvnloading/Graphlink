@@ -25,6 +25,7 @@ import pytest
 # graphlink_licensing) for this module to import cleanly when run standalone.
 import backend.agents as agents_module
 from backend.agents import AgentDispatcher
+from backend.canvas import register_canvas
 from backend.composer import ComposerDocument
 from backend.events import SessionBus
 from backend.notifications import NotificationState
@@ -63,6 +64,50 @@ def _configure_fake_ollama(monkeypatch, chat_fn, *, model="test-model"):
     monkeypatch.setattr(api_provider, "LOCAL_PROVIDER_TYPE", config.LOCAL_PROVIDER_OLLAMA)
     monkeypatch.setitem(config.OLLAMA_MODELS, config.TASK_CHAT, model)
     monkeypatch.setattr(api_provider, "chat", chat_fn)
+
+    # R4.4: start_chat_reply now always streams (backend/agents.py's
+    # _call_chat_agent_stream always passes a non-None on_chunk), so
+    # ChatWorker.run always calls api_provider.chat_stream, never
+    # api_provider.chat, for that path. Every pre-existing test in this file
+    # built around mocking api_provider.chat alone - most of which predate
+    # R4.4 - would otherwise fall through to chat_stream's REAL Ollama
+    # branch (since these fixtures also set LOCAL_PROVIDER_TYPE to Ollama)
+    # and attempt a genuine network call. This fake mirrors
+    # api_provider.chat_stream's own documented non-streaming-provider
+    # fallback shape exactly (one blocking call plus one synthetic
+    # full-text on_chunk), just delegating the blocking call to chat_fn
+    # instead of the real chat() - so chat_fn's return value/exception/
+    # cancellation behavior is preserved unchanged for both the streaming
+    # and non-streaming dispatch paths. Tests that care about the streaming
+    # semantics THEMSELVES (batching, reset events, ...) monkeypatch
+    # api_provider.chat_stream directly instead - see the "R4.4: true token
+    # streaming" section below.
+    #
+    # Calls api_provider.chat (the module attribute, looked up fresh on
+    # every invocation) rather than closing over chat_fn directly - this
+    # matters for tests that re-monkeypatch api_provider.chat again later
+    # (e.g. simulating a third, different reply after the first call
+    # completes): this fallback must see that later reassignment too, same
+    # as the real chat_stream's own fallback branch would.
+    def _fallback_chat_stream(task, messages, on_chunk, **kwargs):
+        response = api_provider.chat(task, messages, **kwargs)
+        on_chunk(response["message"].get("content", ""), False)
+        return response
+
+    monkeypatch.setattr(api_provider, "chat_stream", _fallback_chat_stream)
+
+
+def _configure_fake_chat_stream(monkeypatch, chat_stream_fn, *, model="test-model"):
+    """Sibling of _configure_fake_ollama for tests that care about the
+    streaming semantics THEMSELVES (batching, cancel-mid-stream, reset
+    events, ...) rather than delegating through a plain chat_fn - sets the
+    same is_configured()-satisfying provider state, then installs
+    chat_stream_fn directly as api_provider.chat_stream (no synthetic
+    fallback wrapper in between, unlike _configure_fake_ollama's own)."""
+    monkeypatch.setattr(api_provider, "USE_API_MODE", False)
+    monkeypatch.setattr(api_provider, "LOCAL_PROVIDER_TYPE", config.LOCAL_PROVIDER_OLLAMA)
+    monkeypatch.setitem(config.OLLAMA_MODELS, config.TASK_CHAT, model)
+    monkeypatch.setattr(api_provider, "chat_stream", chat_stream_fn)
 
 
 # -- 1. successful reply ------------------------------------------------------
@@ -1051,3 +1096,319 @@ def test_no_cancel_image_method_or_intent_exists():
     as this design decision holds."""
     dispatcher = AgentDispatcher(_FakeSettingsManager())
     assert not hasattr(dispatcher, "cancel_image")
+
+
+# -- R4.4: true token streaming (dispatcher half) -----------------------------
+#
+# These tests monkeypatch graphlink_app.api_provider.chat_stream directly
+# (the same seam graphlink_chat_agent.py's ChatWorker.run calls when
+# on_chunk is not None), so they exercise the REAL _call_chat_agent_stream ->
+# ChatAgent.get_response -> ChatWorker.run -> api_provider.chat_stream chain,
+# not just a fake standing in for backend/agents.py's own driver function -
+# the dispatcher-side pump/thread-to-loop-handoff logic in _dispatch's _run()
+# is what is actually under test here.
+
+
+class _StreamRecorderConnection:
+    """Connection double recording every 'stream'-kind frame broadcast to
+    it, in order - lets tests assert the pump's batching/flush behavior end
+    to end without a real WebSocket. (Distinct from _Recorder above, which
+    only tracks 'state'-kind topic names.)"""
+
+    def __init__(self):
+        self.frames: list[dict] = []
+
+    async def send_json(self, data):
+        if data.get("kind") == "stream":
+            self.frames.append(data)
+
+
+def test_streaming_happy_path_recorder_receives_ordered_stream_frames_and_on_reply_once(monkeypatch):
+    def fake_chat_stream(task, messages, on_chunk, **kwargs):
+        on_chunk("Hel", False)
+        on_chunk("lo", False)
+        return {"message": {"content": "Hello"}}
+
+    _configure_fake_chat_stream(monkeypatch, fake_chat_stream)
+
+    async def run():
+        bus, notifications, composer_document, dispatcher = _make_dispatch_env()
+        recorder = _StreamRecorderConnection()
+        bus.attach(recorder)
+        replies = []
+
+        await dispatcher.start_chat_reply(
+            bus=bus,
+            notifications_state=notifications,
+            composer_document=composer_document,
+            conversation_history=[{"role": "user", "content": "hi"}],
+            on_reply=replies.append,
+        )
+        entry = next(iter(dispatcher._requests.values()))
+        await entry["task"]
+
+        assert replies == ["Hello"]
+        assert dispatcher._requests == {}
+        assert composer_document.request_state == "idle"
+
+        assert recorder.frames, "must have received at least one stream frame"
+        assert recorder.frames[-1]["done"] is True
+        assert recorder.frames[-1]["delta"] == ""
+        concatenated = "".join(f["delta"] for f in recorder.frames if not f["done"])
+        assert concatenated == "Hello"
+        assert all(f["topic"] == "app-composer" for f in recorder.frames)
+        request_ids = {f["requestId"] for f in recorder.frames}
+        assert len(request_ids) == 1 and next(iter(request_ids))
+        seqs = [f["seq"] for f in recorder.frames]
+        assert seqs == sorted(seqs) and len(set(seqs)) == len(seqs), "seq must be strictly increasing"
+
+    asyncio.run(run())
+
+
+def test_cancel_mid_stream_no_on_reply_and_stream_frames_still_end_with_done_true(monkeypatch):
+    started = threading.Event()
+
+    def fake_chat_stream(task, messages, on_chunk, cancellation_event=None, **kwargs):
+        on_chunk("a", False)
+        on_chunk("b", False)
+        started.set()
+        while not cancellation_event.is_set():
+            time.sleep(0.01)
+        raise api_provider.RequestCancelledError("Request cancelled.")
+
+    _configure_fake_chat_stream(monkeypatch, fake_chat_stream)
+
+    async def run():
+        bus, notifications, composer_document, dispatcher = _make_dispatch_env()
+        recorder = _StreamRecorderConnection()
+        bus.attach(recorder)
+        replies = []
+
+        await dispatcher.start_chat_reply(
+            bus=bus,
+            notifications_state=notifications,
+            composer_document=composer_document,
+            conversation_history=[{"role": "user", "content": "hi"}],
+            on_reply=replies.append,
+        )
+        request_id, entry = next(iter(dispatcher._requests.items()))
+
+        await asyncio.to_thread(started.wait, 5)
+        assert dispatcher.cancel(request_id) is True
+
+        await entry["task"]
+
+        assert replies == [], "cancel discards everything - no partial-text on_reply, matching R4.2 precedent"
+        assert dispatcher._requests == {}
+        assert notifications.visible is True
+        assert notifications.msg_type == "info"
+        assert notifications.message == "Request cancelled."
+
+        assert recorder.frames, "the pump must still have flushed something before terminating"
+        assert recorder.frames[-1]["done"] is True, "the pump never hangs - it always sends its final frame"
+
+    asyncio.run(run())
+
+
+def test_stream_error_mid_way_generic_notification_and_stream_frames_still_end_done_true(monkeypatch):
+    def fake_chat_stream(task, messages, on_chunk, **kwargs):
+        on_chunk("partial", False)
+        raise RuntimeError("boom")
+
+    _configure_fake_chat_stream(monkeypatch, fake_chat_stream)
+
+    async def run():
+        bus, notifications, composer_document, dispatcher = _make_dispatch_env()
+        recorder = _StreamRecorderConnection()
+        bus.attach(recorder)
+        replies = []
+
+        await dispatcher.start_chat_reply(
+            bus=bus,
+            notifications_state=notifications,
+            composer_document=composer_document,
+            conversation_history=[{"role": "user", "content": "hi"}],
+            on_reply=replies.append,
+        )
+        entry = next(iter(dispatcher._requests.values()))
+        await entry["task"]
+
+        assert replies == []
+        assert dispatcher._requests == {}
+        assert notifications.visible is True
+        assert notifications.msg_type == "error"
+        assert notifications.message == "AI response failed: boom"
+
+        assert recorder.frames, "the pump must still have flushed the partial chunk before terminating"
+        assert recorder.frames[-1]["done"] is True
+
+    asyncio.run(run())
+
+
+def test_throttle_batches_many_small_chunks_into_materially_fewer_publish_stream_calls(monkeypatch):
+    chars = [chr(ord("a") + (i % 26)) for i in range(200)]
+    expected = "".join(chars)
+
+    def fake_chat_stream(task, messages, on_chunk, **kwargs):
+        for c in chars:
+            on_chunk(c, False)
+        return {"message": {"content": expected}}
+
+    _configure_fake_chat_stream(monkeypatch, fake_chat_stream)
+
+    async def run():
+        bus, notifications, composer_document, dispatcher = _make_dispatch_env()
+        recorder = _StreamRecorderConnection()
+        bus.attach(recorder)
+        replies = []
+
+        await dispatcher.start_chat_reply(
+            bus=bus,
+            notifications_state=notifications,
+            composer_document=composer_document,
+            conversation_history=[{"role": "user", "content": "hi"}],
+            on_reply=replies.append,
+        )
+        entry = next(iter(dispatcher._requests.values()))
+        await entry["task"]
+
+        assert replies == [expected]
+        assert len(recorder.frames) < 100, (
+            "200 one-character on_chunk calls fired with no delay must batch into "
+            "materially fewer publish_stream calls than input chunks"
+        )
+        concatenated = "".join(f["delta"] for f in recorder.frames if not f["done"])
+        assert concatenated == expected
+        assert recorder.frames[-1]["done"] is True
+
+    asyncio.run(run())
+
+
+def test_completion_handoff_parity_streaming_send_message_creates_identical_nodes(monkeypatch):
+    """R4.4 spec section 6, item 7: re-run the R4.3b thinking+text+code
+    send_message fixture (test_canvas.py's own
+    test_send_message_reply_with_thinking_text_and_code_creates_both_children_on_same_parent)
+    through the real streaming dispatch path (api_provider.chat_stream
+    monkeypatched instead of api_provider.chat) via the real "sendMessage"
+    scene intent, and assert IDENTICAL ChatNode/ThinkingNode/CodeNode
+    creation results to the non-streaming fixture for the same canned full
+    text - proves the completion hand-off (on_reply -> parse_response ->
+    add_chat_node/add_thinking_node/add_code_node, all in backend/canvas.py,
+    untouched by this increment) is truly unchanged by streaming."""
+    canned_text = (
+        "<think>working it out</think>\n"
+        "Here's the plan.\n"
+        "```python\nprint('plan')\n```"
+    )
+
+    def fake_chat_stream(task, messages, on_chunk, **kwargs):
+        on_chunk(canned_text, False)
+        return {"message": {"content": canned_text}}
+
+    _configure_fake_chat_stream(monkeypatch, fake_chat_stream)
+
+    async def run():
+        bus = SessionBus("agents-stream-parity-test")
+        notifications = NotificationState()
+        bus.register_topic("notification", notifications.payload)
+        composer_document = ComposerDocument()
+        bus.register_topic("app-composer", composer_document.payload)
+        dispatcher = AgentDispatcher(_FakeSettingsManager())
+        document = register_canvas(bus, notifications, dispatcher, composer_document)
+
+        user_node_id = await bus.dispatch_intent("scene", "sendMessage", ["plan it out"])
+        entry = next(iter(dispatcher._requests.values()))
+        await entry["task"]
+
+        assistant_nodes = [
+            n for n in document.nodes.values() if n.kind == "chat" and n.id != user_node_id
+        ]
+        assert len(assistant_nodes) == 1
+        assistant_node = assistant_nodes[0]
+        assert assistant_node.content == "Here's the plan."
+
+        thinking_nodes = [n for n in document.nodes.values() if n.kind == "thinking"]
+        code_nodes = [n for n in document.nodes.values() if n.kind == "code"]
+        assert len(thinking_nodes) == 1
+        assert len(code_nodes) == 1
+
+        assert any(
+            e.source == assistant_node.id and e.target == thinking_nodes[0].id
+            for e in document.edges.values()
+        )
+        assert any(
+            e.source == assistant_node.id and e.target == code_nodes[0].id
+            for e in document.edges.values()
+        )
+        assert not any(
+            e.source == thinking_nodes[0].id and e.target == code_nodes[0].id
+            for e in document.edges.values()
+        ), "thinking and code children are not chained to each other"
+        assert document.last_chat_node_id == assistant_node.id
+
+    asyncio.run(run())
+
+
+def test_image_request_runs_independently_while_a_chat_stream_is_paused_mid_flight(monkeypatch):
+    """R4.4 spec section 6, item 8: cross-slot concurrency during an active
+    stream. A chat stream paused mid-flight (self._requests) must not block,
+    or be blocked by, a concurrent image-generation request
+    (self._image_requests) - the two independent slots this dispatcher
+    already guarantees (R4.4a) must keep holding under streaming too."""
+    chat_started = threading.Event()
+    chat_release = threading.Event()
+
+    def fake_chat_stream(task, messages, on_chunk, **kwargs):
+        on_chunk("partial chat text", False)
+        chat_started.set()
+        chat_release.wait(5)
+        return {"message": {"content": "final chat reply"}}
+
+    _configure_fake_chat_stream(monkeypatch, fake_chat_stream)
+    monkeypatch.setattr(api_provider, "generate_image", lambda prompt, **kwargs: b"image-bytes")
+
+    async def run():
+        bus, notifications, composer_document, dispatcher = _make_dispatch_env()
+        recorder = _StreamRecorderConnection()
+        bus.attach(recorder)
+        chat_replies = []
+        image_replies = []
+
+        await dispatcher.start_chat_reply(
+            bus=bus,
+            notifications_state=notifications,
+            composer_document=composer_document,
+            conversation_history=[{"role": "user", "content": "hi"}],
+            on_reply=chat_replies.append,
+        )
+        await asyncio.to_thread(chat_started.wait, 5)
+        # chat_started only guarantees on_chunk queued its delta - give the
+        # pump's own flush timer (FLUSH_INTERVAL_S=0.06s) a moment to
+        # actually broadcast it before asserting.
+        await asyncio.sleep(0.15)
+
+        assert len(dispatcher._requests) == 1
+        assert recorder.frames, "at least the first buffered delta should have flushed by now"
+
+        await dispatcher.start_image_reply(
+            bus=bus, notifications_state=notifications, prompt="a cat", on_reply=image_replies.append,
+        )
+        image_entry = next(iter(dispatcher._image_requests.values()))
+        await image_entry["task"]
+
+        # The image request completed independently, without waiting on the
+        # still-paused chat stream.
+        assert image_replies == [b"image-bytes"]
+        assert dispatcher._image_requests == {}
+        assert len(dispatcher._requests) == 1, "the chat stream is still in flight, untouched by the image request"
+        assert notifications.visible is False, "neither request was rejected"
+
+        chat_release.set()
+        chat_entry = next(iter(dispatcher._requests.values()))
+        await chat_entry["task"]
+
+        assert chat_replies == ["final chat reply"]
+        assert dispatcher._requests == {}
+        assert recorder.frames[-1]["done"] is True, "stream frames kept recording throughout the image request"
+
+    asyncio.run(run())

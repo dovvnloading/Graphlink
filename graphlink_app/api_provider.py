@@ -8,7 +8,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import NamedTuple
+from typing import Callable, NamedTuple
 from urllib.parse import urlparse
 
 import ollama
@@ -2040,86 +2040,211 @@ def chat(task: str, messages: list, **kwargs) -> dict:
         raise RuntimeError(f"Unsupported API provider: {state.api_provider_type}")
 
     except Exception as exc:
-        if isinstance(exc, RequestCancelledError):
-            raise
+        _translate_chat_exception(exc, state, messages)
 
-        error_str = str(exc).lower()
-        status_code = getattr(exc, "status_code", None)
 
-        if "timed out" in error_str or "timeout" in error_str:
-            if _message_contains_audio(messages):
-                raise TimeoutError(
-                    "The request timed out while processing audio.\n\n"
-                    "Please try again. If this keeps happening, use a shorter clip or switch to an audio-capable Gemini or Ollama model."
-                ) from exc
+def _translate_chat_exception(exc: Exception, state, messages: list) -> None:
+    """Shared exception-normalization for chat()/chat_stream(): translates raw
+    provider/network exceptions into actionable, user-facing messages. Always
+    raises - either a translated exception (chained `from exc`) or the
+    original `exc` unchanged - never returns normally. Extracted as its own
+    function (R4.4) so chat_stream()'s live-streaming branch gets the exact
+    same error-translation behavior chat() already has, rather than letting
+    raw provider/network exceptions (connection-refused, timeout, quota, ...)
+    propagate unfriendly and untranslated on the now-exclusively-streaming
+    Composer chat path."""
+    if isinstance(exc, RequestCancelledError):
+        raise exc
+
+    error_str = str(exc).lower()
+    status_code = getattr(exc, "status_code", None)
+
+    if "timed out" in error_str or "timeout" in error_str:
+        if _message_contains_audio(messages):
             raise TimeoutError(
-                "The model request timed out.\n\n"
-                "Please try again or choose a faster model."
+                "The request timed out while processing audio.\n\n"
+                "Please try again. If this keeps happening, use a shorter clip or switch to an audio-capable Gemini or Ollama model."
             ) from exc
+        raise TimeoutError(
+            "The model request timed out.\n\n"
+            "Please try again or choose a faster model."
+        ) from exc
 
-        if "429" in error_str or "quota" in error_str or "resourceexhausted" in error_str:
-            if state.api_provider_type == config.API_PROVIDER_OPENAI:
-                raise RuntimeError(
-                    "OpenAI-compatible API quota exceeded or rate limited.\n\n"
-                    "Please verify billing, rate limits, and the selected model for your endpoint."
-                ) from exc
-            if state.api_provider_type == config.API_PROVIDER_ANTHROPIC:
-                raise RuntimeError(
-                    "Anthropic API quota exceeded or rate limited.\n\n"
-                    "Please verify billing, rate limits, and the selected Claude model."
-                ) from exc
+    if "429" in error_str or "quota" in error_str or "resourceexhausted" in error_str:
+        if state.api_provider_type == config.API_PROVIDER_OPENAI:
             raise RuntimeError(
-                "Google Gemini API Quota Exceeded.\n\n"
-                "Note: Google does not offer a free tier for their 'Pro' models. "
-                "Please switch your default task models to a 'Flash' model in the API Settings, "
-                "or link a billing account in Google AI Studio."
+                "OpenAI-compatible API quota exceeded or rate limited.\n\n"
+                "Please verify billing, rate limits, and the selected model for your endpoint."
+            ) from exc
+        if state.api_provider_type == config.API_PROVIDER_ANTHROPIC:
+            raise RuntimeError(
+                "Anthropic API quota exceeded or rate limited.\n\n"
+                "Please verify billing, rate limits, and the selected Claude model."
+            ) from exc
+        raise RuntimeError(
+            "Google Gemini API Quota Exceeded.\n\n"
+            "Note: Google does not offer a free tier for their 'Pro' models. "
+            "Please switch your default task models to a 'Flash' model in the API Settings, "
+            "or link a billing account in Google AI Studio."
+        ) from exc
+
+    if state.use_api_mode and state.api_provider_type == config.API_PROVIDER_ANTHROPIC:
+        if status_code in (401, 403) or "authentication" in error_str or "invalid x-api-key" in error_str:
+            raise RuntimeError(
+                "Anthropic API authentication failed.\n\n"
+                "Please verify your Anthropic API key in Settings."
             ) from exc
 
-        if state.use_api_mode and state.api_provider_type == config.API_PROVIDER_ANTHROPIC:
-            if status_code in (401, 403) or "authentication" in error_str or "invalid x-api-key" in error_str:
-                raise RuntimeError(
-                    "Anthropic API authentication failed.\n\n"
-                    "Please verify your Anthropic API key in Settings."
-                ) from exc
-
-        if (
-            "connection refused" in error_str
-            or "connecterror" in error_str
-            or "connection error" in error_str
-            or "all connection attempts failed" in error_str
-        ):
-            if not state.use_api_mode:
-                raise ConnectionError(
-                    "Failed to connect to local Ollama server. Please ensure the Ollama app is running and accessible."
-                ) from exc
-            if state.api_provider_type == config.API_PROVIDER_ANTHROPIC:
-                raise ConnectionError(
-                    "Failed to connect to the Anthropic API. Please verify your network connection and try again.\n\n"
-                    f"Details: {exc}"
-                ) from exc
+    if (
+        "connection refused" in error_str
+        or "connecterror" in error_str
+        or "connection error" in error_str
+        or "all connection attempts failed" in error_str
+    ):
+        if not state.use_api_mode:
             raise ConnectionError(
-                "Failed to connect to the API endpoint. Please verify your Base URL in settings and your network connection.\n\n"
+                "Failed to connect to local Ollama server. Please ensure the Ollama app is running and accessible."
+            ) from exc
+        if state.api_provider_type == config.API_PROVIDER_ANTHROPIC:
+            raise ConnectionError(
+                "Failed to connect to the Anthropic API. Please verify your network connection and try again.\n\n"
                 f"Details: {exc}"
             ) from exc
+        raise ConnectionError(
+            "Failed to connect to the API endpoint. Please verify your Base URL in settings and your network connection.\n\n"
+            f"Details: {exc}"
+        ) from exc
 
-        if _message_contains_audio(messages):
-            audio_error_fragments = (
-                "audio input",
-                "audio support",
-                "unsupported audio",
-                "input_audio",
-                "modality",
-                "capabilit",
-                "transcription",
-                "decode audio",
-            )
-            if any(fragment in error_str for fragment in audio_error_fragments):
-                raise RuntimeError(
-                    f"{exc}\n\n"
-                    "Please try again with an audio-capable model, or retry after confirming the file opens correctly."
-                ) from exc
+    if _message_contains_audio(messages):
+        audio_error_fragments = (
+            "audio input",
+            "audio support",
+            "unsupported audio",
+            "input_audio",
+            "modality",
+            "capabilit",
+            "transcription",
+            "decode audio",
+        )
+        if any(fragment in error_str for fragment in audio_error_fragments):
+            raise RuntimeError(
+                f"{exc}\n\n"
+                "Please try again with an audio-capable model, or retry after confirming the file opens correctly."
+            ) from exc
 
-        raise
+    raise exc
+
+
+def chat_stream(task: str, messages: list, on_chunk: Callable[[str, bool], None], **kwargs) -> dict:
+    """Streaming sibling of chat() (Qt-removal R4.4: true token streaming).
+
+    Only the Ollama local provider streams real incremental chunks. Every other
+    provider/task combination (API mode, Llama.cpp local) silently falls back to one
+    ordinary blocking chat() call plus exactly one synthetic full-text chunk - an
+    intentional, explicit R4.4 scope decision, not a gap (see the design spec).
+
+    `on_chunk(delta, reset)` is called zero or more times with `reset=False` and
+    incremental DELTAS (never cumulative text - Ollama's streamed `message.content`
+    fragments must be concatenated, not replaced). It is called once with `("", True)`
+    immediately before a reasoning-retry attempt discards the prior attempt's partial
+    text.
+
+    Returns the exact same shape chat() returns: {"message": {"content": <full text>,
+    "role": "assistant"}}. `**kwargs` behaves identically to chat()'s kwargs (including
+    `cancellation_event`).
+    """
+    cancel_event = kwargs.get("cancellation_event")
+    state = _snapshot_provider_state()
+
+    # Silent fallback: every provider/local-type this increment doesn't cover
+    # degenerates to one blocking chat() call + one synthetic chunk.
+    if state.use_api_mode or state.local_provider_type != config.LOCAL_PROVIDER_OLLAMA:
+        response = chat(task, messages, **kwargs)
+        on_chunk(response["message"].get("content", ""), False)
+        return response
+
+    try:
+        _raise_if_cancelled(cancel_event)
+        model = config.OLLAMA_MODELS.get(task)
+        if not model:
+            raise ValueError(f"No Ollama model configured for task: {task}")
+        _assert_ollama_audio_support(model, messages)
+        ollama_messages = _prepare_ollama_messages(messages)
+
+        ollama_kwargs = {k: v for k, v in kwargs.items() if k != "cancellation_event"}
+        if task == config.TASK_CHAT and ("qwen3" in model.lower() or "deepseek" in model.lower()):
+            ollama_kwargs["think"] = state.ollama_reasoning_mode == "Thinking"
+
+        # Same 3-attempt reasoning-retry loop as chat() (see ReasoningWithoutAnswerError):
+        # each attempt streams live, and if an attempt is discarded, the caller is told via
+        # one on_chunk("", True) reset event before the next attempt's deltas start
+        # arriving.
+        max_attempts = 3
+        last_reasoning_error = None
+        full_response_content = None
+        for attempt in range(max_attempts):
+            if attempt > 0:
+                _raise_if_cancelled(cancel_event)
+                time.sleep(_OLLAMA_REASONING_RETRY_BACKOFF_SECONDS)
+                _raise_if_cancelled(cancel_event)
+                on_chunk("", True)  # tell the caller: discard the last attempt's partial text
+
+            content_parts: list[str] = []
+            thinking_parts: list[str] = []
+            stream = ollama.chat(model=model, messages=ollama_messages, stream=True, **ollama_kwargs)
+            try:
+                for part in stream:
+                    if cancel_event is not None and cancel_event.is_set():
+                        stream.close()  # unwinds ollama/_client.py's `with self._client.stream(...)`
+                    _raise_if_cancelled(cancel_event)  # raises RequestCancelledError if just closed above
+
+                    delta_content = part["message"].get("content") or ""
+                    if delta_content:
+                        content_parts.append(delta_content)
+                        on_chunk(delta_content, False)
+                    delta_thinking = part["message"].get("thinking") or ""
+                    if delta_thinking:
+                        thinking_parts.append(delta_thinking)  # never forwarded to on_chunk
+                    if part.get("done"):
+                        break
+            finally:
+                stream.close()  # idempotent on an already-exhausted generator
+
+            raw_response_content = "".join(content_parts)
+            embedded_reasoning, visible_response_content = split_reasoning_and_content(raw_response_content)
+            reasoning_parts: list[str] = []
+            reasoning_seen: set[str] = set()
+            _append_unique_text_segment(reasoning_parts, "".join(thinking_parts), reasoning_seen)
+            _append_unique_text_segment(reasoning_parts, embedded_reasoning, reasoning_seen)
+
+            try:
+                full_response_content = _compose_reasoned_response(
+                    visible_response_content,
+                    "\n\n".join(reasoning_parts).strip(),
+                    "Ollama",
+                )
+                break
+            except ReasoningWithoutAnswerError as exc:
+                last_reasoning_error = exc
+                continue
+        else:
+            raise RuntimeError(
+                f"Ollama returned reasoning but no final answer after {max_attempts} attempts. "
+                "Retry in Quick mode or choose a different chat format/model."
+            ) from last_reasoning_error
+
+        return {
+            "message": {
+                "content": full_response_content,
+                "role": "assistant",
+            }
+        }
+    except Exception as exc:
+        # Same translation chat()'s Ollama branch gets - a real connection-
+        # refused/timeout/quota failure here must show the same friendly,
+        # actionable message as the non-streaming path, not raw exception
+        # text (this is now the ONLY code path Composer send uses).
+        _translate_chat_exception(exc, state, messages)
 
 
 def initialize_api(provider: str, api_key: str, base_url: str = None):

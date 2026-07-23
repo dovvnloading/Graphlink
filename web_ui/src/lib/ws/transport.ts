@@ -8,6 +8,10 @@
  * Server -> client: {kind:"state", topic, payload}   (versioned envelope)
  *                   {kind:"result", id, value}
  *                   {kind:"error", id?, error}
+ *                   {kind:"stream", topic, requestId, seq, delta, done, reset}
+ *                     (R4.4 token streaming - a sibling delta channel outside
+ *                     the topic/revision system; addressed by requestId, not
+ *                     subscribed like a topic. See subscribeStream().)
  * Client -> server: {kind:"subscribe", topics}
  *                   {kind:"intent", topic, intent, args, id?}
  *
@@ -20,6 +24,7 @@ export type ConnectionStatus = "connecting" | "open" | "closed";
 
 export type StateListener = (payload: Record<string, unknown>) => void;
 export type StatusListener = (status: ConnectionStatus) => void;
+export type StreamListener = (delta: string, done: boolean, reset: boolean, seq: number) => void;
 
 interface WsLike {
   send(data: string): void;
@@ -58,6 +63,9 @@ export class WsTransport {
 
   private readonly stateListeners = new Map<string, Set<StateListener>>();
   private readonly statusListeners = new Set<StatusListener>();
+  /** Keyed by requestId - stream deltas are addressed to a specific in-flight
+   * request, not a topic. See handleMessage()'s "stream" branch. */
+  private readonly streamListeners = new Map<string, Set<StreamListener>>();
   private readonly pending = new Map<
     number,
     { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }
@@ -144,6 +152,24 @@ export class WsTransport {
     };
   }
 
+  /** Listen for one in-flight request's streaming deltas (`kind:"stream"`
+   * frames), addressed by requestId rather than topic. No subscribe message
+   * is sent to the server - the server broadcasts stream frames to every
+   * connection unconditionally, and this only filters/fans them out
+   * client-side. */
+  subscribeStream(requestId: string, listener: StreamListener): () => void {
+    let set = this.streamListeners.get(requestId);
+    if (!set) {
+      set = new Set();
+      this.streamListeners.set(requestId, set);
+    }
+    set.add(listener);
+    return () => {
+      set.delete(listener);
+      if (set.size === 0) this.streamListeners.delete(requestId);
+    };
+  }
+
   onStatus(listener: StatusListener): () => void {
     this.statusListeners.add(listener);
     listener(this.status);
@@ -204,6 +230,20 @@ export class WsTransport {
         else entry.reject(new Error(String(message.error)));
       } else if (kind === "error") {
         console.error("[ws] server error:", message.error);
+      }
+      return;
+    }
+    if (kind === "stream") {
+      // A stream frame with no matching requestId subscriber is silently
+      // dropped - unlike a truly unrecognized kind below, this is an
+      // expected, routine occurrence (e.g. a request already completed and
+      // unsubscribed a moment before a straggling frame arrives).
+      const requestId = message.requestId as string;
+      const listeners = this.streamListeners.get(requestId);
+      if (listeners) {
+        for (const listener of [...listeners]) {
+          listener(message.delta as string, Boolean(message.done), Boolean(message.reset), message.seq as number);
+        }
       }
       return;
     }
