@@ -14,10 +14,13 @@ import { LOD_ZOOM_THRESHOLD } from "./canvasConstants";
  * via the same react-markdown + rehype-highlight pipeline chat nodes already
  * pull in - no new highlighter dependency), delete (generic cascade-delete;
  * code nodes are never branch points, so there's no reparent rule to honor),
- * copy. Deferred, with an honest disabled+title label rather than a silent
+ * copy, and (as of R4.3c) Regenerate Response - conditionally rendered
+ * (not merely disabled) on parentChatNodeId being non-null, matching
+ * legacy's own menu-build-time `if self.node.parent_content_node:` gate.
+ * Deferred, with an honest disabled+title label rather than a silent
  * drop (an R3.4 live-drive audit found the legacy CodeNode menu's branch-
  * visibility item had been dropped with zero acknowledgment - fixed here):
- * Regenerate (R4), Export (R6), and Hide Other Branches (the legacy scene's
+ * Export (R6) and Hide Other Branches (the legacy scene's
  * branch-visibility toggle has no backend/frontend equivalent at all yet -
  * unscoped, not owned by any R-phase).
  */
@@ -25,6 +28,13 @@ import { LOD_ZOOM_THRESHOLD } from "./canvasConstants";
 export interface CodeNodeData extends Record<string, unknown> {
   code: string;
   language: string;
+  // R4.3c: parentChatNodeId is the one-hop-derived parent (see SceneCanvas's
+  // toFlowNodes) - null for a parentless code node. Drives whether the
+  // Regenerate Response menu item renders at all (see CodeNodeMenu below),
+  // matching legacy's own menu-build-time `if self.node.parent_content_node:`
+  // gate rather than merely disabling the item.
+  parentChatNodeId: string | null;
+  onRegenerate: () => void;
   onDelete: () => void;
 }
 
@@ -45,11 +55,15 @@ function toFencedCodeBlock(code: string, language: string): string {
 function CodeNodeMenu({
   position,
   code,
+  parentChatNodeId,
+  onRegenerate,
   onDelete,
   onClose,
 }: {
   position: MenuPosition;
   code: string;
+  parentChatNodeId: string | null;
+  onRegenerate: () => void;
   onDelete: () => void;
   onClose: () => void;
 }) {
@@ -95,9 +109,18 @@ function CodeNodeMenu({
       <button type="button" role="menuitem" disabled title="Branch visibility isn't built yet">
         Hide Other Branches
       </button>
-      <button type="button" role="menuitem" disabled title="Agent regeneration lands in R4">
-        Regenerate Response
-      </button>
+      {parentChatNodeId && (
+        <button
+          type="button"
+          role="menuitem"
+          onClick={() => {
+            onRegenerate();
+            onClose();
+          }}
+        >
+          Regenerate Response
+        </button>
+      )}
       <button
         type="button"
         role="menuitem"
@@ -142,6 +165,8 @@ export function CodeNodeView({ data, selected }: NodeProps<CodeFlowNode>) {
         <CodeNodeMenu
           position={menuPosition}
           code={data.code}
+          parentChatNodeId={data.parentChatNodeId}
+          onRegenerate={data.onRegenerate}
           onDelete={data.onDelete}
           onClose={() => setMenuPosition(null)}
         />

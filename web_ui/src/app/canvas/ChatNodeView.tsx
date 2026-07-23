@@ -28,7 +28,9 @@ import { LOD_ZOOM_THRESHOLD } from "./canvasConstants";
  * more docked children - can now be real (a thinking node docks via its own
  * "Dock to Parent Node" action), so it's implemented for real below, gated
  * on dockedChildren.length > 0 exactly like the legacy's own `if
- * docked_children:` guard.
+ * docked_children:` guard. "Regenerate Response" is likewise no longer
+ * deferred as of R4.3c: it now calls the real regenerateResponse intent,
+ * still gated on !isUser (matching the legacy is_user guard).
  */
 
 export interface ChatNodeData extends Record<string, unknown> {
@@ -39,6 +41,7 @@ export interface ChatNodeData extends Record<string, unknown> {
   onToggleCollapse: () => void;
   onDelete: () => void;
   onUndockChild: (childId: string) => void;
+  onRegenerate: () => void;
 }
 
 export type ChatFlowNode = Node<ChatNodeData, "chat">;
@@ -57,6 +60,7 @@ function ChatNodeMenu({
   onToggleCollapse,
   onDelete,
   onUndockChild,
+  onRegenerate,
   onClose,
 }: {
   position: MenuPosition;
@@ -67,6 +71,7 @@ function ChatNodeMenu({
   onToggleCollapse: () => void;
   onDelete: () => void;
   onUndockChild: (childId: string) => void;
+  onRegenerate: () => void;
   onClose: () => void;
 }) {
   const menuRef = useRef<HTMLDivElement>(null);
@@ -170,7 +175,14 @@ function ChatNodeMenu({
         Delete Node
       </button>
       {!isUser && (
-        <button type="button" role="menuitem" disabled title="Agent regeneration lands in R4">
+        <button
+          type="button"
+          role="menuitem"
+          onClick={() => {
+            onRegenerate();
+            onClose();
+          }}
+        >
           Regenerate Response
         </button>
       )}
@@ -229,6 +241,7 @@ export function ChatNodeView({ data, selected }: NodeProps<ChatFlowNode>) {
           onToggleCollapse={data.onToggleCollapse}
           onDelete={data.onDelete}
           onUndockChild={data.onUndockChild}
+          onRegenerate={data.onRegenerate}
           onClose={() => setMenuPosition(null)}
         />
       )}

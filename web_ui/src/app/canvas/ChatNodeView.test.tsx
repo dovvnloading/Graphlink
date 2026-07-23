@@ -16,6 +16,7 @@ function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}) {
   const onToggleCollapse = vi.fn();
   const onDelete = vi.fn();
   const onUndockChild = vi.fn();
+  const onRegenerate = vi.fn();
   const props = {
     id: "n0",
     selected: false,
@@ -27,6 +28,7 @@ function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}) {
       onToggleCollapse,
       onDelete,
       onUndockChild,
+      onRegenerate,
       ...overrides,
     },
   } as unknown as NodeProps<ChatFlowNode>;
@@ -36,7 +38,7 @@ function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}) {
       <ChatNodeView {...props} />
     </ReactFlowProvider>,
   );
-  return { onToggleCollapse, onDelete, onUndockChild };
+  return { onToggleCollapse, onDelete, onUndockChild, onRegenerate };
 }
 
 describe("ChatNodeView", () => {
@@ -70,9 +72,6 @@ describe("ChatNodeView", () => {
     fireEvent.contextMenu(role);
     expect(screen.getByRole("menu")).toBeInTheDocument();
 
-    const regenerate = screen.getByRole("menuitem", { name: "Regenerate Response" });
-    expect(regenerate).toBeDisabled();
-    expect(regenerate).toHaveAttribute("title", "Agent regeneration lands in R4");
     const exportItem = screen.getByRole("menuitem", { name: "Export" });
     expect(exportItem).toBeDisabled();
     expect(exportItem).toHaveAttribute("title", "Export lands in R6");
@@ -99,6 +98,19 @@ describe("ChatNodeView", () => {
     renderChatNode({ isUser: true });
     fireEvent.contextMenu(screen.getByText("You"));
     expect(screen.queryByRole("menuitem", { name: "Regenerate Response" })).toBeNull();
+  });
+
+  it("Regenerate Response is a real, enabled item for an assistant message that calls onRegenerate then closes the menu", async () => {
+    const user = userEvent.setup();
+    const { onRegenerate } = renderChatNode({ isUser: false });
+
+    fireEvent.contextMenu(screen.getByText("Assistant"));
+    const regenerate = screen.getByRole("menuitem", { name: "Regenerate Response" });
+    expect(regenerate).not.toBeDisabled();
+
+    await user.click(regenerate);
+    expect(onRegenerate).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("menu")).toBeNull(); // onClose fires after onRegenerate
   });
 
   it("Escape and outside-click both close the menu", async () => {

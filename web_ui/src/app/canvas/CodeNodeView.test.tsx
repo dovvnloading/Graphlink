@@ -8,12 +8,15 @@ import { CodeNodeView, type CodeFlowNode } from "./CodeNodeView";
 // ChatNodeView.test.tsx for why a bare ReactFlowProvider is enough here too.
 function renderCodeNode(overrides: Partial<CodeFlowNode["data"]> = {}) {
   const onDelete = vi.fn();
+  const onRegenerate = vi.fn();
   const props = {
     id: "n0",
     selected: false,
     data: {
       code: "def add(a, b):\n    return a + b",
       language: "python",
+      parentChatNodeId: "chat-1",
+      onRegenerate,
       onDelete,
       ...overrides,
     },
@@ -24,7 +27,7 @@ function renderCodeNode(overrides: Partial<CodeFlowNode["data"]> = {}) {
       <CodeNodeView {...props} />
     </ReactFlowProvider>,
   );
-  return { onDelete, container };
+  return { onDelete, onRegenerate, container };
 }
 
 describe("CodeNodeView", () => {
@@ -42,7 +45,7 @@ describe("CodeNodeView", () => {
     expect(screen.getByText("code")).toBeInTheDocument();
   });
 
-  it("right-click opens a menu with real Copy Code/Delete Code Block and deferred Regenerate/Export", async () => {
+  it("right-click opens a menu with real Copy Code/Delete Code Block and deferred Export", async () => {
     const user = userEvent.setup();
     const { onDelete } = renderCodeNode();
 
@@ -53,9 +56,6 @@ describe("CodeNodeView", () => {
     fireEvent.contextMenu(label);
     expect(screen.getByRole("menu")).toBeInTheDocument();
 
-    const regenerate = screen.getByRole("menuitem", { name: "Regenerate Response" });
-    expect(regenerate).toBeDisabled();
-    expect(regenerate).toHaveAttribute("title", "Agent regeneration lands in R4");
     const exportItem = screen.getByRole("menuitem", { name: "Export" });
     expect(exportItem).toBeDisabled();
     expect(exportItem).toHaveAttribute("title", "Export lands in R6");
@@ -69,6 +69,25 @@ describe("CodeNodeView", () => {
     fireEvent.contextMenu(label);
     await user.click(screen.getByRole("menuitem", { name: "Delete Code Block" }));
     expect(onDelete).toHaveBeenCalledOnce();
+  });
+
+  it("Regenerate Response renders enabled and fires onRegenerate then closes the menu when parentChatNodeId is non-null", async () => {
+    const user = userEvent.setup();
+    const { onRegenerate } = renderCodeNode({ parentChatNodeId: "chat-1" });
+
+    fireEvent.contextMenu(screen.getByText("python"));
+    const regenerate = screen.getByRole("menuitem", { name: "Regenerate Response" });
+    expect(regenerate).not.toBeDisabled();
+
+    await user.click(regenerate);
+    expect(onRegenerate).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("Regenerate Response is absent from the DOM entirely (not merely disabled) when parentChatNodeId is null", () => {
+    renderCodeNode({ parentChatNodeId: null });
+    fireEvent.contextMenu(screen.getByText("python"));
+    expect(screen.queryByRole("menuitem", { name: "Regenerate Response" })).toBeNull();
   });
 
   it("Escape and outside-click both close the menu", async () => {

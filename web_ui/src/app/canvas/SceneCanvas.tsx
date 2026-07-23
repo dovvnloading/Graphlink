@@ -80,7 +80,10 @@ const NODE_TYPES = {
   conversation: ConversationNodeView,
 };
 
-function toFlowNodes(scene: SceneState, store: SceneStore): SceneFlowNode[] {
+// Exported standalone for direct unit testing (same posture as
+// scaleDragPosition in sceneStore.ts) - covers the parentChatNodeId
+// derivation below without needing a full <ReactFlow> mount.
+export function toFlowNodes(scene: SceneState, store: SceneStore): SceneFlowNode[] {
   // Looked up per-chat-node below to build dockedChildren - a docked node is
   // omitted from the returned array entirely (see the "thinking" branch), so
   // this is the only remaining way a chat node's dock badge/menu can find it.
@@ -121,11 +124,20 @@ function toFlowNodes(scene: SceneState, store: SceneStore): SceneFlowNode[] {
           onToggleCollapse: () => store.setChatCollapsed(n.id, !n.isCollapsed),
           onDelete: () => store.deleteChatNode(n.id),
           onUndockChild: (childId: string) => store.setNodeDocked(childId, false),
+          onRegenerate: () => store.regenerateResponse(n.id),
         },
       });
       continue;
     }
     if (n.kind === "code") {
+      // parentChatNodeId: this code node's own one-hop parent lookup - the
+      // new stack's equivalent of legacy's CodeNode.parent_content_node,
+      // resolved client-side (same one-hop-via-edges style as
+      // dockedChildren above) since the backend never kind-sniffs a code
+      // node id back to its parent chat node (see regenerateResponse's own
+      // comment above and SceneCanvas's regenerate-response design notes).
+      const parentEdge = scene.edges.find((e) => e.target === n.id);
+      const parentChatNodeId = parentEdge ? parentEdge.source : null;
       flowNodes.push({
         id: n.id,
         type: "code" as const,
@@ -133,6 +145,10 @@ function toFlowNodes(scene: SceneState, store: SceneStore): SceneFlowNode[] {
         data: {
           code: n.code,
           language: n.language,
+          parentChatNodeId,
+          onRegenerate: () => {
+            if (parentChatNodeId) store.regenerateResponse(parentChatNodeId);
+          },
           onDelete: () => store.removeNodes([n.id]),
         },
       });

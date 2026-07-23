@@ -1074,6 +1074,538 @@ def test_chat_branch_history_does_not_error_on_an_unknown_node_id():
     assert doc.chat_branch_history("ghost") == []
 
 
+# -- R4.3c: regenerate response (domain-level) --------------------------------
+
+
+def test_regenerate_response_returns_node_and_parent_id_for_a_valid_chat_node():
+    doc = SceneDocument()
+    parent = doc.add_chat_node(0, 0, "question", True)
+    child = doc.add_chat_node(0, 160, "answer", False, parent_id=parent.id)
+    node, parent_id = doc.regenerate_response(child.id)
+    assert node is child
+    assert parent_id == parent.id
+
+
+def test_regenerate_response_unknown_node_raises_scene_error():
+    with pytest.raises(SceneError):
+        SceneDocument().regenerate_response("ghost")
+
+
+def test_regenerate_response_non_chat_node_raises_scene_error():
+    doc = SceneDocument()
+    parent = doc.add_chat_node(0, 0, "question", True)
+    code_node = doc.add_code_node(10, 10, "x = 1", "python", parent_id=parent.id)
+    with pytest.raises(SceneError):
+        doc.regenerate_response(code_node.id)
+
+
+def test_regenerate_response_node_without_parent_raises_scene_error():
+    doc = SceneDocument()
+    root = doc.add_chat_node(0, 0, "root question", True)
+    with pytest.raises(SceneError):
+        doc.regenerate_response(root.id)
+
+
+def test_update_chat_node_content_mutates_content_only_leaves_title_and_flags_untouched():
+    doc = SceneDocument()
+    node = doc.add_chat_node(0, 0, "original content", False)
+    original_title = node.title
+    returned = doc.update_chat_node_content(node.id, "new content")
+    assert returned is node
+    assert node.content == "new content"
+    assert node.title == original_title
+    assert node.is_user is False
+    assert node.is_collapsed is False
+    assert node.kind == "chat"
+
+
+def test_update_chat_node_content_unknown_node_raises_scene_error():
+    with pytest.raises(SceneError):
+        SceneDocument().update_chat_node_content("ghost", "text")
+
+
+def test_remove_associated_content_children_removes_direct_code_document_image_thinking_children():
+    doc = SceneDocument()
+    chat = doc.add_chat_node(0, 0, "assistant reply", False)
+    code = doc.add_code_node(10, 10, "x = 1", "python", parent_id=chat.id)
+    document_node = doc.add_document_node(20, 20, "file.txt", "content", "document", chat.id)
+    image_node = doc.add_image_node(30, 30, b"bytes", "prompt", chat.id)
+    thinking = doc.add_thinking_node(40, 40, "reasoning", chat.id)
+    sibling = doc.add_chat_node(50, 50, "sibling", True)
+
+    doc.remove_associated_content_children(chat.id)
+
+    assert code.id not in doc.nodes
+    assert document_node.id not in doc.nodes
+    assert image_node.id not in doc.nodes
+    assert thinking.id not in doc.nodes
+    assert sibling.id in doc.nodes, "an unrelated sibling chat node must survive"
+    assert chat.id in doc.nodes, "the chat node itself must survive"
+
+
+def test_remove_associated_content_children_evicts_image_assets_via_remove_nodes():
+    doc = SceneDocument()
+    chat = doc.add_chat_node(0, 0, "assistant reply", False)
+    image_node = doc.add_image_node(10, 10, b"doomed bytes", "prompt", chat.id)
+    asset_id = image_node.image_asset_id
+    assert doc.get_image_asset(asset_id) is not None
+
+    doc.remove_associated_content_children(chat.id)
+
+    assert doc.get_image_asset(asset_id) is None, (
+        "built on top of remove_nodes - asset eviction must come free, not be reimplemented"
+    )
+
+
+def test_remove_associated_content_children_is_one_hop_only():
+    doc = SceneDocument()
+    chat = doc.add_chat_node(0, 0, "assistant reply", False)
+    code_child = doc.add_code_node(10, 10, "x = 1", "python", parent_id=chat.id)
+    grandchild = doc.add_code_node(20, 20, "y = 2", "python")
+    doc.connect(code_child.id, grandchild.id)
+
+    doc.remove_associated_content_children(chat.id)
+
+    assert code_child.id not in doc.nodes
+    assert grandchild.id in doc.nodes, "no cascade past the direct one-hop children"
+
+
+def test_remove_associated_content_children_noop_when_no_content_children_exist():
+    doc = SceneDocument()
+    chat = doc.add_chat_node(0, 0, "assistant reply", False)
+    before_nodes = dict(doc.nodes)
+    doc.remove_associated_content_children(chat.id)
+    assert doc.nodes == before_nodes
+
+
+# -- R4.3c: regenerate response (WS-intent level) -----------------------------
+
+
+def test_regenerate_response_intent_mutates_the_existing_node_in_place_not_a_new_one():
+    async def run():
+        bus, document, recorder, dispatcher = make_bus_with_dispatcher()
+
+        def first_reply(task, messages, **kwargs):
+            return {"message": {"content": "original reply"}}
+
+        with patch.object(api_provider, "USE_API_MODE", False), \
+                patch.object(api_provider, "LOCAL_PROVIDER_TYPE", task_config.LOCAL_PROVIDER_OLLAMA), \
+                patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
+                patch.object(api_provider, "chat", first_reply):
+            user_id = await bus.dispatch_intent("scene", "sendMessage", ["hi"])
+            entry = next(iter(dispatcher._requests.values()))
+            await entry["task"]
+
+        assistant_node = next(n for n in document.nodes.values() if n.kind == "chat" and n.id != user_id)
+        assert assistant_node.content == "original reply"
+        node_count_before = len(document.nodes)
+
+        def regenerated_reply(task, messages, **kwargs):
+            return {"message": {"content": "regenerated reply"}}
+
+        with patch.object(api_provider, "USE_API_MODE", False), \
+                patch.object(api_provider, "LOCAL_PROVIDER_TYPE", task_config.LOCAL_PROVIDER_OLLAMA), \
+                patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
+                patch.object(api_provider, "chat", regenerated_reply):
+            returned_id = await bus.dispatch_intent("scene", "regenerateResponse", [assistant_node.id])
+            entry = next(iter(dispatcher._requests.values()))
+            await entry["task"]
+
+        assert returned_id == assistant_node.id, "the same node id, never a new node"
+        assert assistant_node.id in document.nodes
+        assert document.nodes[assistant_node.id].content == "regenerated reply"
+        assert len(document.nodes) == node_count_before, "no new node was created"
+
+    asyncio.run(run())
+
+
+def test_regenerate_response_replaces_code_child_not_accumulates():
+    async def run():
+        bus, document, recorder, dispatcher = make_bus_with_dispatcher()
+
+        def first_reply(task, messages, **kwargs):
+            return {"message": {"content": "Here:\n\n```python\nprint('one')\n```"}}
+
+        with patch.object(api_provider, "USE_API_MODE", False), \
+                patch.object(api_provider, "LOCAL_PROVIDER_TYPE", task_config.LOCAL_PROVIDER_OLLAMA), \
+                patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
+                patch.object(api_provider, "chat", first_reply):
+            user_id = await bus.dispatch_intent("scene", "sendMessage", ["write code"])
+            entry = next(iter(dispatcher._requests.values()))
+            await entry["task"]
+
+        assistant_node = next(n for n in document.nodes.values() if n.kind == "chat" and n.id != user_id)
+        assert len([n for n in document.nodes.values() if n.kind == "code"]) == 1
+
+        def second_reply(task, messages, **kwargs):
+            return {"message": {"content": "Now:\n\n```python\nprint('two')\n```"}}
+
+        with patch.object(api_provider, "USE_API_MODE", False), \
+                patch.object(api_provider, "LOCAL_PROVIDER_TYPE", task_config.LOCAL_PROVIDER_OLLAMA), \
+                patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
+                patch.object(api_provider, "chat", second_reply):
+            await bus.dispatch_intent("scene", "regenerateResponse", [assistant_node.id])
+            entry = next(iter(dispatcher._requests.values()))
+            await entry["task"]
+
+        code_nodes = [n for n in document.nodes.values() if n.kind == "code"]
+        assert len(code_nodes) == 1, "the old code child must be replaced, not accumulated"
+        assert code_nodes[0].code == "print('two')"
+
+    asyncio.run(run())
+
+
+def test_regenerate_response_document_and_image_children_torn_down_but_never_recreated():
+    async def run():
+        bus, document, recorder, dispatcher = make_bus_with_dispatcher()
+
+        def first_reply(task, messages, **kwargs):
+            return {"message": {"content": "original reply"}}
+
+        with patch.object(api_provider, "USE_API_MODE", False), \
+                patch.object(api_provider, "LOCAL_PROVIDER_TYPE", task_config.LOCAL_PROVIDER_OLLAMA), \
+                patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
+                patch.object(api_provider, "chat", first_reply):
+            user_id = await bus.dispatch_intent("scene", "sendMessage", ["attach files"])
+            entry = next(iter(dispatcher._requests.values()))
+            await entry["task"]
+
+        assistant_node = next(n for n in document.nodes.values() if n.kind == "chat" and n.id != user_id)
+        # Simulate a prior real attachment - manually attached, since
+        # send_message's own _on_reply never creates document/image children.
+        document_node = document.add_document_node(0, 0, "file.txt", "content", "document", assistant_node.id)
+        image_node = document.add_image_node(0, 0, b"bytes", "prompt", assistant_node.id)
+
+        def plain_reply(task, messages, **kwargs):
+            return {"message": {"content": "just plain text, no attachments"}}
+
+        with patch.object(api_provider, "USE_API_MODE", False), \
+                patch.object(api_provider, "LOCAL_PROVIDER_TYPE", task_config.LOCAL_PROVIDER_OLLAMA), \
+                patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
+                patch.object(api_provider, "chat", plain_reply):
+            await bus.dispatch_intent("scene", "regenerateResponse", [assistant_node.id])
+            entry = next(iter(dispatcher._requests.values()))
+            await entry["task"]
+
+        assert document_node.id not in document.nodes
+        assert image_node.id not in document.nodes
+        assert not any(n.kind in ("document", "image") for n in document.nodes.values()), (
+            "torn down but never recreated - parse_response structurally never emits document/image parts"
+        )
+
+    asyncio.run(run())
+
+
+def test_regenerate_response_empty_reply_keeps_original_content_and_notifies():
+    async def run():
+        bus, document, recorder, dispatcher = make_bus_with_dispatcher()
+
+        def first_reply(task, messages, **kwargs):
+            return {"message": {"content": "Here's code:\n\n```python\nprint('original')\n```"}}
+
+        with patch.object(api_provider, "USE_API_MODE", False), \
+                patch.object(api_provider, "LOCAL_PROVIDER_TYPE", task_config.LOCAL_PROVIDER_OLLAMA), \
+                patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
+                patch.object(api_provider, "chat", first_reply):
+            user_id = await bus.dispatch_intent("scene", "sendMessage", ["show me code"])
+            entry = next(iter(dispatcher._requests.values()))
+            await entry["task"]
+
+        assistant_node = next(n for n in document.nodes.values() if n.kind == "chat" and n.id != user_id)
+        assert assistant_node.content == "Here's code:"
+        node_ids_before = set(document.nodes)
+
+        def empty_reply(task, messages, **kwargs):
+            return {"message": {"content": "   \n\n  "}}
+
+        with patch.object(api_provider, "USE_API_MODE", False), \
+                patch.object(api_provider, "LOCAL_PROVIDER_TYPE", task_config.LOCAL_PROVIDER_OLLAMA), \
+                patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
+                patch.object(api_provider, "chat", empty_reply):
+            await bus.dispatch_intent("scene", "regenerateResponse", [assistant_node.id])
+            entry = next(iter(dispatcher._requests.values()))
+            await entry["task"]
+
+        assert document.nodes[assistant_node.id].content == "Here's code:", "original content is kept"
+        assert set(document.nodes) == node_ids_before, "existing children must be untouched"
+        notice = await bus.publish("notification")
+        assert notice["visible"] is True
+        assert notice["msgType"] == "warning"
+        assert notice["message"] == (
+            "The model returned an empty response. The original response has been kept."
+        )
+
+    asyncio.run(run())
+
+
+def test_regenerate_response_reasoning_only_reply_uses_generated_content_not_reasoning_placeholder():
+    async def run():
+        bus, document, recorder, dispatcher = make_bus_with_dispatcher()
+
+        def first_reply(task, messages, **kwargs):
+            return {"message": {"content": "original reply"}}
+
+        with patch.object(api_provider, "USE_API_MODE", False), \
+                patch.object(api_provider, "LOCAL_PROVIDER_TYPE", task_config.LOCAL_PROVIDER_OLLAMA), \
+                patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
+                patch.object(api_provider, "chat", first_reply):
+            user_id = await bus.dispatch_intent("scene", "sendMessage", ["think about it"])
+            entry = next(iter(dispatcher._requests.values()))
+            await entry["task"]
+
+        assistant_node = next(n for n in document.nodes.values() if n.kind == "chat" and n.id != user_id)
+
+        def reasoning_only_reply(task, messages, **kwargs):
+            return {"message": {"content": "<think>pondering deeply</think>"}}
+
+        with patch.object(api_provider, "USE_API_MODE", False), \
+                patch.object(api_provider, "LOCAL_PROVIDER_TYPE", task_config.LOCAL_PROVIDER_OLLAMA), \
+                patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
+                patch.object(api_provider, "chat", reasoning_only_reply):
+            await bus.dispatch_intent("scene", "regenerateResponse", [assistant_node.id])
+            entry = next(iter(dispatcher._requests.values()))
+            await entry["task"]
+
+        # The critical differentiator: regenerate's ternary is 1-way, unlike
+        # send_message's 3-way priority chain - a reasoning-only reply must
+        # fall back to the GENERATED-content placeholder, never the
+        # reasoning-specific one.
+        assert document.nodes[assistant_node.id].content == "[Generated Content]"
+        assert document.nodes[assistant_node.id].content != "[Assistant Reasoning]"
+
+        thinking_nodes = [n for n in document.nodes.values() if n.kind == "thinking"]
+        assert len(thinking_nodes) == 1
+        assert thinking_nodes[0].content == "pondering deeply"
+
+    asyncio.run(run())
+
+
+def test_regenerate_response_node_deleted_mid_flight_is_a_silent_noop():
+    async def run():
+        bus, document, recorder, dispatcher = make_bus_with_dispatcher()
+
+        def first_reply(task, messages, **kwargs):
+            return {"message": {"content": "original reply"}}
+
+        with patch.object(api_provider, "USE_API_MODE", False), \
+                patch.object(api_provider, "LOCAL_PROVIDER_TYPE", task_config.LOCAL_PROVIDER_OLLAMA), \
+                patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
+                patch.object(api_provider, "chat", first_reply):
+            user_id = await bus.dispatch_intent("scene", "sendMessage", ["hi"])
+            entry = next(iter(dispatcher._requests.values()))
+            await entry["task"]
+
+        assistant_node = next(n for n in document.nodes.values() if n.kind == "chat" and n.id != user_id)
+
+        started = threading.Event()
+        release = threading.Event()
+
+        def blocking_chat(task, messages, **kwargs):
+            started.set()
+            release.wait(5)
+            return {"message": {"content": "regenerated reply"}}
+
+        with patch.object(api_provider, "USE_API_MODE", False), \
+                patch.object(api_provider, "LOCAL_PROVIDER_TYPE", task_config.LOCAL_PROVIDER_OLLAMA), \
+                patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
+                patch.object(api_provider, "chat", blocking_chat):
+            returned_id = await bus.dispatch_intent("scene", "regenerateResponse", [assistant_node.id])
+            assert returned_id == assistant_node.id
+
+            await asyncio.to_thread(started.wait, 5)
+            document.remove_nodes([assistant_node.id])
+
+            release.set()
+            entry = next(iter(dispatcher._requests.values()))
+            await entry["task"]
+
+        assert assistant_node.id not in document.nodes
+        notice = await bus.publish("notification")
+        assert notice["visible"] is False, "deleted-mid-flight is a silent no-op - no notification fires"
+
+    asyncio.run(run())
+
+
+def test_regenerate_response_unknown_node_id_shows_notification_not_a_crash():
+    async def run():
+        bus, document, recorder, dispatcher = make_bus_with_dispatcher()
+
+        result = await bus.dispatch_intent("scene", "regenerateResponse", ["ghost"])
+
+        assert result is None
+        assert dispatcher._requests == {}, "no dispatch was ever scheduled"
+        notice = await bus.publish("notification")
+        assert notice["visible"] is True
+        assert notice["msgType"] == "warning"
+        assert notice["message"] == "This node has no parent and cannot be regenerated."
+
+    asyncio.run(run())
+
+
+def test_regenerate_response_shares_the_single_in_flight_guard():
+    async def run():
+        bus, document, recorder, dispatcher = make_bus_with_dispatcher()
+
+        def first_reply(task, messages, **kwargs):
+            return {"message": {"content": "original reply"}}
+
+        with patch.object(api_provider, "USE_API_MODE", False), \
+                patch.object(api_provider, "LOCAL_PROVIDER_TYPE", task_config.LOCAL_PROVIDER_OLLAMA), \
+                patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
+                patch.object(api_provider, "chat", first_reply):
+            user_id = await bus.dispatch_intent("scene", "sendMessage", ["hi"])
+            entry = next(iter(dispatcher._requests.values()))
+            await entry["task"]
+
+        assistant_node = next(n for n in document.nodes.values() if n.kind == "chat" and n.id != user_id)
+
+        started = threading.Event()
+        release = threading.Event()
+
+        def blocking_chat(task, messages, **kwargs):
+            started.set()
+            release.wait(5)
+            return {"message": {"content": "second message reply"}}
+
+        with patch.object(api_provider, "USE_API_MODE", False), \
+                patch.object(api_provider, "LOCAL_PROVIDER_TYPE", task_config.LOCAL_PROVIDER_OLLAMA), \
+                patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
+                patch.object(api_provider, "chat", blocking_chat):
+            # Occupy the single in-flight slot with an ordinary sendMessage.
+            await bus.dispatch_intent("scene", "sendMessage", ["second message"])
+            await asyncio.to_thread(started.wait, 5)
+            assert len(dispatcher._requests) == 1
+
+            returned = await bus.dispatch_intent("scene", "regenerateResponse", [assistant_node.id])
+            # Validation (a real chat node with a parent) still succeeds - the
+            # guard lives one layer deeper, inside AgentDispatcher._dispatch.
+            assert returned == assistant_node.id
+            assert len(dispatcher._requests) == 1, "still just the original sendMessage in flight"
+
+            notice = await bus.publish("notification")
+            assert notice["visible"] is True
+            assert notice["message"] == "A response is already being generated."
+
+            release.set()
+            entry = next(iter(dispatcher._requests.values()))
+            await entry["task"]
+
+    asyncio.run(run())
+
+
+def test_regenerate_response_of_a_non_tip_node_leaves_last_chat_node_id_untouched():
+    # R4.3c design spec section 5's load-bearing rule: regenerating an OLDER,
+    # non-tip node must never rewind last_chat_node_id back to it - only
+    # send_message (creating a brand-new node) or delete_chat_node (removing
+    # the tip itself) ever move that pointer. A regenerate mutates
+    # node_to_regenerate in place without changing its id, so if it is not
+    # already the tip, it must not become the tip just by being regenerated.
+    async def run():
+        bus, document, recorder, dispatcher = make_bus_with_dispatcher()
+
+        def first_reply(task, messages, **kwargs):
+            return {"message": {"content": "first reply"}}
+
+        with patch.object(api_provider, "USE_API_MODE", False), \
+                patch.object(api_provider, "LOCAL_PROVIDER_TYPE", task_config.LOCAL_PROVIDER_OLLAMA), \
+                patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
+                patch.object(api_provider, "chat", first_reply):
+            user1_id = await bus.dispatch_intent("scene", "sendMessage", ["first"])
+            entry = next(iter(dispatcher._requests.values()))
+            await entry["task"]
+
+        old_node = next(n for n in document.nodes.values() if n.kind == "chat" and n.id != user1_id)
+
+        def second_reply(task, messages, **kwargs):
+            return {"message": {"content": "second reply"}}
+
+        with patch.object(api_provider, "USE_API_MODE", False), \
+                patch.object(api_provider, "LOCAL_PROVIDER_TYPE", task_config.LOCAL_PROVIDER_OLLAMA), \
+                patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
+                patch.object(api_provider, "chat", second_reply):
+            await bus.dispatch_intent("scene", "sendMessage", ["second"])
+            entry = next(iter(dispatcher._requests.values()))
+            await entry["task"]
+
+        tip_id = document.last_chat_node_id
+        assert tip_id != old_node.id, "the branch must have advanced past old_node by now"
+
+        def regenerated_reply(task, messages, **kwargs):
+            return {"message": {"content": "regenerated content"}}
+
+        with patch.object(api_provider, "USE_API_MODE", False), \
+                patch.object(api_provider, "LOCAL_PROVIDER_TYPE", task_config.LOCAL_PROVIDER_OLLAMA), \
+                patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
+                patch.object(api_provider, "chat", regenerated_reply):
+            await bus.dispatch_intent("scene", "regenerateResponse", [old_node.id])
+            entry = next(iter(dispatcher._requests.values()))
+            await entry["task"]
+
+        assert document.last_chat_node_id == tip_id, \
+            "regenerating an older node must never rewind the active branch tip"
+        assert old_node.content == "regenerated content"
+
+    asyncio.run(run())
+
+
+def test_regenerate_response_shares_the_single_in_flight_guard_in_reverse():
+    # Mirror of test_regenerate_response_shares_the_single_in_flight_guard:
+    # this occupies the slot with a regenerateResponse first, then asserts a
+    # concurrent ordinary sendMessage is bounced. Both directions exercise
+    # the exact same AgentDispatcher._dispatch guard (`if self._requests:`),
+    # caller-agnostic - see backend/tests/test_agents.py's own cross-channel
+    # guard tests for the underlying primitive this is layered on top of.
+    async def run():
+        bus, document, recorder, dispatcher = make_bus_with_dispatcher()
+
+        def first_reply(task, messages, **kwargs):
+            return {"message": {"content": "original reply"}}
+
+        with patch.object(api_provider, "USE_API_MODE", False), \
+                patch.object(api_provider, "LOCAL_PROVIDER_TYPE", task_config.LOCAL_PROVIDER_OLLAMA), \
+                patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
+                patch.object(api_provider, "chat", first_reply):
+            user_id = await bus.dispatch_intent("scene", "sendMessage", ["hi"])
+            entry = next(iter(dispatcher._requests.values()))
+            await entry["task"]
+
+        assistant_node = next(n for n in document.nodes.values() if n.kind == "chat" and n.id != user_id)
+
+        started = threading.Event()
+        release = threading.Event()
+
+        def blocking_chat(task, messages, **kwargs):
+            started.set()
+            release.wait(5)
+            return {"message": {"content": "regenerated reply"}}
+
+        with patch.object(api_provider, "USE_API_MODE", False), \
+                patch.object(api_provider, "LOCAL_PROVIDER_TYPE", task_config.LOCAL_PROVIDER_OLLAMA), \
+                patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
+                patch.object(api_provider, "chat", blocking_chat):
+            # Occupy the single in-flight slot with a regenerateResponse this time.
+            await bus.dispatch_intent("scene", "regenerateResponse", [assistant_node.id])
+            await asyncio.to_thread(started.wait, 5)
+            assert len(dispatcher._requests) == 1
+
+            returned = await bus.dispatch_intent("scene", "sendMessage", ["second message"])
+            # sendMessage's own domain mutation (a new user ChatNode) still
+            # happens unconditionally - the guard lives one layer deeper,
+            # inside AgentDispatcher._dispatch, same as the forward direction.
+            assert returned is not None
+            assert len(dispatcher._requests) == 1, "still just the original regenerateResponse in flight"
+
+            notice = await bus.publish("notification")
+            assert notice["visible"] is True
+            assert notice["message"] == "A response is already being generated."
+
+            release.set()
+            entry = next(iter(dispatcher._requests.values()))
+            await entry["task"]
+
+    asyncio.run(run())
+
+
 def test_drag_factor_is_bounded():
     doc = SceneDocument()
     doc.set_drag_factor(99)
