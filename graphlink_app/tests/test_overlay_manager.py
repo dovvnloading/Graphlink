@@ -129,6 +129,54 @@ class TestDialogScrim:
         manager.reposition_for_resize()
         assert manager._scrim.geometry() == window.rect()
 
+    def test_dialog_hidden_behind_the_managers_back_releases_the_scrim(self, rig):
+        # Regression (2026-07-23 user report): the chat-library bridge's
+        # load/new-chat success path calls dialog.close() DIRECTLY, never
+        # manager.close("library") - the scrim (which absorbs every mouse
+        # press) stayed visible forever, leaving the whole app dimmed and
+        # input-dead after loading a saved chat. The manager must notice a
+        # behind-the-back hide of the open dialog and release the scrim on
+        # the next event-loop tick.
+        _, manager, surfaces = rig
+        manager.open("dlg_a")
+        assert manager._scrim.isVisible()
+
+        # A direct hide, exactly like ChatLibraryBridge._close_dialog().
+        surfaces["dlg_a"].widget.setVisible(False)
+        QApplication.processEvents()  # let the deferred release tick run
+
+        assert not manager._scrim.isVisible(), (
+            "scrim must be released when the open dialog is closed outside "
+            "the manager (e.g. the chat-library load path)"
+        )
+        assert manager.open_surface_name() is None
+        assert manager._open_name is None, "cached name must be cleared too"
+
+    def test_behind_the_back_hide_emits_chip_off_signal(self, rig):
+        # Same regression's second symptom (audit B6): the toolbar chip
+        # binds to visibility_changed - a direct close never emitted the
+        # (name, False) edge, so the Library chip stayed latched active.
+        _, manager, surfaces = rig
+        received = []
+        manager.visibility_changed.connect(lambda name, is_open: received.append((name, is_open)))
+        manager.open("dlg_a")
+        surfaces["dlg_a"].widget.setVisible(False)
+        QApplication.processEvents()
+        assert ("dlg_a", False) in received
+
+    def test_manager_driven_close_does_not_double_fire_the_deferred_release(self, rig):
+        # The ordinary close() path also delivers a Hide event through the
+        # filter; the deferred release must then no-op (close() already
+        # cleaned up), not emit a second visibility_changed(False).
+        _, manager, surfaces = rig
+        received = []
+        manager.visibility_changed.connect(lambda name, is_open: received.append((name, is_open)))
+        manager.open("dlg_a")
+        manager.close("dlg_a")
+        QApplication.processEvents()
+        assert received.count(("dlg_a", False)) == 1
+        assert not manager._scrim.isVisible()
+
 
 class TestVisibilityChangedSignal:
     def test_emits_true_on_open_and_false_on_close(self, rig):

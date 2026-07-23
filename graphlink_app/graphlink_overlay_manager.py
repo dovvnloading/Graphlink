@@ -38,7 +38,7 @@ OverlayCoordinator, it holds behavior, not chrome.
 
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, QObject, Qt, Signal
+from PySide6.QtCore import QEvent, QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import QApplication, QWidget
 
@@ -205,6 +205,23 @@ class OverlayManager(QObject):
         if name is not None:
             self.close(name)
 
+    def _release_orphaned_surface(self):
+        """Deferred cleanup after a surface was hidden behind the manager's
+        back (see the Hide handling in eventFilter). By this tick, a
+        manager-driven close() has already cleared _open_name - so a
+        remaining _open_name whose surface is no longer genuinely open means
+        an external close: release the scrim and emit the chip-off signal
+        the direct close path never fired (audit B6 - without this, the
+        toolbar chip stays latched active too, not just the scrim)."""
+        if self._open_name is None:
+            return
+        if self.is_open(self._open_name):
+            return  # re-shown between the hide and this tick - still open
+        name = self._open_name
+        self._open_name = None
+        self._scrim.setVisible(False)
+        self.visibility_changed.emit(name, False)
+
     # -- global dismissal (audit B2 + popover outside-click) ---------------
 
     def eventFilter(self, watched, event):
@@ -213,6 +230,22 @@ class OverlayManager(QObject):
         # _open_name from here races the very methods that own it (the P1
         # acceptance tests caught exactly that). open_surface_name() already
         # re-derives from real visibility for reads.
+
+        # Behind-the-back hides: several legacy paths close a surface's
+        # widget DIRECTLY (e.g. the chat-library bridge's load/new-chat
+        # success path calls dialog.close() itself), never going through
+        # this manager's close(). open_surface_name() self-corrects for
+        # reads, but the scrim is only ever hidden inside close() - so a
+        # dialog closed behind our back left a full-window, press-absorbing
+        # scrim up forever: the whole app dimmed and input-dead. Detect the
+        # hide here, but DEFER the release one tick (same no-sync-mutation
+        # rule as above); keyed on the cached _open_name, since the
+        # re-derived name is already None by the time this Hide arrives.
+        if event.type() == QEvent.Type.Hide and self._open_name is not None:
+            surface = self._surfaces.get(self._open_name)
+            if surface is not None and watched is surface.widget_fn():
+                QTimer.singleShot(0, self._release_orphaned_surface)
+
         name = self.open_surface_name()
         if name is None:
             return False
