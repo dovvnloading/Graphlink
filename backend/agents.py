@@ -123,6 +123,25 @@ class AgentDispatcher:
         self._settings_manager = settings_manager
         # request_id -> {"cancel_event": threading.Event, "task": asyncio.Task}
         self._requests: dict[str, dict] = {}
+        # R4.4a: an INDEPENDENT in-flight slot for image generation, separate
+        # from self._requests (chat/conversation). Preserves legacy's real,
+        # verified concurrent capability - graphlink_window.py's
+        # self.chat_thread/self.image_gen_thread are separate, never-aliased
+        # attributes, so a chat request and an image-generation request
+        # genuinely run concurrently today. Reusing self._requests for image
+        # generation too would be a real, visible behavior regression (a user
+        # could no longer send a chat message while an image generates), so
+        # this stays a second, independent dict rather than a new key inside
+        # the existing one. Still single-slot PER KIND (one image request at
+        # a time, same as chat): legacy's generate_image() silently
+        # overwrites self.image_gen_thread with no guard if fired twice (a
+        # latent bug - the orphaned old QThread keeps running unreferenced),
+        # not a deliberate concurrent-multi-image feature; start_image_reply
+        # below gives an honest "already generating" refusal instead of
+        # replicating that hazard. request_id -> {"task": asyncio.Task} - no
+        # "cancel_event" key here, unlike self._requests: image generation
+        # has no cancellation at all (see start_image_reply's own docstring).
+        self._image_requests: dict[str, dict] = {}
 
     def persona(self) -> str:
         """Mirror legacy graphlink_window.py's `_get_current_system_prompt`:
@@ -289,6 +308,94 @@ class AgentDispatcher:
             on_end=lambda: setattr(node, "pending_request_id", None),
             state_topic="scene",
         )
+
+    async def start_image_reply(
+        self,
+        *,
+        bus: SessionBus,
+        notifications_state,
+        prompt: str,
+        on_reply,  # on_reply(image_bytes: bytes) -> None | Awaitable
+    ) -> None:
+        """R4.4a: the independent-slot counterpart to _dispatch, NOT a
+        variant of it - image generation has no conversation_history/
+        persona/on_begin/on_end/state_topic shape (there is no per-node
+        "generating" flag to toggle the way ComposerDocument.request_state or
+        a ConversationNode's pending_request_id do; the frontend shows a
+        transient "Generating image..." notification instead of a per-node
+        spinner). Guarded by self._image_requests, a dict kept fully
+        SEPARATE from self._requests (chat/conversation) - see that field's
+        own comment in __init__ for why this must stay independent rather
+        than reusing the existing single-slot guard.
+
+        No cancel_event is constructed or passed - api_provider.generate_image
+        has no cancellation_event parameter at all and its body has no
+        checkpoint to insert one at (it is one blocking network POST), and
+        legacy itself has zero real cancel affordance for image generation
+        either (ImageGenerationWorkerThread.stop() exists but is never called
+        from any UI path). The WATCHDOG_TIMEOUT_SECONDS ceiling IS still
+        applied here even though legacy has none for image generation - a
+        deliberate, explicitly-flagged improvement (leaving this as the only
+        dispatch surface with no ceiling against a hung external HTTP call
+        would be an unforced gap, not considered legacy design), not silent
+        parity.
+        """
+        if self._image_requests:
+            # Single in-flight-image-request-per-session guard, mirroring
+            # _dispatch's own "A response is already being generated." guard
+            # in shape but tracked on the independent self._image_requests
+            # dict, never self._requests.
+            notifications_state.show("An image is already being generated.", "info")
+            await bus.publish("notification")
+            return
+
+        request_id = uuid.uuid4().hex
+
+        async def _run():
+            try:
+                image_bytes = await asyncio.wait_for(
+                    asyncio.to_thread(api_provider.generate_image, prompt),
+                    timeout=WATCHDOG_TIMEOUT_SECONDS,
+                )
+                if inspect.iscoroutinefunction(on_reply):
+                    await on_reply(image_bytes)
+                else:
+                    on_reply(image_bytes)
+                # Unlike _dispatch, "scene" is NOT published here on success -
+                # on_reply itself (canvas.py's _dispatch_image._on_reply)
+                # already publishes "scene" after mutating the document, so a
+                # second unconditional publish here would be redundant.
+            except asyncio.TimeoutError:
+                notifications_state.show(
+                    "Image generation stopped responding before the request "
+                    "completed. Please try again.",
+                    "error",
+                )
+                await bus.publish("notification")
+            except Exception as exc:
+                # Catches api_provider.generate_image's real gating
+                # RuntimeErrors (not API mode / no client / Anthropic
+                # unsupported / no model configured / quota exceeded) and any
+                # other failure the same way, matching _dispatch's own
+                # generic "AI response failed: {exc}" catch-all shape - exc's
+                # own text is forwarded verbatim after one shared prefix so
+                # api_provider.py's distinct messages stay distinguishable to
+                # the user without the WS layer duplicating that gating
+                # knowledge.
+                logger.exception("image generation dispatch failed")
+                notifications_state.show(f"Image generation failed: {exc}", "error")
+                await bus.publish("notification")
+            finally:
+                # Unconditional on every exit path so the slot never leaks -
+                # a future request must always be admitted once this one is
+                # done, success or failure.
+                self._image_requests.pop(request_id, None)
+
+        # NOT awaited here, same load-bearing reason _dispatch's own _run
+        # task is not awaited inline - the WS connection's read loop must
+        # keep reading further messages on this same socket while a
+        # generation is in flight.
+        self._image_requests[request_id] = {"task": asyncio.create_task(_run())}
 
 
 def _call_chat_agent(conversation_history, persona_text, cancel_event) -> str:

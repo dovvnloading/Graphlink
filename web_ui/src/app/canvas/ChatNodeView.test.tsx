@@ -17,6 +17,7 @@ function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}) {
   const onDelete = vi.fn();
   const onUndockChild = vi.fn();
   const onRegenerate = vi.fn();
+  const onGenerateImage = vi.fn();
   const props = {
     id: "n0",
     selected: false,
@@ -29,6 +30,7 @@ function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}) {
       onDelete,
       onUndockChild,
       onRegenerate,
+      onGenerateImage,
       ...overrides,
     },
   } as unknown as NodeProps<ChatFlowNode>;
@@ -38,7 +40,7 @@ function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}) {
       <ChatNodeView {...props} />
     </ReactFlowProvider>,
   );
-  return { onToggleCollapse, onDelete, onUndockChild, onRegenerate };
+  return { onToggleCollapse, onDelete, onUndockChild, onRegenerate, onGenerateImage };
 }
 
 describe("ChatNodeView", () => {
@@ -80,11 +82,12 @@ describe("ChatNodeView", () => {
     expect(hideBranches).toHaveAttribute("title", "Branch visibility isn't built yet");
     const docView = screen.getByRole("menuitem", { name: "Open Document View" });
     expect(docView).toBeDisabled();
-    for (const name of ["Generate Key Takeaway", "Generate Explainer Note", "Generate Chart", "Generate Image"]) {
+    for (const name of ["Generate Key Takeaway", "Generate Explainer Note", "Generate Chart"]) {
       const item = screen.getByRole("menuitem", { name });
       expect(item).toBeDisabled();
       expect(item).toHaveAttribute("title", "AI generation lands in R4");
     }
+    expect(screen.getByRole("menuitem", { name: "Generate Image" })).not.toBeDisabled();
 
     await user.click(screen.getByRole("menuitem", { name: "Copy Text" }));
     expect(writeText).toHaveBeenCalledWith("Hello **world**");
@@ -111,6 +114,19 @@ describe("ChatNodeView", () => {
     await user.click(regenerate);
     expect(onRegenerate).toHaveBeenCalledOnce();
     expect(screen.queryByRole("menu")).toBeNull(); // onClose fires after onRegenerate
+  });
+
+  it("Generate Image is a real, enabled item (unconditional, unlike Regenerate Response) that calls onGenerateImage then closes the menu", async () => {
+    const user = userEvent.setup();
+    const { onGenerateImage } = renderChatNode({ isUser: true });
+
+    fireEvent.contextMenu(screen.getByText("You"));
+    const generateImage = screen.getByRole("menuitem", { name: "Generate Image" });
+    expect(generateImage).not.toBeDisabled();
+
+    await user.click(generateImage);
+    expect(onGenerateImage).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("menu")).toBeNull(); // onClose fires after onGenerateImage
   });
 
   it("Escape and outside-click both close the menu", async () => {

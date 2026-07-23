@@ -254,6 +254,20 @@ describe("SceneStore", () => {
     expect(intents).toEqual([{ topic: "scene", intent: "regenerateResponse", args: ["n1"] }]);
   });
 
+  it("generateImage sends the scene-topic generateImage intent with the chat node id", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.generateImage("n1");
+    expect(intents).toEqual([{ topic: "scene", intent: "generateImage", args: ["n1"] }]);
+  });
+
+  it("regenerateImage sends the scene-topic regenerateImage intent with the image node id", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.regenerateImage("img1");
+    expect(intents).toEqual([{ topic: "scene", intent: "regenerateImage", args: ["img1"] }]);
+  });
+
   it("suppresses empty removal intents", () => {
     const { transport, intents } = makeFakeTransport();
     const store = new SceneStore(transport);

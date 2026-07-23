@@ -125,6 +125,7 @@ export function toFlowNodes(scene: SceneState, store: SceneStore): SceneFlowNode
           onDelete: () => store.deleteChatNode(n.id),
           onUndockChild: (childId: string) => store.setNodeDocked(childId, false),
           onRegenerate: () => store.regenerateResponse(n.id),
+          onGenerateImage: () => store.generateImage(n.id),
         },
       });
       continue;
@@ -242,6 +243,11 @@ export function toFlowNodes(scene: SceneState, store: SceneStore): SceneFlowNode
           imageAssetId: n.imageAssetId,
           prompt: n.content,
           onDelete: () => store.removeNodes([n.id]),
+          // R4.4a: unlike CodeNodeView's onRegenerate, no client-side parent
+          // lookup/null-guard is needed here - the backend resolves the
+          // image's parent chat node internally (see sceneStore.ts's
+          // regenerateImage / backend/canvas.py's resolve_regenerate_image).
+          onRegenerate: () => store.regenerateImage(n.id),
         },
       });
       continue;

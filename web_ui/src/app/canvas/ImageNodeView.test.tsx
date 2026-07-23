@@ -8,6 +8,7 @@ import { ImageNodeView, type ImageFlowNode } from "./ImageNodeView";
 // ChatNodeView.test.tsx for why a bare ReactFlowProvider is enough here too.
 function renderImageNode(overrides: Partial<ImageFlowNode["data"]> = {}, id = "n0") {
   const onDelete = vi.fn();
+  const onRegenerate = vi.fn();
   const props = {
     id,
     selected: false,
@@ -15,6 +16,7 @@ function renderImageNode(overrides: Partial<ImageFlowNode["data"]> = {}, id = "n
       imageAssetId: "asset-123",
       prompt: "a red fox in the snow",
       onDelete,
+      onRegenerate,
       ...overrides,
     },
   } as unknown as NodeProps<ImageFlowNode>;
@@ -24,7 +26,7 @@ function renderImageNode(overrides: Partial<ImageFlowNode["data"]> = {}, id = "n
       <ImageNodeView {...props} />
     </ReactFlowProvider>,
   );
-  return { onDelete, container };
+  return { onDelete, onRegenerate, container };
 }
 
 // jsdom implements neither URL.createObjectURL/revokeObjectURL nor
@@ -87,7 +89,7 @@ describe("ImageNodeView", () => {
     expect(container.querySelector("img")).toBeNull();
   });
 
-  it("right-click opens a menu with real Copy Image/Export Image/Delete Image and disabled Hide Other Branches/Regenerate Image", async () => {
+  it("right-click opens a menu with real Copy Image/Export Image/Regenerate Image/Delete Image and disabled Hide Other Branches", async () => {
     const user = userEvent.setup();
     const { onDelete } = renderImageNode({ prompt: "a red fox in the snow" });
 
@@ -102,12 +104,37 @@ describe("ImageNodeView", () => {
     expect(hideBranches).toBeDisabled();
     expect(hideBranches).toHaveAttribute("title", "Branch visibility isn't built yet");
 
-    const regenerate = screen.getByRole("menuitem", { name: "Regenerate Image" });
-    expect(regenerate).toBeDisabled();
-    expect(regenerate).toHaveAttribute("title", "Agent regeneration lands in R4");
+    expect(screen.getByRole("menuitem", { name: "Regenerate Image" })).toBeEnabled();
 
     await user.click(screen.getByRole("menuitem", { name: "Delete Image" }));
     expect(onDelete).toHaveBeenCalledOnce();
+  });
+
+  it("Regenerate Image is a real, enabled item that calls onRegenerate then closes the menu", async () => {
+    const user = userEvent.setup();
+    const { onRegenerate } = renderImageNode({ prompt: "a red fox in the snow" });
+
+    fireEvent.contextMenu(screen.getByText("a red fox in the snow"));
+    const regenerate = screen.getByRole("menuitem", { name: "Regenerate Image" });
+    expect(regenerate).not.toBeDisabled();
+
+    await user.click(regenerate);
+    expect(onRegenerate).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("menu")).toBeNull(); // onClose fires after onRegenerate
+  });
+
+  it("Regenerate Image is absent from the menu entirely for a prompt-less image node", () => {
+    // Mirrors legacy's own menu-build-time gate (graphlink_node_image_menu.py:
+    // `if self.node.parent_content_node and self.node.prompt:` - the action is
+    // never added to the menu at all when prompt is falsy), reachable via a
+    // user-attached image with no caption text. Absent from the DOM, not
+    // merely disabled - same convention CodeNodeView's own parent-gated
+    // Regenerate Response item uses.
+    renderImageNode({ prompt: "" }, "n7");
+
+    fireEvent.contextMenu(screen.getByText("Image"));
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Regenerate Image" })).toBeNull();
   });
 
   it("clicking Copy Image fetches the asset and writes it to the clipboard as a ClipboardItem", async () => {
