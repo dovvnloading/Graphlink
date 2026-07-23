@@ -34,6 +34,7 @@ from graphlink_licensing import SettingsManager
 
 from backend import BACKEND_VERSION
 from backend.about import register_about
+from backend.agents import bootstrap_provider_state, register_agents
 from backend.assets import register_assets
 from backend.canvas import register_canvas
 from backend.chat_library import register_chat_library
@@ -68,8 +69,25 @@ def _configure_session(bus: SessionBus, settings_manager: SettingsManager, chat_
     bus.register_intent("system", "ping", ping)
 
     # R2: notifications, moved ahead of canvas - R3.3's sendMessage intent
-    # needs a real NotificationState to give an honest "lands in R4" notice.
+    # needs a real NotificationState to give an honest agent-dispatch notice.
     notifications_state = register_notifications(bus)
+
+    # R2: composer draft/reasoning, token counter. Moved ahead of canvas (R4):
+    # sendMessage's real agent dispatch needs a real ComposerDocument to flip
+    # into/out of "generating" state, and a real AgentDispatcher to hand off
+    # to - both must exist before register_canvas builds the sendMessage
+    # intent that calls them.
+    token_counter = register_token_counter(bus)
+    composer_document = register_composer(bus, token_counter)
+
+    # R4 (doc/QT_REMOVAL_PLAN.md): the agent-dispatch service - one
+    # AgentDispatcher per session (never a module-level singleton). Bolted
+    # onto the bus (same pattern as canvas_document below) so ws_endpoint's
+    # disconnect handler can reach it and cancel any in-flight request when
+    # this session's last connection drops - see AgentDispatcher.cancel_all's
+    # own docstring for why that matters.
+    agent_dispatcher = register_agents(bus, composer_document, notifications_state, settings_manager)
+    bus.agent_dispatcher = agent_dispatcher
 
     # R1 (doc/QT_REMOVAL_PLAN.md): scene document + grid topics.
     # R3.21: stash the document on its own SessionBus so backend/assets.py's
@@ -79,11 +97,7 @@ def _configure_session(bus: SessionBus, settings_manager: SettingsManager, chat_
     # canvas document outside this closure. SessionBus has no fixed attribute
     # set (no __slots__), so this is a plain, minimal bolt-on attribute, not
     # a SessionBus API change.
-    bus.canvas_document = register_canvas(bus, notifications_state)
-
-    # R2: composer draft/reasoning, token counter.
-    token_counter = register_token_counter(bus)
-    register_composer(bus, token_counter)
+    bus.canvas_document = register_canvas(bus, notifications_state, agent_dispatcher, composer_document)
 
     # R2.5: about, plugins, settings, chat library.
     register_about(bus)
@@ -102,6 +116,10 @@ def create_app(
     # ~/.graphlink/session.dat file), shared across every session rather
     # than reconstructed per-session - see backend/settings.py's docstring.
     settings_manager = SettingsManager(settings_state_file)
+    # R4: bootstrap api_provider's module-level provider state from that same
+    # SettingsManager exactly ONCE per process - process-global state, not
+    # session state (see backend/agents.py's docstring).
+    bootstrap_provider_state(settings_manager)
     bus = EventBus(
         configure_session=lambda session_bus: _configure_session(session_bus, settings_manager, chat_db_path)
     )
@@ -129,6 +147,16 @@ def create_app(
             pass
         finally:
             session.detach(websocket)
+            # Concurrency/security review finding (R4): a client that sends
+            # a message then immediately disconnects would otherwise leave
+            # the real outbound LLM call running server-side, untethered,
+            # for up to WATCHDOG_TIMEOUT_SECONDS with no way to ever cancel
+            # it - cancelChatRequest needs a live socket to arrive over.
+            # Only cancel once the LAST connection for this session drops:
+            # another tab/window on the same session should not lose its
+            # in-flight request just because a different tab closed.
+            if session.connection_count == 0:
+                session.agent_dispatcher.cancel_all()
 
     resolved_spa = SPA_DIST_DIR if spa_dir is None else spa_dir
     if resolved_spa.is_dir():

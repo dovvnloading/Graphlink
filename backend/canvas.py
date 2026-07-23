@@ -34,6 +34,8 @@ from graphlink_grid_view_settings import (
 )
 from graphlink_navigation_pins import NavigationPinRecord, NavigationPinStore
 
+from backend.agents import AgentDispatcher
+from backend.composer import ComposerDocument
 from backend.events import SessionBus
 from backend.notifications import NotificationState
 
@@ -651,6 +653,29 @@ class SceneDocument:
         self.last_chat_node_id = node.id
         return node
 
+    def chat_branch_history(self, node_id: str) -> list[dict]:
+        """Walk the branch from node_id up to its root, collecting one
+        {"role", "content"} entry per node visited (including node_id
+        itself), then reverse so the result reads root-to-leaf (oldest
+        message first) - the direct new-backend replacement for legacy
+        conversation_history built by walking the QGraphicsScene parent
+        chain. Follows edges generically (by target match) rather than
+        asserting a chat-kind node shape: the walk itself only ever visits
+        chat-kind nodes in practice given how they are the only kind chained
+        this way, but a bad/unknown node_id or a stray edge shape should
+        stop the walk quietly rather than raise."""
+        history: list[dict] = []
+        current_id: str | None = node_id
+        while current_id is not None:
+            node = self.nodes.get(current_id)
+            if node is None:
+                break
+            history.append({"role": "user" if node.is_user else "assistant", "content": node.content})
+            parent_edge = next((e for e in self.edges.values() if e.target == current_id), None)
+            current_id = parent_edge.source if parent_edge is not None else None
+        history.reverse()
+        return history
+
     def set_chat_collapsed(self, node_id: str, collapsed: bool) -> None:
         node = self.nodes.get(node_id)
         if node is None:
@@ -801,10 +826,19 @@ class SceneDocument:
         }
 
 
-def register_canvas(bus: SessionBus, notifications: NotificationState) -> SceneDocument:
+def register_canvas(
+    bus: SessionBus,
+    notifications: NotificationState,
+    agent_dispatcher: AgentDispatcher,
+    composer_document: ComposerDocument,
+) -> SceneDocument:
     """Give a session its canvas document + the scene/grid topics and every
     R1 intent. Intent names for grid mirror GridControlBridge's @Slot names
-    1:1 so the R2 island port is a transport swap, not a redesign."""
+    1:1 so the R2 island port is a transport swap, not a redesign.
+
+    R4: agent_dispatcher/composer_document are threaded through so
+    sendMessage's real Send action (below) can hand off to the real agent
+    dispatch pipeline instead of the R3-era deferred notice."""
 
     document = SceneDocument()
 
@@ -910,19 +944,24 @@ def register_canvas(bus: SessionBus, notifications: NotificationState) -> SceneD
 
     async def send_conversation_message(node_id, text):
         # R3.25: the real user-message-send action for a conversation node -
-        # appends a real user message. The assistant's reply needs the agent
-        # layer (same R4 prerequisite as ChatNode's send_message), so this is
-        # an honest deferred notice rather than a fake/stubbed response -
-        # same exact notification text/level/publish call as send_message.
+        # appends a real user message. ConversationNode is deliberately NOT
+        # wired to agent_dispatcher this increment (R4 landed real dispatch
+        # for ChatNode's send_message only, above) - reserved for a
+        # follow-up increment, so this remains an honest deferred notice
+        # rather than a fake/stubbed response. The wording below was updated
+        # from "lands in R4" since R4 has now partially landed (just not for
+        # this node type yet) - leaving the old text unchanged would be
+        # actively misleading.
         node = document.send_conversation_message(node_id, text)
         await publish_scene()
-        notifications.show("AI response generation lands in R4.", "info")
+        notifications.show("AI response generation lands in a follow-up increment.", "info")
         await bus.publish("notification")
         return node.id
 
     async def append_conversation_assistant_message(node_id, text):
         # Unlike send_conversation_message, this represents a real reply
-        # landing once R4 exists, not a deferral - so no notification fires.
+        # landing once ConversationNode gets real agent dispatch, not a
+        # deferral - so no notification fires.
         node = document.append_conversation_assistant_message(node_id, text)
         await publish_scene()
         return node.id
@@ -945,14 +984,25 @@ def register_canvas(bus: SessionBus, notifications: NotificationState) -> SceneD
 
     async def send_message(text):
         # R3.3: the real Send action - a real user ChatNode, continuing the
-        # active branch. The assistant's reply needs the agent layer
-        # (graphlink_config.py's Qt/non-Qt split is an R4 prerequisite - see
-        # doc/QT_REMOVAL_PLAN.md's R3 scoping note), so this is an honest
-        # deferred notice rather than a fake/stubbed response.
+        # active branch. R4: the assistant's reply is now a real agent
+        # dispatch call, not a deferred notice - see backend/agents.py.
         node = document.send_message(text)
         await publish_scene()
-        notifications.show("AI response generation lands in R4.", "info")
-        await bus.publish("notification")
+        history = document.chat_branch_history(node.id)
+
+        def _on_reply(reply_text):
+            reply_node = document.add_chat_node(
+                node.x, node.y + MESSAGE_VERTICAL_SPACING, reply_text, False, parent_id=node.id
+            )
+            document.last_chat_node_id = reply_node.id
+
+        await agent_dispatcher.start_chat_reply(
+            bus=bus,
+            notifications_state=notifications,
+            composer_document=composer_document,
+            conversation_history=history,
+            on_reply=_on_reply,
+        )
         return node.id
 
     async def move_node(node_id, x, y):
