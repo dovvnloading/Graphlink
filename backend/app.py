@@ -23,6 +23,7 @@ intent - the acceptance round-trip. Real domain topics arrive per-phase
 from __future__ import annotations
 
 import logging
+import os
 import time
 from pathlib import Path
 
@@ -49,6 +50,75 @@ logger = logging.getLogger(__name__)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SPA_DIST_DIR = REPO_ROOT / "web_ui" / "dist" / "app"
+
+# Loopback host Graphlink always binds to (graphlink_desktop.py hardcodes
+# host="127.0.0.1"). Required, not just preferred, for the same-origin check
+# below: comparing Origin's host against the request's own Host header alone
+# is a self-consistency check on two client-supplied values, not a check
+# against anything the server independently knows to be correct - a DNS-
+# rebinding attacker's page has both its Origin AND the Host header it sends
+# echo the SAME attacker-controlled hostname, so an Origin==Host comparison
+# alone would accept it. Requiring the host part to literally be 127.0.0.1
+# closes that: no attacker-controlled hostname is ever literally this string.
+_LOOPBACK_HOST = "127.0.0.1"
+
+
+def _is_allowed_ws_origin(origin: str | None, host_header: str | None, dev_proxy_origin: str | None = None) -> bool:
+    """Handshake-time allowlist for the /ws WebSocket Origin header.
+
+    Defends against cross-site WebSocket hijacking ("localhost service
+    takeover"): browsers do not enforce same-origin policy on WebSocket
+    connects the way they do fetch/XHR, so any page open in the user's
+    regular browser - malicious or compromised, or a bad ad iframe - can
+    already open a socket to ws://127.0.0.1:<port>/ws. The Origin header is
+    the standard mitigation because page JS cannot set or suppress it (it is
+    a forbidden header name); this function is the exact accept/reject
+    decision made from it, once, at handshake time.
+
+    Policy (exact string equality only - never substring/startswith, which
+    would reopen bypasses like "http://127.0.0.1:5173.evil.com"):
+
+    - origin is None or "" -> True. A real browser always sends Origin for a
+      page-script-initiated connect, so an absent Origin cannot be that
+      attack; it can only be a non-browser caller (tests, curl, local
+      tooling) - a different threat model, since anything already able to
+      speak raw WebSocket to this loopback-only port could set Origin to
+      any string it likes anyway (only browsers are forbidden from spoofing
+      it). Rejecting "absent" would stop zero real attacks.
+    - origin == "null" -> False. Only produced by opaque-origin contexts
+      (sandboxed iframe without allow-same-origin, data:/file: pages) - all
+      attacker-constructed, never a legitimate caller of this app.
+    - origin == f"http://{host_header}" AND host_header's host part is
+      literally "127.0.0.1" -> True. The normal packaged-app case (pywebview
+      window and its backend are same-origin), computed per-request (never
+      hardcoded - the port is a dynamically OS-assigned free port; see
+      graphlink_desktop.py's _free_port()) - the added 127.0.0.1 requirement
+      is what actually defeats DNS rebinding, see _LOOPBACK_HOST's comment.
+    - dev_proxy_origin is not None AND origin == dev_proxy_origin -> True.
+      Deliberately NOT a hardcoded constant this function trusts on its own:
+      the real desktop app (graphlink_desktop.py) never passes one, so this
+      branch is dead in the shipped product by construction, not just by
+      convention - only ws_endpoint's own caller, reading an opt-in env var
+      that is unset in normal operation, can ever supply a non-None value
+      here (see GRAPHLINK_DEV_WS_ORIGIN at the call site). Without this, the
+      previous version of this function hardcoded Vite's default dev port
+      (5173) as an always-trusted origin - correct for the real vite-proxy
+      dev workflow, but wrong to trust unconditionally in the shipped app,
+      since 5173 is an extremely common default port for unrelated Vite
+      projects a user could have running in the same browser.
+    - anything else present -> False.
+    """
+    if origin is None or origin == "":
+        return True
+    if origin == "null":
+        return False
+    if host_header:
+        host_only = host_header.rsplit(":", 1)[0]
+        if host_only == _LOOPBACK_HOST and origin == f"http://{host_header}":
+            return True
+    if dev_proxy_origin and origin == dev_proxy_origin:
+        return True
+    return False
 
 
 def _configure_session(bus: SessionBus, settings_manager: SettingsManager, chat_db_path: Path | None) -> None:
@@ -138,6 +208,19 @@ def create_app(
 
     @app.websocket("/ws")
     async def ws_endpoint(websocket: WebSocket) -> None:
+        origin = websocket.headers.get("origin")
+        host_header = websocket.headers.get("host")
+        # Unset in every real launch (graphlink_desktop.py never sets this) -
+        # a developer running `npm run dev` (web_ui/vite.config.ts's
+        # GRAPHLINK_ISLAND=app target) against a separately-run backend must
+        # opt in explicitly by setting this to their vite dev server's real
+        # origin (e.g. "http://127.0.0.1:5173"), rather than that origin
+        # being trusted unconditionally in the shipped app.
+        dev_proxy_origin = os.environ.get("GRAPHLINK_DEV_WS_ORIGIN")
+        if not _is_allowed_ws_origin(origin, host_header, dev_proxy_origin):
+            logger.warning("rejected WS handshake: origin=%r host=%r", origin, host_header)
+            await websocket.close(code=1008)
+            return
         session_id = websocket.query_params.get("session", "default")
         session = bus.session(session_id)
         await websocket.accept()
