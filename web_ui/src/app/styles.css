@@ -3220,3 +3220,291 @@ body,
   opacity: 0.45;
   cursor: default;
 }
+
+/* -- R5.4 pycoder + code_sandbox nodes ------------------------------------ */
+
+.pycoder-node,
+.code-sandbox-node {
+  width: 420px;
+  max-height: 720px;
+  min-height: 110px;
+}
+
+.pycoder-node.collapsed,
+.code-sandbox-node.collapsed {
+  width: 290px;
+  min-height: 58px;
+}
+
+.pycoder-node-content,
+.code-sandbox-node-content {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 640px;
+  overflow-y: auto;
+}
+
+.pycoder-node-mode-toggle {
+  display: flex;
+  gap: 4px;
+}
+
+.pycoder-node-mode-btn {
+  flex: 1;
+  font-size: 11px;
+  font-weight: 600;
+  font-family: inherit;
+  padding: 6px 10px;
+  color: var(--gl-surface-text-muted);
+  background-color: var(--gl-neutral-button-background);
+  border: 1px solid var(--gl-neutral-button-border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.pycoder-node-mode-btn:hover {
+  color: var(--gl-surface-text);
+}
+
+.pycoder-node-mode-btn.active {
+  color: var(--gl-surface-window);
+  background-color: var(--gl-surface-text-muted);
+  border-color: transparent;
+}
+
+/* Reuses .web-research-node-query-input's/.gitlink-node-input's own chrome
+   verbatim - same shared-token convention already established across sibling
+   node views - applied here under this node kind's own class name. */
+.pycoder-node-input,
+.code-sandbox-node-requirements,
+.code-sandbox-node-input {
+  box-sizing: border-box;
+  width: 100%;
+  resize: vertical;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 8px 10px;
+  color: var(--gl-surface-text);
+  background-color: var(--gl-surface-inset, var(--gl-surface-window));
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 6px;
+}
+
+.code-sandbox-node-requirements {
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 11px;
+}
+
+.pycoder-node-input:focus,
+.code-sandbox-node-requirements:focus,
+.code-sandbox-node-input:focus {
+  outline: none;
+  border-color: var(--gl-surface-text-muted);
+}
+
+.code-sandbox-node-field-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.code-sandbox-node-field-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--gl-surface-text-muted);
+}
+
+.pycoder-node-run-row,
+.code-sandbox-node-run-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.pycoder-node-run-row button,
+.code-sandbox-node-run-row button {
+  font-size: 11px;
+  font-weight: 600;
+  font-family: inherit;
+  padding: 5px 12px;
+  color: var(--gl-surface-text);
+  background-color: var(--gl-neutral-button-background);
+  border: 1px solid var(--gl-neutral-button-border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.pycoder-node-run-row button:hover:enabled,
+.code-sandbox-node-run-row button:hover:enabled {
+  background-color: var(--gl-neutral-button-hover);
+}
+
+.pycoder-node-run-row button:disabled,
+.code-sandbox-node-run-row button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.pycoder-node-banner-error,
+.code-sandbox-node-banner-error {
+  padding: 8px 10px;
+  font-size: 11px;
+  color: var(--gl-semantic-status-error, currentColor);
+  border: 1px solid var(--gl-semantic-status-error, currentColor);
+  border-radius: 8px;
+}
+
+.pycoder-node-failed-badge {
+  margin: 0;
+  font-size: 11px;
+  font-style: italic;
+  color: var(--gl-semantic-status-error, currentColor);
+}
+
+.pycoder-node-section,
+.code-sandbox-node-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.pycoder-node-section-label,
+.code-sandbox-node-section-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--gl-surface-text-muted);
+}
+
+/* Reuses .chat-node-content's full markdown-body rule set verbatim - same
+   shared-class convention .artifact-node-document-content/
+   .gitlink-node-proposal-markdown already establish for this pipeline. Only
+   overrides the max-height/overflow-y a nested pane should never take on its
+   own (the outer .pycoder-node-content/.code-sandbox-node-content already
+   scrolls). */
+.pycoder-node-code,
+.pycoder-node-output,
+.pycoder-node-analysis,
+.code-sandbox-node-code,
+.code-sandbox-node-analysis {
+  max-height: none;
+  overflow: visible;
+}
+
+/* The live terminal / static output fallback - plain preformatted text, NOT
+   the markdown pipeline (see CodeSandboxNodeView's own module doc for why:
+   raw subprocess stdout/stderr is machine output, not prose or code-to-be-
+   colorized - same posture .gitlink-node-context-xml already takes for its
+   own machine-generated XML body). */
+.code-sandbox-node-terminal {
+  margin: 0;
+  padding: 8px 10px;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 240px;
+  overflow: auto;
+  color: var(--gl-surface-text);
+  background-color: var(--gl-surface-inset, var(--gl-surface-window));
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 6px;
+}
+
+/* -- R5.4 shared code-execution approval panel ---------------------------- */
+/* Post-review fix pass: CodeExecutionApprovalPanel is now a small,
+   self-contained modal (its own .overlay-scrim + .overlay-dialog markup,
+   rendered directly by PyCoderNodeView/CodeSandboxNodeView) rather than a
+   <Dialog> registered with the shared useOverlays() singleton - see that
+   component's own module doc for why. It reuses .overlay-scrim/
+   .overlay-dialog purely for visual consistency (colors/shadows/centering),
+   not because it participates in that registry. */
+
+.code-exec-approval-dialog {
+  max-width: min(520px, calc(100vw - 64px));
+}
+
+.code-exec-approval-warning {
+  margin: 0 0 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--gl-semantic-status-error, currentColor);
+}
+
+/* R5.4 post-review FIX C: the pending pip-install manifest, shown for
+   code_sandbox only, positioned BEFORE the code display so it is seen prior
+   to clicking Approve (never buried below the fold). Reuses the same
+   monospace/inset-surface treatment as .code-sandbox-node-terminal, since
+   both are raw machine-formatted text, not prose. */
+.code-exec-approval-requirements {
+  margin: 0 0 12px;
+}
+
+.code-exec-approval-requirements-label {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--gl-surface-text-muted);
+}
+
+.code-exec-approval-requirements-list {
+  margin: 0;
+  padding: 8px 10px;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 120px;
+  overflow: auto;
+  color: var(--gl-surface-text);
+  background-color: var(--gl-surface-inset, var(--gl-surface-window));
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 6px;
+}
+
+.code-exec-approval-code {
+  max-height: 320px;
+  overflow: auto;
+}
+
+.code-exec-approval-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.code-exec-approval-actions button {
+  font-size: 11px;
+  font-weight: 600;
+  font-family: inherit;
+  padding: 5px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.code-exec-approval-approve-btn {
+  color: var(--gl-surface-window);
+  background-color: var(--gl-surface-text-muted);
+  border: none;
+}
+
+.code-exec-approval-deny-btn {
+  color: var(--gl-surface-text);
+  background-color: var(--gl-neutral-button-background);
+  border: 1px solid var(--gl-neutral-button-border);
+}
+
+.code-exec-approval-actions button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}

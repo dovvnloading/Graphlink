@@ -168,6 +168,44 @@ def register_plugins(
             await bus.publish("scene")
             return node.id
 
+        if name == "Py-Coder":
+            # R5.4: the fourth real node-creation plugin, same posture as
+            # Web Research/Artifact/Gitlink above - Py-Coder is a
+            # branch-point child (same as thinking/html/image/conversation/
+            # web_research/artifact/gitlink nodes), so it always requires a
+            # real, valid parent to branch from - there is no unparented/
+            # root form.
+            if not parent_node_id or parent_node_id not in canvas_document.nodes:
+                notifications.show(
+                    "Please select a valid node to branch from before adding a Py-Coder node.",
+                    "warning",
+                )
+                await bus.publish("notification")
+                return None
+            parent = canvas_document.nodes[parent_node_id]
+            node = canvas_document.add_pycoder_node(
+                parent.x, parent.y + MESSAGE_VERTICAL_SPACING, parent_node_id
+            )
+            await bus.publish("scene")
+            return node.id
+
+        if name == "Execution Sandbox":
+            # R5.4: the fifth real node-creation plugin, same posture as
+            # every prior real node-creation plugin above.
+            if not parent_node_id or parent_node_id not in canvas_document.nodes:
+                notifications.show(
+                    "Please select a valid node to branch from before adding an Execution Sandbox node.",
+                    "warning",
+                )
+                await bus.publish("notification")
+                return None
+            parent = canvas_document.nodes[parent_node_id]
+            node = canvas_document.add_code_sandbox_node(
+                parent.x, parent.y + MESSAGE_VERTICAL_SPACING, parent_node_id
+            )
+            await bus.publish("scene")
+            return node.id
+
         if name == "Artifact / Drafter":
             # R5.2: the second real node-creation plugin, same posture as
             # Web Research above - an Artifact node is a branch-point child

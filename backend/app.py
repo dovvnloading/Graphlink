@@ -243,6 +243,18 @@ def create_app(
             # in-flight request just because a different tab closed.
             if session.connection_count == 0:
                 session.agent_dispatcher.cancel_all()
+                # R5.4: a DELIBERATE, SCOPED extension of this disconnect
+                # contract, applied ONLY to the Py-Coder/Execution Sandbox
+                # approval-pause slots - not retrofitted onto the
+                # pre-existing web_research/artifact/gitlink slots (a real,
+                # separate, out-of-scope gap: every one of those already
+                # self-terminates via asyncio.wait_for(..., timeout=...), so
+                # cancel_all() alone is enough for them). An approval pause
+                # has NO timeout by design (the whole point is "wait for a
+                # human, however long that takes"), so without this
+                # extension an abandoned tab's in-flight approval would hang
+                # forever, permanently locking node.pending_request_id.
+                session.agent_dispatcher.cancel_all_pending_approvals()
 
     resolved_spa = SPA_DIST_DIR if spa_dir is None else spa_dir
     if resolved_spa.is_dir():

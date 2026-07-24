@@ -46,6 +46,22 @@ export interface SceneNodeRow {
   gitlinkChangeFingerprint?: string | null;
   gitlinkChangeState: string;
   gitlinkError: string;
+  pycoderMode: string;
+  pycoderPrompt: string;
+  pycoderCode: string;
+  pycoderOutput: string;
+  pycoderAnalysis: string;
+  pycoderLastRunFailed: boolean;
+  pycoderAwaitingApproval: boolean;
+  pycoderError: string;
+  codeSandboxRequirements: string;
+  codeSandboxPrompt: string;
+  codeSandboxCode: string;
+  codeSandboxOutput: string;
+  codeSandboxAnalysis: string;
+  codeSandboxAwaitingApproval: boolean;
+  codeSandboxApprovalRequirements: string;
+  codeSandboxError: string;
 }
 
 export interface ConversationMessageRow {
@@ -352,6 +368,86 @@ function checkSceneNodeRow(value: unknown, path: string, errors: string[]): void
     const fieldValue = value["gitlinkError"];
     if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.gitlinkError: missing required field`);
     else { if (typeof fieldValue !== "string") errors.push(`${path}.gitlinkError` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["pycoderMode"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.pycoderMode: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.pycoderMode` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["pycoderPrompt"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.pycoderPrompt: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.pycoderPrompt` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["pycoderCode"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.pycoderCode: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.pycoderCode` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["pycoderOutput"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.pycoderOutput: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.pycoderOutput` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["pycoderAnalysis"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.pycoderAnalysis: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.pycoderAnalysis` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["pycoderLastRunFailed"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.pycoderLastRunFailed: missing required field`);
+    else { if (typeof fieldValue !== "boolean") errors.push(`${path}.pycoderLastRunFailed` + ": expected boolean"); }
+  }
+  {
+    const fieldValue = value["pycoderAwaitingApproval"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.pycoderAwaitingApproval: missing required field`);
+    else { if (typeof fieldValue !== "boolean") errors.push(`${path}.pycoderAwaitingApproval` + ": expected boolean"); }
+  }
+  {
+    const fieldValue = value["pycoderError"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.pycoderError: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.pycoderError` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["codeSandboxRequirements"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.codeSandboxRequirements: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.codeSandboxRequirements` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["codeSandboxPrompt"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.codeSandboxPrompt: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.codeSandboxPrompt` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["codeSandboxCode"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.codeSandboxCode: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.codeSandboxCode` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["codeSandboxOutput"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.codeSandboxOutput: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.codeSandboxOutput` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["codeSandboxAnalysis"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.codeSandboxAnalysis: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.codeSandboxAnalysis` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["codeSandboxAwaitingApproval"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.codeSandboxAwaitingApproval: missing required field`);
+    else { if (typeof fieldValue !== "boolean") errors.push(`${path}.codeSandboxAwaitingApproval` + ": expected boolean"); }
+  }
+  {
+    const fieldValue = value["codeSandboxApprovalRequirements"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.codeSandboxApprovalRequirements: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.codeSandboxApprovalRequirements` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["codeSandboxError"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.codeSandboxError: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.codeSandboxError` + ": expected string"); }
   }
 }
 

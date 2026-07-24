@@ -17,14 +17,17 @@ import {
 import "@xyflow/react/dist/style.css";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { SceneState } from "../../lib/bridge-core/generated/scene-state";
+import type { StreamListener } from "../../lib/ws/transport";
 import { ArtifactNodeView, type ArtifactFlowNode } from "./ArtifactNodeView";
 import { ChatNodeView, type ChatFlowNode } from "./ChatNodeView";
 import { CodeNodeView, type CodeFlowNode } from "./CodeNodeView";
+import { CodeSandboxNodeView, type CodeSandboxFlowNode } from "./CodeSandboxNodeView";
 import { ConversationNodeView, type ConversationFlowNode } from "./ConversationNodeView";
 import { DocumentNodeView, type DocumentFlowNode } from "./DocumentNodeView";
 import { GitlinkNodeView, type GitlinkFlowNode } from "./GitlinkNodeView";
 import { HtmlNodeView, type HtmlFlowNode } from "./HtmlNodeView";
 import { ImageNodeView, type ImageFlowNode } from "./ImageNodeView";
+import { PyCoderNodeView, type PyCoderFlowNode } from "./PyCoderNodeView";
 import { ThinkingNodeView, type ThinkingFlowNode } from "./ThinkingNodeView";
 import { WebResearchNodeView, type WebResearchFlowNode } from "./WebResearchNodeView";
 import { LOD_ZOOM_THRESHOLD } from "./canvasConstants";
@@ -57,7 +60,9 @@ type SceneFlowNode =
   | ConversationFlowNode
   | WebResearchFlowNode
   | ArtifactFlowNode
-  | GitlinkFlowNode;
+  | GitlinkFlowNode
+  | PyCoderFlowNode
+  | CodeSandboxFlowNode;
 
 function PlaceholderNodeView({ data, selected }: NodeProps<PlaceholderNode>) {
   const zoom = useStore((s) => s.transform[2]);
@@ -87,6 +92,8 @@ const NODE_TYPES = {
   web_research: WebResearchNodeView,
   artifact: ArtifactNodeView,
   gitlink: GitlinkNodeView,
+  pycoder: PyCoderNodeView,
+  code_sandbox: CodeSandboxNodeView,
 };
 
 // Exported standalone for direct unit testing (same posture as
@@ -406,6 +413,105 @@ export function toFlowNodes(scene: SceneState, store: SceneStore): SceneFlowNode
             if (n.pendingRequestId) store.cancelGitlinkRequest(n.pendingRequestId);
           },
           onApply: (fingerprint: string) => store.applyGitlinkChanges(n.id, fingerprint),
+        },
+      });
+      continue;
+    }
+    if (n.kind === "pycoder") {
+      // No onDock here either (same reasoning as every non-dockable R5
+      // plugin-node branch above) - PyCoderNodeView never offers a
+      // dock-into-parent action; the generic `if (n.isDocked) continue`
+      // guard above still covers it correctly if it were ever docked via a
+      // direct WS call.
+      flowNodes.push({
+        id: n.id,
+        type: "pycoder" as const,
+        position: { x: n.x, y: n.y },
+        data: {
+          pycoderMode: n.pycoderMode,
+          pycoderPrompt: n.pycoderPrompt,
+          pycoderCode: n.pycoderCode,
+          pycoderOutput: n.pycoderOutput,
+          pycoderAnalysis: n.pycoderAnalysis,
+          pycoderLastRunFailed: n.pycoderLastRunFailed,
+          pycoderAwaitingApproval: n.pycoderAwaitingApproval,
+          pycoderError: n.pycoderError,
+          isCollapsed: n.isCollapsed,
+          pendingRequestId: n.pendingRequestId ?? null,
+          onToggleCollapse: () => store.setChatCollapsed(n.id, !n.isCollapsed),
+          onDelete: () => store.removeNodes([n.id]),
+          onSetMode: (mode: string) => store.setPyCoderMode(n.id, mode),
+          onRun: (inputText: string) => store.runPyCoder(n.id, inputText),
+          // Same null-guard pattern as every other plugin node's own
+          // analogous cancel call site above - only fire the intent if there
+          // is genuinely a non-null request id to target.
+          onCancel: () => {
+            if (n.pendingRequestId) store.cancelPyCoderRequest(n.pendingRequestId);
+          },
+          // CRITICAL (see CodeExecutionApprovalPanel.tsx's own module doc):
+          // these read n.pendingRequestId - the CURRENT scene snapshot's own
+          // value for THIS node - never anything the UI layer could supply
+          // as a distinct argument. Same null-guard posture as onCancel
+          // above; approveCodeExecution/denyCodeExecution both require a
+          // non-null string.
+          onApprove: () => {
+            if (n.pendingRequestId) store.approveCodeExecution(n.pendingRequestId);
+          },
+          onDeny: () => {
+            if (n.pendingRequestId) store.denyCodeExecution(n.pendingRequestId);
+          },
+        },
+      });
+      continue;
+    }
+    if (n.kind === "code_sandbox") {
+      // No onDock here either (same reasoning as every non-dockable R5
+      // plugin-node branch above) - CodeSandboxNodeView never offers a
+      // dock-into-parent action; the generic `if (n.isDocked) continue`
+      // guard above still covers it correctly if it were ever docked via a
+      // direct WS call. code_sandbox_sandbox_id is deliberately absent below
+      // - it is pure internal server bookkeeping (a sandbox directory name),
+      // never part of the scene wire payload at all (see scene-state.ts) and
+      // never read/forwarded anywhere in this mapping.
+      flowNodes.push({
+        id: n.id,
+        type: "code_sandbox" as const,
+        position: { x: n.x, y: n.y },
+        data: {
+          codeSandboxRequirements: n.codeSandboxRequirements,
+          codeSandboxApprovalRequirements: n.codeSandboxApprovalRequirements,
+          codeSandboxPrompt: n.codeSandboxPrompt,
+          codeSandboxCode: n.codeSandboxCode,
+          codeSandboxOutput: n.codeSandboxOutput,
+          codeSandboxAnalysis: n.codeSandboxAnalysis,
+          codeSandboxAwaitingApproval: n.codeSandboxAwaitingApproval,
+          codeSandboxError: n.codeSandboxError,
+          isCollapsed: n.isCollapsed,
+          pendingRequestId: n.pendingRequestId ?? null,
+          onToggleCollapse: () => store.setChatCollapsed(n.id, !n.isCollapsed),
+          onDelete: () => store.removeNodes([n.id]),
+          onSetRequirements: (requirementsText: string) =>
+            store.setCodeSandboxRequirements(n.id, requirementsText),
+          onRun: (inputText: string) => store.runCodeSandbox(n.id, inputText),
+          onCancel: () => {
+            if (n.pendingRequestId) store.cancelCodeSandboxRequest(n.pendingRequestId);
+          },
+          // CRITICAL - same posture as the pycoder branch's own
+          // onApprove/onDeny above: always n.pendingRequestId, never a
+          // UI-supplied argument.
+          onApprove: () => {
+            if (n.pendingRequestId) store.approveCodeExecution(n.pendingRequestId);
+          },
+          onDeny: () => {
+            if (n.pendingRequestId) store.denyCodeExecution(n.pendingRequestId);
+          },
+          // Generic passthrough to the transport's own stream fan-out (see
+          // sceneStore.ts's own subscribeStream doc) - the live terminal
+          // pane keys its subscription off data.pendingRequestId itself,
+          // this closure only needs to exist so the component never touches
+          // the store/transport directly.
+          subscribeStream: (requestId: string, listener: StreamListener) =>
+            store.subscribeStream(requestId, listener),
         },
       });
       continue;

@@ -75,6 +75,22 @@ function validScenePayload(overrides: Record<string, unknown> = {}) {
         gitlinkPreviewText: "",
         gitlinkChangeState: "",
         gitlinkError: "",
+        pycoderMode: "ai_driven",
+        pycoderPrompt: "",
+        pycoderCode: "",
+        pycoderOutput: "",
+        pycoderAnalysis: "",
+        pycoderLastRunFailed: false,
+        pycoderAwaitingApproval: false,
+        pycoderError: "",
+        codeSandboxRequirements: "",
+        codeSandboxApprovalRequirements: "",
+        codeSandboxPrompt: "",
+        codeSandboxCode: "",
+        codeSandboxOutput: "",
+        codeSandboxAnalysis: "",
+        codeSandboxAwaitingApproval: false,
+        codeSandboxError: "",
       },
     ],
     edges: [],
@@ -423,6 +439,88 @@ describe("SceneStore", () => {
     expect(intents).toEqual([
       { topic: "scene", intent: "applyGitlinkChanges", args: ["n1", "fingerprint-abc123"] },
     ]);
+  });
+
+  it("setPyCoderMode sends the scene-topic setPyCoderMode intent with [nodeId, mode]", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.setPyCoderMode("n1", "manual");
+    expect(intents).toEqual([{ topic: "scene", intent: "setPyCoderMode", args: ["n1", "manual"] }]);
+  });
+
+  it("runPyCoder sends the scene-topic runPyCoder intent with [nodeId, inputText]", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.runPyCoder("n1", "write a fibonacci function");
+    expect(intents).toEqual([
+      { topic: "scene", intent: "runPyCoder", args: ["n1", "write a fibonacci function"] },
+    ]);
+  });
+
+  it("cancelPyCoderRequest sends the scene-topic cancelPyCoderRequest intent with the requestId", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.cancelPyCoderRequest("req-1");
+    expect(intents).toEqual([{ topic: "scene", intent: "cancelPyCoderRequest", args: ["req-1"] }]);
+  });
+
+  it("setCodeSandboxRequirements sends the scene-topic setCodeSandboxRequirements intent with [nodeId, requirementsText]", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.setCodeSandboxRequirements("n1", "numpy\npandas==2.2.0");
+    expect(intents).toEqual([
+      {
+        topic: "scene",
+        intent: "setCodeSandboxRequirements",
+        args: ["n1", "numpy\npandas==2.2.0"],
+      },
+    ]);
+  });
+
+  it("runCodeSandbox sends the scene-topic runCodeSandbox intent with [nodeId, inputText]", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.runCodeSandbox("n1", "plot a sine wave");
+    expect(intents).toEqual([
+      { topic: "scene", intent: "runCodeSandbox", args: ["n1", "plot a sine wave"] },
+    ]);
+  });
+
+  it("cancelCodeSandboxRequest sends the scene-topic cancelCodeSandboxRequest intent with the requestId", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.cancelCodeSandboxRequest("req-2");
+    expect(intents).toEqual([
+      { topic: "scene", intent: "cancelCodeSandboxRequest", args: ["req-2"] },
+    ]);
+  });
+
+  it("approveCodeExecution sends the scene-topic approveCodeExecution intent with ONLY the requestId", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.approveCodeExecution("req-3");
+    expect(intents).toEqual([{ topic: "scene", intent: "approveCodeExecution", args: ["req-3"] }]);
+  });
+
+  it("denyCodeExecution sends the scene-topic denyCodeExecution intent with ONLY the requestId", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.denyCodeExecution("req-4");
+    expect(intents).toEqual([{ topic: "scene", intent: "denyCodeExecution", args: ["req-4"] }]);
+  });
+
+  it("subscribeStream forwards directly to transport.subscribeStream and returns its unsubscribe function", () => {
+    const { transport } = makeFakeTransport();
+    const unsubscribe = vi.fn();
+    const subscribeStreamMock = vi.fn().mockReturnValue(unsubscribe);
+    (transport as unknown as { subscribeStream: typeof subscribeStreamMock }).subscribeStream =
+      subscribeStreamMock;
+    const store = new SceneStore(transport);
+    const listener = vi.fn();
+
+    const result = store.subscribeStream("req-5", listener);
+    expect(subscribeStreamMock).toHaveBeenCalledWith("req-5", listener);
+    expect(result).toBe(unsubscribe);
   });
 
   it("suppresses empty removal intents", () => {

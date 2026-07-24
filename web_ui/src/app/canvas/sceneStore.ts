@@ -13,7 +13,7 @@ import type { SceneState } from "../../lib/bridge-core/generated/scene-state";
 import type { GridControlState } from "../../lib/bridge-core/generated/grid-control-state";
 import type { DragSpeedState } from "../../lib/bridge-core/generated/drag-speed-state";
 import type { FontControlState } from "../../lib/bridge-core/generated/font-control-state";
-import type { WsTransport } from "../../lib/ws/transport";
+import type { StreamListener, WsTransport } from "../../lib/ws/transport";
 
 export const initialSceneState: SceneState = {
   schemaVersion: 1,
@@ -407,6 +407,84 @@ export class SceneStore {
   // store method has no opinion on that, it just forwards the argument.
   applyGitlinkChanges(nodeId: string, fingerprint: string): void {
     this.transport.intent("scene", "applyGitlinkChanges", [nodeId, fingerprint]);
+  }
+
+  // R5.4: Py-Coder node - setPyCoderMode/runPyCoder/cancelPyCoderRequest
+  // mirror backend/canvas.py's registered intent names 1:1, same convention
+  // as every scene intent above. mode is a plain string ("ai_driven" |
+  // "manual") - the backend (SceneDocument.set_pycoder_mode) is the one and
+  // only validator of that value; this store has no opinion on it, same
+  // posture as applyGitlinkChanges's fingerprint passthrough above.
+  setPyCoderMode(nodeId: string, mode: string): void {
+    this.transport.intent("scene", "setPyCoderMode", [nodeId, mode]);
+  }
+
+  // inputText's meaning (a natural-language prompt vs hand-typed code) is
+  // entirely a function of the node's CURRENT server-side pycoder_mode -
+  // this store (and the WS intent itself) is mode-agnostic, matching
+  // backend/canvas.py's own start_pycoder_run docstring ("stores input_text
+  // into the field the CURRENT mode actually reads at dispatch time").
+  runPyCoder(nodeId: string, inputText: string): void {
+    this.transport.intent("scene", "runPyCoder", [nodeId, inputText]);
+  }
+
+  // Same requestId-not-nodeId shape cancelConversationRequest/
+  // cancelWebResearchRequest/cancelArtifactRequest/cancelGitlinkRequest above
+  // already established for their own per-node cancel.
+  cancelPyCoderRequest(requestId: string): void {
+    this.transport.intent("scene", "cancelPyCoderRequest", [requestId]);
+  }
+
+  // R5.4: Execution Sandbox node - same three-intent shape as Py-Coder above
+  // (setCodeSandboxRequirements/runCodeSandbox/cancelCodeSandboxRequest),
+  // minus a mode toggle - backend/canvas.py's start_code_sandbox_run has no
+  // mode-dependent field split (see its own docstring); a run's input_text
+  // always lands in code_sandbox_prompt, and an empty prompt is a legitimate
+  // "re-run the existing code_sandbox_code" request, not an error, at the
+  // WS-intent layer - CodeSandboxNodeView is the one that decides whether
+  // that's currently sensible to allow (see its own Run-enablement comment).
+  setCodeSandboxRequirements(nodeId: string, requirementsText: string): void {
+    this.transport.intent("scene", "setCodeSandboxRequirements", [nodeId, requirementsText]);
+  }
+
+  runCodeSandbox(nodeId: string, inputText: string): void {
+    this.transport.intent("scene", "runCodeSandbox", [nodeId, inputText]);
+  }
+
+  cancelCodeSandboxRequest(requestId: string): void {
+    this.transport.intent("scene", "cancelCodeSandboxRequest", [requestId]);
+  }
+
+  // R5.4: the shared human-approval gate - ONE request_id namespace across
+  // both Py-Coder and Execution Sandbox (backend/agents.py's
+  // AgentDispatcher._resolve_approval looks the id up across both request
+  // dicts), so these two intents are not duplicated per-kind. Both take
+  // ONLY a requestId - never a node id, never the code itself - mirroring
+  // applyGitlinkChanges's own "this store method has no opinion on the
+  // content, it just forwards the caller's requestId" posture; the caller
+  // (CodeExecutionApprovalPanel via SceneCanvas's toFlowNodes closures) is
+  // responsible for that requestId always being the CURRENT
+  // pendingRequestId the scene snapshot says is in flight for that node,
+  // never anything UI-supplied.
+  approveCodeExecution(requestId: string): void {
+    this.transport.intent("scene", "approveCodeExecution", [requestId]);
+  }
+
+  denyCodeExecution(requestId: string): void {
+    this.transport.intent("scene", "denyCodeExecution", [requestId]);
+  }
+
+  // R5.4: NOT one of the 8 registered WS intents above - a thin passthrough
+  // to the transport's own subscribeStream() (already exercised by R4.4's
+  // token streaming through composerStore.ts's own syncStream), exposed here
+  // so CodeSandboxNodeView's live terminal pane can subscribe to a run's
+  // stream frames (keyed by its own pendingRequestId) without needing direct
+  // access to the private `transport` field. No backend registration is
+  // needed for this - subscribeStream is a pure client-side fan-out over
+  // `kind:"stream"` frames the server already broadcasts unconditionally
+  // (see transport.ts's own doc comment on it).
+  subscribeStream(requestId: string, listener: StreamListener): () => void {
+    return this.transport.subscribeStream(requestId, listener);
   }
 
   // R3.3: the Composer's real Send action - a real user ChatNode. The

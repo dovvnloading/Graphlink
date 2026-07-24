@@ -34,7 +34,11 @@ from graphlink_grid_view_settings import (
 )
 from graphlink_navigation_pins import NavigationPinRecord, NavigationPinStore
 
-from backend.agents import _GITLINK_RUN_CLAIM_PLACEHOLDER, AgentDispatcher
+from backend.agents import (
+    _CODE_EXEC_RUN_CLAIM_PLACEHOLDER,
+    _GITLINK_RUN_CLAIM_PLACEHOLDER,
+    AgentDispatcher,
+)
 from backend.composer import ComposerDocument
 from backend.events import SessionBus
 from backend.notifications import NotificationState
@@ -325,6 +329,71 @@ class SceneNode:
     # fail_gitlink_apply below for the transitions.
     gitlink_change_state: str = "draft"
     gitlink_error: str = ""
+    # R5.4: the Py-Coder node's real persisted shape - reads a natural-
+    # language ask (ai_driven mode) or hand-typed code (manual mode), runs it
+    # in a persistent REPL subprocess, and reports the AI's analysis of the
+    # result. pending_request_id (generic, above) is reused unchanged as the
+    # busy marker for the ENTIRE span from Run-click through generation,
+    # through the human-approval pause, through execution, through analysis -
+    # same posture as Gitlink's Run/Apply. Unused (default) for every other
+    # kind.
+    pycoder_mode: str = "ai_driven"  # "ai_driven" | "manual"
+    pycoder_prompt: str = ""  # last natural-language ask (ai_driven only)
+    pycoder_code: str = ""  # current/last code - the thing that actually executes
+    pycoder_output: str = ""  # last REPL stdout
+    pycoder_analysis: str = ""  # AI's analysis of the last output
+    pycoder_last_run_failed: bool = False
+    pycoder_awaiting_approval: bool = False
+    pycoder_error: str = ""
+    # R5.4: the Execution Sandbox node's real persisted shape - runs Python
+    # inside an isolated per-node virtualenv (VirtualEnvSandbox, keyed by
+    # code_sandbox_sandbox_id) with a per-node requirements.txt manifest.
+    # There is no mode field/toggle here (unlike Py-Coder) - the real branch
+    # is "prompt blank AND code already exists -> re-run existing code
+    # as-is; else -> generate from prompt", resolved by the dispatch method
+    # checking code_sandbox_code at call time (see
+    # AgentDispatcher.start_code_sandbox_run in backend/agents.py). Unused
+    # (default) for every other kind.
+    #
+    # code_sandbox_sandbox_id is minted ONCE, at node-creation time (see
+    # add_code_sandbox_node), and is a pure internal directory-naming key -
+    # never shown or edited by the user, never even read by the frontend.
+    # EXCLUDED from scene_payload() and from the codegen SceneNodeRow source,
+    # mirroring gitlink_imported_root's existing "server-side bookkeeping
+    # only, deliberately absent from scene_payload()" precedent exactly.
+    code_sandbox_sandbox_id: str = ""
+    code_sandbox_requirements: str = ""
+    code_sandbox_prompt: str = ""
+    code_sandbox_code: str = ""
+    code_sandbox_output: str = ""
+    code_sandbox_analysis: str = ""
+    code_sandbox_awaiting_approval: bool = False
+    # R5.4 CODESANDBOX FIX (closing the requirements-disclosure staleness
+    # race): a display-only SNAPSHOT of the EXACT requirements manifest
+    # string this specific pending approval refers to - distinct from
+    # code_sandbox_requirements (the user's still-live, still-editable draft
+    # for the NEXT run). The real race this closes: AgentDispatcher.
+    # start_code_sandbox_run (backend/agents.py) reads requirements_manifest
+    # synchronously, at the very top of its own _run(), into a local
+    # `manifest` variable - BEFORE the one real await in that function (the
+    # asyncio.to_thread call to the generation agent). A user can send a new
+    # setCodeSandboxRequirements intent during that await window (it is
+    # ungated by any busy check), changing code_sandbox_requirements to
+    # something different before the approval panel is ever shown. Since the
+    # old approval panel displayed the LIVE code_sandbox_requirements field,
+    # the disclosed package list could differ from the manifest the backend
+    # actually installs a moment later - showing the WRONG list is worse
+    # than showing none for a security disclosure. This field is instead
+    # populated from that SAME already-frozen local `manifest` variable, at
+    # the exact moment code_sandbox_awaiting_approval flips True - exposing a
+    # value already correctly frozen, not re-reading anything live, so this
+    # introduces no new race. Cleared (empty string) everywhere
+    # code_sandbox_awaiting_approval itself is cleared: inline in
+    # start_code_sandbox_run immediately after the approval future resolves,
+    # and in complete_code_sandbox_run/fail_code_sandbox_run below. Unused
+    # (default) for every other kind.
+    code_sandbox_approval_requirements: str = ""
+    code_sandbox_error: str = ""
 
 
 @dataclass
@@ -1121,6 +1190,196 @@ class SceneDocument:
         node.gitlink_error = str(message)
         return node
 
+    # -- R5.4: Py-Coder node --------------------------------------------------
+    #
+    # canvas.py imports NOTHING from graphlink_plugins.pycoder - every method
+    # below is pure state mutation on plain fields, same posture as the
+    # Gitlink section above (apply_web_research_progress's own duck-typed
+    # mutation is the original precedent). The actual REPL/agent dispatch
+    # lives in backend/agents.py, which DOES import from
+    # graphlink_plugins.pycoder.domain.
+    #
+    # R5.4 post-review FIX 3: request_pycoder_approval (and its Execution
+    # Sandbox twin, request_code_sandbox_approval, below) were DELETED here -
+    # confirmed genuinely dead code (grepped the whole repo: their only
+    # references were this definition and their own dedicated unit tests,
+    # zero real call sites). The human-approval gate that actually runs
+    # mutates node.pycoder_code/pycoder_awaiting_approval directly inline
+    # inside AgentDispatcher.start_pycoder_run (backend/agents.py) - these two
+    # SceneDocument methods were a second, never-wired copy of that same
+    # mutation, built ahead of the live dispatch path and then never rewired
+    # to it. Removing dead code is the correct fix here, not building a
+    # redundant call site just to keep them alive.
+
+    def add_pycoder_node(self, x: float, y: float, parent_id: str) -> SceneNode:
+        """The Py-Coder node's creation primitive - same required-parent
+        posture as every R5 sibling (Web Research/Artifact/Gitlink): never
+        exists unparented. Title is always the fixed literal "Py-Coder"
+        (matches backend/plugins.py's own plugin display name)."""
+        if parent_id not in self.nodes:
+            raise SceneError(f"unknown parent node: {parent_id}")
+        node_id = f"n{next(self._counter)}"
+        node = SceneNode(
+            id=node_id,
+            x=float(x),
+            y=float(y),
+            title="Py-Coder",
+            kind="pycoder",
+        )
+        self.nodes[node_id] = node
+        self.connect(parent_id, node_id)
+        return node
+
+    def set_pycoder_mode(self, node_id: str, mode: str) -> SceneNode:
+        """The mode toggle (ai_driven <-> manual). Raises SceneError on an
+        unrecognized mode string - mirrors set_font's own unknown-value
+        rejection shape (raise, don't silently coerce)."""
+        node = self.nodes.get(node_id)
+        if node is None:
+            raise SceneError(f"unknown node: {node_id}")
+        if mode not in ("ai_driven", "manual"):
+            raise SceneError(f"unknown pycoder mode: {mode}")
+        node.pycoder_mode = str(mode)
+        return node
+
+    def start_pycoder_run(self, node_id: str, input_text: str) -> SceneNode:
+        """Begin one Run: stores input_text into the field the CURRENT mode
+        actually reads at dispatch time - pycoder_prompt for ai_driven (the
+        natural-language ask), pycoder_code for manual (the hand-typed code
+        that will execute verbatim) - and clears any previous error. Mirrors
+        start_gitlink_run's own "store the input, clear the error, leave
+        everything else stale-while-revalidate" posture."""
+        node = self.nodes.get(node_id)
+        if node is None:
+            raise SceneError(f"unknown node: {node_id}")
+        if node.kind != "pycoder":
+            raise SceneError(f"node is not a pycoder node: {node_id}")
+        if node.pycoder_mode == "manual":
+            node.pycoder_code = str(input_text)
+        else:
+            node.pycoder_prompt = str(input_text)
+        node.pycoder_error = ""
+        return node
+
+    def complete_pycoder_run(
+        self, node_id: str, code: str, output: str, analysis: str, last_run_failed: bool
+    ) -> SceneNode | None:
+        """Land a successful (or exhausted-repair-loop) run: code/output/
+        analysis/last_run_failed are always set verbatim, awaiting_approval
+        is cleared (the gate this run was paused on, if any, is resolved by
+        definition once a result lands), and any stale error banner is
+        cleared. Silent no-op if the node is gone - same posture as
+        fail_web_research_run's own liveness handling for a background
+        result landing after deletion."""
+        node = self.nodes.get(node_id)
+        if node is None:
+            return None
+        node.pycoder_code = str(code)
+        node.pycoder_output = str(output)
+        node.pycoder_analysis = str(analysis)
+        node.pycoder_last_run_failed = bool(last_run_failed)
+        node.pycoder_awaiting_approval = False
+        node.pycoder_error = ""
+        return node
+
+    def fail_pycoder_run(self, node_id: str, message: str) -> SceneNode | None:
+        """Land a failed (or denied-approval, or cancelled) run.
+        awaiting_approval is ALWAYS cleared here too - a denied/cancelled
+        approval must not leave the node stuck showing the approval prompt
+        forever. Deliberately does NOT clear pycoder_code/pycoder_output/
+        pycoder_analysis - a failed re-run must never wipe out a previously
+        completed result, only the error banner reflects the new failure
+        (stale-while-revalidate, same posture as fail_gitlink_run)."""
+        node = self.nodes.get(node_id)
+        if node is None:
+            return None
+        node.pycoder_awaiting_approval = False
+        node.pycoder_error = str(message)
+        return node
+
+    # -- R5.4: Execution Sandbox node ------------------------------------------
+    #
+    # Same import posture as the Py-Coder section above: canvas.py imports
+    # NOTHING from graphlink_plugins.code_sandbox.
+
+    def add_code_sandbox_node(self, x: float, y: float, parent_id: str) -> SceneNode:
+        """The Execution Sandbox node's creation primitive - same
+        required-parent posture as every R5 sibling. Title is always the
+        fixed literal "Execution Sandbox" (matches backend/plugins.py's own
+        plugin display name). code_sandbox_sandbox_id is minted here, ONCE,
+        at creation time - a short uuid4 hex used purely as this node's
+        sandbox directory name (VirtualEnvSandbox re-sanitizes it again on
+        its own side, but a short, already-safe id keeps the on-disk path
+        short and human-scannable)."""
+        if parent_id not in self.nodes:
+            raise SceneError(f"unknown parent node: {parent_id}")
+        node_id = f"n{next(self._counter)}"
+        node = SceneNode(
+            id=node_id,
+            x=float(x),
+            y=float(y),
+            title="Execution Sandbox",
+            kind="code_sandbox",
+            code_sandbox_sandbox_id=uuid.uuid4().hex[:12],
+        )
+        self.nodes[node_id] = node
+        self.connect(parent_id, node_id)
+        return node
+
+    def set_code_sandbox_requirements(self, node_id: str, requirements_text: str) -> SceneNode:
+        node = self.nodes.get(node_id)
+        if node is None:
+            raise SceneError(f"unknown node: {node_id}")
+        node.code_sandbox_requirements = str(requirements_text)
+        return node
+
+    def start_code_sandbox_run(self, node_id: str, input_text: str) -> SceneNode:
+        """Begin one Run: stores input_text into code_sandbox_prompt (there is
+        no mode-dependent field split here, unlike Py-Coder - see this
+        section's own header comment for why) and clears any previous error.
+        Deliberately does NOT touch code_sandbox_code here - the dispatch
+        method decides generate-vs-reuse by reading the EXISTING
+        code_sandbox_code value at call time, so this must not overwrite it
+        before that decision is made."""
+        node = self.nodes.get(node_id)
+        if node is None:
+            raise SceneError(f"unknown node: {node_id}")
+        if node.kind != "code_sandbox":
+            raise SceneError(f"node is not a code_sandbox node: {node_id}")
+        node.code_sandbox_prompt = str(input_text)
+        node.code_sandbox_error = ""
+        return node
+
+    def complete_code_sandbox_run(self, node_id: str, code: str, output: str, analysis: str) -> SceneNode | None:
+        """Land a successful run - mirrors complete_pycoder_run exactly,
+        minus the last_run_failed flag (Execution Sandbox has no such field;
+        an unrecovered failure after exhausting its own repair attempts
+        surfaces as a failed run, see AgentDispatcher.start_code_sandbox_run,
+        not as a "succeeded but flagged" result the way Py-Coder's repair
+        loop does)."""
+        node = self.nodes.get(node_id)
+        if node is None:
+            return None
+        node.code_sandbox_code = str(code)
+        node.code_sandbox_output = str(output)
+        node.code_sandbox_analysis = str(analysis)
+        node.code_sandbox_awaiting_approval = False
+        node.code_sandbox_approval_requirements = ""
+        node.code_sandbox_error = ""
+        return node
+
+    def fail_code_sandbox_run(self, node_id: str, message: str) -> SceneNode | None:
+        """Land a failed (or denied-approval, or cancelled) run - mirrors
+        fail_pycoder_run exactly (same stale-while-revalidate posture, same
+        unconditional awaiting_approval clear)."""
+        node = self.nodes.get(node_id)
+        if node is None:
+            return None
+        node.code_sandbox_awaiting_approval = False
+        node.code_sandbox_approval_requirements = ""
+        node.code_sandbox_error = str(message)
+        return node
+
     def delete_chat_node(self, node_id: str) -> None:
         """Delete one chat node WITHOUT orphaning its branch: children are
         re-parented to the deleted node's own parent (or become roots if it
@@ -1479,6 +1738,31 @@ class SceneDocument:
                     "gitlinkChangeFingerprint": n.gitlink_change_fingerprint,
                     "gitlinkChangeState": n.gitlink_change_state,
                     "gitlinkError": n.gitlink_error,
+                    "pycoderMode": n.pycoder_mode,
+                    "pycoderPrompt": n.pycoder_prompt,
+                    "pycoderCode": n.pycoder_code,
+                    "pycoderOutput": n.pycoder_output,
+                    "pycoderAnalysis": n.pycoder_analysis,
+                    "pycoderLastRunFailed": n.pycoder_last_run_failed,
+                    "pycoderAwaitingApproval": n.pycoder_awaiting_approval,
+                    "pycoderError": n.pycoder_error,
+                    # codeSandboxSandboxId is DELIBERATELY OMITTED - see the
+                    # field's own comment on SceneNode (pure internal
+                    # directory-naming key, mirrors gitlink_imported_root's
+                    # own "server-side bookkeeping only" precedent).
+                    "codeSandboxRequirements": n.code_sandbox_requirements,
+                    "codeSandboxPrompt": n.code_sandbox_prompt,
+                    "codeSandboxCode": n.code_sandbox_code,
+                    "codeSandboxOutput": n.code_sandbox_output,
+                    "codeSandboxAnalysis": n.code_sandbox_analysis,
+                    "codeSandboxAwaitingApproval": n.code_sandbox_awaiting_approval,
+                    # R5.4 CODESANDBOX FIX: the frozen-at-approval-time
+                    # snapshot, deliberately distinct from
+                    # codeSandboxRequirements above (that one is the user's
+                    # still-live, still-editable draft for the NEXT run) -
+                    # see the field's own comment on SceneNode.
+                    "codeSandboxApprovalRequirements": n.code_sandbox_approval_requirements,
+                    "codeSandboxError": n.code_sandbox_error,
                 }
                 for n in self.nodes.values()
             ],
@@ -2213,12 +2497,178 @@ def register_canvas(
     # already-normalized node.gitlink_pending_changes.
     bus.register_intent("scene", "applyGitlinkChanges", apply_gitlink_changes)
 
+    # -- R5.4: Py-Coder node ---------------------------------------------------
+
+    async def set_pycoder_mode(node_id, mode):
+        document.set_pycoder_mode(node_id, mode)
+        await publish_scene()
+
+    async def run_pycoder(node_id, input_text):
+        # R5.3 post-review FIX 4(b)'s own Run-vs-Run race fix, reused
+        # verbatim for this new kind: claim the busy slot with a shared
+        # placeholder SYNCHRONOUSLY, in the same stretch as the busy
+        # pre-check just above - before document.start_pycoder_run or any
+        # await - so a second concurrent runPyCoder for this SAME node_id
+        # can never pass the same pre-check during the `await
+        # publish_scene()` gap below. Critically, this placeholder stays
+        # claimed for the ENTIRE span from here through generation, through
+        # the human-approval pause, through execution, through analysis - so
+        # a second runPyCoder DURING the pause is refused by this SAME
+        # check, no new logic needed for that case specifically (see the
+        # R5.4 design spec's own section on this).
+        node_for_check = document.nodes.get(node_id)
+        if node_for_check is not None and node_for_check.pending_request_id:
+            notifications.show("Py-Coder is already busy for this node.", "info")
+            await bus.publish("notification")
+            return None
+        if node_for_check is not None:
+            node_for_check.pending_request_id = _CODE_EXEC_RUN_CLAIM_PLACEHOLDER
+        try:
+            node = document.start_pycoder_run(node_id, input_text)
+        except SceneError:
+            if node_for_check is not None:
+                node_for_check.pending_request_id = None
+            notifications.show("This node no longer exists.", "warning")
+            await bus.publish("notification")
+            return None
+        await publish_scene()
+
+        parent_edge = next((e for e in document.edges.values() if e.target == node_id), None)
+        branch_history = document.chat_branch_history(parent_edge.source) if parent_edge else []
+
+        def _on_success(code, output, analysis, last_run_failed):
+            document.complete_pycoder_run(node_id, code, output, analysis, last_run_failed)
+
+        def _on_failure(message):
+            document.fail_pycoder_run(node_id, message)
+
+        await agent_dispatcher.start_pycoder_run(
+            bus=bus, notifications_state=notifications, node=node, node_id=node_id,
+            mode=node.pycoder_mode, prompt=node.pycoder_prompt, code=node.pycoder_code,
+            conversation_history=branch_history,
+            on_success=_on_success, on_failure=_on_failure,
+        )
+        return node_id
+
+    async def cancel_pycoder_request(request_id):
+        agent_dispatcher.cancel_pycoder(request_id)
+
+    bus.register_intent("scene", "setPyCoderMode", set_pycoder_mode)
+    bus.register_intent("scene", "runPyCoder", run_pycoder)
+    bus.register_intent("scene", "cancelPyCoderRequest", cancel_pycoder_request)
+
+    # -- R5.4: Execution Sandbox node -------------------------------------------
+
+    async def set_code_sandbox_requirements(node_id, requirements_text):
+        document.set_code_sandbox_requirements(node_id, requirements_text)
+        await publish_scene()
+
+    async def run_code_sandbox(node_id, input_text):
+        # Same busy-claim-placeholder pattern as run_pycoder above (and
+        # run_gitlink_change_set before it) - see that function's own
+        # comment for the exact race this closes.
+        node_for_check = document.nodes.get(node_id)
+        if node_for_check is not None and node_for_check.pending_request_id:
+            notifications.show("Execution Sandbox is already busy for this node.", "info")
+            await bus.publish("notification")
+            return None
+        if node_for_check is not None:
+            node_for_check.pending_request_id = _CODE_EXEC_RUN_CLAIM_PLACEHOLDER
+        try:
+            node = document.start_code_sandbox_run(node_id, input_text)
+        except SceneError:
+            if node_for_check is not None:
+                node_for_check.pending_request_id = None
+            notifications.show("This node no longer exists.", "warning")
+            await bus.publish("notification")
+            return None
+        await publish_scene()
+
+        parent_edge = next((e for e in document.edges.values() if e.target == node_id), None)
+        branch_history = document.chat_branch_history(parent_edge.source) if parent_edge else []
+
+        def _on_success(code, output, analysis):
+            document.complete_code_sandbox_run(node_id, code, output, analysis)
+
+        def _on_failure(message):
+            document.fail_code_sandbox_run(node_id, message)
+
+        await agent_dispatcher.start_code_sandbox_run(
+            bus=bus, notifications_state=notifications, node=node, node_id=node_id,
+            sandbox_id=node.code_sandbox_sandbox_id,
+            prompt=node.code_sandbox_prompt, existing_code=node.code_sandbox_code,
+            requirements_manifest=node.code_sandbox_requirements,
+            conversation_history=branch_history,
+            on_success=_on_success, on_failure=_on_failure,
+        )
+        return node_id
+
+    async def cancel_code_sandbox_request(request_id):
+        agent_dispatcher.cancel_code_sandbox(request_id)
+
+    bus.register_intent("scene", "setCodeSandboxRequirements", set_code_sandbox_requirements)
+    bus.register_intent("scene", "runCodeSandbox", run_code_sandbox)
+    bus.register_intent("scene", "cancelCodeSandboxRequest", cancel_code_sandbox_request)
+
+    # -- R5.4: shared approve/deny - one request_id namespace across both kinds
+
+    async def approve_code_execution(request_id):
+        agent_dispatcher.approve_code_execution(request_id)
+
+    async def deny_code_execution(request_id):
+        agent_dispatcher.deny_code_execution(request_id)
+
+    bus.register_intent("scene", "approveCodeExecution", approve_code_execution)
+    bus.register_intent("scene", "denyCodeExecution", deny_code_execution)
+
     async def move_node(node_id, x, y):
         document.move_node(node_id, x, y)
         await publish_scene()
 
     async def remove_nodes(node_ids):
-        document.remove_nodes(list(node_ids))
+        ids = list(node_ids)
+        # R5.4: a deleted Py-Coder node's REPL subprocess must not outlive
+        # it - kind is captured BEFORE document.remove_nodes pops the node,
+        # since afterward there is nothing left to read it from.
+        pycoder_ids = [
+            node_id for node_id in ids
+            if document.nodes.get(node_id) is not None and document.nodes[node_id].kind == "pycoder"
+        ]
+        # R5.4 post-review FIX 2: a deleted pycoder/code_sandbox node's
+        # DISPATCHER-SIDE in-flight request must not outlive it either - captured
+        # here, BEFORE document.remove_nodes pops the node, for the same reason
+        # pycoder_ids above is. dispose_pycoder_repl alone only tears down the
+        # REPL subprocess; it does nothing about a request parked on `await
+        # approval_future` in AgentDispatcher._pycoder_requests/
+        # _code_sandbox_requests, which has NO timeout by design (the whole
+        # point is "wait for a human, however long that takes"). Without this,
+        # deleting a node mid-approval-pause would leave that future - and the
+        # asyncio.Task awaiting it - alive forever, and a stale/duplicate
+        # approve-or-deny message arriving later could still resolve it, lazily
+        # recreating a REPL or spinning up a fresh sandbox subprocess for a
+        # node_id no longer present anywhere in the scene.
+        code_exec_cancels = [
+            (document.nodes[node_id].kind, document.nodes[node_id].pending_request_id)
+            for node_id in ids
+            if document.nodes.get(node_id) is not None
+            and document.nodes[node_id].kind in ("pycoder", "code_sandbox")
+            and document.nodes[node_id].pending_request_id
+        ]
+        document.remove_nodes(ids)
+        for node_id in pycoder_ids:
+            await agent_dispatcher.dispose_pycoder_repl(node_id)
+        for kind, request_id in code_exec_cancels:
+            # cancel_pycoder/cancel_code_sandbox resolve any pending
+            # approval_future with False (exactly like a manual Cancel/Deny)
+            # and pop the request out of the dispatcher's own dict - a safe
+            # no-op if request_id does not name a live entry (e.g. it was only
+            # ever the synchronous busy-claim placeholder, never a real
+            # dispatcher request_id, or the request already finished on its
+            # own between the capture above and here).
+            if kind == "pycoder":
+                agent_dispatcher.cancel_pycoder(request_id)
+            else:
+                agent_dispatcher.cancel_code_sandbox(request_id)
         await publish_scene()
 
     async def connect_nodes(source, target):
