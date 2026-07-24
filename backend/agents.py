@@ -62,6 +62,7 @@ import asyncio
 import difflib
 import inspect
 import logging
+import re
 import threading
 import uuid
 from pathlib import Path
@@ -80,6 +81,19 @@ from graphlink_plugins.gitlink.repository import (
     default_import_root,
     read_local_repo_file,
     validate_pending_changes,
+)
+from graphlink_plugins.pycoder.domain import (
+    PyCoderAnalysisAgent,
+    PyCoderExecutionAgent,
+    PyCoderRepairAgent,
+    PythonREPL,
+)
+from graphlink_plugins.code_sandbox.domain import (
+    SandboxGenerationAgent,
+    SandboxRepairAgent,
+    VirtualEnvSandbox,
+    _extract_python_block,
+    _normalize_requirements,
 )
 from graphlink_plugins.web_research.domain import (
     CancellationToken,
@@ -148,6 +162,32 @@ GITLINK_CONTEXT_TIMEOUT_SECONDS = 300
 # OTHER truthy pending_request_id is still a genuine busy node and is
 # rejected exactly as before.
 _GITLINK_RUN_CLAIM_PLACEHOLDER = "pending"
+
+# R5.4: the security-boundary section's own minimal, genuinely free
+# mitigation - a hard wall-clock timeout on Py-Coder's REPL execute() call,
+# closing the one real asymmetry recon found: Execution Sandbox already
+# times out its own subprocess internally (VirtualEnvSandbox.execute_code's
+# baked-in timeout_seconds=240, unchanged by this increment), but Py-Coder's
+# REPL had NONE before this - an AI-generated infinite loop ran forever until
+# a human clicked Stop. 240 is not an independently-derived number for THIS
+# constant - it is deliberately the exact same value as Execution Sandbox's
+# own existing ceiling, for cross-kind consistency. This is a hang guard, not
+# a security control - see the module-level PyCoderNode/CodeSandboxNode
+# security-boundary comment on AgentDispatcher.start_pycoder_run below for
+# the full, unsoftened statement of what this boundary actually is.
+PYCODER_EXECUTE_TIMEOUT_SECONDS = 240
+
+# R5.4: shared by both start_pycoder_run and start_code_sandbox_run - same
+# exact mechanism and reasoning as _GITLINK_RUN_CLAIM_PLACEHOLDER above (see
+# that constant's own comment for the full race this closes), just named for
+# this pair of new kinds rather than reusing the Gitlink-specific name. Both
+# kinds' WS-intent wrappers in backend/canvas.py (run_pycoder/
+# run_code_sandbox) claim node.pending_request_id with this exact sentinel,
+# synchronously, before any await - and both
+# AgentDispatcher.start_pycoder_run/start_code_sandbox_run below recognize
+# ONLY this exact value as "already claimed by my own caller, safe to
+# overwrite".
+_CODE_EXEC_RUN_CLAIM_PLACEHOLDER = "pending"
 
 
 def bootstrap_provider_state(settings_manager: SettingsManager) -> None:
@@ -269,6 +309,139 @@ class AgentDispatcher:
         # register_canvas's own busy checks in backend/canvas.py - this dict
         # split is about cross-request bookkeeping, not the same-node guard.)
         self._gitlink_apply_requests: dict[str, dict] = {}
+        # R5.4: a SEVENTH independent in-flight-request slot - a Py-Coder Run
+        # must be able to run concurrently with any of the six existing
+        # slots above, same reasoning as every prior independent slot.
+        # request_id -> {"cancel_event": threading.Event, "approval_future":
+        # asyncio.Future[bool], "task": asyncio.Task}. approval_future is the
+        # ENTIRE "waiting for human approval" mechanism (see
+        # start_pycoder_run's own docstring) - created eagerly, before the
+        # background task even starts, so cancel_pycoder/
+        # cancel_all_pending_approvals can always resolve it even if the
+        # pipeline has not reached its own `await approval_future` yet.
+        self._pycoder_requests: dict[str, dict] = {}
+        # R5.4: an EIGHTH independent in-flight-request slot - a Execution
+        # Sandbox Run must be able to run concurrently with any of the seven
+        # slots above. Same shape as self._pycoder_requests.
+        self._code_sandbox_requests: dict[str, dict] = {}
+        # R5.4: Py-Coder's REPL subprocess outlives any single run (state
+        # persists between calls, same as legacy's own PyCoderReplManager -
+        # see that class's own docstring in graphlink_plugins/pycoder/domain.py
+        # for why its weakref.WeakKeyDictionary keying strategy does not
+        # survive the port). Keyed by node_id (a plain string) instead:
+        # explicit teardown via dispose_pycoder_repl, not GC. Execution
+        # Sandbox needs NO equivalent manager - VirtualEnvSandbox is
+        # request-scoped by design, constructed fresh per run inside
+        # start_code_sandbox_run's own asyncio.to_thread-wrapped worker
+        # function (exactly like _call_gitlink_agent constructs a fresh
+        # GitlinkAgent per call) - the only state that must survive between
+        # runs is the plain string node.code_sandbox_sandbox_id, real
+        # SceneNode state, not a live object.
+        self._pycoder_repls: dict[str, PythonREPL] = {}
+
+    def get_pycoder_repl(self, node_id: str) -> PythonREPL:
+        """Lazy-create-or-reuse - mirrors PyCoderReplManager.get_repl's own
+        shape, just keyed by node_id instead of node identity."""
+        repl = self._pycoder_repls.get(node_id)
+        if repl is None:
+            repl = PythonREPL()
+            self._pycoder_repls[node_id] = repl
+        return repl
+
+    async def dispose_pycoder_repl(self, node_id: str) -> None:
+        """Explicit teardown of one node's REPL subprocess. Tolerates a
+        missing node_id silently (pop with a default) - called from exactly
+        two places: backend/canvas.py's remove_nodes WS-intent wrapper (for
+        every deleted pycoder node), and start_pycoder_run's own
+        execute-timeout guard below (a hung REPL must not be left alive).
+        NOT called on disconnect/session-end - the REPL persists across
+        disconnects exactly like every other piece of node state in
+        SceneDocument already does; only explicit node deletion (or process
+        shutdown) ends it. stop() does a blocking kill()+wait(), so it runs
+        inside asyncio.to_thread rather than directly on the event loop."""
+        repl = self._pycoder_repls.pop(node_id, None)
+        if repl is not None:
+            await asyncio.to_thread(repl.stop)
+
+    def cancel_pycoder(self, request_id: str) -> bool:
+        """Cooperative cancel, same honestly-documented limitation as every
+        other dispatch surface (the checkpoint is a cancel_event check
+        between stages, not a true mid-call interrupt - EXCEPT for the
+        approval pause itself, which this DOES immediately and definitely
+        unblock by resolving approval_future - see start_pycoder_run's own
+        docstring). Mirrors legacy's own stop() calling
+        self._approval_event.set() to unblock a parked worker - otherwise
+        Cancel would only work pre- or post-pause, never during it."""
+        entry = self._pycoder_requests.get(request_id)
+        if entry is None:
+            return False
+        entry["cancel_event"].set()
+        future = entry.get("approval_future")
+        if future is not None and not future.done():
+            future.set_result(False)
+        return True
+
+    def cancel_code_sandbox(self, request_id: str) -> bool:
+        """Mirrors cancel_pycoder exactly (same shape, same reasoning)."""
+        entry = self._code_sandbox_requests.get(request_id)
+        if entry is None:
+            return False
+        entry["cancel_event"].set()
+        future = entry.get("approval_future")
+        if future is not None and not future.done():
+            future.set_result(False)
+        return True
+
+    def _resolve_approval(self, request_id: str, approved: bool) -> bool:
+        """The shared approve/deny primitive backing approve_code_execution/
+        deny_code_execution below - request_id is a shared uuid4 namespace
+        across BOTH self._pycoder_requests and self._code_sandbox_requests
+        (one lookup across two dicts, not four kind-specific intents/
+        methods), mirroring the WS intent layer's own two-shared-intents
+        design (approveCodeExecution/denyCodeExecution, not four separate
+        per-kind intents).
+
+        Guarding with `future.done()` is LOAD-BEARING, not defensive fluff -
+        a duplicate/stale approve-or-deny message (e.g. a double-click, or a
+        message that arrives after cancel_pycoder/cancel_code_sandbox/
+        cancel_all_pending_approvals already resolved this same future)
+        would otherwise raise asyncio.InvalidStateError."""
+        entry = self._pycoder_requests.get(request_id) or self._code_sandbox_requests.get(request_id)
+        if entry is None:
+            return False
+        future = entry["approval_future"]
+        if not future.done():
+            future.set_result(approved)
+        return True
+
+    def approve_code_execution(self, request_id: str) -> bool:
+        return self._resolve_approval(request_id, True)
+
+    def deny_code_execution(self, request_id: str) -> bool:
+        return self._resolve_approval(request_id, False)
+
+    def cancel_all_pending_approvals(self) -> None:
+        """Called ONLY from backend/app.py's ws_endpoint disconnect handler,
+        ONLY when the session's last connection drops (session.connection_
+        count == 0) - a DELIBERATE, SCOPED extension of that existing
+        disconnect contract, applied ONLY to these two new slots (see
+        backend/app.py's own comment for why this is not retrofitted onto
+        the pre-existing web_research/artifact/gitlink slots: every one of
+        those already self-terminates via asyncio.wait_for(...,
+        timeout=...), but an approval pause has NO timeout by design - the
+        whole point is "wait for a human, however long that takes" - so
+        without this auto-deny it would hang forever, permanently locking
+        node.pending_request_id on an abandoned tab).
+
+        Walks both dicts and resolves any undone future with False
+        (auto-deny) - the same future.done() guard as _resolve_approval
+        applies here for the same reason (a request that already resolved,
+        e.g. because a human approved it a moment before the last tab
+        closed, must not be clobbered)."""
+        for entry in list(self._pycoder_requests.values()) + list(self._code_sandbox_requests.values()):
+            future = entry.get("approval_future")
+            if future is not None and not future.done():
+                future.set_result(False)
 
     def cancel_gitlink(self, request_id: str) -> bool:
         entry = self._gitlink_requests.get(request_id)
@@ -1330,6 +1503,565 @@ class AgentDispatcher:
                 await bus.publish("scene")
 
         self._gitlink_apply_requests[request_id] = {"task": asyncio.create_task(_run())}
+
+    # -- R5.4: Py-Coder / Execution Sandbox -----------------------------------
+    #
+    # SECURITY BOUNDARY (stated plainly, not softened): PyCoderNode and
+    # CodeSandboxNode execute code with the full privileges of the user's
+    # account. The only two protections are the WS-Origin handshake check
+    # and a mandatory human-approval step. There is no code-level sandbox -
+    # no container, VM, or OS-level resource/permission restriction - for
+    # either kind. Py-Coder's new execution timeout is a hang guard, not a
+    # security control: it does not stop a malicious script from reading
+    # files, exfiltrating data, or (for Execution Sandbox specifically)
+    # running arbitrary code during pip install via a hostile package's
+    # build backend, before the approved script itself ever runs.
+    #
+    # Both methods below run their entire pipeline as ONE coroutine on the
+    # event loop - the blocking LLM/REPL/subprocess calls are wrapped in
+    # asyncio.to_thread, but the PAUSE between them (waiting for a human to
+    # approve or deny the candidate code) needs no thread-crossing at all: it
+    # collapses into a plain `asyncio.Future[bool]`
+    # (self._pycoder_requests[request_id]["approval_future"] /
+    # self._code_sandbox_requests[request_id]["approval_future"]), created
+    # BEFORE the background task even starts. `approved = await
+    # approval_future` IS the entire "waiting for approval" state - nothing
+    # else is needed. This replaces legacy's two independently-blocking
+    # mechanisms on two different threads (a QThread worker parked on a
+    # threading.Event, the GUI thread parked inside a modal
+    # QMessageBox.exec()), coordinated only through the shared worker object.
+
+    async def start_pycoder_run(
+        self,
+        *,
+        bus: SessionBus,
+        notifications_state,
+        node,
+        node_id: str,
+        mode: str,
+        prompt: str,
+        code: str,
+        conversation_history: list,
+        on_success,  # on_success(code, output, analysis, last_run_failed)
+        on_failure,  # on_failure(message)
+    ) -> None:
+        """R5.4: Py-Coder's Run action.
+
+        ai_driven mode mirrors legacy's PyCoderExecutionWorker: generate code
+        via PyCoderExecutionAgent -> human-approval pause -> execute in the
+        persistent REPL with up to 4 attempts, repairing via
+        PyCoderRepairAgent between failures -> analyze the final result via
+        PyCoderAnalysisAgent. A successful run through the repair loop AND a
+        run that exhausts every retry both call on_success (never
+        on_failure) - exactly mirroring legacy's own `finished.emit(result)`
+        for both cases, distinguished only by the `last_run_failed` flag and
+        a "**PROCESS FAILED**" analysis prefix.
+
+        manual mode mirrors legacy's CodeExecutionWorker + PyCoderAgentWorker
+        pair: execute the hand-typed code once (no repair loop), then
+        analyze the result. Deliberately ungated - no approval_future is
+        awaited on this path at all, mirroring legacy's own documented
+        posture exactly ("MANUAL mode is deliberately ungated - there the
+        user authored the code themselves and clicking Run *is* the
+        approval").
+
+        Every execute() call, on both paths, is wrapped in
+        asyncio.wait_for(..., timeout=PYCODER_EXECUTE_TIMEOUT_SECONDS) - the
+        one real asymmetry recon found versus Execution Sandbox (which
+        already self-limits via VirtualEnvSandbox.execute_code's own baked-in
+        timeout). On timeout, the REPL is torn down via dispose_pycoder_repl
+        rather than left alive as a runaway subprocess.
+
+        Cooperative cancellation only for the EXECUTE stage itself (same
+        honestly-documented limitation as gitlink/artifact/web_research: the
+        checkpoint is a cancel_event check between stages, not a true
+        mid-call interrupt on an in-flight REPL execute() - the REPL has no
+        polling hook the way Execution Sandbox's subprocess does) - but the
+        approval PAUSE itself is genuinely, immediately interruptible by
+        Cancel, since cancel_pycoder resolves this same approval_future.
+        """
+        if node.pending_request_id and node.pending_request_id != _CODE_EXEC_RUN_CLAIM_PLACEHOLDER:
+            notifications_state.show("Py-Coder is already busy for this node.", "info")
+            await bus.publish("notification")
+            return
+
+        request_id = uuid.uuid4().hex
+        node.pending_request_id = request_id
+        cancel_event = threading.Event()
+        approval_future: asyncio.Future = asyncio.get_running_loop().create_future()
+        await bus.publish("scene")
+
+        async def _run():
+            try:
+                if mode == "manual":
+                    manual_code = code or ""
+                    if not manual_code.strip():
+                        # Guard-rail message, routed through pycoder_error
+                        # (not pycoder_analysis, unlike legacy's own
+                        # `set_ai_analysis`) - see the R5.4 report's own note
+                        # on unifying every guard-rail message through the
+                        # one error field this port actually has.
+                        on_failure("Add Python code before running Py-Coder.")
+                        await bus.publish("scene")
+                        return
+
+                    repl = self.get_pycoder_repl(node_id)
+                    try:
+                        output = await asyncio.wait_for(
+                            asyncio.to_thread(repl.execute, manual_code),
+                            timeout=PYCODER_EXECUTE_TIMEOUT_SECONDS,
+                        )
+                    except asyncio.TimeoutError:
+                        await self.dispose_pycoder_repl(node_id)
+                        message = (
+                            "Py-Coder execution stopped responding before the request "
+                            "completed and was terminated. Please try again."
+                        )
+                        on_failure(message)
+                        notifications_state.show(message, "error")
+                        await bus.publish("notification")
+                        return
+
+                    if cancel_event.is_set():
+                        notifications_state.show("Py-Coder execution cancelled.", "info")
+                        await bus.publish("notification")
+                        return
+
+                    last_run_failed = getattr(repl, "last_run_failed", False)
+                    output_text = output if output else "[No output produced]"
+                    analysis = await asyncio.to_thread(
+                        _call_pycoder_analysis_agent, None, manual_code, output_text
+                    )
+                    on_success(manual_code, output_text, analysis, last_run_failed)
+                    await bus.publish("scene")
+                    return
+
+                # ai_driven mode
+                prompt_text = (prompt or "").strip()
+                if not prompt_text:
+                    on_failure("Please enter a prompt.")
+                    await bus.publish("scene")
+                    return
+
+                initial_response = await asyncio.to_thread(
+                    _call_pycoder_execution_agent, conversation_history, prompt_text
+                )
+                if cancel_event.is_set():
+                    notifications_state.show("Py-Coder run cancelled.", "info")
+                    await bus.publish("notification")
+                    return
+
+                code_match = re.search(r"\[TOOL:PYTHON\](.*?)\[/TOOL\]", initial_response, re.DOTALL)
+                if not code_match:
+                    # No code needed for this prompt - a real completed run
+                    # (never executed the REPL, never gated on approval),
+                    # exactly mirroring legacy's own `finished.emit(result)`
+                    # for this branch.
+                    on_success(
+                        "# No code was generated for this prompt.",
+                        "[Not applicable]",
+                        initial_response,
+                        False,
+                    )
+                    await bus.publish("scene")
+                    return
+
+                current_code = code_match.group(1).strip()
+
+                # -- human-approval gate --------------------------------------
+                node.pycoder_code = current_code
+                node.pycoder_awaiting_approval = True
+                await bus.publish("scene")
+                approved = await approval_future
+                node.pycoder_awaiting_approval = False
+
+                if not approved:
+                    on_failure("Py-Coder run cancelled: execution was not approved.")
+                    await bus.publish("scene")
+                    return
+
+                repl = self.get_pycoder_repl(node_id)
+                retry_count = 0
+                max_retries = 4
+                last_error = None
+
+                while retry_count < max_retries:
+                    if cancel_event.is_set():
+                        notifications_state.show("Py-Coder execution cancelled.", "info")
+                        await bus.publish("notification")
+                        return
+
+                    try:
+                        execution_output = await asyncio.wait_for(
+                            asyncio.to_thread(repl.execute, current_code),
+                            timeout=PYCODER_EXECUTE_TIMEOUT_SECONDS,
+                        )
+                        execution_failed = getattr(repl, "last_run_failed", False)
+                    except asyncio.TimeoutError:
+                        await self.dispose_pycoder_repl(node_id)
+                        message = (
+                            "Py-Coder execution stopped responding before the request "
+                            "completed and was terminated. Please try again."
+                        )
+                        on_failure(message)
+                        notifications_state.show(message, "error")
+                        await bus.publish("notification")
+                        return
+                    except Exception as exc:
+                        execution_output = f"\n--- EXECUTION FAILED ---\n{type(exc).__name__}: {exc}"
+                        execution_failed = True
+
+                    if not execution_failed:
+                        output_text = execution_output if execution_output else "[No output produced]"
+                        analysis = await asyncio.to_thread(
+                            _call_pycoder_analysis_agent, prompt_text, current_code, execution_output
+                        )
+                        on_success(current_code, output_text, analysis, False)
+                        await bus.publish("scene")
+                        return
+
+                    last_error = execution_output
+                    retry_count += 1
+                    if retry_count < max_retries:
+                        is_final = retry_count == max_retries - 1
+                        current_code = await asyncio.to_thread(
+                            _call_pycoder_repair_agent, current_code, last_error, is_final
+                        )
+
+                # Every retry exhausted - still a real completed run (never
+                # on_failure), matching legacy's own `finished.emit(result)`
+                # for the exhausted-repair-loop case, flagged via
+                # last_run_failed=True and a "**PROCESS FAILED**" prefix.
+                final_failure_analysis = await asyncio.to_thread(
+                    _call_pycoder_analysis_agent,
+                    prompt_text,
+                    current_code,
+                    f"The code failed to execute after {max_retries} attempts. The final error was:\n{last_error}",
+                )
+                combined_analysis = (
+                    f"**PROCESS FAILED**\n\nAfter {max_retries} attempts, the code could not "
+                    f"be successfully executed.\n\n{final_failure_analysis}"
+                )
+                on_success(current_code, last_error, combined_analysis, True)
+                await bus.publish("scene")
+            except Exception as exc:
+                logger.exception("pycoder dispatch failed")
+                on_failure(f"Py-Coder execution failed: {exc}")
+                notifications_state.show(f"Py-Coder execution failed: {exc}", "error")
+                await bus.publish("notification")
+            finally:
+                self._pycoder_requests.pop(request_id, None)
+                if node.pending_request_id == request_id:
+                    node.pending_request_id = None
+                await bus.publish("scene")
+
+        self._pycoder_requests[request_id] = {
+            "cancel_event": cancel_event,
+            "approval_future": approval_future,
+            "task": asyncio.create_task(_run()),
+        }
+
+    async def start_code_sandbox_run(
+        self,
+        *,
+        bus: SessionBus,
+        notifications_state,
+        node,
+        node_id: str,
+        sandbox_id: str,
+        prompt: str,
+        existing_code: str,
+        requirements_manifest: str,
+        conversation_history: list,
+        on_success,  # on_success(code, output, analysis)
+        on_failure,  # on_failure(message)
+    ) -> None:
+        """R5.4: Execution Sandbox's Run action - mirrors legacy's
+        CodeSandboxExecutionWorker (generate-or-reuse -> human-approval pause
+        -> prepare venv -> install requirements -> execute-with-repair-loop
+        -> analyze), collapsed into one coroutine via the same
+        asyncio.Future approval-pause mechanism as start_pycoder_run above
+        (see that method's own docstring).
+
+        UNLIKE Py-Coder, there is no persisted mode field - the real branch
+        is resolved HERE, at call time: a non-blank prompt always means
+        "generate" (regenerating ignores any existing code, mirrors
+        legacy's own `existing_code = code if run_mode == "manual" else
+        ""`); a blank prompt with existing code means "reuse the existing
+        code as-is, skip generation entirely"; a blank prompt with no
+        existing code is a guard-rail failure, exactly matching legacy's own
+        CodeSandboxExecutionWorker.run() top-of-function check.
+
+        A fresh VirtualEnvSandbox is constructed HERE, per run (never
+        cached/reused on the dispatcher) - the only state that must survive
+        between runs is the plain string sandbox_id (real SceneNode state,
+        not a live object), exactly like _call_gitlink_agent constructing a
+        fresh GitlinkAgent per call.
+
+        Cancellation is MORE effective here than Py-Coder's own REPL-based
+        cancel: VirtualEnvSandbox._run_subprocess polls `should_continue()`
+        (wired to `not cancel_event.is_set()`) roughly every 100ms while its
+        subprocess is running, and genuinely terminates it via self.stop()
+        the instant that check fails - a real, near-immediate interrupt, not
+        merely a "checked between stages" limitation. This mirrors legacy's
+        own already-working stop() behavior; it is not a new capability
+        introduced by this port. VirtualEnvSandbox.execute_code's own
+        baked-in 240s timeout (unchanged - see graphlink_plugins/
+        code_sandbox/domain.py) is what actually bounds a hung subprocess
+        that never checks should_continue on its own; PYCODER_EXECUTE_
+        TIMEOUT_SECONDS reuses that same number for Py-Coder's own,
+        previously-missing equivalent.
+
+        R5.4 post-review FIX 1: live output streaming. VirtualEnvSandbox's
+        `ensure_base_environment`/`sync_requirements`/`execute_code` each
+        already accept an `emit_line` callback (see graphlink_plugins/
+        code_sandbox/domain.py's own `_run_subprocess`) - invoked once per
+        line of subprocess stdout/stderr, on the WORKER THREAD inside
+        asyncio.to_thread. `_thread_emit_line` below hands each line to the
+        event loop the same load-bearing way `_dispatch`'s own
+        `_thread_on_chunk` does (`loop.call_soon_threadsafe(...)` feeding an
+        `asyncio.Queue` - the only safe way to cross that thread boundary;
+        `bus`/the queue itself are never touched directly from the worker
+        thread). UNLIKE `_dispatch`'s own `_pump`, there is deliberately NO
+        batching/flush-interval machinery here - R5.1's web-research
+        increment already made this exact call for its own low-frequency
+        progress channel ("too sparse to justify it"), and this channel is
+        the same shape: one `bus.publish_stream(...)` call per subprocess
+        line, in order, not a 15-17Hz token stream. A final `done=True` frame
+        is always sent last, from the shared `finally` below, so it fires on
+        EVERY exit path (guard-rail failure, no-code-generated, denied
+        approval, cancelled, timed-out, or a real success) - mirroring
+        `_dispatch`'s own "unconditional final flush on every exit path"
+        guarantee for its own stream. `topic="scene"` (not a
+        Composer-specific topic): CodeSandboxNode state is scene state, same
+        as every other plugin node kind's own dispatch surface."""
+        if node.pending_request_id and node.pending_request_id != _CODE_EXEC_RUN_CLAIM_PLACEHOLDER:
+            notifications_state.show("Execution Sandbox is already busy for this node.", "info")
+            await bus.publish("notification")
+            return
+
+        request_id = uuid.uuid4().hex
+        node.pending_request_id = request_id
+        cancel_event = threading.Event()
+        approval_future: asyncio.Future = asyncio.get_running_loop().create_future()
+        await bus.publish("scene")
+
+        def _should_continue() -> bool:
+            return not cancel_event.is_set()
+
+        async def _run():
+            loop = asyncio.get_running_loop()
+            line_queue: asyncio.Queue = asyncio.Queue()
+            _STREAM_DONE = object()
+            stream_seq = 0
+
+            def _thread_emit_line(line: str) -> None:
+                # Runs on the WORKER THREAD inside asyncio.to_thread - never
+                # touch `line_queue`/`bus` directly here, only via
+                # call_soon_threadsafe (see this method's own docstring).
+                loop.call_soon_threadsafe(line_queue.put_nowait, line)
+
+            async def _drain_stream() -> None:
+                nonlocal stream_seq
+                while True:
+                    item = await line_queue.get()
+                    if item is _STREAM_DONE:
+                        break
+                    await bus.publish_stream(
+                        topic="scene", request_id=request_id, seq=stream_seq, delta=item, done=False,
+                    )
+                    stream_seq += 1
+                # Guaranteed final frame, unconditional and always last - see
+                # the `finally` below that always queues _STREAM_DONE before
+                # awaiting this task, on EVERY exit path.
+                await bus.publish_stream(
+                    topic="scene", request_id=request_id, seq=stream_seq, delta="", done=True,
+                )
+
+            drain_task = asyncio.create_task(_drain_stream())
+            try:
+                prompt_text = (prompt or "").strip()
+                manifest = _normalize_requirements(requirements_manifest or "")
+                current_code = (existing_code or "").strip()
+
+                if prompt_text:
+                    initial_response = await asyncio.to_thread(
+                        _call_sandbox_generation_agent, conversation_history, prompt_text, manifest
+                    )
+                    if cancel_event.is_set():
+                        notifications_state.show("Sandbox execution cancelled.", "info")
+                        await bus.publish("notification")
+                        return
+                    extracted = _extract_python_block(initial_response)
+                    if not extracted:
+                        on_success(
+                            "# No Python code was generated for this request.",
+                            "[Sandbox was not executed]",
+                            initial_response,
+                        )
+                        await bus.publish("scene")
+                        return
+                    current_code = extracted
+                elif not current_code:
+                    on_failure("Provide a task prompt or Python code before running the sandbox.")
+                    await bus.publish("scene")
+                    return
+
+                # -- human-approval gate --------------------------------------
+                node.code_sandbox_code = current_code
+                node.code_sandbox_awaiting_approval = True
+                # R5.4 CODESANDBOX FIX (closing the requirements-disclosure
+                # staleness race): freeze the DISCLOSED manifest into its own
+                # snapshot field at the exact same moment the approval gate
+                # opens, using `manifest` - already computed above, at the
+                # top of this function, before this function's own
+                # generation-agent await. This introduces no new race: it
+                # only exposes a value already correctly frozen, never
+                # re-reading node.code_sandbox_requirements (the user's
+                # still-live, still-editable draft for the NEXT run) at this
+                # point. See SceneNode.code_sandbox_approval_requirements's
+                # own comment for the full race this closes.
+                node.code_sandbox_approval_requirements = manifest
+                await bus.publish("scene")
+                approved = await approval_future
+                node.code_sandbox_awaiting_approval = False
+                # Cleared here too, immediately once the approval resolves -
+                # mirrors code_sandbox_awaiting_approval's own clear on this
+                # exact line (and canvas.py's complete_code_sandbox_run/
+                # fail_code_sandbox_run clear it again downstream, redundant
+                # but harmless, for every other path that lands there).
+                node.code_sandbox_approval_requirements = ""
+
+                if not approved:
+                    on_failure("Sandbox run cancelled: execution was not approved.")
+                    await bus.publish("scene")
+                    return
+
+                sandbox = VirtualEnvSandbox(sandbox_id)
+                try:
+                    await asyncio.to_thread(
+                        sandbox.ensure_base_environment, _should_continue, _thread_emit_line
+                    )
+                    await asyncio.to_thread(
+                        sandbox.sync_requirements, manifest, _should_continue, _thread_emit_line
+                    )
+                except InterruptedError:
+                    notifications_state.show("Sandbox execution cancelled.", "info")
+                    await bus.publish("notification")
+                    return
+
+                max_attempts = 3
+                final_output = ""
+                final_return_code = 0
+                last_error = ""
+                try:
+                    for attempt_index in range(max_attempts):
+                        final_output, final_return_code = await asyncio.to_thread(
+                            sandbox.execute_code, current_code, _should_continue, _thread_emit_line
+                        )
+                        if not _is_sandbox_error_output(final_output, final_return_code):
+                            break
+                        last_error = final_output or "The sandbox process exited with an error."
+                        if attempt_index == max_attempts - 1:
+                            break
+                        current_code = await asyncio.to_thread(
+                            _call_sandbox_repair_agent, current_code, last_error, manifest, prompt_text or None
+                        )
+                    else:
+                        # Structurally unreachable (mirrors legacy's own
+                        # identical dead `else` branch - every loop path
+                        # above ends in an explicit `break`), kept for exact
+                        # structural parity rather than optimized away.
+                        final_output = final_output or last_error
+                except InterruptedError:
+                    notifications_state.show("Sandbox execution cancelled.", "info")
+                    await bus.publish("notification")
+                    return
+
+                output_text = final_output if final_output else "[No output produced]"
+                analysis = await asyncio.to_thread(
+                    _call_pycoder_analysis_agent, prompt_text or None, current_code, output_text
+                )
+                on_success(current_code, output_text, analysis)
+                await bus.publish("scene")
+            except Exception as exc:
+                logger.exception("code sandbox dispatch failed")
+                on_failure(f"Sandbox execution failed: {exc}")
+                notifications_state.show(f"Sandbox execution failed: {exc}", "error")
+                await bus.publish("notification")
+            finally:
+                self._code_sandbox_requests.pop(request_id, None)
+                if node.pending_request_id == request_id:
+                    node.pending_request_id = None
+                line_queue.put_nowait(_STREAM_DONE)
+                await drain_task
+                await bus.publish("scene")
+
+        self._code_sandbox_requests[request_id] = {
+            "cancel_event": cancel_event,
+            "approval_future": approval_future,
+            "task": asyncio.create_task(_run()),
+        }
+
+
+def _call_pycoder_execution_agent(conversation_history, user_prompt) -> str:
+    """Runs inside asyncio.to_thread. Reuses PyCoderExecutionAgent.get_response
+    verbatim - a fresh instance per call, same posture as _call_gitlink_agent/
+    _call_artifact_agent constructing their own agent fresh each time."""
+    return PyCoderExecutionAgent().get_response(conversation_history, user_prompt)
+
+
+def _call_pycoder_repair_agent(code, error, is_final_attempt) -> str:
+    """Runs inside asyncio.to_thread. Reuses PyCoderRepairAgent.get_response
+    verbatim."""
+    return PyCoderRepairAgent().get_response(code, error, is_final_attempt)
+
+
+def _call_pycoder_analysis_agent(original_prompt, code, code_output) -> str:
+    """Runs inside asyncio.to_thread. Reuses PyCoderAnalysisAgent.get_response
+    verbatim - shared by both Py-Coder's and Execution Sandbox's own final
+    analysis step, exactly like legacy's CodeSandboxExecutionWorker
+    constructing its own PyCoderAnalysisAgent instance directly rather than
+    duplicating that agent's logic."""
+    return PyCoderAnalysisAgent().get_response(original_prompt, code, code_output)
+
+
+def _call_sandbox_generation_agent(conversation_history, user_prompt, requirements_manifest) -> str:
+    """Runs inside asyncio.to_thread. Reuses SandboxGenerationAgent.get_response
+    verbatim."""
+    return SandboxGenerationAgent().get_response(conversation_history, user_prompt, requirements_manifest)
+
+
+def _call_sandbox_repair_agent(code, error_output, requirements_manifest, original_prompt) -> str:
+    """Runs inside asyncio.to_thread. Reuses SandboxRepairAgent.get_response
+    verbatim."""
+    return SandboxRepairAgent().get_response(
+        code, error_output, requirements_manifest, original_prompt=original_prompt
+    )
+
+
+# R5.4: replicates CodeSandboxExecutionWorker._is_error_output exactly - that
+# method never moved to graphlink_plugins/code_sandbox/domain.py (it is a
+# worker-instance method, not a free function any moved domain piece calls -
+# see that module's own docstring for why), so this is a second, independent
+# copy of the same keyword-based heuristic, not a shared import.
+_SANDBOX_ERROR_KEYWORDS = (
+    "traceback (most recent call last)",
+    "modulenotfounderror",
+    "importerror",
+    "nameerror:",
+    "syntaxerror:",
+    "typeerror:",
+    "valueerror:",
+    "exception:",
+)
+
+
+def _is_sandbox_error_output(output_text, return_code) -> bool:
+    if return_code != 0:
+        return True
+    lowered = (output_text or "").lower()
+    return any(keyword in lowered for keyword in _SANDBOX_ERROR_KEYWORDS)
 
 
 def _call_chat_agent(conversation_history, persona_text, cancel_event) -> str:

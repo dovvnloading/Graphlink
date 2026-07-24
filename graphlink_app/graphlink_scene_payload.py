@@ -260,6 +260,38 @@ class SceneNodeRow:
     gitlinkChangeFingerprint: str | None = None
     gitlinkChangeState: str = "draft"
     gitlinkError: str = ""
+    # R5.4: the Py-Coder node's real persisted shape - populated for
+    # kind=="pycoder" rows, defaulted for every other kind.
+    pycoderMode: str = "ai_driven"
+    pycoderPrompt: str = ""
+    pycoderCode: str = ""
+    pycoderOutput: str = ""
+    pycoderAnalysis: str = ""
+    pycoderLastRunFailed: bool = False
+    pycoderAwaitingApproval: bool = False
+    pycoderError: str = ""
+    # R5.4: the Execution Sandbox node's real persisted shape - populated for
+    # kind=="code_sandbox" rows, defaulted for every other kind.
+    # codeSandboxSandboxId is DELIBERATELY NOT one of these fields - see
+    # backend/canvas.py's own comment on SceneNode.code_sandbox_sandbox_id
+    # (pure internal directory-naming key, mirrors gitlink_imported_root's
+    # own "server-side bookkeeping only" precedent).
+    codeSandboxRequirements: str = ""
+    codeSandboxPrompt: str = ""
+    codeSandboxCode: str = ""
+    codeSandboxOutput: str = ""
+    codeSandboxAnalysis: str = ""
+    codeSandboxAwaitingApproval: bool = False
+    # R5.4 CODESANDBOX FIX (closing the requirements-disclosure staleness
+    # race): a display-only snapshot of the EXACT requirements manifest this
+    # specific pending approval refers to, frozen the instant
+    # codeSandboxAwaitingApproval flips True - deliberately distinct from
+    # codeSandboxRequirements above (the user's still-live, still-editable
+    # draft for the NEXT run). See backend/canvas.py's own comment on
+    # SceneNode.code_sandbox_approval_requirements for the full race this
+    # closes.
+    codeSandboxApprovalRequirements: str = ""
+    codeSandboxError: str = ""
 
 
 @dataclass

@@ -3222,3 +3222,850 @@ def test_agents_never_imports_qt():
         text=True,
     )
     assert result.returncode == 0, result.stderr
+
+
+# -- R5.4: Py-Coder / Execution Sandbox ---------------------------------------
+#
+# The approve/deny asyncio.Future mechanism is the novel piece this section
+# exercises hardest: the future is created EAGERLY, before the background
+# task is even scheduled (see AgentDispatcher.start_pycoder_run/
+# start_code_sandbox_run's own docstrings) - so approve_code_execution/
+# deny_code_execution/cancel_pycoder/cancel_code_sandbox/
+# cancel_all_pending_approvals can all resolve it at ANY point in the
+# request's lifetime, even before the pipeline itself ever reaches its own
+# `await approval_future` line. Tests below rely on this: resolving the
+# future immediately after start_*_run returns (before awaiting the task to
+# completion) is equivalent to resolving it while genuinely parked on the
+# gate, since asyncio.Future carries its resolved value regardless of when
+# `await` is issued on it.
+
+
+def _make_pycoder_node(**overrides):
+    defaults = dict(
+        pending_request_id=None,
+        pycoder_mode="ai_driven",
+        pycoder_prompt="",
+        pycoder_code="",
+        pycoder_output="",
+        pycoder_analysis="",
+        pycoder_last_run_failed=False,
+        pycoder_awaiting_approval=False,
+        pycoder_error="",
+    )
+    defaults.update(overrides)
+    return SimpleNamespace(**defaults)
+
+
+def _make_code_sandbox_node(**overrides):
+    defaults = dict(
+        pending_request_id=None,
+        code_sandbox_sandbox_id="sandbox-test-1",
+        code_sandbox_requirements="",
+        code_sandbox_prompt="",
+        code_sandbox_code="",
+        code_sandbox_output="",
+        code_sandbox_analysis="",
+        code_sandbox_awaiting_approval=False,
+        code_sandbox_error="",
+    )
+    defaults.update(overrides)
+    return SimpleNamespace(**defaults)
+
+
+def _make_code_exec_env():
+    bus = SessionBus("agents-code-exec-test")
+    notifications = NotificationState()
+    bus.register_topic("notification", notifications.payload)
+    bus.register_topic("scene", lambda: {})
+    dispatcher = AgentDispatcher(_FakeSettingsManager())
+    return bus, notifications, dispatcher
+
+
+class _FakeRepl:
+    """A duck-typed stand-in for PythonREPL - avoids spawning a real
+    subprocess for tests that only care about the dispatch pipeline's own
+    control flow."""
+
+    def __init__(self, script=None):
+        # script: list of (output, failed) tuples, one per execute() call;
+        # the last entry repeats if execute() is called more times than the
+        # script has entries.
+        self.script = list(script or [("", False)])
+        self.last_run_failed = False
+        self.calls = []
+        self.stopped = False
+
+    def execute(self, code):
+        self.calls.append(code)
+        output, failed = self.script.pop(0) if len(self.script) > 1 else self.script[0]
+        self.last_run_failed = failed
+        return output
+
+    def stop(self):
+        self.stopped = True
+
+
+# -- Py-Coder: manual mode -----------------------------------------------------
+
+
+def test_pycoder_manual_mode_blank_code_calls_on_failure_without_creating_a_repl(monkeypatch):
+    repl_created = []
+    monkeypatch.setattr(
+        AgentDispatcher, "get_pycoder_repl", lambda self, node_id: repl_created.append(node_id) or _FakeRepl()
+    )
+
+    async def run():
+        bus, notifications, dispatcher = _make_code_exec_env()
+        node = _make_pycoder_node(pycoder_mode="manual")
+        failures = []
+
+        await dispatcher.start_pycoder_run(
+            bus=bus, notifications_state=notifications, node=node, node_id="n1",
+            mode="manual", prompt="", code="   ", conversation_history=[],
+            on_success=lambda *a: None, on_failure=failures.append,
+        )
+        entry = next(iter(dispatcher._pycoder_requests.values()))
+        await entry["task"]
+
+        assert failures == ["Add Python code before running Py-Coder."]
+        assert repl_created == [], "a blank-code guard must never touch the REPL"
+        assert dispatcher._pycoder_requests == {}
+        assert node.pending_request_id is None
+
+    asyncio.run(run())
+
+
+def test_pycoder_manual_mode_success_executes_once_and_analyzes(monkeypatch):
+    fake_repl = _FakeRepl(script=[("42", False)])
+    monkeypatch.setattr(AgentDispatcher, "get_pycoder_repl", lambda self, node_id: fake_repl)
+    monkeypatch.setattr(
+        agents_module.PyCoderAnalysisAgent, "get_response",
+        lambda self, original_prompt, code, code_output: f"analysis of {code_output}",
+    )
+
+    async def run():
+        bus, notifications, dispatcher = _make_code_exec_env()
+        node = _make_pycoder_node(pycoder_mode="manual")
+        successes = []
+
+        await dispatcher.start_pycoder_run(
+            bus=bus, notifications_state=notifications, node=node, node_id="n1",
+            mode="manual", prompt="", code="print(42)", conversation_history=[],
+            on_success=lambda *a: successes.append(a), on_failure=lambda m: None,
+        )
+        entry = next(iter(dispatcher._pycoder_requests.values()))
+        await entry["task"]
+
+        assert successes == [("print(42)", "42", "analysis of 42", False)]
+        assert fake_repl.calls == ["print(42)"]
+        assert dispatcher._pycoder_requests == {}
+        assert node.pending_request_id is None
+
+    asyncio.run(run())
+
+
+def test_pycoder_manual_mode_reports_last_run_failed_from_the_repl(monkeypatch):
+    fake_repl = _FakeRepl(script=[("Traceback...", True)])
+    monkeypatch.setattr(AgentDispatcher, "get_pycoder_repl", lambda self, node_id: fake_repl)
+    monkeypatch.setattr(
+        agents_module.PyCoderAnalysisAgent, "get_response",
+        lambda self, original_prompt, code, code_output: "explains the error",
+    )
+
+    async def run():
+        bus, notifications, dispatcher = _make_code_exec_env()
+        node = _make_pycoder_node(pycoder_mode="manual")
+        successes = []
+
+        await dispatcher.start_pycoder_run(
+            bus=bus, notifications_state=notifications, node=node, node_id="n1",
+            mode="manual", prompt="", code="raise ValueError()", conversation_history=[],
+            on_success=lambda *a: successes.append(a), on_failure=lambda m: None,
+        )
+        entry = next(iter(dispatcher._pycoder_requests.values()))
+        await entry["task"]
+
+        assert len(successes) == 1
+        code, output, analysis, last_run_failed = successes[0]
+        assert last_run_failed is True
+        assert output == "Traceback..."
+
+    asyncio.run(run())
+
+
+def test_pycoder_manual_mode_execute_timeout_disposes_the_repl_and_calls_on_failure(monkeypatch):
+    monkeypatch.setattr(agents_module, "PYCODER_EXECUTE_TIMEOUT_SECONDS", 0.05)
+
+    class _SlowRepl:
+        def __init__(self):
+            self.last_run_failed = False
+            self.stopped = False
+
+        def execute(self, code):
+            time.sleep(0.3)
+            return "too late"
+
+        def stop(self):
+            self.stopped = True
+
+    fake_repl = _SlowRepl()
+
+    async def run():
+        bus, notifications, dispatcher = _make_code_exec_env()
+        # Populate the REAL dict directly (not via a monkeypatched
+        # get_pycoder_repl) so dispose_pycoder_repl's own real pop-and-stop
+        # logic has something genuine to tear down.
+        dispatcher._pycoder_repls["n1"] = fake_repl
+        node = _make_pycoder_node(pycoder_mode="manual")
+        failures = []
+
+        await dispatcher.start_pycoder_run(
+            bus=bus, notifications_state=notifications, node=node, node_id="n1",
+            mode="manual", prompt="", code="while True: pass", conversation_history=[],
+            on_success=lambda *a: None, on_failure=failures.append,
+        )
+        entry = next(iter(dispatcher._pycoder_requests.values()))
+        await entry["task"]
+
+        assert len(failures) == 1
+        assert "timed out" in failures[0] or "stopped responding" in failures[0]
+        assert fake_repl.stopped is True, "the hung REPL must be torn down on timeout"
+        assert "n1" not in dispatcher._pycoder_repls
+        assert dispatcher._pycoder_requests == {}
+        assert node.pending_request_id is None
+        assert notifications.visible is True
+        assert notifications.msg_type == "error"
+
+    asyncio.run(run())
+
+
+# -- Py-Coder: ai_driven mode ---------------------------------------------------
+
+
+def test_pycoder_ai_driven_empty_prompt_calls_on_failure():
+    async def run():
+        bus, notifications, dispatcher = _make_code_exec_env()
+        node = _make_pycoder_node(pycoder_mode="ai_driven")
+        failures = []
+
+        await dispatcher.start_pycoder_run(
+            bus=bus, notifications_state=notifications, node=node, node_id="n1",
+            mode="ai_driven", prompt="   ", code="", conversation_history=[],
+            on_success=lambda *a: None, on_failure=failures.append,
+        )
+        entry = next(iter(dispatcher._pycoder_requests.values()))
+        await entry["task"]
+
+        assert failures == ["Please enter a prompt."]
+        assert dispatcher._pycoder_requests == {}
+        assert node.pending_request_id is None
+
+    asyncio.run(run())
+
+
+def test_pycoder_ai_driven_no_code_generated_calls_on_success_with_placeholder_and_skips_approval(monkeypatch):
+    monkeypatch.setattr(
+        agents_module.PyCoderExecutionAgent, "get_response",
+        lambda self, history, prompt: "Here is a direct answer, no code needed.",
+    )
+
+    async def run():
+        bus, notifications, dispatcher = _make_code_exec_env()
+        node = _make_pycoder_node(pycoder_mode="ai_driven")
+        successes = []
+
+        await dispatcher.start_pycoder_run(
+            bus=bus, notifications_state=notifications, node=node, node_id="n1",
+            mode="ai_driven", prompt="what is 1+1", code="", conversation_history=[],
+            on_success=lambda *a: successes.append(a), on_failure=lambda m: None,
+        )
+        entry = next(iter(dispatcher._pycoder_requests.values()))
+        await entry["task"]
+
+        assert successes == [(
+            "# No code was generated for this prompt.",
+            "[Not applicable]",
+            "Here is a direct answer, no code needed.",
+            False,
+        )]
+        assert node.pycoder_awaiting_approval is False, "no code ever means no approval gate"
+
+    asyncio.run(run())
+
+
+def test_pycoder_ai_driven_denied_approval_calls_on_failure_with_the_exact_legacy_message(monkeypatch):
+    monkeypatch.setattr(
+        agents_module.PyCoderExecutionAgent, "get_response",
+        lambda self, history, prompt: "[TOOL:PYTHON]\nprint(1)\n[/TOOL]",
+    )
+
+    async def run():
+        bus, notifications, dispatcher = _make_code_exec_env()
+        node = _make_pycoder_node(pycoder_mode="ai_driven")
+        failures = []
+
+        await dispatcher.start_pycoder_run(
+            bus=bus, notifications_state=notifications, node=node, node_id="n1",
+            mode="ai_driven", prompt="add 1+1", code="", conversation_history=[],
+            on_success=lambda *a: None, on_failure=failures.append,
+        )
+        request_id, entry = next(iter(dispatcher._pycoder_requests.items()))
+
+        # Resolve BEFORE awaiting the task to completion - proves the future
+        # carries its value regardless of when the pipeline's own `await
+        # approval_future` actually executes (see this section's own
+        # docstring).
+        assert dispatcher.deny_code_execution(request_id) is True
+        await entry["task"]
+
+        assert failures == ["Py-Coder run cancelled: execution was not approved."]
+        assert node.pycoder_awaiting_approval is False
+        assert dispatcher._pycoder_requests == {}
+        assert node.pending_request_id is None
+
+    asyncio.run(run())
+
+
+def test_pycoder_ai_driven_approved_executes_successfully(monkeypatch):
+    monkeypatch.setattr(
+        agents_module.PyCoderExecutionAgent, "get_response",
+        lambda self, history, prompt: "[TOOL:PYTHON]\nprint(2)\n[/TOOL]",
+    )
+    fake_repl = _FakeRepl(script=[("2", False)])
+    monkeypatch.setattr(AgentDispatcher, "get_pycoder_repl", lambda self, node_id: fake_repl)
+    monkeypatch.setattr(
+        agents_module.PyCoderAnalysisAgent, "get_response",
+        lambda self, original_prompt, code, code_output: "the answer is 2",
+    )
+
+    async def run():
+        bus, notifications, dispatcher = _make_code_exec_env()
+        node = _make_pycoder_node(pycoder_mode="ai_driven")
+        successes = []
+
+        await dispatcher.start_pycoder_run(
+            bus=bus, notifications_state=notifications, node=node, node_id="n1",
+            mode="ai_driven", prompt="add 1+1", code="", conversation_history=[],
+            on_success=lambda *a: successes.append(a), on_failure=lambda m: None,
+        )
+        request_id, entry = next(iter(dispatcher._pycoder_requests.items()))
+        assert dispatcher.approve_code_execution(request_id) is True
+        await entry["task"]
+
+        assert successes == [("print(2)", "2", "the answer is 2", False)]
+        assert node.pycoder_awaiting_approval is False
+        assert fake_repl.calls == ["print(2)"]
+        assert dispatcher._pycoder_requests == {}
+        assert node.pending_request_id is None
+
+    asyncio.run(run())
+
+
+def test_pycoder_ai_driven_repair_loop_exhausts_retries_calls_on_success_with_last_run_failed_true(monkeypatch):
+    monkeypatch.setattr(
+        agents_module.PyCoderExecutionAgent, "get_response",
+        lambda self, history, prompt: "[TOOL:PYTHON]\nbroken\n[/TOOL]",
+    )
+    monkeypatch.setattr(
+        agents_module.PyCoderRepairAgent, "get_response",
+        lambda self, code, error, is_final_attempt: "still broken",
+    )
+    monkeypatch.setattr(
+        agents_module.PyCoderAnalysisAgent, "get_response",
+        lambda self, original_prompt, code, code_output: "explains the persistent failure",
+    )
+    fake_repl = _FakeRepl(script=[("err", True)])  # every execute() call fails
+    monkeypatch.setattr(AgentDispatcher, "get_pycoder_repl", lambda self, node_id: fake_repl)
+
+    async def run():
+        bus, notifications, dispatcher = _make_code_exec_env()
+        node = _make_pycoder_node(pycoder_mode="ai_driven")
+        successes = []
+
+        await dispatcher.start_pycoder_run(
+            bus=bus, notifications_state=notifications, node=node, node_id="n1",
+            mode="ai_driven", prompt="do something impossible", code="", conversation_history=[],
+            on_success=lambda *a: successes.append(a), on_failure=lambda m: None,
+        )
+        request_id, entry = next(iter(dispatcher._pycoder_requests.items()))
+        dispatcher.approve_code_execution(request_id)
+        await entry["task"]
+
+        assert len(successes) == 1, "an exhausted repair loop is still a completed run, never on_failure"
+        code, output, analysis, last_run_failed = successes[0]
+        assert last_run_failed is True
+        assert analysis.startswith("**PROCESS FAILED**")
+        assert len(fake_repl.calls) == 4, "max_retries=4, matching legacy exactly"
+
+    asyncio.run(run())
+
+
+def test_pycoder_busy_node_refuses_immediately_without_creating_a_request_entry():
+    async def run():
+        bus, notifications, dispatcher = _make_code_exec_env()
+        node = _make_pycoder_node(pending_request_id="already-busy")
+
+        await dispatcher.start_pycoder_run(
+            bus=bus, notifications_state=notifications, node=node, node_id="n1",
+            mode="ai_driven", prompt="x", code="", conversation_history=[],
+            on_success=lambda *a: None, on_failure=lambda m: None,
+        )
+
+        assert dispatcher._pycoder_requests == {}
+        assert notifications.visible is True
+        assert notifications.msg_type == "info"
+
+    asyncio.run(run())
+
+
+# -- Execution Sandbox ----------------------------------------------------------
+
+
+def test_code_sandbox_both_blank_calls_on_failure():
+    async def run():
+        bus, notifications, dispatcher = _make_code_exec_env()
+        node = _make_code_sandbox_node()
+        failures = []
+
+        await dispatcher.start_code_sandbox_run(
+            bus=bus, notifications_state=notifications, node=node, node_id="n1",
+            sandbox_id="sandbox-1", prompt="   ", existing_code="   ",
+            requirements_manifest="", conversation_history=[],
+            on_success=lambda *a: None, on_failure=failures.append,
+        )
+        entry = next(iter(dispatcher._code_sandbox_requests.values()))
+        await entry["task"]
+
+        assert failures == ["Provide a task prompt or Python code before running the sandbox."]
+        assert dispatcher._code_sandbox_requests == {}
+        assert node.pending_request_id is None
+
+    asyncio.run(run())
+
+
+def test_code_sandbox_blank_prompt_with_existing_code_reuses_it_without_calling_generation_agent(monkeypatch):
+    generation_calls = []
+    monkeypatch.setattr(
+        agents_module.SandboxGenerationAgent, "get_response",
+        lambda self, history, prompt, manifest: generation_calls.append(prompt) or "unused",
+    )
+
+    async def run():
+        bus, notifications, dispatcher = _make_code_exec_env()
+        node = _make_code_sandbox_node()
+
+        await dispatcher.start_code_sandbox_run(
+            bus=bus, notifications_state=notifications, node=node, node_id="n1",
+            sandbox_id="sandbox-1", prompt="  ", existing_code="print('reuse me')",
+            requirements_manifest="", conversation_history=[],
+            on_success=lambda *a: None, on_failure=lambda m: None,
+        )
+        request_id, entry = next(iter(dispatcher._code_sandbox_requests.items()))
+
+        # Give the pipeline a moment to reach the approval gate, then deny -
+        # this test only cares that generation was skipped, not about a full
+        # execute cycle.
+        for _ in range(200):
+            if node.code_sandbox_awaiting_approval or entry["task"].done():
+                break
+            await asyncio.sleep(0.005)
+        assert node.code_sandbox_code == "print('reuse me')", (
+            "the EXISTING code must be what is shown for approval, unmodified"
+        )
+        dispatcher.deny_code_execution(request_id)
+        await entry["task"]
+
+        assert generation_calls == [], "a blank prompt with existing code must never call the generation agent"
+
+    asyncio.run(run())
+
+
+def test_code_sandbox_nonblank_prompt_always_regenerates_even_with_existing_code(monkeypatch):
+    monkeypatch.setattr(
+        agents_module.SandboxGenerationAgent, "get_response",
+        lambda self, history, prompt, manifest: "[TOOL:PYTHON]\nprint('regenerated')\n[/TOOL]",
+    )
+
+    async def run():
+        bus, notifications, dispatcher = _make_code_exec_env()
+        node = _make_code_sandbox_node()
+
+        await dispatcher.start_code_sandbox_run(
+            bus=bus, notifications_state=notifications, node=node, node_id="n1",
+            sandbox_id="sandbox-1", prompt="write something new", existing_code="print('stale code')",
+            requirements_manifest="", conversation_history=[],
+            on_success=lambda *a: None, on_failure=lambda m: None,
+        )
+        request_id, entry = next(iter(dispatcher._code_sandbox_requests.items()))
+        dispatcher.deny_code_execution(request_id)
+        await entry["task"]
+
+        assert node.code_sandbox_code == "print('regenerated')", (
+            "a non-blank prompt must always regenerate, ignoring any existing code"
+        )
+
+    asyncio.run(run())
+
+
+def test_code_sandbox_no_code_extracted_calls_on_success_with_placeholder_and_skips_approval(monkeypatch):
+    monkeypatch.setattr(
+        agents_module.SandboxGenerationAgent, "get_response",
+        lambda self, history, prompt, manifest: "A direct answer, no code tool used.",
+    )
+
+    async def run():
+        bus, notifications, dispatcher = _make_code_exec_env()
+        node = _make_code_sandbox_node()
+        successes = []
+
+        await dispatcher.start_code_sandbox_run(
+            bus=bus, notifications_state=notifications, node=node, node_id="n1",
+            sandbox_id="sandbox-1", prompt="what is 1+1", existing_code="",
+            requirements_manifest="", conversation_history=[],
+            on_success=lambda *a: successes.append(a), on_failure=lambda m: None,
+        )
+        entry = next(iter(dispatcher._code_sandbox_requests.values()))
+        await entry["task"]
+
+        assert successes == [(
+            "# No Python code was generated for this request.",
+            "[Sandbox was not executed]",
+            "A direct answer, no code tool used.",
+        )]
+        assert node.code_sandbox_awaiting_approval is False
+
+    asyncio.run(run())
+
+
+def test_code_sandbox_denied_approval_calls_on_failure_with_the_exact_legacy_message(monkeypatch):
+    monkeypatch.setattr(
+        agents_module.SandboxGenerationAgent, "get_response",
+        lambda self, history, prompt, manifest: "[TOOL:PYTHON]\nprint(1)\n[/TOOL]",
+    )
+
+    async def run():
+        bus, notifications, dispatcher = _make_code_exec_env()
+        node = _make_code_sandbox_node()
+        failures = []
+
+        await dispatcher.start_code_sandbox_run(
+            bus=bus, notifications_state=notifications, node=node, node_id="n1",
+            sandbox_id="sandbox-1", prompt="do x", existing_code="",
+            requirements_manifest="", conversation_history=[],
+            on_success=lambda *a: None, on_failure=failures.append,
+        )
+        request_id, entry = next(iter(dispatcher._code_sandbox_requests.items()))
+        assert dispatcher.deny_code_execution(request_id) is True
+        await entry["task"]
+
+        assert failures == ["Sandbox run cancelled: execution was not approved."]
+        assert node.code_sandbox_awaiting_approval is False
+        assert dispatcher._code_sandbox_requests == {}
+        assert node.pending_request_id is None
+
+    asyncio.run(run())
+
+
+def test_code_sandbox_approved_full_success_flow_runs_venv_and_analyzes(monkeypatch):
+    monkeypatch.setattr(
+        agents_module.SandboxGenerationAgent, "get_response",
+        lambda self, history, prompt, manifest: "[TOOL:PYTHON]\nprint('ok')\n[/TOOL]",
+    )
+    monkeypatch.setattr(
+        agents_module.PyCoderAnalysisAgent, "get_response",
+        lambda self, original_prompt, code, code_output: "sandbox ran fine",
+    )
+
+    class _FakeSandbox:
+        def __init__(self, sandbox_id):
+            self.sandbox_id = sandbox_id
+            self.prep_calls = []
+
+        def ensure_base_environment(self, should_continue, emit_line=None):
+            self.prep_calls.append("ensure_base_environment")
+
+        def sync_requirements(self, manifest, should_continue, emit_line=None):
+            self.prep_calls.append(("sync_requirements", manifest))
+
+        def execute_code(self, code, should_continue, emit_line=None):
+            return f"ran: {code}", 0
+
+    monkeypatch.setattr(agents_module, "VirtualEnvSandbox", _FakeSandbox)
+
+    async def run():
+        bus, notifications, dispatcher = _make_code_exec_env()
+        node = _make_code_sandbox_node()
+        successes = []
+
+        await dispatcher.start_code_sandbox_run(
+            bus=bus, notifications_state=notifications, node=node, node_id="n1",
+            sandbox_id="sandbox-42", prompt="print ok", existing_code="",
+            requirements_manifest="numpy", conversation_history=[],
+            on_success=lambda *a: successes.append(a), on_failure=lambda m: None,
+        )
+        request_id, entry = next(iter(dispatcher._code_sandbox_requests.items()))
+        dispatcher.approve_code_execution(request_id)
+        await entry["task"]
+
+        assert len(successes) == 1
+        code, output, analysis = successes[0]
+        assert code == "print('ok')"
+        assert output == "ran: print('ok')"
+        assert analysis == "sandbox ran fine"
+        assert node.code_sandbox_awaiting_approval is False
+        assert dispatcher._code_sandbox_requests == {}
+        assert node.pending_request_id is None
+
+    asyncio.run(run())
+
+
+def test_code_sandbox_run_streams_live_output_lines_in_order_with_a_final_done_frame(monkeypatch):
+    """R5.4 post-review FIX 1: execute_code's emit_line callback must reach
+    the WS layer via bus.publish_stream, in order, addressed to this run's
+    own request_id, ending with an unconditional final done=True frame -
+    same recorder/assertion shape test_streaming_happy_path_... uses for the
+    chat token-streaming pump above (_StreamRecorderConnection is a plain,
+    reusable Connection double, not chat-specific)."""
+    monkeypatch.setattr(
+        agents_module.SandboxGenerationAgent, "get_response",
+        lambda self, history, prompt, manifest: "[TOOL:PYTHON]\nprint('ok')\n[/TOOL]",
+    )
+    monkeypatch.setattr(
+        agents_module.PyCoderAnalysisAgent, "get_response",
+        lambda self, original_prompt, code, code_output: "sandbox ran fine",
+    )
+
+    class _FakeSandbox:
+        def __init__(self, sandbox_id):
+            self.sandbox_id = sandbox_id
+
+        def ensure_base_environment(self, should_continue, emit_line=None):
+            if emit_line:
+                emit_line("[Sandbox] Creating virtual environment...\n")
+
+        def sync_requirements(self, manifest, should_continue, emit_line=None):
+            if emit_line:
+                emit_line("[Sandbox] No extra dependencies requested.\n")
+
+        def execute_code(self, code, should_continue, emit_line=None):
+            if emit_line:
+                emit_line("line one\n")
+                emit_line("line two\n")
+            return "line one\nline two", 0
+
+    monkeypatch.setattr(agents_module, "VirtualEnvSandbox", _FakeSandbox)
+
+    async def run():
+        bus, notifications, dispatcher = _make_code_exec_env()
+        recorder = _StreamRecorderConnection()
+        bus.attach(recorder)
+        node = _make_code_sandbox_node()
+        successes = []
+
+        await dispatcher.start_code_sandbox_run(
+            bus=bus, notifications_state=notifications, node=node, node_id="n1",
+            sandbox_id="sandbox-42", prompt="print ok", existing_code="",
+            requirements_manifest="", conversation_history=[],
+            on_success=lambda *a: successes.append(a), on_failure=lambda m: None,
+        )
+        request_id, entry = next(iter(dispatcher._code_sandbox_requests.items()))
+        dispatcher.approve_code_execution(request_id)
+        await entry["task"]
+
+        assert len(successes) == 1, "the run must still complete normally alongside the new streaming side-channel"
+
+        assert recorder.frames, "must have received at least one stream frame"
+        assert recorder.frames[-1]["done"] is True
+        assert recorder.frames[-1]["delta"] == ""
+        non_final = [f for f in recorder.frames if not f["done"]]
+        assert [f["delta"] for f in non_final] == [
+            "[Sandbox] Creating virtual environment...\n",
+            "[Sandbox] No extra dependencies requested.\n",
+            "line one\n",
+            "line two\n",
+        ], "one publish_stream call per emit_line call, in order - no batching"
+        assert all(f["topic"] == "scene" for f in recorder.frames)
+        assert all(f["requestId"] == request_id for f in recorder.frames), (
+            "every frame must be addressed to THIS run's own request_id"
+        )
+        seqs = [f["seq"] for f in recorder.frames]
+        assert seqs == sorted(seqs) and len(set(seqs)) == len(seqs), "seq must be strictly increasing"
+
+    asyncio.run(run())
+
+
+def test_code_sandbox_busy_node_refuses_immediately_without_creating_a_request_entry():
+    async def run():
+        bus, notifications, dispatcher = _make_code_exec_env()
+        node = _make_code_sandbox_node(pending_request_id="already-busy")
+
+        await dispatcher.start_code_sandbox_run(
+            bus=bus, notifications_state=notifications, node=node, node_id="n1",
+            sandbox_id="sandbox-1", prompt="x", existing_code="",
+            requirements_manifest="", conversation_history=[],
+            on_success=lambda *a: None, on_failure=lambda m: None,
+        )
+
+        assert dispatcher._code_sandbox_requests == {}
+        assert notifications.visible is True
+        assert notifications.msg_type == "info"
+
+    asyncio.run(run())
+
+
+def test_is_sandbox_error_output_detects_nonzero_return_code_and_keywords():
+    assert agents_module._is_sandbox_error_output("all good", 1) is True
+    assert agents_module._is_sandbox_error_output("Traceback (most recent call last):", 0) is True
+    assert agents_module._is_sandbox_error_output("ModuleNotFoundError: no module", 0) is True
+    assert agents_module._is_sandbox_error_output("all good, no errors here", 0) is False
+
+
+# -- shared approve/deny + cancel + disconnect auto-deny mechanics ------------
+
+
+def test_cancel_pycoder_sets_cancel_event_and_resolves_the_approval_future_false():
+    async def run():
+        bus, notifications, dispatcher = _make_code_exec_env()
+        node = _make_pycoder_node(pending_request_id="req-1")
+        cancel_event = threading.Event()
+        future = asyncio.get_running_loop().create_future()
+        dispatcher._pycoder_requests["req-1"] = {
+            "cancel_event": cancel_event, "approval_future": future, "task": None,
+        }
+
+        assert dispatcher.cancel_pycoder("req-1") is True
+        assert cancel_event.is_set() is True
+        assert future.done() is True
+        assert future.result() is False
+
+    asyncio.run(run())
+
+
+def test_cancel_pycoder_returns_false_for_an_unknown_request_id():
+    dispatcher = AgentDispatcher(_FakeSettingsManager())
+    assert dispatcher.cancel_pycoder("no-such-request") is False
+
+
+def test_cancel_code_sandbox_returns_false_for_an_unknown_request_id():
+    dispatcher = AgentDispatcher(_FakeSettingsManager())
+    assert dispatcher.cancel_code_sandbox("no-such-request") is False
+
+
+def test_approve_code_execution_resolves_a_pending_pycoder_future():
+    async def run():
+        dispatcher = AgentDispatcher(_FakeSettingsManager())
+        future = asyncio.get_running_loop().create_future()
+        dispatcher._pycoder_requests["req-x"] = {
+            "cancel_event": threading.Event(), "approval_future": future, "task": None,
+        }
+
+        assert dispatcher.approve_code_execution("req-x") is True
+        assert future.result() is True
+
+    asyncio.run(run())
+
+
+def test_deny_code_execution_resolves_a_pending_code_sandbox_future():
+    async def run():
+        dispatcher = AgentDispatcher(_FakeSettingsManager())
+        future = asyncio.get_running_loop().create_future()
+        dispatcher._code_sandbox_requests["req-y"] = {
+            "cancel_event": threading.Event(), "approval_future": future, "task": None,
+        }
+
+        assert dispatcher.deny_code_execution("req-y") is True
+        assert future.result() is False
+
+    asyncio.run(run())
+
+
+def test_approve_code_execution_returns_false_for_an_unknown_request_id():
+    dispatcher = AgentDispatcher(_FakeSettingsManager())
+    assert dispatcher.approve_code_execution("no-such-request") is False
+
+
+def test_resolve_approval_is_idempotent_and_never_raises_on_a_stale_duplicate_call():
+    """LOAD-BEARING guard: a duplicate/stale approve-or-deny (e.g. a
+    double-click, or a message arriving after cancel already resolved this
+    same future) must never raise asyncio.InvalidStateError."""
+    async def run():
+        dispatcher = AgentDispatcher(_FakeSettingsManager())
+        future = asyncio.get_running_loop().create_future()
+        dispatcher._pycoder_requests["req-dup"] = {
+            "cancel_event": threading.Event(), "approval_future": future, "task": None,
+        }
+
+        assert dispatcher.approve_code_execution("req-dup") is True
+        assert future.result() is True
+        # A second, stale call for the SAME request must not raise, and must
+        # not flip the already-resolved value.
+        assert dispatcher.deny_code_execution("req-dup") is True
+        assert future.result() is True, "the first resolution wins - a stale deny must not clobber it"
+
+    asyncio.run(run())
+
+
+def test_cancel_all_pending_approvals_auto_denies_every_undone_future_in_both_dicts():
+    async def run():
+        dispatcher = AgentDispatcher(_FakeSettingsManager())
+        pycoder_future = asyncio.get_running_loop().create_future()
+        sandbox_future = asyncio.get_running_loop().create_future()
+        already_resolved_future = asyncio.get_running_loop().create_future()
+        already_resolved_future.set_result(True)
+
+        dispatcher._pycoder_requests["p1"] = {
+            "cancel_event": threading.Event(), "approval_future": pycoder_future, "task": None,
+        }
+        dispatcher._code_sandbox_requests["s1"] = {
+            "cancel_event": threading.Event(), "approval_future": sandbox_future, "task": None,
+        }
+        dispatcher._code_sandbox_requests["s2"] = {
+            "cancel_event": threading.Event(), "approval_future": already_resolved_future, "task": None,
+        }
+
+        dispatcher.cancel_all_pending_approvals()
+
+        assert pycoder_future.result() is False
+        assert sandbox_future.result() is False
+        assert already_resolved_future.result() is True, (
+            "an already-resolved future must never be clobbered by the auto-deny sweep"
+        )
+
+    asyncio.run(run())
+
+
+def test_get_pycoder_repl_returns_the_same_instance_for_the_same_node_id():
+    dispatcher = AgentDispatcher(_FakeSettingsManager())
+    first = dispatcher.get_pycoder_repl("n1")
+    second = dispatcher.get_pycoder_repl("n1")
+    assert first is second
+    assert dispatcher.get_pycoder_repl("n2") is not first
+
+
+def test_dispose_pycoder_repl_tolerates_a_missing_node_id_silently():
+    async def run():
+        dispatcher = AgentDispatcher(_FakeSettingsManager())
+        await dispatcher.dispose_pycoder_repl("never-created")  # must not raise
+
+    asyncio.run(run())
+
+
+def test_dispose_pycoder_repl_stops_and_removes_the_repl():
+    class _StoppableRepl:
+        def __init__(self):
+            self.stopped = False
+
+        def stop(self):
+            self.stopped = True
+
+    async def run():
+        dispatcher = AgentDispatcher(_FakeSettingsManager())
+        fake_repl = _StoppableRepl()
+        dispatcher._pycoder_repls["n1"] = fake_repl
+
+        await dispatcher.dispose_pycoder_repl("n1")
+
+        assert fake_repl.stopped is True
+        assert "n1" not in dispatcher._pycoder_repls
+
+    asyncio.run(run())

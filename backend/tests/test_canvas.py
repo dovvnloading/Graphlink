@@ -3713,3 +3713,775 @@ def test_two_concurrent_run_gitlink_change_set_calls_for_the_same_node_only_one_
         )
 
     asyncio.run(run())
+
+
+# -- R5.4: Py-Coder node ------------------------------------------------------
+
+
+def test_add_pycoder_node_requires_valid_parent():
+    doc = SceneDocument()
+    with pytest.raises(SceneError):
+        doc.add_pycoder_node(0, 0, "ghost")
+
+
+def test_add_pycoder_node_creates_child_with_defaults():
+    doc = SceneDocument()
+    parent = doc.add_chat_node(0, 0, "wire up pycoder", True)
+    node = doc.add_pycoder_node(10, 20, parent.id)
+    assert node.kind == "pycoder"
+    assert node.title == "Py-Coder"
+    assert node.pycoder_mode == "ai_driven"
+    assert node.pycoder_prompt == ""
+    assert node.pycoder_code == ""
+    assert node.pycoder_output == ""
+    assert node.pycoder_analysis == ""
+    assert node.pycoder_last_run_failed is False
+    assert node.pycoder_awaiting_approval is False
+    assert node.pycoder_error == ""
+    assert any(e.source == parent.id and e.target == node.id for e in doc.edges.values())
+
+
+def test_add_pycoder_node_requires_a_parent_id():
+    doc = SceneDocument()
+    with pytest.raises(TypeError):
+        doc.add_pycoder_node(0, 0)
+
+
+def test_pycoder_node_deletion_goes_through_the_generic_remove_nodes_path():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_pycoder_node(10, 10, parent.id)
+    assert not hasattr(doc, "delete_pycoder_node"), (
+        "pycoder nodes are not branch points - no special delete method"
+    )
+    doc.remove_nodes([node.id])
+    assert node.id not in doc.nodes
+
+
+def test_set_pycoder_mode_sets_the_field():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_pycoder_node(0, 0, parent.id)
+    returned = doc.set_pycoder_mode(node.id, "manual")
+    assert returned is node
+    assert node.pycoder_mode == "manual"
+
+
+def test_set_pycoder_mode_rejects_unknown_mode():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_pycoder_node(0, 0, parent.id)
+    with pytest.raises(SceneError):
+        doc.set_pycoder_mode(node.id, "turbo")
+
+
+def test_set_pycoder_mode_unknown_node_raises_scene_error():
+    with pytest.raises(SceneError):
+        SceneDocument().set_pycoder_mode("ghost", "manual")
+
+
+def test_start_pycoder_run_ai_driven_stores_prompt_and_clears_error():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_pycoder_node(0, 0, parent.id)
+    node.pycoder_error = "a previous error"
+
+    returned = doc.start_pycoder_run(node.id, "sort this list")
+
+    assert returned is node
+    assert node.pycoder_prompt == "sort this list"
+    assert node.pycoder_error == ""
+
+
+def test_start_pycoder_run_manual_stores_code_not_prompt():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_pycoder_node(0, 0, parent.id)
+    doc.set_pycoder_mode(node.id, "manual")
+
+    doc.start_pycoder_run(node.id, "print('hi')")
+
+    assert node.pycoder_code == "print('hi')"
+    assert node.pycoder_prompt == ""
+
+
+def test_start_pycoder_run_unknown_node_raises_scene_error():
+    with pytest.raises(SceneError):
+        SceneDocument().start_pycoder_run("ghost", "x")
+
+
+def test_start_pycoder_run_wrong_kind_raises_scene_error():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_gitlink_node(0, 0, parent.id)
+    with pytest.raises(SceneError):
+        doc.start_pycoder_run(node.id, "x")
+
+
+def test_complete_pycoder_run_sets_all_fields_and_clears_approval_and_error():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_pycoder_node(0, 0, parent.id)
+    node.pycoder_awaiting_approval = True
+    node.pycoder_error = "stale error"
+
+    returned = doc.complete_pycoder_run(node.id, "print(1)", "1", "analysis text", False)
+
+    assert returned is node
+    assert node.pycoder_code == "print(1)"
+    assert node.pycoder_output == "1"
+    assert node.pycoder_analysis == "analysis text"
+    assert node.pycoder_last_run_failed is False
+    assert node.pycoder_awaiting_approval is False
+    assert node.pycoder_error == ""
+
+
+def test_complete_pycoder_run_is_a_silent_noop_for_a_deleted_node():
+    assert SceneDocument().complete_pycoder_run("ghost", "c", "o", "a", False) is None
+
+
+def test_fail_pycoder_run_sets_error_clears_approval_but_preserves_output():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_pycoder_node(0, 0, parent.id)
+    node.pycoder_code = "print(1)"
+    node.pycoder_output = "1"
+    node.pycoder_analysis = "old analysis"
+    node.pycoder_awaiting_approval = True
+
+    returned = doc.fail_pycoder_run(node.id, "execution timed out")
+
+    assert returned is node
+    assert node.pycoder_error == "execution timed out"
+    assert node.pycoder_awaiting_approval is False
+    # stale-while-revalidate: a failed run must not wipe out a previously
+    # completed result.
+    assert node.pycoder_code == "print(1)"
+    assert node.pycoder_output == "1"
+    assert node.pycoder_analysis == "old analysis"
+
+
+def test_fail_pycoder_run_is_a_silent_noop_for_a_deleted_node():
+    assert SceneDocument().fail_pycoder_run("ghost", "x") is None
+
+
+def test_scene_payload_pycoder_fields_default_correctly_for_a_fresh_node():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_pycoder_node(0, 0, parent.id)
+    row = {n["id"]: n for n in doc.scene_payload()["nodes"]}[node.id]
+    assert row["pycoderMode"] == "ai_driven"
+    assert row["pycoderPrompt"] == ""
+    assert row["pycoderCode"] == ""
+    assert row["pycoderOutput"] == ""
+    assert row["pycoderAnalysis"] == ""
+    assert row["pycoderLastRunFailed"] is False
+    assert row["pycoderAwaitingApproval"] is False
+    assert row["pycoderError"] == ""
+
+
+# -- R5.4: Execution Sandbox node ---------------------------------------------
+
+
+def test_add_code_sandbox_node_requires_valid_parent():
+    doc = SceneDocument()
+    with pytest.raises(SceneError):
+        doc.add_code_sandbox_node(0, 0, "ghost")
+
+
+def test_add_code_sandbox_node_creates_child_with_defaults_and_mints_sandbox_id():
+    doc = SceneDocument()
+    parent = doc.add_chat_node(0, 0, "wire up sandbox", True)
+    node = doc.add_code_sandbox_node(10, 20, parent.id)
+    assert node.kind == "code_sandbox"
+    assert node.title == "Execution Sandbox"
+    assert node.code_sandbox_sandbox_id, "a sandbox id must be minted at creation time"
+    assert node.code_sandbox_requirements == ""
+    assert node.code_sandbox_prompt == ""
+    assert node.code_sandbox_code == ""
+    assert node.code_sandbox_output == ""
+    assert node.code_sandbox_analysis == ""
+    assert node.code_sandbox_awaiting_approval is False
+    assert node.code_sandbox_error == ""
+    assert any(e.source == parent.id and e.target == node.id for e in doc.edges.values())
+
+
+def test_add_code_sandbox_node_mints_a_different_id_per_node():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    a = doc.add_code_sandbox_node(0, 0, parent.id)
+    b = doc.add_code_sandbox_node(0, 0, parent.id)
+    assert a.code_sandbox_sandbox_id != b.code_sandbox_sandbox_id
+
+
+def test_add_code_sandbox_node_requires_a_parent_id():
+    doc = SceneDocument()
+    with pytest.raises(TypeError):
+        doc.add_code_sandbox_node(0, 0)
+
+
+def test_code_sandbox_node_deletion_goes_through_the_generic_remove_nodes_path():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_code_sandbox_node(10, 10, parent.id)
+    assert not hasattr(doc, "delete_code_sandbox_node")
+    doc.remove_nodes([node.id])
+    assert node.id not in doc.nodes
+
+
+def test_set_code_sandbox_requirements_sets_the_field():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_code_sandbox_node(0, 0, parent.id)
+    returned = doc.set_code_sandbox_requirements(node.id, "numpy\nrequests")
+    assert returned is node
+    assert node.code_sandbox_requirements == "numpy\nrequests"
+
+
+def test_set_code_sandbox_requirements_unknown_node_raises_scene_error():
+    with pytest.raises(SceneError):
+        SceneDocument().set_code_sandbox_requirements("ghost", "numpy")
+
+
+def test_start_code_sandbox_run_stores_prompt_and_clears_error_without_touching_code():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_code_sandbox_node(0, 0, parent.id)
+    node.code_sandbox_code = "print('previous run')"
+    node.code_sandbox_error = "a previous error"
+
+    returned = doc.start_code_sandbox_run(node.id, "add a health check")
+
+    assert returned is node
+    assert node.code_sandbox_prompt == "add a health check"
+    assert node.code_sandbox_error == ""
+    assert node.code_sandbox_code == "print('previous run')", (
+        "start_code_sandbox_run must not overwrite the existing code - the "
+        "dispatch method decides generate-vs-reuse by reading it at call time"
+    )
+
+
+def test_start_code_sandbox_run_unknown_node_raises_scene_error():
+    with pytest.raises(SceneError):
+        SceneDocument().start_code_sandbox_run("ghost", "x")
+
+
+def test_start_code_sandbox_run_wrong_kind_raises_scene_error():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_pycoder_node(0, 0, parent.id)
+    with pytest.raises(SceneError):
+        doc.start_code_sandbox_run(node.id, "x")
+
+
+def test_complete_code_sandbox_run_sets_all_fields_and_clears_approval_and_error():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_code_sandbox_node(0, 0, parent.id)
+    node.code_sandbox_awaiting_approval = True
+    node.code_sandbox_approval_requirements = "numpy"
+    node.code_sandbox_error = "stale error"
+
+    returned = doc.complete_code_sandbox_run(node.id, "print(1)", "1", "analysis text")
+
+    assert returned is node
+    assert node.code_sandbox_code == "print(1)"
+    assert node.code_sandbox_output == "1"
+    assert node.code_sandbox_analysis == "analysis text"
+    assert node.code_sandbox_awaiting_approval is False
+    assert node.code_sandbox_approval_requirements == "", (
+        "the frozen approval snapshot must be cleared alongside awaiting_approval"
+    )
+    assert node.code_sandbox_error == ""
+
+
+def test_complete_code_sandbox_run_is_a_silent_noop_for_a_deleted_node():
+    assert SceneDocument().complete_code_sandbox_run("ghost", "c", "o", "a") is None
+
+
+def test_fail_code_sandbox_run_sets_error_clears_approval_but_preserves_output():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_code_sandbox_node(0, 0, parent.id)
+    node.code_sandbox_code = "print(1)"
+    node.code_sandbox_output = "1"
+    node.code_sandbox_analysis = "old analysis"
+    node.code_sandbox_awaiting_approval = True
+    node.code_sandbox_approval_requirements = "numpy"
+
+    returned = doc.fail_code_sandbox_run(node.id, "sandbox timed out")
+
+    assert returned is node
+    assert node.code_sandbox_error == "sandbox timed out"
+    assert node.code_sandbox_awaiting_approval is False
+    assert node.code_sandbox_approval_requirements == "", (
+        "the frozen approval snapshot must be cleared alongside awaiting_approval"
+    )
+    assert node.code_sandbox_code == "print(1)"
+    assert node.code_sandbox_output == "1"
+    assert node.code_sandbox_analysis == "old analysis"
+
+
+def test_fail_code_sandbox_run_is_a_silent_noop_for_a_deleted_node():
+    assert SceneDocument().fail_code_sandbox_run("ghost", "x") is None
+
+
+def test_scene_payload_code_sandbox_fields_default_correctly_and_excludes_sandbox_id():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_code_sandbox_node(0, 0, parent.id)
+    row = {n["id"]: n for n in doc.scene_payload()["nodes"]}[node.id]
+    assert "codeSandboxSandboxId" not in row, (
+        "the internal sandbox directory-naming key must never reach the wire"
+    )
+    assert row["codeSandboxRequirements"] == ""
+    assert row["codeSandboxPrompt"] == ""
+    assert row["codeSandboxCode"] == ""
+    assert row["codeSandboxOutput"] == ""
+    assert row["codeSandboxAnalysis"] == ""
+    assert row["codeSandboxAwaitingApproval"] is False
+    assert row["codeSandboxApprovalRequirements"] == ""
+    assert row["codeSandboxError"] == ""
+
+
+# -- R5.4: Py-Coder / Execution Sandbox - WS-intent level ---------------------
+
+
+def test_set_pycoder_mode_intent_publishes_scene():
+    async def run():
+        bus, document, recorder, _dispatcher = make_bus_with_dispatcher()
+        parent = document.add_node(0, 0, "parent")
+        node = document.add_pycoder_node(0, 0, parent.id)
+
+        await bus.dispatch_intent("scene", "setPyCoderMode", [node.id, "manual"])
+
+        assert document.nodes[node.id].pycoder_mode == "manual"
+
+    asyncio.run(run())
+
+
+def test_run_pycoder_intent_busy_node_refuses_without_calling_dispatcher():
+    class _FakeDispatcher:
+        def __init__(self):
+            self.called = False
+
+        async def start_pycoder_run(self, **kwargs):
+            self.called = True
+
+    async def run():
+        bus = SessionBus("pycoder-busy-test")
+        notifications = NotificationState()
+        bus.register_topic("notification", notifications.payload)
+        composer_document = ComposerDocument()
+        bus.register_topic("app-composer", composer_document.payload)
+        fake_dispatcher = _FakeDispatcher()
+        document = register_canvas(bus, notifications, fake_dispatcher, composer_document)
+        parent = document.add_node(0, 0, "parent")
+        node = document.add_pycoder_node(0, 0, parent.id)
+        node.pending_request_id = "already-busy"
+
+        result = await bus.dispatch_intent("scene", "runPyCoder", [node.id, "sort this"])
+
+        assert result is None
+        assert fake_dispatcher.called is False
+        assert notifications.visible is True
+        assert notifications.msg_type == "info"
+
+    asyncio.run(run())
+
+
+def test_run_pycoder_intent_dispatches_with_correct_node_fields():
+    class _FakeDispatcher:
+        def __init__(self):
+            self.calls = []
+
+        async def start_pycoder_run(self, **kwargs):
+            self.calls.append(kwargs)
+
+    async def run():
+        bus = SessionBus("pycoder-run-intent-test")
+        notifications = NotificationState()
+        bus.register_topic("notification", notifications.payload)
+        composer_document = ComposerDocument()
+        bus.register_topic("app-composer", composer_document.payload)
+        fake_dispatcher = _FakeDispatcher()
+        document = register_canvas(bus, notifications, fake_dispatcher, composer_document)
+        parent = document.add_node(0, 0, "parent")
+        node = document.add_pycoder_node(0, 0, parent.id)
+
+        result = await bus.dispatch_intent("scene", "runPyCoder", [node.id, "sort this list"])
+
+        assert result == node.id
+        assert document.nodes[node.id].pycoder_prompt == "sort this list"
+        assert len(fake_dispatcher.calls) == 1
+        call = fake_dispatcher.calls[0]
+        assert call["mode"] == "ai_driven"
+        assert call["prompt"] == "sort this list"
+        assert callable(call["on_success"])
+        assert callable(call["on_failure"])
+
+    asyncio.run(run())
+
+
+def test_cancel_pycoder_request_intent_calls_agent_dispatcher_cancel_pycoder():
+    class _FakeDispatcher:
+        def __init__(self):
+            self.cancel_calls = []
+
+        def cancel_pycoder(self, request_id):
+            self.cancel_calls.append(request_id)
+            return True
+
+    async def run():
+        bus = SessionBus("cancel-pycoder-request-intent-test")
+        notifications = NotificationState()
+        bus.register_topic("notification", notifications.payload)
+        composer_document = ComposerDocument()
+        bus.register_topic("app-composer", composer_document.payload)
+        fake_dispatcher = _FakeDispatcher()
+        register_canvas(bus, notifications, fake_dispatcher, composer_document)
+
+        result = await bus.dispatch_intent("scene", "cancelPyCoderRequest", ["req-789"])
+
+        assert result is None
+        assert fake_dispatcher.cancel_calls == ["req-789"]
+
+    asyncio.run(run())
+
+
+def test_run_code_sandbox_intent_dispatches_with_correct_node_fields():
+    class _FakeDispatcher:
+        def __init__(self):
+            self.calls = []
+
+        async def start_code_sandbox_run(self, **kwargs):
+            self.calls.append(kwargs)
+
+    async def run():
+        bus = SessionBus("sandbox-run-intent-test")
+        notifications = NotificationState()
+        bus.register_topic("notification", notifications.payload)
+        composer_document = ComposerDocument()
+        bus.register_topic("app-composer", composer_document.payload)
+        fake_dispatcher = _FakeDispatcher()
+        document = register_canvas(bus, notifications, fake_dispatcher, composer_document)
+        parent = document.add_node(0, 0, "parent")
+        node = document.add_code_sandbox_node(0, 0, parent.id)
+
+        result = await bus.dispatch_intent("scene", "runCodeSandbox", [node.id, "generate a health check"])
+
+        assert result == node.id
+        assert document.nodes[node.id].code_sandbox_prompt == "generate a health check"
+        assert len(fake_dispatcher.calls) == 1
+        call = fake_dispatcher.calls[0]
+        assert call["sandbox_id"] == document.nodes[node.id].code_sandbox_sandbox_id
+        assert call["prompt"] == "generate a health check"
+        assert call["existing_code"] == ""
+        assert callable(call["on_success"])
+        assert callable(call["on_failure"])
+
+    asyncio.run(run())
+
+
+def test_run_code_sandbox_intent_busy_node_refuses_without_calling_dispatcher():
+    class _FakeDispatcher:
+        def __init__(self):
+            self.called = False
+
+        async def start_code_sandbox_run(self, **kwargs):
+            self.called = True
+
+    async def run():
+        bus = SessionBus("sandbox-busy-test")
+        notifications = NotificationState()
+        bus.register_topic("notification", notifications.payload)
+        composer_document = ComposerDocument()
+        bus.register_topic("app-composer", composer_document.payload)
+        fake_dispatcher = _FakeDispatcher()
+        document = register_canvas(bus, notifications, fake_dispatcher, composer_document)
+        parent = document.add_node(0, 0, "parent")
+        node = document.add_code_sandbox_node(0, 0, parent.id)
+        node.pending_request_id = "already-busy"
+
+        result = await bus.dispatch_intent("scene", "runCodeSandbox", [node.id, "x"])
+
+        assert result is None
+        assert fake_dispatcher.called is False
+        assert notifications.visible is True
+        assert notifications.msg_type == "info"
+
+    asyncio.run(run())
+
+
+def test_cancel_code_sandbox_request_intent_calls_agent_dispatcher_cancel_code_sandbox():
+    class _FakeDispatcher:
+        def __init__(self):
+            self.cancel_calls = []
+
+        def cancel_code_sandbox(self, request_id):
+            self.cancel_calls.append(request_id)
+            return True
+
+    async def run():
+        bus = SessionBus("cancel-sandbox-request-intent-test")
+        notifications = NotificationState()
+        bus.register_topic("notification", notifications.payload)
+        composer_document = ComposerDocument()
+        bus.register_topic("app-composer", composer_document.payload)
+        fake_dispatcher = _FakeDispatcher()
+        register_canvas(bus, notifications, fake_dispatcher, composer_document)
+
+        result = await bus.dispatch_intent("scene", "cancelCodeSandboxRequest", ["req-321"])
+
+        assert result is None
+        assert fake_dispatcher.cancel_calls == ["req-321"]
+
+    asyncio.run(run())
+
+
+def test_approve_code_execution_intent_calls_agent_dispatcher_approve():
+    class _FakeDispatcher:
+        def __init__(self):
+            self.calls = []
+
+        def approve_code_execution(self, request_id):
+            self.calls.append(request_id)
+            return True
+
+    async def run():
+        bus = SessionBus("approve-code-execution-intent-test")
+        notifications = NotificationState()
+        bus.register_topic("notification", notifications.payload)
+        composer_document = ComposerDocument()
+        bus.register_topic("app-composer", composer_document.payload)
+        fake_dispatcher = _FakeDispatcher()
+        register_canvas(bus, notifications, fake_dispatcher, composer_document)
+
+        result = await bus.dispatch_intent("scene", "approveCodeExecution", ["req-abc"])
+
+        assert result is None
+        assert fake_dispatcher.calls == ["req-abc"]
+
+    asyncio.run(run())
+
+
+def test_deny_code_execution_intent_calls_agent_dispatcher_deny():
+    class _FakeDispatcher:
+        def __init__(self):
+            self.calls = []
+
+        def deny_code_execution(self, request_id):
+            self.calls.append(request_id)
+            return True
+
+    async def run():
+        bus = SessionBus("deny-code-execution-intent-test")
+        notifications = NotificationState()
+        bus.register_topic("notification", notifications.payload)
+        composer_document = ComposerDocument()
+        bus.register_topic("app-composer", composer_document.payload)
+        fake_dispatcher = _FakeDispatcher()
+        register_canvas(bus, notifications, fake_dispatcher, composer_document)
+
+        result = await bus.dispatch_intent("scene", "denyCodeExecution", ["req-def"])
+
+        assert result is None
+        assert fake_dispatcher.calls == ["req-def"]
+
+    asyncio.run(run())
+
+
+def test_remove_nodes_disposes_the_repl_for_every_deleted_pycoder_node():
+    """R5.4: a deleted Py-Coder node's REPL subprocess must not outlive it -
+    uses the REAL AgentDispatcher (make_bus_with_dispatcher) so this proves
+    the actual dispose_pycoder_repl wiring, not a mocked stand-in."""
+    async def run():
+        bus, document, _recorder, dispatcher = make_bus_with_dispatcher()
+        parent = document.add_node(0, 0, "parent")
+        pycoder_node = document.add_pycoder_node(0, 0, parent.id)
+        other_node = document.add_gitlink_node(0, 0, parent.id)
+        # Populate a REPL for this node id, so there is something real to
+        # tear down.
+        repl = dispatcher.get_pycoder_repl(pycoder_node.id)
+        assert pycoder_node.id in dispatcher._pycoder_repls
+
+        await bus.dispatch_intent("scene", "removeNodes", [[pycoder_node.id, other_node.id]])
+
+        assert pycoder_node.id not in document.nodes
+        assert other_node.id not in document.nodes
+        assert pycoder_node.id not in dispatcher._pycoder_repls, (
+            "the REPL must be disposed once its owning pycoder node is deleted"
+        )
+
+    asyncio.run(run())
+
+
+def test_remove_nodes_does_not_touch_the_repl_dict_when_no_pycoder_node_is_deleted():
+    async def run():
+        bus, document, _recorder, dispatcher = make_bus_with_dispatcher()
+        parent = document.add_node(0, 0, "parent")
+        pycoder_node = document.add_pycoder_node(0, 0, parent.id)
+        other_node = document.add_gitlink_node(0, 0, parent.id)
+        dispatcher.get_pycoder_repl(pycoder_node.id)
+
+        await bus.dispatch_intent("scene", "removeNodes", [[other_node.id]])
+
+        assert other_node.id not in document.nodes
+        assert pycoder_node.id in document.nodes
+        assert pycoder_node.id in dispatcher._pycoder_repls, (
+            "a still-live pycoder node's REPL must not be disposed just "
+            "because a DIFFERENT node was deleted"
+        )
+
+    asyncio.run(run())
+
+
+def test_remove_nodes_cancels_the_dispatchers_pycoder_request_when_deleted_mid_approval_pause(monkeypatch):
+    """R5.4 post-review FIX 2: dispose_pycoder_repl (proven above) only tears
+    down the REPL subprocess - it does nothing about a request genuinely
+    parked on `await approval_future` in AgentDispatcher._pycoder_requests,
+    which has NO timeout by design (the whole point is "wait for a human,
+    however long that takes"). Deleting the node mid-pause must ALSO
+    resolve/cancel that dispatcher-side request (mirrors a manual Cancel
+    exactly - see AgentDispatcher.cancel_pycoder), closing the orphan window
+    completely rather than leaving the future - and the asyncio.Task awaiting
+    it - alive forever."""
+    monkeypatch.setattr(
+        agents_module.PyCoderExecutionAgent, "get_response",
+        lambda self, history, prompt: "[TOOL:PYTHON]\nprint(1)\n[/TOOL]",
+    )
+
+    async def run():
+        bus, document, _recorder, dispatcher = make_bus_with_dispatcher()
+        parent = document.add_node(0, 0, "parent")
+        pycoder_node = document.add_pycoder_node(0, 0, parent.id)
+
+        await bus.dispatch_intent("scene", "runPyCoder", [pycoder_node.id, "do something"])
+        request_id, entry = next(iter(dispatcher._pycoder_requests.items()))
+
+        # Let the pipeline genuinely reach the approval gate (a real
+        # asyncio.to_thread hop for PyCoderExecutionAgent.get_response, then a
+        # real `await approval_future` with nothing else ever resolving it) -
+        # same polling idiom test_agents.py's own
+        # test_code_sandbox_blank_prompt_with_existing_code_reuses_it_...
+        # uses for the equivalent code_sandbox gate.
+        for _ in range(200):
+            if pycoder_node.pycoder_awaiting_approval or entry["task"].done():
+                break
+            await asyncio.sleep(0.005)
+        assert pycoder_node.pycoder_awaiting_approval is True, "must genuinely be parked on the approval gate"
+        assert request_id in dispatcher._pycoder_requests
+
+        await bus.dispatch_intent("scene", "removeNodes", [[pycoder_node.id]])
+        await entry["task"]
+
+        assert pycoder_node.id not in document.nodes
+        assert dispatcher._pycoder_requests == {}, (
+            "the orphaned dispatcher-side request must be resolved and popped - "
+            "not left parked on approval_future forever"
+        )
+        assert entry["task"].done(), "the background task must actually complete, not hang"
+
+    asyncio.run(run())
+
+
+def test_remove_nodes_cancels_the_dispatchers_code_sandbox_request_when_deleted_mid_approval_pause(monkeypatch):
+    """R5.4 post-review FIX 2's Execution Sandbox twin - mirrors the pycoder
+    test above exactly (same race, same fix, same asserted outcome)."""
+    monkeypatch.setattr(
+        agents_module.SandboxGenerationAgent, "get_response",
+        lambda self, history, prompt, manifest: "[TOOL:PYTHON]\nprint(1)\n[/TOOL]",
+    )
+
+    async def run():
+        bus, document, _recorder, dispatcher = make_bus_with_dispatcher()
+        parent = document.add_node(0, 0, "parent")
+        sandbox_node = document.add_code_sandbox_node(0, 0, parent.id)
+
+        await bus.dispatch_intent("scene", "runCodeSandbox", [sandbox_node.id, "do something"])
+        request_id, entry = next(iter(dispatcher._code_sandbox_requests.items()))
+
+        for _ in range(200):
+            if sandbox_node.code_sandbox_awaiting_approval or entry["task"].done():
+                break
+            await asyncio.sleep(0.005)
+        assert sandbox_node.code_sandbox_awaiting_approval is True, "must genuinely be parked on the approval gate"
+        assert request_id in dispatcher._code_sandbox_requests
+
+        await bus.dispatch_intent("scene", "removeNodes", [[sandbox_node.id]])
+        await entry["task"]
+
+        assert sandbox_node.id not in document.nodes
+        assert dispatcher._code_sandbox_requests == {}, (
+            "the orphaned dispatcher-side request must be resolved and popped - "
+            "not left parked on approval_future forever"
+        )
+        assert entry["task"].done(), "the background task must actually complete, not hang"
+
+    asyncio.run(run())
+
+
+def test_code_sandbox_approval_requirements_snapshot_is_decoupled_from_the_live_draft_field(monkeypatch):
+    """R5.4 CODESANDBOX FIX: closes the requirements-disclosure staleness
+    race. AgentDispatcher.start_code_sandbox_run (backend/agents.py) reads
+    requirements_manifest synchronously into a local `manifest` variable at
+    the very top of its own _run(), BEFORE its one real await (the
+    asyncio.to_thread call to SandboxGenerationAgent). A setCodeSandboxRequirements
+    intent - ungated by any busy check - can land during that await window
+    and change the LIVE node.code_sandbox_requirements field before the
+    approval panel is ever shown. Uses the REAL AgentDispatcher
+    (make_bus_with_dispatcher) driven through the real runCodeSandbox/
+    setCodeSandboxRequirements WS intents, and genuinely parks on the
+    approval gate (same polling idiom as
+    test_remove_nodes_cancels_the_dispatchers_code_sandbox_request_when_deleted_mid_approval_pause
+    above), proving node.code_sandbox_approval_requirements - the frozen
+    snapshot this pending approval genuinely refers to - stays "numpy" even
+    after a fresh setCodeSandboxRequirements changes the live draft field to
+    "requests"."""
+    monkeypatch.setattr(
+        agents_module.SandboxGenerationAgent, "get_response",
+        lambda self, history, prompt, manifest: "[TOOL:PYTHON]\nprint(1)\n[/TOOL]",
+    )
+
+    async def run():
+        bus, document, _recorder, dispatcher = make_bus_with_dispatcher()
+        parent = document.add_node(0, 0, "parent")
+        sandbox_node = document.add_code_sandbox_node(0, 0, parent.id)
+
+        await bus.dispatch_intent("scene", "setCodeSandboxRequirements", [sandbox_node.id, "numpy"])
+
+        await bus.dispatch_intent("scene", "runCodeSandbox", [sandbox_node.id, "do something"])
+        request_id, entry = next(iter(dispatcher._code_sandbox_requests.items()))
+
+        for _ in range(200):
+            if sandbox_node.code_sandbox_awaiting_approval or entry["task"].done():
+                break
+            await asyncio.sleep(0.005)
+        assert sandbox_node.code_sandbox_awaiting_approval is True, "must genuinely be parked on the approval gate"
+        assert sandbox_node.code_sandbox_approval_requirements == "numpy", (
+            "the frozen snapshot must be populated the instant the approval gate opens"
+        )
+
+        # A fresh live-draft edit arrives WHILE this approval is still
+        # pending - exactly the real race this fix closes.
+        await bus.dispatch_intent("scene", "setCodeSandboxRequirements", [sandbox_node.id, "requests"])
+
+        assert sandbox_node.code_sandbox_approval_requirements == "numpy", (
+            "the disclosed approval snapshot must stay the frozen manifest this "
+            "pending approval genuinely refers to, unaffected by a later live edit"
+        )
+        assert sandbox_node.code_sandbox_requirements == "requests", (
+            "the live draft field must still reflect the user's newest edit, "
+            "proving the two fields are genuinely decoupled"
+        )
+
+        # Deny, so the background task completes cleanly without touching a
+        # real virtualenv.
+        assert dispatcher.deny_code_execution(request_id) is True
+        await entry["task"]
+        assert sandbox_node.code_sandbox_approval_requirements == "", (
+            "must be cleared once the approval resolves, mirroring "
+            "code_sandbox_awaiting_approval's own clear"
+        )
+
+    asyncio.run(run())

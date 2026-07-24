@@ -88,18 +88,19 @@ def test_register_plugins_publishes_on_the_app_plugins_topic():
 
 
 def test_execute_plugin_shows_info_notification_for_known_plugin():
-    # "Py-Coder" (not "Gitlink" - Gitlink is now a real node-creation plugin,
-    # see the dedicated R5.3 tests below) stands in for "any plugin name
-    # still on the honest-deferred-notice path".
+    # "HTML Renderer" (not "Gitlink"/"Py-Coder"/"Execution Sandbox" - all
+    # three are now real node-creation plugins, see their own dedicated
+    # tests below) stands in for "any plugin name still on the
+    # honest-deferred-notice path".
     bus = SessionBus("plugins-exec-test")
     notifications = NotificationState()
     bus.register_topic("notification", notifications.payload)
     register_plugins(bus, notifications, SceneDocument())
 
-    asyncio.run(bus.dispatch_intent("app-plugins", "executePlugin", ["Py-Coder"]))
+    asyncio.run(bus.dispatch_intent("app-plugins", "executePlugin", ["HTML Renderer"]))
     assert notifications.visible is True
     assert notifications.msg_type == "info"
-    assert "Py-Coder" in notifications.message
+    assert "HTML Renderer" in notifications.message
     assert "R3" in notifications.message or "R5" in notifications.message
 
 
@@ -318,13 +319,139 @@ def test_execute_plugin_gitlink_creates_node():
     assert "scene" in recorder.topics_seen()
 
 
-# -- R5.1/R5.2/R5.3: non-regression - every OTHER plugin name is still an
+# -- R5.4: "Py-Coder" - the fourth real node-creation plugin ------------------
+
+
+def test_execute_plugin_pycoder_requires_parent():
+    bus, notifications, canvas_document = _make_plugins_bus()
+
+    result = asyncio.run(bus.dispatch_intent("app-plugins", "executePlugin", ["Py-Coder"]))
+
+    assert result is None
+    assert notifications.visible is True
+    assert notifications.msg_type == "warning"
+    assert notifications.message == (
+        "Please select a valid node to branch from before adding a Py-Coder node."
+    )
+    assert not any(n.kind == "pycoder" for n in canvas_document.nodes.values())
+
+
+def test_execute_plugin_pycoder_rejects_unknown_parent_id():
+    bus, notifications, canvas_document = _make_plugins_bus()
+
+    result = asyncio.run(
+        bus.dispatch_intent("app-plugins", "executePlugin", ["Py-Coder", "ghost-node-id"])
+    )
+
+    assert result is None
+    assert notifications.visible is True
+    assert notifications.msg_type == "warning"
+    assert not any(n.kind == "pycoder" for n in canvas_document.nodes.values())
+
+
+def test_execute_plugin_pycoder_creates_a_real_pycoder_node():
+    bus, notifications, canvas_document = _make_plugins_bus()
+    parent = canvas_document.add_node(10, 20, "parent")
+
+    class Recorder:
+        def __init__(self):
+            self.messages = []
+
+        async def send_json(self, data):
+            self.messages.append(data)
+
+        def topics_seen(self):
+            return [m["topic"] for m in self.messages if m["kind"] == "state"]
+
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    result = asyncio.run(bus.dispatch_intent("app-plugins", "executePlugin", ["Py-Coder", parent.id]))
+
+    assert result is not None
+    node = canvas_document.nodes[result]
+    assert node.kind == "pycoder"
+    assert node.title == "Py-Coder"
+    assert any(
+        e.source == parent.id and e.target == node.id for e in canvas_document.edges.values()
+    )
+    assert notifications.visible is False, "success is not a deferral - no notification fires"
+    assert "scene" in recorder.topics_seen()
+
+
+# -- R5.4: "Execution Sandbox" - the fifth real node-creation plugin ----------
+
+
+def test_execute_plugin_execution_sandbox_requires_parent():
+    bus, notifications, canvas_document = _make_plugins_bus()
+
+    result = asyncio.run(bus.dispatch_intent("app-plugins", "executePlugin", ["Execution Sandbox"]))
+
+    assert result is None
+    assert notifications.visible is True
+    assert notifications.msg_type == "warning"
+    assert notifications.message == (
+        "Please select a valid node to branch from before adding an Execution Sandbox node."
+    )
+    assert not any(n.kind == "code_sandbox" for n in canvas_document.nodes.values())
+
+
+def test_execute_plugin_execution_sandbox_rejects_unknown_parent_id():
+    bus, notifications, canvas_document = _make_plugins_bus()
+
+    result = asyncio.run(
+        bus.dispatch_intent("app-plugins", "executePlugin", ["Execution Sandbox", "ghost-node-id"])
+    )
+
+    assert result is None
+    assert notifications.visible is True
+    assert notifications.msg_type == "warning"
+    assert not any(n.kind == "code_sandbox" for n in canvas_document.nodes.values())
+
+
+def test_execute_plugin_execution_sandbox_creates_a_real_code_sandbox_node():
+    bus, notifications, canvas_document = _make_plugins_bus()
+    parent = canvas_document.add_node(10, 20, "parent")
+
+    class Recorder:
+        def __init__(self):
+            self.messages = []
+
+        async def send_json(self, data):
+            self.messages.append(data)
+
+        def topics_seen(self):
+            return [m["topic"] for m in self.messages if m["kind"] == "state"]
+
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    result = asyncio.run(
+        bus.dispatch_intent("app-plugins", "executePlugin", ["Execution Sandbox", parent.id])
+    )
+
+    assert result is not None
+    node = canvas_document.nodes[result]
+    assert node.kind == "code_sandbox"
+    assert node.title == "Execution Sandbox"
+    assert node.code_sandbox_sandbox_id, "a sandbox id must be minted at creation time"
+    assert any(
+        e.source == parent.id and e.target == node.id for e in canvas_document.edges.values()
+    )
+    assert notifications.visible is False, "success is not a deferral - no notification fires"
+    assert "scene" in recorder.topics_seen()
+
+
+# -- R5.1/R5.2/R5.3/R5.4: non-regression - every OTHER plugin name is still an
 # honest, unchanged deferred notice -------------------------------------------
 
 
 @pytest.mark.parametrize(
     "name",
-    [n for n in (p[0] for p in _PLUGINS) if n not in ("Web Research", "Artifact / Drafter", "Gitlink")],
+    [
+        n for n in (p[0] for p in _PLUGINS)
+        if n not in ("Web Research", "Artifact / Drafter", "Gitlink", "Py-Coder", "Execution Sandbox")
+    ],
 )
 def test_execute_plugin_every_other_plugin_name_still_shows_the_unchanged_deferred_notice(name):
     bus, notifications, canvas_document = _make_plugins_bus()

@@ -189,3 +189,69 @@ def test_disconnect_cancels_any_in_flight_chat_request(monkeypatch):
     while not cancel_event.is_set() and time.monotonic() < deadline:
         time.sleep(0.01)
     assert cancel_event.is_set()
+
+
+def test_disconnect_auto_denies_any_pending_pycoder_approval(monkeypatch):
+    # R5.4: an approval pause has NO timeout by design (the whole point is
+    # "wait for a human, however long that takes") - so a client that starts
+    # a Py-Coder run, sees the approval gate, then closes its tab WITHOUT
+    # ever approving or denying must not leave that request parked forever,
+    # permanently locking node.pending_request_id. ws_endpoint's disconnect
+    # handler must resolve the pending approval_future to False (auto-deny)
+    # once the session's last connection drops - this exercises that through
+    # the real ASGI app end to end, not just AgentDispatcher.
+    # cancel_all_pending_approvals in isolation (test_agents.py already
+    # covers that unit-level).
+    import graphlink_plugins.pycoder.domain as pycoder_domain
+
+    monkeypatch.setattr(
+        pycoder_domain.PyCoderExecutionAgent, "get_response",
+        lambda self, history, prompt: "[TOOL:PYTHON]\nprint(1)\n[/TOOL]",
+    )
+
+    client = make_client()
+    with client.websocket_connect("/ws?session=pycoder-disconnect-test") as ws:
+        ws.send_json({"kind": "subscribe", "topics": ["scene"]})
+        ws.receive_json()  # initial scene snapshot
+
+        # No "id" on either intent below - deliberately, to keep message
+        # ordering simple: each add_*/execute_plugin wrapper broadcasts its
+        # own scene state DURING the call (before dispatch_intent returns),
+        # so with no id there is exactly one message per intent to drain,
+        # and the new node's id is read back from that broadcast's own
+        # payload rather than from a "result" envelope.
+        ws.send_json({"kind": "intent", "topic": "scene", "intent": "addNode", "args": [0, 0, "root"]})
+        scene_after_add = ws.receive_json()["payload"]
+        parent_id = scene_after_add["nodes"][0]["id"]
+
+        ws.send_json(
+            {"kind": "intent", "topic": "app-plugins", "intent": "executePlugin", "args": ["Py-Coder", parent_id]}
+        )
+        scene_after_plugin = ws.receive_json()["payload"]
+        node_id = next(n["id"] for n in scene_after_plugin["nodes"] if n["kind"] == "pycoder")
+
+        ws.send_json(
+            {"kind": "intent", "topic": "scene", "intent": "runPyCoder", "args": [node_id, "add 1"]}
+        )
+        # Exactly two scene republishes land before the pipeline genuinely
+        # pauses: (1) run_pycoder's own synchronous busy-claim publish, (2)
+        # the background task's publish right after it sets
+        # pycoder_awaiting_approval=True and parks on `await
+        # approval_future` - nothing more arrives until approve/deny or
+        # disconnect.
+        ws.receive_json()  # (1) busy-claim publish
+        ws.receive_json()  # (2) awaiting-approval publish
+
+        session = client.app.state.bus.session("pycoder-disconnect-test")
+        assert session.agent_dispatcher._pycoder_requests, "runPyCoder never created a request entry"
+        entry = next(iter(session.agent_dispatcher._pycoder_requests.values()))
+        approval_future = entry["approval_future"]
+        assert not approval_future.done(), "the pipeline must genuinely be parked on the gate here"
+    # Exiting the `with` block closes the websocket, running ws_endpoint's
+    # finally - the disconnect this test exists to exercise.
+
+    deadline = time.monotonic() + 5
+    while not approval_future.done() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert approval_future.done(), "the pending approval must be auto-denied on disconnect"
+    assert approval_future.result() is False

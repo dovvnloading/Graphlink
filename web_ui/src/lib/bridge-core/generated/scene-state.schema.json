@@ -56,6 +56,30 @@
           "code": {
             "type": "string"
           },
+          "codeSandboxAnalysis": {
+            "type": "string"
+          },
+          "codeSandboxApprovalRequirements": {
+            "type": "string"
+          },
+          "codeSandboxAwaitingApproval": {
+            "type": "boolean"
+          },
+          "codeSandboxCode": {
+            "type": "string"
+          },
+          "codeSandboxError": {
+            "type": "string"
+          },
+          "codeSandboxOutput": {
+            "type": "string"
+          },
+          "codeSandboxPrompt": {
+            "type": "string"
+          },
+          "codeSandboxRequirements": {
+            "type": "string"
+          },
           "content": {
             "type": "string"
           },
@@ -196,6 +220,30 @@
             "type": "string"
           },
           "previewLabel": {
+            "type": "string"
+          },
+          "pycoderAnalysis": {
+            "type": "string"
+          },
+          "pycoderAwaitingApproval": {
+            "type": "boolean"
+          },
+          "pycoderCode": {
+            "type": "string"
+          },
+          "pycoderError": {
+            "type": "string"
+          },
+          "pycoderLastRunFailed": {
+            "type": "boolean"
+          },
+          "pycoderMode": {
+            "type": "string"
+          },
+          "pycoderOutput": {
+            "type": "string"
+          },
+          "pycoderPrompt": {
             "type": "string"
           },
           "researchActiveSourceId": {
@@ -390,7 +438,23 @@
           "gitlinkPendingChanges",
           "gitlinkPreviewText",
           "gitlinkChangeState",
-          "gitlinkError"
+          "gitlinkError",
+          "pycoderMode",
+          "pycoderPrompt",
+          "pycoderCode",
+          "pycoderOutput",
+          "pycoderAnalysis",
+          "pycoderLastRunFailed",
+          "pycoderAwaitingApproval",
+          "pycoderError",
+          "codeSandboxRequirements",
+          "codeSandboxPrompt",
+          "codeSandboxCode",
+          "codeSandboxOutput",
+          "codeSandboxAnalysis",
+          "codeSandboxAwaitingApproval",
+          "codeSandboxApprovalRequirements",
+          "codeSandboxError"
         ],
         "type": "object"
       },
