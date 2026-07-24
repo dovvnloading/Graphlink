@@ -43,6 +43,22 @@ function baseNode(overrides: Partial<SceneNodeRow> = {}): SceneNodeRow {
     researchError: "",
     researchResult: null,
     artifactContent: "",
+    gitlinkRepo: "",
+    gitlinkBranch: "",
+    gitlinkScopeMode: "selected",
+    gitlinkLocalRoot: "",
+    gitlinkRepoFilePaths: [],
+    gitlinkSelectedPaths: [],
+    gitlinkTaskPrompt: "",
+    gitlinkContextStats: {},
+    gitlinkContextSummary: "",
+    gitlinkContextVersion: 0,
+    gitlinkProposalMarkdown: "",
+    gitlinkPendingChanges: [],
+    gitlinkPreviewText: "",
+    gitlinkChangeFingerprint: null,
+    gitlinkChangeState: "",
+    gitlinkError: "",
     ...overrides,
   };
 }
@@ -389,6 +405,167 @@ describe("toFlowNodes (R5.2 artifact node)", () => {
 
     (artifactFlowNode!.data as { onDelete: () => void }).onDelete();
     expect(removeSpy).toHaveBeenCalledWith(["art-1"]);
+  });
+});
+
+describe("toFlowNodes (R5.3 gitlink node)", () => {
+  it("maps a gitlink scene node's all 15 new fields onto the flow node's data - and gitlinkContextXml is never read (not part of the wire payload)", () => {
+    const pendingChanges = [
+      { path: "src/a.py", operation: "modify", reason: "add health check", content: "print(1)" },
+    ];
+    const scene = baseScene({
+      nodes: [
+        baseNode({
+          id: "gl-1",
+          kind: "gitlink",
+          isCollapsed: true,
+          pendingRequestId: "req-1",
+          gitlinkRepo: "owner/repo",
+          gitlinkBranch: "main",
+          gitlinkScopeMode: "selected",
+          gitlinkLocalRoot: "C:/repos/repo",
+          gitlinkRepoFilePaths: ["src/a.py", "src/b.py"],
+          gitlinkSelectedPaths: ["src/a.py"],
+          gitlinkTaskPrompt: "Add a health-check endpoint",
+          gitlinkContextStats: { files: "2", tokens: "512" },
+          gitlinkContextSummary: "2 files, 512 tokens",
+          gitlinkContextVersion: 3,
+          gitlinkProposalMarkdown: "# Proposal",
+          gitlinkPendingChanges: pendingChanges,
+          gitlinkPreviewText: "--- a/src/a.py\n+++ b/src/a.py",
+          gitlinkChangeFingerprint: "fp-1",
+          gitlinkChangeState: "previewed",
+          gitlinkError: "",
+        }),
+      ],
+      edges: [],
+    });
+    const store = makeStore();
+
+    const flowNodes = toFlowNodes(scene, store);
+    const glFlowNode = flowNodes.find((n) => n.id === "gl-1");
+    expect(glFlowNode).toBeDefined();
+    expect(glFlowNode!.type).toBe("gitlink");
+    expect(glFlowNode!.data).toMatchObject({
+      gitlinkRepo: "owner/repo",
+      gitlinkBranch: "main",
+      gitlinkScopeMode: "selected",
+      gitlinkLocalRoot: "C:/repos/repo",
+      gitlinkRepoFilePaths: ["src/a.py", "src/b.py"],
+      gitlinkSelectedPaths: ["src/a.py"],
+      gitlinkTaskPrompt: "Add a health-check endpoint",
+      gitlinkContextStats: { files: "2", tokens: "512" },
+      gitlinkContextSummary: "2 files, 512 tokens",
+      gitlinkContextVersion: 3,
+      gitlinkProposalMarkdown: "# Proposal",
+      gitlinkPendingChanges: pendingChanges,
+      gitlinkPreviewText: "--- a/src/a.py\n+++ b/src/a.py",
+      gitlinkChangeFingerprint: "fp-1",
+      gitlinkChangeState: "previewed",
+      gitlinkError: "",
+      isCollapsed: true,
+      pendingRequestId: "req-1",
+    });
+    // gitlinkContextXml genuinely is not part of SceneNodeRow at all - this
+    // mapping (and the wire payload it reads from) never references it.
+    expect("gitlinkContextXml" in (glFlowNode!.data as Record<string, unknown>)).toBe(false);
+  });
+
+  it("coalesces null-ish optional fields (pendingRequestId/gitlinkChangeFingerprint) to null", () => {
+    const scene = baseScene({
+      nodes: [baseNode({ id: "gl-2", kind: "gitlink" })],
+      edges: [],
+    });
+    const store = makeStore();
+
+    const flowNodes = toFlowNodes(scene, store);
+    const glFlowNode = flowNodes.find((n) => n.id === "gl-2");
+    expect(glFlowNode).toBeDefined();
+    expect(glFlowNode!.data).toMatchObject({ pendingRequestId: null, gitlinkChangeFingerprint: null });
+  });
+
+  it("onFetchRepositories/onLoadTree/onSetLocalRoot/onImportSnapshot/onBuildContext/onFetchContext/onRun/onApply all resolve to this node's id", () => {
+    const scene = baseScene({ nodes: [baseNode({ id: "gl-1", kind: "gitlink" })], edges: [] });
+    const store = makeStore();
+    const fetchReposSpy = vi.spyOn(store, "fetchGitlinkRepositories").mockResolvedValue([]);
+    const loadTreeSpy = vi.spyOn(store, "loadGitlinkRepoTree");
+    const setRootSpy = vi.spyOn(store, "setGitlinkLocalRoot");
+    const importSpy = vi.spyOn(store, "importGitlinkSnapshot");
+    const buildContextSpy = vi.spyOn(store, "buildGitlinkContext");
+    const fetchContextSpy = vi.spyOn(store, "fetchGitlinkContext").mockResolvedValue("");
+    const runSpy = vi.spyOn(store, "runGitlinkChangeSet");
+    const applySpy = vi.spyOn(store, "applyGitlinkChanges");
+
+    const flowNodes = toFlowNodes(scene, store);
+    const glFlowNode = flowNodes.find((n) => n.id === "gl-1");
+    const data = glFlowNode!.data as unknown as {
+      onFetchRepositories: () => Promise<string[]>;
+      onLoadTree: (repo: string, branch: string) => void;
+      onSetLocalRoot: (localRoot: string) => void;
+      onImportSnapshot: (repo: string, branch: string) => void;
+      onBuildContext: (scopeMode: string, selectedPaths: string[]) => void;
+      onFetchContext: () => Promise<string>;
+      onRun: (taskPrompt: string) => void;
+      onApply: (fingerprint: string) => void;
+    };
+
+    data.onFetchRepositories();
+    expect(fetchReposSpy).toHaveBeenCalledWith("gl-1");
+    data.onLoadTree("owner/repo", "main");
+    expect(loadTreeSpy).toHaveBeenCalledWith("gl-1", "owner/repo", "main");
+    data.onSetLocalRoot("C:/repos/repo");
+    expect(setRootSpy).toHaveBeenCalledWith("gl-1", "C:/repos/repo");
+    data.onImportSnapshot("owner/repo", "main");
+    expect(importSpy).toHaveBeenCalledWith("gl-1", "owner/repo", "main");
+    data.onBuildContext("full", ["a.py"]);
+    expect(buildContextSpy).toHaveBeenCalledWith("gl-1", "full", ["a.py"]);
+    data.onFetchContext();
+    expect(fetchContextSpy).toHaveBeenCalledWith("gl-1");
+    data.onRun("Add a health-check endpoint");
+    expect(runSpy).toHaveBeenCalledWith("gl-1", "Add a health-check endpoint");
+    data.onApply("fp-1");
+    expect(applySpy).toHaveBeenCalledWith("gl-1", "fp-1");
+  });
+
+  it("onCancel fires cancelGitlinkRequest with pendingRequestId when set, and is a no-op otherwise", () => {
+    const scene = baseScene({
+      nodes: [
+        baseNode({ id: "gl-pending", kind: "gitlink", pendingRequestId: "req-77" }),
+        baseNode({ id: "gl-idle", kind: "gitlink", pendingRequestId: null }),
+      ],
+      edges: [],
+    });
+    const store = makeStore();
+    const intentSpy = vi.spyOn(store, "cancelGitlinkRequest");
+
+    const flowNodes = toFlowNodes(scene, store);
+    const pendingNode = flowNodes.find((n) => n.id === "gl-pending");
+    const idleNode = flowNodes.find((n) => n.id === "gl-idle");
+
+    (pendingNode!.data as { onCancel: () => void }).onCancel();
+    expect(intentSpy).toHaveBeenCalledWith("req-77");
+
+    (idleNode!.data as { onCancel: () => void }).onCancel();
+    expect(intentSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("onToggleCollapse/onDelete reuse the generic setChatCollapsed/removeNodes intents", () => {
+    const scene = baseScene({
+      nodes: [baseNode({ id: "gl-1", kind: "gitlink", isCollapsed: false })],
+      edges: [],
+    });
+    const store = makeStore();
+    const collapseSpy = vi.spyOn(store, "setChatCollapsed");
+    const removeSpy = vi.spyOn(store, "removeNodes");
+
+    const flowNodes = toFlowNodes(scene, store);
+    const glFlowNode = flowNodes.find((n) => n.id === "gl-1");
+
+    (glFlowNode!.data as { onToggleCollapse: () => void }).onToggleCollapse();
+    expect(collapseSpy).toHaveBeenCalledWith("gl-1", true);
+
+    (glFlowNode!.data as { onDelete: () => void }).onDelete();
+    expect(removeSpy).toHaveBeenCalledWith(["gl-1"]);
   });
 });
 

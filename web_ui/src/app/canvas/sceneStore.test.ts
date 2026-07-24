@@ -7,6 +7,17 @@ type StateListener = (payload: Record<string, unknown>) => void;
 function makeFakeTransport() {
   const listeners = new Map<string, StateListener>();
   const intents: Array<{ topic: string; intent: string; args: unknown[] }> = [];
+  const requests: Array<{ topic: string; intent: string; args: unknown[] }> = [];
+  // A queue rather than mockResolvedValueOnce: the latter REPLACES the
+  // implementation for that call (skipping the requests.push below
+  // entirely), which would make every request-based intent look
+  // unsent. Shifting a pre-loaded result here keeps both the recorded call
+  // AND a controllable resolved value.
+  const requestResults: unknown[] = [];
+  const requestImpl = vi.fn((topic: string, intent: string, args: unknown[] = []) => {
+    requests.push({ topic, intent, args });
+    return Promise.resolve(requestResults.length > 0 ? requestResults.shift() : undefined);
+  });
   const transport = {
     subscribe: vi.fn((topic: string, listener: StateListener) => {
       listeners.set(topic, listener);
@@ -15,8 +26,9 @@ function makeFakeTransport() {
     intent: vi.fn((topic: string, intent: string, args: unknown[] = []) => {
       intents.push({ topic, intent, args });
     }),
+    request: requestImpl,
   } as unknown as WsTransport;
-  return { transport, listeners, intents };
+  return { transport, listeners, intents, requests, requestImpl, requestResults };
 }
 
 function validScenePayload(overrides: Record<string, unknown> = {}) {
@@ -48,6 +60,21 @@ function validScenePayload(overrides: Record<string, unknown> = {}) {
         researchTotal: 0,
         researchError: "",
         artifactContent: "",
+        gitlinkRepo: "",
+        gitlinkBranch: "",
+        gitlinkScopeMode: "selected",
+        gitlinkLocalRoot: "",
+        gitlinkRepoFilePaths: [],
+        gitlinkSelectedPaths: [],
+        gitlinkTaskPrompt: "",
+        gitlinkContextStats: {},
+        gitlinkContextSummary: "",
+        gitlinkContextVersion: 0,
+        gitlinkProposalMarkdown: "",
+        gitlinkPendingChanges: [],
+        gitlinkPreviewText: "",
+        gitlinkChangeState: "",
+        gitlinkError: "",
       },
     ],
     edges: [],
@@ -306,6 +333,95 @@ describe("SceneStore", () => {
     store.cancelArtifactRequest("req-13");
     expect(intents).toEqual([
       { topic: "scene", intent: "cancelArtifactRequest", args: ["req-13"] },
+    ]);
+  });
+
+  it("fetchGitlinkRepositories sends a REQUEST (not a fire-and-forget intent) with [nodeId], and resolves to the reply", async () => {
+    const { transport, requests, intents, requestResults } = makeFakeTransport();
+    requestResults.push(["owner/repo-a", "owner/repo-b"]);
+    const store = new SceneStore(transport);
+
+    const result = await store.fetchGitlinkRepositories("n1");
+    expect(requests).toEqual([
+      { topic: "scene", intent: "fetchGitlinkRepositories", args: ["n1"] },
+    ]);
+    expect(intents).toEqual([]);
+    expect(result).toEqual(["owner/repo-a", "owner/repo-b"]);
+  });
+
+  it("loadGitlinkRepoTree sends the scene-topic loadGitlinkRepoTree intent with [nodeId, repo, branch]", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.loadGitlinkRepoTree("n1", "owner/repo", "main");
+    expect(intents).toEqual([
+      { topic: "scene", intent: "loadGitlinkRepoTree", args: ["n1", "owner/repo", "main"] },
+    ]);
+  });
+
+  it("setGitlinkLocalRoot sends the scene-topic setGitlinkLocalRoot intent with [nodeId, localRoot]", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.setGitlinkLocalRoot("n1", "C:/repos/graphlink");
+    expect(intents).toEqual([
+      { topic: "scene", intent: "setGitlinkLocalRoot", args: ["n1", "C:/repos/graphlink"] },
+    ]);
+  });
+
+  it("importGitlinkSnapshot sends the scene-topic importGitlinkSnapshot intent with [nodeId, repo, branch]", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.importGitlinkSnapshot("n1", "owner/repo", "main");
+    expect(intents).toEqual([
+      { topic: "scene", intent: "importGitlinkSnapshot", args: ["n1", "owner/repo", "main"] },
+    ]);
+  });
+
+  it("buildGitlinkContext sends the scene-topic buildGitlinkContext intent with [nodeId, scopeMode, selectedPaths]", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.buildGitlinkContext("n1", "selected", ["src/a.py", "src/b.py"]);
+    expect(intents).toEqual([
+      {
+        topic: "scene",
+        intent: "buildGitlinkContext",
+        args: ["n1", "selected", ["src/a.py", "src/b.py"]],
+      },
+    ]);
+  });
+
+  it("fetchGitlinkContext sends a REQUEST (not a fire-and-forget intent) with [nodeId], and resolves to the reply", async () => {
+    const { transport, requests, intents, requestResults } = makeFakeTransport();
+    requestResults.push("<context>...</context>");
+    const store = new SceneStore(transport);
+
+    const result = await store.fetchGitlinkContext("n1");
+    expect(requests).toEqual([{ topic: "scene", intent: "fetchGitlinkContext", args: ["n1"] }]);
+    expect(intents).toEqual([]);
+    expect(result).toBe("<context>...</context>");
+  });
+
+  it("runGitlinkChangeSet sends the scene-topic runGitlinkChangeSet intent with [nodeId, taskPrompt]", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.runGitlinkChangeSet("n1", "Add a health-check endpoint");
+    expect(intents).toEqual([
+      { topic: "scene", intent: "runGitlinkChangeSet", args: ["n1", "Add a health-check endpoint"] },
+    ]);
+  });
+
+  it("cancelGitlinkRequest sends the scene-topic cancelGitlinkRequest intent with the requestId", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.cancelGitlinkRequest("req-55");
+    expect(intents).toEqual([{ topic: "scene", intent: "cancelGitlinkRequest", args: ["req-55"] }]);
+  });
+
+  it("applyGitlinkChanges sends the scene-topic applyGitlinkChanges intent with [nodeId, fingerprint]", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.applyGitlinkChanges("n1", "fingerprint-abc123");
+    expect(intents).toEqual([
+      { topic: "scene", intent: "applyGitlinkChanges", args: ["n1", "fingerprint-abc123"] },
     ]);
   });
 

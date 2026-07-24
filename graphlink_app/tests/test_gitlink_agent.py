@@ -8,6 +8,8 @@ direct assertion that the module has zero Qt dependencies, same as the Code Revi
 Quality Gate scoring-module tests.
 """
 
+import os
+import subprocess
 import sys
 from pathlib import Path
 from unittest.mock import patch
@@ -25,6 +27,8 @@ from graphlink_plugins.gitlink.agent import (
     _xml_file_block,
 )
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
 
 def test_module_has_no_qt_dependency():
     import graphlink_plugins.gitlink.agent as agent_module
@@ -32,6 +36,47 @@ def test_module_has_no_qt_dependency():
     source = Path(agent_module.__file__).read_text(encoding="utf-8")
     for banned in ("PySide6", "qtawesome", "QGraphics", "QWidget", "QApplication"):
         assert banned not in source, f"{banned} leaked into the supposedly Qt-free gitlink agent module"
+
+
+def test_module_imports_qt_free_in_a_fresh_process_and_resolves_the_qt_free_config():
+    # Step 0 (R5.3): agent.py's `import graphlink_config as config` was ONE
+    # transitive Qt hazard - graphlink_config.py does unconditional
+    # module-top-level `from PySide6.QtGui import ...` / `from PySide6.QtWidgets
+    # import QApplication`, so importing this module pulled the whole Qt stack
+    # into any process that touched it (e.g. backend/agents.py), even though
+    # this module itself has zero direct PySide6 imports (confirmed by the
+    # string-scan above). Swapping to `graphlink_task_config` severs that
+    # chain. A same-process `sys.modules` assertion is unreliable here - some
+    # earlier test in the same pytest run may already have imported Qt - so
+    # this runs a fresh python subprocess and asserts PySide6 never enters
+    # sys.modules, mirroring backend/tests/test_agent_layer_qt_free.py's own
+    # `_assert_import_is_qt_free` mechanism (the real precedent for "does this
+    # import chain stay Qt-free" in this codebase).
+    code = (
+        "import sys\n"
+        "import graphlink_plugins.gitlink.agent as agent_module\n"
+        "qt = [m for m in sys.modules if m.startswith('PySide6')]\n"
+        "assert not qt, f'importing graphlink_plugins.gitlink.agent pulled Qt: {qt}'\n"
+        "assert agent_module.config.__name__ == 'graphlink_task_config', (\n"
+        "    f'agent.py config reference resolved to {agent_module.config.__name__!r}, '\n"
+        "    'expected graphlink_task_config'\n"
+        ")\n"
+        "print('graphlink_plugins.gitlink.agent imported qt-free')\n"
+    )
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(REPO_ROOT / "graphlink_app") + os.pathsep + env.get("PYTHONPATH", "")
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=env,
+    )
+    assert result.returncode == 0, (
+        "importing graphlink_plugins.gitlink.agent in a fresh process failed or pulled Qt:\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
 
 
 class TestCleanText:

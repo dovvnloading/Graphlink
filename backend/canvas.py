@@ -34,7 +34,7 @@ from graphlink_grid_view_settings import (
 )
 from graphlink_navigation_pins import NavigationPinRecord, NavigationPinStore
 
-from backend.agents import AgentDispatcher
+from backend.agents import _GITLINK_RUN_CLAIM_PLACEHOLDER, AgentDispatcher
 from backend.composer import ComposerDocument
 from backend.events import SessionBus
 from backend.notifications import NotificationState
@@ -246,6 +246,85 @@ class SceneNode:
     # than a new list-typed field - only this one new scalar is needed.
     # Unused (default) for every other kind.
     artifact_content: str = ""
+    # R5.3: the Gitlink node's real persisted shape - reads a GitHub repo (or
+    # a local checkout) into structured XML context, proposes an LLM change
+    # set, and only writes to disk after an explicit, fingerprint-verified
+    # approval. Unused (default) for every other kind.
+    gitlink_repo: str = ""
+    gitlink_branch: str = ""
+    gitlink_scope_mode: str = "selected"
+    gitlink_local_root: str = ""
+    # Mirrors legacy repo_state["imported_root"] - remembers which local path
+    # a prior Import Repo Snapshot produced, so a later run can reuse it
+    # without re-downloading. Server-side bookkeeping ONLY: deliberately
+    # absent from scene_payload()/SceneNodeRow - there is no wire field for
+    # it, nothing on the frontend ever needs to read it directly (gitlink_
+    # local_root is what's shown/edited).
+    gitlink_imported_root: str = ""
+    gitlink_repo_file_paths: list[str] = field(default_factory=list)
+    gitlink_selected_paths: list[str] = field(default_factory=list)
+    gitlink_task_prompt: str = ""
+    # DESIGNED ceiling of 180,000 chars (repository.py's MAX_CONTEXT_CHARS) -
+    # an order of magnitude above this node's other fields' implicit
+    # ceilings. scene_payload() resends every node on roughly 20 undebounced
+    # triggers (see the image_assets comment above) - inlining a 180KB text
+    # blob there would reproduce that exact cost on every unrelated
+    # mutation for the rest of the session. EXCLUDED from scene_payload() on
+    # purpose; served on demand via the read-only fetchGitlinkContext intent
+    # instead (see fetch_gitlink_context_xml below). Deleted automatically
+    # when the node is deleted - no separate eviction bookkeeping needed
+    # (unlike image_assets, this never leaves this dataclass instance).
+    gitlink_context_xml: str = ""
+    # repository.py's build_context_bundle returns a mixed int/str dict
+    # (scanned_files/loaded_files/included_files/load_errors/
+    # context_omissions are ints; source_root/summary are strings) -
+    # store_gitlink_context stringifies every value before assigning here so
+    # the wire field this feeds (scene_payload()'s "gitlinkContextStats") stays
+    # honestly dict[str, str] end to end, matching how graphlink_scene_payload.py's
+    # SceneNodeRow types it for codegen. DEVIATION from a literal-verbatim
+    # forward: unlike R5.1's providerSnapshot (typed dict[str, str] but always
+    # populated as {} at runtime, so the type is never really exercised),
+    # gitlink_context_stats IS genuinely populated with int values at
+    # runtime - forwarding it unmodified would make the generated
+    # validateSceneState() reject every real context-build result. The
+    # str-coercion here is load-bearing, not a defensive formality.
+    gitlink_context_stats: dict[str, str] = field(default_factory=dict)
+    gitlink_context_summary: str = ""
+    # R5.3 post-review FIX 6: a genuine MONOTONIC per-node counter,
+    # incremented unconditionally every time store_gitlink_context lands a
+    # successful Build Context result (see that method below) - unlike
+    # gitlink_context_summary (built purely from aggregate file counts, per
+    # repository.py's build_context_bundle - never from paths/content), this
+    # can never collide. Without this field, two DIFFERENT Build Context
+    # results (e.g. selecting a different single file each time) could
+    # produce an IDENTICAL summary string, tricking the frontend's
+    # lazy-fetch-once guard (keyed on data.gitlinkContextSummary) into
+    # skipping a real refetch and showing stale XML. UNLIKE
+    # gitlink_context_xml/gitlink_change_local_root, this DOES need to be on
+    # the wire (see scene_payload() below) - the frontend reads it to detect
+    # "a new build landed" even when the summary text happens to repeat.
+    gitlink_context_version: int = 0
+    gitlink_proposal_markdown: str = ""
+    gitlink_pending_changes: list[dict[str, Any]] = field(default_factory=list)
+    gitlink_preview_text: str = ""
+    gitlink_change_fingerprint: str | None = None
+    # R5.3 post-review FIX 2: the local_root the approved change set's WRITE
+    # DESTINATION was bound to at Run time (see complete_gitlink_run below).
+    # _fingerprint_changes only hashes file content/paths/operations, never
+    # local_root - deliberately NOT modified, since it is reused verbatim
+    # from gitlink/agent.py, shared with the legacy Qt app. Without this
+    # separate binding, a still-valid fingerprint would let previously-
+    # reviewed content be written into a directory that was never diffed or
+    # shown to the user, if gitlink_local_root changes between Run and
+    # Apply (see start_gitlink_apply's fourth check in backend/agents.py).
+    # Plain internal bookkeeping field, like gitlink_context_xml: NEVER
+    # added to scene_payload()/the codegen dataclass source - the frontend
+    # never reads this directly, only the backend enforces it.
+    gitlink_change_local_root: str | None = None
+    # draft | previewed | applying | applied - see complete_gitlink_run/
+    # fail_gitlink_apply below for the transitions.
+    gitlink_change_state: str = "draft"
+    gitlink_error: str = ""
 
 
 @dataclass
@@ -807,6 +886,241 @@ class SceneDocument:
         node.history.append({"role": "assistant", "content": str(ai_message)})
         return node
 
+    # -- R5.3: gitlink node --------------------------------------------------
+    #
+    # canvas.py imports NOTHING from graphlink_plugins.gitlink - every method
+    # below is pure state mutation on plain fields, matching how
+    # apply_web_research_progress already does duck-typed mutation without
+    # importing the domain package. The fingerprint mechanism itself
+    # (_fingerprint_changes) lives in backend/agents.py, which DOES import
+    # from graphlink_plugins.gitlink - same precedent as ArtifactAgent/
+    # web_research.domain already being imported there, not here.
+
+    def add_gitlink_node(self, x: float, y: float, parent_id: str) -> SceneNode:
+        """The Gitlink node's creation primitive - same required-parent
+        posture as document/thinking/html/image/conversation/web_research/
+        artifact nodes (never exists unparented - confirmed against
+        graphlink_plugin_portal.py's own no_selection_message/
+        invalid_parent_message for Gitlink, there is no unparented/root form
+        in the domain model). Title is always the fixed literal "Gitlink"
+        (mirrors conversation/web_research/artifact's own fixed titles)."""
+        if parent_id not in self.nodes:
+            raise SceneError(f"unknown parent node: {parent_id}")
+        node_id = f"n{next(self._counter)}"
+        node = SceneNode(
+            id=node_id,
+            x=float(x),
+            y=float(y),
+            title="Gitlink",
+            kind="gitlink",
+        )
+        self.nodes[node_id] = node
+        self.connect(parent_id, node_id)
+        return node
+
+    def set_gitlink_local_root(self, node_id: str, local_root: str) -> SceneNode:
+        """The one dedicated config setter Gitlink needs (see the design
+        rationale on every other config field being passed as a direct
+        action parameter instead): the user may type/paste a local checkout
+        path BEFORE ever clicking Import/Build Context, with no other action
+        call site to piggyback on."""
+        node = self.nodes.get(node_id)
+        if node is None:
+            raise SceneError(f"unknown node: {node_id}")
+        node.gitlink_local_root = str(local_root)
+        return node
+
+    def store_gitlink_repo_tree(self, node_id: str, repo: str, branch: str, file_paths: list[str]) -> SceneNode:
+        """Lands a successful loadGitlinkRepoTree result: repo, branch
+        (resolved server-side, including any default-branch lookup), and the
+        scanned text-file path list."""
+        node = self.nodes.get(node_id)
+        if node is None:
+            raise SceneError(f"unknown node: {node_id}")
+        node.gitlink_repo = str(repo)
+        node.gitlink_branch = str(branch)
+        node.gitlink_repo_file_paths = list(file_paths)
+        return node
+
+    def store_gitlink_snapshot_root(self, node_id: str, repo: str, branch: str, local_root: str) -> SceneNode:
+        """Lands a successful importGitlinkSnapshot result - sets
+        repo/branch/local_root AND gitlink_imported_root (so a later run
+        knows this path came from an import, matching legacy repo_state's
+        imported_root concept)."""
+        node = self.nodes.get(node_id)
+        if node is None:
+            raise SceneError(f"unknown node: {node_id}")
+        node.gitlink_repo = str(repo)
+        node.gitlink_branch = str(branch)
+        node.gitlink_local_root = str(local_root)
+        node.gitlink_imported_root = str(local_root)
+        return node
+
+    def store_gitlink_context(
+        self,
+        node_id: str,
+        *,
+        scope_mode: str,
+        selected_paths: list[str],
+        context_xml: str,
+        context_stats: dict[str, Any],
+        context_summary: str,
+    ) -> SceneNode:
+        """Lands a successful buildGitlinkContext result: scope_mode,
+        selected_paths, and all three context_* fields. context_stats is
+        stringified value-by-value here - repository.py's
+        build_context_bundle returns a mixed int/str dict, but the wire field
+        this feeds (scene_payload()'s "gitlinkContextStats") must stay
+        honestly dict[str, str] for the codegen'd validator (see the field's
+        own comment on SceneNode).
+
+        R5.3 post-review FIX 6: gitlink_context_version is incremented
+        UNCONDITIONALLY every time this method runs - a genuine monotonic
+        counter, never reset, never skipped - closing a real bug
+        gitlink_context_summary alone could not: two different Build Context
+        results (e.g. selecting a different single file each time) can
+        produce an IDENTICAL summary string (see that field's own comment on
+        SceneNode), which was tricking the frontend's lazy-fetch-once guard
+        into skipping a real refetch and showing stale XML."""
+        node = self.nodes.get(node_id)
+        if node is None:
+            raise SceneError(f"unknown node: {node_id}")
+        node.gitlink_scope_mode = str(scope_mode)
+        node.gitlink_selected_paths = list(selected_paths)
+        node.gitlink_context_xml = str(context_xml)
+        node.gitlink_context_stats = {str(k): str(v) for k, v in (context_stats or {}).items()}
+        node.gitlink_context_summary = str(context_summary)
+        node.gitlink_context_version += 1
+        return node
+
+    def fetch_gitlink_context_xml(self, node_id: str) -> str:
+        """The read-side of the lazy fetch: gitlink_context_xml is EXCLUDED
+        from scene_payload() (see the field's own comment on SceneNode) - this
+        is the only way the frontend ever gets the full text, via the
+        read-only fetchGitlinkContext intent."""
+        node = self.nodes.get(node_id)
+        if node is None:
+            raise SceneError(f"unknown node: {node_id}")
+        return node.gitlink_context_xml
+
+    def start_gitlink_run(self, node_id: str, task_prompt: str) -> SceneNode:
+        """Begin one Generate Change Set run: stores the task prompt and
+        clears any previous error. Deliberately does NOT touch
+        gitlink_pending_changes/gitlink_proposal_markdown/
+        gitlink_change_fingerprint here - those only change once
+        complete_gitlink_run lands a real result, same stale-while-revalidate
+        posture web research's own start_web_research_run documents for
+        research_result."""
+        node = self.nodes.get(node_id)
+        if node is None:
+            raise SceneError(f"unknown node: {node_id}")
+        if node.kind != "gitlink":
+            raise SceneError(f"node is not a gitlink node: {node_id}")
+        node.gitlink_task_prompt = str(task_prompt)
+        node.gitlink_error = ""
+        return node
+
+    def complete_gitlink_run(
+        self,
+        node_id: str,
+        proposal_markdown: str,
+        pending_changes: list[dict[str, Any]],
+        preview_text: str,
+        fingerprint: str | None,
+        local_root: str,
+    ) -> SceneNode:
+        """Land a successful run. proposal_markdown/pending_changes/
+        preview_text are always set. If pending_changes is non-empty:
+        change_state becomes "previewed", fingerprint is recorded, AND
+        (R5.3 post-review FIX 2) gitlink_change_local_root records the
+        EXACT local_root this run used - the write-destination binding
+        start_gitlink_apply's fourth check enforces, since the fingerprint
+        alone says nothing about where the content is written. If
+        pending_changes is empty (the agent's own write_intent came back
+        no_changes or blocked): change_state becomes "draft" and both
+        fingerprint and local_root are cleared - mirrors legacy
+        set_proposal's own unconditional `change_state = PREVIEWED if
+        pending_changes else DRAFT` exactly (an empty proposal is never
+        something to approve), extended so an empty proposal never leaves a
+        dangling local_root binding behind either.
+
+        `local_root` is compared as raw trimmed text against
+        start_gitlink_apply's own local_root_text - stored stripped here so
+        that comparison lines up exactly."""
+        node = self.nodes.get(node_id)
+        if node is None:
+            raise SceneError(f"unknown node: {node_id}")
+        node.gitlink_proposal_markdown = str(proposal_markdown)
+        node.gitlink_pending_changes = list(pending_changes or [])
+        node.gitlink_preview_text = str(preview_text)
+        if node.gitlink_pending_changes:
+            node.gitlink_change_state = "previewed"
+            node.gitlink_change_fingerprint = fingerprint
+            node.gitlink_change_local_root = str(local_root).strip()
+        else:
+            node.gitlink_change_state = "draft"
+            node.gitlink_change_fingerprint = None
+            node.gitlink_change_local_root = None
+        return node
+
+    def fail_gitlink_run(self, node_id: str, message: str) -> SceneNode | None:
+        """No-op (return None without raising) if the node is gone - a
+        background failure landing after node deletion should be silent,
+        matching the more defensive posture used for other failure-only
+        paths in this file (e.g. apply_web_research_progress). Deliberately
+        does NOT clear any existing pending_changes/proposal_markdown/
+        change_state - a failed re-run must never wipe out a previously
+        staged, still-valid proposal; only the error banner reflects the
+        new failure."""
+        node = self.nodes.get(node_id)
+        if node is None:
+            return None
+        node.gitlink_error = str(message)
+        return node
+
+    def complete_gitlink_apply(self, node_id: str, written_files: int) -> SceneNode:
+        """Land a successful apply: change_state becomes "applied", error is
+        cleared.
+
+        R5.3 post-review FIX 1 (CRITICAL): ALSO clears gitlink_pending_changes
+        and gitlink_change_fingerprint - a successful Apply must invalidate
+        the approval it just consumed, or the exact same already-applied
+        change set could be replayed via a second applyGitlinkChanges call
+        (start_gitlink_apply's fingerprint check would still pass, since
+        nothing here previously changed after a successful write).
+        gitlink_change_local_root is cleared alongside them (R5.3 post-review
+        FIX 2) - a cleared approval must have no dangling bound fields.
+        gitlink_proposal_markdown/gitlink_preview_text are DELIBERATELY left
+        untouched - they remain visible as a historical record of what was
+        applied."""
+        node = self.nodes.get(node_id)
+        if node is None:
+            raise SceneError(f"unknown node: {node_id}")
+        node.gitlink_change_state = "applied"
+        node.gitlink_error = ""
+        node.gitlink_pending_changes = []
+        node.gitlink_change_fingerprint = None
+        node.gitlink_change_local_root = None
+        return node
+
+    def fail_gitlink_apply(self, node_id: str, message: str) -> SceneNode | None:
+        """No-op if the node is gone. Reverts change_state to "previewed"
+        (NEVER silently "applied"), CLEARS gitlink_change_fingerprint (so a
+        stale approval can never be replayed) and gitlink_change_local_root
+        (R5.3 post-review FIX 2 - a cleared approval must have no dangling
+        bound fields), and sets gitlink_error verbatim. Handles BOTH the
+        fingerprint-mismatch refusal path, the local_root-mismatch refusal
+        path, and the write-failure path identically - all three are "the
+        apply did not happen, here is why"."""
+        node = self.nodes.get(node_id)
+        if node is None:
+            return None
+        node.gitlink_change_state = "previewed"
+        node.gitlink_change_fingerprint = None
+        node.gitlink_change_local_root = None
+        node.gitlink_error = str(message)
+        return node
+
     def delete_chat_node(self, node_id: str) -> None:
         """Delete one chat node WITHOUT orphaning its branch: children are
         re-parented to the deleted node's own parent (or become roots if it
@@ -1141,6 +1455,30 @@ class SceneDocument:
                     "researchError": n.research_error,
                     "researchResult": n.research_result,
                     "artifactContent": n.artifact_content,
+                    "gitlinkRepo": n.gitlink_repo,
+                    "gitlinkBranch": n.gitlink_branch,
+                    "gitlinkScopeMode": n.gitlink_scope_mode,
+                    "gitlinkLocalRoot": n.gitlink_local_root,
+                    "gitlinkRepoFilePaths": list(n.gitlink_repo_file_paths),
+                    "gitlinkSelectedPaths": list(n.gitlink_selected_paths),
+                    "gitlinkTaskPrompt": n.gitlink_task_prompt,
+                    # gitlinkContextXml is DELIBERATELY OMITTED - see the
+                    # field's own comment on SceneNode. Served on demand via
+                    # the fetchGitlinkContext intent instead.
+                    "gitlinkContextStats": dict(n.gitlink_context_stats),
+                    "gitlinkContextSummary": n.gitlink_context_summary,
+                    # R5.3 post-review FIX 6: UNLIKE gitlinkContextXml (and
+                    # unlike gitlink_change_local_root, never on the wire at
+                    # all), this genuinely needs to be here - see the field's
+                    # own comment on SceneNode for why gitlinkContextSummary
+                    # alone cannot be trusted as a lazy-fetch-once cache key.
+                    "gitlinkContextVersion": n.gitlink_context_version,
+                    "gitlinkProposalMarkdown": n.gitlink_proposal_markdown,
+                    "gitlinkPendingChanges": [dict(c) for c in n.gitlink_pending_changes],
+                    "gitlinkPreviewText": n.gitlink_preview_text,
+                    "gitlinkChangeFingerprint": n.gitlink_change_fingerprint,
+                    "gitlinkChangeState": n.gitlink_change_state,
+                    "gitlinkError": n.gitlink_error,
                 }
                 for n in self.nodes.values()
             ],
@@ -1716,6 +2054,164 @@ def register_canvas(
 
     async def cancel_artifact_request(request_id):
         agent_dispatcher.cancel_artifact(request_id)
+
+    # -- R5.3: Gitlink node --------------------------------------------------
+    #
+    # Reuses the existing generic pending_request_id field as the busy/
+    # in-flight marker for every Gitlink action (list repos, load tree,
+    # import, build context, run, apply) - this is exactly that field's
+    # documented purpose, and critically it is what makes the
+    # fingerprint-recheck race-proof: a Run cannot start while an Apply
+    # request_id occupies this node's slot, and vice versa.
+
+    async def fetch_gitlink_repositories(node_id):
+        node = document.nodes.get(node_id)
+        if node is None or node.pending_request_id:
+            notifications.show("Gitlink is busy for this node.", "info")
+            await bus.publish("notification")
+            return []
+        return await agent_dispatcher.fetch_gitlink_repositories(
+            bus=bus, notifications_state=notifications, node=node,
+        )
+
+    async def load_gitlink_repo_tree(node_id, repo, branch):
+        node = document.nodes.get(node_id)
+        if node is None or node.pending_request_id:
+            notifications.show("Gitlink is busy for this node.", "info")
+            await bus.publish("notification")
+            return None
+        result = await agent_dispatcher.load_gitlink_repo_tree(
+            bus=bus, notifications_state=notifications, node=node, repo=repo, branch=branch,
+        )
+        if result is not None:
+            document.store_gitlink_repo_tree(node_id, *result)
+            await publish_scene()
+        return node_id
+
+    async def set_gitlink_local_root(node_id, local_root):
+        document.set_gitlink_local_root(node_id, local_root)
+        await publish_scene()
+
+    async def import_gitlink_snapshot(node_id, repo, branch):
+        node = document.nodes.get(node_id)
+        if node is None or node.pending_request_id:
+            notifications.show("Gitlink is busy for this node.", "info")
+            await bus.publish("notification")
+            return None
+        result = await agent_dispatcher.import_gitlink_snapshot(
+            bus=bus, notifications_state=notifications, node=node, repo=repo, branch=branch,
+            local_root_hint=node.gitlink_local_root, imported_root_hint=node.gitlink_imported_root,
+        )
+        if result is not None:
+            document.store_gitlink_snapshot_root(node_id, *result)
+            await publish_scene()
+        return node_id
+
+    async def build_gitlink_context(node_id, scope_mode, selected_paths):
+        node = document.nodes.get(node_id)
+        if node is None or node.pending_request_id:
+            notifications.show("Gitlink is busy for this node.", "info")
+            await bus.publish("notification")
+            return None
+        result = await agent_dispatcher.build_gitlink_context(
+            bus=bus, notifications_state=notifications, node=node,
+            scope_mode=scope_mode, selected_paths=list(selected_paths),
+        )
+        if result is not None:
+            document.store_gitlink_context(node_id, scope_mode=scope_mode,
+                                            selected_paths=selected_paths, **result)
+            await publish_scene()
+        return node_id
+
+    async def fetch_gitlink_context(node_id):
+        return document.fetch_gitlink_context_xml(node_id)
+
+    async def run_gitlink_change_set(node_id, task_prompt):
+        node_for_check = document.nodes.get(node_id)
+        if node_for_check is not None and node_for_check.pending_request_id:
+            notifications.show("Gitlink is already busy for this node.", "info")
+            await bus.publish("notification")
+            return None
+        # R5.3 post-review FIX 4(b): claim the busy slot with a placeholder
+        # SYNCHRONOUSLY, in the same stretch as the busy pre-check just
+        # above - before document.start_gitlink_run or any await - so a
+        # second concurrent call for this SAME node_id can never pass that
+        # same pre-check during the `await publish_scene()` gap below.
+        # agent_dispatcher.start_gitlink_run (the ONLY caller of this dict
+        # entry for this node_id, invoked just below) recognizes this exact
+        # placeholder and overwrites it with the real request_id, still
+        # synchronously - see that method's own docstring.
+        if node_for_check is not None:
+            node_for_check.pending_request_id = _GITLINK_RUN_CLAIM_PLACEHOLDER
+        try:
+            node = document.start_gitlink_run(node_id, task_prompt)
+        except SceneError:
+            # Node deleted (or wrong-kind) concurrently with the claim above -
+            # the placeholder must not linger on a node this handler is
+            # about to give up on.
+            if node_for_check is not None:
+                node_for_check.pending_request_id = None
+            notifications.show("This node no longer exists.", "warning")
+            await bus.publish("notification")
+            return None
+        await publish_scene()
+
+        def _on_success(proposal_markdown, pending_changes, preview_text, fingerprint, local_root):
+            document.complete_gitlink_run(node_id, proposal_markdown, pending_changes,
+                                           preview_text, fingerprint, local_root)
+
+        def _on_failure(message):
+            document.fail_gitlink_run(node_id, message)
+
+        await agent_dispatcher.start_gitlink_run(
+            bus=bus, notifications_state=notifications, node=node, node_id=node_id,
+            repo=node.gitlink_repo, branch=node.gitlink_branch,
+            scope_mode=node.gitlink_scope_mode, task_prompt=task_prompt,
+            context_xml=node.gitlink_context_xml, context_summary=node.gitlink_context_summary,
+            local_root=node.gitlink_local_root,
+            on_success=_on_success, on_failure=_on_failure,
+        )
+        return node_id
+
+    async def cancel_gitlink_request(request_id):
+        agent_dispatcher.cancel_gitlink(request_id)
+
+    async def apply_gitlink_changes(node_id, fingerprint):
+        node = document.nodes.get(node_id)
+        if node is None:
+            notifications.show("This node no longer exists.", "warning")
+            await bus.publish("notification")
+            return None
+
+        def _on_success(written_files):
+            document.complete_gitlink_apply(node_id, written_files)
+
+        def _on_failure(message):
+            document.fail_gitlink_apply(node_id, message)
+
+        await agent_dispatcher.start_gitlink_apply(
+            bus=bus, notifications_state=notifications, node=node, node_id=node_id,
+            client_fingerprint=fingerprint, local_root=node.gitlink_local_root,
+            on_success=_on_success, on_failure=_on_failure,
+        )
+        return node_id
+
+    bus.register_intent("scene", "fetchGitlinkRepositories", fetch_gitlink_repositories)
+    bus.register_intent("scene", "loadGitlinkRepoTree", load_gitlink_repo_tree)
+    bus.register_intent("scene", "setGitlinkLocalRoot", set_gitlink_local_root)
+    bus.register_intent("scene", "importGitlinkSnapshot", import_gitlink_snapshot)
+    bus.register_intent("scene", "buildGitlinkContext", build_gitlink_context)
+    bus.register_intent("scene", "fetchGitlinkContext", fetch_gitlink_context)
+    bus.register_intent("scene", "runGitlinkChangeSet", run_gitlink_change_set)
+    bus.register_intent("scene", "cancelGitlinkRequest", cancel_gitlink_request)
+    # CRITICAL, load-bearing property: applyGitlinkChanges takes ONLY
+    # (node_id, fingerprint) as WS intent arguments - there must be NO
+    # changes/pending_changes parameter anywhere in this signature or the
+    # dispatcher method it calls. This closes the most obvious
+    # content-injection bypass by construction, not by a runtime check: the
+    # only content that ever reaches apply_change_set is server-held,
+    # already-normalized node.gitlink_pending_changes.
+    bus.register_intent("scene", "applyGitlinkChanges", apply_gitlink_changes)
 
     async def move_node(node_id, x, y):
         document.move_node(node_id, x, y)

@@ -146,6 +146,28 @@ def register_plugins(
             await bus.publish("scene")
             return node.id
 
+        if name == "Gitlink":
+            # R5.3: the third real node-creation plugin, same posture as Web
+            # Research/Artifact above - Gitlink is a branch-point child (same
+            # as thinking/html/image/conversation/web_research/artifact
+            # nodes), so it always requires a real, valid parent to branch
+            # from - there is no unparented/root form (confirmed against
+            # graphlink_plugin_portal.py's own no_selection_message/
+            # invalid_parent_message for Gitlink).
+            if not parent_node_id or parent_node_id not in canvas_document.nodes:
+                notifications.show(
+                    "Please select a valid node to branch from before adding a Gitlink node.",
+                    "warning",
+                )
+                await bus.publish("notification")
+                return None
+            parent = canvas_document.nodes[parent_node_id]
+            node = canvas_document.add_gitlink_node(
+                parent.x, parent.y + MESSAGE_VERTICAL_SPACING, parent_node_id
+            )
+            await bus.publish("scene")
+            return node.id
+
         if name == "Artifact / Drafter":
             # R5.2: the second real node-creation plugin, same posture as
             # Web Research above - an Artifact node is a branch-point child

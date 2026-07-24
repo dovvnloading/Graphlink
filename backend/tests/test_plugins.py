@@ -88,15 +88,18 @@ def test_register_plugins_publishes_on_the_app_plugins_topic():
 
 
 def test_execute_plugin_shows_info_notification_for_known_plugin():
+    # "Py-Coder" (not "Gitlink" - Gitlink is now a real node-creation plugin,
+    # see the dedicated R5.3 tests below) stands in for "any plugin name
+    # still on the honest-deferred-notice path".
     bus = SessionBus("plugins-exec-test")
     notifications = NotificationState()
     bus.register_topic("notification", notifications.payload)
     register_plugins(bus, notifications, SceneDocument())
 
-    asyncio.run(bus.dispatch_intent("app-plugins", "executePlugin", ["Gitlink"]))
+    asyncio.run(bus.dispatch_intent("app-plugins", "executePlugin", ["Py-Coder"]))
     assert notifications.visible is True
     assert notifications.msg_type == "info"
-    assert "Gitlink" in notifications.message
+    assert "Py-Coder" in notifications.message
     assert "R3" in notifications.message or "R5" in notifications.message
 
 
@@ -252,12 +255,76 @@ def test_execute_plugin_artifact_drafter_creates_a_real_artifact_node():
     assert "scene" in recorder.topics_seen()
 
 
-# -- R5.1/R5.2: non-regression - every OTHER plugin name is still an honest,
-# unchanged deferred notice ---------------------------------------------------
+# -- R5.3: "Gitlink" - the third real node-creation plugin -------------------
+
+
+def test_execute_plugin_gitlink_requires_parent():
+    bus, notifications, canvas_document = _make_plugins_bus()
+
+    result = asyncio.run(bus.dispatch_intent("app-plugins", "executePlugin", ["Gitlink"]))
+
+    assert result is None
+    assert notifications.visible is True
+    assert notifications.msg_type == "warning"
+    assert notifications.message == (
+        "Please select a valid node to branch from before adding a Gitlink node."
+    )
+    assert not any(n.kind == "gitlink" for n in canvas_document.nodes.values())
+
+
+def test_execute_plugin_gitlink_rejects_unknown_parent_id():
+    bus, notifications, canvas_document = _make_plugins_bus()
+
+    result = asyncio.run(
+        bus.dispatch_intent("app-plugins", "executePlugin", ["Gitlink", "ghost-node-id"])
+    )
+
+    assert result is None
+    assert notifications.visible is True
+    assert notifications.msg_type == "warning"
+    assert notifications.message == (
+        "Please select a valid node to branch from before adding a Gitlink node."
+    )
+    assert not any(n.kind == "gitlink" for n in canvas_document.nodes.values())
+
+
+def test_execute_plugin_gitlink_creates_node():
+    bus, notifications, canvas_document = _make_plugins_bus()
+    parent = canvas_document.add_node(10, 20, "parent")
+
+    class Recorder:
+        def __init__(self):
+            self.messages = []
+
+        async def send_json(self, data):
+            self.messages.append(data)
+
+        def topics_seen(self):
+            return [m["topic"] for m in self.messages if m["kind"] == "state"]
+
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    result = asyncio.run(bus.dispatch_intent("app-plugins", "executePlugin", ["Gitlink", parent.id]))
+
+    assert result is not None
+    node = canvas_document.nodes[result]
+    assert node.kind == "gitlink"
+    assert node.title == "Gitlink"
+    assert any(
+        e.source == parent.id and e.target == node.id for e in canvas_document.edges.values()
+    )
+    assert notifications.visible is False, "success is not a deferral - no notification fires"
+    assert "scene" in recorder.topics_seen()
+
+
+# -- R5.1/R5.2/R5.3: non-regression - every OTHER plugin name is still an
+# honest, unchanged deferred notice -------------------------------------------
 
 
 @pytest.mark.parametrize(
-    "name", [n for n in (p[0] for p in _PLUGINS) if n not in ("Web Research", "Artifact / Drafter")]
+    "name",
+    [n for n in (p[0] for p in _PLUGINS) if n not in ("Web Research", "Artifact / Drafter", "Gitlink")],
 )
 def test_execute_plugin_every_other_plugin_name_still_shows_the_unchanged_deferred_notice(name):
     bus, notifications, canvas_document = _make_plugins_bus()

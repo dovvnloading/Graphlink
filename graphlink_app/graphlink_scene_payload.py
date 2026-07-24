@@ -57,6 +57,32 @@ full document text. Populated for kind=="artifact" rows, defaulted (empty
 string) for every other kind, same additive rule. The turn-by-turn
 conversation reuses the existing `history` field (R3.25) rather than a new
 list-typed field.
+
+R5.3 adds the Gitlink node's 16 `gitlink*` fields: populated for
+kind=="gitlink" rows, defaulted (empty string/list/dict/None) for every
+other kind, same additive rule. `gitlinkContextXml` is DELIBERATELY NOT
+one of these 16 - repository.py's build_context_bundle can produce up to
+180,000 chars of XML (MAX_CONTEXT_CHARS), an order of magnitude above every
+other Gitlink field's implicit ceiling, and scene_payload() resends every
+node on ~20 undebounced triggers - inlining that blob here would reproduce
+the exact cost the R3.21 image_assets transport decision (see that field's
+own comment) was designed to avoid. It is served on demand via the
+read-only fetchGitlinkContext intent instead, never as part of this
+snapshot. `gitlinkPendingChanges` is a list of `GitlinkPendingChangeRow` (a
+proper nested dataclass, matching the convention `ResearchSourceRow`
+already established for a list-of-structured-object field, rather than a
+loose dict) - `content` is `str | None` (not required) because a `delete`
+operation's normalized change item genuinely omits the `content` key
+entirely (see GitlinkAgent._normalize_files), and the schema generator's
+required/optional split is driven purely by `X | None` typing, not by a
+dataclass default value.
+
+R5.3 post-review FIX 6 adds `gitlinkContextVersion` (a genuine monotonic
+per-node counter, see the field's own comment on SceneNodeRow below) -
+UNLIKE `gitlinkContextXml`/the backend-only `gitlink_change_local_root`,
+this one DOES belong on the wire: the frontend's Context-tabs lazy-fetch
+guard needs it to detect a new Build Context result even when
+`gitlinkContextSummary` happens to repeat.
 """
 
 from __future__ import annotations
@@ -124,6 +150,20 @@ class ResearchResultRow:
 
 
 @dataclass
+class GitlinkPendingChangeRow:
+    path: str
+    operation: str
+    reason: str
+    # str | None (not just a defaulted str): a `delete` operation's
+    # normalized change item genuinely omits the `content` key entirely (see
+    # GitlinkAgent._normalize_files) - the schema generator's required/
+    # optional split is driven by `X | None` typing, not by a dataclass
+    # default value, so this must be Optional for a delete-only item to
+    # validate.
+    content: str | None = None
+
+
+@dataclass
 class SceneNodeRow:
     id: str
     x: float
@@ -183,6 +223,43 @@ class SceneNodeRow:
     # diff/patch). Populated for kind=="artifact" rows, defaulted (empty
     # string) for every other kind.
     artifactContent: str = ""
+    # R5.3: the Gitlink node's real persisted shape - populated for
+    # kind=="gitlink" rows, defaulted for every other kind. gitlinkContextXml
+    # is DELIBERATELY NOT one of these fields - see this module's own
+    # docstring for why (served on demand via fetchGitlinkContext instead).
+    gitlinkRepo: str = ""
+    gitlinkBranch: str = ""
+    gitlinkScopeMode: str = "selected"
+    gitlinkLocalRoot: str = ""
+    gitlinkRepoFilePaths: list[str] = field(default_factory=list)
+    gitlinkSelectedPaths: list[str] = field(default_factory=list)
+    gitlinkTaskPrompt: str = ""
+    # dict[str, str], not the mixed int/str shape repository.py's
+    # build_context_bundle actually returns - backend/canvas.py's
+    # store_gitlink_context stringifies every value before this ever reaches
+    # the wire (see that method's own comment), so this stays honestly
+    # dict[str, str] end to end.
+    gitlinkContextStats: dict[str, str] = field(default_factory=dict)
+    gitlinkContextSummary: str = ""
+    # R5.3 post-review FIX 6: a genuine monotonic per-node counter,
+    # incremented unconditionally every time backend/canvas.py's
+    # store_gitlink_context lands a successful Build Context result - unlike
+    # gitlinkContextSummary (built purely from aggregate file counts, never
+    # from paths/content), two different Build Context results can never
+    # collide here. Closes a real bug: the frontend's Context-tabs
+    # lazy-fetch-once guard used to key on gitlinkContextSummary alone, and
+    # two DIFFERENT builds (e.g. selecting a different single file each
+    # time) could produce an IDENTICAL summary string, so the guard
+    # incorrectly skipped refetching and showed stale XML. See
+    # backend/canvas.py's SceneNode.gitlink_context_version for the full
+    # rationale.
+    gitlinkContextVersion: int = 0
+    gitlinkProposalMarkdown: str = ""
+    gitlinkPendingChanges: list[GitlinkPendingChangeRow] = field(default_factory=list)
+    gitlinkPreviewText: str = ""
+    gitlinkChangeFingerprint: str | None = None
+    gitlinkChangeState: str = "draft"
+    gitlinkError: str = ""
 
 
 @dataclass

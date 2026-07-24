@@ -59,16 +59,28 @@ in one blocking call or was assembled from many small chunks.
 from __future__ import annotations
 
 import asyncio
+import difflib
 import inspect
 import logging
 import threading
 import uuid
+from pathlib import Path
+from urllib.parse import quote
 
 import api_provider
 import graphlink_task_config as config
 from graphlink_artifact_agent import ArtifactAgent
 from graphlink_chat_agent import ChatAgent
 from graphlink_licensing import SettingsManager  # type hint only
+from graphlink_plugins.common.github_client import GitHubRestClient
+from graphlink_plugins.gitlink.agent import GitlinkAgent, _fingerprint_changes, _is_repo_text_path
+from graphlink_plugins.gitlink.repository import (
+    GitlinkRepository,
+    apply_change_set,
+    default_import_root,
+    read_local_repo_file,
+    validate_pending_changes,
+)
 from graphlink_plugins.web_research.domain import (
     CancellationToken,
     ProgressEvent,
@@ -95,6 +107,47 @@ WATCHDOG_TIMEOUT_SECONDS = 420
 # has its own outer timeout beyond this one. Realistic worst-case legitimate
 # duration is roughly 660s, so 900s gives headroom without being unbounded.
 WEB_RESEARCH_WATCHDOG_TIMEOUT_SECONDS = 900
+
+# R5.3: Gitlink's six timeout constants, each independently reasoned rather
+# than reused from an existing constant whose justification doesn't apply
+# here.
+#
+# One LLM completion (same call-count shape as chat/artifact, whose 420s
+# already covers that shape) but can carry up to 180,000 chars of input
+# context (repository.py's MAX_CONTEXT_CHARS) - an order of magnitude more
+# prompt than typical, measurably increasing processing/queueing latency even
+# at identical call-count. A deliberate bump over 420s for THIS reason alone -
+# NOT web research's 900s reasoning (which exists because that service chains
+# ~10 sequential calls inside one outer timeout; Gitlink's run is one call).
+GITLINK_WATCHDOG_TIMEOUT_SECONDS = 600
+# Local disk I/O only, no network - generous headroom, short enough to fail
+# fast.
+GITLINK_APPLY_TIMEOUT_SECONDS = 30
+# Up to 5 sequential paginated GET /user/repos calls (MAX_REPO_PAGES).
+GITLINK_REPO_LIST_TIMEOUT_SECONDS = 150
+# One branch-resolve GET (GET /repos/{repo}) + one recursive tree GET.
+GITLINK_TREE_TIMEOUT_SECONDS = 60
+# One zipball GET (network-timeout-capped at 60s by
+# GitlinkRepository.download_repository_snapshot itself) + local
+# extract/move.
+GITLINK_IMPORT_TIMEOUT_SECONDS = 90
+# Bounded by selected-file count when no local_root is set (one GitHub file
+# fetch per selected path); local-root-backed builds are pure disk I/O and
+# finish well under this.
+GITLINK_CONTEXT_TIMEOUT_SECONDS = 300
+
+# R5.3 post-review FIX 4(b): the sentinel value backend/canvas.py's
+# run_gitlink_change_set stores into node.pending_request_id SYNCHRONOUSLY,
+# in the same stretch as its own busy pre-check, immediately before ever
+# calling start_gitlink_run below - this closes the real await-spanning gap
+# between that pre-check and start_gitlink_run's own synchronous claim
+# (spanning run_gitlink_change_set's own `await publish_scene()`). See
+# start_gitlink_run's own docstring and run_gitlink_change_set's own comment
+# for the full race this closes. start_gitlink_run recognizes ONLY this
+# exact value as "already claimed by my own caller, safe to overwrite" - any
+# OTHER truthy pending_request_id is still a genuine busy node and is
+# rejected exactly as before.
+_GITLINK_RUN_CLAIM_PLACEHOLDER = "pending"
 
 
 def bootstrap_provider_state(settings_manager: SettingsManager) -> None:
@@ -198,6 +251,31 @@ class AgentDispatcher:
         # every prior independent slot above. request_id -> {"cancel_event":
         # threading.Event, "task": asyncio.Task}.
         self._artifact_requests: dict[str, dict] = {}
+        # R5.3: a FIFTH independent in-flight-request slot, separate from
+        # self._requests/self._image_requests/self._web_research_requests/
+        # self._artifact_requests - a Gitlink Generate Change Set run must be
+        # able to run concurrently with any of those four, same reasoning as
+        # every prior independent slot above. request_id -> {"cancel_event":
+        # threading.Event, "task": asyncio.Task} - Run is cancellable,
+        # mirrors self._web_research_requests' exact shape.
+        self._gitlink_requests: dict[str, dict] = {}
+        # R5.3: a SIXTH independent in-flight-request slot - Gitlink's Apply
+        # (the disk-write step) must be able to run concurrently with a
+        # Gitlink Run on a DIFFERENT node, or with any other kind's dispatch.
+        # request_id -> {"task": asyncio.Task} - NO "cancel_event" key here,
+        # matching self._image_requests' shape: legacy has zero cancel
+        # affordance for the disk-write step either. (Same-node concurrent
+        # Run+Apply is additionally blocked by node.pending_request_id - see
+        # register_canvas's own busy checks in backend/canvas.py - this dict
+        # split is about cross-request bookkeeping, not the same-node guard.)
+        self._gitlink_apply_requests: dict[str, dict] = {}
+
+    def cancel_gitlink(self, request_id: str) -> bool:
+        entry = self._gitlink_requests.get(request_id)
+        if entry is None:
+            return False
+        entry["cancel_event"].set()
+        return True
 
     def persona(self) -> str:
         """Mirror legacy graphlink_window.py's `_get_current_system_prompt`:
@@ -829,6 +907,430 @@ class AgentDispatcher:
             "cancel_event": cancel_event, "task": asyncio.create_task(_run())
         }
 
+    # -- R5.3: Gitlink ------------------------------------------------------
+    #
+    # Four PLAIN async methods below (fetch_gitlink_repositories/
+    # load_gitlink_repo_tree/import_gitlink_snapshot/build_gitlink_context) -
+    # NO dict-tracking: the caller (backend/canvas.py's register_canvas) already
+    # guards busy-state via node.pending_request_id directly before calling,
+    # and each of these is awaited DIRECTLY by that caller (not scheduled via
+    # asyncio.create_task the way start_chat_reply/start_web_research/
+    # start_artifact_reply/start_gitlink_run/start_gitlink_apply are) - there
+    # is no natural intermediate UI state beyond "loading" for a one-shot
+    # listing/import/context-build action, and the caller needs the result
+    # back in the same round trip. node.pending_request_id is still the busy
+    # marker for the duration (see AgentDispatcher.__init__'s own comment on
+    # why every Gitlink action - including these four - shares that one
+    # field); it is set/cleared inline here rather than via a background task.
+
+    async def fetch_gitlink_repositories(self, *, bus: SessionBus, notifications_state, node) -> list[str]:
+        request_id = uuid.uuid4().hex
+        node.pending_request_id = request_id
+        await bus.publish("scene")
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(_list_github_repositories, self._settings_manager),
+                timeout=GITLINK_REPO_LIST_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            notifications_state.show(
+                "Loading GitHub repositories stopped responding before the request completed. "
+                "Please try again.",
+                "error",
+            )
+            await bus.publish("notification")
+            return []
+        except Exception as exc:
+            logger.exception("gitlink repository listing failed")
+            notifications_state.show(f"Failed to load GitHub repositories: {exc}", "error")
+            await bus.publish("notification")
+            return []
+        finally:
+            node.pending_request_id = None
+            await bus.publish("scene")
+
+    async def load_gitlink_repo_tree(self, *, bus: SessionBus, notifications_state, node, repo: str, branch: str):
+        request_id = uuid.uuid4().hex
+        node.pending_request_id = request_id
+        await bus.publish("scene")
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(_load_gitlink_tree, self._settings_manager, repo, branch),
+                timeout=GITLINK_TREE_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            notifications_state.show(
+                "Loading the repository file tree stopped responding before the request "
+                "completed. Please try again.",
+                "error",
+            )
+            await bus.publish("notification")
+            return None
+        except Exception as exc:
+            logger.exception("gitlink repo tree load failed")
+            notifications_state.show(f"Failed to load the repository file tree: {exc}", "error")
+            await bus.publish("notification")
+            return None
+        finally:
+            node.pending_request_id = None
+            await bus.publish("scene")
+
+    async def import_gitlink_snapshot(
+        self, *, bus: SessionBus, notifications_state, node, repo: str, branch: str,
+        local_root_hint: str, imported_root_hint: str,
+    ):
+        request_id = uuid.uuid4().hex
+        node.pending_request_id = request_id
+        await bus.publish("scene")
+        try:
+            resolved_repo, resolved_branch, local_root_path = await asyncio.wait_for(
+                asyncio.to_thread(
+                    _ensure_gitlink_snapshot, self._settings_manager, repo, branch,
+                    local_root_hint, imported_root_hint,
+                ),
+                timeout=GITLINK_IMPORT_TIMEOUT_SECONDS,
+            )
+            return resolved_repo, resolved_branch, str(local_root_path)
+        except asyncio.TimeoutError:
+            notifications_state.show(
+                "Importing the repository snapshot stopped responding before the request "
+                "completed. Please try again.",
+                "error",
+            )
+            await bus.publish("notification")
+            return None
+        except Exception as exc:
+            logger.exception("gitlink snapshot import failed")
+            notifications_state.show(f"Failed to import the repository snapshot: {exc}", "error")
+            await bus.publish("notification")
+            return None
+        finally:
+            node.pending_request_id = None
+            await bus.publish("scene")
+
+    async def build_gitlink_context(
+        self, *, bus: SessionBus, notifications_state, node, scope_mode: str, selected_paths: list[str],
+    ):
+        request_id = uuid.uuid4().hex
+        node.pending_request_id = request_id
+        await bus.publish("scene")
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(
+                    _build_gitlink_context_bundle,
+                    self._settings_manager,
+                    repo=node.gitlink_repo,
+                    branch=node.gitlink_branch,
+                    scope_mode=scope_mode,
+                    selected_paths=selected_paths,
+                    repo_file_paths=list(node.gitlink_repo_file_paths),
+                    local_root_hint=node.gitlink_local_root,
+                    imported_root_hint=node.gitlink_imported_root,
+                ),
+                timeout=GITLINK_CONTEXT_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            notifications_state.show(
+                "Building the repository context stopped responding before the request "
+                "completed. Please try again.",
+                "error",
+            )
+            await bus.publish("notification")
+            return None
+        except Exception as exc:
+            logger.exception("gitlink context build failed")
+            notifications_state.show(f"Failed to build the repository context: {exc}", "error")
+            await bus.publish("notification")
+            return None
+        finally:
+            node.pending_request_id = None
+            await bus.publish("scene")
+
+    async def start_gitlink_run(
+        self,
+        *,
+        bus: SessionBus,
+        notifications_state,
+        node,
+        node_id: str,
+        repo: str,
+        branch: str,
+        scope_mode: str,
+        task_prompt: str,
+        context_xml: str,
+        context_summary: str,
+        local_root: str,
+        on_success,
+        on_failure,
+    ) -> None:
+        """R5.3: Gitlink's Generate Change Set action - the independent
+        Gitlink Run slot, mirroring start_web_research/start_artifact_reply's
+        own fire-and-forget shape: the caller (register_canvas's
+        run_gitlink_change_set) returns immediately after this schedules its
+        background task; the eventual result lands via on_success/on_failure
+        plus a "scene" republish, same as every other kind's real dispatch.
+
+        Cooperative cancellation only, via a threading.Event
+        (GitlinkAgent.get_response has no cancellation primitive of its own)
+        - same honestly-documented limitation as every other dispatch
+        surface: the checkpoint is placed AFTER the blocking call returns, so
+        a cancel requested while the model call is already in flight discards
+        the result rather than truly interrupting the underlying network
+        call.
+
+        The fingerprint is computed over the EXACT change set about to be
+        shown - mirrors legacy's own shown_fingerprint, computed immediately
+        before display, never a value captured earlier or later.
+
+        DEFENSE-IN-DEPTH busy guard, checked here too (not only by
+        register_canvas's own run_gitlink_change_set pre-check): node.
+        pending_request_id is the shared busy marker for EVERY Gitlink
+        action on this node, and the whole point of that field is making the
+        Run-cannot-start-while-an-Apply-is-in-flight (and vice versa)
+        guarantee hold regardless of call site. Checking it again here means
+        a future caller that skips the canvas.py pre-check can never
+        accidentally start a second concurrent Gitlink action on the same
+        node. The ONE exception is _GITLINK_RUN_CLAIM_PLACEHOLDER (see that
+        constant's own comment): run_gitlink_change_set stores that exact
+        sentinel into node.pending_request_id, synchronously, immediately
+        before calling this method - this method recognizes it as "already
+        claimed by my own caller" and overwrites it, rather than rejecting a
+        request its own caller just admitted.
+
+        R5.3 post-review FIX 4(a): node.pending_request_id is now claimed
+        SYNCHRONOUSLY here, immediately after the busy check and BEFORE
+        asyncio.create_task(_run()) below - mirroring start_gitlink_apply's
+        own claim exactly. Before this fix, the slot stayed empty until
+        _run() actually got a turn on the event loop, leaving a real gap
+        between "Run was requested" and "Run's sub-task actually started"
+        during which a second concurrent Run or an Apply for the same node
+        could slip past the busy check above."""
+        if node.pending_request_id and node.pending_request_id != _GITLINK_RUN_CLAIM_PLACEHOLDER:
+            notifications_state.show("Gitlink is already busy for this node.", "info")
+            await bus.publish("notification")
+            return
+
+        request_id = uuid.uuid4().hex
+        node.pending_request_id = request_id
+        cancel_event = threading.Event()
+        await bus.publish("scene")
+
+        async def _run():
+            try:
+                payload = {
+                    "task_prompt": task_prompt,
+                    "context_xml": context_xml,
+                    "repo": repo,
+                    "branch": branch,
+                    "scope_label": "Full Repo Access" if scope_mode == "full" else "Selected Files",
+                    "context_summary": context_summary,
+                    "branch_transcript": "",
+                }
+                result = await asyncio.wait_for(
+                    asyncio.to_thread(_call_gitlink_agent, payload),
+                    timeout=GITLINK_WATCHDOG_TIMEOUT_SECONDS,
+                )
+                if cancel_event.is_set():
+                    notifications_state.show("Gitlink generation cancelled.", "info")
+                    await bus.publish("notification")
+                else:
+                    proposal_markdown = _build_gitlink_proposal_markdown(repo, branch, result)
+                    preview_text = _build_gitlink_preview_text(result["files"], local_root, repo, branch)
+                    fingerprint = _fingerprint_changes(result["files"]) if result["files"] else None
+                    # R5.3 post-review FIX 2: local_root is now forwarded to
+                    # on_success too, so document.complete_gitlink_run can
+                    # record exactly which local_root THIS run used (see that
+                    # method's own docstring) - the write-destination binding
+                    # start_gitlink_apply's fourth check enforces.
+                    on_success(proposal_markdown, result["files"], preview_text, fingerprint, local_root)
+                    await bus.publish("scene")
+            except asyncio.TimeoutError:
+                cancel_event.set()
+                notifications_state.show(
+                    "Gitlink generation stopped responding before the request completed. "
+                    "Please try again.",
+                    "error",
+                )
+                await bus.publish("notification")
+            except Exception as exc:
+                logger.exception("gitlink dispatch failed")
+                on_failure(f"Gitlink generation failed: {exc}")
+                notifications_state.show(f"Gitlink generation failed: {exc}", "error")
+                await bus.publish("notification")
+            finally:
+                self._gitlink_requests.pop(request_id, None)
+                # R5.3 post-review FIX 4(c): only clear if this task's OWN
+                # request_id is still the one recorded - a stale,
+                # already-superseded task finishing late must never clobber
+                # a newer legitimate busy marker.
+                if node.pending_request_id == request_id:
+                    node.pending_request_id = None
+                await bus.publish("scene")
+
+        self._gitlink_requests[request_id] = {
+            "cancel_event": cancel_event, "task": asyncio.create_task(_run())
+        }
+
+    async def start_gitlink_apply(
+        self,
+        *,
+        bus: SessionBus,
+        notifications_state,
+        node,
+        node_id: str,
+        client_fingerprint: str,
+        local_root: str,
+        on_success,
+        on_failure,
+    ) -> None:
+        """R5.3: Gitlink's Apply action - THE code the whole increment hinges
+        on. The fingerprint check and the freeze of the data that will
+        actually be written happen in the SAME synchronous stretch of this
+        coroutine, with ZERO await between them. Python asyncio is
+        single-threaded; only an await yields control - so it is IMPOSSIBLE
+        (not merely unlikely) for node.gitlink_pending_changes to be mutated
+        between the recompute and the freeze immediately after it. This is a
+        STRONGER guarantee than legacy's own check, because legacy's
+        confirmation dialog is a real blocking call that pumps the Qt event
+        loop (letting a background thread's finished signal run mid-dialog) -
+        this coroutine has no equivalent yield point until deliberately
+        introduced AFTER the freeze.
+
+        R5.3 post-review FIX 5: node.pending_request_id is now claimed
+        SYNCHRONOUSLY here, immediately after the busy check above and
+        BEFORE the local_root_text validation - mirroring start_gitlink_run's
+        own early synchronous claim (see that method's own docstring). Before
+        this fix, the busy slot stayed unclaimed all the way through the
+        local_root_text validation, the `await asyncio.to_thread(local_root_
+        path.exists)` call below (a real yield point), and the entire atomic
+        fingerprint/local_root section, only ever being set at the very end,
+        just before scheduling _run(). Two genuinely concurrent Apply calls
+        for the SAME node (two different WebSocket connections on the same
+        session, e.g. two browser tabs - not a single connection's
+        sequential message loop) could both read node.pending_request_id as
+        falsy before either claimed it, both proceed through the exists()
+        await and the atomic section, and both end up scheduling a write via
+        apply_change_set concurrently - a real write-safety issue, since two
+        concurrent writers touching the same files' backup/rollback
+        bookkeeping is not something apply_change_set was designed to
+        tolerate. Every early-return failure path BELOW this claim (empty
+        pending_changes, empty local_root, nonexistent local_root,
+        fingerprint mismatch, local_root mismatch) now ALSO clears
+        node.pending_request_id back to None before returning, since none of
+        those paths ever reach _run()'s own finally block - without that
+        clear, a legitimately-rejected Apply would leave the node
+        permanently stuck "busy"."""
+        if node.pending_request_id:
+            notifications_state.show("Gitlink is already busy for this node.", "info")
+            await bus.publish("notification")
+            return
+
+        request_id = uuid.uuid4().hex
+        node.pending_request_id = request_id
+
+        if not node.gitlink_pending_changes:
+            node.pending_request_id = None
+            on_failure("There is no approved change set to write.")
+            await bus.publish("scene")
+            return
+
+        local_root_text = (local_root or "").strip()
+        if not local_root_text:
+            node.pending_request_id = None
+            on_failure("Select or import a local repository path before applying changes.")
+            await bus.publish("scene")
+            return
+        local_root_path = Path(local_root_text).expanduser()
+        # R5.3 post-review FIX 3: wrapped in asyncio.to_thread, like every
+        # other filesystem check in this file - this was the sole exception,
+        # running synchronously directly on the shared event loop. Placed
+        # BEFORE the atomic check-and-freeze section below, so this await
+        # does not touch that section's own zero-await guarantee (which only
+        # covers the fingerprint-check-through-snapshot-freeze part). R5.3
+        # post-review FIX 5: this await is now the reason the busy claim
+        # above had to move earlier - a second concurrent call could
+        # otherwise slip past the busy check while this await has yielded
+        # control.
+        local_root_exists = await asyncio.to_thread(local_root_path.exists)
+        if not local_root_exists:
+            node.pending_request_id = None
+            on_failure("The selected local repository path does not exist.")
+            await bus.publish("scene")
+            return
+
+        # --- Atomic check-and-freeze: NO await between these statements. ---
+        current_fingerprint = _fingerprint_changes(node.gitlink_pending_changes)
+        if (
+            client_fingerprint != current_fingerprint
+            or current_fingerprint != node.gitlink_change_fingerprint
+        ):
+            node.pending_request_id = None
+            on_failure("The proposed change set changed after approval. Review it again before applying.")
+            await bus.publish("scene")
+            return
+        # R5.3 post-review FIX 2: the fingerprint above says nothing about
+        # WHERE the content is written - _fingerprint_changes only hashes
+        # file content/paths/operations, never local_root (deliberately not
+        # modified here - it is reused verbatim from gitlink/agent.py, shared
+        # with the legacy Qt app). Without this separate check, a
+        # gitlink_local_root edited after Run but before Apply would let
+        # previously-reviewed content be written into a directory that was
+        # never diffed or shown to the user. Compared as raw trimmed text,
+        # consistent with how local_root_text itself is derived just above
+        # and how document.complete_gitlink_run records
+        # gitlink_change_local_root.
+        if local_root_text != (node.gitlink_change_local_root or ""):
+            node.pending_request_id = None
+            on_failure(
+                "The local repository path changed since this proposal was generated. "
+                "Regenerate the change set before applying."
+            )
+            await bus.publish("scene")
+            return
+        changes_snapshot = [dict(item) for item in node.gitlink_pending_changes]
+        # --- End atomic section. Everything past this point operates ONLY on
+        # changes_snapshot, never on node.gitlink_pending_changes again. ---
+
+        # R5.3 post-review FIX 5: request_id was already generated and
+        # claimed into node.pending_request_id right after the busy check
+        # above - NOT re-generated here. Only the change_state transition and
+        # publish happen at this point now.
+        node.gitlink_change_state = "applying"
+        await bus.publish("scene")
+
+        async def _run():
+            try:
+                written_files = await asyncio.wait_for(
+                    asyncio.to_thread(_call_gitlink_apply, local_root_path, changes_snapshot),
+                    timeout=GITLINK_APPLY_TIMEOUT_SECONDS,
+                )
+                on_success(written_files)
+                notifications_state.show(f"Applied {written_files} file changes.", "info")
+                await bus.publish("notification")
+            except asyncio.TimeoutError:
+                on_failure(
+                    "Applying changes stopped responding before the request completed. "
+                    "Some files may have been partially written - check the repository "
+                    "before retrying."
+                )
+                notifications_state.show("Gitlink apply timed out.", "error")
+                await bus.publish("notification")
+            except Exception as exc:
+                logger.exception("gitlink apply failed")
+                on_failure(f"Failed to write approved changes: {exc}")
+                notifications_state.show(f"Gitlink apply failed: {exc}", "error")
+                await bus.publish("notification")
+            finally:
+                self._gitlink_apply_requests.pop(request_id, None)
+                # R5.3 post-review FIX 4(c): only clear if this task's OWN
+                # request_id is still the one recorded - same stale-task
+                # guard as start_gitlink_run's own finally block above.
+                if node.pending_request_id == request_id:
+                    node.pending_request_id = None
+                await bus.publish("scene")
+
+        self._gitlink_apply_requests[request_id] = {"task": asyncio.create_task(_run())}
+
 
 def _call_chat_agent(conversation_history, persona_text, cancel_event) -> str:
     """Runs inside asyncio.to_thread - a real OS thread, not the event loop."""
@@ -893,6 +1395,307 @@ def _call_artifact_agent(current_artifact, history):
     never touched in that case since mutation only happens in the success
     branch."""
     return ArtifactAgent().get_response(current_artifact, history)
+
+
+# -- R5.3: Gitlink - blocking helpers, each runs inside asyncio.to_thread ----
+#
+# These replicate the exact GitHub REST call shapes graphlink_plugin_gitlink.py's
+# legacy GitlinkNode uses (load_github_repositories/load_repository_tree/
+# _resolve_repo_and_branch/_ensure_repository_snapshot/build_context_bundle),
+# confirmed by reading that file directly, as new plain functions here using
+# GitHubRestClient.request() directly - repo-listing and tree-loading were
+# never extracted into the Qt-free gitlink package, so there is no existing
+# Qt-free surface to import for them.
+
+# Up to 5 sequential pages of GET /user/repos, matching legacy's own
+# MAX_REPO_PAGES constant.
+_GITLINK_MAX_REPO_PAGES = 5
+
+
+def _list_github_repositories(settings_manager):
+    """Replicates load_github_repositories exactly: GET /user/repos with
+    per_page=100, sort=updated, visibility=all,
+    affiliation=owner,collaborator,organization_member, looped while
+    page <= 5, collecting each page's item full_name, stopping early on a
+    short/empty page. Returns the sorted, deduplicated list of repo
+    full_names."""
+    client = GitHubRestClient(settings_manager)
+    repos: list[str] = []
+    page = 1
+    while page <= _GITLINK_MAX_REPO_PAGES:
+        page_payload = client.request(
+            "https://api.github.com/user/repos",
+            params={
+                "per_page": 100,
+                "page": page,
+                "sort": "updated",
+                "visibility": "all",
+                "affiliation": "owner,collaborator,organization_member",
+            },
+        )
+        if not page_payload:
+            break
+        repos.extend(item.get("full_name", "") for item in page_payload if item.get("full_name"))
+        if len(page_payload) < 100:
+            break
+        page += 1
+    return sorted(set(repos), key=str.lower)
+
+
+def _resolve_gitlink_branch(client, repo_name, branch_hint):
+    """Replicates the branch-resolution half of _resolve_repo_and_branch: an
+    explicit branch_hint wins outright; otherwise GET /repos/{repo_name} and
+    read default_branch."""
+    branch_name = (branch_hint or "").strip()
+    if branch_name:
+        return branch_name
+    repo_payload = client.request(f"https://api.github.com/repos/{repo_name}")
+    default_branch = repo_payload.get("default_branch", "")
+    if not default_branch:
+        raise RuntimeError("GitHub did not provide a default branch for this repository.")
+    return default_branch
+
+
+def _load_gitlink_tree(settings_manager, repo, branch):
+    """Replicates load_repository_tree exactly: resolve repo/branch, GET the
+    recursive git tree, keep only blob entries whose path passes
+    _is_repo_text_path. Returns (repo, resolved_branch, sorted_file_paths)."""
+    if not repo or "/" not in repo:
+        raise RuntimeError("Enter a repository as `owner/repo`.")
+    client = GitHubRestClient(settings_manager)
+    resolved_branch = _resolve_gitlink_branch(client, repo, branch)
+    tree_payload = client.request(
+        f"https://api.github.com/repos/{repo}/git/trees/{quote(resolved_branch, safe='')}",
+        params={"recursive": 1},
+    )
+    tree_items = tree_payload.get("tree", [])
+    file_paths = sorted(
+        (
+            item.get("path", "")
+            for item in tree_items
+            if item.get("type") == "blob" and item.get("path") and _is_repo_text_path(item.get("path", ""))
+        ),
+        key=str.lower,
+    )
+    return repo, resolved_branch, file_paths
+
+
+def _ensure_gitlink_snapshot(settings_manager, repo, branch, local_root_hint, imported_root_hint):
+    """Replicates _ensure_repository_snapshot exactly: an existing
+    local_root_hint wins outright (error if it does not exist); else an
+    existing imported_root_hint is reused if it still exists; else a fresh
+    snapshot is downloaded to default_import_root(repo, branch) (itself
+    short-circuiting if that target already exists non-empty). Returns
+    (repo, resolved_branch, local_root_path). Shared by both
+    import_gitlink_snapshot and build_gitlink_context's own full-scope path -
+    factored out once here rather than duplicated, per the design spec."""
+    client = GitHubRestClient(settings_manager)
+    resolved_branch = _resolve_gitlink_branch(client, repo, branch)
+
+    local_root_text = (local_root_hint or "").strip()
+    if local_root_text:
+        root_path = Path(local_root_text).expanduser()
+        if root_path.exists():
+            return repo, resolved_branch, root_path
+        raise RuntimeError("The selected local repo path does not exist.")
+
+    imported_root_text = (imported_root_hint or "").strip()
+    if imported_root_text:
+        imported_path = Path(imported_root_text)
+        if imported_path.exists():
+            return repo, resolved_branch, imported_path
+
+    target_root = default_import_root(repo, resolved_branch)
+    repository = GitlinkRepository(client)
+    target_path = repository.download_repository_snapshot(repo, resolved_branch, target_root)
+    return repo, resolved_branch, target_path
+
+
+def _build_gitlink_context_bundle(
+    settings_manager, *, repo, branch, scope_mode, selected_paths, repo_file_paths,
+    local_root_hint, imported_root_hint,
+):
+    """Replicates the build_context_bundle wrapper: resolve local_root from
+    local_root_hint (None if blank; error if set but does not exist); if
+    scope_mode is "full" and local_root is still None, ensure a snapshot
+    first (reusing _ensure_gitlink_snapshot rather than duplicating it); then
+    delegate to GitlinkRepository.build_context_bundle. Returns a dict with
+    context_xml/context_stats/context_summary keys, matching
+    store_gitlink_context(node_id, scope_mode=..., selected_paths=...,
+    **result)'s call shape in backend/canvas.py.
+
+    DEVIATION from a strict line-for-line legacy replication, noted
+    explicitly: legacy's own build_context_bundle wrapper unconditionally
+    calls _resolve_repo_and_branch() at its very top (one GET
+    /repos/{repo_name} every time, even for a purely local-root/selected-
+    files build). This function only resolves the branch via GitHub when a
+    snapshot actually needs to be ensured (scope_mode == "full" and no
+    local_root) - matching the design spec's own literal parameter passing
+    (`branch_name=node.gitlink_branch`) rather than legacy's more eager
+    resolution. A local-root-backed build with a blank branch therefore
+    proceeds using an empty branch string (harmless: build_context_bundle
+    only reads files from local_root in that case, never from GitHub, and
+    branch only ends up in cosmetic XML attributes)."""
+    local_root_text = (local_root_hint or "").strip()
+    local_root = None
+    if local_root_text:
+        local_root = Path(local_root_text).expanduser()
+        if not local_root.exists():
+            raise RuntimeError("The selected local repo path does not exist.")
+
+    resolved_branch = branch
+    if scope_mode == "full" and local_root is None:
+        _, resolved_branch, local_root = _ensure_gitlink_snapshot(
+            settings_manager, repo, branch, local_root_hint, imported_root_hint
+        )
+
+    client = GitHubRestClient(settings_manager)
+    repository = GitlinkRepository(client)
+    result = repository.build_context_bundle(
+        repo_name=repo,
+        branch_name=resolved_branch,
+        scope_mode=scope_mode,
+        selected_paths=selected_paths,
+        repo_file_paths=repo_file_paths,
+        local_root=local_root,
+    )
+    return {
+        "context_xml": result.context_xml,
+        "context_stats": dict(result.context_stats),
+        "context_summary": result.context_summary,
+    }
+
+
+def _call_gitlink_agent(payload):
+    """Runs inside asyncio.to_thread. Reuses GitlinkAgent.get_response
+    verbatim - same defensive-by-construction dict-in/dict-out contract,
+    completely unmodified."""
+    return GitlinkAgent().get_response(payload)
+
+
+def _build_gitlink_proposal_markdown(repo, branch, result):
+    """Replicates _build_proposal_markdown exactly, as a plain function
+    operating on GitlinkAgent.get_response's own result dict instead of a
+    widget's repo_state."""
+    summary = result.get("summary") or "No summary returned."
+    rationale = result.get("rationale") or "No rationale returned."
+    notes = result.get("notes") or []
+    write_intent = result.get("write_intent", "blocked")
+    files = result.get("files") or []
+
+    lines = [
+        "## Gitlink Proposal",
+        "",
+        f"- Repository: {repo or 'Unknown repo'}",
+        f"- Branch: {branch or 'Unknown branch'}",
+        f"- Intent: {str(write_intent).replace('_', ' ').title()}",
+        f"- Files Returned: {len(files)}",
+        "",
+        "### Summary",
+        summary,
+        "",
+        "### Rationale",
+        rationale,
+    ]
+
+    if notes:
+        lines.extend(["", "### Notes"])
+        lines.extend(f"- {note}" for note in notes)
+
+    if files:
+        lines.extend(["", "### Proposed File Writes"])
+        for file_item in files:
+            lines.append(
+                f"- `{file_item.get('path', '')}` [{file_item.get('operation', 'update')}] - "
+                f"{file_item.get('reason', 'No reason supplied.')}"
+            )
+
+    return "\n".join(lines)
+
+
+def _build_gitlink_preview_text(files, local_root, repo, branch):
+    """Replicates _build_preview_text's diff-building shape, reusing
+    read_local_repo_file for the original-content side of each update/delete
+    diff. DEVIATION from legacy, noted explicitly: legacy's own
+    _read_original_text_for_preview falls back to a live GitHub fetch when no
+    local_root is configured; this function does NOT - it degrades
+    gracefully (shows the proposed content with an explicit warning banner
+    instead of a diff) rather than spending a GitHub API call per changed
+    file purely for a preview render. `repo`/`branch` are used only in that
+    warning's text, never for a network fetch."""
+    preview_parts = []
+    for file_item in files:
+        path_text = file_item.get("path", "")
+        operation = file_item.get("operation", "update")
+        original_text = None
+        if local_root:
+            try:
+                original_text = read_local_repo_file(local_root, path_text)
+            except Exception:
+                original_text = None
+        proposed_text = file_item.get("content", "") if operation in {"update", "create"} else ""
+
+        # None = the original could not be read (as opposed to "" = a real
+        # empty file). For update/delete that means no honest diff exists -
+        # say so explicitly instead of diffing against "" and rendering a
+        # misleading all-additions "create" diff. Creates never need the
+        # original, so they render normally either way. Mirrors the A2 fix
+        # already shipped for the legacy widget's own preview builder.
+        if original_text is None and operation in {"update", "delete"}:
+            preview_parts.append(f"### {path_text} [{operation}]\n")
+            preview_parts.append(
+                "!! WARNING: the original file could not be read (no local checkout is "
+                f"configured for {repo or 'this repository'}@{branch or 'unknown branch'}), "
+                "so no diff can be shown for this change."
+            )
+            if operation == "update":
+                preview_parts.append(
+                    "!! Applying will OVERWRITE the existing file with the full "
+                    "proposed content below:\n"
+                )
+                preview_parts.append(proposed_text if proposed_text else "[No content in proposal]")
+            else:
+                preview_parts.append("!! Applying will DELETE the file.")
+            preview_parts.append("")
+            continue
+        original_text = original_text or ""
+
+        if operation == "create":
+            diff_lines = list(
+                difflib.unified_diff(
+                    [], proposed_text.splitlines(), fromfile=f"a/{path_text}", tofile=f"b/{path_text}", lineterm="",
+                )
+            )
+        elif operation == "delete":
+            diff_lines = list(
+                difflib.unified_diff(
+                    original_text.splitlines(), [], fromfile=f"a/{path_text}", tofile=f"b/{path_text}", lineterm="",
+                )
+            )
+        else:
+            diff_lines = list(
+                difflib.unified_diff(
+                    original_text.splitlines(), proposed_text.splitlines(),
+                    fromfile=f"a/{path_text}", tofile=f"b/{path_text}", lineterm="",
+                )
+            )
+
+        preview_parts.append(f"### {path_text} [{operation}]\n")
+        if diff_lines:
+            preview_parts.append("\n".join(diff_lines))
+        else:
+            preview_parts.append("No textual diff available.")
+        preview_parts.append("")
+
+    return "\n".join(preview_parts).strip()
+
+
+def _call_gitlink_apply(local_root, pending_changes):
+    """Runs inside asyncio.to_thread. Reuses validate_pending_changes/
+    apply_change_set UNMODIFIED, verbatim - the path-safety boundary is never
+    reimplemented, only invoked."""
+    validate_pending_changes(pending_changes)
+    return apply_change_set(local_root, pending_changes)
 
 
 def register_agents(bus, composer_document, notifications_state, settings_manager) -> AgentDispatcher:

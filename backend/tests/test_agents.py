@@ -13,8 +13,10 @@ itself.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import threading
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -25,7 +27,7 @@ import pytest
 # graphlink_licensing) for this module to import cleanly when run standalone.
 import backend.agents as agents_module
 from backend.agents import AgentDispatcher
-from backend.canvas import register_canvas
+from backend.canvas import SceneDocument, register_canvas
 from backend.composer import ComposerDocument
 from backend.events import SessionBus
 from backend.notifications import NotificationState
@@ -2317,6 +2319,883 @@ def test_artifact_request_and_web_research_request_run_concurrently(monkeypatch)
         assert artifact_replies == [("artifact document", "artifact message")]
         assert dispatcher._web_research_requests == {}
         assert dispatcher._artifact_requests == {}
+
+    asyncio.run(run())
+
+
+# -- R5.3: Gitlink -------------------------------------------------------
+#
+# The data-integrity core of this whole increment: the fingerprint
+# check-and-freeze in start_gitlink_apply must be provably atomic (no await
+# between recompute and freeze), the client-supplied fingerprint must be
+# checked against BOTH a fresh recompute AND the server's own last-recorded
+# fingerprint (a three-way check), and applyGitlinkChanges/start_gitlink_apply
+# must never accept a changes/pending_changes payload from the caller.
+
+
+def _make_gitlink_node(**overrides):
+    defaults = dict(
+        pending_request_id=None,
+        gitlink_repo="octocat/hello-world",
+        gitlink_branch="main",
+        gitlink_scope_mode="selected",
+        gitlink_local_root="",
+        gitlink_imported_root="",
+        gitlink_repo_file_paths=[],
+        gitlink_selected_paths=[],
+        gitlink_task_prompt="",
+        gitlink_context_xml="<gitlink_context/>",
+        gitlink_context_stats={},
+        gitlink_context_summary="",
+        gitlink_proposal_markdown="",
+        gitlink_pending_changes=[],
+        gitlink_preview_text="",
+        gitlink_change_fingerprint=None,
+        gitlink_change_local_root=None,
+        gitlink_change_state="draft",
+        gitlink_error="",
+    )
+    defaults.update(overrides)
+    return SimpleNamespace(**defaults)
+
+
+def _make_gitlink_env():
+    bus = SessionBus("agents-gitlink-test")
+    notifications = NotificationState()
+    bus.register_topic("notification", notifications.payload)
+    bus.register_topic("scene", lambda: {})
+    dispatcher = AgentDispatcher(_FakeSettingsManager())
+    return bus, notifications, dispatcher
+
+
+def test_call_gitlink_agent_calls_get_response(monkeypatch):
+    captured = []
+    fake_result = {
+        "summary": "s", "write_intent": "changes_ready", "rationale": "r",
+        "notes": [], "files": [], "change_count": 0, "raw_response": "{}",
+    }
+
+    def fake_get_response(self, payload):
+        captured.append(payload)
+        return fake_result
+
+    monkeypatch.setattr(agents_module.GitlinkAgent, "get_response", fake_get_response)
+
+    payload = {"task_prompt": "do x", "context_xml": "<x/>", "repo": "o/r", "branch": "main"}
+    result = agents_module._call_gitlink_agent(payload)
+
+    assert result is fake_result
+    assert captured == [payload]
+
+
+# -- start_gitlink_run --------------------------------------------------------
+
+
+def test_start_gitlink_run_with_changes_calls_on_success_with_fingerprint(monkeypatch):
+    fake_result = {
+        "summary": "add a health check", "write_intent": "changes_ready", "rationale": "r",
+        "notes": [], "change_count": 1,
+        "files": [{"path": "a.py", "operation": "update", "reason": "x", "content": "y"}],
+        "raw_response": "{}",
+    }
+    monkeypatch.setattr(agents_module.GitlinkAgent, "get_response", lambda self, payload: fake_result)
+
+    async def run():
+        bus, notifications, dispatcher = _make_gitlink_env()
+        node = _make_gitlink_node()
+        successes = []
+
+        await dispatcher.start_gitlink_run(
+            bus=bus, notifications_state=notifications, node=node, node_id="n1",
+            repo="octocat/hello-world", branch="main", scope_mode="selected",
+            task_prompt="add a health check", context_xml="<x/>", context_summary="s",
+            local_root="",
+            on_success=lambda *args: successes.append(args),
+            on_failure=lambda message: None,
+        )
+        entry = next(iter(dispatcher._gitlink_requests.values()))
+        await entry["task"]
+
+        assert len(successes) == 1
+        proposal_markdown, files, preview_text, fingerprint, local_root = successes[0]
+        assert files == fake_result["files"]
+        assert fingerprint == agents_module._fingerprint_changes(fake_result["files"])
+        assert "octocat/hello-world" in proposal_markdown
+        assert local_root == "", "the exact local_root this run used must be forwarded to on_success (FIX 2)"
+        assert dispatcher._gitlink_requests == {}
+        assert node.pending_request_id is None
+        assert notifications.visible is False
+
+    asyncio.run(run())
+
+
+def test_start_gitlink_run_no_changes_calls_on_success_with_empty_files_and_none_fingerprint(monkeypatch):
+    fake_result = {
+        "summary": "nothing to change", "write_intent": "no_changes", "rationale": "r",
+        "notes": ["no changes needed"], "files": [], "change_count": 0, "raw_response": "{}",
+    }
+    monkeypatch.setattr(agents_module.GitlinkAgent, "get_response", lambda self, payload: fake_result)
+
+    async def run():
+        bus, notifications, dispatcher = _make_gitlink_env()
+        node = _make_gitlink_node()
+        successes = []
+
+        await dispatcher.start_gitlink_run(
+            bus=bus, notifications_state=notifications, node=node, node_id="n1",
+            repo="o/r", branch="main", scope_mode="selected", task_prompt="do nothing",
+            context_xml="<x/>", context_summary="s", local_root="",
+            on_success=lambda *args: successes.append(args),
+            on_failure=lambda message: None,
+        )
+        entry = next(iter(dispatcher._gitlink_requests.values()))
+        await entry["task"]
+
+        assert len(successes) == 1
+        _proposal_markdown, files, _preview_text, fingerprint, _local_root = successes[0]
+        assert files == []
+        assert fingerprint is None
+
+    asyncio.run(run())
+
+
+def test_start_gitlink_run_timeout_fires_the_exact_message_and_clears_the_slot(monkeypatch):
+    monkeypatch.setattr(agents_module, "GITLINK_WATCHDOG_TIMEOUT_SECONDS", 0.05)
+
+    def slow_get_response(self, payload):
+        time.sleep(0.3)
+        return {
+            "summary": "s", "write_intent": "no_changes", "rationale": "r",
+            "notes": [], "files": [], "change_count": 0, "raw_response": "",
+        }
+
+    monkeypatch.setattr(agents_module.GitlinkAgent, "get_response", slow_get_response)
+
+    async def run():
+        bus, notifications, dispatcher = _make_gitlink_env()
+        node = _make_gitlink_node()
+        successes = []
+
+        await dispatcher.start_gitlink_run(
+            bus=bus, notifications_state=notifications, node=node, node_id="n1",
+            repo="o/r", branch="main", scope_mode="selected", task_prompt="x",
+            context_xml="<x/>", context_summary="s", local_root="",
+            on_success=lambda *args: successes.append(args),
+            on_failure=lambda message: None,
+        )
+        entry = next(iter(dispatcher._gitlink_requests.values()))
+        await entry["task"]
+
+        assert successes == []
+        assert dispatcher._gitlink_requests == {}
+        assert node.pending_request_id is None
+        assert notifications.visible is True
+        assert notifications.msg_type == "error"
+        assert notifications.message == (
+            "Gitlink generation stopped responding before the request completed. Please try again."
+        )
+
+    asyncio.run(run())
+
+
+def test_start_gitlink_run_cancel_mid_flight_fires_info_notification_and_never_calls_on_success(monkeypatch):
+    started = threading.Event()
+    release = threading.Event()
+
+    def blocking_get_response(self, payload):
+        started.set()
+        release.wait(5)
+        return {
+            "summary": "s", "write_intent": "changes_ready", "rationale": "r", "notes": [],
+            "files": [{"path": "a.py", "operation": "update", "reason": "x", "content": "y"}],
+            "change_count": 1, "raw_response": "{}",
+        }
+
+    monkeypatch.setattr(agents_module.GitlinkAgent, "get_response", blocking_get_response)
+
+    async def run():
+        bus, notifications, dispatcher = _make_gitlink_env()
+        node = _make_gitlink_node()
+        successes = []
+
+        await dispatcher.start_gitlink_run(
+            bus=bus, notifications_state=notifications, node=node, node_id="n1",
+            repo="o/r", branch="main", scope_mode="selected", task_prompt="x",
+            context_xml="<x/>", context_summary="s", local_root="",
+            on_success=lambda *args: successes.append(args),
+            on_failure=lambda message: None,
+        )
+        request_id, entry = next(iter(dispatcher._gitlink_requests.items()))
+
+        await asyncio.to_thread(started.wait, 5)
+        assert dispatcher.cancel_gitlink(request_id) is True
+        release.set()
+        await entry["task"]
+
+        assert successes == [], "a cancelled run must never call on_success, even on a late return"
+        assert dispatcher._gitlink_requests == {}
+        assert node.pending_request_id is None
+        assert notifications.visible is True
+        assert notifications.msg_type == "info"
+        assert notifications.message == "Gitlink generation cancelled."
+
+    asyncio.run(run())
+
+
+def test_cancel_gitlink_returns_false_for_an_unknown_request_id():
+    dispatcher = AgentDispatcher(_FakeSettingsManager())
+    assert dispatcher.cancel_gitlink("no-such-request") is False
+
+
+def test_start_gitlink_run_busy_node_refuses_immediately_without_creating_a_request_entry():
+    async def run():
+        bus, notifications, dispatcher = _make_gitlink_env()
+        node = _make_gitlink_node(pending_request_id="already-busy")
+
+        await dispatcher.start_gitlink_run(
+            bus=bus, notifications_state=notifications, node=node, node_id="n1",
+            repo="o/r", branch="main", scope_mode="selected", task_prompt="x",
+            context_xml="<x/>", context_summary="s", local_root="",
+            on_success=lambda *args: None, on_failure=lambda message: None,
+        )
+
+        assert dispatcher._gitlink_requests == {}
+        assert notifications.visible is True
+        assert notifications.msg_type == "info"
+
+    asyncio.run(run())
+
+
+# -- start_gitlink_apply: the data-integrity core -----------------------------
+
+
+def test_gitlink_apply_rejects_client_fingerprint_mismatch(monkeypatch):
+    def raising_apply_change_set(local_root, pending_changes):
+        raise AssertionError("apply_change_set must never be reached on a fingerprint mismatch")
+
+    monkeypatch.setattr(agents_module, "apply_change_set", raising_apply_change_set)
+
+    async def run(tmp_path):
+        bus, notifications, dispatcher = _make_gitlink_env()
+        changes = [{"path": "a.py", "operation": "update", "reason": "r", "content": "x"}]
+        real_fingerprint = agents_module._fingerprint_changes(changes)
+        node = _make_gitlink_node(
+            gitlink_pending_changes=changes,
+            gitlink_change_fingerprint=real_fingerprint,
+            gitlink_local_root=str(tmp_path),
+        )
+        failures = []
+        successes = []
+
+        await dispatcher.start_gitlink_apply(
+            bus=bus, notifications_state=notifications, node=node, node_id="n1",
+            client_fingerprint="deliberately-wrong-fingerprint", local_root=str(tmp_path),
+            on_success=successes.append, on_failure=failures.append,
+        )
+
+        assert failures == [
+            "The proposed change set changed after approval. Review it again before applying."
+        ]
+        assert successes == []
+        assert dispatcher._gitlink_apply_requests == {}, "no apply task must ever have been scheduled"
+
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        asyncio.run(run(Path(tmp)))
+
+
+def test_gitlink_apply_rejects_when_pending_changes_mutated_between_generation_and_apply(monkeypatch, tmp_path):
+    def raising_apply_change_set(local_root, pending_changes):
+        raise AssertionError("apply_change_set must never be reached when the recorded fingerprint is stale")
+
+    monkeypatch.setattr(agents_module, "apply_change_set", raising_apply_change_set)
+
+    async def run():
+        bus, notifications, dispatcher = _make_gitlink_env()
+        changes_a = [{"path": "a.py", "operation": "update", "reason": "r", "content": "x"}]
+        changes_b = [{"path": "b.py", "operation": "update", "reason": "r2", "content": "y"}]
+        fingerprint_for_a = agents_module._fingerprint_changes(changes_a)
+        # Simulates a second Run landing (mutating pending_changes) WITHOUT
+        # going through complete_gitlink_run's own fingerprint-recording -
+        # node.gitlink_change_fingerprint is left stale, still pointing at A.
+        node = _make_gitlink_node(
+            gitlink_pending_changes=changes_b,
+            gitlink_change_fingerprint=fingerprint_for_a,
+            gitlink_local_root=str(tmp_path),
+        )
+        failures = []
+
+        await dispatcher.start_gitlink_apply(
+            bus=bus, notifications_state=notifications, node=node, node_id="n1",
+            client_fingerprint=fingerprint_for_a, local_root=str(tmp_path),
+            on_success=lambda written_files: None, on_failure=failures.append,
+        )
+
+        assert failures == [
+            "The proposed change set changed after approval. Review it again before applying."
+        ]
+        assert dispatcher._gitlink_apply_requests == {}
+
+    asyncio.run(run())
+
+
+def test_gitlink_apply_freezes_changes_before_await(monkeypatch, tmp_path):
+    changes = [{"path": "a.py", "operation": "update", "reason": "r", "content": "original"}]
+    fingerprint = agents_module._fingerprint_changes(changes)
+    node = _make_gitlink_node(
+        gitlink_pending_changes=changes,
+        gitlink_change_fingerprint=fingerprint,
+        gitlink_local_root=str(tmp_path),
+        gitlink_change_local_root=str(tmp_path),
+    )
+    captured = {}
+
+    def mutating_apply_change_set(local_root, pending_changes):
+        # Proves the write uses a DISTINCT, already-frozen list/copy - not
+        # node.gitlink_pending_changes itself.
+        assert pending_changes is not node.gitlink_pending_changes
+        captured["frozen_content"] = pending_changes[0]["content"]
+        # Mutate the LIVE node list from inside this patched function, to
+        # prove the write still used the original frozen snapshot's content,
+        # not whatever the live list is mutated to afterward.
+        node.gitlink_pending_changes[0]["content"] = "mutated-after-freeze"
+        return 1
+
+    monkeypatch.setattr(agents_module, "apply_change_set", mutating_apply_change_set)
+
+    async def run():
+        bus, notifications, dispatcher = _make_gitlink_env()
+        successes = []
+
+        await dispatcher.start_gitlink_apply(
+            bus=bus, notifications_state=notifications, node=node, node_id="n1",
+            client_fingerprint=fingerprint, local_root=str(tmp_path),
+            on_success=successes.append, on_failure=lambda message: None,
+        )
+        entry = next(iter(dispatcher._gitlink_apply_requests.values()))
+        await entry["task"]
+
+        assert successes == [1]
+        assert captured["frozen_content"] == "original", (
+            "the write must use the frozen snapshot's content, unaffected by the later mutation"
+        )
+        assert node.gitlink_pending_changes[0]["content"] == "mutated-after-freeze"
+
+    asyncio.run(run())
+
+
+def test_gitlink_apply_busy_guard_blocks_concurrent_run_and_apply(tmp_path):
+    async def run():
+        bus, notifications, dispatcher = _make_gitlink_env()
+        changes = [{"path": "a.py", "operation": "update", "reason": "r", "content": "x"}]
+        fingerprint = agents_module._fingerprint_changes(changes)
+        node = _make_gitlink_node(
+            pending_request_id="an-in-flight-request",
+            gitlink_pending_changes=changes,
+            gitlink_change_fingerprint=fingerprint,
+            gitlink_local_root=str(tmp_path),
+        )
+
+        await dispatcher.start_gitlink_run(
+            bus=bus, notifications_state=notifications, node=node, node_id="n1",
+            repo="o/r", branch="main", scope_mode="selected", task_prompt="x",
+            context_xml="<x/>", context_summary="s", local_root="",
+            on_success=lambda *args: None, on_failure=lambda message: None,
+        )
+        assert dispatcher._gitlink_requests == {}, "Run must refuse immediately for a busy node"
+
+        failures = []
+        await dispatcher.start_gitlink_apply(
+            bus=bus, notifications_state=notifications, node=node, node_id="n1",
+            client_fingerprint=fingerprint, local_root=str(tmp_path),
+            on_success=lambda written_files: None, on_failure=failures.append,
+        )
+        assert dispatcher._gitlink_apply_requests == {}, "Apply must refuse immediately for a busy node"
+        assert failures == [], "the busy guard shows a notification, not an on_failure call"
+        assert notifications.visible is True
+        assert notifications.message == "Gitlink is already busy for this node."
+
+    asyncio.run(run())
+
+
+def test_gitlink_apply_no_pending_changes_calls_on_failure_without_touching_apply_change_set(monkeypatch, tmp_path):
+    def raising_apply_change_set(local_root, pending_changes):
+        raise AssertionError("apply_change_set must never be reached with no pending changes")
+
+    monkeypatch.setattr(agents_module, "apply_change_set", raising_apply_change_set)
+
+    async def run():
+        bus, notifications, dispatcher = _make_gitlink_env()
+        node = _make_gitlink_node(gitlink_local_root=str(tmp_path))
+        failures = []
+
+        await dispatcher.start_gitlink_apply(
+            bus=bus, notifications_state=notifications, node=node, node_id="n1",
+            client_fingerprint="whatever", local_root=str(tmp_path),
+            on_success=lambda written_files: None, on_failure=failures.append,
+        )
+
+        assert failures == ["There is no approved change set to write."]
+        assert dispatcher._gitlink_apply_requests == {}
+
+    asyncio.run(run())
+
+
+def test_gitlink_apply_missing_local_root_calls_on_failure(monkeypatch):
+    changes = [{"path": "a.py", "operation": "update", "reason": "r", "content": "x"}]
+    fingerprint = agents_module._fingerprint_changes(changes)
+    node = _make_gitlink_node(
+        gitlink_pending_changes=changes, gitlink_change_fingerprint=fingerprint, gitlink_local_root="",
+    )
+
+    async def run():
+        bus, notifications, dispatcher = _make_gitlink_env()
+        failures = []
+
+        await dispatcher.start_gitlink_apply(
+            bus=bus, notifications_state=notifications, node=node, node_id="n1",
+            client_fingerprint=fingerprint, local_root="",
+            on_success=lambda written_files: None, on_failure=failures.append,
+        )
+
+        assert failures == ["Select or import a local repository path before applying changes."]
+        assert dispatcher._gitlink_apply_requests == {}
+
+    asyncio.run(run())
+
+
+def test_gitlink_apply_nonexistent_local_root_calls_on_failure(monkeypatch):
+    changes = [{"path": "a.py", "operation": "update", "reason": "r", "content": "x"}]
+    fingerprint = agents_module._fingerprint_changes(changes)
+    missing_root = "C:/this/path/does/not/exist/for/sure/gitlink-test"
+    node = _make_gitlink_node(
+        gitlink_pending_changes=changes, gitlink_change_fingerprint=fingerprint, gitlink_local_root=missing_root,
+    )
+
+    async def run():
+        bus, notifications, dispatcher = _make_gitlink_env()
+        failures = []
+
+        await dispatcher.start_gitlink_apply(
+            bus=bus, notifications_state=notifications, node=node, node_id="n1",
+            client_fingerprint=fingerprint, local_root=missing_root,
+            on_success=lambda written_files: None, on_failure=failures.append,
+        )
+
+        assert failures == ["The selected local repository path does not exist."]
+        assert dispatcher._gitlink_apply_requests == {}
+
+    asyncio.run(run())
+
+
+def test_gitlink_apply_success_calls_on_success_with_written_files_count(monkeypatch, tmp_path):
+    changes = [{"path": "a.py", "operation": "update", "reason": "r", "content": "x"}]
+    fingerprint = agents_module._fingerprint_changes(changes)
+    node = _make_gitlink_node(
+        gitlink_pending_changes=changes, gitlink_change_fingerprint=fingerprint, gitlink_local_root=str(tmp_path),
+        gitlink_change_local_root=str(tmp_path),
+    )
+    monkeypatch.setattr(agents_module, "apply_change_set", lambda local_root, pending_changes: 3)
+    monkeypatch.setattr(agents_module, "validate_pending_changes", lambda pending_changes: None)
+
+    async def run():
+        bus, notifications, dispatcher = _make_gitlink_env()
+        successes = []
+
+        await dispatcher.start_gitlink_apply(
+            bus=bus, notifications_state=notifications, node=node, node_id="n1",
+            client_fingerprint=fingerprint, local_root=str(tmp_path),
+            on_success=successes.append, on_failure=lambda message: None,
+        )
+        entry = next(iter(dispatcher._gitlink_apply_requests.values()))
+        await entry["task"]
+
+        assert successes == [3]
+        assert dispatcher._gitlink_apply_requests == {}
+        assert node.pending_request_id is None
+        assert notifications.visible is True
+        assert notifications.msg_type == "info"
+        assert notifications.message == "Applied 3 file changes."
+
+    asyncio.run(run())
+
+
+def test_gitlink_apply_rollback_message_surfaced_verbatim(monkeypatch, tmp_path):
+    changes = [{"path": "a.py", "operation": "update", "reason": "r", "content": "x"}]
+    fingerprint = agents_module._fingerprint_changes(changes)
+    node = _make_gitlink_node(
+        gitlink_pending_changes=changes, gitlink_change_fingerprint=fingerprint, gitlink_local_root=str(tmp_path),
+        gitlink_change_local_root=str(tmp_path),
+    )
+    # The exact rollback RuntimeError shape repository.py's own apply_change_set
+    # produces on a failed restore (see its own docstring/comment).
+    rollback_message = (
+        "disk full (rolled back all other changes, but could not restore: "
+        f"{tmp_path}/a.py)"
+    )
+
+    def raising_apply_change_set(local_root, pending_changes):
+        raise RuntimeError(rollback_message)
+
+    monkeypatch.setattr(agents_module, "apply_change_set", raising_apply_change_set)
+
+    async def run():
+        bus, notifications, dispatcher = _make_gitlink_env()
+        failures = []
+
+        await dispatcher.start_gitlink_apply(
+            bus=bus, notifications_state=notifications, node=node, node_id="n1",
+            client_fingerprint=fingerprint, local_root=str(tmp_path),
+            on_success=lambda written_files: None, on_failure=failures.append,
+        )
+        entry = next(iter(dispatcher._gitlink_apply_requests.values()))
+        await entry["task"]
+
+        assert failures == [f"Failed to write approved changes: {rollback_message}"]
+        assert dispatcher._gitlink_apply_requests == {}
+        assert notifications.visible is True
+        assert notifications.msg_type == "error"
+
+    asyncio.run(run())
+
+
+def test_gitlink_apply_timeout_fires_the_exact_message_and_clears_the_slot(monkeypatch, tmp_path):
+    monkeypatch.setattr(agents_module, "GITLINK_APPLY_TIMEOUT_SECONDS", 0.05)
+    changes = [{"path": "a.py", "operation": "update", "reason": "r", "content": "x"}]
+    fingerprint = agents_module._fingerprint_changes(changes)
+    node = _make_gitlink_node(
+        gitlink_pending_changes=changes, gitlink_change_fingerprint=fingerprint, gitlink_local_root=str(tmp_path),
+        gitlink_change_local_root=str(tmp_path),
+    )
+
+    def slow_apply_change_set(local_root, pending_changes):
+        time.sleep(0.3)
+        return 1
+
+    monkeypatch.setattr(agents_module, "apply_change_set", slow_apply_change_set)
+
+    async def run():
+        bus, notifications, dispatcher = _make_gitlink_env()
+        failures = []
+
+        await dispatcher.start_gitlink_apply(
+            bus=bus, notifications_state=notifications, node=node, node_id="n1",
+            client_fingerprint=fingerprint, local_root=str(tmp_path),
+            on_success=lambda written_files: None, on_failure=failures.append,
+        )
+        entry = next(iter(dispatcher._gitlink_apply_requests.values()))
+        await entry["task"]
+
+        assert len(failures) == 1
+        assert "stopped responding" in failures[0]
+        assert dispatcher._gitlink_apply_requests == {}
+        assert node.pending_request_id is None
+
+    asyncio.run(run())
+
+
+# -- R5.3 post-review FIX 1/FIX 2 ---------------------------------------------
+
+
+def test_gitlink_apply_rejects_when_local_root_changed_since_generation(monkeypatch, tmp_path):
+    """R5.3 post-review FIX 2 (HIGH): _fingerprint_changes only hashes file
+    content/paths/operations, never local_root - so an unchanged, still-valid
+    fingerprint must NOT be enough to authorize a write once the local_root
+    binding recorded at Run time no longer matches the local_root passed to
+    Apply. Both checkout paths must actually exist on disk (the exists()
+    check runs BEFORE this new check), so this uses two real tmp_path
+    subdirectories rather than illustrative non-existent paths."""
+    def raising_apply_change_set(local_root, pending_changes):
+        raise AssertionError("apply_change_set must never be reached when local_root changed since generation")
+
+    monkeypatch.setattr(agents_module, "apply_change_set", raising_apply_change_set)
+
+    checkout_a = tmp_path / "checkout-a"
+    checkout_a.mkdir()
+    checkout_b = tmp_path / "checkout-b"
+    checkout_b.mkdir()
+
+    async def run():
+        bus, notifications, dispatcher = _make_gitlink_env()
+        changes = [{"path": "a.py", "operation": "update", "reason": "r", "content": "x"}]
+        fingerprint = agents_module._fingerprint_changes(changes)
+        # The change set was generated (Run) against checkout_a, but
+        # gitlink_local_root has since been edited to checkout_b - the
+        # fingerprint itself is still perfectly valid (nothing about the
+        # CONTENT changed), which is exactly why FIX 2 exists.
+        node = _make_gitlink_node(
+            gitlink_pending_changes=changes,
+            gitlink_change_fingerprint=fingerprint,
+            gitlink_change_local_root=str(checkout_a),
+            gitlink_local_root=str(checkout_b),
+        )
+        failures = []
+
+        await dispatcher.start_gitlink_apply(
+            bus=bus, notifications_state=notifications, node=node, node_id="n1",
+            client_fingerprint=fingerprint, local_root=str(checkout_b),
+            on_success=lambda written_files: None, on_failure=failures.append,
+        )
+
+        assert failures == [
+            "The local repository path changed since this proposal was generated. "
+            "Regenerate the change set before applying."
+        ]
+        assert dispatcher._gitlink_apply_requests == {}, "no apply task must ever have been scheduled"
+
+    asyncio.run(run())
+
+
+def test_gitlink_apply_cannot_be_replayed_after_success(monkeypatch, tmp_path):
+    """R5.3 post-review FIX 1 (CRITICAL): a successful Apply must invalidate
+    the approval it just consumed. Exercises the REAL
+    canvas.SceneDocument.complete_gitlink_apply/complete_gitlink_run wiring
+    (not a bespoke test stub) since that is where the fix actually lives -
+    on_success below is exactly what backend/canvas.py's
+    apply_gitlink_changes wires up in production. Runs start_gitlink_apply
+    to a successful completion once, then attempts calling it AGAIN with the
+    SAME original fingerprint, and asserts the replay is refused with the
+    "no approved change set" message and apply_change_set is never invoked
+    the second time."""
+    changes = [{"path": "a.py", "operation": "update", "reason": "r", "content": "x"}]
+    fingerprint = agents_module._fingerprint_changes(changes)
+    apply_calls = []
+
+    def counting_apply_change_set(local_root, pending_changes):
+        apply_calls.append(list(pending_changes))
+        return 1
+
+    monkeypatch.setattr(agents_module, "apply_change_set", counting_apply_change_set)
+    monkeypatch.setattr(agents_module, "validate_pending_changes", lambda pending_changes: None)
+
+    async def run():
+        bus, notifications, dispatcher = _make_gitlink_env()
+        document = SceneDocument()
+        parent = document.add_chat_node(0, 0, "root", True)
+        node = document.add_gitlink_node(0, 0, parent.id)
+        document.complete_gitlink_run(node.id, "## Gitlink Proposal", changes, "diff", fingerprint, str(tmp_path))
+
+        def _on_success(written_files):
+            document.complete_gitlink_apply(node.id, written_files)
+
+        def _on_failure(message):
+            document.fail_gitlink_apply(node.id, message)
+
+        # First Apply: succeeds, consuming the approval.
+        await dispatcher.start_gitlink_apply(
+            bus=bus, notifications_state=notifications, node=node, node_id=node.id,
+            client_fingerprint=fingerprint, local_root=str(tmp_path),
+            on_success=_on_success, on_failure=_on_failure,
+        )
+        entry = next(iter(dispatcher._gitlink_apply_requests.values()))
+        await entry["task"]
+
+        assert len(apply_calls) == 1
+        assert node.gitlink_change_state == "applied"
+        assert node.gitlink_pending_changes == [], "the approval must be cleared on success (FIX 1)"
+        assert node.gitlink_change_fingerprint is None, "a consumed approval must never be replayable"
+        assert node.pending_request_id is None
+
+        # Second Apply attempt with the SAME original fingerprint: must be
+        # refused, and apply_change_set must never be invoked again.
+        failures = []
+        await dispatcher.start_gitlink_apply(
+            bus=bus, notifications_state=notifications, node=node, node_id=node.id,
+            client_fingerprint=fingerprint, local_root=str(tmp_path),
+            on_success=_on_success, on_failure=failures.append,
+        )
+
+        assert failures == ["There is no approved change set to write."]
+        assert len(apply_calls) == 1, "apply_change_set must NOT be invoked on the replay attempt"
+        assert dispatcher._gitlink_apply_requests == {}
+
+    asyncio.run(run())
+
+
+# -- R5.3 post-review FIX 5: real concurrent interleaving for Apply-vs-Apply,
+# not a pre-set busy flag -----------------------------------------------------
+
+
+def test_two_concurrent_start_gitlink_apply_calls_for_the_same_node_only_one_reaches_the_write_path(
+    monkeypatch, tmp_path,
+):
+    """R5.3 post-review FIX 5: before this fix, node.pending_request_id was
+    only claimed at the very END of start_gitlink_apply - AFTER the
+    local_root_text validation, the `await asyncio.to_thread(local_root_
+    path.exists)` yield point, and the entire atomic fingerprint/local_root
+    check-and-freeze section - so two genuinely concurrent Apply calls for
+    the SAME node (two different WebSocket connections on the same session,
+    e.g. two browser tabs - not a single connection's sequential message
+    loop) could both read node.pending_request_id as falsy before either
+    claimed it, both pass every check, and both end up scheduling a write via
+    apply_change_set concurrently.
+
+    This drives TWO REAL coroutines through a genuine asyncio interleaving -
+    both dispatcher.start_gitlink_apply(...) calls are fired via
+    asyncio.gather without either being awaited to completion first, exactly
+    the scenario the fix spec calls for - not the trivial
+    pre-set-pending_request_id case
+    test_gitlink_apply_busy_guard_blocks_concurrent_run_and_apply above
+    already covers. Mirrors
+    test_two_concurrent_run_gitlink_change_set_calls_for_the_same_node_only_one_reaches_the_agent's
+    own mechanism in test_canvas.py (asyncio.gather, a call-counting patch,
+    then draining the one admitted background task afterward). apply_change_set
+    is ALSO patched to actually sleep (a real blocking sleep inside the
+    asyncio.to_thread-wrapped worker call) so there is a genuine interleaving
+    opportunity even if some future change removed the already-real
+    `local_root_path.exists()` await this test also relies on."""
+    call_count = {"n": 0}
+
+    def slow_counting_apply_change_set(local_root, pending_changes):
+        call_count["n"] += 1
+        time.sleep(0.05)
+        return len(pending_changes)
+
+    monkeypatch.setattr(agents_module, "apply_change_set", slow_counting_apply_change_set)
+    monkeypatch.setattr(agents_module, "validate_pending_changes", lambda pending_changes: None)
+
+    async def run():
+        bus, notifications, dispatcher = _make_gitlink_env()
+        changes = [{"path": "a.py", "operation": "update", "reason": "r", "content": "x"}]
+        fingerprint = agents_module._fingerprint_changes(changes)
+        node = _make_gitlink_node(
+            gitlink_pending_changes=changes,
+            gitlink_change_fingerprint=fingerprint,
+            gitlink_change_local_root=str(tmp_path),
+            gitlink_local_root=str(tmp_path),
+        )
+        successes = []
+        failures = []
+
+        await asyncio.gather(
+            dispatcher.start_gitlink_apply(
+                bus=bus, notifications_state=notifications, node=node, node_id="n1",
+                client_fingerprint=fingerprint, local_root=str(tmp_path),
+                on_success=successes.append, on_failure=failures.append,
+            ),
+            dispatcher.start_gitlink_apply(
+                bus=bus, notifications_state=notifications, node=node, node_id="n1",
+                client_fingerprint=fingerprint, local_root=str(tmp_path),
+                on_success=successes.append, on_failure=failures.append,
+            ),
+        )
+
+        # Deterministic here, same reasoning as the Run-vs-Run test in
+        # test_canvas.py: neither coroutine's own body has a genuine
+        # suspension point before the busy claim, so asyncio's FIFO task
+        # scheduling always lets the FIRST-created call win the claim; the
+        # second one sees a truthy node.pending_request_id immediately and
+        # is rejected via the plain "already busy" notification branch (no
+        # on_failure call for that branch - see start_gitlink_apply's own
+        # busy-check at the very top).
+        assert len(dispatcher._gitlink_apply_requests) == 1, (
+            "only ONE Apply may ever be admitted for this node at a time"
+        )
+        entry = next(iter(dispatcher._gitlink_apply_requests.values()))
+        await entry["task"]
+
+        assert call_count["n"] == 1, "only ONE of the two concurrent calls may ever reach the write path"
+        assert successes == [1], "the admitted call's on_success must fire exactly once"
+        assert failures == [], "the rejected call is refused via the busy notification, not on_failure"
+        assert dispatcher._gitlink_apply_requests == {}
+        assert node.pending_request_id is None, (
+            "the busy slot must be fully released once the admitted Apply finishes"
+        )
+
+    asyncio.run(run())
+
+
+def test_gitlink_apply_no_changes_payload_in_intent_signature():
+    """Signature-inspection regression guard: the registered
+    applyGitlinkChanges WS intent handler must take EXACTLY two parameters
+    (node_id, fingerprint) - guards against a future regression that adds a
+    changes/pending_changes argument, which would let a client inject
+    arbitrary file content into the write path."""
+    bus = SessionBus("gitlink-signature-test")
+    notifications = NotificationState()
+    bus.register_topic("notification", notifications.payload)
+    composer_document = ComposerDocument()
+    bus.register_topic("app-composer", composer_document.payload)
+
+    class _FakeDispatcher:
+        async def start_gitlink_apply(self, **kwargs):
+            pass
+
+    register_canvas(bus, notifications, _FakeDispatcher(), composer_document)
+
+    handler = bus._intents[("scene", "applyGitlinkChanges")]
+    signature = inspect.signature(handler)
+    assert list(signature.parameters) == ["node_id", "fingerprint"], (
+        "applyGitlinkChanges must take ONLY (node_id, fingerprint) - no changes/pending_changes param"
+    )
+
+
+def test_gitlink_request_and_other_kind_request_run_concurrently(monkeypatch):
+    """Mirrors the other cross-kind concurrency tests: a Gitlink Run request
+    must run concurrently with (neither blocking nor blocked by) a chat/
+    composer request - self._gitlink_requests and self._requests are two
+    genuinely independent slots."""
+    chat_started = threading.Event()
+    chat_release = threading.Event()
+    gitlink_started = threading.Event()
+    gitlink_release = threading.Event()
+
+    def blocking_chat(task, messages, **kwargs):
+        chat_started.set()
+        chat_release.wait(5)
+        return {"message": {"content": "chat reply"}}
+
+    def blocking_get_response(self, payload):
+        gitlink_started.set()
+        gitlink_release.wait(5)
+        return {
+            "summary": "s", "write_intent": "changes_ready", "rationale": "r", "notes": [],
+            "files": [{"path": "a.py", "operation": "update", "reason": "x", "content": "y"}],
+            "change_count": 1, "raw_response": "{}",
+        }
+
+    _configure_fake_ollama(monkeypatch, blocking_chat)
+    monkeypatch.setattr(agents_module.GitlinkAgent, "get_response", blocking_get_response)
+
+    async def run():
+        bus, notifications, composer_document, dispatcher = _make_dispatch_env()
+        chat_replies = []
+        gitlink_successes = []
+        gitlink_node = _make_gitlink_node()
+
+        await dispatcher.start_chat_reply(
+            bus=bus,
+            notifications_state=notifications,
+            composer_document=composer_document,
+            conversation_history=[{"role": "user", "content": "hi"}],
+            on_reply=chat_replies.append,
+        )
+        await dispatcher.start_gitlink_run(
+            bus=bus, notifications_state=notifications, node=gitlink_node, node_id="n1",
+            repo="o/r", branch="main", scope_mode="selected", task_prompt="x",
+            context_xml="<x/>", context_summary="s", local_root="",
+            on_success=lambda *args: gitlink_successes.append(args),
+            on_failure=lambda message: None,
+        )
+
+        await asyncio.to_thread(chat_started.wait, 5)
+        await asyncio.to_thread(gitlink_started.wait, 5)
+
+        assert len(dispatcher._requests) == 1
+        assert len(dispatcher._gitlink_requests) == 1
+        assert notifications.visible is False, "neither call should have been rejected"
+
+        chat_release.set()
+        chat_entry = next(iter(dispatcher._requests.values()))
+        await chat_entry["task"]
+        gitlink_release.set()
+        gitlink_entry = next(iter(dispatcher._gitlink_requests.values()))
+        await gitlink_entry["task"]
+
+        assert chat_replies == ["chat reply"]
+        assert len(gitlink_successes) == 1
+        assert dispatcher._requests == {}
+        assert dispatcher._gitlink_requests == {}
 
     asyncio.run(run())
 
