@@ -72,6 +72,7 @@ py-modules = [
     "api_provider",
     "graphlink_agents",
     "graphlink_agents_artifact",
+    "graphlink_artifact_agent",
     "graphlink_agents_code_sandbox",
     "graphlink_agents_core",
     "graphlink_agents_pycoder",

@@ -49,6 +49,14 @@ kind=="web_research" rows, defaulted (empty string/0/None) for every other
 kind, same additive rule. `researchResult`, when present, is a nested
 ResearchResultRow - the one field here (besides R3.25's `history`) whose
 shape is a structured object rather than a scalar.
+
+R5.2 adds `artifactContent` (the Artifact/Drafter node's real persisted
+shape): the model returns the WHOLE document every turn (whole-document
+replace, never a diff/patch), so this single scalar always holds the latest
+full document text. Populated for kind=="artifact" rows, defaulted (empty
+string) for every other kind, same additive rule. The turn-by-turn
+conversation reuses the existing `history` field (R3.25) rather than a new
+list-typed field.
 """
 
 from __future__ import annotations
@@ -170,6 +178,11 @@ class SceneNodeRow:
     researchActiveSourceId: str | None = None
     researchError: str = ""
     researchResult: ResearchResultRow | None = None
+    # R5.2: the Artifact/Drafter node's real persisted shape - the latest
+    # full document text (whole-document replace every turn, never a
+    # diff/patch). Populated for kind=="artifact" rows, defaulted (empty
+    # string) for every other kind.
+    artifactContent: str = ""
 
 
 @dataclass

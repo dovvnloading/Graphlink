@@ -63,3 +63,14 @@ def test_chat_agent_imports_qt_free():
     # is the machine-checked fact that the real chat-agent path backend/
     # needs no longer does.
     _assert_import_is_qt_free("graphlink_chat_agent")
+
+
+def test_artifact_agent_imports_qt_free():
+    # R5.2 prerequisite: graphlink_agents_artifact.py (home of ArtifactAgent
+    # before this split) has its own unconditional `from PySide6.QtCore
+    # import QThread, Signal` at module level, needed only by its
+    # ArtifactWorkerThread class - importing anything from it, including the
+    # Qt-free ArtifactAgent, pulled Qt in regardless. This is the
+    # machine-checked fact that the real artifact-agent path backend/ needs
+    # no longer does.
+    _assert_import_is_qt_free("graphlink_artifact_agent")

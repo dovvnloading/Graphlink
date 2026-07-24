@@ -47,6 +47,7 @@ function validScenePayload(overrides: Record<string, unknown> = {}) {
         researchCompleted: 0,
         researchTotal: 0,
         researchError: "",
+        artifactContent: "",
       },
     ],
     edges: [],
@@ -287,6 +288,24 @@ describe("SceneStore", () => {
     store.cancelWebResearchRequest("req-99");
     expect(intents).toEqual([
       { topic: "scene", intent: "cancelWebResearchRequest", args: ["req-99"] },
+    ]);
+  });
+
+  it("sendArtifactMessage sends the scene-topic sendArtifactMessage intent with [nodeId, text]", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.sendArtifactMessage("n1", "Draft a project proposal");
+    expect(intents).toEqual([
+      { topic: "scene", intent: "sendArtifactMessage", args: ["n1", "Draft a project proposal"] },
+    ]);
+  });
+
+  it("cancelArtifactRequest sends the scene-topic cancelArtifactRequest intent with the requestId", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.cancelArtifactRequest("req-13");
+    expect(intents).toEqual([
+      { topic: "scene", intent: "cancelArtifactRequest", args: ["req-13"] },
     ]);
   });
 

@@ -1907,6 +1907,420 @@ def test_start_web_research_constructs_web_research_service_with_no_override_the
     assert captured_kwargs == [{}]
 
 
+# -- R5.2: start_artifact_reply/_call_artifact_agent - the independent
+# artifact/drafter slot -------------------------------------------------------
+#
+# Mirrors the R5.1 web-research section's own structure: these tests never
+# touch Ollama/api_provider.chat plumbing (except the two dedicated
+# concurrency tests) - start_artifact_reply's only real dependency is
+# ArtifactAgent.get_response, monkeypatched directly on the class (agents.py
+# constructs a fresh ArtifactAgent() instance per call, so patching the class
+# method is the seam, mirroring how WebResearchService.run is patched as a
+# class-level seam for the research path).
+
+
+def _make_artifact_env():
+    bus = SessionBus("agents-artifact-test")
+    notifications = NotificationState()
+    bus.register_topic("notification", notifications.payload)
+    bus.register_topic("scene", lambda: {})
+    dispatcher = AgentDispatcher(_FakeSettingsManager())
+    return bus, notifications, dispatcher
+
+
+def test_call_artifact_agent_calls_get_response_and_returns_the_tuple(monkeypatch):
+    captured = []
+
+    def fake_get_response(self, current_artifact, history):
+        captured.append((current_artifact, history))
+        return "the new document", "an ai message"
+
+    monkeypatch.setattr(agents_module.ArtifactAgent, "get_response", fake_get_response)
+
+    result = agents_module._call_artifact_agent(
+        "the old document", [{"role": "user", "content": "add a section"}]
+    )
+
+    assert result == ("the new document", "an ai message")
+    assert captured == [("the old document", [{"role": "user", "content": "add a section"}])]
+
+
+def test_call_artifact_agent_propagates_the_missing_tag_runtime_error(monkeypatch):
+    # ArtifactAgent.get_response's own fail-closed contract (see
+    # graphlink_artifact_agent.py): a reply missing <artifact>...</artifact>
+    # tags raises RuntimeError rather than silently corrupting the document.
+    # _call_artifact_agent must let that propagate straight out, unmodified,
+    # for start_artifact_reply's own except Exception to catch.
+    def raising_get_response(self, current_artifact, history):
+        raise RuntimeError(
+            "The model's response did not include the required <artifact>...</artifact> tags, "
+            "so the document was left unchanged to avoid overwriting it with an unstructured reply."
+        )
+
+    monkeypatch.setattr(agents_module.ArtifactAgent, "get_response", raising_get_response)
+
+    with pytest.raises(RuntimeError, match="did not include the required"):
+        agents_module._call_artifact_agent("the old document", [])
+
+
+def test_start_artifact_reply_calls_on_reply_with_the_tuple_then_clears_the_slot(monkeypatch):
+    def fake_get_response(self, current_artifact, history):
+        return "the new document", "an ai message"
+
+    monkeypatch.setattr(agents_module.ArtifactAgent, "get_response", fake_get_response)
+
+    async def run():
+        bus, notifications, dispatcher = _make_artifact_env()
+        node = _make_node()
+        replies = []
+
+        await dispatcher.start_artifact_reply(
+            bus=bus,
+            notifications_state=notifications,
+            node=node,
+            current_artifact="the old document",
+            history=[{"role": "user", "content": "add a section"}],
+            on_reply=lambda new_content, ai_message: replies.append((new_content, ai_message)),
+        )
+        entry = next(iter(dispatcher._artifact_requests.values()))
+        await entry["task"]
+
+        assert replies == [("the new document", "an ai message")]
+        assert dispatcher._artifact_requests == {}
+        assert node.pending_request_id is None
+        assert notifications.visible is False
+
+    asyncio.run(run())
+
+
+def test_start_artifact_reply_second_call_while_in_flight_is_rejected(monkeypatch):
+    started = threading.Event()
+    release = threading.Event()
+
+    def blocking_get_response(self, current_artifact, history):
+        started.set()
+        release.wait(5)
+        return "first document", "first message"
+
+    monkeypatch.setattr(agents_module.ArtifactAgent, "get_response", blocking_get_response)
+
+    async def run():
+        bus, notifications, dispatcher = _make_artifact_env()
+        node1 = _make_node()
+        node2 = _make_node()
+        replies = []
+
+        await dispatcher.start_artifact_reply(
+            bus=bus,
+            notifications_state=notifications,
+            node=node1,
+            current_artifact="doc1",
+            history=[],
+            on_reply=lambda new_content, ai_message: replies.append((new_content, ai_message)),
+        )
+        await asyncio.to_thread(started.wait, 5)
+
+        # Second call while the first is still in flight must be rejected and
+        # must not disturb the first request.
+        await dispatcher.start_artifact_reply(
+            bus=bus,
+            notifications_state=notifications,
+            node=node2,
+            current_artifact="doc2",
+            history=[],
+            on_reply=lambda new_content, ai_message: replies.append((new_content, ai_message)),
+        )
+        assert notifications.visible is True
+        assert notifications.msg_type == "info"
+        assert notifications.message == "An artifact request is already running."
+        assert len(dispatcher._artifact_requests) == 1
+        assert node2.pending_request_id is None, "the bounced call must never touch node2"
+
+        release.set()
+        entry = next(iter(dispatcher._artifact_requests.values()))
+        await entry["task"]
+
+        assert replies == [("first document", "first message")]
+        assert dispatcher._artifact_requests == {}
+
+    asyncio.run(run())
+
+
+def test_start_artifact_reply_missing_tag_failure_shows_error_notification_and_never_calls_on_reply(monkeypatch):
+    """SECURITY-CRITICAL: on the fail-closed tag-parsing RuntimeError,
+    on_reply must NEVER be invoked - the document must be left completely
+    untouched rather than being replaced with anything derived from the
+    malformed reply."""
+    def raising_get_response(self, current_artifact, history):
+        raise RuntimeError(
+            "The model's response did not include the required <artifact>...</artifact> tags, "
+            "so the document was left unchanged to avoid overwriting it with an unstructured reply."
+        )
+
+    monkeypatch.setattr(agents_module.ArtifactAgent, "get_response", raising_get_response)
+
+    async def run():
+        bus, notifications, dispatcher = _make_artifact_env()
+        node = _make_node()
+        on_reply_calls = []
+
+        await dispatcher.start_artifact_reply(
+            bus=bus,
+            notifications_state=notifications,
+            node=node,
+            current_artifact="the old document",
+            history=[],
+            on_reply=lambda new_content, ai_message: on_reply_calls.append((new_content, ai_message)),
+        )
+        entry = next(iter(dispatcher._artifact_requests.values()))
+        await entry["task"]
+
+        assert on_reply_calls == [], "on_reply must never be called on a tag-parsing failure"
+        assert dispatcher._artifact_requests == {}
+        assert node.pending_request_id is None
+        assert notifications.visible is True
+        assert notifications.msg_type == "error"
+        assert notifications.message == (
+            "Artifact generation failed: The model's response did not include the required "
+            "<artifact>...</artifact> tags, so the document was left unchanged to avoid "
+            "overwriting it with an unstructured reply."
+        )
+
+    asyncio.run(run())
+
+
+def test_start_artifact_reply_timeout_fires_the_exact_message_and_clears_the_slot(monkeypatch):
+    monkeypatch.setattr(agents_module, "WATCHDOG_TIMEOUT_SECONDS", 0.05)
+
+    def slow_get_response(self, current_artifact, history):
+        time.sleep(0.3)
+        return "too late", "too late message"
+
+    monkeypatch.setattr(agents_module.ArtifactAgent, "get_response", slow_get_response)
+
+    async def run():
+        bus, notifications, dispatcher = _make_artifact_env()
+        node = _make_node()
+        replies = []
+
+        await dispatcher.start_artifact_reply(
+            bus=bus,
+            notifications_state=notifications,
+            node=node,
+            current_artifact="doc",
+            history=[],
+            on_reply=lambda new_content, ai_message: replies.append((new_content, ai_message)),
+        )
+        entry = next(iter(dispatcher._artifact_requests.values()))
+        await entry["task"]
+
+        assert replies == []
+        assert dispatcher._artifact_requests == {}, "the slot must not leak/deadlock future requests"
+        assert node.pending_request_id is None
+        assert notifications.visible is True
+        assert notifications.msg_type == "error"
+        expected_message = (
+            "Artifact generation stopped responding before the request completed. Please try again."
+        )
+        assert notifications.message == expected_message
+
+    asyncio.run(run())
+
+
+def test_cancel_artifact_drops_the_result_and_never_calls_on_reply_even_on_a_late_return(monkeypatch):
+    started = threading.Event()
+    release = threading.Event()
+
+    def blocking_get_response(self, current_artifact, history):
+        started.set()
+        release.wait(5)
+        return "a document nobody should see", "a message nobody should see"
+
+    monkeypatch.setattr(agents_module.ArtifactAgent, "get_response", blocking_get_response)
+
+    async def run():
+        bus, notifications, dispatcher = _make_artifact_env()
+        node = _make_node()
+        replies = []
+
+        await dispatcher.start_artifact_reply(
+            bus=bus,
+            notifications_state=notifications,
+            node=node,
+            current_artifact="doc",
+            history=[],
+            on_reply=lambda new_content, ai_message: replies.append((new_content, ai_message)),
+        )
+        await asyncio.to_thread(started.wait, 5)
+
+        request_id = next(iter(dispatcher._artifact_requests.keys()))
+        assert dispatcher.cancel_artifact(request_id) is True
+
+        release.set()
+        entry = next(iter(dispatcher._artifact_requests.values()))
+        await entry["task"]
+
+        assert replies == [], "on_reply must never be called once the request is cancelled"
+        assert dispatcher._artifact_requests == {}
+        assert node.pending_request_id is None
+        assert notifications.visible is True
+        assert notifications.msg_type == "info"
+        assert notifications.message == "Artifact generation cancelled."
+
+    asyncio.run(run())
+
+
+def test_cancel_artifact_returns_false_for_an_unknown_request_id():
+    dispatcher = AgentDispatcher(_FakeSettingsManager())
+    assert dispatcher.cancel_artifact("no-such-request") is False
+
+
+def test_artifact_request_and_chat_request_run_concurrently_both_dicts_non_empty(monkeypatch):
+    """THE key concurrency-slot regression guard (R5.2, mirrors R4.4a/R5.1's
+    own chat/image and chat/web-research guards): a chat/composer request
+    occupies self._requests while an artifact-generation request occupies the
+    SEPARATE self._artifact_requests dict at the same time - neither blocks
+    nor is blocked by the other, and both dicts are simultaneously non-empty
+    at least once."""
+    chat_started = threading.Event()
+    chat_release = threading.Event()
+    artifact_started = threading.Event()
+    artifact_release = threading.Event()
+
+    def blocking_chat(task, messages, **kwargs):
+        chat_started.set()
+        chat_release.wait(5)
+        return {"message": {"content": "chat reply"}}
+
+    def blocking_get_response(self, current_artifact, history):
+        artifact_started.set()
+        artifact_release.wait(5)
+        return "artifact document", "artifact message"
+
+    _configure_fake_ollama(monkeypatch, blocking_chat)
+    monkeypatch.setattr(agents_module.ArtifactAgent, "get_response", blocking_get_response)
+
+    async def run():
+        bus, notifications, composer_document, dispatcher = _make_dispatch_env()
+        node = _make_node()
+        chat_replies = []
+        artifact_replies = []
+
+        await dispatcher.start_chat_reply(
+            bus=bus,
+            notifications_state=notifications,
+            composer_document=composer_document,
+            conversation_history=[{"role": "user", "content": "hi"}],
+            on_reply=chat_replies.append,
+        )
+        await dispatcher.start_artifact_reply(
+            bus=bus,
+            notifications_state=notifications,
+            node=node,
+            current_artifact="doc",
+            history=[],
+            on_reply=lambda new_content, ai_message: artifact_replies.append((new_content, ai_message)),
+        )
+
+        await asyncio.to_thread(chat_started.wait, 5)
+        await asyncio.to_thread(artifact_started.wait, 5)
+
+        # THE key assertion: both slots are genuinely occupied at the same
+        # time - neither request bounced the other, and neither notification
+        # fired.
+        assert len(dispatcher._requests) == 1
+        assert len(dispatcher._artifact_requests) == 1
+        assert notifications.visible is False, "neither call should have been rejected"
+
+        chat_release.set()
+        chat_entry = next(iter(dispatcher._requests.values()))
+        await chat_entry["task"]
+        artifact_release.set()
+        artifact_entry = next(iter(dispatcher._artifact_requests.values()))
+        await artifact_entry["task"]
+
+        assert chat_replies == ["chat reply"]
+        assert artifact_replies == [("artifact document", "artifact message")]
+        assert dispatcher._requests == {}
+        assert dispatcher._artifact_requests == {}
+        assert composer_document.request_state == "idle"
+
+    asyncio.run(run())
+
+
+def test_artifact_request_and_web_research_request_run_concurrently(monkeypatch):
+    """Mirrors test_web_research_request_and_chat_request_run_concurrently_
+    both_dicts_non_empty: an artifact-generation request must also be able to
+    run concurrently with a web-research request - self._artifact_requests
+    and self._web_research_requests are two more genuinely independent slots,
+    neither blocking nor blocked by the other."""
+    research_started = threading.Event()
+    research_release = threading.Event()
+    artifact_started = threading.Event()
+    artifact_release = threading.Event()
+
+    def blocking_run(self, request, *, token=None, progress=None):
+        research_started.set()
+        research_release.wait(5)
+        return SimpleNamespace(answer_markdown="research result")
+
+    def blocking_get_response(self, current_artifact, history):
+        artifact_started.set()
+        artifact_release.wait(5)
+        return "artifact document", "artifact message"
+
+    monkeypatch.setattr(agents_module.WebResearchService, "run", blocking_run)
+    monkeypatch.setattr(agents_module.ArtifactAgent, "get_response", blocking_get_response)
+
+    async def run():
+        bus, notifications, dispatcher = _make_web_research_env()
+        research_node = _make_node()
+        artifact_node = _make_node()
+        research_successes = []
+        artifact_replies = []
+
+        await dispatcher.start_web_research(
+            bus=bus,
+            notifications_state=notifications,
+            node=research_node,
+            node_id="n1",
+            query="q",
+            branch_history=[],
+            on_progress=lambda event: None,
+            on_success=research_successes.append,
+            on_failure=lambda exc: None,
+        )
+        await dispatcher.start_artifact_reply(
+            bus=bus,
+            notifications_state=notifications,
+            node=artifact_node,
+            current_artifact="doc",
+            history=[],
+            on_reply=lambda new_content, ai_message: artifact_replies.append((new_content, ai_message)),
+        )
+
+        await asyncio.to_thread(research_started.wait, 5)
+        await asyncio.to_thread(artifact_started.wait, 5)
+
+        assert len(dispatcher._web_research_requests) == 1
+        assert len(dispatcher._artifact_requests) == 1
+        assert notifications.visible is False, "neither call should have been rejected"
+
+        research_release.set()
+        research_entry = next(iter(dispatcher._web_research_requests.values()))
+        await research_entry["task"]
+        artifact_release.set()
+        artifact_entry = next(iter(dispatcher._artifact_requests.values()))
+        await artifact_entry["task"]
+
+        assert research_successes == [SimpleNamespace(answer_markdown="research result")]
+        assert artifact_replies == [("artifact document", "artifact message")]
+        assert dispatcher._web_research_requests == {}
+        assert dispatcher._artifact_requests == {}
+
+    asyncio.run(run())
+
+
 def test_agents_never_imports_qt():
     # This is the regression gate for Step 0's providers.py fix - mirrors
     # test_plugins.py's own test_plugins_never_imports_qt's exact

@@ -187,12 +187,77 @@ def test_execute_plugin_web_research_with_a_valid_parent_creates_a_real_node_and
     assert "scene" in recorder.topics_seen()
 
 
-# -- R5.1: non-regression - every OTHER plugin name is still an honest,
+# -- R5.2: "Artifact / Drafter" - the second real node-creation plugin ------
+
+
+def test_execute_plugin_artifact_drafter_requires_a_selected_parent():
+    bus, notifications, canvas_document = _make_plugins_bus()
+
+    result = asyncio.run(bus.dispatch_intent("app-plugins", "executePlugin", ["Artifact / Drafter"]))
+
+    assert result is None
+    assert notifications.visible is True
+    assert notifications.msg_type == "warning"
+    assert notifications.message == (
+        "Please select a valid node to branch from before adding an Artifact node."
+    )
+    assert not any(n.kind == "artifact" for n in canvas_document.nodes.values())
+
+
+def test_execute_plugin_artifact_drafter_rejects_unknown_parent_id():
+    bus, notifications, canvas_document = _make_plugins_bus()
+
+    result = asyncio.run(
+        bus.dispatch_intent("app-plugins", "executePlugin", ["Artifact / Drafter", "ghost-node-id"])
+    )
+
+    assert result is None
+    assert notifications.visible is True
+    assert notifications.msg_type == "warning"
+    assert notifications.message == (
+        "Please select a valid node to branch from before adding an Artifact node."
+    )
+    assert not any(n.kind == "artifact" for n in canvas_document.nodes.values())
+
+
+def test_execute_plugin_artifact_drafter_creates_a_real_artifact_node():
+    bus, notifications, canvas_document = _make_plugins_bus()
+    parent = canvas_document.add_node(10, 20, "parent")
+
+    class Recorder:
+        def __init__(self):
+            self.messages = []
+
+        async def send_json(self, data):
+            self.messages.append(data)
+
+        def topics_seen(self):
+            return [m["topic"] for m in self.messages if m["kind"] == "state"]
+
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    result = asyncio.run(
+        bus.dispatch_intent("app-plugins", "executePlugin", ["Artifact / Drafter", parent.id])
+    )
+
+    assert result is not None
+    node = canvas_document.nodes[result]
+    assert node.kind == "artifact"
+    assert node.title == "Artifact"
+    assert any(
+        e.source == parent.id and e.target == node.id for e in canvas_document.edges.values()
+    )
+    assert notifications.visible is False, "success is not a deferral - no notification fires"
+    assert "scene" in recorder.topics_seen()
+
+
+# -- R5.1/R5.2: non-regression - every OTHER plugin name is still an honest,
 # unchanged deferred notice ---------------------------------------------------
 
 
 @pytest.mark.parametrize(
-    "name", [n for n in (p[0] for p in _PLUGINS) if n != "Web Research"]
+    "name", [n for n in (p[0] for p in _PLUGINS) if n not in ("Web Research", "Artifact / Drafter")]
 )
 def test_execute_plugin_every_other_plugin_name_still_shows_the_unchanged_deferred_notice(name):
     bus, notifications, canvas_document = _make_plugins_bus()
