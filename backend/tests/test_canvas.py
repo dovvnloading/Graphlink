@@ -3059,3 +3059,657 @@ def test_cancel_artifact_request_intent_calls_agent_dispatcher_cancel_artifact()
         assert fake_dispatcher.cancel_calls == ["req-123"]
 
     asyncio.run(run())
+
+
+# -- R5.3: gitlink node -------------------------------------------------------
+
+
+def test_add_gitlink_node_requires_valid_parent():
+    doc = SceneDocument()
+    with pytest.raises(SceneError):
+        doc.add_gitlink_node(0, 0, "ghost")
+
+
+def test_add_gitlink_node_creates_child():
+    doc = SceneDocument()
+    parent = doc.add_chat_node(0, 0, "wire up gitlink", True)
+    node = doc.add_gitlink_node(10, 20, parent.id)
+    assert node.kind == "gitlink"
+    assert node.title == "Gitlink"
+    assert node.gitlink_repo == ""
+    assert node.gitlink_change_state == "draft"
+    assert any(e.source == parent.id and e.target == node.id for e in doc.edges.values())
+
+
+def test_add_gitlink_node_requires_a_parent_id():
+    # Same TypeError-not-SceneError posture as every other required-parent
+    # node kind (document/thinking/html/image/conversation/web_research/
+    # artifact) - parent_id has no default in add_gitlink_node's signature.
+    doc = SceneDocument()
+    with pytest.raises(TypeError):
+        doc.add_gitlink_node(0, 0)
+
+
+def test_gitlink_node_deletion_goes_through_the_generic_remove_nodes_path():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_gitlink_node(10, 10, parent.id)
+    assert not hasattr(doc, "delete_gitlink_node"), (
+        "gitlink nodes are not branch points - no special delete method"
+    )
+    doc.remove_nodes([node.id])
+    assert node.id not in doc.nodes
+
+
+def test_set_gitlink_local_root_sets_the_field():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_gitlink_node(0, 0, parent.id)
+    returned = doc.set_gitlink_local_root(node.id, "C:/checkout/repo")
+    assert returned is node
+    assert node.gitlink_local_root == "C:/checkout/repo"
+
+
+def test_set_gitlink_local_root_unknown_node_raises_scene_error():
+    with pytest.raises(SceneError):
+        SceneDocument().set_gitlink_local_root("ghost", "C:/checkout")
+
+
+def test_store_gitlink_repo_tree():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_gitlink_node(0, 0, parent.id)
+    returned = doc.store_gitlink_repo_tree(node.id, "octocat/hello-world", "main", ["a.py", "b.py"])
+    assert returned is node
+    assert node.gitlink_repo == "octocat/hello-world"
+    assert node.gitlink_branch == "main"
+    assert node.gitlink_repo_file_paths == ["a.py", "b.py"]
+
+
+def test_store_gitlink_repo_tree_unknown_node_raises_scene_error():
+    with pytest.raises(SceneError):
+        SceneDocument().store_gitlink_repo_tree("ghost", "o/r", "main", [])
+
+
+def test_store_gitlink_snapshot_root_sets_repo_branch_local_root_and_imported_root():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_gitlink_node(0, 0, parent.id)
+    returned = doc.store_gitlink_snapshot_root(node.id, "octocat/hello-world", "main", "C:/tmp/snapshot")
+    assert returned is node
+    assert node.gitlink_repo == "octocat/hello-world"
+    assert node.gitlink_branch == "main"
+    assert node.gitlink_local_root == "C:/tmp/snapshot"
+    assert node.gitlink_imported_root == "C:/tmp/snapshot"
+
+
+def test_store_gitlink_context_excluded_from_scene_payload():
+    # Security/cost-boundary test: gitlinkContextXml must NEVER appear in
+    # scene_payload() (see the field's own comment on SceneNode), while
+    # gitlinkContextSummary/gitlinkContextStats - small, cheap status-badge
+    # fields - ARE present.
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_gitlink_node(0, 0, parent.id)
+    huge_xml = "<gitlink_context>" + ("x" * 5000) + "</gitlink_context>"
+
+    doc.store_gitlink_context(
+        node.id,
+        scope_mode="selected",
+        selected_paths=["a.py"],
+        context_xml=huge_xml,
+        context_stats={"scanned_files": 3, "loaded_files": 3, "source_root": "github"},
+        context_summary="Scanned 3 files.",
+    )
+
+    assert node.gitlink_context_xml == huge_xml, "the domain object DOES hold the full text"
+
+    row = {n["id"]: n for n in doc.scene_payload()["nodes"]}[node.id]
+    assert "gitlinkContextXml" not in row
+    assert row["gitlinkContextSummary"] == "Scanned 3 files."
+    assert row["gitlinkScopeMode"] == "selected"
+    assert row["gitlinkSelectedPaths"] == ["a.py"]
+    # context_stats' mixed int/str values are stringified end to end.
+    assert row["gitlinkContextStats"] == {
+        "scanned_files": "3", "loaded_files": "3", "source_root": "github",
+    }
+
+
+def test_store_gitlink_context_unknown_node_raises_scene_error():
+    with pytest.raises(SceneError):
+        SceneDocument().store_gitlink_context(
+            "ghost", scope_mode="selected", selected_paths=[], context_xml="",
+            context_stats={}, context_summary="",
+        )
+
+
+def test_store_gitlink_context_increments_version_even_with_an_identical_summary():
+    """R5.3 post-review FIX 6: gitlink_context_version is a genuine
+    MONOTONIC counter, incremented unconditionally on every call - unlike
+    gitlink_context_summary (built purely from aggregate file counts, see
+    repository.py's build_context_bundle), which can collide across two
+    DIFFERENT Build Context results (e.g. selecting a different single file
+    each time produces the exact same "Scanned 1 files." summary). Two
+    successive store_gitlink_context calls for the SAME node, with
+    IDENTICAL summary/stats (same file count from two different
+    single-file selections), must still produce two DIFFERENT version
+    values - this is what lets the frontend's lazy-fetch-once guard detect
+    the second build actually happened."""
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_gitlink_node(0, 0, parent.id)
+    assert node.gitlink_context_version == 0, "a fresh node starts at 0"
+
+    doc.store_gitlink_context(
+        node.id,
+        scope_mode="selected",
+        selected_paths=["a.py"],
+        context_xml="<gitlink_context>a.py content</gitlink_context>",
+        context_stats={"scanned_files": 1, "loaded_files": 1},
+        context_summary="Scanned 1 files.",
+    )
+    assert node.gitlink_context_version == 1
+
+    # A second, genuinely DIFFERENT Build Context result (a different single
+    # file selected) that happens to produce an IDENTICAL summary string.
+    doc.store_gitlink_context(
+        node.id,
+        scope_mode="selected",
+        selected_paths=["b.py"],
+        context_xml="<gitlink_context>b.py content</gitlink_context>",
+        context_stats={"scanned_files": 1, "loaded_files": 1},
+        context_summary="Scanned 1 files.",
+    )
+    assert node.gitlink_context_version == 2, (
+        "the version must increase even when the summary string is identical to the prior build"
+    )
+    assert node.gitlink_context_xml == "<gitlink_context>b.py content</gitlink_context>", (
+        "the second build's own content must have actually landed"
+    )
+
+    row = {n["id"]: n for n in doc.scene_payload()["nodes"]}[node.id]
+    assert row["gitlinkContextVersion"] == 2, "scene_payload() must reflect the current version"
+
+
+def test_fetch_gitlink_context_xml_returns_full_text_not_in_payload():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_gitlink_node(0, 0, parent.id)
+    doc.store_gitlink_context(
+        node.id, scope_mode="full", selected_paths=[], context_xml="<gitlink_context>full text</gitlink_context>",
+        context_stats={}, context_summary="done",
+    )
+
+    fetched = doc.fetch_gitlink_context_xml(node.id)
+
+    assert fetched == "<gitlink_context>full text</gitlink_context>"
+    row = {n["id"]: n for n in doc.scene_payload()["nodes"]}[node.id]
+    assert "gitlinkContextXml" not in row
+
+
+def test_fetch_gitlink_context_xml_unknown_node_raises_scene_error():
+    with pytest.raises(SceneError):
+        SceneDocument().fetch_gitlink_context_xml("ghost")
+
+
+def test_start_gitlink_run_sets_task_prompt_and_clears_error():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_gitlink_node(0, 0, parent.id)
+    node.gitlink_error = "a previous error"
+
+    returned = doc.start_gitlink_run(node.id, "add a health check endpoint")
+
+    assert returned is node
+    assert node.gitlink_task_prompt == "add a health check endpoint"
+    assert node.gitlink_error == ""
+
+
+def test_start_gitlink_run_unknown_node_raises_scene_error():
+    with pytest.raises(SceneError):
+        SceneDocument().start_gitlink_run("ghost", "do something")
+
+
+def test_start_gitlink_run_wrong_kind_raises_scene_error():
+    doc = SceneDocument()
+    chat = doc.add_chat_node(0, 0, "not a gitlink node", True)
+    with pytest.raises(SceneError):
+        doc.start_gitlink_run(chat.id, "do something")
+
+
+def test_complete_gitlink_run_no_changes_stays_draft():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_gitlink_node(0, 0, parent.id)
+
+    returned = doc.complete_gitlink_run(node.id, "## Gitlink Proposal\n\nNo changes needed.", [], "", None, "")
+
+    assert returned is node
+    assert node.gitlink_proposal_markdown == "## Gitlink Proposal\n\nNo changes needed."
+    assert node.gitlink_pending_changes == []
+    assert node.gitlink_change_state == "draft"
+    assert node.gitlink_change_fingerprint is None
+    assert node.gitlink_change_local_root is None, "an empty proposal must never leave a dangling local_root binding"
+
+
+def test_complete_gitlink_run_with_changes_becomes_previewed_with_fingerprint():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_gitlink_node(0, 0, parent.id)
+    changes = [{"path": "a.py", "operation": "update", "reason": "fix bug", "content": "x = 1"}]
+
+    returned = doc.complete_gitlink_run(
+        node.id, "## Gitlink Proposal", changes, "diff text", "abc123fingerprint", "C:/checkout/repo",
+    )
+
+    assert returned is node
+    assert node.gitlink_pending_changes == changes
+    assert node.gitlink_preview_text == "diff text"
+    assert node.gitlink_change_state == "previewed"
+    assert node.gitlink_change_fingerprint == "abc123fingerprint"
+    assert node.gitlink_change_local_root == "C:/checkout/repo", (
+        "R5.3 post-review FIX 2: the local_root this run used must be bound to the approval"
+    )
+
+
+def test_complete_gitlink_run_unknown_node_raises_scene_error():
+    with pytest.raises(SceneError):
+        SceneDocument().complete_gitlink_run("ghost", "proposal", [], "", None, "")
+
+
+def test_fail_gitlink_run_sets_error_and_is_a_silent_noop_for_a_deleted_node():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_gitlink_node(0, 0, parent.id)
+
+    returned = doc.fail_gitlink_run(node.id, "Gitlink generation failed: boom")
+    assert returned is node
+    assert node.gitlink_error == "Gitlink generation failed: boom"
+
+    assert doc.fail_gitlink_run("ghost", "too late") is None
+
+
+def test_fail_gitlink_run_does_not_clear_a_previously_staged_proposal():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_gitlink_node(0, 0, parent.id)
+    changes = [{"path": "a.py", "operation": "update", "reason": "r", "content": "x"}]
+    doc.complete_gitlink_run(node.id, "## Gitlink Proposal", changes, "diff", "fp1", "C:/checkout")
+
+    doc.fail_gitlink_run(node.id, "a later re-run failed")
+
+    assert node.gitlink_pending_changes == changes, "a failed re-run must not wipe a valid staged proposal"
+    assert node.gitlink_change_state == "previewed"
+    assert node.gitlink_change_fingerprint == "fp1"
+    assert node.gitlink_error == "a later re-run failed"
+
+
+def test_complete_gitlink_apply_sets_applied_and_clears_error():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_gitlink_node(0, 0, parent.id)
+    node.gitlink_change_state = "applying"
+    node.gitlink_error = "stale"
+
+    returned = doc.complete_gitlink_apply(node.id, 2)
+
+    assert returned is node
+    assert node.gitlink_change_state == "applied"
+    assert node.gitlink_error == ""
+
+
+def test_complete_gitlink_apply_clears_pending_changes_and_fingerprint_to_prevent_replay():
+    """R5.3 post-review FIX 1 (CRITICAL): a successful Apply must invalidate
+    the approval it just consumed - otherwise start_gitlink_apply's own
+    fingerprint check would still pass on a second, replayed call, since
+    nothing about the (already-applied) content changed. proposal_markdown/
+    preview_text stay intact as a historical record of what was applied."""
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_gitlink_node(0, 0, parent.id)
+    changes = [{"path": "a.py", "operation": "update", "reason": "r", "content": "x"}]
+    doc.complete_gitlink_run(node.id, "## Gitlink Proposal", changes, "diff text", "fp1", "C:/checkout")
+    node.gitlink_change_state = "applying"
+
+    returned = doc.complete_gitlink_apply(node.id, 1)
+
+    assert returned is node
+    assert node.gitlink_change_state == "applied"
+    assert node.gitlink_pending_changes == [], "the approval must be cleared so it cannot be replayed"
+    assert node.gitlink_change_fingerprint is None
+    assert node.gitlink_change_local_root is None, "a cleared approval must have no dangling bound fields"
+    # Historical record of what was applied - deliberately left untouched.
+    assert node.gitlink_proposal_markdown == "## Gitlink Proposal"
+    assert node.gitlink_preview_text == "diff text"
+
+
+def test_complete_gitlink_apply_unknown_node_raises_scene_error():
+    with pytest.raises(SceneError):
+        SceneDocument().complete_gitlink_apply("ghost", 1)
+
+
+def test_fail_gitlink_apply_reverts_to_previewed_and_clears_fingerprint():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_gitlink_node(0, 0, parent.id)
+    changes = [{"path": "a.py", "operation": "update", "reason": "r", "content": "x"}]
+    doc.complete_gitlink_run(node.id, "## Gitlink Proposal", changes, "diff", "fp1", "C:/checkout")
+    node.gitlink_change_state = "applying"
+
+    returned = doc.fail_gitlink_apply(
+        node.id, "The proposed change set changed after approval. Review it again before applying."
+    )
+
+    assert returned is node
+    assert node.gitlink_change_state == "previewed"
+    assert node.gitlink_change_fingerprint is None, "a stale approval must never be replayable"
+    assert node.gitlink_change_local_root is None, "a cleared approval must have no dangling bound fields"
+    assert node.gitlink_error == (
+        "The proposed change set changed after approval. Review it again before applying."
+    )
+    # pending_changes/proposal_markdown themselves stay put - only the
+    # fingerprint is invalidated, so the user can review and re-approve.
+    assert node.gitlink_pending_changes == changes
+
+
+def test_fail_gitlink_apply_is_a_silent_noop_for_a_deleted_node():
+    assert SceneDocument().fail_gitlink_apply("ghost", "too late") is None
+
+
+def test_scene_payload_gitlink_fields_default_correctly_for_a_fresh_node():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_gitlink_node(0, 0, parent.id)
+
+    row = {n["id"]: n for n in doc.scene_payload()["nodes"]}[node.id]
+
+    assert row["gitlinkRepo"] == ""
+    assert row["gitlinkBranch"] == ""
+    assert row["gitlinkScopeMode"] == "selected"
+    assert row["gitlinkLocalRoot"] == ""
+    assert row["gitlinkRepoFilePaths"] == []
+    assert row["gitlinkSelectedPaths"] == []
+    assert row["gitlinkTaskPrompt"] == ""
+    assert row["gitlinkContextStats"] == {}
+    assert row["gitlinkContextSummary"] == ""
+    # R5.3 post-review FIX 6: a fresh node's monotonic counter starts at 0.
+    assert row["gitlinkContextVersion"] == 0
+    assert row["gitlinkProposalMarkdown"] == ""
+    assert row["gitlinkPendingChanges"] == []
+    assert row["gitlinkPreviewText"] == ""
+    assert row["gitlinkChangeFingerprint"] is None
+    assert row["gitlinkChangeState"] == "draft"
+    assert row["gitlinkError"] == ""
+    # R5.3 post-review FIX 2: gitlink_change_local_root is plain internal
+    # backend bookkeeping, like gitlink_context_xml/gitlink_imported_root -
+    # it must NEVER appear on the wire.
+    assert "gitlinkChangeLocalRoot" not in row
+
+
+def test_scene_payload_gitlink_pending_changes_is_a_copy_not_the_live_list():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_gitlink_node(0, 0, parent.id)
+    changes = [{"path": "a.py", "operation": "update", "reason": "r", "content": "x"}]
+    doc.complete_gitlink_run(node.id, "proposal", changes, "diff", "fp1", "C:/checkout")
+
+    row = {n["id"]: n for n in doc.scene_payload()["nodes"]}[node.id]
+    row["gitlinkPendingChanges"][0]["path"] = "mutated.py"
+
+    assert node.gitlink_pending_changes[0]["path"] == "a.py", (
+        "mutating the payload copy must never mutate the live domain state"
+    )
+
+
+# -- R5.3: gitlink node - WS-intent level -------------------------------------
+
+
+def _make_gitlink_plugins_bus():
+    bus = SessionBus("gitlink-canvas-test")
+    notifications = NotificationState()
+    bus.register_topic("notification", notifications.payload)
+    composer_document = ComposerDocument()
+    bus.register_topic("app-composer", composer_document.payload)
+
+    class _FakeDispatcher:
+        pass
+
+    fake_dispatcher = _FakeDispatcher()
+    document = register_canvas(bus, notifications, fake_dispatcher, composer_document)
+    return bus, notifications, document, fake_dispatcher
+
+
+def test_set_gitlink_local_root_intent_publishes_scene():
+    async def run():
+        bus, notifications, document, _dispatcher = _make_gitlink_plugins_bus()
+        parent = document.add_node(0, 0, "parent")
+        node = document.add_gitlink_node(0, 0, parent.id)
+
+        await bus.dispatch_intent("scene", "setGitlinkLocalRoot", [node.id, "C:/checkout"])
+
+        assert document.nodes[node.id].gitlink_local_root == "C:/checkout"
+
+    asyncio.run(run())
+
+
+def test_fetch_gitlink_context_intent_returns_full_text():
+    async def run():
+        bus, notifications, document, _dispatcher = _make_gitlink_plugins_bus()
+        parent = document.add_node(0, 0, "parent")
+        node = document.add_gitlink_node(0, 0, parent.id)
+        document.store_gitlink_context(
+            node.id, scope_mode="selected", selected_paths=["a.py"],
+            context_xml="<gitlink_context>full</gitlink_context>", context_stats={}, context_summary="s",
+        )
+
+        result = await bus.dispatch_intent("scene", "fetchGitlinkContext", [node.id])
+
+        assert result == "<gitlink_context>full</gitlink_context>"
+
+    asyncio.run(run())
+
+
+def test_fetch_gitlink_repositories_intent_busy_guard_returns_empty_list_without_calling_dispatcher():
+    class _FakeDispatcher:
+        def __init__(self):
+            self.called = False
+
+        async def fetch_gitlink_repositories(self, **kwargs):
+            self.called = True
+            return ["should-not-be-reached/repo"]
+
+    async def run():
+        bus = SessionBus("gitlink-busy-test")
+        notifications = NotificationState()
+        bus.register_topic("notification", notifications.payload)
+        composer_document = ComposerDocument()
+        bus.register_topic("app-composer", composer_document.payload)
+        fake_dispatcher = _FakeDispatcher()
+        document = register_canvas(bus, notifications, fake_dispatcher, composer_document)
+        parent = document.add_node(0, 0, "parent")
+        node = document.add_gitlink_node(0, 0, parent.id)
+        node.pending_request_id = "already-busy"
+
+        result = await bus.dispatch_intent("scene", "fetchGitlinkRepositories", [node.id])
+
+        assert result == []
+        assert fake_dispatcher.called is False
+        assert notifications.visible is True
+        assert notifications.msg_type == "info"
+
+    asyncio.run(run())
+
+
+def test_run_gitlink_change_set_intent_dispatches_with_correct_node_fields():
+    class _FakeDispatcher:
+        def __init__(self):
+            self.calls = []
+
+        async def start_gitlink_run(self, **kwargs):
+            self.calls.append(kwargs)
+
+    async def run():
+        bus = SessionBus("gitlink-run-intent-test")
+        notifications = NotificationState()
+        bus.register_topic("notification", notifications.payload)
+        composer_document = ComposerDocument()
+        bus.register_topic("app-composer", composer_document.payload)
+        fake_dispatcher = _FakeDispatcher()
+        document = register_canvas(bus, notifications, fake_dispatcher, composer_document)
+        parent = document.add_node(0, 0, "parent")
+        node = document.add_gitlink_node(0, 0, parent.id)
+        document.store_gitlink_repo_tree(node.id, "octocat/hello-world", "main", ["a.py"])
+        document.store_gitlink_context(
+            node.id, scope_mode="selected", selected_paths=["a.py"], context_xml="<x/>",
+            context_stats={}, context_summary="s",
+        )
+
+        result = await bus.dispatch_intent("scene", "runGitlinkChangeSet", [node.id, "add a feature"])
+
+        assert result == node.id
+        assert document.nodes[node.id].gitlink_task_prompt == "add a feature"
+        assert len(fake_dispatcher.calls) == 1
+        call = fake_dispatcher.calls[0]
+        assert call["repo"] == "octocat/hello-world"
+        assert call["branch"] == "main"
+        assert call["scope_mode"] == "selected"
+        assert call["task_prompt"] == "add a feature"
+        assert call["context_xml"] == "<x/>"
+        assert call["context_summary"] == "s"
+        assert callable(call["on_success"])
+        assert callable(call["on_failure"])
+
+    asyncio.run(run())
+
+
+def test_apply_gitlink_changes_intent_calls_dispatcher_with_only_node_id_and_fingerprint():
+    class _FakeDispatcher:
+        def __init__(self):
+            self.calls = []
+
+        async def start_gitlink_apply(self, **kwargs):
+            self.calls.append(kwargs)
+
+    async def run():
+        bus = SessionBus("gitlink-apply-intent-test")
+        notifications = NotificationState()
+        bus.register_topic("notification", notifications.payload)
+        composer_document = ComposerDocument()
+        bus.register_topic("app-composer", composer_document.payload)
+        fake_dispatcher = _FakeDispatcher()
+        document = register_canvas(bus, notifications, fake_dispatcher, composer_document)
+        parent = document.add_node(0, 0, "parent")
+        node = document.add_gitlink_node(0, 0, parent.id)
+        document.set_gitlink_local_root(node.id, "C:/checkout")
+
+        result = await bus.dispatch_intent("scene", "applyGitlinkChanges", [node.id, "fp-123"])
+
+        assert result == node.id
+        assert len(fake_dispatcher.calls) == 1
+        call = fake_dispatcher.calls[0]
+        assert call["client_fingerprint"] == "fp-123"
+        assert call["local_root"] == "C:/checkout"
+        assert callable(call["on_success"])
+        assert callable(call["on_failure"])
+
+    asyncio.run(run())
+
+
+def test_cancel_gitlink_request_intent_calls_agent_dispatcher_cancel_gitlink():
+    class _FakeDispatcher:
+        def __init__(self):
+            self.cancel_calls = []
+
+        def cancel_gitlink(self, request_id):
+            self.cancel_calls.append(request_id)
+            return True
+
+    async def run():
+        bus = SessionBus("cancel-gitlink-request-intent-test")
+        notifications = NotificationState()
+        bus.register_topic("notification", notifications.payload)
+        composer_document = ComposerDocument()
+        bus.register_topic("app-composer", composer_document.payload)
+        fake_dispatcher = _FakeDispatcher()
+        register_canvas(bus, notifications, fake_dispatcher, composer_document)
+
+        result = await bus.dispatch_intent("scene", "cancelGitlinkRequest", ["req-456"])
+
+        assert result is None
+        assert fake_dispatcher.cancel_calls == ["req-456"]
+
+    asyncio.run(run())
+
+
+# -- R5.3 post-review FIX 4: real concurrent interleaving, not a pre-set busy
+# flag --------------------------------------------------------------------
+
+
+def test_two_concurrent_run_gitlink_change_set_calls_for_the_same_node_only_one_reaches_the_agent(monkeypatch):
+    """R5.3 post-review FIX 4(a)+(b): before this fix, node.pending_request_id
+    was only claimed INSIDE start_gitlink_run's separately-scheduled _run()
+    sub-task, and run_gitlink_change_set's own busy pre-check was separated
+    from agents.py's claim by a real `await publish_scene()` - so two
+    concurrent runGitlinkChangeSet calls for the SAME node could both pass
+    every busy check before either one's claim ever landed, and both would
+    reach the LLM.
+
+    This drives TWO REAL coroutines through a genuine asyncio interleaving -
+    both dispatch_intent(...) calls are fired via asyncio.gather without
+    either being awaited to completion first, exactly the scenario the fix
+    spec calls for - not the trivial pre-set-pending_request_id case the
+    existing busy-guard tests already cover (e.g.
+    test_gitlink_apply_busy_guard_blocks_concurrent_run_and_apply in
+    test_agents.py). GitlinkAgent.get_response is reached via a REAL
+    asyncio.to_thread hop (unmocked at that layer), which is itself a
+    genuine yield point back to the event loop - so even a slow/blocking
+    mock is unnecessary for real interleaving to occur here; the race this
+    fix closes is entirely in the synchronous busy-check-and-claim ordering,
+    which asyncio.gather's task scheduling exercises directly."""
+    call_count = {"n": 0}
+
+    def counting_get_response(self, payload):
+        call_count["n"] += 1
+        return {
+            "summary": "s", "write_intent": "changes_ready", "rationale": "r", "notes": [],
+            "files": [{"path": "a.py", "operation": "update", "reason": "x", "content": "y"}],
+            "change_count": 1, "raw_response": "{}",
+        }
+
+    monkeypatch.setattr(agents_module.GitlinkAgent, "get_response", counting_get_response)
+
+    async def run():
+        bus, document, recorder, dispatcher = make_bus_with_dispatcher()
+        parent = document.add_chat_node(0, 0, "root", True)
+        node = document.add_gitlink_node(0, 0, parent.id)
+        document.store_gitlink_repo_tree(node.id, "octocat/hello-world", "main", ["a.py"])
+        document.store_gitlink_context(
+            node.id, scope_mode="selected", selected_paths=["a.py"], context_xml="<x/>",
+            context_stats={}, context_summary="s",
+        )
+
+        results = await asyncio.gather(
+            bus.dispatch_intent("scene", "runGitlinkChangeSet", [node.id, "task A"]),
+            bus.dispatch_intent("scene", "runGitlinkChangeSet", [node.id, "task B"]),
+        )
+        # The admitted call returns node_id (mirrors every other successful
+        # scene-intent wrapper); the busy-rejected call returns None (mirrors
+        # run_gitlink_change_set's own existing busy-rejection branch, same
+        # sentinel shape as e.g. fetchGitlinkRepositories's busy guard).
+        # Deterministic here: neither coroutine's own body has a genuine
+        # suspension point before the busy claim, so asyncio's FIFO task
+        # scheduling always lets the FIRST-created task ("task A") win.
+        assert results == [node.id, None], "exactly one of the two concurrent calls must be admitted"
+
+        entries = list(dispatcher._gitlink_requests.values())
+        assert len(entries) == 1, "only ONE Run may ever be admitted for this node at a time"
+        await entries[0]["task"]
+
+        assert call_count["n"] == 1, "only ONE of the two concurrent calls may ever reach the LLM"
+        assert document.nodes[node.id].gitlink_change_state == "previewed"
+        assert dispatcher._gitlink_requests == {}
+        assert document.nodes[node.id].pending_request_id is None, (
+            "the busy slot must be fully released once the admitted Run finishes"
+        )
+
+    asyncio.run(run())

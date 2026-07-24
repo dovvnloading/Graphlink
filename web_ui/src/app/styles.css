@@ -2894,3 +2894,329 @@ body,
   background-color: var(--gl-neutral-button-background);
   border: 1px solid var(--gl-neutral-button-border);
 }
+
+/* -- R5.3 gitlink node ---------------------------------------------------- */
+
+.gitlink-node {
+  width: 460px;
+  max-height: 720px;
+  min-height: 110px;
+}
+
+.gitlink-node.collapsed {
+  width: 290px;
+  min-height: 58px;
+}
+
+.gitlink-node-content {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 640px;
+  overflow-y: auto;
+}
+
+.gitlink-node-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--gl-surface-border);
+}
+
+.gitlink-node-tab {
+  font-size: 11px;
+  font-weight: 600;
+  font-family: inherit;
+  padding: 6px 10px;
+  color: var(--gl-surface-text-muted);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+}
+
+.gitlink-node-tab:hover {
+  color: var(--gl-surface-text);
+}
+
+.gitlink-node-tab.active {
+  color: var(--gl-surface-text);
+  border-bottom-color: var(--gl-surface-text-muted);
+}
+
+.gitlink-node-setup-tab,
+.gitlink-node-context-tab,
+.gitlink-node-proposal-tab {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.gitlink-node-field-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.gitlink-node-field-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--gl-surface-text-muted);
+}
+
+.gitlink-node-inline-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Reuses .web-research-node-query-input's own chrome verbatim - same
+   shared-token convention already established across sibling node views -
+   applied here under this node kind's own class name for every plain
+   text/select/textarea input in the Setup tab. */
+.gitlink-node-input,
+.gitlink-node-select {
+  box-sizing: border-box;
+  width: 100%;
+  font-family: inherit;
+  font-size: 12px;
+  padding: 8px 10px;
+  color: var(--gl-surface-text);
+  background-color: var(--gl-surface-inset, var(--gl-surface-window));
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 6px;
+}
+
+.gitlink-node-task-prompt {
+  resize: vertical;
+  line-height: 1.4;
+}
+
+.gitlink-node-input:focus,
+.gitlink-node-select:focus {
+  outline: none;
+  border-color: var(--gl-surface-text-muted);
+}
+
+.gitlink-node-inline-row button {
+  font-size: 11px;
+  font-weight: 600;
+  font-family: inherit;
+  padding: 5px 12px;
+  color: var(--gl-surface-text);
+  background-color: var(--gl-neutral-button-background);
+  border: 1px solid var(--gl-neutral-button-border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.gitlink-node-inline-row button:hover:enabled {
+  background-color: var(--gl-neutral-button-hover);
+}
+
+.gitlink-node-inline-row button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.gitlink-node-repo-options {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 120px;
+  overflow-y: auto;
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 6px;
+}
+
+.gitlink-node-repo-options button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font-family: inherit;
+  font-size: 11px;
+  padding: 6px 8px;
+  color: var(--gl-surface-text);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+
+.gitlink-node-repo-options button:hover {
+  background-color: var(--gl-neutral-button-hover);
+}
+
+.gitlink-node-file-tree {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.gitlink-node-file-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 160px;
+  overflow-y: auto;
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 6px;
+}
+
+.gitlink-node-file-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  font-size: 11px;
+  color: var(--gl-surface-text);
+}
+
+.gitlink-node-file-count {
+  margin: 0;
+  font-size: 10px;
+  color: var(--gl-surface-text-muted);
+}
+
+.gitlink-node-context-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.gitlink-node-stat-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+}
+
+.gitlink-node-stat-key {
+  color: var(--gl-surface-text-muted);
+}
+
+.gitlink-node-stat-value {
+  color: var(--gl-surface-text);
+  font-weight: 600;
+}
+
+.gitlink-node-context-summary {
+  margin: 0;
+  font-size: 12px;
+  color: var(--gl-surface-text);
+}
+
+.gitlink-node-context-xml {
+  margin: 0;
+  padding: 8px 10px;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 320px;
+  overflow: auto;
+  color: var(--gl-surface-text);
+  background-color: var(--gl-surface-inset, var(--gl-surface-window));
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 6px;
+}
+
+.gitlink-node-empty {
+  margin: 0;
+  font-size: 12px;
+  font-style: italic;
+  color: var(--gl-surface-text-muted);
+}
+
+/* Reuses .chat-node-content's full markdown-body rule set verbatim - same
+   shared-class convention .artifact-node-document-content/
+   .web-research-node-answer already establish for this pipeline. Only
+   overrides the max-height/overflow-y a nested pane should never take on its
+   own (the outer .gitlink-node-content already scrolls). */
+.gitlink-node-proposal-markdown,
+.gitlink-node-proposal-diff {
+  max-height: none;
+  overflow: visible;
+}
+
+.gitlink-node-banner-error {
+  padding: 8px 10px;
+  font-size: 11px;
+  color: var(--gl-semantic-status-error, currentColor);
+  border: 1px solid var(--gl-semantic-status-error, currentColor);
+  border-radius: 8px;
+}
+
+.gitlink-node-apply-row {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.gitlink-node-apply-btn {
+  font-size: 11px;
+  font-weight: 600;
+  font-family: inherit;
+  padding: 5px 12px;
+  color: var(--gl-surface-window);
+  background-color: var(--gl-surface-text-muted);
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.gitlink-node-apply-btn:hover:enabled {
+  filter: brightness(1.1);
+}
+
+.gitlink-node-apply-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.gitlink-node-apply-dialog {
+  max-width: min(460px, calc(100vw - 64px));
+}
+
+.gitlink-node-apply-file-list {
+  margin: 8px 0;
+  padding-left: 18px;
+  max-height: 160px;
+  overflow-y: auto;
+  font-size: 11px;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  color: var(--gl-surface-text-muted);
+}
+
+.gitlink-node-apply-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.gitlink-node-apply-dialog-actions button {
+  font-size: 11px;
+  font-weight: 600;
+  font-family: inherit;
+  padding: 5px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.gitlink-node-apply-dialog-actions button:last-child {
+  color: var(--gl-surface-window);
+  background-color: var(--gl-surface-text-muted);
+  border: none;
+}
+
+.gitlink-node-apply-dialog-actions button:first-child {
+  color: var(--gl-surface-text);
+  background-color: var(--gl-neutral-button-background);
+  border: 1px solid var(--gl-neutral-button-border);
+}
+
+.gitlink-node-apply-dialog-actions button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}

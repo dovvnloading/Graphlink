@@ -22,6 +22,7 @@ import { ChatNodeView, type ChatFlowNode } from "./ChatNodeView";
 import { CodeNodeView, type CodeFlowNode } from "./CodeNodeView";
 import { ConversationNodeView, type ConversationFlowNode } from "./ConversationNodeView";
 import { DocumentNodeView, type DocumentFlowNode } from "./DocumentNodeView";
+import { GitlinkNodeView, type GitlinkFlowNode } from "./GitlinkNodeView";
 import { HtmlNodeView, type HtmlFlowNode } from "./HtmlNodeView";
 import { ImageNodeView, type ImageFlowNode } from "./ImageNodeView";
 import { ThinkingNodeView, type ThinkingFlowNode } from "./ThinkingNodeView";
@@ -55,7 +56,8 @@ type SceneFlowNode =
   | ImageFlowNode
   | ConversationFlowNode
   | WebResearchFlowNode
-  | ArtifactFlowNode;
+  | ArtifactFlowNode
+  | GitlinkFlowNode;
 
 function PlaceholderNodeView({ data, selected }: NodeProps<PlaceholderNode>) {
   const zoom = useStore((s) => s.transform[2]);
@@ -84,6 +86,7 @@ const NODE_TYPES = {
   conversation: ConversationNodeView,
   web_research: WebResearchNodeView,
   artifact: ArtifactNodeView,
+  gitlink: GitlinkNodeView,
 };
 
 // Exported standalone for direct unit testing (same posture as
@@ -351,6 +354,58 @@ export function toFlowNodes(scene: SceneState, store: SceneStore): SceneFlowNode
           onCancel: () => {
             if (n.pendingRequestId) store.cancelArtifactRequest(n.pendingRequestId);
           },
+        },
+      });
+      continue;
+    }
+    if (n.kind === "gitlink") {
+      // No onDock here either (same reasoning as the html/image/conversation/
+      // web_research/artifact branches above) - GitlinkNodeView never offers
+      // a dock-into-parent action; the generic `if (n.isDocked) continue`
+      // guard above still covers it correctly if it were ever docked via a
+      // direct WS call. gitlinkContextXml is deliberately absent below - it
+      // is never part of the scene wire payload (fetched lazily on demand via
+      // fetchGitlinkContext instead - see GitlinkNodeView's own Context tab).
+      flowNodes.push({
+        id: n.id,
+        type: "gitlink" as const,
+        position: { x: n.x, y: n.y },
+        data: {
+          gitlinkRepo: n.gitlinkRepo,
+          gitlinkBranch: n.gitlinkBranch,
+          gitlinkScopeMode: n.gitlinkScopeMode,
+          gitlinkLocalRoot: n.gitlinkLocalRoot,
+          gitlinkRepoFilePaths: n.gitlinkRepoFilePaths,
+          gitlinkSelectedPaths: n.gitlinkSelectedPaths,
+          gitlinkTaskPrompt: n.gitlinkTaskPrompt,
+          gitlinkContextStats: n.gitlinkContextStats,
+          gitlinkContextSummary: n.gitlinkContextSummary,
+          gitlinkContextVersion: n.gitlinkContextVersion,
+          gitlinkProposalMarkdown: n.gitlinkProposalMarkdown,
+          gitlinkPendingChanges: n.gitlinkPendingChanges,
+          gitlinkPreviewText: n.gitlinkPreviewText,
+          gitlinkChangeFingerprint: n.gitlinkChangeFingerprint ?? null,
+          gitlinkChangeState: n.gitlinkChangeState,
+          gitlinkError: n.gitlinkError,
+          isCollapsed: n.isCollapsed,
+          pendingRequestId: n.pendingRequestId ?? null,
+          onToggleCollapse: () => store.setChatCollapsed(n.id, !n.isCollapsed),
+          onDelete: () => store.removeNodes([n.id]),
+          onFetchRepositories: () => store.fetchGitlinkRepositories(n.id),
+          onLoadTree: (repo: string, branch: string) => store.loadGitlinkRepoTree(n.id, repo, branch),
+          onSetLocalRoot: (localRoot: string) => store.setGitlinkLocalRoot(n.id, localRoot),
+          onImportSnapshot: (repo: string, branch: string) => store.importGitlinkSnapshot(n.id, repo, branch),
+          onBuildContext: (scopeMode: string, selectedPaths: string[]) =>
+            store.buildGitlinkContext(n.id, scopeMode, selectedPaths),
+          onFetchContext: () => store.fetchGitlinkContext(n.id),
+          onRun: (taskPrompt: string) => store.runGitlinkChangeSet(n.id, taskPrompt),
+          // Same null-guard pattern as the conversation/web_research/artifact
+          // nodes' own analogous cancel call sites above - only fire the
+          // intent if there is genuinely a non-null request id to target.
+          onCancel: () => {
+            if (n.pendingRequestId) store.cancelGitlinkRequest(n.pendingRequestId);
+          },
+          onApply: (fingerprint: string) => store.applyGitlinkChanges(n.id, fingerprint),
         },
       });
       continue;

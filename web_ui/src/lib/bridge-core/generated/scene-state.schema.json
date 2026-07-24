@@ -65,6 +65,86 @@
           "filePath": {
             "type": "string"
           },
+          "gitlinkBranch": {
+            "type": "string"
+          },
+          "gitlinkChangeFingerprint": {
+            "type": "string"
+          },
+          "gitlinkChangeState": {
+            "type": "string"
+          },
+          "gitlinkContextStats": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "gitlinkContextSummary": {
+            "type": "string"
+          },
+          "gitlinkContextVersion": {
+            "type": "integer"
+          },
+          "gitlinkError": {
+            "type": "string"
+          },
+          "gitlinkLocalRoot": {
+            "type": "string"
+          },
+          "gitlinkPendingChanges": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "content": {
+                  "type": "string"
+                },
+                "operation": {
+                  "type": "string"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "operation",
+                "reason"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "gitlinkPreviewText": {
+            "type": "string"
+          },
+          "gitlinkProposalMarkdown": {
+            "type": "string"
+          },
+          "gitlinkRepo": {
+            "type": "string"
+          },
+          "gitlinkRepoFilePaths": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "gitlinkScopeMode": {
+            "type": "string"
+          },
+          "gitlinkSelectedPaths": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "gitlinkTaskPrompt": {
+            "type": "string"
+          },
           "history": {
             "items": {
               "additionalProperties": false,
@@ -295,7 +375,22 @@
           "researchCompleted",
           "researchTotal",
           "researchError",
-          "artifactContent"
+          "artifactContent",
+          "gitlinkRepo",
+          "gitlinkBranch",
+          "gitlinkScopeMode",
+          "gitlinkLocalRoot",
+          "gitlinkRepoFilePaths",
+          "gitlinkSelectedPaths",
+          "gitlinkTaskPrompt",
+          "gitlinkContextStats",
+          "gitlinkContextSummary",
+          "gitlinkContextVersion",
+          "gitlinkProposalMarkdown",
+          "gitlinkPendingChanges",
+          "gitlinkPreviewText",
+          "gitlinkChangeState",
+          "gitlinkError"
         ],
         "type": "object"
       },

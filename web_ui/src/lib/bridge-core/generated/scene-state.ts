@@ -30,6 +30,22 @@ export interface SceneNodeRow {
   researchError: string;
   researchResult?: ResearchResultRow | null;
   artifactContent: string;
+  gitlinkRepo: string;
+  gitlinkBranch: string;
+  gitlinkScopeMode: string;
+  gitlinkLocalRoot: string;
+  gitlinkRepoFilePaths: string[];
+  gitlinkSelectedPaths: string[];
+  gitlinkTaskPrompt: string;
+  gitlinkContextStats: Record<string, string>;
+  gitlinkContextSummary: string;
+  gitlinkContextVersion: number;
+  gitlinkProposalMarkdown: string;
+  gitlinkPendingChanges: GitlinkPendingChangeRow[];
+  gitlinkPreviewText: string;
+  gitlinkChangeFingerprint?: string | null;
+  gitlinkChangeState: string;
+  gitlinkError: string;
 }
 
 export interface ConversationMessageRow {
@@ -69,6 +85,13 @@ export interface ResearchCitationRow {
   sourceId: string;
   marker: string;
   claimContext: string;
+}
+
+export interface GitlinkPendingChangeRow {
+  path: string;
+  operation: string;
+  reason: string;
+  content?: string | null;
 }
 
 export interface SceneEdgeRow {
@@ -247,6 +270,89 @@ function checkSceneNodeRow(value: unknown, path: string, errors: string[]): void
     if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.artifactContent: missing required field`);
     else { if (typeof fieldValue !== "string") errors.push(`${path}.artifactContent` + ": expected string"); }
   }
+  {
+    const fieldValue = value["gitlinkRepo"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.gitlinkRepo: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.gitlinkRepo` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["gitlinkBranch"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.gitlinkBranch: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.gitlinkBranch` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["gitlinkScopeMode"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.gitlinkScopeMode: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.gitlinkScopeMode` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["gitlinkLocalRoot"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.gitlinkLocalRoot: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.gitlinkLocalRoot` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["gitlinkRepoFilePaths"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.gitlinkRepoFilePaths: missing required field`);
+    else { if (!Array.isArray(fieldValue)) errors.push(`${path}.gitlinkRepoFilePaths` + ": expected array");
+    else (fieldValue as unknown[]).forEach((item, i) => { if (typeof item !== "string") errors.push(`${path}.gitlinkRepoFilePaths` + `[${i}]` + ": expected string"); }); }
+  }
+  {
+    const fieldValue = value["gitlinkSelectedPaths"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.gitlinkSelectedPaths: missing required field`);
+    else { if (!Array.isArray(fieldValue)) errors.push(`${path}.gitlinkSelectedPaths` + ": expected array");
+    else (fieldValue as unknown[]).forEach((item, i) => { if (typeof item !== "string") errors.push(`${path}.gitlinkSelectedPaths` + `[${i}]` + ": expected string"); }); }
+  }
+  {
+    const fieldValue = value["gitlinkTaskPrompt"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.gitlinkTaskPrompt: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.gitlinkTaskPrompt` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["gitlinkContextStats"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.gitlinkContextStats: missing required field`);
+    else { if (!isRecord(fieldValue)) errors.push(`${path}.gitlinkContextStats` + ": expected object");
+    else Object.entries(fieldValue as Record<string, unknown>).forEach(([k, v]) => { if (typeof v !== "string") errors.push(`${path}.gitlinkContextStats` + `[${JSON.stringify(k)}]` + ": expected string"); }); }
+  }
+  {
+    const fieldValue = value["gitlinkContextSummary"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.gitlinkContextSummary: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.gitlinkContextSummary` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["gitlinkContextVersion"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.gitlinkContextVersion: missing required field`);
+    else { if (typeof fieldValue !== "number") errors.push(`${path}.gitlinkContextVersion` + ": expected number"); }
+  }
+  {
+    const fieldValue = value["gitlinkProposalMarkdown"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.gitlinkProposalMarkdown: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.gitlinkProposalMarkdown` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["gitlinkPendingChanges"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.gitlinkPendingChanges: missing required field`);
+    else { if (!Array.isArray(fieldValue)) errors.push(`${path}.gitlinkPendingChanges` + ": expected array");
+    else (fieldValue as unknown[]).forEach((item, i) => { checkGitlinkPendingChangeRow(item, `${path}.gitlinkPendingChanges` + `[${i}]`, errors); }); }
+  }
+  {
+    const fieldValue = value["gitlinkPreviewText"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.gitlinkPreviewText: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.gitlinkPreviewText` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["gitlinkChangeFingerprint"];
+    if (fieldValue !== undefined && fieldValue !== null) { if (typeof fieldValue !== "string") errors.push(`${path}.gitlinkChangeFingerprint` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["gitlinkChangeState"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.gitlinkChangeState: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.gitlinkChangeState` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["gitlinkError"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.gitlinkError: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.gitlinkError` + ": expected string"); }
+  }
 }
 
 function checkConversationMessageRow(value: unknown, path: string, errors: string[]): void {
@@ -401,6 +507,29 @@ function checkResearchCitationRow(value: unknown, path: string, errors: string[]
     const fieldValue = value["claimContext"];
     if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.claimContext: missing required field`);
     else { if (typeof fieldValue !== "string") errors.push(`${path}.claimContext` + ": expected string"); }
+  }
+}
+
+function checkGitlinkPendingChangeRow(value: unknown, path: string, errors: string[]): void {
+  if (!isRecord(value)) { errors.push(`${path}: expected object`); return; }
+  {
+    const fieldValue = value["path"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.path: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.path` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["operation"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.operation: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.operation` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["reason"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.reason: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.reason` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["content"];
+    if (fieldValue !== undefined && fieldValue !== null) { if (typeof fieldValue !== "string") errors.push(`${path}.content` + ": expected string"); }
   }
 }
 

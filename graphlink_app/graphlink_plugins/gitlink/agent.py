@@ -27,7 +27,7 @@ import re
 from pathlib import Path, PurePosixPath
 
 import api_provider
-import graphlink_config as config
+import graphlink_task_config as config
 from graphlink_plugins.common.llm_json import extract_json_object
 
 

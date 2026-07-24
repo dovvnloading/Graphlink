@@ -349,6 +349,66 @@ export class SceneStore {
     this.transport.intent("scene", "cancelArtifactRequest", [requestId]);
   }
 
+  // R5.3: real Gitlink plugin - nine intents backing the three-tab
+  // Setup/Context/Proposal flow (see GitlinkNodeView.tsx's own module doc for
+  // the full per-tab breakdown). fetchGitlinkRepositories/fetchGitlinkContext
+  // are the only two of the nine that need a REPLY (a repo name list / the
+  // lazily-fetched context XML body) rather than a fire-and-forget push
+  // through the next scene snapshot - transport.intent() is declared
+  // `: void` (confirmed by reading transport.ts: it is fire-and-forget,
+  // dropped silently pre-connect, no return value at all), so it cannot be
+  // what "returns a Promise" means here. transport.request() is the real
+  // request/response primitive for that (the same one transport.test.ts's
+  // own "system"/"ping" round-trip exercises) - these two ride that instead.
+  // Every other Gitlink method below stays on the ordinary intent() path,
+  // exactly like every other scene intent above.
+  fetchGitlinkRepositories(nodeId: string): Promise<string[]> {
+    return this.transport.request("scene", "fetchGitlinkRepositories", [nodeId]) as Promise<string[]>;
+  }
+
+  loadGitlinkRepoTree(nodeId: string, repo: string, branch: string): void {
+    this.transport.intent("scene", "loadGitlinkRepoTree", [nodeId, repo, branch]);
+  }
+
+  setGitlinkLocalRoot(nodeId: string, localRoot: string): void {
+    this.transport.intent("scene", "setGitlinkLocalRoot", [nodeId, localRoot]);
+  }
+
+  importGitlinkSnapshot(nodeId: string, repo: string, branch: string): void {
+    this.transport.intent("scene", "importGitlinkSnapshot", [nodeId, repo, branch]);
+  }
+
+  // scopeMode/selectedPaths are never independently mirrored server-side via
+  // their own setter intent (see GitlinkNodeView.tsx's Setup tab doc) - they
+  // only ever travel as parameters of this one call, read from local
+  // component state at the moment Build Context is clicked.
+  buildGitlinkContext(nodeId: string, scopeMode: string, selectedPaths: string[]): void {
+    this.transport.intent("scene", "buildGitlinkContext", [nodeId, scopeMode, selectedPaths]);
+  }
+
+  fetchGitlinkContext(nodeId: string): Promise<string> {
+    return this.transport.request("scene", "fetchGitlinkContext", [nodeId]) as Promise<string>;
+  }
+
+  runGitlinkChangeSet(nodeId: string, taskPrompt: string): void {
+    this.transport.intent("scene", "runGitlinkChangeSet", [nodeId, taskPrompt]);
+  }
+
+  // Same requestId-not-nodeId shape cancelConversationRequest/
+  // cancelWebResearchRequest/cancelArtifactRequest above already established
+  // for their own per-node cancel.
+  cancelGitlinkRequest(requestId: string): void {
+    this.transport.intent("scene", "cancelGitlinkRequest", [requestId]);
+  }
+
+  // fingerprint is passed through verbatim - the caller (GitlinkNodeView's
+  // Apply confirmation) must pass exactly the server's own last-sent
+  // gitlinkChangeFingerprint, never anything computed client-side; this
+  // store method has no opinion on that, it just forwards the argument.
+  applyGitlinkChanges(nodeId: string, fingerprint: string): void {
+    this.transport.intent("scene", "applyGitlinkChanges", [nodeId, fingerprint]);
+  }
+
   // R3.3: the Composer's real Send action - a real user ChatNode. The
   // assistant's reply is deferred to R4 (graphlink_config.py's Qt/non-Qt
   // split is a prerequisite for calling the real agent layer); the backend
