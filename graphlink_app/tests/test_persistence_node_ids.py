@@ -17,6 +17,13 @@ silently adopted the wrong members. Two-part fix, both covered here:
    (uuid4, stored on the node, restored on load so it survives load/save cycles), and
    connections/children dual-write `*_id` fields alongside the legacy positional
    fields. The deserializer prefers IDs and falls back to positions for pre-ID saves.
+
+Note: the fixture below uses a ConversationNode as the "third node" that gets skipped
+in TestRoundTripWithASkippedNode - it originally used a PyCoderNode for this, but
+PyCoderNode was deleted along with the other Qt-removal plugin nodes. The node's
+specific type is incidental to what's under test here (generic skip-safe index
+arithmetic, not anything PyCoder-specific), so ConversationNode - a node type that
+remains in scope - is an equally valid stand-in.
 """
 
 import sys
@@ -30,7 +37,7 @@ from PySide6.QtWidgets import QApplication
 
 _APP = QApplication.instance() or QApplication([])
 
-from graphlink_pycoder import PyCoderNode
+from graphlink_conversation_node import ConversationNode
 from graphlink_scene import ChatScene
 from graphlink_session.deserializers import SceneDeserializer
 from graphlink_session.serializers import SceneSerializer
@@ -48,15 +55,15 @@ def _make_window_and_scene():
 
 
 def _build_source_scene():
-    """chat_a -> chat_b (parent/child + connection), a PyCoder node under chat_a,
-    and two notes. all_nodes order is chat nodes first, then pycoder (NODE_LIST_NAMES),
-    so the save-side item space is: [chat_a=0, chat_b=1, pycoder=2, note0=3, note1=4]."""
+    """chat_a -> chat_b (parent/child + connection), a Conversation node under chat_a,
+    and two notes. all_nodes order is chat nodes first, then conversation (NODE_LIST_NAMES),
+    so the save-side item space is: [chat_a=0, chat_b=1, conversation=2, note0=3, note1=4]."""
     window, scene = _make_window_and_scene()
     chat_a = scene.add_chat_node("alpha", is_user=True)
     chat_b = scene.add_chat_node("bravo", is_user=False, parent_node=chat_a)
-    pycoder = PyCoderNode(parent_node=chat_a)
-    scene.addItem(pycoder)
-    scene.pycoder_nodes.append(pycoder)
+    conversation = ConversationNode(parent_node=chat_a)
+    scene.addItem(conversation)
+    scene.conversation_nodes.append(conversation)
     note_x = scene.add_note(QPointF(10, 10))
     note_x.content = "note-x"
     note_y = scene.add_note(QPointF(20, 20))
@@ -128,8 +135,8 @@ class TestRoundTripWithASkippedNode:
     def _tampered_payload(self, strip_ids=False):
         window, scene, chat_a, chat_b = _build_source_scene()
         chat_data = _serialize(window)
-        # The pycoder payload (save index 2) becomes a removed-plugin type.
-        assert chat_data["nodes"][2]["node_type"] == "pycoder"
+        # The conversation payload (save index 2) becomes a removed-plugin type.
+        assert chat_data["nodes"][2]["node_type"] == "conversation"
         chat_data["nodes"][2]["node_type"] = "workflow"
         if strip_ids:
             chat_data = _strip_ids(chat_data)
@@ -152,9 +159,9 @@ class TestRoundTripWithASkippedNode:
 
     def test_container_referencing_the_first_note_gets_the_first_note_not_the_second(self):
         # THE decisive corruption case. Save-side item space:
-        #   [chat_a=0, chat_b=1, pycoder=2, note0=3, note1=4]
+        #   [chat_a=0, chat_b=1, conversation=2, note0=3, note1=4]
         # A container holding item 3 (the first note) used to resolve, after the
-        # pycoder node was skipped, against a survivor-count-based map where key 3
+        # conversation node was skipped, against a survivor-count-based map where key 3
         # pointed at the SECOND note - silent wrong-member adoption, no error.
         chat_data = self._tampered_payload()
         first_note_content = chat_data["notes_data"][0]["content"]

@@ -10,6 +10,13 @@ node class as a seed_prompt(text) method instead, and the dispatcher just calls 
 These tests construct each seedable node headlessly (QApplication only, no scene/main
 window needed) and verify seed_prompt() reproduces the exact widget-and-side-effect
 behavior the old isinstance branch had for that node type.
+
+Note: this file originally also covered WebNode, PyCoderNode, CodeSandboxNode,
+ArtifactNode, and GitlinkNode (plus WebNode/GitlinkNode-specific plain-attribute
+state checks). Those five classes were removed as part of the Qt-to-web rewrite
+(superseded by Qt-free FastAPI+React implementations), so their parametrize cases
+and dedicated tests were removed along with them. Coverage for ConversationNode and
+HtmlViewNode is unaffected and kept below.
 """
 
 import sys
@@ -22,43 +29,21 @@ from PySide6.QtWidgets import QApplication
 
 _APP = QApplication.instance() or QApplication([])
 
-from graphlink_web import WebNode
-from graphlink_pycoder import PyCoderNode
-from graphlink_plugins.graphlink_plugin_code_sandbox import CodeSandboxNode
-from graphlink_plugins.graphlink_plugin_artifact import ArtifactNode
 from graphlink_conversation_node import ConversationNode
 from graphlink_html_view import HtmlViewNode
-from graphlink_plugins.graphlink_plugin_gitlink import GitlinkNode
 
 
 @pytest.mark.parametrize(
     "node_cls, get_widget_text",
     [
-        (WebNode, lambda n: n.query_input.toPlainText()),
-        (PyCoderNode, lambda n: n.prompt_input.toPlainText()),
-        (CodeSandboxNode, lambda n: n.prompt_input.toPlainText()),
-        (ArtifactNode, lambda n: n.instruction_input.toPlainText()),
         (ConversationNode, lambda n: n.message_input.text()),
         (HtmlViewNode, lambda n: n.html_input.toPlainText()),
-        (GitlinkNode, lambda n: n.task_input.toPlainText()),
     ],
 )
 def test_seed_prompt_sets_the_expected_widget_text(node_cls, get_widget_text):
     node = node_cls(parent_node=None)
     node.seed_prompt("hello world")
     assert get_widget_text(node) == "hello world"
-
-
-def test_web_node_query_state_updates():
-    node = WebNode(parent_node=None)
-    node.seed_prompt("search this")
-    assert node.query == "search this"
-
-
-def test_gitlink_node_task_prompt_state_updates():
-    node = GitlinkNode(parent_node=None)
-    node.seed_prompt("make this change")
-    assert node.task_prompt == "make this change"
 
 
 def test_every_seedable_registry_spec_has_a_working_seed_prompt():

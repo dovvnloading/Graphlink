@@ -24,13 +24,8 @@ from graphlink_composer_web import ComposerWebHost
 from graphlink_web_island_host import AcceleratorForwardingFilter
 from graphlink_canvas_items import Note, Frame, Container
 from graphlink_node import ChatNode, CodeNode, ThinkingNode
-from graphlink_pycoder import PyCoderNode
-from graphlink_plugins.graphlink_plugin_code_sandbox import CodeSandboxNode
-from graphlink_web import WebNode
 from graphlink_conversation_node import ConversationNode
 from graphlink_html_view import HtmlViewNode
-from graphlink_plugins.graphlink_plugin_artifact import ArtifactNode
-from graphlink_plugins.graphlink_plugin_gitlink import GitlinkNode
 
 from graphlink_ui_dialogs.graphlink_library_dialog import ChatLibraryDialog
 from graphlink_about_web import AboutWebHost
@@ -648,10 +643,6 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
             worker.deleteLater()
 
     def _iter_shutdown_threads(self):
-        # Artifact/Gitlink/Code Sandbox/PyCoder nodes each keep their running worker on
-        # their own node.worker_thread - multiple nodes of the same plugin type can run
-        # concurrently, so there is no single shared main_window attribute to check for
-        # them anymore.
         for attr_name, label in (
             ("chat_thread", "active chat request"),
             ("takeaway_thread", "takeaway generation"),
@@ -669,21 +660,6 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
 
         for operation_id, worker in list(getattr(self, "utility_threads", {}).items()):
             yield "canvas utility operation", worker, (lambda op=operation_id: self.utility_threads.pop(op, None))
-
-        chat_view = getattr(self, "chat_view", None)
-        scene = chat_view.scene() if chat_view is not None else None
-        if scene is not None:
-            for node_list_name, label in (
-                ("code_sandbox_nodes", "code sandbox execution"),
-                ("artifact_nodes", "artifact workflow"),
-                ("pycoder_nodes", "PyCoder execution"),
-                ("gitlink_nodes", "Gitlink proposal"),
-                ("web_nodes", "web research"),
-            ):
-                for node in list(getattr(scene, node_list_name, [])):
-                    worker = getattr(node, "worker_thread", None)
-                    if worker is not None:
-                        yield label, worker, (lambda n=node: setattr(n, "worker_thread", None))
 
         save_thread = getattr(getattr(self, "session_manager", None), "save_thread", None)
         if save_thread is not None:
@@ -1005,55 +981,9 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         if isinstance(node, ConversationNode):
             return self._build_document_section("Conversation Transcript", self._history_to_markdown(getattr(node, "conversation_history", [])))
 
-        if isinstance(node, WebNode):
-            sources = getattr(node, "sources", []) or []
-            source_lines = "\n".join(f"- [{url}]({url})" for url in sources if str(url).strip())
-            return self._join_document_sections(
-                self._build_document_section("Query", getattr(node, "query", "")),
-                self._build_document_section("Summary", getattr(node, "summary", "")),
-                self._build_document_section("Sources", source_lines),
-            )
-
-        if isinstance(node, PyCoderNode):
-            terminal = node.get_output() if hasattr(node, "get_output") else ""
-            analysis = node.get_ai_analysis() if hasattr(node, "get_ai_analysis") else ""
-            return self._join_document_sections(
-                self._build_document_section("Task Prompt", node.get_prompt() if hasattr(node, "get_prompt") else ""),
-                self._build_document_section("Code", self._build_code_block(node.get_code() if hasattr(node, "get_code") else "", "python")),
-                self._build_document_section("Terminal Output", self._build_code_block(terminal)),
-                self._build_document_section("Analysis", analysis),
-            )
-
-        if isinstance(node, CodeSandboxNode):
-            terminal = node.get_output() if hasattr(node, "get_output") else ""
-            analysis = node.get_ai_analysis() if hasattr(node, "get_ai_analysis") else ""
-            return self._join_document_sections(
-                self._build_document_section("Task Brief", node.get_prompt() if hasattr(node, "get_prompt") else ""),
-                self._build_document_section("Requirements", self._build_code_block(node.get_requirements() if hasattr(node, "get_requirements") else "")),
-                self._build_document_section("Code", self._build_code_block(node.get_code() if hasattr(node, "get_code") else "", "python")),
-                self._build_document_section("Terminal Output", self._build_code_block(terminal)),
-                self._build_document_section("Review", analysis),
-            )
-
         if isinstance(node, HtmlViewNode):
             html_source = node.get_html_content() if hasattr(node, "get_html_content") else ""
             return self._build_document_section("HTML Source", self._build_code_block(html_source, "html"))
-
-        if isinstance(node, ArtifactNode):
-            transcript = self._history_to_markdown(getattr(node, "local_history", []))
-            return self._join_document_sections(
-                self._build_document_section("Artifact", node.get_artifact_content() if hasattr(node, "get_artifact_content") else ""),
-                self._build_document_section("Drafting Transcript", transcript),
-            )
-
-        if isinstance(node, GitlinkNode):
-            context_xml = self._truncate_document_text(getattr(node, "context_xml", ""))
-            return self._join_document_sections(
-                self._build_document_section("Task Prompt", node.get_task_prompt() if hasattr(node, "get_task_prompt") else ""),
-                self._build_document_section("Proposal", getattr(node, "proposal_markdown", "")),
-                self._build_document_section("Patch Preview", self._build_code_block(getattr(node, "preview_text", ""))),
-                self._build_document_section("Context XML (truncated)", self._build_code_block(context_xml, "xml")),
-            )
 
         return ""
 
@@ -1198,12 +1128,8 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         if hasattr(self, 'composer'):
             self.composer.set_context_anchor(node)
         if isinstance(node, ChatNode): text_content = node.text if node.text else "[Attachment/Content Node]"
-        elif isinstance(node, PyCoderNode): text_content = "Py-Coder Analysis"
-        elif isinstance(node, CodeSandboxNode): text_content = "Execution Sandbox"
-        elif isinstance(node, WebNode): text_content = "Web Research Node"
         elif isinstance(node, ConversationNode): text_content = "Conversation"
         elif isinstance(node, HtmlViewNode): text_content = "HTML Renderer"
-        elif isinstance(node, GitlinkNode): text_content = "Gitlink"
         elif isinstance(node, Note) and node.is_summary_note: self.message_input.setPlaceholderText("Cannot respond to a summary note."); return
         if text_content: self.message_input.setPlaceholderText(f"Responding to: {text_content[:30]}...")
         else: self.message_input.setPlaceholderText("Type your message...")
@@ -1491,7 +1417,7 @@ class ChatWindow(QMainWindow, WindowActionsMixin, WindowNavigationMixin):
         self.message_input.setEnabled(True)
         
     def _get_single_selected_node(self):
-        selected_items = self.chat_view.scene().selectedItems(); valid_types = (ChatNode, PyCoderNode, CodeSandboxNode, WebNode, ConversationNode, HtmlViewNode, GitlinkNode)
+        selected_items = self.chat_view.scene().selectedItems(); valid_types = (ChatNode, ConversationNode, HtmlViewNode)
         if len(selected_items) == 1 and isinstance(selected_items[0], valid_types): return selected_items[0]
         return None
 

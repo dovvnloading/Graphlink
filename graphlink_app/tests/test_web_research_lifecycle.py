@@ -1,7 +1,12 @@
-"""Lifecycle, UI-state, and persistence regressions for Web Research."""
+"""Lifecycle regressions for the Web Research worker thread.
+
+WebNode (the legacy Qt canvas node) was deleted once the Web-Research
+plugin was fully ported to the Qt-free backend/frontend stack; its
+UI-state/persistence tests were removed with it. WebResearchWorker itself
+is untouched and still covered here.
+"""
 
 import time
-from unittest.mock import MagicMock
 
 from PySide6.QtWidgets import QApplication
 
@@ -13,7 +18,6 @@ from graphlink_plugins.web_research.domain import (
     RequestCancelled,
 )
 from graphlink_plugins.web_research.worker import WebResearchWorker
-from graphlink_web import WebNode
 
 
 _APP = QApplication.instance() or QApplication([])
@@ -88,58 +92,3 @@ def test_worker_stop_is_cooperative_and_emits_cancelled():
     _APP.processEvents()
 
     assert cancelled == ["request-1"]
-
-
-def test_web_node_exposes_cancel_state_without_disabling_recovery():
-    node = WebNode(parent_node=None)
-    requested = []
-    node.cancel_requested.connect(requested.append)
-    node.set_running_state(True)
-
-    assert node.run_button.isEnabled()
-    assert node.run_button.text() == "Stop Research"
-    node.run_button.click()
-    _APP.processEvents()
-    assert requested == [node]
-
-
-def test_web_node_dispose_stops_only_its_own_worker():
-    node = WebNode(parent_node=None)
-    worker = MagicMock()
-    worker.isRunning.return_value = True
-    node.worker_thread = worker
-    node.set_running_state(True)
-
-    node.dispose()
-
-    worker.stop.assert_called_once_with()
-    assert node.is_disposed is True
-    assert node.worker_thread is None
-    assert node.is_running is False
-
-
-def test_web_result_round_trip_preserves_citations_warnings_and_sources():
-    node = WebNode(parent_node=None)
-    payload = _result().to_dict()
-
-    node.restore_research_result(payload)
-
-    assert node.research_result.answer_markdown == "A cited answer [s1]."
-    assert node.research_result.sources[0].status == "accepted"
-    assert node.research_result.citations[0].marker == "[s1]"
-    assert node.warnings == ["One source was truncated."]
-    assert node.research_result_payload == payload
-    assert node.source_count_label.text() == "1 source"
-
-
-def test_web_error_clears_stale_result_metadata():
-    node = WebNode(parent_node=None)
-    node.set_result("old answer", _result().sources, research_result=_result())
-
-    node.set_error("network unavailable")
-
-    assert node.research_result is None
-    assert node.research_result_payload == {}
-    assert node.sources == []
-    assert node.warnings == []
-    assert node.summary == ""

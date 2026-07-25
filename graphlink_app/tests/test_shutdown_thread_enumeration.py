@@ -1,20 +1,20 @@
 """Tests for ChatWindow._iter_shutdown_threads()/_shutdown_background_threads().
 
-Regression coverage for two related bugs in the hand-maintained shutdown thread list:
+Regression coverage for a bug in the hand-maintained shutdown thread list:
+it still named main_window.X_thread attributes (reasoning_thread,
+workflow_thread, graph_diff_thread, quality_gate_thread, code_review_thread,
+sandbox_thread, artifact_thread, gitlink_thread, code_exec_thread, and
+pycoder_exec_thread) that were removed from the window entirely once those
+plugins moved to a per-node node.worker_thread attribute. They were harmless
+no-ops (getattr(self, name, None) always returned None) but misleading.
 
-1. The shutdown list still named main_window.X_thread attributes (reasoning_thread,
-   workflow_thread, graph_diff_thread, quality_gate_thread, code_review_thread,
-   sandbox_thread, artifact_thread, gitlink_thread, and - once PyCoder got the same
-   per-node fix, see test_per_node_worker_threads.py - code_exec_thread and
-   pycoder_exec_thread) that were removed from the window entirely once those plugins
-   moved to a per-node node.worker_thread attribute. They were harmless no-ops
-   (getattr(self, name, None) always returned None) but misleading.
-
-2. Because closeEvent()/_shutdown_background_threads() only ever checked window-level
-   attributes, a running Code Sandbox/Artifact/PyCoder/Gitlink node's worker_thread was
-   never waited on at shutdown - the app could quit mid-execution (e.g. abandoning a
-   sandbox subprocess) instead of asking the user to wait, the way it already does for
-   the window-level threads (chat, web, ...).
+R5-closeout: the per-node Code Sandbox/Artifact/PyCoder/Gitlink worker-thread
+enumeration this file used to also cover was removed along with those legacy
+Qt node classes themselves (ported to the Qt-free backend/frontend stack) -
+graphlink_scene.py no longer has code_sandbox_nodes/artifact_nodes/
+pycoder_nodes/gitlink_nodes lists, and graphlink_window.py's
+_iter_shutdown_threads() no longer walks them. Only the window-level-attribute
+coverage remains relevant.
 
 Uses plain fake objects (not MagicMock) as the `self` for these unbound-method calls
 so that only attributes explicitly set below are considered present - a MagicMock
@@ -35,11 +35,7 @@ import graphlink_window
 
 
 class _FakeScene:
-    def __init__(self):
-        self.code_sandbox_nodes = []
-        self.artifact_nodes = []
-        self.pycoder_nodes = []
-        self.gitlink_nodes = []
+    pass
 
 
 class _FakeChatView:
@@ -48,11 +44,6 @@ class _FakeChatView:
 
     def scene(self):
         return self._scene
-
-
-class _FakeNode:
-    def __init__(self, worker_thread=None):
-        self.worker_thread = worker_thread
 
 
 def _fake_worker(is_running=True):
@@ -102,84 +93,6 @@ class TestIterShutdownThreadsHasNoGhostAttributes:
                 f"to a per-node worker_thread attribute; there is no longer a "
                 f"corresponding shared main_window attribute to check at shutdown."
             )
-
-
-class TestPerNodeWorkerThreadsAreWaitedOnAtShutdown:
-    def test_running_sandbox_node_worker_is_found(self):
-        scene = _FakeScene()
-        node = _FakeNode(worker_thread=_fake_worker())
-        scene.code_sandbox_nodes.append(node)
-        window = _FakeWindow(scene)
-
-        results = list(window._iter_shutdown_threads())
-
-        assert len(results) == 1
-        label, worker, clear_ref = results[0]
-        assert label == "code sandbox execution"
-        assert worker is node.worker_thread
-
-    def test_two_concurrent_sandbox_nodes_are_both_found(self):
-        scene = _FakeScene()
-        node_a = _FakeNode(worker_thread=_fake_worker())
-        node_b = _FakeNode(worker_thread=_fake_worker())
-        scene.code_sandbox_nodes.extend([node_a, node_b])
-        window = _FakeWindow(scene)
-
-        results = list(window._iter_shutdown_threads())
-
-        assert {worker for _, worker, _ in results} == {node_a.worker_thread, node_b.worker_thread}
-
-    def test_clear_ref_only_resets_its_own_node(self):
-        scene = _FakeScene()
-        node_a = _FakeNode(worker_thread=_fake_worker())
-        node_b = _FakeNode(worker_thread=_fake_worker())
-        scene.code_sandbox_nodes.extend([node_a, node_b])
-        window = _FakeWindow(scene)
-
-        for _, worker, clear_ref in window._iter_shutdown_threads():
-            if worker is node_a.worker_thread:
-                clear_ref()
-
-        assert node_a.worker_thread is None
-        assert node_b.worker_thread is not None
-
-    def test_artifact_pycoder_and_gitlink_node_workers_are_also_found(self):
-        scene = _FakeScene()
-        scene.artifact_nodes.append(_FakeNode(worker_thread=_fake_worker()))
-        scene.pycoder_nodes.append(_FakeNode(worker_thread=_fake_worker()))
-        scene.gitlink_nodes.append(_FakeNode(worker_thread=_fake_worker()))
-        window = _FakeWindow(scene)
-
-        labels = {label for label, _, _ in window._iter_shutdown_threads()}
-
-        assert labels == {"artifact workflow", "PyCoder execution", "Gitlink proposal"}
-
-    def test_shutdown_background_threads_waits_for_and_clears_a_finishing_sandbox_worker(self):
-        scene = _FakeScene()
-        worker = _fake_worker()
-        worker.wait.return_value = True
-        node = _FakeNode(worker_thread=worker)
-        scene.code_sandbox_nodes.append(node)
-        window = _FakeWindow(scene)
-
-        still_running = window._shutdown_background_threads(timeout_ms=100)
-
-        assert still_running == []
-        worker.stop.assert_called_once()
-        assert node.worker_thread is None
-
-    def test_shutdown_background_threads_reports_a_sandbox_worker_that_does_not_stop_in_time(self):
-        scene = _FakeScene()
-        worker = _fake_worker()
-        worker.wait.return_value = False
-        node = _FakeNode(worker_thread=worker)
-        scene.code_sandbox_nodes.append(node)
-        window = _FakeWindow(scene)
-
-        still_running = window._shutdown_background_threads(timeout_ms=100)
-
-        assert still_running == ["code sandbox execution"]
-        assert node.worker_thread is worker
 
 
 class TestDirectAttributeWorkersStillWork:

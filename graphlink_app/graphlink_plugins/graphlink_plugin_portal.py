@@ -4,18 +4,13 @@ from typing import Optional
 from PySide6.QtCore import QPointF
 
 from graphlink_connections import (
-    SystemPromptConnectionItem, PyCoderConnectionItem, ConversationConnectionItem,
+    SystemPromptConnectionItem, ConversationConnectionItem,
     HtmlConnectionItem
 )
 from graphlink_config import get_current_palette, get_surface_color
-from graphlink_pycoder import PyCoderNode
-from graphlink_plugins.graphlink_plugin_code_sandbox import CodeSandboxNode, CodeSandboxConnectionItem
 from graphlink_node import ChatNode, CodeNode
-from graphlink_web import WebNode, WebConnectionItem
 from graphlink_conversation_node import ConversationNode
 from graphlink_html_view import HtmlViewNode
-from graphlink_plugins.graphlink_plugin_gitlink import GitlinkNode, GitlinkConnectionItem
-from graphlink_plugins.graphlink_plugin_artifact import ArtifactNode, ArtifactConnectionItem
 from graphlink_memory import clone_history
 
 
@@ -69,40 +64,10 @@ _register_spec(
     node_cls=ConversationNode, connection_cls=ConversationConnectionItem, seedable=True,
 )
 _register_spec(
-    key="web", display_name="Web Research",
-    description="Searches, retrieves, and summarizes cited web sources under a bounded network policy.",
-    category="Reasoning & Research", icon="fa5s.globe",
-    node_cls=WebNode, connection_cls=WebConnectionItem, seedable=True,
-)
-_register_spec(
-    key="gitlink", display_name="Gitlink",
-    description="Loads a GitHub repository into structured XML context, prepares file-level changes, and only writes after explicit approval.",
-    category="Build & Execution", icon="fa5s.link",
-    node_cls=GitlinkNode, connection_cls=GitlinkConnectionItem, seedable=True,
-)
-_register_spec(
-    key="pycoder", display_name="Py-Coder",
-    description="Opens a Python execution environment to run code and get AI analysis.",
-    category="Build & Execution", icon="fa5s.laptop-code",
-    node_cls=PyCoderNode, connection_cls=PyCoderConnectionItem, seedable=True,
-)
-_register_spec(
-    key="code_sandbox", display_name="Execution Sandbox",
-    description="Runs Python inside an isolated virtualenv with your full user-account privileges (isolates installed packages, not the operating system) and lets you declare per-node requirements.txt dependencies.",
-    category="Build & Execution", icon="fa5s.shield-alt",
-    node_cls=CodeSandboxNode, connection_cls=CodeSandboxConnectionItem, seedable=True,
-)
-_register_spec(
     key="html_renderer", display_name="HTML Renderer",
     description="Adds a node to render HTML code from a parent node.",
     category="Build & Execution", icon="fa5s.window-maximize",
     node_cls=HtmlViewNode, connection_cls=HtmlConnectionItem, seedable=True,
-)
-_register_spec(
-    key="artifact", display_name="Artifact / Drafter",
-    description="A split-pane node for iteratively drafting and refining living documents (Markdown).",
-    category="Workflow & Drafting", icon="fa5s.pen-nib",
-    node_cls=ArtifactNode, connection_cls=ArtifactConnectionItem, seedable=True,
 )
 
 
@@ -190,51 +155,11 @@ class PluginPortal:
         )
 
         self._register_plugin(
-            name='Web Research',
-            description='Searches, retrieves, and summarizes cited web sources under a bounded network policy.',
-            callback=self._create_web_node,
-            category='Reasoning & Research',
-            icon='fa5s.globe',
-        )
-
-        self._register_plugin(
-            name='Gitlink',
-            description='Loads a GitHub repository into structured XML context, prepares file-level changes, and only writes after explicit approval.',
-            callback=self._create_gitlink_node,
-            category='Build & Execution',
-            icon='fa5s.link',
-        )
-
-        self._register_plugin(
-            name='Py-Coder',
-            description='Opens a Python execution environment to run code and get AI analysis.',
-            callback=self._create_pycoder_node,
-            category='Build & Execution',
-            icon='fa5s.laptop-code',
-        )
-
-        self._register_plugin(
-            name='Execution Sandbox',
-            description='Runs Python inside an isolated virtualenv with your full user-account privileges (isolates installed packages, not the operating system) and lets you declare per-node requirements.txt dependencies.',
-            callback=self._create_code_sandbox_node,
-            category='Build & Execution',
-            icon='fa5s.shield-alt',
-        )
-
-        self._register_plugin(
             name='HTML Renderer',
             description='Adds a node to render HTML code from a parent node.',
             callback=self._create_html_view_node,
             category='Build & Execution',
             icon='fa5s.window-maximize',
-        )
-
-        self._register_plugin(
-            name='Artifact / Drafter',
-            description='A split-pane node for iteratively drafting and refining living documents (Markdown).',
-            callback=self._create_artifact_node,
-            category='Workflow & Drafting',
-            icon='fa5s.pen-nib',
         )
 
     def get_plugins(self):
@@ -427,81 +352,6 @@ class PluginPortal:
             register_connection(connection)
         return prompt_note
 
-    def _create_pycoder_node(self):
-        scene = self.main_window.chat_view.scene()
-
-        def _wire(node):
-            node.run_clicked.connect(self.main_window.execute_pycoder_node)
-
-        return self.create_node(
-            node_cls=PyCoderNode,
-            connection_cls=PyCoderConnectionItem,
-            scene_nodes=scene.pycoder_nodes,
-            scene_connections=scene.pycoder_connections,
-            wire=_wire,
-            no_selection_message="Please select a node to branch from before adding Py-Coder.",
-            invalid_parent_message="Py-Coder can only branch from a valid conversational node.",
-        )
-
-    def _create_code_sandbox_node(self):
-        scene = self.main_window.chat_view.scene()
-        return self.create_node(
-            node_cls=CodeSandboxNode,
-            connection_cls=CodeSandboxConnectionItem,
-            scene_nodes=scene.code_sandbox_nodes,
-            scene_connections=scene.code_sandbox_connections,
-            wire=lambda node: node.sandbox_requested.connect(self.main_window.execute_code_sandbox_node),
-            clone_parent_history=True,
-            no_selection_message="Please select a node to branch from before adding an Execution Sandbox.",
-            invalid_parent_message="Execution Sandbox can only branch from a valid conversational node.",
-        )
-
-    def _create_artifact_node(self):
-        scene = self.main_window.chat_view.scene()
-
-        def _wire(node):
-            node.artifact_requested.connect(self.main_window.execute_artifact_node)
-            node.stop_requested.connect(self.main_window.stop_artifact_node)
-
-        return self.create_node(
-            node_cls=ArtifactNode,
-            connection_cls=ArtifactConnectionItem,
-            scene_nodes=scene.artifact_nodes,
-            scene_connections=scene.artifact_connections,
-            wire=_wire,
-            no_selection_message="Please select a node to branch from before adding an Artifact Drafter.",
-            invalid_parent_message="Artifact Drafter can only branch from a valid conversational node.",
-        )
-
-    def _create_gitlink_node(self):
-        scene = self.main_window.chat_view.scene()
-        return self.create_node(
-            node_cls=GitlinkNode,
-            connection_cls=GitlinkConnectionItem,
-            scene_nodes=scene.gitlink_nodes,
-            scene_connections=scene.gitlink_connections,
-            node_kwargs={"settings_manager": self.main_window.settings_manager},
-            wire=lambda node: node.gitlink_requested.connect(self.main_window.execute_gitlink_node),
-            clone_parent_history=True,
-            no_selection_message="Please select a node to branch from before adding Gitlink.",
-            invalid_parent_message="Gitlink can only branch from a valid conversational node.",
-        )
-
-    def _create_web_node(self):
-        scene = self.main_window.chat_view.scene()
-        return self.create_node(
-            node_cls=WebNode,
-            connection_cls=WebConnectionItem,
-            scene_nodes=scene.web_nodes,
-            scene_connections=scene.web_connections,
-            wire=lambda node: (
-                node.run_clicked.connect(self.main_window.execute_web_node),
-                node.cancel_requested.connect(self.main_window.cancel_web_node),
-            ),
-            resolve_branch_parent=False,
-            no_selection_message="Please select a valid node to branch from before adding a Web Node.",
-        )
-
     def _create_conversation_node(self):
         scene = self.main_window.chat_view.scene()
         selected_node = self.main_window.current_node
@@ -528,7 +378,7 @@ class PluginPortal:
     def _create_html_view_node(self):
         scene = self.main_window.chat_view.scene()
         selected_node = self.main_window.current_node
-        valid_parents = (ChatNode, CodeNode, PyCoderNode, CodeSandboxNode, WebNode, ConversationNode, GitlinkNode)
+        valid_parents = (ChatNode, CodeNode, ConversationNode)
 
         def _wire(node):
             node.render_requested.connect(self.main_window.execute_html_view_node)
