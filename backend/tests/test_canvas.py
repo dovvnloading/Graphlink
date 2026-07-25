@@ -5156,3 +5156,346 @@ def test_note_frame_container_ws_intents_mutate_and_publish():
         assert recorder.topics_seen().count("scene") >= 10, "every mutation publishes"
 
     asyncio.run(run())
+
+
+# -- R6.2: chart node (add_chart_node/resize_chart/toggle_chart_aspect_lock) --
+
+_CHART_DATA = {"type": "bar", "title": "Widgets Sold", "labels": ["Q1", "Q2"], "values": [10.0, 20.0]}
+
+
+def test_add_chart_node_creates_a_real_rendered_chart_connected_to_its_parent():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+
+    chart = doc.add_chart_node(50, 60, parent.id, "bar", dict(_CHART_DATA))
+
+    assert chart.kind == "chart"
+    assert chart.chart_type == "bar"
+    assert chart.chart_data == _CHART_DATA
+    assert chart.chart_source_node_id == parent.id
+    assert chart.chart_asset_version == 1
+    assert chart.chart_width == 680.0 and chart.chart_height == 500.0
+    assert chart.chart_aspect_locked is True
+    assert any(e.source == parent.id and e.target == chart.id for e in doc.edges.values())
+    asset = doc.get_image_asset(chart.chart_asset_id)
+    assert asset is not None
+    png_bytes, mime_type = asset
+    assert mime_type == "image/png"
+    assert png_bytes.startswith(b"\x89PNG\r\n\x1a\n")
+
+
+def test_add_chart_node_title_defaults_to_chart_when_data_has_none():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+
+    chart = doc.add_chart_node(0, 0, parent.id, "bar", {"labels": ["a"], "values": [1.0]})
+
+    assert chart.title == "Chart"
+
+
+def test_add_chart_node_rejects_an_unknown_parent():
+    doc = SceneDocument()
+    with pytest.raises(SceneError):
+        doc.add_chart_node(0, 0, "ghost", "bar", dict(_CHART_DATA))
+
+
+def test_add_chart_node_rejects_an_unsupported_chart_type():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    with pytest.raises(SceneError):
+        doc.add_chart_node(0, 0, parent.id, "not-a-real-type", dict(_CHART_DATA))
+
+
+def test_resize_chart_clamps_to_legacy_min_max_bounds():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    chart = doc.add_chart_node(0, 0, parent.id, "bar", dict(_CHART_DATA))
+    doc.toggle_chart_aspect_lock(chart.id)  # unlock so width/height are independent
+
+    doc.resize_chart(chart.id, 10.0, 10.0)
+    assert chart.chart_width == 440.0 and chart.chart_height == 320.0
+
+    doc.resize_chart(chart.id, 999999.0, 999999.0)
+    assert chart.chart_width == 2400.0 and chart.chart_height == 1800.0
+
+
+def test_resize_chart_preserves_aspect_ratio_when_locked():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    chart = doc.add_chart_node(0, 0, parent.id, "bar", dict(_CHART_DATA))
+    assert chart.chart_aspect_locked is True
+
+    doc.resize_chart(chart.id, 1000.0, 500.0)  # 2:1 ratio, within bounds
+
+    assert chart.chart_width / chart.chart_height == pytest.approx(2.0, rel=1e-6)
+
+
+def test_resize_chart_rerenders_and_bumps_asset_version_overwriting_same_id():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    chart = doc.add_chart_node(0, 0, parent.id, "bar", dict(_CHART_DATA))
+    original_asset_id = chart.chart_asset_id
+    original_bytes, _ = doc.get_image_asset(original_asset_id)
+
+    doc.resize_chart(chart.id, 900.0, 900.0)
+
+    assert chart.chart_asset_id == original_asset_id, "same id, overwritten in place"
+    assert chart.chart_asset_version == 2
+    new_bytes, _ = doc.get_image_asset(original_asset_id)
+    assert new_bytes != original_bytes
+
+
+def test_resize_chart_rejects_a_non_chart_node():
+    doc = SceneDocument()
+    plain = doc.add_node(0, 0, "plain")
+    with pytest.raises(SceneError):
+        doc.resize_chart(plain.id, 500.0, 500.0)
+
+
+def test_toggle_chart_aspect_lock_flips_flag_without_touching_size():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    chart = doc.add_chart_node(0, 0, parent.id, "bar", dict(_CHART_DATA))
+    width_before, height_before = chart.chart_width, chart.chart_height
+
+    doc.toggle_chart_aspect_lock(chart.id)
+
+    assert chart.chart_aspect_locked is False
+    assert (chart.chart_width, chart.chart_height) == (width_before, height_before)
+
+    doc.toggle_chart_aspect_lock(chart.id)
+    assert chart.chart_aspect_locked is True
+
+
+def test_toggle_chart_aspect_lock_rejects_a_non_chart_node():
+    doc = SceneDocument()
+    plain = doc.add_node(0, 0, "plain")
+    with pytest.raises(SceneError):
+        doc.toggle_chart_aspect_lock(plain.id)
+
+
+def test_removing_a_chart_node_cleans_up_its_asset_from_image_assets():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    chart = doc.add_chart_node(0, 0, parent.id, "bar", dict(_CHART_DATA))
+    asset_id = chart.chart_asset_id
+    assert doc.get_image_asset(asset_id) is not None
+
+    doc.remove_nodes([chart.id])
+
+    assert doc.get_image_asset(asset_id) is None
+
+
+def test_scene_payload_exposes_all_chart_fields():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    chart = doc.add_chart_node(0, 0, parent.id, "bar", dict(_CHART_DATA), chart_error="degraded")
+
+    payload = doc.scene_payload()
+    row = next(n for n in payload["nodes"] if n["id"] == chart.id)
+
+    assert row["chartType"] == "bar"
+    assert row["chartData"] == _CHART_DATA
+    assert row["chartError"] == "degraded"
+    assert row["chartAssetId"] == chart.chart_asset_id
+    assert row["chartAssetVersion"] == 1
+    assert row["chartWidth"] == 680.0
+    assert row["chartHeight"] == 500.0
+    assert row["chartAspectLocked"] is True
+    assert row["chartSourceNodeId"] == parent.id
+
+
+# -- R6.2: generateChart intent -----------------------------------------------
+#
+# document.add_chart_node is owned by a parallel workstream (backend/canvas.py's
+# chart SceneNode model/add_chart_node/resizeChart/toggleChartAspectLock) and
+# is stubbed onto the document instance in these tests rather than exercised
+# for real - these tests cover generate_chart's OWN contract (parent/
+# chart-type validation, branch-history-to-source-text plumbing, the
+# dispatcher hand-off, and the canonicalize-or-placeholder decision on
+# success), not add_chart_node's internals, which get their own coverage from
+# whichever test file that workstream ships.
+
+
+def _stub_add_chart_node(document):
+    """Records every add_chart_node call and returns a real (if minimally
+    faked) chart-kind SceneNode via the existing add_node primitive - good
+    enough to prove generate_chart's own on_success closure reaches
+    add_chart_node with the right arguments and that the returned node id is
+    handed back through the intent, without depending on the parallel
+    workstream's real implementation landing first."""
+    calls = []
+
+    def _add_chart_node(x, y, parent_id, chart_type, chart_data, *, chart_error=""):
+        node = document.add_node(x, y, "Chart")
+        node.kind = "chart"
+        calls.append({
+            "x": x, "y": y, "parent_id": parent_id, "chart_type": chart_type,
+            "chart_data": chart_data, "chart_error": chart_error,
+        })
+        return node
+
+    document.add_chart_node = _add_chart_node
+    return calls
+
+
+def test_generate_chart_intent_creates_a_real_chart_node_end_to_end():
+    class _FakeDispatcher:
+        def __init__(self):
+            self.calls = []
+
+        async def start_chart_generation(self, **kwargs):
+            self.calls.append(kwargs)
+            await kwargs["on_success"]({
+                "type": kwargs["chart_type"],
+                "title": "Q3 Sales",
+                "labels": ["A", "B"],
+                "values": [1, 2],
+                "xAxis": "Category",
+                "yAxis": "Value",
+            })
+
+    async def run():
+        bus = SessionBus("generate-chart-intent-test")
+        notifications = NotificationState()
+        bus.register_topic("notification", notifications.payload)
+        composer_document = ComposerDocument()
+        bus.register_topic("app-composer", composer_document.payload)
+        fake_dispatcher = _FakeDispatcher()
+        document = register_canvas(bus, notifications, fake_dispatcher, composer_document)
+        recorder = Recorder()
+        bus.attach(recorder)
+        add_chart_node_calls = _stub_add_chart_node(document)
+
+        root = await bus.dispatch_intent("scene", "addChatNode", [0, 0, "root question", True])
+        recorder.messages.clear()
+
+        result = await bus.dispatch_intent("scene", "generateChart", [root, "bar"])
+
+        assert result is not None
+        assert result in document.nodes
+        assert document.nodes[result].kind == "chart"
+        assert recorder.topics_seen().count("scene") >= 1
+
+        assert len(add_chart_node_calls) == 1
+        call = add_chart_node_calls[0]
+        assert call["parent_id"] == root
+        assert call["chart_type"] == "bar"
+        assert call["chart_error"] == ""
+        assert call["chart_data"]["labels"] == ["A", "B"]
+        assert call["chart_data"]["values"] == [1.0, 2.0]
+
+        assert len(fake_dispatcher.calls) == 1
+        dispatch_call = fake_dispatcher.calls[0]
+        assert dispatch_call["bus"] is bus
+        assert dispatch_call["notifications_state"] is notifications
+        assert dispatch_call["node_id"] == root
+        assert dispatch_call["chart_type"] == "bar"
+        assert dispatch_call["source_text"] == "User: root question"
+        assert callable(dispatch_call["on_success"])
+        assert callable(dispatch_call["on_failure"])
+
+    asyncio.run(run())
+
+
+def test_generate_chart_intent_rejects_an_invalid_parent_id_without_creating_a_node():
+    class _FakeDispatcher:
+        def __init__(self):
+            self.calls = []
+
+        async def start_chart_generation(self, **kwargs):
+            self.calls.append(kwargs)
+
+    async def run():
+        bus = SessionBus("generate-chart-invalid-parent-test")
+        notifications = NotificationState()
+        bus.register_topic("notification", notifications.payload)
+        composer_document = ComposerDocument()
+        bus.register_topic("app-composer", composer_document.payload)
+        fake_dispatcher = _FakeDispatcher()
+        document = register_canvas(bus, notifications, fake_dispatcher, composer_document)
+        _stub_add_chart_node(document)
+        node_count_before = len(document.nodes)
+
+        result = await bus.dispatch_intent("scene", "generateChart", ["ghost", "bar"])
+
+        assert result is None
+        assert len(document.nodes) == node_count_before
+        assert fake_dispatcher.calls == []
+        notice = await bus.publish("notification")
+        assert notice["visible"] is True
+        assert notice["msgType"] == "warning"
+        assert notice["message"] == (
+            "Please select a valid node to branch from before generating a chart."
+        )
+
+    asyncio.run(run())
+
+
+def test_generate_chart_intent_rejects_an_unsupported_chart_type_without_creating_a_node():
+    class _FakeDispatcher:
+        def __init__(self):
+            self.calls = []
+
+        async def start_chart_generation(self, **kwargs):
+            self.calls.append(kwargs)
+
+    async def run():
+        bus = SessionBus("generate-chart-invalid-type-test")
+        notifications = NotificationState()
+        bus.register_topic("notification", notifications.payload)
+        composer_document = ComposerDocument()
+        bus.register_topic("app-composer", composer_document.payload)
+        fake_dispatcher = _FakeDispatcher()
+        document = register_canvas(bus, notifications, fake_dispatcher, composer_document)
+        _stub_add_chart_node(document)
+
+        root = await bus.dispatch_intent("scene", "addChatNode", [0, 0, "root question", True])
+        node_count_before = len(document.nodes)
+
+        result = await bus.dispatch_intent("scene", "generateChart", [root, "not-a-real-chart-type"])
+
+        assert result is None
+        assert len(document.nodes) == node_count_before
+        assert fake_dispatcher.calls == []
+        notice = await bus.publish("notification")
+        assert notice["visible"] is True
+        assert notice["msgType"] == "warning"
+        assert notice["message"] == "Please choose a valid chart type before generating a chart."
+
+    asyncio.run(run())
+
+
+def test_generate_chart_intent_dispatcher_level_failure_shows_notification_without_creating_a_node():
+    # Mirrors this feature's own contract: on agent failure (the dispatcher
+    # invokes on_failure, never on_success - matching
+    # start_chart_generation's real top-level-"error"-key/timeout/exception
+    # branches), a notification is shown and nothing is created.
+    class _FakeDispatcher:
+        def __init__(self):
+            self.calls = []
+
+        async def start_chart_generation(self, **kwargs):
+            self.calls.append(kwargs)
+            kwargs["on_failure"]("Chart generation failed: no chartable data.")
+
+    async def run():
+        bus = SessionBus("generate-chart-dispatcher-failure-test")
+        notifications = NotificationState()
+        bus.register_topic("notification", notifications.payload)
+        composer_document = ComposerDocument()
+        bus.register_topic("app-composer", composer_document.payload)
+        fake_dispatcher = _FakeDispatcher()
+        document = register_canvas(bus, notifications, fake_dispatcher, composer_document)
+        add_chart_node_calls = _stub_add_chart_node(document)
+
+        root = await bus.dispatch_intent("scene", "addChatNode", [0, 0, "root question", True])
+        node_count_before = len(document.nodes)
+
+        result = await bus.dispatch_intent("scene", "generateChart", [root, "bar"])
+
+        assert result is None
+        assert len(document.nodes) == node_count_before
+        assert add_chart_node_calls == []
+
+    asyncio.run(run())

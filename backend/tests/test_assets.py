@@ -113,3 +113,78 @@ def test_asset_ids_do_not_collide_across_sessions_with_identical_creation_order(
 
     response_b = client.get(f"/api/assets/{node_b.image_asset_id}?session=session-a")
     assert response_b.status_code == 404
+
+
+# -- R6.2: GET /api/assets/chart/{node_id}/export -----------------------------
+
+_CHART_DATA = {"type": "bar", "title": "Widgets Sold", "labels": ["Q1", "Q2"], "values": [10.0, 20.0]}
+
+
+def test_export_chart_returns_a_real_higher_resolution_png():
+    client = make_client()
+    bus = client.app.state.bus
+    document = bus.session("default").canvas_document
+    parent = document.add_node(0, 0, "parent")
+    chart = document.add_chart_node(0, 0, parent.id, "bar", dict(_CHART_DATA))
+
+    display_bytes, _ = document.get_image_asset(chart.chart_asset_id)
+    response = client.get(f"/api/assets/chart/{chart.id}/export")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/png"
+    assert response.content.startswith(b"\x89PNG\r\n\x1a\n")
+    # A real 3x re-render, not a copy of the cached display asset - export is
+    # a distinct render pass at CHART_EXPORT_DPI_SCALE, so its bytes (and, in
+    # practice, its size at 3x the pixel dimensions) differ from the display
+    # asset's.
+    assert response.content != display_bytes
+    assert len(response.content) > len(display_bytes)
+
+
+def test_export_chart_content_disposition_uses_the_sanitized_title():
+    client = make_client()
+    bus = client.app.state.bus
+    document = bus.session("default").canvas_document
+    parent = document.add_node(0, 0, "parent")
+    chart = document.add_chart_node(
+        0, 0, parent.id, "bar", {"type": "bar", "title": "Q1 Sales / Report!!", "labels": ["a"], "values": [1.0]}
+    )
+
+    response = client.get(f"/api/assets/chart/{chart.id}/export")
+
+    assert response.headers["content-disposition"] == 'attachment; filename="Q1_Sales_Report.png"'
+
+
+def test_export_chart_for_unknown_node_returns_404_json():
+    client = make_client()
+
+    response = client.get("/api/assets/chart/nope-not-real/export")
+
+    assert response.status_code == 404
+    assert response.json() == {"error": "unknown chart"}
+
+
+def test_export_chart_for_a_non_chart_node_returns_404_json():
+    client = make_client()
+    bus = client.app.state.bus
+    document = bus.session("default").canvas_document
+    node = document.add_node(0, 0, "plain node")
+
+    response = client.get(f"/api/assets/chart/{node.id}/export")
+
+    assert response.status_code == 404
+    assert response.json() == {"error": "unknown chart"}
+
+
+def test_export_chart_scopes_by_session_query_param():
+    client = make_client()
+    bus = client.app.state.bus
+    document_a = bus.session("session-a").canvas_document
+    parent_a = document_a.add_node(0, 0, "parent")
+    chart_a = document_a.add_chart_node(0, 0, parent_a.id, "bar", dict(_CHART_DATA))
+
+    default_response = client.get(f"/api/assets/chart/{chart_a.id}/export")
+    assert default_response.status_code == 404
+
+    scoped_response = client.get(f"/api/assets/chart/{chart_a.id}/export?session=session-a")
+    assert scoped_response.status_code == 200

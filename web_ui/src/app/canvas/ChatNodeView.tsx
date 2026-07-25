@@ -13,8 +13,8 @@ import { LOD_ZOOM_THRESHOLD } from "./canvasConstants";
  * honest disabled+title label rather than a fake action or a silent drop
  * (an R3.4 live-drive audit found several legacy ChatNode menu items had
  * been dropped with zero acknowledgment - fixed here): Regenerate (assistant
- * nodes only, needs the R4 agent layer), Key Takeaway/Explainer Note/Chart/
- * Image generation (R4, same agent-layer blocker), Export (R6 session/export
+ * nodes only, needs the R4 agent layer), Key Takeaway/Explainer Note
+ * generation (R4, same agent-layer blocker), Export (R6 session/export
  * work), Open Document View (the document-viewer island isn't wired into the
  * SPA overlay system yet), and Hide Other Branches (the legacy scene's
  * branch-visibility toggle has no backend/frontend equivalent at all yet -
@@ -35,6 +35,13 @@ import { LOD_ZOOM_THRESHOLD } from "./canvasConstants";
  * generateImage intent, with no visibility/enablement gating beyond what
  * already existed - matches legacy's own unconditional enablement (the
  * empty-content case is caught server-side with a warning banner instead).
+ * "Generate Chart" is likewise no longer deferred as of R6.2: it now opens a
+ * real click-to-expand submenu (CHART_TYPE_OPTIONS below) offering the 5
+ * chart types in legacy's own menu order (Bar/Line/Histogram/Pie/Sankey),
+ * each dispatching the real generateChart intent with this node as the
+ * parent. Key Takeaway/Explainer Note remain honestly deferred (still no
+ * agent-layer support of their own) - the stale "Chart" mention in their old
+ * shared R4-blocker note above has been removed accordingly.
  */
 
 export interface ChatNodeData extends Record<string, unknown> {
@@ -47,6 +54,7 @@ export interface ChatNodeData extends Record<string, unknown> {
   onUndockChild: (childId: string) => void;
   onRegenerate: () => void;
   onGenerateImage: () => void;
+  onGenerateChart: (chartType: string) => void;
 }
 
 export type ChatFlowNode = Node<ChatNodeData, "chat">;
@@ -55,6 +63,19 @@ interface MenuPosition {
   x: number;
   y: number;
 }
+
+// R6.2: legacy's own Generate Chart submenu order, confirmed during recon
+// (graphlink_canvas_chart_item.py / the legacy chat-node menu build) - Bar,
+// Line, Histogram, Pie, Sankey. `value` is the exact lowercase chart_type
+// string backend/canvas.py's generateChart intent (and
+// graphlink_chart_data.py's SUPPORTED_CHART_TYPES) expects.
+const CHART_TYPE_OPTIONS: { value: string; label: string }[] = [
+  { value: "bar", label: "Bar" },
+  { value: "line", label: "Line" },
+  { value: "histogram", label: "Histogram" },
+  { value: "pie", label: "Pie" },
+  { value: "sankey", label: "Sankey" },
+];
 
 function ChatNodeMenu({
   position,
@@ -67,6 +88,7 @@ function ChatNodeMenu({
   onUndockChild,
   onRegenerate,
   onGenerateImage,
+  onGenerateChart,
   onClose,
 }: {
   position: MenuPosition;
@@ -79,9 +101,11 @@ function ChatNodeMenu({
   onUndockChild: (childId: string) => void;
   onRegenerate: () => void;
   onGenerateImage: () => void;
+  onGenerateChart: (chartType: string) => void;
   onClose: () => void;
 }) {
   const menuRef = useRef<HTMLDivElement>(null);
+  const [chartMenuOpen, setChartMenuOpen] = useState(false);
 
   useEffect(() => {
     function onPointerDown(event: PointerEvent) {
@@ -164,9 +188,37 @@ function ChatNodeMenu({
       <button type="button" role="menuitem" disabled title="AI generation lands in R4">
         Generate Explainer Note
       </button>
-      <button type="button" role="menuitem" disabled title="AI generation lands in R4">
+      {/* R6.2: a real click-to-expand submenu (not disabled) - same
+          click-to-toggle popover interaction GroupColorPicker.tsx already
+          established for a nested picker inside a single flat menu list,
+          rather than inventing a hover-triggered flyout with no other
+          precedent anywhere in this codebase. */}
+      <button
+        type="button"
+        role="menuitem"
+        aria-haspopup="true"
+        aria-expanded={chartMenuOpen}
+        onClick={() => setChartMenuOpen((open) => !open)}
+      >
         Generate Chart
       </button>
+      {chartMenuOpen && (
+        <div className="chat-node-submenu" role="menu" aria-label="Chart type">
+          {CHART_TYPE_OPTIONS.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                onGenerateChart(option.value);
+                onClose();
+              }}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+      )}
       <button
         type="button"
         role="menuitem"
@@ -257,6 +309,7 @@ export function ChatNodeView({ data, selected }: NodeProps<ChatFlowNode>) {
           onUndockChild={data.onUndockChild}
           onRegenerate={data.onRegenerate}
           onGenerateImage={data.onGenerateImage}
+          onGenerateChart={data.onGenerateChart}
           onClose={() => setMenuPosition(null)}
         />
       )}

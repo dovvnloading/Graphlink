@@ -27,6 +27,8 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
+from graphlink_chart_data import ChartDataError, canonicalize_chart_data, SUPPORTED_CHART_TYPES
+from graphlink_chart_rendering import render_chart_png
 from graphlink_grid_view_settings import (
     GRID_SIZE_PRESETS,
     GRID_STYLE_PRESETS,
@@ -105,6 +107,20 @@ GROUP_MEMBER_DEFAULT_WIDTH = 220.0
 GROUP_MEMBER_DEFAULT_HEIGHT = 120.0
 GROUP_COLLAPSED_WIDTH = 260.0
 GROUP_COLLAPSED_HEIGHT = 50.0
+
+# R6.2: Chart node - legacy ChartItem's own MIN_WIDTH/MIN_HEIGHT/MAX_WIDTH/
+# MAX_HEIGHT bounds, enforced server-side by resize_chart below (the
+# frontend NodeResizer is the one that would normally clamp a drag, but the
+# backend is the actual source of truth for the stored size, so it clamps
+# independently rather than trusting whatever the client sends).
+# DEFAULT_WIDTH/DEFAULT_HEIGHT are NOT repeated here - they live directly as
+# SceneNode.chart_width/chart_height's own dataclass field defaults below,
+# and add_chart_node reads them off a freshly-constructed node rather than a
+# second literal, so the two can never drift apart.
+CHART_MIN_WIDTH = 440.0
+CHART_MIN_HEIGHT = 320.0
+CHART_MAX_WIDTH = 2400.0
+CHART_MAX_HEIGHT = 1800.0
 
 
 class SceneError(ValueError):
@@ -471,6 +487,60 @@ class SceneNode:
     # every other kind.
     group_width: float | None = None
     group_height: float | None = None
+    # R6.2: Chart node - graphlink_canvas_chart_item.py's ChartItem, ported
+    # to a backend-rendered PNG (see graphlink_chart_rendering.py's own
+    # module docstring for why - matplotlib+FigureCanvasAgg was already
+    # Qt-free upstream; only the QImage-wrapping step needed replacing).
+    #
+    # chart_type is one of SUPPORTED_CHART_TYPES (graphlink_chart_data.py):
+    # "bar" | "line" | "pie" | "histogram" | "sankey". Unused (default "")
+    # for every other kind.
+    chart_type: str = ""
+    # ALREADY-canonicalized chart data (canonicalize_chart_data's own output
+    # shape) - add_chart_node below does NOT call canonicalize_chart_data
+    # itself; the caller (backend/agents.py's generateChart intent, via
+    # AgentDispatcher.start_chart_generation) is responsible for that, so it
+    # can catch ChartDataError itself and still create a placeholder chart
+    # with chart_error set on failure, matching legacy's never-hard-fail
+    # contract, rather than add_chart_node raising and aborting node
+    # creation entirely.
+    chart_data: dict[str, Any] = field(default_factory=dict)
+    # Non-empty if generation/canonicalization degraded to a placeholder -
+    # the chart still has a real (if minimal) chart_asset_id and renders
+    # SOMETHING, never a blank/broken state (mirrors ChartDataAgent's own
+    # get_response/repair_chart_data/heuristic_chart_data degrade-gracefully
+    # chain, which never hard-fails outright for a genuine LLM response).
+    chart_error: str = ""
+    # Opaque key into the EXISTING SceneDocument.image_assets dict (REUSED,
+    # not a parallel store - same dict R3.21's image nodes already use, see
+    # that field's own transport-decision comment on image_assets) - the
+    # rendered display-resolution PNG. Export (the 3x-resolution download)
+    # re-renders fresh rather than reading this asset - see backend/assets.py.
+    chart_asset_id: str = ""
+    # Incremented every time chart_asset_id's bytes are (re)written (by
+    # add_chart_node's initial render, or resize_chart's re-render) - lets
+    # the frontend cache-bust the <img> src with a version query param after
+    # a resize re-render, since the asset id itself never changes.
+    chart_asset_version: int = 0
+    # Legacy ChartItem.DEFAULT_WIDTH/DEFAULT_HEIGHT - add_chart_node reads
+    # these dataclass defaults directly (not a second literal) when
+    # rendering a freshly-created chart's first PNG, so the two can never
+    # drift apart. resize_chart clamps any later change into
+    # [CHART_MIN_WIDTH, CHART_MAX_WIDTH] / [CHART_MIN_HEIGHT, CHART_MAX_HEIGHT].
+    chart_width: float = 680.0
+    chart_height: float = 500.0
+    # Legacy ChartItem.aspect_ratio_locked's own default (True, unlike most
+    # bool fields on this dataclass which default False) - resize_chart
+    # consults this to decide whether to re-derive a dimension after
+    # clamping; toggle_chart_aspect_lock flips it without touching size or
+    # re-rendering.
+    chart_aspect_locked: bool = True
+    # Provenance: which node's content the chart data was generated from -
+    # always the parent branch-point edge's source in this implementation
+    # (legacy's rarer "different node" case is a known, accepted
+    # simplification, not replicated). Unused (default "") for every other
+    # kind.
+    chart_source_node_id: str = ""
 
 
 @dataclass
@@ -1765,6 +1835,148 @@ class SceneDocument:
         # against for every other node kind.
         self._detach_node_from_membership(node_id)
 
+    # -- R6.2: chart node ----------------------------------------------------
+
+    def add_chart_node(
+        self,
+        x: float,
+        y: float,
+        parent_id: str,
+        chart_type: str,
+        chart_data: dict[str, Any],
+        *,
+        chart_error: str = "",
+    ) -> SceneNode:
+        """The Chart node's creation primitive - same required-parent
+        posture as every other branch-point-child kind (web_research/
+        artifact/gitlink/pycoder/code_sandbox above): a chart never exists
+        unparented, it is always generated FROM some other node's content.
+        chart_type MUST be one of SUPPORTED_CHART_TYPES (SceneError
+        otherwise, same "validate up front, never construct a half-invalid
+        node" posture create_frame/create_container use for their own
+        item_ids checks).
+
+        chart_data is assumed ALREADY canonicalized by the CALLER - this
+        method deliberately does NOT call canonicalize_chart_data itself
+        (see chart_data's own field comment on SceneNode for the full
+        reasoning: the WS-intent wrapper needs to be able to catch
+        ChartDataError itself and still create a placeholder chart with
+        chart_error set, rather than have creation abort entirely).
+
+        Title mirrors legacy ChartItem's own `self.title = str(self.data.
+        get("title") or "Chart")` - the chart's own title field if present,
+        else the literal "Chart" (not a chart-type-specific default; that is
+        genuinely what legacy does).
+
+        Renders the display PNG immediately at the freshly-constructed
+        node's OWN chart_width/chart_height (the dataclass defaults, 680x500
+        - read off `node`, not a second literal, so they can never drift
+        apart - see those fields' own comments), stores the bytes in the
+        SAME image_assets dict R3.21's image nodes already use (reused, not
+        a parallel store), and sets chart_asset_version = 1 for this first
+        render."""
+        if parent_id not in self.nodes:
+            raise SceneError(f"unknown parent node: {parent_id}")
+        normalized_type = str(chart_type or "").strip().lower()
+        if normalized_type not in SUPPORTED_CHART_TYPES:
+            raise SceneError(f"unsupported chart type: {chart_type}")
+
+        node_id = f"n{next(self._counter)}"
+        safe_chart_data = dict(chart_data) if isinstance(chart_data, dict) else {}
+        title = str(safe_chart_data.get("title") or "Chart")
+        node = SceneNode(
+            id=node_id,
+            x=float(x),
+            y=float(y),
+            title=title,
+            kind="chart",
+            chart_type=normalized_type,
+            chart_data=safe_chart_data,
+            chart_error=str(chart_error),
+            chart_source_node_id=parent_id,
+        )
+
+        png_bytes = render_chart_png(
+            node.chart_type, node.chart_data, node.chart_width, node.chart_height, dpi_scale=1.0,
+        )
+        asset_id = f"chart{uuid.uuid4().hex}"
+        self.image_assets[asset_id] = (png_bytes, "image/png")
+        node.chart_asset_id = asset_id
+        node.chart_asset_version = 1
+
+        self.nodes[node_id] = node
+        self.connect(parent_id, node_id)
+        return node
+
+    def resize_chart(self, node_id: str, width: float, height: float) -> None:
+        """Chart kind only (SceneError otherwise). Clamps (width, height)
+        into [CHART_MIN_WIDTH, CHART_MAX_WIDTH] / [CHART_MIN_HEIGHT,
+        CHART_MAX_HEIGHT]. If chart_aspect_locked, preserves the aspect
+        ratio of the REQUESTED (width, height) pair AS SENT - the frontend/
+        NodeResizer is responsible for computing a ratio-correct pair before
+        ever calling this; UNLIKE legacy ChartItem._clamp_size (which
+        consults self.resize_start_aspect_ratio, a value frozen at drag
+        START), this method has no concept of an in-progress gesture, so it
+        only ever has the two numbers it was given to work from. After the
+        plain min/max clamp, if aspect-locked, re-derives whichever
+        dimension keeps the REQUESTED ratio relative to the (already-
+        clamped) other dimension - same "pick whichever correction moves the
+        clamped pair least" algorithm legacy's own _clamp_size uses - then
+        re-clamps once more, so the final stored size never violates either
+        the lock or the min/max bounds even after that re-derivation.
+
+        Re-renders the PNG at the final clamped size, OVERWRITING
+        self.image_assets[chart_asset_id] IN PLACE (same id, new bytes - the
+        old bytes are simply replaced, never left behind) and increments
+        chart_asset_version so the frontend can cache-bust the <img> src."""
+        node = self.nodes.get(node_id)
+        if node is None:
+            raise SceneError(f"unknown node: {node_id}")
+        if node.kind != "chart":
+            raise SceneError(f"node is not a chart node: {node_id}")
+
+        requested_width = float(width)
+        requested_height = float(height)
+        clamped_width = min(CHART_MAX_WIDTH, max(CHART_MIN_WIDTH, requested_width))
+        clamped_height = min(CHART_MAX_HEIGHT, max(CHART_MIN_HEIGHT, requested_height))
+
+        if node.chart_aspect_locked and requested_width > 0 and requested_height > 0:
+            aspect_ratio = requested_width / requested_height
+            width_from_height = clamped_height * aspect_ratio
+            height_from_width = clamped_width / aspect_ratio
+            if abs(width_from_height - clamped_width) < abs(height_from_width - clamped_height):
+                clamped_width = width_from_height
+                clamped_height = clamped_width / aspect_ratio
+            else:
+                clamped_height = height_from_width
+                clamped_width = clamped_height * aspect_ratio
+            # Re-deriving one dimension from the other can overshoot the
+            # opposite bound for an extreme aspect ratio - one more clamp
+            # keeps the final pair inside both bounds unconditionally.
+            clamped_width = min(CHART_MAX_WIDTH, max(CHART_MIN_WIDTH, clamped_width))
+            clamped_height = min(CHART_MAX_HEIGHT, max(CHART_MIN_HEIGHT, clamped_height))
+
+        node.chart_width = clamped_width
+        node.chart_height = clamped_height
+
+        png_bytes = render_chart_png(
+            node.chart_type, node.chart_data, node.chart_width, node.chart_height, dpi_scale=1.0,
+        )
+        self.image_assets[node.chart_asset_id] = (png_bytes, "image/png")
+        node.chart_asset_version += 1
+
+    def toggle_chart_aspect_lock(self, node_id: str) -> None:
+        """Chart kind only (SceneError otherwise). Flips chart_aspect_locked.
+        No re-render - the current PNG is still correct for the current
+        size regardless of the lock flag; only a later resize_chart call's
+        BEHAVIOR changes."""
+        node = self.nodes.get(node_id)
+        if node is None:
+            raise SceneError(f"unknown node: {node_id}")
+        if node.kind != "chart":
+            raise SceneError(f"node is not a chart node: {node_id}")
+        node.chart_aspect_locked = not node.chart_aspect_locked
+
     def _branch_parent_edge(self, node_id: str) -> SceneEdge | None:
         """R6.1: the shared 'find the edge whose target == node_id' lookup
         chat_branch_history/get_branch_root/regenerate_response/
@@ -2100,6 +2312,12 @@ class SceneDocument:
                 # deleted images would accumulate in memory forever.
                 if node.image_asset_id:
                     self.image_assets.pop(node.image_asset_id, None)
+                # R6.2: a chart node's rendered PNG lives in the SAME
+                # image_assets dict (reused, not a parallel store - see
+                # chart_asset_id's own field comment on SceneNode) - same
+                # leak-prevention reasoning as image_asset_id just above.
+                if node.chart_asset_id:
+                    self.image_assets.pop(node.chart_asset_id, None)
                 self._detach_node_from_membership(node_id)
 
     def _detach_node_from_membership(self, node_id: str) -> None:
@@ -2268,6 +2486,16 @@ class SceneDocument:
                     "isLocked": n.is_locked,
                     "groupWidth": n.group_width,
                     "groupHeight": n.group_height,
+                    # R6.2: Chart node.
+                    "chartType": n.chart_type,
+                    "chartData": dict(n.chart_data),
+                    "chartError": n.chart_error,
+                    "chartAssetId": n.chart_asset_id,
+                    "chartAssetVersion": n.chart_asset_version,
+                    "chartWidth": n.chart_width,
+                    "chartHeight": n.chart_height,
+                    "chartAspectLocked": n.chart_aspect_locked,
+                    "chartSourceNodeId": n.chart_source_node_id,
                 }
                 for n in self.nodes.values()
             ],
@@ -2343,6 +2571,56 @@ def _research_result_wire(result) -> dict[str, Any]:
         ],
         "warnings": list(result.warnings),
         "providerSnapshot": dict(result.provider_snapshot),
+    }
+
+
+def _chart_source_text(branch_history: list[dict]) -> str:
+    """R6.2: flattens chat_branch_history's own {"role","content"} list (the
+    SAME branch walk web_research/pycoder/gitlink already reuse via
+    document.chat_branch_history - see this module's own docstring
+    convention) into the single plain-text string ChartDataAgent.get_response
+    expects. NOT a new branch-walking helper (chat_branch_history already IS
+    that, reused as-is) - just the formatting step its list-of-dicts shape
+    needs before it can be handed to an agent whose interface is a flat
+    string, mirroring legacy graphlink_window_actions.py's own
+    _build_chart_source_text/history_to_transcript role for the same
+    call site. Empty/whitespace-only turns are skipped so an accidental blank
+    ChatNode doesn't inject a stray blank line."""
+    lines = []
+    for turn in branch_history:
+        content = str(turn.get("content") or "").strip()
+        if not content:
+            continue
+        speaker = "User" if turn.get("role") == "user" else "Assistant"
+        lines.append(f"{speaker}: {content}")
+    return "\n\n".join(lines)
+
+
+def _placeholder_chart_data(chart_type: str) -> dict[str, Any]:
+    """R6.2: a minimal, already-canonical-SHAPED payload (matching
+    canonicalize_chart_data's own output keys exactly) for the rare
+    defensive case in generate_chart below where ChartDataAgent's response
+    carries no top-level "error" key yet still fails
+    canonicalize_chart_data - see that function's own call site for the full
+    reasoning. One trivial data point per chart kind: just enough for
+    render_chart_png to draw SOMETHING rather than leave the request a
+    silent no-op, matching this feature's "never a blank/broken state"
+    contract. NOT run back through canonicalize_chart_data itself - callers
+    that need genuinely validated data should generate it properly instead."""
+    if chart_type == "sankey":
+        return {"type": "sankey", "title": "Chart", "flows": [{"source": "A", "target": "B", "value": 1.0}]}
+    if chart_type == "histogram":
+        return {
+            "type": "histogram", "title": "Chart", "values": [0.0, 1.0], "bins": 2,
+            "xAxis": "Value", "yAxis": "Frequency",
+        }
+    return {
+        "type": chart_type,
+        "title": "Chart",
+        "labels": ["A", "B"],
+        "values": [1.0, 1.0],
+        "xAxis": "Category" if chart_type == "bar" else "Sequence",
+        "yAxis": "Value",
     }
 
 
@@ -2856,6 +3134,98 @@ def register_canvas(
     async def cancel_artifact_request(request_id):
         agent_dispatcher.cancel_artifact(request_id)
 
+    # -- R6.2: Chart node ------------------------------------------------------
+    #
+    # Unlike every branch-point-child kind above (Web Research/Artifact/
+    # Gitlink/Py-Coder/Execution Sandbox), Chart has no separate "create an
+    # empty node, then run generation on it" split - generateChart is a
+    # single combined create+generate action, so there is no addChartNode
+    # intent at all: the SceneNode is only ever created (by
+    # document.add_chart_node, in _on_success below) once real chart data
+    # actually exists, mirroring legacy's own ChartWorkerThread flow (a
+    # transient loading state anchored on the SOURCE node, not a pre-created
+    # placeholder chart node - see graphlink_window_actions.py's
+    # generate_chart/handle_chart_data).
+
+    async def generate_chart(parent_node_id, chart_type):
+        if not parent_node_id or parent_node_id not in document.nodes:
+            notifications.show(
+                "Please select a valid node to branch from before generating a chart.",
+                "warning",
+            )
+            await bus.publish("notification")
+            return None
+
+        normalized_chart_type = str(chart_type or "").strip().lower()
+        if normalized_chart_type not in SUPPORTED_CHART_TYPES:
+            notifications.show(
+                "Please choose a valid chart type before generating a chart.",
+                "warning",
+            )
+            await bus.publish("notification")
+            return None
+
+        parent = document.nodes[parent_node_id]
+        branch_history = document.chat_branch_history(parent_node_id)
+        source_text = _chart_source_text(branch_history)
+
+        result_holder: dict[str, str] = {}
+
+        async def _on_success(result):
+            try:
+                chart_data = canonicalize_chart_data(result, normalized_chart_type)
+                chart_error = ""
+            except ChartDataError as exc:
+                # R6.2 contract: ChartDataAgent's own validate_chart_data
+                # pipeline (repair round trip, then heuristic fallback)
+                # already tries hard to guarantee canonical output before
+                # ever returning successfully - this is the rare defensive
+                # case where it still somehow didn't. Never a silent no-op:
+                # still create a real chart node with a minimal placeholder
+                # shape and chart_error set, same "degrade gracefully, never
+                # drop the request" contract as the agent's own internal
+                # fallback chain.
+                chart_data = _placeholder_chart_data(normalized_chart_type)
+                chart_error = f"The generated chart data could not be validated: {exc}"
+            node = document.add_chart_node(
+                parent.x + MESSAGE_VERTICAL_SPACING,
+                parent.y,
+                parent_node_id,
+                normalized_chart_type,
+                chart_data,
+                chart_error=chart_error,
+            )
+            result_holder["node_id"] = node.id
+            await bus.publish("scene")
+
+        def _on_failure(message):
+            # Matches ChartWorkerThread's own error path (and this feature's
+            # explicit contract): a genuinely unrecoverable agent-side
+            # failure (get_response's own top-level "error" key, or a
+            # timeout/exception) shows a notification and creates nothing -
+            # start_chart_generation above already shows that notification,
+            # so there is nothing left for this callback to do.
+            pass
+
+        await agent_dispatcher.start_chart_generation(
+            bus=bus,
+            notifications_state=notifications,
+            node_id=parent_node_id,
+            chart_type=normalized_chart_type,
+            source_text=source_text,
+            on_success=_on_success,
+            on_failure=_on_failure,
+        )
+        return result_holder.get("node_id")
+
+    async def resize_chart(node_id, width, height):
+        document.resize_chart(node_id, width, height)
+        await publish_scene()
+
+    async def toggle_chart_aspect_lock(node_id):
+        document.toggle_chart_aspect_lock(node_id)
+        await publish_scene()
+
     # -- R5.3: Gitlink node --------------------------------------------------
     #
     # Reuses the existing generic pending_request_id field as the busy/
@@ -3327,6 +3697,11 @@ def register_canvas(
     # pair above.
     bus.register_intent("scene", "sendArtifactMessage", send_artifact_message)
     bus.register_intent("scene", "cancelArtifactRequest", cancel_artifact_request)
+    # R6.2: Chart - a single combined create+generate action, unlike every
+    # node-creation flow above - see generate_chart's own docstring.
+    bus.register_intent("scene", "generateChart", generate_chart)
+    bus.register_intent("scene", "resizeChart", resize_chart)
+    bus.register_intent("scene", "toggleChartAspectLock", toggle_chart_aspect_lock)
     bus.register_intent("scene", "moveNode", move_node)
     bus.register_intent("scene", "removeNodes", remove_nodes)
     bus.register_intent("scene", "connectNodes", connect_nodes)

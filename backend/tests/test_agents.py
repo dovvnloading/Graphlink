@@ -4266,3 +4266,203 @@ def test_dispose_pycoder_repl_stops_and_removes_the_repl():
         assert "n1" not in dispatcher._pycoder_repls
 
     asyncio.run(run())
+
+
+# -- R6.2: start_chart_generation/_call_chart_agent - the independent chart
+# generation slot -------------------------------------------------------------
+#
+# Mirrors the R5.2 artifact section's own structure: these tests never touch
+# Ollama/api_provider.chat plumbing - start_chart_generation's only real
+# dependency is ChartDataAgent.get_response, monkeypatched directly on the
+# class (agents.py constructs a fresh ChartDataAgent() instance per call, so
+# patching the class method is the seam, mirroring how ArtifactAgent.
+# get_response and WebResearchService.run are patched as class-level seams
+# for their own dispatch paths).
+
+
+def _make_chart_env():
+    bus = SessionBus("agents-chart-test")
+    notifications = NotificationState()
+    bus.register_topic("notification", notifications.payload)
+    bus.register_topic("scene", lambda: {})
+    dispatcher = AgentDispatcher(_FakeSettingsManager())
+    return bus, notifications, dispatcher
+
+
+def test_call_chart_agent_calls_get_response_and_returns_the_parsed_dict(monkeypatch):
+    captured = []
+
+    def fake_get_response(self, text, chart_type):
+        captured.append((text, chart_type))
+        return '{"type": "bar", "title": "T", "labels": ["A"], "values": [1]}'
+
+    monkeypatch.setattr(agents_module.ChartDataAgent, "get_response", fake_get_response)
+
+    result = agents_module._call_chart_agent("some source text", "bar")
+
+    assert result == {"type": "bar", "title": "T", "labels": ["A"], "values": [1]}
+    assert captured == [("some source text", "bar")]
+
+
+def test_start_chart_generation_calls_on_success_with_the_parsed_result_then_clears_the_slot(monkeypatch):
+    def fake_get_response(self, text, chart_type):
+        return '{"type": "bar", "title": "T", "labels": ["A", "B"], "values": [1, 2]}'
+
+    monkeypatch.setattr(agents_module.ChartDataAgent, "get_response", fake_get_response)
+
+    async def run():
+        bus, notifications, dispatcher = _make_chart_env()
+        successes = []
+        failures = []
+
+        # Directly awaited (NOT scheduled via asyncio.create_task) - see
+        # start_chart_generation's own docstring for why: unlike every other
+        # independent slot, there is no background task to wait on
+        # separately, the whole thing (including on_success) has already
+        # completed by the time this await returns.
+        await dispatcher.start_chart_generation(
+            bus=bus,
+            notifications_state=notifications,
+            node_id="n-parent",
+            chart_type="bar",
+            source_text="the parent branch's text",
+            on_success=lambda result: successes.append(result),
+            on_failure=lambda message: failures.append(message),
+        )
+
+        assert successes == [{"type": "bar", "title": "T", "labels": ["A", "B"], "values": [1, 2]}]
+        assert failures == []
+        assert dispatcher._chart_requests == {}
+        assert notifications.visible is False
+
+    asyncio.run(run())
+
+
+def test_start_chart_generation_second_call_while_in_flight_is_rejected(monkeypatch):
+    started = threading.Event()
+    release = threading.Event()
+
+    def blocking_get_response(self, text, chart_type):
+        started.set()
+        release.wait(5)
+        return '{"type": "bar", "title": "T", "labels": ["A"], "values": [1]}'
+
+    monkeypatch.setattr(agents_module.ChartDataAgent, "get_response", blocking_get_response)
+
+    async def run():
+        bus, notifications, dispatcher = _make_chart_env()
+        successes = []
+
+        # Unlike the fire-and-forget slots' own equivalent test,
+        # start_chart_generation is directly awaited by ITS caller (see its
+        # own docstring) - so testing the busy guard requires the TEST
+        # itself to schedule the first call as a background task, mirroring
+        # what backend/canvas.py's generateChart WS wrapper's own caller
+        # (the WS read loop) effectively does across two overlapping
+        # connections to the same session.
+        first_call_task = asyncio.create_task(
+            dispatcher.start_chart_generation(
+                bus=bus,
+                notifications_state=notifications,
+                node_id="n1",
+                chart_type="bar",
+                source_text="text one",
+                on_success=lambda result: successes.append(result),
+                on_failure=lambda message: None,
+            )
+        )
+        await asyncio.to_thread(started.wait, 5)
+
+        # Second call while the first is still in flight must be rejected
+        # and must not disturb the first request.
+        await dispatcher.start_chart_generation(
+            bus=bus,
+            notifications_state=notifications,
+            node_id="n2",
+            chart_type="pie",
+            source_text="text two",
+            on_success=lambda result: successes.append(result),
+            on_failure=lambda message: None,
+        )
+        assert notifications.visible is True
+        assert notifications.msg_type == "info"
+        assert notifications.message == "A chart is already being generated."
+        assert len(dispatcher._chart_requests) == 1
+
+        release.set()
+        await first_call_task
+
+        assert successes == [{"type": "bar", "title": "T", "labels": ["A"], "values": [1]}]
+        assert dispatcher._chart_requests == {}
+
+    asyncio.run(run())
+
+
+def test_start_chart_generation_top_level_error_key_calls_on_failure_and_shows_notification_never_calls_on_success(monkeypatch):
+    # Mirrors ChartWorkerThread.run()'s own `if 'error' in parsed: raise
+    # ValueError(...)` check at the one legacy call site - a fully-degraded
+    # ChartDataAgent response (even its own heuristic fallback found
+    # nothing) must never reach on_success.
+    def fake_get_response(self, text, chart_type):
+        return '{"error": "Could not find sufficient data to generate a bar chart."}'
+
+    monkeypatch.setattr(agents_module.ChartDataAgent, "get_response", fake_get_response)
+
+    async def run():
+        bus, notifications, dispatcher = _make_chart_env()
+        successes = []
+        failures = []
+
+        await dispatcher.start_chart_generation(
+            bus=bus,
+            notifications_state=notifications,
+            node_id="n1",
+            chart_type="bar",
+            source_text="text with no chartable data",
+            on_success=lambda result: successes.append(result),
+            on_failure=lambda message: failures.append(message),
+        )
+
+        assert successes == [], "on_success must never be called on a top-level error-key response"
+        assert failures == ["Could not find sufficient data to generate a bar chart."]
+        assert dispatcher._chart_requests == {}
+        assert notifications.visible is True
+        assert notifications.msg_type == "error"
+        assert notifications.message == (
+            "Chart generation failed: Could not find sufficient data to generate a bar chart."
+        )
+
+    asyncio.run(run())
+
+
+def test_start_chart_generation_timeout_fires_the_exact_message_and_clears_the_slot(monkeypatch):
+    monkeypatch.setattr(agents_module, "WATCHDOG_TIMEOUT_SECONDS", 0.05)
+
+    def slow_get_response(self, text, chart_type):
+        time.sleep(0.3)
+        return '{"type": "bar", "title": "T", "labels": ["A"], "values": [1]}'
+
+    monkeypatch.setattr(agents_module.ChartDataAgent, "get_response", slow_get_response)
+
+    async def run():
+        bus, notifications, dispatcher = _make_chart_env()
+        successes = []
+        failures = []
+
+        await dispatcher.start_chart_generation(
+            bus=bus,
+            notifications_state=notifications,
+            node_id="n1",
+            chart_type="bar",
+            source_text="text",
+            on_success=lambda result: successes.append(result),
+            on_failure=lambda message: failures.append(message),
+        )
+
+        assert successes == []
+        assert len(failures) == 1 and "stopped responding" in failures[0]
+        assert dispatcher._chart_requests == {}, "the slot must not leak/deadlock future requests"
+        assert notifications.visible is True
+        assert notifications.msg_type == "error"
+
+    asyncio.run(run())

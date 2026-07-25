@@ -69,6 +69,16 @@ _HEX_ALLOWLIST: dict[str, str] = {
         "color default (saved into scene JSON) - scene data must keep its "
         "color across theme switches, like DEFAULT_GRID_COLOR"
     ),
+    "graphlink_chart_rendering.py": (
+        "R6.2: Qt-free Matplotlib chart rendering, imported directly by "
+        "backend/ (must stay importable with zero Qt in its dependency "
+        "chain, so it cannot import graphlink_config/graphlink_styles - both "
+        "pull in Qt). Its dark-theme palette (SURFACE/PANEL/BORDER/TEXT/ "
+        "MUTED/GRID/PRIMARY/SECONDARY/SELECTION) is copied VERBATIM from "
+        "graphlink_config.py's THEME_TOKENS['dark'], and SLATE=#868686 is "
+        "the same already-allowlisted data-series entry from "
+        "graphlink_canvas_chart_item.py above, not a new color choice."
+    ),
 }
 
 # Files allowed to carry the literal string "Segoe UI" outside the token
@@ -78,6 +88,11 @@ _FONT_ALLOWLIST: dict[str, str] = {
         "FONT_FAMILIES: the user-pickable font list offers 'Segoe UI' and "
         "'Segoe UI Variable' as CHOICES - data presented to the user, not a "
         "hardcoded app default (defaults go through FONT_FAMILY_NAME)"
+    ),
+    "graphlink_chart_rendering.py": (
+        "R6.2: same Qt-free-dependency-chain constraint as its _HEX_ALLOWLIST "
+        "entry above - cannot import graphlink_styles.FONT_FAMILY_NAME "
+        "(pulls in Qt), so its value ('Segoe UI') is copied verbatim instead"
     ),
 }
 

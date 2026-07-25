@@ -601,6 +601,30 @@ export class SceneStore {
     this.transport.intent("scene", "ungroup", [nodeId]);
   }
 
+  // -- R6.2: Chart node -----------------------------------------------------
+  //
+  // Mirrors backend/canvas.py's register_canvas() intent names/argument order
+  // 1:1, same convention as every scene intent above. generateChart returns
+  // the new chart node's id server-side (or null + a notification on invalid
+  // parent/chartType), but - same posture as every other addXNode-style
+  // method above (addChatNode, addNote, createFrame, ...) - this stays a
+  // plain fire-and-forget intent() call, not request(): the new node arrives
+  // through the next scene snapshot, and nothing on the frontend needs the id
+  // synchronously (ChatNodeView's Generate Chart submenu just fires-and-
+  // forgets, same as its own onGenerateImage).
+
+  generateChart(parentNodeId: string, chartType: string): void {
+    this.transport.intent("scene", "generateChart", [parentNodeId, chartType]);
+  }
+
+  resizeChart(nodeId: string, width: number, height: number): void {
+    this.transport.intent("scene", "resizeChart", [nodeId, width, height]);
+  }
+
+  toggleChartAspectLock(nodeId: string): void {
+    this.transport.intent("scene", "toggleChartAspectLock", [nodeId]);
+  }
+
   // Grid intents ride the grid-control topic; font intents ride scene - both
   // keep the legacy bridges' @Slot names 1:1 (backend/canvas.py contract).
   setGridSize(size: number): void {

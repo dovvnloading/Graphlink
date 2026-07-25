@@ -158,6 +158,22 @@ describe("toFlowNodes (R4.4a Generate/Regenerate Image wiring)", () => {
     expect(intentSpy).toHaveBeenCalledWith("chat-1");
   });
 
+  it("a chat node's onGenerateChart calls generateChart with [its own id, the chartType argument] (R6.2)", () => {
+    const scene = baseScene({
+      nodes: [baseNode({ id: "chat-1", kind: "chat", content: "Hello", isUser: true })],
+      edges: [],
+    });
+    const store = makeStore();
+    const intentSpy = vi.spyOn(store, "generateChart");
+
+    const flowNodes = toFlowNodes(scene, store);
+    const chatFlowNode = flowNodes.find((n) => n.id === "chat-1");
+    expect(chatFlowNode).toBeDefined();
+
+    (chatFlowNode!.data as { onGenerateChart: (chartType: string) => void }).onGenerateChart("sankey");
+    expect(intentSpy).toHaveBeenCalledWith("chat-1", "sankey");
+  });
+
   it("an image node's onRegenerate calls regenerateImage with its own id - no client-side parent lookup, unlike CodeNode's onRegenerate", () => {
     const scene = baseScene({
       nodes: [
@@ -1112,6 +1128,108 @@ describe("toFlowNodes (R6.1 frame/container nodes)", () => {
     expect(spies.fitFrameToContent).toHaveBeenCalledWith("frame-1");
     data.onUngroup();
     expect(spies.ungroup).toHaveBeenCalledWith("frame-1");
+  });
+});
+
+// R6.2: Chart node. The generated SceneNodeRow type hasn't been regenerated
+// yet to carry chartType/chartData/chartError/chartAssetId/
+// chartAssetVersion/chartWidth/chartHeight/chartAspectLocked/
+// chartSourceNodeId (see SceneCanvas.tsx's own SceneNodeChartFields
+// comment) - same situation GroupTestFields above solves for R6.1.
+interface ChartTestFields {
+  chartType: string;
+  chartData: Record<string, unknown>;
+  chartError: string;
+  chartAssetId: string;
+  chartAssetVersion: number;
+  chartWidth: number;
+  chartHeight: number;
+  chartAspectLocked: boolean;
+  chartSourceNodeId: string;
+}
+
+function chartNode(overrides: Partial<SceneNodeRow & ChartTestFields> = {}): SceneNodeRow & ChartTestFields {
+  return {
+    ...baseNode(),
+    kind: "chart",
+    chartType: "bar",
+    chartData: { type: "bar", title: "Revenue" },
+    chartError: "",
+    chartAssetId: "asset-chart-1",
+    chartAssetVersion: 1,
+    chartWidth: 680,
+    chartHeight: 500,
+    chartAspectLocked: true,
+    chartSourceNodeId: "chat-1",
+    ...overrides,
+  } as SceneNodeRow & ChartTestFields;
+}
+
+describe("toFlowNodes (R6.2 chart node)", () => {
+  it("maps all 9 chart wire fields onto the flow node's data, and chartWidth/chartHeight ALSO onto the flow node object itself (NodeResizer controlled-mode)", () => {
+    const scene = baseScene({
+      nodes: [
+        chartNode({
+          id: "chart-1",
+          x: 10,
+          y: 20,
+          chartType: "sankey",
+          chartData: { type: "sankey", title: "Flow" },
+          chartError: "used a placeholder chart",
+          chartAssetId: "asset-9",
+          chartAssetVersion: 4,
+          chartWidth: 900,
+          chartHeight: 640,
+          chartAspectLocked: false,
+          chartSourceNodeId: "chat-9",
+        }),
+      ],
+      edges: [],
+    });
+    const store = makeStore();
+
+    const flowNodes = toFlowNodes(scene, store);
+    const chartFlowNode = flowNodes.find((n) => n.id === "chart-1");
+    expect(chartFlowNode).toBeDefined();
+    expect(chartFlowNode!.type).toBe("chart");
+    expect(chartFlowNode!.position).toEqual({ x: 10, y: 20 });
+    expect(chartFlowNode!.width).toBe(900);
+    expect(chartFlowNode!.height).toBe(640);
+    expect(chartFlowNode!.data).toMatchObject({
+      chartType: "sankey",
+      chartData: { type: "sankey", title: "Flow" },
+      chartError: "used a placeholder chart",
+      chartAssetId: "asset-9",
+      chartAssetVersion: 4,
+      chartWidth: 900,
+      chartHeight: 640,
+      chartAspectLocked: false,
+      chartSourceNodeId: "chat-9",
+    });
+  });
+
+  it("onToggleAspectLock/onResize call the right store intents with this node's id", () => {
+    const scene = baseScene({ nodes: [chartNode({ id: "chart-1" })], edges: [] });
+    const store = makeStore();
+    const toggleSpy = vi.spyOn(store, "toggleChartAspectLock");
+    const resizeSpy = vi.spyOn(store, "resizeChart");
+
+    const flowNodes = toFlowNodes(scene, store);
+    const data = flowNodes.find((n) => n.id === "chart-1")!.data as {
+      onToggleAspectLock: () => void;
+      onResize: (width: number, height: number) => void;
+    };
+
+    data.onToggleAspectLock();
+    expect(toggleSpy).toHaveBeenCalledWith("chart-1");
+    data.onResize(1200, 900);
+    expect(resizeSpy).toHaveBeenCalledWith("chart-1", 1200, 900);
+  });
+
+  it("a docked chart node is omitted from the flow nodes array, same generic guard as every other kind", () => {
+    const scene = baseScene({ nodes: [chartNode({ id: "chart-1", isDocked: true })], edges: [] });
+    const store = makeStore();
+    expect(toFlowNodes(scene, store).find((n) => n.id === "chart-1")).toBeUndefined();
   });
 });
 

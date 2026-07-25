@@ -19,6 +19,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import type { SceneNodeRow, SceneState } from "../../lib/bridge-core/generated/scene-state";
 import type { StreamListener } from "../../lib/ws/transport";
 import { ArtifactNodeView, type ArtifactFlowNode } from "./ArtifactNodeView";
+import { ChartNodeView, type ChartFlowNode } from "./ChartNodeView";
 import { ChatNodeView, type ChatFlowNode } from "./ChatNodeView";
 import { CodeNodeView, type CodeFlowNode } from "./CodeNodeView";
 import { CodeSandboxNodeView, type CodeSandboxFlowNode } from "./CodeSandboxNodeView";
@@ -56,6 +57,28 @@ interface SceneNodeGroupFields {
 }
 type SceneNodeRowWithGroups = SceneNodeRow & SceneNodeGroupFields;
 
+// R6.2: Chart node. Same situation as SceneNodeGroupFields above - the
+// generated SceneNodeRow type hasn't been regenerated yet to carry
+// chartType/chartData/chartError/chartAssetId/chartAssetVersion/chartWidth/
+// chartHeight/chartAspectLocked/chartSourceNodeId (backend/canvas.py's
+// scene_payload() contract for this increment). chartData is left as
+// Record<string, unknown> rather than a fully-typed union - it is already
+// canonicalized server-side (graphlink_chart_data.py's
+// canonicalize_chart_data), and this view only ever reads its own
+// well-known "title" key defensively (see ChartNodeView.tsx).
+interface SceneNodeChartFields {
+  chartType: string;
+  chartData: Record<string, unknown>;
+  chartError: string;
+  chartAssetId: string;
+  chartAssetVersion: number;
+  chartWidth: number;
+  chartHeight: number;
+  chartAspectLocked: boolean;
+  chartSourceNodeId: string;
+}
+type SceneNodeRowWithChart = SceneNodeRow & SceneNodeChartFields;
+
 /**
  * The React Flow canvas (Qt-removal plan R1) - the QGraphicsScene/ChatView
  * successor. R1 scope: pan/zoom, model-driven grid (size/style/color/opacity
@@ -87,7 +110,8 @@ export type SceneFlowNode =
   | PyCoderFlowNode
   | CodeSandboxFlowNode
   | NoteFlowNode
-  | GroupFlowNode;
+  | GroupFlowNode
+  | ChartFlowNode;
 
 function PlaceholderNodeView({ data, selected }: NodeProps<PlaceholderNode>) {
   const zoom = useStore((s) => s.transform[2]);
@@ -126,6 +150,9 @@ const NODE_TYPES = {
   // duplicate files.
   frame: GroupNodeView,
   container: GroupNodeView,
+  // R6.2: real chart nodes (bar/line/pie/histogram/sankey) - a backend-
+  // rendered PNG card, see ChartNodeView.tsx's own module doc.
+  chart: ChartNodeView,
 };
 
 // Exported standalone for direct unit testing (same posture as
@@ -174,6 +201,12 @@ export function toFlowNodes(scene: SceneState, store: SceneStore): SceneFlowNode
           onUndockChild: (childId: string) => store.setNodeDocked(childId, false),
           onRegenerate: () => store.regenerateResponse(n.id),
           onGenerateImage: () => store.generateImage(n.id),
+          // R6.2: real chart generation - fires the new generateChart intent
+          // with this chat node as the parent (see ChatNodeView.tsx's own
+          // Generate Chart submenu). Fire-and-forget, same posture as
+          // onGenerateImage above - the new chart node arrives through the
+          // next scene snapshot.
+          onGenerateChart: (chartType: string) => store.generateChart(n.id, chartType),
         },
       });
       continue;
@@ -619,6 +652,43 @@ export function toFlowNodes(scene: SceneState, store: SceneStore): SceneFlowNode
           onResize: (width: number, height: number) => store.resizeFrame(n.id, width, height),
           onFitToContent: () => store.fitFrameToContent(n.id),
           onUngroup: () => store.ungroup(n.id),
+        },
+      });
+      continue;
+    }
+    if (n.kind === "chart") {
+      // No onDock here either (same reasoning as every non-dockable R3/R5
+      // content-card branch above) - ChartNodeView never offers a
+      // dock-into-parent action; the generic `if (n.isDocked) continue`
+      // guard above still covers it correctly if it were ever docked via a
+      // direct WS call. width/height are ALSO set on the flow node object
+      // itself here (not just inside `data`) - the same NodeResizer
+      // controlled-mode technique the frame/container branch above uses
+      // (see GroupNodeView.tsx's own doc), needed because ChartNodeView is
+      // resizable too. Unlike frame/container though, chartWidth/chartHeight
+      // are part of the ordinary 9-field wire contract (scene_payload()
+      // exposes them like every other chart field), so they're ALSO
+      // duplicated into `data` below rather than living only on the flow
+      // node object.
+      const chart = n as SceneNodeRowWithChart;
+      flowNodes.push({
+        id: n.id,
+        type: "chart" as const,
+        position: { x: n.x, y: n.y },
+        width: chart.chartWidth,
+        height: chart.chartHeight,
+        data: {
+          chartType: chart.chartType,
+          chartData: chart.chartData,
+          chartError: chart.chartError,
+          chartAssetId: chart.chartAssetId,
+          chartAssetVersion: chart.chartAssetVersion,
+          chartWidth: chart.chartWidth,
+          chartHeight: chart.chartHeight,
+          chartAspectLocked: chart.chartAspectLocked,
+          chartSourceNodeId: chart.chartSourceNodeId,
+          onToggleAspectLock: () => store.toggleChartAspectLock(n.id),
+          onResize: (width: number, height: number) => store.resizeChart(n.id, width, height),
         },
       });
       continue;
