@@ -16,7 +16,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import type { SceneState } from "../../lib/bridge-core/generated/scene-state";
+import type { SceneNodeRow, SceneState } from "../../lib/bridge-core/generated/scene-state";
 import type { StreamListener } from "../../lib/ws/transport";
 import { ArtifactNodeView, type ArtifactFlowNode } from "./ArtifactNodeView";
 import { ChatNodeView, type ChatFlowNode } from "./ChatNodeView";
@@ -25,13 +25,36 @@ import { CodeSandboxNodeView, type CodeSandboxFlowNode } from "./CodeSandboxNode
 import { ConversationNodeView, type ConversationFlowNode } from "./ConversationNodeView";
 import { DocumentNodeView, type DocumentFlowNode } from "./DocumentNodeView";
 import { GitlinkNodeView, type GitlinkFlowNode } from "./GitlinkNodeView";
+import { GroupNodeView, type GroupFlowNode } from "./GroupNodeView";
 import { HtmlNodeView, type HtmlFlowNode } from "./HtmlNodeView";
 import { ImageNodeView, type ImageFlowNode } from "./ImageNodeView";
+import { NoteNodeView, type NoteFlowNode } from "./NoteNodeView";
 import { PyCoderNodeView, type PyCoderFlowNode } from "./PyCoderNodeView";
 import { ThinkingNodeView, type ThinkingFlowNode } from "./ThinkingNodeView";
 import { WebResearchNodeView, type WebResearchFlowNode } from "./WebResearchNodeView";
-import { LOD_ZOOM_THRESHOLD } from "./canvasConstants";
+import { GROUP_FALLBACK_HEIGHT, GROUP_FALLBACK_WIDTH, LOD_ZOOM_THRESHOLD } from "./canvasConstants";
 import { SceneStore, scaleDragPosition } from "./sceneStore";
+
+// R6.1: Notes/Frames/Containers - the generated SceneNodeRow type (codegen
+// source: backend/canvas.py's scene_payload()) has not been regenerated yet
+// to include these fields (see backend/canvas.py's own R6.1 section for the
+// exact contract this documents - color/headerColor/isSystemPrompt/
+// isSummaryNote/itemIds/isLocked/groupWidth/groupHeight). This local type
+// carries the contract precisely so toFlowNodes below reads real,
+// type-checked field names instead of scattering `as any` - once codegen
+// runs, SceneNodeRow will carry these natively and this cast (and this
+// comment) can be deleted.
+interface SceneNodeGroupFields {
+  color: string | null;
+  headerColor: string | null;
+  isSystemPrompt: boolean;
+  isSummaryNote: boolean;
+  itemIds: string[];
+  isLocked: boolean;
+  groupWidth: number | null;
+  groupHeight: number | null;
+}
+type SceneNodeRowWithGroups = SceneNodeRow & SceneNodeGroupFields;
 
 /**
  * The React Flow canvas (Qt-removal plan R1) - the QGraphicsScene/ChatView
@@ -49,7 +72,7 @@ const GRID_VARIANTS: Record<string, BackgroundVariant> = {
 };
 
 type PlaceholderNode = Node<{ title: string }, "placeholder">;
-type SceneFlowNode =
+export type SceneFlowNode =
   | PlaceholderNode
   | ChatFlowNode
   | CodeFlowNode
@@ -62,7 +85,9 @@ type SceneFlowNode =
   | ArtifactFlowNode
   | GitlinkFlowNode
   | PyCoderFlowNode
-  | CodeSandboxFlowNode;
+  | CodeSandboxFlowNode
+  | NoteFlowNode
+  | GroupFlowNode;
 
 function PlaceholderNodeView({ data, selected }: NodeProps<PlaceholderNode>) {
   const zoom = useStore((s) => s.transform[2]);
@@ -94,6 +119,13 @@ const NODE_TYPES = {
   gitlink: GitlinkNodeView,
   pycoder: PyCoderNodeView,
   code_sandbox: CodeSandboxNodeView,
+  note: NoteNodeView,
+  // R6.1: one shared component backs both "frame" and "container" NODE_TYPES
+  // entries - see GroupNodeView.tsx's own module doc for why a single
+  // data.groupKind-parameterized component was chosen over two near-
+  // duplicate files.
+  frame: GroupNodeView,
+  container: GroupNodeView,
 };
 
 // Exported standalone for direct unit testing (same posture as
@@ -516,6 +548,81 @@ export function toFlowNodes(scene: SceneState, store: SceneStore): SceneFlowNode
       });
       continue;
     }
+    if (n.kind === "note") {
+      // No onDock here either (same reasoning as every non-dockable kind
+      // above) - a note never offers a dock-into-parent action of its own;
+      // the generic `if (n.isDocked) continue` guard above still covers it
+      // correctly if it were ever docked via a direct WS call.
+      const note = n as SceneNodeRowWithGroups;
+      flowNodes.push({
+        id: n.id,
+        type: "note" as const,
+        position: { x: n.x, y: n.y },
+        data: {
+          content: n.content,
+          color: note.color,
+          headerColor: note.headerColor,
+          isSystemPrompt: note.isSystemPrompt,
+          isSummaryNote: note.isSummaryNote,
+          onSetContent: (content: string) => store.setNoteContent(n.id, content),
+          onSetColor: (color: string | null, headerColor: string | null) =>
+            store.setGroupColor(n.id, color, headerColor),
+          onDelete: () => store.removeNodes([n.id]),
+        },
+      });
+      continue;
+    }
+    if (n.kind === "frame" || n.kind === "container") {
+      // R6.1: rendered BEHIND every other node (zIndex:-1 - React Flow paints
+      // in ascending zIndex order) since members are ordinary top-level flow
+      // nodes at their own absolute positions, never React Flow
+      // parentId/extent children of this node - see GroupNodeView.tsx's own
+      // module doc for why that is the deliberate, simpler equivalent of
+      // legacy's "auto-grow to enclose, never clip" behavior.
+      //
+      // width/height are set on the FLOW NODE OBJECT itself (not just inside
+      // `data`) - the documented xyflow mechanism that lets <NodeResizer/>
+      // (frame only) drive the node wrapper's own size directly; see
+      // GroupNodeView.tsx's own doc for the fuller reasoning. Fallback to
+      // GROUP_FALLBACK_WIDTH/HEIGHT covers the (should-be-unreachable, see
+      // canvasConstants.ts) case of a null groupWidth/groupHeight.
+      //
+      // draggable: an unlocked frame gets draggable:false (a deliberate
+      // simplification vs. legacy's own independently-draggable-when-
+      // unlocked behavior, confirmed as not worth preserving - see
+      // GroupNodeView.tsx's doc) - every locked frame and every container
+      // (which has no lock concept, always drags as a group) stays
+      // draggable, and its own onNodesChange drag carries its itemIds
+      // members along by the identical delta (see onNodesChange below).
+      const group = n as SceneNodeRowWithGroups;
+      flowNodes.push({
+        id: n.id,
+        type: n.kind as "frame" | "container",
+        position: { x: n.x, y: n.y },
+        width: group.groupWidth ?? GROUP_FALLBACK_WIDTH,
+        height: group.groupHeight ?? GROUP_FALLBACK_HEIGHT,
+        zIndex: -1,
+        draggable: n.kind === "container" || group.isLocked,
+        data: {
+          groupKind: n.kind,
+          label: n.content,
+          color: group.color,
+          headerColor: group.headerColor,
+          isCollapsed: n.isCollapsed,
+          isLocked: group.isLocked,
+          itemIds: group.itemIds,
+          onSetLabel: (text: string) => store.setGroupLabel(n.id, text),
+          onToggleCollapsed: () => store.toggleGroupCollapsed(n.id),
+          onToggleLock: () => store.toggleFrameLock(n.id),
+          onSetColor: (color: string | null, headerColor: string | null) =>
+            store.setGroupColor(n.id, color, headerColor),
+          onResize: (width: number, height: number) => store.resizeFrame(n.id, width, height),
+          onFitToContent: () => store.fitFrameToContent(n.id),
+          onUngroup: () => store.ungroup(n.id),
+        },
+      });
+      continue;
+    }
     flowNodes.push({
       id: n.id,
       type: "placeholder" as const,
@@ -534,6 +641,50 @@ export function toFlowNodes(scene: SceneState, store: SceneStore): SceneFlowNode
 // gets covered instead of the mount.
 export function handleSelectionChange(store: SceneStore, nodes: { id: string }[]): void {
   store.setSelectedNodeId(nodes[0]?.id ?? null);
+}
+
+// R6.1: whether `node`'s own drag should carry its itemIds members along -
+// true for any container (no lock concept, always drags as a group) or a
+// LOCKED frame; false for everything else (including an unlocked frame,
+// which is non-draggable anyway - see toFlowNodes' draggable: setting
+// above). Exported standalone, same testability convention as
+// scaleDragPosition/toFlowNodes/handleSelectionChange above.
+export function groupDragKindOf(node: SceneFlowNode | undefined): "frame" | "container" | null {
+  if (!node) return null;
+  if (node.type === "container") return "container";
+  if (node.type === "frame" && (node.data as { isLocked?: boolean }).isLocked) return "frame";
+  return null;
+}
+
+// R6.1: the group-drag delta-application core, pulled out of onNodesChange's
+// closure for the same reason - a direct unit test can call this without a
+// full <ReactFlow> mount + synthetic drag simulation. `nodes` is the PRE-this-
+// change local flow-node array; `scaledPosition` is the dragged node's own
+// new (already drag-speed-scaled) target position for this tick. Returns one
+// synthetic "position" NodeChange per live member, carrying it by the exact
+// same delta the dragged group node itself is about to move by.
+export function applyGroupDragDelta(
+  nodes: SceneFlowNode[],
+  draggedId: string,
+  scaledPosition: { x: number; y: number },
+): NodeChange<SceneFlowNode>[] {
+  const draggedNode = nodes.find((n) => n.id === draggedId);
+  if (!groupDragKindOf(draggedNode) || !draggedNode) return [];
+  const deltaX = scaledPosition.x - draggedNode.position.x;
+  const deltaY = scaledPosition.y - draggedNode.position.y;
+  const itemIds = (draggedNode.data as { itemIds?: string[] }).itemIds ?? [];
+  const memberChanges: NodeChange<SceneFlowNode>[] = [];
+  for (const memberId of itemIds) {
+    const member = nodes.find((n) => n.id === memberId);
+    if (!member) continue;
+    memberChanges.push({
+      id: memberId,
+      type: "position",
+      dragging: true,
+      position: { x: member.position.x + deltaX, y: member.position.y + deltaY },
+    });
+  }
+  return memberChanges;
 }
 
 function toFlowEdges(scene: SceneState): Edge[] {
@@ -564,6 +715,14 @@ function CanvasInner({ store }: { store: SceneStore }) {
 
   const onNodesChange = useCallback(
     (changes: NodeChange<SceneFlowNode>[]) => {
+      // Synthetic member-position changes generated below (via
+      // applyGroupDragDelta), alongside the real changes React Flow
+      // reported - both go through the SAME applyNodeChanges call so a
+      // member's local position updates in lockstep with its group, every
+      // drag frame.
+      const memberChanges: NodeChange<SceneFlowNode>[] = [];
+      const memberMoveIntents: Array<{ id: string; x: number; y: number }> = [];
+
       const scaled = changes.map((change) => {
         if (change.type !== "position" || !change.position) return change;
         if (change.dragging) {
@@ -574,19 +733,34 @@ function CanvasInner({ store }: { store: SceneStore }) {
             start = node ? { ...node.position } : { ...change.position };
             dragStartRef.current.set(change.id, start);
           }
+          const scaledPosition = scaleDragPosition(start, change.position, scene.dragFactor);
+          memberChanges.push(...applyGroupDragDelta(nodes, change.id, scaledPosition));
           return {
             ...change,
-            position: scaleDragPosition(start, change.position, scene.dragFactor),
+            position: scaledPosition,
           };
         }
         // Drag end: commit the node's final (already-scaled) position.
         draggingRef.current = false;
         const settled = nodes.find((n) => n.id === change.id);
-        if (settled) store.moveNode(change.id, settled.position.x, settled.position.y);
+        if (settled) {
+          store.moveNode(change.id, settled.position.x, settled.position.y);
+          if (groupDragKindOf(settled)) {
+            const itemIds = (settled.data as { itemIds?: string[] }).itemIds ?? [];
+            for (const memberId of itemIds) {
+              const member = nodes.find((n) => n.id === memberId);
+              if (member) memberMoveIntents.push({ id: memberId, x: member.position.x, y: member.position.y });
+            }
+          }
+        }
         dragStartRef.current.delete(change.id);
         return change;
       });
-      setNodes((current) => applyNodeChanges(scaled, current));
+      // Persist each carried-along member's settled position too - the same
+      // moveNode call site the group's own commit above uses, fired after
+      // the map so every real change's own drag-end has already run.
+      for (const move of memberMoveIntents) store.moveNode(move.id, move.x, move.y);
+      setNodes((current) => applyNodeChanges([...scaled, ...memberChanges], current));
     },
     [nodes, scene.dragFactor, store],
   );

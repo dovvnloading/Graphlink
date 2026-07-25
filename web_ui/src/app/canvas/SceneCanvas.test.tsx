@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { handleSelectionChange, toFlowNodes } from "./SceneCanvas";
+import { applyGroupDragDelta, groupDragKindOf, handleSelectionChange, toFlowNodes, type SceneFlowNode } from "./SceneCanvas";
 import { SceneStore, initialSceneState } from "./sceneStore";
 import type { WsTransport } from "../../lib/ws/transport";
 import type { SceneNodeRow, SceneState } from "../../lib/bridge-core/generated/scene-state";
@@ -905,5 +905,325 @@ describe("handleSelectionChange (R5.1 onSelectionChange wiring)", () => {
     const spy = vi.spyOn(store, "setSelectedNodeId");
     handleSelectionChange(store, []);
     expect(spy).toHaveBeenCalledWith(null);
+  });
+});
+
+// R6.1: Notes/Frames/Containers. The generated SceneNodeRow type hasn't been
+// regenerated yet to carry color/headerColor/isSystemPrompt/isSummaryNote/
+// itemIds/isLocked/groupWidth/groupHeight (see SceneCanvas.tsx's own
+// SceneNodeGroupFields comment) - this local helper builds a baseNode() with
+// those extra fields layered on, the test-file equivalent of that same cast.
+interface GroupTestFields {
+  color: string | null;
+  headerColor: string | null;
+  isSystemPrompt: boolean;
+  isSummaryNote: boolean;
+  itemIds: string[];
+  isLocked: boolean;
+  groupWidth: number | null;
+  groupHeight: number | null;
+}
+
+function groupNode(overrides: Partial<SceneNodeRow & GroupTestFields> = {}): SceneNodeRow & GroupTestFields {
+  return {
+    ...baseNode(),
+    color: null,
+    headerColor: null,
+    isSystemPrompt: false,
+    isSummaryNote: false,
+    itemIds: [],
+    isLocked: true,
+    groupWidth: null,
+    groupHeight: null,
+    ...overrides,
+  } as SceneNodeRow & GroupTestFields;
+}
+
+describe("toFlowNodes (R6.1 note node)", () => {
+  it("maps a note scene node's content/color/headerColor/isSystemPrompt/isSummaryNote onto the flow node's data", () => {
+    const scene = baseScene({
+      nodes: [
+        groupNode({
+          id: "note-1",
+          kind: "note",
+          content: "Remember to follow up",
+          color: "#3f8f5c",
+          headerColor: "#3f7dc9",
+          isSystemPrompt: true,
+          isSummaryNote: false,
+        }),
+      ],
+      edges: [],
+    });
+    const store = makeStore();
+
+    const flowNodes = toFlowNodes(scene, store);
+    const noteFlowNode = flowNodes.find((n) => n.id === "note-1");
+    expect(noteFlowNode).toBeDefined();
+    expect(noteFlowNode!.type).toBe("note");
+    expect(noteFlowNode!.data).toMatchObject({
+      content: "Remember to follow up",
+      color: "#3f8f5c",
+      headerColor: "#3f7dc9",
+      isSystemPrompt: true,
+      isSummaryNote: false,
+    });
+  });
+
+  it("onSetContent/onSetColor/onDelete call the right store intents with this node's id", () => {
+    const scene = baseScene({ nodes: [groupNode({ id: "note-1", kind: "note" })], edges: [] });
+    const store = makeStore();
+    const setContentSpy = vi.spyOn(store, "setNoteContent");
+    const setColorSpy = vi.spyOn(store, "setGroupColor");
+    const removeSpy = vi.spyOn(store, "removeNodes");
+
+    const flowNodes = toFlowNodes(scene, store);
+    const noteFlowNode = flowNodes.find((n) => n.id === "note-1");
+    const data = noteFlowNode!.data as {
+      onSetContent: (content: string) => void;
+      onSetColor: (color: string | null, headerColor: string | null) => void;
+      onDelete: () => void;
+    };
+
+    data.onSetContent("updated");
+    expect(setContentSpy).toHaveBeenCalledWith("note-1", "updated");
+
+    data.onSetColor("#cf5354", null);
+    expect(setColorSpy).toHaveBeenCalledWith("note-1", "#cf5354", null);
+
+    data.onDelete();
+    expect(removeSpy).toHaveBeenCalledWith(["note-1"]);
+  });
+});
+
+describe("toFlowNodes (R6.1 frame/container nodes)", () => {
+  it("maps a frame's groupWidth/groupHeight onto the flow NODE's own width/height, sets zIndex:-1, and draggable:true when locked", () => {
+    const scene = baseScene({
+      nodes: [
+        groupNode({
+          id: "frame-1",
+          kind: "frame",
+          x: 10,
+          y: 20,
+          content: "My Frame",
+          itemIds: ["n1", "n2"],
+          isLocked: true,
+          groupWidth: 400,
+          groupHeight: 250,
+        }),
+      ],
+      edges: [],
+    });
+    const store = makeStore();
+
+    const flowNodes = toFlowNodes(scene, store);
+    const frameFlowNode = flowNodes.find((n) => n.id === "frame-1");
+    expect(frameFlowNode).toBeDefined();
+    expect(frameFlowNode!.type).toBe("frame");
+    expect(frameFlowNode!.position).toEqual({ x: 10, y: 20 });
+    expect(frameFlowNode!.width).toBe(400);
+    expect(frameFlowNode!.height).toBe(250);
+    expect(frameFlowNode!.zIndex).toBe(-1);
+    expect(frameFlowNode!.draggable).toBe(true);
+    expect(frameFlowNode!.data).toMatchObject({
+      groupKind: "frame",
+      label: "My Frame",
+      isLocked: true,
+      itemIds: ["n1", "n2"],
+    });
+  });
+
+  it("an UNLOCKED frame gets draggable:false", () => {
+    const scene = baseScene({
+      nodes: [groupNode({ id: "frame-1", kind: "frame", isLocked: false, groupWidth: 300, groupHeight: 200 })],
+      edges: [],
+    });
+    const store = makeStore();
+
+    const flowNodes = toFlowNodes(scene, store);
+    const frameFlowNode = flowNodes.find((n) => n.id === "frame-1");
+    expect(frameFlowNode!.draggable).toBe(false);
+  });
+
+  it("a container is ALWAYS draggable regardless of isLocked (containers have no lock concept)", () => {
+    const scene = baseScene({
+      nodes: [
+        groupNode({ id: "container-1", kind: "container", isLocked: false, groupWidth: 300, groupHeight: 200 }),
+      ],
+      edges: [],
+    });
+    const store = makeStore();
+
+    const flowNodes = toFlowNodes(scene, store);
+    const containerFlowNode = flowNodes.find((n) => n.id === "container-1");
+    expect(containerFlowNode!.type).toBe("container");
+    expect(containerFlowNode!.draggable).toBe(true);
+    expect((containerFlowNode!.data as { groupKind: string }).groupKind).toBe("container");
+  });
+
+  it("falls back to GROUP_FALLBACK_WIDTH/HEIGHT when groupWidth/groupHeight are null", () => {
+    const scene = baseScene({
+      nodes: [groupNode({ id: "frame-1", kind: "frame", groupWidth: null, groupHeight: null })],
+      edges: [],
+    });
+    const store = makeStore();
+
+    const flowNodes = toFlowNodes(scene, store);
+    const frameFlowNode = flowNodes.find((n) => n.id === "frame-1");
+    expect(frameFlowNode!.width).toBe(320);
+    expect(frameFlowNode!.height).toBe(200);
+  });
+
+  it("onSetLabel/onToggleCollapsed/onToggleLock/onSetColor/onResize/onFitToContent/onUngroup call the right store intents", () => {
+    const scene = baseScene({ nodes: [groupNode({ id: "frame-1", kind: "frame" })], edges: [] });
+    const store = makeStore();
+    const spies = {
+      setGroupLabel: vi.spyOn(store, "setGroupLabel"),
+      toggleGroupCollapsed: vi.spyOn(store, "toggleGroupCollapsed"),
+      toggleFrameLock: vi.spyOn(store, "toggleFrameLock"),
+      setGroupColor: vi.spyOn(store, "setGroupColor"),
+      resizeFrame: vi.spyOn(store, "resizeFrame"),
+      fitFrameToContent: vi.spyOn(store, "fitFrameToContent"),
+      ungroup: vi.spyOn(store, "ungroup"),
+    };
+
+    const flowNodes = toFlowNodes(scene, store);
+    const data = flowNodes.find((n) => n.id === "frame-1")!.data as {
+      onSetLabel: (text: string) => void;
+      onToggleCollapsed: () => void;
+      onToggleLock: () => void;
+      onSetColor: (color: string | null, headerColor: string | null) => void;
+      onResize: (width: number, height: number) => void;
+      onFitToContent: () => void;
+      onUngroup: () => void;
+    };
+
+    data.onSetLabel("New Label");
+    expect(spies.setGroupLabel).toHaveBeenCalledWith("frame-1", "New Label");
+    data.onToggleCollapsed();
+    expect(spies.toggleGroupCollapsed).toHaveBeenCalledWith("frame-1");
+    data.onToggleLock();
+    expect(spies.toggleFrameLock).toHaveBeenCalledWith("frame-1");
+    data.onSetColor("#d98a3d", null);
+    expect(spies.setGroupColor).toHaveBeenCalledWith("frame-1", "#d98a3d", null);
+    data.onResize(500, 300);
+    expect(spies.resizeFrame).toHaveBeenCalledWith("frame-1", 500, 300);
+    data.onFitToContent();
+    expect(spies.fitFrameToContent).toHaveBeenCalledWith("frame-1");
+    data.onUngroup();
+    expect(spies.ungroup).toHaveBeenCalledWith("frame-1");
+  });
+});
+
+describe("groupDragKindOf (R6.1 group-drag eligibility)", () => {
+  function flowNode(overrides: Partial<SceneFlowNode> = {}): SceneFlowNode {
+    return {
+      id: "g1",
+      type: "frame",
+      position: { x: 0, y: 0 },
+      data: { itemIds: [] },
+      ...overrides,
+    } as unknown as SceneFlowNode;
+  }
+
+  it("returns 'frame' for a locked frame", () => {
+    expect(groupDragKindOf(flowNode({ type: "frame", data: { isLocked: true } } as Partial<SceneFlowNode>))).toBe(
+      "frame",
+    );
+  });
+
+  it("returns null for an unlocked frame", () => {
+    expect(groupDragKindOf(flowNode({ type: "frame", data: { isLocked: false } } as Partial<SceneFlowNode>))).toBeNull();
+  });
+
+  it("returns 'container' unconditionally (no lock concept)", () => {
+    expect(groupDragKindOf(flowNode({ type: "container", data: {} } as Partial<SceneFlowNode>))).toBe("container");
+  });
+
+  it("returns null for every other node kind", () => {
+    expect(groupDragKindOf(flowNode({ type: "chat" } as Partial<SceneFlowNode>))).toBeNull();
+  });
+
+  it("returns null for undefined", () => {
+    expect(groupDragKindOf(undefined)).toBeNull();
+  });
+});
+
+describe("applyGroupDragDelta (R6.1 group-drag)", () => {
+  it("a locked frame's drag carries every member by the identical delta", () => {
+    const nodes: SceneFlowNode[] = [
+      {
+        id: "frame-1",
+        type: "frame",
+        position: { x: 100, y: 100 },
+        data: { isLocked: true, itemIds: ["member-1", "member-2"] },
+      } as unknown as SceneFlowNode,
+      { id: "member-1", type: "chat", position: { x: 120, y: 140 }, data: {} } as unknown as SceneFlowNode,
+      { id: "member-2", type: "code", position: { x: 300, y: 160 }, data: {} } as unknown as SceneFlowNode,
+      { id: "unrelated", type: "chat", position: { x: 999, y: 999 }, data: {} } as unknown as SceneFlowNode,
+    ];
+
+    // The frame itself moved from (100,100) to (140,130): delta (40,30).
+    const changes = applyGroupDragDelta(nodes, "frame-1", { x: 140, y: 130 });
+
+    expect(changes).toHaveLength(2);
+    const typedChanges = changes as unknown as Array<{ id: string; position: { x: number; y: number } }>;
+    const byId = new Map(typedChanges.map((c) => [c.id, c]));
+    expect(byId.get("member-1")!.position).toEqual({ x: 160, y: 170 });
+    expect(byId.get("member-2")!.position).toEqual({ x: 340, y: 190 });
+    // The unrelated node never appears in the output.
+    expect(byId.has("unrelated")).toBe(false);
+    for (const change of changes) {
+      expect(change.type).toBe("position");
+      expect((change as { dragging: boolean }).dragging).toBe(true);
+    }
+  });
+
+  it("an unlocked frame's drag carries no members", () => {
+    const nodes: SceneFlowNode[] = [
+      {
+        id: "frame-1",
+        type: "frame",
+        position: { x: 100, y: 100 },
+        data: { isLocked: false, itemIds: ["member-1"] },
+      } as unknown as SceneFlowNode,
+      { id: "member-1", type: "chat", position: { x: 120, y: 140 }, data: {} } as unknown as SceneFlowNode,
+    ];
+    expect(applyGroupDragDelta(nodes, "frame-1", { x: 140, y: 130 })).toEqual([]);
+  });
+
+  it("a container's drag carries every member by the identical delta unconditionally", () => {
+    const nodes: SceneFlowNode[] = [
+      {
+        id: "container-1",
+        type: "container",
+        position: { x: 0, y: 0 },
+        data: { itemIds: ["member-1"] },
+      } as unknown as SceneFlowNode,
+      { id: "member-1", type: "note", position: { x: 50, y: 50 }, data: {} } as unknown as SceneFlowNode,
+    ];
+    const changes = applyGroupDragDelta(nodes, "container-1", { x: -10, y: 5 });
+    expect(changes).toEqual([
+      { id: "member-1", type: "position", dragging: true, position: { x: 40, y: 55 } },
+    ]);
+  });
+
+  it("a plain (non-group) node's drag carries no members", () => {
+    const nodes: SceneFlowNode[] = [
+      { id: "chat-1", type: "chat", position: { x: 0, y: 0 }, data: {} } as unknown as SceneFlowNode,
+    ];
+    expect(applyGroupDragDelta(nodes, "chat-1", { x: 10, y: 10 })).toEqual([]);
+  });
+
+  it("skips a member id that no longer resolves to a live node", () => {
+    const nodes: SceneFlowNode[] = [
+      {
+        id: "frame-1",
+        type: "frame",
+        position: { x: 0, y: 0 },
+        data: { isLocked: true, itemIds: ["gone"] },
+      } as unknown as SceneFlowNode,
+    ];
+    expect(applyGroupDragDelta(nodes, "frame-1", { x: 10, y: 10 })).toEqual([]);
   });
 });

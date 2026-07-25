@@ -226,6 +226,51 @@ def register_plugins(
             await bus.publish("scene")
             return node.id
 
+        if name == "System Prompt":
+            # R6.1: the sixth real node-creation plugin, same "requires a
+            # real, valid parent_node_id" posture as every real
+            # node-creation plugin above - legacy places a System Prompt
+            # note near/above a branch root, which only makes sense relative
+            # to a selected node. UNLIKE the branch-point-child plugins
+            # above (which attach as a CHILD of parent_node_id, one
+            # MESSAGE_VERTICAL_SPACING below it), this note attaches to
+            # parent_node_id's BRANCH ROOT (SceneDocument.get_branch_root -
+            # the same parent-edge walk backend/agents.py's
+            # _resolve_branch_system_prompt uses at send time), positioned
+            # roughly 150px ABOVE that root, and connects note -> root (the
+            # edge DIRECTION _resolve_branch_system_prompt looks for -
+            # reversed from the child-plugins' root -> child edges above).
+            if not parent_node_id or parent_node_id not in canvas_document.nodes:
+                notifications.show(
+                    "Please select a valid node to branch from before adding a System Prompt node.",
+                    "warning",
+                )
+                await bus.publish("notification")
+                return None
+            root = canvas_document.get_branch_root(parent_node_id)
+            # A root can only ever have ONE effective system-prompt note -
+            # backend/agents.py._resolve_branch_system_prompt has no
+            # deterministic "which one wins" rule for two at once. Reuse an
+            # existing one instead of creating a silently-inert duplicate.
+            existing = next(
+                (
+                    canvas_document.nodes[edge.source]
+                    for edge in canvas_document.edges.values()
+                    if edge.target == root.id
+                    and edge.source in canvas_document.nodes
+                    and canvas_document.nodes[edge.source].kind == "note"
+                    and canvas_document.nodes[edge.source].is_system_prompt
+                ),
+                None,
+            )
+            if existing is not None:
+                await bus.publish("scene")
+                return existing.id
+            note = canvas_document.add_note(root.x, root.y - 150, is_system_prompt=True)
+            canvas_document.connect(note.id, root.id)
+            await bus.publish("scene")
+            return note.id
+
         notifications.show(f'"{name}" node creation lands in R3/R5.', "info")
         await bus.publish("notification")
         return None

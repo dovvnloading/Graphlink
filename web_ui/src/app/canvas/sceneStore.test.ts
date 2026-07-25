@@ -509,6 +509,98 @@ describe("SceneStore", () => {
     expect(intents).toEqual([{ topic: "scene", intent: "denyCodeExecution", args: ["req-4"] }]);
   });
 
+  it("addNote sends the scene-topic addNote intent with [x, y, isSystemPrompt, isSummaryNote], defaulting both flags false", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.addNote(10, 20);
+    expect(intents).toEqual([{ topic: "scene", intent: "addNote", args: [10, 20, false, false] }]);
+  });
+
+  it("addNote forwards isSystemPrompt/isSummaryNote when supplied", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.addNote(10, 20, { isSystemPrompt: true });
+    store.addNote(30, 40, { isSummaryNote: true });
+    expect(intents).toEqual([
+      { topic: "scene", intent: "addNote", args: [10, 20, true, false] },
+      { topic: "scene", intent: "addNote", args: [30, 40, false, true] },
+    ]);
+  });
+
+  it("setNoteContent sends the scene-topic setNoteContent intent with [nodeId, content]", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.setNoteContent("n1", "updated text");
+    expect(intents).toEqual([{ topic: "scene", intent: "setNoteContent", args: ["n1", "updated text"] }]);
+  });
+
+  it("createFrame sends the scene-topic createFrame intent with [itemIds]", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.createFrame(["n1", "n2"]);
+    expect(intents).toEqual([{ topic: "scene", intent: "createFrame", args: [["n1", "n2"]] }]);
+  });
+
+  it("createContainer sends the scene-topic createContainer intent with [itemIds]", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.createContainer(["n1", "n2"]);
+    expect(intents).toEqual([{ topic: "scene", intent: "createContainer", args: [["n1", "n2"]] }]);
+  });
+
+  it("setGroupLabel sends the scene-topic setGroupLabel intent with [nodeId, text]", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.setGroupLabel("n1", "New Label");
+    expect(intents).toEqual([{ topic: "scene", intent: "setGroupLabel", args: ["n1", "New Label"] }]);
+  });
+
+  it("setGroupColor sends the scene-topic setGroupColor intent with [nodeId, color, headerColor], both nullable", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.setGroupColor("n1", "#3f8f5c", null);
+    store.setGroupColor("n1", null, null);
+    expect(intents).toEqual([
+      { topic: "scene", intent: "setGroupColor", args: ["n1", "#3f8f5c", null] },
+      { topic: "scene", intent: "setGroupColor", args: ["n1", null, null] },
+    ]);
+  });
+
+  it("toggleFrameLock sends the scene-topic toggleFrameLock intent with [nodeId]", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.toggleFrameLock("n1");
+    expect(intents).toEqual([{ topic: "scene", intent: "toggleFrameLock", args: ["n1"] }]);
+  });
+
+  it("toggleGroupCollapsed sends the scene-topic toggleGroupCollapsed intent with [nodeId]", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.toggleGroupCollapsed("n1");
+    expect(intents).toEqual([{ topic: "scene", intent: "toggleGroupCollapsed", args: ["n1"] }]);
+  });
+
+  it("resizeFrame sends the scene-topic resizeFrame intent with [nodeId, width, height]", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.resizeFrame("n1", 500, 300);
+    expect(intents).toEqual([{ topic: "scene", intent: "resizeFrame", args: ["n1", 500, 300] }]);
+  });
+
+  it("fitFrameToContent sends the scene-topic fitFrameToContent intent with [nodeId]", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.fitFrameToContent("n1");
+    expect(intents).toEqual([{ topic: "scene", intent: "fitFrameToContent", args: ["n1"] }]);
+  });
+
+  it("ungroup sends the scene-topic ungroup intent with [nodeId]", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.ungroup("n1");
+    expect(intents).toEqual([{ topic: "scene", intent: "ungroup", args: ["n1"] }]);
+  });
+
   it("subscribeStream forwards directly to transport.subscribeStream and returns its unsubscribe function", () => {
     const { transport } = makeFakeTransport();
     const unsubscribe = vi.fn();

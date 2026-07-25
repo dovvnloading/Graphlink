@@ -442,15 +442,131 @@ def test_execute_plugin_execution_sandbox_creates_a_real_code_sandbox_node():
     assert "scene" in recorder.topics_seen()
 
 
-# -- R5.1/R5.2/R5.3/R5.4: non-regression - every OTHER plugin name is still an
-# honest, unchanged deferred notice -------------------------------------------
+# -- R6.1: "System Prompt" - the sixth real node-creation plugin -------------
+#
+# Unlike Web Research/Artifact/Gitlink/Py-Coder/Execution Sandbox above (each
+# a branch-point CHILD of parent_node_id), a System Prompt note attaches to
+# parent_node_id's BRANCH ROOT (SceneDocument.get_branch_root) and connects
+# note -> root (reversed from the child plugins' root -> child edges) - see
+# backend/plugins.py's own "System Prompt" branch and backend/agents.py's
+# _resolve_branch_system_prompt, which looks for that exact edge shape at
+# send time.
+
+
+def test_execute_plugin_system_prompt_requires_parent():
+    bus, notifications, canvas_document = _make_plugins_bus()
+
+    result = asyncio.run(bus.dispatch_intent("app-plugins", "executePlugin", ["System Prompt"]))
+
+    assert result is None
+    assert notifications.visible is True
+    assert notifications.msg_type == "warning"
+    assert notifications.message == (
+        "Please select a valid node to branch from before adding a System Prompt node."
+    )
+    assert not any(n.kind == "note" for n in canvas_document.nodes.values())
+
+
+def test_execute_plugin_system_prompt_rejects_unknown_parent_id():
+    bus, notifications, canvas_document = _make_plugins_bus()
+
+    result = asyncio.run(
+        bus.dispatch_intent("app-plugins", "executePlugin", ["System Prompt", "ghost-node-id"])
+    )
+
+    assert result is None
+    assert notifications.visible is True
+    assert notifications.msg_type == "warning"
+    assert notifications.message == (
+        "Please select a valid node to branch from before adding a System Prompt node."
+    )
+    assert not any(n.kind == "note" for n in canvas_document.nodes.values())
+
+
+def test_execute_plugin_system_prompt_creates_a_note_attached_to_the_branch_root_not_the_selected_child():
+    bus, notifications, canvas_document = _make_plugins_bus()
+    # A 2-hop branch: root -> mid. Selecting `mid` must still resolve the
+    # note to `root` (get_branch_root's own walk), proving this isn't just
+    # attaching to whatever node_id was passed in directly.
+    root = canvas_document.add_node(100, 200, "root")
+    mid = canvas_document.add_node(100, 320, "mid")
+    canvas_document.connect(root.id, mid.id)
+
+    class Recorder:
+        def __init__(self):
+            self.messages = []
+
+        async def send_json(self, data):
+            self.messages.append(data)
+
+        def topics_seen(self):
+            return [m["topic"] for m in self.messages if m["kind"] == "state"]
+
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    result = asyncio.run(bus.dispatch_intent("app-plugins", "executePlugin", ["System Prompt", mid.id]))
+
+    assert result is not None
+    note = canvas_document.nodes[result]
+    assert note.kind == "note"
+    assert note.is_system_prompt is True
+    # Positioned above the ROOT (not `mid`), roughly matching legacy's
+    # "200px above" placement.
+    assert note.x == root.x
+    assert note.y == root.y - 150
+    # note -> root, the exact direction _resolve_branch_system_prompt looks
+    # for - NOT root -> note (the child plugins' own direction) and NOT
+    # note -> mid (the selected node, not the resolved root).
+    assert any(e.source == note.id and e.target == root.id for e in canvas_document.edges.values())
+    assert not any(e.source == note.id and e.target == mid.id for e in canvas_document.edges.values())
+    assert notifications.visible is False, "success is not a deferral - no notification fires"
+    assert "scene" in recorder.topics_seen()
+
+
+def test_execute_plugin_system_prompt_on_a_rootless_node_attaches_to_itself():
+    # A node with no parent edge at all IS its own branch root
+    # (get_branch_root's own documented behavior) - selecting it directly
+    # must still produce a valid note -> node edge, not a crash/no-op.
+    bus, notifications, canvas_document = _make_plugins_bus()
+    lone = canvas_document.add_node(0, 0, "lone")
+
+    result = asyncio.run(bus.dispatch_intent("app-plugins", "executePlugin", ["System Prompt", lone.id]))
+
+    assert result is not None
+    note = canvas_document.nodes[result]
+    assert note.kind == "note"
+    assert note.is_system_prompt is True
+    assert any(e.source == note.id and e.target == lone.id for e in canvas_document.edges.values())
+
+
+def test_execute_plugin_system_prompt_reuses_an_existing_note_instead_of_creating_a_duplicate():
+    # Post-review fix: a root can only ever have ONE effective system-prompt
+    # note (_resolve_branch_system_prompt has no "which one wins" rule for
+    # two at once) - a second invocation on the same branch must return the
+    # SAME note, not silently create an inert duplicate.
+    bus, notifications, canvas_document = _make_plugins_bus()
+    root = canvas_document.add_node(100, 200, "root")
+
+    first = asyncio.run(bus.dispatch_intent("app-plugins", "executePlugin", ["System Prompt", root.id]))
+    second = asyncio.run(bus.dispatch_intent("app-plugins", "executePlugin", ["System Prompt", root.id]))
+
+    assert first == second
+    assert sum(1 for n in canvas_document.nodes.values() if n.kind == "note") == 1
+
+
+# -- R5.1/R5.2/R5.3/R5.4/R6.1: non-regression - every OTHER plugin name is
+# still an honest, unchanged deferred notice ----------------------------------
 
 
 @pytest.mark.parametrize(
     "name",
     [
         n for n in (p[0] for p in _PLUGINS)
-        if n not in ("Web Research", "Artifact / Drafter", "Gitlink", "Py-Coder", "Execution Sandbox")
+        if n not in (
+            "Web Research", "Artifact / Drafter", "Gitlink", "Py-Coder", "Execution Sandbox",
+            "System Prompt",
+        )
     ],
 )
 def test_execute_plugin_every_other_plugin_name_still_shows_the_unchanged_deferred_notice(name):

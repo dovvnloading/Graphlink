@@ -11,6 +11,9 @@ function makeStore(nodes: Array<{ id: string; x: number; y: number; title: strin
     removeNodes: vi.fn(),
     removeEdges: vi.fn(),
     addPin: vi.fn(),
+    addNote: vi.fn(),
+    createFrame: vi.fn(),
+    createContainer: vi.fn(),
   };
 }
 
@@ -84,5 +87,57 @@ describe("buildCommands", () => {
     commands.find((c) => c.id === "add-pin")!.run();
     expect(store.addPin).toHaveBeenCalledTimes(1);
     expect(store.addPin.mock.calls[0][0]).toBe("Pin 1");
+  });
+
+  it("add-note is always enabled and calls addNote with the viewport center", () => {
+    const store = makeStore();
+    // @ts-expect-error - test double
+    const commands = buildCommands(store, makeRf(), makeOverlays());
+    const addNote = commands.find((c) => c.id === "add-note")!;
+    expect(addNote.enabled()).toBe(true);
+    addNote.run();
+    expect(store.addNote).toHaveBeenCalledTimes(1);
+  });
+
+  it("create-frame/create-container are disabled with 0 or 1 selected nodes", () => {
+    const store = makeStore([{ id: "n0", x: 0, y: 0, title: "A", kind: "placeholder" }]);
+    // @ts-expect-error - test double
+    const noneSelected = buildCommands(store, makeRf([{ id: "n0", selected: false }]), makeOverlays());
+    expect(noneSelected.find((c) => c.id === "create-frame")!.enabled()).toBe(false);
+    expect(noneSelected.find((c) => c.id === "create-container")!.enabled()).toBe(false);
+
+    // @ts-expect-error - test double
+    const oneSelected = buildCommands(store, makeRf([{ id: "n0", selected: true }]), makeOverlays());
+    expect(oneSelected.find((c) => c.id === "create-frame")!.enabled()).toBe(false);
+    expect(oneSelected.find((c) => c.id === "create-container")!.enabled()).toBe(false);
+  });
+
+  it("create-frame is enabled with 2+ selected nodes and calls createFrame with their ids", () => {
+    const store = makeStore();
+    const rf = makeRf([
+      { id: "n0", selected: true },
+      { id: "n1", selected: true },
+      { id: "n2", selected: false },
+    ]);
+    // @ts-expect-error - test double
+    const commands = buildCommands(store, rf, makeOverlays());
+    const createFrame = commands.find((c) => c.id === "create-frame")!;
+    expect(createFrame.enabled()).toBe(true);
+    createFrame.run();
+    expect(store.createFrame).toHaveBeenCalledWith(["n0", "n1"]);
+  });
+
+  it("create-container is enabled with 2+ selected nodes and calls createContainer with their ids", () => {
+    const store = makeStore();
+    const rf = makeRf([
+      { id: "n0", selected: true },
+      { id: "n1", selected: true },
+    ]);
+    // @ts-expect-error - test double
+    const commands = buildCommands(store, rf, makeOverlays());
+    const createContainer = commands.find((c) => c.id === "create-container")!;
+    expect(createContainer.enabled()).toBe(true);
+    createContainer.run();
+    expect(store.createContainer).toHaveBeenCalledWith(["n0", "n1"]);
   });
 });
