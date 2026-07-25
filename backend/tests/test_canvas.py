@@ -32,7 +32,9 @@ from backend.notifications import NotificationState
 
 import api_provider
 import graphlink_task_config as task_config
+from graphlink_navigation_pins import NavigationPinRecord
 from graphlink_plugins.web_research.domain import ResearchCitation, ResearchResult, ResearchSource
+from backend.token_counter import estimate_tokens
 
 
 # -- document invariants ----------------------------------------------------
@@ -2012,15 +2014,48 @@ def test_pin_intents_round_trip_through_the_store():
         bus, document, _ = make_bus()
         pin_id = await bus.dispatch_intent("scene", "addPin", ["Start here", 5, 9, "note!"])
         payload = document.scene_payload()
-        assert payload["pins"] == [
-            {"id": pin_id, "title": "Start here", "note": "note!", "x": 5.0, "y": 9.0}
-        ]
+        pin = payload["pins"][0]
+        # R6.3: anchorItemId/sortOrder/createdAt asserted separately below
+        # (not baked into one exact-dict-equality assert) since createdAt is
+        # a real timestamp, not a fixed value.
+        assert pin["id"] == pin_id
+        assert pin["title"] == "Start here"
+        assert pin["note"] == "note!"
+        assert pin["x"] == 5.0
+        assert pin["y"] == 9.0
+        assert pin["anchorItemId"] is None
+        assert pin["sortOrder"] == 0
+        assert isinstance(pin["createdAt"], str) and pin["createdAt"]
         await bus.dispatch_intent("scene", "movePin", [pin_id, 50, 90])
         assert document.scene_payload()["pins"][0]["x"] == 50.0
         await bus.dispatch_intent("scene", "removePin", [pin_id])
         assert document.scene_payload()["pins"] == []
 
     asyncio.run(run())
+
+
+def test_pin_payload_exposes_anchor_item_id_sort_order_and_created_at():
+    # R6.3: NavigationPinRecord already carried anchor_item_id/sort_order/
+    # created_at (graphlink_navigation_pins.py) - this is purely a wire-
+    # exposure gap, closed by adding 3 keys to scene_payload()'s existing
+    # pin dict. Uses non-default values throughout so a field being silently
+    # dropped or swapped with another would be caught.
+    doc = SceneDocument()
+    doc.pins.add(
+        NavigationPinRecord.create(
+            title="Anchored",
+            note="pinned to a node",
+            x=1.0,
+            y=2.0,
+            anchor_item_id="n42",
+            sort_order=7,
+            created_at="2020-01-02T03:04:05+00:00",
+        )
+    )
+    pin = doc.scene_payload()["pins"][0]
+    assert pin["anchorItemId"] == "n42"
+    assert pin["sortOrder"] == 7
+    assert pin["createdAt"] == "2020-01-02T03:04:05+00:00"
 
 
 def test_update_pin_intent_renames_and_validates():
@@ -5499,3 +5534,176 @@ def test_generate_chart_intent_dispatcher_level_failure_shows_notification_witho
         assert add_chart_node_calls == []
 
     asyncio.run(run())
+
+
+# -- R6.3: view state, session tokens, splitter/scroll gaps, multimodal content ----
+
+
+def test_set_view_state_persists_and_appears_on_scene_payload():
+    doc = SceneDocument()
+    default_payload = doc.scene_payload()
+    assert default_payload["zoomFactor"] == 1.0
+    assert default_payload["scrollX"] == 0.0
+    assert default_payload["scrollY"] == 0.0
+
+    doc.set_view_state(1.5, 120.0, -40.0)
+    payload = doc.scene_payload()
+    assert payload["zoomFactor"] == 1.5
+    assert payload["scrollX"] == 120.0
+    assert payload["scrollY"] == -40.0
+
+
+def test_set_view_state_intent_mutates_and_publishes_scene():
+    async def run():
+        bus, document, recorder = make_bus()
+        await bus.dispatch_intent("scene", "setViewState", [2.0, 10, 20])
+        payload = document.scene_payload()
+        assert payload["zoomFactor"] == 2.0
+        assert payload["scrollX"] == 10.0
+        assert payload["scrollY"] == 20.0
+        assert recorder.topics_seen().count("scene") == 1
+
+    asyncio.run(run())
+
+
+def test_total_session_tokens_starts_at_zero_and_grows_after_send_message_and_reply():
+    # R6.3: total_session_tokens must be a REAL, live-growing counter, not a
+    # static field stuck at 0 - grows once for the user's own message text
+    # (send_message's own domain mutation) and once for the assistant's
+    # completed reply text (the _on_reply callback), both via
+    # estimate_tokens. Same fake-dispatcher/monkeypatch seam as
+    # test_send_message_intent_dispatches_a_real_agent_reply above.
+    async def run():
+        bus, document, recorder, dispatcher = make_bus_with_dispatcher()
+        assert document.total_session_tokens == 0
+
+        user_text = "what is this graph about?"
+        reply_text = "a real agent reply with several distinct words"
+
+        def fake_chat(task, messages, **kwargs):
+            return {"message": {"content": reply_text}}
+
+        with patch.object(api_provider, "USE_API_MODE", False), \
+                patch.object(api_provider, "LOCAL_PROVIDER_TYPE", task_config.LOCAL_PROVIDER_OLLAMA), \
+                patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
+                patch.object(api_provider, "chat", fake_chat):
+            await bus.dispatch_intent("scene", "sendMessage", [user_text])
+            entry = next(iter(dispatcher._requests.values()))
+            await entry["task"]
+
+        expected = estimate_tokens(user_text) + estimate_tokens(reply_text)
+        assert expected > 0, "the test fixture itself must exercise a non-zero token count"
+        assert document.total_session_tokens == expected
+        assert document.scene_payload()["totalSessionTokens"] == expected
+
+    asyncio.run(run())
+
+
+def test_set_html_splitter_state_accepts_html_kind_and_rejects_others():
+    doc = SceneDocument()
+    chat_node = doc.add_chat_node(0, 0, "hi", True)
+    html_node = doc.add_html_node(0, 0, "<p>hi</p>", chat_node.id)
+    assert html_node.html_splitter_state is None
+
+    doc.set_html_splitter_state(html_node.id, 0.35)
+    assert html_node.html_splitter_state == 0.35
+    payload_node = next(n for n in doc.scene_payload()["nodes"] if n["id"] == html_node.id)
+    assert payload_node["htmlSplitterState"] == 0.35
+
+    with pytest.raises(SceneError):
+        doc.set_html_splitter_state(chat_node.id, 0.5)
+
+    with pytest.raises(SceneError):
+        doc.set_html_splitter_state("does-not-exist", 0.5)
+
+
+def test_set_html_splitter_state_intent_mutates_and_publishes_scene():
+    async def run():
+        bus, document, recorder = make_bus()
+        chat_id = await bus.dispatch_intent("scene", "addChatNode", [0, 0, "hi", True])
+        html_id = await bus.dispatch_intent("scene", "addHtmlNode", [0, 0, "<p>hi</p>", chat_id])
+        recorder.messages.clear()
+
+        await bus.dispatch_intent("scene", "setHtmlSplitterState", [html_id, 0.6])
+        assert document.nodes[html_id].html_splitter_state == 0.6
+        assert recorder.topics_seen().count("scene") == 1
+
+        with pytest.raises(Exception):
+            await bus.dispatch_intent("scene", "setHtmlSplitterState", [chat_id, 0.6])
+
+    asyncio.run(run())
+
+
+def test_set_chat_scroll_value_accepts_chat_kind_and_rejects_others():
+    doc = SceneDocument()
+    chat_node = doc.add_chat_node(0, 0, "hi", True)
+    other_node = doc.add_node(0, 0, "placeholder")
+    assert chat_node.chat_scroll_value == 0.0
+
+    doc.set_chat_scroll_value(chat_node.id, 123.0)
+    assert chat_node.chat_scroll_value == 123.0
+    payload_node = next(n for n in doc.scene_payload()["nodes"] if n["id"] == chat_node.id)
+    assert payload_node["chatScrollValue"] == 123.0
+
+    with pytest.raises(SceneError):
+        doc.set_chat_scroll_value(other_node.id, 5.0)
+
+    with pytest.raises(SceneError):
+        doc.set_chat_scroll_value("does-not-exist", 5.0)
+
+
+def test_set_chat_scroll_value_intent_mutates_and_publishes_scene():
+    async def run():
+        bus, document, recorder = make_bus()
+        chat_id = await bus.dispatch_intent("scene", "addChatNode", [0, 0, "hi", True])
+        other_id = await bus.dispatch_intent("scene", "addNode", [0, 0, "placeholder"])
+        recorder.messages.clear()
+
+        await bus.dispatch_intent("scene", "setChatScrollValue", [chat_id, 88.0])
+        assert document.nodes[chat_id].chat_scroll_value == 88.0
+        assert recorder.topics_seen().count("scene") == 1
+
+        with pytest.raises(Exception):
+            await bus.dispatch_intent("scene", "setChatScrollValue", [other_id, 1.0])
+
+    asyncio.run(run())
+
+
+def test_scene_payload_round_trips_content_parts_with_base64_encoded_image_bytes():
+    # R6.3: content_parts is the RAW in-memory form (real bytes under
+    # "data"); scene_payload()'s wire form base64-encodes any part carrying
+    # raw bytes via content_codec.encode_image_bytes, matching content_codec.
+    # process_content_for_serialization's own output shape, while leaving
+    # the SceneNode's own in-memory field untouched.
+    doc = SceneDocument()
+    chat_node = doc.add_chat_node(0, 0, "look at this", True)
+    raw_image_bytes = b"\x89PNG\r\n raw bytes here"
+    chat_node.content_parts = [
+        {"type": "text", "text": "look at this"},
+        {"type": "image_bytes", "data": raw_image_bytes},
+    ]
+
+    payload_node = next(n for n in doc.scene_payload()["nodes"] if n["id"] == chat_node.id)
+    content_parts = payload_node["contentParts"]
+    assert content_parts[0] == {"type": "text", "text": "look at this"}
+    assert content_parts[1]["type"] == "image_bytes"
+    assert isinstance(content_parts[1]["data"], str), "wire form must be base64 text, not raw bytes"
+    assert base64.b64decode(content_parts[1]["data"]) == raw_image_bytes
+
+    # The in-memory field itself must be untouched by building the wire
+    # payload - still real bytes, never mutated into base64 text in place.
+    assert chat_node.content_parts[1]["data"] == raw_image_bytes
+    assert isinstance(chat_node.content_parts[1]["data"], bytes)
+
+
+def test_scene_payload_content_parts_is_none_not_empty_list_when_unset():
+    # R6.3: "no multimodal content" (None) must stay distinguishable on the
+    # wire from "multimodal content that happens to be empty" ([]) - the
+    # overwhelmingly common plain-text chat node must get contentParts:
+    # null, never [].
+    doc = SceneDocument()
+    chat_node = doc.add_chat_node(0, 0, "plain text only", True)
+    assert chat_node.content_parts is None
+
+    payload_node = next(n for n in doc.scene_payload()["nodes"] if n["id"] == chat_node.id)
+    assert payload_node["contentParts"] is None

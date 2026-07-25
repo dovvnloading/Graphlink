@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
-import { LOD_ZOOM_THRESHOLD } from "./canvasConstants";
+import { CHAT_SCROLL_REPORT_DEBOUNCE_MS, LOD_ZOOM_THRESHOLD } from "./canvasConstants";
 
 /**
  * The chat node (Qt-removal plan R3.1/R3.2) - ChatNode's React successor:
@@ -42,6 +42,12 @@ import { LOD_ZOOM_THRESHOLD } from "./canvasConstants";
  * parent. Key Takeaway/Explainer Note remain honestly deferred (still no
  * agent-layer support of their own) - the stale "Chart" mention in their old
  * shared R4-blocker note above has been removed accordingly.
+ *
+ * R6.3: the node's own scroll position within .chat-node-content (its
+ * scrollable markdown body) is now restored on mount and reported
+ * (debounced) on every scroll - the legacy serializer's own scroll_value
+ * field, previously unmodeled here entirely, needed for R6.4/R6.5's session
+ * load/save round trip.
  */
 
 export interface ChatNodeData extends Record<string, unknown> {
@@ -49,12 +55,17 @@ export interface ChatNodeData extends Record<string, unknown> {
   isUser: boolean;
   isCollapsed: boolean;
   dockedChildren: { id: string; label: string }[];
+  // R6.3: the node's own persisted scroll position - restored into
+  // .chat-node-content's scrollTop once on mount, then kept live-updated
+  // (debounced) via onScrollChange as the user scrolls.
+  chatScrollValue: number;
   onToggleCollapse: () => void;
   onDelete: () => void;
   onUndockChild: (childId: string) => void;
   onRegenerate: () => void;
   onGenerateImage: () => void;
   onGenerateChart: (chartType: string) => void;
+  onScrollChange: (value: number) => void;
 }
 
 export type ChatFlowNode = Node<ChatNodeData, "chat">;
@@ -256,11 +267,55 @@ function ChatNodeMenu({
   );
 }
 
+/** R6.3: the debounce wrapper for scroll-position reporting - same plain
+ * clearTimeout/setTimeout-box-keyed-off-the-caller's-own-timerRef shape as
+ * ChartNodeView.tsx's makeDebouncedChartResize / HtmlNodeView.tsx's
+ * makeDebouncedSplitterReport, exported standalone for the same direct-unit-
+ * testability reason. */
+export function makeDebouncedScrollReport(
+  timerRef: { current: ReturnType<typeof setTimeout> | null },
+  onScrollChange: (value: number) => void,
+  debounceMs: number = CHAT_SCROLL_REPORT_DEBOUNCE_MS,
+): (value: number) => void {
+  return (value) => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => {
+      timerRef.current = null;
+      onScrollChange(value);
+    }, debounceMs);
+  };
+}
+
 export function ChatNodeView({ data, selected }: NodeProps<ChatFlowNode>) {
   const zoom = useStore((s) => s.transform[2]);
   const lodCollapsed = zoom < LOD_ZOOM_THRESHOLD;
   const collapsed = data.isCollapsed || lodCollapsed;
   const [menuPosition, setMenuPosition] = useState<MenuPosition | null>(null);
+
+  // R6.3: restore the saved scroll position once on mount (an empty dep
+  // array - deliberate, not a lint oversight: re-running this on every scene
+  // snapshot/re-render would fight the user's own live scrolling every time
+  // an unrelated field on this node changes). scrollTimerRef carries the
+  // debounce state across scroll events (see makeDebouncedScrollReport
+  // above).
+  const contentRef = useRef<HTMLDivElement>(null);
+  const scrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (contentRef.current) contentRef.current.scrollTop = data.chatScrollValue;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(
+    () => () => {
+      if (scrollTimerRef.current) clearTimeout(scrollTimerRef.current);
+    },
+    [],
+  );
+
+  function onScroll(event: React.UIEvent<HTMLDivElement>) {
+    makeDebouncedScrollReport(scrollTimerRef, data.onScrollChange)(event.currentTarget.scrollTop);
+  }
 
   return (
     <div
@@ -290,7 +345,7 @@ export function ChatNodeView({ data, selected }: NodeProps<ChatFlowNode>) {
         </button>
       </div>
       {!collapsed && (
-        <div className="scene-node-body chat-node-content">
+        <div className="scene-node-body chat-node-content" ref={contentRef} onScroll={onScroll}>
           <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
             {data.content}
           </ReactMarkdown>

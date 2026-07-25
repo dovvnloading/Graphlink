@@ -12,6 +12,7 @@ import {
   type Node,
   type NodeChange,
   type NodeProps,
+  type OnMove,
   applyNodeChanges,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
@@ -33,7 +34,12 @@ import { NoteNodeView, type NoteFlowNode } from "./NoteNodeView";
 import { PyCoderNodeView, type PyCoderFlowNode } from "./PyCoderNodeView";
 import { ThinkingNodeView, type ThinkingFlowNode } from "./ThinkingNodeView";
 import { WebResearchNodeView, type WebResearchFlowNode } from "./WebResearchNodeView";
-import { GROUP_FALLBACK_HEIGHT, GROUP_FALLBACK_WIDTH, LOD_ZOOM_THRESHOLD } from "./canvasConstants";
+import {
+  GROUP_FALLBACK_HEIGHT,
+  GROUP_FALLBACK_WIDTH,
+  LOD_ZOOM_THRESHOLD,
+  VIEWPORT_REPORT_DEBOUNCE_MS,
+} from "./canvasConstants";
 import { SceneStore, scaleDragPosition } from "./sceneStore";
 
 // R6.1: Notes/Frames/Containers - the generated SceneNodeRow type (codegen
@@ -78,6 +84,20 @@ interface SceneNodeChartFields {
   chartSourceNodeId: string;
 }
 type SceneNodeRowWithChart = SceneNodeRow & SceneNodeChartFields;
+
+// R6.3: Scene-level serialization gaps. Same situation as
+// SceneNodeGroupFields/SceneNodeChartFields above - the generated
+// SceneNodeRow type hasn't been regenerated yet to carry
+// htmlSplitterState/chatScrollValue (backend/canvas.py's scene_payload()
+// contract for this increment). contentParts is deliberately absent here -
+// nothing in this increment's frontend scope reads it (see this increment's
+// own report for why: it's a backend-only round-trip capability for OLD
+// multimodal sessions R6.4 may load, not a new frontend feature).
+interface SceneNodeR63Fields {
+  htmlSplitterState: number | null;
+  chatScrollValue: number;
+}
+type SceneNodeRowWithR63 = SceneNodeRow & SceneNodeR63Fields;
 
 /**
  * The React Flow canvas (Qt-removal plan R1) - the QGraphicsScene/ChatView
@@ -187,6 +207,7 @@ export function toFlowNodes(scene: SceneState, store: SceneStore): SceneFlowNode
         const target = nodesById.get(e.target);
         if (target?.isDocked) dockedChildren.push({ id: target.id, label: target.title });
       }
+      const chatR63 = n as SceneNodeRowWithR63;
       flowNodes.push({
         id: n.id,
         type: "chat" as const,
@@ -207,6 +228,13 @@ export function toFlowNodes(scene: SceneState, store: SceneStore): SceneFlowNode
           // onGenerateImage above - the new chart node arrives through the
           // next scene snapshot.
           onGenerateChart: (chartType: string) => store.generateChart(n.id, chartType),
+          // R6.3: the node's own scroll position within its content area -
+          // read on mount by ChatNodeView (restore) and reported (debounced)
+          // via the new setChatScrollValue intent on every scroll. Defaults
+          // to 0 the same way every other numeric ?? fallback in this file
+          // does, ahead of codegen regenerating SceneNodeRow to carry it.
+          chatScrollValue: chatR63.chatScrollValue ?? 0,
+          onScrollChange: (value: number) => store.setChatScrollValue(n.id, value),
         },
       });
       continue;
@@ -297,6 +325,7 @@ export function toFlowNodes(scene: SceneState, store: SceneStore): SceneFlowNode
       // entry exists on this node's own header, and ChatNodeView's own
       // dockedChildren/undock badge is kind-agnostic already, so undocking
       // it is still possible from the parent chat node's side).
+      const htmlR63 = n as SceneNodeRowWithR63;
       flowNodes.push({
         id: n.id,
         type: "html" as const,
@@ -306,6 +335,14 @@ export function toFlowNodes(scene: SceneState, store: SceneStore): SceneFlowNode
           isCollapsed: n.isCollapsed,
           onToggleCollapse: () => store.setChatCollapsed(n.id, !n.isCollapsed),
           onDelete: () => store.removeNodes([n.id]),
+          // R6.3: the Source/Preview split position - read on mount by
+          // HtmlNodeView (restore; null means "no saved value, use the
+          // component's own 50/50 default") and reported (debounced) via the
+          // new setHtmlSplitterState intent once a drag settles. See
+          // canvasConstants.ts's own HTML_SPLIT_* doc for why this exists
+          // now despite being scoped OUT back in R3.17/R3.18.
+          htmlSplitterState: htmlR63.htmlSplitterState ?? null,
+          onSplitterChange: (value: number) => store.setHtmlSplitterState(n.id, value),
         },
       });
       continue;
@@ -766,6 +803,27 @@ function toFlowEdges(scene: SceneState): Edge[] {
     .map((e) => ({ id: e.id, source: e.source, target: e.target }));
 }
 
+// R6.3: the debounce wrapper for viewport (pan/zoom) reporting - same posture
+// as ChartNodeView.tsx's makeDebouncedChartResize (a plain clearTimeout/
+// setTimeout box keyed off the caller's own timerRef, so debounce state
+// survives across repeated calls without this function owning any React
+// state itself), exported standalone for direct unit testing without
+// mounting a real <ReactFlow> pan/zoom gesture - the same testability
+// posture as scaleDragPosition/toFlowNodes/handleSelectionChange above.
+export function makeDebouncedViewportReport(
+  timerRef: { current: ReturnType<typeof setTimeout> | null },
+  onReport: (zoomFactor: number, scrollX: number, scrollY: number) => void,
+  debounceMs: number = VIEWPORT_REPORT_DEBOUNCE_MS,
+): (zoomFactor: number, scrollX: number, scrollY: number) => void {
+  return (zoomFactor, scrollX, scrollY) => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => {
+      timerRef.current = null;
+      onReport(zoomFactor, scrollX, scrollY);
+    }, debounceMs);
+  };
+}
+
 function CanvasInner({ store }: { store: SceneStore }) {
   const scene = useSyncExternalStore(store.subscribe, store.getScene);
   const grid = useSyncExternalStore(store.subscribe, store.getGrid);
@@ -776,6 +834,27 @@ function CanvasInner({ store }: { store: SceneStore }) {
   const [nodes, setNodes] = useState<SceneFlowNode[]>([]);
   const dragStartRef = useRef<Map<string, { x: number; y: number }>>(new Map());
   const draggingRef = useRef(false);
+
+  // R6.3: viewport (pan/zoom) reporting - see makeDebouncedViewportReport's
+  // own doc above. onMove fires on every frame of a pan/zoom gesture (never
+  // just once at the end, unlike NodeResizer's onResizeEnd), so the debounce
+  // here is load-bearing, not just a burst guard: without it, setViewState
+  // would fire a WS intent every animation frame of every pan/zoom gesture.
+  const viewportTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (viewportTimerRef.current) clearTimeout(viewportTimerRef.current);
+    },
+    [],
+  );
+  const onMove: OnMove = useCallback(
+    (_event, viewport) => {
+      makeDebouncedViewportReport(viewportTimerRef, (zoomFactor, scrollX, scrollY) =>
+        store.setViewState(zoomFactor, scrollX, scrollY),
+      )(viewport.zoom, viewport.x, viewport.y);
+    },
+    [store],
+  );
 
   useEffect(() => {
     if (!draggingRef.current) setNodes(toFlowNodes(scene, store));
@@ -892,6 +971,7 @@ function CanvasInner({ store }: { store: SceneStore }) {
         onNodesChange={onNodesChange}
         onConnect={onConnect}
         onDelete={onDelete}
+        onMove={onMove}
         // R5.1: mirrors React Flow's own selection state into the store so
         // PluginPicker can attach "which node was selected" to executePlugin
         // without either component reaching into the other's internals.

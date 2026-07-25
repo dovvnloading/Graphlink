@@ -49,3 +49,31 @@ export const CHART_DEFAULT_HEIGHT = 500;
  * 90ms after a same-process Qt repaint; this is intentionally longer since a
  * resize-then-WS-round-trip in this stack has a different cost profile. */
 export const CHART_RESIZE_DEBOUNCE_MS = 200;
+
+/** R6.3: Scene-level serialization gaps. Three independent "report after
+ * settling, not on every intermediate frame" debounces - same guard-against-
+ * a-network-call-burst posture as CHART_RESIZE_DEBOUNCE_MS above, just
+ * applied to three different gestures (canvas pan/zoom, the HTML node's
+ * splitter drag, a chat node's own content scroll) instead of NodeResizer's
+ * onResizeEnd. */
+export const VIEWPORT_REPORT_DEBOUNCE_MS = 250;
+export const HTML_SPLITTER_REPORT_DEBOUNCE_MS = 200;
+export const CHAT_SCROLL_REPORT_DEBOUNCE_MS = 200;
+
+/** R6.3: HTML view node splitter-position scaffolding. Legacy's own
+ * splitter_state (graphlink_html_view.py's QSplitter) was a deliberate scope
+ * cut back in R3.17/R3.18 (see HtmlNodeView.tsx/styles.css's own now-
+ * superseded comments) - it was pure Qt UI state with no domain meaning AT
+ * THE TIME, confirmed by a since-removed test asserting scene_payload needed
+ * no new key for it. R6.3 re-scopes it back in because R6.4/R6.5's session
+ * load/save pipeline needs every legacy-persisted field to round-trip
+ * losslessly, this one included - a value this app itself never wrote before
+ * can still show up in an OLD chats.db row R6.4 loads. HTML_SPLIT_TOTAL_PX is
+ * the combined source+preview pane height the split fraction is measured
+ * against, chosen to equal the pre-R6.3 fixed 140px+140px total exactly, so
+ * the default 0.5 fraction renders pixel-identical to the old fixed layout.
+ * MIN/MAX keep either pane from being dragged down to zero height. */
+export const HTML_SPLIT_TOTAL_PX = 280;
+export const HTML_SPLIT_DEFAULT = 0.5;
+export const HTML_SPLIT_MIN = 0.15;
+export const HTML_SPLIT_MAX = 0.85;

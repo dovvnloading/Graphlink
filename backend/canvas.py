@@ -21,10 +21,12 @@ document IS the source of truth the window can reload against.
 from __future__ import annotations
 
 import base64
+import importlib.util
 import itertools
 import math
 import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from graphlink_chart_data import ChartDataError, canonicalize_chart_data, SUPPORTED_CHART_TYPES
@@ -50,6 +52,36 @@ from backend.response_parsing import (
     PLACEHOLDER_ASSISTANT_REASONING,
     PLACEHOLDER_EMPTY_RESPONSE,
 )
+from backend.token_counter import estimate_tokens
+
+
+def _load_graphlink_content_codec():
+    """R6.3: graphlink_app/graphlink_session/content_codec.py is 100%
+    Qt-free (it imports only base64/binascii/logging - confirmed by direct
+    read), but the graphlink_session PACKAGE it lives in is not:
+    graphlink_session/__init__.py eagerly imports ChatSessionManager and
+    SaveWorkerThread, and workers.py in turn imports PySide6.QtCore - so a
+    plain `from graphlink_session.content_codec import ...` would run that
+    __init__.py first (Python always runs a package's __init__.py, even for
+    a submodule import) and pull Qt into backend/'s import graph. Same
+    "package wrapper is hazardous, the leaf module itself is not" situation
+    backend/chat_library.py's own docstring already documents for
+    graphlink_session.database - but UNLIKE chat_library.py (which
+    reimplements ChatDatabase's small SQL surface rather than import it),
+    content_codec.py is loaded here directly via importlib, bypassing the
+    package's __init__.py entirely, rather than ported/copied - there is
+    nothing about it worth forking into a second maintained copy."""
+    module_path = (
+        Path(__file__).resolve().parents[1]
+        / "graphlink_app" / "graphlink_session" / "content_codec.py"
+    )
+    spec = importlib.util.spec_from_file_location("_graphlink_session_content_codec", module_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_content_codec = _load_graphlink_content_codec()
 
 # Dark-theme grid swatches. The Qt bridge derived 3 of 5 from the live
 # QPalette; the backend is Qt-free by law (test_no_qt_anywhere.py), so until
@@ -541,6 +573,38 @@ class SceneNode:
     # simplification, not replicated). Unused (default "") for every other
     # kind.
     chart_source_node_id: str = ""
+    # R6.3: HtmlViewNode's persisted draggable code/preview splitter
+    # position - legacy's own splitter_state field, not currently modeled at
+    # all before this increment. None means "use the frontend's own
+    # default", not "0" - a real 0.0 position (fully collapsed to one side)
+    # must round-trip distinctly from "never set". html kind only; unused
+    # (default None) for every other kind.
+    html_splitter_state: float | None = None
+    # R6.3: ChatNode's persisted scroll position within its own content
+    # area (legacy's own scroll_value field). Unlike html_splitter_state
+    # above, 0.0 (scrolled to the top) IS the genuine default for a node
+    # that has never been scrolled, so this is a plain float, not an
+    # Optional - there is no "unset" state worth distinguishing here. chat
+    # kind only; unused (default 0.0) for every other kind.
+    chat_scroll_value: float = 0.0
+    # R6.3: the RAW (already-decoded - "data" holds real Python bytes, never
+    # base64 text) multimodal parts list for a chat node whose legacy
+    # raw_content was a list of typed parts (e.g. an inline pasted image)
+    # rather than a plain string - see content_codec.py's own
+    # process_content_for_serialization/_for_deserialization, which this
+    # increment does not call directly (see scene_payload()'s own comment
+    # for the wire-side base64 encoding step this field feeds). None for the
+    # overwhelmingly common plain-text case, where `content` above is the
+    # only source of truth. ADDITIVE, not a replacement for `content`: even
+    # when this is populated, `content` continues to hold a flattened-text
+    # mirror (join of the text-type parts, or a placeholder like "[Image]"
+    # for non-text parts) so every existing piece of code that already reads
+    # `content` as a plain string keeps working unchanged. chat kind only;
+    # unused (default None) for every other kind. Nothing in this increment
+    # creates multimodal content yet (no image-paste-into-composer feature
+    # exists) - this is purely the data-model capability so R6.4's session
+    # loader has somewhere to put it when an OLD saved session has it.
+    content_parts: list[dict[str, Any]] | None = None
 
 
 @dataclass
@@ -582,6 +646,24 @@ class SceneDocument:
     # increment, same posture as every prior node-type increment before its
     # real trigger landed.
     image_assets: dict[str, tuple[bytes, str]] = field(default_factory=dict)
+    # R6.3: the canvas viewport's persisted zoom/scroll (legacy's own
+    # zoom_factor/scroll_position(x, y)) - document-wide, not per-node, since
+    # there is exactly one viewport per session regardless of node count.
+    # No min/max clamping here (unlike drag_factor/font_size_pt above): the
+    # frontend's own viewport constraints already bound these, so there is
+    # nothing meaningful for the server to enforce independently.
+    zoom_factor: float = 1.0
+    scroll_x: float = 0.0
+    scroll_y: float = 0.0
+    # R6.3: legacy's running cumulative token count for the whole session,
+    # restored into the window's token counter on load - DISTINCT from
+    # backend/token_counter.py's TokenCounterState (a transient, in-memory,
+    # per-process ESTIMATE that resets every restart and is never
+    # persisted). This field is the real, live-growing, save/restore-able
+    # counterpart: send_message's WS wrapper (register_canvas, below) grows
+    # it by add_session_tokens for both the user's own message and the
+    # assistant's completed reply, every time either lands.
+    total_session_tokens: int = 0
     _counter: itertools.count = field(default_factory=itertools.count, repr=False)
 
     # -- nodes -------------------------------------------------------------
@@ -804,6 +886,18 @@ class SceneDocument:
         self.nodes[node_id] = node
         self.connect(parent_id, node_id)
         return node
+
+    def set_html_splitter_state(self, node_id: str, value: float) -> None:
+        """R6.3: persists an HtmlViewNode's draggable code/preview splitter
+        position. html kind only (SceneError otherwise), matching every
+        other kind-specific setter's guard pattern in this file (e.g.
+        resize_chart/toggle_frame_lock)."""
+        node = self.nodes.get(node_id)
+        if node is None:
+            raise SceneError(f"unknown node: {node_id}")
+        if node.kind != "html":
+            raise SceneError(f"node is not an html node: {node_id}")
+        node.html_splitter_state = float(value)
 
     def add_image_node(
         self,
@@ -2270,6 +2364,18 @@ class SceneDocument:
         if node.kind in ("frame", "container"):
             self._recompute_group_bounds(node_id)
 
+    def set_chat_scroll_value(self, node_id: str, value: float) -> None:
+        """R6.3: persists a chat node's own scroll position within its
+        content area. chat kind only (SceneError otherwise), matching every
+        other kind-specific setter's guard pattern in this file (e.g.
+        resize_chart/toggle_frame_lock)."""
+        node = self.nodes.get(node_id)
+        if node is None:
+            raise SceneError(f"unknown node: {node_id}")
+        if node.kind != "chat":
+            raise SceneError(f"node is not a chat node: {node_id}")
+        node.chat_scroll_value = float(value)
+
     def set_node_docked(self, node_id: str, docked: bool) -> None:
         """R3.13: a single generic setter handling both dock (docked=True)
         and undock (docked=False) - mirrors set_chat_collapsed's generic-
@@ -2379,6 +2485,24 @@ class SceneDocument:
             self.font_size_pt = max(FONT_SIZE_MIN, min(FONT_SIZE_MAX, int(size_pt)))
         if color is not None:
             self.font_color = str(color)
+
+    def set_view_state(self, zoom_factor: float, scroll_x: float, scroll_y: float) -> None:
+        """R6.3: plain setter for the canvas viewport's persisted zoom/
+        scroll, no validation beyond basic float coercion - see
+        zoom_factor's own field comment for why there is nothing meaningful
+        to clamp server-side."""
+        self.zoom_factor = float(zoom_factor)
+        self.scroll_x = float(scroll_x)
+        self.scroll_y = float(scroll_y)
+
+    def add_session_tokens(self, text: str) -> None:
+        """R6.3: grow total_session_tokens by `text`'s estimate_tokens count
+        - the one piece of real accumulation logic behind that field. Called
+        from register_canvas's sendMessage wrapper below, once for the
+        user's own new message text and once for the assistant's completed
+        reply text, so the counter genuinely grows as the conversation
+        continues rather than sitting fixed at 0."""
+        self.total_session_tokens += estimate_tokens(str(text))
 
     def organize(self) -> None:
         """Tidy layout: nodes into a near-square grid, stable id order."""
@@ -2496,6 +2620,20 @@ class SceneDocument:
                     "chartHeight": n.chart_height,
                     "chartAspectLocked": n.chart_aspect_locked,
                     "chartSourceNodeId": n.chart_source_node_id,
+                    # R6.3: HTML splitter + chat scroll gaps.
+                    "htmlSplitterState": n.html_splitter_state,
+                    "chatScrollValue": n.chat_scroll_value,
+                    # R6.3: null (not []) when content_parts is None - "no
+                    # multimodal content" must stay distinguishable from
+                    # "multimodal content that happens to be empty". Any
+                    # part carrying raw bytes under "data" gets that key
+                    # base64-encoded for the wire via content_codec's own
+                    # encode_image_bytes - the WIRE shape this produces
+                    # matches content_codec.process_content_for_serialization's
+                    # own output shape exactly, while n.content_parts itself
+                    # (in memory) keeps holding real bytes, per the field's
+                    # own contract.
+                    "contentParts": _content_parts_wire(n.content_parts),
                 }
                 for n in self.nodes.values()
             ],
@@ -2510,6 +2648,11 @@ class SceneDocument:
                     "note": p.note,
                     "x": p.position[0],
                     "y": p.position[1],
+                    # R6.3: NavigationPinRecord already carries these three -
+                    # they just weren't exposed on the wire until now.
+                    "anchorItemId": p.anchor_item_id,
+                    "sortOrder": p.sort_order,
+                    "createdAt": p.created_at,
                 }
                 for p in self.pins.records
             ],
@@ -2518,6 +2661,12 @@ class SceneDocument:
             "fontFamily": self.font_family,
             "fontSizePt": self.font_size_pt,
             "fontColor": self.font_color,
+            # R6.3: canvas view state + the real, live-growing session token
+            # count - see these fields' own comments on SceneDocument.
+            "zoomFactor": self.zoom_factor,
+            "scrollX": self.scroll_x,
+            "scrollY": self.scroll_y,
+            "totalSessionTokens": self.total_session_tokens,
         }
 
     def grid_payload(self) -> dict[str, Any]:
@@ -2533,6 +2682,33 @@ class SceneDocument:
             "stylePresets": list(GRID_STYLE_PRESETS),
             "colorPresets": list(GRID_COLOR_PRESETS),
         }
+
+
+def _content_parts_wire(parts: list[dict[str, Any]] | None) -> list[dict[str, Any]] | None:
+    """R6.3: scene_payload()'s wire-side transform for SceneNode.content_parts
+    - a pure mapping function, NOT a SceneDocument method (same posture as
+    _research_result_wire below). None stays None (never []), so "no
+    multimodal content" and "multimodal content that happens to be empty"
+    remain distinguishable on the wire. Any part that is a dict carrying raw
+    bytes under its "data" key gets that key base64-encoded as a string via
+    content_codec.encode_image_bytes - matching content_codec.
+    process_content_for_serialization's own output shape exactly - while
+    leaving every other key/part untouched. Builds fresh dicts throughout;
+    never mutates the SceneNode's own in-memory parts (which must keep
+    holding real bytes, per content_parts's own field contract)."""
+    if parts is None:
+        return None
+    wire_parts: list[dict[str, Any]] = []
+    for part in parts:
+        if isinstance(part, dict) and isinstance(part.get("data"), (bytes, bytearray)):
+            wire_part = dict(part)
+            wire_part["data"] = _content_codec.encode_image_bytes(bytes(part["data"]))
+            wire_parts.append(wire_part)
+        elif isinstance(part, dict):
+            wire_parts.append(dict(part))
+        else:
+            wire_parts.append(part)
+    return wire_parts
 
 
 def _research_result_wire(result) -> dict[str, Any]:
@@ -2725,6 +2901,10 @@ def register_canvas(
         await publish_scene()
         return node.id
 
+    async def set_html_splitter_state(node_id, value):
+        document.set_html_splitter_state(node_id, value)
+        await publish_scene()
+
     async def add_image_node(x, y, image_bytes_base64, prompt, parent_id, mime_type="image/png"):
         # Unlike every prior wrapper, the WS intent transport is JSON, which
         # cannot carry raw bytes - the caller sends base64 text, decoded here
@@ -2798,15 +2978,28 @@ def register_canvas(
         document.set_chat_collapsed(node_id, collapsed)
         await publish_scene()
 
+    async def set_chat_scroll_value(node_id, value):
+        document.set_chat_scroll_value(node_id, value)
+        await publish_scene()
+
     async def send_message(text):
         # R3.3: the real Send action - a real user ChatNode, continuing the
         # active branch. R4: the assistant's reply is now a real agent
         # dispatch call, not a deferred notice - see backend/agents.py.
         node = document.send_message(text)
+        # R6.3: grow the real, live-growing session token count by the
+        # user's own new message text - see add_session_tokens's own
+        # comment on SceneDocument.
+        document.add_session_tokens(text)
         await publish_scene()
         history = document.chat_branch_history(node.id)
 
         def _on_reply(reply_text):
+            # R6.3: the assistant's reply has completed (regardless of
+            # whether parse_response below finds anything node-worthy in
+            # it) - grow total_session_tokens by its estimated count too,
+            # same as the user's own message text just above.
+            document.add_session_tokens(reply_text)
             # R4.3b: port legacy handle_response's _parse_response retrofit -
             # split the flat reply into thinking/text/code parts and create
             # separate thinking-kind/code-kind CHILD nodes instead of
@@ -3661,12 +3854,17 @@ def register_canvas(
         document.set_drag_factor(factor)
         await publish_scene()
 
+    async def set_view_state(zoom_factor, scroll_x, scroll_y):
+        document.set_view_state(zoom_factor, scroll_x, scroll_y)
+        await publish_scene()
+
     bus.register_intent("scene", "addNode", add_node)
     bus.register_intent("scene", "addChatNode", add_chat_node)
     bus.register_intent("scene", "addCodeNode", add_code_node)
     bus.register_intent("scene", "addDocumentNode", add_document_node)
     bus.register_intent("scene", "addThinkingNode", add_thinking_node)
     bus.register_intent("scene", "addHtmlNode", add_html_node)
+    bus.register_intent("scene", "setHtmlSplitterState", set_html_splitter_state)
     bus.register_intent("scene", "addImageNode", add_image_node)
     bus.register_intent("scene", "addConversationNode", add_conversation_node)
     bus.register_intent("scene", "sendConversationMessage", send_conversation_message)
@@ -3677,6 +3875,7 @@ def register_canvas(
     bus.register_intent("scene", "setNodeDocked", set_node_docked)
     bus.register_intent("scene", "deleteChatNode", delete_chat_node)
     bus.register_intent("scene", "setChatCollapsed", set_chat_collapsed)
+    bus.register_intent("scene", "setChatScrollValue", set_chat_scroll_value)
     bus.register_intent("scene", "sendMessage", send_message)
     bus.register_intent("scene", "regenerateResponse", regenerate_response)
     # R4.4a: "Generate Image from Text" (ChatNode) and "Regenerate Image"
@@ -3712,6 +3911,7 @@ def register_canvas(
     bus.register_intent("scene", "updatePin", update_pin)
     bus.register_intent("scene", "setSnapToGrid", set_snap_to_grid)
     bus.register_intent("scene", "setDragFactor", set_drag_factor)
+    bus.register_intent("scene", "setViewState", set_view_state)
     # R4.3: per-node cancel for a ConversationNode's in-flight reply. Reuses
     # the exact intent NAME "cancelChatRequest" already registered on the
     # "app-composer" topic by R4.2 - SessionBus keys handlers by the

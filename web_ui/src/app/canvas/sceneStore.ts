@@ -625,6 +625,33 @@ export class SceneStore {
     this.transport.intent("scene", "toggleChartAspectLock", [nodeId]);
   }
 
+  // -- R6.3: Scene-level serialization gaps ---------------------------------
+  //
+  // Mirrors backend/canvas.py's register_canvas() intent names/argument order
+  // 1:1, same convention as every scene intent above. These three back the
+  // legacy session serializer's own view_state/HTML splitter_state/chat
+  // scroll_value fields - not because anything reads them back INTO this
+  // increment's UI yet, but because R6.4 (session LOAD) and R6.5 (session
+  // SAVE) need somewhere real on the document/node model to persist and
+  // restore them; without these, a value present in an old chats.db row (or
+  // one a user sets by panning/zooming/dragging/scrolling in this session)
+  // would have nowhere to land. Fire-and-forget, same posture as every other
+  // plain setter intent above (setChatCollapsed, resizeChart, ...) - no reply
+  // needed, the next scene snapshot is enough if the value round-trips
+  // through it at all.
+
+  setViewState(zoomFactor: number, scrollX: number, scrollY: number): void {
+    this.transport.intent("scene", "setViewState", [zoomFactor, scrollX, scrollY]);
+  }
+
+  setHtmlSplitterState(nodeId: string, value: number): void {
+    this.transport.intent("scene", "setHtmlSplitterState", [nodeId, value]);
+  }
+
+  setChatScrollValue(nodeId: string, value: number): void {
+    this.transport.intent("scene", "setChatScrollValue", [nodeId, value]);
+  }
+
   // Grid intents ride the grid-control topic; font intents ride scene - both
   // keep the legacy bridges' @Slot names 1:1 (backend/canvas.py contract).
   setGridSize(size: number): void {
