@@ -2,7 +2,7 @@ import { ReactFlowProvider, type NodeProps } from "@xyflow/react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { ChatNodeView, type ChatFlowNode } from "./ChatNodeView";
+import { ChatNodeView, makeDebouncedScrollReport, type ChatFlowNode } from "./ChatNodeView";
 
 // Rendered directly (not through a real <ReactFlow nodes=.../> mount): RF's
 // own node wrapper stays `visibility: hidden` in jsdom until its
@@ -19,6 +19,7 @@ function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}) {
   const onRegenerate = vi.fn();
   const onGenerateImage = vi.fn();
   const onGenerateChart = vi.fn();
+  const onScrollChange = vi.fn();
   const props = {
     id: "n0",
     selected: false,
@@ -27,22 +28,24 @@ function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}) {
       isUser: true,
       isCollapsed: false,
       dockedChildren: [],
+      chatScrollValue: 0,
       onToggleCollapse,
       onDelete,
       onUndockChild,
       onRegenerate,
       onGenerateImage,
       onGenerateChart,
+      onScrollChange,
       ...overrides,
     },
   } as unknown as NodeProps<ChatFlowNode>;
 
-  render(
+  const { container } = render(
     <ReactFlowProvider>
       <ChatNodeView {...props} />
     </ReactFlowProvider>,
   );
-  return { onToggleCollapse, onDelete, onUndockChild, onRegenerate, onGenerateImage, onGenerateChart };
+  return { onToggleCollapse, onDelete, onUndockChild, onRegenerate, onGenerateImage, onGenerateChart, onScrollChange, container };
 }
 
 describe("ChatNodeView", () => {
@@ -227,5 +230,85 @@ describe("ChatNodeView", () => {
     expect(onUndockChild).toHaveBeenCalledOnce();
     expect(onUndockChild).toHaveBeenCalledWith("t1");
     expect(screen.queryByRole("menu")).toBeNull(); // the menu closes after any item fires
+  });
+});
+
+// R6.3: the node's own scroll position within .chat-node-content.
+describe("ChatNodeView scroll position (R6.3)", () => {
+  it("restores the saved chatScrollValue into .chat-node-content's scrollTop once on mount", () => {
+    const { container } = renderChatNode({ chatScrollValue: 250 });
+    const content = container.querySelector(".chat-node-content");
+    expect(content).not.toBeNull();
+    expect((content as HTMLDivElement).scrollTop).toBe(250);
+  });
+
+  it("defaults to scrollTop 0 when chatScrollValue is 0 (the default)", () => {
+    const { container } = renderChatNode({ chatScrollValue: 0 });
+    const content = container.querySelector(".chat-node-content") as HTMLDivElement;
+    expect(content.scrollTop).toBe(0);
+  });
+
+  it("scrolling reports the new position (debounced) via onScrollChange", () => {
+    vi.useFakeTimers();
+    try {
+      const { container, onScrollChange } = renderChatNode({ chatScrollValue: 0 });
+      const content = container.querySelector(".chat-node-content") as HTMLDivElement;
+
+      content.scrollTop = 120;
+      fireEvent.scroll(content);
+      expect(onScrollChange).not.toHaveBeenCalled(); // still debouncing
+
+      vi.advanceTimersByTime(200);
+      expect(onScrollChange).toHaveBeenCalledOnce();
+      expect(onScrollChange).toHaveBeenCalledWith(120);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("collapsing hides .chat-node-content, so no scroll container exists to attach onScroll to", () => {
+    const { container } = renderChatNode({ isCollapsed: true });
+    expect(container.querySelector(".chat-node-content")).toBeNull();
+  });
+});
+
+describe("makeDebouncedScrollReport", () => {
+  it("does not call onScrollChange until debounceMs have elapsed with no further calls", () => {
+    vi.useFakeTimers();
+    try {
+      const onScrollChange = vi.fn();
+      const timerRef: { current: ReturnType<typeof setTimeout> | null } = { current: null };
+      const debounced = makeDebouncedScrollReport(timerRef, onScrollChange, 200);
+
+      debounced(75);
+      expect(onScrollChange).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(199);
+      expect(onScrollChange).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      expect(onScrollChange).toHaveBeenCalledOnce();
+      expect(onScrollChange).toHaveBeenCalledWith(75);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a call before the debounce window elapses cancels the previous one - only the LAST scroll position fires", () => {
+    vi.useFakeTimers();
+    try {
+      const onScrollChange = vi.fn();
+      const timerRef: { current: ReturnType<typeof setTimeout> | null } = { current: null };
+      const debounced = makeDebouncedScrollReport(timerRef, onScrollChange, 200);
+
+      debounced(50);
+      vi.advanceTimersByTime(150);
+      debounced(90); // simulates continued scrolling before the debounce settled
+      vi.advanceTimersByTime(150);
+      expect(onScrollChange).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(50);
+      expect(onScrollChange).toHaveBeenCalledOnce();
+      expect(onScrollChange).toHaveBeenCalledWith(90);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

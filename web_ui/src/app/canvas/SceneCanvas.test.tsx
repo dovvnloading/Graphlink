@@ -1,5 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import { applyGroupDragDelta, groupDragKindOf, handleSelectionChange, toFlowNodes, type SceneFlowNode } from "./SceneCanvas";
+import {
+  applyGroupDragDelta,
+  groupDragKindOf,
+  handleSelectionChange,
+  makeDebouncedViewportReport,
+  toFlowNodes,
+  type SceneFlowNode,
+} from "./SceneCanvas";
 import { SceneStore, initialSceneState } from "./sceneStore";
 import type { WsTransport } from "../../lib/ws/transport";
 import type { SceneNodeRow, SceneState } from "../../lib/bridge-core/generated/scene-state";
@@ -1230,6 +1237,137 @@ describe("toFlowNodes (R6.2 chart node)", () => {
     const scene = baseScene({ nodes: [chartNode({ id: "chart-1", isDocked: true })], edges: [] });
     const store = makeStore();
     expect(toFlowNodes(scene, store).find((n) => n.id === "chart-1")).toBeUndefined();
+  });
+});
+
+// R6.3: Scene-level serialization gaps. Same situation as ChartTestFields
+// above - htmlSplitterState/chatScrollValue aren't in the generated
+// SceneNodeRow type yet (see SceneCanvas.tsx's own SceneNodeR63Fields
+// comment).
+interface R63TestFields {
+  htmlSplitterState: number | null;
+  chatScrollValue: number;
+}
+
+function withR63Fields(node: SceneNodeRow, overrides: Partial<R63TestFields> = {}): SceneNodeRow & R63TestFields {
+  return {
+    ...node,
+    htmlSplitterState: null,
+    chatScrollValue: 0,
+    ...overrides,
+  } as SceneNodeRow & R63TestFields;
+}
+
+describe("toFlowNodes (R6.3 chat node scroll value)", () => {
+  it("maps a saved chatScrollValue onto the flow node's data", () => {
+    const scene = baseScene({
+      nodes: [withR63Fields(baseNode({ id: "chat-1", kind: "chat", content: "Hi" }), { chatScrollValue: 240 })],
+      edges: [],
+    });
+    const store = makeStore();
+
+    const flowNodes = toFlowNodes(scene, store);
+    const chatFlowNode = flowNodes.find((n) => n.id === "chat-1");
+    expect((chatFlowNode!.data as { chatScrollValue: number }).chatScrollValue).toBe(240);
+  });
+
+  it("defaults chatScrollValue to 0 when the field is absent (ahead of codegen regenerating SceneNodeRow)", () => {
+    const scene = baseScene({ nodes: [baseNode({ id: "chat-1", kind: "chat", content: "Hi" })], edges: [] });
+    const store = makeStore();
+
+    const flowNodes = toFlowNodes(scene, store);
+    const chatFlowNode = flowNodes.find((n) => n.id === "chat-1");
+    expect((chatFlowNode!.data as { chatScrollValue: number }).chatScrollValue).toBe(0);
+  });
+
+  it("onScrollChange calls setChatScrollValue with this node's own id and the given value", () => {
+    const scene = baseScene({ nodes: [baseNode({ id: "chat-1", kind: "chat", content: "Hi" })], edges: [] });
+    const store = makeStore();
+    const spy = vi.spyOn(store, "setChatScrollValue");
+
+    const flowNodes = toFlowNodes(scene, store);
+    const data = flowNodes.find((n) => n.id === "chat-1")!.data as { onScrollChange: (value: number) => void };
+    data.onScrollChange(180);
+    expect(spy).toHaveBeenCalledWith("chat-1", 180);
+  });
+});
+
+describe("toFlowNodes (R6.3 html node splitter state)", () => {
+  it("maps a saved htmlSplitterState onto the flow node's data", () => {
+    const scene = baseScene({
+      nodes: [
+        withR63Fields(baseNode({ id: "html-1", kind: "html", content: "<p>hi</p>" }), { htmlSplitterState: 0.35 }),
+      ],
+      edges: [],
+    });
+    const store = makeStore();
+
+    const flowNodes = toFlowNodes(scene, store);
+    const htmlFlowNode = flowNodes.find((n) => n.id === "html-1");
+    expect((htmlFlowNode!.data as { htmlSplitterState: number | null }).htmlSplitterState).toBe(0.35);
+  });
+
+  it("defaults htmlSplitterState to null when the field is absent (ahead of codegen regenerating SceneNodeRow)", () => {
+    const scene = baseScene({ nodes: [baseNode({ id: "html-1", kind: "html", content: "<p>hi</p>" })], edges: [] });
+    const store = makeStore();
+
+    const flowNodes = toFlowNodes(scene, store);
+    const htmlFlowNode = flowNodes.find((n) => n.id === "html-1");
+    expect((htmlFlowNode!.data as { htmlSplitterState: number | null }).htmlSplitterState).toBeNull();
+  });
+
+  it("onSplitterChange calls setHtmlSplitterState with this node's own id and the given value", () => {
+    const scene = baseScene({ nodes: [baseNode({ id: "html-1", kind: "html", content: "<p>hi</p>" })], edges: [] });
+    const store = makeStore();
+    const spy = vi.spyOn(store, "setHtmlSplitterState");
+
+    const flowNodes = toFlowNodes(scene, store);
+    const data = flowNodes.find((n) => n.id === "html-1")!.data as { onSplitterChange: (value: number) => void };
+    data.onSplitterChange(0.6);
+    expect(spy).toHaveBeenCalledWith("html-1", 0.6);
+  });
+});
+
+describe("makeDebouncedViewportReport (R6.3 canvas pan/zoom reporting)", () => {
+  it("does not call onReport until debounceMs have elapsed with no further calls", () => {
+    vi.useFakeTimers();
+    try {
+      const onReport = vi.fn();
+      const timerRef: { current: ReturnType<typeof setTimeout> | null } = { current: null };
+      const debounced = makeDebouncedViewportReport(timerRef, onReport, 250);
+
+      debounced(1.5, 100, 200);
+      expect(onReport).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(249);
+      expect(onReport).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      expect(onReport).toHaveBeenCalledOnce();
+      expect(onReport).toHaveBeenCalledWith(1.5, 100, 200);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a call before the debounce window elapses cancels the previous one - only the LAST viewport fires, never every intermediate pan/zoom frame", () => {
+    vi.useFakeTimers();
+    try {
+      const onReport = vi.fn();
+      const timerRef: { current: ReturnType<typeof setTimeout> | null } = { current: null };
+      const debounced = makeDebouncedViewportReport(timerRef, onReport, 250);
+
+      debounced(1, 0, 0); // frame 1 of a pan/zoom gesture
+      vi.advanceTimersByTime(100);
+      debounced(1.2, 40, 60); // frame 2, still mid-gesture
+      vi.advanceTimersByTime(100);
+      debounced(1.4, 80, 120); // frame 3 (the settled end position)
+      vi.advanceTimersByTime(200);
+      expect(onReport).not.toHaveBeenCalled(); // only 200ms since the LAST frame
+      vi.advanceTimersByTime(50);
+      expect(onReport).toHaveBeenCalledOnce();
+      expect(onReport).toHaveBeenCalledWith(1.4, 80, 120);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

@@ -828,13 +828,20 @@ body,
   color: var(--gl-surface-text-muted);
 }
 
-/* Fixed-height source/preview panes, deliberately not resizable by drag in
-   either direction. Legacy graphlink_html_view.py's QSplitter (splitter_state)
-   was pure Qt UI state with no domain meaning - never in scene_payload/the DB
-   row (confirmed by backend/tests/test_canvas.py's
-   test_html_node_scene_payload_needs_no_new_key) - so it's a scope cut here,
-   not an oversight. `resize: none` on the textarea keeps the browser from
-   offering its own native drag handle as an accidental substitute. */
+/* Source/Preview pane heights are set inline by HtmlNodeView.tsx (driven by
+   its own splitterValue state), not fixed here - the 140px below is only the
+   pre-drag/pre-restore fallback (matches HTML_SPLIT_DEFAULT's 0.5 fraction of
+   HTML_SPLIT_TOTAL_PX exactly, so it's never visibly different from the
+   inline value on first paint). This USED to be genuinely fixed, deliberately
+   not resizable: legacy graphlink_html_view.py's QSplitter (splitter_state)
+   was scoped out as "pure Qt UI state with no domain meaning" back in
+   R3.17/R3.18. R6.3 reintroduced a real drag handle (.html-node-splitter
+   below) because R6.4/R6.5's session load/save pipeline needs every
+   legacy-persisted field - splitter_state included - to round-trip
+   losslessly; see canvasConstants.ts's own HTML_SPLIT_* doc. `resize: none`
+   on the textarea still stands: it suppresses the BROWSER's own native
+   textarea resize handle, an unrelated affordance from this custom splitter
+   that would otherwise fight it for the same corner. */
 .html-node-source {
   box-sizing: border-box;
   width: 100%;
@@ -852,6 +859,22 @@ body,
 .html-node-source:focus {
   outline: none;
   border-color: var(--gl-surface-text-muted);
+}
+
+/* R6.3: the draggable Source/Preview split handle - a thin bar, not a full
+   row, so it reads as a resize affordance rather than another content
+   section. row-resize cursor matches the only axis it actually drags on. */
+.html-node-splitter {
+  height: 6px;
+  margin: 0 2px;
+  border-radius: 3px;
+  background-color: var(--gl-surface-border);
+  cursor: row-resize;
+  touch-action: none;
+}
+
+.html-node-splitter:hover {
+  background-color: var(--gl-surface-text-muted);
 }
 
 .html-node-render-btn {

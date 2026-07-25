@@ -622,6 +622,27 @@ describe("SceneStore", () => {
     expect(intents).toEqual([{ topic: "scene", intent: "toggleChartAspectLock", args: ["n1"] }]);
   });
 
+  it("setViewState sends the scene-topic setViewState intent with [zoomFactor, scrollX, scrollY]", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.setViewState(1.5, 120, -80);
+    expect(intents).toEqual([{ topic: "scene", intent: "setViewState", args: [1.5, 120, -80] }]);
+  });
+
+  it("setHtmlSplitterState sends the scene-topic setHtmlSplitterState intent with [nodeId, value]", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.setHtmlSplitterState("html-1", 0.4);
+    expect(intents).toEqual([{ topic: "scene", intent: "setHtmlSplitterState", args: ["html-1", 0.4] }]);
+  });
+
+  it("setChatScrollValue sends the scene-topic setChatScrollValue intent with [nodeId, value]", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.setChatScrollValue("chat-1", 320);
+    expect(intents).toEqual([{ topic: "scene", intent: "setChatScrollValue", args: ["chat-1", 320] }]);
+  });
+
   it("subscribeStream forwards directly to transport.subscribeStream and returns its unsubscribe function", () => {
     const { transport } = makeFakeTransport();
     const unsubscribe = vi.fn();

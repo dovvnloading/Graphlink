@@ -2,7 +2,14 @@ import { ReactFlowProvider, type NodeProps } from "@xyflow/react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { buildSandboxedHtmlDocument, HtmlNodeView, type HtmlFlowNode } from "./HtmlNodeView";
+import {
+  buildSandboxedHtmlDocument,
+  clampSplitterValue,
+  HtmlNodeView,
+  makeDebouncedSplitterReport,
+  type HtmlFlowNode,
+} from "./HtmlNodeView";
+import { HTML_SPLIT_MAX, HTML_SPLIT_MIN, HTML_SPLIT_TOTAL_PX } from "./canvasConstants";
 
 const EXACT_CSP =
   "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; base-uri 'none'; frame-src 'none'; object-src 'none'; form-action 'none'";
@@ -13,14 +20,17 @@ const EXACT_CSP_META = `<meta http-equiv="Content-Security-Policy" content="${EX
 function renderHtmlNode(overrides: Partial<HtmlFlowNode["data"]> = {}) {
   const onToggleCollapse = vi.fn();
   const onDelete = vi.fn();
+  const onSplitterChange = vi.fn();
   const props = {
     id: "n0",
     selected: false,
     data: {
       htmlContent: "<p>hello</p>",
       isCollapsed: false,
+      htmlSplitterState: null,
       onToggleCollapse,
       onDelete,
+      onSplitterChange,
       ...overrides,
     },
   } as unknown as NodeProps<HtmlFlowNode>;
@@ -30,7 +40,13 @@ function renderHtmlNode(overrides: Partial<HtmlFlowNode["data"]> = {}) {
       <HtmlNodeView {...props} />
     </ReactFlowProvider>,
   );
-  return { onToggleCollapse, onDelete, container };
+  return { onToggleCollapse, onDelete, onSplitterChange, container };
+}
+
+function getSplitter(container: HTMLElement): HTMLDivElement {
+  const splitter = container.querySelector(".html-node-splitter");
+  expect(splitter).not.toBeNull();
+  return splitter as HTMLDivElement;
 }
 
 function getIframe(container: HTMLElement): HTMLIFrameElement {
@@ -194,5 +210,144 @@ describe("HtmlNodeView", () => {
     expect(container.querySelector("textarea.html-node-source")).toBeNull();
     expect(container.querySelector("iframe.html-node-preview")).toBeNull();
     expect(screen.queryByRole("button", { name: "Render" })).toBeNull();
+  });
+});
+
+// R6.3: HTML node splitter-position scaffolding.
+describe("HtmlNodeView splitter (R6.3)", () => {
+  it("defaults to a 50/50 split (HTML_SPLIT_TOTAL_PX/2 each pane) when htmlSplitterState is null", () => {
+    const { container } = renderHtmlNode({ htmlSplitterState: null });
+    const textarea = getSourceTextarea(container);
+    const iframe = getIframe(container);
+    expect(textarea.style.height).toBe(`${HTML_SPLIT_TOTAL_PX / 2}px`);
+    expect(iframe.style.height).toBe(`${HTML_SPLIT_TOTAL_PX / 2}px`);
+  });
+
+  it("restores a previously saved split position on mount, and the two panes always sum to HTML_SPLIT_TOTAL_PX", () => {
+    const { container } = renderHtmlNode({ htmlSplitterState: 0.3 });
+    const textarea = getSourceTextarea(container);
+    const iframe = getIframe(container);
+    expect(textarea.style.height).toBe(`${Math.round(0.3 * HTML_SPLIT_TOTAL_PX)}px`);
+    expect(iframe.style.height).toBe(`${HTML_SPLIT_TOTAL_PX - Math.round(0.3 * HTML_SPLIT_TOTAL_PX)}px`);
+  });
+
+  it("the splitter is a real separator element wired to a pointerdown handler", () => {
+    const { container } = renderHtmlNode();
+    const splitter = getSplitter(container);
+    expect(splitter).toHaveAttribute("role", "separator");
+    expect(splitter).toHaveAttribute("aria-orientation", "horizontal");
+  });
+
+  it("dragging the splitter updates the pane heights immediately, then reports the settled value once debounceMs elapses", () => {
+    vi.useFakeTimers();
+    try {
+      const { container, onSplitterChange } = renderHtmlNode({ htmlSplitterState: 0.5 });
+      const splitter = getSplitter(container);
+
+      fireEvent.pointerDown(splitter, { clientY: 100 });
+      // Dragging DOWN by 28px (10% of HTML_SPLIT_TOTAL_PX=280) grows the
+      // Source pane's fraction from 0.5 to 0.6 - visible immediately, no
+      // debounce on the live drag itself.
+      fireEvent.pointerMove(window, { clientY: 128 });
+      const textarea = getSourceTextarea(container);
+      expect(textarea.style.height).toBe(`${Math.round(0.6 * HTML_SPLIT_TOTAL_PX)}px`);
+      expect(onSplitterChange).not.toHaveBeenCalled();
+
+      fireEvent.pointerUp(window);
+      expect(onSplitterChange).not.toHaveBeenCalled(); // still debouncing
+      vi.advanceTimersByTime(200);
+      expect(onSplitterChange).toHaveBeenCalledOnce();
+      expect(onSplitterChange).toHaveBeenCalledWith(0.6);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("clamps a far drag to HTML_SPLIT_MAX rather than letting the Preview pane collapse to nothing", () => {
+    vi.useFakeTimers();
+    try {
+      const { container, onSplitterChange } = renderHtmlNode({ htmlSplitterState: 0.5 });
+      const splitter = getSplitter(container);
+
+      fireEvent.pointerDown(splitter, { clientY: 0 });
+      fireEvent.pointerMove(window, { clientY: 10000 }); // absurdly far down
+      fireEvent.pointerUp(window);
+      vi.advanceTimersByTime(200);
+
+      expect(onSplitterChange).toHaveBeenCalledWith(HTML_SPLIT_MAX);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a pointerdown/pointerup with no movement in between reports nothing (not even the unchanged value)", () => {
+    vi.useFakeTimers();
+    try {
+      const { container, onSplitterChange } = renderHtmlNode({ htmlSplitterState: 0.5 });
+      const splitter = getSplitter(container);
+
+      fireEvent.pointerDown(splitter, { clientY: 50 });
+      fireEvent.pointerUp(window);
+      vi.advanceTimersByTime(500);
+
+      expect(onSplitterChange).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("clampSplitterValue", () => {
+  it("passes values already inside [HTML_SPLIT_MIN, HTML_SPLIT_MAX] through unchanged", () => {
+    expect(clampSplitterValue(0.5)).toBe(0.5);
+  });
+
+  it("clamps below HTML_SPLIT_MIN up to HTML_SPLIT_MIN", () => {
+    expect(clampSplitterValue(-1)).toBe(HTML_SPLIT_MIN);
+  });
+
+  it("clamps above HTML_SPLIT_MAX down to HTML_SPLIT_MAX", () => {
+    expect(clampSplitterValue(2)).toBe(HTML_SPLIT_MAX);
+  });
+});
+
+describe("makeDebouncedSplitterReport", () => {
+  it("does not call onSplitterChange until debounceMs have elapsed with no further calls", () => {
+    vi.useFakeTimers();
+    try {
+      const onSplitterChange = vi.fn();
+      const timerRef: { current: ReturnType<typeof setTimeout> | null } = { current: null };
+      const debounced = makeDebouncedSplitterReport(timerRef, onSplitterChange, 200);
+
+      debounced(0.4);
+      expect(onSplitterChange).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(199);
+      expect(onSplitterChange).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      expect(onSplitterChange).toHaveBeenCalledOnce();
+      expect(onSplitterChange).toHaveBeenCalledWith(0.4);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a call before the debounce window elapses cancels the previous one - only the LAST value fires", () => {
+    vi.useFakeTimers();
+    try {
+      const onSplitterChange = vi.fn();
+      const timerRef: { current: ReturnType<typeof setTimeout> | null } = { current: null };
+      const debounced = makeDebouncedSplitterReport(timerRef, onSplitterChange, 200);
+
+      debounced(0.4);
+      vi.advanceTimersByTime(150);
+      debounced(0.6);
+      vi.advanceTimersByTime(150);
+      expect(onSplitterChange).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(50);
+      expect(onSplitterChange).toHaveBeenCalledOnce();
+      expect(onSplitterChange).toHaveBeenCalledWith(0.6);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
