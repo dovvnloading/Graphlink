@@ -536,6 +536,18 @@ export class SceneStore {
     this.transport.intent("scene", "organizeNodes", []);
   }
 
+  // R6.5: session save - targets "app-chat-library", not "scene", since
+  // Save is a chat-library concern (it needs chat_id/title bookkeeping the
+  // scene topic has no notion of), matching loadChat's own home despite
+  // being triggered from a different UI surface (the app bar's Save
+  // button, not the library dialog) - an intent's topic is about which
+  // backend module owns it, not which component happens to dispatch it
+  // (see this file's own "grid-control" calls just below for the same
+  // precedent: not every method here targets "scene").
+  saveChat(): void {
+    this.transport.intent("app-chat-library", "saveChat", []);
+  }
+
   // -- R6.1: Notes/Frames/Containers ----------------------------------------
   //
   // Mirrors backend/canvas.py's register_canvas() intent names/argument

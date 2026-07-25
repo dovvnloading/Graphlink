@@ -1,29 +1,39 @@
-"""Chat library dialog: list/rename/delete/load (Qt-removal plan R2.5e + R6.4).
+"""Chat library dialog: list/rename/delete/load/save/new (Qt-removal plan
+R2.5e + R6.4 + R6.5).
 
 An INDEPENDENT Qt-free reimplementation of ChatDatabase.get_all_chats()/
-rename_chat()/delete_chat()/load_chat()/load_notes()/load_pins() - not an
-import - because graphlink_session/__init__.py eagerly imports
-ChatSessionManager and SaveWorkerThread (workers.py imports
-PySide6.QtCore.QThread/Signal) before graphlink_session.database can ever be
-imported cleanly: Python always runs a package's __init__.py first, even for
-`from graphlink_session.database import ChatDatabase`. ChatDatabase itself
-(graphlink_session/database.py) is Qt-free; only the package wrapper around
-it is hazardous. Same reimplement-not-import precedent as backend/composer.py
-and backend/plugins.py.
+rename_chat()/delete_chat()/load_chat()/load_notes()/load_pins()/
+save_chat_atomically() - not an import - because graphlink_session/
+__init__.py eagerly imports ChatSessionManager and SaveWorkerThread
+(workers.py imports PySide6.QtCore.QThread/Signal) before graphlink_session.
+database can ever be imported cleanly: Python always runs a package's
+__init__.py first, even for `from graphlink_session.database import
+ChatDatabase`. ChatDatabase itself (graphlink_session/database.py) is
+Qt-free; only the package wrapper around it is hazardous. Same
+reimplement-not-import precedent as backend/composer.py and
+backend/plugins.py.
 
 Reads/writes the SAME real ~/.graphlink/chats.db file the legacy app uses
 (same "chats"/"notes"/"pins" table schemas, same queries, same migration
 ALTER TABLEs for older databases, same _format_timestamp display format moved
-verbatim from graphlink_chat_library_bridge.py) - list, rename, delete, and
-(R6.4) load are all genuinely real here. newChat has no backend counterpart
-at all yet: creating a brand-new empty session is just "clear the canvas",
-which will land alongside R6.5's save primitive, not this file.
+verbatim from graphlink_chat_library_bridge.py) - list, rename, delete,
+load, save, and new are ALL genuinely real here as of R6.5.
+
+R6.5's save_chat_atomically_row mirrors ChatDatabase.save_chat_atomically
+exactly: ONE shared connection for the chats-row write (UPDATE if a
+current_chat_id is set, else INSERT) plus a full delete-then-reinsert-all of
+notes and pins, all committed together - see that method's own docstring
+(database.py:271-289) for why a single transaction matters (three separate
+connections, as the now-dead save_chat/update_chat/save_notes/save_pins
+methods used, left chat/notes/pins inconsistent on a mid-sequence crash).
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
+import re
 import sqlite3
 from datetime import datetime
 from pathlib import Path
@@ -33,6 +43,7 @@ from backend.canvas import SceneDocument
 from backend.events import SessionBus
 from backend.notifications import NotificationState
 from backend.session_load import restore_chat_into_document
+from backend.session_save import build_chat_data
 
 DEFAULT_DB_PATH = Path.home() / ".graphlink" / "chats.db"
 
@@ -170,8 +181,6 @@ def load_chat_row(db_path: Path, chat_id: int) -> dict[str, Any] | None:
     already json.loads()'d, or None if the id doesn't exist (a chat deleted
     from another window/process between the library listing and this call -
     the caller shows a real notice, not a crash)."""
-    import json
-
     with contextlib.closing(_connect(db_path)) as conn, conn:
         _ensure_chats_table(conn)
         row = conn.execute("SELECT title, data FROM chats WHERE id = ?", (chat_id,)).fetchone()
@@ -236,6 +245,128 @@ def load_pins_rows(db_path: Path, chat_id: int) -> list[dict[str, Any]]:
     ]
 
 
+def save_chat_atomically_row(
+    db_path: Path,
+    chat_id: int | None,
+    title: str,
+    chat_data: dict[str, Any],
+    notes_data: list[dict[str, Any]],
+    pins_data: list[dict[str, Any]],
+) -> int:
+    """Mirrors ChatDatabase.save_chat_atomically exactly (database.py:271-
+    315): ONE shared connection - UPDATE if `chat_id` is truthy, else INSERT
+    (the SQLite AUTOINCREMENT rowid becomes the new chat's id) - then an
+    unconditional full delete-then-reinsert of notes and pins for the
+    resolved id, all inside the SAME transaction (Python's sqlite3 `with
+    conn:` commits everything together, or rolls all of it back on any
+    exception - never a partial chat/notes/pins write). `chat_data` here is
+    the dict AFTER notes_data/pins_data have already been popped out by the
+    caller (mirrors _prepare_chat_payload's own pop, done once at the
+    boundary rather than inside this function)."""
+    chat_data_json = json.dumps(chat_data)
+    with contextlib.closing(_connect(db_path)) as conn:
+        _ensure_chats_table(conn)
+        _ensure_notes_table(conn)
+        _ensure_pins_table(conn)
+        with conn:
+            if chat_id:
+                conn.execute(
+                    "UPDATE chats SET title = ?, data = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    (title, chat_data_json, chat_id),
+                )
+                resolved_chat_id = chat_id
+            else:
+                cursor = conn.execute(
+                    "INSERT INTO chats (title, data, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)",
+                    (title, chat_data_json),
+                )
+                resolved_chat_id = cursor.lastrowid
+
+            conn.execute("DELETE FROM notes WHERE chat_id = ?", (resolved_chat_id,))
+            for note in notes_data:
+                position = note.get("position") if isinstance(note.get("position"), dict) else {}
+                size = note.get("size") if isinstance(note.get("size"), dict) else {}
+                conn.execute(
+                    """
+                    INSERT INTO notes (
+                        chat_id, content, position_x, position_y,
+                        width, height, color, header_color, is_system_prompt, is_summary_note
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        resolved_chat_id,
+                        str(note.get("content", "")),
+                        float(position.get("x", 0.0)),
+                        float(position.get("y", 0.0)),
+                        float(size.get("width", 0.0)),
+                        float(size.get("height", 0.0)),
+                        str(note.get("color") or "#4a7c59"),
+                        note.get("header_color"),
+                        1 if note.get("is_system_prompt") else 0,
+                        1 if note.get("is_summary_note") else 0,
+                    ),
+                )
+
+            conn.execute("DELETE FROM pins WHERE chat_id = ?", (resolved_chat_id,))
+            for index, pin in enumerate(pins_data):
+                position = pin.get("position") if isinstance(pin.get("position"), dict) else {}
+                conn.execute(
+                    """
+                    INSERT INTO pins (
+                        chat_id, title, note, position_x, position_y,
+                        pin_id, sort_order, anchor_item_id, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        resolved_chat_id,
+                        str(pin.get("title", "")),
+                        pin.get("note"),
+                        float(position.get("x", 0.0)),
+                        float(position.get("y", 0.0)),
+                        pin.get("pin_id"),
+                        pin.get("sort_order", index),
+                        pin.get("anchor_item_id"),
+                        pin.get("created_at"),
+                    ),
+                )
+
+        return resolved_chat_id
+
+
+_FALLBACK_TITLE_WORD_RE = re.compile(r"[\w']+", re.UNICODE)
+
+
+def _fallback_title(seed_message: str) -> str:
+    """Byte-for-byte port of SaveWorkerThread._fallback_title (workers.py:
+    28-37): first 5 regex-matched words of the seed message, space-joined,
+    truncated to 80 chars; a literal "Chat {timestamp}" if the seed message
+    yields no usable words at all (e.g. empty, or punctuation-only)."""
+    words = _FALLBACK_TITLE_WORD_RE.findall(str(seed_message or ""))
+    if words:
+        title = " ".join(words[:5]).strip()
+        if title:
+            return title[:80]
+    return f"Chat {datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+
+def _resolve_seed_message(document: SceneDocument) -> str:
+    """Deliberate simplification of ChatSessionManager.save_current_chat's
+    own `next((node for node in reversed(scene.nodes) if node.text), None)`
+    (manager.py:108) - legacy's `.text` is a generic attribute several
+    different live Qt widget classes each define with their own meaning;
+    this backend has no single equivalent across all 12 node kinds. Since
+    this text only ever seeds a cosmetic fallback title (see this module's
+    own docstring on skipping the LLM title-generation call entirely), the
+    dominant "has real conversational text" kind - chat - is a reasonable,
+    bounded stand-in: the last chat-kind node's content, in creation order,
+    or "New Chat" if the canvas has no chat node at all yet."""
+    last_chat_content = None
+    for node in document.nodes.values():
+        if node.kind == "chat" and node.content:
+            last_chat_content = node.content
+    return last_chat_content if last_chat_content is not None else "New Chat"
+
+
 def chat_library_payload(db_path: Path) -> dict[str, Any]:
     try:
         rows = get_all_chats(db_path)
@@ -258,6 +389,36 @@ def register_chat_library(
     resolved_path = db_path if db_path is not None else DEFAULT_DB_PATH
 
     bus.register_topic("app-chat-library", lambda: chat_library_payload(resolved_path))
+
+    # Adversarial review finding: loadChat/saveChat/newChat all mutate the
+    # SAME canvas_document and each awaits at least one asyncio.to_thread DB
+    # call - an await point that yields control back to the event loop. A
+    # session can have MULTIPLE attached WS connections at once (every tab/
+    # window that doesn't pass its own ?session= query param shares
+    # session="default" - see backend/app.py's ws_endpoint), so two tabs
+    # racing Save/Load/New Chat could genuinely interleave mid-await and
+    # silently overwrite or corrupt one another's work - there is no
+    # per-window isolation here the way Qt's single-threaded-per-window
+    # model gave legacy for free. This mutable flag - checked and set at
+    # entry, cleared in a finally - serializes all three against each
+    # other, the generalized (load/new included, not just save)
+    # counterpart of ChatSessionManager's own _is_saving reentrancy guard.
+    _mutation_in_progress = {"active": False}
+
+    def _serialize_mutating_intent(handler):
+        async def wrapped(*args, **kwargs):
+            if _mutation_in_progress["active"]:
+                if notifications is not None:
+                    notifications.show("Another chat operation is already in progress. Please wait.", "warning")
+                    await bus.publish("notification")
+                return
+            _mutation_in_progress["active"] = True
+            try:
+                await handler(*args, **kwargs)
+            finally:
+                _mutation_in_progress["active"] = False
+
+        return wrapped
 
     # Writes run in worker threads (asyncio.to_thread) so a slow disk/WAL
     # commit never stalls the event loop. No Python-side lock is needed:
@@ -305,6 +466,11 @@ def register_chat_library(
                 return
 
             restore_chat_into_document(canvas_document, row, notes_rows, pins_rows)
+            # R6.5: remember which row this scene now corresponds to, so a
+            # later Save updates THIS row instead of always inserting a new
+            # one - the backend analog of ChatSessionManager.current_chat_id
+            # being set from the load path, not just the save path.
+            canvas_document.current_chat_id = int(chat_id)
         except Exception as exc:
             # Adversarial review finding: load_notes_rows/load_pins_rows (a
             # real sqlite3.Error, e.g. a locked/corrupted db file) previously
@@ -330,6 +496,92 @@ def register_chat_library(
             notifications.show(f'Loaded "{title}".', "success")
             await bus.publish("notification")
 
+    async def save_chat():
+        # R6.5: replicates ChatSessionManager.save_current_chat's own
+        # orchestration (manager.py:83-133) - serialize -> resolve title/
+        # chat_id -> one atomic DB write -> adopt the resolved chat_id.
+        # Unlike legacy, this runs synchronously start-to-finish on the
+        # event loop rather than handing off to a background QThread; the
+        # _serialize_mutating_intent wrapper this is registered through
+        # (see register_chat_library's own docstring above it) is this
+        # function's actual reentrancy guard - see that comment for why one
+        # is needed at all (a naive "nothing else runs during an await" -
+        # this file's own ORIGINAL, WRONG assumption - does not hold once a
+        # session can have more than one attached WS connection).
+        if canvas_document is None:
+            return
+
+        has_any_nodes = bool(canvas_document.nodes)
+        if not has_any_nodes and canvas_document.current_chat_id is None:
+            # Mirrors save_current_chat's own "Nothing was added to the chat
+            # canvas yet." guard (manager.py:94-96) - an empty, never-saved
+            # canvas has nothing worth writing a row for.
+            if notifications is not None:
+                notifications.show("Nothing was added to the chat canvas yet.", "warning")
+                await bus.publish("notification")
+            return
+
+        try:
+            chat_data = build_chat_data(canvas_document)
+        except Exception as exc:
+            if notifications is not None:
+                notifications.show(f"Failed to prepare chat save payload: {exc}", "error")
+                await bus.publish("notification")
+            return
+
+        notes_data = chat_data.pop("notes_data", [])
+        pins_data = chat_data.pop("pins_data", [])
+
+        chat_id_for_save: int | None = None
+        title: str
+        current_id = canvas_document.current_chat_id
+        if not current_id:
+            title = _fallback_title(_resolve_seed_message(canvas_document))
+        else:
+            existing_row = await asyncio.to_thread(load_chat_row, resolved_path, int(current_id))
+            if existing_row is not None:
+                # Resaving an existing chat NEVER regenerates its title,
+                # matching SaveWorkerThread.run()'s own `title = chat["title"]`
+                # (workers.py:69) exactly.
+                title = str(existing_row.get("title") or "Untitled")
+                chat_id_for_save = int(current_id)
+            else:
+                # The row was deleted elsewhere between load and this save -
+                # falls back to a fresh INSERT, matching legacy's own
+                # tolerance for this race (workers.py:71-72) rather than
+                # erroring.
+                title = _fallback_title(_resolve_seed_message(canvas_document))
+
+        try:
+            new_chat_id = await asyncio.to_thread(
+                save_chat_atomically_row, resolved_path, chat_id_for_save, title, chat_data, notes_data, pins_data,
+            )
+        except Exception as exc:
+            if notifications is not None:
+                notifications.show(f"Failed to save the chat session.\nError: {exc}", "error")
+                await bus.publish("notification")
+            return
+
+        canvas_document.current_chat_id = int(new_chat_id)
+        await bus.publish("app-chat-library")
+        if notifications is not None:
+            notifications.show(f'Saved "{title}".', "success")
+            await bus.publish("notification")
+
+    async def new_chat():
+        # R6.5: the backend counterpart of legacy's "start with an empty
+        # scene" - there is no legacy method this ports 1:1 (Qt's
+        # ChatSessionManager has no "new chat" concept at all; a fresh scene
+        # is just whatever exists before the first load/save of a session),
+        # so this simply clears the live document and drops current_chat_id,
+        # exactly like clear_for_load already does for a session LOAD.
+        if canvas_document is None:
+            return
+        canvas_document.clear_for_load()
+        await bus.publish("scene")
+
     bus.register_intent("app-chat-library", "renameChat", rename)
     bus.register_intent("app-chat-library", "deleteChat", delete)
-    bus.register_intent("app-chat-library", "loadChat", load_chat)
+    bus.register_intent("app-chat-library", "loadChat", _serialize_mutating_intent(load_chat))
+    bus.register_intent("app-chat-library", "saveChat", _serialize_mutating_intent(save_chat))
+    bus.register_intent("app-chat-library", "newChat", _serialize_mutating_intent(new_chat))

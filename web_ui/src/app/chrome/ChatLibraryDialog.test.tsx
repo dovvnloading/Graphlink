@@ -91,10 +91,12 @@ describe("ChatLibraryDialog", () => {
     expect(intents).toContainEqual(["app-chat-library", "loadChat", [2]]);
   });
 
-  it("New Chat stays disabled - no session SAVE primitive exists until R6.5", async () => {
-    const { user } = setup();
+  it("New Chat dispatches the newChat intent and closes the dialog", async () => {
+    const { user, intents } = setup();
     await user.click(screen.getByText("open library"));
 
-    expect(screen.getByText("New Chat")).toBeDisabled();
+    await user.click(screen.getByText("New Chat"));
+    expect(intents).toContainEqual(["app-chat-library", "newChat", []]);
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 });

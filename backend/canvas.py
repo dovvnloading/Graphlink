@@ -664,6 +664,17 @@ class SceneDocument:
     # it by add_session_tokens for both the user's own message and the
     # assistant's completed reply, every time either lands.
     total_session_tokens: int = 0
+    # R6.5: the ~/.graphlink/chats.db row this session's scene currently
+    # corresponds to, or None for a brand-new/never-saved session - the
+    # backend analog of ChatSessionManager.current_chat_id. Determines
+    # save_current_chat's own INSERT-vs-UPDATE branch: set on a successful
+    # loadChat (backend/chat_library.py), left None for a fresh session, and
+    # reset to None by clear_for_load/new_chat below (a freshly loaded OR
+    # freshly cleared scene has no id of its own yet until the next load/
+    # save assigns one). Deliberately NOT part of scene_payload() - purely
+    # server-side bookkeeping the frontend never needs to read directly,
+    # same posture as gitlink_imported_root/code_sandbox_sandbox_id.
+    current_chat_id: int | None = None
     _counter: itertools.count = field(default_factory=itertools.count, repr=False)
 
     # -- nodes -------------------------------------------------------------
@@ -714,6 +725,7 @@ class SceneDocument:
         self.scroll_x = 0.0
         self.scroll_y = 0.0
         self.total_session_tokens = 0
+        self.current_chat_id = None
 
     def add_chat_node(
         self,
