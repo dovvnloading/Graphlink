@@ -140,4 +140,28 @@ describe("buildCommands", () => {
     createContainer.run();
     expect(store.createContainer).toHaveBeenCalledWith(["n0", "n1"]);
   });
+
+  it("export-canvas-png is disabled with an empty scene and enabled once nodes exist (R6.8)", () => {
+    // exportCanvasAsPng itself is fully unit-tested in exportCanvasPng.test.ts
+    // (including the html-to-image mock) - this just confirms the command is
+    // wired to the same hasNodes gate fit-all/organize-nodes already use, and
+    // that run() doesn't throw when there's no real .react-flow__viewport in
+    // the DOM (exportCanvasAsPng's own defensive no-op covers that case).
+    // @ts-expect-error - test double
+    const empty = buildCommands(makeStore([]), makeRf(), makeOverlays());
+    const exportEmpty = empty.find((c) => c.id === "export-canvas-png")!;
+    expect(exportEmpty.name).toBe("Export Canvas as PNG");
+    expect(exportEmpty.enabled()).toBe(false);
+
+    const nodeList = [{ id: "n0", x: 0, y: 0, title: "A", kind: "placeholder" }];
+    // rf.getNodes() must ALSO return a real node here (not the default []) -
+    // otherwise run() would hit exportCanvasAsPng's empty-nodes no-op path
+    // instead of the "no real .react-flow__viewport in the DOM" path this
+    // test's own comment claims to exercise.
+    // @ts-expect-error - test double
+    const withNodes = buildCommands(makeStore(nodeList), makeRf([{ id: "n0" }]), makeOverlays());
+    const exportWithNodes = withNodes.find((c) => c.id === "export-canvas-png")!;
+    expect(exportWithNodes.enabled()).toBe(true);
+    expect(() => exportWithNodes.run()).not.toThrow();
+  });
 });

@@ -1,4 +1,5 @@
 import type { ReactFlowInstance } from "@xyflow/react";
+import { exportCanvasAsPng } from "../canvas/exportCanvasPng";
 import type { SceneStore } from "../canvas/sceneStore";
 import type { OverlayContextValue } from "../overlays/overlays";
 
@@ -51,6 +52,13 @@ export function buildCommands(
       aliases: ["reset zoom", "default view"],
       run: () => rf.setViewport({ ...rf.getViewport(), zoom: 1 }, { duration: 200 }),
       enabled: () => true,
+    },
+    {
+      id: "export-canvas-png",
+      name: "Export Canvas as PNG",
+      aliases: ["export png", "download image", "save canvas image"],
+      run: () => void exportCanvasAsPng(rf, "--gl-surface-window"),
+      enabled: hasNodes,
     },
     {
       id: "zoom-in",
