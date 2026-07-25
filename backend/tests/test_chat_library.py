@@ -1,4 +1,5 @@
-"""Chat library topic tests (Qt-removal plan R2.5e + R6.4 loadChat)."""
+"""Chat library topic tests (Qt-removal plan R2.5e + R6.4 loadChat + R6.5
+saveChat/newChat)."""
 
 import asyncio
 import json
@@ -8,7 +9,9 @@ import pytest
 
 from backend.canvas import SceneDocument
 from backend.chat_library import (
+    _fallback_title,
     _format_timestamp,
+    _resolve_seed_message,
     chat_library_payload,
     delete_chat,
     get_all_chats,
@@ -17,6 +20,7 @@ from backend.chat_library import (
     load_pins_rows,
     register_chat_library,
     rename_chat,
+    save_chat_atomically_row,
 )
 from backend.events import SessionBus
 from backend.notifications import NotificationState
@@ -316,3 +320,158 @@ def test_load_chat_intent_restores_notes_and_pins_too(db_path):
     notes = [n for n in document.nodes.values() if n.kind == "note"]
     assert len(notes) == 1 and notes[0].content == "A restored note"
     assert len(document.pins.records) == 1
+
+
+# -- R6.5: save_chat_atomically_row / title helpers --------------------------
+
+
+def test_save_chat_atomically_row_inserts_when_chat_id_is_none(db_path):
+    new_id = save_chat_atomically_row(db_path, None, "New Title", {"nodes": []}, [], [])
+    row = load_chat_row(db_path, new_id)
+    assert row == {"title": "New Title", "data": {"nodes": []}}
+
+
+def test_save_chat_atomically_row_updates_the_same_row_when_chat_id_given(db_path):
+    first_id = save_chat_atomically_row(db_path, None, "First", {"nodes": [1]}, [], [])
+    second_id = save_chat_atomically_row(db_path, first_id, "First", {"nodes": [1, 2]}, [], [])
+    assert second_id == first_id
+    assert len(get_all_chats(db_path)) == 1
+    row = load_chat_row(db_path, first_id)
+    assert row["data"] == {"nodes": [1, 2]}
+
+
+def test_save_chat_atomically_row_replaces_notes_and_pins_wholesale(db_path):
+    chat_id = save_chat_atomically_row(
+        db_path, None, "T", {"nodes": []},
+        [{"content": "note A", "position": {"x": 0, "y": 0}, "size": {"width": 1, "height": 1},
+          "color": "#fff", "header_color": None, "is_system_prompt": False, "is_summary_note": False}],
+        [{"title": "pin A", "note": "", "position": {"x": 0, "y": 0}, "pin_id": "p1",
+          "sort_order": 0, "anchor_item_id": None, "created_at": None}],
+    )
+    assert len(load_notes_rows(db_path, chat_id)) == 1
+    assert len(load_pins_rows(db_path, chat_id)) == 1
+
+    # Resaving with EMPTY notes/pins must wholesale-replace, not append to,
+    # the previous set - mirrors ChatDatabase._write_notes/_write_pins's own
+    # DELETE-then-reinsert-all contract exactly.
+    save_chat_atomically_row(db_path, chat_id, "T", {"nodes": []}, [], [])
+    assert load_notes_rows(db_path, chat_id) == []
+    assert load_pins_rows(db_path, chat_id) == []
+
+
+def test_fallback_title_matches_legacy_regex_and_truncation():
+    assert _fallback_title("Hello, world! This is a test message.") == "Hello world This is a"
+    assert _fallback_title("") .startswith("Chat 20")
+    assert _fallback_title("...") .startswith("Chat 20")
+    long_word_title = _fallback_title("a" * 200)
+    assert len(long_word_title) == 80
+
+
+def test_resolve_seed_message_uses_last_chat_node_content():
+    document = SceneDocument()
+    document.add_chat_node(0, 0, "first message", is_user=True)
+    ai = document.add_chat_node(0, 100, "second message", is_user=False)
+    assert _resolve_seed_message(document) == "second message"
+
+
+def test_resolve_seed_message_falls_back_to_new_chat_when_no_chat_nodes():
+    document = SceneDocument()
+    document.add_note(0, 0)
+    assert _resolve_seed_message(document) == "New Chat"
+
+
+# -- R6.5: the saveChat / newChat intents ------------------------------------
+
+
+def test_save_chat_intent_warns_and_skips_write_for_a_never_saved_empty_canvas(db_path):
+    bus, document, notifications = _bus_with_canvas(db_path)
+    asyncio.run(bus.dispatch_intent("app-chat-library", "saveChat", []))
+    assert get_all_chats(db_path) == []
+    assert notifications.visible and notifications.msg_type == "warning"
+
+
+def test_save_chat_intent_inserts_a_new_row_and_adopts_the_id(db_path):
+    bus, document, notifications = _bus_with_canvas(db_path)
+    document.add_chat_node(0, 0, "hello world", is_user=True)
+
+    asyncio.run(bus.dispatch_intent("app-chat-library", "saveChat", []))
+
+    rows = get_all_chats(db_path)
+    assert len(rows) == 1
+    assert document.current_chat_id == rows[0]["id"]
+    assert notifications.visible and notifications.msg_type == "success"
+
+
+def test_save_chat_intent_resave_updates_same_row_and_keeps_existing_title(db_path):
+    bus, document, notifications = _bus_with_canvas(db_path)
+    document.add_chat_node(0, 0, "hello world", is_user=True)
+    asyncio.run(bus.dispatch_intent("app-chat-library", "saveChat", []))
+    first_id = document.current_chat_id
+    first_title = get_all_chats(db_path)[0]["title"]
+
+    document.add_code_node(100, 0, "x = 1", "python")
+    asyncio.run(bus.dispatch_intent("app-chat-library", "saveChat", []))
+
+    rows = get_all_chats(db_path)
+    assert len(rows) == 1
+    assert rows[0]["id"] == first_id
+    assert rows[0]["title"] == first_title
+    row = load_chat_row(db_path, first_id)
+    assert len(row["data"]["nodes"]) == 2
+
+
+def test_save_chat_intent_falls_back_to_insert_when_current_row_was_deleted_elsewhere(db_path):
+    bus, document, notifications = _bus_with_canvas(db_path)
+    document.current_chat_id = 999  # a row that never existed / was deleted
+    document.add_chat_node(0, 0, "hello world", is_user=True)
+
+    asyncio.run(bus.dispatch_intent("app-chat-library", "saveChat", []))
+
+    assert notifications.visible and notifications.msg_type == "success"
+    rows = get_all_chats(db_path)
+    assert len(rows) == 1
+    assert document.current_chat_id == rows[0]["id"] != 999
+
+
+def test_new_chat_intent_clears_canvas_and_resets_current_chat_id(db_path):
+    bus, document, _ = _bus_with_canvas(db_path)
+    document.add_chat_node(0, 0, "hello", is_user=True)
+    document.current_chat_id = 5
+
+    asyncio.run(bus.dispatch_intent("app-chat-library", "newChat", []))
+
+    assert document.nodes == {}
+    assert document.current_chat_id is None
+
+
+def test_two_concurrent_save_chat_calls_do_not_race_only_one_row_is_written(db_path):
+    # Adversarial review finding: loadChat/saveChat/newChat share ONE
+    # canvas_document, and a session can have MULTIPLE attached WS
+    # connections (every tab that doesn't pass its own ?session= shares
+    # session="default") - without a reentrancy guard, two tabs racing Save
+    # could interleave mid-await (asyncio.to_thread yields control back to
+    # the loop) and silently corrupt or double-write. asyncio.gather here
+    # genuinely interleaves both coroutines on the same event loop, exactly
+    # the scenario two real WS connections would create.
+    bus, document, notifications = _bus_with_canvas(db_path)
+    document.add_chat_node(0, 0, "hello world", is_user=True)
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    async def _race():
+        await asyncio.gather(
+            bus.dispatch_intent("app-chat-library", "saveChat", []),
+            bus.dispatch_intent("app-chat-library", "saveChat", []),
+        )
+
+    asyncio.run(_race())
+
+    # Exactly one row, regardless of which of the two calls "won" - the
+    # loser must have been rejected by the guard, not raced to a second
+    # INSERT.
+    assert len(get_all_chats(db_path)) == 1
+
+    notification_messages = [
+        m["payload"]["message"] for m in recorder.messages if m.get("topic") == "notification"
+    ]
+    assert any("already in progress" in message for message in notification_messages), notification_messages

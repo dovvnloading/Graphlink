@@ -5,14 +5,13 @@ import type { AppChatLibraryState } from "../../lib/bridge-core/generated/app-ch
 import { Dialog, useOverlays } from "../overlays/overlays";
 
 /**
- * The chat library dialog (Qt-removal plan R2.5e + R6.4) - chat-library
- * island's SPA successor. List/search/rename/delete/load are all real
- * (backend/chat_library.py reads/writes the same ~/.graphlink/chats.db the
- * legacy app uses; R6.4 wired Load Chat to a real backend/session_load.py
- * restore). New Chat has no backend counterpart yet - there is no session
- * SAVE primitive until R6.5, so "start a new session" would have nothing to
- * offer the user beyond clearing the canvas - rendered disabled with an
- * explicit label rather than silently no-op'ing a click.
+ * The chat library dialog (Qt-removal plan R2.5e + R6.4 + R6.5) - chat-
+ * library island's SPA successor. List/search/rename/delete/load/new are
+ * all real (backend/chat_library.py reads/writes the same
+ * ~/.graphlink/chats.db the legacy app uses; R6.4 wired Load Chat to a real
+ * backend/session_load.py restore, R6.5 wired New Chat to a real
+ * clear_for_load + current_chat_id reset - Save itself lives on the app
+ * bar, not this dialog, see AppBar.tsx's own comment).
  */
 
 const initialState: AppChatLibraryState = {
@@ -113,6 +112,13 @@ export function ChatLibraryDialog({ transport }: { transport: WsTransport }) {
     overlays.close();
   }
 
+  function newChat() {
+    // R6.5: clears the live canvas and drops current_chat_id server-side -
+    // same fire-and-forget, close-immediately posture as loadChat above.
+    transport.intent("app-chat-library", "newChat", []);
+    overlays.close();
+  }
+
   function onRenameKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
     if (event.key === "Enter") {
       event.preventDefault();
@@ -185,7 +191,7 @@ export function ChatLibraryDialog({ transport }: { transport: WsTransport }) {
             </>
           ) : (
             <>
-              <button type="button" className="library-button" disabled title="Session save lands in R6.5">
+              <button type="button" className="library-button" onClick={newChat}>
                 New Chat
               </button>
               <button

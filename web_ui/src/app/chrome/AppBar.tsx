@@ -14,9 +14,10 @@ import { useOverlays } from "../overlays/overlays";
  *   drag/grid/font instead of three stacked cards)
  * - library/settings/about/help/plugins -> overlay dialogs; chips read REAL
  *   open state from the overlay context (audit B6), never latched clicks
- * - saveChat -> R6 (sessions); provider mode select -> R4 (providers).
- *   Both rendered disabled with the phase called out - explicitly deferred,
- *   never silently dropped.
+ * - saveChat -> real as of R6.5 (store.saveChat(), targets the
+ *   app-chat-library topic - see SceneStore's own comment on why); provider
+ *   mode select -> still deferred to R4's own remaining work, rendered
+ *   disabled with the phase called out.
  */
 
 export function AppBar({ store }: { store: SceneStore }) {
@@ -42,7 +43,7 @@ export function AppBar({ store }: { store: SceneStore }) {
       >
         Library
       </button>
-      <button type="button" className="appbar-btn" disabled title="Session save lands in R6">
+      <button type="button" className="appbar-btn" onClick={() => store.saveChat()}>
         Save
       </button>
       <button
