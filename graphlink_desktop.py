@@ -55,13 +55,13 @@ def _wait_for_health(base_url: str, timeout: float) -> bool:
     return False
 
 
-def _start_backend(port: int) -> threading.Thread:
+def _start_backend(port: int, previous_run_crashed: bool = False) -> threading.Thread:
     import uvicorn
 
     from backend.app import create_app
 
     config = uvicorn.Config(
-        create_app(),
+        create_app(previous_run_crashed=previous_run_crashed),
         host="127.0.0.1",
         port=port,
         log_level="warning",
@@ -75,7 +75,23 @@ def _start_backend(port: int) -> threading.Thread:
 
 
 def main() -> int:
-    logging.basicConfig(level=logging.INFO, format="%(name)s: %(message)s")
+    # R6.7 (Qt-removal plan): real rotating-file logging plus unhandled-
+    # exception/native-crash capture, replacing the old bare stderr-only
+    # basicConfig call - see backend/crash_recovery.py's own docstring for
+    # why these two calls (and the sentinel check/mark_running below) live
+    # here, in the real entry point, rather than inside create_app().
+    from backend.crash_recovery import (
+        configure_logging,
+        install_exception_handlers,
+        mark_clean_exit,
+        mark_running,
+        previous_run_crashed,
+    )
+
+    configure_logging()
+    install_exception_handlers()
+    crashed = previous_run_crashed()
+    mark_running()
 
     spa_index = REPO_ROOT / "web_ui" / "dist" / "app" / "index.html"
     if not spa_index.is_file():
@@ -83,14 +99,16 @@ def main() -> int:
             "SPA build missing at %s - run: cd web_ui && GRAPHLINK_ISLAND=app npx vite build",
             spa_index,
         )
+        mark_clean_exit()
         return 1
 
     port = int(os.environ.get("GRAPHLINK_BACKEND_PORT", 0)) or _free_port()
     base_url = f"http://127.0.0.1:{port}"
 
-    _start_backend(port)
+    _start_backend(port, previous_run_crashed=crashed)
     if not _wait_for_health(base_url, STARTUP_TIMEOUT_SECONDS):
         logger.error("backend did not become healthy at %s within %.0fs", base_url, STARTUP_TIMEOUT_SECONDS)
+        mark_clean_exit()
         return 1
     logger.info("backend healthy at %s", base_url)
 
@@ -105,6 +123,11 @@ def main() -> int:
         background_color="#1a1a1a",
     )
     webview.start(debug=bool(os.environ.get("GRAPHLINK_DEBUG_WEBVIEW")))
+    # Reached only on a normal window close - webview.start() blocks until
+    # then. An uncaught exception anywhere above (or a hard kill/power loss)
+    # never reaches this line, leaving running.lock in place - exactly the
+    # signal previous_run_crashed() checks for on the NEXT launch.
+    mark_clean_exit()
     return 0
 
 
