@@ -332,6 +332,203 @@ def test_persona_is_the_base_persona_text_when_enabled():
     assert "Vertex" in persona_text  # BASE_SYSTEM_PROMPT's persona alias
 
 
+# -- R6.1: _resolve_branch_system_prompt (System Prompt note override) --------
+#
+# Legacy graphlink_chat_agent.py's resolve_branch_system_prompt, ported: a
+# note (kind="note", is_system_prompt=True) connected note -> root REPLACES
+# persona()'s resolution entirely for any send on that branch. These first
+# few tests call _resolve_branch_system_prompt directly against a bare
+# SceneDocument (no dispatch pipeline involved) - fast, precise unit
+# coverage of the resolution logic itself; the send_message/regenerate_
+# response end-to-end tests further below prove the real wiring.
+
+
+def test_resolve_branch_system_prompt_returns_none_with_no_canvas_context():
+    dispatcher = AgentDispatcher(_FakeSettingsManager())
+    document = SceneDocument()
+    root = document.add_chat_node(0, 0, "root message", True)
+    assert dispatcher._resolve_branch_system_prompt(None, root.id) is None
+    assert dispatcher._resolve_branch_system_prompt(document, None) is None
+
+
+def test_resolve_branch_system_prompt_returns_none_when_no_note_is_attached():
+    dispatcher = AgentDispatcher(_FakeSettingsManager())
+    document = SceneDocument()
+    root = document.add_chat_node(0, 0, "root message", True)
+    assert dispatcher._resolve_branch_system_prompt(document, root.id) is None
+
+
+def test_resolve_branch_system_prompt_ignores_a_note_not_marked_is_system_prompt():
+    dispatcher = AgentDispatcher(_FakeSettingsManager())
+    document = SceneDocument()
+    root = document.add_chat_node(0, 0, "root message", True)
+    plain_note = document.add_note(0, -150)  # is_system_prompt=False (default)
+    document.connect(plain_note.id, root.id)
+    assert dispatcher._resolve_branch_system_prompt(document, root.id) is None
+
+
+def test_resolve_branch_system_prompt_finds_a_note_attached_to_the_true_branch_root():
+    dispatcher = AgentDispatcher(_FakeSettingsManager())
+    document = SceneDocument()
+    root = document.add_chat_node(0, 0, "root message", True)
+    mid = document.add_chat_node(0, 100, "mid reply", False, parent_id=root.id)
+    leaf = document.add_chat_node(0, 200, "leaf message", True, parent_id=mid.id)
+
+    note = document.add_note(0, -150, is_system_prompt=True)
+    document.set_note_content(note.id, "Custom branch persona.")
+    document.connect(note.id, root.id)
+
+    # Resolving from the LEAF (2 hops from root) must still find the note
+    # attached to the TRUE root, not stop early at the immediate parent.
+    assert dispatcher._resolve_branch_system_prompt(document, leaf.id) == "Custom branch persona."
+    assert dispatcher._resolve_branch_system_prompt(document, mid.id) == "Custom branch persona."
+    assert dispatcher._resolve_branch_system_prompt(document, root.id) == "Custom branch persona."
+
+
+def test_resolve_branch_system_prompt_note_does_not_leak_into_chat_branch_history():
+    # Regression guard for the exact hazard _branch_parent_edge exists to
+    # prevent: the note -> root edge must NOT make chat_branch_history (the
+    # real conversation_history builder) treat the note as a fake extra
+    # parent turn, and must NOT make get_branch_root resolve to the note
+    # itself instead of the true chat root.
+    document = SceneDocument()
+    root = document.add_chat_node(0, 0, "root message", True)
+    child = document.add_chat_node(0, 100, "child reply", False, parent_id=root.id)
+
+    note = document.add_note(0, -150, is_system_prompt=True)
+    document.set_note_content(note.id, "Custom branch persona.")
+    document.connect(note.id, root.id)
+
+    history = document.chat_branch_history(child.id)
+    assert history == [
+        {"role": "user", "content": "root message"},
+        {"role": "assistant", "content": "child reply"},
+    ]
+    assert document.get_branch_root(child.id).id == root.id
+
+
+# -- R6.1: end-to-end - sendMessage/regenerateResponse actually resolve the
+# note override through the real dispatch pipeline ----------------------------
+
+
+def _configure_fake_ollama_provider_only(monkeypatch, *, model="test-model"):
+    # Sets just enough api_provider/config state for is_configured() to
+    # return True, WITHOUT installing a chat/chat_stream fake - these tests
+    # monkeypatch backend.agents._call_chat_agent_stream directly instead
+    # (one level below ChatAgent/api_provider.chat_stream), to assert
+    # exactly what persona_text _dispatch resolved and handed it, without
+    # depending on ChatAgent's own system-prompt-string-building internals.
+    monkeypatch.setattr(api_provider, "USE_API_MODE", False)
+    monkeypatch.setattr(api_provider, "LOCAL_PROVIDER_TYPE", config.LOCAL_PROVIDER_OLLAMA)
+    monkeypatch.setitem(config.OLLAMA_MODELS, config.TASK_CHAT, model)
+
+
+def test_send_message_uses_the_branch_attached_system_prompt_note_instead_of_the_default(monkeypatch):
+    _configure_fake_ollama_provider_only(monkeypatch)
+    captured = {}
+
+    def fake_stream(conversation_history, persona_text, cancel_event, on_chunk):
+        captured["persona_text"] = persona_text
+        on_chunk("a reply", False)
+        return "a reply"
+
+    monkeypatch.setattr(agents_module, "_call_chat_agent_stream", fake_stream)
+
+    async def run():
+        bus = SessionBus("agents-system-prompt-test")
+        notifications = NotificationState()
+        bus.register_topic("notification", notifications.payload)
+        composer_document = ComposerDocument()
+        bus.register_topic("app-composer", composer_document.payload)
+        dispatcher = AgentDispatcher(_FakeSettingsManager(enable_system_prompt=True))
+        document = register_canvas(bus, notifications, dispatcher, composer_document)
+
+        # Seed a branch root manually, attach a System Prompt note to it,
+        # then continue the branch through the real "sendMessage" intent -
+        # proving the resolved persona comes from the note, not persona()'s
+        # BASE_SYSTEM_PROMPT default.
+        root = document.add_chat_node(0, 0, "root message", True)
+        document.last_chat_node_id = root.id
+        note = document.add_note(0, -150, is_system_prompt=True)
+        document.set_note_content(note.id, "Custom branch persona.")
+        document.connect(note.id, root.id)
+
+        await bus.dispatch_intent("scene", "sendMessage", ["continue the branch"])
+        entry = next(iter(dispatcher._requests.values()))
+        await entry["task"]
+
+        assert captured["persona_text"] == "Custom branch persona."
+        assert "Vertex" not in captured["persona_text"]  # the default never got a look-in
+
+    asyncio.run(run())
+
+
+def test_send_message_falls_back_to_the_default_persona_when_no_note_is_attached(monkeypatch):
+    _configure_fake_ollama_provider_only(monkeypatch)
+    captured = {}
+
+    def fake_stream(conversation_history, persona_text, cancel_event, on_chunk):
+        captured["persona_text"] = persona_text
+        on_chunk("a reply", False)
+        return "a reply"
+
+    monkeypatch.setattr(agents_module, "_call_chat_agent_stream", fake_stream)
+
+    async def run():
+        bus = SessionBus("agents-system-prompt-fallback-test")
+        notifications = NotificationState()
+        bus.register_topic("notification", notifications.payload)
+        composer_document = ComposerDocument()
+        bus.register_topic("app-composer", composer_document.payload)
+        dispatcher = AgentDispatcher(_FakeSettingsManager(enable_system_prompt=True))
+        register_canvas(bus, notifications, dispatcher, composer_document)
+
+        await bus.dispatch_intent("scene", "sendMessage", ["first message, no note attached"])
+        entry = next(iter(dispatcher._requests.values()))
+        await entry["task"]
+
+        assert captured["persona_text"] == dispatcher.persona()
+
+    asyncio.run(run())
+
+
+def test_regenerate_response_also_resolves_the_branch_attached_system_prompt_note(monkeypatch):
+    # regenerate_response's call site passes node_id=parent_id (not the
+    # node being regenerated) - proves that wiring independently of
+    # send_message's own node_id=node.id wiring above.
+    _configure_fake_ollama_provider_only(monkeypatch)
+    captured = {}
+
+    def fake_chat(conversation_history, persona_text, cancel_event):
+        captured["persona_text"] = persona_text
+        return "regenerated reply"
+
+    monkeypatch.setattr(agents_module, "_call_chat_agent", fake_chat)
+
+    async def run():
+        bus = SessionBus("agents-regenerate-system-prompt-test")
+        notifications = NotificationState()
+        bus.register_topic("notification", notifications.payload)
+        composer_document = ComposerDocument()
+        bus.register_topic("app-composer", composer_document.payload)
+        dispatcher = AgentDispatcher(_FakeSettingsManager(enable_system_prompt=True))
+        document = register_canvas(bus, notifications, dispatcher, composer_document)
+
+        root = document.add_chat_node(0, 0, "root message", True)
+        assistant_reply = document.add_chat_node(0, 100, "old reply", False, parent_id=root.id)
+        note = document.add_note(0, -150, is_system_prompt=True)
+        document.set_note_content(note.id, "Custom branch persona.")
+        document.connect(note.id, root.id)
+
+        await bus.dispatch_intent("scene", "regenerateResponse", [assistant_reply.id])
+        entry = next(iter(dispatcher._requests.values()))
+        await entry["task"]
+
+        assert captured["persona_text"] == "Custom branch persona."
+
+    asyncio.run(run())
+
+
 # -- 6. bootstrap_provider_state -----------------------------------------------
 
 

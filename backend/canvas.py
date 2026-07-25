@@ -84,6 +84,28 @@ ORGANIZE_SPACING_Y = 180
 # find_branch_position packing algorithm (a later refinement).
 MESSAGE_VERTICAL_SPACING = 160
 
+# R6.1: Notes/Frames/Containers - legacy canvas decorations, ported for the
+# first time. _recompute_group_bounds (below, on SceneDocument) is plain
+# server-side math, NOT a React Flow extent/parentId feature - it computes a
+# padded union rect around a frame/container's own members every time
+# membership or a member's position changes, so a group visually always
+# encloses its members and never clips them (the legacy behavior these
+# numbers reproduce). GROUP_PADDING applies to all 4 sides of the union rect;
+# GROUP_PADDING_TOP is the (larger) top-edge allowance instead of
+# GROUP_PADDING, leaving room for the header/label row every frame/container
+# renders. GROUP_MEMBER_DEFAULT_WIDTH/HEIGHT is the flat per-member footprint
+# estimate used when a member's own kind has no width/height field of its
+# own - true of every one of the 12 existing SceneNode kinds today (none
+# carries one), so this is always what is actually used in practice, not
+# just a defensive fallback. GROUP_COLLAPSED_WIDTH/HEIGHT is the fixed pill
+# size a frame/container shrinks to while is_collapsed.
+GROUP_PADDING = 40.0
+GROUP_PADDING_TOP = 50.0
+GROUP_MEMBER_DEFAULT_WIDTH = 220.0
+GROUP_MEMBER_DEFAULT_HEIGHT = 120.0
+GROUP_COLLAPSED_WIDTH = 260.0
+GROUP_COLLAPSED_HEIGHT = 50.0
+
 
 class SceneError(ValueError):
     """A scene intent referenced something that does not exist or is invalid.
@@ -394,6 +416,61 @@ class SceneNode:
     # (default) for every other kind.
     code_sandbox_approval_requirements: str = ""
     code_sandbox_error: str = ""
+    # R6.1: Notes/Frames/Containers - shared color override for note/frame/
+    # container kinds. Hex string like "#4a7c59"; None means "use the kind's
+    # own default color", a rendering fallback that is entirely the
+    # frontend's job (canvas.py never resolves a color itself, same posture
+    # as gitlink_context_xml being opaque server-held data the frontend
+    # interprets). Unused (default None) for every other kind.
+    color: str | None = None
+    # Header/title-bar color override, settable independently from the body
+    # `color` above (a frame/container's header row can be tinted separately
+    # from its body fill) - None means "derive from color/default", again
+    # entirely a frontend rendering decision. Unused for every other kind.
+    header_color: str | None = None
+    # note kind only - the legacy system-prompt / summary-note badge flags.
+    # Both default False; unused for every other kind.
+    is_system_prompt: bool = False
+    is_summary_note: bool = False
+    # frame/container membership: the ids of the member nodes this group
+    # currently encloses. In this implementation a node can be a member of
+    # AT MOST ONE frame AND AT MOST ONE container simultaneously (never two
+    # frames, never two containers) - create_frame/create_container's own
+    # detach-from-existing-same-kind-group rule enforces this (see below).
+    # Unused (default empty list) for every other kind.
+    item_ids: list[str] = field(default_factory=list)
+    # frame kind only - legacy default is LOCKED (True), unlike every other
+    # bool field on this dataclass (which all default False). Containers
+    # have no lock concept at all - see create_container's own docstring for
+    # why no lock toggle is exposed for them. Unused for every other kind.
+    is_locked: bool = True
+    # frame kind only - the MANUAL resize override recorded by resize_frame,
+    # cleared back to None by fit_frame_to_content. This pair (unlike
+    # group_width/group_height just below) is the single, stable source of
+    # truth for "is this frame currently manually sized": it is NEVER
+    # auto-populated by _recompute_group_bounds's own auto-fit branch, only
+    # ever written by resize_frame/fit_frame_to_content, so its None-ness
+    # survives a collapse/expand round-trip untouched (unlike group_width/
+    # group_height, which DO get temporarily overwritten with the fixed
+    # collapsed-pill size while is_collapsed - see toggle_group_collapsed).
+    # Deliberately excluded from scene_payload()/the wire - pure internal
+    # bookkeeping, mirrors gitlink_imported_root's own "server-side only"
+    # precedent. Unused (always None) for container kind - containers have
+    # no manual-resize capability (no resize_container method exists).
+    group_manual_width: float | None = None
+    group_manual_height: float | None = None
+    # frame/container's current effective on-canvas size, kept live by
+    # _recompute_group_bounds: the fixed GROUP_COLLAPSED_WIDTH/HEIGHT pill
+    # while is_collapsed, else group_manual_width/height verbatim while a
+    # frame has a manual override active, else the padded bbox-of-members
+    # auto-fit size. THIS is the field the contract names group_width/
+    # group_height and exposes on the wire as groupWidth/groupHeight -
+    # group_manual_width/height above exist purely so a frame's manual
+    # override survives a collapse/expand round-trip without the collapsed-
+    # pill overwrite (this field) destroying it. Unused (default None) for
+    # every other kind.
+    group_width: float | None = None
+    group_height: float | None = None
 
 
 @dataclass
@@ -1380,6 +1457,341 @@ class SceneDocument:
         node.code_sandbox_error = str(message)
         return node
 
+    # -- R6.1: Notes/Frames/Containers ----------------------------------------
+    #
+    # Legacy canvas decorations, ported here for the first time (never
+    # covered by any prior increment). Notes are free-floating markdown
+    # sticky-notes with no parent-required posture (unlike almost every R3+
+    # content kind). Frames/containers are "group" nodes: they never contain
+    # their members via any React Flow parent/extent mechanism - membership
+    # is plain data (item_ids) and enclosure is plain server-side math
+    # (_recompute_group_bounds below), matching the legacy behavior of
+    # always auto-growing to enclose members, never clipping them.
+
+    def add_note(
+        self,
+        x: float,
+        y: float,
+        *,
+        is_system_prompt: bool = False,
+        is_summary_note: bool = False,
+    ) -> SceneNode:
+        """A note's creation primitive. UNLIKE every R3+ content kind, no
+        parent is required or accepted - notes are free-floating, never
+        branch-point children (mirrors the legacy note widget, which the
+        canvas places directly, not via a ChatNode-anchored connection)."""
+        node_id = f"n{next(self._counter)}"
+        node = SceneNode(
+            id=node_id,
+            x=float(x),
+            y=float(y),
+            title="Note",
+            kind="note",
+            content="Add note...",
+            is_system_prompt=bool(is_system_prompt),
+            is_summary_note=bool(is_summary_note),
+        )
+        self.nodes[node_id] = node
+        return node
+
+    def set_note_content(self, node_id: str, content: str) -> None:
+        node = self.nodes.get(node_id)
+        if node is None:
+            raise SceneError(f"unknown node: {node_id}")
+        node.content = str(content)
+
+    def _bbox_of_members(self, item_ids: list[str]) -> tuple[float, float, float, float]:
+        """Compute the padded union rect (x, y, width, height) enclosing
+        every member id's ESTIMATED footprint - GROUP_MEMBER_DEFAULT_WIDTH/
+        HEIGHT, since no current SceneNode kind carries its own width/height
+        field (see that constant's own comment). Stale/unknown member ids
+        (a member deleted out from under a group between mutations) are
+        silently skipped, never raise - a bbox recompute must never crash on
+        a dangling id. Falls back to a small default rect anchored at the
+        origin when item_ids is empty or every id is stale, so callers
+        (including resize_frame's own minimum-size clamp) always get a
+        well-defined rect back."""
+        left = top = right = bottom = None
+        for member_id in item_ids:
+            member = self.nodes.get(member_id)
+            if member is None:
+                continue
+            mx1, my1 = member.x, member.y
+            mx2 = member.x + GROUP_MEMBER_DEFAULT_WIDTH
+            my2 = member.y + GROUP_MEMBER_DEFAULT_HEIGHT
+            left = mx1 if left is None else min(left, mx1)
+            top = my1 if top is None else min(top, my1)
+            right = mx2 if right is None else max(right, mx2)
+            bottom = my2 if bottom is None else max(bottom, my2)
+        if left is None:
+            left = top = 0.0
+            right, bottom = GROUP_MEMBER_DEFAULT_WIDTH, GROUP_MEMBER_DEFAULT_HEIGHT
+        x = left - GROUP_PADDING
+        y = top - GROUP_PADDING_TOP
+        width = (right - left) + GROUP_PADDING * 2
+        height = (bottom - top) + GROUP_PADDING_TOP + GROUP_PADDING
+        return x, y, width, height
+
+    def _recompute_group_bounds(self, node_id: str) -> None:
+        """The core "legacy never clips, always auto-grows to enclose
+        members" recompute - plain server-side math, NOT a React Flow
+        extent/parentId feature. Silent no-op for an unknown id or a
+        non-frame/container kind (defensive: every call site below already
+        only ever calls this with a live frame/container id, but a caller
+        that races a delete must never crash here).
+
+        Three cases, in priority order:
+        1. Collapsed: skip the bbox computation entirely, snap to the fixed
+           GROUP_COLLAPSED_WIDTH/HEIGHT pill size. x/y are left untouched -
+           a collapsed pill stays wherever it was expanded from.
+        2. Frame with a manual size override (group_manual_width/height both
+           set): the override's WIDTH/HEIGHT stay exactly as manually set,
+           but x/y still re-centers so the manually-sized rect stays
+           centered on the live bbox-of-members center point.
+        3. Otherwise (auto-fit - every container, and every frame with no
+           override): x/y/width/height all come straight from the padded
+           bbox-of-members.
+        """
+        node = self.nodes.get(node_id)
+        if node is None or node.kind not in ("frame", "container"):
+            return
+        if node.is_collapsed:
+            node.group_width = GROUP_COLLAPSED_WIDTH
+            node.group_height = GROUP_COLLAPSED_HEIGHT
+            return
+        if node.kind == "frame" and node.group_manual_width is not None and node.group_manual_height is not None:
+            bx, by, bw, bh = self._bbox_of_members(node.item_ids)
+            center_x, center_y = bx + bw / 2.0, by + bh / 2.0
+            node.group_width = node.group_manual_width
+            node.group_height = node.group_manual_height
+            node.x = center_x - node.group_width / 2.0
+            node.y = center_y - node.group_height / 2.0
+            return
+        x, y, width, height = self._bbox_of_members(node.item_ids)
+        node.x, node.y, node.group_width, node.group_height = x, y, width, height
+
+    def _detach_from_existing_group(self, member_id: str, group_kind: str) -> None:
+        """Part of create_frame/create_container's shared validation: if
+        member_id is already tracked by some OTHER node of the SAME
+        group_kind ("frame" or "container" - membership is scoped per kind,
+        since a node may belong to at most one frame AND at most one
+        container simultaneously, per item_ids's own field comment), detach
+        it from that group first. If the detach empties that group's
+        item_ids, the now-empty group is deleted too (mirrors legacy
+        auto-delete-when-empty); otherwise the group's bounds are
+        recomputed to reflect its shrunk membership. A node can be a member
+        of at most one group of a given kind, so at most one match exists -
+        the loop stops at the first hit."""
+        for other in list(self.nodes.values()):
+            if other.kind != group_kind or member_id not in other.item_ids:
+                continue
+            other.item_ids = [i for i in other.item_ids if i != member_id]
+            if not other.item_ids:
+                self.nodes.pop(other.id, None)
+            else:
+                self._recompute_group_bounds(other.id)
+            break
+
+    def create_frame(self, item_ids: list[str]) -> SceneNode:
+        """Group an existing set of nodes into a new frame. Validates every
+        id exists BEFORE any mutation (fail fast, no partial detach), then
+        detaches each from any frame it was already a member of (see
+        _detach_from_existing_group). is_locked defaults True (the legacy
+        frame default - locked). Initial x/y/width/height come from the
+        padded bbox-of-members, computed immediately via
+        _recompute_group_bounds right after construction."""
+        ids = list(item_ids)
+        for member_id in ids:
+            if member_id not in self.nodes:
+                raise SceneError(f"unknown member node: {member_id}")
+        for member_id in ids:
+            self._detach_from_existing_group(member_id, "frame")
+        node_id = f"n{next(self._counter)}"
+        node = SceneNode(
+            id=node_id,
+            x=0.0,
+            y=0.0,
+            title="Frame",
+            kind="frame",
+            content="Add note...",
+            item_ids=ids,
+            is_locked=True,
+            is_collapsed=False,
+        )
+        self.nodes[node_id] = node
+        self._recompute_group_bounds(node_id)
+        return node
+
+    def create_container(self, item_ids: list[str]) -> SceneNode:
+        """Group an existing set of nodes into a new container. Same
+        validation/detach posture as create_frame, scoped to "container"
+        membership instead of "frame" - a node may simultaneously be a
+        member of one frame AND one container, so this never touches a
+        node's frame membership. UNLIKE create_frame, item_ids here may
+        include note/frame/container ids too - container membership can
+        nest (a container may hold another container or a frame as one of
+        its members). is_locked is left at its dataclass default (True) but
+        is MEANINGLESS for containers - see the field's own comment; no
+        toggle_container_lock exists and none should be added."""
+        ids = list(item_ids)
+        for member_id in ids:
+            if member_id not in self.nodes:
+                raise SceneError(f"unknown member node: {member_id}")
+        for member_id in ids:
+            self._detach_from_existing_group(member_id, "container")
+        node_id = f"n{next(self._counter)}"
+        node = SceneNode(
+            id=node_id,
+            x=0.0,
+            y=0.0,
+            title="Container",
+            kind="container",
+            content="New Container",
+            item_ids=ids,
+            is_collapsed=False,
+        )
+        self.nodes[node_id] = node
+        self._recompute_group_bounds(node_id)
+        return node
+
+    def set_group_label(self, node_id: str, text: str) -> None:
+        """Sets the header-note / title text for a frame or container -
+        reuses the generic `content` field, same reuse pattern as R3.5's
+        code text / R3.13's thinking text living in that same field."""
+        node = self.nodes.get(node_id)
+        if node is None:
+            raise SceneError(f"unknown node: {node_id}")
+        if node.kind not in ("frame", "container"):
+            raise SceneError(f"node is not a frame/container node: {node_id}")
+        node.content = str(text)
+
+    def set_group_color(self, node_id: str, color: str | None, header_color: str | None) -> None:
+        """Shared color setter for note/frame/container kinds - see the
+        color/header_color fields' own comments on SceneNode for what each
+        controls. Either may be cleared back to None (default) by passing
+        None explicitly."""
+        node = self.nodes.get(node_id)
+        if node is None:
+            raise SceneError(f"unknown node: {node_id}")
+        if node.kind not in ("note", "frame", "container"):
+            raise SceneError(f"node is not a note/frame/container node: {node_id}")
+        node.color = str(color) if color is not None else None
+        node.header_color = str(header_color) if header_color is not None else None
+
+    def toggle_frame_lock(self, node_id: str) -> None:
+        """Frame kind only. Recomputes bounds afterward for consistency with
+        every other group mutator here - locked vs unlocked does not change
+        the bbox math itself in this implementation (there is no
+        drag-suppression concept at the domain-model layer, only at the
+        frontend interaction layer), but keeping the call is cheap and
+        future-proofs a later change to that math."""
+        node = self.nodes.get(node_id)
+        if node is None:
+            raise SceneError(f"unknown node: {node_id}")
+        if node.kind != "frame":
+            raise SceneError(f"node is not a frame node: {node_id}")
+        node.is_locked = not node.is_locked
+        self._recompute_group_bounds(node_id)
+
+    def toggle_group_collapsed(self, node_id: str) -> None:
+        """Shared frame/container collapse toggle. A single call to
+        _recompute_group_bounds after flipping is_collapsed correctly
+        handles BOTH directions: collapsing snaps to the fixed pill size
+        (that helper's own is_collapsed branch), expanding recomputes from
+        the bbox of members - respecting a frame's manual size override if
+        one is still set (group_manual_width/height survive the collapsed
+        state untouched, see those fields' own comments)."""
+        node = self.nodes.get(node_id)
+        if node is None:
+            raise SceneError(f"unknown node: {node_id}")
+        if node.kind not in ("frame", "container"):
+            raise SceneError(f"node is not a frame/container node: {node_id}")
+        node.is_collapsed = not node.is_collapsed
+        self._recompute_group_bounds(node_id)
+
+    def resize_frame(self, node_id: str, width: float, height: float) -> None:
+        """Frame kind only. Records a manual size override, clamped to never
+        go below the padded bbox-of-members minimum size - computed via the
+        exact same _bbox_of_members helper the auto-fit path itself uses, so
+        "minimum" and "auto-fit size" can never drift apart. Recomputes
+        immediately afterward so x/y re-centers on the current member bbox
+        around the new size right away, same posture as toggle_frame_lock's
+        own trailing recompute call."""
+        node = self.nodes.get(node_id)
+        if node is None:
+            raise SceneError(f"unknown node: {node_id}")
+        if node.kind != "frame":
+            raise SceneError(f"node is not a frame node: {node_id}")
+        _, _, min_width, min_height = self._bbox_of_members(node.item_ids)
+        node.group_manual_width = max(float(width), min_width)
+        node.group_manual_height = max(float(height), min_height)
+        self._recompute_group_bounds(node_id)
+
+    def fit_frame_to_content(self, node_id: str) -> None:
+        """Frame kind only. Clears the manual size override back to None
+        (auto-fit) and forces an immediate bbox recompute - the exact
+        inverse of resize_frame."""
+        node = self.nodes.get(node_id)
+        if node is None:
+            raise SceneError(f"unknown node: {node_id}")
+        if node.kind != "frame":
+            raise SceneError(f"node is not a frame node: {node_id}")
+        node.group_manual_width = None
+        node.group_manual_height = None
+        self._recompute_group_bounds(node_id)
+
+    def ungroup(self, node_id: str) -> None:
+        """Deletes a frame/container node itself. Members are NOT deleted
+        and keep their current absolute x/y positions unchanged - they
+        simply stop being tracked in any item_ids list (the deleted group's
+        own item_ids goes with it). Also drops any edges touching the group
+        node, mirroring remove_nodes' own "edges die with either endpoint"
+        invariant (frame/container nodes are not normally edge-connected the
+        way chat nodes are, but this keeps the invariant airtight rather
+        than relying on that never happening)."""
+        node = self.nodes.get(node_id)
+        if node is None:
+            raise SceneError(f"unknown node: {node_id}")
+        if node.kind not in ("frame", "container"):
+            raise SceneError(f"node is not a frame/container node: {node_id}")
+        del self.nodes[node_id]
+        self.edges = {
+            eid: e for eid, e in self.edges.items()
+            if e.source != node_id and e.target != node_id
+        }
+        # A group can itself be a member of an outer container (nesting) -
+        # detach it there too, or the outer group is left tracking a
+        # dangling id, same failure mode remove_nodes already guards
+        # against for every other node kind.
+        self._detach_node_from_membership(node_id)
+
+    def _branch_parent_edge(self, node_id: str) -> SceneEdge | None:
+        """R6.1: the shared 'find the edge whose target == node_id' lookup
+        chat_branch_history/get_branch_root/regenerate_response/
+        delete_chat_node all use to walk BRANCH structure (parent -> child,
+        source -> target) - factored out once this increment introduced a
+        second, unrelated edge shape that can also target a chat node: a
+        System Prompt note's note -> root edge (backend/plugins.py's
+        "System Prompt" branch, direction confirmed against
+        backend/agents.py's _resolve_branch_system_prompt). That edge is
+        METADATA (which note decorates this root) - a note is never a real
+        branch "parent", so a branch history/root walk must never traverse
+        through it (doing so would both corrupt chat_branch_history's real
+        conversation_history with the note's own content as a fake turn, AND
+        make get_branch_root resolve to the note instead of the true chat
+        root, silently defeating the override it exists to find). Skips
+        edges whose source is a kind="note" node for exactly that reason;
+        otherwise identical to the plain `next((e for e in self.edges.
+        values() if e.target == node_id), None)` pattern this replaces."""
+        for edge in self.edges.values():
+            if edge.target != node_id:
+                continue
+            source_node = self.nodes.get(edge.source)
+            if source_node is not None and source_node.kind == "note":
+                continue
+            return edge
+        return None
+
     def delete_chat_node(self, node_id: str) -> None:
         """Delete one chat node WITHOUT orphaning its branch: children are
         re-parented to the deleted node's own parent (or become roots if it
@@ -1388,11 +1800,26 @@ class SceneDocument:
         child branch instead of splicing them back together."""
         if node_id not in self.nodes:
             raise SceneError(f"unknown node: {node_id}")
-        parent_edge = next((e for e in self.edges.values() if e.target == node_id), None)
+        parent_edge = self._branch_parent_edge(node_id)
         parent_id = parent_edge.source if parent_edge is not None else None
         child_edges = [e for e in self.edges.values() if e.source == node_id]
+        # R6.1: a System Prompt note attached to node_id (a note -> node_id
+        # edge - the exact shape _branch_parent_edge deliberately skips
+        # above, so it is NOT parent_edge) still dies with this endpoint,
+        # same "edges die with either endpoint" invariant remove_nodes
+        # already enforces elsewhere - otherwise it would dangle, pointing
+        # at a node_id that no longer exists in self.nodes. The note ITSELF
+        # is not deleted (mirrors ungroup's own "detach, don't
+        # cascade-delete" precedent) - only this now-stale edge.
+        note_edges = []
+        for edge in self.edges.values():
+            if edge.target != node_id:
+                continue
+            source_node = self.nodes.get(edge.source)
+            if source_node is not None and source_node.kind == "note":
+                note_edges.append(edge)
 
-        for edge in [parent_edge, *child_edges]:
+        for edge in [parent_edge, *child_edges, *note_edges]:
             if edge is not None:
                 self.edges.pop(edge.id, None)
         if parent_id is not None:
@@ -1405,6 +1832,7 @@ class SceneDocument:
             self.last_chat_node_id = parent_id
 
         del self.nodes[node_id]
+        self._detach_node_from_membership(node_id)
 
     def send_message(self, text: str) -> SceneNode:
         """The Composer's real Send action (R3.3): create a real user
@@ -1443,10 +1871,32 @@ class SceneDocument:
             if node is None:
                 break
             history.append({"role": "user" if node.is_user else "assistant", "content": node.content})
-            parent_edge = next((e for e in self.edges.values() if e.target == current_id), None)
+            parent_edge = self._branch_parent_edge(current_id)
             current_id = parent_edge.source if parent_edge is not None else None
         history.reverse()
         return history
+
+    def get_branch_root(self, node_id: str) -> SceneNode | None:
+        """R6.1 addition (backend/agents.py's system-prompt-override
+        resolution and backend/plugins.py's System Prompt plugin both need
+        this same walk): find node_id's topmost ancestor by walking the
+        parent-edge chain up - the SAME by-target-match walk chat_branch_
+        history/regenerate_response/delete_chat_node already use (via
+        _branch_parent_edge) - until reaching a node with no incoming parent
+        edge. Returns node_id's own node when it already has no parent (it
+        IS the root), or None for an unknown node_id. Deliberately generic,
+        not scoped to kind="chat" - any node reachable via this edge-chain
+        shape can be walked."""
+        current_id: str | None = node_id
+        root: SceneNode | None = None
+        while current_id is not None:
+            node = self.nodes.get(current_id)
+            if node is None:
+                break
+            root = node
+            parent_edge = self._branch_parent_edge(current_id)
+            current_id = parent_edge.source if parent_edge is not None else None
+        return root
 
     def regenerate_response(self, node_id: str) -> tuple[SceneNode, str]:
         """Validate + resolve a regenerate target. Mirrors legacy's regenerate_node
@@ -1464,7 +1914,7 @@ class SceneDocument:
             raise SceneError(f"unknown node: {node_id}")
         if node.kind != "chat":
             raise SceneError(f"node is not a chat node: {node_id}")
-        parent_edge = next((e for e in self.edges.values() if e.target == node_id), None)
+        parent_edge = self._branch_parent_edge(node_id)
         if parent_edge is None:
             raise SceneError(f"node has no parent and cannot be regenerated: {node_id}")
         return node, parent_edge.source
@@ -1552,7 +2002,7 @@ class SceneDocument:
             raise SceneError(f"unknown node: {image_node_id}")
         if node.kind != "image":
             raise SceneError(f"node is not an image node: {image_node_id}")
-        parent_edge = next((e for e in self.edges.values() if e.target == image_node_id), None)
+        parent_edge = self._branch_parent_edge(image_node_id)
         if parent_edge is None:
             raise SceneError(f"image node has no parent: {image_node_id}")
         if not node.content or not node.content.strip():
@@ -1600,6 +2050,13 @@ class SceneDocument:
         if node is None:
             raise SceneError(f"unknown node: {node_id}")
         node.is_collapsed = bool(collapsed)
+        # R6.1: unlike every other kind this generic setter already served,
+        # a frame/container's is_collapsed also drives derived geometry
+        # (the collapsed pill size vs the auto-fit/manual bbox) - recompute
+        # here too so this stays correct no matter which entry point sets
+        # it, rather than only being safe via toggle_group_collapsed.
+        if node.kind in ("frame", "container"):
+            self._recompute_group_bounds(node_id)
 
     def set_node_docked(self, node_id: str, docked: bool) -> None:
         """R3.13: a single generic setter handling both dock (docked=True)
@@ -1616,6 +2073,15 @@ class SceneDocument:
         if node is None:
             raise SceneError(f"unknown node: {node_id}")
         node.x, node.y = float(x), float(y)
+        # R6.1: keep every frame/container this node is a member of enclosing
+        # it - a node is a member of at most one frame AND at most one
+        # container simultaneously (see item_ids's own field comment), so
+        # this is at most 2 matches, not an expensive scan; a plain
+        # iteration over self.nodes.values() is correctness-first, no reverse
+        # index needed for this dataset size.
+        for group in self.nodes.values():
+            if group.kind in ("frame", "container") and node_id in group.item_ids:
+                self._recompute_group_bounds(group.id)
         return node
 
     def remove_nodes(self, node_ids: list[str]) -> None:
@@ -1634,6 +2100,33 @@ class SceneDocument:
                 # deleted images would accumulate in memory forever.
                 if node.image_asset_id:
                     self.image_assets.pop(node.image_asset_id, None)
+                self._detach_node_from_membership(node_id)
+
+    def _detach_node_from_membership(self, node_id: str) -> None:
+        """R6.1: if the deleted node was itself a frame/container, its own
+        item_ids simply goes with it (already popped from self.nodes by the
+        caller) - members are NOT cascade-deleted, they just stop being
+        tracked, same "release, don't destroy" rule ungroup() uses. If the
+        deleted node was instead a MEMBER of some other frame/container (or,
+        since containers can nest, a group nested inside another group),
+        detach it from that group's item_ids - auto-deleting the group if
+        that empties it out (mirrors create_frame/create_container's own
+        detach rule), else recomputing its bounds to reflect the shrunk
+        membership. Shared by remove_nodes() and delete_chat_node() - the
+        latter deletes via its own reparent-children path rather than
+        remove_nodes, so it would otherwise leave stale item_ids behind.
+        list(...) over a live view since a match can mutate self.nodes
+        (popping an emptied group) mid-iteration."""
+        for group in list(self.nodes.values()):
+            if group.kind not in ("frame", "container"):
+                continue
+            if node_id not in group.item_ids:
+                continue
+            group.item_ids = [i for i in group.item_ids if i != node_id]
+            if not group.item_ids:
+                self.nodes.pop(group.id, None)
+            else:
+                self._recompute_group_bounds(group.id)
 
     # -- edges -------------------------------------------------------------
 
@@ -1763,6 +2256,18 @@ class SceneDocument:
                     # see the field's own comment on SceneNode.
                     "codeSandboxApprovalRequirements": n.code_sandbox_approval_requirements,
                     "codeSandboxError": n.code_sandbox_error,
+                    # R6.1: Notes/Frames/Containers. groupManualWidth/Height
+                    # are DELIBERATELY OMITTED, same "server-side bookkeeping
+                    # only" posture as codeSandboxSandboxId/gitlinkImportedRoot
+                    # above - see those fields' own comments on SceneNode.
+                    "color": n.color,
+                    "headerColor": n.header_color,
+                    "isSystemPrompt": n.is_system_prompt,
+                    "isSummaryNote": n.is_summary_note,
+                    "itemIds": list(n.item_ids),
+                    "isLocked": n.is_locked,
+                    "groupWidth": n.group_width,
+                    "groupHeight": n.group_height,
                 }
                 for n in self.nodes.values()
             ],
@@ -2098,6 +2603,12 @@ def register_canvas(
             composer_document=composer_document,
             conversation_history=history,
             on_reply=_on_reply,
+            # R6.1: lets AgentDispatcher resolve a branch-attached System
+            # Prompt note override (see backend/agents.py's
+            # _resolve_branch_system_prompt) - node.id is the just-created
+            # user ChatNode "about to be sent", the walk starts from here.
+            canvas_document=document,
+            node_id=node.id,
         )
         return node.id
 
@@ -2192,6 +2703,12 @@ def register_canvas(
             # node in the canvas, with no way for the frontend to tell that
             # apart from an actual Composer send.
             stream=False,
+            # R6.1: same branch-system-prompt-override resolution as
+            # send_message above - parent_id (not node_to_regenerate.id) so
+            # the walk starts from the SAME node chat_branch_history just
+            # built `history` from, a moment above.
+            canvas_document=document,
+            node_id=parent_id,
         )
         return node_to_regenerate.id
 
@@ -2268,7 +2785,7 @@ def register_canvas(
             return None
         await publish_scene()
 
-        parent_edge = next((e for e in document.edges.values() if e.target == node_id), None)
+        parent_edge = document._branch_parent_edge(node_id)
         branch_history = document.chat_branch_history(parent_edge.source) if parent_edge else []
 
         async def _on_progress(event):
@@ -2319,7 +2836,7 @@ def register_canvas(
         node = document.send_artifact_message(node_id, text)
         await publish_scene()
 
-        parent_edge = next((e for e in document.edges.values() if e.target == node_id), None)
+        parent_edge = document._branch_parent_edge(node_id)
         branch_history = document.chat_branch_history(parent_edge.source) if parent_edge else []
         full_history = branch_history + node.history
 
@@ -2533,7 +3050,7 @@ def register_canvas(
             return None
         await publish_scene()
 
-        parent_edge = next((e for e in document.edges.values() if e.target == node_id), None)
+        parent_edge = document._branch_parent_edge(node_id)
         branch_history = document.chat_branch_history(parent_edge.source) if parent_edge else []
 
         def _on_success(code, output, analysis, last_run_failed):
@@ -2584,7 +3101,7 @@ def register_canvas(
             return None
         await publish_scene()
 
-        parent_edge = next((e for e in document.edges.values() if e.target == node_id), None)
+        parent_edge = document._branch_parent_edge(node_id)
         branch_history = document.chat_branch_history(parent_edge.source) if parent_edge else []
 
         def _on_success(code, output, analysis):
@@ -2620,6 +3137,69 @@ def register_canvas(
 
     bus.register_intent("scene", "approveCodeExecution", approve_code_execution)
     bus.register_intent("scene", "denyCodeExecution", deny_code_execution)
+
+    # -- R6.1: Notes/Frames/Containers -----------------------------------------
+
+    async def add_note(x, y, is_system_prompt=False, is_summary_note=False):
+        node = document.add_note(
+            x, y, is_system_prompt=is_system_prompt, is_summary_note=is_summary_note,
+        )
+        await publish_scene()
+        return node.id
+
+    async def set_note_content(node_id, content):
+        document.set_note_content(node_id, content)
+        await publish_scene()
+
+    async def create_frame(item_ids):
+        node = document.create_frame(list(item_ids))
+        await publish_scene()
+        return node.id
+
+    async def create_container(item_ids):
+        node = document.create_container(list(item_ids))
+        await publish_scene()
+        return node.id
+
+    async def set_group_label(node_id, text):
+        document.set_group_label(node_id, text)
+        await publish_scene()
+
+    async def set_group_color(node_id, color, header_color):
+        document.set_group_color(node_id, color, header_color)
+        await publish_scene()
+
+    async def toggle_frame_lock(node_id):
+        document.toggle_frame_lock(node_id)
+        await publish_scene()
+
+    async def toggle_group_collapsed(node_id):
+        document.toggle_group_collapsed(node_id)
+        await publish_scene()
+
+    async def resize_frame(node_id, width, height):
+        document.resize_frame(node_id, width, height)
+        await publish_scene()
+
+    async def fit_frame_to_content(node_id):
+        document.fit_frame_to_content(node_id)
+        await publish_scene()
+
+    async def ungroup(node_id):
+        document.ungroup(node_id)
+        await publish_scene()
+
+    bus.register_intent("scene", "addNote", add_note)
+    bus.register_intent("scene", "setNoteContent", set_note_content)
+    bus.register_intent("scene", "createFrame", create_frame)
+    bus.register_intent("scene", "createContainer", create_container)
+    bus.register_intent("scene", "setGroupLabel", set_group_label)
+    bus.register_intent("scene", "setGroupColor", set_group_color)
+    bus.register_intent("scene", "toggleFrameLock", toggle_frame_lock)
+    bus.register_intent("scene", "toggleGroupCollapsed", toggle_group_collapsed)
+    bus.register_intent("scene", "resizeFrame", resize_frame)
+    bus.register_intent("scene", "fitFrameToContent", fit_frame_to_content)
+    bus.register_intent("scene", "ungroup", ungroup)
 
     async def move_node(node_id, x, y):
         document.move_node(node_id, x, y)

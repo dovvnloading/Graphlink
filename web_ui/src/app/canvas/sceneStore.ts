@@ -536,6 +536,71 @@ export class SceneStore {
     this.transport.intent("scene", "organizeNodes", []);
   }
 
+  // -- R6.1: Notes/Frames/Containers ----------------------------------------
+  //
+  // Mirrors backend/canvas.py's register_canvas() intent names/argument
+  // order 1:1, same convention as every scene intent above. addNote/
+  // createFrame/createContainer all return the new node's id server-side
+  // (register_canvas's own handlers `return node.id`), but - same posture as
+  // every other addXNode method above (addChatNode, addThinkingNode,
+  // addHtmlNode, addImageNode, addConversationNode, ...) - this stays a
+  // plain fire-and-forget intent() call, not request(): the new node arrives
+  // through the next scene snapshot like any other mutation, and nothing on
+  // the frontend needs the id synchronously the way fetchGitlinkRepositories/
+  // fetchGitlinkContext genuinely do.
+
+  addNote(x: number, y: number, options: { isSystemPrompt?: boolean; isSummaryNote?: boolean } = {}): void {
+    const { isSystemPrompt = false, isSummaryNote = false } = options;
+    this.transport.intent("scene", "addNote", [x, y, isSystemPrompt, isSummaryNote]);
+  }
+
+  setNoteContent(nodeId: string, content: string): void {
+    this.transport.intent("scene", "setNoteContent", [nodeId, content]);
+  }
+
+  createFrame(itemIds: string[]): void {
+    this.transport.intent("scene", "createFrame", [itemIds]);
+  }
+
+  createContainer(itemIds: string[]): void {
+    this.transport.intent("scene", "createContainer", [itemIds]);
+  }
+
+  // Shared setter for frame/container header-note/title text (backend/
+  // canvas.py's set_group_label) - reused verbatim for both kinds, same
+  // posture as setGroupColor below.
+  setGroupLabel(nodeId: string, text: string): void {
+    this.transport.intent("scene", "setGroupLabel", [nodeId, text]);
+  }
+
+  // Shared color setter for note/frame/container kinds. Either argument may
+  // be null to clear that half back to "derive from default" - the caller
+  // (GroupColorPicker's "Reset to Default" item) passes (null, null) for a
+  // full reset, or one real hex + null for a single-half set.
+  setGroupColor(nodeId: string, color: string | null, headerColor: string | null): void {
+    this.transport.intent("scene", "setGroupColor", [nodeId, color, headerColor]);
+  }
+
+  toggleFrameLock(nodeId: string): void {
+    this.transport.intent("scene", "toggleFrameLock", [nodeId]);
+  }
+
+  toggleGroupCollapsed(nodeId: string): void {
+    this.transport.intent("scene", "toggleGroupCollapsed", [nodeId]);
+  }
+
+  resizeFrame(nodeId: string, width: number, height: number): void {
+    this.transport.intent("scene", "resizeFrame", [nodeId, width, height]);
+  }
+
+  fitFrameToContent(nodeId: string): void {
+    this.transport.intent("scene", "fitFrameToContent", [nodeId]);
+  }
+
+  ungroup(nodeId: string): void {
+    this.transport.intent("scene", "ungroup", [nodeId]);
+  }
+
   // Grid intents ride the grid-control topic; font intents ride scene - both
   // keep the legacy bridges' @Slot names 1:1 (backend/canvas.py contract).
   setGridSize(size: number): void {

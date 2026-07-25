@@ -464,6 +464,45 @@ class AgentDispatcher:
             return ""
         return BASE_SYSTEM_PROMPT
 
+    def _resolve_branch_system_prompt(self, canvas_document, node_id: str | None) -> str | None:
+        """R6.1 port of legacy graphlink_chat_agent.py's
+        resolve_branch_system_prompt: given the id of a chat node about to be
+        sent, walk its branch up to the root (SceneDocument.get_branch_root -
+        the same parent-edge walk chat_branch_history/regenerate_response
+        already use for this codebase's own precedent), then look for an
+        edge whose source is a kind="note"/is_system_prompt=True node and
+        whose target is that root. If one exists, its `content` REPLACES
+        persona()'s resolution entirely for this send - legacy does not
+        concatenate the two. Returns None (never "") when there is no such
+        note, so callers can tell "no override, fall back to the default"
+        apart from "the override IS a genuinely empty string" (not reachable
+        via add_note's own default content, but kept as a clean contract).
+
+        `canvas_document` is duck-typed, like start_conversation_reply's own
+        `node` parameter above - this module deliberately does not import
+        backend/canvas.py's SceneDocument (canvas.py imports FROM this
+        module, so importing it back here would be circular). Both
+        `canvas_document` and `node_id` are optional: callers that have no
+        canvas context at all (there are none in this increment, but future
+        dispatch surfaces might not) simply get None back, same as "no note
+        attached"."""
+        if canvas_document is None or node_id is None:
+            return None
+        root = canvas_document.get_branch_root(node_id)
+        if root is None:
+            return None
+        for edge in canvas_document.edges.values():
+            if edge.target != root.id:
+                continue
+            source_node = canvas_document.nodes.get(edge.source)
+            if (
+                source_node is not None
+                and getattr(source_node, "kind", None) == "note"
+                and getattr(source_node, "is_system_prompt", False)
+            ):
+                return source_node.content
+        return None
+
     def cancel(self, request_id: str) -> bool:
         entry = self._requests.get(request_id)
         if entry is None:
@@ -517,6 +556,8 @@ class AgentDispatcher:
         on_end,
         state_topic: str,
         stream: bool = False,
+        canvas_document=None,
+        node_id: str | None = None,
     ) -> None:
         """The shared real-dispatch pipeline behind both start_chat_reply
         (Composer, state_topic="app-composer") and start_conversation_reply
@@ -537,7 +578,15 @@ class AgentDispatcher:
         kwarg entirely and is completely unchanged by this addition. Either
         way, the completion hand-off below (`on_reply(reply_text)` then
         `await bus.publish("scene")`) is identical - callers never see a
-        difference once the reply is ready."""
+        difference once the reply is ready.
+
+        `canvas_document`/`node_id` (R6.1, both keyword-only, default None):
+        optional branch-system-prompt-override context - see
+        _resolve_branch_system_prompt. Only start_chat_reply's send_message/
+        regenerate_response call sites (backend/canvas.py) pass these today;
+        every other caller (including start_conversation_reply) omits them,
+        which simply falls back to persona()'s existing resolution, byte-
+        identical to this method's pre-R6.1 behavior."""
         if self._requests:
             # Single-request-per-session guard: never start a second
             # concurrent request while one is already in flight.
@@ -563,6 +612,15 @@ class AgentDispatcher:
             on_begin(request_id)
             await bus.publish(state_topic)
             try:
+                # R6.1: a branch-attached System Prompt note (see
+                # _resolve_branch_system_prompt) REPLACES persona()'s
+                # resolution entirely when present - computed once up front,
+                # shared by both the streaming and non-streaming branches
+                # below, exactly like persona() itself was before this
+                # addition (each branch used to call self.persona() fresh -
+                # now both read this single resolved value instead).
+                override = self._resolve_branch_system_prompt(canvas_document, node_id)
+                persona_text = override if override is not None else self.persona()
                 if stream:
                     loop = asyncio.get_running_loop()
                     queue: asyncio.Queue = asyncio.Queue()
@@ -657,7 +715,7 @@ class AgentDispatcher:
                             asyncio.to_thread(
                                 _call_chat_agent_stream,
                                 conversation_history,
-                                self.persona(),
+                                persona_text,
                                 cancel_event,
                                 _thread_on_chunk,
                             ),
@@ -672,7 +730,7 @@ class AgentDispatcher:
                         await pump_task
                 else:
                     reply_text = await asyncio.wait_for(
-                        asyncio.to_thread(_call_chat_agent, conversation_history, self.persona(), cancel_event),
+                        asyncio.to_thread(_call_chat_agent, conversation_history, persona_text, cancel_event),
                         timeout=WATCHDOG_TIMEOUT_SECONDS,
                     )
                 if inspect.iscoroutinefunction(on_reply):
@@ -722,6 +780,8 @@ class AgentDispatcher:
         conversation_history,
         on_reply,
         stream: bool = True,
+        canvas_document=None,
+        node_id: str | None = None,
     ) -> None:
         # R4.4: defaults to True for send_message's Composer-send call site
         # (the only surface this increment's design intends to stream), but
@@ -736,6 +796,13 @@ class AgentDispatcher:
         # frontend to distinguish "a send is in flight" from "a regenerate
         # elsewhere in the canvas is in flight" - a real, confusing surprise
         # this parameter exists specifically to prevent.
+        #
+        # `canvas_document`/`node_id` (R6.1): optional, forwarded straight
+        # through to _dispatch for branch-system-prompt-override resolution -
+        # see that method's own docstring. Both default None so every
+        # pre-R6.1 caller (there are many across test_agents.py) keeps
+        # working unchanged, falling back to persona()'s existing
+        # resolution.
         return await self._dispatch(
             bus=bus,
             notifications_state=notifications_state,
@@ -745,6 +812,8 @@ class AgentDispatcher:
             on_end=composer_document.end_request,
             state_topic="app-composer",
             stream=stream,
+            canvas_document=canvas_document,
+            node_id=node_id,
         )
 
     async def start_conversation_reply(

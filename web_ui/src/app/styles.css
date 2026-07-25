@@ -3508,3 +3508,265 @@ body,
   opacity: 0.45;
   cursor: default;
 }
+
+/* -- R6.1 note node ---------------------------------------------------- */
+
+/* Deliberately no width/max-height here (unlike every other .scene-node.*
+   card) - Note's own size is content-driven, matching legacy ("just let the
+   div grow with its content, no manual resize UI"). max-width alone keeps
+   long markdown lines readable without capping vertical growth. */
+.note-node {
+  max-width: 360px;
+}
+
+.note-node.system-prompt {
+  border-style: dashed;
+  border-width: 2px;
+}
+
+.note-node-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.note-node-badges {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.note-node-badge {
+  font-size: 11px;
+  line-height: 1;
+  color: var(--gl-surface-text-muted);
+}
+
+.note-node-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.note-node-delete-btn {
+  font-size: 13px;
+  line-height: 1;
+  padding: 3px 7px;
+  color: var(--gl-semantic-status-error, currentColor);
+  background: transparent;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.note-node-delete-btn:hover {
+  background-color: var(--gl-neutral-button-hover);
+}
+
+.note-node-content {
+  cursor: text;
+}
+
+.note-node-content > :first-child {
+  margin-top: 0;
+}
+
+.note-node-content > :last-child {
+  margin-bottom: 0;
+}
+
+.note-node-editor {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 80px;
+  resize: vertical;
+  font-family: inherit;
+  font-size: 11px;
+  padding: 6px 8px;
+  color: var(--gl-surface-text);
+  background-color: var(--gl-surface-inset, var(--gl-surface-window));
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 6px;
+}
+
+.note-node-editor:focus {
+  outline: none;
+  border-color: var(--gl-surface-text-muted);
+}
+
+/* -- R6.1 shared color-swatch popover (note/frame/container) -------------- */
+
+.group-color-picker {
+  position: relative;
+  display: inline-flex;
+}
+
+.group-color-swatch-trigger {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border-radius: 50%;
+  background-color: var(--gl-neutral-button-background);
+  border: 1px solid var(--gl-neutral-button-border);
+  cursor: pointer;
+}
+
+.group-color-swatch-trigger:hover {
+  border-color: var(--gl-surface-text-muted);
+}
+
+.group-color-popover {
+  z-index: 50;
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  width: 176px;
+  padding: 8px;
+  gap: 4px;
+  background-color: var(--gl-surface-node-body);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 8px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+}
+
+.group-color-section-label {
+  margin: 4px 0 0;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--gl-surface-text-muted);
+}
+
+.group-color-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.group-color-swatch {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--gl-surface-border);
+  cursor: pointer;
+}
+
+.group-color-swatch.active {
+  border-color: var(--gl-surface-text-bright, var(--gl-surface-text));
+  box-shadow: 0 0 0 1px var(--gl-surface-text-bright, var(--gl-surface-text));
+}
+
+.group-color-reset {
+  margin-top: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  font-family: inherit;
+  padding: 5px 8px;
+  color: var(--gl-surface-text);
+  background-color: var(--gl-neutral-button-background);
+  border: 1px solid var(--gl-neutral-button-border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.group-color-reset:hover {
+  background-color: var(--gl-neutral-button-hover);
+}
+
+/* -- R6.1 frame/container group node --------------------------------------- */
+/* GroupNodeView.tsx - one shared component for both "frame" and "container"
+   NODE_TYPES entries. Renders as a background decoration BEHIND its member
+   nodes (SceneCanvas.tsx's toFlowNodes sets zIndex:-1) - width/height come
+   from the flow node object itself (backend-owned, see that file's own
+   comment), this root fills 100%/100% of that wrapper. */
+
+.group-node {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  background-color: var(--gl-surface-node-body);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 10px;
+  opacity: 0.92;
+}
+
+.group-node.selected {
+  border-color: var(--gl-surface-border-strong, var(--gl-surface-text-muted));
+}
+
+.group-node-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--gl-surface-text);
+  background-color: var(--gl-surface-inset, var(--gl-surface-node-body));
+  border-bottom: 1px solid var(--gl-surface-border);
+  border-radius: 9px 9px 0 0;
+  cursor: default;
+}
+
+.group-node.collapsed .group-node-header {
+  border-bottom: none;
+  border-radius: 9px;
+}
+
+.group-node-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.group-node-label-input {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  font-weight: 600;
+  font-family: inherit;
+  padding: 2px 4px;
+  color: var(--gl-surface-text);
+  background-color: var(--gl-surface-inset-deep, var(--gl-surface-window));
+  border: 1px solid var(--gl-surface-text-muted);
+  border-radius: 4px;
+}
+
+.group-node-label-input:focus {
+  outline: none;
+}
+
+.group-node-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.group-node-btn {
+  font-size: 10px;
+  font-weight: 600;
+  font-family: inherit;
+  padding: 3px 7px;
+  color: var(--gl-surface-text-muted);
+  background: transparent;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.group-node-btn:hover {
+  color: var(--gl-surface-text);
+  background-color: var(--gl-neutral-button-hover);
+}
+
+.group-node-ungroup-btn {
+  color: var(--gl-semantic-status-error, currentColor);
+}

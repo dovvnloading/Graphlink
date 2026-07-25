@@ -29,6 +29,13 @@ export function buildCommands(
 ): PaletteCommand[] {
   const hasNodes = () => store.getScene().nodes.length > 0;
   const hasSelection = () => rf.getNodes().some((n) => n.selected);
+  // R6.1: Create Frame/Create Container both need 2+ currently-selected
+  // canvas nodes - reuses rf.getNodes() the same way delete-selected already
+  // does above, rather than sceneStore's own selectedNodeId (that field only
+  // ever tracks ONE id - see its own doc comment on SceneStore - so it
+  // cannot answer a "2+ selected" question).
+  const selectedNodeIds = () => rf.getNodes().filter((n) => n.selected).map((n) => n.id);
+  const hasMultiSelection = () => selectedNodeIds().length >= 2;
 
   return [
     {
@@ -145,6 +152,37 @@ export function buildCommands(
       aliases: ["plugin picker", "add node"],
       run: () => overlays.open("plugins", "popover"),
       enabled: () => true,
+    },
+    {
+      // R6.1: plain, ungated - creates a blank note near the current
+      // viewport center. Same center-of-viewport formula "add-pin" above
+      // already uses; "Add System Prompt Note" is a DIFFERENT, existing
+      // path (the plugin picker's generic executePlugin("System Prompt", ...)
+      // - see backend/plugins.py) and is deliberately not duplicated here.
+      id: "add-note",
+      name: "Add Note",
+      aliases: ["sticky note", "create note", "new note"],
+      run: () => {
+        const viewport = rf.getViewport();
+        const x = (window.innerWidth / 2 - viewport.x) / viewport.zoom;
+        const y = (window.innerHeight / 2 - viewport.y) / viewport.zoom;
+        store.addNote(x, y);
+      },
+      enabled: () => true,
+    },
+    {
+      id: "create-frame",
+      name: "Create Frame",
+      aliases: ["group into frame", "frame selection"],
+      run: () => store.createFrame(selectedNodeIds()),
+      enabled: hasMultiSelection,
+    },
+    {
+      id: "create-container",
+      name: "Create Container",
+      aliases: ["group into container", "container selection"],
+      run: () => store.createContainer(selectedNodeIds()),
+      enabled: hasMultiSelection,
     },
   ];
 }
