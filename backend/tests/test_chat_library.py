@@ -268,13 +268,21 @@ def _bus_with_canvas(db_path):
     publish to it - production guarantees this via _configure_session's own
     ordering; this test harness replicates it directly rather than pulling
     in the full register_canvas (which itself needs an agent dispatcher/
-    composer document unrelated to what's under test here)."""
+    composer document unrelated to what's under test here).
+
+    autosave_interval_seconds=None disables R6.6's own background timer
+    loop here - every test in this file runs in milliseconds, so a real
+    30s-sleeping asyncio task would still be "pending" when asyncio.run()
+    returns and the loop closes, leaking a task and spamming "Task was
+    destroyed but it is pending" warnings across ~30 unrelated tests.
+    backend/tests/test_autosave.py exercises the actual tick logic directly
+    (no timer involved) instead."""
     bus = SessionBus("chat-library-load-test")
     document = SceneDocument()
     bus.register_topic("scene", document.scene_payload)
     notifications = NotificationState()
     bus.register_topic("notification", notifications.payload)
-    register_chat_library(bus, db_path, document, notifications)
+    register_chat_library(bus, db_path, document, notifications, autosave_interval_seconds=None)
     return bus, document, notifications
 
 
@@ -475,3 +483,27 @@ def test_two_concurrent_save_chat_calls_do_not_race_only_one_row_is_written(db_p
         m["payload"]["message"] for m in recorder.messages if m.get("topic") == "notification"
     ]
     assert any("already in progress" in message for message in notification_messages), notification_messages
+
+
+# -- R6.6 regression: register_chat_library must survive a missing event loop --
+
+
+def test_register_chat_library_does_not_crash_without_a_running_event_loop(db_path):
+    # A real, shipped bug: register_chat_library's own R6.6 addition
+    # (register_autosave) called asyncio.create_task() unconditionally, which
+    # raises RuntimeError outside of a running event loop. backend/app.py's
+    # _configure_session calls register_chat_library from exactly this kind
+    # of sync context under Starlette's TestClient (confirmed - it broke
+    # test_ws_origin.py and test_assets.py, both unrelated to chat_library),
+    # so this proves the real production call shape - a bare, non-async
+    # call, default autosave_interval_seconds - can never take core session
+    # setup down with it.
+    bus = SessionBus("chat-library-no-loop-test")
+    document = SceneDocument()
+    bus.register_topic("scene", document.scene_payload)
+    notifications = NotificationState()
+    bus.register_topic("notification", notifications.payload)
+
+    register_chat_library(bus, db_path, document, notifications)
+
+    assert bus.autosave_task is None

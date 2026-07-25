@@ -385,6 +385,8 @@ def register_chat_library(
     db_path: Path | None = None,
     canvas_document: SceneDocument | None = None,
     notifications: NotificationState | None = None,
+    *,
+    autosave_interval_seconds: float | None = 30.0,
 ) -> None:
     resolved_path = db_path if db_path is not None else DEFAULT_DB_PATH
 
@@ -585,3 +587,18 @@ def register_chat_library(
     bus.register_intent("app-chat-library", "loadChat", _serialize_mutating_intent(load_chat))
     bus.register_intent("app-chat-library", "saveChat", _serialize_mutating_intent(save_chat))
     bus.register_intent("app-chat-library", "newChat", _serialize_mutating_intent(new_chat))
+
+    if canvas_document is not None and autosave_interval_seconds is not None:
+        # R6.6: local import - backend/autosave.py itself imports several
+        # names FROM this module (_fallback_title/_resolve_seed_message/
+        # load_chat_row/save_chat_atomically_row, so it can reuse them
+        # rather than duplicating any save logic); importing it at this
+        # module's own top level would be a circular import. Shares the
+        # SAME _mutation_in_progress flag every manual intent above already
+        # uses, so an autosave tick can never race a manual load/save/new.
+        from backend.autosave import register_autosave
+
+        register_autosave(
+            bus, resolved_path, canvas_document, notifications, _mutation_in_progress,
+            interval_seconds=autosave_interval_seconds,
+        )
