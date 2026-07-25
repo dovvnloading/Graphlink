@@ -61,6 +61,7 @@ from __future__ import annotations
 import asyncio
 import difflib
 import inspect
+import json
 import logging
 import re
 import threading
@@ -71,6 +72,7 @@ from urllib.parse import quote
 import api_provider
 import graphlink_task_config as config
 from graphlink_artifact_agent import ArtifactAgent
+from graphlink_chart_agent import ChartDataAgent
 from graphlink_chat_agent import ChatAgent
 from graphlink_licensing import SettingsManager  # type hint only
 from graphlink_plugins.common.github_client import GitHubRestClient
@@ -324,6 +326,23 @@ class AgentDispatcher:
         # Sandbox Run must be able to run concurrently with any of the seven
         # slots above. Same shape as self._pycoder_requests.
         self._code_sandbox_requests: dict[str, dict] = {}
+        # R6.2: a NINTH independent in-flight-request GUARD - unlike the
+        # eight dict-of-tasks slots above, start_chart_generation is
+        # DIRECTLY AWAITED by its caller rather than scheduled via
+        # asyncio.create_task (see that method's own docstring for why: it
+        # is a single combined create+generate action with no pre-existing
+        # node to attach a spinner to, so the caller genuinely needs the
+        # result - including the brand new node id - back in the same round
+        # trip, the same shape as the Gitlink read-only helpers just below).
+        # request_id -> True; this dict's only job is answering "is a chart
+        # generation already running for this session", so two overlapping
+        # generateChart calls (e.g. two tabs on the same session) cannot
+        # race each other - there is no task/cancel_event to store since
+        # there is no background task and no cancellation primitive (same
+        # reasoning as self._image_requests: ChartDataAgent.get_response has
+        # no checkpoint to insert one at, and its own legacy caller,
+        # ChartWorkerThread, has no stop() method either).
+        self._chart_requests: dict[str, bool] = {}
         # R5.4: Py-Coder's REPL subprocess outlives any single run (state
         # persists between calls, same as legacy's own PyCoderReplManager -
         # see that class's own docstring in graphlink_plugins/pycoder/domain.py
@@ -2072,6 +2091,119 @@ class AgentDispatcher:
             "task": asyncio.create_task(_run()),
         }
 
+    # -- R6.2: Chart node -----------------------------------------------------
+
+    async def start_chart_generation(
+        self,
+        *,
+        bus: SessionBus,
+        notifications_state,
+        node_id: str,
+        chart_type: str,
+        source_text: str,
+        on_success,
+        on_failure,
+    ) -> None:
+        """R6.2: Chart generation - DIRECTLY AWAITED by its caller
+        (backend/canvas.py's generateChart), NOT scheduled via
+        asyncio.create_task the way start_image_reply/start_web_research/
+        start_artifact_reply/start_gitlink_run above are. Those four are all
+        fire-and-forget precisely because generation there fills in an
+        ALREADY-EXISTING node while the WS connection's read loop moves on
+        to keep reading further messages - but generateChart's own contract
+        is a single combined create+generate action with no pre-existing
+        node at all: the chart SceneNode is only ever created inside
+        on_success below, so the caller genuinely needs the finished result
+        (and the new node id it produces) back in the SAME round trip before
+        it can return anything meaningful to the client. This is the exact
+        same shape - and reasoning - as the Gitlink read-only helpers just
+        above (fetch_gitlink_repositories/load_gitlink_repo_tree/etc.): "no
+        natural intermediate UI state beyond loading for a one-shot action,
+        and the caller needs the result back in the same round trip" (see
+        that section's own comment). Legacy's own generate_chart likewise
+        shows a blocking loading animation for the duration, not a
+        fire-and-forget spinner elsewhere - the same UX this mirrors.
+
+        Still guarded by self._chart_requests (see that field's own comment
+        in __init__), now storing a plain sentinel rather than a task
+        reference - there is no background task to hold onto, only a
+        "one generation in flight for this session" marker, so two
+        overlapping generateChart calls (e.g. from two tabs open on the same
+        session) cannot race each other.
+
+        No cancel_event: ChartDataAgent has no cancellation checkpoint of
+        its own, and its own legacy caller (ChartWorkerThread) has no
+        stop() method either - same honestly-documented limitation as every
+        other dispatch surface.
+
+        Two distinct failure shapes, both routed through on_failure plus a
+        notification, NEITHER of which creates a node (node creation only
+        ever happens in on_success):
+          1. `_call_chart_agent` returns a dict carrying a top-level "error"
+             key - ChartDataAgent.get_response's own fully-degraded case
+             (even its heuristic_chart_data fallback found nothing usable).
+             Mirrors ChartWorkerThread.run()'s identical `if 'error' in
+             parsed: raise ValueError(...)` check at the one legacy call
+             site.
+          2. A timeout or any other exception raised getting there.
+        A dict with NO "error" key is still not guaranteed to be canonical -
+        on_success (backend/canvas.py's own closure) is responsible for its
+        own defensive canonicalize_chart_data/ChartDataError handling before
+        calling document.add_chart_node, exactly as this feature's own
+        contract requires; this method's job ends at handing back whatever
+        ChartDataAgent produced.
+
+        Reuses WATCHDOG_TIMEOUT_SECONDS (420s), not a new constant:
+        ChartDataAgent.get_response makes at most TWO sequential blocking
+        api_provider.chat() calls (the initial extraction call, plus one
+        repair_chart_data round trip on a non-canonical first attempt) -
+        double Artifact's own single-call shape, but nowhere near Web
+        Research's ~10-call chain that justified ITS own 900s bump, and 420s
+        already carries ample headroom for two calls at any realistic
+        per-call latency."""
+        if self._chart_requests:
+            notifications_state.show("A chart is already being generated.", "info")
+            await bus.publish("notification")
+            return
+
+        request_id = uuid.uuid4().hex
+        self._chart_requests[request_id] = True
+
+        async def _invoke(fn, *a):
+            if inspect.iscoroutinefunction(fn):
+                await fn(*a)
+            else:
+                fn(*a)
+
+        try:
+            result = await asyncio.wait_for(
+                asyncio.to_thread(_call_chart_agent, source_text, chart_type),
+                timeout=WATCHDOG_TIMEOUT_SECONDS,
+            )
+            if isinstance(result, dict) and "error" in result:
+                message = str(result["error"])
+                await _invoke(on_failure, message)
+                notifications_state.show(f"Chart generation failed: {message}", "error")
+                await bus.publish("notification")
+            else:
+                await _invoke(on_success, result)
+        except asyncio.TimeoutError:
+            message = (
+                "Chart generation stopped responding before the request completed. "
+                "Please try again."
+            )
+            await _invoke(on_failure, message)
+            notifications_state.show(message, "error")
+            await bus.publish("notification")
+        except Exception as exc:
+            logger.exception("chart generation dispatch failed (parent node %s)", node_id)
+            message = f"Chart generation failed: {exc}"
+            await _invoke(on_failure, message)
+            notifications_state.show(message, "error")
+            await bus.publish("notification")
+        finally:
+            self._chart_requests.pop(request_id, None)
+
 
 def _call_pycoder_execution_agent(conversation_history, user_prompt) -> str:
     """Runs inside asyncio.to_thread. Reuses PyCoderExecutionAgent.get_response
@@ -2196,6 +2328,21 @@ def _call_artifact_agent(current_artifact, history):
     never touched in that case since mutation only happens in the success
     branch."""
     return ArtifactAgent().get_response(current_artifact, history)
+
+
+def _call_chart_agent(source_text: str, chart_type: str) -> dict:
+    """Runs inside asyncio.to_thread - the blocking driver for
+    start_chart_generation above, mirroring _call_artifact_agent's own
+    shape. ChartDataAgent.get_response returns a JSON STRING (its own
+    unchanged public contract, preserved byte-for-byte by the R6.2
+    extraction into graphlink_chart_agent.py - see that module's own
+    docstring), so this parses it back into a dict the same way
+    ChartWorkerThread.run() already does at the one legacy call site
+    (`parsed = json.loads(data)`) before start_chart_generation inspects it
+    for a top-level "error" key."""
+    agent = ChartDataAgent()
+    raw = agent.get_response(source_text, chart_type)
+    return json.loads(raw)
 
 
 # -- R5.3: Gitlink - blocking helpers, each runs inside asyncio.to_thread ----

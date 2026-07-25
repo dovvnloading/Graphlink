@@ -677,6 +677,21 @@ body,
   color: var(--gl-surface-text-muted);
 }
 
+/* R6.2: ChatNodeMenu's click-to-expand "Generate Chart" submenu - an inline,
+   indented sub-list nested inside the same flat menu (see ChatNodeView.tsx's
+   own doc for why this reuses GroupColorPicker.tsx's click-toggle popover
+   idiom rather than a separately-positioned hover flyout). Buttons inside
+   inherit .chat-node-menu's own button styling for free (that selector is
+   not scoped to direct children). */
+.chat-node-submenu {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 2px 0 2px 10px;
+  padding-left: 6px;
+  border-left: 1px solid var(--gl-surface-border);
+}
+
 /* -- R3.13/R3.14 thinking node + docked-child badge ------------------------ */
 
 .thinking-node {
@@ -3769,4 +3784,111 @@ body,
 
 .group-node-ungroup-btn {
   color: var(--gl-semantic-status-error, currentColor);
+}
+
+/* -- R6.2 chart node -------------------------------------------------------- */
+/* ChartNodeView.tsx - a backend-rendered PNG card (bar/line/pie/histogram/
+   sankey). Sized the same way GroupNodeView is (width/height come from the
+   flow node object itself, this root fills 100%/100% of that wrapper) -
+   but unlike a frame/container this is a real content card, so it keeps the
+   ordinary .scene-node/.scene-node-title/.scene-node-body base classes
+   every other content-card kind uses, only adding chart-specific bits. */
+
+.chart-node {
+  display: flex;
+  flex-direction: column;
+}
+
+.chart-node-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.chart-node-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.chart-node-badge {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 2px 6px;
+  color: var(--gl-surface-text-muted);
+  background-color: var(--gl-neutral-button-background);
+  border-radius: 999px;
+}
+
+.chart-node-error-badge {
+  flex-shrink: 0;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--gl-semantic-status-warning, currentColor);
+  cursor: default;
+}
+
+.chart-node-content {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+  min-height: 0;
+}
+
+/* max-width/max-height + object-fit: contain - same "never blow out the
+   card, only ever scale down" contract as .image-node-img. */
+.chart-node-img {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 6px;
+  flex: 1;
+  min-height: 0;
+}
+
+.chart-node-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 120px;
+  padding: 16px;
+  color: var(--gl-surface-text-muted);
+  font-size: 11px;
+  text-align: center;
+  border: 1px dashed var(--gl-surface-border);
+  border-radius: 8px;
+}
+
+.chart-node-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.chart-node-btn {
+  font-size: 10px;
+  font-weight: 600;
+  font-family: inherit;
+  padding: 3px 8px;
+  color: var(--gl-surface-text-muted);
+  background: transparent;
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 5px;
+  cursor: pointer;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.chart-node-btn:hover {
+  color: var(--gl-surface-text);
+  background-color: var(--gl-neutral-button-hover);
 }

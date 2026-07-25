@@ -601,6 +601,27 @@ describe("SceneStore", () => {
     expect(intents).toEqual([{ topic: "scene", intent: "ungroup", args: ["n1"] }]);
   });
 
+  it("generateChart sends the scene-topic generateChart intent with [parentNodeId, chartType]", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.generateChart("chat-1", "bar");
+    expect(intents).toEqual([{ topic: "scene", intent: "generateChart", args: ["chat-1", "bar"] }]);
+  });
+
+  it("resizeChart sends the scene-topic resizeChart intent with [nodeId, width, height]", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.resizeChart("n1", 900, 650);
+    expect(intents).toEqual([{ topic: "scene", intent: "resizeChart", args: ["n1", 900, 650] }]);
+  });
+
+  it("toggleChartAspectLock sends the scene-topic toggleChartAspectLock intent with [nodeId]", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.toggleChartAspectLock("n1");
+    expect(intents).toEqual([{ topic: "scene", intent: "toggleChartAspectLock", args: ["n1"] }]);
+  });
+
   it("subscribeStream forwards directly to transport.subscribeStream and returns its unsubscribe function", () => {
     const { transport } = makeFakeTransport();
     const unsubscribe = vi.fn();

@@ -89,6 +89,27 @@ def test_pycoder_domain_imports_qt_free():
     _assert_import_is_qt_free("graphlink_plugins.pycoder.domain")
 
 
+def test_chart_agent_imports_qt_free():
+    # R6.2 prerequisite: graphlink_agents_tools.py (home of ChartDataAgent
+    # before this split) has its own unconditional `from PySide6.QtCore
+    # import QThread, Signal` at module level, needed only by its
+    # ChartWorkerThread/ImageGenerationWorkerThread/ModelPullWorkerThread
+    # classes - importing anything from it, including the Qt-free
+    # ChartDataAgent, pulled Qt in regardless. This is the machine-checked
+    # fact that the real chart-generation path backend/ needs (backend/
+    # agents.py's generateChart dispatch) no longer does.
+    _assert_import_is_qt_free("graphlink_chart_agent")
+
+
+def test_chart_rendering_imports_qt_free():
+    # R6.2: graphlink_chart_rendering.py ports the legacy ChartItem's
+    # Matplotlib rendering (already Qt-free upstream: matplotlib.use("Agg")
+    # + FigureCanvasAgg) into a standalone module that returns raw PNG bytes
+    # instead of wrapping them in a QImage - the one Qt touch point the
+    # legacy item had. This is the machine-checked fact that swap is real.
+    _assert_import_is_qt_free("graphlink_chart_rendering")
+
+
 def test_code_sandbox_domain_imports_qt_free():
     # R5.4 prerequisite: graphlink_agents_code_sandbox.py (home of
     # SandboxGenerationAgent/SandboxRepairAgent/VirtualEnvSandbox before this

@@ -18,6 +18,7 @@ function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}) {
   const onUndockChild = vi.fn();
   const onRegenerate = vi.fn();
   const onGenerateImage = vi.fn();
+  const onGenerateChart = vi.fn();
   const props = {
     id: "n0",
     selected: false,
@@ -31,6 +32,7 @@ function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}) {
       onUndockChild,
       onRegenerate,
       onGenerateImage,
+      onGenerateChart,
       ...overrides,
     },
   } as unknown as NodeProps<ChatFlowNode>;
@@ -40,7 +42,7 @@ function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}) {
       <ChatNodeView {...props} />
     </ReactFlowProvider>,
   );
-  return { onToggleCollapse, onDelete, onUndockChild, onRegenerate, onGenerateImage };
+  return { onToggleCollapse, onDelete, onUndockChild, onRegenerate, onGenerateImage, onGenerateChart };
 }
 
 describe("ChatNodeView", () => {
@@ -82,12 +84,13 @@ describe("ChatNodeView", () => {
     expect(hideBranches).toHaveAttribute("title", "Branch visibility isn't built yet");
     const docView = screen.getByRole("menuitem", { name: "Open Document View" });
     expect(docView).toBeDisabled();
-    for (const name of ["Generate Key Takeaway", "Generate Explainer Note", "Generate Chart"]) {
+    for (const name of ["Generate Key Takeaway", "Generate Explainer Note"]) {
       const item = screen.getByRole("menuitem", { name });
       expect(item).toBeDisabled();
       expect(item).toHaveAttribute("title", "AI generation lands in R4");
     }
     expect(screen.getByRole("menuitem", { name: "Generate Image" })).not.toBeDisabled();
+    expect(screen.getByRole("menuitem", { name: "Generate Chart" })).not.toBeDisabled();
 
     await user.click(screen.getByRole("menuitem", { name: "Copy Text" }));
     expect(writeText).toHaveBeenCalledWith("Hello **world**");
@@ -127,6 +130,46 @@ describe("ChatNodeView", () => {
     await user.click(generateImage);
     expect(onGenerateImage).toHaveBeenCalledOnce();
     expect(screen.queryByRole("menu")).toBeNull(); // onClose fires after onGenerateImage
+  });
+
+  it("Generate Chart is a real, enabled item with aria-haspopup that starts collapsed (no submenu items in the DOM yet)", () => {
+    renderChatNode({ isUser: true });
+    fireEvent.contextMenu(screen.getByText("You"));
+
+    const generateChart = screen.getByRole("menuitem", { name: "Generate Chart" });
+    expect(generateChart).not.toBeDisabled();
+    expect(generateChart).toHaveAttribute("aria-haspopup", "true");
+    expect(generateChart).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("menuitem", { name: "Bar" })).toBeNull();
+  });
+
+  it("clicking Generate Chart expands a submenu offering all 5 chart types in legacy's own order", async () => {
+    const user = userEvent.setup();
+    renderChatNode({ isUser: true });
+    fireEvent.contextMenu(screen.getByText("You"));
+
+    await user.click(screen.getByRole("menuitem", { name: "Generate Chart" }));
+    expect(screen.getByRole("menuitem", { name: "Generate Chart" })).toHaveAttribute("aria-expanded", "true");
+
+    const submenu = screen.getByRole("menu", { name: "Chart type" });
+    const optionNames = Array.from(submenu.querySelectorAll('[role="menuitem"]')).map((el) => el.textContent);
+    expect(optionNames).toEqual(["Bar", "Line", "Histogram", "Pie", "Sankey"]);
+  });
+
+  it("clicking a chart-type submenu item calls onGenerateChart with the correct lowercase type and closes the whole menu", async () => {
+    const user = userEvent.setup();
+    const { onGenerateChart } = renderChatNode({ isUser: true });
+    fireEvent.contextMenu(screen.getByText("You"));
+
+    await user.click(screen.getByRole("menuitem", { name: "Generate Chart" }));
+    await user.click(screen.getByRole("menuitem", { name: "Sankey" }));
+
+    expect(onGenerateChart).toHaveBeenCalledOnce();
+    expect(onGenerateChart).toHaveBeenCalledWith("sankey");
+    expect(screen.queryByRole("menu", { name: "Chart type" })).toBeNull();
+    // The outer context menu also closed (onClose fires after onGenerateChart,
+    // same as every other real menu action in this file).
+    expect(screen.queryByRole("menuitem", { name: "Copy Text" })).toBeNull();
   });
 
   it("Escape and outside-click both close the menu", async () => {
