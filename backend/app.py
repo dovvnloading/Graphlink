@@ -40,6 +40,7 @@ from backend.assets import register_assets
 from backend.canvas import register_canvas
 from backend.chat_library import register_chat_library
 from backend.composer import register_composer
+from backend.crash_recovery import maybe_show_crash_notice
 from backend.events import EventBus, SessionBus, UnknownIntentError, UnknownTopicError
 from backend.notifications import register_notifications
 from backend.plugins import register_plugins
@@ -121,7 +122,12 @@ def _is_allowed_ws_origin(origin: str | None, host_header: str | None, dev_proxy
     return False
 
 
-def _configure_session(bus: SessionBus, settings_manager: SettingsManager, chat_db_path: Path | None) -> None:
+def _configure_session(
+    bus: SessionBus,
+    settings_manager: SettingsManager,
+    chat_db_path: Path | None,
+    previous_run_crashed: bool = False,
+) -> None:
     """Give every session the R0 topic surface. Later phases extend this
     with canvas/chrome/node topics - one registrar, one place to read the
     whole API surface."""
@@ -141,6 +147,10 @@ def _configure_session(bus: SessionBus, settings_manager: SettingsManager, chat_
     # R2: notifications, moved ahead of canvas - R3.3's sendMessage intent
     # needs a real NotificationState to give an honest agent-dispatch notice.
     notifications_state = register_notifications(bus)
+    # R6.7: a no-op unless graphlink_desktop.py's own running.lock sentinel
+    # found the prior run didn't reach a clean shutdown - see
+    # backend/crash_recovery.py's module docstring for the full mechanism.
+    maybe_show_crash_notice(notifications_state, previous_run_crashed)
 
     # R2: composer draft/reasoning, token counter. Moved ahead of canvas (R4):
     # sendMessage's real agent dispatch needs a real ComposerDocument to flip
@@ -187,6 +197,7 @@ def create_app(
     spa_dir: Path | None = None,
     settings_state_file: Path | None = None,
     chat_db_path: Path | None = None,
+    previous_run_crashed: bool = False,
 ) -> FastAPI:
     app = FastAPI(title="Graphlink backend", version=BACKEND_VERSION)
     # ONE SettingsManager for the whole app (it owns a single shared
@@ -198,7 +209,9 @@ def create_app(
     # session state (see backend/agents.py's docstring).
     bootstrap_provider_state(settings_manager)
     bus = EventBus(
-        configure_session=lambda session_bus: _configure_session(session_bus, settings_manager, chat_db_path)
+        configure_session=lambda session_bus: _configure_session(
+            session_bus, settings_manager, chat_db_path, previous_run_crashed
+        )
     )
     app.state.bus = bus
 
@@ -226,7 +239,27 @@ def create_app(
             await websocket.close(code=1008)
             return
         session_id = websocket.query_params.get("session", "default")
-        session = bus.session(session_id)
+        try:
+            session = bus.session(session_id)
+        except Exception:
+            # R6.7 adversarial-review finding: a bug in one of
+            # _configure_session's register_X calls used to be swallowed
+            # entirely - it never reaches here as a Python-level unhandled
+            # exception (uvicorn's own ASGI machinery catches it first and
+            # logs it via "uvicorn.error", a logger that does NOT propagate
+            # to the root logger - see backend/crash_recovery.py's own
+            # RotatingFileHandler, attached to root), so it landed neither
+            # in graphlink.log nor in sys.excepthook, contradicting this
+            # increment's own point. Logging it via THIS module's own
+            # logger (which does propagate to root, exactly like the
+            # existing dispatch_intent failure path just below does) is
+            # what actually gets it into the log file; closing with 1011
+            # (server error) mirrors the origin-rejection branch above -
+            # reject cleanly before accept() rather than leaving the
+            # client to uvicorn's own default handling.
+            logger.exception("session setup failed for session_id=%r", session_id)
+            await websocket.close(code=1011)
+            return
         await websocket.accept()
         session.attach(websocket)
         try:
