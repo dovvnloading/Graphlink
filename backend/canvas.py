@@ -674,6 +674,47 @@ class SceneDocument:
         self.nodes[node_id] = node
         return node
 
+    def register_restored_node(self, node: SceneNode) -> SceneNode:
+        """R6.4: used ONLY by the session loader (backend/session_load.py),
+        which builds every node's full field set directly from a legacy
+        payload dict before any parent/child edge exists - unlike every
+        add_X_node method above, which creates a node AND its parent edge as
+        one atomic action, the loader cannot do that: legacy's own restore
+        order creates ALL nodes first (in whatever order the saved array
+        happens to hold them, parent or child first, no guarantee) and only
+        resolves edges afterward in a separate phase (children_indices/
+        children_ids, then the 7 connection lists). Assigns a fresh id (the
+        node's own `id` field, if the caller set one from the legacy
+        payload's `id`/persistent_id, is overwritten here - backend ids are
+        a different namespace/format than legacy's uuid-based persistent
+        ids, and the loader tracks its OWN payload-id -> new-id mapping
+        separately, exactly mirroring legacy's `_nodes_by_id`) and inserts
+        the node with no edges - the caller creates those separately once
+        every node it might reference has been registered."""
+        node.id = f"n{next(self._counter)}"
+        self.nodes[node.id] = node
+        return node
+
+    def clear_for_load(self) -> None:
+        """R6.4: resets every mutable piece of scene state to a fresh-
+        session default, immediately before a session load replaces it all -
+        mirrors legacy ChatScene.clear() (called first thing in
+        restore_chat, deserializers.py:476) plus this backend's own R6.3
+        view-state/token additions, which legacy's clear() has no equivalent
+        for (they get overwritten by _restore_view_state/the token-counter
+        reset a few lines later in restore_chat instead - reset here too so
+        a load that fails partway through never leaves a stale value from
+        the PREVIOUS session)."""
+        self.nodes.clear()
+        self.edges.clear()
+        self.image_assets.clear()
+        self.pins.clear()
+        self.last_chat_node_id = None
+        self.zoom_factor = 1.0
+        self.scroll_x = 0.0
+        self.scroll_y = 0.0
+        self.total_session_tokens = 0
+
     def add_chat_node(
         self,
         x: float,
@@ -1935,7 +1976,7 @@ class SceneDocument:
         self,
         x: float,
         y: float,
-        parent_id: str,
+        parent_id: str | None,
         chart_type: str,
         chart_data: dict[str, Any],
         *,
@@ -1943,12 +1984,21 @@ class SceneDocument:
     ) -> SceneNode:
         """The Chart node's creation primitive - same required-parent
         posture as every other branch-point-child kind (web_research/
-        artifact/gitlink/pycoder/code_sandbox above): a chart never exists
-        unparented, it is always generated FROM some other node's content.
-        chart_type MUST be one of SUPPORTED_CHART_TYPES (SceneError
-        otherwise, same "validate up front, never construct a half-invalid
-        node" posture create_frame/create_container use for their own
-        item_ids checks).
+        artifact/gitlink/pycoder/code_sandbox above) for every NEW chart:
+        the UI-driven generateChart intent always passes a real parent_id,
+        since a chart is always generated FROM some other node's content in
+        that flow. chart_type MUST be one of SUPPORTED_CHART_TYPES
+        (SceneError otherwise, same "validate up front, never construct a
+        half-invalid node" posture create_frame/create_container use for
+        their own item_ids checks).
+
+        R6.4: parent_id is None-able for the session LOADER only - legacy
+        genuinely allows a chart with no parent at all (both
+        parent_node_index/parent_node_id absent in the persisted payload is
+        a real, valid legacy state, confirmed by recon), which the original
+        required-parent signature could not represent. When parent_id is
+        None, no parent-existence check runs and no edge is created -
+        chart_source_node_id stays "" rather than getting a real node id.
 
         chart_data is assumed ALREADY canonicalized by the CALLER - this
         method deliberately does NOT call canonicalize_chart_data itself
@@ -1969,7 +2019,7 @@ class SceneDocument:
         SAME image_assets dict R3.21's image nodes already use (reused, not
         a parallel store), and sets chart_asset_version = 1 for this first
         render."""
-        if parent_id not in self.nodes:
+        if parent_id is not None and parent_id not in self.nodes:
             raise SceneError(f"unknown parent node: {parent_id}")
         normalized_type = str(chart_type or "").strip().lower()
         if normalized_type not in SUPPORTED_CHART_TYPES:
@@ -1987,7 +2037,7 @@ class SceneDocument:
             chart_type=normalized_type,
             chart_data=safe_chart_data,
             chart_error=str(chart_error),
-            chart_source_node_id=parent_id,
+            chart_source_node_id=parent_id or "",
         )
 
         png_bytes = render_chart_png(
@@ -1999,7 +2049,8 @@ class SceneDocument:
         node.chart_asset_version = 1
 
         self.nodes[node_id] = node
-        self.connect(parent_id, node_id)
+        if parent_id is not None:
+            self.connect(parent_id, node_id)
         return node
 
     def resize_chart(self, node_id: str, width: float, height: float) -> None:
