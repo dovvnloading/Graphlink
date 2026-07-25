@@ -1,4 +1,5 @@
 import { useReactFlow } from "@xyflow/react";
+import { exportCanvasAsPng } from "../canvas/exportCanvasPng";
 import type { SceneStore } from "../canvas/sceneStore";
 import { useOverlays } from "../overlays/overlays";
 
@@ -18,11 +19,15 @@ import { useOverlays } from "../overlays/overlays";
  *   app-chat-library topic - see SceneStore's own comment on why); provider
  *   mode select -> still deferred to R4's own remaining work, rendered
  *   disabled with the phase called out.
+ * - Export PNG -> real as of R6.8, a net-new capability (no legacy
+ *   canvas-wide export exists) - pure client-side DOM rasterization via
+ *   exportCanvasAsPng, same "zero backend round-trip" shape as the
+ *   Zoom/Fit All buttons right next to it, not an intent dispatch.
  */
 
 export function AppBar({ store }: { store: SceneStore }) {
   const overlays = useOverlays();
-  const { zoomIn, zoomOut, setViewport, fitView, getViewport } = useReactFlow();
+  const { zoomIn, zoomOut, setViewport, fitView, getViewport, getNodes } = useReactFlow();
 
   const chip = (surface: string) =>
     "appbar-btn appbar-btn-checkable" + (overlays.isOpen(surface) ? " checked" : "");
@@ -73,6 +78,14 @@ export function AppBar({ store }: { store: SceneStore }) {
       </button>
       <button type="button" className="appbar-btn" onClick={() => fitView({ duration: 200 })}>
         Fit All
+      </button>
+      <button
+        type="button"
+        className="appbar-btn"
+        title="Export the whole canvas as a PNG image"
+        onClick={() => void exportCanvasAsPng({ getNodes }, "--gl-surface-window")}
+      >
+        Export PNG
       </button>
 
       <span className="appbar-separator" />
