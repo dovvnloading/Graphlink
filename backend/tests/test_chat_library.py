@@ -1,19 +1,25 @@
-"""Chat library topic tests (Qt-removal plan R2.5e)."""
+"""Chat library topic tests (Qt-removal plan R2.5e + R6.4 loadChat)."""
 
 import asyncio
+import json
 import sqlite3
 
 import pytest
 
+from backend.canvas import SceneDocument
 from backend.chat_library import (
     _format_timestamp,
     chat_library_payload,
     delete_chat,
     get_all_chats,
+    load_chat_row,
+    load_notes_rows,
+    load_pins_rows,
     register_chat_library,
     rename_chat,
 )
 from backend.events import SessionBus
+from backend.notifications import NotificationState
 
 
 @pytest.fixture
@@ -161,3 +167,152 @@ def test_delete_chat_intent_removes_and_republishes(db_path):
 
     asyncio.run(bus.dispatch_intent("app-chat-library", "deleteChat", [chat_id]))
     assert recorder.messages[-1]["payload"]["rows"] == []
+
+
+# -- R6.4: load_chat_row / load_notes_rows / load_pins_rows -----------------
+
+
+def _insert_note(db_path, chat_id: int, **overrides) -> None:
+    conn = sqlite3.connect(db_path, timeout=30)
+    try:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id INTEGER NOT NULL, "
+            "content TEXT NOT NULL, position_x REAL NOT NULL, position_y REAL NOT NULL, width REAL NOT NULL, "
+            "height REAL NOT NULL, color TEXT NOT NULL, header_color TEXT, "
+            "is_system_prompt INTEGER DEFAULT 0, is_summary_note INTEGER DEFAULT 0)"
+        )
+        row = {
+            "content": "hello note", "position_x": 1.0, "position_y": 2.0,
+            "width": 100.0, "height": 50.0, "color": "#111111", "header_color": None,
+            "is_system_prompt": 0, "is_summary_note": 0,
+        }
+        row.update(overrides)
+        conn.execute(
+            "INSERT INTO notes (chat_id, content, position_x, position_y, width, height, color, "
+            "header_color, is_system_prompt, is_summary_note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (chat_id, row["content"], row["position_x"], row["position_y"], row["width"], row["height"],
+             row["color"], row["header_color"], row["is_system_prompt"], row["is_summary_note"]),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _insert_pin(db_path, chat_id: int, **overrides) -> None:
+    conn = sqlite3.connect(db_path, timeout=30)
+    try:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS pins (id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id INTEGER NOT NULL, "
+            "title TEXT NOT NULL, note TEXT, position_x REAL NOT NULL, position_y REAL NOT NULL, "
+            "pin_id TEXT, sort_order INTEGER DEFAULT 0, anchor_item_id TEXT, created_at TEXT)"
+        )
+        row = {
+            "title": "My Pin", "note": "", "position_x": 5.0, "position_y": 6.0,
+            "pin_id": "pin-1", "sort_order": 0, "anchor_item_id": None, "created_at": "2026-01-01 00:00:00",
+        }
+        row.update(overrides)
+        conn.execute(
+            "INSERT INTO pins (chat_id, title, note, position_x, position_y, pin_id, sort_order, "
+            "anchor_item_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (chat_id, row["title"], row["note"], row["position_x"], row["position_y"],
+             row["pin_id"], row["sort_order"], row["anchor_item_id"], row["created_at"]),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_load_chat_row_returns_title_and_parsed_data(db_path):
+    chat_id = _insert_chat(db_path, "Loadable", data=json.dumps({"nodes": [{"node_type": "chat"}]}))
+    row = load_chat_row(db_path, chat_id)
+    assert row == {"title": "Loadable", "data": {"nodes": [{"node_type": "chat"}]}}
+
+
+def test_load_chat_row_returns_none_for_missing_id(db_path):
+    assert load_chat_row(db_path, 999) is None
+
+
+def test_load_notes_rows_shape_matches_session_load_expectations(db_path):
+    chat_id = _insert_chat(db_path, "WithNotes")
+    _insert_note(db_path, chat_id, content="A note", is_system_prompt=1)
+
+    rows = load_notes_rows(db_path, chat_id)
+    assert len(rows) == 1
+    assert rows[0] == {
+        "content": "A note", "position": {"x": 1.0, "y": 2.0}, "size": {"width": 100.0, "height": 50.0},
+        "color": "#111111", "header_color": None, "is_system_prompt": True, "is_summary_note": False,
+    }
+
+
+def test_load_pins_rows_orders_by_sort_order_and_shape(db_path):
+    chat_id = _insert_chat(db_path, "WithPins")
+    _insert_pin(db_path, chat_id, title="Second", sort_order=1, pin_id="pin-b")
+    _insert_pin(db_path, chat_id, title="First", sort_order=0, pin_id="pin-a")
+
+    rows = load_pins_rows(db_path, chat_id)
+    assert [row["title"] for row in rows] == ["First", "Second"]
+    assert rows[0]["position"] == {"x": 5.0, "y": 6.0}
+    assert rows[0]["pin_id"] == "pin-a"
+
+
+# -- R6.4: the loadChat intent -----------------------------------------------
+
+
+def _bus_with_canvas(db_path):
+    """Mirrors backend/app.py's own registration order: canvas's "scene"
+    topic must exist before register_chat_library's loadChat intent can
+    publish to it - production guarantees this via _configure_session's own
+    ordering; this test harness replicates it directly rather than pulling
+    in the full register_canvas (which itself needs an agent dispatcher/
+    composer document unrelated to what's under test here)."""
+    bus = SessionBus("chat-library-load-test")
+    document = SceneDocument()
+    bus.register_topic("scene", document.scene_payload)
+    notifications = NotificationState()
+    bus.register_topic("notification", notifications.payload)
+    register_chat_library(bus, db_path, document, notifications)
+    return bus, document, notifications
+
+
+def test_load_chat_intent_restores_a_real_node_into_the_canvas_document(db_path):
+    chat_data = {
+        "nodes": [
+            {"node_type": "chat", "id": "n1", "raw_content": "Hi", "is_user": True, "position": {"x": 0, "y": 0}},
+        ],
+    }
+    chat_id = _insert_chat(db_path, "Real Session", data=json.dumps(chat_data))
+    bus, document, notifications = _bus_with_canvas(db_path)
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    asyncio.run(bus.dispatch_intent("app-chat-library", "loadChat", [chat_id]))
+
+    assert len(document.nodes) == 1
+    node = next(iter(document.nodes.values()))
+    assert node.kind == "chat" and node.content == "Hi" and node.is_user is True
+    assert notifications.visible and notifications.msg_type == "success"
+    scene_messages = [m for m in recorder.messages if m["topic"] == "scene"]
+    assert scene_messages, "loadChat must publish a fresh scene snapshot"
+
+
+def test_load_chat_intent_shows_an_error_notification_for_a_missing_chat(db_path):
+    bus, document, notifications = _bus_with_canvas(db_path)
+
+    asyncio.run(bus.dispatch_intent("app-chat-library", "loadChat", [999]))
+
+    assert document.nodes == {}
+    assert notifications.visible and notifications.msg_type == "error"
+
+
+def test_load_chat_intent_restores_notes_and_pins_too(db_path):
+    chat_data = {"nodes": []}
+    chat_id = _insert_chat(db_path, "Notes And Pins", data=json.dumps(chat_data))
+    _insert_note(db_path, chat_id, content="A restored note")
+    _insert_pin(db_path, chat_id, title="A restored pin")
+    bus, document, _ = _bus_with_canvas(db_path)
+
+    asyncio.run(bus.dispatch_intent("app-chat-library", "loadChat", [chat_id]))
+
+    notes = [n for n in document.nodes.values() if n.kind == "note"]
+    assert len(notes) == 1 and notes[0].content == "A restored note"
+    assert len(document.pins.records) == 1

@@ -2,16 +2,17 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { WsTransport } from "../../lib/ws/transport";
 import { TOPIC_VALIDATORS } from "../../lib/api-contract/topics";
 import type { AppChatLibraryState } from "../../lib/bridge-core/generated/app-chat-library-state";
-import { Dialog } from "../overlays/overlays";
+import { Dialog, useOverlays } from "../overlays/overlays";
 
 /**
- * The chat library dialog (Qt-removal plan R2.5e) - chat-library island's
- * SPA successor. List/search/rename/delete are real (backend/chat_library.py
- * reads/writes the same ~/.graphlink/chats.db the legacy app uses). Load
- * Chat and New Chat are deferred to R6 - session load rebuilds the whole
- * scene through backend/canvas.py's SceneDocument and session save doesn't
- * exist yet - rendered disabled with an explicit R6 label rather than
- * silently no-op'ing a double-click/button press.
+ * The chat library dialog (Qt-removal plan R2.5e + R6.4) - chat-library
+ * island's SPA successor. List/search/rename/delete/load are all real
+ * (backend/chat_library.py reads/writes the same ~/.graphlink/chats.db the
+ * legacy app uses; R6.4 wired Load Chat to a real backend/session_load.py
+ * restore). New Chat has no backend counterpart yet - there is no session
+ * SAVE primitive until R6.5, so "start a new session" would have nothing to
+ * offer the user beyond clearing the canvas - rendered disabled with an
+ * explicit label rather than silently no-op'ing a click.
  */
 
 const initialState: AppChatLibraryState = {
@@ -23,6 +24,7 @@ const initialState: AppChatLibraryState = {
 };
 
 export function ChatLibraryDialog({ transport }: { transport: WsTransport }) {
+  const overlays = useOverlays();
   const [state, setState] = useState<AppChatLibraryState>(initialState);
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState<number | null>(null);
@@ -99,6 +101,18 @@ export function ChatLibraryDialog({ transport }: { transport: WsTransport }) {
     setConfirmingDeleteId(null);
   }
 
+  function loadChat() {
+    if (!effectiveSelected) return;
+    // Fire-and-forget, same posture as rename/delete above - the backend's
+    // own loadChat intent (backend/chat_library.py) reports success/failure
+    // via a real "notification" publish, not a return value here. Closing
+    // the dialog immediately (rather than waiting on that notification)
+    // matches legacy's own ChatLibraryDialog, which closed itself the
+    // moment Load Chat was clicked.
+    transport.intent("app-chat-library", "loadChat", [effectiveSelected.id]);
+    overlays.close();
+  }
+
   function onRenameKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
     if (event.key === "Enter") {
       event.preventDefault();
@@ -171,14 +185,14 @@ export function ChatLibraryDialog({ transport }: { transport: WsTransport }) {
             </>
           ) : (
             <>
-              <button type="button" className="library-button" disabled title="Session load/save lands in R6">
+              <button type="button" className="library-button" disabled title="Session save lands in R6.5">
                 New Chat
               </button>
               <button
                 type="button"
-                className="library-button"
-                disabled
-                title="Session load/save lands in R6"
+                className="library-button library-button-primary"
+                onClick={loadChat}
+                disabled={!effectiveSelected}
               >
                 Load Chat
               </button>

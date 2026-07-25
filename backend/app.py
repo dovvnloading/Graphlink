@@ -176,7 +176,11 @@ def _configure_session(bus: SessionBus, settings_manager: SettingsManager, chat_
     # (canvas_document exists before register_plugins runs) is load-bearing.
     register_plugins(bus, notifications_state, bus.canvas_document)
     register_settings(bus, settings_manager)
-    register_chat_library(bus, chat_db_path)
+    # R6.4: register_chat_library needs the same session's canvas_document
+    # (built above) so loadChat can actually restore a session into it, and
+    # notifications_state so a failed/empty load can surface a real banner -
+    # same load-bearing ordering precedent as register_plugins above.
+    register_chat_library(bus, chat_db_path, bus.canvas_document, notifications_state)
 
 
 def create_app(
