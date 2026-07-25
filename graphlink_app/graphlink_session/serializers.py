@@ -3,11 +3,6 @@ from uuid import uuid4
 from graphlink_conversation_node import ConversationNode
 from graphlink_html_view import HtmlViewNode
 from graphlink_node import ChatNode, CodeNode, DocumentNode, ImageNode, ThinkingNode
-from graphlink_plugins.graphlink_plugin_artifact import ArtifactNode
-from graphlink_plugins.graphlink_plugin_code_sandbox import CodeSandboxNode
-from graphlink_plugins.graphlink_plugin_gitlink import GitlinkNode
-from graphlink_pycoder import PyCoderNode
-from graphlink_web import WebNode
 from graphlink_chart_data import ChartDataError, canonicalize_chart_data
 
 from graphlink_session.content_codec import (
@@ -107,25 +102,10 @@ class SceneSerializer:
             "end_node_id": self._node_persistent_id(connection.end_node),
         }
 
-    def serialize_pycoder_connection(self, connection, all_nodes_list):
-        return self._serialize_basic_connection(connection, all_nodes_list)
-
-    def serialize_code_sandbox_connection(self, connection, all_nodes_list):
-        return self._serialize_basic_connection(connection, all_nodes_list)
-
-    def serialize_web_connection(self, connection, all_nodes_list):
-        return self._serialize_basic_connection(connection, all_nodes_list)
-
     def serialize_conversation_connection(self, connection, all_nodes_list):
         return self._serialize_basic_connection(connection, all_nodes_list)
 
     def serialize_html_connection(self, connection, all_nodes_list):
-        return self._serialize_basic_connection(connection, all_nodes_list)
-
-    def serialize_artifact_connection(self, connection, all_nodes_list):
-        return self._serialize_basic_connection(connection, all_nodes_list)
-
-    def serialize_gitlink_connection(self, connection, all_nodes_list):
         return self._serialize_basic_connection(connection, all_nodes_list)
 
     def serialize_group_summary_connection(self, connection, nodes_list, notes_list):
@@ -189,54 +169,6 @@ class SceneSerializer:
                 "parent_content_node_index": all_nodes_list.index(node.parent_content_node),
                 "is_docked": node.is_docked,
             }
-        if isinstance(node, PyCoderNode):
-            return {
-                "node_type": "pycoder",
-                "position": {"x": node.pos().x(), "y": node.pos().y()},
-                "mode": node.mode.name,
-                "prompt": node.get_prompt(),
-                "code": node.get_code(),
-                "output": node.get_output(),
-                "analysis": node.get_ai_analysis(),
-                "conversation_history": serialize_history(getattr(node, "conversation_history", [])),
-                "include_branch_context": getattr(node, "include_branch_context", True),
-                "is_collapsed": node.is_collapsed,
-                "parent_node_index": all_nodes_list.index(node.parent_node),
-                "children_indices": [all_nodes_list.index(child) for child in node.children],
-            }
-        if isinstance(node, CodeSandboxNode):
-            return {
-                "node_type": "code_sandbox",
-                "position": {"x": node.pos().x(), "y": node.pos().y()},
-                "prompt": node.get_prompt(),
-                "requirements": node.get_requirements(),
-                "code": node.get_code(),
-                "output": node.get_output(),
-                "analysis": node.get_ai_analysis(),
-                "status": node.status,
-                "sandbox_id": node.sandbox_id,
-                "conversation_history": serialize_history(getattr(node, "conversation_history", [])),
-                "include_branch_context": getattr(node, "include_branch_context", True),
-                "is_collapsed": node.is_collapsed,
-                "parent_node_index": all_nodes_list.index(node.parent_node),
-                "children_indices": [all_nodes_list.index(child) for child in node.children],
-            }
-        if isinstance(node, WebNode):
-            return {
-                "node_type": "web",
-                "position": {"x": node.pos().x(), "y": node.pos().y()},
-                "query": node.query,
-                "status": node.status,
-                "summary": node.summary,
-                "sources": [source.to_dict() if callable(getattr(source, "to_dict", None)) else source for source in node.sources],
-                "research_result": dict(getattr(node, "research_result_payload", {}) or {}),
-                "warnings": list(getattr(node, "warnings", []) or []),
-                "conversation_history": serialize_history(getattr(node, "conversation_history", [])),
-                "include_branch_context": getattr(node, "include_branch_context", True),
-                "is_collapsed": node.is_collapsed,
-                "parent_node_index": all_nodes_list.index(node.parent_node),
-                "children_indices": [all_nodes_list.index(child) for child in node.children],
-            }
         if isinstance(node, ConversationNode):
             return {
                 "node_type": "conversation",
@@ -262,37 +194,6 @@ class SceneSerializer:
                 # 14 widget-reads the Phase 7 gate exists to eliminate.
                 "html_content": node.get_html_content(),
                 "splitter_state": node.get_splitter_state(),
-                "conversation_history": serialize_history(getattr(node, "conversation_history", [])),
-                "is_collapsed": node.is_collapsed,
-                "parent_node_index": all_nodes_list.index(node.parent_node),
-                "children_indices": [all_nodes_list.index(child) for child in node.children],
-            }
-        if isinstance(node, ArtifactNode):
-            return {
-                "node_type": "artifact",
-                "position": {"x": node.pos().x(), "y": node.pos().y()},
-                "instruction": node.get_instruction(),
-                "content": node.get_artifact_content(),
-                "conversation_history": serialize_history(getattr(node, "conversation_history", [])),
-                "local_history": serialize_history(getattr(node, "local_history", [])),
-                "chat_html_cache": node.chat_html_cache,
-                "include_branch_context": getattr(node, "include_branch_context", True),
-                "is_collapsed": node.is_collapsed,
-                "parent_node_index": all_nodes_list.index(node.parent_node),
-                "children_indices": [all_nodes_list.index(child) for child in node.children],
-            }
-        if isinstance(node, GitlinkNode):
-            return {
-                "node_type": "gitlink",
-                "position": {"x": node.pos().x(), "y": node.pos().y()},
-                "task_prompt": node.get_task_prompt(),
-                "repo_state": dict(getattr(node, "repo_state", {}) or {}),
-                "repo_file_paths": list(getattr(node, "repo_file_paths", []) or []),
-                "selected_paths": list(getattr(node, "selected_paths", []) or []),
-                "context_xml": getattr(node, "context_xml", ""),
-                "context_stats": dict(getattr(node, "context_stats", {}) or {}),
-                "proposal_data": dict(getattr(node, "proposal_data", {}) or {}),
-                "preview_text": getattr(node, "preview_text", ""),
                 "conversation_history": serialize_history(getattr(node, "conversation_history", [])),
                 "is_collapsed": node.is_collapsed,
                 "parent_node_index": all_nodes_list.index(node.parent_node),
@@ -412,13 +313,8 @@ class SceneSerializer:
             ("document_connections", scene.document_connections, self.serialize_document_connection),
             ("image_connections", scene.image_connections, self.serialize_image_connection),
             ("thinking_connections", scene.thinking_connections, self.serialize_thinking_connection),
-            ("pycoder_connections", scene.pycoder_connections, self.serialize_pycoder_connection),
-            ("code_sandbox_connections", scene.code_sandbox_connections, self.serialize_code_sandbox_connection),
-            ("web_connections", scene.web_connections, self.serialize_web_connection),
             ("conversation_connections", scene.conversation_connections, self.serialize_conversation_connection),
             ("html_connections", scene.html_connections, self.serialize_html_connection),
-            ("artifact_connections", scene.artifact_connections, self.serialize_artifact_connection),
-            ("gitlink_connections", scene.gitlink_connections, self.serialize_gitlink_connection),
         )
 
         chat_data = {

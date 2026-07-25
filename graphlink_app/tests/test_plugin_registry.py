@@ -29,8 +29,8 @@ from graphlink_plugins.graphlink_plugin_portal import (
 )
 
 
-def test_registry_has_eight_entries():
-    assert len(PLUGIN_REGISTRY) == 8
+def test_registry_has_three_entries():
+    assert len(PLUGIN_REGISTRY) == 3
 
 
 def test_registry_names_match_the_live_portal_registration():
@@ -53,22 +53,6 @@ def test_registry_descriptions_match_the_live_portal_registration():
     portal_descriptions_by_name = {p["name"]: p["description"] for p in portal.get_plugins()}
     for spec in PLUGIN_REGISTRY.values():
         assert portal_descriptions_by_name[spec.display_name] == spec.description
-
-
-def test_execution_sandbox_description_does_not_oversell_containment():
-    # The description used to just say "isolated virtualenv" with no caveat, which a
-    # user could easily read as stronger containment than a venv actually provides. The
-    # approval dialog shown before every run has always been honest about this
-    # (_handle_code_sandbox_approval_request); the picker-level description should say
-    # the same thing, not oversell it.
-    spec = get_plugin_spec("code_sandbox")
-    assert "not the operating system" in spec.description
-
-
-def test_get_plugin_spec_returns_the_registered_spec():
-    spec = get_plugin_spec("gitlink")
-    assert spec is not None
-    assert spec.display_name == "Gitlink"
 
 
 def test_get_plugin_spec_returns_none_for_unknown_key():

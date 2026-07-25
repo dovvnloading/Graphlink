@@ -2,11 +2,6 @@ from graphlink_canvas_items import NavigationPin, Note
 from graphlink_conversation_node import ConversationNode
 from graphlink_html_view import HtmlViewNode
 from graphlink_node import ChatNode
-from graphlink_plugins.graphlink_plugin_artifact import ArtifactNode
-from graphlink_plugins.graphlink_plugin_code_sandbox import CodeSandboxNode
-from graphlink_plugins.graphlink_plugin_gitlink import GitlinkNode
-from graphlink_pycoder import PyCoderNode
-from graphlink_web import WebNode
 
 # Bumped whenever the saved chat payload's shape changes in a way future load code needs
 # to branch on. No migration logic reads this yet - it's the version marker itself, not
@@ -21,35 +16,20 @@ NODE_LIST_NAMES = (
     "document_nodes",
     "image_nodes",
     "thinking_nodes",
-    "pycoder_nodes",
-    "code_sandbox_nodes",
-    "web_nodes",
     "conversation_nodes",
     "html_view_nodes",
-    "artifact_nodes",
-    "gitlink_nodes",
 )
 
 SAVE_GUARD_NODE_LIST_NAMES = (
     "nodes",
     "conversation_nodes",
-    "artifact_nodes",
-    "pycoder_nodes",
-    "code_sandbox_nodes",
-    "web_nodes",
     "html_view_nodes",
-    "gitlink_nodes",
 )
 
 CHILD_LINK_NODE_TYPES = (
     ChatNode,
-    PyCoderNode,
-    CodeSandboxNode,
-    WebNode,
     ConversationNode,
     HtmlViewNode,
-    ArtifactNode,
-    GitlinkNode,
 )
 
 

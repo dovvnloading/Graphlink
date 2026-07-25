@@ -1,38 +1,31 @@
-"""Tests for the per-node worker-thread fix.
+"""Regression coverage: dead shared-thread attributes must not reappear in
+graphlink_window_actions.py.
 
-Six plugins (Artifact, Workflow, Graph Diff, Quality Gate, Code Review, Gitlink) plus
-Code Sandbox stored their running worker thread on a single main_window.X_thread
-attribute shared across every node of that plugin type, in addition to (for Quality
-Gate/Code Review/Gitlink/Code Sandbox) a proper per-node node.worker_thread attribute.
-The shared attribute was pure dead weight for five of the seven (nothing else ever
-read it) except for Code Sandbox, where stop_code_sandbox_node actually stopped
-whatever main_window.sandbox_thread currently was - meaning clicking "stop" on one
-sandbox node could stop a *different*, more-recently-started concurrent sandbox node's
-execution instead of (or as well as) its own.
+Several plugins (Artifact, Workflow, Graph Diff, Quality Gate, Code Review,
+Gitlink, Code Sandbox, Reasoning, PyCoder) used to store their running worker
+thread on a single main_window.X_thread attribute shared across every node of
+that plugin type, in addition to (for some of them) a proper per-node
+node.worker_thread attribute. The shared attribute was pure dead weight for
+most of them, but for Code Sandbox (and later PyCoder) it was an active bug:
+stop_code_sandbox_node/stop_pycoder_node actually stopped whichever
+main_window.sandbox_thread/pycoder_exec_thread currently was - meaning
+clicking "stop" on one node could stop a *different*, more-recently-started
+concurrent node's execution instead of (or as well as) its own.
 
-Graphlink-Reasoning got the same fix later, as part of its full redesign: it predates
-graphlink_plugins/ entirely, so it never got fixed along with the other six - it had
-the shared main_window.reasoning_thread attribute AND no stop capability of any kind
-(no node.worker_thread, no stop_reasoning_node method at all).
-
-PyCoderNode had the same bug and was the last one still unfixed:
-stop_pycoder_node(pycoder_node) took a specific node argument but stopped
-main_window.code_exec_thread/pycoder_exec_thread - single attributes shared across every
-PyCoderNode - so clicking "stop" on one node could stop a different,
-more-recently-started concurrent PyCoderNode's execution instead of (or as well as) its
-own. Fixed the same way as Code Sandbox: both CodeExecutionWorker (MANUAL mode) and
-PyCoderExecutionWorker (AI_DRIVEN mode) are now stored on the owning
-pycoder_node.worker_thread instead.
-
-These tests use WindowActionsMixin directly (a bare mixin - the methods only need the
-attributes they actually touch, so a minimal instance is enough) rather than a full
-ChatWindow, which needs a running QApplication with a real settings_manager and more
-app machinery than this fix is about.
+The per-node test coverage for Artifact, Code Sandbox, and PyCoder that used
+to live in this file was removed along with those node classes as part of the
+Qt-removal cleanup (they were reimplemented Qt-free in the new FastAPI+React
+app), and their stop_artifact_node/stop_code_sandbox_node/stop_pycoder_node
+methods no longer exist on WindowActionsMixin at all. The remaining test below
+is generic - it scans graphlink_window_actions.py's source text for the dead
+attribute names directly, not any node class - and still protects the
+plugins that remain in this legacy app (Workflow, Graph Diff, Quality Gate,
+Code Review, Reasoning): a regression here would mean a shared-thread
+attribute crept back in for one of them.
 """
 
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -41,111 +34,6 @@ from PySide6.QtWidgets import QApplication
 _APP = QApplication.instance() or QApplication([])
 
 import graphlink_window_actions
-from graphlink_plugins.graphlink_plugin_artifact import ArtifactNode
-from graphlink_plugins.graphlink_plugin_code_sandbox import CodeSandboxNode
-from graphlink_pycoder import PyCoderMode, PyCoderNode
-from graphlink_window_actions import WindowActionsMixin
-
-
-class _FakeMainWindow(WindowActionsMixin):
-    pass
-
-
-def _fake_worker_thread(is_running=True):
-    thread = MagicMock()
-    thread.isRunning.return_value = is_running
-    return thread
-
-
-class TestCodeSandboxStopOnlyTouchesItsOwnNode:
-    def test_stopping_one_node_does_not_stop_a_different_concurrent_node(self):
-        main_window = _FakeMainWindow()
-        node_a = CodeSandboxNode(parent_node=None)
-        node_b = CodeSandboxNode(parent_node=None)
-        node_a.worker_thread = _fake_worker_thread()
-        node_b.worker_thread = _fake_worker_thread()
-
-        main_window.stop_code_sandbox_node(node_a)
-
-        assert node_a.worker_thread is None
-        node_b.worker_thread.stop.assert_not_called()
-        node_b.worker_thread.isRunning.assert_not_called()
-
-    def test_stopping_the_correct_node_actually_stops_its_thread(self):
-        main_window = _FakeMainWindow()
-        node = CodeSandboxNode(parent_node=None)
-        thread = _fake_worker_thread()
-        node.worker_thread = thread
-
-        main_window.stop_code_sandbox_node(node)
-
-        thread.stop.assert_called_once()
-        assert node.worker_thread is None
-
-    def test_main_window_has_no_shared_sandbox_thread_attribute_after_stop(self):
-        main_window = _FakeMainWindow()
-        node = CodeSandboxNode(parent_node=None)
-        node.worker_thread = _fake_worker_thread()
-
-        main_window.stop_code_sandbox_node(node)
-
-        assert not hasattr(main_window, "sandbox_thread")
-
-
-class TestArtifactStopMethods:
-    def test_stop_artifact_node_stops_its_own_thread_and_resets_state(self):
-        main_window = _FakeMainWindow()
-        node = ArtifactNode(parent_node=None)
-        thread = _fake_worker_thread()
-        node.worker_thread = thread
-        node.set_running_state(True)
-        assert node.instruction_input.isReadOnly() is True  # sanity: "running" locks input
-
-        main_window.stop_artifact_node(node)
-
-        thread.stop.assert_called_once()
-        assert node.worker_thread is None
-        assert node.instruction_input.isReadOnly() is False  # set_running_state(False) ran
-
-
-class TestPyCoderStopOnlyTouchesItsOwnNode:
-    def test_stopping_one_node_does_not_stop_a_different_concurrent_node(self):
-        main_window = _FakeMainWindow()
-        node_a = PyCoderNode(parent_node=None, mode=PyCoderMode.MANUAL)
-        node_b = PyCoderNode(parent_node=None, mode=PyCoderMode.MANUAL)
-        node_a.worker_thread = _fake_worker_thread()
-        node_b.worker_thread = _fake_worker_thread()
-
-        main_window.stop_pycoder_node(node_a)
-
-        assert node_a.worker_thread is None
-        node_b.worker_thread.stop.assert_not_called()
-        node_b.worker_thread.isRunning.assert_not_called()
-
-    def test_stopping_the_correct_node_actually_stops_its_thread(self):
-        main_window = _FakeMainWindow()
-        node = PyCoderNode(parent_node=None, mode=PyCoderMode.AI_DRIVEN)
-        thread = _fake_worker_thread()
-        node.worker_thread = thread
-
-        main_window.stop_pycoder_node(node)
-
-        thread.stop.assert_called_once()
-        assert node.worker_thread is None
-
-    def test_new_pycoder_node_starts_with_no_worker_thread(self):
-        node = PyCoderNode(parent_node=None)
-        assert node.worker_thread is None
-
-    def test_main_window_has_no_shared_pycoder_thread_attributes_after_stop(self):
-        main_window = _FakeMainWindow()
-        node = PyCoderNode(parent_node=None, mode=PyCoderMode.MANUAL)
-        node.worker_thread = _fake_worker_thread()
-
-        main_window.stop_pycoder_node(node)
-
-        assert not hasattr(main_window, "code_exec_thread")
-        assert not hasattr(main_window, "pycoder_exec_thread")
 
 
 class TestNoDeadSharedThreadAttributesRemainInSource:

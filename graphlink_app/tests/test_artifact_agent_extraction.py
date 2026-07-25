@@ -11,14 +11,13 @@ any importer, including ArtifactAgent despite it containing zero Qt code.
 graphlink_agents_artifact.py re-exports ArtifactAgent unchanged for backward
 compatibility.
 
-A pure relocation, not a rewrite - both classes were already Qt-free/
-Qt-only-for-threading and self-contained; ArtifactNode never referenced
-either by name. This file proves the module boundary landed exactly where
-the recon said it would: graphlink_artifact_agent.py holds ArtifactAgent's
-real home, graphlink_agents_artifact.py holds ArtifactWorkerThread plus a
-re-export, the old plugin module holds neither, and the one production
-construction site (graphlink_window_actions.execute_artifact_node) still gets
-a real, working ArtifactWorkerThread from the re-exporting location.
+R5-closeout: graphlink_plugins/graphlink_plugin_artifact.py (ArtifactNode)
+was deleted once the Artifact plugin was fully ported to the Qt-free
+backend/frontend stack. The tests that asserted things about that module
+(ArtifactNode/ArtifactConnectionItem staying put, dead imports being gone
+from it) no longer have a subject and were removed with it. The tests below
+still protect real, currently-live code: ArtifactAgent's Qt-free home and
+ArtifactWorkerThread's re-export/construction contract.
 """
 
 import sys
@@ -28,7 +27,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import graphlink_agents_artifact
 import graphlink_artifact_agent
-import graphlink_plugins.graphlink_plugin_artifact as plugin_artifact_module
 from graphlink_agents_artifact import ArtifactAgent, ArtifactWorkerThread
 
 
@@ -51,28 +49,6 @@ class TestModuleBoundary:
         worker = ArtifactWorkerThread("doc", [])
         assert isinstance(worker.agent, ArtifactAgent)
         assert type(worker.agent).__module__ == "graphlink_artifact_agent"
-
-    def test_neither_class_remains_on_the_plugin_module(self):
-        assert not hasattr(plugin_artifact_module, "ArtifactAgent")
-        assert not hasattr(plugin_artifact_module, "ArtifactWorkerThread")
-
-    def test_the_plugin_modules_own_classes_are_unaffected(self):
-        # ArtifactNode/ArtifactConnectionItem/ArtifactInstructionInput stay put -
-        # only the agent/worker moved.
-        assert hasattr(plugin_artifact_module, "ArtifactNode")
-        assert hasattr(plugin_artifact_module, "ArtifactConnectionItem")
-        assert hasattr(plugin_artifact_module, "ArtifactInstructionInput")
-
-    def test_the_plugin_module_no_longer_imports_api_provider_or_config_directly(self):
-        # Both became dead once ArtifactAgent.get_response (the only consumer
-        # in this file) moved out - a real dead-import cleanup, not just a
-        # class move.
-        assert not hasattr(plugin_artifact_module, "api_provider")
-        assert not hasattr(plugin_artifact_module, "config")
-
-    def test_the_plugin_module_no_longer_imports_qthread(self):
-        # QThread's only use in this file was as ArtifactWorkerThread's base class.
-        assert not hasattr(plugin_artifact_module, "QThread")
 
 
 class TestOwnershipContractUnchanged:

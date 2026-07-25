@@ -60,11 +60,6 @@ _HEX_ALLOWLIST: dict[str, str] = {
         "DEFAULT_GRID_COLOR in the deliberately Qt-free plain-data settings "
         "model - a persisted user-preference default, not chrome"
     ),
-    "graphlink_plugins/common/combo.py": (
-        "single #656565 default-parameter accent in a reusable combo widget's "
-        "public API signature - callers pass real accents; changing the "
-        "default's identity is an API change deferred past P0"
-    ),
     "graphlink_canvas/graphlink_canvas_chart_item.py": (
         "single #868686 'slate' entry in the chart data-series color cycle - "
         "series colors are data, not chrome (rule 2 of the sweep)"

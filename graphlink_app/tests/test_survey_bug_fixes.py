@@ -25,7 +25,6 @@ from graphlink_connections import (
     ContentConnectionItem,
     DocumentConnectionItem,
     ImageConnectionItem,
-    PyCoderConnectionItem,
     SystemPromptConnectionItem,
     ConnectionItem,
     resolve_collapsed_endpoint,
@@ -79,7 +78,6 @@ _ALL_ENDPOINT_CLASSES = [
     DocumentConnectionItem,
     ImageConnectionItem,
     SystemPromptConnectionItem,
-    PyCoderConnectionItem,
 ]
 
 
@@ -122,7 +120,7 @@ def test_resolve_collapsed_endpoint_returns_item_when_nothing_collapsed():
 
 
 def test_every_connection_class_delegates_endpoint_to_the_shared_helper():
-    # All 6 classes' _get_effective_endpoint ignore self, so an arbitrary
+    # All 5 classes' _get_effective_endpoint ignore self, so an arbitrary
     # stand-in self is fine. This proves none of the previously-duplicated
     # variants still carries its own Frame-blind copy.
     frame = Frame([])

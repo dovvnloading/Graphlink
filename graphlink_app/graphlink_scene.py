@@ -7,19 +7,14 @@ from PySide6.QtGui import QColor, QPen, QTransform
 from graphlink_node import ChatNode, CodeNode, DocumentNode, ImageNode, ThinkingNode
 from graphlink_connections import (
     ConnectionItem, ContentConnectionItem, SystemPromptConnectionItem,
-    DocumentConnectionItem, ImageConnectionItem, PyCoderConnectionItem,
+    DocumentConnectionItem, ImageConnectionItem,
     ConversationConnectionItem, GroupSummaryConnectionItem,
     HtmlConnectionItem, ThinkingConnectionItem
 )
 from graphlink_canvas_items import Frame, Note, NavigationPin, ChartItem, Container
 from graphlink_navigation_pins import NavigationPinStore
-from graphlink_pycoder import PyCoderNode
-from graphlink_plugins.graphlink_plugin_code_sandbox import CodeSandboxNode
-from graphlink_web import WebNode, WebConnectionItem
 from graphlink_conversation_node import ConversationNode
 from graphlink_html_view import HtmlViewNode
-from graphlink_plugins.graphlink_plugin_artifact import ArtifactNode, ArtifactConnectionItem
-from graphlink_plugins.graphlink_plugin_gitlink import GitlinkNode, GitlinkConnectionItem
 from graphlink_memory import clone_history, resolve_branch_parent
 from graphlink_config import get_surface_color
 from graphlink_styles import FONT_FAMILY_NAME
@@ -60,13 +55,8 @@ class ChatScene(QGraphicsScene):
         self.document_nodes = []
         self.image_nodes = []
         self.thinking_nodes = []
-        self.pycoder_nodes = []
-        self.code_sandbox_nodes = []
-        self.web_nodes = []
         self.conversation_nodes = []
         self.html_view_nodes = []
-        self.artifact_nodes = []
-        self.gitlink_nodes = []
         self.chart_nodes = []
         self.chart_connections = []
         self.transient_layout_items = []
@@ -78,14 +68,9 @@ class ChatScene(QGraphicsScene):
         self.image_connections = []
         self.thinking_connections = []
         self.system_prompt_connections = []
-        self.pycoder_connections = []
-        self.code_sandbox_connections = []
-        self.web_connections = []
         self.conversation_connections = []
         self.group_summary_connections = []
         self.html_connections = []
-        self.artifact_connections = []
-        self.gitlink_connections = []
 
         self.setBackgroundBrush(QColor(get_surface_color("node_body")))
         
@@ -172,14 +157,9 @@ class ChatScene(QGraphicsScene):
             self.image_connections,
             self.thinking_connections,
             self.system_prompt_connections,
-            self.pycoder_connections,
-            self.code_sandbox_connections,
-            self.web_connections,
             self.conversation_connections,
             self.group_summary_connections,
             self.html_connections,
-            self.artifact_connections,
-            self.gitlink_connections,
             self.chart_connections,
         ]
 
@@ -300,14 +280,6 @@ class ChatScene(QGraphicsScene):
                 content = node.thinking_text
             elif isinstance(node, ConversationNode):
                 content = "\n".join([msg.get('content', '') for msg in node.conversation_history])
-            elif isinstance(node, ArtifactNode):
-                content = node.get_artifact_content() + "\n" + node.chat_html_cache
-            elif isinstance(node, GitlinkNode):
-                content = node.get_task_prompt() + "\n" + node.context_xml + "\n" + node.proposal_markdown + "\n" + node.preview_text
-            elif isinstance(node, PyCoderNode):
-                content = node.get_prompt() + "\n" + node.get_code() + "\n" + node.get_output()
-            elif isinstance(node, CodeSandboxNode):
-                content = node.get_prompt() + "\n" + node.get_requirements() + "\n" + node.get_code() + "\n" + node.get_output()
             elif isinstance(node, ChartItem):
                 content = node.to_context_text() if hasattr(node, "to_context_text") else str(node.data)
             elif isinstance(node, Note):
@@ -716,8 +688,8 @@ class ChatScene(QGraphicsScene):
 
     def createFrame(self):
         """Creates a Frame around the currently selected nodes."""
-        selected_nodes = [item for item in self.selectedItems() 
-                         if isinstance(item, (ChatNode, CodeNode, DocumentNode, ImageNode, ThinkingNode, ChartItem, PyCoderNode, CodeSandboxNode, WebNode, ConversationNode, HtmlViewNode, ArtifactNode, GitlinkNode))]
+        selected_nodes = [item for item in self.selectedItems()
+                         if isinstance(item, (ChatNode, CodeNode, DocumentNode, ImageNode, ThinkingNode, ChartItem, ConversationNode, HtmlViewNode))]
         
         if not selected_nodes:
             return
@@ -738,8 +710,8 @@ class ChatScene(QGraphicsScene):
 
     def createContainer(self):
         """Creates a Container around the currently selected items."""
-        selected_items = [item for item in self.selectedItems() 
-                         if isinstance(item, (ChatNode, CodeNode, DocumentNode, ImageNode, ThinkingNode, Note, ChartItem, Frame, Container, PyCoderNode, CodeSandboxNode, WebNode, ConversationNode, HtmlViewNode, ArtifactNode, GitlinkNode))]
+        selected_items = [item for item in self.selectedItems()
+                         if isinstance(item, (ChatNode, CodeNode, DocumentNode, ImageNode, ThinkingNode, Note, ChartItem, Frame, Container, ConversationNode, HtmlViewNode))]
         
         if not selected_items:
             return
@@ -845,9 +817,7 @@ class ChatScene(QGraphicsScene):
 
     def _all_conversational_nodes(self):
         return (
-            self.nodes + self.pycoder_nodes + self.code_sandbox_nodes + self.web_nodes +
-            self.conversation_nodes + self.html_view_nodes +
-            self.artifact_nodes + self.gitlink_nodes
+            self.nodes + self.conversation_nodes + self.html_view_nodes
         )
 
     def _all_content_nodes(self):
@@ -942,8 +912,7 @@ class ChatScene(QGraphicsScene):
 
     def _spawn_clearance_for(self, item):
         conversational_types = (
-            ChatNode, PyCoderNode, CodeSandboxNode, WebNode, ConversationNode,
-            HtmlViewNode, ArtifactNode, GitlinkNode,
+            ChatNode, ConversationNode, HtmlViewNode,
         )
         content_types = (CodeNode, DocumentNode, ImageNode, ThinkingNode, ChartItem)
 
@@ -1116,10 +1085,8 @@ class ChatScene(QGraphicsScene):
 
         # Update all other types of connections.
         for conn_list in [self.content_connections, self.document_connections, self.image_connections, self.thinking_connections,
-                          self.system_prompt_connections, self.pycoder_connections, self.code_sandbox_connections, self.web_connections,
-                          self.conversation_connections, self.group_summary_connections,
-                          self.html_connections, self.artifact_connections, self.gitlink_connections,
-                          self.chart_connections]:
+                          self.system_prompt_connections, self.conversation_connections, self.group_summary_connections,
+                          self.html_connections, self.chart_connections]:
             for conn in conn_list:
                 conn.update_path()
                 if hasattr(conn, 'sync_visibility_mode'):
@@ -1462,27 +1429,6 @@ class ChatScene(QGraphicsScene):
                     if conn.end_node == item: self.removeItem(conn); self.thinking_connections.remove(conn)
                 self.removeItem(item)
                 if item in self.thinking_nodes: self.thinking_nodes.remove(item)
-            elif isinstance(item, PyCoderNode):
-                self._remove_associated_chart_nodes(item)
-                if item.parent_node and item in item.parent_node.children: item.parent_node.children.remove(item)
-                self._remove_connections_for_node(item)
-                if hasattr(item, "dispose"): item.dispose()
-                self.removeItem(item)
-                if item in self.pycoder_nodes: self.pycoder_nodes.remove(item)
-            elif isinstance(item, CodeSandboxNode):
-                self._remove_associated_chart_nodes(item)
-                if item.parent_node and item in item.parent_node.children: item.parent_node.children.remove(item)
-                self._remove_connections_for_node(item)
-                if hasattr(item, "dispose"): item.dispose()
-                self.removeItem(item)
-                if item in self.code_sandbox_nodes: self.code_sandbox_nodes.remove(item)
-            elif isinstance(item, WebNode):
-                self._remove_associated_chart_nodes(item)
-                if item.parent_node and item in item.parent_node.children: item.parent_node.children.remove(item)
-                self._remove_connections_for_node(item)
-                if hasattr(item, "dispose"): item.dispose()
-                self.removeItem(item)
-                if item in self.web_nodes: self.web_nodes.remove(item)
             elif isinstance(item, ConversationNode):
                 self._remove_associated_chart_nodes(item)
                 if item.parent_node and item in item.parent_node.children: item.parent_node.children.remove(item)
@@ -1496,23 +1442,6 @@ class ChatScene(QGraphicsScene):
                 self._remove_connections_for_node(item)
                 self.removeItem(item)
                 if item in self.html_view_nodes: self.html_view_nodes.remove(item)
-            elif isinstance(item, ArtifactNode):
-                self._remove_associated_chart_nodes(item)
-                if item.parent_node and item in item.parent_node.children: item.parent_node.children.remove(item)
-                self._remove_connections_for_node(item)
-                if hasattr(item, "dispose"): item.dispose()
-                self.removeItem(item)
-                if item in self.artifact_nodes: self.artifact_nodes.remove(item)
-            elif isinstance(item, GitlinkNode):
-                self._remove_associated_chart_nodes(item)
-                if item.parent_node and item in item.parent_node.children: item.parent_node.children.remove(item)
-                self._remove_connections_for_node(item)
-                if hasattr(item, "dispose"): item.dispose()
-                self.removeItem(item)
-                if item in self.gitlink_nodes: self.gitlink_nodes.remove(item)
-                if self.window and self.window.current_node == item:
-                    self.window.current_node = None
-                    self.window.message_input.setPlaceholderText("Type your message...")
             elif isinstance(item, Frame): self.deleteFrame(item)
             elif isinstance(item, Container): self.deleteContainer(item)
             elif isinstance(item, Note):
@@ -1578,7 +1507,7 @@ class ChatScene(QGraphicsScene):
             'h_top': moving_rect.top(), 'h_middle': moving_rect.center().y(), 'h_bottom': moving_rect.bottom(),
         }
 
-        static_items = [item for item in self.items() if isinstance(item, (ChatNode, CodeNode, Note, Frame, ChartItem, DocumentNode, ImageNode, ThinkingNode, Container, PyCoderNode, CodeSandboxNode, WebNode, ConversationNode, HtmlViewNode, ArtifactNode, GitlinkNode)) and item != moving_item and not item.isSelected()]
+        static_items = [item for item in self.items() if isinstance(item, (ChatNode, CodeNode, Note, Frame, ChartItem, DocumentNode, ImageNode, ThinkingNode, Container, ConversationNode, HtmlViewNode)) and item != moving_item and not item.isSelected()]
 
         for static_item in static_items:
             static_rect = static_item.sceneBoundingRect()
@@ -1684,9 +1613,8 @@ class ChatScene(QGraphicsScene):
         connection_lists = (
             self.connections, self.content_connections, self.document_connections,
             self.image_connections, self.thinking_connections, self.system_prompt_connections,
-            self.pycoder_connections, self.code_sandbox_connections, self.web_connections,
             self.conversation_connections, self.group_summary_connections, self.html_connections,
-            self.artifact_connections, self.gitlink_connections, self.chart_connections,
+            self.chart_connections,
         )
         for conn_list in connection_lists:
             for conn in conn_list:
@@ -1694,9 +1622,7 @@ class ChatScene(QGraphicsScene):
 
         hover_animation_node_lists = (
             self.nodes, self.code_nodes, self.document_nodes, self.image_nodes,
-            self.thinking_nodes, self.pycoder_nodes, self.code_sandbox_nodes,
-            self.web_nodes, self.conversation_nodes, self.html_view_nodes,
-            self.artifact_nodes, self.gitlink_nodes,
+            self.thinking_nodes, self.conversation_nodes, self.html_view_nodes,
         )
         for node_list in hover_animation_node_lists:
             for node in node_list:
@@ -1714,18 +1640,14 @@ class ChatScene(QGraphicsScene):
             _try_teardown(chart, "dispose")  # ChartItem.dispose() is timer/figure-only
 
         # Bug-scan finding: dispose() (stops the node's background QThread
-        # worker, and - for the 4 that wire it via a lambda closing over the
-        # node/thread, see each dispose()'s own comment - disconnects the
-        # worker's own signals so neither the worker nor the node is pinned
-        # alive forever) was only ever invoked from deleteSelectedItems(),
-        # never from clear(). New Chat / chat-switching mid-generation left
-        # the worker running with nothing to stop it, for every worker-owning
-        # node type, not just the one (ArtifactNode) this was first noticed
-        # on. GitlinkNode's dispose() already disconnected correctly - it was
-        # equally never being called here either.
+        # worker and disconnects the worker's own signals so neither the
+        # worker nor the node is pinned alive forever) was only ever invoked
+        # from deleteSelectedItems(), never from clear(). New Chat / chat-
+        # switching mid-generation left the worker running with nothing to
+        # stop it. ConversationNode is the remaining worker-owning node type
+        # in this scene.
         worker_owning_node_lists = (
-            self.pycoder_nodes, self.code_sandbox_nodes,
-            self.conversation_nodes, self.artifact_nodes, self.gitlink_nodes,
+            self.conversation_nodes,
         )
         for node_list in worker_owning_node_lists:
             for node in node_list:
@@ -1748,28 +1670,18 @@ class ChatScene(QGraphicsScene):
         self.document_nodes.clear()
         self.image_nodes.clear()
         self.thinking_nodes.clear()
-        self.pycoder_nodes.clear()
-        self.code_sandbox_nodes.clear()
-        self.web_nodes.clear()
         self.conversation_nodes.clear()
         self.html_view_nodes.clear()
-        self.artifact_nodes.clear()
-        self.gitlink_nodes.clear()
         self.chart_nodes.clear()
-        
+
         self.content_connections.clear()
         self.document_connections.clear()
         self.image_connections.clear()
         self.thinking_connections.clear()
         self.system_prompt_connections.clear()
-        self.pycoder_connections.clear()
-        self.code_sandbox_connections.clear()
-        self.web_connections.clear()
         self.conversation_connections.clear()
         self.group_summary_connections.clear()
         self.html_connections.clear()
-        self.artifact_connections.clear()
-        self.gitlink_connections.clear()
         self.chart_connections.clear()
         
         if hasattr(self, 'window') and self.window:

@@ -13,18 +13,12 @@ from graphlink_connections import (
     GroupSummaryConnectionItem,
     HtmlConnectionItem,
     ImageConnectionItem,
-    PyCoderConnectionItem,
     SystemPromptConnectionItem,
     ThinkingConnectionItem,
 )
 from graphlink_conversation_node import ConversationNode
 from graphlink_html_view import HtmlViewNode
 from graphlink_node import ChatNode, CodeNode, DocumentNode, ImageNode, ThinkingNode
-from graphlink_plugins.graphlink_plugin_artifact import ArtifactConnectionItem, ArtifactNode
-from graphlink_plugins.graphlink_plugin_code_sandbox import CodeSandboxConnectionItem, CodeSandboxNode
-from graphlink_plugins.graphlink_plugin_gitlink import GitlinkConnectionItem, GitlinkNode
-from graphlink_pycoder import PyCoderMode, PyCoderNode
-from graphlink_web import WebConnectionItem, WebNode
 from graphlink_navigation_pins import NavigationPinRecord, NavigationPinValidationError
 
 from graphlink_session.content_codec import (
@@ -160,21 +154,6 @@ class SceneDeserializer:
         scene.register_connection(connection)
         return connection
 
-    def deserialize_pycoder_connection(self, data, scene, all_nodes_map):
-        return self._deserialize_basic_connection(
-            data, scene, all_nodes_map, PyCoderConnectionItem, "pycoder_connections"
-        )
-
-    def deserialize_code_sandbox_connection(self, data, scene, all_nodes_map):
-        return self._deserialize_basic_connection(
-            data, scene, all_nodes_map, CodeSandboxConnectionItem, "code_sandbox_connections"
-        )
-
-    def deserialize_web_connection(self, data, scene, all_nodes_map):
-        return self._deserialize_basic_connection(
-            data, scene, all_nodes_map, WebConnectionItem, "web_connections"
-        )
-
     def deserialize_conversation_connection(self, data, scene, all_nodes_map):
         return self._deserialize_basic_connection(
             data, scene, all_nodes_map, ConversationConnectionItem, "conversation_connections"
@@ -183,16 +162,6 @@ class SceneDeserializer:
     def deserialize_html_connection(self, data, scene, all_nodes_map):
         return self._deserialize_basic_connection(
             data, scene, all_nodes_map, HtmlConnectionItem, "html_connections"
-        )
-
-    def deserialize_artifact_connection(self, data, scene, all_nodes_map):
-        return self._deserialize_basic_connection(
-            data, scene, all_nodes_map, ArtifactConnectionItem, "artifact_connections"
-        )
-
-    def deserialize_gitlink_connection(self, data, scene, all_nodes_map):
-        return self._deserialize_basic_connection(
-            data, scene, all_nodes_map, GitlinkConnectionItem, "gitlink_connections"
         )
 
     def deserialize_group_summary_connection(self, data, scene, nodes_map, notes_map):
@@ -274,78 +243,6 @@ class SceneDeserializer:
                 if data.get("is_docked", False):
                     node.dock()
 
-        elif node_type == "pycoder":
-            parent_node = all_nodes_map.get(data["parent_node_index"])
-            if parent_node:
-                node = PyCoderNode(parent_node, mode=PyCoderMode[data.get("mode", "AI_DRIVEN")])
-                node.setPos(data["position"]["x"], data["position"]["y"])
-                # setPlainText, not setText: QTextEdit.setText() auto-detects
-                # "might be rich text" and silently strips angle-bracket
-                # substrings it mistakes for HTML tags (e.g. a prompt containing
-                # "<script>" or "<div>") before textChanged ever populates the
-                # prompt mirror - found by adversarial review as a real,
-                # pre-existing hole in this increment's round-trip guarantee.
-                # CodeSandbox/Artifact's restore paths already use setPlainText.
-                node.prompt_input.setPlainText(data.get("prompt", ""))
-                node.set_code(data.get("code", ""))
-                node.set_output(data.get("output", ""))
-                node.set_ai_analysis(data.get("analysis", ""))
-                node.conversation_history = deserialize_history(data.get("conversation_history", []))
-                node.include_branch_context = data.get("include_branch_context", True)
-                if data.get("is_collapsed", False):
-                    node.set_collapsed(True)
-                # Phase 7 prerequisite (increment 3): wire the run-request
-                # signal on restore, matching every other node type's own
-                # _connect_if_available call in this function (pycoder was the
-                # one branch connecting nothing).
-                self._connect_if_available(node.run_clicked, "execute_pycoder_node")
-                scene.addItem(node)
-                scene.pycoder_nodes.append(node)
-
-        elif node_type == "code_sandbox":
-            parent_node = all_nodes_map.get(data["parent_node_index"])
-            if parent_node:
-                node = CodeSandboxNode(parent_node)
-                node.setPos(data["position"]["x"], data["position"]["y"])
-                node.prompt_input.setPlainText(data.get("prompt", ""))
-                node.set_requirements(data.get("requirements", ""))
-                node.set_code(data.get("code", ""))
-                node.set_output(data.get("output", ""))
-                node.set_ai_analysis(data.get("analysis", ""))
-                node.status = data.get("status", "Idle")
-                node.sandbox_id = data.get("sandbox_id", node.sandbox_id)
-                tone = "success" if node.status == "Ready" else ("error" if node.status == "Error" else "info")
-                node._update_status_pill(tone)
-                node.conversation_history = deserialize_history(data.get("conversation_history", []))
-                node.include_branch_context = data.get("include_branch_context", True)
-                if data.get("is_collapsed", False):
-                    node.set_collapsed(True)
-                self._connect_if_available(node.sandbox_requested, "execute_code_sandbox_node")
-                scene.addItem(node)
-                scene.code_sandbox_nodes.append(node)
-
-        elif node_type == "web":
-            parent_node = all_nodes_map.get(data["parent_node_index"])
-            if parent_node:
-                node = WebNode(parent_node)
-                node.setPos(data["position"]["x"], data["position"]["y"])
-                node.query_input.setText(data.get("query", ""))
-                node.set_status(data.get("status", "Idle"))
-                summary = data.get("summary", "")
-                sources = data.get("sources", [])
-                if data.get("research_result"):
-                    node.restore_research_result(data["research_result"])
-                elif summary:
-                    node.set_result(summary, sources)
-                node.conversation_history = deserialize_history(data.get("conversation_history", []))
-                node.include_branch_context = data.get("include_branch_context", True)
-                self._connect_if_available(node.run_clicked, "execute_web_node")
-                self._connect_if_available(node.cancel_requested, "cancel_web_node")
-                if data.get("is_collapsed", False):
-                    node.set_collapsed(True)
-                scene.addItem(node)
-                scene.web_nodes.append(node)
-
         elif node_type == "conversation":
             parent_node = all_nodes_map.get(data["parent_node_index"])
             if parent_node:
@@ -376,47 +273,6 @@ class SceneDeserializer:
                 self._connect_if_available(node.render_requested, "execute_html_view_node")
                 scene.addItem(node)
                 scene.html_view_nodes.append(node)
-
-        elif node_type == "artifact":
-            parent_node = all_nodes_map.get(data["parent_node_index"])
-            if parent_node:
-                node = ArtifactNode(parent_node)
-                node.setPos(data["position"]["x"], data["position"]["y"])
-                node.instruction_input.setPlainText(data.get("instruction", ""))
-                node.set_artifact_content(data.get("content", ""))
-                node.conversation_history = deserialize_history(data.get("conversation_history", []))
-                node.include_branch_context = data.get("include_branch_context", True)
-                node.local_history = deserialize_history(data.get("local_history", []))
-                node.chat_html_cache = data.get("chat_html_cache", "")
-                node.chat_display.setHtml(node.chat_html_cache)
-                if data.get("is_collapsed", False):
-                    node.set_collapsed(True)
-                self._connect_if_available(node.artifact_requested, "execute_artifact_node")
-                self._connect_if_available(node.stop_requested, "stop_artifact_node")
-                scene.addItem(node)
-                scene.artifact_nodes.append(node)
-
-        elif node_type == "gitlink":
-            parent_node = all_nodes_map.get(data["parent_node_index"])
-            if parent_node:
-                node = GitlinkNode(parent_node, settings_manager=getattr(self.window, "settings_manager", None))
-                node.setPos(data["position"]["x"], data["position"]["y"])
-                node.conversation_history = deserialize_history(data.get("conversation_history", []))
-                node.restore_saved_state(
-                    repo_state=data.get("repo_state", {}),
-                    repo_file_paths=data.get("repo_file_paths", []),
-                    selected_paths=data.get("selected_paths", []),
-                    task_prompt=data.get("task_prompt", ""),
-                    context_xml=data.get("context_xml", ""),
-                    context_stats=data.get("context_stats", {}),
-                    proposal_data=data.get("proposal_data", {}),
-                    preview_text=data.get("preview_text", ""),
-                )
-                if data.get("is_collapsed", False):
-                    node.set_collapsed(True)
-                self._connect_if_available(node.gitlink_requested, "execute_gitlink_node")
-                scene.addItem(node)
-                scene.gitlink_nodes.append(node)
 
         if node:
             all_nodes_map[index] = node
@@ -725,13 +581,8 @@ class SceneDeserializer:
                 ("document_connections", self.deserialize_document_connection),
                 ("image_connections", self.deserialize_image_connection),
                 ("thinking_connections", self.deserialize_thinking_connection),
-                ("pycoder_connections", self.deserialize_pycoder_connection),
-                ("code_sandbox_connections", self.deserialize_code_sandbox_connection),
-                ("web_connections", self.deserialize_web_connection),
                 ("conversation_connections", self.deserialize_conversation_connection),
                 ("html_connections", self.deserialize_html_connection),
-                ("artifact_connections", self.deserialize_artifact_connection),
-                ("gitlink_connections", self.deserialize_gitlink_connection),
             )
 
             for payload_name, loader in connection_groups:
