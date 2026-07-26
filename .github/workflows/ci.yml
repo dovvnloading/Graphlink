@@ -8,6 +8,14 @@ name: CI
 # not been empirically confirmed on Linux runners, and this workflow's job
 # is to match verified-working local behavior, not to guess at a cheaper
 # runner that might diverge.
+#
+# R7.1 fix: the pytest/compileall steps no longer pin working-directory to
+# graphlink_app/ - that scoped collection to graphlink_app/tests/ only, so
+# backend/tests/ (real production coverage added by every R0-R6 increment)
+# had never once run in CI. Both steps now run from the repo root, which
+# picks up graphlink_app/tests/, backend/tests/, and tests/ (the permanent
+# Qt-removal gate, relocated here in this same increment) together - the
+# exact set `python -m pytest -q` from repo root already runs locally.
 
 on:
   pull_request:
@@ -30,11 +38,9 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Compile check
-        working-directory: graphlink_app
         run: python -m compileall -q .
 
       - name: Run pytest
-        working-directory: graphlink_app
         run: python -m pytest -q
 
   frontend-checks:

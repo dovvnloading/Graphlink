@@ -1,5 +1,12 @@
 anthropic
 beautifulsoup4
+# Qt-removal target architecture (doc/QT_REMOVAL_PLAN.md): Python backend +
+# native pywebview shell. PySide6/qtawesome below are scheduled for REMOVAL
+# at the R7 cutover - do not add new Qt dependencies. Matches pyproject.toml's
+# own dependencies list, which this file was already out of sync with.
+fastapi
+uvicorn
+pywebview
 ddgs
 Markdown
 matplotlib

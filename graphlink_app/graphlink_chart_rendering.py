@@ -25,8 +25,8 @@ makes that alpha genuinely apply via `_mpl_rgba` instead of reproducing a
 Qt-only accident.
 
 This file must stay Qt-free forever - it exists to be importable from
-backend/, which graphlink_app/tests/test_no_qt_anywhere.py holds to zero
-tolerance for backend/.
+backend/, which tests/test_no_qt_anywhere.py holds to zero tolerance for
+backend/.
 """
 
 from __future__ import annotations
