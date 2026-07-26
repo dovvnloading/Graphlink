@@ -36,10 +36,21 @@ const snapshot = {
   ollamaCurrentModel: "",
   ollamaModelAssignments: {},
   ollamaScannedModels: [],
-  ollamaScanSummary: "No saved scan yet. Run a system scan to build the local model list.",
+  ollamaScanSummary: "No saved scan yet. Run a system scan or choose a folder to build the local model list.",
   ollamaScanStatus: "idle",
   ollamaPullStatus: "idle",
   ollamaNotice: "",
+  llamaCppReasoningMode: "Thinking",
+  llamaCppChatModelPath: "",
+  llamaCppTitleModelPath: "",
+  llamaCppChatFormat: "",
+  llamaCppNCtx: 4096,
+  llamaCppNGpuLayers: 0,
+  llamaCppNThreads: 0,
+  llamaCppScannedModels: [],
+  llamaCppScanSummary: "No saved GGUF scan yet. Run a system scan or choose a folder to build the local model list.",
+  llamaCppScanStatus: "idle",
+  llamaCppNotice: "",
 };
 
 function makeTransport() {
@@ -110,6 +121,16 @@ async function goToOllama(
   act(() => push({ ...snapshot, ...overrides, activeSection: "ollama (local)" }));
 }
 
+async function goToLlamaCpp(
+  user: ReturnType<typeof userEvent.setup>,
+  push: (payload: Record<string, unknown>) => void,
+  overrides: Record<string, unknown> = {},
+) {
+  await user.click(screen.getByText("open settings"));
+  await user.click(screen.getByRole("button", { name: "Llama.cpp (Local)" }));
+  act(() => push({ ...snapshot, ...overrides, activeSection: "llama.cpp (local)" }));
+}
+
 describe("SettingsDialog", () => {
   it("navigating sections fires setActiveSection with the clicked section's key", async () => {
     const { user, intents } = setup();
@@ -128,13 +149,12 @@ describe("SettingsDialog", () => {
     expect(screen.getByText("API Provider")).toBeInTheDocument();
   });
 
-  it("Llama.cpp still renders the deferred placeholder", async () => {
+  it("Llama.cpp page renders for the real (not deferred-placeholder) section", async () => {
     const { user, push } = setup();
-    await user.click(screen.getByText("open settings"));
-    await user.click(screen.getByRole("button", { name: "Llama.cpp (Local)" }));
-    act(() => push({ ...snapshot, activeSection: "llama.cpp (local)" }));
+    await goToLlamaCpp(user, push);
 
-    expect(screen.getByText("Llama.cpp (Local) configuration lands in R7.4c.")).toBeInTheDocument();
+    expect(screen.queryByText(/lands in R7\.4c/)).toBeNull();
+    expect(screen.getByText("Reasoning Mode")).toBeInTheDocument();
   });
 
   it("Ollama page renders for the real (not deferred-placeholder) section", async () => {
@@ -178,13 +198,6 @@ describe("SettingsDialog", () => {
     await user.click(screen.getByText("System Scan"));
 
     expect(intents).toContainEqual(["app-settings", "scanOllamaSystem", []]);
-  });
-
-  it("Scan Folder... is disabled - deferred to R7.4c's native picker", async () => {
-    const { user, push } = setup();
-    await goToOllama(user, push);
-
-    expect(screen.getByText("Scan Folder...")).toBeDisabled();
   });
 
   it("a per-task select defaults to auto and switching to inherit fires setOllamaModelAssignment immediately", async () => {
@@ -414,5 +427,188 @@ describe("SettingsDialog", () => {
 
     expect(screen.getByPlaceholderText("https://api.openai.com/v1")).toHaveValue("https://api.openai.com/v1");
     expect(screen.getByLabelText("Chat, Explain, Takeaways (main model)")).toHaveValue("");
+  });
+
+  it("clicking a reasoning mode radio fires setLlamaCppReasoningMode", async () => {
+    const { user, push, intents } = setup();
+    await goToLlamaCpp(user, push);
+
+    await user.click(screen.getByLabelText("Quick Mode (No CoT)"));
+
+    expect(intents).toContainEqual(["app-settings", "setLlamaCppReasoningMode", ["Quick"]]);
+  });
+
+  it("shows 'No model selected' when no chat model path is set", async () => {
+    const { user, push } = setup();
+    await goToLlamaCpp(user, push, { llamaCppChatModelPath: "" });
+
+    expect(screen.getByText("No model selected")).toBeInTheDocument();
+  });
+
+  it("shows the current active GGUF's basename, not its full path", async () => {
+    const { user, push } = setup();
+    await goToLlamaCpp(user, push, { llamaCppChatModelPath: "C:\\models\\chat.gguf" });
+
+    expect(screen.getByText("chat.gguf")).toBeInTheDocument();
+  });
+
+  it("System Scan fires scanLlamaCppSystem and disables while running", async () => {
+    const { user, push, intents } = setup();
+    await goToLlamaCpp(user, push, { llamaCppScanStatus: "running" });
+
+    expect(screen.getByText("Scanning...")).toBeDisabled();
+
+    act(() => push({ ...snapshot, activeSection: "llama.cpp (local)", llamaCppScanStatus: "idle" }));
+    await user.click(screen.getByText("System Scan"));
+
+    expect(intents).toContainEqual(["app-settings", "scanLlamaCppSystem", []]);
+  });
+
+  it("Scan Folder... fires pickLlamaCppScanFolder (no longer a deferred placeholder)", async () => {
+    const { user, push, intents } = setup();
+    await goToLlamaCpp(user, push);
+
+    await user.click(screen.getByText("Scan Folder..."));
+
+    expect(intents).toContainEqual(["app-settings", "pickLlamaCppScanFolder", []]);
+  });
+
+  it("Scan Folder... is disabled while a scan is running", async () => {
+    const { user, push } = setup();
+    await goToLlamaCpp(user, push, { llamaCppScanStatus: "running" });
+
+    expect(screen.getByText("Scan Folder...")).toBeDisabled();
+  });
+
+  it("the shared scanned-models datalist populates from llamaCppScannedModels", async () => {
+    const { user, push } = setup();
+    await goToLlamaCpp(user, push, { llamaCppScannedModels: ["C:/models/a.gguf", "C:/models/b.gguf"] });
+
+    const datalist = document.getElementById("settings-llama-cpp-scanned-models");
+    expect(datalist?.querySelectorAll("option")).toHaveLength(2);
+  });
+
+  it("the Scanned Chat Model select only appears once models are scanned, and selecting one fires setLlamaCppChatModelPath", async () => {
+    const { user, push, intents } = setup();
+    await goToLlamaCpp(user, push);
+    expect(screen.queryByLabelText("Scanned Chat Model")).toBeNull();
+
+    await goToLlamaCpp(user, push, { llamaCppScannedModels: ["C:/models/a.gguf"] });
+    await user.selectOptions(screen.getByLabelText("Scanned Chat Model"), "C:/models/a.gguf");
+
+    expect(intents).toContainEqual(["app-settings", "setLlamaCppChatModelPath", ["C:/models/a.gguf"]]);
+  });
+
+  it("the Scanned Chat Model select shows the blank placeholder when the configured path isn't in the scanned list", async () => {
+    const { user, push } = setup();
+    await goToLlamaCpp(user, push, {
+      llamaCppScannedModels: ["C:/models/a.gguf", "C:/models/b.gguf"],
+      llamaCppChatModelPath: "C:/models/not-in-the-scanned-list.gguf",
+    });
+
+    expect(screen.getByLabelText("Scanned Chat Model")).toHaveValue("");
+  });
+
+  it("Chat Model File shows 'No file selected' by default and Browse fires pickLlamaCppChatModelFile", async () => {
+    const { user, push, intents } = setup();
+    await goToLlamaCpp(user, push);
+
+    expect(screen.getByText("No file selected")).toBeInTheDocument();
+    const browseButtons = screen.getAllByRole("button", { name: "Browse..." });
+    await user.click(browseButtons[0]);
+
+    expect(intents).toContainEqual(["app-settings", "pickLlamaCppChatModelFile", []]);
+  });
+
+  it("Chat Model File shows the staged path once one is set", async () => {
+    const { user, push } = setup();
+    await goToLlamaCpp(user, push, { llamaCppChatModelPath: "C:/models/chat.gguf" });
+
+    expect(screen.getByText("C:/models/chat.gguf")).toBeInTheDocument();
+  });
+
+  it("Chat Naming File shows a reuse fallback by default and its own Browse fires pickLlamaCppTitleModelFile", async () => {
+    const { user, push, intents } = setup();
+    await goToLlamaCpp(user, push);
+
+    expect(screen.getByText("Reusing the main chat model")).toBeInTheDocument();
+    const browseButtons = screen.getAllByRole("button", { name: "Browse..." });
+    await user.click(browseButtons[1]);
+
+    expect(intents).toContainEqual(["app-settings", "pickLlamaCppTitleModelFile", []]);
+  });
+
+  it("Chat Format Override fires setLlamaCppChatFormat", async () => {
+    const { user, push, intents } = setup();
+    await goToLlamaCpp(user, push);
+
+    await user.type(screen.getByLabelText("Chat Format Override"), "x");
+
+    expect(intents).toContainEqual(["app-settings", "setLlamaCppChatFormat", ["x"]]);
+  });
+
+  it("Context Window fires setLlamaCppNCtx with the parsed number", async () => {
+    const { user, push, intents } = setup();
+    await goToLlamaCpp(user, push);
+
+    const field = screen.getByLabelText("Context Window");
+    await user.clear(field);
+    await user.type(field, "8192");
+
+    expect(intents).toContainEqual(["app-settings", "setLlamaCppNCtx", [8192]]);
+  });
+
+  it("GPU Layers fires setLlamaCppNGpuLayers with the parsed number", async () => {
+    const { user, push, intents } = setup();
+    await goToLlamaCpp(user, push);
+
+    const field = screen.getByLabelText("GPU Layers");
+    await user.clear(field);
+    await user.type(field, "20");
+
+    expect(intents).toContainEqual(["app-settings", "setLlamaCppNGpuLayers", [20]]);
+  });
+
+  it("CPU Threads fires setLlamaCppNThreads with the parsed number", async () => {
+    const { user, push, intents } = setup();
+    await goToLlamaCpp(user, push);
+
+    const field = screen.getByLabelText("CPU Threads");
+    await user.clear(field);
+    await user.type(field, "4");
+
+    expect(intents).toContainEqual(["app-settings", "setLlamaCppNThreads", [4]]);
+  });
+
+  it("an llamaCppNotice renders as an inline error", async () => {
+    const { user, push } = setup();
+    await goToLlamaCpp(user, push, { llamaCppNotice: "Chat Model File cannot be empty." });
+
+    expect(screen.getByText("Chat Model File cannot be empty.")).toBeInTheDocument();
+  });
+
+  it("Save Settings fires saveLlamaCppSettings", async () => {
+    const { user, push, intents } = setup();
+    await goToLlamaCpp(user, push);
+
+    await user.click(screen.getByText("Save Settings"));
+
+    expect(intents).toContainEqual(["app-settings", "saveLlamaCppSettings", []]);
+  });
+
+  it("Ollama's own Scan Folder... fires pickOllamaScanFolder (retroactively un-deferred by R7.4c)", async () => {
+    const { user, push, intents } = setup();
+    await goToOllama(user, push);
+
+    await user.click(screen.getByText("Scan Folder..."));
+
+    expect(intents).toContainEqual(["app-settings", "pickOllamaScanFolder", []]);
+  });
+
+  it("Ollama's Scan Folder... disables while a scan is running", async () => {
+    const { user, push } = setup();
+    await goToOllama(user, push, { ollamaScanStatus: "running" });
+
+    expect(screen.getByText("Scan Folder...")).toBeDisabled();
   });
 });

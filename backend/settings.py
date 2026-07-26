@@ -1,5 +1,5 @@
-"""Settings dialog: General + Integrations + API-provider + Ollama pages
-(Qt-removal plan R2.5d, extended R7.4a, extended R7.4b).
+"""Settings dialog: General + Integrations + API-provider + Ollama +
+Llama.cpp pages (Qt-removal plan R2.5d, extended R7.4a, R7.4b, R7.4c).
 
 Unlike composer.py/plugins.py this is a genuine REUSE, not a
 reimplementation: SettingsManager (graphlink_licensing.py) and its own
@@ -11,22 +11,27 @@ Qt-free repo-root survivor modules (Qt-removal plan R7.2); ollama is a
 hard, always-installed dependency (pyproject.toml), not the optional
 llama-cpp-python extra.
 
-Scope (doc/QT_REMOVAL_PLAN.md R2.5d, R7.4a, R7.4b): the General/Appearance
-page, the Integrations page (GitHub token, write-only), the API-provider
-page (OpenAI-Compatible/Anthropic/Gemini), and now the Ollama page
-(reasoning mode, system model scan, per-task model assignment, model pull)
-are real here. Llama.cpp remains deferred - R7.4c - and the update-check
-pair (checkForUpdates/openRepository) needs a native browser-open
-capability that doesn't exist yet in graphlink_desktop.py. The SPA renders
-those sections disabled with an explicit "lands in R7.4c" label rather
-than faking them.
+Scope (doc/QT_REMOVAL_PLAN.md R2.5d, R7.4a-c): the General/Appearance page,
+the Integrations page (GitHub token, write-only), the API-provider page
+(OpenAI-Compatible/Anthropic/Gemini), the Ollama page (reasoning mode,
+system model scan, per-task model assignment, model pull), and now the
+Llama.cpp page (reasoning mode, runtime tunables, GGUF model scan/browse,
+chat/naming model paths) are all real here - this closes every settings
+page R2.5d originally deferred. The update-check pair
+(checkForUpdates/openRepository) still needs a native browser-open
+capability that doesn't exist yet in graphlink_desktop.py and is out of
+this file's scope (a separate R7.5 gap, not a settings page).
 
-The Ollama page's "Scan Folder..." button is ALSO deferred, narrower than
-the whole page: it needs the same native folder-picker capability R7.4c
-builds for Llama.cpp's GGUF file browse (both are pywebview's
-create_file_dialog, just OPEN_DIALOG vs FOLDER_DIALOG) - deliberately not
-duplicated here ahead of that build. "System Scan" needs no picker and is
-fully real.
+R7.4c's own scope was the LAST genuinely NEW capability gap this whole
+settings surface needed: a native OS file/folder picker, since llama.cpp's
+C++ bindings and Ollama's manifest walker both need a real on-disk PATH
+string, not file bytes (a plain HTML <input type="file"> only ever gives
+bytes) - see backend/native_dialogs.py's own docstring for the mechanism
+(pywebview's webview.windows list, populated at create_window() time with
+zero plumbing changes needed in graphlink_desktop.py). Building it also
+retroactively un-defers the Ollama page's own "Scan Folder..." button,
+which was deliberately left disabled pending exactly this capability - see
+pick_ollama_scan_folder below.
 
 The API-provider page deliberately does NOT replicate one piece of legacy
 behavior: the old QWidget pre-filled its API-key field with the saved
@@ -51,6 +56,7 @@ independently and stomp on each other's in-memory copy.
 from __future__ import annotations
 
 import asyncio
+import os
 import threading
 from typing import Any, Callable
 
@@ -61,6 +67,7 @@ import graphlink_task_config as config
 from graphlink_licensing import SettingsManager
 from graphlink_model_catalog import AUTO_MODEL, INHERIT_MODEL
 
+from backend import native_dialogs
 from backend.events import SessionBus
 from backend.notifications import NotificationState
 
@@ -98,6 +105,12 @@ _OLLAMA_TASK_KEYS = (
 )
 _OLLAMA_REASONING_MODES = ("Thinking", "Quick")
 
+# Same 2-mode set, distinct constant deliberately (not reused) - Llama.cpp
+# and Ollama have entirely separate SettingsManager fields/api_provider
+# global state for reasoning mode, so keeping the constants separate avoids
+# an accidental coupling if one provider's valid-mode set ever diverges.
+_LLAMA_CPP_REASONING_MODES = ("Thinking", "Quick")
+
 # Every persistence-touching mutation runs in a worker thread
 # (asyncio.to_thread) so SettingsManager._save_state's json-dump + fsync +
 # atomic-replace never stalls the event loop (and with it, every session's
@@ -112,6 +125,19 @@ _manager_lock = threading.Lock()
 def _apply(mutation: Callable[..., None], *args: Any) -> None:
     with _manager_lock:
         mutation(*args)
+
+
+def _locked_llama_cpp_settings(manager: SettingsManager) -> dict[str, Any]:
+    # Adversarial-review finding: SettingsManager.get_llama_cpp_settings()
+    # does 7 separate unsynchronized dict reads - calling it outside
+    # _manager_lock let a concurrent setLlamaCppNCtx/NGpuLayers/NThreads/
+    # ChatFormat call (each correctly _apply-locked) interleave mid-read,
+    # so a live-reapply could combine e.g. a brand-new n_ctx with a stale
+    # chat_format. Doesn't corrupt the persisted file (this is a read, never
+    # written back), but it's exactly the class of race this file's own
+    # comments already claim to guard against elsewhere.
+    with _manager_lock:
+        return manager.get_llama_cpp_settings()
 
 
 def _redact(text: str, secret: Any) -> str:
@@ -180,20 +206,30 @@ def _ollama_scan_summary(manager: SettingsManager) -> str:
     cached_models = manager.get_ollama_scanned_models()
     has_saved_scan = bool(scan_mode or scan_path or manager.get_ollama_model_scan_locations())
     if not has_saved_scan:
-        return "No saved scan yet. Run a system scan to build the local model list."
+        return "No saved scan yet. Run a system scan or choose a folder to build the local model list."
     if not cached_models:
         return "The last scan is saved, but it did not find any Ollama models."
     if scan_mode == "folder" and scan_path:
-        # Folder scanning isn't wired in THIS page yet - it needs the same
-        # native-picker capability R7.4c builds for Llama.cpp's GGUF file
-        # browse, deliberately deferred out of this increment's scope (see
-        # doc/QT_REMOVAL_PLAN.md's R7.4 scoping). This branch only DISPLAYS
-        # a scan a user already saved via the legacy Qt app sharing the
-        # same session.dat - it doesn't let this page create one.
         return f"Using saved scan from folder: {scan_path}"
     if scan_mode == "system":
         return "Using saved system scan results from local Ollama locations."
     return "Using saved scanned model list."
+
+
+def _llama_cpp_scan_summary(manager: SettingsManager) -> str:
+    scan_mode = manager.get_llama_cpp_model_scan_mode()
+    scan_path = manager.get_llama_cpp_model_scan_path()
+    cached_models = manager.get_llama_cpp_scanned_models()
+    has_saved_scan = bool(scan_mode or scan_path or manager.get_llama_cpp_model_scan_locations())
+    if not has_saved_scan:
+        return "No saved GGUF scan yet. Run a system scan or choose a folder to build the local model list."
+    if not cached_models:
+        return "The last GGUF scan is saved, but it did not find any models."
+    if scan_mode == "folder" and scan_path:
+        return f"Using saved scan from folder: {scan_path}"
+    if scan_mode == "system":
+        return "Using saved system scan results from local GGUF locations."
+    return "Using saved scanned GGUF model list."
 
 
 def settings_payload(manager: SettingsManager) -> dict[str, Any]:
@@ -255,6 +291,21 @@ def register_settings(
     ollama_pull_status = {"value": "idle"}
     ollama_notice = {"value": ""}
 
+    # Llama.cpp mirrors Ollama's flat-cells shape (still exactly one page,
+    # still no per-provider keying needed) plus two EXTRA cells with no
+    # Ollama analog: the staged chat/title GGUF paths. Legacy's own bridge
+    # kept these in-memory on the bridge instance and only persisted them
+    # on an explicit saveLlamaCppSettings() call - Browse/select just
+    # updates the staged draft, exactly like the API-provider page's own
+    # draftApiKey/draftBaseUrl/draftModels (a local edit buffer, not
+    # write-through) rather than Ollama's immediate-persist intents. Seeded
+    # from the manager's already-persisted value so a fresh session opens
+    # showing whatever was last saved, matching legacy's own __init__.
+    llama_scan_status = {"value": "idle"}
+    llama_notice = {"value": ""}
+    llama_staged_chat_path = {"value": manager.get_llama_cpp_chat_model_path()}
+    llama_staged_title_path = {"value": manager.get_llama_cpp_title_model_override_path()}
+
     def build_payload() -> dict[str, Any]:
         payload = settings_payload(manager)
         payload["activeSection"] = active_section["value"]
@@ -288,6 +339,22 @@ def register_settings(
         payload["ollamaScanStatus"] = ollama_scan_status["value"]
         payload["ollamaPullStatus"] = ollama_pull_status["value"]
         payload["ollamaNotice"] = ollama_notice["value"]
+
+        payload["llamaCppReasoningMode"] = manager.get_llama_cpp_reasoning_mode()
+        # Staged (session-local), NOT manager.get_llama_cpp_chat_model_path()
+        # - the field must show the in-progress draft, not the last-saved
+        # value, exactly like the API-provider page's draftBaseUrl/
+        # draftModels never reading back from the payload once edited.
+        payload["llamaCppChatModelPath"] = llama_staged_chat_path["value"]
+        payload["llamaCppTitleModelPath"] = llama_staged_title_path["value"]
+        payload["llamaCppChatFormat"] = manager.get_llama_cpp_chat_format()
+        payload["llamaCppNCtx"] = manager.get_llama_cpp_n_ctx()
+        payload["llamaCppNGpuLayers"] = manager.get_llama_cpp_n_gpu_layers()
+        payload["llamaCppNThreads"] = manager.get_llama_cpp_n_threads()
+        payload["llamaCppScannedModels"] = manager.get_llama_cpp_scanned_models()
+        payload["llamaCppScanSummary"] = _llama_cpp_scan_summary(manager)
+        payload["llamaCppScanStatus"] = llama_scan_status["value"]
+        payload["llamaCppNotice"] = llama_notice["value"]
         return payload
 
     bus.register_topic("app-settings", build_payload)
@@ -653,12 +720,11 @@ def register_settings(
         await asyncio.to_thread(_apply, _persist)
         await bus.publish("app-settings")
 
-    async def scan_ollama_system():
-        # Check-then-set with no await between them - safe under asyncio's
-        # single-threaded event loop (unlike the two genuinely async-gapped
-        # races above), matching legacy's own isRunning()-guarded no-op.
-        if ollama_scan_status["value"] == "running":
-            return
+    async def _run_ollama_scan(scan_path: str | None) -> None:
+        # Extracted (R7.4c) from what used to be scan_ollama_system's own
+        # monolithic body, unchanged in behavior - factored out so
+        # pick_ollama_scan_folder (below) can share it with a real path
+        # instead of duplicating the scan/persist/report sequence.
         ollama_scan_status["value"] = "running"
         ollama_notice["value"] = ""
         await bus.publish("app-settings")
@@ -670,7 +736,7 @@ def register_settings(
             # surfaced either; matched here, not newly dropped). Only a
             # genuine, unexpected exception (e.g. a filesystem error
             # walking a manifest folder) reaches this except.
-            results = await asyncio.to_thread(api_provider.scan_local_ollama_models, None)
+            results = await asyncio.to_thread(api_provider.scan_local_ollama_models, scan_path)
         except Exception as exc:  # noqa: BLE001 - no secret in this path to redact
             ollama_scan_status["value"] = "error"
             ollama_notice["value"] = f"Scan failed: {exc}"
@@ -707,6 +773,47 @@ def register_settings(
             return
         ollama_scan_status["value"] = "done"
         await bus.publish("app-settings")
+
+    async def scan_ollama_system():
+        # Check-then-set with no await between them - safe under asyncio's
+        # single-threaded event loop (unlike the two genuinely async-gapped
+        # races above), matching legacy's own isRunning()-guarded no-op.
+        if ollama_scan_status["value"] == "running":
+            return
+        await _run_ollama_scan(None)
+
+    async def pick_ollama_scan_folder():
+        # R7.4c: the retroactive un-defer of this page's own "Scan
+        # Folder..." button, now that native_dialogs exists. Matches
+        # legacy's pickOllamaScanFolder(): a cancelled dialog is a quiet
+        # no-op, not an error. The reentrancy guard is set BEFORE the
+        # (blocking, potentially long-lived-until-the-user-decides) native
+        # dialog opens, not after - two near-simultaneous clicks must not
+        # both reach a native file-dialog call.
+        if ollama_scan_status["value"] == "running":
+            return
+        ollama_scan_status["value"] = "running"
+        await bus.publish("app-settings")
+        directory = manager.get_ollama_model_scan_path() or os.path.expanduser("~")
+        try:
+            # Adversarial-review finding: the native dialog call itself can
+            # raise (a per-platform GTK/COM/file-type-parsing failure inside
+            # pywebview's create_file_dialog - confirmed reachable via its
+            # own source, not theoretical). Uncaught, this would strand the
+            # reentrancy gate at "running" forever - the exact class of bug
+            # already fixed twice in this file for the SCAN/PERSIST steps,
+            # reintroduced here via the dialog call that precedes them.
+            folder = await native_dialogs.pick_folder(directory=directory)
+        except Exception as exc:  # noqa: BLE001 - a local folder path, not a credential
+            ollama_scan_status["value"] = "error"
+            ollama_notice["value"] = f"Could not open the folder picker: {exc}"
+            await bus.publish("app-settings")
+            return
+        if not folder:
+            ollama_scan_status["value"] = "idle"
+            await bus.publish("app-settings")
+            return
+        await _run_ollama_scan(folder)
 
     async def pull_ollama_model(model_name: str):
         model_name = str(model_name).strip()
@@ -758,6 +865,264 @@ def register_settings(
         ollama_notice["value"] = ""
         await bus.publish("app-settings")
 
+    async def set_llama_cpp_reasoning_mode(mode: str):
+        mode = str(mode)
+        if mode not in _LLAMA_CPP_REASONING_MODES:
+            return
+        await asyncio.to_thread(_apply, manager.set_llama_cpp_reasoning_mode, mode)
+
+        def _reapply_if_llama_cpp_is_still_the_live_provider() -> None:
+            # Same shape as set_ollama_reasoning_mode's own live re-apply:
+            # gated on is_local_llama_cpp_mode(), checked and applied inside
+            # this SAME to_thread hop so a concurrent provider-mode switch
+            # can't be clobbered back to Llama.cpp. Unlike Ollama's version,
+            # this genuinely CAN fail: initialize_local_provider's
+            # Llama.cpp branch re-validates chat_model_path (must still be
+            # a real, existing .gguf file) every time it runs - if that
+            # file was deleted/moved from under an already-active session
+            # since Llama.cpp was last activated, this raises. The mode is
+            # already persisted above regardless, so a failure here only
+            # means it takes effect on the next mode switch/restart instead
+            # of immediately - not a lost setting.
+            if api_provider.is_local_llama_cpp_mode():
+                settings = _locked_llama_cpp_settings(manager)
+                settings["reasoning_mode"] = mode
+                api_provider.initialize_local_provider(config.LOCAL_PROVIDER_LLAMACPP, settings)
+
+        try:
+            await asyncio.to_thread(_reapply_if_llama_cpp_is_still_the_live_provider)
+        except Exception as exc:  # noqa: BLE001 - no secret in this path (a local file path, not a credential)
+            llama_notice["value"] = f"Reasoning mode saved, but could not be applied to the live model: {exc}"
+        await bus.publish("app-settings")
+
+    async def set_llama_cpp_chat_format(chat_format: str):
+        await asyncio.to_thread(_apply, manager.set_llama_cpp_chat_format, str(chat_format))
+        await bus.publish("app-settings")
+
+    def _set_llama_cpp_runtime_field(field: str, value: int) -> None:
+        # Read-modify-write entirely inside this one _apply-locked closure -
+        # SettingsManager.set_llama_cpp_runtime requires all 4 kwargs every
+        # call (no partial-update variant), so the "current" read must
+        # happen in the SAME locked critical section as the write, not
+        # before scheduling it - exactly the class of race the R7.4a
+        # save_api_configuration bug and R7.4b's model-assignment test both
+        # already covered for other read-modify-writes in this file.
+        current = manager.get_llama_cpp_settings()
+        current[field] = value
+        manager.set_llama_cpp_runtime(
+            n_ctx=current["n_ctx"],
+            n_gpu_layers=current["n_gpu_layers"],
+            n_threads=current["n_threads"],
+            chat_format=current["chat_format"],
+        )
+
+    async def set_llama_cpp_n_ctx(n_ctx: int):
+        try:
+            n_ctx = int(n_ctx)
+        except (TypeError, ValueError):
+            return
+        await asyncio.to_thread(_apply, _set_llama_cpp_runtime_field, "n_ctx", n_ctx)
+        await bus.publish("app-settings")
+
+    async def set_llama_cpp_n_gpu_layers(n_gpu_layers: int):
+        try:
+            n_gpu_layers = int(n_gpu_layers)
+        except (TypeError, ValueError):
+            return
+        await asyncio.to_thread(_apply, _set_llama_cpp_runtime_field, "n_gpu_layers", n_gpu_layers)
+        await bus.publish("app-settings")
+
+    async def set_llama_cpp_n_threads(n_threads: int):
+        try:
+            n_threads = int(n_threads)
+        except (TypeError, ValueError):
+            return
+        await asyncio.to_thread(_apply, _set_llama_cpp_runtime_field, "n_threads", n_threads)
+        await bus.publish("app-settings")
+
+    def _initial_gguf_directory(staged_path: str) -> str:
+        # Matches legacy's own _pick_gguf_file: prefer the staged path's
+        # own directory (so re-browsing starts where the current selection
+        # already lives), else a saved scan path, else home - never leaves
+        # it to whatever the OS defaults to.
+        if staged_path:
+            directory = os.path.dirname(staged_path)
+            if directory:
+                return directory
+        return manager.get_llama_cpp_model_scan_path() or os.path.expanduser("~")
+
+    async def pick_llama_cpp_chat_model_file():
+        # Stages only - matches legacy's pickLlamaCppChatModelFile(), which
+        # never persists until the user clicks Save. A cancelled dialog
+        # (path is None) is a quiet no-op.
+        directory = _initial_gguf_directory(llama_staged_chat_path["value"])
+        path = await native_dialogs.pick_file(
+            file_types=("GGUF files (*.gguf)", "All Files (*.*)"), directory=directory
+        )
+        if path:
+            llama_staged_chat_path["value"] = path
+            await bus.publish("app-settings")
+
+    async def pick_llama_cpp_title_model_file():
+        # Legacy's own initial-dir fallback order for the TITLE picker
+        # specifically: the staged title path, else the staged CHAT path
+        # (not the title one) - matches _pick_gguf_file's caller passing
+        # `self._llama_title_model_path or self._llama_chat_model_path`.
+        directory = _initial_gguf_directory(
+            llama_staged_title_path["value"] or llama_staged_chat_path["value"]
+        )
+        path = await native_dialogs.pick_file(
+            file_types=("GGUF files (*.gguf)", "All Files (*.*)"), directory=directory
+        )
+        if path:
+            llama_staged_title_path["value"] = path
+            await bus.publish("app-settings")
+
+    async def set_llama_cpp_chat_model_path(path: str):
+        # The non-native counterpart (selecting from the scanned-models
+        # dropdown) - also stages only, matching pick_llama_cpp_chat_model_file.
+        llama_staged_chat_path["value"] = str(path).strip()
+        await bus.publish("app-settings")
+
+    async def set_llama_cpp_title_model_path(path: str):
+        llama_staged_title_path["value"] = str(path).strip()
+        await bus.publish("app-settings")
+
+    async def _run_llama_cpp_scan(scan_path: str | None) -> None:
+        llama_scan_status["value"] = "running"
+        llama_notice["value"] = ""
+        await bus.publish("app-settings")
+
+        try:
+            # Unlike scan_local_ollama_models, this DOES raise for a real,
+            # reachable failure: an explicit scan_path that doesn't exist or
+            # isn't a directory (api_provider.py's own scan_local_llama_cpp_models).
+            results = await asyncio.to_thread(api_provider.scan_local_llama_cpp_models, scan_path)
+        except Exception as exc:  # noqa: BLE001 - no secret in this path (a local folder path, not a credential)
+            llama_scan_status["value"] = "error"
+            llama_notice["value"] = f"Scan failed: {exc}"
+            await bus.publish("app-settings")
+            return
+
+        def _persist() -> None:
+            manager.set_llama_cpp_model_scan_cache(
+                results.get("models", []),
+                results.get("scan_mode", ""),
+                results.get("scan_path", ""),
+                results.get("locations", []),
+            )
+
+        try:
+            # Same reentrancy-gate-recovery fix as scan_ollama_system's own
+            # persist step - a disk-write failure here must not strand this
+            # scan status at "running" forever.
+            await asyncio.to_thread(_apply, _persist)
+        except Exception as exc:  # noqa: BLE001 - no secret in this path
+            llama_scan_status["value"] = "error"
+            llama_notice["value"] = f"Scan failed: {exc}"
+            await bus.publish("app-settings")
+            return
+
+        llama_scan_status["value"] = "done"
+        if results.get("truncated"):
+            # A deliberate small improvement over legacy (never surfaced
+            # this): the scan collector is bounded (50k directories / 30s -
+            # see api_provider.py's _GGUF_SCAN_MAX_DIRECTORIES/_MAX_SECONDS)
+            # specifically because the default system-wide roots include
+            # the user's whole Downloads/Documents/Desktop trees, which can
+            # be huge. Silently reporting an incomplete scan as complete
+            # would be misleading; this doesn't change any persisted field.
+            llama_notice["value"] = "Scan stopped early (too many folders or took too long) - results may be incomplete."
+        await bus.publish("app-settings")
+
+    async def scan_llama_cpp_system():
+        if llama_scan_status["value"] == "running":
+            return
+        await _run_llama_cpp_scan(None)
+
+    async def pick_llama_cpp_scan_folder():
+        if llama_scan_status["value"] == "running":
+            return
+        llama_scan_status["value"] = "running"
+        await bus.publish("app-settings")
+        directory = manager.get_llama_cpp_model_scan_path() or os.path.expanduser("~")
+        try:
+            # Same reentrancy-gate hazard fixed above for pick_ollama_scan_folder.
+            folder = await native_dialogs.pick_folder(directory=directory)
+        except Exception as exc:  # noqa: BLE001 - a local folder path, not a credential
+            llama_scan_status["value"] = "error"
+            llama_notice["value"] = f"Could not open the folder picker: {exc}"
+            await bus.publish("app-settings")
+            return
+        if not folder:
+            llama_scan_status["value"] = "idle"
+            await bus.publish("app-settings")
+            return
+        await _run_llama_cpp_scan(folder)
+
+    async def save_llama_cpp_settings():
+        # Sequencing matches legacy's saveLlamaCppSettings() exactly:
+        # (1) validate the staged paths locally - chat is required, title
+        # is optional but validated if non-empty; (2) if Llama.cpp is the
+        # CURRENTLY LIVE provider, re-initialize it with the new settings,
+        # aborting without persisting anything on failure (a real, useful
+        # abort: this is what catches "that .gguf file doesn't actually
+        # exist" before it's saved); (3) only then persist.
+        chat_path = llama_staged_chat_path["value"].strip()
+        title_path = llama_staged_title_path["value"].strip()
+
+        # Legacy-parity fix: restores the 5 distinct legacy error messages
+        # (graphlink_settings_bridge.py's saveLlamaCppSettings) instead of 2
+        # generic ones - a user gets the ACTUAL problem (empty vs. not-found
+        # vs. wrong-extension), not just "must be a real .gguf file" for all
+        # three.
+        if not chat_path:
+            llama_notice["value"] = "Chat Model File cannot be empty."
+            await bus.publish("app-settings")
+            return
+        if not os.path.isfile(chat_path):
+            llama_notice["value"] = f"Chat model file was not found: {chat_path}"
+            await bus.publish("app-settings")
+            return
+        if not chat_path.lower().endswith(".gguf"):
+            llama_notice["value"] = "Chat Model File must point to a .gguf file."
+            await bus.publish("app-settings")
+            return
+        if title_path:
+            if not os.path.isfile(title_path):
+                llama_notice["value"] = f"Chat naming model file was not found: {title_path}"
+                await bus.publish("app-settings")
+                return
+            if not title_path.lower().endswith(".gguf"):
+                llama_notice["value"] = "Chat Naming File must point to a .gguf file."
+                await bus.publish("app-settings")
+                return
+
+        def _maybe_reapply_live() -> None:
+            # Checked and applied inside the SAME to_thread hop - the same
+            # race-preemption shape as set_llama_cpp_reasoning_mode's own
+            # live re-apply above.
+            if api_provider.is_local_llama_cpp_mode():
+                settings = _locked_llama_cpp_settings(manager)
+                settings["chat_model_path"] = chat_path
+                settings["title_model_path"] = title_path
+                api_provider.initialize_local_provider(config.LOCAL_PROVIDER_LLAMACPP, settings)
+
+        try:
+            await asyncio.to_thread(_maybe_reapply_live)
+        except Exception as exc:  # noqa: BLE001 - no secret in this path (local file paths, not credentials)
+            llama_notice["value"] = f"Invalid Llama.cpp configuration: {exc}"
+            await bus.publish("app-settings")
+            return
+
+        def _persist() -> None:
+            manager.set_llama_cpp_chat_model_path(chat_path)
+            manager.set_llama_cpp_title_model_path(title_path)
+
+        await asyncio.to_thread(_apply, _persist)
+        llama_notice["value"] = ""
+        await bus.publish("app-settings")
+
     bus.register_intent("app-settings", "setActiveSection", set_active_section)
     bus.register_intent("app-settings", "setTheme", set_theme)
     bus.register_intent("app-settings", "setShowTokenCounter", set_show_token_counter)
@@ -773,3 +1138,16 @@ def register_settings(
     bus.register_intent("app-settings", "setOllamaModelAssignment", set_ollama_model_assignment)
     bus.register_intent("app-settings", "scanOllamaSystem", scan_ollama_system)
     bus.register_intent("app-settings", "pullOllamaModel", pull_ollama_model)
+    bus.register_intent("app-settings", "pickOllamaScanFolder", pick_ollama_scan_folder)
+    bus.register_intent("app-settings", "setLlamaCppReasoningMode", set_llama_cpp_reasoning_mode)
+    bus.register_intent("app-settings", "setLlamaCppChatFormat", set_llama_cpp_chat_format)
+    bus.register_intent("app-settings", "setLlamaCppNCtx", set_llama_cpp_n_ctx)
+    bus.register_intent("app-settings", "setLlamaCppNGpuLayers", set_llama_cpp_n_gpu_layers)
+    bus.register_intent("app-settings", "setLlamaCppNThreads", set_llama_cpp_n_threads)
+    bus.register_intent("app-settings", "pickLlamaCppChatModelFile", pick_llama_cpp_chat_model_file)
+    bus.register_intent("app-settings", "pickLlamaCppTitleModelFile", pick_llama_cpp_title_model_file)
+    bus.register_intent("app-settings", "setLlamaCppChatModelPath", set_llama_cpp_chat_model_path)
+    bus.register_intent("app-settings", "setLlamaCppTitleModelPath", set_llama_cpp_title_model_path)
+    bus.register_intent("app-settings", "scanLlamaCppSystem", scan_llama_cpp_system)
+    bus.register_intent("app-settings", "pickLlamaCppScanFolder", pick_llama_cpp_scan_folder)
+    bus.register_intent("app-settings", "saveLlamaCppSettings", save_llama_cpp_settings)

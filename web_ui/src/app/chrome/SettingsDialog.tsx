@@ -5,21 +5,16 @@ import type { AppSettingsState } from "../../lib/bridge-core/generated/app-setti
 import { Dialog } from "../overlays/overlays";
 
 /**
- * The settings dialog (Qt-removal plan R2.5d, extended R7.4a, R7.4b) -
- * settings island's SPA successor. General + Integrations + API-provider +
- * Ollama pages are real. Llama.cpp remains deferred (R7.4c) - it needs a
- * native GGUF file-picker capability that doesn't exist yet in
- * graphlink_desktop.py - rendered here as a disabled placeholder with an
- * explicit label rather than faking it, the same explicit-defer discipline
- * as the app bar's disabled Save/provider-select. The Ollama page's own
- * "Scan Folder..." button is ALSO deferred for the same reason, narrower
- * than the whole page - see backend/settings.py's module docstring.
+ * The settings dialog (Qt-removal plan R2.5d, extended R7.4a-c) - settings
+ * island's SPA successor. Every page R2.5d originally deferred is real now:
+ * General, Integrations, API-provider, Ollama, and (R7.4c) Llama.cpp. The
+ * Ollama page's own "Scan Folder..." button, deferred alongside Llama.cpp
+ * pending a native folder-picker capability, is real too - see
+ * backend/native_dialogs.py's docstring for the mechanism.
  */
 
 const SECTIONS = ["General", "Ollama (Local)", "Llama.cpp (Local)", "API Endpoint", "Integrations"] as const;
 type Section = (typeof SECTIONS)[number];
-
-const DEFERRED_SECTIONS = new Set<Section>(["Llama.cpp (Local)"]);
 
 // Mirrors graphlink_task_config.py's TASK_* constants - the same 5-slot set
 // backend/settings.py's _OLLAMA_TASK_KEYS uses (task_image_gen is absent:
@@ -33,6 +28,15 @@ const OLLAMA_TASK_LABELS: Record<(typeof OLLAMA_TASKS)[number], string> = {
   task_web_summarize: "Web Content Summarization Model",
 };
 const OLLAMA_MODELS_DATALIST_ID = "settings-ollama-scanned-models";
+const LLAMA_CPP_MODELS_DATALIST_ID = "settings-llama-cpp-scanned-models";
+
+// Llama.cpp has no per-task assignment concept like Ollama's OLLAMA_TASKS -
+// just one global chat model path plus an optional title/naming override
+// (api_provider.py's _get_llama_cpp_model_path: chart/web-validate/web-
+// summarize all silently fall back to the chat model path).
+function basename(path: string): string {
+  return path.split(/[\\/]/).pop() || path;
+}
 
 const THEME_OPTIONS = [
   { value: "dark", label: "Dark" },
@@ -103,6 +107,17 @@ const initialState: AppSettingsState = {
   ollamaScanStatus: "idle",
   ollamaPullStatus: "idle",
   ollamaNotice: "",
+  llamaCppReasoningMode: "Thinking",
+  llamaCppChatModelPath: "",
+  llamaCppTitleModelPath: "",
+  llamaCppChatFormat: "",
+  llamaCppNCtx: 4096,
+  llamaCppNGpuLayers: 0,
+  llamaCppNThreads: 0,
+  llamaCppScannedModels: [],
+  llamaCppScanSummary: "",
+  llamaCppScanStatus: "idle",
+  llamaCppNotice: "",
 };
 
 function sectionKey(section: Section): string {
@@ -539,10 +554,12 @@ function OllamaPage({ state, transport }: { state: AppSettingsState; transport: 
         >
           {state.ollamaScanStatus === "running" ? "Scanning..." : "System Scan"}
         </button>
-        {/* "Scan Folder..." is deliberately deferred - see this file's module
-            docstring - it needs the same native folder-picker capability
-            R7.4c builds for Llama.cpp's GGUF file browse. */}
-        <button type="button" className="settings-button" disabled title="Lands with R7.4c's native file-picker capability">
+        <button
+          type="button"
+          className="settings-button"
+          disabled={state.ollamaScanStatus === "running"}
+          onClick={() => transport.intent("app-settings", "pickOllamaScanFolder", [])}
+        >
           Scan Folder...
         </button>
       </div>
@@ -597,13 +614,262 @@ function OllamaPage({ state, transport }: { state: AppSettingsState; transport: 
   );
 }
 
-function DeferredPage({ section }: { section: Section }) {
+// Llama.cpp's runtime tunables (chat format, n_ctx, n_gpu_layers, n_threads)
+// persist on every change - no separate Save step, unlike the model-path
+// fields below. A plain value={state.llamaCpp*} binding (no local buffer)
+// breaks multi-character typing: the fake test transport (and, over a real
+// WS round trip, ordinary network latency) never echoes a change back
+// before the NEXT keystroke fires, so the input keeps resetting to the
+// stale last-confirmed value between keystrokes instead of accumulating
+// what the user is typing. A small local draft, reset only when the
+// confirmed value changes to something the draft doesn't already reflect
+// (the same pattern OllamaTaskField/ApiProviderPage already use), fixes it.
+//
+// Adversarial-review finding, deliberately NOT further chased: this reset
+// compares the incoming value only against the last value WE'VE SEEN, not
+// against every edit we've SENT - so a same-session echo of an EARLIER
+// keystroke landing after a NEWER one would still stomp the newer draft.
+// A fully correct fix needs echo-cancellation (a pending-edit counter) or a
+// backend-tracked version stamp; both add real state-machine complexity
+// for a narrow window that requires sustained fast typing during a slow
+// round trip on a loopback WS connection. This is the same class of
+// already-accepted risk OllamaTaskField's own explicit-model-ID input has
+// (no draft buffer at all there) - not a new regression, just not fully
+// closed either.
+function LlamaCppNumberField({
+  label,
+  value,
+  min,
+  max,
+  step,
+  placeholder,
+  onCommit,
+}: {
+  label: string;
+  value: number;
+  min?: number;
+  max?: number;
+  step?: number;
+  placeholder?: string;
+  onCommit: (n: number) => void;
+}) {
+  const [draft, setDraft] = useState(String(value));
+  const [lastValue, setLastValue] = useState(value);
+
+  if (value !== lastValue) {
+    setLastValue(value);
+    setDraft(String(value));
+  }
+
   return (
-    <div className="settings-deferred-page">
-      <p>{section} configuration lands in R7.4c.</p>
-      <p className="settings-deferred-detail">
-        Needs a native GGUF file picker that doesn't exist yet in graphlink_desktop.py.
+    <label className="settings-field">
+      <span className="settings-field-label">{label}</span>
+      <input
+        type="number"
+        className="settings-select"
+        min={min}
+        max={max}
+        step={step}
+        placeholder={placeholder}
+        value={draft}
+        onChange={(event) => {
+          setDraft(event.target.value);
+          const n = Number(event.target.value);
+          if (!Number.isNaN(n) && event.target.value.trim() !== "") onCommit(n);
+        }}
+      />
+    </label>
+  );
+}
+
+function LlamaCppPage({ state, transport }: { state: AppSettingsState; transport: WsTransport }) {
+  const [draftChatFormat, setDraftChatFormat] = useState(state.llamaCppChatFormat);
+  const [lastChatFormat, setLastChatFormat] = useState(state.llamaCppChatFormat);
+
+  if (state.llamaCppChatFormat !== lastChatFormat) {
+    setLastChatFormat(state.llamaCppChatFormat);
+    setDraftChatFormat(state.llamaCppChatFormat);
+  }
+
+  // Chat/title model path fields are STAGED server-side (backend/settings.py's
+  // llama_staged_chat_path/llama_staged_title_path) - Browse/select updates
+  // the draft immediately (visible via state), but nothing persists until
+  // Save Settings, matching the API-provider page's own draft-then-commit
+  // shape rather than Ollama's per-field immediate persist.
+  const scannedChatValue = state.llamaCppScannedModels.includes(state.llamaCppChatModelPath)
+    ? state.llamaCppChatModelPath
+    : "";
+  const scannedTitleValue = state.llamaCppScannedModels.includes(state.llamaCppTitleModelPath)
+    ? state.llamaCppTitleModelPath
+    : "";
+
+  return (
+    <div className="settings-general-page">
+      <fieldset className="settings-fieldset">
+        <legend>Reasoning Mode</legend>
+        <label className="settings-checkbox-row">
+          <input
+            type="radio"
+            name="llama-cpp-reasoning-mode"
+            checked={state.llamaCppReasoningMode === "Thinking"}
+            onChange={() => transport.intent("app-settings", "setLlamaCppReasoningMode", ["Thinking"])}
+          />
+          Thinking Mode (Enable CoT)
+        </label>
+        <label className="settings-checkbox-row">
+          <input
+            type="radio"
+            name="llama-cpp-reasoning-mode"
+            checked={state.llamaCppReasoningMode === "Quick"}
+            onChange={() => transport.intent("app-settings", "setLlamaCppReasoningMode", ["Quick"])}
+          />
+          Quick Mode (No CoT)
+        </label>
+      </fieldset>
+
+      <p className="settings-update-status">
+        Current Active GGUF: <strong>{state.llamaCppChatModelPath ? basename(state.llamaCppChatModelPath) : "No model selected"}</strong>
       </p>
+
+      <div className="settings-button-row">
+        <button
+          type="button"
+          className="settings-button"
+          disabled={state.llamaCppScanStatus === "running"}
+          onClick={() => transport.intent("app-settings", "scanLlamaCppSystem", [])}
+        >
+          {state.llamaCppScanStatus === "running" ? "Scanning..." : "System Scan"}
+        </button>
+        <button
+          type="button"
+          className="settings-button"
+          disabled={state.llamaCppScanStatus === "running"}
+          onClick={() => transport.intent("app-settings", "pickLlamaCppScanFolder", [])}
+        >
+          Scan Folder...
+        </button>
+      </div>
+      <p className="settings-update-status">{state.llamaCppScanSummary}</p>
+
+      <datalist id={LLAMA_CPP_MODELS_DATALIST_ID}>
+        {state.llamaCppScannedModels.map((path) => (
+          <option key={path} value={path} />
+        ))}
+      </datalist>
+
+      {state.llamaCppScannedModels.length > 0 && (
+        <label className="settings-field">
+          <span className="settings-field-label">Scanned Chat Model</span>
+          <select
+            className="settings-select"
+            value={scannedChatValue}
+            onChange={(event) => transport.intent("app-settings", "setLlamaCppChatModelPath", [event.target.value])}
+          >
+            <option value="">Select a scanned model...</option>
+            {state.llamaCppScannedModels.map((path) => (
+              <option key={path} value={path}>
+                {basename(path)}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+
+      <div className="settings-field">
+        <span className="settings-field-label">Chat Model File</span>
+        <span className="settings-update-status">{state.llamaCppChatModelPath || "No file selected"}</span>
+        <button
+          type="button"
+          className="settings-button"
+          onClick={() => transport.intent("app-settings", "pickLlamaCppChatModelFile", [])}
+        >
+          Browse...
+        </button>
+      </div>
+
+      {state.llamaCppScannedModels.length > 0 && (
+        <label className="settings-field">
+          <span className="settings-field-label">Scanned Naming Model</span>
+          <select
+            className="settings-select"
+            value={scannedTitleValue}
+            onChange={(event) => transport.intent("app-settings", "setLlamaCppTitleModelPath", [event.target.value])}
+          >
+            <option value="">Select a scanned model...</option>
+            {state.llamaCppScannedModels.map((path) => (
+              <option key={path} value={path}>
+                {basename(path)}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+
+      <div className="settings-field">
+        <span className="settings-field-label">Chat Naming File (optional)</span>
+        <span className="settings-update-status">{state.llamaCppTitleModelPath || "Reusing the main chat model"}</span>
+        <button
+          type="button"
+          className="settings-button"
+          onClick={() => transport.intent("app-settings", "pickLlamaCppTitleModelFile", [])}
+        >
+          Browse...
+        </button>
+      </div>
+
+      <label className="settings-field">
+        <span className="settings-field-label">Chat Format Override</span>
+        <input
+          type="text"
+          className="settings-select"
+          placeholder="Leave blank to let the GGUF metadata decide"
+          value={draftChatFormat}
+          onChange={(event) => {
+            setDraftChatFormat(event.target.value);
+            transport.intent("app-settings", "setLlamaCppChatFormat", [event.target.value]);
+          }}
+        />
+      </label>
+
+      <LlamaCppNumberField
+        label="Context Window"
+        value={state.llamaCppNCtx}
+        min={256}
+        max={131072}
+        step={256}
+        onCommit={(n) => transport.intent("app-settings", "setLlamaCppNCtx", [n])}
+      />
+      <LlamaCppNumberField
+        label="GPU Layers"
+        value={state.llamaCppNGpuLayers}
+        min={-1}
+        max={9999}
+        onCommit={(n) => transport.intent("app-settings", "setLlamaCppNGpuLayers", [n])}
+      />
+      <LlamaCppNumberField
+        label="CPU Threads"
+        value={state.llamaCppNThreads}
+        min={0}
+        max={256}
+        placeholder="0 = Auto"
+        onCommit={(n) => transport.intent("app-settings", "setLlamaCppNThreads", [n])}
+      />
+
+      {state.llamaCppNotice && (
+        <p className="settings-update-status" data-level="error">
+          {state.llamaCppNotice}
+        </p>
+      )}
+
+      <div className="settings-button-row">
+        <button
+          type="button"
+          className="settings-button settings-button-primary"
+          onClick={() => transport.intent("app-settings", "saveLlamaCppSettings", [])}
+        >
+          Save Settings
+        </button>
+      </div>
     </div>
   );
 }
@@ -646,8 +912,8 @@ export function SettingsDialog({ transport }: { transport: WsTransport }) {
             <ApiProviderPage state={state} transport={transport} />
           ) : activeSection === "Ollama (Local)" ? (
             <OllamaPage state={state} transport={transport} />
-          ) : DEFERRED_SECTIONS.has(activeSection) ? (
-            <DeferredPage section={activeSection} />
+          ) : activeSection === "Llama.cpp (Local)" ? (
+            <LlamaCppPage state={state} transport={transport} />
           ) : (
             activeSection
           )}

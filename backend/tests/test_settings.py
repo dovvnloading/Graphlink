@@ -4,11 +4,13 @@ import asyncio
 
 import ollama
 import pytest
+import webview
 from graphlink_licensing import SettingsManager
 
 import api_provider
 import graphlink_task_config as config
 import backend.settings as settings_module
+from backend import native_dialogs
 from backend.events import SessionBus
 from backend.notifications import NotificationState
 from backend.settings import register_settings, settings_payload
@@ -1123,3 +1125,607 @@ def test_pull_ollama_model_persist_failure_reports_error_and_does_not_strand_the
     monkeypatch.setattr(api_provider, "invalidate_ollama_capability_cache", lambda name: calls.append(name))
     asyncio.run(bus.dispatch_intent("app-settings", "pullOllamaModel", ["qwen3:8b"]))
     assert calls == ["qwen3:8b"]
+
+
+# -- R7.4c: Llama.cpp settings page (reasoning mode, runtime tunables,
+# -- GGUF model scan/browse, chat/naming model paths) plus the retroactive
+# -- un-defer of the Ollama page's own "Scan Folder..." button, now that
+# -- native_dialogs.py exists.
+
+
+def test_pick_ollama_scan_folder_scans_the_picked_folder(manager, monkeypatch):
+    async def _fake_pick_folder(directory=""):
+        return "C:/models/ollama"
+
+    monkeypatch.setattr(native_dialogs, "pick_folder", _fake_pick_folder)
+    monkeypatch.setattr(
+        api_provider,
+        "scan_local_ollama_models",
+        lambda scan_path: {"models": ["llama3.2:3b"], "scan_mode": "folder", "scan_path": scan_path, "locations": [scan_path]},
+    )
+    bus = SessionBus("settings-pick-ollama-scan-folder-test")
+    register_settings(bus, manager)
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "pickOllamaScanFolder", []))
+
+    assert manager.get_ollama_scanned_models() == ["llama3.2:3b"]
+    payload = recorder.messages[-1]["payload"]
+    assert payload["ollamaScanStatus"] == "done"
+
+
+def test_pick_ollama_scan_folder_is_a_no_op_when_cancelled(manager, monkeypatch):
+    async def _fake_pick_folder(directory=""):
+        return None
+
+    calls = []
+    monkeypatch.setattr(native_dialogs, "pick_folder", _fake_pick_folder)
+    monkeypatch.setattr(api_provider, "scan_local_ollama_models", lambda scan_path: calls.append(1) or {"models": []})
+    bus = SessionBus("settings-pick-ollama-scan-folder-cancel-test")
+    register_settings(bus, manager)
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "pickOllamaScanFolder", []))
+
+    assert calls == []
+    assert recorder.messages[-1]["payload"]["ollamaScanStatus"] == "idle"
+
+
+def test_pick_ollama_scan_folder_is_a_no_op_while_already_running(manager, monkeypatch):
+    picker_calls = []
+
+    async def _fake_pick_folder(directory=""):
+        picker_calls.append(1)
+        return "C:/models"
+
+    monkeypatch.setattr(native_dialogs, "pick_folder", _fake_pick_folder)
+    monkeypatch.setattr(api_provider, "scan_local_ollama_models", lambda scan_path: {"models": []})
+    bus = SessionBus("settings-pick-ollama-scan-folder-no-op-test")
+    register_settings(bus, manager)
+
+    async def _run():
+        first = asyncio.create_task(bus.dispatch_intent("app-settings", "pickOllamaScanFolder", []))
+        await asyncio.sleep(0)
+        await bus.dispatch_intent("app-settings", "pickOllamaScanFolder", [])
+        await first
+
+    asyncio.run(_run())
+    assert len(picker_calls) == 1
+
+
+def test_pick_ollama_scan_folder_dialog_failure_reports_error_and_does_not_strand_the_running_gate(manager, monkeypatch):
+    # Adversarial-review finding: native_dialogs.pick_folder() itself can
+    # raise (a per-platform dialog failure inside pywebview's
+    # create_file_dialog - confirmed reachable, not theoretical). Before
+    # this fix, that exception propagated uncaught, leaving
+    # ollama_scan_status["value"] stuck at "running" forever - the same
+    # reentrancy-gate hazard already fixed twice elsewhere in this file for
+    # the scan/persist steps, reintroduced here via the dialog call itself.
+    async def _boom(directory=""):
+        raise RuntimeError("native dialog backend crashed")
+
+    monkeypatch.setattr(native_dialogs, "pick_folder", _boom)
+    bus = SessionBus("settings-pick-ollama-scan-folder-dialog-failure-test")
+    register_settings(bus, manager)
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "pickOllamaScanFolder", []))
+
+    payload = recorder.messages[-1]["payload"]
+    assert payload["ollamaScanStatus"] == "error"
+    assert "native dialog backend crashed" in payload["ollamaNotice"]
+
+    # The gate must not be stranded - a second call must actually reach the
+    # picker again, not silently no-op against a status stuck at "running".
+    calls = []
+
+    async def _fake_pick_folder(directory=""):
+        calls.append(1)
+        return None
+
+    monkeypatch.setattr(native_dialogs, "pick_folder", _fake_pick_folder)
+    asyncio.run(bus.dispatch_intent("app-settings", "pickOllamaScanFolder", []))
+    assert calls == [1]
+
+
+def test_set_llama_cpp_reasoning_mode_persists_and_rejects_unknown_modes(manager):
+    bus = SessionBus("settings-llama-cpp-reasoning-mode-test")
+    register_settings(bus, manager)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "setLlamaCppReasoningMode", ["Quick"]))
+    assert manager.get_llama_cpp_reasoning_mode() == "Quick"
+
+    asyncio.run(bus.dispatch_intent("app-settings", "setLlamaCppReasoningMode", ["not-a-real-mode"]))
+    assert manager.get_llama_cpp_reasoning_mode() == "Quick"
+
+
+def test_set_llama_cpp_reasoning_mode_reapplies_live_only_when_llama_cpp_is_the_active_provider(manager, monkeypatch):
+    calls = []
+    monkeypatch.setattr(api_provider, "initialize_local_provider", lambda *a, **k: calls.append(a))
+
+    monkeypatch.setattr(api_provider, "is_local_llama_cpp_mode", lambda: False)
+    bus = SessionBus("settings-llama-cpp-reasoning-not-active-test")
+    register_settings(bus, manager)
+    asyncio.run(bus.dispatch_intent("app-settings", "setLlamaCppReasoningMode", ["Quick"]))
+    assert calls == []
+
+    monkeypatch.setattr(api_provider, "is_local_llama_cpp_mode", lambda: True)
+    asyncio.run(bus.dispatch_intent("app-settings", "setLlamaCppReasoningMode", ["Thinking"]))
+    assert len(calls) == 1
+    assert calls[0][0] == config.LOCAL_PROVIDER_LLAMACPP
+    assert calls[0][1]["reasoning_mode"] == "Thinking"
+
+
+def test_set_llama_cpp_reasoning_mode_reapply_failure_reports_a_notice_without_crashing(manager, monkeypatch):
+    # Unlike Ollama's reasoning-mode reapply, this one has a REAL failure
+    # mode: initialize_local_provider re-validates chat_model_path every
+    # call, which can raise if the persisted GGUF file no longer exists.
+    monkeypatch.setattr(api_provider, "is_local_llama_cpp_mode", lambda: True)
+
+    def _boom(*a, **k):
+        raise RuntimeError("Llama.cpp model file was not found: C:/gone.gguf")
+
+    monkeypatch.setattr(api_provider, "initialize_local_provider", _boom)
+    bus = SessionBus("settings-llama-cpp-reasoning-reapply-failure-test")
+    register_settings(bus, manager)
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "setLlamaCppReasoningMode", ["Quick"]))
+
+    # The mode is still persisted even though the live reapply failed.
+    assert manager.get_llama_cpp_reasoning_mode() == "Quick"
+    payload = recorder.messages[-1]["payload"]
+    assert "could not be applied to the live model" in payload["llamaCppNotice"]
+
+
+def test_set_llama_cpp_chat_format_persists(manager):
+    bus = SessionBus("settings-llama-cpp-chat-format-test")
+    register_settings(bus, manager)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "setLlamaCppChatFormat", ["chatml"]))
+
+    assert manager.get_llama_cpp_chat_format() == "chatml"
+
+
+def test_set_llama_cpp_n_ctx_persists_and_rejects_non_numeric(manager):
+    bus = SessionBus("settings-llama-cpp-n-ctx-test")
+    register_settings(bus, manager)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "setLlamaCppNCtx", [8192]))
+    assert manager.get_llama_cpp_n_ctx() == 8192
+
+    asyncio.run(bus.dispatch_intent("app-settings", "setLlamaCppNCtx", ["not-a-number"]))
+    assert manager.get_llama_cpp_n_ctx() == 8192  # unchanged, not coerced to garbage
+
+
+def test_set_llama_cpp_n_gpu_layers_persists(manager):
+    bus = SessionBus("settings-llama-cpp-n-gpu-layers-test")
+    register_settings(bus, manager)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "setLlamaCppNGpuLayers", [20]))
+
+    assert manager.get_llama_cpp_n_gpu_layers() == 20
+
+
+def test_set_llama_cpp_n_threads_persists(manager):
+    bus = SessionBus("settings-llama-cpp-n-threads-test")
+    register_settings(bus, manager)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "setLlamaCppNThreads", [4]))
+
+    assert manager.get_llama_cpp_n_threads() == 4
+
+
+def test_set_llama_cpp_runtime_fields_read_and_write_atomically_across_concurrent_calls(manager, monkeypatch):
+    # Mirrors R7.4b's set_ollama_model_assignment atomicity regression test:
+    # set_llama_cpp_runtime requires ALL FOUR kwargs every call (no partial
+    # update), so a stale pre-await read of the "current" values would
+    # silently revert a concurrent change to a DIFFERENT runtime field
+    # landing in the window between this call's read and its write.
+    real_apply = settings_module._apply
+    injected = {"done": False}
+
+    def _apply_with_a_concurrent_runtime_change_in_the_window(mutation, *args):
+        if not injected["done"]:
+            injected["done"] = True
+            manager.set_llama_cpp_runtime(n_ctx=4096, n_gpu_layers=0, n_threads=99, chat_format="")
+        return real_apply(mutation, *args)
+
+    monkeypatch.setattr(settings_module, "_apply", _apply_with_a_concurrent_runtime_change_in_the_window)
+    bus = SessionBus("settings-llama-cpp-runtime-race-test")
+    register_settings(bus, manager)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "setLlamaCppNCtx", [16384]))
+
+    assert injected["done"], "the concurrent write never ran - the test no longer exercises the window"
+    assert manager.get_llama_cpp_n_ctx() == 16384
+    # Must NOT be reverted - the concurrently-set n_threads must survive.
+    assert manager.get_llama_cpp_n_threads() == 99
+
+
+def test_pick_llama_cpp_chat_model_file_stages_path_when_a_file_is_picked(manager, monkeypatch):
+    async def _fake_pick_file(file_types=(), directory=""):
+        return "C:/models/chat.gguf"
+
+    monkeypatch.setattr(native_dialogs, "pick_file", _fake_pick_file)
+    bus = SessionBus("settings-llama-cpp-pick-chat-file-test")
+    register_settings(bus, manager)
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "pickLlamaCppChatModelFile", []))
+
+    assert recorder.messages[-1]["payload"]["llamaCppChatModelPath"] == "C:/models/chat.gguf"
+    # Staged only - never persisted until Save.
+    assert manager.get_llama_cpp_chat_model_path() == ""
+
+
+def test_pick_llama_cpp_chat_model_file_does_nothing_when_the_dialog_is_cancelled(manager, monkeypatch):
+    async def _fake_pick_file(file_types=(), directory=""):
+        return None
+
+    monkeypatch.setattr(native_dialogs, "pick_file", _fake_pick_file)
+    bus = SessionBus("settings-llama-cpp-pick-chat-file-cancel-test")
+    register_settings(bus, manager)
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "pickLlamaCppChatModelFile", []))
+
+    assert recorder.messages == []  # no publish at all when nothing was picked
+
+
+def test_pick_llama_cpp_title_model_file_stages_path(manager, monkeypatch):
+    async def _fake_pick_file(file_types=(), directory=""):
+        return "C:/models/title.gguf"
+
+    monkeypatch.setattr(native_dialogs, "pick_file", _fake_pick_file)
+    bus = SessionBus("settings-llama-cpp-pick-title-file-test")
+    register_settings(bus, manager)
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "pickLlamaCppTitleModelFile", []))
+
+    assert recorder.messages[-1]["payload"]["llamaCppTitleModelPath"] == "C:/models/title.gguf"
+    assert manager.get_llama_cpp_title_model_override_path() == ""
+
+
+def test_set_llama_cpp_chat_model_path_stages_without_persisting(manager):
+    bus = SessionBus("settings-llama-cpp-set-chat-path-test")
+    register_settings(bus, manager)
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "setLlamaCppChatModelPath", ["C:/models/scanned.gguf"]))
+
+    assert recorder.messages[-1]["payload"]["llamaCppChatModelPath"] == "C:/models/scanned.gguf"
+    assert manager.get_llama_cpp_chat_model_path() == ""
+
+
+def test_set_llama_cpp_title_model_path_stages_without_persisting(manager):
+    bus = SessionBus("settings-llama-cpp-set-title-path-test")
+    register_settings(bus, manager)
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "setLlamaCppTitleModelPath", ["C:/models/scanned-title.gguf"]))
+
+    assert recorder.messages[-1]["payload"]["llamaCppTitleModelPath"] == "C:/models/scanned-title.gguf"
+    assert manager.get_llama_cpp_title_model_override_path() == ""
+
+
+def test_scan_llama_cpp_system_persists_results_and_reports_done(manager, monkeypatch):
+    monkeypatch.setattr(
+        api_provider,
+        "scan_local_llama_cpp_models",
+        lambda scan_path: {"models": ["C:/models/a.gguf"], "scan_mode": "system", "scan_path": "", "locations": ["C:/models"], "truncated": False},
+    )
+    bus = SessionBus("settings-llama-cpp-scan-test")
+    register_settings(bus, manager)
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "scanLlamaCppSystem", []))
+
+    assert manager.get_llama_cpp_scanned_models() == ["C:/models/a.gguf"]
+    payload = recorder.messages[-1]["payload"]
+    assert payload["llamaCppScanStatus"] == "done"
+    assert payload["llamaCppNotice"] == ""
+
+
+def test_scan_llama_cpp_system_reports_truncated_scans(manager, monkeypatch):
+    monkeypatch.setattr(
+        api_provider,
+        "scan_local_llama_cpp_models",
+        lambda scan_path: {"models": [], "scan_mode": "system", "scan_path": "", "locations": [], "truncated": True},
+    )
+    bus = SessionBus("settings-llama-cpp-scan-truncated-test")
+    register_settings(bus, manager)
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "scanLlamaCppSystem", []))
+
+    payload = recorder.messages[-1]["payload"]
+    assert payload["llamaCppScanStatus"] == "done"
+    assert "stopped early" in payload["llamaCppNotice"]
+
+
+def test_scan_llama_cpp_system_reports_error_on_a_genuine_exception(manager, monkeypatch):
+    def _boom(scan_path):
+        raise RuntimeError("Scan folder does not exist: /nope")
+
+    monkeypatch.setattr(api_provider, "scan_local_llama_cpp_models", _boom)
+    bus = SessionBus("settings-llama-cpp-scan-error-test")
+    register_settings(bus, manager)
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "scanLlamaCppSystem", []))
+
+    payload = recorder.messages[-1]["payload"]
+    assert payload["llamaCppScanStatus"] == "error"
+    assert "Scan folder does not exist" in payload["llamaCppNotice"]
+    assert manager.get_llama_cpp_scanned_models() == []
+
+
+def test_scan_llama_cpp_system_is_a_no_op_while_already_running(manager, monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        api_provider, "scan_local_llama_cpp_models", lambda scan_path: calls.append(1) or {"models": []}
+    )
+    bus = SessionBus("settings-llama-cpp-scan-no-op-test")
+    register_settings(bus, manager)
+
+    async def _run():
+        first = asyncio.create_task(bus.dispatch_intent("app-settings", "scanLlamaCppSystem", []))
+        await asyncio.sleep(0)
+        await bus.dispatch_intent("app-settings", "scanLlamaCppSystem", [])
+        await first
+
+    asyncio.run(_run())
+    assert len(calls) == 1
+
+
+def test_scan_llama_cpp_system_persist_failure_reports_error_and_does_not_strand_the_running_gate(manager, monkeypatch):
+    monkeypatch.setattr(
+        api_provider,
+        "scan_local_llama_cpp_models",
+        lambda scan_path: {"models": ["a.gguf"], "scan_mode": "system", "scan_path": "", "locations": []},
+    )
+
+    def _boom(*a, **k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(SettingsManager, "set_llama_cpp_model_scan_cache", _boom)
+    bus = SessionBus("settings-llama-cpp-scan-persist-failure-test")
+    register_settings(bus, manager)
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "scanLlamaCppSystem", []))
+
+    payload = recorder.messages[-1]["payload"]
+    assert payload["llamaCppScanStatus"] == "error"
+    assert "disk full" in payload["llamaCppNotice"]
+
+    calls = []
+    monkeypatch.setattr(SettingsManager, "set_llama_cpp_model_scan_cache", lambda *a, **k: calls.append(1))
+    asyncio.run(bus.dispatch_intent("app-settings", "scanLlamaCppSystem", []))
+    assert calls == [1]
+
+
+def test_pick_llama_cpp_scan_folder_scans_the_picked_folder(manager, monkeypatch):
+    async def _fake_pick_folder(directory=""):
+        return "C:/models/gguf"
+
+    monkeypatch.setattr(native_dialogs, "pick_folder", _fake_pick_folder)
+    monkeypatch.setattr(
+        api_provider,
+        "scan_local_llama_cpp_models",
+        lambda scan_path: {"models": ["a.gguf"], "scan_mode": "folder", "scan_path": scan_path, "locations": [scan_path]},
+    )
+    bus = SessionBus("settings-llama-cpp-pick-scan-folder-test")
+    register_settings(bus, manager)
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "pickLlamaCppScanFolder", []))
+
+    assert manager.get_llama_cpp_scanned_models() == ["a.gguf"]
+    assert recorder.messages[-1]["payload"]["llamaCppScanStatus"] == "done"
+
+
+def test_pick_llama_cpp_scan_folder_is_a_no_op_when_cancelled(manager, monkeypatch):
+    async def _fake_pick_folder(directory=""):
+        return None
+
+    calls = []
+    monkeypatch.setattr(native_dialogs, "pick_folder", _fake_pick_folder)
+    monkeypatch.setattr(api_provider, "scan_local_llama_cpp_models", lambda scan_path: calls.append(1) or {"models": []})
+    bus = SessionBus("settings-llama-cpp-pick-scan-folder-cancel-test")
+    register_settings(bus, manager)
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "pickLlamaCppScanFolder", []))
+
+    assert calls == []
+    assert recorder.messages[-1]["payload"]["llamaCppScanStatus"] == "idle"
+
+
+def test_pick_llama_cpp_scan_folder_is_a_no_op_while_already_running(manager, monkeypatch):
+    picker_calls = []
+
+    async def _fake_pick_folder(directory=""):
+        picker_calls.append(1)
+        return "C:/models"
+
+    monkeypatch.setattr(native_dialogs, "pick_folder", _fake_pick_folder)
+    monkeypatch.setattr(api_provider, "scan_local_llama_cpp_models", lambda scan_path: {"models": []})
+    bus = SessionBus("settings-llama-cpp-pick-scan-folder-no-op-test")
+    register_settings(bus, manager)
+
+    async def _run():
+        first = asyncio.create_task(bus.dispatch_intent("app-settings", "pickLlamaCppScanFolder", []))
+        await asyncio.sleep(0)
+        await bus.dispatch_intent("app-settings", "pickLlamaCppScanFolder", [])
+        await first
+
+    asyncio.run(_run())
+    assert len(picker_calls) == 1
+
+
+def test_pick_llama_cpp_scan_folder_dialog_failure_reports_error_and_does_not_strand_the_running_gate(manager, monkeypatch):
+    # Same reentrancy-gate hazard fixed above for pick_ollama_scan_folder.
+    async def _boom(directory=""):
+        raise RuntimeError("native dialog backend crashed")
+
+    monkeypatch.setattr(native_dialogs, "pick_folder", _boom)
+    bus = SessionBus("settings-llama-cpp-pick-scan-folder-dialog-failure-test")
+    register_settings(bus, manager)
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "pickLlamaCppScanFolder", []))
+
+    payload = recorder.messages[-1]["payload"]
+    assert payload["llamaCppScanStatus"] == "error"
+    assert "native dialog backend crashed" in payload["llamaCppNotice"]
+
+    calls = []
+
+    async def _fake_pick_folder(directory=""):
+        calls.append(1)
+        return None
+
+    monkeypatch.setattr(native_dialogs, "pick_folder", _fake_pick_folder)
+    asyncio.run(bus.dispatch_intent("app-settings", "pickLlamaCppScanFolder", []))
+    assert calls == [1]
+
+
+def test_save_llama_cpp_settings_rejects_missing_chat_path(manager):
+    bus = SessionBus("settings-llama-cpp-save-missing-chat-test")
+    register_settings(bus, manager)
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "saveLlamaCppSettings", []))
+
+    assert recorder.messages[-1]["payload"]["llamaCppNotice"] == "Chat Model File cannot be empty."
+    assert manager.get_llama_cpp_chat_model_path() == ""
+
+
+def test_save_llama_cpp_settings_rejects_a_chat_path_that_is_not_a_real_file(manager):
+    bus = SessionBus("settings-llama-cpp-save-nonexistent-chat-test")
+    register_settings(bus, manager)
+    asyncio.run(bus.dispatch_intent("app-settings", "setLlamaCppChatModelPath", ["C:/does/not/exist.gguf"]))
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "saveLlamaCppSettings", []))
+
+    assert recorder.messages[-1]["payload"]["llamaCppNotice"] == "Chat model file was not found: C:/does/not/exist.gguf"
+    assert manager.get_llama_cpp_chat_model_path() == ""
+
+
+def test_save_llama_cpp_settings_rejects_a_chat_path_with_the_wrong_extension(manager, tmp_path):
+    not_gguf = tmp_path / "chat.txt"
+    not_gguf.write_text("not a real model")
+    bus = SessionBus("settings-llama-cpp-save-wrong-ext-test")
+    register_settings(bus, manager)
+    asyncio.run(bus.dispatch_intent("app-settings", "setLlamaCppChatModelPath", [str(not_gguf)]))
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "saveLlamaCppSettings", []))
+
+    assert recorder.messages[-1]["payload"]["llamaCppNotice"] == "Chat Model File must point to a .gguf file."
+    assert manager.get_llama_cpp_chat_model_path() == ""
+
+
+def test_save_llama_cpp_settings_rejects_an_invalid_title_path_even_with_a_valid_chat_path(manager, tmp_path):
+    chat_gguf = tmp_path / "chat.gguf"
+    chat_gguf.write_text("fake gguf bytes")
+    bus = SessionBus("settings-llama-cpp-save-invalid-title-test")
+    register_settings(bus, manager)
+    asyncio.run(bus.dispatch_intent("app-settings", "setLlamaCppChatModelPath", [str(chat_gguf)]))
+    asyncio.run(bus.dispatch_intent("app-settings", "setLlamaCppTitleModelPath", ["C:/does/not/exist-title.gguf"]))
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "saveLlamaCppSettings", []))
+
+    assert (
+        recorder.messages[-1]["payload"]["llamaCppNotice"]
+        == "Chat naming model file was not found: C:/does/not/exist-title.gguf"
+    )
+    assert manager.get_llama_cpp_chat_model_path() == ""  # nothing persisted, not even the valid chat path
+
+
+def test_save_llama_cpp_settings_persists_on_success_with_an_optional_blank_title(manager, tmp_path, monkeypatch):
+    monkeypatch.setattr(api_provider, "is_local_llama_cpp_mode", lambda: False)
+    chat_gguf = tmp_path / "chat.gguf"
+    chat_gguf.write_text("fake gguf bytes")
+    bus = SessionBus("settings-llama-cpp-save-success-test")
+    register_settings(bus, manager)
+    asyncio.run(bus.dispatch_intent("app-settings", "setLlamaCppChatModelPath", [str(chat_gguf)]))
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "saveLlamaCppSettings", []))
+
+    assert manager.get_llama_cpp_chat_model_path() == str(chat_gguf)
+    assert manager.get_llama_cpp_title_model_override_path() == ""
+    assert recorder.messages[-1]["payload"]["llamaCppNotice"] == ""
+
+
+def test_save_llama_cpp_settings_reapplies_live_only_when_llama_cpp_is_the_active_provider(manager, tmp_path, monkeypatch):
+    chat_gguf = tmp_path / "chat.gguf"
+    chat_gguf.write_text("fake gguf bytes")
+    calls = []
+    monkeypatch.setattr(api_provider, "initialize_local_provider", lambda *a, **k: calls.append(a))
+    bus = SessionBus("settings-llama-cpp-save-reapply-gate-test")
+    register_settings(bus, manager)
+    asyncio.run(bus.dispatch_intent("app-settings", "setLlamaCppChatModelPath", [str(chat_gguf)]))
+
+    monkeypatch.setattr(api_provider, "is_local_llama_cpp_mode", lambda: False)
+    asyncio.run(bus.dispatch_intent("app-settings", "saveLlamaCppSettings", []))
+    assert calls == []
+    assert manager.get_llama_cpp_chat_model_path() == str(chat_gguf)  # still persists even when not live-active
+
+    asyncio.run(bus.dispatch_intent("app-settings", "setLlamaCppChatModelPath", [str(chat_gguf)]))
+    monkeypatch.setattr(api_provider, "is_local_llama_cpp_mode", lambda: True)
+    asyncio.run(bus.dispatch_intent("app-settings", "saveLlamaCppSettings", []))
+    assert len(calls) == 1
+    assert calls[0][0] == config.LOCAL_PROVIDER_LLAMACPP
+    assert calls[0][1]["chat_model_path"] == str(chat_gguf)
+
+
+def test_save_llama_cpp_settings_aborts_without_persisting_when_the_live_reapply_fails(manager, tmp_path, monkeypatch):
+    # The most important defect this shape has to catch: a bad live-init
+    # call (e.g. an invalid GGUF file that fails to load) must not
+    # persist the new paths at all - Save should be all-or-nothing.
+    chat_gguf = tmp_path / "chat.gguf"
+    chat_gguf.write_text("fake gguf bytes")
+    monkeypatch.setattr(api_provider, "is_local_llama_cpp_mode", lambda: True)
+
+    def _boom(*a, **k):
+        raise RuntimeError("failed to load model")
+
+    monkeypatch.setattr(api_provider, "initialize_local_provider", _boom)
+    bus = SessionBus("settings-llama-cpp-save-reapply-failure-test")
+    register_settings(bus, manager)
+    asyncio.run(bus.dispatch_intent("app-settings", "setLlamaCppChatModelPath", [str(chat_gguf)]))
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "saveLlamaCppSettings", []))
+
+    assert "Invalid Llama.cpp configuration" in recorder.messages[-1]["payload"]["llamaCppNotice"]
+    assert manager.get_llama_cpp_chat_model_path() == ""  # NOT persisted - the whole save aborted
