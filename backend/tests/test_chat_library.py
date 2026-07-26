@@ -5,6 +5,7 @@ import asyncio
 import contextlib
 import json
 import sqlite3
+import threading
 import time
 
 import pytest
@@ -640,39 +641,63 @@ def test_a_user_save_waits_out_a_real_in_flight_autosave_tick_instead_of_being_d
     # claim/release itself, which meant mutating the actual _guarded_tick
     # (dropping its owner tag, or its release signal) left the test green -
     # the production wiring was never under test at all.
+    # This test WAS flaky and failed CI once (a 1.0s wall-clock assertion
+    # against a 2.0s production timeout, while racing a loop configured to
+    # re-claim every 0.02s - a 2x margin on a contended 2-core runner). The
+    # fix is to remove the race, not to widen the bound: exactly ONE real
+    # tick is driven, its duration is controlled by a gate rather than a
+    # sleep, and no second tick can ever re-claim mid-handoff. It still
+    # drives the REAL _guarded_tick, so the mutations this exists to catch
+    # (dropping the owner tag, or dropping the release signal) still fail it.
     bus, document, notifications = _library_session(db_path)
     document.add_chat_node(0, 0, "hello", is_user=True)
 
+    tick_is_holding_the_guard = threading.Event()
+    let_the_tick_finish = threading.Event()
     real_save = autosave_module.save_chat_atomically_row
 
-    def slow_save(*args, **kwargs):
-        # Runs inside autosave's own asyncio.to_thread, so this holds the
-        # guard across a real await point exactly like a slow disk would.
-        time.sleep(0.1)
+    def gated_save(*args, **kwargs):
+        # Runs inside autosave's own asyncio.to_thread, so the guard is held
+        # across a real await point exactly like a slow disk would - but for
+        # a duration this test controls instead of a hoped-for sleep.
+        tick_is_holding_the_guard.set()
+        assert let_the_tick_finish.wait(timeout=30), "test never released the tick"
         return real_save(*args, **kwargs)
 
-    monkeypatch.setattr(autosave_module, "save_chat_atomically_row", slow_save)
+    monkeypatch.setattr(autosave_module, "save_chat_atomically_row", gated_save)
+    # Generous margin: a missing release signal makes the save sit out this
+    # whole timeout, so 30s-vs-5s below still kills that mutation, with far
+    # more headroom for CI jitter than the original 2s-vs-1s.
+    monkeypatch.setattr(chat_library_module, "AUTOSAVE_YIELD_TIMEOUT_SECONDS", 30.0)
 
     async def _run():
+        # interval_seconds is deliberately huge: the periodic loop must never
+        # fire on its own here. The single tick below is driven directly, so
+        # there is no second tick to steal the guard back between this tick
+        # releasing and the user's save claiming.
         register_autosave(
             bus, db_path, document, notifications,
-            bus.chat_mutation_guard, bus.chat_save_state, interval_seconds=0.02,
+            bus.chat_mutation_guard, bus.chat_save_state, interval_seconds=3600,
         )
+        tick = asyncio.create_task(bus.autosave_guarded_tick())
         try:
-            for _ in range(200):  # wait for a real tick to claim the guard
-                if bus.chat_mutation_guard["owner"] == AUTOSAVE_OWNER:
-                    break
-                await asyncio.sleep(0.01)
+            await asyncio.to_thread(tick_is_holding_the_guard.wait, 30)
             assert bus.chat_mutation_guard["owner"] == AUTOSAVE_OWNER, "no real tick ever started"
 
-            # Bounded well under AUTOSAVE_YIELD_TIMEOUT_SECONDS (2.0s): the
-            # save must proceed as soon as the tick RELEASES, not after
-            # sitting out the whole timeout. Without _guarded_tick's release
-            # signal this hangs past 1s and fails here.
-            await asyncio.wait_for(
-                bus.dispatch_intent("app-chat-library", "saveChat", []), timeout=1.0
-            )
+            # The user clicks Save while the tick genuinely holds the guard.
+            save = asyncio.create_task(bus.dispatch_intent("app-chat-library", "saveChat", []))
+            await asyncio.sleep(0)  # let it reach the yield-wait
+            let_the_tick_finish.set()
+
+            # Must proceed as soon as the tick RELEASES rather than sitting
+            # out the (patched, 30s) yield timeout.
+            await asyncio.wait_for(save, timeout=5.0)
+            await tick
         finally:
+            let_the_tick_finish.set()
+            tick.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await tick
             bus.autosave_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await bus.autosave_task
