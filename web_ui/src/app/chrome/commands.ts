@@ -179,6 +179,26 @@ export function buildCommands(
       enabled: () => true,
     },
     {
+      // R7.5a: real, ungated - store.newChat() already exists (wired from
+      // the chat-library dialog); this just gives the palette its own entry
+      // point to the same intent, same posture as "add-note" above.
+      id: "new-chat",
+      name: "New Chat",
+      aliases: ["new session", "clear canvas", "start over"],
+      run: () => store.newChat(),
+      enabled: () => true,
+    },
+    {
+      // R7.5a: zero new capability - rf.fitView with a nodes filter is the
+      // same primitive "fit-all" above already uses, just scoped to the
+      // current selection instead of every node.
+      id: "focus-selection",
+      name: "Focus on Selection",
+      aliases: ["zoom to selection", "frame selection view"],
+      run: () => rf.fitView({ nodes: selectedNodeIds().map((id) => ({ id })), duration: 200 }),
+      enabled: hasSelection,
+    },
+    {
       id: "create-frame",
       name: "Create Frame",
       aliases: ["group into frame", "frame selection"],

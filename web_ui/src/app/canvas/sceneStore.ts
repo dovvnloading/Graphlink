@@ -548,6 +548,14 @@ export class SceneStore {
     this.transport.intent("app-chat-library", "saveChat", []);
   }
 
+  // R7.5a: command-palette's "New Chat" - same "app-chat-library", not
+  // "scene", topic-ownership reasoning as saveChat above; newChat already
+  // exists and is wired from the chat-library dialog, this just gives the
+  // command palette a second entry point to the same real intent.
+  newChat(): void {
+    this.transport.intent("app-chat-library", "newChat", []);
+  }
+
   // -- R6.1: Notes/Frames/Containers ----------------------------------------
   //
   // Mirrors backend/canvas.py's register_canvas() intent names/argument

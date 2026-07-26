@@ -271,6 +271,43 @@ def register_plugins(
             await bus.publish("scene")
             return note.id
 
+        if name == "Conversation Node":
+            # R7.5a: ConversationNode has existed since R3.25 with zero
+            # creation path - add_conversation_node was only ever reachable
+            # from backend tests, never from a real UI action. Same
+            # "branch-point child, real valid parent required" posture as
+            # every real node-creation plugin above.
+            if not parent_node_id or parent_node_id not in canvas_document.nodes:
+                notifications.show(
+                    "Please select a valid node to branch from before adding a Conversation Node.",
+                    "warning",
+                )
+                await bus.publish("notification")
+                return None
+            parent = canvas_document.nodes[parent_node_id]
+            node = canvas_document.add_conversation_node(parent.x, parent.y + MESSAGE_VERTICAL_SPACING, parent_node_id)
+            await bus.publish("scene")
+            return node.id
+
+        if name == "HTML Renderer":
+            # R7.5a: HtmlViewNode has existed since R3.17 with zero creation
+            # path, same gap class as Conversation Node above. Starts with
+            # empty html_content - the same "create blank, then edit in
+            # place" posture add_note's System Prompt branch above and the
+            # plain "Add Note" command already use, since the plugin picker
+            # has no field to source initial HTML from.
+            if not parent_node_id or parent_node_id not in canvas_document.nodes:
+                notifications.show(
+                    "Please select a valid node to branch from before adding an HTML Renderer node.",
+                    "warning",
+                )
+                await bus.publish("notification")
+                return None
+            parent = canvas_document.nodes[parent_node_id]
+            node = canvas_document.add_html_node(parent.x, parent.y + MESSAGE_VERTICAL_SPACING, "", parent_node_id)
+            await bus.publish("scene")
+            return node.id
+
         notifications.show(f'"{name}" node creation lands in R3/R5.', "info")
         await bus.publish("notification")
         return None
