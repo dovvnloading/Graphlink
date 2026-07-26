@@ -1,6 +1,6 @@
 <div align="center">
 
-# Graphlink
+# GraphLink
 
 ![License](https://img.shields.io/badge/License-MIT-green)
 ![Python](https://img.shields.io/badge/Python-3.10%2B-blue)
