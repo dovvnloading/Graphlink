@@ -66,6 +66,15 @@ _API_TASK_KEYS = (
     config.TASK_WEB_SUMMARIZE,
 )
 
+# The three providers the page can actually display. Used to bound the
+# per-provider catalog-state dict: without it, that dict is keyed by a
+# raw client-supplied string and grows without limit.
+_KNOWN_API_PROVIDERS = (
+    config.API_PROVIDER_OPENAI,
+    config.API_PROVIDER_ANTHROPIC,
+    config.API_PROVIDER_GEMINI,
+)
+
 # Every persistence-touching mutation runs in a worker thread
 # (asyncio.to_thread) so SettingsManager._save_state's json-dump + fsync +
 # atomic-replace never stalls the event loop (and with it, every session's
@@ -82,7 +91,7 @@ def _apply(mutation: Callable[..., None], *args: Any) -> None:
         mutation(*args)
 
 
-def _redact(text: str, secret: str) -> str:
+def _redact(text: str, secret: Any) -> str:
     # Post-review fix: some HTTP client libraries embed request parameters
     # (including a rejected API key) directly in exception text - the
     # legacy bridge this page replaces redacted for exactly this reason
@@ -90,7 +99,15 @@ def _redact(text: str, secret: str) -> str:
     # Applied before any exception text reaches a WS-broadcast message, so
     # the write-only-key guarantee holds on the failure path too, not just
     # the happy path.
-    if not secret:
+    #
+    # Second-pass fix: the isinstance check is load-bearing, not defensive
+    # noise. Intent arguments arrive as raw JSON off the wire with no
+    # coercion anywhere in the dispatch path, and both call sites are
+    # inside `except` blocks - where a TypeError from str.replace would
+    # NOT be caught by its own `try` and would escape the handler, leaving
+    # the catalog pinned at "loading" (which disables the Load button) for
+    # the life of the process.
+    if not isinstance(secret, str) or not secret:
         return text
     return text.replace(secret, "***")
 
@@ -232,12 +249,60 @@ def register_settings(
         await bus.publish("app-settings")
 
     async def load_api_models(provider: str, api_key: str, base_url: str = ""):
+        # Second-pass fix: coerce every wire argument BEFORE it is used for
+        # anything - `provider` in particular is used as a dict key below,
+        # and an unhashable JSON value (array/object) would raise TypeError
+        # straight out of the handler. Intent args reach here as raw JSON
+        # with no validation anywhere in the dispatch path.
+        provider = str(provider)
+        base_url = str(base_url).strip()
+
         # Gemini has no live catalog endpoint wired (legacy never showed the
         # Load button for it either) - a stale/misbehaving client asking
         # anyway gets a clean error rather than a confusing initialize_api
         # call with the wrong semantics.
         if provider not in (config.API_PROVIDER_OPENAI, config.API_PROVIDER_ANTHROPIC):
-            api_catalog_state[provider] = {"status": "error", "message": f"{provider} does not support catalog refresh."}
+            # Only a provider the UI can actually VIEW gets a stored status
+            # slot: build_payload surfaces the slot for the viewed provider
+            # only, so a slot for an unknown string could never be read -
+            # it would just grow this dict without bound on a key the client
+            # controls.
+            if provider in _KNOWN_API_PROVIDERS:
+                api_catalog_state[provider] = {
+                    "status": "error",
+                    "message": f"{provider} does not support catalog refresh.",
+                }
+                await bus.publish("app-settings")
+            return
+
+        if provider == config.API_PROVIDER_OPENAI and not base_url:
+            # Restores a guard both legacy predecessors had. Without it an
+            # empty Base URL silently falls through to api_provider's own
+            # "https://api.openai.com/v1" default, sending a key meant for a
+            # self-hosted proxy to OpenAI's public API instead.
+            api_catalog_state[provider] = {
+                "status": "error",
+                "message": "Please enter the Base URL for the OpenAI-compatible provider.",
+            }
+            await bus.publish("app-settings")
+            return
+
+        # This page deliberately never sends the saved key to the client
+        # (see the module docstring), so a user who already has a key saved
+        # opens the dialog with a blank field. Legacy pre-filled the field
+        # and therefore always had a key to test with; the write-only port
+        # has to make up for that here instead, or Load is simply unusable
+        # for every already-configured user. Falling back server-side keeps
+        # the plaintext key off the wire entirely.
+        key = str(api_key).strip()
+        if not key:
+            key = (
+                manager.get_openai_key()
+                if provider == config.API_PROVIDER_OPENAI
+                else manager.get_anthropic_key()
+            )
+        if not key:
+            api_catalog_state[provider] = {"status": "error", "message": "Please enter the API Key."}
             await bus.publish("app-settings")
             return
 
@@ -254,8 +319,8 @@ def register_settings(
             await asyncio.to_thread(
                 api_provider.initialize_api,
                 provider,
-                str(api_key),
-                str(base_url) if provider == config.API_PROVIDER_OPENAI else None,
+                key,
+                base_url if provider == config.API_PROVIDER_OPENAI else None,
             )
             descriptors = await asyncio.to_thread(api_provider.get_available_model_descriptors)
             # Post-review fix: api_provider's provider globals are process-
@@ -291,7 +356,11 @@ def register_settings(
                 for descriptor in descriptors
             ]
         except Exception as exc:  # noqa: BLE001 - redacted, then surfaced, matching legacy's error label
-            message = _redact(str(exc), api_key)
+            # Redact the EFFECTIVE key (which may be the stored one picked
+            # up by the fallback above), not the submitted argument - the
+            # effective key is what actually reached the provider SDK and
+            # so is what can come back embedded in its exception text.
+            message = _redact(str(exc), key)
             api_catalog_state[provider] = {
                 "status": "error",
                 "message": f"Catalog refresh failed: {message}\nSaved/custom model IDs remain usable if the endpoint supports them.",
@@ -318,6 +387,18 @@ def register_settings(
         # select a model" warning instead.
         if not isinstance(models_by_task, dict):
             models_by_task = {}
+
+        if provider == config.API_PROVIDER_OPENAI and not base_url:
+            # Same guard as load_api_models, and the more important of the
+            # two: an empty base_url persisted here is read straight back
+            # by SettingsManager.get_api_base_url (whose own default only
+            # applies to a MISSING key, not a stored ""), so every later
+            # provider bootstrap silently re-points the saved key at
+            # api.openai.com.
+            if notifications is not None:
+                notifications.show("Please enter the Base URL for the OpenAI-compatible provider.", "warning")
+                await bus.publish("notification")
+            return
 
         if not api_key:
             if notifications is not None:
@@ -384,7 +465,28 @@ def register_settings(
         await bus.publish("app-settings")
 
     async def reset_api_settings():
-        await asyncio.to_thread(_apply, manager.reset_api_settings)
+        def _reset() -> None:
+            manager.reset_api_settings()
+            # SettingsManager.reset_api_settings intentionally leaves
+            # api_model_catalog_by_provider alone (it is shared with the
+            # legacy Qt bridge), but "All API settings have been cleared"
+            # has to mean it - otherwise the page keeps offering the old
+            # provider's model catalog after the reset. Clearing through
+            # the existing public setter rather than editing the shared
+            # legacy module.
+            for known in _KNOWN_API_PROVIDERS:
+                manager.set_api_model_catalog([], known)
+
+        await asyncio.to_thread(_apply, _reset)
+        # Transient per-provider status/message is UI state, not manager
+        # state, so it has to be cleared here too - otherwise the previous
+        # "Catalog refreshed - N model(s)" success banner survives a reset
+        # that just deleted that very catalog.
+        api_catalog_state.clear()
+        # Legacy's reset_settings snapped the provider dropdown back to
+        # OpenAI-Compatible; reset_api_settings restores exactly that as
+        # the persisted provider, so the viewed provider follows it.
+        viewing_api_provider["value"] = manager.get_api_provider()
         if notifications is not None:
             notifications.show("All API settings have been cleared.", "success")
             await bus.publish("notification")
