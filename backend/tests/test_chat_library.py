@@ -2,15 +2,20 @@
 saveChat/newChat)."""
 
 import asyncio
+import contextlib
 import json
 import sqlite3
+import time
 
 import pytest
 
 import backend.autosave as autosave_module
-from backend.autosave import autosave_tick
+import backend.chat_library as chat_library_module
+from backend.autosave import autosave_tick, register_autosave
 from backend.canvas import SceneDocument
 from backend.chat_library import (
+    AUTOSAVE_OWNER,
+    USER_OWNER,
     _fallback_title,
     _format_timestamp,
     _resolve_seed_message,
@@ -616,3 +621,175 @@ def test_deleting_a_different_chat_leaves_the_open_session_pointer_alone(db_path
 
     assert document.current_chat_id == saved_id
     assert bus.chat_save_state["chat_id"] == saved_id
+
+
+# -- audit fix: a background autosave tick must never beat the user to their
+# -- own data. The guard is shared, so it has to be ownership-aware.
+
+
+def test_a_user_save_waits_out_a_real_in_flight_autosave_tick_instead_of_being_dropped(db_path, monkeypatch):
+    # Audit finding (the fix this test exists for): _serialize_mutating_intent
+    # DROPS a blocked intent and warns. That contract was written when only a
+    # user-initiated intent could hold the flag. R6.6 then had a BACKGROUND
+    # task claim the same flag, so an autosave tick that happened to be
+    # mid-write made the user's own Save vanish - with a warning naming an
+    # operation they never started.
+    #
+    # Drives the REAL register_autosave loop, deliberately: an earlier version
+    # of this test used a hand-written double that reimplemented the
+    # claim/release itself, which meant mutating the actual _guarded_tick
+    # (dropping its owner tag, or its release signal) left the test green -
+    # the production wiring was never under test at all.
+    bus, document, notifications = _library_session(db_path)
+    document.add_chat_node(0, 0, "hello", is_user=True)
+
+    real_save = autosave_module.save_chat_atomically_row
+
+    def slow_save(*args, **kwargs):
+        # Runs inside autosave's own asyncio.to_thread, so this holds the
+        # guard across a real await point exactly like a slow disk would.
+        time.sleep(0.1)
+        return real_save(*args, **kwargs)
+
+    monkeypatch.setattr(autosave_module, "save_chat_atomically_row", slow_save)
+
+    async def _run():
+        register_autosave(
+            bus, db_path, document, notifications,
+            bus.chat_mutation_guard, bus.chat_save_state, interval_seconds=0.02,
+        )
+        try:
+            for _ in range(200):  # wait for a real tick to claim the guard
+                if bus.chat_mutation_guard["owner"] == AUTOSAVE_OWNER:
+                    break
+                await asyncio.sleep(0.01)
+            assert bus.chat_mutation_guard["owner"] == AUTOSAVE_OWNER, "no real tick ever started"
+
+            # Bounded well under AUTOSAVE_YIELD_TIMEOUT_SECONDS (2.0s): the
+            # save must proceed as soon as the tick RELEASES, not after
+            # sitting out the whole timeout. Without _guarded_tick's release
+            # signal this hangs past 1s and fails here.
+            await asyncio.wait_for(
+                bus.dispatch_intent("app-chat-library", "saveChat", []), timeout=1.0
+            )
+        finally:
+            bus.autosave_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await bus.autosave_task
+
+    asyncio.run(_run())
+
+    assert notifications.visible and notifications.msg_type == "success", notifications.message
+    assert notifications.message.startswith("Saved "), "the user's Save must not be discarded"
+    assert document.current_chat_id is not None
+
+
+def test_a_user_save_still_loses_to_another_user_operation(db_path):
+    # The other direction is deliberate and must NOT change: two real user
+    # operations racing is an honest "you started two things" conflict.
+    bus, document, notifications = _library_session(db_path)
+    document.add_chat_node(0, 0, "hello", is_user=True)
+    bus.chat_mutation_guard["active"] = True
+    bus.chat_mutation_guard["owner"] = USER_OWNER
+
+    async def _run():
+        # Must be rejected IMMEDIATELY, not after sitting out the 2.0s
+        # autosave-yield timeout. Asserting the outcome alone would pass even
+        # if the wait were (wrongly) applied to user-vs-user conflicts too -
+        # the test would just get slower, which no assertion would notice.
+        await asyncio.wait_for(
+            bus.dispatch_intent("app-chat-library", "saveChat", []), timeout=0.5
+        )
+
+    asyncio.run(_run())
+
+    assert get_all_chats(db_path) == []
+    assert notifications.visible and notifications.msg_type == "warning"
+    assert "Another chat operation" in notifications.message
+
+
+def test_a_user_save_gives_up_with_an_honest_message_if_autosave_is_genuinely_stuck(db_path, monkeypatch):
+    # The wait is bounded: a tick stuck on sqlite's own 30s lock timeout must
+    # not freeze the UI. It degrades to the pre-fix drop - but with a message
+    # that names autosave rather than "another chat operation", which is what
+    # made the original warning read as a bug.
+    monkeypatch.setattr(chat_library_module, "AUTOSAVE_YIELD_TIMEOUT_SECONDS", 0.05)
+    bus, document, notifications = _library_session(db_path)
+    document.add_chat_node(0, 0, "hello", is_user=True)
+    bus.chat_mutation_guard["active"] = True
+    bus.chat_mutation_guard["owner"] = AUTOSAVE_OWNER
+    bus.chat_mutation_guard["released"].clear()
+
+    asyncio.run(bus.dispatch_intent("app-chat-library", "saveChat", []))
+
+    assert get_all_chats(db_path) == []
+    assert notifications.visible and notifications.msg_type == "warning"
+    assert "Autosave is still finishing" in notifications.message
+
+
+def test_the_guard_is_released_with_its_owner_cleared_after_a_normal_save(db_path):
+    bus, document, notifications = _library_session(db_path)
+    document.add_chat_node(0, 0, "hello", is_user=True)
+
+    asyncio.run(bus.dispatch_intent("app-chat-library", "saveChat", []))
+
+    guard = bus.chat_mutation_guard
+    assert guard["active"] is False
+    assert guard["owner"] is None
+    assert guard["released"].is_set()
+
+
+def test_the_yield_still_works_on_a_LATER_autosave_tick_not_just_the_first(db_path, monkeypatch):
+    # Mutation testing caught this gap: the test above only ever observes the
+    # FIRST tick to claim the guard, when `released` has never been set. Drop
+    # _guarded_tick's `released.clear()` and that test stays green - but from
+    # the second tick onward a waiting user intent would be woken instantly by
+    # the STALE signal from the previous tick, re-check, find the guard still
+    # held, and be dropped exactly as before the fix. A fix that works once and
+    # then quietly stops working is worse than no fix, so this pins the
+    # steady-state behavior rather than the first-run behavior.
+    bus, document, notifications = _library_session(db_path)
+    document.add_chat_node(0, 0, "hello", is_user=True)
+
+    real_save = autosave_module.save_chat_atomically_row
+
+    def slow_save(*args, **kwargs):
+        time.sleep(0.1)
+        return real_save(*args, **kwargs)
+
+    monkeypatch.setattr(autosave_module, "save_chat_atomically_row", slow_save)
+
+    async def _await_owner(expected):
+        for _ in range(300):
+            if bus.chat_mutation_guard["owner"] == expected:
+                return True
+            await asyncio.sleep(0.01)
+        return False
+
+    async def _run():
+        register_autosave(
+            bus, db_path, document, notifications,
+            bus.chat_mutation_guard, bus.chat_save_state, interval_seconds=0.02,
+        )
+        try:
+            assert await _await_owner(AUTOSAVE_OWNER), "no first tick"
+            assert await _await_owner(None), "first tick never released"
+            assert bus.chat_mutation_guard["released"].is_set()
+
+            # A real change, so the NEXT tick actually writes (and so holds the
+            # guard) instead of short-circuiting on the unchanged-content guard.
+            document.add_chat_node(300, 0, "a second message", is_user=True)
+            assert await _await_owner(AUTOSAVE_OWNER), "no second tick"
+
+            await asyncio.wait_for(
+                bus.dispatch_intent("app-chat-library", "saveChat", []), timeout=1.0
+            )
+        finally:
+            bus.autosave_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await bus.autosave_task
+
+    asyncio.run(_run())
+
+    assert notifications.visible and notifications.msg_type == "success", notifications.message
+    assert notifications.message.startswith("Saved ")
