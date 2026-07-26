@@ -146,3 +146,32 @@ def test_clear_github_token_intent(manager):
     asyncio.run(bus.dispatch_intent("app-settings", "clearGithubToken", []))
     assert manager.get_github_token() == ""
     assert settings_payload(manager)["githubTokenConfigured"] is False
+
+
+# -- R7.3: SettingsManager.schema_version (graphlink_licensing.py) - ported
+# -- from graphlink_app/tests/test_schema_version.py's own Qt-free class.
+# -- Its sibling TestChatPayloadSchemaVersion is NOT ported here: it exercises
+# -- graphlink_scene.ChatScene/graphlink_session.serializers.SceneSerializer,
+# -- both Qt-tainted with no backend/ equivalent to test against.
+
+
+def test_a_fresh_settings_file_has_the_current_schema_version(manager):
+    assert manager.get_schema_version() == SettingsManager.CURRENT_SCHEMA_VERSION
+
+
+def test_an_old_settings_file_without_schema_version_is_backfilled(tmp_path):
+    import json
+
+    state_file = tmp_path / "session.dat"
+    state_file.write_text(json.dumps({"theme": "mono"}), encoding="utf-8")
+
+    old_manager = SettingsManager(state_file)
+
+    # Backfilled in memory immediately, the same as every other pre-existing
+    # key here (theme, show_token_counter, ...) - none of those write back to
+    # disk until the next explicit set_*() call either, so schema_version
+    # matching that existing pattern is correct, not a gap.
+    assert old_manager.get_schema_version() == SettingsManager.CURRENT_SCHEMA_VERSION
+
+    old_manager.set_theme("mono")  # any setter call persists the whole (now-backfilled) state
+    assert json.loads(state_file.read_text(encoding="utf-8"))["schema_version"] == SettingsManager.CURRENT_SCHEMA_VERSION
