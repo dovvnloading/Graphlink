@@ -1,5 +1,11 @@
 """THE Qt-removal gate (doc/QT_REMOVAL_PLAN.md sections 0 and 3). Permanent.
 
+R7.1: relocated here from graphlink_app/tests/ - that directory is exactly
+what R7's own cutover phase deletes, and a gate whose entire purpose is
+enforcing Qt removal forever cannot live inside the tree being removed.
+`REPO_ROOT` below is one level shallower than before (this file now sits at
+tests/, not graphlink_app/tests/) to match.
+
 Burn-down mode (pin > 0): the count of Python files importing PySide6/PyQt -
 source AND tests, whole repo - must EXACTLY match qt_burndown.json. Adding a
 Qt import anywhere fails this test; removing Qt files fails it too until the
@@ -21,7 +27,7 @@ import json
 import re
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[1]
 PIN_PATH = REPO_ROOT / "qt_burndown.json"
 
 _EXCLUDED_DIRS = {".git", "node_modules", "dist", "__pycache__", ".venv", "venv"}

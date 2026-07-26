@@ -8,7 +8,7 @@ full-state envelopes, named intents) so the existing island payload schemas
 and generated TS types retarget without redesign.
 
 Zero Qt imports are permitted anywhere under this package - enforced by
-graphlink_app/tests/test_no_qt_anywhere.py.
+tests/test_no_qt_anywhere.py.
 """
 
 import sys
