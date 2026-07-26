@@ -2204,6 +2204,24 @@ def test_smart_guides_defaults_false_and_the_setter_publishes_scene():
     asyncio.run(run())
 
 
+def test_has_saved_chat_tracks_current_chat_id_without_exposing_it():
+    # R7.5c: the frontend's New Chat confirm needs legacy's full skip
+    # predicate ("empty canvas AND no current chat"), so scene_payload
+    # publishes the boolean shadow of current_chat_id - and only that. The
+    # row id itself stays server-side.
+    document = SceneDocument()
+    assert document.scene_payload()["hasSavedChat"] is False
+
+    document.current_chat_id = 7
+    payload = document.scene_payload()
+    assert payload["hasSavedChat"] is True
+    assert "currentChatId" not in payload
+    assert 7 not in payload.values()
+
+    document.current_chat_id = None
+    assert document.scene_payload()["hasSavedChat"] is False
+
+
 # -- R4.4a: Generate/Regenerate Image - domain-level resolvers ---------------
 
 

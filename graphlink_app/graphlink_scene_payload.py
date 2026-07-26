@@ -330,6 +330,11 @@ class SceneStatePayload:
     # R7.5b-3: the third and final canvas-visual parity fix - populated 1:1
     # from backend/canvas.py's SceneDocument.smart_guides.
     smartGuides: bool
+    # R7.5c: True when this scene corresponds to a saved chats.db row -
+    # derived from backend/canvas.py's SceneDocument.current_chat_id, which
+    # itself stays server-side. Lets the frontend evaluate legacy's New Chat
+    # confirm-skip predicate ("empty canvas AND no current chat").
+    hasSavedChat: bool
     dragFactor: float
     fontFamily: str
     fontSizePt: int

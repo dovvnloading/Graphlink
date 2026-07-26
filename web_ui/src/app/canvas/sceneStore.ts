@@ -26,6 +26,7 @@ export const initialSceneState: SceneState = {
   fadeConnectionsEnabled: false,
   orthogonalRouting: false,
   smartGuides: false,
+  hasSavedChat: false,
   dragFactor: 1,
   fontFamily: "Segoe UI",
   fontSizePt: 9,

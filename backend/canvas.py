@@ -755,9 +755,12 @@ class SceneDocument:
     # loadChat (backend/chat_library.py), left None for a fresh session, and
     # reset to None by clear_for_load/new_chat below (a freshly loaded OR
     # freshly cleared scene has no id of its own yet until the next load/
-    # save assigns one). Deliberately NOT part of scene_payload() - purely
-    # server-side bookkeeping the frontend never needs to read directly,
-    # same posture as gitlink_imported_root/code_sandbox_sandbox_id.
+    # save assigns one). The id ITSELF stays server-side - the frontend has
+    # no use for a chats.db row number, same posture as
+    # gitlink_imported_root/code_sandbox_sandbox_id. R7.5c does expose one
+    # derived bit of it as scene_payload()'s "hasSavedChat", because legacy's
+    # New Chat confirm skips only when the canvas is empty AND there is no
+    # current chat - a predicate the frontend cannot evaluate without it.
     current_chat_id: int | None = None
     _counter: itertools.count = field(default_factory=itertools.count, repr=False)
 
@@ -2807,6 +2810,10 @@ class SceneDocument:
             "fadeConnectionsEnabled": self.fade_connections_enabled,
             "orthogonalRouting": self.orthogonal_routing,
             "smartGuides": self.smart_guides,
+            # R7.5c: the one derived bit of current_chat_id the frontend needs
+            # (see that field's own comment) - whether this scene corresponds
+            # to a saved chats.db row. Never the id itself.
+            "hasSavedChat": self.current_chat_id is not None,
             "dragFactor": self.drag_factor,
             "fontFamily": self.font_family,
             "fontSizePt": self.font_size_pt,
