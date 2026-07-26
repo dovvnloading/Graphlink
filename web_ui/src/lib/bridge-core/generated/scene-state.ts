@@ -134,6 +134,7 @@ export interface SceneState {
   fadeConnectionsEnabled: boolean;
   orthogonalRouting: boolean;
   smartGuides: boolean;
+  hasSavedChat: boolean;
   dragFactor: number;
   fontFamily: string;
   fontSizePt: number;
@@ -729,6 +730,11 @@ function checkSceneState(value: unknown, path: string, errors: string[]): void {
     const fieldValue = value["smartGuides"];
     if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.smartGuides: missing required field`);
     else { if (typeof fieldValue !== "boolean") errors.push(`${path}.smartGuides` + ": expected boolean"); }
+  }
+  {
+    const fieldValue = value["hasSavedChat"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.hasSavedChat: missing required field`);
+    else { if (typeof fieldValue !== "boolean") errors.push(`${path}.hasSavedChat` + ": expected boolean"); }
   }
   {
     const fieldValue = value["dragFactor"];

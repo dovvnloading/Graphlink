@@ -99,6 +99,7 @@ function validScenePayload(overrides: Record<string, unknown> = {}) {
     fadeConnectionsEnabled: false,
     orthogonalRouting: false,
     smartGuides: false,
+    hasSavedChat: false,
     dragFactor: 0.5,
     fontFamily: "Segoe UI",
     fontSizePt: 9,

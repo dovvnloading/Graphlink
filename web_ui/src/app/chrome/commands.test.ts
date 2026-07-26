@@ -9,12 +9,15 @@ vi.mock("../canvas/exportCanvasPng", () => ({
   exportCanvasAsPng: (...args: unknown[]) => exportCanvasAsPngMock(...args),
 }));
 
-import { buildCommands } from "./commands";
+import { buildCommands, requestNewChat } from "./commands";
 import { initialSceneState } from "../canvas/sceneStore";
 import type { OverlayContextValue } from "../overlays/overlays";
 
-function makeStore(nodes: Array<{ id: string; x: number; y: number; title: string; kind: string }> = []) {
-  const scene = { ...initialSceneState, nodes, pins: [] };
+function makeStore(
+  nodes: Array<{ id: string; x: number; y: number; title: string; kind: string }> = [],
+  hasSavedChat = false,
+) {
+  const scene = { ...initialSceneState, nodes, pins: [], hasSavedChat };
   return {
     getScene: () => scene,
     organizeNodes: vi.fn(),
@@ -25,6 +28,7 @@ function makeStore(nodes: Array<{ id: string; x: number; y: number; title: strin
     createFrame: vi.fn(),
     createContainer: vi.fn(),
     newChat: vi.fn(),
+    saveChat: vi.fn(),
   };
 }
 
@@ -153,6 +157,8 @@ describe("buildCommands", () => {
   });
 
   it("new-chat is always enabled and calls store.newChat (R7.5a)", () => {
+    // Empty scene -> R7.5c's confirm is skipped entirely, so this still
+    // reaches newChat without any modal.
     const store = makeStore();
     // @ts-expect-error - test double
     const commands = buildCommands(store, makeRf(), makeOverlays());
@@ -160,6 +166,17 @@ describe("buildCommands", () => {
     expect(newChat.enabled()).toBe(true);
     newChat.run();
     expect(store.newChat).toHaveBeenCalledTimes(1);
+  });
+
+  it("save-chat is always enabled and calls store.saveChat (R7.5c)", () => {
+    const store = makeStore();
+    // @ts-expect-error - test double
+    const commands = buildCommands(store, makeRf(), makeOverlays());
+    const save = commands.find((c) => c.id === "save-chat")!;
+    expect(save.name).toBe("Save Chat");
+    expect(save.enabled()).toBe(true);
+    save.run();
+    expect(store.saveChat).toHaveBeenCalledTimes(1);
   });
 
   it("focus-selection is disabled with no selection and calls fitView scoped to the selected ids when run (R7.5a)", () => {
@@ -217,5 +234,48 @@ describe("buildCommands", () => {
 
     expect(exportCanvasAsPngMock).toHaveBeenCalledOnce();
     expect(exportCanvasAsPngMock).toHaveBeenCalledWith(rf, "--gl-surface-window");
+  });
+});
+
+// R7.5c: the New Chat confirm, restored from legacy's blocking QMessageBox.
+describe("requestNewChat", () => {
+  it("skips the confirm on an empty, never-saved canvas - nothing to lose", () => {
+    const store = makeStore([]);
+    const confirmFn = vi.fn(() => true);
+    // @ts-expect-error - test double
+    requestNewChat(store, confirmFn);
+    expect(confirmFn).not.toHaveBeenCalled();
+    expect(store.newChat).toHaveBeenCalledTimes(1);
+  });
+
+  it("still asks when the canvas is empty but the scene IS a saved chat", () => {
+    // Legacy's skip needs BOTH halves (graphlink_window.py:1429). Emptying a
+    // loaded chat and hitting Ctrl+T must not silently detach it: newChat()
+    // drops current_chat_id, so the next Save would INSERT a new row instead
+    // of updating the one the user believes they are editing.
+    const store = makeStore([], true);
+    const confirmFn = vi.fn(() => false);
+    // @ts-expect-error - test double
+    requestNewChat(store, confirmFn);
+    expect(confirmFn).toHaveBeenCalledOnce();
+    expect(store.newChat).not.toHaveBeenCalled();
+  });
+
+  it("asks before discarding a canvas that has content, and proceeds on yes", () => {
+    const store = makeStore([{ id: "n0", x: 0, y: 0, title: "A", kind: "chat" }]);
+    const confirmFn = vi.fn(() => true);
+    // @ts-expect-error - test double
+    requestNewChat(store, confirmFn);
+    expect(confirmFn).toHaveBeenCalledWith("Start a new chat? Any unsaved changes will be lost.");
+    expect(store.newChat).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT clear the canvas when the confirm is declined", () => {
+    const store = makeStore([{ id: "n0", x: 0, y: 0, title: "A", kind: "chat" }]);
+    const confirmFn = vi.fn(() => false);
+    // @ts-expect-error - test double
+    requestNewChat(store, confirmFn);
+    expect(confirmFn).toHaveBeenCalledOnce();
+    expect(store.newChat).not.toHaveBeenCalled();
   });
 });

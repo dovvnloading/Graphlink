@@ -844,8 +844,10 @@ export function isOrthogonalEligible(sourceKind: string | undefined, targetKind:
 // R7.5b-3: one node's current rendered size in flow units, for smart-guide
 // rects - see the comment on CanvasInner's reactFlow hoist for why the
 // internal store alone is not enough and the DOM is the reliable fallback.
-type MeasuredSizeSource = { getInternalNode: (id: string) => { measured?: { width?: number; height?: number } } | undefined };
-function measuredNodeSize(reactFlow: MeasuredSizeSource, id: string): { width: number; height: number } | null {
+// Exported since R7.5c: App.tsx's Ctrl+Arrow navigation has to center on a
+// node's MIDDLE, and hit the exact same empty-`measured` trap this solves.
+export type MeasuredSizeSource = { getInternalNode: (id: string) => { measured?: { width?: number; height?: number } } | undefined };
+export function measuredNodeSize(reactFlow: MeasuredSizeSource, id: string): { width: number; height: number } | null {
   const measured = reactFlow.getInternalNode(id)?.measured;
   if (measured?.width !== undefined && measured?.height !== undefined) {
     return { width: measured.width, height: measured.height };
@@ -853,6 +855,34 @@ function measuredNodeSize(reactFlow: MeasuredSizeSource, id: string): { width: n
   const el = document.querySelector(`.react-flow__node[data-id="${CSS.escape(id)}"]`);
   if (!(el instanceof HTMLElement) || el.offsetWidth === 0) return null;
   return { width: el.offsetWidth, height: el.offsetHeight };
+}
+
+/**
+ * R7.5c: carry the current selection across a snapshot rebuild.
+ *
+ * toFlowNodes mints brand-new node objects from every scene snapshot, so
+ * anything React Flow keeps on the node object rather than in the scene -
+ * selection above all - is dropped unless copied over explicitly.
+ *
+ * Found live, not by a test: Ctrl+Arrow calls setCenter, setCenter fires
+ * onMove, onMove reports the viewport to the backend, the backend echoes a
+ * fresh scene, and the selection the keystroke had just made vanished about
+ * 300ms later. That left the NEXT Ctrl+Arrow with no single selected node,
+ * so branch-walking died after exactly one hop. The same wipe hits any
+ * selection that merely overlaps a snapshot - an autosave tick, a streaming
+ * token - which is why it is fixed here at the rebuild rather than inside
+ * the shortcut handler.
+ *
+ * A node the backend actually removed is simply absent from `rebuilt`, so a
+ * stale id can never resurrect one.
+ */
+export function withPreservedSelection(
+  rebuilt: SceneFlowNode[],
+  current: SceneFlowNode[],
+): SceneFlowNode[] {
+  const selectedIds = new Set(current.filter((n) => n.selected).map((n) => n.id));
+  if (selectedIds.size === 0) return rebuilt;
+  return rebuilt.map((n) => (selectedIds.has(n.id) ? { ...n, selected: true } : n));
 }
 
 // Exported standalone for direct unit testing, same posture as toFlowNodes
@@ -960,7 +990,8 @@ function CanvasInner({ store }: { store: SceneStore }) {
   );
 
   useEffect(() => {
-    if (!draggingRef.current) setNodes(toFlowNodes(scene, store));
+    if (draggingRef.current) return;
+    setNodes((current) => withPreservedSelection(toFlowNodes(scene, store), current));
   }, [scene, store]);
 
   const edges = useMemo(() => toFlowEdges(scene, hoveredEdgeId), [scene, hoveredEdgeId]);

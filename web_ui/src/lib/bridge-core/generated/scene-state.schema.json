@@ -40,6 +40,9 @@
     "fontSizePt": {
       "type": "integer"
     },
+    "hasSavedChat": {
+      "type": "boolean"
+    },
     "minCompatibleSchemaVersion": {
       "type": "integer"
     },
@@ -520,6 +523,7 @@
     "fadeConnectionsEnabled",
     "orthogonalRouting",
     "smartGuides",
+    "hasSavedChat",
     "dragFactor",
     "fontFamily",
     "fontSizePt",
