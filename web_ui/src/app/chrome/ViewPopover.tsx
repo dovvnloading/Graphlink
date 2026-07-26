@@ -117,6 +117,15 @@ export function ViewPopover({ store }: { store: SceneStore }) {
           />
           Orthogonal Routing
         </label>
+        {/* R7.5b-3: the fourth and final legacy grid-control toggle. */}
+        <label className="view-check-row">
+          <input
+            type="checkbox"
+            checked={scene.smartGuides}
+            onChange={(e) => store.setSmartGuides(e.target.checked)}
+          />
+          Smart Guides
+        </label>
       </section>
 
       <section className="view-section" aria-label="Font">

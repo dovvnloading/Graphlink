@@ -5,6 +5,7 @@ import {
   MiniMap,
   Position,
   ReactFlow,
+  ViewportPortal,
   useReactFlow,
   useStore,
   type Connection,
@@ -42,6 +43,7 @@ import {
   VIEWPORT_REPORT_DEBOUNCE_MS,
 } from "./canvasConstants";
 import { SceneStore, scaleDragPosition } from "./sceneStore";
+import { computeSmartGuideSnap, type GuideLine, type Rect } from "./smartGuides";
 
 // R6.1: Notes/Frames/Containers - the generated SceneNodeRow type (codegen
 // source: backend/canvas.py's scene_payload()) has not been regenerated yet
@@ -839,6 +841,20 @@ export function isOrthogonalEligible(sourceKind: string | undefined, targetKind:
   return ORTHO_ELIGIBLE_TARGET_KINDS.has(targetKind);
 }
 
+// R7.5b-3: one node's current rendered size in flow units, for smart-guide
+// rects - see the comment on CanvasInner's reactFlow hoist for why the
+// internal store alone is not enough and the DOM is the reliable fallback.
+type MeasuredSizeSource = { getInternalNode: (id: string) => { measured?: { width?: number; height?: number } } | undefined };
+function measuredNodeSize(reactFlow: MeasuredSizeSource, id: string): { width: number; height: number } | null {
+  const measured = reactFlow.getInternalNode(id)?.measured;
+  if (measured?.width !== undefined && measured?.height !== undefined) {
+    return { width: measured.width, height: measured.height };
+  }
+  const el = document.querySelector(`.react-flow__node[data-id="${CSS.escape(id)}"]`);
+  if (!(el instanceof HTMLElement) || el.offsetWidth === 0) return null;
+  return { width: el.offsetWidth, height: el.offsetHeight };
+}
+
 // Exported standalone for direct unit testing, same posture as toFlowNodes
 // above - R7.5b-1's fade-connections opacity logic doesn't need a mounted
 // <ReactFlow> to verify.
@@ -887,6 +903,19 @@ export function makeDebouncedViewportReport(
 function CanvasInner({ store }: { store: SceneStore }) {
   const scene = useSyncExternalStore(store.subscribe, store.getScene);
   const grid = useSyncExternalStore(store.subscribe, store.getGrid);
+  // Hoisted above onNodesChange: smart guides (R7.5b-3) need node
+  // dimensions. Neither the local `nodes` array NOR React Flow's internal
+  // store reliably has them here: toFlowNodes rebuilds the array from every
+  // scene snapshot with fresh objects (no `measured`), and RF's own
+  // adoptUserNodes then rebuilds its internal `measured` FROM those user
+  // objects (verified against the installed @xyflow/system source, and
+  // confirmed live: `getInternalNode(...).measured` was {} at drag time), so
+  // both copies get wiped on every publish. measuredNodeSize below prefers
+  // the internal store when populated and falls back to the live DOM
+  // element's layout size - offsetWidth/Height are pre-transform layout px
+  // (flow units at any zoom), and reading the live rendered rect is also the
+  // most faithful translation of legacy's own sceneBoundingRect() reads.
+  const reactFlow = useReactFlow();
 
   // Local node state exists so dragging is fluid; backend snapshots are the
   // truth and reconcile in whenever nothing is being dragged. dragStartRef
@@ -900,6 +929,14 @@ function CanvasInner({ store }: { store: SceneStore }) {
   // (never scene state), same posture as legacy's purely presentational hover
   // flag.
   const [hoveredEdgeId, setHoveredEdgeId] = useState<string | null>(null);
+
+  // R7.5b-3: the smart-guide lines currently visible during a drag - local
+  // component state only, never scene state, matching legacy's non-persisted
+  // ChatScene.smart_guide_lines. Set per drag frame in onNodesChange, cleared
+  // on drag end; the render-time gate below (not an effect) hides any stale
+  // lines instantly if the toggle flips off mid-drag.
+  const [smartGuideLines, setSmartGuideLines] = useState<GuideLine[]>([]);
+  const visibleGuideLines = scene.smartGuides ? smartGuideLines : [];
 
   // R6.3: viewport (pan/zoom) reporting - see makeDebouncedViewportReport's
   // own doc above. onMove fires on every frame of a pan/zoom gesture (never
@@ -937,27 +974,78 @@ function CanvasInner({ store }: { store: SceneStore }) {
       // drag frame.
       const memberChanges: NodeChange<SceneFlowNode>[] = [];
       const memberMoveIntents: Array<{ id: string; x: number; y: number }> = [];
+      // R7.5b-3: guides produced by this frame's drag changes - applied via
+      // one setSmartGuideLines call after the map, cleared on drag end.
+      // DELIBERATE deviation for multi-select drags (review-confirmed):
+      // legacy cleared guides per-item, so only the LAST-processed item's
+      // guides survived each frame - an artifact of Qt's per-item itemChange
+      // ordering, not a design choice. Accumulating every co-mover's guides
+      // shows all live alignments instead of an arbitrary one.
+      const frameGuides: GuideLine[] = [];
+      let sawDragging = false;
+      let sawDragEnd = false;
 
       const scaled = changes.map((change) => {
         if (change.type !== "position" || !change.position) return change;
         if (change.dragging) {
           draggingRef.current = true;
+          sawDragging = true;
           let start = dragStartRef.current.get(change.id);
           if (!start) {
             const node = nodes.find((n) => n.id === change.id);
             start = node ? { ...node.position } : { ...change.position };
             dragStartRef.current.set(change.id, start);
           }
-          const scaledPosition = scaleDragPosition(start, change.position, scene.dragFactor);
-          memberChanges.push(...applyGroupDragDelta(nodes, change.id, scaledPosition));
+          let finalPosition = scaleDragPosition(start, change.position, scene.dragFactor);
+          // R7.5b-3: smart-guide snap, as a LAYERED PASS on top of React
+          // Flow's native grid-snap (which, when enabled, already ran inside
+          // RF before this change was emitted) - the recorded design
+          // decision, chosen over re-implementing grid-snap manually. Smart
+          // guides win per-axis when both would apply, reproducing legacy
+          // snap_position's own per-axis priority. Runs BEFORE
+          // applyGroupDragDelta below so carried group members ride the
+          // corrected delta. Legacy's !isSelected() candidate exclusion is
+          // translated as !n.selected (every co-mover in a multi-select drag
+          // reports its own dragging change with selected=true); a dragged
+          // group's own members are additionally excluded - they move in
+          // lockstep with the group, so "aligning" against them is always
+          // trivially true and would freeze the drag (a gap legacy never had
+          // to answer: this canvas carries members via synthetic deltas, not
+          // Qt child-item parenting - per the recorded design decision, only
+          // the group's own rect snaps and members ride the delta).
+          if (scene.smartGuides) {
+            const moving = nodes.find((n) => n.id === change.id);
+            const movingSize = measuredNodeSize(reactFlow, change.id);
+            if (moving && movingSize) {
+              const memberIds = groupDragKindOf(moving)
+                ? new Set((moving.data as { itemIds?: string[] }).itemIds ?? [])
+                : new Set<string>();
+              const candidates: Rect[] = [];
+              for (const n of nodes) {
+                if (n.id === change.id || n.selected || memberIds.has(n.id)) continue;
+                const size = measuredNodeSize(reactFlow, n.id);
+                if (!size) continue;
+                candidates.push({ x: n.position.x, y: n.position.y, width: size.width, height: size.height });
+              }
+              const snap = computeSmartGuideSnap(
+                { x: finalPosition.x, y: finalPosition.y, width: movingSize.width, height: movingSize.height },
+                candidates,
+              );
+              finalPosition = { x: snap.x, y: snap.y };
+              frameGuides.push(...snap.guides);
+            }
+          }
+          memberChanges.push(...applyGroupDragDelta(nodes, change.id, finalPosition));
           return {
             ...change,
-            position: scaledPosition,
+            position: finalPosition,
           };
         }
         // Drag end: commit the node's final (already-scaled) position.
         draggingRef.current = false;
+        sawDragEnd = true;
         const settled = nodes.find((n) => n.id === change.id);
+        dragStartRef.current.delete(change.id);
         if (settled) {
           store.moveNode(change.id, settled.position.x, settled.position.y);
           if (groupDragKindOf(settled)) {
@@ -967,17 +1055,30 @@ function CanvasInner({ store }: { store: SceneStore }) {
               if (member) memberMoveIntents.push({ id: memberId, x: member.position.x, y: member.position.y });
             }
           }
+          // R7.5b-3 review fix: RF's drag-stop change carries its own
+          // internal RAW pointer-derived position - the drag-factor/smart-
+          // guide corrections applied per frame above never feed back into
+          // RF's drag state. Passing the raw change through here made the
+          // node visibly bounce off its corrected position on release, then
+          // reconcile after the backend echo. Return the settled (last
+          // corrected frame's) position instead, which is also exactly what
+          // moveNode just committed - local state and the wire now agree at
+          // the instant of release.
+          return { ...change, position: { ...settled.position } };
         }
-        dragStartRef.current.delete(change.id);
         return change;
       });
       // Persist each carried-along member's settled position too - the same
       // moveNode call site the group's own commit above uses, fired after
       // the map so every real change's own drag-end has already run.
       for (const move of memberMoveIntents) store.moveNode(move.id, move.x, move.y);
+      // Guides re-derive every drag frame (legacy cleared + re-added its
+      // QGraphicsLineItems per recompute); drag end always clears.
+      if (sawDragging) setSmartGuideLines(frameGuides);
+      else if (sawDragEnd) setSmartGuideLines([]);
       setNodes((current) => applyNodeChanges([...scaled, ...memberChanges], current));
     },
-    [nodes, scene.dragFactor, store],
+    [nodes, scene.dragFactor, scene.smartGuides, reactFlow, store],
   );
 
   const onConnect = useCallback(
@@ -1014,7 +1115,7 @@ function CanvasInner({ store }: { store: SceneStore }) {
     [store, nodes],
   );
 
-  const { screenToFlowPosition } = useReactFlow();
+  const { screenToFlowPosition } = reactFlow;
   const onDoubleClick = useCallback(
     (event: React.MouseEvent) => {
       // Double-click on empty canvas creates a node there - the R1 stand-in
@@ -1064,6 +1165,44 @@ function CanvasInner({ store }: { store: SceneStore }) {
           style={{ opacity: grid.gridOpacityPercent / 100 }}
         />
         <MiniMap pannable zoomable className="scene-minimap" />
+        {/* R7.5b-3: smart-guide lines. Legacy's guides were QGraphicsLineItems
+            in the same unified scene as the nodes, panning/zooming for free -
+            ViewportPortal is the direct React Flow analog (children render
+            inside the same CSS-transformed layer, in flow coordinates). The
+            dash color is Qt's QColor(128, 128, 128, 200) ported exactly
+            (200/255 = 0.784 alpha). pointerEvents none so a guide can never
+            swallow the drag it is annotating. */}
+        {visibleGuideLines.length > 0 && (
+          <ViewportPortal>
+            {visibleGuideLines.map((guide, index) => (
+              <div
+                key={index}
+                className="smart-guide-line"
+                style={
+                  guide.orientation === "vertical"
+                    ? {
+                        position: "absolute",
+                        left: guide.position,
+                        top: guide.start,
+                        width: 0,
+                        height: guide.end - guide.start,
+                        borderLeft: "1px dashed rgba(128, 128, 128, 0.784)",
+                        pointerEvents: "none",
+                      }
+                    : {
+                        position: "absolute",
+                        left: guide.start,
+                        top: guide.position,
+                        width: guide.end - guide.start,
+                        height: 0,
+                        borderTop: "1px dashed rgba(128, 128, 128, 0.784)",
+                        pointerEvents: "none",
+                      }
+                }
+              />
+            ))}
+          </ViewportPortal>
+        )}
       </ReactFlow>
     </div>
   );

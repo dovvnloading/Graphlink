@@ -327,6 +327,9 @@ class SceneStatePayload:
     # R7.5b-2: Qt-removal plan R7.5's second canvas-visual parity fix -
     # populated 1:1 from backend/canvas.py's SceneDocument.orthogonal_routing.
     orthogonalRouting: bool
+    # R7.5b-3: the third and final canvas-visual parity fix - populated 1:1
+    # from backend/canvas.py's SceneDocument.smart_guides.
+    smartGuides: bool
     dragFactor: float
     fontFamily: str
     fontSizePt: int

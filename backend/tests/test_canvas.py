@@ -2186,6 +2186,24 @@ def test_orthogonal_routing_defaults_false_and_the_setter_publishes_scene():
     asyncio.run(run())
 
 
+def test_smart_guides_defaults_false_and_the_setter_publishes_scene():
+    # R7.5b-3: the third and final canvas-visual parity fix - the snap math
+    # itself is frontend-only (smartGuides.ts); the backend owns just the
+    # toggle, matching legacy's ChatScene-owns-the-flag split.
+    async def run():
+        bus, document, recorder = make_bus()
+        assert document.scene_payload()["smartGuides"] is False
+
+        await bus.dispatch_intent("scene", "setSmartGuides", [True])
+        assert document.scene_payload()["smartGuides"] is True
+        assert recorder.topics_seen()[-1] == "scene"
+
+        await bus.dispatch_intent("scene", "setSmartGuides", [False])
+        assert document.scene_payload()["smartGuides"] is False
+
+    asyncio.run(run())
+
+
 # -- R4.4a: Generate/Regenerate Image - domain-level resolvers ---------------
 
 
