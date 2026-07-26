@@ -234,6 +234,7 @@ function ApiProviderPage({
   const [draftApiKey, setDraftApiKey] = useState("");
   const [draftBaseUrl, setDraftBaseUrl] = useState(state.apiBaseUrl);
   const [draftModels, setDraftModels] = useState<Record<string, string>>(state.apiModels);
+  const [confirmingReset, setConfirmingReset] = useState(false);
   const [lastViewingProvider, setLastViewingProvider] = useState(viewingProvider);
 
   if (viewingProvider !== lastViewingProvider) {
@@ -241,6 +242,8 @@ function ApiProviderPage({
     setDraftApiKey("");
     setDraftBaseUrl(state.apiBaseUrl);
     setDraftModels(state.apiModels);
+    // Don't leave a Reset armed across a provider switch.
+    setConfirmingReset(false);
   }
 
   const catalogModelIds = state.apiModelCatalog.map((entry) => entry.modelId);
@@ -349,24 +352,46 @@ function ApiProviderPage({
         ))}
       </fieldset>
 
+      {confirmingReset && (
+        <p className="settings-update-status" data-level="error">
+          This clears all saved API keys and model configurations and cannot be undone.
+        </p>
+      )}
+
       <div className="settings-button-row">
-        <button
-          type="button"
-          className="settings-button"
-          onClick={() => {
-            transport.intent("app-settings", "resetApiSettings", []);
-            // Post-review fix: Reset only cleared draftApiKey, leaving
-            // draftBaseUrl/draftModels showing their pre-reset values (the
-            // resync effect only fires on a genuine viewingProvider change,
-            // which Reset doesn't cause) - a subsequent Save would silently
-            // re-persist exactly what Reset was meant to clear.
-            setDraftApiKey("");
-            setDraftBaseUrl(DEFAULT_OPENAI_BASE_URL);
-            setDraftModels({});
-          }}
-        >
-          Reset API Settings
-        </button>
+        {/* Reset wipes every provider's key irreversibly. Legacy gated it
+            behind a "This cannot be undone" Yes/No prompt; this is the same
+            two-step confirm the legacy settings island and ChatLibraryDialog
+            already use, rather than a one-click destructive button. */}
+        {confirmingReset ? (
+          <>
+            <button type="button" className="settings-button" onClick={() => setConfirmingReset(false)}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="settings-button settings-button-primary"
+              onClick={() => {
+                transport.intent("app-settings", "resetApiSettings", []);
+                // Reset must clear the local drafts too, not just the key:
+                // the resync block only fires on a viewingProvider change,
+                // which Reset doesn't cause, so stale draftBaseUrl/
+                // draftModels would otherwise survive and a later Save
+                // would re-persist exactly what Reset just cleared.
+                setDraftApiKey("");
+                setDraftBaseUrl(DEFAULT_OPENAI_BASE_URL);
+                setDraftModels({});
+                setConfirmingReset(false);
+              }}
+            >
+              Confirm Reset
+            </button>
+          </>
+        ) : (
+          <button type="button" className="settings-button" onClick={() => setConfirmingReset(true)}>
+            Reset API Settings
+          </button>
+        )}
         <button
           type="button"
           className="settings-button settings-button-primary"

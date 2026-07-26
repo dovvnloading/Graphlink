@@ -212,16 +212,43 @@ describe("SettingsDialog", () => {
     expect(screen.getByPlaceholderText("Enter your API key...")).toHaveValue("");
   });
 
-  it("Reset API Settings fires resetApiSettings", async () => {
+  it("Reset API Settings does nothing on the first click - it only arms the confirmation", async () => {
+    // Reset irreversibly wipes every provider's saved key, so it must not
+    // be a single-click action. Legacy gated it behind a "This cannot be
+    // undone" Yes/No prompt.
     const { user, push, intents } = setup();
     await goToApiEndpoint(user, push);
 
     await user.click(screen.getByText("Reset API Settings"));
 
+    expect(intents.some(([, intent]) => intent === "resetApiSettings")).toBe(false);
+    expect(screen.getByText(/cannot be undone/)).toBeInTheDocument();
+    expect(screen.getByText("Confirm Reset")).toBeInTheDocument();
+  });
+
+  it("Cancel backs out of an armed Reset without firing anything", async () => {
+    const { user, push, intents } = setup();
+    await goToApiEndpoint(user, push);
+
+    await user.click(screen.getByText("Reset API Settings"));
+    await user.click(screen.getByText("Cancel"));
+
+    expect(intents.some(([, intent]) => intent === "resetApiSettings")).toBe(false);
+    expect(screen.queryByText("Confirm Reset")).toBeNull();
+    expect(screen.getByText("Reset API Settings")).toBeInTheDocument();
+  });
+
+  it("Confirm Reset fires resetApiSettings", async () => {
+    const { user, push, intents } = setup();
+    await goToApiEndpoint(user, push);
+
+    await user.click(screen.getByText("Reset API Settings"));
+    await user.click(screen.getByText("Confirm Reset"));
+
     expect(intents).toContainEqual(["app-settings", "resetApiSettings", []]);
   });
 
-  it("Reset API Settings clears the local Base URL and model drafts too, not just the key", async () => {
+  it("Confirm Reset clears the local Base URL and model drafts too, not just the key", async () => {
     // Regression test: Reset originally only cleared draftApiKey, leaving
     // draftBaseUrl/draftModels showing their pre-reset values (the resync
     // effect only fires on a genuine provider switch, which Reset doesn't
@@ -235,6 +262,7 @@ describe("SettingsDialog", () => {
     await user.type(screen.getByLabelText("Chat, Explain, Takeaways (main model)"), "gpt-4o");
 
     await user.click(screen.getByText("Reset API Settings"));
+    await user.click(screen.getByText("Confirm Reset"));
 
     expect(screen.getByPlaceholderText("https://api.openai.com/v1")).toHaveValue("https://api.openai.com/v1");
     expect(screen.getByLabelText("Chat, Explain, Takeaways (main model)")).toHaveValue("");
