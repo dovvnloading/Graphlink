@@ -90,6 +90,36 @@
       },
       "type": "object"
     },
+    "ollamaCurrentModel": {
+      "type": "string"
+    },
+    "ollamaModelAssignments": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "type": "object"
+    },
+    "ollamaNotice": {
+      "type": "string"
+    },
+    "ollamaPullStatus": {
+      "type": "string"
+    },
+    "ollamaReasoningMode": {
+      "type": "string"
+    },
+    "ollamaScanStatus": {
+      "type": "string"
+    },
+    "ollamaScanSummary": {
+      "type": "string"
+    },
+    "ollamaScannedModels": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
     "revision": {
       "type": "integer"
     },
@@ -124,7 +154,15 @@
     "apiCatalogStatus",
     "apiCatalogMessage",
     "geminiStaticModels",
-    "geminiStaticImageModels"
+    "geminiStaticImageModels",
+    "ollamaReasoningMode",
+    "ollamaCurrentModel",
+    "ollamaModelAssignments",
+    "ollamaScannedModels",
+    "ollamaScanSummary",
+    "ollamaScanStatus",
+    "ollamaPullStatus",
+    "ollamaNotice"
   ],
   "title": "AppSettingsState",
   "type": "object"

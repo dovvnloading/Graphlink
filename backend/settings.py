@@ -1,24 +1,32 @@
-"""Settings dialog: General + Integrations + API-provider pages
-(Qt-removal plan R2.5d, extended R7.4a).
+"""Settings dialog: General + Integrations + API-provider + Ollama pages
+(Qt-removal plan R2.5d, extended R7.4a, extended R7.4b).
 
 Unlike composer.py/plugins.py this is a genuine REUSE, not a
 reimplementation: SettingsManager (graphlink_licensing.py) and its own
 imports (graphlink_secrets, graphlink_model_catalog) carry zero PySide6
 coupling, confirmed via a runtime sys.modules check in
-test_settings_never_imports_qt below. api_provider.py and
-graphlink_task_config.py (this file's two new R7.4a imports) are
-confirmed Qt-free repo-root survivor modules (Qt-removal plan R7.2).
+test_settings_never_imports_qt below. api_provider.py,
+graphlink_task_config.py, and graphlink_model_catalog.py are confirmed
+Qt-free repo-root survivor modules (Qt-removal plan R7.2); ollama is a
+hard, always-installed dependency (pyproject.toml), not the optional
+llama-cpp-python extra.
 
-Scope (doc/QT_REMOVAL_PLAN.md R2.5d, R7.4a): the General/Appearance page
-(theme, token-counter visibility, system-prompt toggle, notification
-preferences), the Integrations page (GitHub token, write-only), and now
-the API-provider page (OpenAI-Compatible/Anthropic/Gemini endpoint
-config, per-task model assignment, live catalog refresh) are real here.
-Ollama/Llama.cpp pages remain deferred - R7.4b/R7.4c - and the
-update-check pair (checkForUpdates/openRepository) needs a native
-browser-open capability that doesn't exist yet in graphlink_desktop.py.
-The SPA renders those sections disabled with an explicit "lands in R7.4b/
-R7.4c" label rather than faking them.
+Scope (doc/QT_REMOVAL_PLAN.md R2.5d, R7.4a, R7.4b): the General/Appearance
+page, the Integrations page (GitHub token, write-only), the API-provider
+page (OpenAI-Compatible/Anthropic/Gemini), and now the Ollama page
+(reasoning mode, system model scan, per-task model assignment, model pull)
+are real here. Llama.cpp remains deferred - R7.4c - and the update-check
+pair (checkForUpdates/openRepository) needs a native browser-open
+capability that doesn't exist yet in graphlink_desktop.py. The SPA renders
+those sections disabled with an explicit "lands in R7.4c" label rather
+than faking them.
+
+The Ollama page's "Scan Folder..." button is ALSO deferred, narrower than
+the whole page: it needs the same native folder-picker capability R7.4c
+builds for Llama.cpp's GGUF file browse (both are pywebview's
+create_file_dialog, just OPEN_DIALOG vs FOLDER_DIALOG) - deliberately not
+duplicated here ahead of that build. "System Scan" needs no picker and is
+fully real.
 
 The API-provider page deliberately does NOT replicate one piece of legacy
 behavior: the old QWidget pre-filled its API-key field with the saved
@@ -46,9 +54,12 @@ import asyncio
 import threading
 from typing import Any, Callable
 
+import ollama
+
 import api_provider
 import graphlink_task_config as config
 from graphlink_licensing import SettingsManager
+from graphlink_model_catalog import AUTO_MODEL, INHERIT_MODEL
 
 from backend.events import SessionBus
 from backend.notifications import NotificationState
@@ -74,6 +85,18 @@ _KNOWN_API_PROVIDERS = (
     config.API_PROVIDER_ANTHROPIC,
     config.API_PROVIDER_GEMINI,
 )
+
+# Ollama's five per-task model-assignment slots - task_image_gen is
+# deliberately absent (Ollama has no image-generation path, matching
+# legacy: OLLAMA_TASKS in graphlink_settings_bridge.py has the same 5).
+_OLLAMA_TASK_KEYS = (
+    config.TASK_CHAT,
+    config.TASK_TITLE,
+    config.TASK_CHART,
+    config.TASK_WEB_VALIDATE,
+    config.TASK_WEB_SUMMARIZE,
+)
+_OLLAMA_REASONING_MODES = ("Thinking", "Quick")
 
 # Every persistence-touching mutation runs in a worker thread
 # (asyncio.to_thread) so SettingsManager._save_state's json-dump + fsync +
@@ -133,6 +156,46 @@ def _api_model_catalog_for_wire(manager: SettingsManager, provider: str) -> list
     ]
 
 
+def _flatten_ollama_assignment(assignment: Any) -> str:
+    # Wire representation collapses {"mode": ..., "model_id": ...} to a
+    # single string ("inherit"/"auto"/an explicit model id) - matches the
+    # legacy bridge's own _flatten_ollama_assignment exactly, including
+    # preserving an explicit model id verbatim even if it is no longer in
+    # the scanned-models list (the field always shows whatever is actually
+    # persisted, never silently drops it).
+    mode = assignment.get("mode", AUTO_MODEL) if isinstance(assignment, dict) else AUTO_MODEL
+    if mode == "explicit":
+        return assignment.get("model_id") or AUTO_MODEL
+    return mode
+
+
+def _ollama_model_assignments_for_wire(manager: SettingsManager) -> dict[str, str]:
+    raw = manager.get_ollama_model_assignments()
+    return {task: _flatten_ollama_assignment(raw.get(task, {})) for task in _OLLAMA_TASK_KEYS}
+
+
+def _ollama_scan_summary(manager: SettingsManager) -> str:
+    scan_mode = manager.get_ollama_model_scan_mode()
+    scan_path = manager.get_ollama_model_scan_path()
+    cached_models = manager.get_ollama_scanned_models()
+    has_saved_scan = bool(scan_mode or scan_path or manager.get_ollama_model_scan_locations())
+    if not has_saved_scan:
+        return "No saved scan yet. Run a system scan to build the local model list."
+    if not cached_models:
+        return "The last scan is saved, but it did not find any Ollama models."
+    if scan_mode == "folder" and scan_path:
+        # Folder scanning isn't wired in THIS page yet - it needs the same
+        # native-picker capability R7.4c builds for Llama.cpp's GGUF file
+        # browse, deliberately deferred out of this increment's scope (see
+        # doc/QT_REMOVAL_PLAN.md's R7.4 scoping). This branch only DISPLAYS
+        # a scan a user already saved via the legacy Qt app sharing the
+        # same session.dat - it doesn't let this page create one.
+        return f"Using saved scan from folder: {scan_path}"
+    if scan_mode == "system":
+        return "Using saved system scan results from local Ollama locations."
+    return "Using saved scanned model list."
+
+
 def settings_payload(manager: SettingsManager) -> dict[str, Any]:
     return {
         "theme": manager.get_theme(),
@@ -182,6 +245,16 @@ def register_settings(
     def _catalog_state_for(provider: str) -> dict[str, str]:
         return api_catalog_state.get(provider, _default_catalog_state)
 
+    # Ollama has exactly one page (unlike API-provider's 3), so a flat pair
+    # of cells - not one keyed by anything client-supplied - carries no
+    # analog of the per-provider bug the API-provider page's catalog state
+    # had to be fixed for. scan and pull deliberately share one notice
+    # field, matching the legacy bridge's own single self._notice exactly
+    # (not a new gap: legacy never isolated scan-vs-pull messages either).
+    ollama_scan_status = {"value": "idle"}
+    ollama_pull_status = {"value": "idle"}
+    ollama_notice = {"value": ""}
+
     def build_payload() -> dict[str, Any]:
         payload = settings_payload(manager)
         payload["activeSection"] = active_section["value"]
@@ -206,6 +279,15 @@ def register_settings(
         # update when the list changes.
         payload["geminiStaticModels"] = list(api_provider.GEMINI_MODELS_STATIC)
         payload["geminiStaticImageModels"] = list(api_provider.GEMINI_IMAGE_MODELS_STATIC)
+
+        payload["ollamaReasoningMode"] = manager.get_ollama_reasoning_mode()
+        payload["ollamaCurrentModel"] = config.OLLAMA_MODELS.get(config.TASK_CHAT, "")
+        payload["ollamaModelAssignments"] = _ollama_model_assignments_for_wire(manager)
+        payload["ollamaScannedModels"] = manager.get_ollama_scanned_models()
+        payload["ollamaScanSummary"] = _ollama_scan_summary(manager)
+        payload["ollamaScanStatus"] = ollama_scan_status["value"]
+        payload["ollamaPullStatus"] = ollama_pull_status["value"]
+        payload["ollamaNotice"] = ollama_notice["value"]
         return payload
 
     bus.register_topic("app-settings", build_payload)
@@ -492,6 +574,190 @@ def register_settings(
             await bus.publish("notification")
         await bus.publish("app-settings")
 
+    async def set_ollama_reasoning_mode(mode: str):
+        mode = str(mode)
+        if mode not in _OLLAMA_REASONING_MODES:
+            return
+        await asyncio.to_thread(_apply, manager.set_ollama_reasoning_mode, mode)
+
+        def _reapply_if_ollama_is_still_the_live_provider() -> None:
+            # Checked and applied inside the SAME to_thread hop, not split
+            # across an await boundary: a concurrent mode switch (the
+            # toolbar's provider selector) landing in a gap between a
+            # separate check and a later apply could otherwise force the
+            # live provider back to Ollama after the user had already
+            # switched away - the same class of stale-check-then-await
+            # race the R7.4a audit found and fixed elsewhere in this file.
+            # Legacy-parity note (corrected after adversarial review): this
+            # live re-apply is NOT what legacy's own settings dialog did.
+            # graphlink_settings_bridge.py's setOllamaReasoningMode called
+            # _reinitialize_main_window_agent() unconditionally, which just
+            # rebuilds ChatAgent - it never touched the live
+            # OLLAMA_REASONING_MODE global api_provider.py's chat dispatch
+            # actually reads. Legacy's ONLY path that ever updated that
+            # global was a completely separate control - the composer
+            # toolbar's setReasoningLevel - which the Settings dialog was
+            # never wired to. So in real legacy usage, changing reasoning
+            # mode via Settings persisted the value but left the live
+            # think= kwarg stale until the next provider-mode switch or
+            # restart. This re-apply is a genuine fix for that gap, not a
+            # port of existing legacy behavior - gated on
+            # is_local_ollama_mode() so it can't be the mechanism that
+            # forces a user who already switched to a different provider
+            # back onto Ollama.
+            if api_provider.is_local_ollama_mode():
+                api_provider.initialize_local_provider(config.LOCAL_PROVIDER_OLLAMA, {"reasoning_mode": mode})
+
+        await asyncio.to_thread(_reapply_if_ollama_is_still_the_live_provider)
+        await bus.publish("app-settings")
+
+    async def set_ollama_model_assignment(task: str, value: str):
+        # Coerced before use, matching every intent in this file post the
+        # R7.4a audit: task ends up as a dict key below, and a client can
+        # send any JSON type over the wire with zero validation anywhere
+        # in the dispatch path.
+        task = str(task)
+        value = str(value).strip()
+        if task not in _OLLAMA_TASK_KEYS:
+            return
+        if task == config.TASK_CHAT and value == INHERIT_MODEL:
+            # Adversarial-review finding: task_chat has no "inherit"
+            # concept - it IS the base chat model, and its <select> in
+            # SettingsDialog.tsx never renders an "inherit" option (task !==
+            # "task_chat" guards it there). Without this normalization, a
+            # stray or hand-edited "inherit" for this one task would persist
+            # fine but leave the frontend's <select> showing a value with no
+            # matching <option> - falling back here to auto instead, which
+            # the UI CAN represent.
+            value = AUTO_MODEL
+        if not value or value in (INHERIT_MODEL, AUTO_MODEL):
+            assignment = {"mode": value or AUTO_MODEL, "model_id": ""}
+        else:
+            assignment = {"mode": "explicit", "model_id": value}
+
+        def _persist() -> None:
+            # Read-modify-write, all inside this one _apply-locked closure -
+            # not read-before-await-then-write-after. Splitting those across
+            # an await boundary is exactly the R7.4a save_api_configuration
+            # race: a concurrent assignment change for a DIFFERENT task
+            # (two browser tabs on the same session) landing in the gap
+            # would get its own freshly-persisted change silently reverted
+            # by this call's stale pre-read of the whole assignments dict.
+            assignments = manager.get_ollama_model_assignments()
+            assignments[task] = assignment
+            manager.set_ollama_model_assignments(assignments)
+            config.sync_ollama_task_models(manager)
+            if task == config.TASK_CHAT and assignment["mode"] == "explicit":
+                config.set_current_model(assignment["model_id"])
+
+        await asyncio.to_thread(_apply, _persist)
+        await bus.publish("app-settings")
+
+    async def scan_ollama_system():
+        # Check-then-set with no await between them - safe under asyncio's
+        # single-threaded event loop (unlike the two genuinely async-gapped
+        # races above), matching legacy's own isRunning()-guarded no-op.
+        if ollama_scan_status["value"] == "running":
+            return
+        ollama_scan_status["value"] = "running"
+        ollama_notice["value"] = ""
+        await bus.publish("app-settings")
+
+        try:
+            # scan_local_ollama_models never raises for "Ollama not
+            # running" - that's reported via the returned server_reachable/
+            # server_error fields (which legacy's own worker/bridge never
+            # surfaced either; matched here, not newly dropped). Only a
+            # genuine, unexpected exception (e.g. a filesystem error
+            # walking a manifest folder) reaches this except.
+            results = await asyncio.to_thread(api_provider.scan_local_ollama_models, None)
+        except Exception as exc:  # noqa: BLE001 - no secret in this path to redact
+            ollama_scan_status["value"] = "error"
+            ollama_notice["value"] = f"Scan failed: {exc}"
+            await bus.publish("app-settings")
+            return
+
+        def _persist() -> None:
+            manager.set_ollama_model_scan_cache(
+                results.get("models", []),
+                results.get("scan_mode", ""),
+                results.get("scan_path", ""),
+                results.get("locations", []),
+            )
+            config.sync_ollama_task_models(manager)
+
+        try:
+            # Adversarial-review finding: set_ollama_model_scan_cache does a
+            # real disk write (SettingsManager._save_state - json dump +
+            # fsync + atomic replace), which CAN fail (locked file,
+            # permission denied, disk full). Before this fix, a failure here
+            # propagated uncaught out of the intent handler - the WS layer
+            # logs and survives it, but ollama_scan_status["value"] was left
+            # at "running" forever, so the "already running" reentrancy
+            # guard at the top of this function would silently no-op every
+            # future scan for the rest of the session. Legacy never had this
+            # failure mode: its reentrancy check was tied to the QThread
+            # object, nulled at the start of its finished-handler regardless
+            # of whether persistence succeeded.
+            await asyncio.to_thread(_apply, _persist)
+        except Exception as exc:  # noqa: BLE001 - no secret in this path to redact
+            ollama_scan_status["value"] = "error"
+            ollama_notice["value"] = f"Scan failed: {exc}"
+            await bus.publish("app-settings")
+            return
+        ollama_scan_status["value"] = "done"
+        await bus.publish("app-settings")
+
+    async def pull_ollama_model(model_name: str):
+        model_name = str(model_name).strip()
+        if not model_name:
+            ollama_notice["value"] = "Model name cannot be empty."
+            await bus.publish("app-settings")
+            return
+        if ollama_pull_status["value"] == "running":
+            return
+        ollama_pull_status["value"] = "running"
+        ollama_notice["value"] = ""
+        await bus.publish("app-settings")
+
+        try:
+            await asyncio.to_thread(ollama.pull, model_name)
+        except Exception as exc:  # noqa: BLE001 - mapped to a friendly message, matching ModelPullWorkerThread's own 3-way mapping; no secret here to redact (a model name is not a credential)
+            text = str(exc).lower()
+            if "not found" in text:
+                message = f"Model '{model_name}' was not found on the Ollama hub."
+            elif "connection refused" in text:
+                message = "Could not connect to Ollama. Is Ollama running?"
+            else:
+                message = f"An unexpected error occurred: {exc}"
+            ollama_pull_status["value"] = "error"
+            ollama_notice["value"] = message
+            await bus.publish("app-settings")
+            return
+
+        def _persist() -> None:
+            api_provider.invalidate_ollama_capability_cache(model_name)
+            config.set_current_model(model_name)
+
+        try:
+            # Belt-and-suspenders for the same reentrancy-gate hazard fixed
+            # in scan_ollama_system's own _persist call above - unlike that
+            # one, neither invalidate_ollama_capability_cache nor
+            # set_current_model do disk I/O today (both are in-memory-only
+            # global mutations), so this has no realistic failure mode right
+            # now, but a stranded "running" gate is bad enough - and cheap
+            # enough to guard against - that this doesn't wait for one of
+            # them to grow a fallible path first.
+            await asyncio.to_thread(_apply, _persist)
+        except Exception as exc:  # noqa: BLE001 - no secret here to redact (a model name is not a credential)
+            ollama_pull_status["value"] = "error"
+            ollama_notice["value"] = f"An unexpected error occurred: {exc}"
+            await bus.publish("app-settings")
+            return
+        ollama_pull_status["value"] = "done"
+        ollama_notice["value"] = ""
+        await bus.publish("app-settings")
+
     bus.register_intent("app-settings", "setActiveSection", set_active_section)
     bus.register_intent("app-settings", "setTheme", set_theme)
     bus.register_intent("app-settings", "setShowTokenCounter", set_show_token_counter)
@@ -503,3 +769,7 @@ def register_settings(
     bus.register_intent("app-settings", "loadApiModels", load_api_models)
     bus.register_intent("app-settings", "saveApiConfiguration", save_api_configuration)
     bus.register_intent("app-settings", "resetApiSettings", reset_api_settings)
+    bus.register_intent("app-settings", "setOllamaReasoningMode", set_ollama_reasoning_mode)
+    bus.register_intent("app-settings", "setOllamaModelAssignment", set_ollama_model_assignment)
+    bus.register_intent("app-settings", "scanOllamaSystem", scan_ollama_system)
+    bus.register_intent("app-settings", "pullOllamaModel", pull_ollama_model)

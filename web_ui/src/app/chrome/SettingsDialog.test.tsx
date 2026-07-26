@@ -32,6 +32,14 @@ const snapshot = {
   apiCatalogMessage: "Model catalog has not been refreshed yet.",
   geminiStaticModels: ["gemini-2.5-flash", "gemini-2.5-pro"],
   geminiStaticImageModels: ["gemini-2.5-flash-image"],
+  ollamaReasoningMode: "Thinking",
+  ollamaCurrentModel: "",
+  ollamaModelAssignments: {},
+  ollamaScannedModels: [],
+  ollamaScanSummary: "No saved scan yet. Run a system scan to build the local model list.",
+  ollamaScanStatus: "idle",
+  ollamaPullStatus: "idle",
+  ollamaNotice: "",
 };
 
 function makeTransport() {
@@ -92,6 +100,16 @@ async function goToApiEndpoint(
   act(() => push({ ...snapshot, ...overrides, activeSection: "api endpoint" }));
 }
 
+async function goToOllama(
+  user: ReturnType<typeof userEvent.setup>,
+  push: (payload: Record<string, unknown>) => void,
+  overrides: Record<string, unknown> = {},
+) {
+  await user.click(screen.getByText("open settings"));
+  await user.click(screen.getByRole("button", { name: "Ollama (Local)" }));
+  act(() => push({ ...snapshot, ...overrides, activeSection: "ollama (local)" }));
+}
+
 describe("SettingsDialog", () => {
   it("navigating sections fires setActiveSection with the clicked section's key", async () => {
     const { user, intents } = setup();
@@ -110,13 +128,143 @@ describe("SettingsDialog", () => {
     expect(screen.getByText("API Provider")).toBeInTheDocument();
   });
 
-  it("Ollama and Llama.cpp still render the deferred placeholder", async () => {
+  it("Llama.cpp still renders the deferred placeholder", async () => {
     const { user, push } = setup();
     await user.click(screen.getByText("open settings"));
     await user.click(screen.getByRole("button", { name: "Llama.cpp (Local)" }));
     act(() => push({ ...snapshot, activeSection: "llama.cpp (local)" }));
 
-    expect(screen.getByText("Llama.cpp (Local) configuration lands in R7.4b/R7.4c.")).toBeInTheDocument();
+    expect(screen.getByText("Llama.cpp (Local) configuration lands in R7.4c.")).toBeInTheDocument();
+  });
+
+  it("Ollama page renders for the real (not deferred-placeholder) section", async () => {
+    const { user, push } = setup();
+    await goToOllama(user, push);
+
+    expect(screen.queryByText(/lands in R7\.4c/)).toBeNull();
+    expect(screen.getByText("Reasoning Mode")).toBeInTheDocument();
+  });
+
+  it("clicking a reasoning mode radio fires setOllamaReasoningMode", async () => {
+    const { user, push, intents } = setup();
+    await goToOllama(user, push);
+
+    await user.click(screen.getByLabelText("Quick Mode (No CoT)"));
+
+    expect(intents).toContainEqual(["app-settings", "setOllamaReasoningMode", ["Quick"]]);
+  });
+
+  it("shows the current active model when one is set", async () => {
+    const { user, push } = setup();
+    await goToOllama(user, push, { ollamaCurrentModel: "llama3.2:3b" });
+
+    expect(screen.getByText("llama3.2:3b")).toBeInTheDocument();
+  });
+
+  it("falls back to an Auto message when no current model is set", async () => {
+    const { user, push } = setup();
+    await goToOllama(user, push, { ollamaCurrentModel: "" });
+
+    expect(screen.getByText("Auto - no compatible installed model found")).toBeInTheDocument();
+  });
+
+  it("System Scan fires scanOllamaSystem and disables while running", async () => {
+    const { user, push, intents } = setup();
+    await goToOllama(user, push, { ollamaScanStatus: "running" });
+
+    expect(screen.getByText("Scanning...")).toBeDisabled();
+
+    act(() => push({ ...snapshot, activeSection: "ollama (local)", ollamaScanStatus: "idle" }));
+    await user.click(screen.getByText("System Scan"));
+
+    expect(intents).toContainEqual(["app-settings", "scanOllamaSystem", []]);
+  });
+
+  it("Scan Folder... is disabled - deferred to R7.4c's native picker", async () => {
+    const { user, push } = setup();
+    await goToOllama(user, push);
+
+    expect(screen.getByText("Scan Folder...")).toBeDisabled();
+  });
+
+  it("a per-task select defaults to auto and switching to inherit fires setOllamaModelAssignment immediately", async () => {
+    const { user, push, intents } = setup();
+    await goToOllama(user, push);
+
+    await user.selectOptions(screen.getByLabelText("Chat Naming Model"), "Use chat model");
+
+    expect(intents).toContainEqual(["app-settings", "setOllamaModelAssignment", ["task_title", "inherit"]]);
+  });
+
+  it("task_chat has no 'Use chat model' inherit option (it IS the chat model)", async () => {
+    const { user, push } = setup();
+    await goToOllama(user, push);
+
+    const chatSelect = screen.getByLabelText("Chat Model") as HTMLSelectElement;
+    const optionLabels = Array.from(chatSelect.options).map((o) => o.textContent);
+    expect(optionLabels).not.toContain("Use chat model");
+  });
+
+  it("switching a task to explicit reveals a text field; typing fires setOllamaModelAssignment", async () => {
+    const { user, push, intents } = setup();
+    await goToOllama(user, push);
+
+    await user.selectOptions(screen.getByLabelText("Chart Generation Model"), "Custom model ID...");
+    await user.type(screen.getByLabelText("Chart Generation Model (custom model ID)"), "x");
+
+    expect(intents).toContainEqual(["app-settings", "setOllamaModelAssignment", ["task_chart", "x"]]);
+  });
+
+  it("an existing explicit assignment shows the custom-ID field pre-populated, not the special modes", async () => {
+    const { user, push } = setup();
+    await goToOllama(user, push, { ollamaModelAssignments: { task_chart: "qwen3:8b" } });
+
+    expect(screen.getByLabelText("Chart Generation Model (custom model ID)")).toHaveValue("qwen3:8b");
+  });
+
+  it("scanned models populate the shared datalist used by task fields and the pull input", async () => {
+    const { user, push } = setup();
+    await goToOllama(user, push, { ollamaScannedModels: ["llama3.2:3b", "qwen3:8b"] });
+
+    const datalist = document.getElementById("settings-ollama-scanned-models");
+    expect(datalist?.querySelectorAll("option")).toHaveLength(2);
+  });
+
+  it("Validate and Pull Model stays disabled until a model name is typed", async () => {
+    const { user, push } = setup();
+    await goToOllama(user, push);
+
+    const pullButton = screen.getByRole("button", { name: "Validate and Pull Model" });
+    expect(pullButton).toBeDisabled();
+
+    await user.type(screen.getByPlaceholderText("Advanced model ID entry"), "llama3.2:3b");
+    expect(pullButton).toBeEnabled();
+  });
+
+  it("Validate and Pull Model fires pullOllamaModel with the typed name", async () => {
+    const { user, push, intents } = setup();
+    await goToOllama(user, push);
+
+    await user.type(screen.getByPlaceholderText("Advanced model ID entry"), "llama3.2:3b");
+    await user.click(screen.getByRole("button", { name: "Validate and Pull Model" }));
+
+    expect(intents).toContainEqual(["app-settings", "pullOllamaModel", ["llama3.2:3b"]]);
+  });
+
+  it("Validate and Pull Model is disabled and relabeled while a pull is running", async () => {
+    const { user, push } = setup();
+    await goToOllama(user, push, { ollamaPullStatus: "running" });
+
+    await user.type(screen.getByPlaceholderText("Advanced model ID entry"), "llama3.2:3b");
+
+    expect(screen.getByRole("button", { name: "Validating..." })).toBeDisabled();
+  });
+
+  it("an ollamaNotice renders as an inline error", async () => {
+    const { user, push } = setup();
+    await goToOllama(user, push, { ollamaNotice: "Model 'bogus' was not found on the Ollama hub." });
+
+    expect(screen.getByText("Model 'bogus' was not found on the Ollama hub.")).toBeInTheDocument();
   });
 
   it("the API key field always starts blank, even when a key is already configured", async () => {

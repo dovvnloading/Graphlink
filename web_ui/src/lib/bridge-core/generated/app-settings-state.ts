@@ -29,6 +29,14 @@ export interface AppSettingsState {
   apiCatalogMessage: string;
   geminiStaticModels: string[];
   geminiStaticImageModels: string[];
+  ollamaReasoningMode: string;
+  ollamaCurrentModel: string;
+  ollamaModelAssignments: Record<string, string>;
+  ollamaScannedModels: string[];
+  ollamaScanSummary: string;
+  ollamaScanStatus: string;
+  ollamaPullStatus: string;
+  ollamaNotice: string;
   minCompatibleSchemaVersion?: number | null;
 }
 
@@ -174,6 +182,48 @@ function checkAppSettingsState(value: unknown, path: string, errors: string[]): 
     if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.geminiStaticImageModels: missing required field`);
     else { if (!Array.isArray(fieldValue)) errors.push(`${path}.geminiStaticImageModels` + ": expected array");
     else (fieldValue as unknown[]).forEach((item, i) => { if (typeof item !== "string") errors.push(`${path}.geminiStaticImageModels` + `[${i}]` + ": expected string"); }); }
+  }
+  {
+    const fieldValue = value["ollamaReasoningMode"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.ollamaReasoningMode: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.ollamaReasoningMode` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["ollamaCurrentModel"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.ollamaCurrentModel: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.ollamaCurrentModel` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["ollamaModelAssignments"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.ollamaModelAssignments: missing required field`);
+    else { if (!isRecord(fieldValue)) errors.push(`${path}.ollamaModelAssignments` + ": expected object");
+    else Object.entries(fieldValue as Record<string, unknown>).forEach(([k, v]) => { if (typeof v !== "string") errors.push(`${path}.ollamaModelAssignments` + `[${JSON.stringify(k)}]` + ": expected string"); }); }
+  }
+  {
+    const fieldValue = value["ollamaScannedModels"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.ollamaScannedModels: missing required field`);
+    else { if (!Array.isArray(fieldValue)) errors.push(`${path}.ollamaScannedModels` + ": expected array");
+    else (fieldValue as unknown[]).forEach((item, i) => { if (typeof item !== "string") errors.push(`${path}.ollamaScannedModels` + `[${i}]` + ": expected string"); }); }
+  }
+  {
+    const fieldValue = value["ollamaScanSummary"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.ollamaScanSummary: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.ollamaScanSummary` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["ollamaScanStatus"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.ollamaScanStatus: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.ollamaScanStatus` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["ollamaPullStatus"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.ollamaPullStatus: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.ollamaPullStatus` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["ollamaNotice"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.ollamaNotice: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.ollamaNotice` + ": expected string"); }
   }
   {
     const fieldValue = value["minCompatibleSchemaVersion"];
