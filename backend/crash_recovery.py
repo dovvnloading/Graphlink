@@ -113,13 +113,30 @@ def configure_logging(base_dir: Path | str | None = None, level: int = logging.I
     resolved = log_path(base_dir)
     resolved.parent.mkdir(parents=True, exist_ok=True)
 
+    formatter = logging.Formatter(_LOG_FORMAT)
+
     handler = logging.handlers.RotatingFileHandler(
         resolved, maxBytes=_LOG_MAX_BYTES, backupCount=_LOG_BACKUP_COUNT, encoding="utf-8",
     )
-    handler.setFormatter(logging.Formatter(_LOG_FORMAT))
+    handler.setFormatter(formatter)
 
     root_logger = logging.getLogger()
     root_logger.addHandler(handler)
+
+    # Audit fix: this function replaced graphlink_desktop.py's own
+    # logging.basicConfig() call, which had given the root logger a stderr
+    # StreamHandler. Attaching only the file handler silently took the console
+    # away - and because logging.lastResort only fires when root has NO
+    # handler, `python graphlink_desktop.py` with a missing SPA build printed
+    # absolutely nothing and exited 1, despite that path logging a perfectly
+    # good error. Running from a terminal is the documented launch story for
+    # this entry point, so the console stays. The windowed-app argument was
+    # always a reason to ADD the file, never to remove stderr.
+    if sys.stderr is not None:
+        stream_handler = logging.StreamHandler()
+        stream_handler.setFormatter(formatter)
+        root_logger.addHandler(stream_handler)
+
     root_logger.setLevel(level)
 
     _logging_configured = True
@@ -134,7 +151,6 @@ def install_exception_handlers(base_dir: Path | str | None = None) -> None:
     global _handlers_installed, _faulthandler_file
     if _handlers_installed:
         return
-    _handlers_installed = True
 
     directory = crash_dir(base_dir)
     directory.mkdir(parents=True, exist_ok=True)
@@ -159,6 +175,13 @@ def install_exception_handlers(base_dir: Path | str | None = None) -> None:
     sys.excepthook = _excepthook
     threading.excepthook = _threading_excepthook
 
+    # Set LAST, matching configure_logging above. Audit finding: this used to
+    # be set first, so if mkdir or open() raised (an unwritable ~/.graphlink/
+    # crash, a full disk) the flag was already latched and every later retry
+    # became a silent no-op - leaving the hooks this function exists to
+    # install permanently absent, with no second chance.
+    _handlers_installed = True
+
 
 def mark_running(base_dir: Path | str | None = None) -> None:
     path = sentinel_path(base_dir)
@@ -170,7 +193,32 @@ def mark_running(base_dir: Path | str | None = None) -> None:
 
 
 def mark_clean_exit(base_dir: Path | str | None = None) -> None:
+    """Removes this process's own sentinel. Audit fix: this used to unlink
+    unconditionally, which made two concurrent instances corrupt each other -
+    B starts while A is running and overwrites the lock with B's pid, then A
+    exits cleanly and deletes it, so a later crash of B left no evidence and
+    went unreported on the next launch. Only the pid that wrote the sentinel
+    may remove it.
+
+    KNOWN, UNFIXED: the other half of that scenario - B seeing A's live lock
+    at startup and reporting a crash that never happened - needs a real
+    is-that-pid-alive check, which has no safe portable form here (os.kill's
+    signal-0 liveness probe is POSIX-only; on Windows os.kill calls
+    TerminateProcess and would kill the other instance). Left alone
+    deliberately rather than fixed with something dangerous."""
     path = sentinel_path(base_dir)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        owner = payload.get("pid")
+    except (FileNotFoundError, ValueError, OSError):
+        # Unreadable or malformed: fall back to the old unconditional
+        # behavior rather than leaving a stale lock that would report a
+        # phantom crash forever.
+        owner = os.getpid()
+
+    if owner != os.getpid():
+        return
+
     try:
         path.unlink()
     except FileNotFoundError:

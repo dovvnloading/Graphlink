@@ -26,10 +26,35 @@ import { toPng } from "html-to-image";
  * of what's currently visible" - the point of a canvas export is a complete,
  * shareable picture of the conversation, not a viewport crop.
  *
+ * WHY THE LIVE VIEWPORT IS SET AND RESTORED (audit finding, was a real bug):
+ * an earlier version applied the export transform ONLY to html-to-image's own
+ * clone and never touched the live canvas - which sounds strictly better
+ * (no flicker, nothing to restore) but silently made the exported IMAGE
+ * CONTENT depend on the viewer's current zoom, the exact thing the FRAMING
+ * paragraph above promises it doesn't. Every node view derives its collapsed
+ * state from React Flow's LIVE store zoom (ChatNodeView.tsx's
+ * `lodCollapsed = zoom < LOD_ZOOM_THRESHOLD`, threshold 0.5 in
+ * canvasConstants.ts), and a node's body is behind `{!collapsed && ...}` -
+ * so a user zoomed out to 0.4 to see their whole graph (the natural thing to
+ * do right before exporting it) got a PNG of title bars with no content.
+ * Overriding the clone's CSS transform cannot fix that: the clone is taken
+ * from DOM React has already rendered collapsed. The only fix is to put the
+ * live store at the export zoom, let React re-render, and capture that -
+ * hence setViewport + a double-rAF wait for the resulting paint, with the
+ * user's own viewport restored in a `finally` so a failed export can never
+ * strand them somewhere they didn't navigate to. The cost is one frame of
+ * visible movement during an export; the benefit is that the exported image
+ * no longer depends on where the user happened to be looking.
+ *
  * OUTPUT SIZE: a fixed 1920x1080 (a first, simple v1 default rather than
  * dynamically sizing to the content's own aspect ratio - avoids a much
  * larger, more speculative "what's the right image size for an arbitrarily
- * shaped graph" design problem for a first cut of this feature).
+ * shaped graph" design problem for a first cut of this feature). `pixelRatio:
+ * 1` is passed explicitly to make that literally true: html-to-image
+ * otherwise multiplies the canvas by window.devicePixelRatio, so the same
+ * graph exported from a 150%-scaled Windows display came out 2880x1620 and
+ * from a 200% display 3840x2160 - three users, three different files, none of
+ * them the documented size.
  *
  * MIN/MAX ZOOM: reuses the SAME 0.1-2.5 bounds SceneCanvas.tsx's own
  * <ReactFlow minZoom={0.1} maxZoom={2.5}> already enforces on the live
@@ -54,10 +79,15 @@ import { toPng } from "html-to-image";
  * defined - before ever handing anything to toPng is what actually avoids
  * that trap.
  *
- * html-to-image's toPng() clones the target node into an off-screen SVG
- * foreignObject, applies the `style` overrides ONLY to that clone, rasterizes
- * it, then discards the clone - the live page's actual pan/zoom is never
- * touched, so there is no visible flicker and nothing to restore afterward.
+ * FAILURE HANDLING: toPng genuinely rejects in states this app already
+ * anticipates - one unreachable /api/assets/{id} (ImageNodeView renders an
+ * "Image unavailable" placeholder for exactly that case) makes html-to-image's
+ * own embedImageNode reject the whole capture. Both call sites `void` this
+ * function's promise, so an unhandled rejection would mean the button does
+ * nothing, silently, with no way for the user to tell a failed export from a
+ * slow one. Caught and logged here instead, matching ImageNodeView.tsx's own
+ * handleExportImage - the directly analogous "rasterize/fetch, then download
+ * via a temporary anchor" helper in this codebase.
  */
 
 const IMAGE_WIDTH = 1920;
@@ -77,8 +107,18 @@ function resolveBackgroundColor(cssCustomPropertyName: string): string {
   return resolved || FALLBACK_BACKGROUND_COLOR;
 }
 
+/** Two frames, not one: the first rAF fires after React has committed the
+ * setViewport state update, the second after the browser has actually laid
+ * out and painted it. Capturing on the first would race the very re-render
+ * this wait exists to observe. */
+function nextPaint(): Promise<void> {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+  });
+}
+
 export async function exportCanvasAsPng(
-  rf: Pick<ReactFlowInstance, "getNodes">,
+  rf: Pick<ReactFlowInstance, "getNodes" | "getViewport" | "setViewport">,
   backgroundColorVar: string,
 ): Promise<void> {
   const nodes = rf.getNodes();
@@ -98,19 +138,34 @@ export async function exportCanvasAsPng(
   const bounds = getNodesBounds(nodes);
   const viewport = getViewportForBounds(bounds, IMAGE_WIDTH, IMAGE_HEIGHT, MIN_ZOOM, MAX_ZOOM, PADDING);
 
-  const dataUrl = await toPng(viewportEl, {
-    backgroundColor: resolveBackgroundColor(backgroundColorVar),
-    width: IMAGE_WIDTH,
-    height: IMAGE_HEIGHT,
-    style: {
-      width: `${IMAGE_WIDTH}px`,
-      height: `${IMAGE_HEIGHT}px`,
-      transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.zoom})`,
-    },
-  });
+  const userViewport = rf.getViewport();
+  try {
+    await rf.setViewport(viewport);
+    await nextPaint();
 
-  const anchor = document.createElement("a");
-  anchor.href = dataUrl;
-  anchor.download = timestampedFilename();
-  anchor.click();
+    const dataUrl = await toPng(viewportEl, {
+      backgroundColor: resolveBackgroundColor(backgroundColorVar),
+      width: IMAGE_WIDTH,
+      height: IMAGE_HEIGHT,
+      pixelRatio: 1,
+      style: {
+        // Redundant with the live viewport we just set, deliberately: it
+        // pins the clone's framing to the exact numbers computed above even
+        // if React Flow's own transform hasn't settled, and it is what React
+        // Flow's documented export recipe does.
+        width: `${IMAGE_WIDTH}px`,
+        height: `${IMAGE_HEIGHT}px`,
+        transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.zoom})`,
+      },
+    });
+
+    const anchor = document.createElement("a");
+    anchor.href = dataUrl;
+    anchor.download = timestampedFilename();
+    anchor.click();
+  } catch (error) {
+    console.error("[export-png] Export failed:", error);
+  } finally {
+    await rf.setViewport(userViewport);
+  }
 }

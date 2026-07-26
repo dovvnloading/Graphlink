@@ -1,4 +1,4 @@
-import { getNodesBounds, getViewportForBounds } from "@xyflow/react";
+import { getNodesBounds, getViewportForBounds, type Viewport } from "@xyflow/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // html-to-image performs real DOM-to-canvas rasterization that jsdom can't
@@ -25,6 +25,24 @@ function fakeNode(id: string, x: number, y: number) {
   };
 }
 
+const USER_VIEWPORT: Viewport = { x: -50, y: -25, zoom: 0.4 };
+
+/** A stand-in for the bits of ReactFlowInstance this module actually uses,
+ * recording every setViewport call so the set-then-restore contract can be
+ * asserted on rather than assumed. */
+function fakeRf(nodes: ReturnType<typeof fakeNode>[]) {
+  const setViewportCalls: Viewport[] = [];
+  return {
+    getNodes: () => nodes,
+    getViewport: () => USER_VIEWPORT,
+    setViewport: (viewport: Viewport) => {
+      setViewportCalls.push(viewport);
+      return Promise.resolve(true);
+    },
+    setViewportCalls,
+  };
+}
+
 describe("exportCanvasAsPng", () => {
   let viewportEl: HTMLDivElement;
 
@@ -44,19 +62,24 @@ describe("exportCanvasAsPng", () => {
 
   it("does nothing when the canvas has no nodes - no rasterization, no download", async () => {
     const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    const rf = fakeRf([]);
 
-    await exportCanvasAsPng({ getNodes: () => [] }, "--gl-surface-window");
+    await exportCanvasAsPng(rf, "--gl-surface-window");
 
     expect(toPngMock).not.toHaveBeenCalled();
     expect(clickSpy).not.toHaveBeenCalled();
+    // Nothing to export must also mean nothing moved on screen.
+    expect(rf.setViewportCalls).toEqual([]);
   });
 
   it("does nothing when .react-flow__viewport isn't in the DOM", async () => {
     document.body.removeChild(viewportEl); // remove it before calling
+    const rf = fakeRf([fakeNode("n1", 0, 0)]);
 
-    await exportCanvasAsPng({ getNodes: () => [fakeNode("n1", 0, 0)] }, "--gl-surface-window");
+    await exportCanvasAsPng(rf, "--gl-surface-window");
 
     expect(toPngMock).not.toHaveBeenCalled();
+    expect(rf.setViewportCalls).toEqual([]);
 
     document.body.appendChild(viewportEl); // restore for afterEach's own removal
   });
@@ -71,7 +94,7 @@ describe("exportCanvasAsPng", () => {
     document.documentElement.style.setProperty("--gl-surface-window", "#1E1E1E");
     vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
 
-    await exportCanvasAsPng({ getNodes: () => [fakeNode("n1", 0, 0)] }, "--gl-surface-window");
+    await exportCanvasAsPng(fakeRf([fakeNode("n1", 0, 0)]), "--gl-surface-window");
 
     const [, options] = toPngMock.mock.calls[0];
     expect(options.backgroundColor).toBe("#1E1E1E");
@@ -80,7 +103,7 @@ describe("exportCanvasAsPng", () => {
   it("falls back to a concrete dark color when the CSS custom property isn't defined", async () => {
     vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
 
-    await exportCanvasAsPng({ getNodes: () => [fakeNode("n1", 0, 0)] }, "--gl-surface-window-does-not-exist");
+    await exportCanvasAsPng(fakeRf([fakeNode("n1", 0, 0)]), "--gl-surface-window-does-not-exist");
 
     const [, options] = toPngMock.mock.calls[0];
     expect(options.backgroundColor).toBe("#1a1a1a");
@@ -102,7 +125,7 @@ describe("exportCanvasAsPng", () => {
     const expectedBounds = getNodesBounds(nodes);
     const expectedViewport = getViewportForBounds(expectedBounds, 1920, 1080, 0.1, 2.5, 0.1);
 
-    await exportCanvasAsPng({ getNodes: () => nodes }, "--gl-surface-window");
+    await exportCanvasAsPng(fakeRf(nodes), "--gl-surface-window");
 
     expect(toPngMock).toHaveBeenCalledOnce();
     const [target, options] = toPngMock.mock.calls[0];
@@ -116,14 +139,27 @@ describe("exportCanvasAsPng", () => {
     );
   });
 
+  it("pins pixelRatio to 1 so the output really is 1920x1080 on a high-DPI display", async () => {
+    // Audit finding: without this, html-to-image multiplies the canvas by
+    // window.devicePixelRatio - the same graph exported from a 150%-scaled
+    // Windows display came out 2880x1620, contradicting the fixed size this
+    // module documents and giving two users different files for one graph.
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+
+    await exportCanvasAsPng(fakeRf([fakeNode("n1", 0, 0)]), "--gl-surface-window");
+
+    const [, options] = toPngMock.mock.calls[0];
+    expect(options.pixelRatio).toBe(1);
+  });
+
   it("a single node produces a different transform than two spread-out nodes", async () => {
     vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
 
-    await exportCanvasAsPng({ getNodes: () => [fakeNode("n1", 0, 0)] }, "--gl-surface-window");
+    await exportCanvasAsPng(fakeRf([fakeNode("n1", 0, 0)]), "--gl-surface-window");
     const singleNodeTransform = toPngMock.mock.calls[0][1].style.transform;
 
     toPngMock.mockClear();
-    await exportCanvasAsPng({ getNodes: () => [fakeNode("n1", 0, 0), fakeNode("n2", 900, 700)] }, "--gl-surface-window");
+    await exportCanvasAsPng(fakeRf([fakeNode("n1", 0, 0), fakeNode("n2", 900, 700)]), "--gl-surface-window");
     const twoNodeTransform = toPngMock.mock.calls[0][1].style.transform;
 
     expect(twoNodeTransform).not.toBe(singleNodeTransform);
@@ -135,9 +171,59 @@ describe("exportCanvasAsPng", () => {
       captured.anchor = this;
     });
 
-    await exportCanvasAsPng({ getNodes: () => [fakeNode("n1", 0, 0)] }, "--gl-surface-window");
+    await exportCanvasAsPng(fakeRf([fakeNode("n1", 0, 0)]), "--gl-surface-window");
 
     expect(captured.anchor?.getAttribute("href")).toBe("data:image/png;base64,fake");
     expect(captured.anchor?.getAttribute("download")).toMatch(/^graphlink-canvas-.+\.png$/);
+  });
+
+  // -- audit fix: the live viewport must be at the export zoom during capture --
+
+  it("puts the LIVE viewport at the export framing before rasterizing, then restores the user's own", async () => {
+    // Audit finding (real bug): node views read React Flow's live store zoom
+    // to decide whether to render collapsed (lodCollapsed = zoom < 0.5). With
+    // the export transform applied only to html-to-image's clone, a user
+    // zoomed out below that threshold exported title bars with no content -
+    // the clone is taken from DOM React already rendered collapsed, so no
+    // CSS override on the clone can bring the bodies back. Only moving the
+    // live store makes React re-render at the export zoom.
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    const nodes = [fakeNode("n1", 0, 0), fakeNode("n2", 900, 700)];
+    const expectedViewport = getViewportForBounds(getNodesBounds(nodes), 1920, 1080, 0.1, 2.5, 0.1);
+
+    const rf = fakeRf(nodes);
+    let viewportDuringCapture: Viewport | undefined;
+    toPngMock.mockImplementation(() => {
+      viewportDuringCapture = rf.setViewportCalls[rf.setViewportCalls.length - 1];
+      return Promise.resolve("data:image/png;base64,fake");
+    });
+
+    await exportCanvasAsPng(rf, "--gl-surface-window");
+
+    // The zoom in force AT capture time is the computed export zoom, not the
+    // user's 0.4 - this is the assertion the old implementation would fail.
+    expect(viewportDuringCapture).toEqual(expectedViewport);
+    expect(expectedViewport.zoom).not.toBe(USER_VIEWPORT.zoom);
+    // ...and the user is put back exactly where they were.
+    expect(rf.setViewportCalls).toEqual([expectedViewport, USER_VIEWPORT]);
+  });
+
+  it("restores the user's viewport and logs, without rejecting, when rasterization fails", async () => {
+    // Audit finding: toPng genuinely rejects when a node's image asset is
+    // unreachable (a state ImageNodeView already renders a placeholder for).
+    // Both call sites `void` this promise, so an unhandled rejection meant a
+    // dead button and a user stranded at the export zoom.
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    toPngMock.mockRejectedValue(new Error("Failed to embed image"));
+
+    const rf = fakeRf([fakeNode("n1", 0, 0)]);
+
+    await expect(exportCanvasAsPng(rf, "--gl-surface-window")).resolves.toBeUndefined();
+
+    expect(clickSpy).not.toHaveBeenCalled();
+    expect(consoleSpy).toHaveBeenCalledWith("[export-png] Export failed:", expect.any(Error));
+    // The user must not be left stranded at the export zoom.
+    expect(rf.setViewportCalls[rf.setViewportCalls.length - 1]).toEqual(USER_VIEWPORT);
   });
 });

@@ -83,7 +83,7 @@ export function AppBar({ store }: { store: SceneStore }) {
         type="button"
         className="appbar-btn"
         title="Export the whole canvas as a PNG image"
-        onClick={() => void exportCanvasAsPng({ getNodes }, "--gl-surface-window")}
+        onClick={() => void exportCanvasAsPng({ getNodes, getViewport, setViewport }, "--gl-surface-window")}
       >
         Export PNG
       </button>
