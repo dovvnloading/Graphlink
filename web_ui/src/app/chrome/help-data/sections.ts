@@ -279,7 +279,7 @@ export const HELP_SECTIONS: HelpSection[] = [
           },
           {
             "action": "Grid and Guide Controls",
-            "description": "The controls overlay can enable snap-to-grid and font controls. Smart guides, orthogonal routing, and faded connections are not available yet in this build. These tools are useful when a canvas needs visual cleanup rather than new AI output."
+            "description": "The controls overlay can enable snap-to-grid, font controls, and faded connections. Smart guides and orthogonal routing are not available yet in this build. These tools are useful when a canvas needs visual cleanup rather than new AI output."
           },
           {
             "action": "Reduce Visual Noise",

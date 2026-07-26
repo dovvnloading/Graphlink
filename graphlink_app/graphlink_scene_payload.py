@@ -321,6 +321,9 @@ class SceneStatePayload:
     edges: list[SceneEdgeRow]
     pins: list[ScenePinRow]
     snapToGrid: bool
+    # R7.5b-1: Qt-removal plan R7.5's first canvas-visual parity fix -
+    # populated 1:1 from backend/canvas.py's SceneDocument.fade_connections_enabled.
+    fadeConnectionsEnabled: bool
     dragFactor: float
     fontFamily: str
     fontSizePt: int

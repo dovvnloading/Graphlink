@@ -4,6 +4,7 @@ import {
   groupDragKindOf,
   handleSelectionChange,
   makeDebouncedViewportReport,
+  toFlowEdges,
   toFlowNodes,
   type SceneFlowNode,
 } from "./SceneCanvas";
@@ -1481,5 +1482,56 @@ describe("applyGroupDragDelta (R6.1 group-drag)", () => {
       } as unknown as SceneFlowNode,
     ];
     expect(applyGroupDragDelta(nodes, "frame-1", { x: 10, y: 10 })).toEqual([]);
+  });
+});
+
+describe("toFlowEdges (R7.5b-1 faded connections)", () => {
+  const scene = baseScene({
+    nodes: [baseNode({ id: "a" }), baseNode({ id: "b" }), baseNode({ id: "c" })],
+    edges: [
+      { id: "e1", source: "a", target: "b" },
+      { id: "e2", source: "a", target: "c" },
+    ],
+  });
+
+  it("applies no opacity style to any edge when fadeConnectionsEnabled is false, regardless of hover", () => {
+    const off = baseScene({ ...scene, fadeConnectionsEnabled: false });
+    expect(toFlowEdges(off, null)).toEqual([
+      { id: "e1", source: "a", target: "b" },
+      { id: "e2", source: "a", target: "c" },
+    ]);
+    expect(toFlowEdges(off, "e1")).toEqual([
+      { id: "e1", source: "a", target: "b" },
+      { id: "e2", source: "a", target: "c" },
+    ]);
+  });
+
+  it("fades every edge except the hovered one when fadeConnectionsEnabled is true", () => {
+    const on = baseScene({ ...scene, fadeConnectionsEnabled: true });
+    const edges = toFlowEdges(on, "e1");
+    expect(edges.find((e) => e.id === "e1")).toEqual({ id: "e1", source: "a", target: "b" });
+    expect(edges.find((e) => e.id === "e2")).toEqual({
+      id: "e2",
+      source: "a",
+      target: "c",
+      style: { opacity: 0.08 },
+    });
+  });
+
+  it("fades every edge when nothing is hovered", () => {
+    const on = baseScene({ ...scene, fadeConnectionsEnabled: true });
+    const edges = toFlowEdges(on, null);
+    for (const edge of edges) {
+      expect(edge.style).toEqual({ opacity: 0.08 });
+    }
+  });
+
+  it("still suppresses an edge pointing at a docked node, independent of fade state", () => {
+    const docked = baseScene({
+      nodes: [baseNode({ id: "a" }), baseNode({ id: "b", isDocked: true })],
+      edges: [{ id: "e1", source: "a", target: "b" }],
+      fadeConnectionsEnabled: true,
+    });
+    expect(toFlowEdges(docked, null)).toEqual([]);
   });
 });

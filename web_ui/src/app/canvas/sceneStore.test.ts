@@ -96,6 +96,7 @@ function validScenePayload(overrides: Record<string, unknown> = {}) {
     edges: [],
     pins: [],
     snapToGrid: true,
+    fadeConnectionsEnabled: false,
     dragFactor: 0.5,
     fontFamily: "Segoe UI",
     fontSizePt: 9,

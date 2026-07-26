@@ -23,6 +23,7 @@ export const initialSceneState: SceneState = {
   edges: [],
   pins: [],
   snapToGrid: false,
+  fadeConnectionsEnabled: false,
   dragFactor: 1,
   fontFamily: "Segoe UI",
   fontSizePt: 9,
@@ -526,6 +527,11 @@ export class SceneStore {
 
   setSnapToGrid(enabled: boolean): void {
     this.transport.intent("scene", "setSnapToGrid", [enabled]);
+  }
+
+  // R7.5b-1: same bare-bool/"scene"-topic shape as setSnapToGrid above.
+  setFadeConnections(enabled: boolean): void {
+    this.transport.intent("scene", "setFadeConnections", [enabled]);
   }
 
   setDragFactor(factor: number): void {
