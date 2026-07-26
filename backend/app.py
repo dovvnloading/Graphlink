@@ -158,7 +158,7 @@ def _configure_session(
     # to - both must exist before register_canvas builds the sendMessage
     # intent that calls them.
     token_counter = register_token_counter(bus)
-    composer_document = register_composer(bus, token_counter)
+    composer_document = register_composer(bus, token_counter, settings_manager, notifications_state)
 
     # R4 (doc/QT_REMOVAL_PLAN.md): the agent-dispatch service - one
     # AgentDispatcher per session (never a module-level singleton). Bolted

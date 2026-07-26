@@ -34,8 +34,13 @@ from dataclasses import dataclass, field
 from typing import Any
 from uuid import uuid4
 
+import api_provider
+
 from backend.events import SessionBus
+from backend.notifications import NotificationState
+from backend.settings import apply_llama_cpp_reasoning_mode, apply_ollama_reasoning_mode
 from backend.token_counter import TokenCounterState
+from graphlink_licensing import SettingsManager
 
 REASONING_OPTIONS = [
     {"id": "thinking", "label": "Thinking Mode (Enable CoT)", "description": "Slower, higher-quality reasoning."},
@@ -134,14 +139,25 @@ class ComposerDocument:
                 "contextReview": False,
                 "routeSelection": False,
                 "modelSelection": False,
-                "reasoningSelection": True,
+                "reasoningSelection": api_provider.is_local_ollama_mode() or api_provider.is_local_llama_cpp_mode(),
                 "settingsShortcut": True,
                 "cancellation": True,
             },
         }
 
 
-def register_composer(bus: SessionBus, token_counter: TokenCounterState) -> ComposerDocument:
+def register_composer(
+    bus: SessionBus,
+    token_counter: TokenCounterState,
+    settings_manager: SettingsManager | None = None,
+    notifications: NotificationState | None = None,
+) -> ComposerDocument:
+    # settings_manager/notifications are optional only so the 2-positional-
+    # arg call in backend/tests/test_backend_composer.py's make_bus()
+    # (register_composer(bus, counter)) keeps working unchanged - the real
+    # (and only) production call site, backend/app.py's _configure_session,
+    # always passes both (mirroring register_settings's own `notifications`
+    # optional-param precedent exactly).
     document = ComposerDocument()
     bus.register_topic("app-composer", document.payload)
 
@@ -156,7 +172,45 @@ def register_composer(bus: SessionBus, token_counter: TokenCounterState) -> Comp
         await bus.publish("token-counter")
 
     async def set_reasoning_level(level):
+        # Busy-guard, matching legacy's setReasoningLevel exactly
+        # (graphlink_composer_bridge.py, ~line 249): a bare no-op - no
+        # exception, no publish - while a request is in flight. This
+        # document only ever has two request_state values
+        # ("idle"/"generating"), already exposed on the wire as
+        # request.canSend == (request_state == "idle") - reuse that existing
+        # fact rather than adding a second field for it.
+        if document.request_state != "idle":
+            return
+
+        # Unchanged existing behavior: raises ComposerError for an
+        # unrecognized id (see
+        # test_set_reasoning_level_intent_updates_and_rejects_unknown).
         document.set_reasoning_level(level)
+
+        # Same Title-Case normalization backend/settings.py's own
+        # _OLLAMA_REASONING_MODES/_LLAMA_CPP_REASONING_MODES validate
+        # against, and legacy's own bridge applied. This ternary is TOTAL -
+        # it always produces "Thinking" or "Quick" - so the shared apply
+        # functions below never need to re-validate whatever this handler
+        # passes them.
+        normalized_mode = "Thinking" if str(level).strip().lower() == "thinking" else "Quick"
+
+        if settings_manager is not None:
+            # Mutually exclusive by construction (api_provider.py) - order
+            # between the two branches is arbitrary; Ollama-first here
+            # purely to match backend/settings.py's own file ordering
+            # (Ollama defined before Llama.cpp throughout that file).
+            if api_provider.is_local_ollama_mode():
+                await apply_ollama_reasoning_mode(settings_manager, normalized_mode)
+            elif api_provider.is_local_llama_cpp_mode():
+                failure = await apply_llama_cpp_reasoning_mode(settings_manager, normalized_mode)
+                if failure is not None and notifications is not None:
+                    notifications.show(failure, "error")
+                    await bus.publish("notification")
+            # else: cloud/API mode - reasoningSelection is already False
+            # there (see payload() above), so the UI disables this control
+            # entirely; skip the apply step, never raise.
+
         await publish()
 
     bus.register_intent("app-composer", "updateDraft", update_draft)
