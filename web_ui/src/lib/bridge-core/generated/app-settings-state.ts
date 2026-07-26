@@ -37,6 +37,17 @@ export interface AppSettingsState {
   ollamaScanStatus: string;
   ollamaPullStatus: string;
   ollamaNotice: string;
+  llamaCppReasoningMode: string;
+  llamaCppChatModelPath: string;
+  llamaCppTitleModelPath: string;
+  llamaCppChatFormat: string;
+  llamaCppNCtx: number;
+  llamaCppNGpuLayers: number;
+  llamaCppNThreads: number;
+  llamaCppScannedModels: string[];
+  llamaCppScanSummary: string;
+  llamaCppScanStatus: string;
+  llamaCppNotice: string;
   minCompatibleSchemaVersion?: number | null;
 }
 
@@ -224,6 +235,62 @@ function checkAppSettingsState(value: unknown, path: string, errors: string[]): 
     const fieldValue = value["ollamaNotice"];
     if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.ollamaNotice: missing required field`);
     else { if (typeof fieldValue !== "string") errors.push(`${path}.ollamaNotice` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["llamaCppReasoningMode"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.llamaCppReasoningMode: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.llamaCppReasoningMode` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["llamaCppChatModelPath"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.llamaCppChatModelPath: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.llamaCppChatModelPath` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["llamaCppTitleModelPath"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.llamaCppTitleModelPath: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.llamaCppTitleModelPath` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["llamaCppChatFormat"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.llamaCppChatFormat: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.llamaCppChatFormat` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["llamaCppNCtx"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.llamaCppNCtx: missing required field`);
+    else { if (typeof fieldValue !== "number") errors.push(`${path}.llamaCppNCtx` + ": expected number"); }
+  }
+  {
+    const fieldValue = value["llamaCppNGpuLayers"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.llamaCppNGpuLayers: missing required field`);
+    else { if (typeof fieldValue !== "number") errors.push(`${path}.llamaCppNGpuLayers` + ": expected number"); }
+  }
+  {
+    const fieldValue = value["llamaCppNThreads"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.llamaCppNThreads: missing required field`);
+    else { if (typeof fieldValue !== "number") errors.push(`${path}.llamaCppNThreads` + ": expected number"); }
+  }
+  {
+    const fieldValue = value["llamaCppScannedModels"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.llamaCppScannedModels: missing required field`);
+    else { if (!Array.isArray(fieldValue)) errors.push(`${path}.llamaCppScannedModels` + ": expected array");
+    else (fieldValue as unknown[]).forEach((item, i) => { if (typeof item !== "string") errors.push(`${path}.llamaCppScannedModels` + `[${i}]` + ": expected string"); }); }
+  }
+  {
+    const fieldValue = value["llamaCppScanSummary"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.llamaCppScanSummary: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.llamaCppScanSummary` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["llamaCppScanStatus"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.llamaCppScanStatus: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.llamaCppScanStatus` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["llamaCppNotice"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.llamaCppNotice: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.llamaCppNotice` + ": expected string"); }
   }
   {
     const fieldValue = value["minCompatibleSchemaVersion"];

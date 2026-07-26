@@ -81,6 +81,42 @@
     "githubTokenConfigured": {
       "type": "boolean"
     },
+    "llamaCppChatFormat": {
+      "type": "string"
+    },
+    "llamaCppChatModelPath": {
+      "type": "string"
+    },
+    "llamaCppNCtx": {
+      "type": "integer"
+    },
+    "llamaCppNGpuLayers": {
+      "type": "integer"
+    },
+    "llamaCppNThreads": {
+      "type": "integer"
+    },
+    "llamaCppNotice": {
+      "type": "string"
+    },
+    "llamaCppReasoningMode": {
+      "type": "string"
+    },
+    "llamaCppScanStatus": {
+      "type": "string"
+    },
+    "llamaCppScanSummary": {
+      "type": "string"
+    },
+    "llamaCppScannedModels": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "llamaCppTitleModelPath": {
+      "type": "string"
+    },
     "minCompatibleSchemaVersion": {
       "type": "integer"
     },
@@ -162,7 +198,18 @@
     "ollamaScanSummary",
     "ollamaScanStatus",
     "ollamaPullStatus",
-    "ollamaNotice"
+    "ollamaNotice",
+    "llamaCppReasoningMode",
+    "llamaCppChatModelPath",
+    "llamaCppTitleModelPath",
+    "llamaCppChatFormat",
+    "llamaCppNCtx",
+    "llamaCppNGpuLayers",
+    "llamaCppNThreads",
+    "llamaCppScannedModels",
+    "llamaCppScanSummary",
+    "llamaCppScanStatus",
+    "llamaCppNotice"
   ],
   "title": "AppSettingsState",
   "type": "object"
