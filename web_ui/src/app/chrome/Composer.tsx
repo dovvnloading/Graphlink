@@ -107,6 +107,7 @@ export function Composer({ store, sceneStore }: { store: ComposerStore; sceneSto
           data-overlay-trigger="reasoning"
           aria-haspopup="dialog"
           aria-pressed={overlays.isOpen("reasoning")}
+          disabled={!composer.capabilities.reasoningSelection || !composer.request.canSend}
           onClick={() => overlays.toggle("reasoning", "popover")}
         >
           <span className="control-kicker">Reasoning</span>

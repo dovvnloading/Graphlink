@@ -140,6 +140,51 @@ def _locked_llama_cpp_settings(manager: SettingsManager) -> dict[str, Any]:
         return manager.get_llama_cpp_settings()
 
 
+async def apply_ollama_reasoning_mode(manager: SettingsManager, mode: str) -> None:
+    """Persist `mode` and, if Ollama is still the live provider, re-apply it to
+    api_provider's module state so the very next chat()/chat_stream() call
+    picks it up. `mode` MUST already be "Thinking" or "Quick" - this function
+    does not re-validate it (every caller's own normalization is total, so
+    there is no path that could hand it anything else). Checked-and-applied
+    inside the SAME asyncio.to_thread hop as a deliberate race-preemption:
+    see set_ollama_reasoning_mode's inline comment for why. Shared by this
+    file's own setOllamaReasoningMode intent (Settings-dialog Ollama page)
+    and backend/composer.py's setReasoningLevel intent (composer's own
+    quick-access popover) so both surfaces apply a change identically."""
+    await asyncio.to_thread(_apply, manager.set_ollama_reasoning_mode, mode)
+
+    def _reapply_if_ollama_is_still_the_live_provider() -> None:
+        if api_provider.is_local_ollama_mode():
+            api_provider.initialize_local_provider(config.LOCAL_PROVIDER_OLLAMA, {"reasoning_mode": mode})
+
+    await asyncio.to_thread(_reapply_if_ollama_is_still_the_live_provider)
+
+
+async def apply_llama_cpp_reasoning_mode(manager: SettingsManager, mode: str) -> str | None:
+    """Same contract as apply_ollama_reasoning_mode, for Llama.cpp. Returns a
+    human-readable failure message if the live re-apply fails (the mode is
+    ALREADY persisted regardless - only the live effect is delayed to the
+    next mode switch/restart), or None on success / when Llama.cpp is not the
+    active provider. Returns rather than writes a notice directly: this
+    file's own setLlamaCppReasoningMode intent writes the message into its
+    page-local llama_notice cell; backend/composer.py's intent has no such
+    cell and surfaces it through the shared NotificationState banner
+    instead - that decision belongs to each caller, not to this function."""
+    await asyncio.to_thread(_apply, manager.set_llama_cpp_reasoning_mode, mode)
+
+    def _reapply_if_llama_cpp_is_still_the_live_provider() -> None:
+        if api_provider.is_local_llama_cpp_mode():
+            settings = _locked_llama_cpp_settings(manager)
+            settings["reasoning_mode"] = mode
+            api_provider.initialize_local_provider(config.LOCAL_PROVIDER_LLAMACPP, settings)
+
+    try:
+        await asyncio.to_thread(_reapply_if_llama_cpp_is_still_the_live_provider)
+    except Exception as exc:  # noqa: BLE001 - no secret in this path (a local file path, not a credential)
+        return f"Reasoning mode saved, but could not be applied to the live model: {exc}"
+    return None
+
+
 def _redact(text: str, secret: Any) -> str:
     # Post-review fix: some HTTP client libraries embed request parameters
     # (including a rejected API key) directly in exception text - the
@@ -642,40 +687,37 @@ def register_settings(
         await bus.publish("app-settings")
 
     async def set_ollama_reasoning_mode(mode: str):
+        # Checked and applied inside the SAME to_thread hop, not split across
+        # an await boundary: a concurrent mode switch (the toolbar's provider
+        # selector) landing in a gap between a separate check and a later
+        # apply could otherwise force the live provider back to Ollama after
+        # the user had already switched away - the same class of
+        # stale-check-then-await race the R7.4a audit found and fixed
+        # elsewhere in this file.
+        # Legacy-parity note (corrected after adversarial review): this live
+        # re-apply is NOT what legacy's own settings dialog did.
+        # graphlink_settings_bridge.py's setOllamaReasoningMode called
+        # _reinitialize_main_window_agent() unconditionally, which just
+        # rebuilds ChatAgent - it never touched the live
+        # OLLAMA_REASONING_MODE global api_provider.py's chat dispatch
+        # actually reads. Legacy's ONLY path that ever updated that global
+        # was a completely separate control - the composer toolbar's
+        # setReasoningLevel - which the Settings dialog was never wired to.
+        # So in real legacy usage, changing reasoning mode via Settings
+        # persisted the value but left the live think= kwarg stale until the
+        # next provider-mode switch or restart. This re-apply is a genuine
+        # fix for that gap, not a port of existing legacy behavior - gated on
+        # is_local_ollama_mode() so it can't be the mechanism that forces a
+        # user who already switched to a different provider back onto
+        # Ollama.
+        #
+        # R7.5d: this apply/re-apply sequence is now shared with
+        # backend/composer.py's own setReasoningLevel intent - see
+        # apply_ollama_reasoning_mode's own docstring above.
         mode = str(mode)
         if mode not in _OLLAMA_REASONING_MODES:
             return
-        await asyncio.to_thread(_apply, manager.set_ollama_reasoning_mode, mode)
-
-        def _reapply_if_ollama_is_still_the_live_provider() -> None:
-            # Checked and applied inside the SAME to_thread hop, not split
-            # across an await boundary: a concurrent mode switch (the
-            # toolbar's provider selector) landing in a gap between a
-            # separate check and a later apply could otherwise force the
-            # live provider back to Ollama after the user had already
-            # switched away - the same class of stale-check-then-await
-            # race the R7.4a audit found and fixed elsewhere in this file.
-            # Legacy-parity note (corrected after adversarial review): this
-            # live re-apply is NOT what legacy's own settings dialog did.
-            # graphlink_settings_bridge.py's setOllamaReasoningMode called
-            # _reinitialize_main_window_agent() unconditionally, which just
-            # rebuilds ChatAgent - it never touched the live
-            # OLLAMA_REASONING_MODE global api_provider.py's chat dispatch
-            # actually reads. Legacy's ONLY path that ever updated that
-            # global was a completely separate control - the composer
-            # toolbar's setReasoningLevel - which the Settings dialog was
-            # never wired to. So in real legacy usage, changing reasoning
-            # mode via Settings persisted the value but left the live
-            # think= kwarg stale until the next provider-mode switch or
-            # restart. This re-apply is a genuine fix for that gap, not a
-            # port of existing legacy behavior - gated on
-            # is_local_ollama_mode() so it can't be the mechanism that
-            # forces a user who already switched to a different provider
-            # back onto Ollama.
-            if api_provider.is_local_ollama_mode():
-                api_provider.initialize_local_provider(config.LOCAL_PROVIDER_OLLAMA, {"reasoning_mode": mode})
-
-        await asyncio.to_thread(_reapply_if_ollama_is_still_the_live_provider)
+        await apply_ollama_reasoning_mode(manager, mode)
         await bus.publish("app-settings")
 
     async def set_ollama_model_assignment(task: str, value: str):
@@ -866,33 +908,31 @@ def register_settings(
         await bus.publish("app-settings")
 
     async def set_llama_cpp_reasoning_mode(mode: str):
+        # Same shape as set_ollama_reasoning_mode's own live re-apply: gated
+        # on is_local_llama_cpp_mode(), checked and applied inside the SAME
+        # to_thread hop so a concurrent provider-mode switch can't be
+        # clobbered back to Llama.cpp. Unlike Ollama's version, this
+        # genuinely CAN fail: initialize_local_provider's Llama.cpp branch
+        # re-validates chat_model_path (must still be a real, existing .gguf
+        # file) every time it runs - if that file was deleted/moved from
+        # under an already-active session since Llama.cpp was last
+        # activated, this raises. The mode is already persisted regardless,
+        # so a failure here only means it takes effect on the next mode
+        # switch/restart instead of immediately - not a lost setting.
+        #
+        # R7.5d: this apply/re-apply sequence is now shared with
+        # backend/composer.py's own setReasoningLevel intent - see
+        # apply_llama_cpp_reasoning_mode's own docstring above.
         mode = str(mode)
         if mode not in _LLAMA_CPP_REASONING_MODES:
             return
-        await asyncio.to_thread(_apply, manager.set_llama_cpp_reasoning_mode, mode)
-
-        def _reapply_if_llama_cpp_is_still_the_live_provider() -> None:
-            # Same shape as set_ollama_reasoning_mode's own live re-apply:
-            # gated on is_local_llama_cpp_mode(), checked and applied inside
-            # this SAME to_thread hop so a concurrent provider-mode switch
-            # can't be clobbered back to Llama.cpp. Unlike Ollama's version,
-            # this genuinely CAN fail: initialize_local_provider's
-            # Llama.cpp branch re-validates chat_model_path (must still be
-            # a real, existing .gguf file) every time it runs - if that
-            # file was deleted/moved from under an already-active session
-            # since Llama.cpp was last activated, this raises. The mode is
-            # already persisted above regardless, so a failure here only
-            # means it takes effect on the next mode switch/restart instead
-            # of immediately - not a lost setting.
-            if api_provider.is_local_llama_cpp_mode():
-                settings = _locked_llama_cpp_settings(manager)
-                settings["reasoning_mode"] = mode
-                api_provider.initialize_local_provider(config.LOCAL_PROVIDER_LLAMACPP, settings)
-
-        try:
-            await asyncio.to_thread(_reapply_if_llama_cpp_is_still_the_live_provider)
-        except Exception as exc:  # noqa: BLE001 - no secret in this path (a local file path, not a credential)
-            llama_notice["value"] = f"Reasoning mode saved, but could not be applied to the live model: {exc}"
+        failure = await apply_llama_cpp_reasoning_mode(manager, mode)
+        if failure is not None:
+            llama_notice["value"] = failure
+        # NOTE: on success, do NOT clear llama_notice to "" - this preserves
+        # the exact pre-existing behavior (today's code never clears it on
+        # success either); do not "improve" this as a drive-by fix in this
+        # increment.
         await bus.publish("app-settings")
 
     async def set_llama_cpp_chat_format(chat_format: str):

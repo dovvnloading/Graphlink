@@ -238,6 +238,7 @@ describe("Composer", () => {
             ],
           },
         },
+        request: { ...initialComposerState.request, canSend: true },
       },
     });
     render(
@@ -250,6 +251,46 @@ describe("Composer", () => {
     await user.click(screen.getByText("Thinking Mode (Enable CoT)"));
     expect(setReasoningLevel).toHaveBeenCalledWith("thinking");
     expect(screen.queryByText("Thinking Mode (Enable CoT)")).toBeNull();
+  });
+
+  it("Reasoning trigger is disabled when reasoningSelection is false", () => {
+    const { store } = makeStore({
+      composer: {
+        capabilities: { ...initialComposerState.capabilities, reasoningSelection: false },
+        request: { ...initialComposerState.request, canSend: true },
+      },
+    });
+    const { container } = render(
+      <OverlayProvider>
+        {/* @ts-expect-error - test double */}
+        <Composer store={store} sceneStore={makeSceneStore().sceneStore} />
+      </OverlayProvider>,
+    );
+    expect(container.querySelector('[data-overlay-trigger="reasoning"]')).toBeDisabled();
+  });
+
+  it("Reasoning trigger is disabled while a request is busy even when reasoningSelection is true", () => {
+    const { store } = makeStore();
+    const { container } = render(
+      <OverlayProvider>
+        {/* @ts-expect-error - test double */}
+        <Composer store={store} sceneStore={makeSceneStore().sceneStore} />
+      </OverlayProvider>,
+    );
+    expect(container.querySelector('[data-overlay-trigger="reasoning"]')).toBeDisabled();
+  });
+
+  it("Reasoning trigger is enabled when reasoningSelection is true and canSend is true", () => {
+    const { store } = makeStore({
+      composer: { request: { ...initialComposerState.request, canSend: true } },
+    });
+    const { container } = render(
+      <OverlayProvider>
+        {/* @ts-expect-error - test double */}
+        <Composer store={store} sceneStore={makeSceneStore().sceneStore} />
+      </OverlayProvider>,
+    );
+    expect(container.querySelector('[data-overlay-trigger="reasoning"]')).not.toBeDisabled();
   });
 });
 
