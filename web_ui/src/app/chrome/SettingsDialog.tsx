@@ -5,19 +5,34 @@ import type { AppSettingsState } from "../../lib/bridge-core/generated/app-setti
 import { Dialog } from "../overlays/overlays";
 
 /**
- * The settings dialog (Qt-removal plan R2.5d, extended R7.4a) - settings
- * island's SPA successor. General + Integrations + API-provider pages are
- * real. Ollama/Llama.cpp remain deferred (R7.4b/R7.4c) - both need a native
- * file-picker capability that doesn't exist yet in graphlink_desktop.py -
- * rendered here as disabled placeholders with an explicit label rather than
- * faking them, the same explicit-defer discipline as the app bar's disabled
- * Save/provider-select.
+ * The settings dialog (Qt-removal plan R2.5d, extended R7.4a, R7.4b) -
+ * settings island's SPA successor. General + Integrations + API-provider +
+ * Ollama pages are real. Llama.cpp remains deferred (R7.4c) - it needs a
+ * native GGUF file-picker capability that doesn't exist yet in
+ * graphlink_desktop.py - rendered here as a disabled placeholder with an
+ * explicit label rather than faking it, the same explicit-defer discipline
+ * as the app bar's disabled Save/provider-select. The Ollama page's own
+ * "Scan Folder..." button is ALSO deferred for the same reason, narrower
+ * than the whole page - see backend/settings.py's module docstring.
  */
 
 const SECTIONS = ["General", "Ollama (Local)", "Llama.cpp (Local)", "API Endpoint", "Integrations"] as const;
 type Section = (typeof SECTIONS)[number];
 
-const DEFERRED_SECTIONS = new Set<Section>(["Ollama (Local)", "Llama.cpp (Local)"]);
+const DEFERRED_SECTIONS = new Set<Section>(["Llama.cpp (Local)"]);
+
+// Mirrors graphlink_task_config.py's TASK_* constants - the same 5-slot set
+// backend/settings.py's _OLLAMA_TASK_KEYS uses (task_image_gen is absent:
+// Ollama has no image-generation path).
+const OLLAMA_TASKS = ["task_chat", "task_title", "task_chart", "task_web_validate", "task_web_summarize"] as const;
+const OLLAMA_TASK_LABELS: Record<(typeof OLLAMA_TASKS)[number], string> = {
+  task_chat: "Chat Model",
+  task_title: "Chat Naming Model",
+  task_chart: "Chart Generation Model",
+  task_web_validate: "Web Content Validation Model",
+  task_web_summarize: "Web Content Summarization Model",
+};
+const OLLAMA_MODELS_DATALIST_ID = "settings-ollama-scanned-models";
 
 const THEME_OPTIONS = [
   { value: "dark", label: "Dark" },
@@ -80,6 +95,14 @@ const initialState: AppSettingsState = {
   apiCatalogMessage: "Model catalog has not been refreshed yet.",
   geminiStaticModels: [],
   geminiStaticImageModels: [],
+  ollamaReasoningMode: "Thinking",
+  ollamaCurrentModel: "",
+  ollamaModelAssignments: {},
+  ollamaScannedModels: [],
+  ollamaScanSummary: "",
+  ollamaScanStatus: "idle",
+  ollamaPullStatus: "idle",
+  ollamaNotice: "",
 };
 
 function sectionKey(section: Section): string {
@@ -416,14 +439,170 @@ function ApiProviderPage({
   );
 }
 
+// The flat wire value ("inherit"|"auto"|"<explicit model id>") maps onto two
+// UI controls: a mode select (mirrors the legacy island's 3 special combo
+// entries) and a conditionally-shown text input for the explicit case. This
+// is a deliberate 2-control simplification of the legacy single editable
+// combo, ported verbatim from web_ui/src/islands/settings/App.tsx's own
+// OllamaTaskField.
+function OllamaTaskField({
+  task,
+  value,
+  transport,
+}: {
+  task: (typeof OLLAMA_TASKS)[number];
+  value: string;
+  transport: WsTransport;
+}) {
+  const isSpecial = value === "inherit" || value === "auto";
+  const [uiMode, setUiMode] = useState(isSpecial ? value : "explicit");
+  const [prevValue, setPrevValue] = useState(value);
+
+  if (value !== prevValue) {
+    setPrevValue(value);
+    setUiMode(isSpecial ? value : "explicit");
+  }
+
+  return (
+    <>
+      <label className="settings-field">
+        <span className="settings-field-label">{OLLAMA_TASK_LABELS[task]}</span>
+        <select
+          className="settings-select"
+          value={uiMode}
+          onChange={(event) => {
+            const nextMode = event.target.value;
+            setUiMode(nextMode);
+            if (nextMode !== "explicit") {
+              transport.intent("app-settings", "setOllamaModelAssignment", [task, nextMode]);
+            }
+          }}
+        >
+          {task !== "task_chat" && <option value="inherit">Use chat model</option>}
+          <option value="auto">Auto - choose a compatible installed model</option>
+          <option value="explicit">Custom model ID...</option>
+        </select>
+      </label>
+      {uiMode === "explicit" && (
+        <label className="settings-field">
+          <span className="settings-field-label">{OLLAMA_TASK_LABELS[task]} (custom model ID)</span>
+          <input
+            type="text"
+            className="settings-select"
+            list={OLLAMA_MODELS_DATALIST_ID}
+            value={isSpecial ? "" : value}
+            onChange={(event) => transport.intent("app-settings", "setOllamaModelAssignment", [task, event.target.value])}
+          />
+        </label>
+      )}
+    </>
+  );
+}
+
+function OllamaPage({ state, transport }: { state: AppSettingsState; transport: WsTransport }) {
+  const [draftPullModel, setDraftPullModel] = useState("");
+
+  return (
+    <div className="settings-general-page">
+      <fieldset className="settings-fieldset">
+        <legend>Reasoning Mode</legend>
+        <label className="settings-checkbox-row">
+          <input
+            type="radio"
+            name="ollama-reasoning-mode"
+            checked={state.ollamaReasoningMode === "Thinking"}
+            onChange={() => transport.intent("app-settings", "setOllamaReasoningMode", ["Thinking"])}
+          />
+          Thinking Mode (Enable CoT)
+        </label>
+        <label className="settings-checkbox-row">
+          <input
+            type="radio"
+            name="ollama-reasoning-mode"
+            checked={state.ollamaReasoningMode === "Quick"}
+            onChange={() => transport.intent("app-settings", "setOllamaReasoningMode", ["Quick"])}
+          />
+          Quick Mode (No CoT)
+        </label>
+      </fieldset>
+
+      <p className="settings-update-status">
+        Current Active Model: <strong>{state.ollamaCurrentModel || "Auto - no compatible installed model found"}</strong>
+      </p>
+
+      <div className="settings-button-row">
+        <button
+          type="button"
+          className="settings-button"
+          disabled={state.ollamaScanStatus === "running"}
+          onClick={() => transport.intent("app-settings", "scanOllamaSystem", [])}
+        >
+          {state.ollamaScanStatus === "running" ? "Scanning..." : "System Scan"}
+        </button>
+        {/* "Scan Folder..." is deliberately deferred - see this file's module
+            docstring - it needs the same native folder-picker capability
+            R7.4c builds for Llama.cpp's GGUF file browse. */}
+        <button type="button" className="settings-button" disabled title="Lands with R7.4c's native file-picker capability">
+          Scan Folder...
+        </button>
+      </div>
+      <p className="settings-update-status">{state.ollamaScanSummary}</p>
+
+      <datalist id={OLLAMA_MODELS_DATALIST_ID}>
+        {state.ollamaScannedModels.map((model) => (
+          <option key={model} value={model} />
+        ))}
+      </datalist>
+
+      <fieldset className="settings-fieldset">
+        <legend>Model Selection (per task)</legend>
+        {OLLAMA_TASKS.map((task) => (
+          <OllamaTaskField
+            key={task}
+            task={task}
+            value={state.ollamaModelAssignments[task] ?? "auto"}
+            transport={transport}
+          />
+        ))}
+      </fieldset>
+
+      <label className="settings-field">
+        <span className="settings-field-label">Validate and Pull Model</span>
+        <input
+          type="text"
+          className="settings-select"
+          list={OLLAMA_MODELS_DATALIST_ID}
+          placeholder="Advanced model ID entry"
+          value={draftPullModel}
+          onChange={(event) => setDraftPullModel(event.target.value)}
+        />
+      </label>
+      <div className="settings-button-row">
+        <button
+          type="button"
+          className="settings-button settings-button-primary"
+          disabled={draftPullModel.trim().length === 0 || state.ollamaPullStatus === "running"}
+          onClick={() => transport.intent("app-settings", "pullOllamaModel", [draftPullModel])}
+        >
+          {state.ollamaPullStatus === "running" ? "Validating..." : "Validate and Pull Model"}
+        </button>
+      </div>
+
+      {state.ollamaNotice && (
+        <p className="settings-update-status" data-level="error">
+          {state.ollamaNotice}
+        </p>
+      )}
+    </div>
+  );
+}
+
 function DeferredPage({ section }: { section: Section }) {
   return (
     <div className="settings-deferred-page">
-      <p>{section} configuration lands in R7.4b/R7.4c.</p>
+      <p>{section} configuration lands in R7.4c.</p>
       <p className="settings-deferred-detail">
-        {section === "Llama.cpp (Local)"
-          ? "Needs a native GGUF file picker that doesn't exist yet in graphlink_desktop.py."
-          : "Backend model scan/pull wiring for this provider hasn't landed yet."}
+        Needs a native GGUF file picker that doesn't exist yet in graphlink_desktop.py.
       </p>
     </div>
   );
@@ -465,6 +644,8 @@ export function SettingsDialog({ transport }: { transport: WsTransport }) {
             <IntegrationsPage state={state} transport={transport} />
           ) : activeSection === "API Endpoint" ? (
             <ApiProviderPage state={state} transport={transport} />
+          ) : activeSection === "Ollama (Local)" ? (
+            <OllamaPage state={state} transport={transport} />
           ) : DEFERRED_SECTIONS.has(activeSection) ? (
             <DeferredPage section={activeSection} />
           ) : (

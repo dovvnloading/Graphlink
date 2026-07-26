@@ -1,14 +1,15 @@
-"""The SPA settings topic's wire contract (Qt-removal plan R2.5d, extended R7.4a).
+"""The SPA settings topic's wire contract (Qt-removal plan R2.5d, extended R7.4a, R7.4b).
 
 Was deliberately a SUBSET of graphlink_settings_payload.py::SettingsStatePayload
 (General + Integrations fields only) - Ollama/Llama.cpp/API-provider pages
 weren't implemented yet (see backend/settings.py's module docstring for
-why). R7.4a adds the API-provider fields for real; Ollama/Llama.cpp remain
-deferred (R7.4b/R7.4c) so their fields would still be dead weight here -
-the same "only what the SPA actually needs" rationale as every other
-R2.3-R2.5 app-* payload. Registered as its own codegen artifact (topic
-"app-settings") so the generated validator doesn't collide with the legacy
-island's own settings-state.ts.
+why). R7.4a added the API-provider fields for real; R7.4b now adds the
+Ollama fields for real too. Llama.cpp remains deferred (R7.4c) so its
+fields would still be dead weight here - the same "only what the SPA
+actually needs" rationale as every other R2.3-R2.5 app-* payload.
+Registered as its own codegen artifact (topic "app-settings") so the
+generated validator doesn't collide with the legacy island's own
+settings-state.ts.
 """
 
 from __future__ import annotations
@@ -52,4 +53,13 @@ class AppSettingsStatePayload:
     apiCatalogMessage: str
     geminiStaticModels: list[str]
     geminiStaticImageModels: list[str]
+    # R7.4b: Ollama page.
+    ollamaReasoningMode: str
+    ollamaCurrentModel: str
+    ollamaModelAssignments: dict[str, str]
+    ollamaScannedModels: list[str]
+    ollamaScanSummary: str
+    ollamaScanStatus: str
+    ollamaPullStatus: str
+    ollamaNotice: str
     minCompatibleSchemaVersion: int | None = None

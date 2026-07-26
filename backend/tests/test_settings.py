@@ -2,6 +2,7 @@
 
 import asyncio
 
+import ollama
 import pytest
 from graphlink_licensing import SettingsManager
 
@@ -796,3 +797,329 @@ def test_reset_api_settings_intent_clears_everything(manager, monkeypatch):
     assert manager.get_openai_key() == ""
     assert manager.get_api_provider() == "OpenAI-Compatible"
     assert manager.get_api_models("OpenAI-Compatible") == {}
+
+
+# -- R7.4b: Ollama settings page - reasoning mode, per-task model
+# -- assignment, system model scan, model pull. "Scan Folder..." is
+# -- deliberately NOT covered here (deferred alongside R7.4c's native
+# -- folder-picker capability - see backend/settings.py's module
+# -- docstring).
+#
+# graphlink_task_config.OLLAMA_MODELS is a module-level dict mutated
+# IN PLACE by the real sync_ollama_task_models/set_current_model this
+# file's intents call - a plain monkeypatch.setattr on an attribute a
+# function later does `dict[key] = value` on would NOT be restored by
+# monkeypatch's teardown (only whole-object reassignment is). Every test
+# below that can trigger either function replaces the dict with a fresh
+# copy first, so mutations are contained and reverted like any other
+# monkeypatched value.
+
+
+def _isolate_ollama_task_config(monkeypatch):
+    monkeypatch.setattr(config, "OLLAMA_MODELS", dict(config.OLLAMA_MODELS))
+
+
+def test_set_ollama_reasoning_mode_persists_and_rejects_unknown_modes(manager):
+    bus = SessionBus("settings-ollama-reasoning-mode-test")
+    register_settings(bus, manager)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "setOllamaReasoningMode", ["Quick"]))
+    assert manager.get_ollama_reasoning_mode() == "Quick"
+
+    asyncio.run(bus.dispatch_intent("app-settings", "setOllamaReasoningMode", ["not-a-real-mode"]))
+    assert manager.get_ollama_reasoning_mode() == "Quick"  # unchanged, not overwritten with garbage
+
+
+def test_set_ollama_reasoning_mode_reapplies_live_only_when_ollama_is_the_active_provider(manager, monkeypatch):
+    # Regression-shaped test for a race preempted at design time (the same
+    # class the R7.4a audit found after the fact): re-applying the live
+    # provider state unconditionally would forcibly switch an active
+    # Anthropic/OpenAI session back to Ollama just because its reasoning
+    # mode changed in the background.
+    calls = []
+    monkeypatch.setattr(api_provider, "initialize_local_provider", lambda *a, **k: calls.append(a))
+
+    monkeypatch.setattr(api_provider, "is_local_ollama_mode", lambda: False)
+    bus = SessionBus("settings-ollama-reasoning-not-active-test")
+    register_settings(bus, manager)
+    asyncio.run(bus.dispatch_intent("app-settings", "setOllamaReasoningMode", ["Quick"]))
+    assert calls == []  # Ollama isn't live - must not touch the live provider at all
+
+    monkeypatch.setattr(api_provider, "is_local_ollama_mode", lambda: True)
+    asyncio.run(bus.dispatch_intent("app-settings", "setOllamaReasoningMode", ["Thinking"]))
+    assert calls == [(config.LOCAL_PROVIDER_OLLAMA, {"reasoning_mode": "Thinking"})]
+
+
+def test_set_ollama_model_assignment_rejects_unknown_task(manager, monkeypatch):
+    _isolate_ollama_task_config(monkeypatch)
+    bus = SessionBus("settings-ollama-assignment-unknown-task-test")
+    register_settings(bus, manager)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "setOllamaModelAssignment", ["task_image_gen", "llava"]))
+
+    assert manager.get_ollama_model_assignments().get("task_image_gen") is None
+
+
+def test_set_ollama_model_assignment_explicit_auto_and_inherit(manager, monkeypatch):
+    _isolate_ollama_task_config(monkeypatch)
+    bus = SessionBus("settings-ollama-assignment-modes-test")
+    register_settings(bus, manager)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "setOllamaModelAssignment", [config.TASK_TITLE, "llama3.2:3b"]))
+    assert manager.get_ollama_model_assignments()[config.TASK_TITLE] == {"mode": "explicit", "model_id": "llama3.2:3b"}
+
+    asyncio.run(bus.dispatch_intent("app-settings", "setOllamaModelAssignment", [config.TASK_TITLE, "inherit"]))
+    assert manager.get_ollama_model_assignments()[config.TASK_TITLE]["mode"] == "inherit"
+
+    asyncio.run(bus.dispatch_intent("app-settings", "setOllamaModelAssignment", [config.TASK_TITLE, ""]))
+    assert manager.get_ollama_model_assignments()[config.TASK_TITLE]["mode"] == "auto"
+
+
+def test_set_ollama_model_assignment_normalizes_inherit_to_auto_for_task_chat(manager, monkeypatch):
+    # Adversarial-review finding: task_chat has no "inherit" concept (it IS
+    # the base chat model) and its <select> in SettingsDialog.tsx never
+    # renders that option for this one task - a stray/hand-edited "inherit"
+    # for task_chat must not persist as-is, since the frontend would then
+    # show a value its own <select> has no matching <option> for.
+    _isolate_ollama_task_config(monkeypatch)
+    bus = SessionBus("settings-ollama-assignment-chat-inherit-test")
+    register_settings(bus, manager)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "setOllamaModelAssignment", [config.TASK_CHAT, "inherit"]))
+
+    assert manager.get_ollama_model_assignments()[config.TASK_CHAT] == {"mode": "auto", "model_id": ""}
+
+
+def test_set_ollama_model_assignment_sets_current_model_for_an_explicit_chat_task(manager, monkeypatch):
+    _isolate_ollama_task_config(monkeypatch)
+    bus = SessionBus("settings-ollama-assignment-current-model-test")
+    register_settings(bus, manager)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "setOllamaModelAssignment", [config.TASK_CHAT, "qwen3:8b"]))
+
+    assert config.OLLAMA_MODELS[config.TASK_CHAT] == "qwen3:8b"
+
+
+def test_set_ollama_model_assignment_reads_and_writes_atomically_across_concurrent_calls(manager, monkeypatch):
+    # Mirrors the R7.4a save_api_configuration regression test: the
+    # read-modify-write of the whole assignments dict must happen inside
+    # ONE locked critical section, or a concurrent assignment change for a
+    # DIFFERENT task landing between this call's read and its write gets
+    # silently reverted by this call's stale copy of the dict.
+    _isolate_ollama_task_config(monkeypatch)
+
+    real_apply = settings_module._apply
+    injected = {"done": False}
+
+    def _apply_with_a_concurrent_assignment_in_the_window(mutation, *args):
+        if not injected["done"]:
+            injected["done"] = True
+            assignments = manager.get_ollama_model_assignments()
+            assignments[config.TASK_CHART] = {"mode": "explicit", "model_id": "concurrent-chart-model"}
+            manager.set_ollama_model_assignments(assignments)
+        return real_apply(mutation, *args)
+
+    monkeypatch.setattr(settings_module, "_apply", _apply_with_a_concurrent_assignment_in_the_window)
+    bus = SessionBus("settings-ollama-assignment-race-test")
+    register_settings(bus, manager)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "setOllamaModelAssignment", [config.TASK_TITLE, "llama3.2:3b"]))
+
+    assert injected["done"], "the concurrent write never ran - the test no longer exercises the window"
+    assert manager.get_ollama_model_assignments()[config.TASK_TITLE] == {"mode": "explicit", "model_id": "llama3.2:3b"}
+    # Must NOT be reverted - the concurrently-assigned chart model must
+    # survive this call's own read-modify-write.
+    assert manager.get_ollama_model_assignments()[config.TASK_CHART]["model_id"] == "concurrent-chart-model"
+
+
+def test_scan_ollama_system_persists_results_and_reports_done(manager, monkeypatch):
+    _isolate_ollama_task_config(monkeypatch)
+    monkeypatch.setattr(
+        api_provider,
+        "scan_local_ollama_models",
+        lambda scan_path: {"models": ["llama3.2:3b"], "scan_mode": "system", "scan_path": "", "locations": ["~/.ollama"]},
+    )
+    bus = SessionBus("settings-ollama-scan-test")
+    register_settings(bus, manager)
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "scanOllamaSystem", []))
+
+    assert manager.get_ollama_scanned_models() == ["llama3.2:3b"]
+    payload = recorder.messages[-1]["payload"]
+    assert payload["ollamaScanStatus"] == "done"
+    assert "llama3.2:3b" in payload["ollamaScannedModels"]
+
+
+def test_scan_ollama_system_reports_error_on_a_genuine_exception(manager, monkeypatch):
+    def _boom(scan_path):
+        raise OSError("permission denied walking manifest folder")
+
+    monkeypatch.setattr(api_provider, "scan_local_ollama_models", _boom)
+    bus = SessionBus("settings-ollama-scan-error-test")
+    register_settings(bus, manager)
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "scanOllamaSystem", []))
+
+    payload = recorder.messages[-1]["payload"]
+    assert payload["ollamaScanStatus"] == "error"
+    assert "permission denied" in payload["ollamaNotice"]
+    assert manager.get_ollama_scanned_models() == []  # a failed scan does not persist a partial result
+
+
+def test_scan_ollama_system_is_a_no_op_while_already_running(manager, monkeypatch):
+    calls = []
+    monkeypatch.setattr(api_provider, "scan_local_ollama_models", lambda scan_path: calls.append(1) or {"models": []})
+    bus = SessionBus("settings-ollama-scan-no-op-test")
+    register_settings(bus, manager)
+
+    async def _run():
+        first = asyncio.create_task(bus.dispatch_intent("app-settings", "scanOllamaSystem", []))
+        await asyncio.sleep(0)  # let the first call claim "running" before the second is dispatched
+        await bus.dispatch_intent("app-settings", "scanOllamaSystem", [])
+        await first
+
+    asyncio.run(_run())
+    assert len(calls) == 1
+
+
+def test_scan_ollama_system_persist_failure_reports_error_and_does_not_strand_the_running_gate(manager, monkeypatch):
+    # Adversarial-review finding: set_ollama_model_scan_cache does a real
+    # disk write (json dump + fsync + atomic replace) that CAN fail (locked
+    # file, permission denied, disk full). Before this fix, that exception
+    # propagated uncaught out of the intent handler, leaving
+    # ollama_scan_status["value"] stuck at "running" forever - every future
+    # scanOllamaSystem call would then silently no-op via the "already
+    # running" guard, with no way to recover short of restarting the app.
+    _isolate_ollama_task_config(monkeypatch)
+    monkeypatch.setattr(
+        api_provider, "scan_local_ollama_models", lambda scan_path: {"models": ["llama3.2:3b"], "scan_mode": "system"}
+    )
+
+    def _boom(*a, **k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(SettingsManager, "set_ollama_model_scan_cache", _boom)
+    bus = SessionBus("settings-ollama-scan-persist-failure-test")
+    register_settings(bus, manager)
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "scanOllamaSystem", []))
+
+    payload = recorder.messages[-1]["payload"]
+    assert payload["ollamaScanStatus"] == "error"
+    assert "disk full" in payload["ollamaNotice"]
+
+    # The gate must not be stranded - a second scan must actually run, not
+    # silently no-op against a status that never left "running".
+    calls = []
+    monkeypatch.setattr(SettingsManager, "set_ollama_model_scan_cache", lambda *a, **k: calls.append(1))
+    asyncio.run(bus.dispatch_intent("app-settings", "scanOllamaSystem", []))
+    assert calls == [1]
+
+
+def test_pull_ollama_model_rejects_an_empty_model_name(manager, monkeypatch):
+    calls = []
+    monkeypatch.setattr(ollama, "pull", lambda name: calls.append(name))
+    bus = SessionBus("settings-ollama-pull-empty-test")
+    register_settings(bus, manager)
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "pullOllamaModel", ["   "]))
+
+    assert calls == []
+    assert recorder.messages[-1]["payload"]["ollamaNotice"] == "Model name cannot be empty."
+
+
+def test_pull_ollama_model_success_invalidates_cache_and_sets_current_model(manager, monkeypatch):
+    _isolate_ollama_task_config(monkeypatch)
+    monkeypatch.setattr(ollama, "pull", lambda name: None)
+    invalidated = []
+    monkeypatch.setattr(api_provider, "invalidate_ollama_capability_cache", lambda name: invalidated.append(name))
+    bus = SessionBus("settings-ollama-pull-success-test")
+    register_settings(bus, manager)
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "pullOllamaModel", ["qwen3:8b"]))
+
+    assert invalidated == ["qwen3:8b"]
+    assert config.OLLAMA_MODELS[config.TASK_CHAT] == "qwen3:8b"
+    payload = recorder.messages[-1]["payload"]
+    assert payload["ollamaPullStatus"] == "done"
+    assert payload["ollamaNotice"] == ""
+
+
+@pytest.mark.parametrize(
+    "raw_error,expected_fragment",
+    [
+        ("model 'bogus' not found", "was not found on the Ollama hub"),
+        ("connection refused", "Is Ollama running?"),
+        ("some other disk i/o failure", "unexpected error occurred"),
+    ],
+)
+def test_pull_ollama_model_maps_errors_to_friendly_messages(manager, monkeypatch, raw_error, expected_fragment):
+    def _boom(name):
+        raise RuntimeError(raw_error)
+
+    monkeypatch.setattr(ollama, "pull", _boom)
+    bus = SessionBus("settings-ollama-pull-error-test")
+    register_settings(bus, manager)
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "pullOllamaModel", ["some-model"]))
+
+    payload = recorder.messages[-1]["payload"]
+    assert payload["ollamaPullStatus"] == "error"
+    assert expected_fragment in payload["ollamaNotice"]
+
+
+def test_pull_ollama_model_is_a_no_op_while_already_running(manager, monkeypatch):
+    calls = []
+    monkeypatch.setattr(ollama, "pull", lambda name: calls.append(name))
+    bus = SessionBus("settings-ollama-pull-no-op-test")
+    register_settings(bus, manager)
+
+    async def _run():
+        first = asyncio.create_task(bus.dispatch_intent("app-settings", "pullOllamaModel", ["model-a"]))
+        await asyncio.sleep(0)
+        await bus.dispatch_intent("app-settings", "pullOllamaModel", ["model-b"])
+        await first
+
+    asyncio.run(_run())
+    assert calls == ["model-a"]
+
+
+def test_pull_ollama_model_persist_failure_reports_error_and_does_not_strand_the_running_gate(manager, monkeypatch):
+    # Same reentrancy-gate hazard as scan_ollama_system's own persist step -
+    # guarded here even though neither invalidate_ollama_capability_cache
+    # nor set_current_model do disk I/O today, so a stuck "running" gate
+    # can't reappear if one of them grows a fallible path later.
+    _isolate_ollama_task_config(monkeypatch)
+    monkeypatch.setattr(ollama, "pull", lambda name: None)
+
+    def _boom(name):
+        raise RuntimeError("cache invalidation blew up")
+
+    monkeypatch.setattr(api_provider, "invalidate_ollama_capability_cache", _boom)
+    bus = SessionBus("settings-ollama-pull-persist-failure-test")
+    register_settings(bus, manager)
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "pullOllamaModel", ["qwen3:8b"]))
+
+    payload = recorder.messages[-1]["payload"]
+    assert payload["ollamaPullStatus"] == "error"
+    assert "cache invalidation blew up" in payload["ollamaNotice"]
+
+    calls = []
+    monkeypatch.setattr(api_provider, "invalidate_ollama_capability_cache", lambda name: calls.append(name))
+    asyncio.run(bus.dispatch_intent("app-settings", "pullOllamaModel", ["qwen3:8b"]))
+    assert calls == ["qwen3:8b"]
