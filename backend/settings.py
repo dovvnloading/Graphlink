@@ -140,6 +140,20 @@ def _locked_llama_cpp_settings(manager: SettingsManager) -> dict[str, Any]:
         return manager.get_llama_cpp_settings()
 
 
+async def _republish_composer_reasoning(bus: SessionBus) -> None:
+    """Push a fresh composer snapshot after a reasoning-mode change here.
+
+    The composer's own Reasoning control displays the SAME persisted value
+    these intents edit (backend/composer.py derives it rather than keeping a
+    private copy, matching legacy). It therefore has to be told to rebuild,
+    or the Settings dialog and the composer disagree until some unrelated
+    composer event happens to republish. Guarded because a focused
+    test_settings.py bus registers no composer topic.
+    """
+    if bus.has_topic("app-composer"):
+        await bus.publish("app-composer")
+
+
 async def apply_ollama_reasoning_mode(manager: SettingsManager, mode: str) -> None:
     """Persist `mode` and, if Ollama is still the live provider, re-apply it to
     api_provider's module state so the very next chat()/chat_stream() call
@@ -719,6 +733,7 @@ def register_settings(
             return
         await apply_ollama_reasoning_mode(manager, mode)
         await bus.publish("app-settings")
+        await _republish_composer_reasoning(bus)
 
     async def set_ollama_model_assignment(task: str, value: str):
         # Coerced before use, matching every intent in this file post the
@@ -934,6 +949,7 @@ def register_settings(
         # success either); do not "improve" this as a drive-by fix in this
         # increment.
         await bus.publish("app-settings")
+        await _republish_composer_reasoning(bus)
 
     async def set_llama_cpp_chat_format(chat_format: str):
         await asyncio.to_thread(_apply, manager.set_llama_cpp_chat_format, str(chat_format))

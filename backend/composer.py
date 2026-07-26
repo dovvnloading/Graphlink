@@ -30,6 +30,7 @@ values a second time through this payload would just be redundant.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 from uuid import uuid4
@@ -69,7 +70,28 @@ class ComposerDocument:
     """The composer's state for one session."""
 
     draft: ComposerDraft = field(default_factory=ComposerDraft)
+    # The FALLBACK reasoning level, used only when no persisted-settings
+    # reader has been wired (a bare ComposerDocument() in a unit test).
+    # Whenever register_composer got a real SettingsManager, the persisted
+    # value wins - see reasoning_level_reader below.
     reasoning_level: str = DEFAULT_REASONING_LEVEL
+    # R7.5d follow-up: reads the ACTIVE provider's persisted reasoning mode
+    # ("Thinking"/"Quick"). Legacy's composer never stored a reasoning level
+    # of its own either - graphlink_composer_bridge.py's _reasoning() derives
+    # it from the settings manager on every payload build, which is why the
+    # Qt composer and the Settings dialog could never disagree.
+    #
+    # The first pass of R7.5d wired only the WRITE half of that (the toggle
+    # began genuinely persisting + re-applying to api_provider) and left this
+    # document's own private reasoning_level as the display source. That made
+    # the two halves diverge in a way that was worse than the original bug:
+    # get_ollama_reasoning_mode() defaults to "Thinking", so a user who had
+    # never touched the setting saw the composer confidently report "Quick
+    # Mode (No CoT)" while every chat call really ran with think=True, and
+    # selecting the already-active "Quick" was the only way to reach the
+    # state the UI already claimed. Deriving instead of mirroring removes the
+    # second source of truth rather than trying to keep two in sync.
+    reasoning_level_reader: Callable[[], str] | None = field(default=None, repr=False)
     # R4: the in-flight agent-dispatch request, if any - set by
     # backend/agents.py's AgentDispatcher around a real chat call so the
     # composer UI can reflect generating/idle state and offer cancellation.
@@ -93,10 +115,24 @@ class ComposerDocument:
         self.request_id = None
         self.request_state = "idle"
 
-    def _reasoning_label(self) -> str:
-        return next(o["label"] for o in REASONING_OPTIONS if o["id"] == self.reasoning_level)
+    def effective_reasoning_level(self) -> str:
+        """The reasoning level to DISPLAY: the active provider's persisted
+        setting when one is reachable, else this document's own fallback.
+
+        Normalizes the settings manager's Title-Case vocabulary
+        ("Thinking"/"Quick") to this payload's lowercase option ids, which
+        are the two the frontend renders and sends back.
+        """
+        if self.reasoning_level_reader is None:
+            return self.reasoning_level
+        raw = str(self.reasoning_level_reader() or "").strip().lower()
+        return "thinking" if raw == "thinking" else "quick"
+
+    def _reasoning_label(self, level: str) -> str:
+        return next(o["label"] for o in REASONING_OPTIONS if o["id"] == level)
 
     def payload(self) -> dict[str, Any]:
+        reasoning_level = self.effective_reasoning_level()
         return {
             "draft": {
                 "id": self.draft.id,
@@ -118,8 +154,8 @@ class ComposerDocument:
                 "modelLabel": "",
                 "modelOptions": [],
                 "reasoning": {
-                    "level": self.reasoning_level,
-                    "label": self._reasoning_label(),
+                    "level": reasoning_level,
+                    "label": self._reasoning_label(reasoning_level),
                     "options": list(REASONING_OPTIONS),
                 },
                 "label": "Ollama (Local)",
@@ -159,6 +195,17 @@ def register_composer(
     # always passes both (mirroring register_settings's own `notifications`
     # optional-param precedent exactly).
     document = ComposerDocument()
+    if settings_manager is not None:
+        # Derive the displayed level from the SAME persisted setting the
+        # Settings dialog edits and api_provider actually obeys, exactly as
+        # legacy's _reasoning() did (graphlink_composer_bridge.py:464-474),
+        # branching on the live provider for the same reason it did.
+        def _persisted_reasoning_mode() -> str:
+            if api_provider.is_local_llama_cpp_mode():
+                return settings_manager.get_llama_cpp_reasoning_mode()
+            return settings_manager.get_ollama_reasoning_mode()
+
+        document.reasoning_level_reader = _persisted_reasoning_mode
     bus.register_topic("app-composer", document.payload)
 
     async def publish():
@@ -210,6 +257,13 @@ def register_composer(
             # else: cloud/API mode - reasoningSelection is already False
             # there (see payload() above), so the UI disables this control
             # entirely; skip the apply step, never raise.
+
+            # The Settings dialog renders the same persisted value on its
+            # Ollama/Llama.cpp page. Without this it keeps showing the old
+            # one until something else republishes, which is the mirror
+            # image of the stale-composer bug this follow-up exists to fix.
+            if bus.has_topic("app-settings"):
+                await bus.publish("app-settings")
 
         await publish()
 

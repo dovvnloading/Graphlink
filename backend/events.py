@@ -91,6 +91,21 @@ class SessionBus:
         assert key not in self._intents, f"intent {topic}/{intent} registered twice"
         self._intents[key] = handler
 
+    def has_topic(self, name: str) -> bool:
+        """True when `name` has a registered builder on this bus.
+
+        Cross-topic publishing is an established pattern here (the composer
+        publishes "token-counter", the canvas publishes "notification"), but
+        publish() raises UnknownTopicError for an unregistered topic. In
+        production every topic is registered by _configure_session, so an
+        unconditional cross-publish is safe there; a focused unit test that
+        registers only ONE module's topics is where it would blow up. This
+        lets a cross-publisher say "notify that surface too, if it exists"
+        without either swallowing a real error or forcing every test to
+        register unrelated modules.
+        """
+        return name in self._topics
+
     # -- connections -------------------------------------------------------
 
     def attach(self, conn: Connection) -> None:
