@@ -71,6 +71,7 @@ from typing import Any
 
 from backend.canvas import SceneDocument
 from backend.chat_library import (
+    AUTOSAVE_OWNER,
     _content_digest,
     _fallback_title,
     _resolve_seed_message,
@@ -196,11 +197,22 @@ def register_autosave(
             # interval entirely rather than racing it; the next tick will
             # try again in `interval_seconds`.
             return
+        # Audit fix: claim the guard as AUTOSAVE, not anonymously. A user
+        # intent arriving mid-tick used to be discarded outright, warned about
+        # an operation they never started; knowing an unattended tick is the
+        # holder is what lets chat_library.py's _serialize_mutating_intent
+        # wait the tick out and honor the click instead. Releasing must also
+        # SIGNAL, or a waiting intent would sit out its whole timeout for a
+        # tick that already finished.
         mutation_guard["active"] = True
+        mutation_guard["owner"] = AUTOSAVE_OWNER
+        mutation_guard["released"].clear()
         try:
             await autosave_tick(bus, db_path, canvas_document, notifications, last_saved)
         finally:
             mutation_guard["active"] = False
+            mutation_guard["owner"] = None
+            mutation_guard["released"].set()
 
     async def _loop() -> None:
         while True:

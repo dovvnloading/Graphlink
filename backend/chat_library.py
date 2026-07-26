@@ -389,6 +389,37 @@ def _content_digest(chat_data: dict[str, Any], notes_data: list, pins_data: list
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+USER_OWNER = "user"
+AUTOSAVE_OWNER = "autosave"
+
+# How long a user-initiated intent will wait out an in-flight autosave tick
+# before giving up and warning instead. A tick measures ~10-50ms even on a
+# large canvas, so this is ~40x headroom; the only way to exceed it is a tick
+# genuinely stuck on sqlite's own lock timeout, where a truthful "try again"
+# beats a UI that appears to have frozen.
+AUTOSAVE_YIELD_TIMEOUT_SECONDS = 2.0
+
+
+def _busy_message(owner: str | None) -> str:
+    """Audit finding: the single generic message named "another chat
+    operation" even when the holder was a background autosave the user never
+    started, which reads as a bug rather than as the app protecting itself."""
+    if owner == AUTOSAVE_OWNER:
+        return "Autosave is still finishing. Please try again in a moment."
+    return "Another chat operation is already in progress. Please wait."
+
+
+def _new_mutation_guard() -> dict[str, Any]:
+    """The one definition of the guard's shape, so register_chat_library,
+    backend/autosave.py and the tests can never drift apart on it.
+
+    `released` is constructed with no running event loop on purpose - safe
+    since 3.10 (Event binds its loop at wait() time, not construction), and
+    register_chat_library is genuinely called outside a loop, which is the
+    exact hazard that broke R6.6's own asyncio.create_task call."""
+    return {"active": False, "owner": None, "released": asyncio.Event()}
+
+
 def _new_save_state() -> dict[str, Any]:
     """The one cell tracking "what is currently on disk for this session",
     shared by every path that writes or reads a chat row: autosave's tick,
@@ -451,7 +482,39 @@ def register_chat_library(
     # entry, cleared in a finally - serializes all three against each
     # other, the generalized (load/new included, not just save)
     # counterpart of ChatSessionManager's own _is_saving reentrancy guard.
-    _mutation_in_progress = {"active": False}
+    #
+    # OWNERSHIP (audit fix). The flag above was written when only a
+    # user-initiated intent could ever hold it, which is what makes "drop the
+    # second one and warn" an honest contract: the user really did start two
+    # operations. R6.6 then had a BACKGROUND task claim the same flag, and the
+    # asymmetry went unnoticed - an autosave tick that happened to be mid-write
+    # made the user's own Save/Load/New Chat vanish, with a warning naming an
+    # operation they never started. A background convenience feature must never
+    # be able to beat the user to their own data.
+    #
+    # So the guard now records WHO holds it, and the two directions differ:
+    #   user arrives, autosave holds  -> wait briefly for the tick to finish,
+    #                                    then proceed (ticks are ~10-50ms)
+    #   user arrives, another user holds -> drop + warn, exactly as before
+    #   autosave arrives, anyone holds   -> skip this interval, as before
+    # The wait is bounded: if a tick is genuinely stuck (sqlite's own 30s lock
+    # timeout), the user gets a truthful message instead of a frozen UI. Every
+    # outcome is at least as good as the pre-fix behavior, and the common one
+    # is strictly better - the Save just works.
+    # `released` is set on every release and cleared on every claim.
+    _mutation_in_progress = _new_mutation_guard()
+
+    def _claim_guard(owner: str) -> None:
+        _mutation_in_progress["active"] = True
+        _mutation_in_progress["owner"] = owner
+        _mutation_in_progress["released"].clear()
+
+    def _release_guard() -> None:
+        _mutation_in_progress["active"] = False
+        _mutation_in_progress["owner"] = None
+        _mutation_in_progress["released"].set()
+
+    bus.chat_mutation_guard = _mutation_in_progress
 
     # R6.6 + audit fix: see _new_save_state's own docstring for what this
     # tracks and the two bugs that came from autosave owning it privately.
@@ -471,16 +534,30 @@ def register_chat_library(
 
     def _serialize_mutating_intent(handler):
         async def wrapped(*args, **kwargs):
+            if _mutation_in_progress["active"] and _mutation_in_progress["owner"] == AUTOSAVE_OWNER:
+                # Yield to the user: wait the tick out rather than discarding
+                # their click. On timeout we fall through to the same
+                # drop-and-warn below, so a stuck tick degrades to exactly the
+                # pre-fix behavior instead of hanging.
+                with contextlib.suppress(asyncio.TimeoutError):
+                    await asyncio.wait_for(
+                        _mutation_in_progress["released"].wait(),
+                        timeout=AUTOSAVE_YIELD_TIMEOUT_SECONDS,
+                    )
+
             if _mutation_in_progress["active"]:
+                # Re-checked, not assumed: several intents can be released
+                # from the wait above at once, and only the first may claim.
                 if notifications is not None:
-                    notifications.show("Another chat operation is already in progress. Please wait.", "warning")
+                    notifications.show(_busy_message(_mutation_in_progress["owner"]), "warning")
                     await bus.publish("notification")
                 return
-            _mutation_in_progress["active"] = True
+
+            _claim_guard(USER_OWNER)
             try:
                 await handler(*args, **kwargs)
             finally:
-                _mutation_in_progress["active"] = False
+                _release_guard()
 
         return wrapped
 

@@ -15,6 +15,7 @@ import pytest
 from backend.autosave import autosave_tick, register_autosave
 from backend.canvas import SceneDocument
 from backend.chat_library import (
+    _new_mutation_guard,
     _new_save_state,
     chat_library_payload,
     delete_chat,
@@ -217,7 +218,7 @@ def test_register_autosave_ticks_on_a_real_timer_and_writes_a_row(tmp_path):
     db_path = tmp_path / "chats.db"
     bus, document, notifications = _bus(db_path)
     document.add_chat_node(0, 0, "hello autosave", is_user=True)
-    mutation_guard = {"active": False}
+    mutation_guard = _new_mutation_guard()
 
     async def _run():
         register_autosave(
@@ -240,7 +241,11 @@ def test_register_autosave_skips_a_tick_while_mutation_guard_is_active(tmp_path)
     db_path = tmp_path / "chats.db"
     bus, document, notifications = _bus(db_path)
     document.add_chat_node(0, 0, "hello autosave", is_user=True)
-    mutation_guard = {"active": True}  # simulates a manual load/save/new-chat in flight
+    # Simulates a manual load/save/new-chat already in flight. Built from the
+    # real factory so this can never drift from the production guard's shape.
+    mutation_guard = _new_mutation_guard()
+    mutation_guard["active"] = True
+    mutation_guard["owner"] = "user"
 
     async def _run():
         register_autosave(
