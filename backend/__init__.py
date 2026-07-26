@@ -11,18 +11,16 @@ Zero Qt imports are permitted anywhere under this package - enforced by
 tests/test_no_qt_anywhere.py.
 """
 
-import sys
-from pathlib import Path
-
 BACKEND_VERSION = "0.1.0"
 
-# The surviving Qt-free domain modules (GridViewSettings, NavigationPinStore,
-# payload dataclasses, session layer, ...) live flat inside graphlink_app/
-# and import each other by bare name - the same path convention the Qt entry
-# point used. The backend consumes them under that convention until the R7
-# cutover restructures the tree. Qt-free-ness of everything imported from
-# there is enforced per-module by test_no_qt_anywhere.py's zero-tolerance
-# rule the moment it lands in backend/ imports.
-_GRAPHLINK_APP_DIR = str(Path(__file__).resolve().parents[1] / "graphlink_app")
-if _GRAPHLINK_APP_DIR not in sys.path:
-    sys.path.insert(0, _GRAPHLINK_APP_DIR)
+# R7.2: the Qt-free domain modules backend/ depends on (api_provider,
+# graphlink_task_config, graphlink_licensing, the graphlink_plugins/ package,
+# ...) used to live inside graphlink_app/, reached via a sys.path.insert here.
+# They now sit as ordinary siblings of this package at the repo root, so no
+# path manipulation is needed: whatever already put this package's own parent
+# directory on sys.path (running graphlink_desktop.py, or `python -m pytest`
+# from repo root) already makes those siblings importable by the exact same
+# bare names, with zero changes to their own cross-imports. Qt-free-ness of
+# everything imported from there is still enforced per-module by
+# test_no_qt_anywhere.py's zero-tolerance rule the moment it lands in
+# backend/ imports.

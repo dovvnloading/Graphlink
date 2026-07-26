@@ -16,9 +16,8 @@ import backend.app as app_module
 from backend.app import create_app
 from backend.crash_recovery import CRASH_NOTICE_MESSAGE
 
-# Importing any backend.* submodule (above) runs backend/__init__.py first,
-# which puts graphlink_app/ on sys.path - these bare top-level imports must
-# come after it, same ordering rule backend/tests/test_agents.py documents.
+# R7.2: api_provider/graphlink_task_config sit at the repo root, a sibling
+# of backend/ - already importable, no ordering constraint.
 import api_provider
 import graphlink_task_config as config
 

@@ -10,11 +10,9 @@ from unittest.mock import patch
 
 import pytest
 
-# Importing any backend.* submodule runs backend/__init__.py first, which
-# puts graphlink_app/ on sys.path - these must come before the bare
-# top-level graphlink_app imports below (api_provider, graphlink_task_config)
-# for this module to import cleanly when run standalone, not just as part of
-# a larger session where some earlier-collected module already did this.
+# R7.2: api_provider/graphlink_task_config (imported below, directly or via
+# backend.agents) sit at the repo root, a sibling of backend/ - already on
+# sys.path whenever this package is, no ordering constraint.
 import backend.agents as agents_module
 from backend.agents import AgentDispatcher
 from backend.canvas import (
