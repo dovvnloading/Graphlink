@@ -4,6 +4,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import { LOD_ZOOM_THRESHOLD } from "./canvasConstants";
+import { downloadTextFile } from "./downloadTextFile";
 
 /**
  * The code node (Qt-removal plan R3.5/R3.6) - a card holding a single code
@@ -20,9 +21,14 @@ import { LOD_ZOOM_THRESHOLD } from "./canvasConstants";
  * Deferred, with an honest disabled+title label rather than a silent
  * drop (an R3.4 live-drive audit found the legacy CodeNode menu's branch-
  * visibility item had been dropped with zero acknowledgment - fixed here):
- * Export (R6) and Hide Other Branches (the legacy scene's
+ * Hide Other Branches (the legacy scene's
  * branch-visibility toggle has no backend/frontend equivalent at all yet -
- * unscoped, not owned by any R-phase).
+ * unscoped, not owned by any R-phase). "Export" is likewise no longer
+ * deferred as of R7.5a: it downloads the raw code (not the fenced/
+ * highlighted markdown) as a file via downloadTextFile, guessing a
+ * reasonable extension from the language field (LANGUAGE_EXTENSIONS below)
+ * and falling back to .txt for anything unrecognized - frontend-only, no
+ * backend involved, since the code is already in memory client-side.
  */
 
 export interface CodeNodeData extends Record<string, unknown> {
@@ -52,16 +58,54 @@ function toFencedCodeBlock(code: string, language: string): string {
   return "```" + language + "\n" + code + "\n```";
 }
 
+/** R7.5a: a best-effort language -> file extension guess for Export's
+ * download filename - browsers don't require a "correct" extension to
+ * accept a download (same reasoning ImageNodeView.tsx's own filename helper
+ * already documents), so an unrecognized language just falls back to .txt
+ * rather than growing this list to be exhaustive. */
+const LANGUAGE_EXTENSIONS: Record<string, string> = {
+  python: "py",
+  javascript: "js",
+  typescript: "ts",
+  jsx: "jsx",
+  tsx: "tsx",
+  json: "json",
+  bash: "sh",
+  shell: "sh",
+  sh: "sh",
+  html: "html",
+  css: "css",
+  markdown: "md",
+  sql: "sql",
+  java: "java",
+  c: "c",
+  cpp: "cpp",
+  "c++": "cpp",
+  csharp: "cs",
+  go: "go",
+  rust: "rs",
+  yaml: "yaml",
+  xml: "xml",
+};
+
+function codeFileExtension(language: string): string {
+  return LANGUAGE_EXTENSIONS[language.trim().toLowerCase()] ?? "txt";
+}
+
 function CodeNodeMenu({
   position,
+  nodeId,
   code,
+  language,
   parentChatNodeId,
   onRegenerate,
   onDelete,
   onClose,
 }: {
   position: MenuPosition;
+  nodeId: string;
   code: string;
+  language: string;
   parentChatNodeId: string | null;
   onRegenerate: () => void;
   onDelete: () => void;
@@ -103,7 +147,14 @@ function CodeNodeMenu({
       >
         Copy Code
       </button>
-      <button type="button" role="menuitem" disabled title="Export lands in R6">
+      <button
+        type="button"
+        role="menuitem"
+        onClick={() => {
+          downloadTextFile(code, `code-${nodeId}.${codeFileExtension(language)}`);
+          onClose();
+        }}
+      >
         Export
       </button>
       <button type="button" role="menuitem" disabled title="Branch visibility isn't built yet">
@@ -136,7 +187,7 @@ function CodeNodeMenu({
   );
 }
 
-export function CodeNodeView({ data, selected }: NodeProps<CodeFlowNode>) {
+export function CodeNodeView({ id, data, selected }: NodeProps<CodeFlowNode>) {
   const zoom = useStore((s) => s.transform[2]);
   const collapsed = zoom < LOD_ZOOM_THRESHOLD;
   const [menuPosition, setMenuPosition] = useState<MenuPosition | null>(null);
@@ -164,7 +215,9 @@ export function CodeNodeView({ data, selected }: NodeProps<CodeFlowNode>) {
       {menuPosition && (
         <CodeNodeMenu
           position={menuPosition}
+          nodeId={id}
           code={data.code}
+          language={data.language}
           parentChatNodeId={data.parentChatNodeId}
           onRegenerate={data.onRegenerate}
           onDelete={data.onDelete}

@@ -1,8 +1,20 @@
 import { ReactFlowProvider, type NodeProps } from "@xyflow/react";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CodeNodeView, type CodeFlowNode } from "./CodeNodeView";
+
+// R7.5a: jsdom implements neither URL.createObjectURL nor
+// URL.revokeObjectURL - same hand-installed-fakes pattern
+// ImageNodeView.test.tsx's own Export Image tests already established.
+beforeEach(() => {
+  URL.createObjectURL = vi.fn().mockReturnValue("blob:fake-object-url");
+  URL.revokeObjectURL = vi.fn();
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 // Rendered directly (not through a real <ReactFlow nodes=.../> mount) - see
 // ChatNodeView.test.tsx for why a bare ReactFlowProvider is enough here too.
@@ -45,7 +57,7 @@ describe("CodeNodeView", () => {
     expect(screen.getByText("code")).toBeInTheDocument();
   });
 
-  it("right-click opens a menu with real Copy Code/Delete Code Block and deferred Export", async () => {
+  it("right-click opens a menu with real Copy Code/Delete Code Block/Export and deferred Hide Other Branches", async () => {
     const user = userEvent.setup();
     const { onDelete } = renderCodeNode();
 
@@ -56,9 +68,7 @@ describe("CodeNodeView", () => {
     fireEvent.contextMenu(label);
     expect(screen.getByRole("menu")).toBeInTheDocument();
 
-    const exportItem = screen.getByRole("menuitem", { name: "Export" });
-    expect(exportItem).toBeDisabled();
-    expect(exportItem).toHaveAttribute("title", "Export lands in R6");
+    expect(screen.getByRole("menuitem", { name: "Export" })).not.toBeDisabled();
     const hideBranches = screen.getByRole("menuitem", { name: "Hide Other Branches" });
     expect(hideBranches).toBeDisabled();
     expect(hideBranches).toHaveAttribute("title", "Branch visibility isn't built yet");
@@ -69,6 +79,45 @@ describe("CodeNodeView", () => {
     fireEvent.contextMenu(label);
     await user.click(screen.getByRole("menuitem", { name: "Delete Code Block" }));
     expect(onDelete).toHaveBeenCalledOnce();
+  });
+
+  it("clicking Export downloads the raw code as a language-appropriate file, then closes the menu (R7.5a)", async () => {
+    const user = userEvent.setup();
+    renderCodeNode({ code: "print('hi')", language: "python" });
+
+    const captured: { anchor?: HTMLAnchorElement } = {};
+    const clickSpy = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(function (this: HTMLAnchorElement) {
+        captured.anchor = this;
+      });
+
+    fireEvent.contextMenu(screen.getByText("python"));
+    await user.click(screen.getByRole("menuitem", { name: "Export" }));
+
+    await waitFor(() => expect(clickSpy).toHaveBeenCalled());
+    expect(URL.createObjectURL).toHaveBeenCalled();
+    const blobArg = (URL.createObjectURL as ReturnType<typeof vi.fn>).mock.calls[0][0] as Blob;
+    expect(await blobArg.text()).toBe("print('hi')");
+    expect(captured.anchor?.getAttribute("download")).toBe("code-n0.py");
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:fake-object-url");
+    expect(screen.queryByRole("menu")).toBeNull(); // onClose fires after Export
+  });
+
+  it("falls back to a .txt extension for an unrecognized language (R7.5a)", async () => {
+    const user = userEvent.setup();
+    renderCodeNode({ language: "brainfuck" });
+
+    const captured: { anchor?: HTMLAnchorElement } = {};
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
+      captured.anchor = this;
+    });
+
+    fireEvent.contextMenu(screen.getByText("brainfuck"));
+    await user.click(screen.getByRole("menuitem", { name: "Export" }));
+
+    await waitFor(() => expect(captured.anchor).toBeDefined());
+    expect(captured.anchor?.getAttribute("download")).toBe("code-n0.txt");
   });
 
   it("Regenerate Response renders enabled and fires onRegenerate then closes the menu when parentChatNodeId is non-null", async () => {

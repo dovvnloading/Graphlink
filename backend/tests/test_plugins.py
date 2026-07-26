@@ -2,8 +2,6 @@
 
 import asyncio
 
-import pytest
-
 from backend.canvas import SceneDocument
 from backend.events import SessionBus
 from backend.notifications import NotificationState
@@ -87,21 +85,32 @@ def test_register_plugins_publishes_on_the_app_plugins_topic():
     assert recorder.messages[0]["payload"]["categories"]
 
 
-def test_execute_plugin_shows_info_notification_for_known_plugin():
-    # "HTML Renderer" (not "Gitlink"/"Py-Coder"/"Execution Sandbox" - all
-    # three are now real node-creation plugins, see their own dedicated
-    # tests below) stands in for "any plugin name still on the
-    # honest-deferred-notice path".
+def test_execute_plugin_falls_through_to_the_generic_deferred_notice_for_an_unhandled_registered_name(monkeypatch):
+    # R7.5a closed the last 2 gaps (Conversation Node, HTML Renderer) - every
+    # _PLUGINS entry today has its own real branch, so the generic fallback
+    # at the bottom of execute_plugin has no live entry left to exercise
+    # through the real registry. It stays in place as the established growth
+    # path for the NEXT plugin added to _PLUGINS before its own branch lands
+    # (same state every plugin above was once in) - proven still-correct
+    # here by monkeypatching _PLUGINS into exactly that state for one call.
+    import backend.plugins as plugins_module
+
+    monkeypatch.setattr(
+        plugins_module,
+        "_PLUGINS",
+        plugins_module._PLUGINS + [("Future Plugin", "Not yet wired.", "Build & Execution")],
+    )
     bus = SessionBus("plugins-exec-test")
     notifications = NotificationState()
     bus.register_topic("notification", notifications.payload)
     register_plugins(bus, notifications, SceneDocument())
 
-    asyncio.run(bus.dispatch_intent("app-plugins", "executePlugin", ["HTML Renderer"]))
+    result = asyncio.run(bus.dispatch_intent("app-plugins", "executePlugin", ["Future Plugin"]))
+
+    assert result is None
     assert notifications.visible is True
     assert notifications.msg_type == "info"
-    assert "HTML Renderer" in notifications.message
-    assert "R3" in notifications.message or "R5" in notifications.message
+    assert notifications.message == '"Future Plugin" node creation lands in R3/R5.'
 
 
 def test_execute_plugin_shows_warning_notification_for_unknown_plugin():
@@ -555,27 +564,147 @@ def test_execute_plugin_system_prompt_reuses_an_existing_note_instead_of_creatin
     assert sum(1 for n in canvas_document.nodes.values() if n.kind == "note") == 1
 
 
-# -- R5.1/R5.2/R5.3/R5.4/R6.1: non-regression - every OTHER plugin name is
-# still an honest, unchanged deferred notice ----------------------------------
+# -- R7.5a: "Conversation Node" - the seventh real node-creation plugin ------
+#
+# Existed as a real, working node kind since R3.25 (add_conversation_node)
+# with zero UI-reachable creation path - execute_plugin had no branch for
+# it at all, silently falling through to the generic deferred notice despite
+# the node itself being fully functional.
 
 
-@pytest.mark.parametrize(
-    "name",
-    [
-        n for n in (p[0] for p in _PLUGINS)
-        if n not in (
-            "Web Research", "Artifact / Drafter", "Gitlink", "Py-Coder", "Execution Sandbox",
-            "System Prompt",
-        )
-    ],
-)
-def test_execute_plugin_every_other_plugin_name_still_shows_the_unchanged_deferred_notice(name):
+def test_execute_plugin_conversation_node_requires_parent():
     bus, notifications, canvas_document = _make_plugins_bus()
 
-    result = asyncio.run(bus.dispatch_intent("app-plugins", "executePlugin", [name]))
+    result = asyncio.run(bus.dispatch_intent("app-plugins", "executePlugin", ["Conversation Node"]))
 
     assert result is None
     assert notifications.visible is True
-    assert notifications.msg_type == "info"
-    assert notifications.message == f'"{name}" node creation lands in R3/R5.'
-    assert not any(n.kind == "web_research" for n in canvas_document.nodes.values())
+    assert notifications.msg_type == "warning"
+    assert notifications.message == (
+        "Please select a valid node to branch from before adding a Conversation Node."
+    )
+    assert not any(n.kind == "conversation" for n in canvas_document.nodes.values())
+
+
+def test_execute_plugin_conversation_node_rejects_unknown_parent_id():
+    bus, notifications, canvas_document = _make_plugins_bus()
+
+    result = asyncio.run(
+        bus.dispatch_intent("app-plugins", "executePlugin", ["Conversation Node", "ghost-node-id"])
+    )
+
+    assert result is None
+    assert notifications.visible is True
+    assert notifications.msg_type == "warning"
+    assert not any(n.kind == "conversation" for n in canvas_document.nodes.values())
+
+
+def test_execute_plugin_conversation_node_creates_a_real_conversation_node():
+    bus, notifications, canvas_document = _make_plugins_bus()
+    parent = canvas_document.add_node(10, 20, "parent")
+
+    class Recorder:
+        def __init__(self):
+            self.messages = []
+
+        async def send_json(self, data):
+            self.messages.append(data)
+
+        def topics_seen(self):
+            return [m["topic"] for m in self.messages if m["kind"] == "state"]
+
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    result = asyncio.run(
+        bus.dispatch_intent("app-plugins", "executePlugin", ["Conversation Node", parent.id])
+    )
+
+    assert result is not None
+    node = canvas_document.nodes[result]
+    assert node.kind == "conversation"
+    assert node.title == "Conversation"
+    assert any(
+        e.source == parent.id and e.target == node.id for e in canvas_document.edges.values()
+    )
+    assert notifications.visible is False, "success is not a deferral - no notification fires"
+    assert "scene" in recorder.topics_seen()
+
+
+# -- R7.5a: "HTML Renderer" - the eighth real node-creation plugin -----------
+#
+# Same gap class as Conversation Node above: add_html_node has existed since
+# R3.17 with zero creation path. Starts with empty html_content since the
+# plugin picker has no field to source initial HTML from - same "create
+# blank, then edit in place" posture as "Add Note".
+
+
+def test_execute_plugin_html_renderer_requires_parent():
+    bus, notifications, canvas_document = _make_plugins_bus()
+
+    result = asyncio.run(bus.dispatch_intent("app-plugins", "executePlugin", ["HTML Renderer"]))
+
+    assert result is None
+    assert notifications.visible is True
+    assert notifications.msg_type == "warning"
+    assert notifications.message == (
+        "Please select a valid node to branch from before adding an HTML Renderer node."
+    )
+    assert not any(n.kind == "html" for n in canvas_document.nodes.values())
+
+
+def test_execute_plugin_html_renderer_rejects_unknown_parent_id():
+    bus, notifications, canvas_document = _make_plugins_bus()
+
+    result = asyncio.run(
+        bus.dispatch_intent("app-plugins", "executePlugin", ["HTML Renderer", "ghost-node-id"])
+    )
+
+    assert result is None
+    assert notifications.visible is True
+    assert notifications.msg_type == "warning"
+    assert not any(n.kind == "html" for n in canvas_document.nodes.values())
+
+
+def test_execute_plugin_html_renderer_creates_a_real_html_node_with_empty_content():
+    bus, notifications, canvas_document = _make_plugins_bus()
+    parent = canvas_document.add_node(10, 20, "parent")
+
+    class Recorder:
+        def __init__(self):
+            self.messages = []
+
+        async def send_json(self, data):
+            self.messages.append(data)
+
+        def topics_seen(self):
+            return [m["topic"] for m in self.messages if m["kind"] == "state"]
+
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    result = asyncio.run(
+        bus.dispatch_intent("app-plugins", "executePlugin", ["HTML Renderer", parent.id])
+    )
+
+    assert result is not None
+    node = canvas_document.nodes[result]
+    assert node.kind == "html"
+    assert node.content == ""
+    assert any(
+        e.source == parent.id and e.target == node.id for e in canvas_document.edges.values()
+    )
+    assert notifications.visible is False, "success is not a deferral - no notification fires"
+    assert "scene" in recorder.topics_seen()
+
+
+def test_every_plugin_now_has_a_real_creation_branch():
+    # R7.5a closes the last 2 gaps - confirms explicitly (rather than
+    # letting the old parametrized non-regression test below silently
+    # collect zero cases) that every _PLUGINS entry has moved off the
+    # generic deferred notice.
+    handled = {
+        "Web Research", "Artifact / Drafter", "Gitlink", "Py-Coder", "Execution Sandbox",
+        "System Prompt", "Conversation Node", "HTML Renderer",
+    }
+    assert handled == {name for name, _description, _category in _PLUGINS}

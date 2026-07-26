@@ -1,8 +1,20 @@
 import { ReactFlowProvider, type NodeProps } from "@xyflow/react";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatNodeView, makeDebouncedScrollReport, type ChatFlowNode } from "./ChatNodeView";
+
+// R7.5a: jsdom implements neither URL.createObjectURL nor
+// URL.revokeObjectURL - same hand-installed-fakes pattern
+// ImageNodeView.test.tsx's own Export Image tests already established.
+beforeEach(() => {
+  URL.createObjectURL = vi.fn().mockReturnValue("blob:fake-object-url");
+  URL.revokeObjectURL = vi.fn();
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 // Rendered directly (not through a real <ReactFlow nodes=.../> mount): RF's
 // own node wrapper stays `visibility: hidden` in jsdom until its
@@ -79,9 +91,7 @@ describe("ChatNodeView", () => {
     fireEvent.contextMenu(role);
     expect(screen.getByRole("menu")).toBeInTheDocument();
 
-    const exportItem = screen.getByRole("menuitem", { name: "Export" });
-    expect(exportItem).toBeDisabled();
-    expect(exportItem).toHaveAttribute("title", "Export lands in R6");
+    expect(screen.getByRole("menuitem", { name: "Export" })).not.toBeDisabled();
     const hideBranches = screen.getByRole("menuitem", { name: "Hide Other Branches" });
     expect(hideBranches).toBeDisabled();
     expect(hideBranches).toHaveAttribute("title", "Branch visibility isn't built yet");
@@ -101,6 +111,30 @@ describe("ChatNodeView", () => {
     fireEvent.contextMenu(role);
     await user.click(screen.getByRole("menuitem", { name: "Delete Node" }));
     expect(onDelete).toHaveBeenCalledOnce();
+  });
+
+  it("clicking Export downloads the raw content (not rendered markdown) as a .md file, then closes the menu (R7.5a)", async () => {
+    const user = userEvent.setup();
+    renderChatNode({ content: "Hello **world**" });
+
+    const captured: { anchor?: HTMLAnchorElement } = {};
+    const clickSpy = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(function (this: HTMLAnchorElement) {
+        captured.anchor = this;
+      });
+
+    fireEvent.contextMenu(screen.getByText("You"));
+    await user.click(screen.getByRole("menuitem", { name: "Export" }));
+
+    await waitFor(() => expect(clickSpy).toHaveBeenCalled());
+    expect(URL.createObjectURL).toHaveBeenCalled();
+    const blobArg = (URL.createObjectURL as ReturnType<typeof vi.fn>).mock.calls[0][0] as Blob;
+    expect(await blobArg.text()).toBe("Hello **world**");
+    expect(captured.anchor?.getAttribute("href")).toBe("blob:fake-object-url");
+    expect(captured.anchor?.getAttribute("download")).toBe("chat-n0.md");
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:fake-object-url");
+    expect(screen.queryByRole("menu")).toBeNull(); // onClose fires after Export
   });
 
   it("Regenerate Response only appears for assistant messages, matching the legacy is_user guard", () => {

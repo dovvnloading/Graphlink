@@ -24,6 +24,7 @@ function makeStore(nodes: Array<{ id: string; x: number; y: number; title: strin
     addNote: vi.fn(),
     createFrame: vi.fn(),
     createContainer: vi.fn(),
+    newChat: vi.fn(),
   };
 }
 
@@ -149,6 +150,38 @@ describe("buildCommands", () => {
     expect(createContainer.enabled()).toBe(true);
     createContainer.run();
     expect(store.createContainer).toHaveBeenCalledWith(["n0", "n1"]);
+  });
+
+  it("new-chat is always enabled and calls store.newChat (R7.5a)", () => {
+    const store = makeStore();
+    // @ts-expect-error - test double
+    const commands = buildCommands(store, makeRf(), makeOverlays());
+    const newChat = commands.find((c) => c.id === "new-chat")!;
+    expect(newChat.enabled()).toBe(true);
+    newChat.run();
+    expect(store.newChat).toHaveBeenCalledTimes(1);
+  });
+
+  it("focus-selection is disabled with no selection and calls fitView scoped to the selected ids when run (R7.5a)", () => {
+    const store = makeStore([
+      { id: "n0", x: 0, y: 0, title: "A", kind: "placeholder" },
+      { id: "n1", x: 0, y: 0, title: "B", kind: "placeholder" },
+    ]);
+    const noneSelected = makeRf([{ id: "n0" }, { id: "n1" }]);
+    // @ts-expect-error - test double
+    const disabled = buildCommands(store, noneSelected, makeOverlays());
+    expect(disabled.find((c) => c.id === "focus-selection")!.enabled()).toBe(false);
+
+    const rf = makeRf([
+      { id: "n0", selected: true },
+      { id: "n1", selected: false },
+    ]);
+    // @ts-expect-error - test double
+    const commands = buildCommands(store, rf, makeOverlays());
+    const focusSelection = commands.find((c) => c.id === "focus-selection")!;
+    expect(focusSelection.enabled()).toBe(true);
+    focusSelection.run();
+    expect(rf.fitView).toHaveBeenCalledWith({ nodes: [{ id: "n0" }], duration: 200 });
   });
 
   it("export-canvas-png is disabled with an empty scene and enabled once nodes exist (R6.8)", () => {

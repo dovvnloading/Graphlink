@@ -4,6 +4,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import { CHAT_SCROLL_REPORT_DEBOUNCE_MS, LOD_ZOOM_THRESHOLD } from "./canvasConstants";
+import { downloadTextFile } from "./downloadTextFile";
 
 /**
  * The chat node (Qt-removal plan R3.1/R3.2) - ChatNode's React successor:
@@ -14,9 +15,9 @@ import { CHAT_SCROLL_REPORT_DEBOUNCE_MS, LOD_ZOOM_THRESHOLD } from "./canvasCons
  * (an R3.4 live-drive audit found several legacy ChatNode menu items had
  * been dropped with zero acknowledgment - fixed here): Regenerate (assistant
  * nodes only, needs the R4 agent layer), Key Takeaway/Explainer Note
- * generation (R4, same agent-layer blocker), Export (R6 session/export
- * work), Open Document View (the document-viewer island isn't wired into the
- * SPA overlay system yet), and Hide Other Branches (the legacy scene's
+ * generation (R4, same agent-layer blocker), Open Document View (the
+ * document-viewer island isn't wired into the SPA overlay system yet), and
+ * Hide Other Branches (the legacy scene's
  * branch-visibility toggle has no backend/frontend equivalent at all yet -
  * unscoped, not owned by any R-phase). One legacy item is still deliberately
  * NOT listed even as disabled: "Generate Group Summary" is itself
@@ -41,7 +42,11 @@ import { CHAT_SCROLL_REPORT_DEBOUNCE_MS, LOD_ZOOM_THRESHOLD } from "./canvasCons
  * each dispatching the real generateChart intent with this node as the
  * parent. Key Takeaway/Explainer Note remain honestly deferred (still no
  * agent-layer support of their own) - the stale "Chart" mention in their old
- * shared R4-blocker note above has been removed accordingly.
+ * shared R4-blocker note above has been removed accordingly. "Export" is
+ * likewise no longer deferred as of R7.5a: it downloads the node's raw
+ * content (not the rendered markdown) as a .md file via downloadTextFile -
+ * frontend-only, no backend involved, since the content is already in
+ * memory client-side.
  *
  * R6.3: the node's own scroll position within .chat-node-content (its
  * scrollable markdown body) is now restored on mount and reported
@@ -90,6 +95,7 @@ const CHART_TYPE_OPTIONS: { value: string; label: string }[] = [
 
 function ChatNodeMenu({
   position,
+  nodeId,
   content,
   isUser,
   isCollapsed,
@@ -103,6 +109,7 @@ function ChatNodeMenu({
   onClose,
 }: {
   position: MenuPosition;
+  nodeId: string;
   content: string;
   isUser: boolean;
   isCollapsed: boolean;
@@ -162,7 +169,14 @@ function ChatNodeMenu({
       >
         {isCollapsed ? "Expand" : "Collapse"}
       </button>
-      <button type="button" role="menuitem" disabled title="Export lands in R6">
+      <button
+        type="button"
+        role="menuitem"
+        onClick={() => {
+          downloadTextFile(content, `chat-${nodeId}.md`);
+          onClose();
+        }}
+      >
         Export
       </button>
       <button type="button" role="menuitem" disabled title="Branch visibility isn't built yet">
@@ -286,7 +300,7 @@ export function makeDebouncedScrollReport(
   };
 }
 
-export function ChatNodeView({ data, selected }: NodeProps<ChatFlowNode>) {
+export function ChatNodeView({ id, data, selected }: NodeProps<ChatFlowNode>) {
   const zoom = useStore((s) => s.transform[2]);
   const lodCollapsed = zoom < LOD_ZOOM_THRESHOLD;
   const collapsed = data.isCollapsed || lodCollapsed;
@@ -355,6 +369,7 @@ export function ChatNodeView({ data, selected }: NodeProps<ChatFlowNode>) {
       {menuPosition && (
         <ChatNodeMenu
           position={menuPosition}
+          nodeId={id}
           content={data.content}
           isUser={data.isUser}
           isCollapsed={data.isCollapsed}
