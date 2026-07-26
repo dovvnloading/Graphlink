@@ -3,6 +3,7 @@ import {
   applyGroupDragDelta,
   groupDragKindOf,
   handleSelectionChange,
+  isOrthogonalEligible,
   makeDebouncedViewportReport,
   toFlowEdges,
   toFlowNodes,
@@ -1533,5 +1534,77 @@ describe("toFlowEdges (R7.5b-1 faded connections)", () => {
       fadeConnectionsEnabled: true,
     });
     expect(toFlowEdges(docked, null)).toEqual([]);
+  });
+});
+
+describe("isOrthogonalEligible (R7.5b-2 orthogonal routing node-kind classification)", () => {
+  it("is never eligible when the source is a note (legacy SystemPromptConnectionItem: always a fixed Bezier)", () => {
+    expect(isOrthogonalEligible("note", "chat")).toBe(false);
+  });
+
+  it.each(["code", "document", "image", "thinking"])(
+    "is never eligible when the target kind is %s (legacy: always a straight line)",
+    (targetKind) => {
+      expect(isOrthogonalEligible("chat", targetKind)).toBe(false);
+    },
+  );
+
+  it.each(["chat", "conversation", "html"])(
+    "is eligible when the target kind is %s and the source isn't a note (legacy: shares the ortho-gated update_path)",
+    (targetKind) => {
+      expect(isOrthogonalEligible("chat", targetKind)).toBe(true);
+    },
+  );
+
+  it.each(["web_research", "artifact", "gitlink", "pycoder", "code_sandbox", "frame", "container", "chart", "note"])(
+    "defaults to NOT eligible for %s targets - no legacy connection-type precedent exists for these kinds",
+    (targetKind) => {
+      expect(isOrthogonalEligible("chat", targetKind)).toBe(false);
+    },
+  );
+
+  it("is not eligible when the target kind is unknown/undefined", () => {
+    expect(isOrthogonalEligible("chat", undefined)).toBe(false);
+  });
+});
+
+describe("toFlowEdges (R7.5b-2 orthogonal routing)", () => {
+  it("leaves type undefined when orthogonalRouting is off, even for an eligible pair", () => {
+    const scene = baseScene({
+      nodes: [baseNode({ id: "a", kind: "chat" }), baseNode({ id: "b", kind: "chat" })],
+      edges: [{ id: "e1", source: "a", target: "b" }],
+      orthogonalRouting: false,
+    });
+    expect(toFlowEdges(scene, null)[0].type).toBeUndefined();
+  });
+
+  it("sets type to 'orthogonal' when the toggle is on and the pair is eligible", () => {
+    const scene = baseScene({
+      nodes: [baseNode({ id: "a", kind: "chat" }), baseNode({ id: "b", kind: "chat" })],
+      edges: [{ id: "e1", source: "a", target: "b" }],
+      orthogonalRouting: true,
+    });
+    expect(toFlowEdges(scene, null)[0].type).toBe("orthogonal");
+  });
+
+  it("leaves type undefined when the toggle is on but the pair is ineligible (e.g. targeting a code node)", () => {
+    const scene = baseScene({
+      nodes: [baseNode({ id: "a", kind: "chat" }), baseNode({ id: "b", kind: "code" })],
+      edges: [{ id: "e1", source: "a", target: "b" }],
+      orthogonalRouting: true,
+    });
+    expect(toFlowEdges(scene, null)[0].type).toBeUndefined();
+  });
+
+  it("composes with faded connections - an orthogonal edge still dims when both toggles are on", () => {
+    const scene = baseScene({
+      nodes: [baseNode({ id: "a", kind: "chat" }), baseNode({ id: "b", kind: "chat" })],
+      edges: [{ id: "e1", source: "a", target: "b" }],
+      orthogonalRouting: true,
+      fadeConnectionsEnabled: true,
+    });
+    const edge = toFlowEdges(scene, null)[0];
+    expect(edge.type).toBe("orthogonal");
+    expect(edge.style).toEqual({ opacity: 0.08 });
   });
 });

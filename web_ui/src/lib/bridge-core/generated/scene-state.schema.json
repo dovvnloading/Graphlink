@@ -463,6 +463,9 @@
       },
       "type": "array"
     },
+    "orthogonalRouting": {
+      "type": "boolean"
+    },
     "pins": {
       "items": {
         "additionalProperties": false,
@@ -512,6 +515,7 @@
     "pins",
     "snapToGrid",
     "fadeConnectionsEnabled",
+    "orthogonalRouting",
     "dragFactor",
     "fontFamily",
     "fontSizePt",
