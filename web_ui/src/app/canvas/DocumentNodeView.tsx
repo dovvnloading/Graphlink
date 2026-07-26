@@ -263,7 +263,7 @@ function DocumentNodeMenu({
       )}
       <div className="chat-node-menu-separator" role="separator" />
       {isDocumentKind && (
-        <button type="button" role="menuitem" disabled title="Export lands in R6">
+        <button type="button" role="menuitem" disabled title="Document export isn't available yet">
           Export
         </button>
       )}

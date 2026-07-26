@@ -100,7 +100,7 @@ describe("ChatNodeView", () => {
     for (const name of ["Generate Key Takeaway", "Generate Explainer Note"]) {
       const item = screen.getByRole("menuitem", { name });
       expect(item).toBeDisabled();
-      expect(item).toHaveAttribute("title", "AI generation lands in R4");
+      expect(item).toHaveAttribute("title", "AI note generation isn't available yet");
     }
     expect(screen.getByRole("menuitem", { name: "Generate Image" })).not.toBeDisabled();
     expect(screen.getByRole("menuitem", { name: "Generate Chart" })).not.toBeDisabled();

@@ -202,7 +202,7 @@ export function HtmlNodeView({ data, selected }: NodeProps<HtmlFlowNode>) {
             type="button"
             className="html-node-header-btn"
             disabled
-            title="Popout view isn't built yet - see the R3 plan doc for why a naive window.open() would be unsafe for untrusted HTML"
+            title="Popout view isn't built yet - opening untrusted HTML in a separate window needs a security review first"
           >
             Popout
           </button>

@@ -95,7 +95,7 @@ export function Composer({ store, sceneStore }: { store: ComposerStore; sceneSto
           type="button"
           className="composer-icon-button"
           disabled
-          title="Attachments land in R4 (file-staging pipeline)"
+          title="Attachments aren't available yet"
           aria-label="Attach context"
         >
           <Icon name="attach" />
@@ -119,7 +119,7 @@ export function Composer({ store, sceneStore }: { store: ComposerStore; sceneSto
           type="button"
           className="composer-control"
           disabled
-          title="Model/provider selection lands in R4"
+          title="Model selection isn't available here yet - configure models in Settings"
         >
           <span className="control-copy">
             <span className="control-kicker">{composer.route.provider}</span>

@@ -308,7 +308,7 @@ def register_plugins(
             await bus.publish("scene")
             return node.id
 
-        notifications.show(f'"{name}" node creation lands in R3/R5.', "info")
+        notifications.show(f'"{name}" node creation isn\'t available yet.', "info")
         await bus.publish("notification")
         return None
 

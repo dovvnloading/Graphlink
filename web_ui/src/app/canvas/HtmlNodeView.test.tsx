@@ -178,7 +178,7 @@ describe("HtmlNodeView", () => {
     expect(popout).toBeDisabled();
     expect(popout).toHaveAttribute(
       "title",
-      "Popout view isn't built yet - see the R3 plan doc for why a naive window.open() would be unsafe for untrusted HTML",
+      "Popout view isn't built yet - opening untrusted HTML in a separate window needs a security review first",
     );
 
     await user.click(popout); // disabled - fires nothing

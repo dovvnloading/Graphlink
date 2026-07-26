@@ -110,7 +110,7 @@ def test_execute_plugin_falls_through_to_the_generic_deferred_notice_for_an_unha
     assert result is None
     assert notifications.visible is True
     assert notifications.msg_type == "info"
-    assert notifications.message == '"Future Plugin" node creation lands in R3/R5.'
+    assert notifications.message == '"Future Plugin" node creation isn\'t available yet.'
 
 
 def test_execute_plugin_shows_warning_notification_for_unknown_plugin():

@@ -207,10 +207,10 @@ function ChatNodeMenu({
       <button type="button" role="menuitem" disabled title="Document view integration isn't wired into the SPA yet">
         Open Document View
       </button>
-      <button type="button" role="menuitem" disabled title="AI generation lands in R4">
+      <button type="button" role="menuitem" disabled title="AI note generation isn't available yet">
         Generate Key Takeaway
       </button>
-      <button type="button" role="menuitem" disabled title="AI generation lands in R4">
+      <button type="button" role="menuitem" disabled title="AI note generation isn't available yet">
         Generate Explainer Note
       </button>
       {/* R6.2: a real click-to-expand submenu (not disabled) - same

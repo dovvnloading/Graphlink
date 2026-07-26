@@ -195,7 +195,7 @@ describe("DocumentNodeView", () => {
 
     const exportItem = screen.getByRole("menuitem", { name: "Export" });
     expect(exportItem).toBeDisabled();
-    expect(exportItem).toHaveAttribute("title", "Export lands in R6");
+    expect(exportItem).toHaveAttribute("title", "Document export isn't available yet");
 
     // filePath is empty -> Open File must be entirely absent, matching the
     // legacy menu's own conditional (only added when file_path is set).
