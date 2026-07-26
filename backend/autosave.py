@@ -231,6 +231,15 @@ def register_autosave(
                 # anywhere. One bad tick must never be able to end the loop.
                 logger.exception("autosave: tick failed for session %r", bus.session_id)
 
+    # Exposed for the same reason bus.autosave_task and bus.chat_save_state
+    # are: a closure-local is unreachable to the tests that have to prove the
+    # real claim/release/signal wiring works. Driving ONE tick directly is
+    # what lets the user-save-yield test be deterministic - racing the
+    # free-running loop instead means asserting a wall-clock bound against a
+    # loop that re-claims every interval, which is exactly how that test
+    # turned flaky on a contended CI runner.
+    bus.autosave_guarded_tick = _guarded_tick
+
     loop_coro = _loop()
     try:
         bus.autosave_task = asyncio.create_task(loop_coro)
