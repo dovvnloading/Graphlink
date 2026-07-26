@@ -5776,3 +5776,111 @@ def test_scene_payload_content_parts_is_none_not_empty_list_when_unset():
 
     payload_node = next(n for n in doc.scene_payload()["nodes"] if n["id"] == chat_node.id)
     assert payload_node["contentParts"] is None
+
+
+# -- R7.5e: Collapse All / Expand All -----------------------------------------
+
+
+def test_set_all_conversational_collapsed_only_touches_chat_conversation_html_nodes():
+    doc = SceneDocument()
+    chat_node = doc.add_chat_node(0, 0, "hi", True)
+    conversation_node = doc.add_conversation_node(0, 160, chat_node.id)
+    html_node = doc.add_html_node(0, 320, "<p>hi</p>", chat_node.id)
+    code_node = doc.add_code_node(0, 480, "x = 1", "python", parent_id=chat_node.id)
+    document_node = doc.add_document_node(
+        0, 640, "file.txt", "contents", "document", chat_node.id
+    )
+    frame = doc.create_frame([code_node.id])
+
+    doc.set_all_conversational_collapsed(True)
+
+    assert doc.nodes[chat_node.id].is_collapsed is True
+    assert doc.nodes[conversation_node.id].is_collapsed is True
+    assert doc.nodes[html_node.id].is_collapsed is True
+    # Untouched kinds - completely unaffected, not just coincidentally False.
+    assert doc.nodes[code_node.id].is_collapsed is False
+    assert doc.nodes[document_node.id].is_collapsed is False
+    assert doc.nodes[frame.id].is_collapsed is False
+
+
+def test_set_all_conversational_collapsed_expand_does_not_clobber_a_collapsed_frame():
+    doc = SceneDocument()
+    chat_node = doc.add_chat_node(0, 0, "hi", True)
+    conversation_node = doc.add_conversation_node(0, 160, chat_node.id)
+    html_node = doc.add_html_node(0, 320, "<p>hi</p>", chat_node.id)
+    code_node = doc.add_code_node(0, 480, "x = 1", "python", parent_id=chat_node.id)
+    document_node = doc.add_document_node(
+        0, 640, "file.txt", "contents", "document", chat_node.id
+    )
+    frame = doc.create_frame([code_node.id])
+
+    doc.set_all_conversational_collapsed(True)
+    # The frame's own collapse mechanism - independent of the bulk op above,
+    # which must never have touched it (it started False, per the previous
+    # test).
+    doc.toggle_group_collapsed(frame.id)
+    assert doc.nodes[frame.id].is_collapsed is True
+
+    doc.set_all_conversational_collapsed(False)
+
+    assert doc.nodes[chat_node.id].is_collapsed is False
+    assert doc.nodes[conversation_node.id].is_collapsed is False
+    assert doc.nodes[html_node.id].is_collapsed is False
+    # Proves expand-all did not clobber the frame: still True afterward.
+    assert doc.nodes[frame.id].is_collapsed is True
+    # document/code were never collapsed by either bulk call - still False.
+    assert doc.nodes[code_node.id].is_collapsed is False
+    assert doc.nodes[document_node.id].is_collapsed is False
+
+
+def test_collapse_all_nodes_intent_collapses_eligible_nodes_and_publishes_once():
+    async def run():
+        bus, document, recorder = make_bus()
+        chat_id = await bus.dispatch_intent("scene", "addChatNode", [0, 0, "hi", True])
+        conversation_id = await bus.dispatch_intent(
+            "scene", "addConversationNode", [0, 160, chat_id]
+        )
+        recorder.messages.clear()
+
+        await bus.dispatch_intent("scene", "collapseAllNodes", [])
+
+        assert document.nodes[chat_id].is_collapsed is True
+        assert document.nodes[conversation_id].is_collapsed is True
+        assert recorder.topics_seen().count("scene") == 1, "one publish, not one per node"
+
+    asyncio.run(run())
+
+
+def test_expand_all_nodes_intent_expands_eligible_nodes_and_publishes_once():
+    async def run():
+        bus, document, recorder = make_bus()
+        chat_id = await bus.dispatch_intent("scene", "addChatNode", [0, 0, "hi", True])
+        conversation_id = await bus.dispatch_intent(
+            "scene", "addConversationNode", [0, 160, chat_id]
+        )
+        await bus.dispatch_intent("scene", "setChatCollapsed", [chat_id, True])
+        await bus.dispatch_intent("scene", "setChatCollapsed", [conversation_id, True])
+        recorder.messages.clear()
+
+        await bus.dispatch_intent("scene", "expandAllNodes", [])
+
+        assert document.nodes[chat_id].is_collapsed is False
+        assert document.nodes[conversation_id].is_collapsed is False
+        assert recorder.topics_seen().count("scene") == 1, "one publish, not one per node"
+
+    asyncio.run(run())
+
+
+def test_collapse_all_and_expand_all_intents_on_an_empty_scene_still_publish_once():
+    async def run():
+        bus, document, recorder = make_bus()
+        recorder.messages.clear()
+
+        await bus.dispatch_intent("scene", "collapseAllNodes", [])
+        assert recorder.topics_seen().count("scene") == 1
+
+        recorder.messages.clear()
+        await bus.dispatch_intent("scene", "expandAllNodes", [])
+        assert recorder.topics_seen().count("scene") == 1
+
+    asyncio.run(run())

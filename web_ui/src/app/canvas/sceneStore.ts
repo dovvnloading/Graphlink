@@ -164,6 +164,20 @@ export class SceneStore {
     this.transport.intent("scene", "setChatCollapsed", [id, collapsed]);
   }
 
+  // R7.5e: legacy's "Collapse All Nodes"/"Expand All Nodes" (graphlink_
+  // window_navigation.py:12-13) - a bulk is_collapsed change restricted
+  // server-side to chat/conversation/html-kind nodes only. Same plain
+  // fire-and-forget shape as setChatCollapsed above and every other no-arg
+  // scene intent (organizeNodes, ...): the new is_collapsed values arrive
+  // through the next scene snapshot, nothing synchronous needed here.
+  collapseAllNodes(): void {
+    this.transport.intent("scene", "collapseAllNodes", []);
+  }
+
+  expandAllNodes(): void {
+    this.transport.intent("scene", "expandAllNodes", []);
+  }
+
   // R3.9/R3.10: real document nodes (attachments). Unlike chat/code,
   // parentId is REQUIRED - the backend's add_document_node signature has no
   // default for it (a document node can never exist without a parent chat

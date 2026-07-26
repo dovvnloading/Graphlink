@@ -71,6 +71,12 @@ export function buildCommands(
   // cannot answer a "2+ selected" question).
   const selectedNodeIds = () => rf.getNodes().filter((n) => n.selected).map((n) => n.id);
   const hasMultiSelection = () => selectedNodeIds().length >= 2;
+  // R7.5e: Collapse All/Expand All are gated on scene content, not selection
+  // (legacy enabled them whenever at least one eligible node existed,
+  // regardless of what was selected) - restricted to the three kinds the
+  // backend's collapseAllNodes/expandAllNodes intents actually touch.
+  const hasCollapsibleNodes = () =>
+    store.getScene().nodes.some((n) => n.kind === "chat" || n.kind === "conversation" || n.kind === "html");
 
   return [
     {
@@ -255,6 +261,26 @@ export function buildCommands(
       aliases: ["group into container", "container selection"],
       run: () => store.createContainer(selectedNodeIds()),
       enabled: hasMultiSelection,
+    },
+    {
+      // R7.5e: legacy's "Collapse All Nodes" (graphlink_window_navigation.py:12),
+      // alias "fold all" - enabled only when at least one chat/conversation/
+      // html node exists, same posture as create-frame/create-container's own
+      // content-shaped gate above.
+      id: "collapse-all-nodes",
+      name: "Collapse All Nodes",
+      aliases: ["fold all"],
+      run: () => store.collapseAllNodes(),
+      enabled: hasCollapsibleNodes,
+    },
+    {
+      // R7.5e: legacy's "Expand All Nodes" (graphlink_window_navigation.py:13),
+      // alias "unfold all".
+      id: "expand-all-nodes",
+      name: "Expand All Nodes",
+      aliases: ["unfold all"],
+      run: () => store.expandAllNodes(),
+      enabled: hasCollapsibleNodes,
     },
   ];
 }
