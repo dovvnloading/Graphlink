@@ -25,6 +25,7 @@ function makeStore(sceneOverrides: Partial<typeof initialSceneState> = {}) {
   const setFadeConnections = vi.fn();
   const setSnapToGrid = vi.fn();
   const setOrthogonalConnections = vi.fn();
+  const setSmartGuides = vi.fn();
   const store = {
     subscribe: (l: () => void) => {
       listeners.add(l);
@@ -42,11 +43,12 @@ function makeStore(sceneOverrides: Partial<typeof initialSceneState> = {}) {
     setSnapToGrid,
     setFadeConnections,
     setOrthogonalConnections,
+    setSmartGuides,
     setFontFamily: vi.fn(),
     setFontSize: vi.fn(),
     setFontColor: vi.fn(),
   };
-  return { store, setFadeConnections, setSnapToGrid, setOrthogonalConnections };
+  return { store, setFadeConnections, setSnapToGrid, setOrthogonalConnections, setSmartGuides };
 }
 
 function renderOpen(store: unknown) {
@@ -112,6 +114,32 @@ describe("ViewPopover (R7.5b-2 Orthogonal Routing checkbox)", () => {
     await user.click(screen.getByRole("checkbox", { name: "Orthogonal Routing" }));
 
     expect(setOrthogonalConnections).toHaveBeenCalledWith(true);
+    expect(setFadeConnections).not.toHaveBeenCalled();
+  });
+});
+
+// R7.5b-3: same posture again - only the new control is covered.
+describe("ViewPopover (R7.5b-3 Smart Guides checkbox)", () => {
+  it("reflects smartGuides=false as unchecked and smartGuides=true as checked", () => {
+    const off = makeStore({ smartGuides: false });
+    const { unmount } = renderOpen(off.store);
+    expect(screen.getByRole("checkbox", { name: "Smart Guides" })).not.toBeChecked();
+    unmount();
+
+    const on = makeStore({ smartGuides: true });
+    renderOpen(on.store);
+    expect(screen.getByRole("checkbox", { name: "Smart Guides" })).toBeChecked();
+  });
+
+  it("calls store.setSmartGuides with the new value on toggle, independent of the other toggles", async () => {
+    const user = userEvent.setup();
+    const { store, setSmartGuides, setOrthogonalConnections, setFadeConnections } = makeStore({ smartGuides: false });
+    renderOpen(store);
+
+    await user.click(screen.getByRole("checkbox", { name: "Smart Guides" }));
+
+    expect(setSmartGuides).toHaveBeenCalledWith(true);
+    expect(setOrthogonalConnections).not.toHaveBeenCalled();
     expect(setFadeConnections).not.toHaveBeenCalled();
   });
 });

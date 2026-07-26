@@ -25,6 +25,7 @@ export const initialSceneState: SceneState = {
   snapToGrid: false,
   fadeConnectionsEnabled: false,
   orthogonalRouting: false,
+  smartGuides: false,
   dragFactor: 1,
   fontFamily: "Segoe UI",
   fontSizePt: 9,
@@ -539,6 +540,11 @@ export class SceneStore {
   // GridControlBridge's own setOrthogonalConnections Slot name 1:1.
   setOrthogonalConnections(enabled: boolean): void {
     this.transport.intent("scene", "setOrthogonalConnections", [enabled]);
+  }
+
+  // R7.5b-3: the fourth and final legacy grid-control toggle.
+  setSmartGuides(enabled: boolean): void {
+    this.transport.intent("scene", "setSmartGuides", [enabled]);
   }
 
   setDragFactor(factor: number): void {

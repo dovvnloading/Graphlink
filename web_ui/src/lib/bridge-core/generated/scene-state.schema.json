@@ -503,6 +503,9 @@
     "schemaVersion": {
       "type": "integer"
     },
+    "smartGuides": {
+      "type": "boolean"
+    },
     "snapToGrid": {
       "type": "boolean"
     }
@@ -516,6 +519,7 @@
     "snapToGrid",
     "fadeConnectionsEnabled",
     "orthogonalRouting",
+    "smartGuides",
     "dragFactor",
     "fontFamily",
     "fontSizePt",

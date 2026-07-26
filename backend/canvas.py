@@ -702,6 +702,12 @@ class SceneDocument:
     # legacy scene's orthogonal_routing bool, same bare-bool/"scene"-topic
     # shape as fade_connections_enabled above.
     orthogonal_routing: bool = False
+    # R7.5b-3: Qt-removal plan R7.5's third and final canvas-visual parity
+    # fix - the legacy scene's smart_guides bool, same bare-bool/"scene"-topic
+    # shape as the two toggles above. The snap math itself is 100% client-side
+    # (web_ui/src/app/canvas/smartGuides.ts), matching the legacy split where
+    # ChatScene owned only the flag and the geometry ran in the view layer.
+    smart_guides: bool = False
     drag_factor: float = 1.0
     # Canvas font (ChatScene's setFontFamily/-Size/-Color state, R2): defaults
     # match the legacy scene's own construction-time values.
@@ -2800,6 +2806,7 @@ class SceneDocument:
             "snapToGrid": self.snap_to_grid,
             "fadeConnectionsEnabled": self.fade_connections_enabled,
             "orthogonalRouting": self.orthogonal_routing,
+            "smartGuides": self.smart_guides,
             "dragFactor": self.drag_factor,
             "fontFamily": self.font_family,
             "fontSizePt": self.font_size_pt,
@@ -4001,6 +4008,10 @@ def register_canvas(
         document.orthogonal_routing = bool(enabled)
         await publish_scene()
 
+    async def set_smart_guides(enabled):
+        document.smart_guides = bool(enabled)
+        await publish_scene()
+
     async def set_drag_factor(factor):
         document.set_drag_factor(factor)
         await publish_scene()
@@ -4067,6 +4078,7 @@ def register_canvas(
     # setSnapToGrid/setFadeConnections above - the Python function name above
     # doesn't need to match.
     bus.register_intent("scene", "setOrthogonalConnections", set_orthogonal_routing)
+    bus.register_intent("scene", "setSmartGuides", set_smart_guides)
     bus.register_intent("scene", "setDragFactor", set_drag_factor)
     bus.register_intent("scene", "setViewState", set_view_state)
     # R4.3: per-node cancel for a ConversationNode's in-flight reply. Reuses
