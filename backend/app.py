@@ -185,7 +185,12 @@ def _configure_session(
     # just above) so "Web Research" can create a real node - this ordering
     # (canvas_document exists before register_plugins runs) is load-bearing.
     register_plugins(bus, notifications_state, bus.canvas_document)
-    register_settings(bus, settings_manager)
+    # R7.4a: register_settings now takes notifications_state too, so the
+    # API-provider page's save-validation/init-failure paths can surface a
+    # real banner (same load-bearing ordering precedent as register_plugins/
+    # register_chat_library above - notifications_state already exists by
+    # this point in every case).
+    register_settings(bus, settings_manager, notifications_state)
     # R6.4: register_chat_library needs the same session's canvas_document
     # (built above) so loadChat can actually restore a session into it, and
     # notifications_state so a failed/empty load can surface a real banner -

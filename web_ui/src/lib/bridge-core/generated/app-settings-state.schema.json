@@ -2,11 +2,81 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
+    "activeApiProvider": {
+      "type": "string"
+    },
     "activeSection": {
       "type": "string"
     },
+    "apiBaseUrl": {
+      "type": "string"
+    },
+    "apiCatalogMessage": {
+      "type": "string"
+    },
+    "apiCatalogStatus": {
+      "type": "string"
+    },
+    "apiKeyConfigured": {
+      "additionalProperties": {
+        "type": "boolean"
+      },
+      "type": "object"
+    },
+    "apiModelCatalog": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "available": {
+            "type": "boolean"
+          },
+          "capabilities": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "modelId": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "ready": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "modelId",
+          "provider",
+          "capabilities",
+          "ready",
+          "available"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "apiModels": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "type": "object"
+    },
     "enableSystemPrompt": {
       "type": "boolean"
+    },
+    "geminiStaticImageModels": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "geminiStaticModels": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
     },
     "githubTokenConfigured": {
       "type": "boolean"
@@ -31,6 +101,9 @@
     },
     "theme": {
       "type": "string"
+    },
+    "viewingApiProvider": {
+      "type": "string"
     }
   },
   "required": [
@@ -41,7 +114,17 @@
     "showTokenCounter",
     "enableSystemPrompt",
     "notificationPreferences",
-    "githubTokenConfigured"
+    "githubTokenConfigured",
+    "activeApiProvider",
+    "viewingApiProvider",
+    "apiBaseUrl",
+    "apiKeyConfigured",
+    "apiModels",
+    "apiModelCatalog",
+    "apiCatalogStatus",
+    "apiCatalogMessage",
+    "geminiStaticModels",
+    "geminiStaticImageModels"
   ],
   "title": "AppSettingsState",
   "type": "object"
