@@ -2,6 +2,14 @@
  * Regenerate with graphlink_island_codegen.py; a pytest fails if this file
  * drifts from what regenerating it now would produce. */
 
+export interface ApiModelDescriptor {
+  modelId: string;
+  provider: string;
+  capabilities: string[];
+  ready: boolean;
+  available: boolean;
+}
+
 export interface AppSettingsState {
   schemaVersion: number;
   revision: number;
@@ -11,6 +19,16 @@ export interface AppSettingsState {
   enableSystemPrompt: boolean;
   notificationPreferences: Record<string, boolean>;
   githubTokenConfigured: boolean;
+  activeApiProvider: string;
+  viewingApiProvider: string;
+  apiBaseUrl: string;
+  apiKeyConfigured: Record<string, boolean>;
+  apiModels: Record<string, string>;
+  apiModelCatalog: ApiModelDescriptor[];
+  apiCatalogStatus: string;
+  apiCatalogMessage: string;
+  geminiStaticModels: string[];
+  geminiStaticImageModels: string[];
   minCompatibleSchemaVersion?: number | null;
 }
 
@@ -28,6 +46,36 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 // normal, expected shape of a NEWER compatible sender - rejecting it here would
 // defeat the additive-forward-compatibility the version negotiation exists to
 // provide. Missing or wrongly-typed KNOWN fields are still hard errors.
+
+function checkApiModelDescriptor(value: unknown, path: string, errors: string[]): void {
+  if (!isRecord(value)) { errors.push(`${path}: expected object`); return; }
+  {
+    const fieldValue = value["modelId"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.modelId: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.modelId` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["provider"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.provider: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.provider` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["capabilities"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.capabilities: missing required field`);
+    else { if (!Array.isArray(fieldValue)) errors.push(`${path}.capabilities` + ": expected array");
+    else (fieldValue as unknown[]).forEach((item, i) => { if (typeof item !== "string") errors.push(`${path}.capabilities` + `[${i}]` + ": expected string"); }); }
+  }
+  {
+    const fieldValue = value["ready"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.ready: missing required field`);
+    else { if (typeof fieldValue !== "boolean") errors.push(`${path}.ready` + ": expected boolean"); }
+  }
+  {
+    const fieldValue = value["available"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.available: missing required field`);
+    else { if (typeof fieldValue !== "boolean") errors.push(`${path}.available` + ": expected boolean"); }
+  }
+}
 
 function checkAppSettingsState(value: unknown, path: string, errors: string[]): void {
   if (!isRecord(value)) { errors.push(`${path}: expected object`); return; }
@@ -71,6 +119,61 @@ function checkAppSettingsState(value: unknown, path: string, errors: string[]): 
     const fieldValue = value["githubTokenConfigured"];
     if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.githubTokenConfigured: missing required field`);
     else { if (typeof fieldValue !== "boolean") errors.push(`${path}.githubTokenConfigured` + ": expected boolean"); }
+  }
+  {
+    const fieldValue = value["activeApiProvider"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.activeApiProvider: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.activeApiProvider` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["viewingApiProvider"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.viewingApiProvider: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.viewingApiProvider` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["apiBaseUrl"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.apiBaseUrl: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.apiBaseUrl` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["apiKeyConfigured"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.apiKeyConfigured: missing required field`);
+    else { if (!isRecord(fieldValue)) errors.push(`${path}.apiKeyConfigured` + ": expected object");
+    else Object.entries(fieldValue as Record<string, unknown>).forEach(([k, v]) => { if (typeof v !== "boolean") errors.push(`${path}.apiKeyConfigured` + `[${JSON.stringify(k)}]` + ": expected boolean"); }); }
+  }
+  {
+    const fieldValue = value["apiModels"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.apiModels: missing required field`);
+    else { if (!isRecord(fieldValue)) errors.push(`${path}.apiModels` + ": expected object");
+    else Object.entries(fieldValue as Record<string, unknown>).forEach(([k, v]) => { if (typeof v !== "string") errors.push(`${path}.apiModels` + `[${JSON.stringify(k)}]` + ": expected string"); }); }
+  }
+  {
+    const fieldValue = value["apiModelCatalog"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.apiModelCatalog: missing required field`);
+    else { if (!Array.isArray(fieldValue)) errors.push(`${path}.apiModelCatalog` + ": expected array");
+    else (fieldValue as unknown[]).forEach((item, i) => { checkApiModelDescriptor(item, `${path}.apiModelCatalog` + `[${i}]`, errors); }); }
+  }
+  {
+    const fieldValue = value["apiCatalogStatus"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.apiCatalogStatus: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.apiCatalogStatus` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["apiCatalogMessage"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.apiCatalogMessage: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.apiCatalogMessage` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["geminiStaticModels"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.geminiStaticModels: missing required field`);
+    else { if (!Array.isArray(fieldValue)) errors.push(`${path}.geminiStaticModels` + ": expected array");
+    else (fieldValue as unknown[]).forEach((item, i) => { if (typeof item !== "string") errors.push(`${path}.geminiStaticModels` + `[${i}]` + ": expected string"); }); }
+  }
+  {
+    const fieldValue = value["geminiStaticImageModels"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.geminiStaticImageModels: missing required field`);
+    else { if (!Array.isArray(fieldValue)) errors.push(`${path}.geminiStaticImageModels` + ": expected array");
+    else (fieldValue as unknown[]).forEach((item, i) => { if (typeof item !== "string") errors.push(`${path}.geminiStaticImageModels` + `[${i}]` + ": expected string"); }); }
   }
   {
     const fieldValue = value["minCompatibleSchemaVersion"];
