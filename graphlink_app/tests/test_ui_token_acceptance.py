@@ -56,10 +56,6 @@ _HEX_ALLOWLIST: dict[str, str] = {
         "grid-color preset swatches - user-pickable data choices, stable "
         "across themes by design"
     ),
-    "graphlink_grid_view_settings.py": (
-        "DEFAULT_GRID_COLOR in the deliberately Qt-free plain-data settings "
-        "model - a persisted user-preference default, not chrome"
-    ),
     "graphlink_canvas/graphlink_canvas_chart_item.py": (
         "single #868686 'slate' entry in the chart data-series color cycle - "
         "series colors are data, not chrome (rule 2 of the sweep)"
@@ -68,16 +64,6 @@ _HEX_ALLOWLIST: dict[str, str] = {
         "DEFAULT_CONTAINER_COLOR: the container's persisted user-facing body "
         "color default (saved into scene JSON) - scene data must keep its "
         "color across theme switches, like DEFAULT_GRID_COLOR"
-    ),
-    "graphlink_chart_rendering.py": (
-        "R6.2: Qt-free Matplotlib chart rendering, imported directly by "
-        "backend/ (must stay importable with zero Qt in its dependency "
-        "chain, so it cannot import graphlink_config/graphlink_styles - both "
-        "pull in Qt). Its dark-theme palette (SURFACE/PANEL/BORDER/TEXT/ "
-        "MUTED/GRID/PRIMARY/SECONDARY/SELECTION) is copied VERBATIM from "
-        "graphlink_config.py's THEME_TOKENS['dark'], and SLATE=#868686 is "
-        "the same already-allowlisted data-series entry from "
-        "graphlink_canvas_chart_item.py above, not a new color choice."
     ),
 }
 
@@ -88,11 +74,6 @@ _FONT_ALLOWLIST: dict[str, str] = {
         "FONT_FAMILIES: the user-pickable font list offers 'Segoe UI' and "
         "'Segoe UI Variable' as CHOICES - data presented to the user, not a "
         "hardcoded app default (defaults go through FONT_FAMILY_NAME)"
-    ),
-    "graphlink_chart_rendering.py": (
-        "R6.2: same Qt-free-dependency-chain constraint as its _HEX_ALLOWLIST "
-        "entry above - cannot import graphlink_styles.FONT_FAMILY_NAME "
-        "(pulls in Qt), so its value ('Segoe UI') is copied verbatim instead"
     ),
 }
 

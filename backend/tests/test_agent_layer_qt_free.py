@@ -7,7 +7,6 @@ earlier test may already have imported Qt - so each check runs a fresh
 python subprocess and asserts PySide6 never entered sys.modules.
 """
 
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -23,18 +22,16 @@ def _assert_import_is_qt_free(module_name: str) -> None:
         "assert not qt, f'importing {module_name} pulled Qt: {{qt}}'\n"
         f"print('{module_name} imported qt-free')\n"
     )
-    # The legacy modules live in graphlink_app/ and are importable as
-    # top-level names (pyproject py-modules); a fresh subprocess needs that
-    # directory on its path the same way conftest arranges it in-process.
-    env = dict(os.environ)
-    env["PYTHONPATH"] = str(REPO_ROOT / "graphlink_app") + os.pathsep + env.get("PYTHONPATH", "")
+    # R7.2: these modules now sit at REPO_ROOT itself (a sibling of
+    # backend/), not inside graphlink_app/ - `python -c` sets sys.path[0] to
+    # cwd, and the subprocess already runs with cwd=REPO_ROOT below, so no
+    # PYTHONPATH injection is needed any more.
     result = subprocess.run(
         [sys.executable, "-c", code],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
         timeout=60,
-        env=env,
     )
     assert result.returncode == 0, (
         f"importing {module_name} in a fresh process failed or pulled Qt:\n"

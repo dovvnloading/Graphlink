@@ -21,12 +21,13 @@ document IS the source of truth the window can reload against.
 from __future__ import annotations
 
 import base64
-import importlib.util
+import binascii
 import itertools
+import logging
 import math
 import uuid
 from dataclasses import dataclass, field
-from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from graphlink_chart_data import ChartDataError, canonicalize_chart_data, SUPPORTED_CHART_TYPES
@@ -55,33 +56,101 @@ from backend.response_parsing import (
 from backend.token_counter import estimate_tokens
 
 
-def _load_graphlink_content_codec():
-    """R6.3: graphlink_app/graphlink_session/content_codec.py is 100%
-    Qt-free (it imports only base64/binascii/logging - confirmed by direct
-    read), but the graphlink_session PACKAGE it lives in is not:
-    graphlink_session/__init__.py eagerly imports ChatSessionManager and
-    SaveWorkerThread, and workers.py in turn imports PySide6.QtCore - so a
-    plain `from graphlink_session.content_codec import ...` would run that
-    __init__.py first (Python always runs a package's __init__.py, even for
-    a submodule import) and pull Qt into backend/'s import graph. Same
-    "package wrapper is hazardous, the leaf module itself is not" situation
-    backend/chat_library.py's own docstring already documents for
-    graphlink_session.database - but UNLIKE chat_library.py (which
-    reimplements ChatDatabase's small SQL surface rather than import it),
-    content_codec.py is loaded here directly via importlib, bypassing the
-    package's __init__.py entirely, rather than ported/copied - there is
-    nothing about it worth forking into a second maintained copy."""
-    module_path = (
-        Path(__file__).resolve().parents[1]
-        / "graphlink_app" / "graphlink_session" / "content_codec.py"
-    )
-    spec = importlib.util.spec_from_file_location("_graphlink_session_content_codec", module_path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+# R7.2: ported from graphlink_app/graphlink_session/content_codec.py, not
+# imported. content_codec.py itself is 100% Qt-free (base64/binascii/logging
+# only), but the graphlink_session PACKAGE it lives in is not -
+# graphlink_session/__init__.py eagerly imports ChatSessionManager and
+# SaveWorkerThread, and workers.py in turn imports PySide6.QtCore, so a plain
+# `from graphlink_session.content_codec import ...` would run that __init__.py
+# first (Python always runs a package's __init__.py, even for a submodule
+# import) and pull Qt into backend/'s import graph. Before R7.2 this was
+# loaded via a raw importlib.util.spec_from_file_location path load,
+# bypassing the package's __init__.py - that workaround existed only because
+# every OTHER Qt-free survivor could be reached by relocating the physical
+# file (matching R7.2's real destination for the 33 modules it did move); this
+# one file can't get the same treatment because graphlink_session/
+# deserializers.py and serializers.py - Qt-tainted, still live until the R7.6
+# cutover - import it via a normal package-relative
+# `from graphlink_session.content_codec import (...)`, which a physical move
+# would break. So the file itself stays exactly where it is, and its logic is
+# ported here instead - the same "reimplement, don't import" precedent
+# backend/chat_library.py and backend/crash_recovery.py already follow for a
+# Qt-tainted wrapper around Qt-free logic. The _content_codec namespace below
+# exists purely so every one of the 8 call sites across canvas.py/
+# session_load.py/session_save.py keeps its existing `_content_codec.foo(...)`
+# spelling unchanged.
 
 
-_content_codec = _load_graphlink_content_codec()
+def _serialize_history(history):
+    serialized_history = []
+    for message in history or []:
+        new_message = message.copy()
+        if "content" in new_message:
+            new_message["content"] = _process_content_for_serialization(new_message["content"])
+        serialized_history.append(new_message)
+    return serialized_history
+
+
+def _deserialize_history(history):
+    deserialized_history = []
+    for message in history or []:
+        new_message = message.copy()
+        if "content" in new_message:
+            new_message["content"] = _process_content_for_deserialization(new_message["content"])
+        deserialized_history.append(new_message)
+    return deserialized_history
+
+
+def _process_content_for_serialization(content):
+    """Base64-encode raw image bytes inside multimodal content payloads."""
+    if isinstance(content, list):
+        processed_parts = []
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "image_bytes" and isinstance(part.get("data"), bytes):
+                new_part = part.copy()
+                new_part["data"] = base64.b64encode(part["data"]).decode("utf-8")
+                processed_parts.append(new_part)
+            else:
+                processed_parts.append(part)
+        return processed_parts
+    return content
+
+
+def _process_content_for_deserialization(content):
+    """Decode base64 image payloads back into raw bytes when loading a chat."""
+    if isinstance(content, list):
+        processed_parts = []
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "image_bytes" and isinstance(part.get("data"), str):
+                new_part = part.copy()
+                try:
+                    new_part["data"] = base64.b64decode(part["data"])
+                    processed_parts.append(new_part)
+                except (binascii.Error, ValueError):
+                    logging.exception("Failed to decode base64 image data during deserialization.")
+                    processed_parts.append({"type": "text", "text": "[ERROR: Image Data Corrupted]"})
+            else:
+                processed_parts.append(part)
+        return processed_parts
+    return content
+
+
+def _encode_image_bytes(data):
+    return base64.b64encode(data).decode("utf-8")
+
+
+def _decode_image_bytes(data):
+    return base64.b64decode(data)
+
+
+_content_codec = SimpleNamespace(
+    serialize_history=_serialize_history,
+    deserialize_history=_deserialize_history,
+    process_content_for_serialization=_process_content_for_serialization,
+    process_content_for_deserialization=_process_content_for_deserialization,
+    encode_image_bytes=_encode_image_bytes,
+    decode_image_bytes=_decode_image_bytes,
+)
 
 # Dark-theme grid swatches. The Qt bridge derived 3 of 5 from the live
 # QPalette; the backend is Qt-free by law (test_no_qt_anywhere.py), so until

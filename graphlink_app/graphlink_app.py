@@ -1,5 +1,18 @@
 import logging
 import sys
+from pathlib import Path
+
+# R7.2: api_provider, graphlink_version, and 31 other modules every import
+# below transitively needs (directly or via graphlink_window.py's own import
+# graph) moved out of this directory to the repo root. Must run before ANY
+# graphlink_* import - graphlink_window (the very next real import) already
+# needs api_provider/graphlink_audio/graphlink_prompts/
+# graphlink_navigation_pins/graphlink_token_estimator, so inserting this any
+# later is too late.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from graphlink_window import ChatWindow

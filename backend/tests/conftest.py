@@ -1,10 +1,10 @@
 import pytest
 
-import backend  # noqa: F401 - side effect: backend/__init__.py's own import
-# puts graphlink_app/ on sys.path - this must come before the bare
-# `import api_provider` below, matching the same convention every other
-# file in this test package already follows (see test_canvas.py/
-# test_agents.py/test_app_ws.py's own identical comment).
+import backend  # noqa: F401 - exercises the package import
+# R7.2: api_provider.py sits at the repo root, a sibling of backend/ - the
+# same directory pytest already put on sys.path to make `backend` itself
+# importable, so this needs no setup and no particular ordering relative to
+# the import above.
 import api_provider
 
 
