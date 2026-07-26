@@ -69,7 +69,9 @@ describe("Composer", () => {
     );
     expect(screen.getByLabelText("Send message")).toBeDisabled();
     expect(screen.getByLabelText("Attach context")).toBeDisabled();
-    expect(screen.getByTitle("Model/provider selection lands in R4")).toBeDisabled();
+    expect(
+      screen.getByTitle("Model selection isn't available here yet - configure models in Settings"),
+    ).toBeDisabled();
   });
 
   it("Send is enabled once there's text, calls sceneStore.sendMessage, and clears the draft", async () => {

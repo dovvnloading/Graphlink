@@ -116,7 +116,7 @@ export function AppBar({ store }: { store: SceneStore }) {
         value="Ollama (Local)"
         aria-label="Provider mode"
         disabled
-        title="Provider modes land in R4"
+        title="Switching provider modes isn't available yet"
         onChange={() => {}}
       >
         <option>Ollama (Local)</option>

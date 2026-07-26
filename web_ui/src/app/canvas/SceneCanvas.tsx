@@ -146,7 +146,7 @@ function PlaceholderNodeView({ data, selected }: NodeProps<PlaceholderNode>) {
           on bottom. */}
       <Handle type="target" position={Position.Top} className="scene-node-handle" />
       <div className="scene-node-title">{data.title}</div>
-      {!collapsed && <div className="scene-node-body">placeholder — real nodes land in R3</div>}
+      {!collapsed && <div className="scene-node-body">Placeholder node</div>}
       <Handle type="source" position={Position.Bottom} className="scene-node-handle" />
     </div>
   );
