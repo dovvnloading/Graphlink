@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import json
 import re
 import sqlite3
@@ -367,6 +368,51 @@ def _resolve_seed_message(document: SceneDocument) -> str:
     return last_chat_content if last_chat_content is not None else "New Chat"
 
 
+def _content_digest(chat_data: dict[str, Any], notes_data: list, pins_data: list) -> str:
+    """A pure function of "what would actually get written" - the change-guard
+    autosave skips redundant writes with. Lives here, next to the save
+    primitives it digests the output of, rather than in backend/autosave.py:
+    saveChat and loadChat both need to record a digest too (see
+    _new_save_state below), and autosave.py already imports FROM this module,
+    never the reverse.
+
+    sort_keys makes this independent of dict insertion order (build_chat_data's
+    own key order never changes call to call, but this is cheap insurance
+    against a false "changed" from something that isn't); default=str tolerates
+    any value json can't natively encode without ever raising (a digest
+    mismatch on an unexpected type just means "assume changed, write it" - the
+    safe direction to fail in, never "assume unchanged, skip a real write")."""
+    payload = json.dumps(
+        {"chat_data": chat_data, "notes_data": notes_data, "pins_data": pins_data},
+        sort_keys=True, default=str,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _new_save_state() -> dict[str, Any]:
+    """The one cell tracking "what is currently on disk for this session",
+    shared by every path that writes or reads a chat row: autosave's tick,
+    the manual saveChat, and loadChat.
+
+    Audit finding (this used to be a closure-local in register_autosave that
+    NOTHING else could reach, while autosave.py's own docstring claimed it
+    covered manual saves too). Two real consequences of that, both fixed by
+    making it shared and by tracking chat_id alongside the digest:
+
+    1. A manual Save or a loadChat left the cell stale, so the very next tick
+       rewrote a byte-identical row - bumping updated_at and re-sorting the
+       Chat Library (get_all_chats orders by updated_at DESC) under the user
+       for no reason.
+    2. The guard compared CONTENT only, but chats.db is shared mutable state.
+       Delete the currently-open chat from the library and keep working
+       without touching the canvas: the document's digest never changes, so
+       every subsequent tick short-circuited and autosave silently stopped
+       protecting the session entirely. Comparing chat_id too means a row
+       that vanished underneath the session can no longer be mistaken for
+       "already saved"."""
+    return {"digest": None, "chat_id": None}
+
+
 def chat_library_payload(db_path: Path) -> dict[str, Any]:
     try:
         rows = get_all_chats(db_path)
@@ -407,6 +453,22 @@ def register_chat_library(
     # counterpart of ChatSessionManager's own _is_saving reentrancy guard.
     _mutation_in_progress = {"active": False}
 
+    # R6.6 + audit fix: see _new_save_state's own docstring for what this
+    # tracks and the two bugs that came from autosave owning it privately.
+    _last_saved = _new_save_state()
+    # Stashed on the bus for the same reason register_autosave stashes
+    # bus.autosave_task: it is per-session state a caller may legitimately
+    # need to observe, and a closure-local is unreachable to anything -
+    # including the tests that have to prove the sharing actually works,
+    # which is the whole point of the fix.
+    bus.chat_save_state = _last_saved
+
+    def _record_saved(
+        chat_data: dict[str, Any], notes_data: list, pins_data: list, chat_id: int | None
+    ) -> None:
+        _last_saved["digest"] = _content_digest(chat_data, notes_data, pins_data)
+        _last_saved["chat_id"] = int(chat_id) if chat_id is not None else None
+
     def _serialize_mutating_intent(handler):
         async def wrapped(*args, **kwargs):
             if _mutation_in_progress["active"]:
@@ -443,6 +505,18 @@ def register_chat_library(
         # The SPA only calls this after its own two-step confirm, so no
         # confirmation happens here - same contract as the legacy bridge.
         await asyncio.to_thread(delete_chat, resolved_path, int(chat_id))
+        if canvas_document is not None and canvas_document.current_chat_id == int(chat_id):
+            # Audit fix: deleting the row this session is currently pointed at
+            # used to leave current_chat_id dangling AND leave the autosave
+            # digest looking "already saved", so a user who deleted their open
+            # chat and kept working silently had no autosave protection at all
+            # until they happened to edit the canvas. Dropping both makes the
+            # next tick treat this as an unsaved session and INSERT a fresh
+            # row - the same thing a manual Save already does here (save_chat's
+            # own existing_row-is-None fallback).
+            canvas_document.current_chat_id = None
+            _last_saved["digest"] = None
+            _last_saved["chat_id"] = None
         await bus.publish("app-chat-library")
 
     async def load_chat(chat_id: int):
@@ -473,6 +547,21 @@ def register_chat_library(
             # one - the backend analog of ChatSessionManager.current_chat_id
             # being set from the load path, not just the save path.
             canvas_document.current_chat_id = int(chat_id)
+            # Audit fix: the document now matches this row exactly, so record
+            # that. Without it the first tick after a load rewrote a
+            # byte-identical row and bumped updated_at, re-sorting the Chat
+            # Library under the user for a session they had only just opened.
+            try:
+                fresh = build_chat_data(canvas_document)
+                fresh_notes = fresh.pop("notes_data", [])
+                fresh_pins = fresh.pop("pins_data", [])
+                _record_saved(fresh, fresh_notes, fresh_pins, chat_id)
+            except Exception:
+                # Never fail a successful load over bookkeeping - leaving the
+                # digest unset just means one redundant tick, the pre-fix
+                # behavior.
+                _last_saved["digest"] = None
+                _last_saved["chat_id"] = int(chat_id)
         except Exception as exc:
             # Adversarial review finding: load_notes_rows/load_pins_rows (a
             # real sqlite3.Error, e.g. a locked/corrupted db file) previously
@@ -565,6 +654,10 @@ def register_chat_library(
             return
 
         canvas_document.current_chat_id = int(new_chat_id)
+        # Audit fix: record what this manual Save just put on disk, so the
+        # next autosave tick recognizes it as already-saved instead of
+        # rewriting a byte-identical row 30 seconds later.
+        _record_saved(chat_data, notes_data, pins_data, new_chat_id)
         await bus.publish("app-chat-library")
         if notifications is not None:
             notifications.show(f'Saved "{title}".', "success")
@@ -580,6 +673,10 @@ def register_chat_library(
         if canvas_document is None:
             return
         canvas_document.clear_for_load()
+        # clear_for_load drops current_chat_id, so the save state that
+        # described the old document no longer describes anything.
+        _last_saved["digest"] = None
+        _last_saved["chat_id"] = None
         await bus.publish("scene")
 
     bus.register_intent("app-chat-library", "renameChat", rename)
@@ -599,6 +696,6 @@ def register_chat_library(
         from backend.autosave import register_autosave
 
         register_autosave(
-            bus, resolved_path, canvas_document, notifications, _mutation_in_progress,
+            bus, resolved_path, canvas_document, notifications, _mutation_in_progress, _last_saved,
             interval_seconds=autosave_interval_seconds,
         )

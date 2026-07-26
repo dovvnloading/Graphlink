@@ -11,6 +11,7 @@ into unrelated tests elsewhere in the suite.
 import json
 import logging
 import logging.handlers
+import os
 import sys
 import threading
 from pathlib import Path
@@ -227,3 +228,81 @@ def test_excepthook_logs_the_unhandled_exception_and_still_calls_the_default_hoo
     assert "boom" in log_content
     assert "ValueError" in log_content
     assert len(default_hook_calls) == 1
+
+
+# -- audit fixes --
+
+
+def test_mark_clean_exit_leaves_another_instances_sentinel_alone(tmp_path):
+    # Audit finding: mark_clean_exit unlinked unconditionally, so two
+    # concurrent instances corrupted each other - B overwrites the lock with
+    # its own pid, A then exits cleanly and deletes B's lock, and a later
+    # crash of B goes completely unreported on the next launch.
+    mark_running(tmp_path)
+    payload = json.loads(sentinel_path(tmp_path).read_text(encoding="utf-8"))
+    payload["pid"] = os.getpid() + 1  # as if a second instance had marked it
+    sentinel_path(tmp_path).write_text(json.dumps(payload), encoding="utf-8")
+
+    mark_clean_exit(tmp_path)
+
+    assert previous_run_crashed(tmp_path), "a sibling instance's lock must survive"
+
+
+def test_mark_clean_exit_still_removes_our_own_sentinel(tmp_path):
+    mark_running(tmp_path)
+
+    mark_clean_exit(tmp_path)
+
+    assert not previous_run_crashed(tmp_path)
+
+
+def test_mark_clean_exit_clears_a_malformed_sentinel_rather_than_stranding_it(tmp_path):
+    # A lock we can't parse must not become permanent - that would report a
+    # phantom crash on every launch, forever.
+    sentinel_path(tmp_path).parent.mkdir(parents=True, exist_ok=True)
+    sentinel_path(tmp_path).write_text("not json", encoding="utf-8")
+
+    mark_clean_exit(tmp_path)
+
+    assert not previous_run_crashed(tmp_path)
+
+
+def test_configure_logging_keeps_a_stderr_handler_so_terminal_runs_still_print(tmp_path, isolated_logging_state):
+    # Audit finding: this replaced graphlink_desktop.py's logging.basicConfig,
+    # which had provided the only stderr handler. Without one, root HAS a
+    # handler (so logging.lastResort never fires) but nothing reaches the
+    # console - `python graphlink_desktop.py` with a missing SPA build printed
+    # nothing at all and exited 1, despite logging a perfectly good error.
+    configure_logging(tmp_path)
+
+    stream_handlers = [
+        h for h in logging.getLogger().handlers
+        if type(h) is logging.StreamHandler
+    ]
+    assert stream_handlers, "terminal runs must still see log output"
+
+
+def test_install_exception_handlers_can_be_retried_after_a_failure(
+    tmp_path, monkeypatch, isolated_exception_handler_state
+):
+    # Audit finding: the installed flag was set BEFORE the work, so a single
+    # failure (unwritable ~/.graphlink/crash, full disk) latched it forever
+    # and every retry became a silent no-op - leaving sys.excepthook
+    # permanently uninstalled with no second chance.
+    import builtins
+
+    original_hook = sys.excepthook
+    real_open = builtins.open
+
+    def failing_open(*args, **kwargs):
+        raise PermissionError("crash dir is not writable")
+
+    monkeypatch.setattr(builtins, "open", failing_open)
+    with pytest.raises(PermissionError):
+        install_exception_handlers(tmp_path)
+    assert sys.excepthook is original_hook
+
+    monkeypatch.setattr(builtins, "open", real_open)
+    install_exception_handlers(tmp_path)
+
+    assert sys.excepthook is not original_hook, "a retry after a failure must actually install"

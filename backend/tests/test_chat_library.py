@@ -7,6 +7,8 @@ import sqlite3
 
 import pytest
 
+import backend.autosave as autosave_module
+from backend.autosave import autosave_tick
 from backend.canvas import SceneDocument
 from backend.chat_library import (
     _fallback_title,
@@ -507,3 +509,110 @@ def test_register_chat_library_does_not_crash_without_a_running_event_loop(db_pa
     register_chat_library(bus, db_path, document, notifications)
 
     assert bus.autosave_task is None
+
+
+# -- audit fixes: the save-state cell is genuinely shared across every path --
+
+
+def _library_session(db_path):
+    bus = SessionBus("chat-library-save-state-test")
+    document = SceneDocument()
+    bus.register_topic("scene", document.scene_payload)
+    notifications = NotificationState()
+    bus.register_topic("notification", notifications.payload)
+    # autosave_interval_seconds=None: no background timer, so these tests
+    # drive autosave_tick explicitly and deterministically instead.
+    register_chat_library(bus, db_path, document, notifications, autosave_interval_seconds=None)
+    return bus, document, notifications
+
+
+def test_a_manual_save_seeds_the_save_state_so_the_next_tick_is_a_no_op(db_path, monkeypatch):
+    # Audit finding: backend/autosave.py's docstring claimed its change-guard
+    # covered "auto OR manual", but the cell was a closure-local nothing else
+    # could reach, so every manual Save was followed 30s later by a
+    # byte-identical rewrite that bumped updated_at and re-sorted the Chat
+    # Library out from under the user.
+    bus, document, notifications = _library_session(db_path)
+    document.add_chat_node(0, 0, "hello", is_user=True)
+
+    asyncio.run(bus.dispatch_intent("app-chat-library", "saveChat", []))
+    assert len(get_all_chats(db_path)) == 1
+    saved_id = document.current_chat_id
+
+    state = bus.chat_save_state
+    assert state["digest"] is not None and state["chat_id"] == saved_id
+
+    # A tick with nothing changed since that manual save must not write.
+    writes = []
+    real_save = autosave_module.save_chat_atomically_row
+    monkeypatch.setattr(
+        autosave_module, "save_chat_atomically_row",
+        lambda *a, **k: (writes.append(a), real_save(*a, **k))[1],
+    )
+    asyncio.run(autosave_tick(bus, db_path, document, notifications, state))
+    assert writes == [], "a tick right after a manual Save must not rewrite the row"
+
+
+def test_loading_a_chat_seeds_the_save_state_so_the_next_tick_is_a_no_op(db_path, monkeypatch):
+    # Same gap on the load side: opening a chat and touching nothing still
+    # rewrote its row on the first tick, re-sorting the library.
+    seed_bus, seed_document, seed_notifications = _library_session(db_path)
+    seed_document.add_chat_node(0, 0, "hello", is_user=True)
+    asyncio.run(seed_bus.dispatch_intent("app-chat-library", "saveChat", []))
+    chat_id = seed_document.current_chat_id
+
+    bus, document, notifications = _library_session(db_path)
+    asyncio.run(bus.dispatch_intent("app-chat-library", "loadChat", [chat_id]))
+    assert document.current_chat_id == chat_id
+
+    state = bus.chat_save_state
+    assert state["chat_id"] == chat_id
+    assert state["digest"] is not None
+
+    writes = []
+    real_save = autosave_module.save_chat_atomically_row
+    monkeypatch.setattr(
+        autosave_module, "save_chat_atomically_row",
+        lambda *a, **k: (writes.append(a), real_save(*a, **k))[1],
+    )
+    asyncio.run(autosave_tick(bus, db_path, document, notifications, state))
+    assert writes == [], "a tick right after loadChat must not rewrite the row"
+
+
+def test_deleting_the_open_chat_clears_the_pointer_and_reenables_autosave(db_path):
+    # Audit finding (real bug): deleteChat left current_chat_id dangling and
+    # left the content-only digest looking "already saved", so a user who
+    # deleted their open chat and kept working had NO autosave protection
+    # until they happened to edit the canvas.
+    bus, document, notifications = _library_session(db_path)
+    document.add_chat_node(0, 0, "hello", is_user=True)
+    asyncio.run(bus.dispatch_intent("app-chat-library", "saveChat", []))
+    saved_id = document.current_chat_id
+
+    asyncio.run(bus.dispatch_intent("app-chat-library", "deleteChat", [saved_id]))
+
+    assert get_all_chats(db_path) == []
+    assert document.current_chat_id is None, "the pointer to a deleted row must not dangle"
+
+    state = bus.chat_save_state
+    # The canvas is deliberately NOT touched - the pre-fix content-only guard
+    # could not tell this apart from "already saved" and skipped forever.
+    asyncio.run(autosave_tick(bus, db_path, document, notifications, state))
+
+    rows = get_all_chats(db_path)
+    assert len(rows) == 1, "the still-open work must be re-protected under a fresh row"
+    assert rows[0]["id"] != saved_id
+
+
+def test_deleting_a_different_chat_leaves_the_open_session_pointer_alone(db_path):
+    # The guard must be scoped to the row the session actually points at.
+    bus, document, notifications = _library_session(db_path)
+    other_id = _insert_chat(db_path, "Someone else's chat")
+    document.add_chat_node(0, 0, "hello", is_user=True)
+    asyncio.run(bus.dispatch_intent("app-chat-library", "saveChat", []))
+    saved_id = document.current_chat_id
+
+    asyncio.run(bus.dispatch_intent("app-chat-library", "deleteChat", [other_id]))
+
+    assert document.current_chat_id == saved_id
+    assert bus.chat_save_state["chat_id"] == saved_id

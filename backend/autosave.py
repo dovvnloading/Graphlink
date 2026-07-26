@@ -17,13 +17,21 @@ primitives backend/chat_library.py's own explicit saveChat intent calls -
 rather than duplicating any serialization or DB-write logic.
 
 CHANGE-GUARDED, not blind: a tick hashes the about-to-be-written JSON and
-skips the write entirely if it matches the hash from the last successful
-save (auto OR manual - see register_autosave's own `last_hash` argument,
-shared with nothing else, this module's own private bookkeeping). Without
-this, a session with no activity at all would still re-write its own
-unchanged row to disk (and re-publish app-chat-library, causing a pointless
-list re-render if the library dialog happens to be open) every single
-interval, forever, for the entire remaining lifetime of the process.
+skips the write when BOTH that hash and the current chat_id still match what
+was last put on disk. Without this, a session with no activity at all would
+still re-write its own unchanged row to disk (and re-publish
+app-chat-library, causing a pointless list re-render if the library dialog
+happens to be open) every single interval, forever, for the entire remaining
+lifetime of the process.
+
+That "what was last put on disk" cell is `last_saved`, a real argument passed
+in by backend/chat_library.py's register_chat_library and genuinely shared
+with the manual saveChat/loadChat/deleteChat paths - see _new_save_state's
+own docstring there for its shape, and for the two bugs an audit found in
+the original version of this guard, which owned the cell privately (nothing
+else could seed it) and compared content only (so a row deleted underneath
+the session still read as "already saved", silently ending all autosave
+protection for that session).
 
 SILENT ON SUCCESS, LOUD ON FAILURE: unlike the explicit Save button (which
 shows a 'Saved "..."' toast every time - the user just took an action and
@@ -57,14 +65,18 @@ session eviction, this does not.
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import json
 import logging
 from pathlib import Path
 from typing import Any
 
 from backend.canvas import SceneDocument
-from backend.chat_library import _fallback_title, _resolve_seed_message, load_chat_row, save_chat_atomically_row
+from backend.chat_library import (
+    _content_digest,
+    _fallback_title,
+    _resolve_seed_message,
+    load_chat_row,
+    save_chat_atomically_row,
+)
 from backend.events import SessionBus
 from backend.notifications import NotificationState
 from backend.session_save import build_chat_data
@@ -74,35 +86,18 @@ logger = logging.getLogger(__name__)
 DEFAULT_INTERVAL_SECONDS = 30.0
 
 
-def _content_digest(chat_data: dict[str, Any], notes_data: list, pins_data: list) -> str:
-    """A pure function of "what would actually get written" - sort_keys
-    makes this independent of dict insertion order (build_chat_data's own
-    key order never changes call to call, but this is cheap insurance
-    against a false "changed" from something that isn't); default=str
-    tolerates any value json can't natively encode without ever raising
-    (a digest mismatch on an unexpected type just means "assume changed,
-    write it" - the safe direction to fail in, never "assume unchanged,
-    skip a real write")."""
-    payload = json.dumps(
-        {"chat_data": chat_data, "notes_data": notes_data, "pins_data": pins_data},
-        sort_keys=True, default=str,
-    )
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
-
-
 async def autosave_tick(
     bus: SessionBus,
     db_path: Path,
     canvas_document: SceneDocument,
     notifications: NotificationState | None,
-    last_hash: dict[str, str | None],
+    last_saved: dict[str, Any],
 ) -> None:
     """One autosave attempt - directly callable (no timer involved), so
     tests can exercise the actual decision/write logic deterministically
-    rather than waiting on a real sleep. `last_hash` is a single-key mutable
-    dict (`{"value": ...}`) rather than a plain variable so register_autosave's
-    closure and this function can share and update the same cell across
-    calls without a class just for one field."""
+    rather than waiting on a real sleep. `last_saved` is the mutable cell
+    backend/chat_library.py's _new_save_state() creates and every write path
+    shares (see this module's own docstring, and that function's)."""
     if not canvas_document.nodes and canvas_document.current_chat_id is None:
         # Mirrors saveChat's own "Nothing was added to the chat canvas yet"
         # guard - an empty, never-saved canvas has nothing worth protecting.
@@ -118,7 +113,12 @@ async def autosave_tick(
     pins_data = chat_data.pop("pins_data", [])
 
     digest = _content_digest(chat_data, notes_data, pins_data)
-    if digest == last_hash["value"]:
+    if digest == last_saved["digest"] and canvas_document.current_chat_id == last_saved["chat_id"]:
+        # Both halves matter. Content alone is not enough: chats.db is shared
+        # mutable state, and a row that vanished underneath this session (the
+        # user deleting their own open chat from the library) leaves the
+        # document's content digest completely unchanged - comparing chat_id
+        # too is what stops that from reading as "already saved" forever.
         return
 
     chat_id_for_save: int | None = None
@@ -165,7 +165,8 @@ async def autosave_tick(
         return
 
     canvas_document.current_chat_id = int(new_chat_id)
-    last_hash["value"] = digest
+    last_saved["digest"] = digest
+    last_saved["chat_id"] = int(new_chat_id)
     await bus.publish("app-chat-library")
 
 
@@ -175,14 +176,19 @@ def register_autosave(
     canvas_document: SceneDocument,
     notifications: NotificationState | None,
     mutation_guard: dict[str, bool],
+    last_saved: dict[str, Any],
     *,
     interval_seconds: float = DEFAULT_INTERVAL_SECONDS,
 ) -> None:
     """Starts the one long-lived per-session background task. Stashed on
     `bus.autosave_task` purely so a caller COULD cancel it (e.g. a future
     test or a graceful-shutdown path) - nothing in this backend does today,
-    see this module's own docstring on why that is fine for now."""
-    last_hash: dict[str, str | None] = {"value": None}
+    see this module's own docstring on why that is fine for now.
+
+    `last_saved` is owned by the caller (register_chat_library), not created
+    here, precisely so the manual save/load/delete paths can seed and
+    invalidate the same cell - see this module's own CHANGE-GUARDED
+    paragraph."""
 
     async def _guarded_tick() -> None:
         if mutation_guard["active"]:
@@ -192,14 +198,26 @@ def register_autosave(
             return
         mutation_guard["active"] = True
         try:
-            await autosave_tick(bus, db_path, canvas_document, notifications, last_hash)
+            await autosave_tick(bus, db_path, canvas_document, notifications, last_saved)
         finally:
             mutation_guard["active"] = False
 
     async def _loop() -> None:
         while True:
             await asyncio.sleep(interval_seconds)
-            await _guarded_tick()
+            try:
+                await _guarded_tick()
+            except Exception:
+                # Defence in depth, not a fix for a known escape: an audit
+                # walked every unguarded line in autosave_tick and found no
+                # reachable one that can raise today. But this task is never
+                # awaited by anyone and holds a strong reference for the
+                # process's whole life, so if one ever did escape, the task
+                # would die and Python's own "Task exception was never
+                # retrieved" warning would never fire either - autosave would
+                # be off for the rest of the session with literally no signal
+                # anywhere. One bad tick must never be able to end the loop.
+                logger.exception("autosave: tick failed for session %r", bus.session_id)
 
     loop_coro = _loop()
     try:

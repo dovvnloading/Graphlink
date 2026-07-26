@@ -1,4 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
+
+// Mocked so the export-canvas-png test can assert on the WIRING (that run()
+// actually invokes it, with the right instance and token) rather than on
+// "run() didn't throw" - which, since run() `void`s a call to an async
+// function, held for every possible implementation including a no-op.
+const exportCanvasAsPngMock = vi.fn();
+vi.mock("../canvas/exportCanvasPng", () => ({
+  exportCanvasAsPng: (...args: unknown[]) => exportCanvasAsPngMock(...args),
+}));
+
 import { buildCommands } from "./commands";
 import { initialSceneState } from "../canvas/sceneStore";
 import type { OverlayContextValue } from "../overlays/overlays";
@@ -143,10 +153,8 @@ describe("buildCommands", () => {
 
   it("export-canvas-png is disabled with an empty scene and enabled once nodes exist (R6.8)", () => {
     // exportCanvasAsPng itself is fully unit-tested in exportCanvasPng.test.ts
-    // (including the html-to-image mock) - this just confirms the command is
-    // wired to the same hasNodes gate fit-all/organize-nodes already use, and
-    // that run() doesn't throw when there's no real .react-flow__viewport in
-    // the DOM (exportCanvasAsPng's own defensive no-op covers that case).
+    // (including the html-to-image mock) - this confirms the command is wired
+    // to the same hasNodes gate fit-all/organize-nodes already use.
     // @ts-expect-error - test double
     const empty = buildCommands(makeStore([]), makeRf(), makeOverlays());
     const exportEmpty = empty.find((c) => c.id === "export-canvas-png")!;
@@ -154,14 +162,27 @@ describe("buildCommands", () => {
     expect(exportEmpty.enabled()).toBe(false);
 
     const nodeList = [{ id: "n0", x: 0, y: 0, title: "A", kind: "placeholder" }];
-    // rf.getNodes() must ALSO return a real node here (not the default []) -
-    // otherwise run() would hit exportCanvasAsPng's empty-nodes no-op path
-    // instead of the "no real .react-flow__viewport in the DOM" path this
-    // test's own comment claims to exercise.
     // @ts-expect-error - test double
     const withNodes = buildCommands(makeStore(nodeList), makeRf([{ id: "n0" }]), makeOverlays());
     const exportWithNodes = withNodes.find((c) => c.id === "export-canvas-png")!;
     expect(exportWithNodes.enabled()).toBe(true);
-    expect(() => exportWithNodes.run()).not.toThrow();
+  });
+
+  it("export-canvas-png's run() actually invokes exportCanvasAsPng with the instance and background token", () => {
+    // Audit finding: this used to assert `expect(() => run()).not.toThrow()`,
+    // which is vacuous - run() `void`s a call to an async function, and an
+    // async function never throws synchronously, so it held for EVERY
+    // implementation including `run: () => {}` (verified by mutation: the
+    // command could be wired to nothing at all and the suite stayed green).
+    exportCanvasAsPngMock.mockClear();
+    const rf = makeRf([{ id: "n0" }]);
+    const nodeList = [{ id: "n0", x: 0, y: 0, title: "A", kind: "placeholder" }];
+    // @ts-expect-error - test double
+    const commands = buildCommands(makeStore(nodeList), rf, makeOverlays());
+
+    commands.find((c) => c.id === "export-canvas-png")!.run();
+
+    expect(exportCanvasAsPngMock).toHaveBeenCalledOnce();
+    expect(exportCanvasAsPngMock).toHaveBeenCalledWith(rf, "--gl-surface-window");
   });
 });
