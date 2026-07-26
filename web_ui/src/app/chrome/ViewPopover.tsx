@@ -108,6 +108,15 @@ export function ViewPopover({ store }: { store: SceneStore }) {
           />
           Fade Connections
         </label>
+        {/* R7.5b-2: same view-check-row pattern again. */}
+        <label className="view-check-row">
+          <input
+            type="checkbox"
+            checked={scene.orthogonalRouting}
+            onChange={(e) => store.setOrthogonalConnections(e.target.checked)}
+          />
+          Orthogonal Routing
+        </label>
       </section>
 
       <section className="view-section" aria-label="Font">

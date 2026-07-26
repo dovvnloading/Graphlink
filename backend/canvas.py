@@ -698,6 +698,10 @@ class SceneDocument:
     # ported 1:1 in shape to snap_to_grid above (bare bool, "scene" topic,
     # dedicated setFadeConnections intent - see register_canvas below).
     fade_connections_enabled: bool = False
+    # R7.5b-2: Qt-removal plan R7.5's second canvas-visual parity fix - the
+    # legacy scene's orthogonal_routing bool, same bare-bool/"scene"-topic
+    # shape as fade_connections_enabled above.
+    orthogonal_routing: bool = False
     drag_factor: float = 1.0
     # Canvas font (ChatScene's setFontFamily/-Size/-Color state, R2): defaults
     # match the legacy scene's own construction-time values.
@@ -2795,6 +2799,7 @@ class SceneDocument:
             ],
             "snapToGrid": self.snap_to_grid,
             "fadeConnectionsEnabled": self.fade_connections_enabled,
+            "orthogonalRouting": self.orthogonal_routing,
             "dragFactor": self.drag_factor,
             "fontFamily": self.font_family,
             "fontSizePt": self.font_size_pt,
@@ -3992,6 +3997,10 @@ def register_canvas(
         document.fade_connections_enabled = bool(enabled)
         await publish_scene()
 
+    async def set_orthogonal_routing(enabled):
+        document.orthogonal_routing = bool(enabled)
+        await publish_scene()
+
     async def set_drag_factor(factor):
         document.set_drag_factor(factor)
         await publish_scene()
@@ -4053,6 +4062,11 @@ def register_canvas(
     bus.register_intent("scene", "updatePin", update_pin)
     bus.register_intent("scene", "setSnapToGrid", set_snap_to_grid)
     bus.register_intent("scene", "setFadeConnections", set_fade_connections)
+    # Intent name matches the legacy GridControlBridge's own
+    # setOrthogonalConnections Slot name 1:1, same convention as
+    # setSnapToGrid/setFadeConnections above - the Python function name above
+    # doesn't need to match.
+    bus.register_intent("scene", "setOrthogonalConnections", set_orthogonal_routing)
     bus.register_intent("scene", "setDragFactor", set_drag_factor)
     bus.register_intent("scene", "setViewState", set_view_state)
     # R4.3: per-node cancel for a ConversationNode's in-flight reply. Reuses

@@ -24,6 +24,7 @@ export const initialSceneState: SceneState = {
   pins: [],
   snapToGrid: false,
   fadeConnectionsEnabled: false,
+  orthogonalRouting: false,
   dragFactor: 1,
   fontFamily: "Segoe UI",
   fontSizePt: 9,
@@ -532,6 +533,12 @@ export class SceneStore {
   // R7.5b-1: same bare-bool/"scene"-topic shape as setSnapToGrid above.
   setFadeConnections(enabled: boolean): void {
     this.transport.intent("scene", "setFadeConnections", [enabled]);
+  }
+
+  // R7.5b-2: same shape again - intent name matches the legacy
+  // GridControlBridge's own setOrthogonalConnections Slot name 1:1.
+  setOrthogonalConnections(enabled: boolean): void {
+    this.transport.intent("scene", "setOrthogonalConnections", [enabled]);
   }
 
   setDragFactor(factor: number): void {

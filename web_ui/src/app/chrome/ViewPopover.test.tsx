@@ -24,6 +24,7 @@ function makeStore(sceneOverrides: Partial<typeof initialSceneState> = {}) {
   const scene = { ...initialSceneState, ...sceneOverrides };
   const setFadeConnections = vi.fn();
   const setSnapToGrid = vi.fn();
+  const setOrthogonalConnections = vi.fn();
   const store = {
     subscribe: (l: () => void) => {
       listeners.add(l);
@@ -40,11 +41,12 @@ function makeStore(sceneOverrides: Partial<typeof initialSceneState> = {}) {
     setGridColor: vi.fn(),
     setSnapToGrid,
     setFadeConnections,
+    setOrthogonalConnections,
     setFontFamily: vi.fn(),
     setFontSize: vi.fn(),
     setFontColor: vi.fn(),
   };
-  return { store, setFadeConnections, setSnapToGrid };
+  return { store, setFadeConnections, setSnapToGrid, setOrthogonalConnections };
 }
 
 function renderOpen(store: unknown) {
@@ -84,5 +86,32 @@ describe("ViewPopover (R7.5b-1 Fade Connections checkbox)", () => {
 
     expect(setFadeConnections).toHaveBeenCalledWith(true);
     expect(setSnapToGrid).not.toHaveBeenCalled();
+  });
+});
+
+// R7.5b-2: same posture as the Fade Connections describe block above - only
+// the new control is covered.
+describe("ViewPopover (R7.5b-2 Orthogonal Routing checkbox)", () => {
+  it("reflects orthogonalRouting=false as unchecked", () => {
+    const { store } = makeStore({ orthogonalRouting: false });
+    renderOpen(store);
+    expect(screen.getByRole("checkbox", { name: "Orthogonal Routing" })).not.toBeChecked();
+  });
+
+  it("reflects orthogonalRouting=true as checked", () => {
+    const { store } = makeStore({ orthogonalRouting: true });
+    renderOpen(store);
+    expect(screen.getByRole("checkbox", { name: "Orthogonal Routing" })).toBeChecked();
+  });
+
+  it("calls store.setOrthogonalConnections with the new value on toggle, independent of Fade Connections", async () => {
+    const user = userEvent.setup();
+    const { store, setOrthogonalConnections, setFadeConnections } = makeStore({ orthogonalRouting: false });
+    renderOpen(store);
+
+    await user.click(screen.getByRole("checkbox", { name: "Orthogonal Routing" }));
+
+    expect(setOrthogonalConnections).toHaveBeenCalledWith(true);
+    expect(setFadeConnections).not.toHaveBeenCalled();
   });
 });

@@ -2168,6 +2168,24 @@ def test_fade_connections_enabled_defaults_false_and_the_setter_publishes_scene(
     asyncio.run(run())
 
 
+def test_orthogonal_routing_defaults_false_and_the_setter_publishes_scene():
+    # R7.5b-2: Qt-removal plan R7.5's second canvas-visual parity fix - same
+    # shape again; intent name matches the legacy GridControlBridge's own
+    # setOrthogonalConnections Slot name 1:1.
+    async def run():
+        bus, document, recorder = make_bus()
+        assert document.scene_payload()["orthogonalRouting"] is False
+
+        await bus.dispatch_intent("scene", "setOrthogonalConnections", [True])
+        assert document.scene_payload()["orthogonalRouting"] is True
+        assert recorder.topics_seen()[-1] == "scene"
+
+        await bus.dispatch_intent("scene", "setOrthogonalConnections", [False])
+        assert document.scene_payload()["orthogonalRouting"] is False
+
+    asyncio.run(run())
+
+
 # -- R4.4a: Generate/Regenerate Image - domain-level resolvers ---------------
 
 

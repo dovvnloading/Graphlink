@@ -31,6 +31,7 @@ import { GroupNodeView, type GroupFlowNode } from "./GroupNodeView";
 import { HtmlNodeView, type HtmlFlowNode } from "./HtmlNodeView";
 import { ImageNodeView, type ImageFlowNode } from "./ImageNodeView";
 import { NoteNodeView, type NoteFlowNode } from "./NoteNodeView";
+import { OrthogonalEdge } from "./OrthogonalEdge";
 import { PyCoderNodeView, type PyCoderFlowNode } from "./PyCoderNodeView";
 import { ThinkingNodeView, type ThinkingFlowNode } from "./ThinkingNodeView";
 import { WebResearchNodeView, type WebResearchFlowNode } from "./WebResearchNodeView";
@@ -173,6 +174,14 @@ const NODE_TYPES = {
   // R6.2: real chart nodes (bar/line/pie/histogram/sankey) - a backend-
   // rendered PNG card, see ChartNodeView.tsx's own module doc.
   chart: ChartNodeView,
+};
+
+// R7.5b-2: the first custom edge type registered in this codebase - see
+// OrthogonalEdge.tsx's own module doc. Edges not classified as "orthogonal"
+// by isOrthogonalEligible below fall through to defaultEdgeOptions's stock
+// bezier via an `undefined` type, same as before this feature existed.
+const EDGE_TYPES = {
+  orthogonal: OrthogonalEdge,
 };
 
 // Exported standalone for direct unit testing (same posture as
@@ -801,6 +810,35 @@ export function applyGroupDragDelta(
 // code (never set True anywhere in the Qt codebase) - deliberately not ported.
 const FADED_CONNECTION_OPACITY = 0.08;
 
+// R7.5b-2: which node-kind pairs get the orthogonal step path when the
+// toggle is on - derived by mapping each legacy *ConnectionItem subclass onto
+// this app's node-kind vocabulary (see OrthogonalEdge.tsx's own module doc
+// for the path-shape translation). Exported standalone for direct unit
+// testing, same posture as toFlowEdges/toFlowNodes.
+//
+// - source kind "note" -> never eligible (legacy SystemPromptConnectionItem:
+//   always a fixed Bezier, regardless of the toggle).
+// - target kind in {code, document, image, thinking} -> never eligible
+//   (legacy ContentConnectionItem/DocumentConnectionItem/ImageConnectionItem/
+//   ThinkingConnectionItem: always straight lines).
+// - target kind in {chat, conversation, html} -> eligible (legacy
+//   ConnectionItem/ConversationConnectionItem/HtmlConnectionItem, which all
+//   share the ortho-gated update_path).
+// - anything else (web_research/artifact/gitlink/pycoder/code_sandbox/frame/
+//   container/chart/note-as-target) -> defaulted NOT eligible - these node
+//   kinds didn't exist as distinct connection types in the legacy app, so
+//   there is no research-backed mapping for them (an explicit, documented
+//   default, not a silent omission).
+const ORTHO_INELIGIBLE_TARGET_KINDS = new Set(["code", "document", "image", "thinking"]);
+const ORTHO_ELIGIBLE_TARGET_KINDS = new Set(["chat", "conversation", "html"]);
+
+export function isOrthogonalEligible(sourceKind: string | undefined, targetKind: string | undefined): boolean {
+  if (sourceKind === "note") return false;
+  if (targetKind === undefined) return false;
+  if (ORTHO_INELIGIBLE_TARGET_KINDS.has(targetKind)) return false;
+  return ORTHO_ELIGIBLE_TARGET_KINDS.has(targetKind);
+}
+
 // Exported standalone for direct unit testing, same posture as toFlowNodes
 // above - R7.5b-1's fade-connections opacity logic doesn't need a mounted
 // <ReactFlow> to verify.
@@ -808,12 +846,17 @@ export function toFlowEdges(scene: SceneState, hoveredEdgeId: string | null): Ed
   // An edge pointing at a docked node must not render either - mirrors the
   // legacy connection-item self-suppression when its end node is docked.
   const dockedNodeIds = new Set(scene.nodes.filter((n) => n.isDocked).map((n) => n.id));
+  const kindOf = new Map(scene.nodes.map((n) => [n.id, n.kind]));
   return scene.edges
     .filter((e) => !dockedNodeIds.has(e.target))
     .map((e) => ({
       id: e.id,
       source: e.source,
       target: e.target,
+      type:
+        scene.orthogonalRouting && isOrthogonalEligible(kindOf.get(e.source), kindOf.get(e.target))
+          ? "orthogonal"
+          : undefined,
       ...(scene.fadeConnectionsEnabled && e.id !== hoveredEdgeId
         ? { style: { opacity: FADED_CONNECTION_OPACITY } }
         : {}),
@@ -991,6 +1034,7 @@ function CanvasInner({ store }: { store: SceneStore }) {
         nodes={nodes}
         edges={edges}
         nodeTypes={NODE_TYPES}
+        edgeTypes={EDGE_TYPES}
         onNodesChange={onNodesChange}
         onConnect={onConnect}
         onDelete={onDelete}
