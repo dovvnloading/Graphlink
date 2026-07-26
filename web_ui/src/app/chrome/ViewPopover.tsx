@@ -99,6 +99,15 @@ export function ViewPopover({ store }: { store: SceneStore }) {
           />
           Snap to Grid
         </label>
+        {/* R7.5b-1: same view-check-row pattern as Snap to Grid above. */}
+        <label className="view-check-row">
+          <input
+            type="checkbox"
+            checked={scene.fadeConnectionsEnabled}
+            onChange={(e) => store.setFadeConnections(e.target.checked)}
+          />
+          Fade Connections
+        </label>
       </section>
 
       <section className="view-section" aria-label="Font">

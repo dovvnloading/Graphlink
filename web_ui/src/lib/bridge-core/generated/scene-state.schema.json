@@ -28,6 +28,9 @@
       },
       "type": "array"
     },
+    "fadeConnectionsEnabled": {
+      "type": "boolean"
+    },
     "fontColor": {
       "type": "string"
     },
@@ -508,6 +511,7 @@
     "edges",
     "pins",
     "snapToGrid",
+    "fadeConnectionsEnabled",
     "dragFactor",
     "fontFamily",
     "fontSizePt",

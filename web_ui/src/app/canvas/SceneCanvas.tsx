@@ -794,13 +794,30 @@ export function applyGroupDragDelta(
   return memberChanges;
 }
 
-function toFlowEdges(scene: SceneState): Edge[] {
+// R7.5b-1: legacy's exact faded-connections opacity (graphlink_connections.py's
+// _sync_connection_visibility_mode) - every connection sits at this opacity
+// except the one under the mouse, once the feature is toggled on. Legacy also
+// had a `is_selected` stay-bright branch, but the recon confirmed it's dead
+// code (never set True anywhere in the Qt codebase) - deliberately not ported.
+const FADED_CONNECTION_OPACITY = 0.08;
+
+// Exported standalone for direct unit testing, same posture as toFlowNodes
+// above - R7.5b-1's fade-connections opacity logic doesn't need a mounted
+// <ReactFlow> to verify.
+export function toFlowEdges(scene: SceneState, hoveredEdgeId: string | null): Edge[] {
   // An edge pointing at a docked node must not render either - mirrors the
   // legacy connection-item self-suppression when its end node is docked.
   const dockedNodeIds = new Set(scene.nodes.filter((n) => n.isDocked).map((n) => n.id));
   return scene.edges
     .filter((e) => !dockedNodeIds.has(e.target))
-    .map((e) => ({ id: e.id, source: e.source, target: e.target }));
+    .map((e) => ({
+      id: e.id,
+      source: e.source,
+      target: e.target,
+      ...(scene.fadeConnectionsEnabled && e.id !== hoveredEdgeId
+        ? { style: { opacity: FADED_CONNECTION_OPACITY } }
+        : {}),
+    }));
 }
 
 // R6.3: the debounce wrapper for viewport (pan/zoom) reporting - same posture
@@ -835,6 +852,12 @@ function CanvasInner({ store }: { store: SceneStore }) {
   const dragStartRef = useRef<Map<string, { x: number; y: number }>>(new Map());
   const draggingRef = useRef(false);
 
+  // R7.5b-1: which edge (if any) is under the mouse right now - the one
+  // exemption from faded-connections' blanket low-opacity effect. Local-only
+  // (never scene state), same posture as legacy's purely presentational hover
+  // flag.
+  const [hoveredEdgeId, setHoveredEdgeId] = useState<string | null>(null);
+
   // R6.3: viewport (pan/zoom) reporting - see makeDebouncedViewportReport's
   // own doc above. onMove fires on every frame of a pan/zoom gesture (never
   // just once at the end, unlike NodeResizer's onResizeEnd), so the debounce
@@ -860,7 +883,7 @@ function CanvasInner({ store }: { store: SceneStore }) {
     if (!draggingRef.current) setNodes(toFlowNodes(scene, store));
   }, [scene, store]);
 
-  const edges = useMemo(() => toFlowEdges(scene), [scene]);
+  const edges = useMemo(() => toFlowEdges(scene, hoveredEdgeId), [scene, hoveredEdgeId]);
 
   const onNodesChange = useCallback(
     (changes: NodeChange<SceneFlowNode>[]) => {
@@ -976,6 +999,8 @@ function CanvasInner({ store }: { store: SceneStore }) {
         // PluginPicker can attach "which node was selected" to executePlugin
         // without either component reaching into the other's internals.
         onSelectionChange={({ nodes: sel }) => handleSelectionChange(store, sel)}
+        onEdgeMouseEnter={(_event, edge) => setHoveredEdgeId(edge.id)}
+        onEdgeMouseLeave={() => setHoveredEdgeId(null)}
         snapToGrid={scene.snapToGrid}
         snapGrid={[grid.gridSize, grid.gridSize]}
         // Double-click is the R1 create-node gesture (wrapper onDoubleClick);

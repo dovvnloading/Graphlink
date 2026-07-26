@@ -2151,6 +2151,23 @@ def test_snap_and_drag_factor_intents_publish_scene():
     asyncio.run(run())
 
 
+def test_fade_connections_enabled_defaults_false_and_the_setter_publishes_scene():
+    # R7.5b-1: Qt-removal plan R7.5's first canvas-visual parity fix - same
+    # bare-bool/"scene"-topic shape as setSnapToGrid above.
+    async def run():
+        bus, document, recorder = make_bus()
+        assert document.scene_payload()["fadeConnectionsEnabled"] is False
+
+        await bus.dispatch_intent("scene", "setFadeConnections", [True])
+        assert document.scene_payload()["fadeConnectionsEnabled"] is True
+        assert recorder.topics_seen()[-1] == "scene"
+
+        await bus.dispatch_intent("scene", "setFadeConnections", [False])
+        assert document.scene_payload()["fadeConnectionsEnabled"] is False
+
+    asyncio.run(run())
+
+
 # -- R4.4a: Generate/Regenerate Image - domain-level resolvers ---------------
 
 

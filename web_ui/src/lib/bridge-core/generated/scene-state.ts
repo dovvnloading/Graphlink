@@ -131,6 +131,7 @@ export interface SceneState {
   edges: SceneEdgeRow[];
   pins: ScenePinRow[];
   snapToGrid: boolean;
+  fadeConnectionsEnabled: boolean;
   dragFactor: number;
   fontFamily: string;
   fontSizePt: number;
@@ -711,6 +712,11 @@ function checkSceneState(value: unknown, path: string, errors: string[]): void {
     const fieldValue = value["snapToGrid"];
     if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.snapToGrid: missing required field`);
     else { if (typeof fieldValue !== "boolean") errors.push(`${path}.snapToGrid` + ": expected boolean"); }
+  }
+  {
+    const fieldValue = value["fadeConnectionsEnabled"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.fadeConnectionsEnabled: missing required field`);
+    else { if (typeof fieldValue !== "boolean") errors.push(`${path}.fadeConnectionsEnabled` + ": expected boolean"); }
   }
   {
     const fieldValue = value["dragFactor"];
