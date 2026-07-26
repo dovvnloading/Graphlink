@@ -2514,6 +2514,22 @@ class SceneDocument:
         if node.kind in ("frame", "container"):
             self._recompute_group_bounds(node_id)
 
+    def set_all_conversational_collapsed(self, collapsed: bool) -> None:
+        """R7.5e: Collapse All / Expand All - the bulk counterpart to
+        set_chat_collapsed above. Mirrors legacy's
+        graphlink_window_navigation.py collapse_all/expand_all exactly:
+        those iterate ONLY scene._all_conversational_nodes() (chat +
+        conversation + html_view nodes) and call set_collapsed(bool) on
+        each - NOT code/document/image/thinking/chart nodes, and NOT
+        frame/container groups (whose is_collapsed drives derived geometry
+        via _recompute_group_bounds, same carve-out set_chat_collapsed's
+        own comment documents - a frame/container never opts into this
+        bulk op, only into the per-node setter above)."""
+        collapsed = bool(collapsed)
+        for node in self.nodes.values():
+            if node.kind in ("chat", "conversation", "html"):
+                node.is_collapsed = collapsed
+
     def set_chat_scroll_value(self, node_id: str, value: float) -> None:
         """R6.3: persists a chat node's own scroll position within its
         content area. chat kind only (SceneError otherwise), matching every
@@ -3133,6 +3149,14 @@ def register_canvas(
 
     async def set_chat_collapsed(node_id, collapsed):
         document.set_chat_collapsed(node_id, collapsed)
+        await publish_scene()
+
+    async def collapse_all_nodes():
+        document.set_all_conversational_collapsed(True)
+        await publish_scene()
+
+    async def expand_all_nodes():
+        document.set_all_conversational_collapsed(False)
         await publish_scene()
 
     async def set_chat_scroll_value(node_id, value):
@@ -4044,6 +4068,8 @@ def register_canvas(
     bus.register_intent("scene", "setNodeDocked", set_node_docked)
     bus.register_intent("scene", "deleteChatNode", delete_chat_node)
     bus.register_intent("scene", "setChatCollapsed", set_chat_collapsed)
+    bus.register_intent("scene", "collapseAllNodes", collapse_all_nodes)
+    bus.register_intent("scene", "expandAllNodes", expand_all_nodes)
     bus.register_intent("scene", "setChatScrollValue", set_chat_scroll_value)
     bus.register_intent("scene", "sendMessage", send_message)
     bus.register_intent("scene", "regenerateResponse", regenerate_response)

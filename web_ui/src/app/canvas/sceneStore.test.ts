@@ -188,6 +188,20 @@ describe("SceneStore", () => {
     ]);
   });
 
+  it("collapseAllNodes sends the scene-topic collapseAllNodes intent with no args", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.collapseAllNodes();
+    expect(intents).toEqual([{ topic: "scene", intent: "collapseAllNodes", args: [] }]);
+  });
+
+  it("expandAllNodes sends the scene-topic expandAllNodes intent with no args", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.expandAllNodes();
+    expect(intents).toEqual([{ topic: "scene", intent: "expandAllNodes", args: [] }]);
+  });
+
   it("sends code-node intents with the backend's registered names and shapes", () => {
     const { transport, intents } = makeFakeTransport();
     const store = new SceneStore(transport);

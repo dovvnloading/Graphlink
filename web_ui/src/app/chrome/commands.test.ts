@@ -29,6 +29,8 @@ function makeStore(
     createContainer: vi.fn(),
     newChat: vi.fn(),
     saveChat: vi.fn(),
+    collapseAllNodes: vi.fn(),
+    expandAllNodes: vi.fn(),
   };
 }
 
@@ -154,6 +156,33 @@ describe("buildCommands", () => {
     expect(createContainer.enabled()).toBe(true);
     createContainer.run();
     expect(store.createContainer).toHaveBeenCalledWith(["n0", "n1"]);
+  });
+
+  it("collapse-all-nodes/expand-all-nodes are disabled when the scene has zero chat/conversation/html nodes, even with other node kinds present", () => {
+    const store = makeStore([
+      { id: "n0", x: 0, y: 0, title: "A", kind: "code" },
+      { id: "n1", x: 0, y: 0, title: "B", kind: "frame" },
+    ]);
+    // @ts-expect-error - test double
+    const commands = buildCommands(store, makeRf(), makeOverlays());
+    expect(commands.find((c) => c.id === "collapse-all-nodes")!.enabled()).toBe(false);
+    expect(commands.find((c) => c.id === "expand-all-nodes")!.enabled()).toBe(false);
+  });
+
+  it("collapse-all-nodes/expand-all-nodes enable once a chat node exists and each run() calls the matching store method once", () => {
+    const store = makeStore([{ id: "n0", x: 0, y: 0, title: "A", kind: "chat" }]);
+    // @ts-expect-error - test double
+    const commands = buildCommands(store, makeRf(), makeOverlays());
+
+    const collapseAll = commands.find((c) => c.id === "collapse-all-nodes")!;
+    expect(collapseAll.enabled()).toBe(true);
+    collapseAll.run();
+    expect(store.collapseAllNodes).toHaveBeenCalledTimes(1);
+
+    const expandAll = commands.find((c) => c.id === "expand-all-nodes")!;
+    expect(expandAll.enabled()).toBe(true);
+    expandAll.run();
+    expect(store.expandAllNodes).toHaveBeenCalledTimes(1);
   });
 
   it("new-chat is always enabled and calls store.newChat (R7.5a)", () => {
