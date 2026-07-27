@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "currentIndex": {
+      "type": "integer"
+    },
+    "minCompatibleSchemaVersion": {
+      "type": "integer"
+    },
+    "revision": {
+      "type": "integer"
+    },
+    "schemaVersion": {
+      "type": "integer"
+    },
+    "totalMatches": {
+      "type": "integer"
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "revision",
+    "currentIndex",
+    "totalMatches"
+  ],
+  "title": "SearchOverlayState",
+  "type": "object"
+}

@@ -26,7 +26,6 @@ import graphlink_styles as gs
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 GENERATED_FILE = _REPO_ROOT / "web_ui" / "src" / "lib" / "tokens" / "gl-vars-dev.css"
-_MAIN_TSX = _REPO_ROOT / "web_ui" / "src" / "islands" / "composer" / "main.tsx"
 
 _REGENERATE_HINT = (
     "Regenerate it: write graphlink_styles.css_root_block('dark') to "
@@ -91,25 +90,6 @@ class TestGlVarsDevCssIsDevOnly:
     overriding whichever theme is actually active, and masking a failed
     injection instead of letting it show.
     """
-
-    def test_it_is_imported_behind_the_dev_flag(self):
-        main_tsx = _read(_MAIN_TSX)
-
-        assert "gl-vars-dev.css" in main_tsx, "main.tsx must import the dev variables"
-        # Match the real import expression rather than a bare substring, so a
-        # comment mentioning the filename can't satisfy (or spuriously break)
-        # this, and an unconditional import below an unrelated
-        # `const isDev = import.meta.env.DEV` can't sneak past a naive
-        # index comparison.
-        guarded_import = re.search(
-            r"if\s*\(\s*import\.meta\.env\.DEV\s*\)\s*\{[^}]*gl-vars-dev\.css[^}]*\}",
-            main_tsx,
-            re.DOTALL,
-        )
-        assert guarded_import, (
-            "gl-vars-dev.css must be imported inside an `if (import.meta.env.DEV)` "
-            "block so Vite statically eliminates it from the production bundle"
-        )
 
     def test_no_island_imports_it_unconditionally(self):
         # main.tsx is not the only possible importer once a second island

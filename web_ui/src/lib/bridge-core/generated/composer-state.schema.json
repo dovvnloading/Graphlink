@@ -1,0 +1,529 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "capabilities": {
+      "additionalProperties": false,
+      "properties": {
+        "attachments": {
+          "type": "boolean"
+        },
+        "cancellation": {
+          "type": "boolean"
+        },
+        "contextReview": {
+          "type": "boolean"
+        },
+        "modelSelection": {
+          "type": "boolean"
+        },
+        "reasoningSelection": {
+          "type": "boolean"
+        },
+        "routeSelection": {
+          "type": "boolean"
+        },
+        "settingsShortcut": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "attachments",
+        "contextReview",
+        "routeSelection",
+        "modelSelection",
+        "reasoningSelection",
+        "settingsShortcut",
+        "cancellation"
+      ],
+      "type": "object"
+    },
+    "context": {
+      "additionalProperties": false,
+      "properties": {
+        "anchor": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "label": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "label",
+            "type"
+          ],
+          "type": "object"
+        },
+        "items": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "contextLabel": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "preparationState": {
+                "type": "string"
+              },
+              "tokenCount": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "kind",
+              "tokenCount",
+              "preparationState",
+              "contextLabel"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "reviewAvailable": {
+          "type": "boolean"
+        },
+        "totalTokens": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "items",
+        "totalTokens",
+        "reviewAvailable"
+      ],
+      "type": "object"
+    },
+    "draft": {
+      "additionalProperties": false,
+      "properties": {
+        "contextMode": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "restored": {
+          "type": "boolean"
+        },
+        "sendMode": {
+          "enum": [
+            "enter_to_send",
+            "ctrl_enter_to_send"
+          ],
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "text",
+        "contextMode",
+        "sendMode",
+        "restored"
+      ],
+      "type": "object"
+    },
+    "minCompatibleSchemaVersion": {
+      "type": "integer"
+    },
+    "request": {
+      "additionalProperties": false,
+      "properties": {
+        "canCancel": {
+          "type": "boolean"
+        },
+        "canRetry": {
+          "type": "boolean"
+        },
+        "canSend": {
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "state": {
+          "enum": [
+            "idle",
+            "preparing",
+            "uploading",
+            "waiting",
+            "generating",
+            "finalizing",
+            "canceled",
+            "failed",
+            "succeeded"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "state",
+        "message",
+        "canSend",
+        "canCancel",
+        "canRetry"
+      ],
+      "type": "object"
+    },
+    "revision": {
+      "type": "integer"
+    },
+    "route": {
+      "additionalProperties": false,
+      "properties": {
+        "available": {
+          "type": "boolean"
+        },
+        "canChange": {
+          "type": "boolean"
+        },
+        "label": {
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "cloud",
+            "ollama",
+            "llamacpp",
+            "unknown"
+          ],
+          "type": "string"
+        },
+        "modelId": {
+          "type": "string"
+        },
+        "modelLabel": {
+          "type": "string"
+        },
+        "modelOptions": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "active": {
+                "type": "boolean"
+              },
+              "available": {
+                "type": "boolean"
+              },
+              "capabilities": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "id": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              },
+              "provider": {
+                "type": "string"
+              },
+              "ready": {
+                "type": "boolean"
+              },
+              "source": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "label",
+              "provider",
+              "source",
+              "active",
+              "ready",
+              "available",
+              "capabilities"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "modelValue": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "reasoning": {
+          "additionalProperties": false,
+          "properties": {
+            "label": {
+              "type": "string"
+            },
+            "level": {
+              "type": "string"
+            },
+            "options": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "description": {
+                    "type": "string"
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "label": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id",
+                  "label",
+                  "description"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "level",
+            "label",
+            "options"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "mode",
+        "provider",
+        "modelId",
+        "modelLabel",
+        "modelOptions",
+        "reasoning",
+        "label",
+        "available",
+        "canChange"
+      ],
+      "type": "object"
+    },
+    "schemaVersion": {
+      "type": "integer"
+    },
+    "theme": {
+      "additionalProperties": false,
+      "properties": {
+        "cssVariables": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "graphNode": {
+          "additionalProperties": false,
+          "properties": {
+            "badgeFill": {
+              "type": "string"
+            },
+            "bodyEnd": {
+              "type": "string"
+            },
+            "bodyStart": {
+              "type": "string"
+            },
+            "border": {
+              "type": "string"
+            },
+            "dot": {
+              "type": "string"
+            },
+            "header": {
+              "type": "string"
+            },
+            "headerEnd": {
+              "type": "string"
+            },
+            "headerStart": {
+              "type": "string"
+            },
+            "hoverDot": {
+              "type": "string"
+            },
+            "hoverOutline": {
+              "type": "string"
+            },
+            "panelBorder": {
+              "type": "string"
+            },
+            "panelFill": {
+              "type": "string"
+            },
+            "selectedOutline": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "border",
+            "header",
+            "dot",
+            "hoverDot",
+            "hoverOutline",
+            "selectedOutline",
+            "bodyStart",
+            "bodyEnd",
+            "headerStart",
+            "headerEnd",
+            "badgeFill",
+            "panelFill",
+            "panelBorder"
+          ],
+          "type": "object"
+        },
+        "mode": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "neutralButton": {
+          "additionalProperties": false,
+          "properties": {
+            "background": {
+              "type": "string"
+            },
+            "border": {
+              "type": "string"
+            },
+            "hover": {
+              "type": "string"
+            },
+            "icon": {
+              "type": "string"
+            },
+            "mutedIcon": {
+              "type": "string"
+            },
+            "pressed": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "background",
+            "hover",
+            "pressed",
+            "border",
+            "icon",
+            "mutedIcon"
+          ],
+          "type": "object"
+        },
+        "palette": {
+          "additionalProperties": false,
+          "properties": {
+            "aiNode": {
+              "type": "string"
+            },
+            "navHighlight": {
+              "type": "string"
+            },
+            "selection": {
+              "type": "string"
+            },
+            "userNode": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "userNode",
+            "aiNode",
+            "selection",
+            "navHighlight"
+          ],
+          "type": "object"
+        },
+        "semantic": {
+          "additionalProperties": false,
+          "properties": {
+            "artifact": {
+              "type": "string"
+            },
+            "conversationAiBubble": {
+              "type": "string"
+            },
+            "conversationUserBubble": {
+              "type": "string"
+            },
+            "default": {
+              "type": "string"
+            },
+            "searchHighlight": {
+              "type": "string"
+            },
+            "statusError": {
+              "type": "string"
+            },
+            "statusInfo": {
+              "type": "string"
+            },
+            "statusSuccess": {
+              "type": "string"
+            },
+            "statusWarning": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "searchHighlight",
+            "statusInfo",
+            "statusSuccess",
+            "statusError",
+            "statusWarning",
+            "artifact",
+            "conversationUserBubble",
+            "conversationAiBubble",
+            "default"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "mode",
+        "name",
+        "cssVariables",
+        "palette",
+        "semantic",
+        "neutralButton",
+        "graphNode"
+      ],
+      "type": "object"
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "revision",
+    "draft",
+    "context",
+    "route",
+    "request",
+    "capabilities",
+    "theme"
+  ],
+  "title": "ComposerState",
+  "type": "object"
+}

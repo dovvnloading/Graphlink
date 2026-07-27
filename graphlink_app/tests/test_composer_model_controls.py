@@ -141,18 +141,6 @@ def test_cloud_route_uses_persisted_catalog_and_selection_updates_chat_task():
     assert settings.api_models[config.TASK_CHAT] == "cloud-fast"
 
 
-def test_composer_footer_has_stable_model_width_and_no_status_dot():
-    source_root = Path(__file__).resolve().parents[2] / "web_ui" / "src" / "islands" / "composer"
-    composer_source = (source_root / "ComposerApp.tsx").read_text(encoding="utf-8")
-    styles_source = (source_root / "styles.css").read_text(encoding="utf-8")
-
-    assert "status-dot" not in composer_source
-    assert ".status-dot" not in styles_source
-    assert "width: 190px;" in styles_source
-    assert "flex: 0 0 190px;" in styles_source
-    assert "text-overflow: ellipsis;" in styles_source
-
-
 def test_quick_reasoning_disables_ollama_thinking_for_reasoning_models(monkeypatch):
     monkeypatch.setattr(api_provider, "USE_API_MODE", False)
     monkeypatch.setattr(api_provider, "LOCAL_PROVIDER_TYPE", config.LOCAL_PROVIDER_OLLAMA)

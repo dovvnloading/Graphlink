@@ -321,6 +321,14 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 GENERATED_ARTIFACTS = [
     {
         "dataclass": None,  # resolved lazily in main() to avoid importing
+        "dataclass_import": ("graphlink_composer_payload", "ComposerStatePayload"),
+        "title": "ComposerState",
+        "source": "graphlink_app/graphlink_composer_payload.py::ComposerStatePayload",
+        "schema_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "composer-state.schema.json",
+        "ts_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "composer-state.ts",
+    },
+    {
+        "dataclass": None,  # resolved lazily in main() to avoid importing
         "dataclass_import": ("graphlink_token_counter_payload", "TokenCounterStatePayload"),
         "title": "TokenCounterState",
         "source": "graphlink_app/graphlink_token_counter_payload.py::TokenCounterStatePayload",
@@ -334,6 +342,102 @@ GENERATED_ARTIFACTS = [
         "source": "graphlink_app/graphlink_notification_payload.py::NotificationStatePayload",
         "schema_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "notification-state.schema.json",
         "ts_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "notification-state.ts",
+    },
+    {
+        "dataclass": None,  # resolved lazily in main() to avoid importing
+        "dataclass_import": ("graphlink_command_palette_payload", "CommandPaletteStatePayload"),
+        "title": "CommandPaletteState",
+        "source": "graphlink_app/graphlink_command_palette_payload.py::CommandPaletteStatePayload",
+        "schema_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "command-palette-state.schema.json",
+        "ts_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "command-palette-state.ts",
+    },
+    {
+        "dataclass": None,  # resolved lazily in main() to avoid importing
+        "dataclass_import": ("graphlink_settings_payload", "SettingsStatePayload"),
+        "title": "SettingsState",
+        "source": "graphlink_app/graphlink_settings_payload.py::SettingsStatePayload",
+        "schema_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "settings-state.schema.json",
+        "ts_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "settings-state.ts",
+    },
+    {
+        "dataclass": None,  # resolved lazily in main() to avoid importing
+        "dataclass_import": ("graphlink_about_payload", "AboutStatePayload"),
+        "title": "AboutState",
+        "source": "graphlink_app/graphlink_about_payload.py::AboutStatePayload",
+        "schema_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "about-state.schema.json",
+        "ts_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "about-state.ts",
+    },
+    {
+        "dataclass": None,  # resolved lazily in main() to avoid importing
+        "dataclass_import": ("graphlink_help_payload", "HelpStatePayload"),
+        "title": "HelpState",
+        "source": "graphlink_app/graphlink_help_payload.py::HelpStatePayload",
+        "schema_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "help-state.schema.json",
+        "ts_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "help-state.ts",
+    },
+    {
+        "dataclass": None,  # resolved lazily in main() to avoid importing
+        "dataclass_import": ("graphlink_document_viewer_payload", "DocumentViewerStatePayload"),
+        "title": "DocumentViewerState",
+        "source": "graphlink_app/graphlink_document_viewer_payload.py::DocumentViewerStatePayload",
+        "schema_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "document-viewer-state.schema.json",
+        "ts_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "document-viewer-state.ts",
+    },
+    {
+        "dataclass": None,  # resolved lazily in main() to avoid importing
+        "dataclass_import": ("graphlink_chat_library_payload", "ChatLibraryStatePayload"),
+        "title": "ChatLibraryState",
+        "source": "graphlink_app/graphlink_chat_library_payload.py::ChatLibraryStatePayload",
+        "schema_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "chat-library-state.schema.json",
+        "ts_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "chat-library-state.ts",
+    },
+    {
+        "dataclass": None,  # resolved lazily in main() to avoid importing
+        "dataclass_import": ("graphlink_search_overlay_payload", "SearchOverlayStatePayload"),
+        "title": "SearchOverlayState",
+        "source": "graphlink_app/graphlink_search_overlay_payload.py::SearchOverlayStatePayload",
+        "schema_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "search-overlay-state.schema.json",
+        "ts_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "search-overlay-state.ts",
+    },
+    {
+        "dataclass": None,  # resolved lazily in main() to avoid importing
+        "dataclass_import": ("graphlink_pin_overlay_payload", "PinOverlayStatePayload"),
+        "title": "PinOverlayState",
+        "source": "graphlink_app/graphlink_pin_overlay_payload.py::PinOverlayStatePayload",
+        "schema_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "pin-overlay-state.schema.json",
+        "ts_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "pin-overlay-state.ts",
+    },
+    {
+        "dataclass": None,  # resolved lazily in main() to avoid importing
+        "dataclass_import": ("graphlink_composer_picker_payload", "ComposerPickerStatePayload"),
+        "title": "ComposerPickerState",
+        "source": "graphlink_app/graphlink_composer_picker_payload.py::ComposerPickerStatePayload",
+        "schema_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "composer-picker-state.schema.json",
+        "ts_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "composer-picker-state.ts",
+    },
+    {
+        "dataclass": None,  # resolved lazily in main() to avoid importing
+        "dataclass_import": ("graphlink_composer_context_payload", "ComposerContextStatePayload"),
+        "title": "ComposerContextState",
+        "source": "graphlink_app/graphlink_composer_context_payload.py::ComposerContextStatePayload",
+        "schema_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "composer-context-state.schema.json",
+        "ts_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "composer-context-state.ts",
+    },
+    {
+        "dataclass": None,  # resolved lazily in main() to avoid importing
+        "dataclass_import": ("graphlink_toolbar_payload", "ToolbarStatePayload"),
+        "title": "ToolbarState",
+        "source": "graphlink_app/graphlink_toolbar_payload.py::ToolbarStatePayload",
+        "schema_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "toolbar-state.schema.json",
+        "ts_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "toolbar-state.ts",
+    },
+    {
+        "dataclass": None,  # resolved lazily in main() to avoid importing
+        "dataclass_import": ("graphlink_plugin_picker_payload", "PluginPickerStatePayload"),
+        "title": "PluginPickerState",
+        "source": "graphlink_app/graphlink_plugin_picker_payload.py::PluginPickerStatePayload",
+        "schema_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "plugin-picker-state.schema.json",
+        "ts_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "plugin-picker-state.ts",
     },
     {
         "dataclass": None,  # resolved lazily in main() to avoid importing
@@ -358,6 +462,14 @@ GENERATED_ARTIFACTS = [
         "source": "graphlink_app/graphlink_drag_speed_payload.py::DragSpeedStatePayload",
         "schema_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "drag-speed-state.schema.json",
         "ts_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "drag-speed-state.ts",
+    },
+    {
+        "dataclass": None,  # resolved lazily in main() to avoid importing
+        "dataclass_import": ("graphlink_minimap_payload", "MinimapStatePayload"),
+        "title": "MinimapState",
+        "source": "graphlink_app/graphlink_minimap_payload.py::MinimapStatePayload",
+        "schema_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "minimap-state.schema.json",
+        "ts_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "minimap-state.ts",
     },
     {
         # Qt-removal plan R1: the scene topic (backend/canvas.py's
