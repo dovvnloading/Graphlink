@@ -641,14 +641,31 @@ def test_a_user_save_waits_out_a_real_in_flight_autosave_tick_instead_of_being_d
     # claim/release itself, which meant mutating the actual _guarded_tick
     # (dropping its owner tag, or its release signal) left the test green -
     # the production wiring was never under test at all.
-    # This test WAS flaky and failed CI once (a 1.0s wall-clock assertion
-    # against a 2.0s production timeout, while racing a loop configured to
-    # re-claim every 0.02s - a 2x margin on a contended 2-core runner). The
-    # fix is to remove the race, not to widen the bound: exactly ONE real
-    # tick is driven, its duration is controlled by a gate rather than a
-    # sleep, and no second tick can ever re-claim mid-handoff. It still
-    # drives the REAL _guarded_tick, so the mutations this exists to catch
-    # (dropping the owner tag, or dropping the release signal) still fail it.
+    # This test has now failed CI twice, and both fixes before this one were
+    # the wrong shape. The first bounded wall-clock at 1.0s against a 2.0s
+    # timeout; the second widened that to 5.0s against 30.0s. Both still
+    # asserted a DURATION over work the test does not control - two real
+    # sqlite writes plus thread-pool and event-loop scheduling on a shared
+    # CI VM. Measured locally that window is ~40ms; the run that failed on
+    # main blew past 5000ms, a 125x stall, on a commit that touched no
+    # backend code at all.
+    #
+    # So this time the bound is not the mutation detector. Two real races are
+    # removed instead:
+    #
+    #   1. The handoff. `await asyncio.sleep(0)` yields exactly once and
+    #      merely HOPES the save has reached the yield-wait before the tick
+    #      is released. `entered_the_yield_wait` makes that ordering explicit.
+    #   2. The proof. Whether the save was woken by the RELEASE or merely
+    #      outlived the TIMEOUT is now recorded causally by `woke_via_release`
+    #      rather than inferred from a stopwatch.
+    #
+    # The mutations this exists to catch still fail it, now deterministically:
+    # drop the owner tag and the guard assertion below fails; drop
+    # `released.set()` from _release_guard and the save's wait never returns,
+    # so `woke_via_release` stays empty. The remaining wait_for is a hang
+    # guard only - generous on purpose, because no correctness claim rests
+    # on it any more.
     bus, document, notifications = _library_session(db_path)
     document.add_chat_node(0, 0, "hello", is_user=True)
 
@@ -665,10 +682,27 @@ def test_a_user_save_waits_out_a_real_in_flight_autosave_tick_instead_of_being_d
         return real_save(*args, **kwargs)
 
     monkeypatch.setattr(autosave_module, "save_chat_atomically_row", gated_save)
-    # Generous margin: a missing release signal makes the save sit out this
-    # whole timeout, so 30s-vs-5s below still kills that mutation, with far
-    # more headroom for CI jitter than the original 2s-vs-1s.
-    monkeypatch.setattr(chat_library_module, "AUTOSAVE_YIELD_TIMEOUT_SECONDS", 30.0)
+    # Large enough that a real CI stall can never be mistaken for the timeout
+    # path. Nothing asserts against this number - `woke_via_release` below is
+    # what proves which path the save actually took.
+    monkeypatch.setattr(chat_library_module, "AUTOSAVE_YIELD_TIMEOUT_SECONDS", 300.0)
+
+    # Instrument the REAL guard's event, so this observes production wiring
+    # rather than reimplementing it: `entered_the_yield_wait` fires when the
+    # user's Save actually parks on the release signal, and `woke_via_release`
+    # records that it was that signal - not the timeout - that woke it.
+    released_event = bus.chat_mutation_guard["released"]
+    real_event_wait = released_event.wait
+    entered_the_yield_wait = asyncio.Event()
+    woke_via_release: list[bool] = []
+
+    async def recording_wait():
+        entered_the_yield_wait.set()
+        await real_event_wait()
+        woke_via_release.append(True)
+        return True
+
+    monkeypatch.setattr(released_event, "wait", recording_wait)
 
     async def _run():
         # interval_seconds is deliberately huge: the periodic loop must never
@@ -686,12 +720,17 @@ def test_a_user_save_waits_out_a_real_in_flight_autosave_tick_instead_of_being_d
 
             # The user clicks Save while the tick genuinely holds the guard.
             save = asyncio.create_task(bus.dispatch_intent("app-chat-library", "saveChat", []))
-            await asyncio.sleep(0)  # let it reach the yield-wait
+
+            # Wait for the save to genuinely PARK on the release signal before
+            # letting the tick go. This is the ordering the old `sleep(0)` only
+            # hoped for; releasing the tick early would let the save sail past
+            # a guard that was already free and prove nothing.
+            await asyncio.wait_for(entered_the_yield_wait.wait(), timeout=60.0)
             let_the_tick_finish.set()
 
-            # Must proceed as soon as the tick RELEASES rather than sitting
-            # out the (patched, 30s) yield timeout.
-            await asyncio.wait_for(save, timeout=5.0)
+            # Hang guard only - see the header comment. The real assertion is
+            # `woke_via_release` after the loop.
+            await asyncio.wait_for(save, timeout=60.0)
             await tick
         finally:
             let_the_tick_finish.set()
@@ -704,6 +743,13 @@ def test_a_user_save_waits_out_a_real_in_flight_autosave_tick_instead_of_being_d
 
     asyncio.run(_run())
 
+    # THE mutation detector, and the reason this no longer needs a stopwatch:
+    # the save was woken by _release_guard's signal. Drop `released.set()` and
+    # this list stays empty no matter how fast or slow the machine is.
+    assert woke_via_release, (
+        "the user's Save did not resume via the tick's release signal - it "
+        "either never parked on it, or sat out the yield timeout instead"
+    )
     assert notifications.visible and notifications.msg_type == "success", notifications.message
     assert notifications.message.startswith("Saved "), "the user's Save must not be discarded"
     assert document.current_chat_id is not None
