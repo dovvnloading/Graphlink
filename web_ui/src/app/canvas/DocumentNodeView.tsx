@@ -1,6 +1,7 @@
 import { Handle, Position, useStore, type Node, type NodeProps } from "@xyflow/react";
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { LOD_ZOOM_THRESHOLD } from "./canvasConstants";
+import { NodeMenu } from "./NodeMenu";
 
 /**
  * The document node (Qt-removal plan R3.9/R3.10) - graphlink_node_document.py's
@@ -183,24 +184,7 @@ function DocumentNodeMenu({
   onDelete: () => void;
   onClose: () => void;
 }) {
-  const menuRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    function onPointerDown(event: PointerEvent) {
-      // globalThis.Node - the DOM interface, not @xyflow/react's Node (the
-      // type-only import above shadows the bare name for casts like this).
-      if (!menuRef.current?.contains(event.target as globalThis.Node)) onClose();
-    }
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") onClose();
-    }
-    document.addEventListener("pointerdown", onPointerDown, true);
-    document.addEventListener("keydown", onKeyDown, true);
-    return () => {
-      document.removeEventListener("pointerdown", onPointerDown, true);
-      document.removeEventListener("keydown", onKeyDown, true);
-    };
-  }, [onClose]);
 
   const isAudio = attachmentKind === "audio";
   // Legacy gate is `attachment_kind == "document"` (a strict allow-list), not
@@ -211,12 +195,7 @@ function DocumentNodeMenu({
   const isDocumentKind = attachmentKind === "document";
 
   return (
-    <div
-      ref={menuRef}
-      className="chat-node-menu"
-      style={{ position: "fixed", left: position.x, top: position.y }}
-      role="menu"
-    >
+    <NodeMenu position={position} onClose={onClose} className="chat-node-menu">
       {/* Order verified against graphlink_node_document_menu.py's own
           construction order: Copy Details, Collapse/Expand, Dock, Open File
           (conditional), separator, Export (conditional), Hide Other
@@ -281,7 +260,7 @@ function DocumentNodeMenu({
       >
         {isAudio ? "Delete Audio Attachment" : "Delete Attachment"}
       </button>
-    </div>
+    </NodeMenu>
   );
 }
 
