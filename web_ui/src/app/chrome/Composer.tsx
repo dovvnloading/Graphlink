@@ -115,11 +115,27 @@ export function Composer({ store, sceneStore }: { store: ComposerStore; sceneSto
           <Icon name="chevron" />
         </button>
 
+        {/* R8a: a REAL model picker. This was `disabled` with a "not available
+            yet" title and an always-empty option list, so it rendered as a
+            dropdown that could never be opened - reported, correctly, as
+            "does not work at all and is locked up". It now enables exactly
+            when the backend says there is something to choose
+            (capabilities.modelSelection, derived from the resolved provider's
+            real model list) and writes through the same per-task assignment
+            the Settings > Ollama page edits. */}
         <button
           type="button"
           className="composer-control"
-          disabled
-          title="Model selection isn't available here yet - configure models in Settings"
+          data-overlay-trigger="model"
+          aria-haspopup="dialog"
+          aria-pressed={overlays.isOpen("model")}
+          disabled={!composer.capabilities.modelSelection || !composer.request.canSend}
+          title={
+            composer.capabilities.modelSelection
+              ? `Choose the ${composer.route.provider} model for chat`
+              : "No models found - run a scan on the Settings page for this provider"
+          }
+          onClick={() => overlays.toggle("model", "popover")}
         >
           <span className="control-copy">
             <span className="control-kicker">{composer.route.provider}</span>
@@ -159,7 +175,38 @@ export function Composer({ store, sceneStore }: { store: ComposerStore; sceneSto
       </div>
 
       <Reasoning store={store} />
+      <ModelPicker store={store} />
     </div>
+  );
+}
+
+function ModelPicker({ store }: { store: ComposerStore }) {
+  const composer = useSyncExternalStore(store.subscribe, store.getComposer);
+  const overlays = useOverlays();
+  const options = useMemo(() => composer.route.modelOptions, [composer.route.modelOptions]);
+
+  return (
+    <Popover name="model" className="reasoning-popover model-picker-popover">
+      {options.length === 0 ? (
+        <p className="model-picker-empty">
+          No models found for {composer.route.provider}. Run a scan on its Settings page.
+        </p>
+      ) : (
+        options.map((option) => (
+          <button
+            key={option.id}
+            type="button"
+            className={"reasoning-option" + (option.id === composer.route.modelId ? " active" : "")}
+            onClick={() => {
+              store.selectModel(option.id);
+              overlays.close();
+            }}
+          >
+            <span className="reasoning-option-label">{option.label}</span>
+          </button>
+        ))
+      )}
+    </Popover>
   );
 }
 

@@ -174,6 +174,34 @@ async def apply_ollama_reasoning_mode(manager: SettingsManager, mode: str) -> No
     await asyncio.to_thread(_reapply_if_ollama_is_still_the_live_provider)
 
 
+async def apply_ollama_chat_model(manager: SettingsManager, model_id: str) -> None:
+    """Assign the Ollama chat-task model, race-safely (R8a).
+
+    Extracted from register_settings' own set_ollama_model_assignment intent
+    so the composer's model picker and the Settings > Ollama page write through
+    ONE implementation instead of two that can drift. Same precedent as
+    apply_ollama_reasoning_mode above.
+
+    The read-modify-write stays inside a single _apply-locked closure, not
+    split across an await: that split is the R7.4a race where a concurrent
+    assignment change for a different task gets silently reverted by this
+    call's stale pre-read of the whole assignments dict.
+    """
+    chosen = str(model_id or "").strip()
+    if not chosen:
+        return
+    assignment = {"mode": "explicit", "model_id": chosen}
+
+    def _persist() -> None:
+        assignments = manager.get_ollama_model_assignments()
+        assignments[config.TASK_CHAT] = assignment
+        manager.set_ollama_model_assignments(assignments)
+        config.sync_ollama_task_models(manager)
+        config.set_current_model(chosen)
+
+    await asyncio.to_thread(_apply, _persist)
+
+
 async def apply_llama_cpp_reasoning_mode(manager: SettingsManager, mode: str) -> str | None:
     """Same contract as apply_ollama_reasoning_mode, for Llama.cpp. Returns a
     human-readable failure message if the live re-apply fails (the mode is

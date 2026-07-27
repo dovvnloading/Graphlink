@@ -287,17 +287,21 @@ export function PyCoderNodeView({ id, data, selected }: NodeProps<PyCoderFlowNod
             </div>
           )}
 
-          <CodeExecutionApprovalPanel
-            nodeId={id}
-            kind="pycoder"
-            code={data.pycoderCode}
-            awaitingApproval={data.pycoderAwaitingApproval}
-            busy={approvalBusy}
-            onApprove={handleApprove}
-            onDeny={handleDeny}
-          />
         </div>
       )}
+      {/* R8a: OUTSIDE the {!collapsed} gate on purpose - this is a
+          blocking approval prompt, and collapsing the node or zooming
+          past the LOD threshold used to unmount it mid-decision. It
+          self-hides via `if (!awaitingApproval) return null`. */}
+        <CodeExecutionApprovalPanel
+          nodeId={id}
+          kind="pycoder"
+          code={data.pycoderCode}
+          awaitingApproval={data.pycoderAwaitingApproval}
+          busy={approvalBusy}
+          onApprove={handleApprove}
+          onDeny={handleDeny}
+        />
       <Handle type="source" position={Position.Bottom} className="scene-node-handle" />
       {menuPosition && (
         <PyCoderNodeMenu

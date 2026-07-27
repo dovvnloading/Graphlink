@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
@@ -230,7 +231,8 @@ export function CodeExecutionApprovalPanel({
     // consistency (fixed full-viewport centering, matching colors/shadows) -
     // this div is NOT registered with, and shares no state with, the
     // useOverlays() registry those classes were originally styled for.
-    <div className="overlay-scrim code-exec-approval-scrim" data-node-id={nodeId}>
+    createPortal(
+      <div className="overlay-scrim code-exec-approval-scrim" data-node-id={nodeId}>
       <div
         ref={panelRef}
         role="dialog"
@@ -281,6 +283,8 @@ export function CodeExecutionApprovalPanel({
           </div>
         </div>
       </div>
-    </div>
+      </div>,
+      document.body,
+    )
   );
 }

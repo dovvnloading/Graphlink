@@ -19,6 +19,7 @@ function makeStore(
   };
   const updateDraft = vi.fn();
   const setReasoningLevel = vi.fn();
+  const selectModel = vi.fn();
   const cancelChatRequest = vi.fn();
   const dismissNotification = vi.fn();
   const store = {
@@ -32,10 +33,11 @@ function makeStore(
     getStreamText: () => state.streamText,
     updateDraft,
     setReasoningLevel,
+    selectModel,
     cancelChatRequest,
     dismissNotification,
   };
-  return { store, updateDraft, setReasoningLevel, cancelChatRequest, dismissNotification };
+  return { store, updateDraft, setReasoningLevel, selectModel, cancelChatRequest, dismissNotification };
 }
 
 function makeSceneStore() {
@@ -59,19 +61,57 @@ describe("Composer", () => {
     expect(updateDraft).toHaveBeenCalledWith("hi!");
   });
 
-  it("attach/model controls stay visibly disabled with their deferred phase named; Send starts disabled on an empty draft", () => {
+  it("Send starts disabled on an empty draft; the model control is disabled ONLY when there is nothing to choose", () => {
+    // R8a: this used to assert the model control "stays visibly disabled with
+    // its deferred phase named" - i.e. it encoded a dead stub as the expected
+    // behaviour. The control is real now, so the assertion is inverted: it is
+    // disabled when the backend reports no models, and enabled when it does.
     const { store } = makeStore();
-    render(
+    const { container } = render(
       <OverlayProvider>
         {/* @ts-expect-error - test double */}
         <Composer store={store} sceneStore={makeSceneStore().sceneStore} />
       </OverlayProvider>,
     );
     expect(screen.getByLabelText("Send message")).toBeDisabled();
-    expect(screen.getByLabelText("Attach context")).toBeDisabled();
-    expect(
-      screen.getByTitle("Model selection isn't available here yet - configure models in Settings"),
-    ).toBeDisabled();
+    // modelSelection defaults false with an empty modelOptions list.
+    expect(container.querySelector('[data-overlay-trigger="model"]')).toBeDisabled();
+  });
+
+  it("the model control enables when the backend reports real options, and picking one calls selectModel", async () => {
+    const user = userEvent.setup();
+    const { store, selectModel } = makeStore({
+      composer: {
+        route: {
+          ...initialComposerState.route,
+          provider: "Ollama (Local)",
+          modelId: "qwen3:8b",
+          modelLabel: "qwen3:8b",
+          modelOptions: [
+            { id: "qwen3:8b", label: "qwen3:8b" },
+            { id: "nemotron-3-nano:4b", label: "nemotron-3-nano:4b" },
+          ],
+        },
+        capabilities: { ...initialComposerState.capabilities, modelSelection: true },
+        request: { ...initialComposerState.request, canSend: true },
+      },
+    });
+    const { container } = render(
+      <OverlayProvider>
+        {/* @ts-expect-error - test double */}
+        <Composer store={store} sceneStore={makeSceneStore().sceneStore} />
+      </OverlayProvider>,
+    );
+
+    const trigger = container.querySelector('[data-overlay-trigger="model"]') as HTMLButtonElement;
+    expect(trigger).not.toBeDisabled();
+
+    await user.click(trigger);
+    await user.click(screen.getByText("nemotron-3-nano:4b"));
+
+    expect(selectModel).toHaveBeenCalledWith("nemotron-3-nano:4b");
+    // and the popover closes on choose, like the reasoning picker
+    expect(screen.queryByText("nemotron-3-nano:4b")).toBeNull();
   });
 
   it("Send is enabled once there's text, calls sceneStore.sendMessage, and clears the draft", async () => {

@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
+import { NodeMenu } from "./NodeMenu";
 
 /**
  * The shared note/frame/container color-swatch popover (Qt-removal plan
@@ -62,43 +63,52 @@ export interface GroupColorPickerProps {
 }
 
 export function GroupColorPicker({ color, headerColor, onSelect }: GroupColorPickerProps) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  // R8a: anchored off the trigger's real viewport rect and portaled by
+  // NodeMenu, because this popover used to be `position: absolute` inside
+  // `.scene-node`, which is `overflow: hidden` - so it was clipped away
+  // ENTIRELY and picking a colour was impossible on every note/frame.
+  //
+  // The rect is captured when OPENING rather than read during render: reading
+  // a ref mid-render is not concurrent-safe (and eslint rejects it outright).
+  const [anchor, setAnchor] = useState<{ x: number; y: number } | null>(null);
+  const open = anchor !== null;
 
-  useEffect(() => {
-    if (!open) return;
-    function onPointerDown(event: PointerEvent) {
-      if (!ref.current?.contains(event.target as globalThis.Node)) setOpen(false);
+  function toggle() {
+    if (open) {
+      setAnchor(null);
+      return;
     }
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") setOpen(false);
-    }
-    document.addEventListener("pointerdown", onPointerDown, true);
-    document.addEventListener("keydown", onKeyDown, true);
-    return () => {
-      document.removeEventListener("pointerdown", onPointerDown, true);
-      document.removeEventListener("keydown", onKeyDown, true);
-    };
-  }, [open]);
+    const rect = triggerRef.current?.getBoundingClientRect();
+    if (rect) setAnchor({ x: rect.left, y: rect.bottom + 6 });
+  }
+
 
   function choose(nextColor: string | null, nextHeaderColor: string | null) {
     onSelect(nextColor, nextHeaderColor);
-    setOpen(false);
+    setAnchor(null);
   }
 
   return (
-    <div className="group-color-picker nodrag" ref={ref}>
+    <div className="group-color-picker nodrag">
       <button
+        ref={triggerRef}
         type="button"
         className="group-color-swatch-trigger"
         aria-label="Set color"
         aria-haspopup="true"
         aria-expanded={open}
         style={{ backgroundColor: headerColor ?? color ?? undefined }}
-        onClick={() => setOpen((v) => !v)}
+        onClick={toggle}
       />
-      {open && (
-        <div className="group-color-popover" role="menu" aria-label="Color">
+      {anchor && (
+        <NodeMenu
+          position={anchor}
+          onClose={() => setAnchor(null)}
+          ignoreRef={triggerRef}
+          className="group-color-popover"
+          ariaLabel="Color"
+        >
           <p className="group-color-section-label">Body</p>
           <div className="group-color-row">
             {GROUP_NAMED_COLORS.map((c) => (
@@ -147,7 +157,7 @@ export function GroupColorPicker({ color, headerColor, onSelect }: GroupColorPic
           <button type="button" role="menuitem" className="group-color-reset" onClick={() => choose(null, null)}>
             Reset to Default
           </button>
-        </div>
+        </NodeMenu>
       )}
     </div>
   );
