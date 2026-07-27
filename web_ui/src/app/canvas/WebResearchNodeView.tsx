@@ -1,9 +1,10 @@
 import { Handle, Position, useStore, type Node, type NodeProps } from "@xyflow/react";
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import { LOD_ZOOM_THRESHOLD } from "./canvasConstants";
+import { NodeMenu } from "./NodeMenu";
 
 /**
  * The web-research node (Qt-removal plan R5.1) - the Web Research plugin's
@@ -96,25 +97,6 @@ interface MenuPosition {
 
 /** Same outside-click/Escape dismiss pattern every sibling node menu uses
  * (ChatNodeMenu/ThinkingNodeMenu/DocumentNodeMenu/ConversationNodeMenu). */
-function useMenuDismiss(menuRef: React.RefObject<HTMLDivElement | null>, onClose: () => void) {
-  useEffect(() => {
-    function onPointerDown(event: PointerEvent) {
-      // globalThis.Node - the DOM interface, not @xyflow/react's Node (the
-      // type-only import above shadows the bare name for casts like this).
-      if (!menuRef.current?.contains(event.target as globalThis.Node)) onClose();
-    }
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") onClose();
-    }
-    document.addEventListener("pointerdown", onPointerDown, true);
-    document.addEventListener("keydown", onKeyDown, true);
-    return () => {
-      document.removeEventListener("pointerdown", onPointerDown, true);
-      document.removeEventListener("keydown", onKeyDown, true);
-    };
-  }, [menuRef, onClose]);
-}
-
 // -- card-level menu -------------------------------------------------------
 
 function WebResearchNodeMenu({
@@ -130,16 +112,9 @@ function WebResearchNodeMenu({
   onDelete: () => void;
   onClose: () => void;
 }) {
-  const menuRef = useRef<HTMLDivElement>(null);
-  useMenuDismiss(menuRef, onClose);
 
   return (
-    <div
-      ref={menuRef}
-      className="chat-node-menu"
-      style={{ position: "fixed", left: position.x, top: position.y }}
-      role="menu"
-    >
+    <NodeMenu position={position} onClose={onClose} className="chat-node-menu">
       <button
         type="button"
         role="menuitem"
@@ -161,7 +136,7 @@ function WebResearchNodeMenu({
       >
         Delete Node
       </button>
-    </div>
+    </NodeMenu>
   );
 }
 

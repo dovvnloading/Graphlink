@@ -5,6 +5,7 @@ import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import { CHAT_SCROLL_REPORT_DEBOUNCE_MS, LOD_ZOOM_THRESHOLD } from "./canvasConstants";
 import { downloadTextFile } from "./downloadTextFile";
+import { NodeMenu } from "./NodeMenu";
 
 /**
  * The chat node (Qt-removal plan R3.1/R3.2) - ChatNode's React successor:
@@ -122,33 +123,11 @@ function ChatNodeMenu({
   onGenerateChart: (chartType: string) => void;
   onClose: () => void;
 }) {
-  const menuRef = useRef<HTMLDivElement>(null);
   const [chartMenuOpen, setChartMenuOpen] = useState(false);
 
-  useEffect(() => {
-    function onPointerDown(event: PointerEvent) {
-      // globalThis.Node - the DOM interface, not @xyflow/react's Node (the
-      // type-only import above shadows the bare name for casts like this).
-      if (!menuRef.current?.contains(event.target as globalThis.Node)) onClose();
-    }
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") onClose();
-    }
-    document.addEventListener("pointerdown", onPointerDown, true);
-    document.addEventListener("keydown", onKeyDown, true);
-    return () => {
-      document.removeEventListener("pointerdown", onPointerDown, true);
-      document.removeEventListener("keydown", onKeyDown, true);
-    };
-  }, [onClose]);
 
   return (
-    <div
-      ref={menuRef}
-      className="chat-node-menu"
-      style={{ position: "fixed", left: position.x, top: position.y }}
-      role="menu"
-    >
+    <NodeMenu position={position} onClose={onClose} className="chat-node-menu">
       <button
         type="button"
         role="menuitem"
@@ -277,7 +256,7 @@ function ChatNodeMenu({
           Regenerate Response
         </button>
       )}
-    </div>
+    </NodeMenu>
   );
 }
 

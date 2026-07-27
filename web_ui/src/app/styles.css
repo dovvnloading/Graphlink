@@ -1,6 +1,29 @@
 /* Single-app shell styles (Qt-removal plan R0). Token-driven only - the
  * no-raw-colors gate applies here exactly as it does to island CSS. */
 
+/* R8a: ONE documented z-index scale.
+ *
+ * Before this, the SPA had 10 ad-hoc z-index values (5, 20, 22, 30, 40, 50)
+ * with no stated relationship, and the highest of them - .chat-node-menu's 50 -
+ * was the LEAST visible thing on screen. That is not a numbering mistake: node
+ * menus render inside React Flow's viewport, which is itself a transformed,
+ * z-indexed stacking context, so their 50 only ever competed with their
+ * siblings INSIDE the canvas, never with app chrome at root. No value would
+ * have fixed it; escaping the stacking context (see NodeMenu.tsx's portal) is
+ * what fixes it, and only then does a scale mean anything.
+ *
+ * Everything that floats above the canvas must take a value from here. Numbers
+ * are spaced so a tier can be inserted without renumbering its neighbours. */
+:root {
+  --gl-z-canvas-chrome: 5; /* pins/token counter drawn over the canvas */
+  --gl-z-app-layer: 20; /* app-bar popovers, plugin picker, pin overlay */
+  --gl-z-search: 22; /* search overlay, above the other app layers */
+  --gl-z-notification: 30; /* banner must beat app layers, not dialogs */
+  --gl-z-scrim: 40; /* modal scrim + the dialog it dims for */
+  --gl-z-node-menu: 60; /* PORTALED node context menus (NodeMenu.tsx) */
+  --gl-z-approval: 80; /* blocking code-execution prompt - outranks all */
+}
+
 html,
 body,
 #root {
@@ -512,7 +535,13 @@ body,
 }
 
 .chat-node-menu {
-  z-index: 50;
+  /* R8a: portaled to <body> by NodeMenu.tsx, so this finally competes at root
+     instead of only against its siblings inside React Flow's viewport. The
+     height cap matters for the same reason - a menu that used to run off the
+     bottom of the screen now scrolls inside itself. */
+  z-index: var(--gl-z-node-menu);
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   min-width: 170px;
@@ -2141,9 +2170,13 @@ body,
 
 /* -- Settings dialog (R2.5d) ----------------------------------------------- */
 
+/* R8a: width is PINNED, not a range. It was `min-width: 700px` +
+   `max-width: min(820px, ...)`, which let the dialog shrink-wrap to whatever
+   each tab's content happened to measure - so switching tabs visibly resized
+   the whole Settings window. Height was already pinned; width now matches, so
+   the frame is stable and only the page area inside it changes. */
 .settings-dialog {
-  min-width: 700px;
-  max-width: min(820px, calc(100vw - 64px));
+  width: min(820px, calc(100vw - 64px));
   height: min(560px, calc(100vh - 96px));
 }
 

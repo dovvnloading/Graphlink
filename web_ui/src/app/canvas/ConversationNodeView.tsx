@@ -1,9 +1,10 @@
 import { Handle, Position, useStore, type Node, type NodeProps } from "@xyflow/react";
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import { LOD_ZOOM_THRESHOLD } from "./canvasConstants";
+import { NodeMenu } from "./NodeMenu";
 
 /**
  * The conversation node (Qt-removal plan R3.25/R3.26) - ConversationNode's
@@ -66,25 +67,6 @@ interface MenuPosition {
 
 /** Shared outside-click/Escape dismiss behavior - identical pattern to every
  * sibling menu component (ChatNodeMenu/ThinkingNodeMenu/DocumentNodeMenu). */
-function useMenuDismiss(menuRef: React.RefObject<HTMLDivElement | null>, onClose: () => void) {
-  useEffect(() => {
-    function onPointerDown(event: PointerEvent) {
-      // globalThis.Node - the DOM interface, not @xyflow/react's Node (the
-      // type-only import above shadows the bare name for casts like this).
-      if (!menuRef.current?.contains(event.target as globalThis.Node)) onClose();
-    }
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") onClose();
-    }
-    document.addEventListener("pointerdown", onPointerDown, true);
-    document.addEventListener("keydown", onKeyDown, true);
-    return () => {
-      document.removeEventListener("pointerdown", onPointerDown, true);
-      document.removeEventListener("keydown", onKeyDown, true);
-    };
-  }, [menuRef, onClose]);
-}
-
 // -- card-level menu -------------------------------------------------------
 
 function ConversationNodeMenu({
@@ -100,16 +82,9 @@ function ConversationNodeMenu({
   onDelete: () => void;
   onClose: () => void;
 }) {
-  const menuRef = useRef<HTMLDivElement>(null);
-  useMenuDismiss(menuRef, onClose);
 
   return (
-    <div
-      ref={menuRef}
-      className="chat-node-menu"
-      style={{ position: "fixed", left: position.x, top: position.y }}
-      role="menu"
-    >
+    <NodeMenu position={position} onClose={onClose} className="chat-node-menu">
       {/* Order verified against the legacy PluginNodeContextMenu's own
           construction order for this node kind: Open Document View,
           Collapse/Expand, Delete Node - nothing else. */}
@@ -137,7 +112,7 @@ function ConversationNodeMenu({
       >
         Delete Node
       </button>
-    </div>
+    </NodeMenu>
   );
 }
 
@@ -154,16 +129,9 @@ function ConversationBubbleMenu({
   onDeleteMessage: () => void;
   onClose: () => void;
 }) {
-  const menuRef = useRef<HTMLDivElement>(null);
-  useMenuDismiss(menuRef, onClose);
 
   return (
-    <div
-      ref={menuRef}
-      className="chat-node-menu"
-      style={{ position: "fixed", left: position.x, top: position.y }}
-      role="menu"
-    >
+    <NodeMenu position={position} onClose={onClose} className="chat-node-menu">
       <button
         type="button"
         role="menuitem"
@@ -186,7 +154,7 @@ function ConversationBubbleMenu({
       >
         Delete from History
       </button>
-    </div>
+    </NodeMenu>
   );
 }
 
