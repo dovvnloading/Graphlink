@@ -97,13 +97,29 @@ def test_zero_mode_gate_when_pin_reaches_zero():
     if pin["total"] != 0:
         return  # burn-down mode; the assertions above carry the load
 
-    # THE GATE (plan section 0): no import anywhere, package gone, not declared.
+    # THE GATE (plan section 0): no import anywhere, not declared anywhere.
     assert _qt_importing_files() == []
-    assert importlib.util.find_spec("PySide6") is None, (
-        "pin is 0 but PySide6 is still installed - `pip uninstall PySide6` is part "
-        "of the R7 cutover"
-    )
-    pyproject = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    assert "PySide6" not in pyproject and "qtawesome" not in pyproject, (
-        "pin is 0 but pyproject.toml still declares Qt dependencies"
-    )
+
+    # Deliberately NOT `find_spec("PySide6") is None`. That asserted the
+    # developer's environment had no Qt wheel installed, which is not what this
+    # project set out to guarantee - the goal is that GRAPHLINK contains no Qt,
+    # not that the machine running the tests does. A contributor with PySide6
+    # installed for some unrelated project would have failed a gate they had
+    # not broken, and `pip uninstall` would have been the "fix" for a green
+    # build. What actually matters is that nothing in the repo imports Qt
+    # (above) and nothing declares it as a dependency (below), so a fresh
+    # install never pulls it in.
+    # `requirements*` without a suffix filter, deliberately: requirements.in is
+    # the hand-edited source pip-compile reads, and requirements.txt is only its
+    # lock output. A glob of "requirements*.txt" would let someone re-add
+    # PySide6 to the .in file and pass this gate until the next recompile -
+    # caught by negative-testing this assertion rather than by reading it.
+    manifests = [REPO_ROOT / "pyproject.toml", *sorted(REPO_ROOT.glob("requirements*"))]
+    for manifest in manifests:
+        if not manifest.is_file():
+            continue
+        text = manifest.read_text(encoding="utf-8")
+        for package in ("PySide6", "PyQt5", "PyQt6", "qtawesome"):
+            assert package.lower() not in text.lower(), (
+                f"pin is 0 but {manifest.name} still declares {package}"
+            )

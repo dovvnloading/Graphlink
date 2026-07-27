@@ -1,5 +1,5 @@
-/* GENERATED - do not hand-edit. Source of truth: graphlink_app/graphlink_notification_payload.py::NotificationStatePayload.
- * Regenerate with graphlink_island_codegen.py; a pytest fails if this file
+/* GENERATED - do not hand-edit. Source of truth: contracts/graphlink_notification_payload.py::NotificationStatePayload.
+ * Regenerate with codegen.py; a pytest fails if this file
  * drifts from what regenerating it now would produce. */
 
 export interface NotificationState {
