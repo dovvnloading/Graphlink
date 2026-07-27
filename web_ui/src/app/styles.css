@@ -251,7 +251,7 @@ body,
   background-color: var(--gl-surface-node-body);
   border: 1px solid var(--gl-surface-border);
   border-radius: 10px;
-  z-index: 5;
+  z-index: var(--gl-z-canvas-chrome);
 }
 
 .scene-pins-header {
@@ -1059,14 +1059,14 @@ body,
   position: absolute;
   top: 8px;
   right: 16px;
-  z-index: 20;
+  z-index: var(--gl-z-app-layer);
 }
 
 .app-plugins-layer {
   position: absolute;
   top: 8px;
   right: 16px;
-  z-index: 20;
+  z-index: var(--gl-z-app-layer);
 }
 
 .overlay-popover {
@@ -1082,7 +1082,7 @@ body,
 .overlay-scrim {
   position: fixed;
   inset: 0;
-  z-index: 40;
+  z-index: var(--gl-z-scrim);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1458,7 +1458,7 @@ body,
   position: absolute;
   bottom: 16px;
   left: 16px;
-  z-index: 5;
+  z-index: var(--gl-z-canvas-chrome);
 }
 
 .token-counter {
@@ -1500,7 +1500,7 @@ body,
   top: 16px;
   left: 50%;
   transform: translateX(-50%);
-  z-index: 30;
+  z-index: var(--gl-z-notification);
 }
 
 .notification-banner {
@@ -1539,7 +1539,7 @@ body,
   position: absolute;
   top: 8px;
   left: 16px;
-  z-index: 20;
+  z-index: var(--gl-z-app-layer);
 }
 
 .pins-popover {
@@ -1771,7 +1771,7 @@ body,
   top: 8px;
   left: 50%;
   transform: translateX(-50%);
-  z-index: 22;
+  z-index: var(--gl-z-search);
 }
 
 .search-overlay-shell {
@@ -3687,11 +3687,23 @@ body,
   border-color: var(--gl-surface-text-muted);
 }
 
+/* R8a: the code-execution approval prompt is a BLOCKING security decision, so
+   it outranks ordinary dialogs. It used to render inline inside the node,
+   where its `position: fixed; inset: 0` scrim resolved against the node's own
+   transformed box - so it dimmed (and blocked) only the node card, leaving the
+   rest of the app clickable while it waited for a yes/no. It is portaled to
+   <body> now, which is what makes this z-index meaningful at all. */
+.code-exec-approval-scrim {
+  z-index: var(--gl-z-approval);
+}
+
 .group-color-popover {
-  z-index: 50;
-  position: absolute;
-  top: calc(100% + 6px);
-  right: 0;
+  /* R8a: NodeMenu portals this and sets `position: fixed` + left/top inline
+     from the trigger's rect. The old `position: absolute; top; right` anchored
+     it inside `.scene-node`, which is `overflow: hidden` - so it was clipped
+     away entirely and colours could never be picked. A stale `right: 0` here
+     would fight the inline `left` and stretch the panel, so it is gone too. */
+  z-index: var(--gl-z-node-menu);
   display: flex;
   flex-direction: column;
   width: 176px;

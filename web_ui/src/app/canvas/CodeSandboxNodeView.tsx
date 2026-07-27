@@ -318,29 +318,33 @@ export function CodeSandboxNodeView({ id, data, selected }: NodeProps<CodeSandbo
             </div>
           )}
 
-          <CodeExecutionApprovalPanel
-            nodeId={id}
-            kind="code_sandbox"
-            code={data.codeSandboxCode}
-            awaitingApproval={data.codeSandboxAwaitingApproval}
-            // R5.4 CODESANDBOX fix: the approval panel must show the FROZEN
-            // manifest snapshot the pending approval actually refers to
-            // (codeSandboxApprovalRequirements), NOT the live, still-editable
-            // codeSandboxRequirements draft. The Requirements textarea above
-            // is never disabled during a run, so the user can keep typing a
-            // manifest for their NEXT run while this approval is still
-            // pending - reading the live field here would show that
-            // in-progress edit instead of what the paused run actually asked
-            // to install (backend/canvas.py freezes this at the moment
-            // code_sandbox_awaiting_approval flips true; see
-            // AgentDispatcher.start_code_sandbox_run).
-            requirements={data.codeSandboxApprovalRequirements}
-            busy={approvalBusy}
-            onApprove={handleApprove}
-            onDeny={handleDeny}
-          />
         </div>
       )}
+      {/* R8a: OUTSIDE the {!collapsed} gate on purpose - this is a
+          blocking approval prompt, and collapsing the node or zooming
+          past the LOD threshold used to unmount it mid-decision. It
+          self-hides via `if (!awaitingApproval) return null`. */}
+        <CodeExecutionApprovalPanel
+          nodeId={id}
+          kind="code_sandbox"
+          code={data.codeSandboxCode}
+          awaitingApproval={data.codeSandboxAwaitingApproval}
+          // R5.4 CODESANDBOX fix: the approval panel must show the FROZEN
+          // manifest snapshot the pending approval actually refers to
+          // (codeSandboxApprovalRequirements), NOT the live, still-editable
+          // codeSandboxRequirements draft. The Requirements textarea above
+          // is never disabled during a run, so the user can keep typing a
+          // manifest for their NEXT run while this approval is still
+          // pending - reading the live field here would show that
+          // in-progress edit instead of what the paused run actually asked
+          // to install (backend/canvas.py freezes this at the moment
+          // code_sandbox_awaiting_approval flips true; see
+          // AgentDispatcher.start_code_sandbox_run).
+          requirements={data.codeSandboxApprovalRequirements}
+          busy={approvalBusy}
+          onApprove={handleApprove}
+          onDeny={handleDeny}
+        />
       <Handle type="source" position={Position.Bottom} className="scene-node-handle" />
       {menuPosition && (
         <CodeSandboxNodeMenu

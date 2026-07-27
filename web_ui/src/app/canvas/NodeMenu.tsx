@@ -33,11 +33,22 @@ export function NodeMenu({
   position,
   onClose,
   className,
+  ignoreRef,
+  ariaLabel,
   children,
 }: {
   position: { x: number; y: number };
   onClose: () => void;
   className?: string;
+  /** Accessible name for the surface. Context menus are named by the node they
+   * belong to and omit it; named popovers (the colour picker) must pass one or
+   * they lose their accessible name entirely. */
+  ariaLabel?: string;
+  /** A toggle button that opens this surface. Pointerdowns on it are ignored
+   * so it can close the surface itself: without this the outside-click handler
+   * fires first and closes, then the button's own onClick re-opens, making the
+   * toggle appear dead. Context menus have no such trigger and omit it. */
+  ignoreRef?: React.RefObject<HTMLElement | null>;
   children: ReactNode;
 }) {
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -69,7 +80,10 @@ export function NodeMenu({
 
   useEffect(() => {
     const onPointerDown = (event: PointerEvent) => {
-      if (!menuRef.current?.contains(event.target as Node)) onClose();
+      const target = event.target as Node;
+      if (menuRef.current?.contains(target)) return;
+      if (ignoreRef?.current?.contains(target)) return;
+      onClose();
     };
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
@@ -85,7 +99,7 @@ export function NodeMenu({
       document.removeEventListener("pointerdown", onPointerDown, true);
       document.removeEventListener("keydown", onKeyDown, true);
     };
-  }, [onClose]);
+  }, [onClose, ignoreRef]);
 
   return createPortal(
     <div
@@ -93,6 +107,7 @@ export function NodeMenu({
       className={className}
       style={{ position: "fixed", left: placement.x, top: placement.y }}
       role="menu"
+      aria-label={ariaLabel}
     >
       {children}
     </div>,
