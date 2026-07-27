@@ -39,6 +39,7 @@ import api_provider
 
 from backend.events import SessionBus
 from backend.notifications import NotificationState
+from backend.attachments import AttachmentError, StagedAttachment, stage_file
 from backend.settings import (
     _apply,
     apply_llama_cpp_reasoning_mode,
@@ -103,6 +104,21 @@ class ComposerDocument:
     # composer UI can reflect generating/idle state and offer cancellation.
     request_id: str | None = None
     request_state: str = "idle"
+    # R8a: attachments staged for the NEXT send. Lives only in backend
+    # memory - the frontend only ever sees StagedAttachment.to_wire()'s
+    # metadata (see payload() below), never the raw bytes/extracted text.
+    # Cleared by take_staged_attachments() at Send time (backend/canvas.py's
+    # send_message intent - see register_canvas's own docstring on why
+    # composer_document is threaded there).
+    staged_attachments: list[StagedAttachment] = field(default_factory=list)
+
+    def take_staged_attachments(self) -> list[StagedAttachment]:
+        """Pop and clear every staged attachment - called exactly once per
+        Send. A read-then-clear helper rather than two separate calls so
+        canvas.py's send_message can't read the list, get interrupted, and
+        clear a DIFFERENT (newer) list than the one it just read."""
+        items, self.staged_attachments = self.staged_attachments, []
+        return items
 
     def update_draft_text(self, text: str) -> None:
         self.draft.text = str(text)
@@ -181,10 +197,14 @@ class ComposerDocument:
                 "restored": self.draft.restored,
             },
             "context": {
+                # R8a: was 4 hardcoded literals, unconditionally, on every
+                # publish - now the REAL staged-attachment list. "anchor"
+                # stays None: it names a branch-context anchor node, a
+                # separate and still-deferred concept from attachments.
                 "anchor": None,
-                "items": [],
-                "totalTokens": 0,
-                "reviewAvailable": False,
+                "items": [item.to_wire() for item in self.staged_attachments],
+                "totalTokens": sum(item.token_count for item in self.staged_attachments),
+                "reviewAvailable": bool(self.staged_attachments),
             },
             "route": {
                 **route,
@@ -203,7 +223,11 @@ class ComposerDocument:
                 "canRetry": False,
             },
             "capabilities": {
-                "attachments": False,
+                # R8a: real now - staging goes through native_dialogs.pick_file,
+                # which gracefully returns None with no window (bare uvicorn/
+                # pytest), so this stays True unconditionally rather than
+                # trying to detect window availability up front.
+                "attachments": True,
                 "contextReview": False,
                 "routeSelection": False,
                 # Real, and derived - not a constant. The composer's model
@@ -396,6 +420,50 @@ def register_composer(
             await bus.publish("app-settings")
         await publish()
 
+    async def attach_file():
+        """Open a native OPEN file dialog and stage whatever is picked (R8a).
+
+        The one genuinely real capability gap: staging needs an actual
+        on-disk path (backend/attachments.py reads real bytes/extracts real
+        text), so this is a NATIVE dialog - the same native_dialogs.pick_file
+        used by Settings > Llama.cpp's GGUF picker (R7.4c), not a browser
+        <input type="file"> (which never gives a path, only bytes already in
+        the browser - useless here since classification/extraction runs
+        server-side). Cancelling (path is None) is a quiet no-op, matching
+        every other picker in this codebase.
+        """
+        from backend import native_dialogs
+
+        path = await native_dialogs.pick_file(
+            file_types=(
+                "Common Attachments (*.png *.jpg *.jpeg *.webp *.mp3 *.wav *.m4a "
+                "*.flac *.ogg *.opus *.aac *.mp4 *.mpeg *.mpga *.oga *.webm *.pdf "
+                "*.docx *.txt *.md *.py *.js *.ts *.json *.csv *.log)",
+                "Image Files (*.png *.jpg *.jpeg *.webp)",
+                "All Files (*.*)",
+            )
+        )
+        if not path:
+            return
+        try:
+            staged = stage_file(path)
+        except AttachmentError as exc:
+            if notifications is not None:
+                notifications.show(str(exc), "warning")
+                await bus.publish("notification")
+            return
+        document.staged_attachments.append(staged)
+        await publish()
+
+    async def remove_attachment(attachment_id):
+        attachment_id = str(attachment_id)
+        document.staged_attachments = [
+            item for item in document.staged_attachments if item.id != attachment_id
+        ]
+        await publish()
+
+    bus.register_intent("app-composer", "attachFile", attach_file)
+    bus.register_intent("app-composer", "removeAttachment", remove_attachment)
     bus.register_intent("app-composer", "selectModel", select_model)
     bus.register_intent("app-composer", "updateDraft", update_draft)
     bus.register_intent("app-composer", "setReasoningLevel", set_reasoning_level)

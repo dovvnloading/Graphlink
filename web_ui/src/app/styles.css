@@ -1236,6 +1236,63 @@ body,
   gap: 8px;
 }
 
+/* R8a: staged-attachment chips, rendered above the input when
+   composer.context.items is non-empty. */
+.composer-attachment-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.composer-attachment-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 220px;
+  padding: 4px 6px 4px 10px;
+  border-radius: 999px;
+  background-color: var(--gl-neutral-button-hover);
+  border: 1px solid var(--gl-surface-border);
+  font-size: 12px;
+  color: var(--gl-surface-text);
+}
+
+.composer-attachment-chip-kind {
+  flex-shrink: 0;
+  color: var(--gl-surface-text-muted);
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.03em;
+}
+
+.composer-attachment-chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-attachment-chip-remove {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background-color: transparent;
+  color: var(--gl-surface-text-muted);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.composer-attachment-chip-remove:hover {
+  background-color: var(--gl-surface-border);
+  color: var(--gl-surface-text);
+}
+
 .composer-input-wrap {
   display: flex;
 }

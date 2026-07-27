@@ -152,6 +152,17 @@ export class ComposerStore {
     this.transport.intent("app-composer", "setReasoningLevel", [level]);
   }
 
+  attachFile(): void {
+    // R8a: opens a NATIVE file dialog server-side (backend/native_dialogs.py,
+    // same mechanism as Settings > Llama.cpp's GGUF picker) - there is no
+    // browser-side file to pass, staging happens entirely on the backend.
+    this.transport.intent("app-composer", "attachFile", []);
+  }
+
+  removeAttachment(attachmentId: string): void {
+    this.transport.intent("app-composer", "removeAttachment", [attachmentId]);
+  }
+
   cancelChatRequest(requestId: string): void {
     this.transport.intent("app-composer", "cancelChatRequest", [requestId]);
   }

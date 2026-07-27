@@ -24,6 +24,7 @@ from backend.canvas import (
     _research_result_wire,
     register_canvas,
 )
+from backend.attachments import StagedAttachment
 from backend.composer import ComposerDocument
 from backend.events import SessionBus
 from backend.notifications import NotificationState
@@ -1369,6 +1370,159 @@ def test_regenerate_response_document_and_image_children_torn_down_but_never_rec
         assert not any(n.kind in ("document", "image") for n in document.nodes.values()), (
             "torn down but never recreated - parse_response structurally never emits document/image parts"
         )
+
+    asyncio.run(run())
+
+
+# -- R8a: sendMessage consumes real staged attachments ------------------------
+
+
+def _bus_with_composer_document():
+    """Same shape as make_bus_with_dispatcher, but also returns the real
+    ComposerDocument so a test can stage attachments directly on it - the
+    same object canvas.py's send_message reads via composer_document.
+    take_staged_attachments(), confirming the wiring is the SAME instance,
+    not a copy."""
+    bus = SessionBus("attachment-send-test")
+    notifications = NotificationState()
+    bus.register_topic("notification", notifications.payload)
+    composer_document = ComposerDocument()
+    bus.register_topic("app-composer", composer_document.payload)
+    agent_dispatcher = AgentDispatcher(_FakeSettingsManager())
+    document = register_canvas(bus, notifications, agent_dispatcher, composer_document)
+    recorder = Recorder()
+    bus.attach(recorder)
+    return bus, document, composer_document, recorder, agent_dispatcher
+
+
+def test_send_with_no_staged_attachments_is_byte_identical_to_before_r8a():
+    # The zero-ripple guarantee: a plain send with nothing staged must
+    # produce a plain-string content, not a list - content_parts stays None,
+    # so chat_branch_history's fallback path is exercised, not the new one.
+    async def run():
+        bus, document, composer_document, _recorder, _dispatcher = _bus_with_composer_document()
+
+        def capture_reply(task, messages, **kwargs):
+            capture_reply.seen_messages = messages
+            return {"message": {"content": "ok"}}
+
+        with patch.object(api_provider, "USE_API_MODE", False), \
+                patch.object(api_provider, "LOCAL_PROVIDER_TYPE", task_config.LOCAL_PROVIDER_OLLAMA), \
+                patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
+                patch.object(api_provider, "chat", capture_reply):
+            user_id = await bus.dispatch_intent("scene", "sendMessage", ["plain hello"])
+
+        user_node = document.nodes[user_id]
+        assert user_node.content_parts is None
+        assert user_node.content == "plain hello"
+        assert composer_document.staged_attachments == []
+
+    asyncio.run(run())
+
+
+def test_send_with_a_staged_image_produces_real_multimodal_content_parts():
+    async def run():
+        bus, document, composer_document, _recorder, dispatcher = _bus_with_composer_document()
+
+        real_bytes = b"\x89PNG\r\n\x1a\n" + b"\x00" * 20
+        staged = StagedAttachment(
+            kind="image", name="photo.png", path="C:/fake/photo.png", byte_size=len(real_bytes),
+            context_label="Vision", content_part={"type": "image_bytes", "data": real_bytes},
+        )
+        composer_document.staged_attachments.append(staged)
+
+        def capture_reply(task, messages, **kwargs):
+            capture_reply.seen_messages = list(messages)
+            return {"message": {"content": "I see the image"}}
+
+        with patch.object(api_provider, "USE_API_MODE", False), \
+                patch.object(api_provider, "LOCAL_PROVIDER_TYPE", task_config.LOCAL_PROVIDER_OLLAMA), \
+                patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
+                patch.object(api_provider, "chat", capture_reply):
+            user_id = await bus.dispatch_intent("scene", "sendMessage", ["what is this?"])
+            entry = next(iter(dispatcher._requests.values()))
+            await entry["task"]
+
+        user_node = document.nodes[user_id]
+        # The node's plain-text mirror stays a real, readable string - every
+        # existing consumer of .content (title, chat-library preview, copy,
+        # export) keeps working unchanged.
+        assert user_node.content == "what is this?"
+        assert user_node.content_parts == [
+            {"type": "text", "text": "what is this?"},
+            {"type": "image_bytes", "data": real_bytes},
+        ]
+        # The REAL call api_provider.chat received - this is what proves the
+        # attachment reached the model, not just the node's own storage.
+        sent_content = capture_reply.seen_messages[-1]["content"]
+        assert sent_content == user_node.content_parts
+        # Staging is consumed exactly once - popped and cleared by Send.
+        assert composer_document.staged_attachments == []
+
+    asyncio.run(run())
+
+
+def test_send_with_a_staged_document_merges_extracted_text_into_plain_content():
+    # Documents deliberately do NOT touch content_parts - their extracted
+    # text is merged into the plain message text instead, so a text-only
+    # attachment never enters the multimodal path at all.
+    async def run():
+        bus, document, composer_document, _recorder, dispatcher = _bus_with_composer_document()
+
+        staged = StagedAttachment(
+            kind="document", name="notes.txt", path="C:/fake/notes.txt", byte_size=11,
+            context_label="Text", extracted_text="file body here", token_count=3,
+        )
+        composer_document.staged_attachments.append(staged)
+
+        def capture_reply(task, messages, **kwargs):
+            capture_reply.seen_messages = list(messages)
+            return {"message": {"content": "got it"}}
+
+        with patch.object(api_provider, "USE_API_MODE", False), \
+                patch.object(api_provider, "LOCAL_PROVIDER_TYPE", task_config.LOCAL_PROVIDER_OLLAMA), \
+                patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
+                patch.object(api_provider, "chat", capture_reply):
+            user_id = await bus.dispatch_intent("scene", "sendMessage", ["please review"])
+            entry = next(iter(dispatcher._requests.values()))
+            await entry["task"]
+
+        user_node = document.nodes[user_id]
+        assert user_node.content_parts is None, "a text-only attachment must never create content_parts"
+        assert user_node.content.startswith("please review")
+        assert "notes.txt" in user_node.content
+        assert "file body here" in user_node.content
+        # The model saw the merged text too - not just the node's own copy.
+        assert capture_reply.seen_messages[-1]["content"] == user_node.content
+        assert composer_document.staged_attachments == []
+
+    asyncio.run(run())
+
+
+def test_send_republishes_app_composer_immediately_so_staged_chips_clear_on_send():
+    # Regression guard: the composer's staged-attachment chips must clear
+    # the instant Send fires, not wait for the (much later) assistant reply.
+    async def run():
+        bus, document, composer_document, recorder, dispatcher = _bus_with_composer_document()
+        composer_document.staged_attachments.append(
+            StagedAttachment(kind="document", name="x.txt", extracted_text="body", context_label="Text")
+        )
+
+        def slow_reply(task, messages, **kwargs):
+            return {"message": {"content": "reply"}}
+
+        with patch.object(api_provider, "USE_API_MODE", False), \
+                patch.object(api_provider, "LOCAL_PROVIDER_TYPE", task_config.LOCAL_PROVIDER_OLLAMA), \
+                patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
+                patch.object(api_provider, "chat", slow_reply):
+            await bus.dispatch_intent("scene", "sendMessage", ["go"])
+            # Deliberately NOT awaiting the reply task yet - app-composer must
+            # already have republished with an empty items list by this point.
+            composer_publishes = [m for m in recorder.messages if m.get("topic") == "app-composer"]
+            assert composer_publishes, "send_message must republish app-composer synchronously, before the reply"
+            assert composer_publishes[-1]["payload"]["context"]["items"] == []
+            entry = next(iter(dispatcher._requests.values()))
+            await entry["task"]
 
     asyncio.run(run())
 

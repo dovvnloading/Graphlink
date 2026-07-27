@@ -65,6 +65,9 @@
           "items": {
             "additionalProperties": false,
             "properties": {
+              "byteSize": {
+                "type": "integer"
+              },
               "contextLabel": {
                 "type": "string"
               },
@@ -77,9 +80,6 @@
               "name": {
                 "type": "string"
               },
-              "preparationState": {
-                "type": "string"
-              },
               "tokenCount": {
                 "type": "integer"
               }
@@ -88,9 +88,9 @@
               "id",
               "name",
               "kind",
-              "tokenCount",
-              "preparationState",
-              "contextLabel"
+              "byteSize",
+              "contextLabel",
+              "tokenCount"
             ],
             "type": "object"
           },
@@ -204,10 +204,9 @@
         },
         "mode": {
           "enum": [
-            "cloud",
             "ollama",
-            "llamacpp",
-            "unknown"
+            "api",
+            "llama_cpp"
           ],
           "type": "string"
         },
@@ -221,43 +220,16 @@
           "items": {
             "additionalProperties": false,
             "properties": {
-              "active": {
-                "type": "boolean"
-              },
-              "available": {
-                "type": "boolean"
-              },
-              "capabilities": {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
               "id": {
                 "type": "string"
               },
               "label": {
                 "type": "string"
-              },
-              "provider": {
-                "type": "string"
-              },
-              "ready": {
-                "type": "boolean"
-              },
-              "source": {
-                "type": "string"
               }
             },
             "required": [
               "id",
-              "label",
-              "provider",
-              "source",
-              "active",
-              "ready",
-              "available",
-              "capabilities"
+              "label"
             ],
             "type": "object"
           },

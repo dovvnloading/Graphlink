@@ -23,7 +23,7 @@ RequestState = Literal[
     "idle", "preparing", "uploading", "waiting", "generating",
     "finalizing", "canceled", "failed", "succeeded",
 ]
-RouteMode = Literal["cloud", "ollama", "llamacpp", "unknown"]
+RouteMode = Literal["ollama", "api", "llama_cpp"]
 SendMode = Literal["enter_to_send", "ctrl_enter_to_send"]
 
 
@@ -45,12 +45,19 @@ class AppComposerContextAnchorPayload:
 
 @dataclass
 class AppComposerAttachmentPayload:
+    """R8a: matches backend.attachments.StagedAttachment.to_wire() exactly -
+    metadata only, never the raw bytes/extracted text/path. Was 6 fields
+    that did not match the real payload in EITHER direction (missing
+    byteSize, an unused preparationState nothing ever set) - this contract
+    had drifted from backend/composer.py's actual runtime dict before any
+    real caller populated `context.items`, so nothing had ever caught it."""
+
     id: str
     name: str
     kind: str
-    tokenCount: int
-    preparationState: str
+    byteSize: int
     contextLabel: str
+    tokenCount: int
 
 
 @dataclass
@@ -63,14 +70,15 @@ class AppComposerContextPayload:
 
 @dataclass
 class AppComposerModelOptionPayload:
+    """R8a: matches backend/composer.py's real route()['modelOptions'] entries
+    exactly - {"id": m, "label": m} for Ollama's scanned models, or the API
+    catalog's {"id", "label"} pairs. Was 8 fields, 6 of them never set by any
+    real caller (provider/source/active/ready/available/capabilities) -
+    the same never-caught drift as AppComposerAttachmentPayload above, since
+    modelOptions was always [] before R8a made model selection real."""
+
     id: str
     label: str
-    provider: str
-    source: str
-    active: bool
-    ready: bool
-    available: bool
-    capabilities: list[str]
 
 
 @dataclass

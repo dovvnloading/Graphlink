@@ -10,17 +10,25 @@ import type { ComposerStore } from "./composerStore";
  * Real here: draft text editing, reasoning-level selection (a stored
  * preference popover, reusing the overlay system rather than a dedicated
  * picker island), Send - a real user ChatNode via sceneStore.sendMessage,
- * and (R4.3) the agent-dispatch request lifecycle: the assistant's reply
- * is generated asynchronously by the backend agent layer and lands over
- * the existing scene topic republish, exactly like any other node-creation
- * path this app already handles. Send is gated on request.canSend (so a
- * second send can't be issued mid-flight) and Cancel is rendered only
- * while request.canCancel is true, per backend/composer.py's request
- * capability flags. Still visibly deferred, per those same flags: attach
- * (file-staging pipeline), context review (nothing to review until
- * attachments exist), model/provider selection (needs real provider
- * wiring). Each renders disabled with a title naming its phase, exactly
- * the app bar's Save/provider-select precedent.
+ * (R4.3) the agent-dispatch request lifecycle: the assistant's reply is
+ * generated asynchronously by the backend agent layer and lands over the
+ * existing scene topic republish, exactly like any other node-creation
+ * path this app already handles, (R8a) real chat-model selection (a
+ * popover next to reasoning, writing through the same assignment the
+ * Settings > Ollama page uses), and (R8a) real file attachments - a native
+ * dialog stages an image/audio/document, backend/attachments.py classifies
+ * and (for documents) extracts it, and staged items render as removable
+ * chips above the input until Send bundles them onto the new ChatNode.
+ * Send is gated on request.canSend (so a second send can't be issued
+ * mid-flight) and Cancel is rendered only while request.canCancel is true,
+ * per backend/composer.py's request capability flags.
+ *
+ * Still visibly deferred: provider-MODE switching (Ollama/Llama.cpp/API) -
+ * Settings configures all three for real, but changing which one is active
+ * needs real provider-switch wiring the app bar's own disabled selector
+ * names. Context review (inspecting/editing a staged attachment's content
+ * before Send) is also not built - remove-and-reattach is the only
+ * correction available today.
  *
  * Theme is NOT read from this payload (see backend/composer.py's docstring
  * for why) - the SPA's tokens are already global CSS.
@@ -65,6 +73,29 @@ export function Composer({ store, sceneStore }: { store: ComposerStore; sceneSto
 
   return (
     <div className="composer-dock">
+      {composer.context.items.length > 0 && (
+        // R8a: real staged attachments. Metadata only - the composer never
+        // receives raw bytes/extracted text, just what StagedAttachment.
+        // to_wire() sends (backend/attachments.py).
+        <div className="composer-attachment-chips" aria-label="Staged attachments">
+          {composer.context.items.map((item) => (
+            <span key={item.id} className="composer-attachment-chip">
+              <span className="composer-attachment-chip-kind">{item.contextLabel}</span>
+              <span className="composer-attachment-chip-name" title={item.name}>
+                {item.name}
+              </span>
+              <button
+                type="button"
+                className="composer-attachment-chip-remove"
+                aria-label={`Remove ${item.name}`}
+                onClick={() => store.removeAttachment(item.id)}
+              >
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
       <div className="composer-input-wrap">
         <textarea
           ref={inputRef}
@@ -91,12 +122,16 @@ export function Composer({ store, sceneStore }: { store: ComposerStore; sceneSto
           </div>
         )}
 
+        {/* R8a: real now - opens a native file dialog (backend/native_dialogs.py)
+            and stages whatever is picked. Was hard-disabled with an
+            "aren't available yet" title and nothing behind it. */}
         <button
           type="button"
           className="composer-icon-button"
-          disabled
-          title="Attachments aren't available yet"
+          disabled={!composer.capabilities.attachments || !composer.request.canSend}
+          title="Attach a file (image, audio, or a text/PDF/DOCX document)"
           aria-label="Attach context"
+          onClick={() => store.attachFile()}
         >
           <Icon name="attach" />
         </button>
