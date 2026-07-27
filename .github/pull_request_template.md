@@ -15,6 +15,8 @@ Describe the change in 2-5 sentences.
 - [ ] App launches
 - [ ] Relevant workflow was exercised manually
 - [ ] `python -m compileall -q .` passes (run from the repo root - matches CI)
+- [ ] `python -m pytest -q` passes (run from the repo root - matches CI)
+- [ ] `cd web_ui && npm run check` passes (matches CI)
 
 ## UI Notes
 

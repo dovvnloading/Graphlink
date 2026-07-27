@@ -15,23 +15,36 @@ py -m venv .venv
 .venv\Scripts\Activate.ps1
 pip install --upgrade pip
 pip install -r requirements.txt
-cd graphlink_app
-python graphlink_app.py
 ```
 
-If you prefer Visual Studio, open `graphlink_app.sln`.
+The desktop app requires the frontend to already be built - install [Node.js](https://nodejs.org/) 22 or newer first (22 is the enforced floor; `web_ui/.nvmrc` pins the specific newer version this project is actually developed and tested against, for anyone using `nvm`/`fnm`), then:
 
-`python graphlink_app.py` also builds `web_ui/`'s frontend assets automatically the first time, or whenever they're stale - install [Node.js](https://nodejs.org/) 22 or newer first (22 is the enforced floor; `web_ui/.nvmrc` pins the specific newer version this project is actually developed and tested against, for anyone using `nvm`/`fnm`). No separate `npm run build` step is needed. Set `GRAPHLINK_FRONTEND_DEV=1` to skip this and launch against whatever's already built, e.g. while running `npm run dev` yourself in `web_ui/` for frontend iteration.
+```powershell
+cd web_ui
+npm install
+npm run build
+cd ..
+```
+
+This produces `web_ui/dist/app/index.html`. Launching the app does **not** build this automatically - if it's missing, `graphlink_desktop.py` logs an error telling you to run the build and exits with code 1.
+
+Then launch from the repo root:
+
+```powershell
+python graphlink_desktop.py
+```
+
+This starts the Python backend (FastAPI via uvicorn) on a free localhost port in a background thread, waits for it to report healthy, then opens a single native OS webview window (WebView2 on Windows - not a browser tab) pointed at that backend. The backend serves the built frontend, the API, and the WebSocket all from that one origin.
+
+**Iterating on frontend code:** run `npm run dev` inside `web_ui/` for a live-reloading Vite dev server (`127.0.0.1:5173`), which proxies `/api` and `/ws` requests to `http://127.0.0.1:8765`. This assumes a backend is already running on port 8765. `backend/app.py` has an opt-in `GRAPHLINK_DEV_WS_ORIGIN` env var for exactly this case - it lets a manually-run backend accept WebSocket connections from Vite's dev origin. However, there is currently no documented or scripted way to launch just the backend standalone; `graphlink_desktop.py` always boots the full backend+webview flow together. This is a known gap, not a documented workflow - if you need frontend-only iteration against a live backend, you'll have to bridge it yourself for now.
 
 ## Development Rules
 
-- Launch the app from `graphlink_app/`, not from the repo root.
+- Launch the app from the repo root (`python graphlink_desktop.py`), not from a subdirectory.
 - Prefer editing the real implementation modules in:
-  - `graphlink_plugins/` (repo root - relocated out of graphlink_app/ by the Qt-removal plan's R7.2; only its 2 remaining Qt-tainted siblings, graphlink_plugin_context_menu.py/graphlink_plugin_portal.py, and web_research/worker.py stayed behind)
-  - `graphlink_app/graphlink_nodes/`
-  - `graphlink_app/graphlink_canvas/`
-  - `graphlink_app/graphlink_ui_dialogs/`
-- Treat top-level wrapper modules such as `graphlink_plugin_gitlink.py` as compatibility facades unless the change is specifically about import stability.
+  - `graphlink_plugins/` (repo root - Qt-free plugin domain logic: `web_research/`, `gitlink/`, `pycoder/`, `code_sandbox/`, `common/`)
+  - `backend/canvas.py` (the node/graph/connection domain model - chat, code, document, thinking, html, image, conversation, web_research, artifact, gitlink, pycoder, code_sandbox, note, frame/container, and chart node kinds all live here, with no UI code)
+  - `web_ui/src/app/` (the actual UI - `canvas/` for the React Flow graph surface, `chrome/` for the app bar and composer, `overlays/` for dialogs and popovers)
 - Keep changes focused. UI cleanup, plugin behavior, persistence updates, and provider changes should be easy to review independently.
 
 ## Git & GitHub Workflow
@@ -57,14 +70,21 @@ Please include:
 
 ## Validation
 
-Run the `pytest` suite from the repo root, and a compile smoke check - this matches CI exactly (`.github/workflows/ci.yml`):
+Run the Python test suite and a compile smoke check from the repo root, then the frontend checks from `web_ui/` - this matches CI exactly (`.github/workflows/ci.yml`, two jobs, both on `windows-latest`):
 
 ```powershell
-pytest
+python -m pytest -q
 python -m compileall -q .
 ```
 
-The automated coverage is headless (plugin registration, scene/session serialization, path-safety and JSON helpers, and Qt node behavior), so please also validate the app manually when relevant:
+```powershell
+cd web_ui
+npm run check
+```
+
+`npm run check` runs schema-drift detection against `contracts/` (`codegen.py --check`), typecheck, lint, the vitest suite, and a production build, in that order.
+
+The Python-side coverage is plain headless Python - no Qt, no offscreen platform plugin involved anymore - covering plugin registration, scene/session serialization, path-safety and JSON helpers, and the backend's canvas/domain logic. The frontend has its own real, browser-driven test suite (vitest) covering the React UI. Please also validate the app manually when relevant:
 
 1. Launch the app successfully.
 2. Create or load a chat session.

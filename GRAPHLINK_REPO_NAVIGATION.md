@@ -4,654 +4,409 @@ Living navigation document for the Graphlink codebase.
 
 Primary goal: give future work a reliable, current map of where behavior actually lives so we do not need to re-discover the repo from scratch every session.
 
-Last refreshed: 2026-07-08
+Last refreshed: 2026-07-27 (post R7.6b Qt-removal cutover)
 
 ## Repo Snapshot
 
 - Product name in the UI: `Graphlink`
 - Repo / module naming in code: `Graphlink`
-- Code root: `graphlink_app/`
-- Startup project: `graphlink_app/graphlink_app.pyproj`
-- Solution file: `graphlink_app.sln`
-- Python files under `graphlink_app/` excluding `__pycache__`: `114` (`42` top-level, `72` inside package/test directories)
-- Top-level Python modules directly in `graphlink_app/` (not in any subdirectory): `42`
-- Real package directories with `__init__.py`: `6`
-  - `graphlink_canvas/` (`8` Python files)
-  - `graphlink_nodes/` (`11` Python files)
-  - `graphlink_plugins/` (`13` Python files, including the `common/` and `gitlink/` sub-packages)
-  - `graphlink_session/` (`9` Python files)
-  - `graphlink_ui_dialogs/` (`4` Python files)
-  - `graphlink_widgets/` (`10` Python files)
-- `tests/` (not a package - no `__init__.py`): `17` Python files
-- Runtime modes exposed in the shell:
-  - `Ollama (Local)`
-  - `Llama.cpp (Local)`
-  - `API Endpoint`
+- **The Qt/PySide6 desktop app (`graphlink_app/`) is gone.** It was deleted in full at the R7.6b cutover, along with 3 Qt-coupled plugin files (`graphlink_plugin_context_menu.py`, `graphlink_plugin_portal.py`, `web_research/worker.py`). Zero files in the repo import PySide6/PyQt today - `qt_burndown.json` is pinned at `0/0/0`, enforced permanently by `tests/test_no_qt_anywhere.py`. (Stray `graphlink_app/__pycache__`/`.pytest_cache`/`.egg-info` directories may still exist on a given disk as untracked build litter - `git ls-files graphlink_app/` returns nothing; there is no real source there anymore.)
+- Real top-level layout:
+  - `backend/` - real Python package (`__init__.py` present). ALL application/domain logic: the FastAPI app, the WebSocket event bus, and every node/canvas/agent/settings/persistence model. `backend/tests/` holds its pytest suite (25 files).
+  - `web_ui/` - a Vite + React + TypeScript SPA. The real app lives at `web_ui/src/app/`; shared infra lives at `web_ui/src/lib/`.
+  - `contracts/` - repo-root, NEW at R7.6b, build-time-only codegen package (not a runtime dependency of the app). Generates the TS types + JSON Schemas the SPA imports from the Python payload dataclasses. `contracts/tests/` holds its own pytest suite.
+  - `graphlink_plugins/` - real Python package, unchanged location from before the cutover. Qt-free plugin domain logic only.
+  - 18 loose top-level `.py` modules at the repo root (see list below) - unchanged content, just living at the repo root now instead of inside `graphlink_app/`.
+  - `tests/` - not a package (no `__init__.py`). Currently one file, `test_no_qt_anywhere.py`, the permanent Qt-removal gate.
+  - `doc/` - **gitignored** (`.gitignore` has `/doc/`), local-only planning scratch. It is never pushed to the remote and is not part of what a clone or contributor sees. Treat it as a historical record of past planning, not shipped documentation - do not "fix" its content as if it were user-facing.
+- 18 loose top-level `.py` modules (unchanged content, relocated over R7.2 and earlier increments): `api_provider.py`, `graphlink_artifact_agent.py`, `graphlink_audio.py`, `graphlink_chart_agent.py`, `graphlink_chart_data.py`, `graphlink_chart_rendering.py`, `graphlink_chat_agent.py`, `graphlink_desktop.py`, `graphlink_grid_view_settings.py`, `graphlink_licensing.py`, `graphlink_memory.py`, `graphlink_model_catalog.py`, `graphlink_navigation_pins.py`, `graphlink_prompts.py`, `graphlink_secrets.py`, `graphlink_task_config.py`, `graphlink_token_estimator.py`, `graphlink_version.py`.
+- Real entry point: `graphlink_desktop.py` (repo root). `pyproject.toml`'s `[project.gui-scripts]` reads `graphlink = "graphlink_desktop:main"`.
+- Runtime modes exposed in Settings: `Ollama (Local)`, `Llama.cpp (Local)`, `API Endpoint` (OpenAI-Compatible / Anthropic Claude / Google Gemini). The AppBar's own provider-mode `<select>` is still hardcoded-disabled to one option (`Ollama (Local)`) with `title="Switching provider modes isn't available yet"` - see the Architecture Truths section.
 - Runtime persistence outside the repo:
-  - chats database: `~/.graphlink/chats.db`
-  - settings/session state: `~/.graphlink/session.dat`
-- Hardcoded repo-local asset paths still exist in UI code:
-  - `C:\Users\Admin\source\repos\graphlink_app\assets\graphlink.ico`
-  - `C:\Users\Admin\source\repos\graphlink_app\assets\check.png`
-  - `C:\Users\Admin\source\repos\graphlink_app\assets\down_arrow.png`
+  - chats database: `~/.graphlink/chats.db` (same file format the deleted Qt app wrote - `backend/chat_library.py` reads/writes it for compatibility)
+  - settings/session state: `~/.graphlink/session.dat` (`backend/settings.py` owns one shared instance)
+  - crash sentinel: `~/.graphlink/running.lock` (JSON, `backend/crash_recovery.py`)
+  - rotating log: `~/.graphlink/graphlink.log` (2MB cap, `backend/crash_recovery.py`)
+- CI (`.github/workflows/ci.yml`): two jobs, both `windows-latest`. "Python tests (offscreen)" runs `pip install -r requirements.txt`, `python -m compileall -q .`, then `python -m pytest -q` from the repo root (961 tests, confirmed by direct collection: `backend/tests/`, `contracts/tests/`, `tests/`). "Frontend checks" runs `npm ci` then `npm run check` inside `web_ui/` (confirmed by direct run: 779 vitest tests across 41 files, all passing). `windows-latest` is now pinned **solely** for real Windows DPAPI tests (`backend/tests/test_backend_secrets_at_rest.py`) - there is no remaining Qt/offscreen-mode reason.
 
 ## Read This First
 
 If you need to rebuild the mental model quickly, open files in this order:
 
-1. `graphlink_app/graphlink_app.py`
-2. `graphlink_app/graphlink_window.py`
-3. `graphlink_app/graphlink_window_actions.py`
-4. `graphlink_app/api_provider.py`
-5. `graphlink_app/graphlink_settings_bridge.py` (settings island bridge; UI in `web_ui/src/islands/settings/`)
-6. `graphlink_app/graphlink_scene.py`
-7. `graphlink_app/graphlink_session/manager.py`
-8. `graphlink_app/graphlink_session/serializers.py`
-9. `graphlink_app/graphlink_session/deserializers.py`
-10. `graphlink_app/graphlink_session/scene_index.py`
-11. `graphlink_app/graphlink_plugins/graphlink_plugin_portal.py`
-12. `graphlink_app/graphlink_memory.py`
-13. `graphlink_app/graphlink_lod.py`
+1. `graphlink_desktop.py` - the whole launch story
+2. `backend/app.py` - FastAPI app factory, WS event bus wiring, WS origin validation
+3. `backend/canvas.py` - the node/graph/connection domain model (by far the largest file in the repo)
+4. `backend/agents.py` - LLM dispatch (`AgentDispatcher`)
+5. `backend/composer.py` - composer draft/reasoning state
+6. `backend/settings.py` - provider/model settings, DPAPI-backed secrets
+7. `backend/session_load.py` / `backend/session_save.py` - `~/.graphlink/chats.db` compatibility
+8. `backend/autosave.py` / `backend/crash_recovery.py` - background save + crash sentinel
+9. `web_ui/src/app/App.tsx` - the SPA shell: WS transport, topic subscriptions, overlay/shortcut wiring
+10. `web_ui/src/app/canvas/SceneCanvas.tsx` + `sceneStore.ts` - the React Flow graph surface
+11. `web_ui/src/app/chrome/Composer.tsx` - the composer UI
+12. `contracts/codegen.py` - the payload-to-TS/JSON-Schema codegen (`GENERATED_ARTIFACTS`, 11 entries)
 
-That path shows boot, shell ownership, provider/mode initialization, live settings UI, scene authority, persistence, schema indexing, plugin registration, branch-memory rules, and the shared zoom-based render fallback system.
+That path shows boot, backend domain ownership, agent dispatch, persistence, and the SPA's own transport/canvas/chrome wiring, plus the contract layer connecting the two sides.
 
 ## Architecture Truths That Matter
 
-### 1. This is still a flat-import app with package islands
+### 1. The migration is DONE - this is no longer a "mid-migration" codebase
 
-- Root modules still import each other by top-level names such as `from graphlink_window import ChatWindow`.
-- The split packages are real, but the running app is not yet a clean package-first namespaced design.
-- Compatibility wrappers still matter because much of the repo enters package code through those top-level modules.
+Every prior revision of this document described a flat-import Qt app with package islands, "still mid-migration toward split packages." That framing is now false. `graphlink_app/` and its 6 sub-packages (`graphlink_canvas/`, `graphlink_nodes/`, `graphlink_plugins/` (the old in-app one), `graphlink_session/`, `graphlink_ui_dialogs/`, `graphlink_widgets/`) are gone. There are no compatibility wrapper modules anywhere in the repo - the R7.6b cutover deleted the last of them along with `graphlink_app/` itself. The real architecture is now a clean two-process-in-one-process split: a Python FastAPI backend (`backend/` + the loose root modules + `graphlink_plugins/`) and a React SPA (`web_ui/src/app/`), talking over one WebSocket.
 
-### 2. The repo is still mid-migration toward split packages
+### 2. One process, one window, one origin
 
-- Concrete implementations increasingly live in `graphlink_nodes/`, `graphlink_canvas/`, `graphlink_plugins/`, `graphlink_session/`, `graphlink_ui_dialogs/`, and `graphlink_widgets/`.
-- Top-level wrappers still preserve import stability.
-- When both a wrapper and a concrete package module exist, edit the concrete package module unless you are intentionally changing the import surface.
+`graphlink_desktop.py` starts the FastAPI backend (via `uvicorn.Server(...).run()`) on a free localhost port inside a background daemon thread of the SAME process, waits for `GET /api/health` to return 200, then opens exactly one native OS webview window via `pywebview` (WebView2 on Windows) pointed at that backend's own URL. This is not a browser tab and not Qt - there is no separate frontend process, no separate dev server, and no separate window-manager layer. The backend serves the built SPA's static files (`web_ui/dist/app/`), the REST API, and the WebSocket, all from that single origin. If `web_ui/dist/app/index.html` doesn't exist, `graphlink_desktop.py` logs an error telling you to run `cd web_ui && npm run build` and exits with code 1 - it does NOT auto-build.
 
-### 3. Runtime mode handling is now a first-class architecture seam
+### 3. The event bus is the entire client/server contract
 
-- `graphlink_config.py` defines task keys and user-facing mode labels.
-- `graphlink_licensing.py` persists per-mode settings, scan caches, update-check state, and current mode.
-- `graphlink_settings_bridge.py` + `graphlink_settings_web.py` (React UI in `web_ui/src/islands/settings/`) are the live configuration surface for Ollama, Llama.cpp, API providers, integrations, and update controls. The legacy Qt `SettingsDialog` stack was deleted (Phase 3 increment 10; recoverable at the `legacy-settings-final` git tag).
-- `graphlink_window.py` owns startup mode initialization and toolbar mode switching.
-- `api_provider.py` is the real execution authority for:
-  - Ollama local runtime
-  - direct `llama-cpp-python` GGUF runtime
-  - OpenAI-compatible endpoints
-  - Anthropic Claude endpoints
-  - Gemini endpoints
+`backend/app.py`'s `create_app()` wires one `/ws?session=<id>` WebSocket endpoint carrying two message shapes: `{"kind": "subscribe", "topics": [...]}` (server replies with full-state `"state"` snapshots per topic) and `{"kind": "intent", "topic": ..., "intent": ..., "args": [...]}` (server replies with `"result"` or `"error"`). Real topics registered today (see `backend/app.py::_configure_session`, in registration order): `system`, `notification`, `token-counter`, `app-composer`, `scene`, `grid-control`, `drag-speed`, `font-control`, `app-about`, `app-plugins`, `app-settings`, `app-chat-library`. The SPA's `web_ui/src/lib/ws/transport.ts` (`WsTransport`) is the one client-side implementation of this protocol; `web_ui/src/app/App.tsx` subscribes to `system`/`app-settings` directly and hands the transport to per-domain stores (`SceneStore`, `ComposerStore`) that subscribe to their own topics and dispatch intents back. `web_ui/src/lib/bridge-core/generated/*` holds the codegen'd TS types + JSON Schemas used to validate every incoming snapshot before it's trusted (`TOPIC_VALIDATORS` in `web_ui/src/lib/api-contract/topics.ts`).
 
-### 4. `Llama.cpp (Local)` is direct GGUF execution, not Ollama reuse
+### 4. The WS origin check is a real, load-bearing security control, not boilerplate
 
-- The app scans for `.gguf` files directly.
-- Settings persist:
-  - chat model path
-  - optional title model path
-  - chat format override
-  - `n_ctx`
-  - `n_gpu_layers`
-  - `n_threads`
-- Ollama manifests/blobs are not valid `Llama.cpp` model files in this mode.
-- Graphlink intentionally defers GGUF loading until the first request instead of blocking mode switching or Save Settings.
+`backend/app.py::_is_allowed_ws_origin` defends against cross-site WebSocket hijacking (a malicious page in the user's regular browser opening a raw socket to `ws://127.0.0.1:<port>/ws` - browsers don't apply same-origin policy to WebSocket connects). It requires exact-string match against `http://127.0.0.1:<port>` (never substring/startswith), with one opt-in escape hatch: the `GRAPHLINK_DEV_WS_ORIGIN` env var, which lets a manually-run backend accept connections from a separately-run `npm run dev` Vite server. `graphlink_desktop.py` never sets this var, so the escape hatch is dead in the shipped app by construction.
 
-### 5. Attachments are now multimodal, and document nodes also carry audio
+### 5. Runtime mode handling is real for configuration, deferred for in-toolbar switching
 
-- `graphlink_window.py` stages image, document, and audio attachments.
-- `graphlink_window_actions.py` turns:
-  - image attachments into `ImageNode`
-  - document attachments into `DocumentNode`
-  - audio attachments into `DocumentNode` with `attachment_kind='audio'`
-- `graphlink_audio.py` validates audio files, MIME types, duration limits, and preview labels.
-- `graphlink_nodes/graphlink_node_document.py` is now the live UI for both document and audio attachment nodes.
-- Graphlink-level limitation:
-  - `Llama.cpp` local mode is text-only inside the app right now
-  - Ollama and Gemini support both audio and image attachments
-  - Anthropic Claude supports image attachments but explicitly rejects audio attachments (`_anthropic_content_block_from_part` raises, telling the user to switch to Gemini or Ollama)
+`web_ui/src/app/chrome/AppBar.tsx` has a `<select disabled title="Switching provider modes isn't available yet">` with exactly one hardcoded option (`Ollama (Local)`) and a no-op `onChange`. This is confirmed current, not stale documentation. However, configuring each provider's credentials/models IS fully real and reachable: `web_ui/src/app/chrome/SettingsDialog.tsx` has genuine tabs `General`, `Ollama (Local)`, `Llama.cpp (Local)`, `API Endpoint`, `Integrations` (one file, no per-provider split), each wired to real `backend/settings.py` intents (e.g. `setLlamaCppChatModelPath`, `scanLlamaCppSystem`, `pickOllamaScanFolder`, `saveApiConfiguration`). So: you can fully configure Ollama, Llama.cpp, and API-Endpoint (OpenAI-Compatible / Anthropic Claude / Google Gemini) providers today, but switching which one is *active* from the toolbar is not wired yet.
 
-### 6. `ChatScene`, `ChatSessionManager`, and `graphlink_session/scene_index.py` now form the schema triangle
+### 6. Connections are one unified edge model now, not 13 parallel lists
 
-- `graphlink_scene.py` still owns the live runtime lists and creation/deletion behavior.
-- `graphlink_session/serializers.py` and `graphlink_session/deserializers.py` still decide save/load compatibility.
-- `graphlink_session/scene_index.py` now centralizes:
-  - node list names
-  - save-guard node list names
-  - child-link-capable node types
-  - serializer/deserializer item indexing helpers
-- If you add a new persisted node family, update all three places:
-  - `graphlink_scene.py`
-  - `graphlink_session/scene_index.py`
-  - session serializer/deserializer code
+The old Qt app kept a separate `ConnectionItem`-family list per relationship kind (`content_connections`, `document_connections`, `pycoder_connections`, `gitlink_connections`, ... 13 in total) plus a distinct `children` object-tree relationship. `backend/canvas.py`'s `SceneDocument` collapses all of that into one `nodes: dict[str, SceneNode]` + `edges: dict[str, SceneEdge]` model - an edge is just an edge, created via `SceneDocument.connect(source, target)`. The old distinctions (structural parent vs. child-list vs. connection-line) only resurface at the save/load boundary: `backend/session_save.py`'s `_classify_edges` reconstructs the legacy four-bucket split purely to write a byte-compatible `chats.db` row: it is a save-time projection, not a live in-memory structure.
 
-### 7. A shared LoD/proxy render layer now matters across many node families
+### 7. Every plugin picker entry is now a real, working node-creation path
 
-- `graphlink_lod.py` owns zoom thresholds, summary/glyph fallback rendering, preview text helpers, and proxy visibility rules.
-- Many node UIs now rely on it for readable zoomed-out behavior instead of each node hand-rolling its own fallback.
-- If a node looks wrong when zoomed out, `graphlink_lod.py` is usually as important as the node class itself.
+As of R7.5a, all 8 items in the plugin picker create real nodes - there is no more "still deferred" plugin. `System Prompt` creates a `note` node with `is_system_prompt=True` attached above the selected node's branch root (not a distinct node kind); the other 7 each create their own real node kind as a branch-point child of the selected node. See `backend/plugins.py::execute_plugin` for the exact per-plugin logic and required-parent validation.
 
-### 8. Shared visuals are a little more centralized than before
+### 8. "Reimplement, don't import" is the standing precedent for anything touching legacy shapes
 
-- `graphlink_widgets/loading_visuals.py` now owns the shared orbital spinner painting used by both the splash and loading overlays.
-- `graphlink_update.py` plus `graphlink_version.py` own the update-check signal and local version metadata.
+Several `backend/` modules (`composer.py`, `chat_library.py`, `plugins.py`, `session_load.py`, `session_save.py`, `crash_recovery.py`) explicitly reimplement an algorithm that used to live in the deleted `graphlink_app/` tree, rather than importing anything from it (there is nothing left to import from - it's gone). Their module docstrings document exactly which legacy file/algorithm they ported and why a straight import was never viable (Qt-coupling in the source, or the source no longer existing). This precedent still matters if you ever need to cross-check a persistence field name or algorithm detail: the ground truth is the CURRENT backend module's own docstring and the git history of the deleted file, not assumption.
 
-### 9. There are still easy-to-misread legacy seams
+### 9. Windows is still a real, load-bearing target - not legacy inertia
 
-- `graphlink_dialogs.py` duplicates canvas dialog classes but does not appear to be the live authority.
-- `graphlink_widgets/pins.py` defines overlay-side `NavigationPin`; `graphlink_canvas/graphlink_canvas_navigation_pin.py` defines the persisted scene item with the same name.
-- `graphlink_widgets/*.py` still use UTF-8 BOM in places; direct parsing tools should be BOM-aware.
+`graphlink_secrets.py` (repo root, unchanged location) wraps Windows DPAPI (`CryptProtectData`/`CryptUnprotectData` via ctypes) to encrypt secrets at rest in `~/.graphlink/session.dat`, storing them as `"dpapi:" + base64(blob)`. It falls back to plaintext on non-Windows platforms or if DPAPI errors, and legacy unprefixed plaintext values remain readable regardless of platform. This is the sole reason CI still pins `windows-latest` for both jobs.
+
+### 10. Attachments/ingest exist in the data model but are not reachable from the UI today
+
+`backend/canvas.py` has a full `DocumentNode` model (pdf/docx/audio metadata) and a wired `addDocumentNode` WS intent, but `web_ui/src/app/canvas/sceneStore.ts`'s `addDocumentNode()` is only ever called from its own test file - no real UI component invokes it. `backend/composer.py`'s payload also hardcodes `"attachments": False` in its capabilities. `pypdf`, `python-docx`, and `reportlab` are present in `requirements.in`/`pyproject.toml` but are not imported anywhere in the current codebase - they read as unused/legacy-holdover dependencies right now, not evidence of a working ingest path.
 
 ## Runtime Ownership Map
 
 ### Boot and application shell
 
-- `graphlink_app/graphlink_app.py`
-  - `main()`
-  - Creates `QApplication`, loads persisted settings, applies theme/model, and creates `ChatWindow` and `SplashScreen`.
-- `graphlink_app/graphlink_window.py`
-  - `ChatWindow`
-  - Main shell, toolbar, document viewer panel, pin overlay, mode switching, update checks, plugin picker, attachment staging, shortcuts, and session lifecycle.
-- `graphlink_app/graphlink_window_actions.py`
-  - `WindowActionsMixin`
-  - Core prompt send flow, attachment packing, response parsing, regeneration, charts, images, and all plugin execution entry points.
-- `graphlink_app/graphlink_window_navigation.py`
-  - `WindowNavigationMixin`
-  - Command registration, collapse/expand/delete/focus commands, note creation, directional navigation, command palette.
-- `graphlink_app/graphlink_command_palette.py`
-  - `CommandManager`, `CommandPaletteDialog`
-  - Searchable command palette.
-- `graphlink_app/graphlink_update.py`
-  - `UpdateCheckWorker`, version comparison helpers, update-signal fetch.
-- `graphlink_app/graphlink_version.py`
-  - `APP_VERSION`
+- `graphlink_desktop.py`
+  - `main()`, `_start_backend()`, `_free_port()`, `_wait_for_health()`
+  - Starts the FastAPI backend in a daemon thread, waits for `/api/health`, opens the one `pywebview` window. Owns the crash-sentinel calls (`mark_running`/`mark_clean_exit`/`previous_run_crashed`) and logging setup (`configure_logging`/`install_exception_handlers`), all from `backend/crash_recovery.py`.
+  - Real env vars (confirmed by grep, only these 3 exist): `GRAPHLINK_BACKEND_PORT` (pin the port), `GRAPHLINK_DEBUG_WEBVIEW` (enable webview devtools), `GRAPHLINK_DEV_WS_ORIGIN` (opt-in trusted WS origin for a separately-run dev-server workflow).
+- `backend/app.py`
+  - `create_app()` - the FastAPI app factory: mounts `/api/health`, the `/ws` endpoint, `backend/assets.py`'s asset-serving route, and (when `web_ui/dist/app/` exists) the built SPA as static files with a client-side-routing fallback.
+  - `_configure_session()` - registers every topic/intent onto a fresh per-connection `SessionBus`, in a deliberately load-bearing order (notifications before composer before agents before canvas before plugins/settings/chat-library - see the function's own comments for exactly why each ordering matters).
+  - `_is_allowed_ws_origin()` - the WS handshake origin allowlist (see Architecture Truths #4).
+- `backend/events.py`
+  - `EventBus`, `SessionBus` - the pub/sub primitive: `register_topic`, `register_intent`, `publish`, `dispatch_intent`, per-session WebSocket attach/detach and disconnect-triggered cleanup.
 
 ### Canvas, graph surface, and layout
 
-- `graphlink_app/graphlink_view.py`
-  - `ChatView`
-  - `QGraphicsView` wrapper, panning/zooming, drag-and-drop attachments, overlay widgets, minimap mounting, background grid, keyboard pan.
-- `graphlink_app/graphlink_scene.py`
-  - `ChatScene`
-  - Node registries, connection registries, node creation helpers, search, frame/container/note/chart creation, delete logic, branch visibility, font propagation.
-- `graphlink_app/graphlink_connections.py`
-  - Core connection families and shared pin/path behavior.
-- `graphlink_app/graphlink_minimap.py`
-  - `MinimapWidget`
-  - Graph overview and jump navigation.
-- `graphlink_app/graphlink_lod.py`
-  - Shared level-of-detail thresholds, preview text helpers, zoom-aware proxy visibility, and fallback card painting.
+- `backend/canvas.py` (the largest file in the repo, ~4,150 lines)
+  - `SceneNode`, `SceneEdge`, `SceneDocument`, `register_canvas()`
+  - Owns every node kind's creation/deletion/reparenting, the unified edge model, frame/container/note/chart creation, branch-root resolution, collapse/expand, view-state (drag speed, grid, fade connections, orthogonal routing, smart guides), navigation pins, and the `sendMessage`/`regenerateResponse`/`generateImage` entry points that hand off into `backend/agents.py`.
+- `web_ui/src/app/canvas/SceneCanvas.tsx` + `sceneStore.ts`
+  - The React Flow graph surface: node/edge rendering, drag/connect/select, view-state sync, LOD-ish rendering handled per-node-component rather than a shared proxy layer.
+- `web_ui/src/app/canvas/smartGuides.ts`, `treeNavigation.ts`, `exportCanvasPng.ts`, `downloadTextFile.ts`
+  - Pure-function geometry/navigation helpers plus client-side export (PNG whole-canvas export, per-node Chat `.md` / Code-with-guessed-extension export). There is no server-side export format.
+- `web_ui/src/app/canvas/*NodeView.tsx` (one file per node kind, see the Taxonomy section below)
 
 ### Persistence, context, and attachments
 
-- `graphlink_app/graphlink_session/`
-  - Concrete persistence package.
-  - Key files: `content_codec.py`, `database.py`, `deserializers.py`, `manager.py`, `scene_index.py`, `serializers.py`, `title_generator.py`, `workers.py`
-- `graphlink_app/graphlink_core.py`
-  - Compatibility facade for session persistence.
-- `graphlink_app/graphlink_memory.py`
-  - Branch-memory utilities; do not hand-roll history mutation when these helpers already exist.
-- `graphlink_app/graphlink_file_handler.py`
-  - Attachment readability checks and text extraction for plain text, code, PDF, and DOCX.
-- `graphlink_app/graphlink_audio.py`
-  - Audio validation, duration probing, MIME inference, and duration formatting.
-- `graphlink_app/graphlink_exporter.py`
-  - Export helpers used by node context menus.
+- `backend/session_load.py` / `backend/session_save.py`
+  - Load/save against the SAME `~/.graphlink/chats.db` the deleted Qt app wrote. `session_load.py` restores nodes in a single forward pass (parent must already be resolved or the node is skipped, matching the legacy algorithm exactly); `session_save.py`'s `_classify_edges` is the save-time mirror, reconstructing the legacy four-bucket relationship split from the unified `edges` dict.
+- `backend/chat_library.py`
+  - `register_chat_library()` - the `app-chat-library` topic and its list/rename/delete/load/new-chat intents, reading/writing the same `chats.db` rows `session_load.py`/`session_save.py` operate on.
+- `backend/autosave.py`
+  - A net-new (no legacy equivalent existed) background asyncio task per session, ticking every 30s, change-guarded by a content+chat-id hash so an idle session doesn't rewrite its own unchanged row forever. Silent on success, notifies on failure.
+- `backend/crash_recovery.py`
+  - `~/.graphlink/running.lock` sentinel (write on launch, remove on clean exit), `~/.graphlink/graphlink.log` rotating file log (2MB x3 backups), `sys.excepthook`/`threading.excepthook`/`faulthandler` installation, and `maybe_show_crash_notice()` (an in-app notification shown once if the previous run's sentinel was still present at this launch).
+- `graphlink_secrets.py` (repo root)
+  - Windows DPAPI-backed secret encryption for `~/.graphlink/session.dat` (see Architecture Truths #9).
 
-### Providers, prompts, settings, updates, and themes
+### Providers, prompts, settings, and agents
 
-- `graphlink_app/api_provider.py`
-  - Provider/runtime abstraction for Ollama, direct Llama.cpp, OpenAI-compatible APIs, Anthropic Claude, and Gemini.
-  - Also owns local model scanning:
-    - Ollama manifest scanning
-    - GGUF scanning for `Llama.cpp`
-  - Also owns modality handling rules and local runtime initialization.
-- `graphlink_app/graphlink_prompts.py`
-  - Global prompt text and token-safe JSON encoding helpers.
-- `graphlink_app/graphlink_config.py`
-  - Task keys, mode labels, local provider constants, theme palette getters, semantic colors, current model assignment.
-- `graphlink_app/graphlink_licensing.py`
-  - `SettingsManager`
-  - Persisted user settings:
-    - theme
-    - token counter
-    - model settings
-    - system prompt toggle
-    - current runtime mode
-    - Ollama model settings and scan cache
-    - Llama.cpp GGUF settings and scan cache
-    - API endpoint/provider settings
-    - GitHub token
-    - update-check state
-- `graphlink_app/graphlink_styles.py`
-  - QSS themes and shared palette definitions.
+- `api_provider.py` (repo root)
+  - Provider/runtime abstraction for Ollama, direct Llama.cpp (GGUF), OpenAI-compatible endpoints, Anthropic Claude, and Gemini. Local model scanning (Ollama manifests, GGUF files), modality handling, `chat()`, `generate_image()`.
+- `backend/settings.py`
+  - `SettingsManager`-backed `register_settings()`: the `app-settings` topic and every settings intent (General, Ollama, Llama.cpp, API Endpoint, Integrations, GitHub token). Reads defaults from `graphlink_task_config.py`'s task-keyed model dict.
+- `backend/agents.py` (largest single-purpose file after `canvas.py`, ~136KB)
+  - `AgentDispatcher` (one instance per session, never a module-level singleton) - owns in-flight request tracking/cancellation for chat/conversation requests (`self._requests`) and image generation (a separate slot), `bootstrap_provider_state()` (process-global `api_provider` state, set up once per process from the shared `SettingsManager`), and `register_agents()`.
+- `backend/response_parsing.py`
+  - `parse_response()` - splits a flat LLM reply into ordered thinking/text/code parts, shared by the ordinary send path and the regenerate path (both in `backend/canvas.py`). `ConversationNode` is the one confirmed exception - it never routes through this parser.
+- `graphlink_task_config.py`, `graphlink_licensing.py`, `graphlink_prompts.py`, `graphlink_model_catalog.py` (repo root)
+  - Task keys/mode labels, persisted `SettingsManager` state, global prompt text, and the model-catalog helpers `api_provider.py`/`backend/settings.py` consume.
 
-### Shared UI and dialogs
+### Shared chrome, dialogs, and overlays
 
-- `graphlink_app/graphlink_ui_components.py`
-  - `NotificationBanner`, `DocumentViewerPanel`
-- `graphlink_app/graphlink_welcome_screen.py` was removed.
-  - Startup now opens `ChatWindow` directly after `SplashScreen`; starter templates and recent chat launch paths are no longer part of startup.
-- `graphlink_app/graphlink_ui_dialogs/graphlink_library_dialog.py`
-  - `ChatLibraryDialog`
-- Settings surface (the legacy `graphlink_ui_dialogs/graphlink_settings_dialogs.py` Qt stack was deleted in Phase 3 increment 10):
-  - `graphlink_app/graphlink_settings_bridge.py` - all settings intents/state (QWebChannel bridge)
-  - `graphlink_app/graphlink_settings_payload.py` - the wire contract
-  - `graphlink_app/graphlink_settings_web.py` - `SettingsWebHost` (Qt.Tool window shell, close-guard, anchoring)
-  - `graphlink_app/graphlink_settings_workers.py` - scan/catalog QThread workers
-  - `web_ui/src/islands/settings/` - the React UI for all five pages
-- `graphlink_app/graphlink_ui_dialogs/graphlink_system_dialogs.py`
-  - `HelpDialog`, `AboutDialog`
-- `graphlink_app/graphlink_widgets/loading_visuals.py`
-  - Shared spinner painter for splash and overlay loading states.
-
-### Agents and background workers
-
-- `graphlink_app/graphlink_agents.py`
-  - Broad facade used by shell and settings code.
-- `graphlink_app/graphlink_agents_core.py`
-  - Standard chat, explainer, takeaway, and group-summary agents plus worker threads.
-- `graphlink_app/graphlink_agents_tools.py`
-  - Chart data extraction/repair, image generation, model pull workers.
-- `graphlink_app/graphlink_agents_pycoder.py`
-  - Python REPL, execution/repair/analysis agents, Py-Coder workers.
-- `graphlink_app/graphlink_agents_code_sandbox.py`
-  - Virtualenv sandbox, generation/repair agents, isolated execution worker.
-- `graphlink_app/graphlink_agents_web.py`
-  - Search/fetch/validate/summarize worker for the web node.
+- `web_ui/src/app/overlays/overlays.tsx`
+  - `OverlayProvider`/`useOverlays()` - the single-open, Escape-closes, outside-click-dismisses, focus-trapped overlay coordinator every dialog/popover in `chrome/` mounts through. This file is infrastructure only - it does not itself render any dialog.
+- `web_ui/src/app/chrome/*.tsx`
+  - `AppBar.tsx`, `Composer.tsx`, `ViewPopover.tsx`, `CommandPalette.tsx`, `SearchOverlay.tsx`, `PinOverlay.tsx`, `PluginPicker.tsx`, `SettingsDialog.tsx`, `ChatLibraryDialog.tsx`, `AboutDialog.tsx`, `HelpDialog.tsx`, `NotificationBanner.tsx`, `TokenCounter.tsx` - every piece of app chrome, including Settings, lives here (not under `overlays/`, which is only the coordinator).
+- `backend/about.py`, `backend/plugins.py` (listing only), `backend/notifications.py`, `backend/token_counter.py`, `backend/composer.py`
+  - Their respective topics' backend state and intents.
 
 ## Concrete Node and Connection Taxonomy
 
-### Persisted node types in the session payload
+### Real node kinds today (verified directly against `backend/canvas.py`'s `kind=` literals, 16 total)
 
-- `chat`
-- `code`
-- `document`
-- `image`
-- `thinking`
-- `pycoder`
-- `code_sandbox`
-- `web`
-- `conversation`
-- `html`
-- `artifact`
-- `gitlink`
+| `kind` string | User-facing name (plugin picker, where applicable) | React component |
+|---|---|---|
+| `chat` | Chat | `ChatNodeView.tsx` |
+| `code` | Code | `CodeNodeView.tsx` |
+| `document` | Document/attachment | `DocumentNodeView.tsx` |
+| `thinking` | Thinking | `ThinkingNodeView.tsx` |
+| `html` | HTML Renderer | `HtmlNodeView.tsx` |
+| `image` | Image | `ImageNodeView.tsx` |
+| `conversation` | Conversation Node | `ConversationNodeView.tsx` |
+| `web_research` | Web Research | `WebResearchNodeView.tsx` |
+| `artifact` | Artifact / Drafter | `ArtifactNodeView.tsx` |
+| `gitlink` | Gitlink | `GitlinkNodeView.tsx` |
+| `pycoder` | Py-Coder | `PyCoderNodeView.tsx` |
+| `code_sandbox` | Execution Sandbox | `CodeSandboxNodeView.tsx` |
+| `note` | (System Prompt picker entry creates one) | `NoteNodeView.tsx` |
+| `frame` | (Create Frame command) | `GroupNodeView.tsx` (shared with `container`, distinguished by `data.groupKind`) |
+| `container` | (Create Container command) | `GroupNodeView.tsx` |
+| `chart` | Chart | `ChartNodeView.tsx` |
 
-`reasoning`, `workflow`, `graph_diff`, `quality_gate`, and `code_review` node types no
-longer exist - their plugins were removed. The deserializer still initializes `node =
-None` and only matches known types, so an old saved session containing one of these is
-skipped gracefully rather than crashing.
+"System Prompt" is a plugin-picker entry, not a distinct node kind - it creates a `note` node with `is_system_prompt=True`. There is no separate `reasoning`/`workflow`/`graph_diff`/`quality_gate`/`code_review` node kind - those plugin categories were removed before the Qt-removal effort even began and were never ported.
 
-### Important current node-shape detail
+### Connections: one unified model, not 13 parallel lists
 
-- `document` nodes now carry both normal file attachments and audio attachments.
-- Audio-backed `document` nodes persist extra fields such as:
-  - `attachment_kind`
-  - `file_path`
-  - `mime_type`
-  - `duration_seconds`
-  - `byte_size`
-  - `preview_label`
+`SceneDocument.edges: dict[str, SceneEdge]` is the entire connection model at runtime - see Architecture Truths #6. The legacy split (structural parent index / child list / 13 named `*_connections` lists) only exists as a save-time classification inside `backend/session_save.py::_classify_edges`, to keep `chats.db` byte-compatible with what the deleted Qt app could read.
 
 ### Other persisted scene objects
 
-- frames
-- containers
-- notes
-- charts
-- navigation pins
-
-### Connection families present in `ChatScene` and session save/load
-
-- `connections`
-- `content_connections`
-- `document_connections`
-- `image_connections`
-- `thinking_connections`
-- `system_prompt_connections`
-- `pycoder_connections`
-- `code_sandbox_connections`
-- `web_connections`
-- `conversation_connections`
-- `group_summary_connections`
-- `html_connections`
-- `artifact_connections`
-- `gitlink_connections`
+- notes, frames, containers, charts, navigation pins - all live as `SceneNode`/dedicated-model entries in `backend/canvas.py`, same as every node kind above.
 
 ## Core Runtime Flows
 
 ### 1. Application boot
 
-1. `graphlink_app/graphlink_app.py:main()`
-2. `graphlink_licensing.SettingsManager()`
-3. `graphlink_config.apply_theme()`
-4. `graphlink_config.set_current_model()`
-5. `graphlink_window.ChatWindow`
-6. `ChatWindow._initialize_saved_mode_on_startup()`
-7. Mode-specific initialization goes through `api_provider.initialize_local_provider()` or `api_provider.initialize_api()`
-8. `graphlink_widgets.SplashScreen`
+1. `graphlink_desktop.py:main()` - configure logging/exception handlers, check the crash sentinel, mark running.
+2. Verify `web_ui/dist/app/index.html` exists (exit 1 with a build instruction if not).
+3. Pick a port (`GRAPHLINK_BACKEND_PORT` env var or an OS-assigned free port), start `backend.app.create_app()` under `uvicorn` in a daemon thread.
+4. Poll `GET /api/health` until it returns 200 (`STARTUP_TIMEOUT_SECONDS = 15.0`).
+5. Open one `pywebview` window pointed at the backend's own origin; `webview.start()` blocks until the window closes.
+6. On clean close, `mark_clean_exit()` removes the crash sentinel.
 
-### 2. Runtime mode initialization
+### 2. Provider-mode handling
 
-1. `graphlink_window.ChatWindow._initialize_mode()`
-2. If `Ollama (Local)`:
-   - `api_provider.initialize_local_provider(config.LOCAL_PROVIDER_OLLAMA)`
-3. If `Llama.cpp (Local)`:
-   - settings come from `SettingsManager.get_llama_cpp_settings()`
-   - `api_provider.initialize_local_provider(config.LOCAL_PROVIDER_LLAMACPP, ..., preload_model=False)`
-4. If `API Endpoint`:
-   - provider/model settings come from `SettingsManager`
-   - `api_provider.initialize_api(...)`
-5. The settings island mirrors these same seams in `graphlink_settings_bridge.py` (`saveApiConfiguration` / `saveLlamaCppSettings` / the Ollama intents)
+- Active provider state (`api_provider`'s module-level state) is bootstrapped ONCE per process from the shared `SettingsManager`, via `backend/agents.py::bootstrap_provider_state()`, called once from `create_app()`.
+- Configuring each provider's models/credentials happens through `backend/settings.py`'s intents, driven by `SettingsDialog.tsx`'s real Ollama/Llama.cpp/API Endpoint/Integrations tabs.
+- Switching which provider is *active* from the toolbar is NOT wired - `AppBar.tsx`'s provider `<select>` is hardcoded-disabled (see Architecture Truths #5).
 
-### 3. Normal prompt send / attachment flow
+### 3. Prompt send / response flow
 
-1. `WindowActionsMixin.send_message()`
-2. `graphlink_memory.resolve_branch_parent()` and `get_node_history()`
-3. `ChatScene.add_chat_node()` creates the user node
-4. Pending attachments are expanded:
-   - images become `ImageNode`
-   - documents become `DocumentNode`
-   - audio becomes `DocumentNode` with audio metadata
-5. `trim_history()` bounds the context window
-6. `ChatWorkerThread` runs the agent request
-7. `api_provider.chat()` executes the chosen runtime path
-8. `WindowActionsMixin.handle_response()` parses plain text, code blocks, and thinking blocks
-9. `ChatScene.add_chat_node()`, `add_code_node()`, and `add_thinking_node()` create result structure
-10. `ChatWindow.save_chat()` persists the updated graph
+1. User types in `Composer.tsx`; draft state lives in `ComposerStore`/`backend/composer.py`.
+2. Send dispatches the `scene` topic's `sendMessage` intent (`backend/canvas.py::send_message`, wired via `register_canvas`).
+3. `send_message` creates the real user `chat` `SceneNode`, resolves branch history/system prompt, and hands off to `backend/agents.py`'s `AgentDispatcher`.
+4. `AgentDispatcher` calls `api_provider.chat(...)` against whichever provider is currently active, streaming tokens back over the same session's WebSocket as incremental `scene` topic publishes.
+5. `backend/response_parsing.py::parse_response()` splits the completed reply into text/thinking/code parts; `send_message` creates the corresponding child nodes (chat/thinking/code) from those parts.
+6. The SPA's `sceneStore.ts` receives each `scene` snapshot and re-renders the React Flow graph; `regenerateResponse`/`generateImage`/`regenerateImage` intents follow the same dispatch-and-stream shape for their respective actions.
+7. A client that disconnects while a request is in flight has that request cancelled server-side once its session's last WebSocket connection drops (`backend/app.py`'s `ws_endpoint` finally-block calls `agent_dispatcher.cancel_all()` and `cancel_all_pending_approvals()`).
 
 ### 4. Save / load flow
 
-1. `ChatWindow.save_chat()`
-2. `ChatSessionManager.save_current_chat()`
-3. `SceneSerializer.serialize_chat_data()`
-4. `graphlink_session.scene_index` supplies node list and indexing helpers
-5. `ChatDatabase.save_chat()` or `update_chat()`
-6. Notes and pins are stored in dedicated SQLite tables
-7. `SceneDeserializer.restore_chat()` recreates nodes first, then notes/charts/frames/containers, then connections, then pins
+1. Explicit save: the `app-chat-library` topic's `saveChat` intent (`backend/chat_library.py`) calls into `backend/session_save.py`'s `build_chat_data`/`save_chat_atomically_row` primitives, writing a legacy-compatible row into `~/.graphlink/chats.db`.
+2. Autosave: `backend/autosave.py` reuses those SAME save primitives on a 30s per-session timer, change-guarded against redundant writes.
+3. Load: the `app-chat-library` topic's `loadChat` intent restores a `chats.db` row into a fresh `SceneDocument` via `backend/session_load.py`'s single-forward-pass restoration algorithm.
 
-### 5. Plugin lifecycle
+### 5. Crash recovery flow
 
-1. `PluginPortal` registers plugin metadata and categories
-2. The plugin picker surfaces that catalog
-3. `_create_*_node()` methods add plugin nodes and specialized connections to `ChatScene`
-4. `WindowActionsMixin.execute_*_node()` starts the relevant worker thread
-5. Worker thread updates the node UI
-6. `ChatSessionManager` serializes the node and its specialized connections
-7. Delete logic in `ChatScene` and plugin `dispose()` methods performs cleanup
+1. `graphlink_desktop.py:main()` calls `mark_running()` (writes `~/.graphlink/running.lock`) before opening the webview, and checks `previous_run_crashed()` (was the sentinel already there from a prior run that never reached a clean exit) first.
+2. If the previous run crashed, `backend/app.py::_configure_session` calls `maybe_show_crash_notice()`, surfacing a real in-app notification on the `notification` topic.
+3. `configure_logging()`/`install_exception_handlers()` (both idempotent, process-wide) route unhandled exceptions and native/segfault crashes into `~/.graphlink/graphlink.log` for post-mortem, since a windowed app with no console would otherwise lose them entirely.
+4. `mark_clean_exit()` removes the sentinel on a normal window close.
 
-### 6. Title generation flow
+### 6. Plugin lifecycle
 
-1. `ChatSessionManager` delegates naming to `TitleGenerator`
-2. If runtime is API mode or local Llama.cpp mode:
-   - `TitleGenerator.generate_title()` routes through `api_provider.chat(task=config.TASK_TITLE, ...)`
-3. If runtime is local Ollama mode:
-   - `TitleGenerator` prefers configured/local Ollama naming models and falls back across installed candidates
-
-### 7. Update-check flow
-
-1. `graphlink_window.ChatWindow.check_for_updates()`
-2. `graphlink_update.UpdateCheckWorker`
-3. Remote version signal fetched from GitHub
-4. `graphlink_licensing.SettingsManager.record_update_check_result()`
-5. `AppearanceSettingsWidget` surfaces the saved status and manual re-check action
+1. `backend/plugins.py::get_plugin_categories()` supplies the `app-plugins` topic's static category/plugin listing (a from-scratch reimplementation of the deleted `PluginPortal`'s algorithm, not an import).
+2. `PluginPicker.tsx` renders that listing and dispatches the `app-plugins` topic's `executePlugin` intent with the selected plugin name and the currently-selected node id.
+3. `execute_plugin()` validates the plugin name and required parent, then calls the matching `SceneDocument.add_*_node()` method in `backend/canvas.py` and publishes `scene` - every one of the 8 picker entries does real node creation today (see Architecture Truths #7).
 
 ## Plugin Catalog As Registered Today
 
-This is the live registration order in `graphlink_plugins/graphlink_plugin_portal.py`.
+This is the live registration order in `backend/plugins.py::_PLUGINS` / `_CATEGORY_META` (an independent Qt-free reimplementation of the deleted `PluginPortal.get_plugin_categories()`, verified field-for-field against `backend/plugins.py` directly).
 
 ### Branch Foundations
 
-- `System Prompt`
-- `Conversation Node`
+- `System Prompt` - creates a `note` node with `is_system_prompt=True`, attached above the selected node's branch root.
+- `Conversation Node` - creates a `conversation` node.
 
 ### Reasoning & Research
 
-- `Graphlink-Web`
+- `Web Research` - creates a `web_research` node.
 
 ### Build & Execution
 
-- `Gitlink`
-- `Py-Coder`
-- `Execution Sandbox`
-- `HTML Renderer`
+- `Gitlink` - creates a `gitlink` node.
+- `Py-Coder` - creates a `pycoder` node.
+- `Execution Sandbox` - creates a `code_sandbox` node.
+- `HTML Renderer` - creates an `html` node (starts with empty content).
 
 ### Workflow & Drafting
 
-- `Artifact / Drafter`
+- `Artifact / Drafter` - creates an `artifact` node.
 
-Reasoning, Workflow Architect, Quality Gate, Code Review Agent, and Branch Lens
-(GraphDiff) were removed - see the "Remove the 5 advisor plugins" commit. The
-"Validation & Delivery" category had no members left after that removal and is gone
-from `PLUGIN_CATEGORY_META` entirely.
-
-## Compatibility Wrapper Map
-
-These top-level files are import-stability shims, not the main implementation.
-
-### Node wrapper
-
-- `graphlink_app/graphlink_node.py` -> `graphlink_app/graphlink_nodes/*`
-
-### Canvas wrappers
-
-- `graphlink_app/graphlink_canvas_items.py` -> `graphlink_app/graphlink_canvas/__init__.py`
-- `graphlink_app/graphlink_canvas_groups.py` -> `graphlink_app/graphlink_canvas/__init__.py`
-- `graphlink_app/graphlink_canvas_note_items.py` -> `graphlink_app/graphlink_canvas/__init__.py`
-- `graphlink_app/graphlink_canvas_dialogs.py` -> `graphlink_app/graphlink_canvas/graphlink_canvas_dialogs.py`
-
-### Dialog wrappers
-
-- `graphlink_app/graphlink_library_dialog.py` -> `graphlink_app/graphlink_ui_dialogs/graphlink_library_dialog.py`
-- `graphlink_app/graphlink_system_dialogs.py` -> `graphlink_app/graphlink_ui_dialogs/graphlink_system_dialogs.py`
-
-### Agent facade
-
-- `graphlink_app/graphlink_agents.py` re-exports the split `graphlink_agents_*` modules
+`Validation & Delivery` is defined in `_CATEGORY_META` but has zero plugins mapped to it today, so `get_plugin_categories()` filters it out of the returned listing (same "skip empty categories" algorithm the deleted `PluginPortal` used). There is no `Reasoning`/`Workflow Architect`/`Quality Gate`/`Code Review Agent`/`Branch Lens (GraphDiff)` plugin - those were removed well before the Qt-removal effort began and were never carried into `backend/plugins.py`.
 
 ## Concrete File Index
 
 This is the practical lookup map for where code actually lives today.
 
-### Top-level concrete modules that changed or matter most
+### `backend/` (all Python domain logic - no UI code anywhere in this package)
 
-- `api_provider.py`
-  - Provider abstraction for Ollama, direct `Llama.cpp`, OpenAI-compatible chat/image APIs, Anthropic Claude, and Gemini.
-  - Key responsibilities:
-    - local/runtime initialization
-    - GGUF scanning
-    - Ollama model scanning
-    - modality preparation
-    - `chat()`
-    - `generate_image()`
-- `graphlink_audio.py`
-  - Audio attachment validation and duration probing.
-  - Key functions/classes: `AudioValidationError`, `is_supported_audio_file()`, `guess_audio_mime_type()`, `inspect_audio_file()`, `format_duration()`
-- `graphlink_lod.py`
-  - Shared zoom-dependent render helpers.
-  - Key helpers: `lod_mode_for_item()`, `preview_text()`, `sync_proxy_render_state()`, `draw_lod_card()`
-- `graphlink_update.py`
-  - Update signal fetch and comparison logic.
-  - Key symbols: `UPDATE_SIGNAL_URL`, `UPDATE_REPOSITORY_URL`, `UpdateCheckWorker`, `build_update_result()`
-- `graphlink_version.py`
-  - Current local app version constant.
-- `graphlink_window.py`
-  - Main shell, mode switching, toolbar, update checks, settings flyout, attachment staging.
-- `graphlink_window_actions.py`
-  - Prompt dispatch, attachment packaging, response parsing, plugin execution.
-- `graphlink_scene.py`
-  - Scene/controller authority.
-- `graphlink_memory.py`
-  - Branch/history helpers.
+- `app.py` - FastAPI app factory, `/ws` endpoint, WS origin validation, static SPA serving.
+- `canvas.py` - the node/graph/connection domain model (`SceneNode`, `SceneEdge`, `SceneDocument`), every node kind's creation/mutation, view-state, navigation pins, `send_message`/`regenerate_response`/`generateImage`.
+- `agents.py` - `AgentDispatcher`, provider bootstrap, per-request cancellation.
+- `composer.py` - composer draft/reasoning-level state, `app-composer` topic.
+- `settings.py` - `register_settings()`, `app-settings` topic, every provider's settings intents.
+- `chat_library.py` - `app-chat-library` topic: list/rename/delete/load/new-chat intents against `~/.graphlink/chats.db`.
+- `session_load.py` / `session_save.py` - the load/save algorithms proper (called by `chat_library.py` and `autosave.py`, not topics themselves).
+- `autosave.py` - the 30s per-session background save task.
+- `crash_recovery.py` - sentinel file, rotating log, exception handlers, crash notice.
+- `response_parsing.py` - `parse_response()`, the thinking/text/code splitter.
+- `plugins.py` - `app-plugins` topic, plugin catalog + `executePlugin`.
+- `about.py`, `notifications.py`, `token_counter.py` - their respective small, focused topics.
+- `assets.py` - `GET /api/assets/{id}`, the image-node byte-serving route.
+- `events.py` - `EventBus`/`SessionBus`, the pub/sub primitive every topic module registers onto.
+- `native_dialogs.py` - native OS file/folder picker support (used by Llama.cpp GGUF scanning).
+- `tests/` - the backend pytest suite (25 files as of this writing).
 
-### `graphlink_session/`
+### `web_ui/src/app/`
 
-- `content_codec.py`
-  - Serialization helpers for history and binary image content.
-- `database.py`
-  - SQLite persistence.
-- `deserializers.py`
-  - Concrete load compatibility and graph restoration.
-- `manager.py`
-  - `ChatSessionManager`
-  - Coordinates save/load/title generation and delegates runtime helpers.
-- `scene_index.py`
-  - Centralized node-list/index helpers used by persistence code.
-- `serializers.py`
-  - Concrete save payload authority.
-- `title_generator.py`
-  - Chat naming strategy across Ollama, Llama.cpp, and API modes.
-- `workers.py`
-  - Background save worker.
+- `App.tsx` - the shell: WS transport setup, `system`/`app-settings` subscriptions, global keyboard shortcuts, top-level layout mounting every chrome/overlay/canvas piece.
+- `main.tsx` - the React root/entry point.
+- `canvas/` - `SceneCanvas.tsx` (the React Flow surface), `sceneStore.ts` (the `scene` topic client), one `*NodeView.tsx` per node kind (see Taxonomy table), `smartGuides.ts`, `treeNavigation.ts`, `exportCanvasPng.ts`, `downloadTextFile.ts`.
+- `chrome/` - `AppBar.tsx`, `Composer.tsx` + `composerStore.ts`, `ViewPopover.tsx`, `CommandPalette.tsx` + `commands.ts`, `SearchOverlay.tsx`, `PinOverlay.tsx`, `PluginPicker.tsx`, `SettingsDialog.tsx`, `ChatLibraryDialog.tsx`, `AboutDialog.tsx`, `HelpDialog.tsx` (+ `help-data/sections.ts`), `NotificationBanner.tsx`, `TokenCounter.tsx`, `shortcuts.ts`.
+- `overlays/overlays.tsx` - the `OverlayProvider` coordinator only (no dialogs live here).
 
-### `graphlink_ui_dialogs/`
+### `web_ui/src/lib/`
 
-- `graphlink_library_dialog.py`
-  - Recent chat browser.
-- (settings moved out of this package: edit `graphlink_settings_bridge.py` / `web_ui/src/islands/settings/` for Ollama scans, GGUF scans, API provider/model settings, GitHub token settings, and update-check controls)
-- `graphlink_system_dialogs.py`
-  - About/help UI.
+- `ws/transport.ts` - `WsTransport`, the one WebSocket client implementation.
+- `api-contract/topics.ts` - `TOPIC_VALIDATORS`, validating every incoming snapshot against its generated JSON Schema before use.
+- `bridge-core/generated/` - codegen'd TS types + JSON Schemas, one pair per `contracts/` payload dataclass (11 pairs).
+- `bridge-core/islandState.ts`, `schemaVersion.ts`, `textFocus.ts` - small shared bridge helpers (naming is a holdover from the pre-SPA per-island era; there is only one app target now).
+- `tokens/gl-theme.css`, `gl-vars-dev.css` - the design-token CSS variables.
+- `ui/BridgeErrorState.tsx`, `base.css` - shared error-state UI and the CSS reset.
 
-### `graphlink_widgets/`
+### `contracts/` (build-time codegen, not runtime application code)
 
-- `loading_visuals.py`
-  - Shared spinner painter.
-- `overlays.py`
-  - `LoadingAnimation`, `SearchOverlay`
-- `pins.py`
-  - Overlay-side pin helper plus `PinOverlay`
-- `splash.py`
-  - Splash screen and animation
-- `text_inputs.py`
-  - Composer surface and attachment pills
-- `tokens.py`
-  - Token estimator and token counter widget
-- `controls.py`
-  - `FontControl`, `GridControl`
-- `scrolling.py`
-  - `CustomScrollBar`, `ScrollHandle`, `ScrollBar`
+- `codegen.py` - `GENERATED_ARTIFACTS` (11 entries), `--check`/`--write` CLI, the TS/JSON-Schema generation logic.
+- `payload_schema.py` - JSON Schema generation from Python dataclasses.
+- `graphlink_app_*_payload.py` / `graphlink_*_payload.py` - the 11 payload dataclasses (about, chat_library, composer, plugins, settings, drag_speed, font_control, grid_control, notification, scene, token_counter).
+- `tests/test_generated_artifacts.py` - parametrized over all 11 entries plus the `--check`/`--write` CLI drift tests.
+
+### `graphlink_plugins/` (Qt-free plugin domain logic only)
+
+- `web_research/` - `domain.py`, `ports.py`, `fetch_policy.py`, `providers.py`, `service.py` (no `worker.py` - that was the Qt-coupled file deleted at the cutover).
+- `gitlink/` - `agent.py`, `repository.py`.
+- `pycoder/` - `domain.py`.
+- `code_sandbox/` - `domain.py`.
+- `common/` - `github_client.py`, `llm_json.py` (shared helpers).
+
+### Loose top-level modules that matter most
+
+- `api_provider.py` - provider abstraction for Ollama/Llama.cpp/OpenAI-compatible/Anthropic/Gemini; local model scanning; `chat()`/`generate_image()`.
+- `graphlink_secrets.py` - Windows DPAPI secret encryption for `~/.graphlink/session.dat`.
+- `graphlink_licensing.py` - `SettingsManager`, the persisted-settings authority `backend/settings.py` wraps.
+- `graphlink_task_config.py` - task keys, mode labels, `API_PROVIDER_*` constants.
+- `graphlink_desktop.py` - the real entry point (see Runtime Ownership Map).
+- `graphlink_memory.py` - branch/history helpers used by `backend/canvas.py::send_message`.
+- `graphlink_chart_agent.py`, `graphlink_chart_data.py`, `graphlink_chart_rendering.py` - the chart-node pipeline (spec extraction/repair, rendering to PNG).
+- `graphlink_artifact_agent.py`, `graphlink_chat_agent.py` - LLM-facing agent logic `backend/agents.py`/`backend/canvas.py` call into.
 
 ## Where To Edit When...
 
-### You want to change startup, current mode handling, or mode switching
+### You want to change startup or the desktop shell
 
-- `graphlink_app/graphlink_window.py`
-- `graphlink_app/graphlink_config.py`
-- `graphlink_app/graphlink_licensing.py`
-- `graphlink_app/api_provider.py`
-- `graphlink_app/graphlink_settings_bridge.py` (+ `web_ui/src/islands/settings/`)
+- `graphlink_desktop.py`
+- `backend/app.py` (app factory, WS origin policy)
+- `backend/crash_recovery.py` (sentinel/logging)
 
-### You want to change Ollama scanning or default local models
+### You want to change provider configuration or default local models
 
-- `graphlink_app/api_provider.py`
-- `graphlink_app/graphlink_config.py`
-- `graphlink_app/graphlink_licensing.py`
-- `graphlink_app/graphlink_settings_bridge.py` (+ `web_ui/src/islands/settings/`)
+- `api_provider.py`
+- `graphlink_task_config.py`
+- `graphlink_licensing.py`
+- `backend/settings.py` (+ `web_ui/src/app/chrome/SettingsDialog.tsx`)
 
-### You want to change direct `Llama.cpp` / GGUF behavior
+### You want to change prompt send, response parsing, or agent dispatch
 
-- `graphlink_app/api_provider.py`
-- `graphlink_app/graphlink_licensing.py`
-- `graphlink_app/graphlink_settings_bridge.py` (+ `web_ui/src/islands/settings/`)
-- `graphlink_app/graphlink_window.py`
-- `graphlink_app/graphlink_session/title_generator.py`
+- `backend/canvas.py` (`send_message`, `regenerate_response`)
+- `backend/agents.py` (`AgentDispatcher`)
+- `backend/response_parsing.py`
+- `web_ui/src/app/chrome/Composer.tsx` + `composerStore.ts`
 
-### You want to change prompt send, response parsing, attachment handling, or execution dispatch
+### You want to change canvas behavior, graph layout, or view-state (grid/drag-speed/fade/orthogonal/smart-guides)
 
-- `graphlink_app/graphlink_window_actions.py`
-- `graphlink_app/graphlink_memory.py`
-- `graphlink_app/graphlink_file_handler.py`
-- `graphlink_app/graphlink_audio.py`
-- `graphlink_app/api_provider.py`
+- `backend/canvas.py` (`SceneDocument`, view-state intents)
+- `web_ui/src/app/canvas/SceneCanvas.tsx` + `sceneStore.ts`
+- `web_ui/src/app/canvas/smartGuides.ts` (pure geometry)
+- `web_ui/src/app/chrome/ViewPopover.tsx` (the consolidated drag/grid/font popover)
 
-### You want to change attachment staging or supported attachment kinds
+### You want to add or modify a node kind
 
-- `graphlink_app/graphlink_window.py`
-- `graphlink_app/graphlink_window_actions.py`
-- `graphlink_app/graphlink_audio.py`
-- `graphlink_app/graphlink_nodes/graphlink_node_document.py`
-- `graphlink_app/graphlink_session/serializers.py`
-- `graphlink_app/graphlink_session/deserializers.py`
-
-### You want to change canvas behavior, graph layout, or zoomed-out rendering
-
-- `graphlink_app/graphlink_view.py`
-- `graphlink_app/graphlink_scene.py`
-- `graphlink_app/graphlink_connections.py`
-- `graphlink_app/graphlink_minimap.py`
-- `graphlink_app/graphlink_lod.py`
-- `graphlink_app/graphlink_canvas/*`
-
-### You want to add or modify a node family
-
-- Core chat/code/doc/image/thinking nodes:
-  - `graphlink_app/graphlink_nodes/*`
-- Specialized nodes:
-  - `graphlink_app/graphlink_pycoder.py`
-  - `graphlink_app/graphlink_web.py`
-  - `graphlink_app/graphlink_conversation_node.py`
-  - `graphlink_app/graphlink_html_view.py`
-- Then update:
-  - `graphlink_app/graphlink_scene.py`
-  - `graphlink_app/graphlink_session/scene_index.py`
-  - `graphlink_app/graphlink_session/serializers.py`
-  - `graphlink_app/graphlink_session/deserializers.py`
-  - `graphlink_app/graphlink_window.py`
-  - `graphlink_app/graphlink_window_actions.py`
+- Backend model + intents: `backend/canvas.py`
+- React component: a new `web_ui/src/app/canvas/*NodeView.tsx`
+- Persistence: `backend/session_load.py` and `backend/session_save.py` (both need the new kind's restore/classify logic)
+- Contract: a new payload field/shape in `contracts/graphlink_scene_payload.py` if the node needs new wire fields, then `python contracts/codegen.py --write` to regenerate the TS side
 
 ### You want to add or modify a plugin
 
-- Registration and category metadata:
-  - `graphlink_app/graphlink_plugins/graphlink_plugin_portal.py`
-- Picker UI:
-  - `graphlink_app/graphlink_plugins/graphlink_plugin_picker.py`
-- Shared plugin context menu:
-  - `graphlink_app/graphlink_plugins/graphlink_plugin_context_menu.py`
-- Concrete plugin logic:
-  - `graphlink_app/graphlink_plugins/graphlink_plugin_*.py`
-- Then verify:
-  - `graphlink_app/graphlink_scene.py`
-  - `graphlink_app/graphlink_session/scene_index.py`
-  - `graphlink_app/graphlink_session/serializers.py`
-  - `graphlink_app/graphlink_session/deserializers.py`
-  - `graphlink_app/graphlink_window_actions.py`
+- Domain logic: `graphlink_plugins/<name>/` (new package) or an existing one
+- Registration + node-creation wiring: `backend/plugins.py`
+- Picker UI: `web_ui/src/app/chrome/PluginPicker.tsx` (usually needs no change - it renders whatever `app-plugins` returns)
+- New node kind (if the plugin creates one): see "add or modify a node kind" above
 
-### You want to change save/load compatibility
+### You want to change save/load compatibility with `~/.graphlink/chats.db`
 
-- `graphlink_app/graphlink_session/scene_index.py`
-- `graphlink_app/graphlink_session/serializers.py`
-- `graphlink_app/graphlink_session/deserializers.py`
-- `graphlink_app/graphlink_session/manager.py`
-- `graphlink_app/graphlink_core.py`
-- `graphlink_app/graphlink_scene.py`
+- `backend/session_load.py`
+- `backend/session_save.py`
+- `backend/chat_library.py` (the topic/intents that call into both)
+- `backend/autosave.py` (reuses the same save primitives)
 
-### You want to change update checks or version reporting
+### You want to change crash recovery or logging
 
-- `graphlink_app/graphlink_update.py`
-- `graphlink_app/graphlink_version.py`
-- `graphlink_app/graphlink_licensing.py`
-- `graphlink_app/graphlink_window.py`
-- `graphlink_app/graphlink_settings_bridge.py` (+ `web_ui/src/islands/settings/`)
+- `backend/crash_recovery.py`
+- `graphlink_desktop.py` (the calls into it at boot/shutdown)
 
-### You want to change reusable widgets or loading visuals
+### You want to change settings, secrets, or provider credential storage
 
-- `graphlink_app/graphlink_widgets/*`
-- `graphlink_app/graphlink_ui_components.py`
+- `backend/settings.py`
+- `graphlink_licensing.py`
+- `graphlink_secrets.py` (DPAPI encryption)
+- `web_ui/src/app/chrome/SettingsDialog.tsx`
+
+### You want to change the WS wire contract (topics/payload shapes)
+
+- The relevant `contracts/graphlink_*_payload.py` dataclass
+- `contracts/codegen.py` (`GENERATED_ARTIFACTS` registry, if adding a new topic entirely)
+- Run `python contracts/codegen.py --write` from repo root, then `cd web_ui && npm run check:schema` to confirm no drift
+- The backend topic's own `register_topic`/`register_intent` calls (`backend/<module>.py`)
+- The SPA's consuming store/component under `web_ui/src/app/`
+
+### You want to change overlays, dialogs, or chrome UI
+
+- `web_ui/src/app/overlays/overlays.tsx` (the coordinator itself - rarely needs touching)
+- `web_ui/src/app/chrome/*.tsx` (every actual dialog/popover/bar lives here, including Settings)
 
 ## Short Working Rules For Future Sessions
 
-- Open the concrete package file before touching a compatibility wrapper.
-- Treat `api_provider.py` as the runtime execution authority for every model mode.
-- Treat `ChatScene` plus session serializer/deserializer code as the graph schema.
-- Treat `graphlink_session/scene_index.py` as the central list/index helper whenever you add a new persisted node family.
-- Treat `WindowActionsMixin` as the execution dispatcher.
-- Treat `PluginPortal` as the plugin catalog authority.
-- Treat `graphlink_memory.py` as the only safe place to define branch-history semantics.
-- Treat `graphlink_lod.py` as shared render infrastructure, not optional polish.
-- Remember that `Llama.cpp` mode expects direct `.gguf` files, not Ollama blobs/manifests.
-- Remember that audio attachments persist through `DocumentNode`, not a separate audio node type.
-- Be careful with duplicate names:
-  - scene `NavigationPin` lives in `graphlink_canvas`
-  - overlay `NavigationPin` lives in `graphlink_widgets`
-- Be careful with legacy files:
-  - `graphlink_dialogs.py` is not the live canvas dialog authority
-- Be careful with machine-specific paths:
-  - several asset paths are still hardcoded to one local repo location
+- The migration is complete. Do not describe this codebase as "mid-migration" or reference compatibility wrappers - there are none, and `graphlink_app/` does not exist.
+- Treat `backend/canvas.py`'s `SceneDocument` as the graph schema authority - nodes, edges, and view-state all live there, in one unified model (not 13 parallel connection lists).
+- Treat `backend/agents.py`'s `AgentDispatcher` as the execution/cancellation authority for every LLM-backed request; it is instantiated once per session, never as a module-level singleton.
+- Treat `backend/plugins.py` as the plugin catalog authority - every entry is a real node-creation path today, not a deferred notice.
+- Treat `backend/app.py::_is_allowed_ws_origin` as a real security control, not incidental scaffolding - do not relax its exact-match policy without understanding the DNS-rebinding threat model in its own docstring.
+- Treat `contracts/` as build-time-only: it generates code the SPA imports, but it is never itself imported at runtime by `backend/` or `web_ui/`. Regenerate with `python contracts/codegen.py --write` after changing any payload dataclass, and verify with `--check` (or `npm run check:schema`) before shipping.
+- Verify with the CI command, not a narrowed one: `python -m pytest -q` from the repo root (961 tests across `backend/tests/`, `contracts/tests/`, and `tests/`), plus `npm run check` from inside `web_ui/` (schema-drift check, typecheck, lint, 779 vitest tests, build). A subset run can look green while missing real regressions in a directory it never collected.
+- `tests/test_no_qt_anywhere.py` is a permanent gate, not a migration-era placeholder - it fails the build if any file anywhere imports PySide6/PyQt, or if any requirements/pyproject manifest declares one of the removed Qt packages.
+- Remember `doc/` is gitignored and local-only - never treat it as shipped documentation, and don't "fix" it as if a contributor will ever see it.
+- Remember Windows DPAPI (`graphlink_secrets.py`) is still real and still the reason CI is pinned to `windows-latest` - this is not leftover Qt-era inertia.
+- Remember the AppBar's provider-mode `<select>` is deliberately still disabled - don't assume it's wired just because Settings has real per-provider pages underneath it.
