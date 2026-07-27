@@ -821,12 +821,20 @@ class SceneDocument:
         content: str,
         is_user: bool,
         parent_id: str | None = None,
+        content_parts: list[dict[str, Any]] | None = None,
     ) -> SceneNode:
         """The Qt-free ChatScene.add_chat_node equivalent: a real message-
         bubble node, optionally connected to a parent (the branch it
         continues). Mirrors add_node's id/dict bookkeeping; the only new
         behavior is the parent-edge, ported from the legacy scene's own
-        ConnectionItem creation."""
+        ConnectionItem creation.
+
+        R8a: content_parts is the real multimodal attachment payload
+        (image_bytes/audio_file parts) - the data-model capability
+        SceneNode.content_parts has carried since R6.3, finally populated by
+        a real caller. Optional and additive: every existing caller keeps
+        passing only (x, y, content, is_user, parent_id) and gets exactly
+        the plain-text node it always did."""
         if parent_id is not None and parent_id not in self.nodes:
             raise SceneError(f"unknown parent node: {parent_id}")
         node_id = f"n{next(self._counter)}"
@@ -839,6 +847,7 @@ class SceneDocument:
             kind="chat",
             content=str(content),
             is_user=bool(is_user),
+            content_parts=content_parts,
         )
         self.nodes[node_id] = node
         if parent_id is not None:
@@ -2290,13 +2299,17 @@ class SceneDocument:
         del self.nodes[node_id]
         self._detach_node_from_membership(node_id)
 
-    def send_message(self, text: str) -> SceneNode:
+    def send_message(self, text: str, content_parts: list[dict[str, Any]] | None = None) -> SceneNode:
         """The Composer's real Send action (R3.3): create a real user
         ChatNode continuing the current branch (last_chat_node_id), or
         start a fresh root if none exists yet. Positioning is a simple
         deterministic stack, not the legacy find_branch_position packing
         algorithm - real auto-layout is a later refinement; "Organize
-        Nodes" already exists as a fallback."""
+        Nodes" already exists as a fallback.
+
+        R8a: content_parts carries real attachments (image/audio) staged in
+        the composer - optional, additive, threaded straight to
+        add_chat_node."""
         parent_id = self.last_chat_node_id
         if parent_id is not None and parent_id in self.nodes:
             parent = self.nodes[parent_id]
@@ -2305,7 +2318,7 @@ class SceneDocument:
             parent_id = None
             chat_node_count = sum(1 for n in self.nodes.values() if n.kind == "chat")
             x, y = 0.0, chat_node_count * MESSAGE_VERTICAL_SPACING
-        node = self.add_chat_node(x, y, text, True, parent_id=parent_id)
+        node = self.add_chat_node(x, y, text, True, parent_id=parent_id, content_parts=content_parts)
         self.last_chat_node_id = node.id
         return node
 
@@ -2326,7 +2339,16 @@ class SceneDocument:
             node = self.nodes.get(current_id)
             if node is None:
                 break
-            history.append({"role": "user" if node.is_user else "assistant", "content": node.content})
+            # R8a: content_parts, when populated, IS the complete message
+            # content (its own text part plus any image_bytes/audio_file
+            # parts) - not an addendum to node.content. A node with no
+            # attachments has content_parts=None and this is byte-identical
+            # to before: a plain string, exactly as every other consumer of
+            # this history already expects.
+            history.append({
+                "role": "user" if node.is_user else "assistant",
+                "content": node.content_parts if node.content_parts else node.content,
+            })
             parent_edge = self._branch_parent_edge(current_id)
             current_id = parent_edge.source if parent_edge is not None else None
         history.reverse()
@@ -3167,11 +3189,33 @@ def register_canvas(
         # R3.3: the real Send action - a real user ChatNode, continuing the
         # active branch. R4: the assistant's reply is now a real agent
         # dispatch call, not a deferred notice - see backend/agents.py.
-        node = document.send_message(text)
+        #
+        # R8a: consult whatever is staged in the composer right now. This is
+        # WHY composer_document is threaded into register_canvas at all (see
+        # this function's own docstring) - take_staged_attachments() pops
+        # and clears in one step, so a mid-flight staging change can never
+        # land on the send that follows it, and never leaks into the next.
+        staged = composer_document.take_staged_attachments()
+        full_text = text
+        for item in staged:
+            if item.extracted_text is not None:
+                full_text += (
+                    f"\n\n--- Attached: {item.name} ({item.context_label}) ---\n"
+                    f"{item.extracted_text}\n--- end attachment ---"
+                )
+        media_parts = [item.content_part for item in staged if item.content_part is not None]
+        content_parts = [{"type": "text", "text": full_text}, *media_parts] if media_parts else None
+
+        node = document.send_message(full_text, content_parts=content_parts)
+        if staged:
+            # The staged list is now empty (popped above) - republish so the
+            # composer's attachment chips clear the instant Send fires,
+            # rather than waiting for the reply's own later publish().
+            await bus.publish("app-composer")
         # R6.3: grow the real, live-growing session token count by the
         # user's own new message text - see add_session_tokens's own
         # comment on SceneDocument.
-        document.add_session_tokens(text)
+        document.add_session_tokens(full_text)
         await publish_scene()
         history = document.chat_branch_history(node.id)
 

@@ -65,7 +65,12 @@ def test_default_payload_matches_generated_validator_shape(monkeypatch):
     assert set(payload) == {"draft", "context", "route", "request", "capabilities"}
     assert set(payload["draft"]) == {"id", "text", "contextMode", "sendMode", "restored"}
     assert payload["capabilities"]["reasoningSelection"] is True
-    assert payload["capabilities"]["attachments"] is False, "attachment staging is deferred, not faked"
+    # R8a: attachment staging is real now (backend/attachments.py + the
+    # attachFile/removeAttachment intents), so this asserts the OPPOSITE of
+    # what it used to - the old assertion was itself the encoded-as-correct
+    # deferral, which is exactly the shape of bug this feature exists to fix.
+    assert payload["capabilities"]["attachments"] is True
+    assert payload["context"]["items"] == [], "no attachment staged yet on a fresh document"
     assert payload["request"]["canSend"] is True, "idle state can send now that R4 agent dispatch has landed"
 
 
@@ -422,3 +427,105 @@ def test_composer_reasoning_republish_is_skipped_when_settings_is_not_registered
     recorder = asyncio.run(run())
     assert recorder.topics_seen().count("app-composer") == 1
     assert "app-settings" not in recorder.topics_seen()
+
+
+# -- R8a: real file attachments -----------------------------------------------
+
+
+def test_attach_file_stages_a_real_document_and_republishes(tmp_path, monkeypatch):
+    manager = SettingsManager(tmp_path / "session.dat")
+    source = tmp_path / "notes.txt"
+    source.write_text("real attached body", encoding="utf-8")
+
+    async def fake_pick_file(*args, **kwargs):
+        return str(source)
+
+    monkeypatch.setattr("backend.native_dialogs.pick_file", fake_pick_file)
+
+    async def run():
+        bus, composer, notifications, recorder = _make_bus_with_settings(manager)
+        await bus.dispatch_intent("app-composer", "attachFile", [])
+        return composer, recorder
+
+    composer, recorder = asyncio.run(run())
+
+    assert len(composer.staged_attachments) == 1
+    staged = composer.staged_attachments[0]
+    assert staged.kind == "document"
+    assert staged.extracted_text == "real attached body"
+
+    payload = composer.payload()
+    assert payload["capabilities"]["attachments"] is True
+    assert payload["context"]["items"] == [
+        {"id": staged.id, "kind": "document", "name": "notes.txt", "byteSize": staged.byte_size,
+         "contextLabel": "Text", "tokenCount": staged.token_count}
+    ]
+    assert payload["context"]["reviewAvailable"] is True
+    assert recorder.topics_seen().count("app-composer") == 1
+
+
+def test_attach_file_cancel_is_a_quiet_noop(tmp_path, monkeypatch):
+    manager = SettingsManager(tmp_path / "session.dat")
+
+    async def fake_pick_file(*args, **kwargs):
+        return None  # user cancelled the native dialog
+
+    monkeypatch.setattr("backend.native_dialogs.pick_file", fake_pick_file)
+
+    async def run():
+        bus, composer, _, recorder = _make_bus_with_settings(manager)
+        await bus.dispatch_intent("app-composer", "attachFile", [])
+        return composer, recorder
+
+    composer, recorder = asyncio.run(run())
+    assert composer.staged_attachments == []
+    assert recorder.topics_seen() == [], "a cancelled dialog must not publish anything"
+
+
+def test_attach_file_rejection_surfaces_a_real_notification_and_stages_nothing(tmp_path, monkeypatch):
+    manager = SettingsManager(tmp_path / "session.dat")
+    source = tmp_path / "blob.xyz"
+    source.write_bytes(bytes(range(256)) * 20)  # binary garbage, unknown extension
+
+    async def fake_pick_file(*args, **kwargs):
+        return str(source)
+
+    monkeypatch.setattr("backend.native_dialogs.pick_file", fake_pick_file)
+
+    async def run():
+        bus, composer, notifications, recorder = _make_bus_with_settings(manager)
+        await bus.dispatch_intent("app-composer", "attachFile", [])
+        return composer, notifications, recorder
+
+    composer, notifications, recorder = asyncio.run(run())
+    assert composer.staged_attachments == []
+    assert notifications.visible and notifications.msg_type == "warning"
+    assert "Unsupported file type" in notifications.message
+    assert "notification" in recorder.topics_seen()
+    assert "app-composer" not in recorder.topics_seen(), "a rejected file must not publish a stale composer state"
+
+
+def test_remove_attachment_removes_only_the_matching_id(tmp_path, monkeypatch):
+    manager = SettingsManager(tmp_path / "session.dat")
+    first = tmp_path / "a.txt"
+    second = tmp_path / "b.txt"
+    first.write_text("a", encoding="utf-8")
+    second.write_text("b", encoding="utf-8")
+    paths = iter([str(first), str(second)])
+
+    async def fake_pick_file(*args, **kwargs):
+        return next(paths)
+
+    monkeypatch.setattr("backend.native_dialogs.pick_file", fake_pick_file)
+
+    async def run():
+        bus, composer, _, _ = _make_bus_with_settings(manager)
+        await bus.dispatch_intent("app-composer", "attachFile", [])
+        await bus.dispatch_intent("app-composer", "attachFile", [])
+        keep_id = composer.staged_attachments[1].id
+        remove_id = composer.staged_attachments[0].id
+        await bus.dispatch_intent("app-composer", "removeAttachment", [remove_id])
+        return composer, keep_id
+
+    composer, keep_id = asyncio.run(run())
+    assert [item.id for item in composer.staged_attachments] == [keep_id]

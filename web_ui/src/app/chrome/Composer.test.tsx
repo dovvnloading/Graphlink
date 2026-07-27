@@ -20,6 +20,8 @@ function makeStore(
   const updateDraft = vi.fn();
   const setReasoningLevel = vi.fn();
   const selectModel = vi.fn();
+  const attachFile = vi.fn();
+  const removeAttachment = vi.fn();
   const cancelChatRequest = vi.fn();
   const dismissNotification = vi.fn();
   const store = {
@@ -34,10 +36,15 @@ function makeStore(
     updateDraft,
     setReasoningLevel,
     selectModel,
+    attachFile,
+    removeAttachment,
     cancelChatRequest,
     dismissNotification,
   };
-  return { store, updateDraft, setReasoningLevel, selectModel, cancelChatRequest, dismissNotification };
+  return {
+    store, updateDraft, setReasoningLevel, selectModel, attachFile, removeAttachment,
+    cancelChatRequest, dismissNotification,
+  };
 }
 
 function makeSceneStore() {
@@ -333,6 +340,84 @@ describe("Composer", () => {
       </OverlayProvider>,
     );
     expect(container.querySelector('[data-overlay-trigger="reasoning"]')).not.toBeDisabled();
+  });
+
+  it("the Attach button is disabled when capabilities.attachments is false, even with canSend true", () => {
+    const { store } = makeStore({
+      composer: {
+        capabilities: { ...initialComposerState.capabilities, attachments: false },
+        request: { ...initialComposerState.request, canSend: true },
+      },
+    });
+    render(
+      <OverlayProvider>
+        {/* @ts-expect-error - test double */}
+        <Composer store={store} sceneStore={makeSceneStore().sceneStore} />
+      </OverlayProvider>,
+    );
+    expect(screen.getByLabelText("Attach context")).toBeDisabled();
+  });
+
+  it("clicking the Attach button calls store.attachFile() when capable and idle", async () => {
+    const user = userEvent.setup();
+    const { store, attachFile } = makeStore({
+      composer: {
+        capabilities: { ...initialComposerState.capabilities, attachments: true },
+        request: { ...initialComposerState.request, canSend: true },
+      },
+    });
+    render(
+      <OverlayProvider>
+        {/* @ts-expect-error - test double */}
+        <Composer store={store} sceneStore={makeSceneStore().sceneStore} />
+      </OverlayProvider>,
+    );
+    const attachButton = screen.getByLabelText("Attach context");
+    expect(attachButton).not.toBeDisabled();
+    await user.click(attachButton);
+    expect(attachFile).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders no attachment chips when context.items is empty", () => {
+    const { store } = makeStore();
+    const { container } = render(
+      <OverlayProvider>
+        {/* @ts-expect-error - test double */}
+        <Composer store={store} sceneStore={makeSceneStore().sceneStore} />
+      </OverlayProvider>,
+    );
+    expect(container.querySelector(".composer-attachment-chips")).toBeNull();
+  });
+
+  it("renders a real chip per staged attachment, and removing one calls store.removeAttachment(id)", async () => {
+    const user = userEvent.setup();
+    const { store, removeAttachment } = makeStore({
+      composer: {
+        context: {
+          ...initialComposerState.context,
+          items: [
+            { id: "att-1", name: "photo.png", kind: "image", byteSize: 2048, contextLabel: "Vision", tokenCount: 0 },
+            { id: "att-2", name: "notes.txt", kind: "document", byteSize: 512, contextLabel: "Text", tokenCount: 12 },
+          ],
+        },
+      },
+    });
+    render(
+      <OverlayProvider>
+        {/* @ts-expect-error - test double */}
+        <Composer store={store} sceneStore={makeSceneStore().sceneStore} />
+      </OverlayProvider>,
+    );
+
+    expect(screen.getByText("photo.png")).toBeInTheDocument();
+    expect(screen.getByText("notes.txt")).toBeInTheDocument();
+    expect(screen.getByText("Vision")).toBeInTheDocument();
+    expect(screen.getByText("Text")).toBeInTheDocument();
+
+    await user.click(screen.getByLabelText("Remove photo.png"));
+    expect(removeAttachment).toHaveBeenCalledWith("att-1");
+    // the OTHER chip must not have been touched
+    expect(removeAttachment).not.toHaveBeenCalledWith("att-2");
   });
 });
 

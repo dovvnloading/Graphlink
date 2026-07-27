@@ -27,13 +27,13 @@ export interface AppComposerAttachment {
   id: string;
   name: string;
   kind: string;
-  tokenCount: number;
-  preparationState: string;
+  byteSize: number;
   contextLabel: string;
+  tokenCount: number;
 }
 
 export interface AppComposerRoute {
-  mode: "cloud" | "ollama" | "llamacpp" | "unknown";
+  mode: "ollama" | "api" | "llama_cpp";
   provider: string;
   modelId: string;
   modelLabel: string;
@@ -48,12 +48,6 @@ export interface AppComposerRoute {
 export interface AppComposerModelOption {
   id: string;
   label: string;
-  provider: string;
-  source: string;
-  active: boolean;
-  ready: boolean;
-  available: boolean;
-  capabilities: string[];
 }
 
 export interface AppComposerReasoning {
@@ -203,19 +197,19 @@ function checkAppComposerAttachment(value: unknown, path: string, errors: string
     else { if (typeof fieldValue !== "string") errors.push(`${path}.kind` + ": expected string"); }
   }
   {
-    const fieldValue = value["tokenCount"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.tokenCount: missing required field`);
-    else { if (typeof fieldValue !== "number") errors.push(`${path}.tokenCount` + ": expected number"); }
-  }
-  {
-    const fieldValue = value["preparationState"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.preparationState: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.preparationState` + ": expected string"); }
+    const fieldValue = value["byteSize"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.byteSize: missing required field`);
+    else { if (typeof fieldValue !== "number") errors.push(`${path}.byteSize` + ": expected number"); }
   }
   {
     const fieldValue = value["contextLabel"];
     if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.contextLabel: missing required field`);
     else { if (typeof fieldValue !== "string") errors.push(`${path}.contextLabel` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["tokenCount"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.tokenCount: missing required field`);
+    else { if (typeof fieldValue !== "number") errors.push(`${path}.tokenCount` + ": expected number"); }
   }
 }
 
@@ -224,7 +218,7 @@ function checkAppComposerRoute(value: unknown, path: string, errors: string[]): 
   {
     const fieldValue = value["mode"];
     if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.mode: missing required field`);
-    else { if (!["cloud", "ollama", "llamacpp", "unknown"].includes(fieldValue as string)) errors.push(`${path}.mode` + `: ${JSON.stringify(fieldValue)} is not one of [` + "cloud, ollama, llamacpp, unknown" + `]`); }
+    else { if (!["ollama", "api", "llama_cpp"].includes(fieldValue as string)) errors.push(`${path}.mode` + `: ${JSON.stringify(fieldValue)} is not one of [` + "ollama, api, llama_cpp" + `]`); }
   }
   {
     const fieldValue = value["provider"];
@@ -284,37 +278,6 @@ function checkAppComposerModelOption(value: unknown, path: string, errors: strin
     const fieldValue = value["label"];
     if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.label: missing required field`);
     else { if (typeof fieldValue !== "string") errors.push(`${path}.label` + ": expected string"); }
-  }
-  {
-    const fieldValue = value["provider"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.provider: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.provider` + ": expected string"); }
-  }
-  {
-    const fieldValue = value["source"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.source: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.source` + ": expected string"); }
-  }
-  {
-    const fieldValue = value["active"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.active: missing required field`);
-    else { if (typeof fieldValue !== "boolean") errors.push(`${path}.active` + ": expected boolean"); }
-  }
-  {
-    const fieldValue = value["ready"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.ready: missing required field`);
-    else { if (typeof fieldValue !== "boolean") errors.push(`${path}.ready` + ": expected boolean"); }
-  }
-  {
-    const fieldValue = value["available"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.available: missing required field`);
-    else { if (typeof fieldValue !== "boolean") errors.push(`${path}.available` + ": expected boolean"); }
-  }
-  {
-    const fieldValue = value["capabilities"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.capabilities: missing required field`);
-    else { if (!Array.isArray(fieldValue)) errors.push(`${path}.capabilities` + ": expected array");
-    else (fieldValue as unknown[]).forEach((item, i) => { if (typeof item !== "string") errors.push(`${path}.capabilities` + `[${i}]` + ": expected string"); }); }
   }
 }
 
