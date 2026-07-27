@@ -12,9 +12,9 @@ requires-python = ">=3.10"
 dependencies = [
     "anthropic",
     "beautifulsoup4",
-    # Qt-removal target architecture (doc/QT_REMOVAL_PLAN.md): Python backend
-    # + native pywebview shell. PySide6/qtawesome below are scheduled for
-    # REMOVAL at the R7 cutover - do not add new Qt dependencies.
+    # Qt-removal complete (doc/QT_REMOVAL_PLAN.md, R7.6b): Python backend +
+    # native pywebview shell. Do not add Qt dependencies - tests/
+    # test_no_qt_anywhere.py fails the build if any manifest declares one.
     "fastapi",
     "uvicorn",
     "pywebview",
@@ -28,10 +28,8 @@ dependencies = [
     "Pillow",
     "pygments",
     "pypdf",
-    "PySide6",
     "pyspellchecker",
     "python-docx",
-    "qtawesome",
     "reportlab",
     "requests",
     "tiktoken",
@@ -54,168 +52,56 @@ dev = ["pytest", "pytest-env"]
 env = ["QT_QPA_PLATFORM=offscreen"]
 
 [project.gui-scripts]
-graphlink = "graphlink_app:main"
+# R7.6b: was `graphlink_app:main`, the Qt entry point, deleted at the cutover.
+# graphlink_desktop.main() is the pywebview shell that replaced it - it boots
+# the FastAPI backend and opens the SPA in a native window.
+graphlink = "graphlink_desktop:main"
 
 [project.urls]
 Homepage = "https://github.com/dovvnloading/Graphlink"
 
-# graphlink_app/ has no __init__.py by design (see CONTRIBUTING.md: it is the sys.path
-# root, not a package) - modules inside it import each other as flat top-level names
-# (e.g. `from graphlink_window import ChatWindow`). package-dir maps graphlink_app/'s
-# CONTENTS to the top of the installed distribution so that import style keeps working
-# unchanged under an editable/real install; py-modules lists every loose top-level file
-# explicitly since setuptools' auto-discovery only picks up real packages (__init__.py
-# subdirectories), not loose modules.
+# R7.6b (Qt-removal cutover): graphlink_app/ is gone, and with it the entire
+# package-dir indirection this section used to need. Every module now lives at
+# its real import path, so setuptools needs no mapping: py-modules lists the
+# loose top-level files (auto-discovery only finds real packages), and
+# packages.find picks up backend/ and graphlink_plugins/ from the repo root.
+#
+# This also closes the two packaging gaps R7.2 recorded as accepted-for-now:
+# the 17 relocated modules are listed again (they were unlistable while
+# package_dir[""] had to stay "graphlink_app"), and `version = { attr = ... }`
+# below now resolves, because attr: consults package_dir[""] - which no longer
+# points somewhere graphlink_version.py isn't.
+#
+# contracts/ is deliberately absent: it is build-time codegen for the frontend
+# contract (npm run check:schema shells out to it), not runtime application code.
 [tool.setuptools]
-# R7.2: the 17 modules relocated out of graphlink_app/ to the repo root
-# (api_provider, graphlink_task_config, graphlink_licensing, ...) are
-# deliberately NOT listed here any more - setuptools' build_py only
-# consults package_dir[""] to locate a flat py-modules entry, and per-module
-# package_dir overrides are silently ignored for modules (they only work for
-# real packages), so there is no way to keep listing them here while they
-# live outside graphlink_app/. This means a real wheel/sdist build
-# (`python -m build`, `pip install -e .`) will not bundle these 17 modules -
-# a known, accepted, currently-inert gap: nothing in this project's actual
-# pipeline runs `pip install -e .` today (CI only does `pip install -r
-# requirements.txt`, which needs no packaging metadata at all), so nothing
-# breaks in practice. This closes at the R7.6 cutover, when graphlink_app/
-# collapses entirely and this whole package-dir/py-modules scheme gets
-# rebuilt in one motion for a flat single-root layout.
 py-modules = [
-    "graphlink_agents",
-    "graphlink_agents_artifact",
-    "graphlink_agents_code_sandbox",
-    "graphlink_agents_core",
-    "graphlink_agents_pycoder",
-    "graphlink_agents_tools",
-    "graphlink_agents_web",
-    "graphlink_app",
-    "graphlink_canvas_groups",
-    "graphlink_canvas_items",
-    "graphlink_canvas_note_items",
-    "graphlink_command_palette",
-    "graphlink_command_palette_bridge",
-    "graphlink_command_palette_payload",
-    "graphlink_command_palette_web",
-    "graphlink_composer",
-    "graphlink_composer_bridge",
-    "graphlink_composer_context_bridge",
-    "graphlink_composer_context_payload",
-    "graphlink_composer_context_web",
-    "graphlink_composer_payload",
-    "graphlink_composer_picker_bridge",
-    "graphlink_composer_picker_payload",
-    "graphlink_composer_picker_web",
-    "graphlink_composer_popup_positioning",
-    "graphlink_composer_web",
-    "graphlink_config",
-    "graphlink_context_menu",
-    "graphlink_connections",
-    "graphlink_conversation_node",
-    "graphlink_core",
-    "graphlink_crash",
-    "graphlink_drag_speed_bridge",
-    "graphlink_drag_speed_payload",
-    "graphlink_drag_speed_web",
-    "graphlink_exporter",
-    "graphlink_file_handler",
-    "graphlink_font_control_bridge",
-    "graphlink_font_control_payload",
-    "graphlink_font_control_web",
-    "graphlink_frontend_bootstrap",
-    "graphlink_grid_control_bridge",
-    "graphlink_grid_control_payload",
-    "graphlink_grid_control_web",
-    "graphlink_html_view",
-    "graphlink_island_bridge",
-    "graphlink_island_codegen",
-    "graphlink_island_schema",
-    "graphlink_lod",
-    "graphlink_logging",
-    "graphlink_minimap_bridge",
-    "graphlink_minimap_payload",
-    "graphlink_minimap_web",
-    "graphlink_node",
-    "graphlink_notification_bridge",
-    "graphlink_notification_payload",
-    "graphlink_notification_web",
-    "graphlink_overlay_coordinator",
-    "graphlink_paths",
-    "graphlink_pin_overlay_bridge",
-    "graphlink_pin_overlay_payload",
-    "graphlink_pin_overlay_web",
-    "graphlink_plugin_picker_bridge",
-    "graphlink_plugin_picker_payload",
-    "graphlink_plugin_picker_web",
-    "graphlink_renderer_flags",
-    "graphlink_scene",
-    "graphlink_search_overlay_bridge",
-    "graphlink_search_overlay_payload",
-    "graphlink_search_overlay_web",
-    "graphlink_settings_bridge",
-    "graphlink_settings_payload",
-    "graphlink_settings_web",
-    "graphlink_settings_workers",
-    "graphlink_styles",
-    "graphlink_token_counter_bridge",
-    "graphlink_token_counter_payload",
-    "graphlink_token_counter_web",
-    "graphlink_toolbar_bridge",
-    "graphlink_toolbar_payload",
-    "graphlink_toolbar_web",
-    "graphlink_utility",
-    "graphlink_update",
-    "graphlink_view",
-    "graphlink_web_island_host",
-    "graphlink_webengine",
-    "graphlink_window",
-    "graphlink_window_actions",
-    "graphlink_window_navigation",
+    "api_provider",
+    "graphlink_artifact_agent",
+    "graphlink_audio",
+    "graphlink_chart_agent",
+    "graphlink_chart_data",
+    "graphlink_chart_rendering",
+    "graphlink_chat_agent",
+    "graphlink_desktop",
+    "graphlink_grid_view_settings",
+    "graphlink_licensing",
+    "graphlink_memory",
+    "graphlink_model_catalog",
+    "graphlink_navigation_pins",
+    "graphlink_prompts",
+    "graphlink_secrets",
+    "graphlink_task_config",
+    "graphlink_token_estimator",
+    "graphlink_version",
 ]
 
-# R7.2: graphlink_plugins/ moved out of graphlink_app/ WHOLESALE - all 19
-# files, including 3 that are still Qt-tainted (graphlink_plugin_context_menu.py,
-# graphlink_plugin_portal.py, web_research/worker.py). An earlier version of
-# this move tried to leave those 3 behind at the old location to keep the new
-# home Qt-pure; that broke at runtime (ModuleNotFoundError), because Python
-# resolves a dotted import like `graphlink_plugins.graphlink_plugin_portal`
-# against ONE specific `graphlink_plugins` package - whichever directory of
-# that name comes first on sys.path - and two same-named packages can never
-# coexist. graphlink_plugins/ is therefore NOT 100% Qt-free at its new home;
-# that closes at the R7.6 cutover when the 3 remaining Qt files finally get
-# deleted along with the rest of graphlink_app/. packages.find's own `where`
-# list now searches both roots; the package-dir override below is required
-# alongside it - package-dir[""] applies to every discovered package
-# regardless of which `where` root found it, so without this entry a real
-# build looks for graphlink_plugins under graphlink_app/ (where it no longer
-# exists) and fails outright rather than silently mis-packaging.
 [tool.setuptools.packages.find]
-where = ["graphlink_app", "."]
+where = ["."]
 include = [
-    "graphlink_canvas*",
-    "graphlink_nodes*",
+    "backend*",
     "graphlink_plugins*",
-    "graphlink_session*",
-    "graphlink_ui_dialogs*",
-    "graphlink_widgets*",
 ]
 
-[tool.setuptools.package-dir]
-"" = "graphlink_app"
-graphlink_plugins = "graphlink_plugins"
-
-# R7.2: this now hard-fails a real `python -m build`/`pip install -e .`
-# with `ModuleNotFoundError: graphlink_version` - verified empirically, not
-# guessed. setuptools' `attr:` resolution for a bare (non-dotted) module name
-# ONLY ever consults package_dir[""] (confirmed by direct testing: even a
-# dedicated `graphlink_version = "."` package-dir entry, the same mechanism
-# that fixes graphlink_plugins above, does NOT help attr: resolution the way
-# it helps packages.find - they are different code paths), so as long as
-# package_dir[""] must stay "graphlink_app" for the ~89 modules still there,
-# there is no clean way to also point this at graphlink_version.py's new
-# repo-root location. Same accepted-gap tier as py-modules above, but more
-# severe (a hard failure, not silent under-packaging) - stated plainly so
-# nobody is surprised by it. Closes at the R7.6 cutover along with everything
-# else in this file keyed to graphlink_app/.
 [tool.setuptools.dynamic]
 version = { attr = "graphlink_version.APP_VERSION" }
