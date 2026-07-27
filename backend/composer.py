@@ -39,7 +39,12 @@ import api_provider
 
 from backend.events import SessionBus
 from backend.notifications import NotificationState
-from backend.settings import apply_llama_cpp_reasoning_mode, apply_ollama_reasoning_mode
+from backend.settings import (
+    _apply,
+    apply_llama_cpp_reasoning_mode,
+    apply_ollama_chat_model,
+    apply_ollama_reasoning_mode,
+)
 from backend.token_counter import TokenCounterState
 from graphlink_licensing import SettingsManager
 
@@ -92,6 +97,7 @@ class ComposerDocument:
     # state the UI already claimed. Deriving instead of mirroring removes the
     # second source of truth rather than trying to keep two in sync.
     reasoning_level_reader: Callable[[], str] | None = field(default=None, repr=False)
+    route_reader: Callable[[], dict[str, Any]] | None = field(default=None, repr=False)
     # R4: the in-flight agent-dispatch request, if any - set by
     # backend/agents.py's AgentDispatcher around a real chat call so the
     # composer UI can reflect generating/idle state and offer cancellation.
@@ -131,8 +137,41 @@ class ComposerDocument:
     def _reasoning_label(self, level: str) -> str:
         return next(o["label"] for o in REASONING_OPTIONS if o["id"] == level)
 
+    def route(self) -> dict[str, Any]:
+        """The REAL provider/model route (R8a).
+
+        This used to be five hardcoded literals - provider "Ollama (Local)",
+        empty modelId/modelLabel, an empty modelOptions list, and
+        canChange/modelSelection False. The composer therefore rendered a
+        control that looked like a model dropdown, was permanently greyed out,
+        and had nothing behind it. The user reported it as "does not work at
+        all and is locked up", which is exactly right: a visible dead control
+        reads as a bug, not as a documented deferral.
+
+        It now reports what the app is actually configured to do, resolved
+        through the same path api_provider uses at call time
+        (graphlink_task_config.sync_ollama_task_models ->
+         graphlink_model_catalog.resolve_task_model), so what the composer
+        shows and what a send actually uses cannot drift apart.
+        """
+        if self.route_reader is None:
+            # No settings manager wired (the 2-positional-arg test shape).
+            # Report honestly rather than claiming a provider we cannot check.
+            return {
+                "mode": "ollama",
+                "provider": "Ollama (Local)",
+                "modelId": "",
+                "modelLabel": "",
+                "modelOptions": [],
+                "label": "Ollama (Local)",
+                "available": True,
+                "canChange": False,
+            }
+        return self.route_reader()
+
     def payload(self) -> dict[str, Any]:
         reasoning_level = self.effective_reasoning_level()
+        route = self.route()
         return {
             "draft": {
                 "id": self.draft.id,
@@ -148,19 +187,12 @@ class ComposerDocument:
                 "reviewAvailable": False,
             },
             "route": {
-                "mode": "ollama",
-                "provider": "Ollama (Local)",
-                "modelId": "",
-                "modelLabel": "",
-                "modelOptions": [],
+                **route,
                 "reasoning": {
                     "level": reasoning_level,
                     "label": self._reasoning_label(reasoning_level),
                     "options": list(REASONING_OPTIONS),
                 },
-                "label": "Ollama (Local)",
-                "available": True,
-                "canChange": False,
             },
             "request": {
                 "id": self.request_id,
@@ -174,7 +206,9 @@ class ComposerDocument:
                 "attachments": False,
                 "contextReview": False,
                 "routeSelection": False,
-                "modelSelection": False,
+                # Real, and derived - not a constant. The composer's model
+                # control enables exactly when there is something to choose.
+                "modelSelection": bool(route.get("modelOptions")),
                 "reasoningSelection": api_provider.is_local_ollama_mode() or api_provider.is_local_llama_cpp_mode(),
                 "settingsShortcut": True,
                 "cancellation": True,
@@ -206,6 +240,73 @@ def register_composer(
             return settings_manager.get_ollama_reasoning_mode()
 
         document.reasoning_level_reader = _persisted_reasoning_mode
+
+        def _live_route() -> dict[str, Any]:
+            """Resolve the route the way a real send resolves it.
+
+            Deliberately goes through graphlink_task_config.sync_ollama_task_models
+            rather than reading assignments directly: that is the function
+            api_provider itself calls, so the model this reports is by
+            construction the model a send would use. Reading the raw
+            assignment dict instead would re-implement Auto/inherit
+            resolution here and could disagree with the real call path -
+            which is precisely the class of bug that made the composer
+            display "Quick Mode" while running CoT.
+            """
+            import graphlink_task_config as task_config
+
+            if api_provider.is_api_mode():
+                provider = settings_manager.get_api_provider() or "API Endpoint"
+                assigned = settings_manager.get_api_models() or {}
+                model_id = assigned.get(task_config.TASK_CHAT, "") or ""
+                catalog = settings_manager.get_api_model_catalog(provider) or []
+                options = [
+                    {"id": str(m.get("id") or m), "label": str(m.get("label") or m.get("id") or m)}
+                    for m in catalog
+                ]
+                return {
+                    "mode": "api",
+                    "provider": provider,
+                    "modelId": model_id,
+                    "modelLabel": model_id or "Select a model",
+                    "modelOptions": options,
+                    "label": provider,
+                    "available": True,
+                    "canChange": bool(options),
+                }
+
+            if api_provider.is_local_llama_cpp_mode():
+                path = settings_manager.get_llama_cpp_chat_model_path() or ""
+                name = path.replace("\\", "/").rsplit("/", 1)[-1]
+                return {
+                    "mode": "llama_cpp",
+                    "provider": "Llama.cpp (Local)",
+                    "modelId": path,
+                    "modelLabel": name or "Select a model",
+                    # A GGUF is chosen by file path in Settings, not from a
+                    # short list - offering a dropdown here would be a worse
+                    # affordance than the real file picker that already exists.
+                    "modelOptions": [],
+                    "label": "Llama.cpp (Local)",
+                    "available": bool(path),
+                    "canChange": False,
+                }
+
+            task_config.sync_ollama_task_models(settings_manager)
+            model_id = task_config.OLLAMA_MODELS.get(task_config.TASK_CHAT, "") or ""
+            scanned = settings_manager.get_ollama_scanned_models() or []
+            return {
+                "mode": "ollama",
+                "provider": "Ollama (Local)",
+                "modelId": model_id,
+                "modelLabel": model_id or "Select a model",
+                "modelOptions": [{"id": m, "label": m} for m in scanned],
+                "label": "Ollama (Local)",
+                "available": bool(model_id),
+                "canChange": bool(scanned),
+            }
+
+        document.route_reader = _live_route
     bus.register_topic("app-composer", document.payload)
 
     async def publish():
@@ -267,6 +368,35 @@ def register_composer(
 
         await publish()
 
+    async def select_model(model_id):
+        """Assign the chat-task model from the composer (R8a).
+
+        Writes through the SAME per-task assignment the Settings > Ollama page
+        edits, so the two surfaces cannot disagree, and republishes both.
+        """
+        if settings_manager is None:
+            return
+        chosen = str(model_id or "").strip()
+        if not chosen:
+            return
+        import graphlink_task_config as task_config
+
+        if api_provider.is_api_mode():
+            models = dict(settings_manager.get_api_models() or {})
+            models[task_config.TASK_CHAT] = chosen
+            _apply(settings_manager.set_api_models, models)
+        elif api_provider.is_local_ollama_mode():
+            # Shared with the Settings > Ollama page - one implementation,
+            # so the two surfaces cannot disagree about what is assigned.
+            await apply_ollama_chat_model(settings_manager, chosen)
+        else:
+            return
+
+        if bus.has_topic("app-settings"):
+            await bus.publish("app-settings")
+        await publish()
+
+    bus.register_intent("app-composer", "selectModel", select_model)
     bus.register_intent("app-composer", "updateDraft", update_draft)
     bus.register_intent("app-composer", "setReasoningLevel", set_reasoning_level)
 
