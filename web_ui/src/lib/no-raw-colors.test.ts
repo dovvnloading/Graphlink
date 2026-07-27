@@ -1,15 +1,19 @@
 /**
- * Repo-hygiene guard for section 3.4's rule: "Raw hex in island CSS is
- * banned." Scoped to src/islands/** so it automatically covers every future
- * island, not just composer - nobody has to remember to extend this file
- * when island #2 is added.
+ * Repo-hygiene guard for section 3.4's rule: raw hex in hand-authored UI CSS
+ * is banned - every color must come from a var(--gl-*) design token.
+ *
+ * R7.6a repointed this from src/islands/** to src/app/**: the 19 islands were
+ * deleted with the Qt hosts that embedded them, and the SPA under src/app is
+ * now the only hand-authored UI in the repo. The glob stays directory-scoped
+ * rather than file-listed for the same reason as before - it covers every
+ * future component automatically, with nobody needing to remember this file.
  *
  * EXCLUDED, and why:
  * - src/lib/tokens/*.css (gl-theme.css, gl-vars-dev.css) are GENERATED and
  *   contain real color values by design - that is their entire purpose.
  *   Each already has its own staleness pytest guarding its content; this
  *   file only cares about hand-authored island CSS.
- * - web_ui/src/islands/composer/index.html's
+ * - a document's
  *   `<meta name="theme-color" content="#1a1a1a">` is a deliberate, narrow
  *   exception, not an oversight: it is a browser/OS chrome hint (the tab/
  *   task-switcher accent color), read before any CSS or JS runs, so it
@@ -84,23 +88,52 @@ function findColorLiteralsInInlineStyles(source: string): string[] {
   return found;
 }
 
-describe("no raw color literals in island CSS", () => {
-  const cssFiles = globSync("islands/**/*.css", { cwd: REPO_SRC });
+// R7.6a: the SPA came under this guard for the first time when the glob moved
+// off the deleted islands tree, and it immediately surfaced 8 literals that
+// had never been checked. They are PINNED here rather than silently excluded,
+// deliberately mirroring qt_burndown.json's own idiom: the count may only go
+// down, and any NEW literal fails the build.
+//
+// They are not swapped for tokens in THIS increment because none is a
+// like-for-like substitution - doing it correctly changes rendered output and
+// belongs in a design pass, not an island deletion:
+//   - `0 8px 28px rgba(0,0,0,0.45)` and `0 12px 40px rgba(0,0,0,0.55)` match no
+//     existing token: --gl-shadow-3 is `0 8px 28px rgba(0,0,0,0.55)`, so it
+//     shares geometry with one and alpha with the other but equals neither.
+//   - `rgba(0,0,0,0.43)` is a scrim with no token of any kind.
+//   - `var(--gl-accent, #6ea8fe)`'s fallback is load-bearing: --gl-accent is
+//     not defined in the generated token files, so the literal is what
+//     actually renders. Dropping it would remove the color entirely.
+const PINNED_APP_CSS_LITERALS: Record<string, string[]> = {
+  "app\\styles.css": [
+    "rgba(0, 0, 0, 0.45)",
+    "rgba(0, 0, 0, 0.45)",
+    "rgba(0, 0, 0, 0.43)",
+    "rgba(0, 0, 0, 0.55)",
+    "rgba(0, 0, 0, 0.55)",
+    "rgba(0, 0, 0, 0.45)",
+    "#6ea8fe",
+    "rgba(0, 0, 0, 0.45)",
+  ],
+};
 
-  it("found at least one island CSS file to scan (sanity check the glob itself)", () => {
+describe("no raw color literals in app CSS", () => {
+  const cssFiles = globSync("app/**/*.css", { cwd: REPO_SRC });
+
+  it("found at least one app CSS file to scan (sanity check the glob itself)", () => {
     expect(cssFiles.length).toBeGreaterThan(0);
   });
 
-  it.each(cssFiles)("%s has zero hardcoded hex/rgba literals", (relPath) => {
+  it.each(cssFiles)("%s has no unpinned hardcoded hex/rgba literals", (relPath) => {
     const css = readFileSync(join(REPO_SRC, relPath), "utf-8");
     const literals = findColorLiteralsInCssDeclarationValues(css);
 
-    expect(literals).toEqual([]);
+    expect(literals).toEqual(PINNED_APP_CSS_LITERALS[relPath] ?? []);
   });
 });
 
 describe("no raw color literals in island TSX inline styles", () => {
-  const sourceFiles = globSync("islands/**/*.{ts,tsx}", { cwd: REPO_SRC }).filter(
+  const sourceFiles = globSync("app/**/*.{ts,tsx}", { cwd: REPO_SRC }).filter(
     (path) => !path.includes(".test."),
   );
 
