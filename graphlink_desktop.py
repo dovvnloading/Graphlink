@@ -96,7 +96,7 @@ def main() -> int:
     spa_index = REPO_ROOT / "web_ui" / "dist" / "app" / "index.html"
     if not spa_index.is_file():
         logger.error(
-            "SPA build missing at %s - run: cd web_ui && GRAPHLINK_ISLAND=app npx vite build",
+            "SPA build missing at %s - run: cd web_ui && npm run build",
             spa_index,
         )
         mark_clean_exit()

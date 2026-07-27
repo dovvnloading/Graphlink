@@ -4,7 +4,7 @@
 
 ![License](https://img.shields.io/badge/License-MIT-green)
 ![Python](https://img.shields.io/badge/Python-3.10%2B-blue)
-![PySide6](https://img.shields.io/badge/PySide6-Qt%20for%20Python-darkgreen)
+![Stack](https://img.shields.io/badge/Stack-FastAPI%20%2B%20React-blue)
 ![Local First](https://img.shields.io/badge/Local--First-AI%20Workspace-orange)
 ![GitHub stars](https://img.shields.io/github/stars/dovvnloading/Graphlink?style=social)
 
@@ -18,7 +18,7 @@
 
 Graphlink replaces the linear chat window with a visual canvas of connected nodes. Instead of forcing every interaction into a single timeline, it lets you branch: conversations, code generation, web research, drafting, and execution each live as their own node, and every branch can follow its own line of inquiry with its own model and context.
 
-It is built with Python and PySide6, runs entirely on your machine, and works with local model runtimes (Ollama, llama.cpp) as well as hosted APIs (OpenAI-compatible, Anthropic Claude, Google Gemini).
+It is built with a Python (FastAPI) backend and a Vite/React/TypeScript single-page app, launched as one native desktop window via `pywebview` — not a browser tab, not Qt. It runs entirely on your machine, and works with local model runtimes (Ollama, llama.cpp) as well as hosted APIs (OpenAI-compatible, Anthropic Claude, Google Gemini).
 
 > Graphlink is the second generation of the **Graphite** project, renamed to avoid collision with unrelated software. The rename is complete: modules, folders, and the UI all use the `graphlink` name.
 
@@ -43,7 +43,7 @@ It is built with Python and PySide6, runs entirely on your machine, and works wi
 - **Plugin nodes** — attach specialist nodes for web research, code execution, drafting, and repository-aware changes (see [Plugins](#plugins)).
 - **Repository-aware editing** — Gitlink loads a GitHub repo into structured context, previews file-level changes, and only writes after explicit approval.
 - **Local-first persistence** — conversations, notes, navigation pins, and graph layout are stored locally in SQLite.
-- **Export** — save output as `.txt`, `.md`, `.html`, `.py`, `.docx`, or `.pdf`.
+- **Export** — save the whole canvas as a PNG, or export individual nodes: Chat as Markdown, Code as a source file (extension inferred from language), Image as PNG.
 
 Built-in node types (the graph surface itself): **Chat**, **Code**, **Document**, **Image**, and **Thinking**, plus Notes, Frames, Containers, Navigation Pins, and Charts.
 
@@ -63,7 +63,7 @@ Attach these specialist nodes to a branch from the plugin picker:
 | --- | --- | --- |
 | System Prompt | Branch Foundations | Attaches a branch-scoped system prompt that shapes model behavior for that path only. |
 | Conversation Node | Branch Foundations | A self-contained linear chat inside a single node. |
-| Graphlink-Web | Reasoning and Research | Web retrieval, summarization, and source capture for real-time information. |
+| Web Research | Reasoning and Research | Web retrieval, summarization, and source capture for real-time information. |
 | Gitlink | Build and Execution | Loads a GitHub repo into structured context, previews file-level changes, and writes only after approval. |
 | Py-Coder | Build and Execution | Runs Python with AI-assisted generation, execution, and analysis. |
 | Execution Sandbox | Build and Execution | Runs Python in a per-node virtualenv with declared dependencies (isolates installed packages, not the OS or filesystem/network access). |
@@ -75,6 +75,7 @@ Attach these specialist nodes to a branch from the plugin picker:
 ### Requirements
 
 - Python 3.10 or newer. Windows is the primary development target today.
+- Node.js 22 or newer, needed only to build the frontend once (`web_ui/.nvmrc` pins the exact version this project is developed against).
 - Internet access is optional, and only needed for API Endpoint mode, GitHub-backed plugins, and web research.
 
 ### Install and run
@@ -88,19 +89,23 @@ py -m venv .venv
 pip install --upgrade pip
 pip install -r requirements.txt
 
-cd graphlink_app
-python graphlink_app.py
+cd web_ui
+npm install
+npm run build
+cd ..
+
+python graphlink_desktop.py
 ```
 
-`graphlink` above is the repo root (containing `requirements.txt`); `graphlink_app/` is the inner package directory the app actually runs from. Dependencies — PySide6, the provider SDKs, web-search/spellcheck/charting/audio helpers, and the export/parsing libraries — install from `requirements.txt` in a single step. `llama-cpp-python` is optional (only needed for Llama.cpp local mode; Ollama is the built-in local path) — install it separately with `pip install llama-cpp-python`. If you prefer Visual Studio, open `graphlink_app.sln`.
+`graphlink` above is the repo root (containing `requirements.txt` and `graphlink_desktop.py`). Dependencies — FastAPI, uvicorn, pywebview, the provider SDKs, web-search/spellcheck/charting/audio helpers, and the export/parsing libraries — install from `requirements.txt` in a single step. `llama-cpp-python` is optional (only needed for Llama.cpp local mode; Ollama is the built-in local path) — install it separately with `pip install llama-cpp-python`. Building the frontend (`npm run build`, inside `web_ui/`) only needs to be redone when `web_ui/` changes.
 
-> The app is script-oriented: launch it from the inner `graphlink_app/` directory so its imports resolve.
+> `graphlink_desktop.py` starts the Python backend, waits for it to report healthy, then opens a single native window (via `pywebview`) pointed at it — there is no separate frontend dev server to run and no browser tab involved. It requires `web_ui/dist/app/index.html` to already exist; if the frontend hasn't been built yet it logs an error naming the missing step and exits rather than building it for you.
 
 On first launch, Graphlink creates `~/.graphlink/` to hold your sessions and settings (see [Architecture](#architecture)).
 
 ### Choose a model backend
 
-Pick a mode from the toolbar; it persists across launches.
+Ollama (Local) is the mode Graphlink runs in today. Llama.cpp and API Endpoint credentials and models are fully configurable in **Settings**, but switching the *active* running mode away from Ollama isn't wired up in the UI yet.
 
 - **Ollama (Local)** — the default. Best for local-first use with Ollama-managed models.
 - **Llama.cpp (Local)** — direct GGUF loading through `llama-cpp-python`, with runtime controls.
@@ -112,15 +117,14 @@ Model selection and provider settings live in **Settings**. Every per-task model
 
 ### Ollama (Local)
 
-Defaults (used until you save your own) are `qwen3:8b` for chat and naming, and `deepseek-coder:6.7b` for chart generation. Web research falls back to your chat model. To use the defaults:
+Nothing is preconfigured — `qwen3:8b` and `deepseek-coder:6.7b` were an earlier version's hardcoded defaults and are now treated as legacy markers, not live ones. There is no model until you assign one:
 
 ```powershell
 ollama serve
 ollama pull qwen3:8b
-ollama pull deepseek-coder:6.7b
 ```
 
-To use different models, pull those and set them per task in **Settings > Ollama** — you do not need these specific models.
+Then open **Settings > Ollama**, run **Scan** to discover locally-pulled models, and assign one to each task (chat, naming, chart generation; web research falls back to your chat model). Sending a message before a task has an assigned model raises "No Ollama model configured for task: ...".
 
 ### Llama.cpp (Local)
 
@@ -149,43 +153,50 @@ The app reads these as fallbacks when no key is saved in Settings, or for model 
 - **Start** with a chat node or a starter prompt.
 - **Branch** by selecting a node and adding a plugin from the picker or controls; each new node begins a more specialized path (research, code, drafting, execution).
 - **Deliver** with build-oriented nodes — Gitlink for repo-aware change proposals, Py-Coder and Execution Sandbox for running code, Artifact / Drafter for documents.
-- **Export** to `.txt`, `.py`, `.md`, `.html`, `.docx`, or `.pdf`.
-- **Ingest** files: plain text, most source/config/markup formats (`.py`, `.js`, `.ts`, `.json`, `.html`, `.css`, `.yaml`, `.sql`, and many more — see `graphlink_file_handler.py`), common extensionless config files (`Dockerfile`, `Makefile`, `.gitignore`), plus `.pdf` and `.docx`. Other files are still accepted if they look like text.
+- **Export** the whole canvas as a PNG, or export individual nodes — Chat as `.md`, Code as a source file (extension inferred from language, falling back to `.txt`), Image as `.png`.
+- **Ingest**: file attachments are modeled on the backend (a Document node kind exists) but aren't yet wired to any UI action — there is currently no way to attach or ingest a file from the interface.
 
 ## Architecture
 
-Graphlink is a PySide6/Qt desktop app. The main window owns the graph view and plugin portal; nodes and plugins run their AI and execution work on worker threads; `api_provider` routes requests to the selected model backend; and sessions are serialized into local SQLite storage and reconstructed on load.
+Graphlink is a Python (FastAPI) backend paired with a Vite/React/TypeScript single-page app, launched as one native desktop window via `pywebview` — not a browser tab, not Qt.
+
+- **`graphlink_desktop.py`** (repo root) is the native window shell: it starts the backend in a background thread, waits for it to report healthy, then opens a single OS webview window (WebView2 on Windows) pointed at the backend's own URL. The backend serves the built frontend, the REST API, and the WebSocket on that one origin.
+- **`backend/`** holds all real application and domain logic: the FastAPI app factory and a WebSocket pub/sub event bus, the node-graph/canvas model (chat, code, document, image, thinking, and other node kinds; connections; autosave; crash recovery), LLM dispatch, settings, chat-library management, and session load/save.
+- **`web_ui/`** is the React SPA (built with Vite) — the entire UI: the canvas surface, the app bar and composer chrome, and dialogs/overlays. It talks to the backend over the REST API and the WebSocket.
+- **`contracts/`** is build-time-only codegen that generates the TypeScript types and JSON Schemas for WebSocket payloads from the backend's Python dataclasses, keeping the two sides in sync.
+- **`graphlink_plugins/`** holds the domain logic behind the plugin nodes (web research, Gitlink, Py-Coder, Execution Sandbox) — no UI code, no Qt.
 
 Your data lives entirely on your machine:
 
 ```text
-~/.graphlink/chats.db     graph sessions, notes, and pins
-~/.graphlink/session.dat  local settings and saved credentials
+~/.graphlink/chats.db      graph sessions, notes, and pins
+~/.graphlink/session.dat   local settings and saved credentials
+~/.graphlink/running.lock  crash-detection sentinel, written on launch and removed on clean exit
+~/.graphlink/graphlink.log rotating application log (2 MB cap)
 ```
 
 For a detailed, current map of where behavior lives in the codebase, see [GRAPHLINK_REPO_NAVIGATION.md](GRAPHLINK_REPO_NAVIGATION.md).
 
 ## Contributing
 
-Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, development conventions, branch/PR workflow, and pull-request expectations. The repository has a `pytest` suite under `graphlink_app/tests/`; run it with `pytest` from the inner `graphlink_app/` directory. There is currently no automated CI — validation is a manual local step before opening a PR (see CONTRIBUTING.md).
+Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, development conventions, branch/PR workflow, and pull-request expectations. The `pytest` suite spans the whole repo now (`backend/tests/`, `contracts/tests/`, and the root-level `tests/`); run it with `python -m pytest -q` from the repo root. CI (`.github/workflows/ci.yml`) runs on every PR: a Python job (`pip install -r requirements.txt`, then `python -m compileall -q .`, then `python -m pytest -q`) and a frontend job (`npm run check` inside `web_ui/` — schema-drift check, typecheck, lint, Vitest, and build), both on `windows-latest`.
 
 ## Troubleshooting
 
 | Symptom | Things to check |
 | --- | --- |
-| App does not start | Dependencies installed from `requirements.txt`; launched from the inner `graphlink_app/` directory; Python 3.10+. |
+| App does not start | Dependencies installed from `requirements.txt`; the frontend is built (`web_ui/dist/app/index.html` exists — run `cd web_ui && npm run build` if not); launched with `python graphlink_desktop.py` from the repo root; Python 3.10+. |
 | Ollama features fail | Ollama installed and running; the selected model has been pulled and exists locally. |
 | Llama.cpp features fail | `llama-cpp-python` installed; the configured path points to a real `.gguf`; try a `chat_format` override or lower runtime settings. Use Ollama or API mode for image/audio. |
 | API mode fails | API key present; base URL correct for OpenAI-compatible mode; the selected models exist on the endpoint. |
 | GitHub plugins fail | A valid token is saved in Settings and can access the target repository, branch, and path. |
-| Export or import fails | Dependencies reinstalled; destination is writable; the file type is supported. |
+| Export fails | Destination is writable; the node or canvas has content to export. |
 
 ## Limitations
 
-- Windows is the primary target today, though much of the Python is portable.
-- The codebase is mid-migration: most top-level modules are thin compatibility re-exports over the real package implementations, though at least one (`graphlink_dialogs.py`) is a stale, unused duplicate rather than a wrapper — see [GRAPHLINK_REPO_NAVIGATION.md](GRAPHLINK_REPO_NAVIGATION.md) before touching top-level dialog code.
+- Windows is the primary target today, though much of the Python is portable; CI is pinned to `windows-latest` specifically because secrets-at-rest testing exercises real Windows DPAPI.
 - API keys and GitHub tokens are encrypted at rest with Windows DPAPI, scoped to your Windows user account; on non-Windows platforms, or if DPAPI is unavailable, they fall back to plain application state (see [Security](#license-and-security)).
-- Automated coverage is headless (Qt widgets, serialization, and helper logic) rather than end-to-end UI testing.
+- Automated coverage is unit- and component-level (`pytest` for backend/contracts domain logic, Vitest for React components) rather than end-to-end, browser-driven UI testing.
 
 ## License and Security
 
