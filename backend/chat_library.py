@@ -62,6 +62,55 @@ def _format_timestamp(value: Any) -> str:
         return str(value)
 
 
+def _format_timestamp_iso(value: Any) -> str | None:
+    """R8a: the Chat Library redesign groups rows by date (Today/Yesterday/
+    Previous 7 Days/...), which needs a real, parseable instant - the
+    display label from _format_timestamp above is deliberately locale/human
+    formatted and not meant to be parsed back. None (not a sentinel string)
+    on anything unparseable/empty, so the frontend can cleanly bucket those
+    rows as "Unknown" rather than crash on a bad date."""
+    if not value:
+        return None
+    try:
+        return datetime.strptime(str(value), "%Y-%m-%d %H:%M:%S").isoformat()
+    except ValueError:
+        return None
+
+
+_PREVIEW_MAX_CHARS = 140
+
+
+def _extract_preview_and_message_count(chat_data: dict[str, Any]) -> tuple[str, int]:
+    """R8a: a one-line snippet (the last chat message) + total message count
+    for the redesigned Chat Library list. Deliberately computed HERE, at
+    save time, from the SAME chat_data dict already about to be
+    json.dumps'd - not parsed back out of `data` at list-read time in
+    get_all_chats, which would mean loading every row's full JSON blob
+    (images can be embedded as base64 bytes inside it - see
+    backend/canvas.py's _process_content_for_serialization) just to render
+    a list of titles. This is effectively free: no extra I/O, no extra
+    parsing, just a pass over a dict already in memory.
+
+    raw_content is a plain string for a text-only message, or a list of
+    content-part dicts (`_serialize_chat_node`) for a multimodal one - only
+    the "text" parts of the latter contribute to the preview, matching what
+    a user actually reads as the message."""
+    chat_nodes = [
+        node for node in chat_data.get("nodes", [])
+        if isinstance(node, dict) and node.get("node_type") == "chat"
+    ]
+    last_content = chat_nodes[-1].get("raw_content") if chat_nodes else None
+    if isinstance(last_content, list):
+        text = " ".join(
+            str(part.get("text", "")) for part in last_content
+            if isinstance(part, dict) and part.get("type") == "text"
+        )
+    else:
+        text = str(last_content or "")
+    preview = " ".join(text.split())[:_PREVIEW_MAX_CHARS]
+    return preview, len(chat_nodes)
+
+
 def _connect(db_path: Path) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path, timeout=30)
@@ -85,6 +134,18 @@ def _ensure_chats_table(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    # R8a: the redesigned Chat Library list needs a preview snippet + message
+    # count per row (see _extract_preview_and_message_count) - mirrors the
+    # notes/pins tables' own PRAGMA table_info + ALTER TABLE migration idiom
+    # exactly, so a chats.db written before this change gains the columns in
+    # place rather than needing a destructive rebuild. Defaults keep
+    # pre-migration rows valid (empty preview, zero count) until their next
+    # save recomputes both for real.
+    columns = [info[1] for info in conn.execute("PRAGMA table_info(chats)").fetchall()]
+    if "preview" not in columns:
+        conn.execute("ALTER TABLE chats ADD COLUMN preview TEXT DEFAULT ''")
+    if "message_count" not in columns:
+        conn.execute("ALTER TABLE chats ADD COLUMN message_count INTEGER DEFAULT 0")
 
 
 def _ensure_notes_table(conn: sqlite3.Connection) -> None:
@@ -149,7 +210,8 @@ def get_all_chats(db_path: Path) -> list[dict[str, Any]]:
     with contextlib.closing(_connect(db_path)) as conn, conn:
         _ensure_chats_table(conn)
         rows = conn.execute(
-            "SELECT id, title, created_at, updated_at FROM chats ORDER BY updated_at DESC"
+            "SELECT id, title, created_at, updated_at, preview, message_count "
+            "FROM chats ORDER BY updated_at DESC"
         ).fetchall()
     return [
         {
@@ -157,6 +219,10 @@ def get_all_chats(db_path: Path) -> list[dict[str, Any]]:
             "title": str(row[1]),
             "createdLabel": _format_timestamp(row[2]),
             "updatedLabel": _format_timestamp(row[3]),
+            "createdAtIso": _format_timestamp_iso(row[2]),
+            "updatedAtIso": _format_timestamp_iso(row[3]),
+            "preview": str(row[4] or ""),
+            "messageCount": int(row[5] or 0),
         }
         for row in rows
     ]
@@ -265,6 +331,7 @@ def save_chat_atomically_row(
     caller (mirrors _prepare_chat_payload's own pop, done once at the
     boundary rather than inside this function)."""
     chat_data_json = json.dumps(chat_data)
+    preview, message_count = _extract_preview_and_message_count(chat_data)
     with contextlib.closing(_connect(db_path)) as conn:
         _ensure_chats_table(conn)
         _ensure_notes_table(conn)
@@ -272,14 +339,16 @@ def save_chat_atomically_row(
         with conn:
             if chat_id:
                 conn.execute(
-                    "UPDATE chats SET title = ?, data = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                    (title, chat_data_json, chat_id),
+                    "UPDATE chats SET title = ?, data = ?, preview = ?, message_count = ?, "
+                    "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    (title, chat_data_json, preview, message_count, chat_id),
                 )
                 resolved_chat_id = chat_id
             else:
                 cursor = conn.execute(
-                    "INSERT INTO chats (title, data, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)",
-                    (title, chat_data_json),
+                    "INSERT INTO chats (title, data, preview, message_count, updated_at) "
+                    "VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)",
+                    (title, chat_data_json, preview, message_count),
                 )
                 resolved_chat_id = cursor.lastrowid
 

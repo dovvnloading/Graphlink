@@ -1,12 +1,16 @@
-"""The SPA chat-library topic's wire contract (Qt-removal plan R2.5e).
+"""The SPA chat-library topic's wire contract (Qt-removal plan R2.5e, R8a
+library redesign).
 
-Field-for-field the same shape as graphlink_chat_library_payload.py's
-ChatLibraryStatePayload (id/title/createdLabel/updatedLabel rows, plus a
-`notice` field for a recoverable DB-read error), registered as a distinct
-codegen artifact so the SPA's validator is generated from this independent
-Qt-free source rather than importing anything Qt-coupled. No loadChat/
-newChat/search-query field: search is client-only, and load/new-chat are
-deferred to R6 (see backend/chat_library.py's module docstring).
+Started field-for-field identical to graphlink_chat_library_payload.py's
+(now-deleted, Qt-era) ChatLibraryStatePayload; the Qt app is fully gone as
+of R7.6b, so there is no longer any legacy shape to mirror. R8a adds what
+the redesigned list needs to show real per-row content instead of just a
+title and two timestamps: createdAtIso/updatedAtIso (real parseable
+instants, for date-bucketed grouping - createdLabel/updatedLabel stay as
+human display strings, not meant to be parsed back), preview (a one-line
+snippet of the last message, computed once at save time - see
+backend/chat_library.py's _extract_preview_and_message_count), and
+messageCount.
 """
 
 from __future__ import annotations
@@ -20,6 +24,10 @@ class AppChatLibraryRowPayload:
     title: str
     createdLabel: str
     updatedLabel: str
+    createdAtIso: str | None
+    updatedAtIso: str | None
+    preview: str
+    messageCount: int
 
 
 @dataclass

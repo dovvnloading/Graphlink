@@ -7,6 +7,10 @@ export interface AppChatLibraryRow {
   title: string;
   createdLabel: string;
   updatedLabel: string;
+  createdAtIso?: string | null;
+  updatedAtIso?: string | null;
+  preview: string;
+  messageCount: number;
 }
 
 export interface AppChatLibraryState {
@@ -53,6 +57,24 @@ function checkAppChatLibraryRow(value: unknown, path: string, errors: string[]):
     const fieldValue = value["updatedLabel"];
     if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.updatedLabel: missing required field`);
     else { if (typeof fieldValue !== "string") errors.push(`${path}.updatedLabel` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["createdAtIso"];
+    if (fieldValue !== undefined && fieldValue !== null) { if (typeof fieldValue !== "string") errors.push(`${path}.createdAtIso` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["updatedAtIso"];
+    if (fieldValue !== undefined && fieldValue !== null) { if (typeof fieldValue !== "string") errors.push(`${path}.updatedAtIso` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["preview"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.preview: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.preview` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["messageCount"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.messageCount: missing required field`);
+    else { if (typeof fieldValue !== "number") errors.push(`${path}.messageCount` + ": expected number"); }
   }
 }
 
