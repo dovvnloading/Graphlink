@@ -2445,15 +2445,32 @@ body,
   font-size: 12px;
 }
 
-/* -- Chat library dialog (R2.5e) -------------------------------------------- */
+/* -- Chat library dialog (R2.5e, R8a full redesign) -------------------------
+   Was a permanently-boxed flat list with a shared toolbar that mutated
+   based on "whichever row is selected" - no content preview, no date
+   grouping, click-to-select-then-click-Load as a two-step action. R8a
+   replaces all of that with a real chat-history list: date-grouped rows
+   (Today/Yesterday/Previous 7 Days/Previous 30 Days/Older), a one-line
+   preview of each chat's last message, and per-row rename/delete that
+   act on THAT row alone. Deliberately reuses the composer island's exact
+   visual language (flat/borderless controls, var(--gl-neutral-button-hover)
+   as the one interaction fill, a single filled-pill accent element) rather
+   than inventing a competing style - see Composer.tsx-adjacent rules above
+   for the same idiom. Action icons stay always-visible (never opacity-
+   gated on hover) - a hover-only reveal reintroduces the "rename/delete
+   controls go missing" regression real chat-history UIs have shipped and
+   been criticized for. */
 
 .library-dialog {
-  min-width: 480px;
-  max-width: min(560px, calc(100vw - 64px));
-  height: min(620px, calc(100vh - 96px));
+  /* Pinned, not a min/max range - the row count changes on every search
+     keystroke, so the dialog's own frame must never visibly resize with
+     it (same fix already applied to .settings-dialog). */
+  width: min(680px, calc(100vw - 64px));
+  height: min(680px, calc(100vh - 96px));
 }
 
 .library-dialog .overlay-dialog-body {
+  padding: 0;
   flex: 1;
   min-height: 0;
   overflow: hidden;
@@ -2464,68 +2481,46 @@ body,
   height: 100%;
   display: flex;
   flex-direction: column;
-  gap: 12px;
   color: var(--gl-surface-text);
 }
 
-.library-search-input {
-  box-sizing: border-box;
-  flex-shrink: 0;
-  width: 100%;
-  padding: 10px 12px;
-  font-size: 13px;
-  font-family: inherit;
-  color: var(--gl-surface-text);
-  background-color: var(--gl-surface-inset, var(--gl-surface-window));
-  border: 1px solid var(--gl-surface-border);
-  border-radius: 8px;
-  outline: none;
-}
+/* -- header: search + New Chat, persistent, never selection-gated -- */
 
-.library-toolbar {
+.library-header {
   flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: 8px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--gl-surface-border);
 }
 
-.library-button {
-  padding: 8px 12px;
-  font-size: 11px;
-  font-weight: 600;
-  font-family: inherit;
-  color: var(--gl-surface-text);
-  background-color: var(--gl-neutral-button-hover);
-  border: 1px solid var(--gl-surface-border);
-  border-radius: 8px;
-  cursor: pointer;
-}
-
-.library-button:hover:not(:disabled) {
-  filter: brightness(1.15);
-}
-
-.library-button:disabled {
-  opacity: 0.45;
-  cursor: default;
-}
-
-.library-button-primary {
-  color: var(--gl-semantic-status-success, currentColor);
-  border-color: var(--gl-semantic-status-success, currentColor);
-}
-
-.library-button-danger {
-  color: var(--gl-semantic-status-error, currentColor);
-  border-color: var(--gl-semantic-status-error, currentColor);
-}
-
-.library-rename-input {
-  box-sizing: border-box;
+.library-search-wrap {
+  position: relative;
   flex: 1;
   min-width: 0;
-  padding: 8px 10px;
-  font-size: 12px;
+}
+
+.library-search-wrap .icon {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: var(--gl-surface-text-muted);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
+
+.library-search-input {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 9px 12px 9px 32px;
+  font-size: 13px;
   font-family: inherit;
   color: var(--gl-surface-text);
   background-color: var(--gl-surface-inset, var(--gl-surface-window));
@@ -2534,16 +2529,49 @@ body,
   outline: none;
 }
 
-.library-confirm-text {
-  flex: 1;
-  min-width: 0;
+.library-search-input:focus {
+  border-color: var(--gl-surface-text-muted);
+}
+
+/* The one bold accent affordance in this dialog - same idiom as the
+   composer's filled circular send button, widened to a labeled pill
+   since "New Chat" needs a label, not just a glyph. */
+.library-new-chat-button {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
   font-size: 12px;
-  color: var(--gl-semantic-status-warning, currentColor);
+  font-weight: 600;
+  font-family: inherit;
+  color: var(--gl-surface-window);
+  background-color: var(--gl-surface-text-bright, var(--gl-surface-text-muted));
+  border: none;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: opacity 100ms ease;
+}
+
+.library-new-chat-button:hover {
+  opacity: 0.88;
+}
+
+.library-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .library-notice {
   flex-shrink: 0;
-  margin: 0;
+  margin: 10px 20px 0;
   padding: 8px 10px;
   font-size: 12px;
   color: var(--gl-semantic-status-warning, currentColor);
@@ -2552,59 +2580,257 @@ body,
   border-radius: 8px;
 }
 
-.library-list {
+/* -- empty / no-match states -- */
+
+.library-empty-state {
   flex: 1;
   min-height: 0;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 32px 24px;
+  text-align: center;
+  color: var(--gl-surface-text-muted);
 }
 
-.library-empty {
-  padding: 12px 14px;
+.library-empty-state .icon {
+  width: 32px;
+  height: 32px;
+  fill: none;
+  stroke: var(--gl-surface-text-muted);
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.7;
+}
+
+.library-empty-state-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--gl-surface-text);
+}
+
+.library-empty-state-sub {
+  margin: 0;
+  font-size: 12px;
+  max-width: 280px;
+}
+
+.library-search-empty {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 28px 16px;
+  text-align: center;
   font-size: 12px;
   color: var(--gl-surface-text-muted);
 }
 
-.library-row {
-  box-sizing: border-box;
-  padding: 12px 14px;
-  border: 1px solid var(--gl-surface-border);
-  border-radius: 8px;
-  background-color: var(--gl-neutral-button-hover);
+.library-search-empty p {
+  margin: 0;
+}
+
+.library-search-empty-clear {
+  display: inline-block;
+  margin-top: 6px;
+  padding: 2px 4px;
+  background: none;
+  border: none;
+  font-size: 12px;
+  font-family: inherit;
+  color: var(--gl-surface-text-muted);
+  text-decoration: underline;
   cursor: pointer;
 }
 
-.library-row:hover {
-  filter: brightness(1.15);
+/* -- scrolling, date-grouped list -- */
+
+.library-groups {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px 12px 12px;
 }
 
-.library-row.selected {
-  border-color: var(--gl-semantic-status-success, currentColor);
+.library-group:first-child .library-group-header {
+  padding-top: 6px;
+}
+
+.library-group-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  margin: 0;
+  padding: 12px 8px 6px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--gl-surface-text-muted);
+  background-color: var(--gl-surface-node-body);
+}
+
+.library-group-rows {
+  margin: 0 0 4px;
+  padding: 0;
+  list-style: none;
+}
+
+/* Row: flat/borderless at rest - matches the composer's control idiom
+   literally, no border/background until interaction. Elevation stays on
+   the dialog panel itself (the shared Dialog wrapper's own shadow), the
+   same way the composer dock - not its individual buttons - is the one
+   shadowed surface in that pattern. */
+.library-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-radius: 8px;
+}
+
+.library-row:hover,
+.library-row:focus-within {
+  background-color: var(--gl-neutral-button-hover);
+}
+
+.library-row-primary {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 8px 4px 8px 10px;
+  text-align: left;
+  font-family: inherit;
+  color: inherit;
+  background: transparent;
+  border: none;
+  cursor: pointer;
 }
 
 .library-row-title {
-  margin: 0 0 4px 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 13px;
   font-weight: 600;
 }
 
-.library-row-meta {
-  margin: 0;
-  font-size: 11px;
+.library-row-preview {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
   color: var(--gl-surface-text-muted);
 }
 
-.library-status {
+.library-row-preview.placeholder,
+.library-row-preview.hint {
+  font-style: italic;
+}
+
+.library-row-count {
   flex-shrink: 0;
-  margin: 0;
-  padding-left: 2px;
-  font-size: 11px;
+  min-width: 20px;
+  text-align: right;
+  font-size: 10.5px;
   color: var(--gl-surface-text-muted);
+}
+
+/* Rename: an in-place input filling the exact slot the title occupied */
+.library-row-rename-input {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 2px 6px;
+  margin: -2px -6px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--gl-surface-text);
+  background-color: var(--gl-surface-inset, var(--gl-surface-window));
+  border: 1px solid var(--gl-surface-text-muted);
+  border-radius: 6px;
+  outline: none;
+}
+
+/* Actions: ALWAYS rendered and legible - never opacity/pointer-events
+   gated on hover (see this section's own header comment for why). */
+.library-row-actions {
+  flex-shrink: 0;
+  display: flex;
+  gap: 2px;
+  padding-right: 6px;
+}
+
+.library-icon-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  color: var(--gl-neutral-button-icon);
+  background-color: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.library-icon-button:hover:enabled {
+  background-color: var(--gl-neutral-button-hover);
+}
+
+.library-icon-button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.library-icon-button .icon {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.library-icon-button-delete:hover {
+  color: var(--gl-semantic-status-error, currentColor);
+}
+
+/* Inline delete confirm - occupies the same trailing slot, no popover:
+   this list scrolls, and a floating popover near the dialog's top/bottom
+   edge is fragile to position correctly, so the confirm swaps in place. */
+.library-row-confirm {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-right: 6px;
+}
+
+.library-row-confirm-label {
+  font-size: 10.5px;
+  color: var(--gl-semantic-status-warning, currentColor);
+}
+
+.library-icon-button-confirm-delete {
+  color: var(--gl-semantic-status-error, currentColor);
+}
+
+.library-icon-button-confirm-delete:hover {
+  background-color: var(--gl-semantic-status-error, currentColor);
+  color: var(--gl-surface-window);
 }
 
 /* -- R3.25/R3.26 conversation node ------------------------------------------ */

@@ -17,8 +17,10 @@ from backend.canvas import SceneDocument
 from backend.chat_library import (
     AUTOSAVE_OWNER,
     USER_OWNER,
+    _extract_preview_and_message_count,
     _fallback_title,
     _format_timestamp,
+    _format_timestamp_iso,
     _resolve_seed_message,
     chat_library_payload,
     delete_chat,
@@ -78,8 +80,16 @@ def test_get_all_chats_reads_real_rows(db_path):
     ids = {row["id"] for row in rows}
     assert ids == {first_id, second_id}
     for row in rows:
-        assert set(row) == {"id", "title", "createdLabel", "updatedLabel"}
+        assert set(row) == {
+            "id", "title", "createdLabel", "updatedLabel",
+            "createdAtIso", "updatedAtIso", "preview", "messageCount",
+        }
         assert row["updatedLabel"] == "Jan 02, 2026 11:30 AM"
+        assert row["updatedAtIso"] == "2026-01-02T11:30:00"
+        # _insert_chat writes the OLD (pre-R8a) column set directly - the
+        # ALTER TABLE migration must still leave these rows valid.
+        assert row["preview"] == ""
+        assert row["messageCount"] == 0
 
 
 def test_format_timestamp_matches_legacy_display_format():
@@ -87,6 +97,55 @@ def test_format_timestamp_matches_legacy_display_format():
     assert _format_timestamp("") == "Unknown"
     assert _format_timestamp(None) == "Unknown"
     assert _format_timestamp("not-a-timestamp") == "not-a-timestamp"
+
+
+def test_format_timestamp_iso_returns_a_real_parseable_instant():
+    assert _format_timestamp_iso("2026-01-02 11:30:00") == "2026-01-02T11:30:00"
+    assert _format_timestamp_iso("") is None
+    assert _format_timestamp_iso(None) is None
+    assert _format_timestamp_iso("not-a-timestamp") is None
+
+
+def test_extract_preview_uses_the_last_chat_nodes_text():
+    chat_data = {
+        "nodes": [
+            {"node_type": "chat", "raw_content": "first message", "is_user": True},
+            {"node_type": "code", "code": "x = 1"},
+            {"node_type": "chat", "raw_content": "  the   real   last message  ", "is_user": False},
+        ],
+    }
+    preview, count = _extract_preview_and_message_count(chat_data)
+    assert preview == "the real last message"
+    assert count == 2
+
+
+def test_extract_preview_handles_multimodal_content_parts():
+    chat_data = {
+        "nodes": [
+            {
+                "node_type": "chat",
+                "raw_content": [
+                    {"type": "text", "text": "look at this"},
+                    {"type": "image_bytes", "data": "not-real-image-data"},
+                ],
+                "is_user": True,
+            },
+        ],
+    }
+    preview, count = _extract_preview_and_message_count(chat_data)
+    assert preview == "look at this"
+    assert count == 1
+
+
+def test_extract_preview_truncates_long_text():
+    chat_data = {"nodes": [{"node_type": "chat", "raw_content": "a" * 500, "is_user": True}]}
+    preview, _ = _extract_preview_and_message_count(chat_data)
+    assert len(preview) == 140
+
+
+def test_extract_preview_is_empty_for_no_chat_nodes():
+    assert _extract_preview_and_message_count({"nodes": []}) == ("", 0)
+    assert _extract_preview_and_message_count({}) == ("", 0)
 
 
 def test_rename_chat_persists_and_updates_timestamp(db_path):
@@ -345,6 +404,17 @@ def test_save_chat_atomically_row_inserts_when_chat_id_is_none(db_path):
     new_id = save_chat_atomically_row(db_path, None, "New Title", {"nodes": []}, [], [])
     row = load_chat_row(db_path, new_id)
     assert row == {"title": "New Title", "data": {"nodes": []}}
+
+
+def test_save_chat_atomically_row_persists_a_real_preview_and_message_count(db_path):
+    chat_data = {
+        "nodes": [{"node_type": "chat", "raw_content": "hello there world", "is_user": True}],
+    }
+    chat_id = save_chat_atomically_row(db_path, None, "T", chat_data, [], [])
+
+    row = next(r for r in get_all_chats(db_path) if r["id"] == chat_id)
+    assert row["preview"] == "hello there world"
+    assert row["messageCount"] == 1
 
 
 def test_save_chat_atomically_row_updates_the_same_row_when_chat_id_given(db_path):
