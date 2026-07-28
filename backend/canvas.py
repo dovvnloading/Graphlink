@@ -187,6 +187,17 @@ ORGANIZE_SPACING_Y = 180
 # find_branch_position packing algorithm (a later refinement).
 MESSAGE_VERTICAL_SPACING = 160
 
+# R8a: where a generated Key Takeaway / Explainer Note lands relative to its
+# source chat node, and how it is tinted. 400px clears a chat node's own
+# width (~292px) with room to spare, matching the legacy offset. The colours
+# are hex because the backend never resolves colour NAMES (see SceneNode's
+# own comment) - these two are the frontend palette's "Mid Gray" body and
+# "Blue" header, the closest surviving equivalents to legacy's Mid Gray +
+# status_info pairing (there is no status_info token in the new stack).
+NOTE_AGENT_X_OFFSET = 400
+NOTE_AGENT_BODY_COLOR = "#7a7a7a"
+NOTE_AGENT_HEADER_COLOR = "#3f7dc9"
+
 # R6.1: Notes/Frames/Containers - legacy canvas decorations, ported for the
 # first time. _recompute_group_bounds (below, on SceneDocument) is plain
 # server-side math, NOT a React Flow extent/parentId feature - it computes a
@@ -3636,6 +3647,78 @@ def register_canvas(
         )
         return result_holder.get("node_id")
 
+    async def _generate_note_from_node(source_node_id, note_kind, x_offset, y_offset):
+        """R8a: shared path for generateKeyTakeaway and generateExplainerNote.
+
+        Both take one chat node, run its text through an agent, and drop the
+        result into a new note beside it - identical except for the agent and
+        the note's offset, so they share one implementation rather than two
+        that can drift.
+
+        Source text is the node's OWN content, not the branch history that
+        generate_chart uses: legacy's takeaway/explainer passed a single
+        node's text, and widening that to the whole branch would change what
+        the feature summarises.
+        """
+        if not source_node_id or source_node_id not in document.nodes:
+            notifications.show("Please select a valid node first.", "warning")
+            await bus.publish("notification")
+            return None
+
+        source = document.nodes[source_node_id]
+        if source.kind != "chat":
+            notifications.show("This node can't be summarised into a note.", "warning")
+            await bus.publish("notification")
+            return None
+        if not source.content or not source.content.strip():
+            notifications.show("The selected node has no text to summarise.", "warning")
+            await bus.publish("notification")
+            return None
+
+        result_holder: dict[str, str] = {}
+
+        async def _on_success(text):
+            if source_node_id not in document.nodes:
+                # Deleted mid-flight - silent no-op, same posture as
+                # _dispatch_image's own liveness check.
+                return
+            note = document.add_note(source.x + x_offset, source.y + y_offset)
+            document.set_note_content(note.id, text)
+            # Legacy tinted these notes "Mid Gray" with an info-coloured
+            # header. Both values come from the frontend's own palette
+            # (GroupColorPicker's GROUP_MONO_COLORS/GROUP_NAMED_COLORS) since
+            # the backend stores hex and never resolves a colour name. The
+            # legacy note width of 400 is NOT ported: note width is not a
+            # modeled field here (it is CSS-driven), so there is nothing to
+            # set it on.
+            document.set_group_color(note.id, NOTE_AGENT_BODY_COLOR, NOTE_AGENT_HEADER_COLOR)
+            result_holder["node_id"] = note.id
+            await bus.publish("scene")
+
+        def _on_failure(message):
+            # start_note_generation already surfaced the notification.
+            pass
+
+        await agent_dispatcher.start_note_generation(
+            bus=bus,
+            notifications_state=notifications,
+            node_id=source_node_id,
+            note_kind=note_kind,
+            source_text=source.content,
+            on_success=_on_success,
+            on_failure=_on_failure,
+        )
+        return result_holder.get("node_id")
+
+    async def generate_key_takeaway(source_node_id):
+        return await _generate_note_from_node(source_node_id, "takeaway", NOTE_AGENT_X_OFFSET, 0)
+
+    async def generate_explainer_note(source_node_id):
+        # Offset vertically as well as horizontally so a takeaway and an
+        # explainer generated from the same node don't land on top of each
+        # other - the same 100px stagger legacy used.
+        return await _generate_note_from_node(source_node_id, "explainer", NOTE_AGENT_X_OFFSET, 100)
+
     async def resize_chart(node_id, width, height):
         document.resize_chart(node_id, width, height)
         await publish_scene()
@@ -4138,6 +4221,10 @@ def register_canvas(
     # R6.2: Chart - a single combined create+generate action, unlike every
     # node-creation flow above - see generate_chart's own docstring.
     bus.register_intent("scene", "generateChart", generate_chart)
+    # R8a: the two note agents restored from the deleted Qt app - see
+    # graphlink_note_agent.py's own docstring for why they were dead stubs.
+    bus.register_intent("scene", "generateKeyTakeaway", generate_key_takeaway)
+    bus.register_intent("scene", "generateExplainerNote", generate_explainer_note)
     bus.register_intent("scene", "resizeChart", resize_chart)
     bus.register_intent("scene", "toggleChartAspectLock", toggle_chart_aspect_lock)
     bus.register_intent("scene", "moveNode", move_node)

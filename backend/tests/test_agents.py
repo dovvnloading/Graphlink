@@ -4466,3 +4466,124 @@ def test_start_chart_generation_timeout_fires_the_exact_message_and_clears_the_s
         assert notifications.msg_type == "error"
 
     asyncio.run(run())
+
+
+# -- R8a: note agents (Key Takeaway / Explainer Note) -------------------------
+#
+# These two were implemented in the deleted Qt app and never ported, leaving
+# their menu items as disabled stubs. Mocking follows the chart/artifact seam
+# (patch the agent CLASS's get_response), not the api_provider.chat seam,
+# because agents.py constructs a fresh agent instance per call.
+
+
+def _make_note_env():
+    bus = SessionBus("agents-note-test")
+    notifications = NotificationState()
+    bus.register_topic("notification", notifications.payload)
+    bus.register_topic("scene", lambda: {})
+    dispatcher = AgentDispatcher(_FakeSettingsManager())
+    return bus, notifications, dispatcher
+
+
+def test_start_note_generation_takeaway_calls_on_success_then_clears_the_slot(monkeypatch):
+    monkeypatch.setattr(
+        agents_module.KeyTakeawayAgent, "get_response",
+        lambda self, text: f"Key Takeaway\n\nMain Points:\n• from {text}",
+    )
+
+    async def run():
+        bus, notifications, dispatcher = _make_note_env()
+        successes, failures = [], []
+        await dispatcher.start_note_generation(
+            bus=bus, notifications_state=notifications, node_id="n1",
+            note_kind="takeaway", source_text="the source node's text",
+            on_success=successes.append, on_failure=failures.append,
+        )
+        assert successes == ["Key Takeaway\n\nMain Points:\n• from the source node's text"]
+        assert failures == []
+        assert dispatcher._note_requests == {}
+        assert notifications.visible is False
+
+    asyncio.run(run())
+
+
+def test_start_note_generation_explainer_uses_the_explainer_agent(monkeypatch):
+    # note_kind must actually select the agent - a regression here would
+    # silently produce takeaways for both menu items.
+    monkeypatch.setattr(agents_module.KeyTakeawayAgent, "get_response", lambda self, text: "TAKEAWAY")
+    monkeypatch.setattr(agents_module.ExplainerAgent, "get_response", lambda self, text: "EXPLAINER")
+
+    async def run():
+        bus, notifications, dispatcher = _make_note_env()
+        got = []
+        await dispatcher.start_note_generation(
+            bus=bus, notifications_state=notifications, node_id="n1",
+            note_kind="explainer", source_text="x",
+            on_success=got.append, on_failure=lambda m: None,
+        )
+        assert got == ["EXPLAINER"]
+
+    asyncio.run(run())
+
+
+def test_start_note_generation_rejects_a_second_concurrent_run(monkeypatch):
+    monkeypatch.setattr(agents_module.KeyTakeawayAgent, "get_response", lambda self, text: "ok")
+
+    async def run():
+        bus, notifications, dispatcher = _make_note_env()
+        dispatcher._note_requests["already-running"] = True
+        successes = []
+        await dispatcher.start_note_generation(
+            bus=bus, notifications_state=notifications, node_id="n1",
+            note_kind="takeaway", source_text="x",
+            on_success=successes.append, on_failure=lambda m: None,
+        )
+        assert successes == [], "the busy guard must not run a second agent"
+        assert notifications.visible is True
+        assert notifications.msg_type == "info"
+        # The pre-existing sentinel must survive - the guard rejects, it
+        # must never clear someone else's in-flight slot.
+        assert dispatcher._note_requests == {"already-running": True}
+
+    asyncio.run(run())
+
+
+def test_start_note_generation_empty_response_fails_instead_of_creating_a_blank_note(monkeypatch):
+    monkeypatch.setattr(agents_module.KeyTakeawayAgent, "get_response", lambda self, text: "   ")
+
+    async def run():
+        bus, notifications, dispatcher = _make_note_env()
+        successes, failures = [], []
+        await dispatcher.start_note_generation(
+            bus=bus, notifications_state=notifications, node_id="n1",
+            note_kind="takeaway", source_text="x",
+            on_success=successes.append, on_failure=failures.append,
+        )
+        assert successes == [], "an empty agent response must not become a note"
+        assert len(failures) == 1
+        assert notifications.msg_type == "error"
+        assert dispatcher._note_requests == {}
+
+    asyncio.run(run())
+
+
+def test_start_note_generation_agent_exception_surfaces_and_clears_the_slot(monkeypatch):
+    def _boom(self, text):
+        raise RuntimeError("model exploded")
+
+    monkeypatch.setattr(agents_module.KeyTakeawayAgent, "get_response", _boom)
+
+    async def run():
+        bus, notifications, dispatcher = _make_note_env()
+        successes, failures = [], []
+        await dispatcher.start_note_generation(
+            bus=bus, notifications_state=notifications, node_id="n1",
+            note_kind="takeaway", source_text="x",
+            on_success=successes.append, on_failure=failures.append,
+        )
+        assert successes == []
+        assert "model exploded" in failures[0]
+        assert notifications.msg_type == "error"
+        assert dispatcher._note_requests == {}, "the slot must not leak after a failure"
+
+    asyncio.run(run())

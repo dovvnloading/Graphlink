@@ -239,6 +239,11 @@ export function toFlowNodes(scene: SceneState, store: SceneStore): SceneFlowNode
           // onGenerateImage above - the new chart node arrives through the
           // next scene snapshot.
           onGenerateChart: (chartType: string) => store.generateChart(n.id, chartType),
+          // R8a: the two note agents, restored from the deleted Qt app. Same
+          // fire-and-forget posture as onGenerateImage above - the new note
+          // arrives through the next scene snapshot.
+          onGenerateKeyTakeaway: () => store.generateKeyTakeaway(n.id),
+          onGenerateExplainerNote: () => store.generateExplainerNote(n.id),
           // R6.3: the node's own scroll position within its content area -
           // read on mount by ChatNodeView (restore) and reported (debounced)
           // via the new setChatScrollValue intent on every scroll. Defaults

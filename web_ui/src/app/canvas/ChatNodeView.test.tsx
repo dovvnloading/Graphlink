@@ -31,6 +31,8 @@ function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}) {
   const onRegenerate = vi.fn();
   const onGenerateImage = vi.fn();
   const onGenerateChart = vi.fn();
+  const onGenerateKeyTakeaway = vi.fn();
+  const onGenerateExplainerNote = vi.fn();
   const onScrollChange = vi.fn();
   const props = {
     id: "n0",
@@ -47,6 +49,8 @@ function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}) {
       onRegenerate,
       onGenerateImage,
       onGenerateChart,
+      onGenerateKeyTakeaway,
+      onGenerateExplainerNote,
       onScrollChange,
       ...overrides,
     },
@@ -57,7 +61,11 @@ function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}) {
       <ChatNodeView {...props} />
     </ReactFlowProvider>,
   );
-  return { onToggleCollapse, onDelete, onUndockChild, onRegenerate, onGenerateImage, onGenerateChart, onScrollChange, container };
+  return {
+    onToggleCollapse, onDelete, onUndockChild, onRegenerate, onGenerateImage,
+    onGenerateChart, onGenerateKeyTakeaway, onGenerateExplainerNote,
+    onScrollChange, container,
+  };
 }
 
 describe("ChatNodeView", () => {
@@ -97,10 +105,14 @@ describe("ChatNodeView", () => {
     expect(hideBranches).toHaveAttribute("title", "Branch visibility isn't built yet");
     const docView = screen.getByRole("menuitem", { name: "Open Document View" });
     expect(docView).toBeDisabled();
+    // R8a: these two were disabled stubs until their agents were ported
+    // back from the deleted Qt app. This assertion is deliberately inverted
+    // rather than removed - it was the guard that encoded the stub as
+    // correct, so it has to now encode the opposite.
     for (const name of ["Generate Key Takeaway", "Generate Explainer Note"]) {
       const item = screen.getByRole("menuitem", { name });
-      expect(item).toBeDisabled();
-      expect(item).toHaveAttribute("title", "AI note generation isn't available yet");
+      expect(item).not.toBeDisabled();
+      expect(item).not.toHaveAttribute("title");
     }
     expect(screen.getByRole("menuitem", { name: "Generate Image" })).not.toBeDisabled();
     expect(screen.getByRole("menuitem", { name: "Generate Chart" })).not.toBeDisabled();
@@ -167,6 +179,39 @@ describe("ChatNodeView", () => {
     await user.click(generateImage);
     expect(onGenerateImage).toHaveBeenCalledOnce();
     expect(screen.queryByRole("menu")).toBeNull(); // onClose fires after onGenerateImage
+  });
+
+  it("Generate Key Takeaway calls onGenerateKeyTakeaway then closes the menu", async () => {
+    const user = userEvent.setup();
+    const { onGenerateKeyTakeaway, onGenerateExplainerNote } = renderChatNode({ isUser: false });
+
+    fireEvent.contextMenu(screen.getByText("Assistant"));
+    await user.click(screen.getByRole("menuitem", { name: "Generate Key Takeaway" }));
+
+    expect(onGenerateKeyTakeaway).toHaveBeenCalledOnce();
+    // The two sit adjacent in the menu - assert the other one did NOT fire,
+    // so a future edit can't silently wire both buttons to one handler.
+    expect(onGenerateExplainerNote).not.toHaveBeenCalled();
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("Generate Explainer Note calls onGenerateExplainerNote then closes the menu", async () => {
+    const user = userEvent.setup();
+    const { onGenerateExplainerNote, onGenerateKeyTakeaway } = renderChatNode({ isUser: false });
+
+    fireEvent.contextMenu(screen.getByText("Assistant"));
+    await user.click(screen.getByRole("menuitem", { name: "Generate Explainer Note" }));
+
+    expect(onGenerateExplainerNote).toHaveBeenCalledOnce();
+    expect(onGenerateKeyTakeaway).not.toHaveBeenCalled();
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("both note agents are offered on a USER node too, matching legacy's unconditional enablement", () => {
+    renderChatNode({ isUser: true });
+    fireEvent.contextMenu(screen.getByText("You"));
+    expect(screen.getByRole("menuitem", { name: "Generate Key Takeaway" })).not.toBeDisabled();
+    expect(screen.getByRole("menuitem", { name: "Generate Explainer Note" })).not.toBeDisabled();
   });
 
   it("Generate Chart is a real, enabled item with aria-haspopup that starts collapsed (no submenu items in the DOM yet)", () => {
