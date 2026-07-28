@@ -15,8 +15,8 @@
  * Everything that floats above the canvas must take a value from here. Numbers
  * are spaced so a tier can be inserted without renumbering its neighbours. */
 :root {
-  --gl-z-canvas-chrome: 5; /* persistent canvas HUD chrome (token counter) */
   --gl-z-app-layer: 20; /* app-bar popovers, plugin picker, pin overlay */
+  --gl-z-canvas-hud: 21; /* persistent canvas HUD (token counter, minimap) - must never be paintable-over by the composer or any app-layer chrome, on purpose, not just a reserved-space accident */
   --gl-z-search: 22; /* search overlay, above the other app layers */
   --gl-z-notification: 30; /* banner must beat app layers, not dialogs */
   --gl-z-scrim: 40; /* modal scrim + the dialog it dims for */
@@ -238,6 +238,18 @@ body,
      inset as every other piece of canvas chrome, rather than a value
      that happened to be close but came from a different system. */
   margin: var(--gl-chrome-inset) !important;
+  /* R8a: the composer island used to be able to visually cover the
+     minimap's bottom-right corner (its React Flow-supplied z-index:5 lost
+     to the composer's app-layer:20 wherever they geometrically
+     overlapped) - the same class of bug the token counter had on the
+     opposite corner. .app-composer-layer's own width now reserves real
+     space on BOTH sides so overlap shouldn't happen in practice - but
+     "should never be able to" means this can't depend solely on getting
+     that geometry right, so both HUD elements ALSO outrank every
+     app-layer surface here, independent of position. !important for the
+     same reason as the margin above: RF's own stylesheet sets a z-index
+     on this exact element and loads after ours. */
+  z-index: var(--gl-z-canvas-hud) !important;
   background-color: var(--gl-surface-node-body);
   border: 1px solid var(--gl-surface-border);
   border-radius: 8px;
@@ -1137,26 +1149,42 @@ body,
    docked flush at the bottom with no visual container of its own. It's now
    a floating island - a sibling of app-token-counter-layer/
    app-notification-layer inside app-canvas-region - so the canvas renders
-   full-bleed behind it. bottom:64px (not the other layers' usual 16px) is
-   deliberate: at the narrow end of the supported window range a centered
-   card can sit close to app-token-counter-layer's footprint horizontally,
-   so the clearance is enforced vertically instead (the card's whole box
-   stays above the token counter's top edge everywhere), which doesn't
-   depend on how close the two ever get side to side. pointer-events:none
-   on the layer + pointer-events:auto on the card keeps the canvas
-   clickable/draggable everywhere the card doesn't visually cover it. */
+   full-bleed behind it.
+
+   It shares the bottom-left and bottom-right corners with two other real
+   pieces of chrome (the token counter, the minimap), so its box reserves
+   REAL space on both sides rather than relying on a thin, easy-to-erode
+   margin: `left: 230px` clears the token counter's measured footprint
+   (16px inset + ~193px content + a real gap, not a bare few px), `right:
+   232px` clears the minimap's footprint (16px margin + 200px + 16px) the
+   same way. The card centers WITHIN that narrowed box via flex, not the
+   full viewport, so centering can never land it in territory either
+   neighbor already owns - a structural guarantee, not a tuned distance
+   that happens to work today. bottom:64px on top of that gives the
+   token-counter side a SECOND, independent vertical guarantee (its ~41px
+   height plus the 16px inset it shares with this layer still leaves real
+   clearance even if the horizontal reservation above were ever wrong).
+   And on both sides, --gl-z-canvas-hud gives the token counter and the
+   minimap themselves a THIRD guarantee: outranking every app-layer
+   surface regardless of position (see .scene-minimap's and
+   .app-token-counter-layer's own comments) - "should never be able to"
+   means no single mechanism carries that promise alone. pointer-
+   events:none on the layer + pointer-events:auto on the card keeps the
+   canvas clickable/draggable everywhere the card doesn't visually cover
+   it. */
 .app-composer-layer {
   position: absolute;
-  left: 50%;
+  left: 230px;
+  right: 232px;
   bottom: 64px;
-  transform: translateX(-50%);
-  width: min(clamp(480px, calc(100% - 220px), 760px), calc(100% - 24px));
+  display: flex;
+  justify-content: center;
   z-index: var(--gl-z-app-layer);
   pointer-events: none;
 }
 
 .app-composer-layer > .composer-dock {
-  width: 100%;
+  width: min(clamp(480px, calc(100% - 24px), 760px), calc(100vw - 48px));
   pointer-events: auto;
 }
 
@@ -1488,7 +1516,9 @@ body,
   position: absolute;
   bottom: var(--gl-chrome-inset);
   left: var(--gl-chrome-inset);
-  z-index: var(--gl-z-canvas-chrome);
+  /* R8a: outranks the composer/app-layer tier, same reasoning as the
+     minimap - see .scene-minimap's own comment. */
+  z-index: var(--gl-z-canvas-hud);
 }
 
 .token-counter {
