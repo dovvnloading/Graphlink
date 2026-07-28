@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-labelledby="t d">
+  <title id="t">Graphlink - Thread Branch</title>
+  <desc id="d">A main thread with a branch peeling off - version-control grammar.</desc>
+  <g fill="none" stroke="#7d8590" stroke-width="5" stroke-linecap="round">
+    <path d="M20 14v36"/><path d="M20 30c0 12 24 6 24 18"/>
+  </g>
+  <circle cx="20" cy="13" r="8.5" fill="#45c46f"/>
+  <circle cx="20" cy="51" r="8.5" fill="#4a90e2"/>
+  <circle cx="45" cy="51" r="8.5" fill="#4a90e2"/>
+</svg>

@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-labelledby="t d">
+  <title id="t">Graphlink - Branch Arrow - Asymmetric</title>
+  <desc id="d">One branch resolves into a node, the other carries an arrowhead.</desc>
+  <path d="M32 58V46" stroke="#7d8590" stroke-width="7" stroke-linecap="round" fill="none"/>
+  <path d="M32 46L20 34" stroke="#45c46f" stroke-width="7" stroke-linecap="round" fill="none"/>
+  <path d="M32 46L45 33V29" stroke="#4a90e2" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <circle cx="17" cy="30" r="9.5" fill="#45c46f"/>
+  <path d="M45 8L35 27h20z" fill="#4a90e2"/>
+</svg>

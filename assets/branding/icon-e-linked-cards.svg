@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-labelledby="t d">
+  <title id="t">Graphlink - Linked Cards</title>
+  <desc id="d">Two node cards joined by a single edge - the link in Graphlink.</desc>
+  <path d="M28 27l8 10" stroke="#7d8590" stroke-width="5.5" stroke-linecap="round"/>
+  <rect x="4" y="6" width="26" height="22" rx="6.5" fill="#45c46f"/>
+  <rect x="34" y="36" width="26" height="22" rx="6.5" fill="#4a90e2"/>
+</svg>

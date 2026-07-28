@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-labelledby="t d">
+  <title id="t">Graphlink - G Monogram</title>
+  <desc id="d">A bold G whose inner bar terminates in a graph node.</desc>
+  <path d="M46 19a19 19 0 1 0 0 26v-11H33" fill="none" stroke="#45c46f" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="33" cy="34" r="6.5" fill="#4a90e2"/>
+</svg>

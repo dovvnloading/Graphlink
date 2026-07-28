@@ -122,7 +122,23 @@ def main() -> int:
         min_size=(960, 600),
         background_color="#1a1a1a",
     )
-    webview.start(debug=bool(os.environ.get("GRAPHLINK_DEBUG_WEBVIEW")))
+    # R8a: the real app icon. Without an explicit `icon=`, pywebview's
+    # Windows backend falls back to extracting icon index 0 from
+    # sys.executable (webview/platforms/winforms.py) - i.e. python.exe's own
+    # icon, which is why the title bar showed the Python logo. Passed as a
+    # str because the backend does its own os.path.isfile() check on it.
+    #
+    # Rebuild assets/graphlink.ico with: python tools/build_app_icon.py
+    icon_path = REPO_ROOT / "assets" / "graphlink.ico"
+    start_kwargs = {"debug": bool(os.environ.get("GRAPHLINK_DEBUG_WEBVIEW"))}
+    if icon_path.is_file():
+        start_kwargs["icon"] = str(icon_path)
+    else:
+        # Not fatal - the window still opens, just with the interpreter's
+        # icon. Logged rather than raised so a missing asset can never be
+        # the reason the app won't launch.
+        logger.warning("app icon missing at %s - falling back to the default", icon_path)
+    webview.start(**start_kwargs)
     # Reached only on a normal window close - webview.start() blocks until
     # then. An uncaught exception anywhere above (or a hard kill/power loss)
     # never reaches this line, leaving running.lock in place - exactly the

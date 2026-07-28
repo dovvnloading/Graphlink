@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-labelledby="t d">
+  <title id="t">Graphlink - Node Fork</title>
+  <desc id="d">One node branching into two - the most legible mark at small sizes.</desc>
+  <g stroke="#7d8590" stroke-width="5.5" stroke-linecap="round">
+    <line x1="32" y1="15" x2="14" y2="49"/><line x1="32" y1="15" x2="50" y2="49"/>
+  </g>
+  <circle cx="32" cy="15" r="10" fill="#45c46f"/>
+  <circle cx="14" cy="49" r="10" fill="#4a90e2"/>
+  <circle cx="50" cy="49" r="10" fill="#4a90e2"/>
+</svg>

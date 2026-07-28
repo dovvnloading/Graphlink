@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-labelledby="t d">
+  <title id="t">Graphlink - Branch Arrow</title>
+  <desc id="d">A stem forking into two directed branches - branch this conversation.</desc>
+  <path d="M32 58V42" stroke="#7d8590" stroke-width="6" stroke-linecap="round" fill="none"/>
+  <path d="M32 42C32 32 18 34 18 24" stroke="#45c46f" stroke-width="6" stroke-linecap="round" fill="none"/>
+  <path d="M32 42C32 32 46 34 46 24" stroke="#4a90e2" stroke-width="6" stroke-linecap="round" fill="none"/>
+  <path d="M18 8l-9 14h18z" fill="#45c46f"/>
+  <path d="M46 8l-9 14h18z" fill="#4a90e2"/>
+</svg>
