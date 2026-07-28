@@ -15,13 +15,26 @@
  * Everything that floats above the canvas must take a value from here. Numbers
  * are spaced so a tier can be inserted without renumbering its neighbours. */
 :root {
-  --gl-z-canvas-chrome: 5; /* pins/token counter drawn over the canvas */
+  --gl-z-canvas-chrome: 5; /* persistent canvas HUD chrome (token counter) */
   --gl-z-app-layer: 20; /* app-bar popovers, plugin picker, pin overlay */
   --gl-z-search: 22; /* search overlay, above the other app layers */
   --gl-z-notification: 30; /* banner must beat app layers, not dialogs */
   --gl-z-scrim: 40; /* modal scrim + the dialog it dims for */
   --gl-z-node-menu: 60; /* PORTALED node context menus (NodeMenu.tsx) */
   --gl-z-approval: 80; /* blocking code-execution prompt - outranks all */
+
+  /* R8a: ONE canonical edge inset for every piece of chrome anchored to a
+     corner/edge of the canvas (pins, search, view/plugin popovers, token
+     counter, minimap). Before this, the SPA mixed 8px (pins/popovers/
+     search), 16px (token counter/notification), and React Flow's own
+     baked-in 15px (the minimap's default Panel margin, entirely outside
+     this app's own spacing system) - three near-identical values with no
+     stated relationship, which is exactly the kind of ad-hoc drift the
+     z-index scale above already fixed for stacking order. The composer
+     island's own bottom offset stays a distinct, separately-justified
+     value (verified against the token counter's real measured footprint),
+     not this token - it is not a plain edge inset. */
+  --gl-chrome-inset: 16px;
 }
 
 html,
@@ -220,6 +233,11 @@ body,
 }
 
 .scene-minimap {
+  /* Overrides React Flow's own baked-in Panel margin (15px, from its
+     bottom-right default position) so the minimap uses the SAME edge
+     inset as every other piece of canvas chrome, rather than a value
+     that happened to be close but came from a different system. */
+  margin: var(--gl-chrome-inset) !important;
   background-color: var(--gl-surface-node-body);
   border: 1px solid var(--gl-surface-border);
   border-radius: 8px;
@@ -228,104 +246,6 @@ body,
 .scene-minimap .react-flow__minimap-mask {
   fill: var(--gl-surface-window);
   fill-opacity: 0.55;
-}
-
-.scene-pins {
-  position: absolute;
-  left: 16px;
-  top: 16px;
-  width: 190px;
-  padding: 10px 12px;
-  background-color: var(--gl-surface-node-body);
-  border: 1px solid var(--gl-surface-border);
-  border-radius: 10px;
-  z-index: var(--gl-z-canvas-chrome);
-}
-
-.scene-pins-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 6px;
-}
-
-.scene-pins-title {
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.14em;
-  color: var(--gl-surface-text-muted);
-}
-
-.scene-pins-add {
-  font-size: 10px;
-  font-weight: 600;
-  font-family: inherit;
-  padding: 3px 8px;
-  color: var(--gl-surface-text);
-  background-color: var(--gl-neutral-button-background);
-  border: 1px solid var(--gl-neutral-button-border);
-  border-radius: 6px;
-  cursor: pointer;
-}
-
-.scene-pins-add:hover {
-  background-color: var(--gl-neutral-button-hover);
-}
-
-.scene-pins-empty {
-  margin: 4px 0 0;
-  font-size: 11px;
-  color: var(--gl-surface-text-muted);
-}
-
-.scene-pins-list {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.scene-pins-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 2px 0;
-}
-
-.scene-pins-jump {
-  flex: 1;
-  text-align: left;
-  font-size: 11px;
-  font-family: inherit;
-  padding: 4px 6px;
-  color: var(--gl-surface-text);
-  background: transparent;
-  border: none;
-  border-radius: 5px;
-  cursor: pointer;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.scene-pins-jump:hover {
-  background-color: var(--gl-neutral-button-hover);
-}
-
-.scene-pins-remove {
-  font-size: 12px;
-  font-family: inherit;
-  line-height: 1;
-  padding: 2px 6px;
-  color: var(--gl-surface-text-muted);
-  background: transparent;
-  border: none;
-  border-radius: 5px;
-  cursor: pointer;
-}
-
-.scene-pins-remove:hover {
-  color: var(--gl-surface-text);
-  background-color: var(--gl-neutral-button-hover);
 }
 
 .scene-node-handle {
@@ -1045,15 +965,15 @@ body,
 
 .app-popover-layer {
   position: absolute;
-  top: 8px;
-  right: 16px;
+  top: var(--gl-chrome-inset);
+  right: var(--gl-chrome-inset);
   z-index: var(--gl-z-app-layer);
 }
 
 .app-plugins-layer {
   position: absolute;
-  top: 8px;
-  right: 16px;
+  top: var(--gl-chrome-inset);
+  right: var(--gl-chrome-inset);
   z-index: var(--gl-z-app-layer);
 }
 
@@ -1566,8 +1486,8 @@ body,
 
 .app-token-counter-layer {
   position: absolute;
-  bottom: 16px;
-  left: 16px;
+  bottom: var(--gl-chrome-inset);
+  left: var(--gl-chrome-inset);
   z-index: var(--gl-z-canvas-chrome);
 }
 
@@ -1607,7 +1527,7 @@ body,
 
 .app-notification-layer {
   position: absolute;
-  top: 16px;
+  top: var(--gl-chrome-inset);
   left: 50%;
   transform: translateX(-50%);
   z-index: var(--gl-z-notification);
@@ -1647,8 +1567,8 @@ body,
 
 .app-pins-layer {
   position: absolute;
-  top: 8px;
-  left: 16px;
+  top: var(--gl-chrome-inset);
+  left: var(--gl-chrome-inset);
   z-index: var(--gl-z-app-layer);
 }
 
@@ -1878,7 +1798,7 @@ body,
 
 .app-search-layer {
   position: absolute;
-  top: 8px;
+  top: var(--gl-chrome-inset);
   left: 50%;
   transform: translateX(-50%);
   z-index: var(--gl-z-search);

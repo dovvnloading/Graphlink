@@ -930,6 +930,23 @@ export function makeDebouncedViewportReport(
   };
 }
 
+// R8a: reads a real design-token value at render time rather than
+// hardcoding a hex literal - needed anywhere a color has to be a plain JS
+// string (an SVG-attribute-producing prop like MiniMap's nodeColor/
+// nodeStrokeColor), not a CSS declaration value or a style={{}} block, so
+// it falls outside what the no-raw-colors lint gate can enforce for us.
+function useCssVar(name: string, fallback: string): string {
+  // A lazy initializer, not an effect: the token's value is static for the
+  // component's lifetime (no live theme-switching exists yet), so reading
+  // it once during the initial render avoids both a spurious extra render
+  // AND a one-frame flash of `fallback` before the real value lands.
+  const [value] = useState(() => {
+    const computed = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    return computed || fallback;
+  });
+  return value;
+}
+
 function CanvasInner({ store }: { store: SceneStore }) {
   const scene = useSyncExternalStore(store.subscribe, store.getScene);
   const grid = useSyncExternalStore(store.subscribe, store.getGrid);
@@ -995,6 +1012,31 @@ function CanvasInner({ store }: { store: SceneStore }) {
   }, [scene, store]);
 
   const edges = useMemo(() => toFlowEdges(scene, hoveredEdgeId), [scene, hoveredEdgeId]);
+
+  // R8a: the minimap used to render every node as React Flow's own default
+  // plain rectangle (no nodeColor/nodeStrokeColor was ever passed), which
+  // reads as flat, undifferentiated "white boxes" against this app's dark
+  // theme. note/frame/container are the only kinds with a real, user-
+  // assigned color (the same palette GroupColorPicker writes) - reflect it
+  // here so a colored group/note actually stands out on the minimap the
+  // way it does on the canvas. Every other kind (and any uncolored group/
+  // note) gets one deliberate, visible neutral instead of RF's default;
+  // the currently selected node gets the brightest tone so selection state
+  // reads on the minimap too. Colors are read from the real design tokens
+  // (not hardcoded hex) so this stays theme-driven.
+  const minimapNodeColor = useCssVar("--gl-surface-handle-hover", "#6A6A6A");
+  const minimapStrokeColor = useCssVar("--gl-surface-border-strong", "#505050");
+  const minimapSelectedColor = useCssVar("--gl-surface-text-bright", "#FFFFFF");
+  const getMinimapNodeColor = useCallback(
+    (node: SceneFlowNode) => {
+      if (node.selected) return minimapSelectedColor;
+      if ((node.type === "note" || node.type === "frame" || node.type === "container") && node.data.color) {
+        return node.data.color;
+      }
+      return minimapNodeColor;
+    },
+    [minimapNodeColor, minimapSelectedColor],
+  );
 
   const onNodesChange = useCallback(
     (changes: NodeChange<SceneFlowNode>[]) => {
@@ -1195,7 +1237,14 @@ function CanvasInner({ store }: { store: SceneStore }) {
           color={grid.gridColor}
           style={{ opacity: grid.gridOpacityPercent / 100 }}
         />
-        <MiniMap pannable zoomable className="scene-minimap" />
+        <MiniMap
+          pannable
+          zoomable
+          className="scene-minimap"
+          nodeColor={getMinimapNodeColor}
+          nodeStrokeColor={minimapStrokeColor}
+          nodeStrokeWidth={2}
+        />
         {/* R7.5b-3: smart-guide lines. Legacy's guides were QGraphicsLineItems
             in the same unified scene as the nodes, panning/zooming for free -
             ViewportPortal is the direct React Flow analog (children render
