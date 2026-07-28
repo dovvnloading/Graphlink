@@ -158,10 +158,11 @@ function GlobalShortcuts({ store }: { store: SceneStore }) {
 function App() {
   const [status, setStatus] = useState<ConnectionStatus>("closed");
   const [system, setSystem] = useState<SystemState>({});
-  // showTokenCounter defaults true (matches AppSettingsStatePayload's
-  // default and the legacy AppearanceSettingsWidget's own initial state)
-  // until the real snapshot arrives, so the overlay doesn't flash hidden.
-  const [settingsVisibility, setSettingsVisibility] = useState<SettingsVisibilityState>({ showTokenCounter: true });
+  // showTokenCounter defaults false (R8a: off by default, matching
+  // SettingsManager.get_show_token_counter's own default) until the real
+  // snapshot arrives, so the overlay doesn't flash visible for a user who
+  // has it off.
+  const [settingsVisibility, setSettingsVisibility] = useState<SettingsVisibilityState>({ showTokenCounter: false });
 
   const transport = useMemo(() => new WsTransport(defaultWsUrl()), []);
   const sceneStore = useMemo(() => new SceneStore(transport), [transport]);

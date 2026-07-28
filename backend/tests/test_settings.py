@@ -43,7 +43,8 @@ def test_settings_payload_shape_matches_generated_validator_shape(manager):
 def test_settings_payload_reflects_real_manager_defaults(manager):
     payload = settings_payload(manager)
     assert payload["theme"] == "dark"
-    assert payload["showTokenCounter"] is True
+    # R8a: the token counter overlay is off by default - opt-in, not opt-out.
+    assert payload["showTokenCounter"] is False
     assert payload["enableSystemPrompt"] is True
     assert payload["githubTokenConfigured"] is False
     assert set(payload["notificationPreferences"]) == set(SettingsManager.NOTIFICATION_TYPES)
@@ -108,6 +109,13 @@ def test_set_theme_intent_persists_to_the_real_settings_manager(manager):
 def test_set_show_token_counter_intent(manager):
     bus = SessionBus("settings-token-counter-test")
     register_settings(bus, manager)
+
+    # Default is now False - assert the intent actually flips state (True is
+    # the meaningful direction to prove; False-on-False would be a no-op
+    # that could pass even if the setter never ran at all).
+    assert manager.get_show_token_counter() is False
+    asyncio.run(bus.dispatch_intent("app-settings", "setShowTokenCounter", [True]))
+    assert manager.get_show_token_counter() is True
 
     asyncio.run(bus.dispatch_intent("app-settings", "setShowTokenCounter", [False]))
     assert manager.get_show_token_counter() is False

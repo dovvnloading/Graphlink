@@ -81,7 +81,7 @@ class SettingsManager:
                 if 'theme' not in state:
                     state['theme'] = 'dark'
                 if 'show_token_counter' not in state:
-                    state['show_token_counter'] = True
+                    state['show_token_counter'] = False
                 state_changed = False
                 if 'ollama_chat_model' not in state:
                     state['ollama_chat_model'] = ''
@@ -207,7 +207,7 @@ class SettingsManager:
         state = {
             "schema_version": self.CURRENT_SCHEMA_VERSION,
             "theme": "dark",
-            "show_token_counter": True,
+            "show_token_counter": False,
             "ollama_chat_model": "",
             "ollama_title_model": "",
             "ollama_chart_model": "",
@@ -346,7 +346,8 @@ class SettingsManager:
         self._save_state()
 
     def get_show_token_counter(self):
-        return self.state.get("show_token_counter", True)
+        # R8a: off by default - the overlay is opt-in now, not opt-out.
+        return self.state.get("show_token_counter", False)
 
     def set_show_token_counter(self, show: bool):
         self.state['show_token_counter'] = show
