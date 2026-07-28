@@ -32,7 +32,17 @@ API_CLIENT = None
 API_KEY = None
 API_BASE_URL = None
 LOCAL_PROVIDER_TYPE = config.LOCAL_PROVIDER_OLLAMA
-OLLAMA_REASONING_MODE = "Thinking"
+
+# R8a: reasoning is now a graded level, not a bool "mode" - see
+# REASONING_LEVELS' own docstring below for the full mapping story. Local
+# providers default to "high" (the old "Thinking" default - local compute
+# is free to the user, so thorough-by-default is the right starting
+# point); cloud providers default to "off" (extended thinking on a paid
+# API is an opt-in cost/latency tradeoff, never a silent default).
+OLLAMA_REASONING_LEVEL = "high"
+ANTHROPIC_REASONING_LEVEL = "off"
+GEMINI_REASONING_LEVEL = "off"
+OPENAI_REASONING_LEVEL = "off"
 API_MODELS = {
     config.TASK_TITLE: None,
     config.TASK_CHAT: None,
@@ -44,7 +54,7 @@ API_MODELS = {
 LLAMA_CPP_SETTINGS = {
     "chat_model_path": "",
     "title_model_path": "",
-    "reasoning_mode": "Thinking",
+    "reasoning_level": "high",
     "chat_format": "",
     "n_ctx": 4096,
     "n_gpu_layers": 0,
@@ -73,7 +83,10 @@ class _ProviderSnapshot(NamedTuple):
     local_provider_type: str
     api_models: dict
     llama_cpp_settings: dict
-    ollama_reasoning_mode: str
+    ollama_reasoning_level: str
+    anthropic_reasoning_level: str
+    gemini_reasoning_level: str
+    openai_reasoning_level: str
 
 
 def _snapshot_provider_state() -> _ProviderSnapshot:
@@ -87,7 +100,10 @@ def _snapshot_provider_state() -> _ProviderSnapshot:
             local_provider_type=LOCAL_PROVIDER_TYPE,
             api_models=dict(API_MODELS),
             llama_cpp_settings=dict(LLAMA_CPP_SETTINGS),
-            ollama_reasoning_mode=OLLAMA_REASONING_MODE,
+            ollama_reasoning_level=OLLAMA_REASONING_LEVEL,
+            anthropic_reasoning_level=ANTHROPIC_REASONING_LEVEL,
+            gemini_reasoning_level=GEMINI_REASONING_LEVEL,
+            openai_reasoning_level=OPENAI_REASONING_LEVEL,
         )
 
 GEMINI_MODELS_STATIC = sorted([
@@ -775,11 +791,7 @@ def _normalize_llama_cpp_settings(settings: dict | None = None) -> dict:
     normalized = {
         "chat_model_path": str(raw_settings.get("chat_model_path", "")).strip(),
         "title_model_path": str(raw_settings.get("title_model_path", "")).strip(),
-        "reasoning_mode": (
-            "Thinking"
-            if str(raw_settings.get("reasoning_mode", "Thinking")).strip().lower() == "thinking"
-            else "Quick"
-        ),
+        "reasoning_level": normalize_reasoning_level(raw_settings.get("reasoning_level", "high")),
         "chat_format": str(raw_settings.get("chat_format", "")).strip(),
         "n_ctx": max(256, int(raw_settings.get("n_ctx", 4096) or 4096)),
         "n_gpu_layers": int(raw_settings.get("n_gpu_layers", 0) or 0),
@@ -881,6 +893,206 @@ def _assert_llama_cpp_message_support(messages: list):
     )
 
 
+# R8a: reasoning went from a bool "mode" (Thinking/Quick) to a graded
+# level, because every provider this app talks to now has SOME real
+# graded mechanism - confirmed against each one's own current docs rather
+# than assumed:
+#   - OpenAI: reasoning_effort (minimal/low/medium/high/xhigh, model-dependent)
+#   - Anthropic: thinking.budget_tokens on older models; a newer `effort`
+#     param on Opus 4.7+ that REJECTS budget_tokens outright (400 error) -
+#     these are mutually exclusive, not two names for the same thing
+#   - Gemini: thinkingBudget (integer, 2.5-series) vs thinkingLevel
+#     (string, Gemini 3) - same story, different generations, different shape
+#   - Ollama: think is a bool for qwen3/deepseek/qwq, but a REQUIRED string
+#     level ("low"/"medium"/"high") for gpt-oss - two different mechanisms
+#     on the same provider
+# REASONING_LEVELS is the one vocabulary the composer UI and every
+# per-provider mapping function below speaks, so a user learns one control
+# regardless of which provider/model is active; each function here is
+# responsible for translating it into whatever that specific
+# provider/model actually accepts, including admitting when a model can't
+# fully honor a rung (see the docstrings below for exactly which
+# mappings are approximations and why).
+REASONING_LEVELS = ("off", "low", "medium", "high")
+
+
+def normalize_reasoning_level(value: str | None) -> str:
+    """Canonicalizes to one of REASONING_LEVELS, defaulting to "off" for
+    anything unrecognized - the safe direction to fail in for a parameter
+    that can affect cost/latency on a paid API: a garbled persisted value
+    must never silently escalate to expensive reasoning."""
+    normalized = str(value or "").strip().lower()
+    return normalized if normalized in REASONING_LEVELS else "off"
+
+
+def _is_ollama_gpt_oss_model(model_name: str) -> bool:
+    return "gpt-oss" in str(model_name or "").lower()
+
+
+def _is_ollama_bool_reasoning_model(model_name: str) -> bool:
+    normalized = str(model_name or "").lower()
+    return any(token in normalized for token in ("qwen3", "deepseek", "qwq"))
+
+
+def ollama_think_kwarg(model_name: str, level: str) -> bool | str | None:
+    """The exact value for ollama_kwargs["think"], or None when this model
+    has no reasoning control Ollama exposes at all (the kwarg should be
+    omitted entirely - the same behavior this app had for any non-
+    reasoning model before this change).
+
+    gpt-oss REQUIRES a string level - Ollama's own issue tracker documents
+    real bugs when a bool or "minimal" is sent instead (ollama/ollama
+    #12004, #11766), so "off" (not a supported rung for a model that
+    always reasons at some level) maps to the cheapest real one, "low",
+    rather than attempting to disable it outright.
+
+    qwen3/deepseek/qwq only expose a plain on/off think bool via Ollama's
+    own /api/chat - there is no numeric or string-graded knob for these on
+    Ollama specifically (Qwen's own native cloud API does support a
+    numeric thinking_budget, but that is a different API this app does
+    not call). See reasoning_budget_hint below for how low/medium/high
+    still differ meaningfully for these models despite the bool ceiling."""
+    normalized = str(model_name or "").lower()
+    if _is_ollama_gpt_oss_model(normalized):
+        return {"off": "low", "low": "low", "medium": "medium", "high": "high"}[level]
+    if _is_ollama_bool_reasoning_model(normalized):
+        return level != "off"
+    return None
+
+
+def reasoning_budget_hint(level: str) -> str | None:
+    """A real, if soft, SECOND axis of control for models whose only
+    native lever (Ollama's think bool, Llama.cpp's /think directive) is a
+    plain on/off switch: a natural-language nudge on how much reasoning to
+    do, layered on TOP of enabling thinking, not a replacement for it.
+    This is prompt-based guidance, not an API-enforced cap - honestly
+    weaker than Anthropic's budget_tokens or Gemini's thinkingBudget - but
+    a genuine difference in model behavior, not three identical "on"
+    states wearing different labels."""
+    return {
+        "low": "Keep your internal reasoning brief - a few short steps, then answer.",
+        "medium": None,
+        "high": "Reason thoroughly through the problem and verify your answer before responding.",
+    }.get(level)
+
+
+def _append_system_hint(messages: list, hint: str | None) -> list:
+    """Appends `hint` as its OWN leading system-role message. Deliberately
+    separate from _inject_qwen_thinking_instruction below (which prepends
+    INTO the first existing system message as a model-specific chat-
+    template directive) - this is a generic additive instruction, not a
+    template convention, so it gets its own message rather than risking
+    interference with content already sitting in the real system prompt."""
+    if not hint:
+        return messages
+    return [{"role": "system", "content": hint}, *messages]
+
+
+_ANTHROPIC_EFFORT_MODEL_PATTERN = re.compile(r"opus-4-[7-9]\b|opus-4-\d{2,}\b|opus-[5-9]-|opus-\d{2,}-", re.IGNORECASE)
+
+
+def _is_anthropic_effort_model(model_id: str) -> bool:
+    """True for Opus 4.7 and later, which use the newer `effort` parameter
+    and REJECT the older thinking/budget_tokens shape outright (a real 400
+    error, confirmed via Anthropic's own migration docs - these are not
+    two names for the same mechanism). The pattern is deliberately
+    generous about future versions (4.8, 4.9, 5.x, ...) since Anthropic's
+    own docs describe this as the new direction, not a one-off; a model
+    this doesn't recognize falls back to budget_tokens, which has been
+    stable across a much wider range of models and is the safer default
+    when a future model name is genuinely unrecognized."""
+    return bool(_ANTHROPIC_EFFORT_MODEL_PATTERN.search(str(model_id or "")))
+
+
+_ANTHROPIC_BUDGET_TOKENS = {"low": 2000, "medium": 8000, "high": 16000}
+# Thinking tokens count against max_tokens, and budget_tokens must stay
+# strictly under it (Anthropic rejects a budget >= max_tokens) - this is
+# the headroom left for the actual final answer after a request's
+# thinking budget, not an arbitrary constant.
+_ANTHROPIC_THINKING_HEADROOM_TOKENS = 2048
+
+
+def anthropic_reasoning_kwargs(model_id: str, level: str, max_tokens: int) -> dict:
+    """Kwargs to MERGE into an Anthropic request - empty for "off" (no
+    thinking requested at all, the model's plain fast-path response).
+    Also returns a raised `max_tokens` when the caller's own value would
+    leave no room for the requested budget, so picking Low/Medium/High
+    degrades to a clear, working response rather than a silent API
+    rejection."""
+    if level == "off":
+        return {}
+    if _is_anthropic_effort_model(model_id):
+        return {"effort": level}
+    budget = _ANTHROPIC_BUDGET_TOKENS[level]
+    result = {"thinking": {"type": "enabled", "budget_tokens": budget}}
+    if max_tokens <= budget:
+        result["max_tokens"] = budget + _ANTHROPIC_THINKING_HEADROOM_TOKENS
+    return result
+
+
+def _is_gemini_3_model(model_id: str) -> bool:
+    return bool(re.search(r"gemini-3", str(model_id or ""), re.IGNORECASE))
+
+
+def _is_gemini_thinking_capable(model_id: str) -> bool:
+    """2.5-series and 3-series document thinking configuration; 2.0-flash
+    and the image-generation models do not, so the reasoning control
+    should not be sent at all for those rather than silently including a
+    parameter the model may ignore or reject."""
+    normalized = str(model_id or "").lower()
+    if "-image" in normalized:
+        return False
+    if _is_gemini_3_model(normalized):
+        return True
+    return "gemini-2.5" in normalized
+
+
+_GEMINI_THINKING_BUDGET_TOKENS = {"off": 0, "low": 2048, "medium": 8192, "high": 24576}
+# Gemini 3's thinkingLevel only defines three rungs (MINIMAL/LOW/HIGH,
+# confirmed via Google's own docs) - "medium" and "high" both resolve to
+# HIGH there rather than inventing a fourth string value the API doesn't
+# define.
+_GEMINI_THINKING_LEVEL = {"off": "MINIMAL", "low": "LOW", "medium": "HIGH", "high": "HIGH"}
+
+
+def gemini_thinking_config(model_id: str, level: str) -> dict | None:
+    """The `thinkingConfig` value to merge into generationConfig, or None
+    for a model this app doesn't consider thinking-capable (the caller
+    should omit the key entirely)."""
+    if not _is_gemini_thinking_capable(model_id):
+        return None
+    if _is_gemini_3_model(model_id):
+        return {"thinkingLevel": _GEMINI_THINKING_LEVEL[level]}
+    return {"thinkingBudget": _GEMINI_THINKING_BUDGET_TOKENS[level], "includeThoughts": level != "off"}
+
+
+# This endpoint may point at real OpenAI, or at ANY OpenAI-API-shaped
+# server (Groq, a self-hosted vLLM/LM Studio proxy, etc. - see
+# backend/settings.py's own comments on why "OpenAI-Compatible" is
+# base_url-configurable rather than assumed to be api.openai.com).
+# reasoning_effort is only sent when the model name itself suggests a
+# real reasoning model - sending it to an arbitrary non-reasoning
+# endpoint risks a hard 400 from a strict server, not a silent no-op.
+_OPENAI_REASONING_MODEL_PREFIXES = ("o1", "o3", "o4", "gpt-5", "gpt-oss")
+
+
+def _is_openai_reasoning_model(model_id: str) -> bool:
+    normalized = str(model_id or "").strip().lower()
+    return normalized.startswith(_OPENAI_REASONING_MODEL_PREFIXES)
+
+
+def openai_reasoning_kwargs(model_id: str, level: str) -> dict:
+    """Empty for "off" (never sends reasoning_effort, deferring entirely
+    to the model/server's own default) or for any model this app doesn't
+    recognize as a reasoning model by name. Deliberately never sends
+    "minimal" - real-world reports show it's inconsistently supported/
+    buggy across reasoning model versions (see ollama/ollama#12004);
+    "low" is the conservative floor instead."""
+    if level == "off" or not _is_openai_reasoning_model(model_id):
+        return {}
+    return {"reasoning_effort": level}
+
+
 def _is_qwen_reasoning_model_path(model_path: str | None) -> bool:
     normalized_path = os.path.basename(str(model_path or "")).strip().lower()
     if not normalized_path:
@@ -911,8 +1123,15 @@ def _prepare_llama_cpp_messages(messages: list, task: str, settings: dict | None
     active_settings = settings if settings is not None else LLAMA_CPP_SETTINGS
     normalized_messages = [dict(message) for message in messages]
     if task == config.TASK_CHAT and _is_qwen_reasoning_model_path(_get_llama_cpp_model_path(task, active_settings)):
-        enable_thinking = str(active_settings.get("reasoning_mode", "Quick")).strip().lower() == "thinking"
-        normalized_messages = _inject_qwen_thinking_instruction(normalized_messages, enable_thinking)
+        level = normalize_reasoning_level(active_settings.get("reasoning_level", "high"))
+        normalized_messages = _inject_qwen_thinking_instruction(normalized_messages, level != "off")
+        # A second, real axis of control on top of the /think directive -
+        # see reasoning_budget_hint's own docstring: Qwen/QwQ's chat
+        # template only exposes on/off via /think //no_think, so low/
+        # medium/high still need this to differ meaningfully once thinking
+        # is enabled.
+        if level != "off":
+            normalized_messages = _append_system_hint(normalized_messages, reasoning_budget_hint(level))
 
     processed_messages = []
     for msg in normalized_messages:
@@ -947,7 +1166,7 @@ def _prepare_llama_cpp_kwargs(kwargs: dict, settings: dict | None = None) -> dic
     if prepared.pop("format", None) == "json":
         prepared.setdefault("response_format", {"type": "json_object"})
     prepared.pop("response_mime_type", None)
-    enable_thinking = str(active_settings.get("reasoning_mode", "Quick")).strip().lower() == "thinking"
+    enable_thinking = normalize_reasoning_level(active_settings.get("reasoning_level", "high")) != "off"
     prepared.setdefault("enable_thinking", enable_thinking)
     chat_template_kwargs = prepared.get("chat_template_kwargs")
     if isinstance(chat_template_kwargs, dict):
@@ -1010,7 +1229,7 @@ def _configure_llama_cpp_chat_handler(client, settings: dict | None = None):
     if base_handler is None:
         return
 
-    enable_thinking = str(active_settings.get("reasoning_mode", "Quick")).strip().lower() == "thinking"
+    enable_thinking = normalize_reasoning_level(active_settings.get("reasoning_level", "high")) != "off"
     current_flag = getattr(client, "_graphlink_enable_thinking", None)
     if current_flag == enable_thinking and getattr(getattr(client, "chat_handler", None), "_graphlink_wrapped_handler", False):
         return
@@ -1482,7 +1701,7 @@ def _prepare_anthropic_messages(messages: list, cancel_event=None) -> tuple[str 
     return (system_prompt or None), anthropic_messages
 
 
-def _prepare_anthropic_kwargs(task: str, kwargs: dict) -> dict:
+def _prepare_anthropic_kwargs(task: str, kwargs: dict, model_id: str = "", reasoning_level: str = "off") -> dict:
     anthropic_kwargs = dict(kwargs or {})
 
     if "max_completion_tokens" in anthropic_kwargs and "max_tokens" not in anthropic_kwargs:
@@ -1497,6 +1716,13 @@ def _prepare_anthropic_kwargs(task: str, kwargs: dict) -> dict:
 
     if not anthropic_kwargs.get("max_tokens"):
         anthropic_kwargs["max_tokens"] = ANTHROPIC_DEFAULT_MAX_TOKENS.get(task, 4096)
+
+    # anthropic_reasoning_kwargs may raise max_tokens (a requested thinking
+    # budget must stay strictly under it) - update() applies that override
+    # on top of the default/caller-supplied value set just above.
+    anthropic_kwargs.update(
+        anthropic_reasoning_kwargs(model_id, reasoning_level, anthropic_kwargs["max_tokens"])
+    )
 
     return anthropic_kwargs
 
@@ -1873,8 +2099,14 @@ def chat(task: str, messages: list, **kwargs) -> dict:
                 ollama_messages = _prepare_ollama_messages(messages)
 
                 ollama_kwargs = kwargs.copy()
-                if task == config.TASK_CHAT and ("qwen3" in model.lower() or "deepseek" in model.lower()):
-                    ollama_kwargs["think"] = state.ollama_reasoning_mode == "Thinking"
+                if task == config.TASK_CHAT:
+                    think_value = ollama_think_kwarg(model, state.ollama_reasoning_level)
+                    if think_value is not None:
+                        ollama_kwargs["think"] = think_value
+                    if _is_ollama_bool_reasoning_model(model) and state.ollama_reasoning_level != "off":
+                        ollama_messages = _append_system_hint(
+                            ollama_messages, reasoning_budget_hint(state.ollama_reasoning_level)
+                        )
 
                 # Reasoning-capable local models occasionally exhaust their own
                 # "thinking" budget before writing a final answer - often just sampling
@@ -1956,10 +2188,13 @@ def chat(task: str, messages: list, **kwargs) -> dict:
             )
 
         if state.api_provider_type == config.API_PROVIDER_OPENAI:
+            openai_kwargs = dict(kwargs)
+            if task == config.TASK_CHAT:
+                openai_kwargs.update(openai_reasoning_kwargs(api_model, state.openai_reasoning_level))
             response = state.api_client.chat.completions.create(
                 model=api_model,
                 messages=messages,
-                **kwargs,
+                **openai_kwargs,
             )
             _raise_if_cancelled(cancel_event)
             return {
@@ -1974,10 +2209,11 @@ def chat(task: str, messages: list, **kwargs) -> dict:
                 messages,
                 cancel_event=cancel_event,
             )
+            reasoning_level = state.anthropic_reasoning_level if task == config.TASK_CHAT else "off"
             request_kwargs = {
                 "model": api_model,
                 "messages": anthropic_messages,
-                **_prepare_anthropic_kwargs(task, kwargs),
+                **_prepare_anthropic_kwargs(task, kwargs, api_model, reasoning_level),
             }
             if system_prompt:
                 request_kwargs["system"] = system_prompt
@@ -2008,6 +2244,11 @@ def chat(task: str, messages: list, **kwargs) -> dict:
                 cancel_event=cancel_event,
                 api_key=state.api_key,
             )
+            generation_config = dict(kwargs) if kwargs else {}
+            if task == config.TASK_CHAT:
+                thinking_config = gemini_thinking_config(api_model, state.gemini_reasoning_level)
+                if thinking_config is not None:
+                    generation_config["thinkingConfig"] = thinking_config
             request_body = {
                 "contents": gemini_contents,
             }
@@ -2015,8 +2256,8 @@ def chat(task: str, messages: list, **kwargs) -> dict:
                 request_body["system_instruction"] = {
                     "parts": [{"text": str(system_prompt)}],
                 }
-            if kwargs:
-                request_body["generationConfig"] = kwargs
+            if generation_config:
+                request_body["generationConfig"] = generation_config
 
             try:
                 payload = _gemini_post_json(
@@ -2172,8 +2413,14 @@ def chat_stream(task: str, messages: list, on_chunk: Callable[[str, bool], None]
         ollama_messages = _prepare_ollama_messages(messages)
 
         ollama_kwargs = {k: v for k, v in kwargs.items() if k != "cancellation_event"}
-        if task == config.TASK_CHAT and ("qwen3" in model.lower() or "deepseek" in model.lower()):
-            ollama_kwargs["think"] = state.ollama_reasoning_mode == "Thinking"
+        if task == config.TASK_CHAT:
+            think_value = ollama_think_kwarg(model, state.ollama_reasoning_level)
+            if think_value is not None:
+                ollama_kwargs["think"] = think_value
+            if _is_ollama_bool_reasoning_model(model) and state.ollama_reasoning_level != "off":
+                ollama_messages = _append_system_hint(
+                    ollama_messages, reasoning_budget_hint(state.ollama_reasoning_level)
+                )
 
         # Same 3-attempt reasoning-retry loop as chat() (see ReasoningWithoutAnswerError):
         # each attempt streams live, and if an attempt is discarded, the caller is told via
@@ -2324,13 +2571,13 @@ def initialize_local_provider(
     *,
     preload_model: bool = False,
 ):
-    global USE_API_MODE, LOCAL_PROVIDER_TYPE, API_PROVIDER_TYPE, API_CLIENT, API_KEY, API_BASE_URL, LLAMA_CPP_SETTINGS, OLLAMA_REASONING_MODE
+    global USE_API_MODE, LOCAL_PROVIDER_TYPE, API_PROVIDER_TYPE, API_CLIENT, API_KEY, API_BASE_URL, LLAMA_CPP_SETTINGS, OLLAMA_REASONING_LEVEL
 
     if provider == config.LOCAL_PROVIDER_OLLAMA:
         normalized_settings = _normalize_llama_cpp_settings()
         with _PROVIDER_STATE_LOCK:
-            requested_reasoning = str((settings or {}).get("reasoning_mode") or OLLAMA_REASONING_MODE).strip().lower()
-            OLLAMA_REASONING_MODE = "Thinking" if requested_reasoning == "thinking" else "Quick"
+            requested_reasoning = (settings or {}).get("reasoning_level")
+            OLLAMA_REASONING_LEVEL = normalize_reasoning_level(requested_reasoning) if requested_reasoning else OLLAMA_REASONING_LEVEL
             USE_API_MODE = False
             LOCAL_PROVIDER_TYPE = provider
             API_PROVIDER_TYPE = None
@@ -2441,12 +2688,29 @@ def set_mode(use_api: bool):
         USE_API_MODE = use_api
 
 
-def set_ollama_reasoning_mode(mode: str):
+def set_ollama_reasoning_level(level: str):
     """Update the request snapshot source used by reasoning-capable Ollama models."""
-    global OLLAMA_REASONING_MODE
-    normalized = "Thinking" if str(mode or "").strip().lower() == "thinking" else "Quick"
+    global OLLAMA_REASONING_LEVEL
     with _PROVIDER_STATE_LOCK:
-        OLLAMA_REASONING_MODE = normalized
+        OLLAMA_REASONING_LEVEL = normalize_reasoning_level(level)
+
+
+def set_anthropic_reasoning_level(level: str):
+    global ANTHROPIC_REASONING_LEVEL
+    with _PROVIDER_STATE_LOCK:
+        ANTHROPIC_REASONING_LEVEL = normalize_reasoning_level(level)
+
+
+def set_gemini_reasoning_level(level: str):
+    global GEMINI_REASONING_LEVEL
+    with _PROVIDER_STATE_LOCK:
+        GEMINI_REASONING_LEVEL = normalize_reasoning_level(level)
+
+
+def set_openai_reasoning_level(level: str):
+    global OPENAI_REASONING_LEVEL
+    with _PROVIDER_STATE_LOCK:
+        OPENAI_REASONING_LEVEL = normalize_reasoning_level(level)
 
 
 def set_task_model(task: str, api_model: str):
@@ -2469,6 +2733,49 @@ def is_local_ollama_mode() -> bool:
 
 def is_local_llama_cpp_mode() -> bool:
     return not USE_API_MODE and LOCAL_PROVIDER_TYPE == config.LOCAL_PROVIDER_LLAMACPP
+
+
+# R8a: public "does this resolved model support reasoning at all" checks -
+# backend/composer.py uses these to decide whether to show the reasoning
+# control at all (the capability gate), rather than reaching into the
+# private _is_*_reasoning_model detection helpers above directly.
+
+
+def ollama_supports_reasoning(model_name: str) -> bool:
+    return _is_ollama_gpt_oss_model(model_name) or _is_ollama_bool_reasoning_model(model_name)
+
+
+def llama_cpp_supports_reasoning(model_path: str) -> bool:
+    return _is_qwen_reasoning_model_path(model_path)
+
+
+_ANTHROPIC_NO_REASONING_PATTERN = re.compile(r"claude-1\b|claude-instant|claude-2\b|claude-3-haiku\b", re.IGNORECASE)
+
+
+def anthropic_supports_reasoning(model_id: str) -> bool:
+    """No hardcoded Claude model list exists in this app (the catalog is
+    fetched live from Anthropic's own API - see ANTHROPIC_MODELS_URL), so
+    this is a denylist, not an allowlist: extended thinking is a broad,
+    still-expanding feature across Anthropic's modern lineup, so a new,
+    unrecognized model name is assumed capable rather than assumed not -
+    only clearly legacy/non-reasoning models (Claude 1/2/Instant, Haiku 3)
+    are excluded by name. Real Anthropic model ids put the version before
+    the tier name ("claude-3-haiku-20240307", not "claude-haiku-3"), so
+    the literal "claude-3-haiku" pattern here does NOT also match the
+    newer, reasoning-capable "claude-3-5-haiku" - no lookahead trick
+    needed, the "-5-" in between already makes them different substrings."""
+    normalized = str(model_id or "").strip()
+    if not normalized:
+        return False
+    return not _ANTHROPIC_NO_REASONING_PATTERN.search(normalized)
+
+
+def gemini_supports_reasoning(model_id: str) -> bool:
+    return _is_gemini_thinking_capable(model_id)
+
+
+def openai_supports_reasoning(model_id: str) -> bool:
+    return _is_openai_reasoning_model(model_id)
 
 
 def get_mode() -> str:

@@ -29,7 +29,7 @@ export interface AppSettingsState {
   apiCatalogMessage: string;
   geminiStaticModels: string[];
   geminiStaticImageModels: string[];
-  ollamaReasoningMode: string;
+  ollamaReasoningLevel: string;
   ollamaCurrentModel: string;
   ollamaModelAssignments: Record<string, string>;
   ollamaScannedModels: string[];
@@ -37,7 +37,7 @@ export interface AppSettingsState {
   ollamaScanStatus: string;
   ollamaPullStatus: string;
   ollamaNotice: string;
-  llamaCppReasoningMode: string;
+  llamaCppReasoningLevel: string;
   llamaCppChatModelPath: string;
   llamaCppTitleModelPath: string;
   llamaCppChatFormat: string;
@@ -195,9 +195,9 @@ function checkAppSettingsState(value: unknown, path: string, errors: string[]): 
     else (fieldValue as unknown[]).forEach((item, i) => { if (typeof item !== "string") errors.push(`${path}.geminiStaticImageModels` + `[${i}]` + ": expected string"); }); }
   }
   {
-    const fieldValue = value["ollamaReasoningMode"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.ollamaReasoningMode: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.ollamaReasoningMode` + ": expected string"); }
+    const fieldValue = value["ollamaReasoningLevel"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.ollamaReasoningLevel: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.ollamaReasoningLevel` + ": expected string"); }
   }
   {
     const fieldValue = value["ollamaCurrentModel"];
@@ -237,9 +237,9 @@ function checkAppSettingsState(value: unknown, path: string, errors: string[]): 
     else { if (typeof fieldValue !== "string") errors.push(`${path}.ollamaNotice` + ": expected string"); }
   }
   {
-    const fieldValue = value["llamaCppReasoningMode"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.llamaCppReasoningMode: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.llamaCppReasoningMode` + ": expected string"); }
+    const fieldValue = value["llamaCppReasoningLevel"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.llamaCppReasoningLevel: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.llamaCppReasoningLevel` + ": expected string"); }
   }
   {
     const fieldValue = value["llamaCppChatModelPath"];

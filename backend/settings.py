@@ -103,13 +103,16 @@ _OLLAMA_TASK_KEYS = (
     config.TASK_WEB_VALIDATE,
     config.TASK_WEB_SUMMARIZE,
 )
-_OLLAMA_REASONING_MODES = ("Thinking", "Quick")
-
-# Same 2-mode set, distinct constant deliberately (not reused) - Llama.cpp
-# and Ollama have entirely separate SettingsManager fields/api_provider
-# global state for reasoning mode, so keeping the constants separate avoids
-# an accidental coupling if one provider's valid-mode set ever diverges.
-_LLAMA_CPP_REASONING_MODES = ("Thinking", "Quick")
+# R8a: ONE shared vocabulary for all 5 providers' reasoning levels -
+# deliberately consolidated from what used to be per-provider "distinct
+# constant, not reused" tuples (Ollama/Llama.cpp each had their own
+# identical 2-value set). That separation existed because the two
+# providers' valid-mode sets only happened to match, with no shared
+# meaning behind the values - here the whole point is the opposite: one
+# real, shared vocabulary every provider's mapping function in
+# api_provider.py translates from, so keeping five copies of the same
+# tuple would be the ad-hoc-duplication problem, not a safeguard against one.
+_REASONING_LEVELS = api_provider.REASONING_LEVELS
 
 # Every persistence-touching mutation runs in a worker thread
 # (asyncio.to_thread) so SettingsManager._save_state's json-dump + fsync +
@@ -154,22 +157,23 @@ async def _republish_composer_reasoning(bus: SessionBus) -> None:
         await bus.publish("app-composer")
 
 
-async def apply_ollama_reasoning_mode(manager: SettingsManager, mode: str) -> None:
-    """Persist `mode` and, if Ollama is still the live provider, re-apply it to
+async def apply_ollama_reasoning_level(manager: SettingsManager, level: str) -> None:
+    """Persist `level` and, if Ollama is still the live provider, re-apply it to
     api_provider's module state so the very next chat()/chat_stream() call
-    picks it up. `mode` MUST already be "Thinking" or "Quick" - this function
-    does not re-validate it (every caller's own normalization is total, so
-    there is no path that could hand it anything else). Checked-and-applied
-    inside the SAME asyncio.to_thread hop as a deliberate race-preemption:
-    see set_ollama_reasoning_mode's inline comment for why. Shared by this
-    file's own setOllamaReasoningMode intent (Settings-dialog Ollama page)
-    and backend/composer.py's setReasoningLevel intent (composer's own
-    quick-access popover) so both surfaces apply a change identically."""
-    await asyncio.to_thread(_apply, manager.set_ollama_reasoning_mode, mode)
+    picks it up. `level` MUST already be one of api_provider.REASONING_LEVELS -
+    this function does not re-validate it (every caller's own normalization
+    is total, so there is no path that could hand it anything else).
+    Checked-and-applied inside the SAME asyncio.to_thread hop as a
+    deliberate race-preemption: see set_ollama_reasoning_level's inline
+    comment for why. Shared by this file's own setOllamaReasoningLevel
+    intent (Settings-dialog Ollama page) and backend/composer.py's
+    setReasoningLevel intent (composer's own quick-access popover) so both
+    surfaces apply a change identically."""
+    await asyncio.to_thread(_apply, manager.set_ollama_reasoning_level, level)
 
     def _reapply_if_ollama_is_still_the_live_provider() -> None:
         if api_provider.is_local_ollama_mode():
-            api_provider.initialize_local_provider(config.LOCAL_PROVIDER_OLLAMA, {"reasoning_mode": mode})
+            api_provider.initialize_local_provider(config.LOCAL_PROVIDER_OLLAMA, {"reasoning_level": level})
 
     await asyncio.to_thread(_reapply_if_ollama_is_still_the_live_provider)
 
@@ -180,7 +184,7 @@ async def apply_ollama_chat_model(manager: SettingsManager, model_id: str) -> No
     Extracted from register_settings' own set_ollama_model_assignment intent
     so the composer's model picker and the Settings > Ollama page write through
     ONE implementation instead of two that can drift. Same precedent as
-    apply_ollama_reasoning_mode above.
+    apply_ollama_reasoning_level above.
 
     The read-modify-write stays inside a single _apply-locked closure, not
     split across an await: that split is the R7.4a race where a concurrent
@@ -202,29 +206,53 @@ async def apply_ollama_chat_model(manager: SettingsManager, model_id: str) -> No
     await asyncio.to_thread(_apply, _persist)
 
 
-async def apply_llama_cpp_reasoning_mode(manager: SettingsManager, mode: str) -> str | None:
-    """Same contract as apply_ollama_reasoning_mode, for Llama.cpp. Returns a
-    human-readable failure message if the live re-apply fails (the mode is
+async def apply_llama_cpp_reasoning_level(manager: SettingsManager, level: str) -> str | None:
+    """Same contract as apply_ollama_reasoning_level, for Llama.cpp. Returns a
+    human-readable failure message if the live re-apply fails (the level is
     ALREADY persisted regardless - only the live effect is delayed to the
     next mode switch/restart), or None on success / when Llama.cpp is not the
     active provider. Returns rather than writes a notice directly: this
-    file's own setLlamaCppReasoningMode intent writes the message into its
+    file's own setLlamaCppReasoningLevel intent writes the message into its
     page-local llama_notice cell; backend/composer.py's intent has no such
     cell and surfaces it through the shared NotificationState banner
     instead - that decision belongs to each caller, not to this function."""
-    await asyncio.to_thread(_apply, manager.set_llama_cpp_reasoning_mode, mode)
+    await asyncio.to_thread(_apply, manager.set_llama_cpp_reasoning_level, level)
 
     def _reapply_if_llama_cpp_is_still_the_live_provider() -> None:
         if api_provider.is_local_llama_cpp_mode():
             settings = _locked_llama_cpp_settings(manager)
-            settings["reasoning_mode"] = mode
+            settings["reasoning_level"] = level
             api_provider.initialize_local_provider(config.LOCAL_PROVIDER_LLAMACPP, settings)
 
     try:
         await asyncio.to_thread(_reapply_if_llama_cpp_is_still_the_live_provider)
     except Exception as exc:  # noqa: BLE001 - no secret in this path (a local file path, not a credential)
-        return f"Reasoning mode saved, but could not be applied to the live model: {exc}"
+        return f"Reasoning level saved, but could not be applied to the live model: {exc}"
     return None
+
+
+# R8a: the three cloud providers' reasoning levels are each an INDEPENDENT
+# api_provider global (ANTHROPIC_REASONING_LEVEL/GEMINI_REASONING_LEVEL/
+# OPENAI_REASONING_LEVEL) read only at the moment of an actual API call for
+# that provider - unlike Ollama/Llama.cpp above, there is no "is this still
+# the live provider" gate needed: setting the value is always safe
+# regardless of which provider is currently active, so these three are
+# simpler than their local-provider counterparts, not an oversight.
+
+
+async def apply_anthropic_reasoning_level(manager: SettingsManager, level: str) -> None:
+    await asyncio.to_thread(_apply, manager.set_anthropic_reasoning_level, level)
+    await asyncio.to_thread(api_provider.set_anthropic_reasoning_level, level)
+
+
+async def apply_gemini_reasoning_level(manager: SettingsManager, level: str) -> None:
+    await asyncio.to_thread(_apply, manager.set_gemini_reasoning_level, level)
+    await asyncio.to_thread(api_provider.set_gemini_reasoning_level, level)
+
+
+async def apply_openai_reasoning_level(manager: SettingsManager, level: str) -> None:
+    await asyncio.to_thread(_apply, manager.set_openai_reasoning_level, level)
+    await asyncio.to_thread(api_provider.set_openai_reasoning_level, level)
 
 
 def _redact(text: str, secret: Any) -> str:
@@ -418,7 +446,7 @@ def register_settings(
         payload["geminiStaticModels"] = list(api_provider.GEMINI_MODELS_STATIC)
         payload["geminiStaticImageModels"] = list(api_provider.GEMINI_IMAGE_MODELS_STATIC)
 
-        payload["ollamaReasoningMode"] = manager.get_ollama_reasoning_mode()
+        payload["ollamaReasoningLevel"] = manager.get_ollama_reasoning_level()
         payload["ollamaCurrentModel"] = config.OLLAMA_MODELS.get(config.TASK_CHAT, "")
         payload["ollamaModelAssignments"] = _ollama_model_assignments_for_wire(manager)
         payload["ollamaScannedModels"] = manager.get_ollama_scanned_models()
@@ -427,7 +455,7 @@ def register_settings(
         payload["ollamaPullStatus"] = ollama_pull_status["value"]
         payload["ollamaNotice"] = ollama_notice["value"]
 
-        payload["llamaCppReasoningMode"] = manager.get_llama_cpp_reasoning_mode()
+        payload["llamaCppReasoningLevel"] = manager.get_llama_cpp_reasoning_level()
         # Staged (session-local), NOT manager.get_llama_cpp_chat_model_path()
         # - the field must show the in-progress draft, not the last-saved
         # value, exactly like the API-provider page's draftBaseUrl/
@@ -728,7 +756,7 @@ def register_settings(
             await bus.publish("notification")
         await bus.publish("app-settings")
 
-    async def set_ollama_reasoning_mode(mode: str):
+    async def set_ollama_reasoning_level(level: str):
         # Checked and applied inside the SAME to_thread hop, not split across
         # an await boundary: a concurrent mode switch (the toolbar's provider
         # selector) landing in a gap between a separate check and a later
@@ -755,11 +783,11 @@ def register_settings(
         #
         # R7.5d: this apply/re-apply sequence is now shared with
         # backend/composer.py's own setReasoningLevel intent - see
-        # apply_ollama_reasoning_mode's own docstring above.
-        mode = str(mode)
-        if mode not in _OLLAMA_REASONING_MODES:
+        # apply_ollama_reasoning_level's own docstring above.
+        level = str(level)
+        if level not in _REASONING_LEVELS:
             return
-        await apply_ollama_reasoning_mode(manager, mode)
+        await apply_ollama_reasoning_level(manager, level)
         await bus.publish("app-settings")
         await _republish_composer_reasoning(bus)
 
@@ -950,8 +978,8 @@ def register_settings(
         ollama_notice["value"] = ""
         await bus.publish("app-settings")
 
-    async def set_llama_cpp_reasoning_mode(mode: str):
-        # Same shape as set_ollama_reasoning_mode's own live re-apply: gated
+    async def set_llama_cpp_reasoning_level(level: str):
+        # Same shape as set_ollama_reasoning_level's own live re-apply: gated
         # on is_local_llama_cpp_mode(), checked and applied inside the SAME
         # to_thread hop so a concurrent provider-mode switch can't be
         # clobbered back to Llama.cpp. Unlike Ollama's version, this
@@ -959,17 +987,17 @@ def register_settings(
         # re-validates chat_model_path (must still be a real, existing .gguf
         # file) every time it runs - if that file was deleted/moved from
         # under an already-active session since Llama.cpp was last
-        # activated, this raises. The mode is already persisted regardless,
+        # activated, this raises. The level is already persisted regardless,
         # so a failure here only means it takes effect on the next mode
         # switch/restart instead of immediately - not a lost setting.
         #
         # R7.5d: this apply/re-apply sequence is now shared with
         # backend/composer.py's own setReasoningLevel intent - see
-        # apply_llama_cpp_reasoning_mode's own docstring above.
-        mode = str(mode)
-        if mode not in _LLAMA_CPP_REASONING_MODES:
+        # apply_llama_cpp_reasoning_level's own docstring above.
+        level = str(level)
+        if level not in _REASONING_LEVELS:
             return
-        failure = await apply_llama_cpp_reasoning_mode(manager, mode)
+        failure = await apply_llama_cpp_reasoning_level(manager, level)
         if failure is not None:
             llama_notice["value"] = failure
         # NOTE: on success, do NOT clear llama_notice to "" - this preserves
@@ -1184,7 +1212,7 @@ def register_settings(
 
         def _maybe_reapply_live() -> None:
             # Checked and applied inside the SAME to_thread hop - the same
-            # race-preemption shape as set_llama_cpp_reasoning_mode's own
+            # race-preemption shape as set_llama_cpp_reasoning_level's own
             # live re-apply above.
             if api_provider.is_local_llama_cpp_mode():
                 settings = _locked_llama_cpp_settings(manager)
@@ -1218,12 +1246,12 @@ def register_settings(
     bus.register_intent("app-settings", "loadApiModels", load_api_models)
     bus.register_intent("app-settings", "saveApiConfiguration", save_api_configuration)
     bus.register_intent("app-settings", "resetApiSettings", reset_api_settings)
-    bus.register_intent("app-settings", "setOllamaReasoningMode", set_ollama_reasoning_mode)
+    bus.register_intent("app-settings", "setOllamaReasoningLevel", set_ollama_reasoning_level)
     bus.register_intent("app-settings", "setOllamaModelAssignment", set_ollama_model_assignment)
     bus.register_intent("app-settings", "scanOllamaSystem", scan_ollama_system)
     bus.register_intent("app-settings", "pullOllamaModel", pull_ollama_model)
     bus.register_intent("app-settings", "pickOllamaScanFolder", pick_ollama_scan_folder)
-    bus.register_intent("app-settings", "setLlamaCppReasoningMode", set_llama_cpp_reasoning_mode)
+    bus.register_intent("app-settings", "setLlamaCppReasoningLevel", set_llama_cpp_reasoning_level)
     bus.register_intent("app-settings", "setLlamaCppChatFormat", set_llama_cpp_chat_format)
     bus.register_intent("app-settings", "setLlamaCppNCtx", set_llama_cpp_n_ctx)
     bus.register_intent("app-settings", "setLlamaCppNGpuLayers", set_llama_cpp_n_gpu_layers)

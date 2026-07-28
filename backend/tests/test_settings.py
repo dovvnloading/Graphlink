@@ -829,35 +829,35 @@ def _isolate_ollama_task_config(monkeypatch):
     monkeypatch.setattr(config, "OLLAMA_MODELS", dict(config.OLLAMA_MODELS))
 
 
-def test_set_ollama_reasoning_mode_persists_and_rejects_unknown_modes(manager):
-    bus = SessionBus("settings-ollama-reasoning-mode-test")
+def test_set_ollama_reasoning_level_persists_and_rejects_unknown_levels(manager):
+    bus = SessionBus("settings-ollama-reasoning-level-test")
     register_settings(bus, manager)
 
-    asyncio.run(bus.dispatch_intent("app-settings", "setOllamaReasoningMode", ["Quick"]))
-    assert manager.get_ollama_reasoning_mode() == "Quick"
+    asyncio.run(bus.dispatch_intent("app-settings", "setOllamaReasoningLevel", ["off"]))
+    assert manager.get_ollama_reasoning_level() == "off"
 
-    asyncio.run(bus.dispatch_intent("app-settings", "setOllamaReasoningMode", ["not-a-real-mode"]))
-    assert manager.get_ollama_reasoning_mode() == "Quick"  # unchanged, not overwritten with garbage
+    asyncio.run(bus.dispatch_intent("app-settings", "setOllamaReasoningLevel", ["not-a-real-level"]))
+    assert manager.get_ollama_reasoning_level() == "off"  # unchanged, not overwritten with garbage
 
 
-def test_set_ollama_reasoning_mode_reapplies_live_only_when_ollama_is_the_active_provider(manager, monkeypatch):
+def test_set_ollama_reasoning_level_reapplies_live_only_when_ollama_is_the_active_provider(manager, monkeypatch):
     # Regression-shaped test for a race preempted at design time (the same
     # class the R7.4a audit found after the fact): re-applying the live
     # provider state unconditionally would forcibly switch an active
     # Anthropic/OpenAI session back to Ollama just because its reasoning
-    # mode changed in the background.
+    # level changed in the background.
     calls = []
     monkeypatch.setattr(api_provider, "initialize_local_provider", lambda *a, **k: calls.append(a))
 
     monkeypatch.setattr(api_provider, "is_local_ollama_mode", lambda: False)
     bus = SessionBus("settings-ollama-reasoning-not-active-test")
     register_settings(bus, manager)
-    asyncio.run(bus.dispatch_intent("app-settings", "setOllamaReasoningMode", ["Quick"]))
+    asyncio.run(bus.dispatch_intent("app-settings", "setOllamaReasoningLevel", ["off"]))
     assert calls == []  # Ollama isn't live - must not touch the live provider at all
 
     monkeypatch.setattr(api_provider, "is_local_ollama_mode", lambda: True)
-    asyncio.run(bus.dispatch_intent("app-settings", "setOllamaReasoningMode", ["Thinking"]))
-    assert calls == [(config.LOCAL_PROVIDER_OLLAMA, {"reasoning_mode": "Thinking"})]
+    asyncio.run(bus.dispatch_intent("app-settings", "setOllamaReasoningLevel", ["high"]))
+    assert calls == [(config.LOCAL_PROVIDER_OLLAMA, {"reasoning_level": "high"})]
 
 
 def test_set_ollama_model_assignment_rejects_unknown_task(manager, monkeypatch):
@@ -1239,36 +1239,36 @@ def test_pick_ollama_scan_folder_dialog_failure_reports_error_and_does_not_stran
     assert calls == [1]
 
 
-def test_set_llama_cpp_reasoning_mode_persists_and_rejects_unknown_modes(manager):
-    bus = SessionBus("settings-llama-cpp-reasoning-mode-test")
+def test_set_llama_cpp_reasoning_level_persists_and_rejects_unknown_levels(manager):
+    bus = SessionBus("settings-llama-cpp-reasoning-level-test")
     register_settings(bus, manager)
 
-    asyncio.run(bus.dispatch_intent("app-settings", "setLlamaCppReasoningMode", ["Quick"]))
-    assert manager.get_llama_cpp_reasoning_mode() == "Quick"
+    asyncio.run(bus.dispatch_intent("app-settings", "setLlamaCppReasoningLevel", ["off"]))
+    assert manager.get_llama_cpp_reasoning_level() == "off"
 
-    asyncio.run(bus.dispatch_intent("app-settings", "setLlamaCppReasoningMode", ["not-a-real-mode"]))
-    assert manager.get_llama_cpp_reasoning_mode() == "Quick"
+    asyncio.run(bus.dispatch_intent("app-settings", "setLlamaCppReasoningLevel", ["not-a-real-level"]))
+    assert manager.get_llama_cpp_reasoning_level() == "off"
 
 
-def test_set_llama_cpp_reasoning_mode_reapplies_live_only_when_llama_cpp_is_the_active_provider(manager, monkeypatch):
+def test_set_llama_cpp_reasoning_level_reapplies_live_only_when_llama_cpp_is_the_active_provider(manager, monkeypatch):
     calls = []
     monkeypatch.setattr(api_provider, "initialize_local_provider", lambda *a, **k: calls.append(a))
 
     monkeypatch.setattr(api_provider, "is_local_llama_cpp_mode", lambda: False)
     bus = SessionBus("settings-llama-cpp-reasoning-not-active-test")
     register_settings(bus, manager)
-    asyncio.run(bus.dispatch_intent("app-settings", "setLlamaCppReasoningMode", ["Quick"]))
+    asyncio.run(bus.dispatch_intent("app-settings", "setLlamaCppReasoningLevel", ["off"]))
     assert calls == []
 
     monkeypatch.setattr(api_provider, "is_local_llama_cpp_mode", lambda: True)
-    asyncio.run(bus.dispatch_intent("app-settings", "setLlamaCppReasoningMode", ["Thinking"]))
+    asyncio.run(bus.dispatch_intent("app-settings", "setLlamaCppReasoningLevel", ["high"]))
     assert len(calls) == 1
     assert calls[0][0] == config.LOCAL_PROVIDER_LLAMACPP
-    assert calls[0][1]["reasoning_mode"] == "Thinking"
+    assert calls[0][1]["reasoning_level"] == "high"
 
 
-def test_set_llama_cpp_reasoning_mode_reapply_failure_reports_a_notice_without_crashing(manager, monkeypatch):
-    # Unlike Ollama's reasoning-mode reapply, this one has a REAL failure
+def test_set_llama_cpp_reasoning_level_reapply_failure_reports_a_notice_without_crashing(manager, monkeypatch):
+    # Unlike Ollama's reasoning-level reapply, this one has a REAL failure
     # mode: initialize_local_provider re-validates chat_model_path every
     # call, which can raise if the persisted GGUF file no longer exists.
     monkeypatch.setattr(api_provider, "is_local_llama_cpp_mode", lambda: True)
@@ -1282,10 +1282,10 @@ def test_set_llama_cpp_reasoning_mode_reapply_failure_reports_a_notice_without_c
     recorder = Recorder()
     bus.attach(recorder)
 
-    asyncio.run(bus.dispatch_intent("app-settings", "setLlamaCppReasoningMode", ["Quick"]))
+    asyncio.run(bus.dispatch_intent("app-settings", "setLlamaCppReasoningLevel", ["off"]))
 
-    # The mode is still persisted even though the live reapply failed.
-    assert manager.get_llama_cpp_reasoning_mode() == "Quick"
+    # The level is still persisted even though the live reapply failed.
+    assert manager.get_llama_cpp_reasoning_level() == "off"
     payload = recorder.messages[-1]["payload"]
     assert "could not be applied to the live model" in payload["llamaCppNotice"]
 

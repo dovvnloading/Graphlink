@@ -36,24 +36,30 @@ from typing import Any
 from uuid import uuid4
 
 import api_provider
+import graphlink_task_config as config
 
 from backend.events import SessionBus
 from backend.notifications import NotificationState
 from backend.attachments import AttachmentError, StagedAttachment, stage_file
 from backend.settings import (
     _apply,
-    apply_llama_cpp_reasoning_mode,
+    apply_anthropic_reasoning_level,
+    apply_gemini_reasoning_level,
+    apply_llama_cpp_reasoning_level,
     apply_ollama_chat_model,
-    apply_ollama_reasoning_mode,
+    apply_ollama_reasoning_level,
+    apply_openai_reasoning_level,
 )
 from backend.token_counter import TokenCounterState
 from graphlink_licensing import SettingsManager
 
 REASONING_OPTIONS = [
-    {"id": "thinking", "label": "Thinking Mode (Enable CoT)", "description": "Slower, higher-quality reasoning."},
-    {"id": "quick", "label": "Quick Mode (No CoT)", "description": "Faster, direct answers."},
+    {"id": "off", "label": "Off", "description": "No extended reasoning - the fastest, most direct answers."},
+    {"id": "low", "label": "Low", "description": "A little reasoning before answering."},
+    {"id": "medium", "label": "Medium", "description": "A balanced amount of reasoning."},
+    {"id": "high", "label": "High", "description": "Thorough reasoning - slower, higher-quality answers."},
 ]
-DEFAULT_REASONING_LEVEL = "quick"
+DEFAULT_REASONING_LEVEL = "off"
 
 SEND_MODES = ("enter_to_send", "ctrl_enter_to_send")
 
@@ -81,22 +87,27 @@ class ComposerDocument:
     # Whenever register_composer got a real SettingsManager, the persisted
     # value wins - see reasoning_level_reader below.
     reasoning_level: str = DEFAULT_REASONING_LEVEL
-    # R7.5d follow-up: reads the ACTIVE provider's persisted reasoning mode
-    # ("Thinking"/"Quick"). Legacy's composer never stored a reasoning level
-    # of its own either - graphlink_composer_bridge.py's _reasoning() derives
-    # it from the settings manager on every payload build, which is why the
-    # Qt composer and the Settings dialog could never disagree.
+    # R7.5d follow-up: reads the ACTIVE provider's persisted reasoning
+    # level. Legacy's composer never stored a reasoning level of its own
+    # either - graphlink_composer_bridge.py's _reasoning() derives it from
+    # the settings manager on every payload build, which is why the Qt
+    # composer and the Settings dialog could never disagree.
     #
     # The first pass of R7.5d wired only the WRITE half of that (the toggle
     # began genuinely persisting + re-applying to api_provider) and left this
     # document's own private reasoning_level as the display source. That made
     # the two halves diverge in a way that was worse than the original bug:
-    # get_ollama_reasoning_mode() defaults to "Thinking", so a user who had
-    # never touched the setting saw the composer confidently report "Quick
-    # Mode (No CoT)" while every chat call really ran with think=True, and
-    # selecting the already-active "Quick" was the only way to reach the
-    # state the UI already claimed. Deriving instead of mirroring removes the
-    # second source of truth rather than trying to keep two in sync.
+    # get_ollama_reasoning_level() defaulted to "Thinking" (now "high"), so a
+    # user who had never touched the setting saw the composer confidently
+    # report "Quick Mode (No CoT)" (now "Off") while every chat call really
+    # ran with reasoning enabled, and selecting the already-active choice was
+    # the only way to reach the state the UI already claimed. Deriving
+    # instead of mirroring removes the second source of truth rather than
+    # trying to keep two in sync.
+    #
+    # R8a: extended from a local-only (Ollama/Llama.cpp) 2-value mode to a
+    # graded 4-value level (off/low/medium/high) shared by all 5 providers -
+    # see _persisted_reasoning_level's own docstring in register_composer.
     reasoning_level_reader: Callable[[], str] | None = field(default=None, repr=False)
     route_reader: Callable[[], dict[str, Any]] | None = field(default=None, repr=False)
     # R4: the in-flight agent-dispatch request, if any - set by
@@ -141,14 +152,17 @@ class ComposerDocument:
         """The reasoning level to DISPLAY: the active provider's persisted
         setting when one is reachable, else this document's own fallback.
 
-        Normalizes the settings manager's Title-Case vocabulary
-        ("Thinking"/"Quick") to this payload's lowercase option ids, which
-        are the two the frontend renders and sends back.
+        Validates against REASONING_OPTIONS' own ids rather than trusting
+        the reader outright - api_provider.normalize_reasoning_level already
+        guarantees this for every real reader this app wires, but falling
+        back to "off" (not raising) for anything else keeps this method
+        total, matching its own contract as a display-only derivation.
         """
         if self.reasoning_level_reader is None:
             return self.reasoning_level
         raw = str(self.reasoning_level_reader() or "").strip().lower()
-        return "thinking" if raw == "thinking" else "quick"
+        valid_ids = {option["id"] for option in REASONING_OPTIONS}
+        return raw if raw in valid_ids else "off"
 
     def _reasoning_label(self, level: str) -> str:
         return next(o["label"] for o in REASONING_OPTIONS if o["id"] == level)
@@ -233,11 +247,33 @@ class ComposerDocument:
                 # Real, and derived - not a constant. The composer's model
                 # control enables exactly when there is something to choose.
                 "modelSelection": bool(route.get("modelOptions")),
-                "reasoningSelection": api_provider.is_local_ollama_mode() or api_provider.is_local_llama_cpp_mode(),
+                # R8a: real capability detection, not "local providers only" -
+                # every provider this app talks to now has SOME reasoning
+                # mechanism (see api_provider.py's REASONING_LEVELS docstring),
+                # so this shows the control whenever the CURRENTLY RESOLVED
+                # model actually supports it, cloud included.
+                "reasoningSelection": _route_supports_reasoning(route),
                 "settingsShortcut": True,
                 "cancellation": True,
             },
         }
+
+
+def _route_supports_reasoning(route: dict[str, Any]) -> bool:
+    mode = route.get("mode")
+    model_id = str(route.get("modelId") or "")
+    if mode == "ollama":
+        return api_provider.ollama_supports_reasoning(model_id)
+    if mode == "llama_cpp":
+        return api_provider.llama_cpp_supports_reasoning(model_id)
+    if mode == "api":
+        provider = route.get("provider")
+        if provider == config.API_PROVIDER_ANTHROPIC:
+            return api_provider.anthropic_supports_reasoning(model_id)
+        if provider == config.API_PROVIDER_GEMINI:
+            return api_provider.gemini_supports_reasoning(model_id)
+        return api_provider.openai_supports_reasoning(model_id)
+    return False
 
 
 def register_composer(
@@ -258,12 +294,28 @@ def register_composer(
         # Settings dialog edits and api_provider actually obeys, exactly as
         # legacy's _reasoning() did (graphlink_composer_bridge.py:464-474),
         # branching on the live provider for the same reason it did.
-        def _persisted_reasoning_mode() -> str:
+        #
+        # R8a: extended from Ollama/Llama.cpp only to all 5 providers - a
+        # cloud reasoning level only matters once reasoningSelection (see
+        # _route_supports_reasoning above) has already gated the control on,
+        # so an unrecognized/future API provider string here just falls
+        # through to the OpenAI-compatible getter, the same conservative
+        # "off by default" family as the other two cloud providers.
+        def _persisted_reasoning_level() -> str:
             if api_provider.is_local_llama_cpp_mode():
-                return settings_manager.get_llama_cpp_reasoning_mode()
-            return settings_manager.get_ollama_reasoning_mode()
+                return settings_manager.get_llama_cpp_reasoning_level()
+            if api_provider.is_local_ollama_mode():
+                return settings_manager.get_ollama_reasoning_level()
+            if api_provider.is_api_mode():
+                provider = settings_manager.get_api_provider()
+                if provider == config.API_PROVIDER_ANTHROPIC:
+                    return settings_manager.get_anthropic_reasoning_level()
+                if provider == config.API_PROVIDER_GEMINI:
+                    return settings_manager.get_gemini_reasoning_level()
+                return settings_manager.get_openai_reasoning_level()
+            return DEFAULT_REASONING_LEVEL
 
-        document.reasoning_level_reader = _persisted_reasoning_mode
+        document.reasoning_level_reader = _persisted_reasoning_level
 
         def _live_route() -> dict[str, Any]:
             """Resolve the route the way a real send resolves it.
@@ -357,31 +409,34 @@ def register_composer(
         # Unchanged existing behavior: raises ComposerError for an
         # unrecognized id (see
         # test_set_reasoning_level_intent_updates_and_rejects_unknown).
+        # `level` is now one of REASONING_OPTIONS' own 4 ids (already
+        # lowercase) rather than needing a Title-Case normalization step -
+        # api_provider.normalize_reasoning_level is the ONE remaining
+        # normalizer, applied inside each set_*_reasoning_level setter.
         document.set_reasoning_level(level)
-
-        # Same Title-Case normalization backend/settings.py's own
-        # _OLLAMA_REASONING_MODES/_LLAMA_CPP_REASONING_MODES validate
-        # against, and legacy's own bridge applied. This ternary is TOTAL -
-        # it always produces "Thinking" or "Quick" - so the shared apply
-        # functions below never need to re-validate whatever this handler
-        # passes them.
-        normalized_mode = "Thinking" if str(level).strip().lower() == "thinking" else "Quick"
 
         if settings_manager is not None:
             # Mutually exclusive by construction (api_provider.py) - order
-            # between the two branches is arbitrary; Ollama-first here
-            # purely to match backend/settings.py's own file ordering
-            # (Ollama defined before Llama.cpp throughout that file).
+            # matches backend/settings.py's own file ordering.
             if api_provider.is_local_ollama_mode():
-                await apply_ollama_reasoning_mode(settings_manager, normalized_mode)
+                await apply_ollama_reasoning_level(settings_manager, level)
             elif api_provider.is_local_llama_cpp_mode():
-                failure = await apply_llama_cpp_reasoning_mode(settings_manager, normalized_mode)
+                failure = await apply_llama_cpp_reasoning_level(settings_manager, level)
                 if failure is not None and notifications is not None:
                     notifications.show(failure, "error")
                     await bus.publish("notification")
-            # else: cloud/API mode - reasoningSelection is already False
-            # there (see payload() above), so the UI disables this control
-            # entirely; skip the apply step, never raise.
+            elif api_provider.is_api_mode():
+                # R8a: reasoningSelection now gates on the RESOLVED MODEL's
+                # real capability (_route_supports_reasoning), not just "is
+                # this a local provider" - cloud providers reach this branch
+                # whenever their active model actually supports reasoning.
+                provider = settings_manager.get_api_provider()
+                if provider == config.API_PROVIDER_ANTHROPIC:
+                    await apply_anthropic_reasoning_level(settings_manager, level)
+                elif provider == config.API_PROVIDER_GEMINI:
+                    await apply_gemini_reasoning_level(settings_manager, level)
+                else:
+                    await apply_openai_reasoning_level(settings_manager, level)
 
             # The Settings dialog renders the same persisted value on its
             # Ollama/Llama.cpp page. Without this it keeps showing the old

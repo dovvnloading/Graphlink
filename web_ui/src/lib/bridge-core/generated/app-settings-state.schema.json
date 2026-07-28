@@ -99,7 +99,7 @@
     "llamaCppNotice": {
       "type": "string"
     },
-    "llamaCppReasoningMode": {
+    "llamaCppReasoningLevel": {
       "type": "string"
     },
     "llamaCppScanStatus": {
@@ -141,7 +141,7 @@
     "ollamaPullStatus": {
       "type": "string"
     },
-    "ollamaReasoningMode": {
+    "ollamaReasoningLevel": {
       "type": "string"
     },
     "ollamaScanStatus": {
@@ -191,7 +191,7 @@
     "apiCatalogMessage",
     "geminiStaticModels",
     "geminiStaticImageModels",
-    "ollamaReasoningMode",
+    "ollamaReasoningLevel",
     "ollamaCurrentModel",
     "ollamaModelAssignments",
     "ollamaScannedModels",
@@ -199,7 +199,7 @@
     "ollamaScanStatus",
     "ollamaPullStatus",
     "ollamaNotice",
-    "llamaCppReasoningMode",
+    "llamaCppReasoningLevel",
     "llamaCppChatModelPath",
     "llamaCppTitleModelPath",
     "llamaCppChatFormat",

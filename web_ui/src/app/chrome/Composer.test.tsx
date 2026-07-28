@@ -279,11 +279,13 @@ describe("Composer", () => {
         route: {
           ...initialComposerState.route,
           reasoning: {
-            level: "quick",
-            label: "Quick Mode (No CoT)",
+            level: "off",
+            label: "Off",
             options: [
-              { id: "thinking", label: "Thinking Mode (Enable CoT)", description: "Slower." },
-              { id: "quick", label: "Quick Mode (No CoT)", description: "Faster." },
+              { id: "off", label: "Off", description: "No extended reasoning - the fastest, most direct answers." },
+              { id: "low", label: "Low", description: "A little reasoning before answering." },
+              { id: "medium", label: "Medium", description: "A balanced amount of reasoning." },
+              { id: "high", label: "High", description: "Thorough reasoning - slower, higher-quality answers." },
             ],
           },
         },
@@ -296,10 +298,10 @@ describe("Composer", () => {
         <Composer store={store} />
       </OverlayProvider>,
     );
-    await user.click(screen.getByText("Quick Mode (No CoT)"));
-    await user.click(screen.getByText("Thinking Mode (Enable CoT)"));
-    expect(setReasoningLevel).toHaveBeenCalledWith("thinking");
-    expect(screen.queryByText("Thinking Mode (Enable CoT)")).toBeNull();
+    await user.click(screen.getByText("Off"));
+    await user.click(screen.getByText("High"));
+    expect(setReasoningLevel).toHaveBeenCalledWith("high");
+    expect(screen.queryByText("High")).toBeNull();
   });
 
   it("Reasoning trigger is disabled when reasoningSelection is false", () => {
