@@ -671,6 +671,20 @@ export class SceneStore {
     this.transport.intent("scene", "generateChart", [parentNodeId, chartType]);
   }
 
+  // R8a: the Key Takeaway / Explainer Note agents, restored from the deleted
+  // Qt app (their menu items had been disabled stubs blaming a missing agent
+  // layer that had in fact shipped in R4). Both take only the source chat
+  // node's id - the backend reads its own .content, exactly like
+  // generateImage - and the resulting note arrives on the next scene
+  // snapshot, so neither needs the new node id back here.
+  generateKeyTakeaway(sourceNodeId: string): void {
+    this.transport.intent("scene", "generateKeyTakeaway", [sourceNodeId]);
+  }
+
+  generateExplainerNote(sourceNodeId: string): void {
+    this.transport.intent("scene", "generateExplainerNote", [sourceNodeId]);
+  }
+
   resizeChart(nodeId: string, width: number, height: number): void {
     this.transport.intent("scene", "resizeChart", [nodeId, width, height]);
   }

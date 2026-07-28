@@ -15,8 +15,7 @@ import { NodeMenu } from "./NodeMenu";
  * honest disabled+title label rather than a fake action or a silent drop
  * (an R3.4 live-drive audit found several legacy ChatNode menu items had
  * been dropped with zero acknowledgment - fixed here): Regenerate (assistant
- * nodes only, needs the R4 agent layer), Key Takeaway/Explainer Note
- * generation (R4, same agent-layer blocker), Open Document View (the
+ * nodes only, needs the R4 agent layer), Open Document View (the
  * document-viewer island isn't wired into the SPA overlay system yet), and
  * Hide Other Branches (the legacy scene's
  * branch-visibility toggle has no backend/frontend equivalent at all yet -
@@ -41,9 +40,13 @@ import { NodeMenu } from "./NodeMenu";
  * real click-to-expand submenu (CHART_TYPE_OPTIONS below) offering the 5
  * chart types in legacy's own menu order (Bar/Line/Histogram/Pie/Sankey),
  * each dispatching the real generateChart intent with this node as the
- * parent. Key Takeaway/Explainer Note remain honestly deferred (still no
- * agent-layer support of their own) - the stale "Chart" mention in their old
- * shared R4-blocker note above has been removed accordingly. "Export" is
+ * parent. "Generate Key Takeaway" and "Generate Explainer Note" are
+ * likewise no longer deferred as of R8a: their agents were lost with the
+ * R7.6b Qt cutover and never ported, and the tooltip blaming a missing
+ * agent layer had been stale since R4 - the very layer Regenerate/Image/
+ * Chart already use. Both now dispatch real intents that drop the agent's
+ * output into a new note beside this node (graphlink_note_agent.py).
+ * "Export" is
  * likewise no longer deferred as of R7.5a: it downloads the node's raw
  * content (not the rendered markdown) as a .md file via downloadTextFile -
  * frontend-only, no backend involved, since the content is already in
@@ -71,6 +74,8 @@ export interface ChatNodeData extends Record<string, unknown> {
   onRegenerate: () => void;
   onGenerateImage: () => void;
   onGenerateChart: (chartType: string) => void;
+  onGenerateKeyTakeaway: () => void;
+  onGenerateExplainerNote: () => void;
   onScrollChange: (value: number) => void;
 }
 
@@ -107,6 +112,8 @@ function ChatNodeMenu({
   onRegenerate,
   onGenerateImage,
   onGenerateChart,
+  onGenerateKeyTakeaway,
+  onGenerateExplainerNote,
   onClose,
 }: {
   position: MenuPosition;
@@ -121,6 +128,8 @@ function ChatNodeMenu({
   onRegenerate: () => void;
   onGenerateImage: () => void;
   onGenerateChart: (chartType: string) => void;
+  onGenerateKeyTakeaway: () => void;
+  onGenerateExplainerNote: () => void;
   onClose: () => void;
 }) {
   const [chartMenuOpen, setChartMenuOpen] = useState(false);
@@ -186,10 +195,28 @@ function ChatNodeMenu({
       <button type="button" role="menuitem" disabled title="Document view integration isn't wired into the SPA yet">
         Open Document View
       </button>
-      <button type="button" role="menuitem" disabled title="AI note generation isn't available yet">
+      {/* R8a: real. Each runs its agent over THIS node's text and drops the
+          result into a new note beside it - see backend/canvas.py's
+          _generate_note_from_node. Fire-and-forget like Generate Image
+          above: the note arrives on the next scene snapshot. */}
+      <button
+        type="button"
+        role="menuitem"
+        onClick={() => {
+          onGenerateKeyTakeaway();
+          onClose();
+        }}
+      >
         Generate Key Takeaway
       </button>
-      <button type="button" role="menuitem" disabled title="AI note generation isn't available yet">
+      <button
+        type="button"
+        role="menuitem"
+        onClick={() => {
+          onGenerateExplainerNote();
+          onClose();
+        }}
+      >
         Generate Explainer Note
       </button>
       {/* R6.2: a real click-to-expand submenu (not disabled) - same
@@ -359,6 +386,8 @@ export function ChatNodeView({ id, data, selected }: NodeProps<ChatFlowNode>) {
           onRegenerate={data.onRegenerate}
           onGenerateImage={data.onGenerateImage}
           onGenerateChart={data.onGenerateChart}
+          onGenerateKeyTakeaway={data.onGenerateKeyTakeaway}
+          onGenerateExplainerNote={data.onGenerateExplainerNote}
           onClose={() => setMenuPosition(null)}
         />
       )}

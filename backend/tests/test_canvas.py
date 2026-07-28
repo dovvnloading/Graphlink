@@ -18,6 +18,9 @@ from backend.agents import AgentDispatcher
 from backend.canvas import (
     DRAG_FACTOR_MAX,
     DRAG_FACTOR_MIN,
+    NOTE_AGENT_BODY_COLOR,
+    NOTE_AGENT_HEADER_COLOR,
+    NOTE_AGENT_X_OFFSET,
     SceneDocument,
     SceneEmptyPromptError,
     SceneError,
@@ -6036,5 +6039,128 @@ def test_collapse_all_and_expand_all_intents_on_an_empty_scene_still_publish_onc
         recorder.messages.clear()
         await bus.dispatch_intent("scene", "expandAllNodes", [])
         assert recorder.topics_seen().count("scene") == 1
+
+    asyncio.run(run())
+
+
+# -- R8a: generateKeyTakeaway / generateExplainerNote round trips --------------
+#
+# Both agents were lost with the R7.6b Qt cutover and their menu items sat
+# disabled ever since. These cover the intent layer: validation, the note that
+# gets created, and where it lands.
+
+
+def test_generate_key_takeaway_creates_a_tinted_note_beside_the_source_node(monkeypatch):
+    monkeypatch.setattr(
+        agents_module.KeyTakeawayAgent, "get_response",
+        lambda self, text: "Key Takeaway\n\nMain Points:\n• it works",
+    )
+
+    async def run():
+        bus, document, recorder, _ = make_bus_with_dispatcher()
+        chat = document.add_chat_node(100, 200, "a long assistant answer", False)
+        scene_publishes_before = recorder.topics_seen().count("scene")
+
+        note_id = await bus.dispatch_intent("scene", "generateKeyTakeaway", [chat.id])
+
+        assert note_id is not None
+        note = document.nodes[note_id]
+        assert note.kind == "note"
+        assert note.content == "Key Takeaway\n\nMain Points:\n• it works"
+        # Offset to the RIGHT of the source, clearing the chat node's width.
+        assert (note.x, note.y) == (100 + NOTE_AGENT_X_OFFSET, 200)
+        assert note.color == NOTE_AGENT_BODY_COLOR
+        assert note.header_color == NOTE_AGENT_HEADER_COLOR
+        assert recorder.topics_seen().count("scene") > scene_publishes_before
+
+    asyncio.run(run())
+
+
+def test_generate_explainer_note_staggers_below_a_takeaway_from_the_same_node(monkeypatch):
+    # Both generated from ONE node must not land on top of each other.
+    monkeypatch.setattr(agents_module.KeyTakeawayAgent, "get_response", lambda self, text: "TAKEAWAY")
+    monkeypatch.setattr(agents_module.ExplainerAgent, "get_response", lambda self, text: "EXPLAINER")
+
+    async def run():
+        bus, document, _, _ = make_bus_with_dispatcher()
+        chat = document.add_chat_node(0, 0, "source text", False)
+
+        takeaway_id = await bus.dispatch_intent("scene", "generateKeyTakeaway", [chat.id])
+        explainer_id = await bus.dispatch_intent("scene", "generateExplainerNote", [chat.id])
+
+        takeaway, explainer = document.nodes[takeaway_id], document.nodes[explainer_id]
+        assert takeaway.content == "TAKEAWAY"
+        assert explainer.content == "EXPLAINER"
+        assert takeaway.x == explainer.x
+        assert explainer.y > takeaway.y, "the two must not overlap"
+
+    asyncio.run(run())
+
+
+def test_generate_key_takeaway_rejects_an_empty_node_without_calling_the_agent(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        agents_module.KeyTakeawayAgent, "get_response",
+        lambda self, text: calls.append(text) or "should not happen",
+    )
+
+    async def run():
+        bus, document, _, _ = make_bus_with_dispatcher()
+        blank = document.add_chat_node(0, 0, "   ", True)
+        node_count_before = len(document.nodes)
+
+        result = await bus.dispatch_intent("scene", "generateKeyTakeaway", [blank.id])
+
+        assert result is None
+        assert calls == [], "an empty node must never reach the model"
+        assert len(document.nodes) == node_count_before, "no note should be created"
+
+    asyncio.run(run())
+
+
+def test_generate_key_takeaway_rejects_a_non_chat_node(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        agents_module.KeyTakeawayAgent, "get_response",
+        lambda self, text: calls.append(text) or "x",
+    )
+
+    async def run():
+        bus, document, _, _ = make_bus_with_dispatcher()
+        note = document.add_note(0, 0)
+        result = await bus.dispatch_intent("scene", "generateKeyTakeaway", [note.id])
+        assert result is None
+        assert calls == []
+
+    asyncio.run(run())
+
+
+def test_generate_key_takeaway_rejects_an_unknown_node_id():
+    async def run():
+        bus, document, _, _ = make_bus_with_dispatcher()
+        result = await bus.dispatch_intent("scene", "generateKeyTakeaway", ["does-not-exist"])
+        assert result is None
+
+    asyncio.run(run())
+
+
+def test_generate_key_takeaway_sends_the_nodes_own_text_not_the_branch_history(monkeypatch):
+    # Legacy summarised ONE node. Widening this to the branch history (as
+    # generateChart does) would change what the feature actually summarises.
+    seen = []
+    monkeypatch.setattr(
+        agents_module.KeyTakeawayAgent, "get_response",
+        lambda self, text: seen.append(text) or "Key Takeaway",
+    )
+
+    async def run():
+        bus, document, _, _ = make_bus_with_dispatcher()
+        parent = document.add_chat_node(0, 0, "the parent question", True)
+        child = document.add_chat_node(0, 160, "the child answer", False, parent_id=parent.id)
+
+        await bus.dispatch_intent("scene", "generateKeyTakeaway", [child.id])
+
+        assert seen == ["the child answer"]
+        assert "the parent question" not in seen[0]
 
     asyncio.run(run())

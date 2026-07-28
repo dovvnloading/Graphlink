@@ -98,6 +98,16 @@ def test_chart_agent_imports_qt_free():
     _assert_import_is_qt_free("graphlink_chart_agent")
 
 
+def test_note_agent_imports_qt_free():
+    # R8a: graphlink_note_agent.py restores KeyTakeawayAgent/ExplainerAgent,
+    # which were lost when R7.6b deleted graphlink_app/ (they lived in
+    # graphlink_agents_core.py alongside QThread workers). Their menu items
+    # had been disabled stubs ever since. backend/agents.py imports this
+    # module at module scope, so it must stay Qt-free or it re-taints the
+    # entire backend import graph.
+    _assert_import_is_qt_free("graphlink_note_agent")
+
+
 def test_chart_rendering_imports_qt_free():
     # R6.2: graphlink_chart_rendering.py ports the legacy ChartItem's
     # Matplotlib rendering (already Qt-free upstream: matplotlib.use("Agg")

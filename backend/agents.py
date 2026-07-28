@@ -74,6 +74,7 @@ import graphlink_task_config as config
 from graphlink_artifact_agent import ArtifactAgent
 from graphlink_chart_agent import ChartDataAgent
 from graphlink_chat_agent import ChatAgent
+from graphlink_note_agent import ExplainerAgent, KeyTakeawayAgent
 from graphlink_licensing import SettingsManager  # type hint only
 from graphlink_plugins.common.github_client import GitHubRestClient
 from graphlink_plugins.gitlink.agent import GitlinkAgent, _fingerprint_changes, _is_repo_text_path
@@ -343,6 +344,19 @@ class AgentDispatcher:
         # no checkpoint to insert one at, and its own legacy caller,
         # ChartWorkerThread, has no stop() method either).
         self._chart_requests: dict[str, bool] = {}
+        # R8a: a TENTH independent in-flight-request GUARD, same directly-
+        # awaited shape (and therefore same dict-of-sentinels rather than
+        # dict-of-tasks) as self._chart_requests above, for the same reason:
+        # Key Takeaway / Explainer Note each create a brand new note node, so
+        # the caller needs the result back in the same round trip and there is
+        # no pre-existing node to hang a spinner on. ONE guard covers both
+        # agents deliberately - they are the same user-facing gesture
+        # ("summarise this node into a note") differing only in prompt, and
+        # letting a takeaway and an explainer run concurrently would race two
+        # notes onto overlapping canvas positions for no benefit.
+        # request_id -> True; no task/cancel_event to store, since the legacy
+        # workers these replace had no stop() either.
+        self._note_requests: dict[str, bool] = {}
         # R5.4: Py-Coder's REPL subprocess outlives any single run (state
         # persists between calls, same as legacy's own PyCoderReplManager -
         # see that class's own docstring in graphlink_plugins/pycoder/domain.py
@@ -2203,6 +2217,96 @@ class AgentDispatcher:
             await bus.publish("notification")
         finally:
             self._chart_requests.pop(request_id, None)
+
+    async def start_note_generation(
+        self,
+        *,
+        bus: SessionBus,
+        notifications_state,
+        node_id: str,
+        note_kind: str,
+        source_text: str,
+        on_success,
+        on_failure,
+    ) -> None:
+        """R8a: Key Takeaway / Explainer Note generation.
+
+        DIRECTLY AWAITED by its caller rather than scheduled via
+        asyncio.create_task, the same shape as start_chart_generation above
+        and for the same reason: the result is a brand new note node, so the
+        caller needs it back in the same round trip and there is no
+        pre-existing node to attach a spinner to.
+
+        `note_kind` selects the agent ("takeaway" | "explainer"). One method
+        rather than two near-identical ones because the two differ ONLY in
+        which agent class runs and how failures are worded - the guard,
+        timeout, callback and cleanup logic are identical, and duplicating
+        them would be two places to fix every future bug in.
+        """
+        label = NOTE_AGENT_LABELS.get(note_kind, "Note")
+
+        if self._note_requests:
+            notifications_state.show(f"A {label.lower()} is already being generated.", "info")
+            await bus.publish("notification")
+            return
+
+        request_id = uuid.uuid4().hex
+        self._note_requests[request_id] = True
+
+        async def _invoke(fn, *a):
+            if inspect.iscoroutinefunction(fn):
+                await fn(*a)
+            else:
+                fn(*a)
+
+        try:
+            text = await asyncio.wait_for(
+                asyncio.to_thread(_call_note_agent, note_kind, source_text),
+                timeout=WATCHDOG_TIMEOUT_SECONDS,
+            )
+            if not str(text or "").strip():
+                # An agent that returns nothing usable must not silently
+                # create an empty note - that reads as a broken feature.
+                message = f"{label} generation returned an empty response. Please try again."
+                await _invoke(on_failure, message)
+                notifications_state.show(message, "error")
+                await bus.publish("notification")
+            else:
+                await _invoke(on_success, text)
+        except asyncio.TimeoutError:
+            message = (
+                f"{label} generation stopped responding before the request completed. "
+                "Please try again."
+            )
+            await _invoke(on_failure, message)
+            notifications_state.show(message, "error")
+            await bus.publish("notification")
+        except Exception as exc:
+            logger.exception("%s generation dispatch failed (source node %s)", label, node_id)
+            message = f"{label} generation failed: {exc}"
+            await _invoke(on_failure, message)
+            notifications_state.show(message, "error")
+            await bus.publish("notification")
+        finally:
+            self._note_requests.pop(request_id, None)
+
+
+# R8a: the two note agents, keyed by the `note_kind` start_note_generation
+# takes. Kept as data rather than an if/elif so adding a third note agent is
+# one entry, not another branch in three places.
+NOTE_AGENT_LABELS = {"takeaway": "Key takeaway", "explainer": "Explainer note"}
+_NOTE_AGENTS = {"takeaway": KeyTakeawayAgent, "explainer": ExplainerAgent}
+
+
+def _call_note_agent(note_kind: str, source_text: str) -> str:
+    """Runs inside asyncio.to_thread - the blocking driver for
+    start_note_generation above, mirroring _call_chart_agent's own shape
+    (fresh agent instance per call). Returns the agent's already-cleaned
+    text; unlike the chart agent there is no JSON to parse."""
+    agent_cls = _NOTE_AGENTS.get(note_kind)
+    if agent_cls is None:
+        raise ValueError(f"unknown note kind: {note_kind}")
+    return agent_cls().get_response(source_text)
 
 
 def _call_pycoder_execution_agent(conversation_history, user_prompt) -> str:
