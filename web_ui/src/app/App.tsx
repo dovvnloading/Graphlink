@@ -231,16 +231,15 @@ function App() {
             <div className="app-notification-layer">
               <NotificationBanner store={composerStore} />
             </div>
+            <div className="app-composer-layer">
+              <Composer store={composerStore} sceneStore={sceneStore} />
+            </div>
             <CommandPalette store={sceneStore} />
             <AboutDialog transport={transport} />
             <HelpDialog />
             <SettingsDialog transport={transport} />
             <ChatLibraryDialog transport={transport} />
           </main>
-
-          <footer className="app-composer-region">
-            <Composer store={composerStore} sceneStore={sceneStore} />
-          </footer>
         </div>
       </ReactFlowProvider>
     </OverlayProvider>
