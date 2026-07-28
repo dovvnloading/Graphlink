@@ -4,6 +4,12 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#1a1a1a" />
+    <!-- Both are served verbatim from src/app/public. The .ico is the
+         fallback browsers request at /favicon.ico on their own - without it
+         that request fell through to the SPA catch-all and returned
+         index.html, so the tab had no icon at all. -->
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+    <link rel="alternate icon" type="image/x-icon" href="./favicon.ico" />
     <title>Graphlink</title>
   </head>
   <body>

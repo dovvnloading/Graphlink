@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-labelledby="t d">
+  <title id="t">Graphlink - Knockout Tile</title>
+  <desc id="d">A solid brand tile with the graph carved out in negative space. Identical on any background.</desc>
+  <rect x="2" y="2" width="60" height="60" rx="15" fill="#3fae67"/>
+  <g stroke="#ffffff" stroke-width="5" stroke-linecap="round">
+    <line x1="32" y1="21" x2="19" y2="43"/><line x1="32" y1="21" x2="45" y2="43"/>
+  </g>
+  <circle cx="32" cy="21" r="6.5" fill="#ffffff"/>
+  <circle cx="19" cy="43" r="6.5" fill="#ffffff"/>
+  <circle cx="45" cy="43" r="6.5" fill="#ffffff"/>
+</svg>

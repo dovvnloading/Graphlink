@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-labelledby="t d">
+  <title id="t">Graphlink - Node and Handles</title>
+  <desc id="d">The canvas node card itself, with its top and bottom connection handles.</desc>
+  <g stroke="#7d8590" stroke-width="4" stroke-linecap="round">
+    <line x1="32" y1="4" x2="32" y2="14"/><line x1="32" y1="50" x2="32" y2="60"/>
+  </g>
+  <rect x="8" y="14" width="48" height="36" rx="8" fill="#45c46f"/>
+  <circle cx="32" cy="14" r="5.5" fill="#4a90e2"/>
+  <circle cx="32" cy="50" r="5.5" fill="#4a90e2"/>
+</svg>

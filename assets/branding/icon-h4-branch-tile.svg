@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-labelledby="t d">
+  <title id="t">Graphlink - Branch Arrow - Tile</title>
+  <desc id="d">The branch knocked out of a solid brand tile. Context-independent.</desc>
+  <rect x="2" y="2" width="60" height="60" rx="15" fill="#3fae67"/>
+  <path d="M32 54V46" stroke="#ffffff" stroke-width="6" stroke-linecap="round" fill="none"/>
+  <path d="M32 46L21 35V31" stroke="#ffffff" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <path d="M32 46L43 35V31" stroke="#ffffff" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <path d="M21 13L13 29h16z" fill="#ffffff"/>
+  <path d="M43 13L35 29h16z" fill="#ffffff"/>
+</svg>

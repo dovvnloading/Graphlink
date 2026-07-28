@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-labelledby="t d">
+  <title id="t">Graphlink - Split Bubble</title>
+  <desc id="d">One speech bubble cleaved in two - the fork happens inside the conversation.</desc>
+  <path d="M14 10h15v36h-8l-7 9v-9a8 8 0 0 1-8-8V18a8 8 0 0 1 8-8z" fill="#45c46f"/>
+  <path d="M35 10h15a8 8 0 0 1 8 8v20a8 8 0 0 1-8 8H35z" fill="#4a90e2"/>
+</svg>

@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64"
+     role="img" aria-labelledby="t d">
+  <title id="t">Graphlink</title>
+  <desc id="d">A stem forking into two directed branches - the Graphlink app mark.</desc>
+  <g fill="none" stroke-width="6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M32 58L32 45" stroke="#7d8590"/>
+    <path d="M32 45L18 32L18 21" stroke="#45c46f"/>
+    <path d="M10 31L18 20L26 31" stroke="#45c46f"/>
+    <path d="M32 45L46 32L46 21" stroke="#4a90e2"/>
+    <path d="M38 31L46 20L54 31" stroke="#4a90e2"/>
+  </g>
+</svg>

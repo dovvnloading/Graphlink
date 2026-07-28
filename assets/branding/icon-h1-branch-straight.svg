@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-labelledby="t d">
+  <title id="t">Graphlink - Branch Arrow - Straight</title>
+  <desc id="d">Refined H with straight segments and chunky filled arrowheads.</desc>
+  <path d="M32 58V48" stroke="#7d8590" stroke-width="7" stroke-linecap="round" fill="none"/>
+  <path d="M32 48L19 35V30" stroke="#45c46f" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <path d="M32 48L45 35V30" stroke="#4a90e2" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <path d="M19 9L9 28h20z" fill="#45c46f"/>
+  <path d="M45 9L35 28h20z" fill="#4a90e2"/>
+</svg>

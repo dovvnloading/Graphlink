@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-labelledby="t d">
+  <title id="t">Graphlink - Bubble Fork</title>
+  <desc id="d">A single message bubble whose thread forks into two nodes.</desc>
+  <g fill="none" stroke="#7d8590" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M32 33v7"/><path d="M32 40H16v5"/><path d="M32 40h16v5"/>
+  </g>
+  <rect x="8" y="6" width="48" height="27" rx="8" fill="#45c46f"/>
+  <circle cx="16" cy="51" r="8" fill="#4a90e2"/>
+  <circle cx="48" cy="51" r="8" fill="#4a90e2"/>
+</svg>
