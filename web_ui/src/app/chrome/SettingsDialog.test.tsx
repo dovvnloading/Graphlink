@@ -32,7 +32,7 @@ const snapshot = {
   apiCatalogMessage: "Model catalog has not been refreshed yet.",
   geminiStaticModels: ["gemini-2.5-flash", "gemini-2.5-pro"],
   geminiStaticImageModels: ["gemini-2.5-flash-image"],
-  ollamaReasoningMode: "Thinking",
+  ollamaReasoningLevel: "high",
   ollamaCurrentModel: "",
   ollamaModelAssignments: {},
   ollamaScannedModels: [],
@@ -40,7 +40,7 @@ const snapshot = {
   ollamaScanStatus: "idle",
   ollamaPullStatus: "idle",
   ollamaNotice: "",
-  llamaCppReasoningMode: "Thinking",
+  llamaCppReasoningLevel: "high",
   llamaCppChatModelPath: "",
   llamaCppTitleModelPath: "",
   llamaCppChatFormat: "",
@@ -154,7 +154,7 @@ describe("SettingsDialog", () => {
     await goToLlamaCpp(user, push);
 
     expect(screen.queryByText(/lands in R7\.4c/)).toBeNull();
-    expect(screen.getByText("Reasoning Mode")).toBeInTheDocument();
+    expect(screen.getByText("Reasoning Level")).toBeInTheDocument();
   });
 
   it("Ollama page renders for the real (not deferred-placeholder) section", async () => {
@@ -162,16 +162,16 @@ describe("SettingsDialog", () => {
     await goToOllama(user, push);
 
     expect(screen.queryByText(/lands in R7\.4c/)).toBeNull();
-    expect(screen.getByText("Reasoning Mode")).toBeInTheDocument();
+    expect(screen.getByText("Reasoning Level")).toBeInTheDocument();
   });
 
-  it("clicking a reasoning mode radio fires setOllamaReasoningMode", async () => {
+  it("clicking a reasoning level radio fires setOllamaReasoningLevel", async () => {
     const { user, push, intents } = setup();
     await goToOllama(user, push);
 
-    await user.click(screen.getByLabelText("Quick Mode (No CoT)"));
+    await user.click(screen.getByLabelText("Low"));
 
-    expect(intents).toContainEqual(["app-settings", "setOllamaReasoningMode", ["Quick"]]);
+    expect(intents).toContainEqual(["app-settings", "setOllamaReasoningLevel", ["low"]]);
   });
 
   it("shows the current active model when one is set", async () => {
@@ -429,13 +429,13 @@ describe("SettingsDialog", () => {
     expect(screen.getByLabelText("Chat, Explain, Takeaways (main model)")).toHaveValue("");
   });
 
-  it("clicking a reasoning mode radio fires setLlamaCppReasoningMode", async () => {
+  it("clicking a reasoning level radio fires setLlamaCppReasoningLevel", async () => {
     const { user, push, intents } = setup();
     await goToLlamaCpp(user, push);
 
-    await user.click(screen.getByLabelText("Quick Mode (No CoT)"));
+    await user.click(screen.getByLabelText("Low"));
 
-    expect(intents).toContainEqual(["app-settings", "setLlamaCppReasoningMode", ["Quick"]]);
+    expect(intents).toContainEqual(["app-settings", "setLlamaCppReasoningLevel", ["low"]]);
   });
 
   it("shows 'No model selected' when no chat model path is set", async () => {

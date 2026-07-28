@@ -51,8 +51,9 @@ class AppSettingsStatePayload:
     apiCatalogMessage: str
     geminiStaticModels: list[str]
     geminiStaticImageModels: list[str]
-    # R7.4b: Ollama page.
-    ollamaReasoningMode: str
+    # R7.4b: Ollama page. R8a: reasoning went from a 2-value Mode
+    # (Thinking/Quick) to a graded 4-value Level (off/low/medium/high).
+    ollamaReasoningLevel: str
     ollamaCurrentModel: str
     ollamaModelAssignments: dict[str, str]
     ollamaScannedModels: list[str]
@@ -60,8 +61,8 @@ class AppSettingsStatePayload:
     ollamaScanStatus: str
     ollamaPullStatus: str
     ollamaNotice: str
-    # R7.4c: Llama.cpp page.
-    llamaCppReasoningMode: str
+    # R7.4c: Llama.cpp page. R8a: same Mode -> Level change as Ollama above.
+    llamaCppReasoningLevel: str
     llamaCppChatModelPath: str
     llamaCppTitleModelPath: str
     llamaCppChatFormat: str

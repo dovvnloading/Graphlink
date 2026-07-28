@@ -54,13 +54,12 @@ def _make_bus_with_settings(settings_manager):
 
 
 def test_default_payload_matches_generated_validator_shape(monkeypatch):
-    # R7.5d: reasoningSelection is now computed from live api_provider
-    # module state (see test_reasoning_selection_capability_reflects_
-    # active_local_provider below), not hardcoded - pin it here so this
-    # shape assertion is deterministic regardless of any other test's
-    # ambient global provider state.
-    monkeypatch.setattr(api_provider, "is_local_ollama_mode", lambda: True)
-    monkeypatch.setattr(api_provider, "is_local_llama_cpp_mode", lambda: False)
+    # R8a: reasoningSelection is now computed from the RESOLVED MODEL's real
+    # capability (_route_supports_reasoning), not just "is this provider
+    # active" - pin ollama_supports_reasoning directly so this shape
+    # assertion is deterministic regardless of any other test's ambient
+    # global provider state or the bare document's empty modelId.
+    monkeypatch.setattr(api_provider, "ollama_supports_reasoning", lambda model: True)
     payload = ComposerDocument().payload()
     assert set(payload) == {"draft", "context", "route", "request", "capabilities"}
     assert set(payload["draft"]) == {"id", "text", "contextMode", "sendMode", "restored"}
@@ -89,10 +88,10 @@ def test_update_draft_intent_updates_text_and_publishes_composer_and_tokens():
 def test_set_reasoning_level_intent_updates_and_rejects_unknown():
     async def run():
         bus, composer, _, _, _ = make_bus()
-        await bus.dispatch_intent("app-composer", "setReasoningLevel", ["thinking"])
-        assert composer.reasoning_level == "thinking"
+        await bus.dispatch_intent("app-composer", "setReasoningLevel", ["high"])
+        assert composer.reasoning_level == "high"
         payload = composer.payload()
-        assert payload["route"]["reasoning"]["label"] == "Thinking Mode (Enable CoT)"
+        assert payload["route"]["reasoning"]["label"] == "High"
         with pytest.raises(ComposerError):
             await bus.dispatch_intent("app-composer", "setReasoningLevel", ["nonsense"])
 
@@ -102,58 +101,91 @@ def test_set_reasoning_level_intent_updates_and_rejects_unknown():
 def test_reasoning_selection_capability_reflects_active_local_provider(monkeypatch):
     monkeypatch.setattr(api_provider, "is_local_ollama_mode", lambda: True)
     monkeypatch.setattr(api_provider, "is_local_llama_cpp_mode", lambda: False)
+    monkeypatch.setattr(api_provider, "ollama_supports_reasoning", lambda model: True)
     assert ComposerDocument().payload()["capabilities"]["reasoningSelection"] is True
 
-    monkeypatch.setattr(api_provider, "is_local_ollama_mode", lambda: False)
-    monkeypatch.setattr(api_provider, "is_local_llama_cpp_mode", lambda: True)
-    assert ComposerDocument().payload()["capabilities"]["reasoningSelection"] is True
+    # Same model, but Ollama says it has no reasoning mechanism for it -
+    # the capability must follow the MODEL, not just "is Ollama active".
+    monkeypatch.setattr(api_provider, "ollama_supports_reasoning", lambda model: False)
+    assert ComposerDocument().payload()["capabilities"]["reasoningSelection"] is False
 
+
+def test_reasoning_selection_capability_is_real_for_cloud_providers_too(monkeypatch):
+    # R8a: this used to be hardcoded to local-only - cloud providers now show
+    # the control whenever their resolved model actually supports reasoning.
     monkeypatch.setattr(api_provider, "is_local_ollama_mode", lambda: False)
     monkeypatch.setattr(api_provider, "is_local_llama_cpp_mode", lambda: False)
-    assert ComposerDocument().payload()["capabilities"]["reasoningSelection"] is False
+
+    document = ComposerDocument()
+    document.route_reader = lambda: {
+        "mode": "api",
+        "provider": config.API_PROVIDER_ANTHROPIC,
+        "modelId": "claude-opus-4-6",
+        "modelLabel": "claude-opus-4-6",
+        "modelOptions": [],
+        "label": config.API_PROVIDER_ANTHROPIC,
+        "available": True,
+        "canChange": False,
+    }
+    assert document.payload()["capabilities"]["reasoningSelection"] is True
+
+    document.route_reader = lambda: {
+        "mode": "api",
+        "provider": config.API_PROVIDER_ANTHROPIC,
+        "modelId": "claude-2",
+        "modelLabel": "claude-2",
+        "modelOptions": [],
+        "label": config.API_PROVIDER_ANTHROPIC,
+        "available": True,
+        "canChange": False,
+    }
+    assert document.payload()["capabilities"]["reasoningSelection"] is False
 
 
 def test_set_reasoning_level_reapplies_live_when_ollama_is_active(tmp_path, monkeypatch):
     manager = SettingsManager(tmp_path / "session.dat")
     monkeypatch.setattr(api_provider, "is_local_ollama_mode", lambda: True)
     monkeypatch.setattr(api_provider, "is_local_llama_cpp_mode", lambda: False)
+    monkeypatch.setattr(api_provider, "is_api_mode", lambda: False)
     calls = []
     monkeypatch.setattr(api_provider, "initialize_local_provider", lambda *a, **k: calls.append(a))
 
     async def run():
         bus, document, _, _ = _make_bus_with_settings(manager)
-        await bus.dispatch_intent("app-composer", "setReasoningLevel", ["thinking"])
+        await bus.dispatch_intent("app-composer", "setReasoningLevel", ["high"])
 
     asyncio.run(run())
 
-    assert manager.get_ollama_reasoning_mode() == "Thinking"
-    assert calls == [(config.LOCAL_PROVIDER_OLLAMA, {"reasoning_mode": "Thinking"})]
+    assert manager.get_ollama_reasoning_level() == "high"
+    assert calls == [(config.LOCAL_PROVIDER_OLLAMA, {"reasoning_level": "high"})]
 
 
 def test_set_reasoning_level_reapplies_live_when_llama_cpp_is_active(tmp_path, monkeypatch):
     manager = SettingsManager(tmp_path / "session.dat")
     monkeypatch.setattr(api_provider, "is_local_ollama_mode", lambda: False)
     monkeypatch.setattr(api_provider, "is_local_llama_cpp_mode", lambda: True)
+    monkeypatch.setattr(api_provider, "is_api_mode", lambda: False)
     calls = []
     monkeypatch.setattr(api_provider, "initialize_local_provider", lambda *a, **k: calls.append(a))
 
     async def run():
         bus, document, _, _ = _make_bus_with_settings(manager)
-        await bus.dispatch_intent("app-composer", "setReasoningLevel", ["quick"])
+        await bus.dispatch_intent("app-composer", "setReasoningLevel", ["off"])
 
     asyncio.run(run())
 
-    assert manager.get_llama_cpp_reasoning_mode() == "Quick"
+    assert manager.get_llama_cpp_reasoning_level() == "off"
     assert len(calls) == 1
     provider, settings = calls[0]
     assert provider == config.LOCAL_PROVIDER_LLAMACPP
-    assert settings["reasoning_mode"] == "Quick"
+    assert settings["reasoning_level"] == "off"
 
 
 def test_set_reasoning_level_llama_cpp_reapply_failure_surfaces_a_notification(tmp_path, monkeypatch):
     manager = SettingsManager(tmp_path / "session.dat")
     monkeypatch.setattr(api_provider, "is_local_ollama_mode", lambda: False)
     monkeypatch.setattr(api_provider, "is_local_llama_cpp_mode", lambda: True)
+    monkeypatch.setattr(api_provider, "is_api_mode", lambda: False)
 
     def _boom(*a, **k):
         raise RuntimeError("boom")
@@ -162,7 +194,7 @@ def test_set_reasoning_level_llama_cpp_reapply_failure_surfaces_a_notification(t
 
     async def run():
         bus, document, notifications, recorder = _make_bus_with_settings(manager)
-        await bus.dispatch_intent("app-composer", "setReasoningLevel", ["thinking"])
+        await bus.dispatch_intent("app-composer", "setReasoningLevel", ["high"])
         return notifications, recorder
 
     notifications, recorder = asyncio.run(run())
@@ -177,26 +209,38 @@ def test_set_reasoning_level_llama_cpp_reapply_failure_surfaces_a_notification(t
     # the persisted reasoning_level change.
     assert recorder.topics_seen().count("app-composer") == 1
     # Persisted despite the live-apply failure.
-    assert manager.get_llama_cpp_reasoning_mode() == "Thinking"
+    assert manager.get_llama_cpp_reasoning_level() == "high"
 
 
-def test_set_reasoning_level_skips_apply_in_cloud_mode(tmp_path, monkeypatch):
+def test_set_reasoning_level_calls_the_right_cloud_apply_function(tmp_path, monkeypatch):
+    # R8a: cloud providers now genuinely apply too (reasoningSelection only
+    # ever gates the CONTROL's visibility, not whether a chosen value takes
+    # effect) - one call per provider, routed by settings_manager.get_api_provider().
     manager = SettingsManager(tmp_path / "session.dat")
     monkeypatch.setattr(api_provider, "is_local_ollama_mode", lambda: False)
     monkeypatch.setattr(api_provider, "is_local_llama_cpp_mode", lambda: False)
-    calls = []
-    monkeypatch.setattr(api_provider, "initialize_local_provider", lambda *a, **k: calls.append(a))
+    monkeypatch.setattr(api_provider, "is_api_mode", lambda: True)
 
-    async def run():
-        bus, document, _, recorder = _make_bus_with_settings(manager)
-        await bus.dispatch_intent("app-composer", "setReasoningLevel", ["thinking"])
-        return document, recorder
+    for provider_const, getter_name, setter_name in (
+        (config.API_PROVIDER_ANTHROPIC, "get_anthropic_reasoning_level", "set_anthropic_reasoning_level"),
+        (config.API_PROVIDER_GEMINI, "get_gemini_reasoning_level", "set_gemini_reasoning_level"),
+        (config.API_PROVIDER_OPENAI, "get_openai_reasoning_level", "set_openai_reasoning_level"),
+    ):
+        # No single-purpose setter exists (set_api_settings also needs a
+        # base_url + 3 keys this test has no use for) - this is the same
+        # direct-state shortcut a bare-bones test double would use.
+        manager.state["api_provider"] = provider_const
+        calls = []
+        monkeypatch.setattr(api_provider, setter_name, lambda level, _calls=calls: _calls.append(level))
 
-    document, recorder = asyncio.run(run())
+        async def run():
+            bus, document, _, _ = _make_bus_with_settings(manager)
+            await bus.dispatch_intent("app-composer", "setReasoningLevel", ["medium"])
 
-    assert document.reasoning_level == "thinking"
-    assert calls == []
-    assert recorder.topics_seen().count("app-composer") == 1
+        asyncio.run(run())
+
+        assert getattr(manager, getter_name)() == "medium", provider_const
+        assert calls == ["medium"], provider_const
 
 
 def test_set_reasoning_level_busy_guard_no_ops_even_with_settings_manager(tmp_path, monkeypatch):
@@ -210,13 +254,13 @@ def test_set_reasoning_level_busy_guard_no_ops_even_with_settings_manager(tmp_pa
         bus, document, _, recorder = _make_bus_with_settings(manager)
         document.begin_request("req-1")
         publishes_before = recorder.topics_seen().count("app-composer")
-        await bus.dispatch_intent("app-composer", "setReasoningLevel", ["thinking"])
+        await bus.dispatch_intent("app-composer", "setReasoningLevel", ["high"])
         publishes_after = recorder.topics_seen().count("app-composer")
         return document, publishes_before, publishes_after
 
     document, publishes_before, publishes_after = asyncio.run(run())
 
-    assert document.reasoning_level == "quick"
+    assert document.reasoning_level == "off"
     assert calls == []
     assert publishes_after == publishes_before
 
@@ -316,11 +360,11 @@ def test_notification_dismiss_intent_publishes():
 
 
 # -- R7.5d follow-up: the composer must DISPLAY the same persisted reasoning
-# mode it writes. The first R7.5d pass wired only the write half, leaving the
+# level it writes. The first R7.5d pass wired only the write half, leaving the
 # composer's own private reasoning_level as the display source - and since
-# get_ollama_reasoning_mode() defaults to "Thinking" while that field defaults
-# to "quick", a user who had never touched the setting saw the composer report
-# "Quick Mode (No CoT)" while every chat call really ran with think=True.
+# get_ollama_reasoning_level() defaults to "high" while that field defaults
+# to "off", a user who had never touched the setting saw the composer report
+# "Off" while every chat call really ran with reasoning enabled.
 
 
 def _make_bus_with_composer_and_settings(settings_manager):
@@ -340,26 +384,26 @@ def test_composer_reasoning_level_derives_from_the_persisted_setting(tmp_path, m
     manager = SettingsManager(tmp_path / "session.dat")
 
     # The exact startup case that was wrong: never-touched settings, whose
-    # getter defaults to "Thinking", against a composer defaulting to "quick".
-    assert manager.get_ollama_reasoning_mode() == "Thinking"
+    # getter defaults to "high", against a composer defaulting to "off".
+    assert manager.get_ollama_reasoning_level() == "high"
     _, composer, _ = _make_bus_with_composer_and_settings(manager)
-    assert composer.payload()["route"]["reasoning"]["level"] == "thinking"
-    assert composer.payload()["route"]["reasoning"]["label"] == "Thinking Mode (Enable CoT)"
+    assert composer.payload()["route"]["reasoning"]["level"] == "high"
+    assert composer.payload()["route"]["reasoning"]["label"] == "High"
 
-    manager.set_ollama_reasoning_mode("Quick")
-    assert composer.payload()["route"]["reasoning"]["level"] == "quick"
+    manager.set_ollama_reasoning_level("off")
+    assert composer.payload()["route"]["reasoning"]["level"] == "off"
 
 
 def test_composer_reasoning_level_follows_llama_cpp_when_llama_cpp_is_active(tmp_path, monkeypatch):
     monkeypatch.setattr(api_provider, "is_local_ollama_mode", lambda: False)
     monkeypatch.setattr(api_provider, "is_local_llama_cpp_mode", lambda: True)
     manager = SettingsManager(tmp_path / "session.dat")
-    manager.set_ollama_reasoning_mode("Thinking")
-    manager.set_llama_cpp_reasoning_mode("Quick")
+    manager.set_ollama_reasoning_level("high")
+    manager.set_llama_cpp_reasoning_level("off")
 
     _, composer, _ = _make_bus_with_composer_and_settings(manager)
     # Must read the ACTIVE provider's setting, not whichever getter is first.
-    assert composer.payload()["route"]["reasoning"]["level"] == "quick"
+    assert composer.payload()["route"]["reasoning"]["level"] == "off"
 
 
 def test_bare_composer_document_still_uses_its_own_fallback_level(monkeypatch):
@@ -368,9 +412,9 @@ def test_bare_composer_document_still_uses_its_own_fallback_level(monkeypatch):
     # No reader wired (no SettingsManager) - the local field is the source,
     # which is what keeps register_composer(bus, counter) usable in tests.
     document = ComposerDocument()
-    assert document.payload()["route"]["reasoning"]["level"] == "quick"
-    document.set_reasoning_level("thinking")
-    assert document.payload()["route"]["reasoning"]["level"] == "thinking"
+    assert document.payload()["route"]["reasoning"]["level"] == "off"
+    document.set_reasoning_level("high")
+    assert document.payload()["route"]["reasoning"]["level"] == "high"
 
 
 def test_settings_reasoning_change_republishes_the_composer(tmp_path, monkeypatch):
@@ -378,16 +422,16 @@ def test_settings_reasoning_change_republishes_the_composer(tmp_path, monkeypatc
     monkeypatch.setattr(api_provider, "is_local_llama_cpp_mode", lambda: False)
     monkeypatch.setattr(api_provider, "initialize_local_provider", lambda *a, **k: None)
     manager = SettingsManager(tmp_path / "session.dat")
-    manager.set_ollama_reasoning_mode("Quick")
+    manager.set_ollama_reasoning_level("off")
 
     async def run():
         bus, composer, recorder = _make_bus_with_composer_and_settings(manager)
         recorder.messages.clear()
-        await bus.dispatch_intent("app-settings", "setOllamaReasoningMode", ["Thinking"])
+        await bus.dispatch_intent("app-settings", "setOllamaReasoningLevel", ["high"])
         return composer, recorder
 
     composer, recorder = asyncio.run(run())
-    assert composer.payload()["route"]["reasoning"]["level"] == "thinking"
+    assert composer.payload()["route"]["reasoning"]["level"] == "high"
     # Both surfaces render this value, so both have to be told to rebuild.
     assert recorder.topics_seen().count("app-settings") == 1
     assert recorder.topics_seen().count("app-composer") == 1
@@ -402,11 +446,11 @@ def test_composer_reasoning_change_republishes_settings(tmp_path, monkeypatch):
     async def run():
         bus, _, recorder = _make_bus_with_composer_and_settings(manager)
         recorder.messages.clear()
-        await bus.dispatch_intent("app-composer", "setReasoningLevel", ["quick"])
+        await bus.dispatch_intent("app-composer", "setReasoningLevel", ["off"])
         return recorder
 
     recorder = asyncio.run(run())
-    assert manager.get_ollama_reasoning_mode() == "Quick"
+    assert manager.get_ollama_reasoning_level() == "off"
     assert recorder.topics_seen().count("app-composer") == 1
     assert recorder.topics_seen().count("app-settings") == 1
 
@@ -421,7 +465,7 @@ def test_composer_reasoning_republish_is_skipped_when_settings_is_not_registered
 
     async def run():
         bus, _, _, recorder = _make_bus_with_settings(manager)  # no register_settings
-        await bus.dispatch_intent("app-composer", "setReasoningLevel", ["quick"])
+        await bus.dispatch_intent("app-composer", "setReasoningLevel", ["off"])
         return recorder
 
     recorder = asyncio.run(run())

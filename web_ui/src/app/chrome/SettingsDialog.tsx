@@ -30,6 +30,17 @@ const OLLAMA_TASK_LABELS: Record<(typeof OLLAMA_TASKS)[number], string> = {
 const OLLAMA_MODELS_DATALIST_ID = "settings-ollama-scanned-models";
 const LLAMA_CPP_MODELS_DATALIST_ID = "settings-llama-cpp-scanned-models";
 
+// R8a: reasoning went from a 2-value Mode (Thinking/Quick) to a graded
+// 4-value Level shared by both local providers here and the composer's own
+// Reasoning popover (backend/composer.py's REASONING_OPTIONS) - same ids,
+// same labels, so a user never has to learn two different vocabularies.
+const REASONING_LEVEL_OPTIONS = [
+  { id: "off", label: "Off" },
+  { id: "low", label: "Low" },
+  { id: "medium", label: "Medium" },
+  { id: "high", label: "High" },
+] as const;
+
 // Llama.cpp has no per-task assignment concept like Ollama's OLLAMA_TASKS -
 // just one global chat model path plus an optional title/naming override
 // (api_provider.py's _get_llama_cpp_model_path: chart/web-validate/web-
@@ -99,7 +110,7 @@ const initialState: AppSettingsState = {
   apiCatalogMessage: "Model catalog has not been refreshed yet.",
   geminiStaticModels: [],
   geminiStaticImageModels: [],
-  ollamaReasoningMode: "Thinking",
+  ollamaReasoningLevel: "high",
   ollamaCurrentModel: "",
   ollamaModelAssignments: {},
   ollamaScannedModels: [],
@@ -107,7 +118,7 @@ const initialState: AppSettingsState = {
   ollamaScanStatus: "idle",
   ollamaPullStatus: "idle",
   ollamaNotice: "",
-  llamaCppReasoningMode: "Thinking",
+  llamaCppReasoningLevel: "high",
   llamaCppChatModelPath: "",
   llamaCppTitleModelPath: "",
   llamaCppChatFormat: "",
@@ -520,25 +531,18 @@ function OllamaPage({ state, transport }: { state: AppSettingsState; transport: 
   return (
     <div className="settings-general-page">
       <fieldset className="settings-fieldset">
-        <legend>Reasoning Mode</legend>
-        <label className="settings-checkbox-row">
-          <input
-            type="radio"
-            name="ollama-reasoning-mode"
-            checked={state.ollamaReasoningMode === "Thinking"}
-            onChange={() => transport.intent("app-settings", "setOllamaReasoningMode", ["Thinking"])}
-          />
-          Thinking Mode (Enable CoT)
-        </label>
-        <label className="settings-checkbox-row">
-          <input
-            type="radio"
-            name="ollama-reasoning-mode"
-            checked={state.ollamaReasoningMode === "Quick"}
-            onChange={() => transport.intent("app-settings", "setOllamaReasoningMode", ["Quick"])}
-          />
-          Quick Mode (No CoT)
-        </label>
+        <legend>Reasoning Level</legend>
+        {REASONING_LEVEL_OPTIONS.map((option) => (
+          <label className="settings-checkbox-row" key={option.id}>
+            <input
+              type="radio"
+              name="ollama-reasoning-level"
+              checked={state.ollamaReasoningLevel === option.id}
+              onChange={() => transport.intent("app-settings", "setOllamaReasoningLevel", [option.id])}
+            />
+            {option.label}
+          </label>
+        ))}
       </fieldset>
 
       <p className="settings-update-status">
@@ -706,25 +710,18 @@ function LlamaCppPage({ state, transport }: { state: AppSettingsState; transport
   return (
     <div className="settings-general-page">
       <fieldset className="settings-fieldset">
-        <legend>Reasoning Mode</legend>
-        <label className="settings-checkbox-row">
-          <input
-            type="radio"
-            name="llama-cpp-reasoning-mode"
-            checked={state.llamaCppReasoningMode === "Thinking"}
-            onChange={() => transport.intent("app-settings", "setLlamaCppReasoningMode", ["Thinking"])}
-          />
-          Thinking Mode (Enable CoT)
-        </label>
-        <label className="settings-checkbox-row">
-          <input
-            type="radio"
-            name="llama-cpp-reasoning-mode"
-            checked={state.llamaCppReasoningMode === "Quick"}
-            onChange={() => transport.intent("app-settings", "setLlamaCppReasoningMode", ["Quick"])}
-          />
-          Quick Mode (No CoT)
-        </label>
+        <legend>Reasoning Level</legend>
+        {REASONING_LEVEL_OPTIONS.map((option) => (
+          <label className="settings-checkbox-row" key={option.id}>
+            <input
+              type="radio"
+              name="llama-cpp-reasoning-level"
+              checked={state.llamaCppReasoningLevel === option.id}
+              onChange={() => transport.intent("app-settings", "setLlamaCppReasoningLevel", [option.id])}
+            />
+            {option.label}
+          </label>
+        ))}
       </fieldset>
 
       <p className="settings-update-status">

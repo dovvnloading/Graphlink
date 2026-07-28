@@ -20,12 +20,19 @@ def _is_llama_cpp_gguf_path(path_value) -> bool:
 
 class SettingsManager:
     NOTIFICATION_TYPES = ("info", "success", "warning", "error")
+    # R8a: the graded reasoning-effort vocabulary shared by all 5 providers'
+    # reasoning-level fields below - see api_provider.py's own REASONING_LEVELS
+    # docstring for the full per-provider mapping story this feeds.
+    REASONING_LEVELS = ("off", "low", "medium", "high")
     # Bumped whenever session.dat's shape changes in a way future code needs to branch
     # on. Version 2 introduces provider-scoped cloud profiles and explicit local
     # model assignment modes. Version 3 persists refreshed cloud model catalogs so
     # the composer can offer a useful selector without making a network request on
-    # every render.
-    CURRENT_SCHEMA_VERSION = 3
+    # every render. Version 4 replaces the 2-value Ollama/Llama.cpp reasoning
+    # "mode" (Thinking/Quick) with a graded 4-value "level" (off/low/medium/
+    # high) shared by all 5 providers, adding real reasoning-effort fields for
+    # Anthropic/Gemini/OpenAI-compatible where none existed before.
+    CURRENT_SCHEMA_VERSION = 4
     LEGACY_PRODUCT_MODEL_IDS = {"qwen3:8b", "deepseek-coder:6.7b"}
     OLLAMA_MODEL_TASKS = (
         "task_title",
@@ -94,8 +101,15 @@ class SettingsManager:
                     state['ollama_web_validate_model'] = ''
                 if 'ollama_web_summarize_model' not in state:
                     state['ollama_web_summarize_model'] = ''
-                if 'ollama_reasoning_mode' not in state:
-                    state['ollama_reasoning_mode'] = 'Thinking'
+                if 'ollama_reasoning_level' not in state:
+                    # R8a: reasoning went from a 2-value Ollama/Llama.cpp
+                    # bool "mode" to a graded 4-value level shared by every
+                    # provider - migrate any already-persisted choice
+                    # faithfully rather than silently resetting it: "Quick"
+                    # meant no reasoning at all (-> off), "Thinking" meant
+                    # full reasoning (-> high, this field's own default).
+                    state['ollama_reasoning_level'] = 'off' if state.get('ollama_reasoning_mode') == 'Quick' else 'high'
+                state.pop('ollama_reasoning_mode', None)
                 if 'ollama_scanned_models' not in state:
                     state['ollama_scanned_models'] = []
                 if 'ollama_model_scan_mode' not in state:
@@ -108,8 +122,20 @@ class SettingsManager:
                     state['llama_cpp_chat_model_path'] = ''
                 if 'llama_cpp_title_model_path' not in state:
                     state['llama_cpp_title_model_path'] = ''
-                if 'llama_cpp_reasoning_mode' not in state:
-                    state['llama_cpp_reasoning_mode'] = 'Thinking'
+                if 'llama_cpp_reasoning_level' not in state:
+                    # Same migration story as ollama_reasoning_level above.
+                    state['llama_cpp_reasoning_level'] = 'off' if state.get('llama_cpp_reasoning_mode') == 'Quick' else 'high'
+                state.pop('llama_cpp_reasoning_mode', None)
+                if 'anthropic_reasoning_level' not in state:
+                    # New cloud-provider fields (R8a) - "off" by default,
+                    # matching api_provider.py's own conservative default:
+                    # extended thinking on a paid API is an opt-in cost/
+                    # latency tradeoff, never a silent default.
+                    state['anthropic_reasoning_level'] = 'off'
+                if 'gemini_reasoning_level' not in state:
+                    state['gemini_reasoning_level'] = 'off'
+                if 'openai_reasoning_level' not in state:
+                    state['openai_reasoning_level'] = 'off'
                 if 'llama_cpp_chat_format' not in state:
                     state['llama_cpp_chat_format'] = ''
                 if 'llama_cpp_n_ctx' not in state:
@@ -220,14 +246,14 @@ class SettingsManager:
                 "task_web_validate": {"mode": INHERIT_MODEL, "model_id": ""},
                 "task_web_summarize": {"mode": INHERIT_MODEL, "model_id": ""},
             },
-            "ollama_reasoning_mode": "Thinking",
+            "ollama_reasoning_level": "high",
             "ollama_scanned_models": [],
             "ollama_model_scan_mode": "",
             "ollama_model_scan_path": "",
             "ollama_model_scan_locations": [],
             "llama_cpp_chat_model_path": "",
             "llama_cpp_title_model_path": "",
-            "llama_cpp_reasoning_mode": "Thinking",
+            "llama_cpp_reasoning_level": "high",
             "llama_cpp_chat_format": "",
             "llama_cpp_n_ctx": 4096,
             "llama_cpp_n_gpu_layers": 0,
@@ -243,6 +269,12 @@ class SettingsManager:
             "anthropic_api_key": "",
             "gemini_api_key": "",
             "github_access_token": "",
+            # R8a: off by default - extended thinking on a paid API is an
+            # opt-in cost/latency tradeoff, never a silent default (unlike
+            # the local providers above, whose compute is free to the user).
+            "anthropic_reasoning_level": "off",
+            "gemini_reasoning_level": "off",
+            "openai_reasoning_level": "off",
             "api_models": {},
             "api_models_by_provider": {},
             "api_model_catalog_by_provider": {},
@@ -485,12 +517,12 @@ class SettingsManager:
     def set_ollama_web_summarize_model(self, model_name: str):
         self._set_ollama_model("task_web_summarize", "ollama_web_summarize_model", model_name)
 
-    def get_ollama_reasoning_mode(self):
-        return self.state.get("ollama_reasoning_mode", "Thinking")
+    def get_ollama_reasoning_level(self):
+        return self.state.get("ollama_reasoning_level", "high")
 
-    def set_ollama_reasoning_mode(self, mode: str):
-        if mode in ['Thinking', 'Quick']:
-            self.state['ollama_reasoning_mode'] = mode
+    def set_ollama_reasoning_level(self, level: str):
+        if level in self.REASONING_LEVELS:
+            self.state['ollama_reasoning_level'] = level
             self._save_state()
 
     def get_ollama_scanned_models(self):
@@ -544,12 +576,36 @@ class SettingsManager:
         self.state["llama_cpp_title_model_path"] = str(model_path or "").strip()
         self._save_state()
 
-    def get_llama_cpp_reasoning_mode(self):
-        return self.state.get("llama_cpp_reasoning_mode", "Thinking")
+    def get_llama_cpp_reasoning_level(self):
+        return self.state.get("llama_cpp_reasoning_level", "high")
 
-    def set_llama_cpp_reasoning_mode(self, mode: str):
-        if mode in ['Thinking', 'Quick']:
-            self.state['llama_cpp_reasoning_mode'] = mode
+    def set_llama_cpp_reasoning_level(self, level: str):
+        if level in self.REASONING_LEVELS:
+            self.state['llama_cpp_reasoning_level'] = level
+            self._save_state()
+
+    def get_anthropic_reasoning_level(self):
+        return self.state.get("anthropic_reasoning_level", "off")
+
+    def set_anthropic_reasoning_level(self, level: str):
+        if level in self.REASONING_LEVELS:
+            self.state['anthropic_reasoning_level'] = level
+            self._save_state()
+
+    def get_gemini_reasoning_level(self):
+        return self.state.get("gemini_reasoning_level", "off")
+
+    def set_gemini_reasoning_level(self, level: str):
+        if level in self.REASONING_LEVELS:
+            self.state['gemini_reasoning_level'] = level
+            self._save_state()
+
+    def get_openai_reasoning_level(self):
+        return self.state.get("openai_reasoning_level", "off")
+
+    def set_openai_reasoning_level(self, level: str):
+        if level in self.REASONING_LEVELS:
+            self.state['openai_reasoning_level'] = level
             self._save_state()
 
     def get_llama_cpp_chat_format(self):
@@ -627,7 +683,7 @@ class SettingsManager:
         return {
             "chat_model_path": self.get_llama_cpp_chat_model_path(),
             "title_model_path": self.get_llama_cpp_title_model_override_path(),
-            "reasoning_mode": self.get_llama_cpp_reasoning_mode(),
+            "reasoning_level": self.get_llama_cpp_reasoning_level(),
             "chat_format": self.get_llama_cpp_chat_format(),
             "n_ctx": self.get_llama_cpp_n_ctx(),
             "n_gpu_layers": self.get_llama_cpp_n_gpu_layers(),

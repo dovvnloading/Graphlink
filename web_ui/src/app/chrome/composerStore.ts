@@ -23,7 +23,7 @@ export const initialComposerState: AppComposerState = {
     modelId: "",
     modelLabel: "",
     modelOptions: [],
-    reasoning: { level: "quick", label: "Quick Mode (No CoT)", options: [] },
+    reasoning: { level: "off", label: "Off", options: [] },
     label: "Ollama (Local)",
     available: true,
     canChange: false,
