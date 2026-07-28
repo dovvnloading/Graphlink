@@ -168,18 +168,6 @@ body,
   color: var(--gl-status-error, var(--gl-surface-text));
 }
 
-.app-composer-region {
-  padding: 10px 14px;
-  border-top: 1px solid var(--gl-surface-border);
-  background-color: var(--gl-surface-node-body);
-}
-
-.app-composer-placeholder {
-  font-size: 11px;
-  color: var(--gl-surface-text-muted);
-  text-align: center;
-}
-
 /* -- R1 canvas (React Flow) ---------------------------------------------- */
 
 .scene-canvas {
@@ -1225,15 +1213,49 @@ body,
 
 /* -- R2.3 composer + token counter + notification ------------------------ */
 
-.app-composer-region {
-  padding: 10px 14px;
+/* R8a: the composer used to be a <footer> spanning the full window width,
+   docked flush at the bottom with no visual container of its own. It's now
+   a floating island - a sibling of app-token-counter-layer/
+   app-notification-layer inside app-canvas-region - so the canvas renders
+   full-bleed behind it. bottom:64px (not the other layers' usual 16px) is
+   deliberate: at the narrow end of the supported window range a centered
+   card can sit close to app-token-counter-layer's footprint horizontally,
+   so the clearance is enforced vertically instead (the card's whole box
+   stays above the token counter's top edge everywhere), which doesn't
+   depend on how close the two ever get side to side. pointer-events:none
+   on the layer + pointer-events:auto on the card keeps the canvas
+   clickable/draggable everywhere the card doesn't visually cover it. */
+.app-composer-layer {
+  position: absolute;
+  left: 50%;
+  bottom: 64px;
+  transform: translateX(-50%);
+  width: min(clamp(480px, calc(100% - 220px), 760px), calc(100% - 24px));
+  z-index: var(--gl-z-app-layer);
+  pointer-events: none;
+}
+
+.app-composer-layer > .composer-dock {
+  width: 100%;
+  pointer-events: auto;
 }
 
 .composer-dock {
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
+  padding: 8px;
+  box-sizing: border-box;
+  background-color: var(--gl-surface-node-body);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 14px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  transition: border-color 120ms ease;
+}
+
+.composer-dock:focus-within {
+  border-color: var(--gl-surface-text-muted);
 }
 
 /* R8a: staged-attachment chips, rendered above the input when
@@ -1249,11 +1271,11 @@ body,
   align-items: center;
   gap: 6px;
   max-width: 220px;
-  padding: 4px 6px 4px 10px;
+  padding: 4px 8px 4px 10px;
   border-radius: 999px;
-  background-color: var(--gl-neutral-button-hover);
+  background-color: var(--gl-surface-inset, var(--gl-surface-window));
   border: 1px solid var(--gl-surface-border);
-  font-size: 12px;
+  font-size: 11px;
   color: var(--gl-surface-text);
 }
 
@@ -1276,8 +1298,8 @@ body,
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
   padding: 0;
   border: none;
   border-radius: 50%;
@@ -1303,39 +1325,53 @@ body,
   font-family: inherit;
   font-size: 13px;
   line-height: 1.4;
-  padding: 10px 12px;
+  padding: 6px 4px 2px;
   color: var(--gl-surface-text);
-  background-color: var(--gl-surface-inset, var(--gl-surface-node-body));
-  border: 1px solid var(--gl-surface-border);
-  border-radius: 8px;
+  background-color: transparent;
+  border: none;
+}
+
+.composer-input::placeholder {
+  color: var(--gl-surface-text-muted);
 }
 
 .composer-input:focus {
+  /* the focus affordance lives on .composer-dock:focus-within instead - the
+     whole island highlights, not one field inside it */
   outline: none;
-  border-color: var(--gl-surface-text-muted);
 }
 
 .composer-controls {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 2px;
+  padding-top: 4px;
 }
 
+/* R8a: flat/borderless at rest, a soft filled circle only on hover - was a
+   bordered box, which is exactly the "box inside a box" look the composer
+   was criticized for. */
 .composer-icon-button {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
+  width: 26px;
+  height: 26px;
   color: var(--gl-neutral-button-icon);
-  background-color: var(--gl-neutral-button-background);
-  border: 1px solid var(--gl-neutral-button-border);
-  border-radius: 7px;
+  background-color: transparent;
+  border: none;
+  border-radius: 6px;
   cursor: pointer;
+  transition: background-color 100ms ease;
 }
 
 .composer-icon-button:hover:enabled {
   background-color: var(--gl-neutral-button-hover);
+}
+
+.composer-icon-button:focus-visible {
+  outline: 2px solid var(--gl-surface-text-muted);
+  outline-offset: 1px;
 }
 
 .composer-icon-button:disabled {
@@ -1356,17 +1392,19 @@ body,
 .composer-control {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 10px;
+  gap: 5px;
+  padding: 4px 8px;
   font-family: inherit;
   color: var(--gl-surface-text);
-  background-color: var(--gl-neutral-button-background);
-  border: 1px solid var(--gl-neutral-button-border);
-  border-radius: 8px;
+  background-color: transparent;
+  border: none;
+  border-radius: 6px;
   cursor: pointer;
+  transition: background-color 100ms ease;
 }
 
-.composer-control:hover:enabled {
+.composer-control:hover:enabled,
+.composer-control[aria-pressed="true"] {
   background-color: var(--gl-neutral-button-hover);
 }
 
@@ -1421,40 +1459,53 @@ body,
   margin-bottom: 8px;
   max-height: 160px;
   overflow-y: auto;
-  padding: 8px 12px;
+  padding: 10px 12px;
   font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
   font-size: 12px;
   line-height: 1.4;
   color: var(--gl-surface-text-muted);
-  background-color: var(--gl-surface-inset, var(--gl-surface-node-body));
+  background-color: var(--gl-surface-node-body);
   border: 1px solid var(--gl-surface-border);
-  border-radius: 8px;
+  border-radius: 10px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
   white-space: pre-wrap;
   word-break: break-word;
 }
 
+/* R8a: the one seam in the whole rail - everything to its left is flat, so
+   the send/cancel zone reads as a distinct group without boxing every
+   control individually. */
 .composer-send-group {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   margin-left: auto;
+  padding-left: 8px;
+  border-left: 1px solid var(--gl-surface-border);
 }
 
 .composer-cancel-button {
   color: var(--gl-status-error, var(--gl-neutral-button-icon));
 }
 
+/* The sole accent affordance on the card: solid fill + fully circular,
+   everything else on the rail is flat/borderless. */
 .composer-send-button {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 34px;
+  width: 30px;
+  height: 30px;
   color: var(--gl-surface-window);
-  background-color: var(--gl-surface-text-muted);
+  background-color: var(--gl-surface-text-bright, var(--gl-surface-text-muted));
   border: none;
-  border-radius: 8px;
+  border-radius: 50%;
   cursor: pointer;
+  transition: opacity 100ms ease;
+}
+
+.composer-send-button:hover:enabled {
+  opacity: 0.88;
 }
 
 .composer-send-button:disabled {
@@ -1476,6 +1527,8 @@ body,
   flex-direction: column;
   gap: 2px;
   width: 240px;
+  max-height: min(60vh, 320px);
+  overflow-y: auto;
 }
 
 .reasoning-option {
