@@ -183,6 +183,19 @@ body,
 
 /* -- R1 canvas (React Flow) ---------------------------------------------- */
 
+.scene-canvas-row {
+  position: absolute;
+  inset: 0;
+  display: flex;
+}
+
+.scene-canvas-flex-area {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+}
+
 .scene-canvas {
   position: absolute;
   inset: 0;
@@ -2147,16 +2160,65 @@ body,
   height: 100%;
 }
 
-/* -- Document view dialog (R8a) -------------------------------------------- */
+/* -- Document view panel (R8a follow-up) ------------------------------------
+   Docked flush-left, border-right only, fixed width - restores legacy's
+   DocumentViewerPanel chrome (a permanent embedded QWidget, corner_radius=0,
+   .setFixedWidth(500)) instead of the floating-card look every centered
+   Dialog uses. See DocumentViewPanel.tsx's own doc comment. */
 
-.document-view-dialog {
-  min-width: 480px;
-  width: min(760px, calc(100vw - 64px));
+.document-view-panel {
+  flex-shrink: 0;
+  width: 500px;
+  max-width: 45vw;
+  height: 100%;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+  background-color: var(--gl-surface-node-body);
+  border-right: 1px solid var(--gl-surface-border);
+  overflow: hidden;
 }
 
-.document-view-dialog .chat-node-content {
+.document-view-panel-header {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.document-view-panel-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.document-view-panel-close {
+  flex-shrink: 0;
+  padding: 6px 14px;
+  font-size: 12px;
+  font-family: inherit;
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-neutral-button-background);
+  border: 1px solid var(--gl-neutral-button-border);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.document-view-panel-close:hover {
+  background-color: var(--gl-neutral-button-hover);
+}
+
+.document-view-panel-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
   max-height: none;
-  overflow: visible;
+  padding: 8px 12px;
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 6px;
 }
 
 .help-rail {
