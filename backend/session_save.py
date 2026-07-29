@@ -192,6 +192,22 @@ def _serialize_chat_node(node: SceneNode) -> dict[str, Any]:
         "conversation_history": _serialize_history(node.history),
         "scroll_value": node.chat_scroll_value,
         "is_collapsed": bool(node.is_collapsed),
+        # ADR-002 Workstream 1 ("Branch status and lifecycle") - confirmed,
+        # pre-existing gap fixed inline: provider/model/is_branch_synthesis/
+        # synthesis_instructions/item_ids (Synthesize Branches - item_ids
+        # here is the source branch node ids, the SAME generic-field reuse
+        # Compare Branches' own note.item_ids already established) already
+        # synced live to the frontend via scene_payload() but were never
+        # written here, so a Save-then-Load cycle silently dropped a
+        # synthesis result's provenance and its badge. branch_status is
+        # this same pass's own new field, added alongside rather than in a
+        # separate edit.
+        "provider": node.provider,
+        "model": node.model,
+        "is_branch_synthesis": bool(node.is_branch_synthesis),
+        "synthesis_instructions": node.synthesis_instructions,
+        "item_ids": list(node.item_ids),
+        "branch_status": node.branch_status,
     }
 
 
@@ -360,6 +376,17 @@ def _serialize_note(node: SceneNode) -> dict[str, Any]:
         # persisted format (no SQL column for them ever existed; see
         # session_load.py's own docstring), so there is nothing to write
         # back regardless of whether this backend tracked them.
+        #
+        # ADR-002 Workstream 1 ("Branch status and lifecycle") - confirmed,
+        # pre-existing gap fixed inline: is_branch_comparison/item_ids
+        # (Compare Branches) already synced live to the frontend via
+        # scene_payload() but were never written here, so a Save-then-Load
+        # cycle silently dropped a comparison note's badge and its
+        # source-branch references. Unlike the dead legacy fields above,
+        # this is a real, currently-populated field this backend itself
+        # introduced - genuinely missing, not deliberately excluded.
+        "is_branch_comparison": bool(node.is_branch_comparison),
+        "item_ids": list(node.item_ids),
     }
 
 
@@ -664,6 +691,12 @@ def build_chat_data(document: SceneDocument) -> dict[str, Any]:
             "zoom_factor": document.zoom_factor,
             "scroll_position": {"x": document.scroll_x, "y": document.scroll_y},
         },
+        # ADR-002 Workstream 1 ("Branch status and lifecycle"): a document-
+        # level singular pointer, same "own top-level key, not per-node"
+        # shape as total_session_tokens/view_state above - see
+        # SceneDocument.final_deliverable_node_id's own comment for why
+        # this is not a per-node field.
+        "final_deliverable_node_id": document.final_deliverable_node_id,
         "notes_data": [_serialize_note(n) for n in notes],
         "pins_data": [_serialize_pin(r) for r in document.pins.records],
         # The 12 basic connection lists all draw from the SAME classified

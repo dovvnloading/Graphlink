@@ -14,6 +14,12 @@ export function ViewPopover({ store }: { store: SceneStore }) {
   const grid = useSyncExternalStore(store.subscribe, store.getGrid);
   const dragConfig = useSyncExternalStore(store.subscribe, store.getDragConfig);
   const fontConfig = useSyncExternalStore(store.subscribe, store.getFontConfig);
+  // ADR-002 Workstream 1 ("Branch status and lifecycle"): UNLIKE every
+  // other value read here, this one is NOT part of `scene` (backend-synced
+  // state) - it is sceneStore's own local, unpersisted UI-state field (see
+  // that field's own comment for why: a view-only review lens, the same
+  // posture as "Hide Other Branches", not a real document property).
+  const focusAcceptedPaths = useSyncExternalStore(store.subscribe, store.getFocusAcceptedPaths);
 
   const dragPercent = Math.round(scene.dragFactor * 100);
 
@@ -163,6 +169,26 @@ export function ViewPopover({ store }: { store: SceneStore }) {
             />
           ))}
         </div>
+      </section>
+
+      <section className="view-section" aria-label="Branches">
+        <p className="view-section-title">BRANCHES</p>
+        {/* ADR-002 Workstream 1 ("Branch status and lifecycle"): dims every
+            node outside the accepted paths (rejected/superseded branches
+            and their descendants, unless an explicit "accepted" override
+            reactivates a sub-branch) - the whole-graph counterpart to a
+            single chat node's own "Hide Other Branches" menu action. Same
+            view-check-row pattern as every other toggle in this section,
+            but backed by sceneStore's own local focusAcceptedPaths field
+            rather than `scene` - see that field's own comment. */}
+        <label className="view-check-row">
+          <input
+            type="checkbox"
+            checked={focusAcceptedPaths}
+            onChange={(e) => store.setFocusAcceptedPaths(e.target.checked)}
+          />
+          Focus Accepted Paths
+        </label>
       </section>
     </Popover>
   );

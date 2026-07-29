@@ -761,6 +761,29 @@ body,
   max-width: 140px;
 }
 
+/* ADR-002 Workstream 1 ("Branch status and lifecycle"): a small filled dot,
+   ALWAYS rendered (unlike every other badge above, which is conditional) -
+   backgroundColor is set inline per-node (one of 4 real, visually-distinct
+   colors reused from GroupColorPicker.tsx's own palette - see
+   BRANCH_STATUS_COLORS in ChatNodeView.tsx), so no color rule lives here. */
+.chat-node-status-badge {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* ADR-002 Workstream 1 ("Branch status and lifecycle"): the Final
+   Deliverable glyph - same "single glyph, no pill" shape as
+   .chat-node-synthesis-badge above, at most one node in the whole scene
+   ever shows this. */
+.chat-node-final-badge {
+  font-size: 12px;
+  line-height: 1;
+  color: var(--gl-surface-text-muted);
+}
+
 /* -- R3.17/R3.18 html view node -------------------------------------------- */
 
 .html-node {

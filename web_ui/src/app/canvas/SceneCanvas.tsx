@@ -128,6 +128,16 @@ interface SceneNodeSynthesisFields {
 }
 type SceneNodeRowWithSynthesis = SceneNodeRow & SceneNodeSynthesisFields;
 
+// ADR-002 Workstream 1 ("Branch status and lifecycle"). Same situation as
+// SceneNodeSynthesisFields above - the generated SceneNodeRow type hasn't
+// been regenerated yet to carry branchStatus/isFinalDeliverable
+// (backend/canvas.py's scene_payload() contract for this increment).
+interface SceneNodeBranchLifecycleFields {
+  branchStatus: string;
+  isFinalDeliverable: boolean;
+}
+type SceneNodeRowWithBranchLifecycle = SceneNodeRow & SceneNodeBranchLifecycleFields;
+
 /**
  * The React Flow canvas (Qt-removal plan R1) - the QGraphicsScene/ChatView
  * successor. R1 scope: pan/zoom, model-driven grid (size/style/color/opacity
@@ -362,6 +372,105 @@ export function computeDimmedNodeIds(scene: SceneState, originId: string | null)
   return dimmed;
 }
 
+/**
+ * ADR-002 Workstream 1 ("Branch status and lifecycle") - "reduce a complex
+ * graph to its accepted paths." A genuinely separate feature from
+ * computeDimmedNodeIds above (that one is keyed off a single clicked
+ * origin node; this one is keyed off the persisted branchStatus field
+ * across the WHOLE graph, with no origin at all), but architecturally
+ * identical: same downward chat-to-chat BFS shape, same chatAnchorOf-based
+ * inclusion of non-chat content nodes, same opacity-only/edges-untouched
+ * application in toFlowNodes below, same "view-only, not persisted, never
+ * touches scene.nodes' own set" posture.
+ *
+ * Seeds "excluded" from every chat node whose own branchStatus is
+ * "rejected" or "superseded", then walks their descendants (chat-to-chat
+ * edges only) marking each excluded too - UNLESS a descendant's own
+ * branchStatus is "accepted", which is an explicit override: the walk does
+ * not enqueue that node (so nothing below it is excluded via THIS path
+ * either - not via a second BFS pass, simply by never being visited from
+ * here), reactivating a sub-branch without requiring every intermediate
+ * node to be individually re-marked. A LATER rejection further down the
+ * same subtree still re-excludes correctly, since the seeding loop scans
+ * every node's own status independently of BFS reachability, not just
+ * origins the walk happens to pass through.
+ *
+ * The descent from a node to its children follows ONLY the edge parentOf
+ * above also recognizes as canonical for that child (the same "first edge
+ * whose target is this node wins" tie-break computeDimmedNodeIds documents
+ * for the structurally-possible-but-UI-unreachable multi-parent case) -
+ * found necessary by adversarial review: without this check, a chat node
+ * with one legitimate active parent AND a second, unrelated incoming edge
+ * from a rejected/superseded node anywhere else in the graph would get
+ * excluded via that second edge alone, even though its real (tie-break-
+ * winning) parent is perfectly healthy. Only propagating along the
+ * canonical edge keeps this consistent with parentOf's own resolution
+ * elsewhere in this function (chatAnchorOf) rather than disagreeing with
+ * it. A node with no rejected/superseded ancestor on its OWN canonical
+ * chain is never touched, regardless of its own status - being "active" is
+ * not itself excluding, only "rejected"/"superseded" (or a canonical
+ * ancestor being one) is.
+ */
+export function computeNonAcceptedNodeIds(scene: SceneState): Set<string> {
+  // branchStatus isn't on the generated SceneNodeRow type yet (see
+  // SceneNodeBranchLifecycleFields' own comment) - cast once here, rather
+  // than at every read site below.
+  const nodesById = new Map(scene.nodes.map((n) => [n.id, n as SceneNodeRowWithBranchLifecycle]));
+  const parentOf = new Map<string, string>();
+  const childrenOf = new Map<string, string[]>();
+  for (const e of scene.edges) {
+    if (!parentOf.has(e.target)) parentOf.set(e.target, e.source);
+    const siblings = childrenOf.get(e.source);
+    if (siblings) siblings.push(e.target);
+    else childrenOf.set(e.source, [e.target]);
+  }
+
+  const isChat = (id: string) => nodesById.get(id)?.kind === "chat";
+  function chatAnchorOf(id: string): string {
+    if (isChat(id)) return id;
+    const parentId = parentOf.get(id);
+    return parentId && isChat(parentId) ? parentId : id;
+  }
+
+  const excludedChatIds = new Set<string>();
+  const visited = new Set<string>();
+  const queue: string[] = [];
+  for (const node of nodesById.values()) {
+    if (node.kind !== "chat") continue;
+    if (node.branchStatus !== "rejected" && node.branchStatus !== "superseded") continue;
+    excludedChatIds.add(node.id);
+    visited.add(node.id);
+    queue.push(node.id);
+  }
+
+  while (queue.length > 0) {
+    const current = queue.shift() as string;
+    for (const childId of childrenOf.get(current) ?? []) {
+      if (!isChat(childId) || visited.has(childId)) continue;
+      // Only follow the edge parentOf also treats as canonical for this
+      // child - see this function's own doc comment for why (a second,
+      // unrelated incoming edge from elsewhere must never exclude a node
+      // whose real parent is healthy).
+      if (parentOf.get(childId) !== current) continue;
+      visited.add(childId);
+      // Explicit override: an "accepted" descendant reactivates this
+      // sub-branch - it is never added to excludedChatIds, and the walk
+      // does not descend further from it (anything strictly between the
+      // rejected/superseded ancestor and this override stays excluded).
+      if (nodesById.get(childId)?.branchStatus === "accepted") continue;
+      excludedChatIds.add(childId);
+      queue.push(childId);
+    }
+  }
+
+  const excluded = new Set<string>();
+  for (const node of scene.nodes) {
+    if (!BRANCH_FOCUS_KINDS.has(node.kind)) continue;
+    if (excludedChatIds.has(chatAnchorOf(node.id))) excluded.add(node.id);
+  }
+  return excluded;
+}
+
 // Exported standalone for direct unit testing (same posture as
 // scaleDragPosition in sceneStore.ts) - covers the parentChatNodeId
 // derivation below without needing a full <ReactFlow> mount.
@@ -371,6 +480,11 @@ export function toFlowNodes(
   onOpenDocumentView: (markdown: string, sourceLabel: string) => void = () => {},
   branchFocusOriginId: string | null = null,
   onToggleBranchFocus: (nodeId: string) => void = () => {},
+  // ADR-002 Workstream 1 ("Branch status and lifecycle") - "Focus Accepted
+  // Paths" (ViewPopover.tsx's checkbox, backed by sceneStore's own
+  // focusAcceptedPaths field - see that field's own comment for why it
+  // lives there rather than as component state here).
+  focusAcceptedPaths = false,
 ): SceneFlowNode[] {
   // Looked up per-chat-node below to build dockedChildren - a docked node is
   // omitted from the returned array entirely (see the "thinking" branch), so
@@ -380,6 +494,13 @@ export function toFlowNodes(
   // see computeDimmedNodeIds' own doc for why it builds its own maps rather
   // than reusing nodesById above.
   const dimmedIds = computeDimmedNodeIds(scene, branchFocusOriginId);
+  // ADR-002 Workstream 1: only computed when the toggle is actually on -
+  // an empty Set otherwise, same "cheap no-op when the feature isn't
+  // active" posture as dimmedIds above already has via branchFocusOriginId
+  // defaulting to null. Composed (unioned) with dimmedIds below rather
+  // than picked between - both dimming lenses can be active at once.
+  const nonAcceptedIds = focusAcceptedPaths ? computeNonAcceptedNodeIds(scene) : new Set<string>();
+  const isDimmed = (id: string) => dimmedIds.has(id) || nonAcceptedIds.has(id);
   const flowNodes: SceneFlowNode[] = [];
 
   for (const n of scene.nodes) {
@@ -406,6 +527,7 @@ export function toFlowNodes(
       }
       const chatR63 = n as SceneNodeRowWithR63;
       const chatSynthesis = n as SceneNodeRowWithSynthesis;
+      const chatLifecycle = n as SceneNodeRowWithBranchLifecycle;
       flowNodes.push({
         id: n.id,
         type: "chat" as const,
@@ -413,7 +535,7 @@ export function toFlowNodes(
         // R8a: "Hide Other Branches" dimming - see computeDimmedNodeIds' own
         // doc above. undefined (not an explicit opacity: 1) when not dimmed,
         // so this never overrides anything else that might set style later.
-        style: dimmedIds.has(n.id) ? { opacity: BRANCH_DIM_OPACITY } : undefined,
+        style: isDimmed(n.id) ? { opacity: BRANCH_DIM_OPACITY } : undefined,
         data: {
           content: n.content,
           isUser: n.isUser,
@@ -469,6 +591,15 @@ export function toFlowNodes(
           isBranchSynthesis: chatSynthesis.isBranchSynthesis,
           synthesisInstructions: chatSynthesis.synthesisInstructions,
           synthesisSourceNodeIds: chatSynthesis.itemIds,
+          // ADR-002 Workstream 1 ("Branch status and lifecycle") - see
+          // SceneNodeBranchLifecycleFields' own comment. Fire-and-forget,
+          // same posture as onBranchFromHere/onGenerateKeyTakeaway above -
+          // the new value arrives through the next scene snapshot.
+          branchStatus: chatLifecycle.branchStatus,
+          isFinalDeliverable: chatLifecycle.isFinalDeliverable,
+          onSetBranchStatus: (status: string) => store.setBranchStatus(n.id, status),
+          onSetFinalDeliverable: (isFinal: boolean) => store.setFinalDeliverable(n.id, isFinal),
+          onCollapseBranch: (collapsed: boolean) => store.collapseBranch(n.id, collapsed),
           // R6.3: the node's own scroll position within its content area -
           // read on mount by ChatNodeView (restore) and reported (debounced)
           // via the new setChatScrollValue intent on every scroll. Defaults
@@ -493,7 +624,7 @@ export function toFlowNodes(
         id: n.id,
         type: "code" as const,
         position: { x: n.x, y: n.y },
-        style: dimmedIds.has(n.id) ? { opacity: BRANCH_DIM_OPACITY } : undefined,
+        style: isDimmed(n.id) ? { opacity: BRANCH_DIM_OPACITY } : undefined,
         data: {
           code: n.code,
           language: n.language,
@@ -515,7 +646,7 @@ export function toFlowNodes(
         id: n.id,
         type: "document" as const,
         position: { x: n.x, y: n.y },
-        style: dimmedIds.has(n.id) ? { opacity: BRANCH_DIM_OPACITY } : undefined,
+        style: isDimmed(n.id) ? { opacity: BRANCH_DIM_OPACITY } : undefined,
         data: {
           title: n.title,
           content: n.content,
@@ -555,7 +686,7 @@ export function toFlowNodes(
         id: n.id,
         type: "thinking" as const,
         position: { x: n.x, y: n.y },
-        style: dimmedIds.has(n.id) ? { opacity: BRANCH_DIM_OPACITY } : undefined,
+        style: isDimmed(n.id) ? { opacity: BRANCH_DIM_OPACITY } : undefined,
         data: {
           thinkingText: n.content,
           onDock: () => store.setNodeDocked(n.id, true),
@@ -611,7 +742,7 @@ export function toFlowNodes(
         id: n.id,
         type: "image" as const,
         position: { x: n.x, y: n.y },
-        style: dimmedIds.has(n.id) ? { opacity: BRANCH_DIM_OPACITY } : undefined,
+        style: isDimmed(n.id) ? { opacity: BRANCH_DIM_OPACITY } : undefined,
         data: {
           imageAssetId: n.imageAssetId,
           prompt: n.content,
@@ -1286,6 +1417,11 @@ function CanvasInner({
 }) {
   const scene = useSyncExternalStore(store.subscribe, store.getScene);
   const grid = useSyncExternalStore(store.subscribe, store.getGrid);
+  // ADR-002 Workstream 1 ("Branch status and lifecycle") - "Focus Accepted
+  // Paths", toggled from ViewPopover.tsx's own checkbox (a sibling
+  // component, hence living on sceneStore rather than as useState here -
+  // see that field's own comment).
+  const focusAcceptedPaths = useSyncExternalStore(store.subscribe, store.getFocusAcceptedPaths);
   // Hoisted above onNodesChange: smart guides (R7.5b-3) need node
   // dimensions. Neither the local `nodes` array NOR React Flow's internal
   // store reliably has them here: toFlowNodes rebuilds the array from every
@@ -1412,11 +1548,11 @@ function CanvasInner({
     if (draggingRef.current) return;
     setNodes((current) =>
       withPreservedSelection(
-        toFlowNodes(scene, store, onOpenDocumentView, effectiveBranchFocusOriginId, onToggleBranchFocus),
+        toFlowNodes(scene, store, onOpenDocumentView, effectiveBranchFocusOriginId, onToggleBranchFocus, focusAcceptedPaths),
         current,
       ),
     );
-  }, [scene, store, onOpenDocumentView, effectiveBranchFocusOriginId, onToggleBranchFocus]);
+  }, [scene, store, onOpenDocumentView, effectiveBranchFocusOriginId, onToggleBranchFocus, focusAcceptedPaths]);
 
   const edges = useMemo(() => toFlowEdges(scene, hoveredEdgeId), [scene, hoveredEdgeId]);
 

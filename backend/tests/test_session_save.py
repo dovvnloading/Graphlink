@@ -373,3 +373,100 @@ def test_round_trip_preserves_gitlink_field_values():
     assert node2.gitlink_branch == "dev"
     assert node2.gitlink_pending_changes == [{"path": "a.py"}, {"path": "b.py"}]
     assert node2.gitlink_change_state == "previewed"
+
+
+# -- ADR-002 Workstream 1: "Branch status and lifecycle" ---------------------
+#
+# Includes the confirmed, pre-existing gap fixed inline in this same pass -
+# see backend/session_save.py's own comment on _serialize_chat_node/
+# _serialize_note. These round-trip tests (build_chat_data ->
+# restore_chat_into_document) are the strongest possible signal that fields
+# already synced live to the frontend now ALSO survive a real Save then Load,
+# which is exactly the gap that was silently failing before this fix.
+
+
+def test_chat_node_serializes_synthesis_provenance_and_branch_status():
+    doc = SceneDocument()
+    root = doc.add_chat_node(0, 0, "root", True)
+    first = doc.add_chat_node(0, 160, "first", False, parent_id=root.id)
+    second = doc.add_chat_node(460, 160, "second", False, parent_id=root.id)
+    result = doc.add_chat_node(0, 320, "Combined answer", False, parent_id=first.id)
+    doc.mark_branch_synthesis(result.id, [first.id, second.id], "merge them", "Anthropic Claude", "claude-sonnet-5")
+    doc.set_branch_status(result.id, "accepted")
+
+    payload = next(p for p in build_chat_data(doc)["nodes"] if p.get("raw_content") == "Combined answer")
+    assert payload["provider"] == "Anthropic Claude"
+    assert payload["model"] == "claude-sonnet-5"
+    assert payload["is_branch_synthesis"] is True
+    assert payload["synthesis_instructions"] == "merge them"
+    assert set(payload["item_ids"]) == {first.id, second.id}
+    assert payload["branch_status"] == "accepted"
+
+
+def test_note_serializes_branch_comparison_provenance():
+    doc = SceneDocument()
+    first = doc.add_chat_node(0, 0, "first", True)
+    second = doc.add_chat_node(0, 160, "second", True)
+    note = doc.add_note(0, 0)
+    doc.mark_branch_comparison_note(note.id, [first.id, second.id])
+
+    note_payload = build_chat_data(doc)["notes_data"][0]
+    assert note_payload["is_branch_comparison"] is True
+    assert set(note_payload["item_ids"]) == {first.id, second.id}
+
+
+def test_final_deliverable_node_id_serializes_at_the_top_level():
+    doc = SceneDocument()
+    node = doc.add_chat_node(0, 0, "hi", True)
+    doc.set_final_deliverable(node.id, True)
+    chat_data = build_chat_data(doc)
+    assert chat_data["final_deliverable_node_id"] == node.id
+
+
+def test_final_deliverable_node_id_serializes_as_none_when_unmarked():
+    doc = SceneDocument()
+    doc.add_chat_node(0, 0, "hi", True)
+    chat_data = build_chat_data(doc)
+    assert chat_data["final_deliverable_node_id"] is None
+
+
+def test_round_trip_preserves_synthesize_branches_full_shape():
+    doc = SceneDocument()
+    root = doc.add_chat_node(0, 0, "root question", True)
+    first = doc.add_chat_node(0, 160, "first branch reply", False, parent_id=root.id)
+    second = doc.add_chat_node(460, 160, "second branch reply", False, parent_id=root.id)
+    result = doc.add_chat_node(0, 320, "Combined answer", False, parent_id=first.id)
+    doc.mark_branch_synthesis(result.id, [first.id, second.id], "merge them", "Anthropic Claude", "claude-sonnet-5")
+    doc.set_branch_status(result.id, "accepted")
+    doc.set_final_deliverable(result.id, True)
+
+    doc2 = _round_trip(doc)
+    first2 = next(n for n in doc2.nodes.values() if n.content == "first branch reply")
+    second2 = next(n for n in doc2.nodes.values() if n.content == "second branch reply")
+    result2 = next(n for n in doc2.nodes.values() if n.content == "Combined answer")
+
+    assert result2.provider == "Anthropic Claude"
+    assert result2.model == "claude-sonnet-5"
+    assert result2.is_branch_synthesis is True
+    assert result2.synthesis_instructions == "merge them"
+    assert set(result2.item_ids) == {first2.id, second2.id}
+    assert result2.branch_status == "accepted"
+    assert doc2.final_deliverable_node_id == result2.id
+
+
+def test_round_trip_preserves_compare_branches_full_shape():
+    doc = SceneDocument()
+    first = doc.add_chat_node(0, 0, "first branch reply", True)
+    second = doc.add_chat_node(0, 160, "second branch reply", True)
+    note = doc.add_note(0, 0)
+    doc.set_note_content(note.id, "Branch Comparison\n\nAgreements:\n• both agree")
+    doc.mark_branch_comparison_note(note.id, [first.id, second.id])
+
+    doc2 = _round_trip(doc)
+    first2 = next(n for n in doc2.nodes.values() if n.content == "first branch reply")
+    second2 = next(n for n in doc2.nodes.values() if n.content == "second branch reply")
+    note2 = next(n for n in doc2.nodes.values() if n.kind == "note")
+
+    assert note2.is_branch_comparison is True
+    assert set(note2.item_ids) == {first2.id, second2.id}
+    assert note2.content == "Branch Comparison\n\nAgreements:\n• both agree"

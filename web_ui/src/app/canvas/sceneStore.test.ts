@@ -603,6 +603,59 @@ describe("SceneStore", () => {
     expect(intents).toEqual([{ topic: "scene", intent: "compareBranches", args: [["n1", "n2", "n3"]] }]);
   });
 
+  it("setBranchStatus sends the scene-topic setBranchStatus intent with [nodeId, status] (ADR-002 Workstream 1)", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.setBranchStatus("n1", "accepted");
+    expect(intents).toEqual([{ topic: "scene", intent: "setBranchStatus", args: ["n1", "accepted"] }]);
+  });
+
+  it("setFinalDeliverable sends the scene-topic setFinalDeliverable intent with [nodeId, isFinal] (ADR-002 Workstream 1)", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.setFinalDeliverable("n1", true);
+    expect(intents).toEqual([{ topic: "scene", intent: "setFinalDeliverable", args: ["n1", true] }]);
+  });
+
+  it("collapseBranch sends the scene-topic collapseBranch intent with [nodeId, collapsed] (ADR-002 Workstream 1)", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.collapseBranch("n1", true);
+    expect(intents).toEqual([{ topic: "scene", intent: "collapseBranch", args: ["n1", true] }]);
+  });
+
+  // ADR-002 Workstream 1 ("Branch status and lifecycle"): "Focus Accepted
+  // Paths" - local UI state only (see sceneStore.ts's own comment on why
+  // it lives here rather than as component state), NOT a WS intent -
+  // no transport call is ever expected from these.
+  it("getFocusAcceptedPaths/setFocusAcceptedPaths update state and notify listeners", () => {
+    const { transport } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    const seen = vi.fn();
+    store.subscribe(seen);
+
+    expect(store.getFocusAcceptedPaths()).toBe(false);
+    store.setFocusAcceptedPaths(true);
+    expect(store.getFocusAcceptedPaths()).toBe(true);
+    expect(seen).toHaveBeenCalledTimes(1);
+
+    store.setFocusAcceptedPaths(false);
+    expect(store.getFocusAcceptedPaths()).toBe(false);
+    expect(seen).toHaveBeenCalledTimes(2);
+  });
+
+  it("setFocusAcceptedPaths is a no-op (no re-emit) when the value is unchanged", () => {
+    const { transport } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    const seen = vi.fn();
+    store.subscribe(seen);
+
+    store.setFocusAcceptedPaths(true);
+    expect(seen).toHaveBeenCalledTimes(1);
+    store.setFocusAcceptedPaths(true);
+    expect(seen).toHaveBeenCalledTimes(1);
+  });
+
   it("setGroupLabel sends the scene-topic setGroupLabel intent with [nodeId, text]", () => {
     const { transport, intents } = makeFakeTransport();
     const store = new SceneStore(transport);
