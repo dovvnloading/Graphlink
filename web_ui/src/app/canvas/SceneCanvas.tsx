@@ -20,7 +20,6 @@ import "@xyflow/react/dist/style.css";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { SceneNodeRow, SceneState } from "../../lib/bridge-core/generated/scene-state";
 import type { StreamListener } from "../../lib/ws/transport";
-import { useOverlays } from "../overlays/overlays";
 import { ArtifactNodeView, type ArtifactFlowNode } from "./ArtifactNodeView";
 import { ChartNodeView, type ChartFlowNode } from "./ChartNodeView";
 import { ChatNodeView, type ChatFlowNode } from "./ChatNodeView";
@@ -28,7 +27,7 @@ import { CodeNodeView, type CodeFlowNode } from "./CodeNodeView";
 import { CodeSandboxNodeView, type CodeSandboxFlowNode } from "./CodeSandboxNodeView";
 import { ConversationNodeView, type ConversationFlowNode, type ConversationMessage } from "./ConversationNodeView";
 import { DocumentNodeView, type DocumentFlowNode } from "./DocumentNodeView";
-import { DocumentViewDialog } from "./DocumentViewDialog";
+import { DocumentViewPanel } from "./DocumentViewPanel";
 import { GitlinkNodeView, type GitlinkFlowNode } from "./GitlinkNodeView";
 import { GroupNodeView, type GroupFlowNode } from "./GroupNodeView";
 import { HtmlNodeView, type HtmlFlowNode } from "./HtmlNodeView";
@@ -1212,21 +1211,25 @@ function CanvasInner({ store }: { store: SceneStore }) {
     el.style.setProperty("--gl-node-font-color", scene.fontColor);
   }, [scene.fontFamily, scene.fontSizePt, scene.fontColor]);
 
-  // R8a: Open Document View - the read-only markdown modal a chat/
+  // R8a: Open Document View - the read-only markdown panel a chat/
   // conversation node's card menu opens (see toFlowNodes' own
   // onOpenDocumentView field on each of those two branches). The displayed
   // markdown is local-only state (never scene state, same posture as
   // hoveredEdgeId/smartGuideLines above) - SceneCanvas is the only place
-  // that knows how to open this dialog.
-  const overlays = useOverlays();
+  // that knows how to open this panel. Deliberately its OWN open/closed
+  // boolean, not a name in the shared OverlayProvider registry: legacy's
+  // DocumentViewerPanel was a permanent embedded QWidget outside Qt's
+  // OverlayManager entirely (see DocumentViewPanel.tsx's own doc comment),
+  // so this restores that same independence rather than reusing the
+  // Dialog/Popover single-open-surface system a docked panel was never
+  // part of.
   const [documentViewContent, setDocumentViewContent] = useState<string | null>(null);
-  const onOpenDocumentView = useCallback(
-    (markdown: string) => {
-      setDocumentViewContent(markdown);
-      overlays.open("document-view", "dialog");
-    },
-    [overlays],
-  );
+  const [isDocumentViewOpen, setIsDocumentViewOpen] = useState(false);
+  const onOpenDocumentView = useCallback((markdown: string) => {
+    setDocumentViewContent(markdown);
+    setIsDocumentViewOpen(true);
+  }, []);
+  const onCloseDocumentView = useCallback(() => setIsDocumentViewOpen(false), []);
 
   // R8a: "Hide Other Branches" - which node id branch focus is currently
   // anchored to, or null when off. Also local-only state (never scene
@@ -1488,6 +1491,16 @@ function CanvasInner({ store }: { store: SceneStore }) {
 
   return (
     <>
+      {/* R8a follow-up: a real docked flex sibling of the canvas, restoring
+          legacy's QHBoxLayout(doc_viewer_panel, chat_view) shape - opening
+          it visibly shrinks .scene-canvas-flex-area instead of overlaying
+          on top of the graph (see DocumentViewPanel.tsx's own doc comment
+          for why this is no longer one of the shared Dialog/Popover tiers). */}
+      <div className="scene-canvas-row">
+      {isDocumentViewOpen && (
+        <DocumentViewPanel content={documentViewContent} onClose={onCloseDocumentView} />
+      )}
+      <div className="scene-canvas-flex-area">
       <div className="scene-canvas" ref={canvasWrapperRef} onDoubleClick={onDoubleClick}>
       <ReactFlow
         nodes={nodes}
@@ -1570,7 +1583,8 @@ function CanvasInner({ store }: { store: SceneStore }) {
         )}
       </ReactFlow>
       </div>
-      <DocumentViewDialog content={documentViewContent} />
+      </div>
+      </div>
     </>
   );
 }
