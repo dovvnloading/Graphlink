@@ -21,8 +21,9 @@ function Chrome() {
         Settings {overlays.isOpen("settings") ? "(active)" : ""}
       </button>
       <button type="button">elsewhere</button>
-      <Popover name="view">
+      <Popover name="view" label="View">
         <p>view popover body</p>
+        <button type="button">first control</button>
       </Popover>
       <Dialog name="settings" title="Settings">
         {/* R8a finding #16: mirrors ChatLibraryDialog's own rename input -
@@ -100,6 +101,26 @@ describe("overlay system (the OverlayManager contract)", () => {
     expect(screen.getByText("view popover body")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "elsewhere" }));
     expect(screen.queryByText("view popover body")).toBeNull();
+  });
+
+  it("R8a finding #19: opening a popover moves focus onto its first focusable control", async () => {
+    const user = setup();
+    await user.click(screen.getByRole("button", { name: /^View/ }));
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "first control" }));
+  });
+
+  it("R8a finding #19: closing a popover restores focus to its trigger, same as a dialog", async () => {
+    const user = setup();
+    const trigger = screen.getByRole("button", { name: /^View/ });
+    await user.click(trigger);
+    await user.keyboard("{Escape}");
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it("R8a finding #19: a popover has a real aria-label, not an unnamed dialog role", async () => {
+    const user = setup();
+    await user.click(screen.getByRole("button", { name: /^View/ }));
+    expect(screen.getByRole("dialog", { name: "View" })).toBeInTheDocument();
   });
 
   it("every dialog has a working close button (audit B5)", async () => {

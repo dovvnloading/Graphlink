@@ -155,24 +155,50 @@ export function OverlayProvider({ children }: { children: ReactNode }) {
  * it); it mounts only while open. The opener button stays outside. */
 export function Popover({
   name,
+  label,
   className,
   children,
 }: {
   name: string;
+  label: string;
   className?: string;
   children: ReactNode;
 }) {
   const overlays = useOverlays();
   const ref = useRef<HTMLDivElement | null>(null);
+  const isOpen = overlays.isOpen(name);
 
   useEffect(() => {
     overlays.registerSurfaceElement(name, ref.current);
     return () => overlays.registerSurfaceElement(name, null);
   });
 
-  if (!overlays.isOpen(name)) return null;
+  // R8a (UI/UX issue list finding #19): opening a popover via keyboard
+  // (Enter on its trigger button) left focus sitting on the trigger - the
+  // panel's own controls were reachable only by continuing to Tab through
+  // whatever else sits between the trigger and the panel in DOM order (the
+  // rest of the app bar, for View/Plugins/Pins). Focus RESTORATION on
+  // close is already handled generically by open()/close() above for every
+  // overlay tier; moving focus IN on open is the other half, specific to
+  // this component (Dialog already does it in its own effect).
+  useEffect(() => {
+    if (!isOpen) return;
+    const panel = ref.current;
+    if (!panel) return;
+    const first = panel.querySelector<HTMLElement>(FOCUSABLE);
+    (first ?? panel).focus();
+  }, [isOpen]);
+
+  if (!isOpen) return null;
   return (
-    <div ref={ref} role="dialog" aria-modal="false" className={`overlay-popover ${className ?? ""}`}>
+    <div
+      ref={ref}
+      role="dialog"
+      aria-modal="false"
+      aria-label={label}
+      tabIndex={-1}
+      className={`overlay-popover ${className ?? ""}`}
+    >
       {children}
     </div>
   );

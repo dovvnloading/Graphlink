@@ -237,7 +237,7 @@ function ModelPicker({ store }: { store: ComposerStore }) {
   const options = useMemo(() => composer.route.modelOptions, [composer.route.modelOptions]);
 
   return (
-    <Popover name="model" className="reasoning-popover model-picker-popover">
+    <Popover name="model" label="Choose a model" className="reasoning-popover model-picker-popover">
       {options.length === 0 ? (
         <p className="model-picker-empty">
           No models found for {composer.route.provider}. Run a scan on its Settings page.
@@ -267,7 +267,7 @@ function Reasoning({ store }: { store: ComposerStore }) {
   const options = useMemo(() => composer.route.reasoning.options, [composer.route.reasoning.options]);
 
   return (
-    <Popover name="reasoning" className="reasoning-popover">
+    <Popover name="reasoning" label="Choose a reasoning level" className="reasoning-popover">
       {options.map((option) => (
         <button
           key={option.id}

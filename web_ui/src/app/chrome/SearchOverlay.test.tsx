@@ -42,6 +42,7 @@ function setup() {
     <OverlayProvider>
       <ReactFlowProvider>
         <OpenSearchButton />
+        <button type="button">elsewhere</button>
         {/* @ts-expect-error - test double */}
         <SearchOverlay store={store} />
       </ReactFlowProvider>
@@ -89,5 +90,22 @@ describe("SearchOverlay", () => {
     await user.click(screen.getByText("open search"));
     await user.click(screen.getByLabelText("Close (Esc)"));
     expect(screen.queryByLabelText("Search the canvas")).toBeNull();
+  });
+
+  it("R8a finding #17: clicking outside the search bar dismisses it, like every other popover", async () => {
+    const user = setup();
+    await user.click(screen.getByText("open search"));
+    expect(screen.getByLabelText("Search the canvas")).toBeInTheDocument();
+
+    await user.click(screen.getByText("elsewhere"));
+
+    expect(screen.queryByLabelText("Search the canvas")).toBeNull();
+  });
+
+  it("R8a finding #17: clicking inside the search bar does not dismiss it", async () => {
+    const user = setup();
+    await user.click(screen.getByText("open search"));
+    await user.click(screen.getByLabelText("Search the canvas"));
+    expect(screen.getByLabelText("Search the canvas")).toBeInTheDocument();
   });
 });

@@ -52,7 +52,7 @@ export function PluginPicker({ transport, store }: { transport: WsTransport; sto
     state.categories.find((c) => c.name === activeCategoryName) ?? state.categories[0] ?? null;
 
   return (
-    <Popover name="plugins" className="plugin-picker-shell">
+    <Popover name="plugins" label="Plugins" className="plugin-picker-shell">
       <div className="plugin-picker-rail">
         <p className="plugin-picker-rail-label">Categories</p>
         <div className="plugin-picker-rail-buttons">
