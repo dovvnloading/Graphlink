@@ -2109,7 +2109,11 @@ body,
 
 .about-links a {
   font-size: 12px;
-  color: var(--gl-accent, #6ea8fe);
+  /* --gl-accent was never defined anywhere in the token files, so this
+     always took its hardcoded fallback - a saturated blue, the only
+     non-grey color in an otherwise entirely greyscale palette. Matches
+     .chat-node-content a's own link convention instead. */
+  color: var(--gl-palette-selection, var(--gl-surface-text-primary));
   text-decoration: none;
 }
 
