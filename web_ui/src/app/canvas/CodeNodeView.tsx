@@ -19,17 +19,22 @@ import { NodeMenu } from "./NodeMenu";
  * copy, and (as of R4.3c) Regenerate Response - conditionally rendered
  * (not merely disabled) on parentChatNodeId being non-null, matching
  * legacy's own menu-build-time `if self.node.parent_content_node:` gate.
- * Deferred, with an honest disabled+title label rather than a silent
- * drop (an R3.4 live-drive audit found the legacy CodeNode menu's branch-
- * visibility item had been dropped with zero acknowledgment - fixed here):
- * Hide Other Branches (the legacy scene's
- * branch-visibility toggle has no backend/frontend equivalent at all yet -
- * unscoped, not owned by any R-phase). "Export" is likewise no longer
- * deferred as of R7.5a: it downloads the raw code (not the fenced/
- * highlighted markdown) as a file via downloadTextFile, guessing a
- * reasonable extension from the language field (LANGUAGE_EXTENSIONS below)
- * and falling back to .txt for anything unrecognized - frontend-only, no
- * backend involved, since the code is already in memory client-side.
+ * "Export" is likewise no longer deferred as of R7.5a: it downloads the raw
+ * code (not the fenced/highlighted markdown) as a file via downloadTextFile,
+ * guessing a reasonable extension from the language field
+ * (LANGUAGE_EXTENSIONS below) and falling back to .txt for anything
+ * unrecognized - frontend-only, no backend involved, since the code is
+ * already in memory client-side. Hide Other Branches is real as of R8a too
+ * (an R3.4 live-drive audit had found the legacy CodeNode menu's branch-
+ * visibility item dropped with zero acknowledgment; it stood as an honest
+ * disabled+title stub until now): it calls data.onToggleBranchFocus
+ * (already bound to this node's id by SceneCanvas) to toggle branch-focus
+ * isolation, and its own label mirrors data.isBranchFocusActive - a
+ * scene-wide flag, not a per-node one - reading "Show All Branches" when
+ * active and "Hide Other Branches" otherwise, matching legacy's own
+ * `"Show All Branches" if is_branch_hidden else "Hide Other Branches"`
+ * swap. The actual graph algorithm and all state management live in
+ * SceneCanvas.tsx, not here. Nothing left deferred in this menu.
  */
 
 export interface CodeNodeData extends Record<string, unknown> {
@@ -43,6 +48,13 @@ export interface CodeNodeData extends Record<string, unknown> {
   parentChatNodeId: string | null;
   onRegenerate: () => void;
   onDelete: () => void;
+  // R8a: isBranchFocusActive is scene-wide (true if branch focus is active
+  // ANYWHERE in the scene, not just on this node) - it exists purely to
+  // drive the Hide/Show Branches menu item's own label. onToggleBranchFocus
+  // is already closed over this node's id by SceneCanvas; called with no
+  // arguments here.
+  isBranchFocusActive: boolean;
+  onToggleBranchFocus: () => void;
 }
 
 export type CodeFlowNode = Node<CodeNodeData, "code">;
@@ -101,6 +113,8 @@ function CodeNodeMenu({
   parentChatNodeId,
   onRegenerate,
   onDelete,
+  isBranchFocusActive,
+  onToggleBranchFocus,
   onClose,
 }: {
   position: MenuPosition;
@@ -110,6 +124,8 @@ function CodeNodeMenu({
   parentChatNodeId: string | null;
   onRegenerate: () => void;
   onDelete: () => void;
+  isBranchFocusActive: boolean;
+  onToggleBranchFocus: () => void;
   onClose: () => void;
 }) {
 
@@ -136,8 +152,15 @@ function CodeNodeMenu({
       >
         Export
       </button>
-      <button type="button" role="menuitem" disabled title="Branch visibility isn't built yet">
-        Hide Other Branches
+      <button
+        type="button"
+        role="menuitem"
+        onClick={() => {
+          onToggleBranchFocus();
+          onClose();
+        }}
+      >
+        {isBranchFocusActive ? "Show All Branches" : "Hide Other Branches"}
       </button>
       {parentChatNodeId && (
         <button
@@ -200,6 +223,8 @@ export function CodeNodeView({ id, data, selected }: NodeProps<CodeFlowNode>) {
           parentChatNodeId={data.parentChatNodeId}
           onRegenerate={data.onRegenerate}
           onDelete={data.onDelete}
+          isBranchFocusActive={data.isBranchFocusActive}
+          onToggleBranchFocus={data.onToggleBranchFocus}
           onClose={() => setMenuPosition(null)}
         />
       )}

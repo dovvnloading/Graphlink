@@ -209,6 +209,126 @@ export function conversationHistoryToDocumentMarkdown(history: ConversationMessa
   return `## Conversation Transcript\n\n${blocks.join("\n\n")}`;
 }
 
+// R8a: "Hide Other Branches" - restores graphlink_scene.py's
+// toggle_branch_visibility (line 1097). The legacy name is misleading: it
+// never removes anything, it DIMS every node outside the clicked node's
+// branch down to a low opacity, and restores full opacity on toggle-off.
+// 0.18 is legacy's own BRANCH_DIM_OPACITY constant (graphlink_scene.py:23),
+// ported unchanged. This file already established the "restore a legacy dim
+// effect via React Flow's own style.opacity, not a new CSS class or DOM
+// removal" convention for FADED_CONNECTION_OPACITY below - this reuses it.
+const BRANCH_DIM_OPACITY = 0.18;
+
+// Only these five node kinds ever carried this menu item in the legacy app
+// (one dedicated *_menu.py file each - graphlink_node_chat_menu.py,
+// _code_menu.py, _document_menu.py, _image_menu.py, _thinking_menu.py).
+// Every other kind - including Conversation, which ConversationNodeView.tsx's
+// own docstring already documents as a deliberate exclusion from this
+// feature - is left untouched by computeDimmedNodeIds below, exactly as if
+// the feature did not exist for it.
+const BRANCH_FOCUS_KINDS = new Set(["chat", "code", "document", "thinking", "image"]);
+
+/**
+ * Computes which node ids should be dimmed while branch focus is active,
+ * given the node id the user invoked "Hide Other Branches" from
+ * (`originId`). Returns an empty set when focus is off (`originId === null`)
+ * or the origin node no longer exists (deleted while focus was active - this
+ * is how focus self-heals to "show everyone" rather than pointing at
+ * nothing; SceneCanvas below derives its own effectiveBranchFocusOriginId
+ * with the identical existence check, so the menu label un-flips in the
+ * same render rather than one render behind).
+ *
+ * Ported from graphlink_scene.py's toggle_branch_visibility/
+ * _branch_anchor_nodes, adapted to this app's uniform (source, target) edge
+ * model. Legacy modeled "chat A replied by chat B" and "chat A owns code
+ * block B" as different attribute pairs (parent_node/children vs.
+ * parent_content_node); the modern backend models both identically as one
+ * edge (backend/canvas.py's SceneDocument.connect), so this tells them apart
+ * by KIND instead: a node's "chat anchor" is itself if it is chat-kind, else
+ * its nearest parent if THAT is chat-kind, else - an orphaned content node
+ * with no chat parent at all, not reachable through today's UI since every
+ * creation path supplies one, but not impossible after a manual edge edit -
+ * itself, isolating just that one node rather than crashing or silently
+ * dimming nothing.
+ *
+ * The active branch is the set of CHAT nodes reachable from the anchor by
+ * walking chat-to-chat edges only, in both directions (ancestors up,
+ * descendants down) - a content node attached to any branch member is
+ * counted as active via its anchor, not by the walk expanding through it
+ * (content nodes are leaves: they never have children of their own in
+ * current usage, and are never treated as branch-tree interior nodes even
+ * if they somehow did).
+ *
+ * Both the ancestor walk and the descendant BFS are visited-set-guarded, a
+ * deliberate hardening legacy's own equivalent walks do NOT have:
+ * SceneDocument.connect() allows creating a cycle or a second incoming edge
+ * to the same node with no validation at all (there is no such thing as a
+ * malformed QGraphicsScene the same way), so an unguarded walk here could
+ * infinite-loop where legacy's structurally never could.
+ */
+export function computeDimmedNodeIds(scene: SceneState, originId: string | null): Set<string> {
+  if (originId === null) return new Set();
+
+  const nodesById = new Map(scene.nodes.map((n) => [n.id, n]));
+  if (!nodesById.has(originId)) return new Set();
+
+  // parentOf/childrenOf are built fresh here rather than reusing toFlowNodes'
+  // own nodesById map below - this function is exported standalone for
+  // direct unit testing (same posture as toFlowEdges/
+  // conversationHistoryToDocumentMarkdown above), and threading maps between
+  // functions to save one more Map construction over a scene of at most a
+  // few hundred nodes is not worth the coupling.
+  const parentOf = new Map<string, string>();
+  const childrenOf = new Map<string, string[]>();
+  for (const e of scene.edges) {
+    // First edge whose target is this node wins - a deliberate tie-break for
+    // the (currently UI-unreachable, but structurally possible via
+    // connectNodes) case of a node with more than one incoming edge. Legacy
+    // has no multi-parent concept to fall back on for comparison: parent_node
+    // is a single pointer set once at creation, so this is this port's own
+    // reasonable interpretation, not a legacy behavior being matched.
+    if (!parentOf.has(e.target)) parentOf.set(e.target, e.source);
+    const siblings = childrenOf.get(e.source);
+    if (siblings) siblings.push(e.target);
+    else childrenOf.set(e.source, [e.target]);
+  }
+
+  const isChat = (id: string) => nodesById.get(id)?.kind === "chat";
+
+  function chatAnchorOf(id: string): string {
+    if (isChat(id)) return id;
+    const parentId = parentOf.get(id);
+    return parentId && isChat(parentId) ? parentId : id;
+  }
+
+  const anchorId = chatAnchorOf(originId);
+  const activeChatIds = new Set<string>([anchorId]);
+
+  if (isChat(anchorId)) {
+    let cursor = parentOf.get(anchorId);
+    while (cursor !== undefined && isChat(cursor) && !activeChatIds.has(cursor)) {
+      activeChatIds.add(cursor);
+      cursor = parentOf.get(cursor);
+    }
+    const queue = [anchorId];
+    while (queue.length > 0) {
+      const current = queue.shift() as string;
+      for (const childId of childrenOf.get(current) ?? []) {
+        if (activeChatIds.has(childId) || !isChat(childId)) continue;
+        activeChatIds.add(childId);
+        queue.push(childId);
+      }
+    }
+  }
+
+  const dimmed = new Set<string>();
+  for (const node of scene.nodes) {
+    if (!BRANCH_FOCUS_KINDS.has(node.kind)) continue;
+    if (!activeChatIds.has(chatAnchorOf(node.id))) dimmed.add(node.id);
+  }
+  return dimmed;
+}
+
 // Exported standalone for direct unit testing (same posture as
 // scaleDragPosition in sceneStore.ts) - covers the parentChatNodeId
 // derivation below without needing a full <ReactFlow> mount.
@@ -216,11 +336,17 @@ export function toFlowNodes(
   scene: SceneState,
   store: SceneStore,
   onOpenDocumentView: (markdown: string) => void = () => {},
+  branchFocusOriginId: string | null = null,
+  onToggleBranchFocus: (nodeId: string) => void = () => {},
 ): SceneFlowNode[] {
   // Looked up per-chat-node below to build dockedChildren - a docked node is
   // omitted from the returned array entirely (see the "thinking" branch), so
   // this is the only remaining way a chat node's dock badge/menu can find it.
   const nodesById = new Map(scene.nodes.map((n) => [n.id, n]));
+  // R8a: computed once per call, then just a Set.has() per node below -
+  // see computeDimmedNodeIds' own doc for why it builds its own maps rather
+  // than reusing nodesById above.
+  const dimmedIds = computeDimmedNodeIds(scene, branchFocusOriginId);
   const flowNodes: SceneFlowNode[] = [];
 
   for (const n of scene.nodes) {
@@ -250,6 +376,10 @@ export function toFlowNodes(
         id: n.id,
         type: "chat" as const,
         position: { x: n.x, y: n.y },
+        // R8a: "Hide Other Branches" dimming - see computeDimmedNodeIds' own
+        // doc above. undefined (not an explicit opacity: 1) when not dimmed,
+        // so this never overrides anything else that might set style later.
+        style: dimmedIds.has(n.id) ? { opacity: BRANCH_DIM_OPACITY } : undefined,
         data: {
           content: n.content,
           isUser: n.isUser,
@@ -279,6 +409,13 @@ export function toFlowNodes(
           onOpenDocumentView: () => {
             if (n.content.trim()) onOpenDocumentView(n.content);
           },
+          // R8a: "Hide Other Branches" - isBranchFocusActive is scene-wide
+          // (not per-node), purely so the menu button can flip its own label
+          // to "Show All Branches" once ANY branch focus is active, matching
+          // legacy's own `"Show All Branches" if is_branch_hidden else
+          // "Hide Other Branches"` regardless of which node's menu is open.
+          isBranchFocusActive: branchFocusOriginId !== null,
+          onToggleBranchFocus: () => onToggleBranchFocus(n.id),
           // R6.3: the node's own scroll position within its content area -
           // read on mount by ChatNodeView (restore) and reported (debounced)
           // via the new setChatScrollValue intent on every scroll. Defaults
@@ -303,6 +440,7 @@ export function toFlowNodes(
         id: n.id,
         type: "code" as const,
         position: { x: n.x, y: n.y },
+        style: dimmedIds.has(n.id) ? { opacity: BRANCH_DIM_OPACITY } : undefined,
         data: {
           code: n.code,
           language: n.language,
@@ -311,6 +449,10 @@ export function toFlowNodes(
             if (parentChatNodeId) store.regenerateResponse(parentChatNodeId);
           },
           onDelete: () => store.removeNodes([n.id]),
+          // R8a: "Hide Other Branches" - see the chat branch above for why
+          // isBranchFocusActive is scene-wide rather than per-node.
+          isBranchFocusActive: branchFocusOriginId !== null,
+          onToggleBranchFocus: () => onToggleBranchFocus(n.id),
         },
       });
       continue;
@@ -320,6 +462,7 @@ export function toFlowNodes(
         id: n.id,
         type: "document" as const,
         position: { x: n.x, y: n.y },
+        style: dimmedIds.has(n.id) ? { opacity: BRANCH_DIM_OPACITY } : undefined,
         data: {
           title: n.title,
           content: n.content,
@@ -344,6 +487,9 @@ export function toFlowNodes(
           onToggleCollapse: () => store.setChatCollapsed(n.id, !n.isCollapsed),
           onDock: () => store.setNodeDocked(n.id, true),
           onDelete: () => store.removeNodes([n.id]),
+          // R8a: "Hide Other Branches" - see the chat branch above.
+          isBranchFocusActive: branchFocusOriginId !== null,
+          onToggleBranchFocus: () => onToggleBranchFocus(n.id),
         },
       });
       continue;
@@ -356,10 +502,14 @@ export function toFlowNodes(
         id: n.id,
         type: "thinking" as const,
         position: { x: n.x, y: n.y },
+        style: dimmedIds.has(n.id) ? { opacity: BRANCH_DIM_OPACITY } : undefined,
         data: {
           thinkingText: n.content,
           onDock: () => store.setNodeDocked(n.id, true),
           onDelete: () => store.removeNodes([n.id]),
+          // R8a: "Hide Other Branches" - see the chat branch above.
+          isBranchFocusActive: branchFocusOriginId !== null,
+          onToggleBranchFocus: () => onToggleBranchFocus(n.id),
         },
       });
       continue;
@@ -408,6 +558,7 @@ export function toFlowNodes(
         id: n.id,
         type: "image" as const,
         position: { x: n.x, y: n.y },
+        style: dimmedIds.has(n.id) ? { opacity: BRANCH_DIM_OPACITY } : undefined,
         data: {
           imageAssetId: n.imageAssetId,
           prompt: n.content,
@@ -417,6 +568,9 @@ export function toFlowNodes(
           // image's parent chat node internally (see sceneStore.ts's
           // regenerateImage / backend/canvas.py's resolve_regenerate_image).
           onRegenerate: () => store.regenerateImage(n.id),
+          // R8a: "Hide Other Branches" - see the chat branch above.
+          isBranchFocusActive: branchFocusOriginId !== null,
+          onToggleBranchFocus: () => onToggleBranchFocus(n.id),
         },
       });
       continue;
@@ -1051,6 +1205,42 @@ function CanvasInner({ store }: { store: SceneStore }) {
     [overlays],
   );
 
+  // R8a: "Hide Other Branches" - which node id branch focus is currently
+  // anchored to, or null when off. Also local-only state (never scene
+  // state), same posture as documentViewContent above - it is a pure
+  // display concern, not something that needs to survive a reload or be
+  // shared with a hypothetical second viewer.
+  const [branchFocusOriginId, setBranchFocusOriginId] = useState<string | null>(null);
+  // Derived, not stored: raw state alone can go stale the moment its origin
+  // node is deleted while focus is active, and "is this state still
+  // meaningful" is exactly the kind of derivation React's own guidance says
+  // to compute during render rather than reconcile via a setState-in-effect
+  // (the first version of this self-heal DID use such an effect, and the
+  // react-hooks/set-state-in-effect rule correctly flagged it as the
+  // cascading-render anti-pattern it is - this replaces it, not suppresses
+  // it). Every consumer below reads this derived value, never the raw
+  // state directly, so a deleted origin self-heals within the SAME render
+  // instead of flashing "Show All Branches" for one extra frame first.
+  const isBranchFocusOriginValid =
+    branchFocusOriginId !== null && scene.nodes.some((n) => n.id === branchFocusOriginId);
+  const effectiveBranchFocusOriginId = isBranchFocusOriginValid ? branchFocusOriginId : null;
+  const onToggleBranchFocus = useCallback(
+    (nodeId: string) => {
+      // Mirrors graphlink_scene.py's own toggle_branch_visibility exactly:
+      // if focus is already active (from ANY origin), any click anywhere
+      // clears it - the menu label is "Show All Branches" scene-wide once
+      // active, not "focus a different branch". Only when focus is OFF -
+      // including "was on, but its origin has since been deleted", which
+      // reads as off per isBranchFocusOriginValid above - does the clicked
+      // node become the new origin.
+      setBranchFocusOriginId((current) => {
+        const currentIsValid = current !== null && scene.nodes.some((n) => n.id === current);
+        return currentIsValid ? null : nodeId;
+      });
+    },
+    [scene.nodes],
+  );
+
   // R6.3: viewport (pan/zoom) reporting - see makeDebouncedViewportReport's
   // own doc above. onMove fires on every frame of a pan/zoom gesture (never
   // just once at the end, unlike NodeResizer's onResizeEnd), so the debounce
@@ -1074,8 +1264,13 @@ function CanvasInner({ store }: { store: SceneStore }) {
 
   useEffect(() => {
     if (draggingRef.current) return;
-    setNodes((current) => withPreservedSelection(toFlowNodes(scene, store, onOpenDocumentView), current));
-  }, [scene, store, onOpenDocumentView]);
+    setNodes((current) =>
+      withPreservedSelection(
+        toFlowNodes(scene, store, onOpenDocumentView, effectiveBranchFocusOriginId, onToggleBranchFocus),
+        current,
+      ),
+    );
+  }, [scene, store, onOpenDocumentView, effectiveBranchFocusOriginId, onToggleBranchFocus]);
 
   const edges = useMemo(() => toFlowEdges(scene, hoveredEdgeId), [scene, hoveredEdgeId]);
 

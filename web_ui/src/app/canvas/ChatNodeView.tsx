@@ -15,9 +15,7 @@ import { NodeMenu } from "./NodeMenu";
  * honest disabled+title label rather than a fake action or a silent drop
  * (an R3.4 live-drive audit found several legacy ChatNode menu items had
  * been dropped with zero acknowledgment - fixed here): Regenerate (assistant
- * nodes only, needs the R4 agent layer), and Hide Other Branches (the
- * legacy scene's branch-visibility toggle has no backend/frontend equivalent at all yet -
- * unscoped, not owned by any R-phase). One legacy item is still deliberately
+ * nodes only, needs the R4 agent layer). One legacy item is still deliberately
  * NOT listed even as disabled: "Generate Group Summary" is itself
  * conditionally hidden in the legacy menu (only when a multi-selection
  * exists), and that precondition can't occur yet in the new stack (no
@@ -51,7 +49,13 @@ import { NodeMenu } from "./NodeMenu";
  * likewise no longer deferred as of R7.5a: it downloads the node's raw
  * content (not the rendered markdown) as a .md file via downloadTextFile -
  * frontend-only, no backend involved, since the content is already in
- * memory client-side.
+ * memory client-side. "Hide Other Branches" is likewise no longer deferred
+ * as of R8a: it now calls the real onToggleBranchFocus callback, already
+ * closed over this node's own id by SceneCanvas.tsx, which owns the actual
+ * branch-isolation graph walk and per-node dimming style entirely - this
+ * file's only job is flipping the button's own label between "Hide Other
+ * Branches" and "Show All Branches" to match the scene-wide
+ * isBranchFocusActive flag SceneCanvas.tsx also hands down.
  *
  * R6.3: the node's own scroll position within .chat-node-content (its
  * scrollable markdown body) is now restored on mount and reported
@@ -79,6 +83,8 @@ export interface ChatNodeData extends Record<string, unknown> {
   onGenerateExplainerNote: () => void;
   onOpenDocumentView: () => void;
   onScrollChange: (value: number) => void;
+  isBranchFocusActive: boolean;
+  onToggleBranchFocus: () => void;
 }
 
 export type ChatFlowNode = Node<ChatNodeData, "chat">;
@@ -117,6 +123,8 @@ function ChatNodeMenu({
   onGenerateKeyTakeaway,
   onGenerateExplainerNote,
   onOpenDocumentView,
+  isBranchFocusActive,
+  onToggleBranchFocus,
   onClose,
 }: {
   position: MenuPosition;
@@ -134,6 +142,8 @@ function ChatNodeMenu({
   onGenerateKeyTakeaway: () => void;
   onGenerateExplainerNote: () => void;
   onOpenDocumentView: () => void;
+  isBranchFocusActive: boolean;
+  onToggleBranchFocus: () => void;
   onClose: () => void;
 }) {
   const [chartMenuOpen, setChartMenuOpen] = useState(false);
@@ -171,8 +181,15 @@ function ChatNodeMenu({
       >
         Export
       </button>
-      <button type="button" role="menuitem" disabled title="Branch visibility isn't built yet">
-        Hide Other Branches
+      <button
+        type="button"
+        role="menuitem"
+        onClick={() => {
+          onToggleBranchFocus();
+          onClose();
+        }}
+      >
+        {isBranchFocusActive ? "Show All Branches" : "Hide Other Branches"}
       </button>
       {/* Real (not disabled) - matches the legacy's own `if docked_children:`
           guard exactly. One button per docked child, each undocking that
@@ -402,6 +419,8 @@ export function ChatNodeView({ id, data, selected }: NodeProps<ChatFlowNode>) {
           onGenerateKeyTakeaway={data.onGenerateKeyTakeaway}
           onGenerateExplainerNote={data.onGenerateExplainerNote}
           onOpenDocumentView={data.onOpenDocumentView}
+          isBranchFocusActive={data.isBranchFocusActive}
+          onToggleBranchFocus={data.onToggleBranchFocus}
           onClose={() => setMenuPosition(null)}
         />
       )}

@@ -9,6 +9,7 @@ import { ImageNodeView, type ImageFlowNode } from "./ImageNodeView";
 function renderImageNode(overrides: Partial<ImageFlowNode["data"]> = {}, id = "n0") {
   const onDelete = vi.fn();
   const onRegenerate = vi.fn();
+  const onToggleBranchFocus = vi.fn();
   const props = {
     id,
     selected: false,
@@ -17,6 +18,8 @@ function renderImageNode(overrides: Partial<ImageFlowNode["data"]> = {}, id = "n
       prompt: "a red fox in the snow",
       onDelete,
       onRegenerate,
+      isBranchFocusActive: false,
+      onToggleBranchFocus,
       ...overrides,
     },
   } as unknown as NodeProps<ImageFlowNode>;
@@ -26,7 +29,7 @@ function renderImageNode(overrides: Partial<ImageFlowNode["data"]> = {}, id = "n
       <ImageNodeView {...props} />
     </ReactFlowProvider>,
   );
-  return { onDelete, onRegenerate, container };
+  return { onDelete, onRegenerate, onToggleBranchFocus, container };
 }
 
 // jsdom implements neither URL.createObjectURL/revokeObjectURL nor
@@ -89,7 +92,7 @@ describe("ImageNodeView", () => {
     expect(container.querySelector("img")).toBeNull();
   });
 
-  it("right-click opens a menu with real Copy Image/Export Image/Regenerate Image/Delete Image and disabled Hide Other Branches", async () => {
+  it("right-click opens a menu with real Copy Image/Export Image/Hide Other Branches/Regenerate Image/Delete Image", async () => {
     const user = userEvent.setup();
     const { onDelete } = renderImageNode({ prompt: "a red fox in the snow" });
 
@@ -99,15 +102,42 @@ describe("ImageNodeView", () => {
 
     expect(screen.getByRole("menuitem", { name: "Copy Image" })).toBeEnabled();
     expect(screen.getByRole("menuitem", { name: "Export Image" })).toBeEnabled();
-
-    const hideBranches = screen.getByRole("menuitem", { name: "Hide Other Branches" });
-    expect(hideBranches).toBeDisabled();
-    expect(hideBranches).toHaveAttribute("title", "Branch visibility isn't built yet");
-
+    expect(screen.getByRole("menuitem", { name: "Hide Other Branches" })).toBeEnabled();
     expect(screen.getByRole("menuitem", { name: "Regenerate Image" })).toBeEnabled();
 
     await user.click(screen.getByRole("menuitem", { name: "Delete Image" }));
     expect(onDelete).toHaveBeenCalledOnce();
+  });
+
+  it("Hide Other Branches calls onToggleBranchFocus and closes the menu when branch focus is inactive", async () => {
+    const user = userEvent.setup();
+    const { onToggleBranchFocus } = renderImageNode({
+      prompt: "a red fox in the snow",
+      isBranchFocusActive: false,
+    });
+
+    fireEvent.contextMenu(screen.getByText("a red fox in the snow"));
+    const hideBranches = screen.getByRole("menuitem", { name: "Hide Other Branches" });
+
+    await user.click(hideBranches);
+    expect(onToggleBranchFocus).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("labels the item 'Show All Branches' and still calls onToggleBranchFocus when branch focus is active", async () => {
+    const user = userEvent.setup();
+    const { onToggleBranchFocus } = renderImageNode({
+      prompt: "a red fox in the snow",
+      isBranchFocusActive: true,
+    });
+
+    fireEvent.contextMenu(screen.getByText("a red fox in the snow"));
+    expect(screen.queryByRole("menuitem", { name: "Hide Other Branches" })).toBeNull();
+    const showAll = screen.getByRole("menuitem", { name: "Show All Branches" });
+
+    await user.click(showAll);
+    expect(onToggleBranchFocus).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("menu")).toBeNull();
   });
 
   it("Regenerate Image is a real, enabled item that calls onRegenerate then closes the menu", async () => {

@@ -35,6 +35,7 @@ function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}) {
   const onGenerateExplainerNote = vi.fn();
   const onOpenDocumentView = vi.fn();
   const onScrollChange = vi.fn();
+  const onToggleBranchFocus = vi.fn();
   const props = {
     id: "n0",
     selected: false,
@@ -54,6 +55,8 @@ function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}) {
       onGenerateExplainerNote,
       onOpenDocumentView,
       onScrollChange,
+      isBranchFocusActive: false,
+      onToggleBranchFocus,
       ...overrides,
     },
   } as unknown as NodeProps<ChatFlowNode>;
@@ -66,7 +69,7 @@ function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}) {
   return {
     onToggleCollapse, onDelete, onUndockChild, onRegenerate, onGenerateImage,
     onGenerateChart, onGenerateKeyTakeaway, onGenerateExplainerNote,
-    onOpenDocumentView, onScrollChange, container,
+    onOpenDocumentView, onScrollChange, onToggleBranchFocus, container,
   };
 }
 
@@ -102,9 +105,11 @@ describe("ChatNodeView", () => {
     expect(screen.getByRole("menu")).toBeInTheDocument();
 
     expect(screen.getByRole("menuitem", { name: "Export" })).not.toBeDisabled();
+    // R8a: no longer a disabled stub - see the dedicated Hide Other Branches
+    // describe block below for its data-driven-label behavior.
     const hideBranches = screen.getByRole("menuitem", { name: "Hide Other Branches" });
-    expect(hideBranches).toBeDisabled();
-    expect(hideBranches).toHaveAttribute("title", "Branch visibility isn't built yet");
+    expect(hideBranches).not.toBeDisabled();
+    expect(hideBranches).not.toHaveAttribute("title");
     // R8a: these three were disabled stubs until their agents/dialog were
     // wired up (Open Document View: the shared DocumentViewDialog; Key
     // Takeaway/Explainer Note: ported back from the deleted Qt app). This
@@ -325,6 +330,39 @@ describe("ChatNodeView", () => {
     expect(onUndockChild).toHaveBeenCalledOnce();
     expect(onUndockChild).toHaveBeenCalledWith("t1");
     expect(screen.queryByRole("menu")).toBeNull(); // the menu closes after any item fires
+  });
+});
+
+// R8a: Hide Other Branches / Show All Branches - the one menu item in this
+// file whose visible text is data-driven (isBranchFocusActive) rather than
+// fixed. onToggleBranchFocus is the same callback either way - SceneCanvas.tsx
+// (not this file) interprets what "toggle" means given current state.
+describe("ChatNodeView Hide Other Branches / Show All Branches (R8a)", () => {
+  it("labels the item 'Hide Other Branches' and calls onToggleBranchFocus then closes the menu when isBranchFocusActive is false", async () => {
+    const user = userEvent.setup();
+    const { onToggleBranchFocus } = renderChatNode({ isBranchFocusActive: false });
+
+    fireEvent.contextMenu(screen.getByText("You"));
+    const item = screen.getByRole("menuitem", { name: "Hide Other Branches" });
+    expect(item).not.toBeDisabled();
+
+    await user.click(item);
+    expect(onToggleBranchFocus).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("labels the item 'Show All Branches' and still calls the same onToggleBranchFocus when isBranchFocusActive is true", async () => {
+    const user = userEvent.setup();
+    const { onToggleBranchFocus } = renderChatNode({ isBranchFocusActive: true });
+
+    fireEvent.contextMenu(screen.getByText("You"));
+    expect(screen.queryByRole("menuitem", { name: "Hide Other Branches" })).toBeNull();
+    const item = screen.getByRole("menuitem", { name: "Show All Branches" });
+    expect(item).not.toBeDisabled();
+
+    await user.click(item);
+    expect(onToggleBranchFocus).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("menu")).toBeNull();
   });
 });
 

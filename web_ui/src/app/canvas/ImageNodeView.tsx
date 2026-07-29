@@ -35,9 +35,12 @@ import { NodeMenu } from "./NodeMenu";
  * deferred as of R4.4a: it now calls the real regenerateImage intent -
  * unlike CodeNodeView's own onRegenerate, no client-side parent-lookup/
  * null-guard is needed here, since the backend resolves the ImageNode's
- * parent chat node internally (see sceneStore.ts's regenerateImage). Still
- * deferred, with an honest disabled+title label: Hide Other Branches (branch
- * visibility isn't built yet - unscoped, not owned by any R-phase).
+ * parent chat node internally (see sceneStore.ts's regenerateImage). Hide
+ * Other Branches is likewise no longer deferred as of R8a: it now calls the
+ * real onToggleBranchFocus intent, closed over this node's own id by
+ * SceneCanvas, and its label flips to "Show All Branches" once
+ * isBranchFocusActive is true - both fields (and the dimming itself) are
+ * SceneCanvas's concern, this file just renders whatever it's handed.
  */
 
 export interface ImageNodeData extends Record<string, unknown> {
@@ -45,6 +48,8 @@ export interface ImageNodeData extends Record<string, unknown> {
   prompt: string;
   onDelete: () => void;
   onRegenerate: () => void;
+  isBranchFocusActive: boolean;
+  onToggleBranchFocus: () => void;
 }
 
 export type ImageFlowNode = Node<ImageNodeData, "image">;
@@ -119,6 +124,8 @@ function ImageNodeMenu({
   prompt,
   onDelete,
   onRegenerate,
+  isBranchFocusActive,
+  onToggleBranchFocus,
   onClose,
 }: {
   position: MenuPosition;
@@ -127,6 +134,8 @@ function ImageNodeMenu({
   prompt: string;
   onDelete: () => void;
   onRegenerate: () => void;
+  isBranchFocusActive: boolean;
+  onToggleBranchFocus: () => void;
   onClose: () => void;
 }) {
 
@@ -156,8 +165,15 @@ function ImageNodeMenu({
         Export Image
       </button>
       <div className="chat-node-menu-separator" role="separator" />
-      <button type="button" role="menuitem" disabled title="Branch visibility isn't built yet">
-        Hide Other Branches
+      <button
+        type="button"
+        role="menuitem"
+        onClick={() => {
+          onToggleBranchFocus();
+          onClose();
+        }}
+      >
+        {isBranchFocusActive ? "Show All Branches" : "Hide Other Branches"}
       </button>
       {prompt.trim() && (
         <button
@@ -229,6 +245,8 @@ export function ImageNodeView({ id, data, selected }: NodeProps<ImageFlowNode>) 
           prompt={data.prompt}
           onDelete={data.onDelete}
           onRegenerate={data.onRegenerate}
+          isBranchFocusActive={data.isBranchFocusActive}
+          onToggleBranchFocus={data.onToggleBranchFocus}
           onClose={() => setMenuPosition(null)}
         />
       )}
