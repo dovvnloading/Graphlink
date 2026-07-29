@@ -349,7 +349,6 @@ def _llama_cpp_scan_summary(manager: SettingsManager) -> str:
 
 def settings_payload(manager: SettingsManager) -> dict[str, Any]:
     return {
-        "theme": manager.get_theme(),
         "showTokenCounter": manager.get_show_token_counter(),
         "enableSystemPrompt": manager.get_enable_system_prompt(),
         "notificationPreferences": manager.get_notification_preferences(),
@@ -481,10 +480,6 @@ def register_settings(
     # The topic builder (read path) stays on the loop, unlocked: field reads
     # are GIL-atomic, and every mutation republishes on completion, so a
     # snapshot that races a write is immediately superseded by a settled one.
-
-    async def set_theme(theme: str):
-        await asyncio.to_thread(_apply, manager.set_theme, str(theme))
-        await bus.publish("app-settings")
 
     async def set_show_token_counter(enabled: bool):
         await asyncio.to_thread(_apply, manager.set_show_token_counter, bool(enabled))
@@ -1236,7 +1231,6 @@ def register_settings(
         await bus.publish("app-settings")
 
     bus.register_intent("app-settings", "setActiveSection", set_active_section)
-    bus.register_intent("app-settings", "setTheme", set_theme)
     bus.register_intent("app-settings", "setShowTokenCounter", set_show_token_counter)
     bus.register_intent("app-settings", "setEnableSystemPrompt", set_enable_system_prompt)
     bus.register_intent("app-settings", "setNotificationPreference", set_notification_preference)

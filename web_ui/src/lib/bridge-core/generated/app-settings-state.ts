@@ -14,7 +14,6 @@ export interface AppSettingsState {
   schemaVersion: number;
   revision: number;
   activeSection: string;
-  theme: string;
   showTokenCounter: boolean;
   enableSystemPrompt: boolean;
   notificationPreferences: Record<string, boolean>;
@@ -112,11 +111,6 @@ function checkAppSettingsState(value: unknown, path: string, errors: string[]): 
     const fieldValue = value["activeSection"];
     if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.activeSection: missing required field`);
     else { if (typeof fieldValue !== "string") errors.push(`${path}.activeSection` + ": expected string"); }
-  }
-  {
-    const fieldValue = value["theme"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.theme: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.theme` + ": expected string"); }
   }
   {
     const fieldValue = value["showTokenCounter"];

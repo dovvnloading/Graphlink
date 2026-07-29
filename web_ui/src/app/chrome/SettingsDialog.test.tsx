@@ -17,7 +17,6 @@ const snapshot = {
   minCompatibleSchemaVersion: 1,
   revision: 1,
   activeSection: "general",
-  theme: "dark",
   showTokenCounter: true,
   enableSystemPrompt: true,
   notificationPreferences: { info: true, success: true, warning: true, error: true },
