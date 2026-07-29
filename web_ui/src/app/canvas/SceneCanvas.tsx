@@ -1189,6 +1189,28 @@ function CanvasInner({ store }: { store: SceneStore }) {
   const [smartGuideLines, setSmartGuideLines] = useState<GuideLine[]>([]);
   const visibleGuideLines = scene.smartGuides ? smartGuideLines : [];
 
+  // R8a (UI/UX issue list finding #11): the View popover's FONT section
+  // (family/size/color) already round-trips real intents into scene state -
+  // nothing ever consumed them. Written as CSS custom properties on the
+  // canvas wrapper (not per-node inline styles) so every current AND future
+  // node inherits them for free through .scene-node's own rules in
+  // styles.css, the same way .scene-canvas already carries grid state down
+  // via React Flow's own Background props.
+  const canvasWrapperRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = canvasWrapperRef.current;
+    if (!el) return;
+    el.style.setProperty("--gl-node-font-family", scene.fontFamily);
+    // fontSizePt is POINTS (backend field: font_size_pt, default 9 -> the
+    // FONT_SIZE_MIN/MAX range of 8-16 only makes sense as points, not
+    // pixels: 16px node text would be barely a size change from the 12px/
+    // 11px base, while 16pt is a real, visible jump). `pt` is a real CSS
+    // unit (1pt = 1/72in = 4/3px), not print-only, so this needs no
+    // conversion - just the right unit suffix.
+    el.style.setProperty("--gl-node-font-size", `${scene.fontSizePt}pt`);
+    el.style.setProperty("--gl-node-font-color", scene.fontColor);
+  }, [scene.fontFamily, scene.fontSizePt, scene.fontColor]);
+
   // R8a: Open Document View - the read-only markdown modal a chat/
   // conversation node's card menu opens (see toFlowNodes' own
   // onOpenDocumentView field on each of those two branches). The displayed
@@ -1465,7 +1487,7 @@ function CanvasInner({ store }: { store: SceneStore }) {
 
   return (
     <>
-      <div className="scene-canvas" onDoubleClick={onDoubleClick}>
+      <div className="scene-canvas" ref={canvasWrapperRef} onDoubleClick={onDoubleClick}>
       <ReactFlow
         nodes={nodes}
         edges={edges}
