@@ -187,6 +187,15 @@ const EDGE_TYPES = {
   orthogonal: OrthogonalEdge,
 };
 
+// R8a follow-up: legacy's graphlink_window.py show_document_view() showed
+// this exact message (via notification_banner.show_message(..., "info"))
+// when a node had nothing to show, rather than silently doing nothing - the
+// SPA's first cut of "don't open on nothing" (both onOpenDocumentView guards
+// below) dropped that half of the behavior. Restored via SceneStore's
+// showInfoNotification, the one frontend-triggerable entry point into the
+// shared notification banner.
+const NO_DOCUMENT_VIEW_CONTENT_MESSAGE = "No document view content is available for this node yet.";
+
 // R8a: ports the deleted Qt app's own `_history_to_markdown` +
 // `_build_document_section("Conversation Transcript", ...)`
 // (graphlink_window.py) byte-for-byte - the exact markdown a conversation
@@ -401,12 +410,14 @@ export function toFlowNodes(
           onGenerateKeyTakeaway: () => store.generateKeyTakeaway(n.id),
           onGenerateExplainerNote: () => store.generateExplainerNote(n.id),
           // R8a: Open Document View - shows this node's own message text
-          // verbatim in the read-only document modal. Guards on non-blank
-          // content the same way legacy's own document-view action silently
-          // no-op'd on nothing (see conversationHistoryToDocumentMarkdown's
-          // own doc above for the sibling conversation-node guard).
+          // verbatim in the read-only document panel. Guards on non-blank
+          // content, matching legacy's own document-view action exactly:
+          // a notification on nothing, not a silent no-op (see
+          // conversationHistoryToDocumentMarkdown's own doc above for the
+          // sibling conversation-node guard).
           onOpenDocumentView: () => {
             if (n.content.trim()) onOpenDocumentView(n.content);
+            else store.showInfoNotification(NO_DOCUMENT_VIEW_CONTENT_MESSAGE);
           },
           // R8a: "Hide Other Branches" - isBranchFocusActive is scene-wide
           // (not per-node), purely so the menu button can flip its own label
@@ -610,6 +621,7 @@ export function toFlowNodes(
           onOpenDocumentView: () => {
             const markdown = conversationHistoryToDocumentMarkdown(n.history);
             if (markdown) onOpenDocumentView(markdown);
+            else store.showInfoNotification(NO_DOCUMENT_VIEW_CONTENT_MESSAGE);
           },
         },
       });

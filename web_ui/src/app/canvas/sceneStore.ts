@@ -758,6 +758,18 @@ export class SceneStore {
   setFontColor(hex: string): void {
     this.transport.intent("scene", "setFontColor", [hex]);
   }
+
+  // Rides the notification topic, not scene - same "this store already
+  // spans more than one topic" precedent as the grid-control intents above.
+  // Document View's empty-content guard (SceneCanvas.tsx's toFlowNodes) is
+  // the first caller: a genuinely frontend-only condition (the node's own
+  // already-synced content is blank) that still needs the app's one shared
+  // notification banner, which is server-authoritative state - see
+  // backend/notifications.py's showInfo intent for why this exists instead
+  // of a second, parallel client-local notification UI.
+  showInfoNotification(message: string): void {
+    this.transport.intent("notification", "showInfo", [message]);
+  }
 }
 
 /** start + (proposed - start) * factor: the drag-speed contract carried over

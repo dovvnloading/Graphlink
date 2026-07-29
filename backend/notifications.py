@@ -57,5 +57,18 @@ def register_notifications(bus: SessionBus, settings_manager: "SettingsManager |
         state.dismiss()
         await bus.publish("notification")
 
+    async def show_info(message: str):
+        # The one frontend-triggerable "show" entry point, deliberately fixed
+        # to "info" rather than accepting an arbitrary msg_type over the wire
+        # (Literal["info", "success", "warning", "error"] isn't enforced at
+        # runtime - a caller-supplied type could otherwise land in the
+        # payload's msgType and mismatch the CSS class the frontend switches
+        # on). Exists for genuinely frontend-only conditions - a Document
+        # View request for a node with no content to show, say - that have no
+        # other reason to round-trip through a backend intent handler.
+        state.show(str(message), "info")
+        await bus.publish("notification")
+
     bus.register_intent("notification", "dismiss", dismiss)
+    bus.register_intent("notification", "showInfo", show_info)
     return state
