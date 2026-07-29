@@ -563,6 +563,37 @@ def test_bootstrap_api_endpoint_mode_calls_initialize_api_with_provider_key_and_
     assert settings_manager.get_current_mode() == config.MODE_API_ENDPOINT
 
 
+def test_bootstrap_ollama_local_mode_seeds_initialize_local_provider_with_persisted_reasoning_level(
+    tmp_path, monkeypatch, caplog
+):
+    # Regression test: _apply_mode's Ollama-local branch used to call the
+    # removed get_ollama_reasoning_mode() under the wrong dict key
+    # ("reasoning_mode" instead of "reasoning_level", the key
+    # initialize_local_provider actually reads) - bootstrap_provider_state's
+    # own broad except Exception silently swallowed the resulting
+    # AttributeError every time, so the persisted reasoning level was never
+    # actually applied on startup. Asserting BOTH the real call args AND that
+    # no warning was logged catches a regression that "must not raise" alone
+    # (see the fixture above) cannot.
+    settings_manager = SettingsManager(tmp_path / "session.dat")
+    settings_manager.set_current_mode(config.MODE_OLLAMA_LOCAL)
+    settings_manager.set_ollama_reasoning_level("low")
+
+    calls = []
+
+    def fake_initialize_local_provider(provider, settings=None, *, preload_model=False):
+        calls.append((provider, settings))
+
+    monkeypatch.setattr(api_provider, "initialize_local_provider", fake_initialize_local_provider)
+
+    with caplog.at_level("WARNING"):
+        agents_module.bootstrap_provider_state(settings_manager)
+
+    assert calls == [(config.LOCAL_PROVIDER_OLLAMA, {"reasoning_level": "low"})]
+    assert settings_manager.get_current_mode() == config.MODE_OLLAMA_LOCAL
+    assert not any(record.levelname == "WARNING" for record in caplog.records)
+
+
 def test_bootstrap_falls_back_to_ollama_when_apply_mode_raises(tmp_path, monkeypatch, caplog):
     settings_manager = SettingsManager(tmp_path / "session.dat")
     settings_manager.set_current_mode(config.MODE_API_ENDPOINT)
