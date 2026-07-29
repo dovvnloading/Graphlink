@@ -3,12 +3,14 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type ReactNode,
   type RefObject,
 } from "react";
+import { createPortal } from "react-dom";
 
 /**
  * The SPA overlay system (Qt-removal plan R2) - the OverlayManager contract
@@ -151,22 +153,97 @@ export function OverlayProvider({ children }: { children: ReactNode }) {
   return <OverlayContext.Provider value={value}>{children}</OverlayContext.Provider>;
 }
 
+const ANCHOR_MARGIN = 8;
+const ANCHOR_GAP = 6;
+
+/**
+ * R8a (UI/UX issue list finding #27): the anchored variant's placement
+ * logic. View/Plugins/Pins used to render inside a wrapper div hard-
+ * positioned at a fixed corner of the canvas (independent of which button
+ * was actually clicked) - View and Plugins sat at byte-identical
+ * coordinates despite being two different, adjacent toolbar buttons.
+ *
+ * Portaled to document.body (so `position: fixed` resolves against the
+ * real viewport, the same reason NodeMenu.tsx does it) and positioned from
+ * the trigger's own getBoundingClientRect(), the same anchoring contract
+ * the Qt OverlayManager had. Opens below-left of the trigger by default,
+ * flips above it if there isn't room below, and clamps horizontally so it
+ * never runs off either edge - mirroring NodeMenu's own flip-and-clamp
+ * effect (same problem, a click point there vs. a trigger rect here).
+ *
+ * Reasoning/Model (Composer.tsx) deliberately do NOT use this - they
+ * already render next to their own trigger via ordinary CSS (anchored to
+ * the composer dock, not a shared top-right/top-left corner div), so
+ * anchoring them here would be solving a problem they don't have.
+ */
+function useAnchoredPlacement(
+  panelRef: RefObject<HTMLElement | null>,
+  triggerName: string,
+  isOpen: boolean,
+) {
+  const [placement, setPlacement] = useState<{ top: number; left: number } | null>(null);
+
+  // One pass, not a render-then-correct two-step: .overlay-popover's width/
+  // height come from its CSS (padding, min/max-width, content) and don't
+  // depend on `position` being fixed vs. the browser's static default, so
+  // the panel's OWN rect is already meaningful on the very first layout
+  // pass after it mounts - there is nothing to flip/clamp against on a
+  // later pass that isn't already available on this one.
+  //
+  // No explicit "reset to null while closed" branch: Popover's own
+  // `if (!isOpen) return null` already unmounts the panel entirely, so a
+  // stale placement value sitting in state while closed is never rendered
+  // - the next open recomputes it before anything reads it again.
+  useLayoutEffect(() => {
+    if (!isOpen) return;
+    const trigger = document.querySelector<HTMLElement>(`[data-overlay-trigger="${triggerName}"]`);
+    const panel = panelRef.current;
+    if (!trigger || !panel) return;
+    const triggerRect = trigger.getBoundingClientRect();
+    const panelRect = panel.getBoundingClientRect();
+
+    const top =
+      triggerRect.bottom + panelRect.height + ANCHOR_GAP > window.innerHeight
+        ? Math.max(ANCHOR_MARGIN, triggerRect.top - panelRect.height - ANCHOR_GAP)
+        : triggerRect.bottom + ANCHOR_GAP;
+    const left = Math.min(
+      Math.max(ANCHOR_MARGIN, triggerRect.left),
+      window.innerWidth - panelRect.width - ANCHOR_MARGIN,
+    );
+
+    if (!placement || placement.top !== top || placement.left !== left) {
+      setPlacement({ top, left });
+    }
+    // Deliberately excludes `placement` - it is read only to bail out once
+    // the computed value stops changing, so depending on it would loop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, triggerName, panelRef]);
+
+  return placement;
+}
+
 /** Anchored light surface. Render it where it should appear (CSS positions
- * it); it mounts only while open. The opener button stays outside. */
+ * it, unless `anchored` is set - see useAnchoredPlacement above); it mounts
+ * only while open. The opener button stays outside. */
 export function Popover({
   name,
   label,
   className,
+  anchored,
   children,
 }: {
   name: string;
   label: string;
   className?: string;
+  /** Portal to document.body and position from the trigger's own rect
+   * rather than relying on CSS to place a wrapper div at a fixed corner. */
+  anchored?: boolean;
   children: ReactNode;
 }) {
   const overlays = useOverlays();
   const ref = useRef<HTMLDivElement | null>(null);
   const isOpen = overlays.isOpen(name);
+  const anchorPlacement = useAnchoredPlacement(ref, name, isOpen && !!anchored);
 
   useEffect(() => {
     overlays.registerSurfaceElement(name, ref.current);
@@ -190,18 +267,20 @@ export function Popover({
   }, [isOpen]);
 
   if (!isOpen) return null;
-  return (
+  const panel = (
     <div
       ref={ref}
       role="dialog"
       aria-modal="false"
       aria-label={label}
       tabIndex={-1}
-      className={`overlay-popover ${className ?? ""}`}
+      className={`overlay-popover ${anchored ? "overlay-popover-anchored" : ""} ${className ?? ""}`}
+      style={anchored && anchorPlacement ? { top: anchorPlacement.top, left: anchorPlacement.left } : undefined}
     >
       {children}
     </div>
   );
+  return anchored ? createPortal(panel, document.body) : panel;
 }
 
 // R8a (UI/UX issue list finding #17): the original selector didn't exclude

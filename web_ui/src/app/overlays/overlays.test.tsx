@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { Dialog, OverlayProvider, Popover, useOverlays } from "./overlays";
 
 function Chrome() {
@@ -242,5 +242,120 @@ describe("overlay system (the OverlayManager contract)", () => {
     await user.click(opener);
     await user.keyboard("{Escape}");
     expect(document.activeElement).toBe(opener);
+  });
+});
+
+describe("anchored popover placement (R8a finding #27)", () => {
+  function AnchoredChrome() {
+    const overlays = useOverlays();
+    return (
+      <div>
+        <button
+          type="button"
+          data-overlay-trigger="anchored-demo"
+          onClick={() => overlays.toggle("anchored-demo", "popover")}
+        >
+          trigger
+        </button>
+        <Popover name="anchored-demo" label="Anchored demo" anchored>
+          <p>anchored body</p>
+        </Popover>
+      </div>
+    );
+  }
+
+  function setupAnchored() {
+    const user = userEvent.setup();
+    render(
+      <OverlayProvider>
+        <AnchoredChrome />
+      </OverlayProvider>,
+    );
+    return user;
+  }
+
+  // jsdom returns an all-zero rect for anything not explicitly mocked (no
+  // real layout engine) - only the TRIGGER needs mocking for these cases;
+  // the panel's own (real, zero) height/width don't change which branch
+  // the placement math takes for the specific numbers chosen below, so
+  // there's no need for the more elaborate dual-mock this would otherwise
+  // require (NodeMenu.tsx's own identical flip/clamp logic has no
+  // dedicated unit test at all for the same reason - this is deliberately
+  // lighter than a full pixel-accuracy suite, backed by live-browser
+  // verification for the real thing). Call AFTER render - the trigger
+  // must already exist in the DOM to spy on its own instance method.
+  function mockTriggerRect(trigger: HTMLElement, rect: Partial<DOMRect>) {
+    vi.spyOn(trigger, "getBoundingClientRect").mockReturnValue({
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      width: 0,
+      height: 0,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+      ...rect,
+    } as DOMRect);
+    return trigger;
+  }
+
+  function setViewport(width: number, height: number) {
+    Object.defineProperty(window, "innerWidth", { value: width, configurable: true });
+    Object.defineProperty(window, "innerHeight", { value: height, configurable: true });
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("portals to document.body rather than rendering in place", async () => {
+    const user = setupAnchored();
+    await user.click(screen.getByRole("button", { name: "trigger" }));
+    const popover = screen.getByRole("dialog", { name: "Anchored demo" });
+    expect(popover.parentElement).toBe(document.body);
+  });
+
+  it("opens directly below the trigger when there is room", async () => {
+    setViewport(1024, 768);
+    const user = setupAnchored();
+    const trigger = mockTriggerRect(screen.getByRole("button", { name: "trigger" }), {
+      top: 100,
+      bottom: 130,
+      left: 200,
+      right: 260,
+    });
+    await user.click(trigger);
+    const popover = screen.getByRole("dialog", { name: "Anchored demo" });
+    expect(popover.style.top).toBe("136px"); // trigger.bottom (130) + ANCHOR_GAP (6)
+    expect(popover.style.left).toBe("200px"); // trigger.left, unclamped
+  });
+
+  it("flips above the trigger when there is no room below", async () => {
+    setViewport(1024, 768);
+    const user = setupAnchored();
+    const trigger = mockTriggerRect(screen.getByRole("button", { name: "trigger" }), {
+      top: 750,
+      bottom: 780,
+      left: 100,
+      right: 160,
+    });
+    await user.click(trigger);
+    const popover = screen.getByRole("dialog", { name: "Anchored demo" });
+    expect(popover.style.top).toBe("744px"); // trigger.top (750) - panel height (0) - ANCHOR_GAP (6)
+  });
+
+  it("clamps horizontally so it cannot run off the right edge", async () => {
+    setViewport(1024, 768);
+    const user = setupAnchored();
+    const trigger = mockTriggerRect(screen.getByRole("button", { name: "trigger" }), {
+      top: 100,
+      bottom: 130,
+      left: 1020,
+      right: 1024,
+    });
+    await user.click(trigger);
+    const popover = screen.getByRole("dialog", { name: "Anchored demo" });
+    expect(popover.style.left).toBe("1016px"); // innerWidth (1024) - panel width (0) - ANCHOR_MARGIN (8)
   });
 });

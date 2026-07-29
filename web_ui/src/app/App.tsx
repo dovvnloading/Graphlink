@@ -215,15 +215,9 @@ function App() {
             <div className="app-search-layer">
               <SearchOverlay store={sceneStore} />
             </div>
-            <div className="app-pins-layer">
-              <PinOverlay store={sceneStore} />
-            </div>
-            <div className="app-popover-layer">
-              <ViewPopover store={sceneStore} />
-            </div>
-            <div className="app-plugins-layer">
-              <PluginPicker transport={transport} store={sceneStore} />
-            </div>
+            <PinOverlay store={sceneStore} />
+            <ViewPopover store={sceneStore} />
+            <PluginPicker transport={transport} store={sceneStore} />
             {settingsVisibility.showTokenCounter !== false && (
               <div className="app-token-counter-layer">
                 <TokenCounter store={composerStore} />
