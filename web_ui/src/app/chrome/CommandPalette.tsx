@@ -16,6 +16,7 @@ export function CommandPalette({ store }: { store: SceneStore }) {
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const resultsRef = useRef<HTMLUListElement>(null);
   const isOpen = overlays.isOpen("palette");
 
   // Reset local state during render on the false->true transition (not in
@@ -47,6 +48,15 @@ export function CommandPalette({ store }: { store: SceneStore }) {
   }, [commands, query]);
 
   const clampedIndex = Math.min(selectedIndex, Math.max(filtered.length - 1, 0));
+
+  // Arrow-key selection only moved a data index - past roughly a dozen
+  // results the highlighted row scrolled out of the visible list with
+  // nothing to bring it back, so Enter could run a command the user could
+  // no longer see. "nearest" scrolls only when the row is actually outside
+  // the viewport, so real reordering doesn't also cause a viewport jump.
+  useEffect(() => {
+    resultsRef.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest" });
+  }, [clampedIndex]);
 
   if (!isOpen) return null;
 
@@ -95,7 +105,7 @@ export function CommandPalette({ store }: { store: SceneStore }) {
           autoComplete="off"
           spellCheck={false}
         />
-        <ul className="palette-results" role="listbox" aria-label="Commands">
+        <ul className="palette-results" role="listbox" aria-label="Commands" ref={resultsRef}>
           {filtered.length === 0 && <li className="palette-empty">No matching commands</li>}
           {filtered.map((command, index) => (
             <li

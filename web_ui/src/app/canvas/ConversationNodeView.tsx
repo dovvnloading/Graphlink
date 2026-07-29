@@ -276,7 +276,11 @@ export function ConversationNodeView({ data, selected }: NodeProps<ConversationF
               onKeyDown={(event) => {
                 // Enter-to-send / Shift+Enter-for-newline - same convention
                 // the existing Composer already uses (Composer.tsx's own
-                // onKeyDown handler).
+                // onKeyDown handler), including the IME-composing guard: an
+                // IME's Enter-to-commit keystroke also reports
+                // key==="Enter", so without it, confirming a composed
+                // character sent the half-typed buffer.
+                if (event.nativeEvent.isComposing) return;
                 if (event.key === "Enter" && !event.shiftKey) {
                   event.preventDefault();
                   send();

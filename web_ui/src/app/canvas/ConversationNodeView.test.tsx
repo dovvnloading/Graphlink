@@ -262,6 +262,17 @@ describe("ConversationNodeView", () => {
     expect(input).toHaveValue("line one\nline two");
   });
 
+  it("Enter fired while an IME is still composing does not send", async () => {
+    const { onSend } = renderConversationNode();
+    const input = screen.getByRole("textbox", { name: "Message" });
+
+    fireEvent.change(input, { target: { value: "半角" } });
+    fireEvent.keyDown(input, { key: "Enter", isComposing: true });
+
+    expect(onSend).not.toHaveBeenCalled();
+    expect(input).toHaveValue("半角");
+  });
+
   it("the Send button is disabled when the input is empty or whitespace-only", async () => {
     const user = userEvent.setup();
     renderConversationNode();

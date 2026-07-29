@@ -10,9 +10,17 @@ function makeStore() {
   const scene = {
     ...initialSceneState,
     nodes: [
-      { id: "n0", x: 0, y: 0, title: "Alpha node", kind: "placeholder" },
-      { id: "n1", x: 100, y: 100, title: "Beta node", kind: "placeholder" },
-      { id: "n2", x: 200, y: 200, title: "Another alpha", kind: "placeholder" },
+      { id: "n0", x: 0, y: 0, title: "Alpha node", content: "", kind: "placeholder" },
+      { id: "n1", x: 100, y: 100, title: "Beta node", content: "", kind: "placeholder" },
+      { id: "n2", x: 200, y: 200, title: "Another alpha", content: "", kind: "placeholder" },
+      {
+        id: "n3",
+        x: 300,
+        y: 300,
+        title: "Gamma node",
+        content: "the quick brown zebra jumps",
+        kind: "placeholder",
+      },
     ],
   };
   return { subscribe: () => () => {}, getScene: () => scene };
@@ -60,6 +68,13 @@ describe("SearchOverlay", () => {
     expect(screen.getByText("2 / 2")).toBeInTheDocument();
     await user.keyboard("{Shift>}{Enter}{/Shift}");
     expect(screen.getByText("1 / 2")).toBeInTheDocument();
+  });
+
+  it("matches against a node's full content, not just its title", async () => {
+    const user = setup();
+    await user.click(screen.getByText("open search"));
+    await user.type(screen.getByLabelText("Search the canvas"), "zebra");
+    expect(screen.getByText("0 / 1")).toBeInTheDocument();
   });
 
   it("shows 0/0 for a query with no matches", async () => {

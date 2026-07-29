@@ -20,3 +20,12 @@ class ResizeObserverStub {
   disconnect() {}
 }
 (globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = ResizeObserverStub;
+
+// jsdom implements no scrollIntoView at all (not even a no-op stub) - calling
+// it throws "is not a function" in any component that does. A no-op default
+// is enough for tests that don't care about scrolling; a test that DOES care
+// (CommandPalette.test.tsx's scroll-into-view case) overrides it locally
+// with its own vi.fn() to make assertions.
+if (!Element.prototype.scrollIntoView) {
+  Element.prototype.scrollIntoView = () => {};
+}

@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { Composer } from "./Composer";
@@ -164,6 +164,27 @@ describe("Composer", () => {
     await user.type(input, "{Enter}");
     expect(sendMessage).toHaveBeenCalledWith("hi");
     expect(updateDraft).toHaveBeenCalledWith("");
+  });
+
+  it("Enter fired while an IME is still composing does not send", () => {
+    const { store } = makeStore({
+      composer: {
+        draft: { ...initialComposerState.draft, text: "半角" },
+        request: { ...initialComposerState.request, canSend: true },
+      },
+    });
+    const { sceneStore, sendMessage } = makeSceneStore();
+    render(
+      <OverlayProvider>
+        {/* @ts-expect-error - test double */}
+        <Composer store={store} sceneStore={sceneStore} />
+      </OverlayProvider>,
+    );
+    const input = screen.getByLabelText("Message composer");
+
+    fireEvent.keyDown(input, { key: "Enter", isComposing: true });
+
+    expect(sendMessage).not.toHaveBeenCalled();
   });
 
   it("whitespace-only text does not enable Send", () => {

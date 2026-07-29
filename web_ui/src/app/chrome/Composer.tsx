@@ -103,6 +103,10 @@ export function Composer({ store, sceneStore }: { store: ComposerStore; sceneSto
           value={composer.draft.text}
           onChange={(e) => store.updateDraft(e.target.value)}
           onKeyDown={(e) => {
+            // An IME's Enter-to-commit keystroke also reports key==="Enter",
+            // so without this guard, confirming a composed character (e.g.
+            // Japanese/Chinese/Korean input) sent the half-typed buffer.
+            if (e.nativeEvent.isComposing) return;
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
               send();
