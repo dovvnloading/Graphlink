@@ -16,6 +16,7 @@ function renderDocumentNode(overrides: Partial<DocumentFlowNode["data"]> = {}) {
   const onToggleCollapse = vi.fn();
   const onDock = vi.fn();
   const onDelete = vi.fn();
+  const onToggleBranchFocus = vi.fn();
   const props = {
     id: "n0",
     selected: false,
@@ -32,6 +33,8 @@ function renderDocumentNode(overrides: Partial<DocumentFlowNode["data"]> = {}) {
       onToggleCollapse,
       onDock,
       onDelete,
+      isBranchFocusActive: false,
+      onToggleBranchFocus,
       ...overrides,
     },
   } as unknown as NodeProps<DocumentFlowNode>;
@@ -41,7 +44,7 @@ function renderDocumentNode(overrides: Partial<DocumentFlowNode["data"]> = {}) {
       <DocumentNodeView {...props} />
     </ReactFlowProvider>,
   );
-  return { onToggleCollapse, onDock, onDelete };
+  return { onToggleCollapse, onDock, onDelete, onToggleBranchFocus };
 }
 
 describe("formatByteSize (ported DocumentNode._format_byte_size)", () => {
@@ -190,8 +193,7 @@ describe("DocumentNodeView", () => {
 
     fireEvent.contextMenu(title);
     const hideBranches = screen.getByRole("menuitem", { name: "Hide Other Branches" });
-    expect(hideBranches).toBeDisabled();
-    expect(hideBranches).toHaveAttribute("title", "Branch visibility isn't built yet");
+    expect(hideBranches).toBeEnabled();
 
     const exportItem = screen.getByRole("menuitem", { name: "Export" });
     expect(exportItem).toBeDisabled();
@@ -245,6 +247,29 @@ describe("DocumentNodeView", () => {
     const title = screen.getByText("notes.pdf");
     fireEvent.contextMenu(title);
     expect(screen.queryByRole("menuitem", { name: "Export" })).toBeNull();
+  });
+
+  it("Hide Other Branches calls onToggleBranchFocus and closes the menu when branch focus is inactive", async () => {
+    const user = userEvent.setup();
+    const { onToggleBranchFocus } = renderDocumentNode({ isBranchFocusActive: false });
+    const title = screen.getByText("notes.pdf");
+
+    fireEvent.contextMenu(title);
+    await user.click(screen.getByRole("menuitem", { name: "Hide Other Branches" }));
+    expect(onToggleBranchFocus).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("reads 'Show All Branches' when branch focus is active, and still calls the same onToggleBranchFocus", async () => {
+    const user = userEvent.setup();
+    const { onToggleBranchFocus } = renderDocumentNode({ isBranchFocusActive: true });
+    const title = screen.getByText("notes.pdf");
+
+    fireEvent.contextMenu(title);
+    expect(screen.queryByRole("menuitem", { name: "Hide Other Branches" })).toBeNull();
+    await user.click(screen.getByRole("menuitem", { name: "Show All Branches" }));
+    expect(onToggleBranchFocus).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("menu")).toBeNull();
   });
 
   it("Escape and outside-click both close the menu", async () => {

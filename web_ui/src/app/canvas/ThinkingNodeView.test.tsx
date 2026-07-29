@@ -9,6 +9,7 @@ import { ThinkingNodeView, type ThinkingFlowNode } from "./ThinkingNodeView";
 function renderThinkingNode(overrides: Partial<ThinkingFlowNode["data"]> = {}) {
   const onDock = vi.fn();
   const onDelete = vi.fn();
+  const onToggleBranchFocus = vi.fn();
   const props = {
     id: "n0",
     selected: false,
@@ -16,6 +17,8 @@ function renderThinkingNode(overrides: Partial<ThinkingFlowNode["data"]> = {}) {
       thinkingText: "Considering **several** approaches before answering.",
       onDock,
       onDelete,
+      isBranchFocusActive: false,
+      onToggleBranchFocus,
       ...overrides,
     },
   } as unknown as NodeProps<ThinkingFlowNode>;
@@ -25,7 +28,7 @@ function renderThinkingNode(overrides: Partial<ThinkingFlowNode["data"]> = {}) {
       <ThinkingNodeView {...props} />
     </ReactFlowProvider>,
   );
-  return { onDock, onDelete };
+  return { onDock, onDelete, onToggleBranchFocus };
 }
 
 describe("ThinkingNodeView", () => {
@@ -34,7 +37,7 @@ describe("ThinkingNodeView", () => {
     expect(screen.getByText("several")).toBeInTheDocument(); // bold text still renders as text
   });
 
-  it("right-click opens a menu with real Copy Content/Dock to Parent Node/Delete Node and honest disabled Hide Other Branches", async () => {
+  it("right-click opens a menu with real Copy Content/Dock to Parent Node/Hide Other Branches/Delete Node", async () => {
     const user = userEvent.setup();
     const { onDock, onDelete } = renderThinkingNode();
 
@@ -52,8 +55,7 @@ describe("ThinkingNodeView", () => {
     expect(copyItem).toBeEnabled();
     expect(dockItem).toBeEnabled();
     expect(deleteItem).toBeEnabled();
-    expect(hideBranches).toBeDisabled();
-    expect(hideBranches).toHaveAttribute("title", "Branch visibility isn't built yet");
+    expect(hideBranches).toBeEnabled();
 
     await user.click(copyItem);
     expect(writeText).toHaveBeenCalledWith("Considering **several** approaches before answering.");
@@ -65,6 +67,33 @@ describe("ThinkingNodeView", () => {
     fireEvent.contextMenu(label);
     await user.click(screen.getByRole("menuitem", { name: "Delete Node" }));
     expect(onDelete).toHaveBeenCalledOnce();
+  });
+
+  it("Hide Other Branches calls onToggleBranchFocus and closes the menu when branch focus is inactive", async () => {
+    const user = userEvent.setup();
+    const { onToggleBranchFocus } = renderThinkingNode({ isBranchFocusActive: false });
+    const label = screen.getByText("Thinking");
+
+    fireEvent.contextMenu(label);
+    const hideBranches = screen.getByRole("menuitem", { name: "Hide Other Branches" });
+    await user.click(hideBranches);
+
+    expect(onToggleBranchFocus).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("labels the item Show All Branches and still calls onToggleBranchFocus when branch focus is active", async () => {
+    const user = userEvent.setup();
+    const { onToggleBranchFocus } = renderThinkingNode({ isBranchFocusActive: true });
+    const label = screen.getByText("Thinking");
+
+    fireEvent.contextMenu(label);
+    expect(screen.queryByRole("menuitem", { name: "Hide Other Branches" })).toBeNull();
+    const showBranches = screen.getByRole("menuitem", { name: "Show All Branches" });
+    await user.click(showBranches);
+
+    expect(onToggleBranchFocus).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("menu")).toBeNull();
   });
 
   it("Escape and outside-click both close the menu", async () => {

@@ -28,17 +28,18 @@ import { NodeMenu } from "./NodeMenu";
  * Real: render (markdown thinking text, same react-markdown + rehype-
  * highlight pipeline every other node kind pulls in), delete (generic
  * cascade-delete - a thinking node is never a branch point/reparented, same
- * as CodeNode), copy, dock. Deferred, with an honest disabled+title label
- * rather than a silent drop (same audit convention every prior node kind in
- * this plan has followed): Hide Other Branches (the legacy scene's branch-
- * visibility toggle has no backend/frontend equivalent at all yet - unscoped,
- * not owned by any R-phase).
+ * as CodeNode), copy, dock, and now Hide Other Branches / Show All Branches -
+ * a scene-wide toggle (SceneCanvas.tsx owns the graph walk and the dimming
+ * style; this view just calls the closed-over onToggleBranchFocus() and
+ * mirrors isBranchFocusActive back into the menu item's own label).
  */
 
 export interface ThinkingNodeData extends Record<string, unknown> {
   thinkingText: string;
   onDock: () => void;
   onDelete: () => void;
+  isBranchFocusActive: boolean;
+  onToggleBranchFocus: () => void;
 }
 
 export type ThinkingFlowNode = Node<ThinkingNodeData, "thinking">;
@@ -53,12 +54,16 @@ function ThinkingNodeMenu({
   thinkingText,
   onDock,
   onDelete,
+  isBranchFocusActive,
+  onToggleBranchFocus,
   onClose,
 }: {
   position: MenuPosition;
   thinkingText: string;
   onDock: () => void;
   onDelete: () => void;
+  isBranchFocusActive: boolean;
+  onToggleBranchFocus: () => void;
   onClose: () => void;
 }) {
 
@@ -88,8 +93,15 @@ function ThinkingNodeMenu({
       >
         Dock to Parent Node
       </button>
-      <button type="button" role="menuitem" disabled title="Branch visibility isn't built yet">
-        Hide Other Branches
+      <button
+        type="button"
+        role="menuitem"
+        onClick={() => {
+          onToggleBranchFocus();
+          onClose();
+        }}
+      >
+        {isBranchFocusActive ? "Show All Branches" : "Hide Other Branches"}
       </button>
       <button
         type="button"
@@ -137,6 +149,8 @@ export function ThinkingNodeView({ data, selected }: NodeProps<ThinkingFlowNode>
           thinkingText={data.thinkingText}
           onDock={data.onDock}
           onDelete={data.onDelete}
+          isBranchFocusActive={data.isBranchFocusActive}
+          onToggleBranchFocus={data.onToggleBranchFocus}
           onClose={() => setMenuPosition(null)}
         />
       )}

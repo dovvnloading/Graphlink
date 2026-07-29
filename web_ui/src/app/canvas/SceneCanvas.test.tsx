@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   applyGroupDragDelta,
+  computeDimmedNodeIds,
   conversationHistoryToDocumentMarkdown,
   groupDragKindOf,
   handleSelectionChange,
@@ -1776,5 +1777,296 @@ describe("withPreservedSelection (R7.5c snapshot-rebuild selection wipe)", () =>
     const rebuilt = [node("a")];
     withPreservedSelection(rebuilt, current);
     expect(rebuilt[0].selected).toBeUndefined();
+  });
+});
+
+// -- R8a: "Hide Other Branches" (computeDimmedNodeIds + its toFlowNodes wiring) --
+//
+// This is the one genuinely algorithmic piece of R8a's four-item deferred-
+// menu-item cleanup - real ancestor/descendant graph traversal, not just
+// callback threading - so it gets deliberately heavier coverage than a
+// typical wiring test: every scenario below was hand-traced against the
+// implementation before being written down here as an assertion, not
+// reverse-engineered from whatever the code happened to produce.
+
+describe("computeDimmedNodeIds (R8a Hide Other Branches)", () => {
+  it("returns an empty set when focus is off (originId is null)", () => {
+    const scene = baseScene({
+      nodes: [baseNode({ id: "chat-1", kind: "chat" })],
+      edges: [],
+    });
+    expect(computeDimmedNodeIds(scene, null)).toEqual(new Set());
+  });
+
+  it("returns an empty set when the origin node no longer exists (deleted while focus was active)", () => {
+    const scene = baseScene({
+      nodes: [baseNode({ id: "chat-1", kind: "chat" })],
+      edges: [],
+    });
+    expect(computeDimmedNodeIds(scene, "chat-gone")).toEqual(new Set());
+  });
+
+  it("dims nothing for a lone chat node with no siblings", () => {
+    const scene = baseScene({
+      nodes: [baseNode({ id: "chat-1", kind: "chat" })],
+      edges: [],
+    });
+    expect(computeDimmedNodeIds(scene, "chat-1")).toEqual(new Set());
+  });
+
+  it("isolates a sibling branch: two chats sharing one parent, focused from one, dims only the other", () => {
+    // A -> B, A -> B2 (a real fork - B and B2 are independent children of A).
+    const scene = baseScene({
+      nodes: [
+        baseNode({ id: "A", kind: "chat" }),
+        baseNode({ id: "B", kind: "chat" }),
+        baseNode({ id: "B2", kind: "chat" }),
+      ],
+      edges: [
+        { id: "e1", source: "A", target: "B" },
+        { id: "e2", source: "A", target: "B2" },
+      ],
+    });
+    expect(computeDimmedNodeIds(scene, "B")).toEqual(new Set(["B2"]));
+  });
+
+  it("a linear chain (A -> B -> C) focused from B keeps both the ancestor and the descendant visible", () => {
+    const scene = baseScene({
+      nodes: [
+        baseNode({ id: "A", kind: "chat" }),
+        baseNode({ id: "B", kind: "chat" }),
+        baseNode({ id: "C", kind: "chat" }),
+      ],
+      edges: [
+        { id: "e1", source: "A", target: "B" },
+        { id: "e2", source: "B", target: "C" },
+      ],
+    });
+    expect(computeDimmedNodeIds(scene, "B")).toEqual(new Set());
+  });
+
+  it("a content node (code) attached to an active chat node is not dimmed", () => {
+    // A -> B, B -> X (code, attached to B). Focused from B: B's own content
+    // node must stay visible, matching legacy's parent_content_node anchor.
+    const scene = baseScene({
+      nodes: [
+        baseNode({ id: "A", kind: "chat" }),
+        baseNode({ id: "B", kind: "chat" }),
+        baseNode({ id: "X", kind: "code" }),
+      ],
+      edges: [
+        { id: "e1", source: "A", target: "B" },
+        { id: "e2", source: "B", target: "X" },
+      ],
+    });
+    expect(computeDimmedNodeIds(scene, "B")).toEqual(new Set());
+  });
+
+  it("a content node attached to a DIMMED sibling branch is itself dimmed", () => {
+    // A -> B, A -> B2, B2 -> X (code, attached to the sibling branch B2).
+    // Focused from B: X must be dimmed along with its owner B2.
+    const scene = baseScene({
+      nodes: [
+        baseNode({ id: "A", kind: "chat" }),
+        baseNode({ id: "B", kind: "chat" }),
+        baseNode({ id: "B2", kind: "chat" }),
+        baseNode({ id: "X", kind: "code" }),
+      ],
+      edges: [
+        { id: "e1", source: "A", target: "B" },
+        { id: "e2", source: "A", target: "B2" },
+        { id: "e3", source: "B2", target: "X" },
+      ],
+    });
+    expect(computeDimmedNodeIds(scene, "B")).toEqual(new Set(["B2", "X"]));
+  });
+
+  it("descends through the FULL downstream chain, including a content node several hops down", () => {
+    // A -> B -> C, C -> D (document, attached to C). Focused from the root A.
+    const scene = baseScene({
+      nodes: [
+        baseNode({ id: "A", kind: "chat" }),
+        baseNode({ id: "B", kind: "chat" }),
+        baseNode({ id: "C", kind: "chat" }),
+        baseNode({ id: "D", kind: "document" }),
+      ],
+      edges: [
+        { id: "e1", source: "A", target: "B" },
+        { id: "e2", source: "B", target: "C" },
+        { id: "e3", source: "C", target: "D" },
+      ],
+    });
+    expect(computeDimmedNodeIds(scene, "A")).toEqual(new Set());
+  });
+
+  it("focusing FROM a content node resolves to its parent chat node's branch, not just itself", () => {
+    // A -> B, A -> B2, B -> X (code). Right-clicking X's own menu must
+    // isolate B's branch (X's owner), dimming B2 exactly as focusing from B
+    // directly would - matches legacy's _branch_anchor_nodes mapping a
+    // content node to its parent_content_node.
+    const scene = baseScene({
+      nodes: [
+        baseNode({ id: "A", kind: "chat" }),
+        baseNode({ id: "B", kind: "chat" }),
+        baseNode({ id: "B2", kind: "chat" }),
+        baseNode({ id: "X", kind: "code" }),
+      ],
+      edges: [
+        { id: "e1", source: "A", target: "B" },
+        { id: "e2", source: "A", target: "B2" },
+        { id: "e3", source: "B", target: "X" },
+      ],
+    });
+    expect(computeDimmedNodeIds(scene, "X")).toEqual(new Set(["B2"]));
+  });
+
+  it("an orphaned content node with no chat parent isolates only itself, without crashing", () => {
+    const scene = baseScene({
+      nodes: [
+        baseNode({ id: "A", kind: "chat" }),
+        baseNode({ id: "orphan", kind: "code" }),
+      ],
+      edges: [],
+    });
+    expect(computeDimmedNodeIds(scene, "orphan")).toEqual(new Set(["A"]));
+  });
+
+  it("never dims a node kind outside the five that carry this menu item, regardless of branch membership", () => {
+    // A -> B, A -> B2 (dimmed sibling), plus a conversation node and a note
+    // with no edges at all - both must be left alone by this feature
+    // entirely (ConversationNodeView.tsx's own docstring documents the
+    // conversation exclusion as deliberate).
+    const scene = baseScene({
+      nodes: [
+        baseNode({ id: "A", kind: "chat" }),
+        baseNode({ id: "B", kind: "chat" }),
+        baseNode({ id: "B2", kind: "chat" }),
+        baseNode({ id: "conv-1", kind: "conversation" }),
+        baseNode({ id: "note-1", kind: "note" }),
+      ],
+      edges: [
+        { id: "e1", source: "A", target: "B" },
+        { id: "e2", source: "A", target: "B2" },
+      ],
+    });
+    expect(computeDimmedNodeIds(scene, "B")).toEqual(new Set(["B2"]));
+  });
+
+  it("terminates and produces a sane result on a manually-created cycle (A -> B -> A), rather than hanging", () => {
+    // SceneDocument.connect() has no cycle prevention (backend/canvas.py),
+    // unlike legacy's QGraphicsScene-constrained edges - this is a
+    // deliberate hardening test, not a scenario legacy itself could reach.
+    const scene = baseScene({
+      nodes: [
+        baseNode({ id: "A", kind: "chat" }),
+        baseNode({ id: "B", kind: "chat" }),
+      ],
+      edges: [
+        { id: "e1", source: "A", target: "B" },
+        { id: "e2", source: "B", target: "A" },
+      ],
+    });
+    expect(computeDimmedNodeIds(scene, "A")).toEqual(new Set());
+  });
+
+  it("a docked node can still be dimmed by the algorithm itself (toFlowNodes filters docked nodes out separately)", () => {
+    // computeDimmedNodeIds has no isDocked awareness of its own - docked-node
+    // exclusion from the rendered canvas is toFlowNodes' own concern (the
+    // top-of-loop `if (n.isDocked) continue` guard), same separation of
+    // concerns as every other per-kind field in that function. This test
+    // exists to pin that computeDimmedNodeIds does not silently duplicate
+    // that filtering itself.
+    const scene = baseScene({
+      nodes: [
+        baseNode({ id: "A", kind: "chat" }),
+        baseNode({ id: "B", kind: "chat" }),
+        baseNode({ id: "B2", kind: "chat", isDocked: true }),
+      ],
+      edges: [
+        { id: "e1", source: "A", target: "B" },
+        { id: "e2", source: "A", target: "B2" },
+      ],
+    });
+    expect(computeDimmedNodeIds(scene, "B")).toEqual(new Set(["B2"]));
+  });
+});
+
+describe("toFlowNodes (R8a Hide Other Branches wiring)", () => {
+  function sceneWithFork() {
+    return baseScene({
+      nodes: [
+        baseNode({ id: "A", kind: "chat", x: 0, y: 0 }),
+        baseNode({ id: "B", kind: "chat", x: 0, y: 0 }),
+        baseNode({ id: "B2", kind: "chat", x: 0, y: 0 }),
+        baseNode({ id: "X", kind: "code", x: 0, y: 0 }),
+        baseNode({ id: "Y", kind: "document", x: 0, y: 0 }),
+        baseNode({ id: "Z", kind: "thinking", x: 0, y: 0 }),
+        baseNode({ id: "W", kind: "image", x: 0, y: 0 }),
+      ],
+      edges: [
+        { id: "e1", source: "A", target: "B" },
+        { id: "e2", source: "A", target: "B2" },
+        { id: "e3", source: "B", target: "X" },
+        { id: "e4", source: "B", target: "Y" },
+        { id: "e5", source: "B", target: "Z" },
+        { id: "e6", source: "B", target: "W" },
+      ],
+    });
+  }
+
+  it("applies the dim opacity style to a dimmed node of each of the five participating kinds, and no style to active ones", () => {
+    const scene = sceneWithFork();
+    const store = makeStore();
+    const flowNodes = toFlowNodes(scene, store, () => {}, "B", () => {});
+
+    // B2 is the dimmed sibling - the only dimmed node in this fixture.
+    expect(flowNodes.find((n) => n.id === "B2")?.style).toEqual({ opacity: 0.18 });
+    // Every kind attached to the active branch (B) stays undimmed - no
+    // style override at all, not an explicit opacity: 1.
+    for (const id of ["A", "B", "X", "Y", "Z", "W"]) {
+      expect(flowNodes.find((n) => n.id === id)?.style).toBeUndefined();
+    }
+  });
+
+  it("applies no style to anyone when branch focus is off (default/omitted argument)", () => {
+    const scene = sceneWithFork();
+    const store = makeStore();
+    // Two-argument call - the pre-R8a call shape - must still work and dim
+    // nothing, matching every other backward-compat check in this file.
+    const flowNodes = toFlowNodes(scene, store);
+    for (const n of flowNodes) expect(n.style).toBeUndefined();
+  });
+
+  it("isBranchFocusActive is true scene-wide for all five kinds once focus is active anywhere, regardless of which node is dimmed", () => {
+    const scene = sceneWithFork();
+    const store = makeStore();
+    const flowNodes = toFlowNodes(scene, store, () => {}, "B", () => {});
+    for (const id of ["A", "B", "B2", "X", "Y", "Z", "W"]) {
+      const data = flowNodes.find((n) => n.id === id)?.data as { isBranchFocusActive: boolean };
+      expect(data.isBranchFocusActive).toBe(true);
+    }
+  });
+
+  it("isBranchFocusActive is false for all five kinds when focus is off", () => {
+    const scene = sceneWithFork();
+    const store = makeStore();
+    const flowNodes = toFlowNodes(scene, store, () => {}, null, () => {});
+    for (const id of ["A", "B", "B2", "X", "Y", "Z", "W"]) {
+      const data = flowNodes.find((n) => n.id === id)?.data as { isBranchFocusActive: boolean };
+      expect(data.isBranchFocusActive).toBe(false);
+    }
+  });
+
+  it("each of the five kinds' onToggleBranchFocus calls the outer callback with its OWN node id, not some other node's", () => {
+    const scene = sceneWithFork();
+    const store = makeStore();
+    const calls: string[] = [];
+    const flowNodes = toFlowNodes(scene, store, () => {}, null, (nodeId) => calls.push(nodeId));
+
+    for (const id of ["A", "B", "X", "Y", "Z", "W"]) {
+      const data = flowNodes.find((n) => n.id === id)?.data as { onToggleBranchFocus: () => void };
+      data.onToggleBranchFocus();
+    }
+    expect(calls).toEqual(["A", "B", "X", "Y", "Z", "W"]);
   });
 });

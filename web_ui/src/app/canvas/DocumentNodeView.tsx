@@ -17,12 +17,16 @@ import { NodeMenu } from "./NodeMenu";
  * intent ThinkingNodeView uses; SceneCanvas.tsx's node/edge filtering and
  * ChatNodeView's badge/"Reveal Docked Items" are already kind-agnostic, so
  * no further wiring was needed beyond this file and SceneCanvas's document
- * branch. Deferred, with an honest disabled+title label rather than a
- * silently-dropped action (see the R3.7-era audit this increment is
+ * branch. Also real as of this increment: Hide Other Branches / Show All
+ * Branches - this view only proxies data.onToggleBranchFocus (already bound
+ * to this node's id by SceneCanvas.tsx) and flips its own label off
+ * data.isBranchFocusActive, a scene-wide flag rather than a per-node one;
+ * the branch-scoping algorithm and the actual dimming style live entirely in
+ * SceneCanvas.tsx. Deferred, with an honest disabled+title label rather than
+ * a silently-dropped action (see the R3.7-era audit this increment is
  * following up on): Open File (needs a new backend endpoint; browsers
  * cannot open arbitrary local paths), Export (R6, document-kind only -
- * matches the legacy menu's own conditional), Hide Other Branches (branch
- * visibility isn't built yet).
+ * matches the legacy menu's own conditional).
  */
 
 export interface DocumentNodeData extends Record<string, unknown> {
@@ -47,6 +51,8 @@ export interface DocumentNodeData extends Record<string, unknown> {
   onToggleCollapse: () => void;
   onDock: () => void;
   onDelete: () => void;
+  isBranchFocusActive: boolean;
+  onToggleBranchFocus: () => void;
 }
 
 export type DocumentFlowNode = Node<DocumentNodeData, "document">;
@@ -172,6 +178,8 @@ function DocumentNodeMenu({
   onToggleCollapse,
   onDock,
   onDelete,
+  isBranchFocusActive,
+  onToggleBranchFocus,
   onClose,
 }: {
   position: MenuPosition;
@@ -182,6 +190,8 @@ function DocumentNodeMenu({
   onToggleCollapse: () => void;
   onDock: () => void;
   onDelete: () => void;
+  isBranchFocusActive: boolean;
+  onToggleBranchFocus: () => void;
   onClose: () => void;
 }) {
 
@@ -246,8 +256,15 @@ function DocumentNodeMenu({
           Export
         </button>
       )}
-      <button type="button" role="menuitem" disabled title="Branch visibility isn't built yet">
-        Hide Other Branches
+      <button
+        type="button"
+        role="menuitem"
+        onClick={() => {
+          onToggleBranchFocus();
+          onClose();
+        }}
+      >
+        {isBranchFocusActive ? "Show All Branches" : "Hide Other Branches"}
       </button>
       <button
         type="button"
@@ -338,6 +355,8 @@ export function DocumentNodeView({ data, selected }: NodeProps<DocumentFlowNode>
           onToggleCollapse={data.onToggleCollapse}
           onDock={data.onDock}
           onDelete={data.onDelete}
+          isBranchFocusActive={data.isBranchFocusActive}
+          onToggleBranchFocus={data.onToggleBranchFocus}
           onClose={() => setMenuPosition(null)}
         />
       )}

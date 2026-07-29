@@ -21,6 +21,7 @@ afterEach(() => {
 function renderCodeNode(overrides: Partial<CodeFlowNode["data"]> = {}) {
   const onDelete = vi.fn();
   const onRegenerate = vi.fn();
+  const onToggleBranchFocus = vi.fn();
   const props = {
     id: "n0",
     selected: false,
@@ -30,6 +31,8 @@ function renderCodeNode(overrides: Partial<CodeFlowNode["data"]> = {}) {
       parentChatNodeId: "chat-1",
       onRegenerate,
       onDelete,
+      isBranchFocusActive: false,
+      onToggleBranchFocus,
       ...overrides,
     },
   } as unknown as NodeProps<CodeFlowNode>;
@@ -39,7 +42,7 @@ function renderCodeNode(overrides: Partial<CodeFlowNode["data"]> = {}) {
       <CodeNodeView {...props} />
     </ReactFlowProvider>,
   );
-  return { onDelete, onRegenerate, container };
+  return { onDelete, onRegenerate, onToggleBranchFocus, container };
 }
 
 describe("CodeNodeView", () => {
@@ -57,7 +60,7 @@ describe("CodeNodeView", () => {
     expect(screen.getByText("code")).toBeInTheDocument();
   });
 
-  it("right-click opens a menu with real Copy Code/Delete Code Block/Export and deferred Hide Other Branches", async () => {
+  it("right-click opens a menu with real Copy Code/Delete Code Block/Export/Hide Other Branches", async () => {
     const user = userEvent.setup();
     const { onDelete } = renderCodeNode();
 
@@ -69,9 +72,7 @@ describe("CodeNodeView", () => {
     expect(screen.getByRole("menu")).toBeInTheDocument();
 
     expect(screen.getByRole("menuitem", { name: "Export" })).not.toBeDisabled();
-    const hideBranches = screen.getByRole("menuitem", { name: "Hide Other Branches" });
-    expect(hideBranches).toBeDisabled();
-    expect(hideBranches).toHaveAttribute("title", "Branch visibility isn't built yet");
+    expect(screen.getByRole("menuitem", { name: "Hide Other Branches" })).not.toBeDisabled();
 
     await user.click(screen.getByRole("menuitem", { name: "Copy Code" }));
     expect(writeText).toHaveBeenCalledWith("def add(a, b):\n    return a + b");
@@ -137,6 +138,32 @@ describe("CodeNodeView", () => {
     renderCodeNode({ parentChatNodeId: null });
     fireEvent.contextMenu(screen.getByText("python"));
     expect(screen.queryByRole("menuitem", { name: "Regenerate Response" })).toBeNull();
+  });
+
+  it("Hide Other Branches reads 'Hide Other Branches' and calls onToggleBranchFocus then closes the menu when branch focus is inactive (R8a)", async () => {
+    const user = userEvent.setup();
+    const { onToggleBranchFocus } = renderCodeNode({ isBranchFocusActive: false });
+
+    fireEvent.contextMenu(screen.getByText("python"));
+    const toggle = screen.getByRole("menuitem", { name: "Hide Other Branches" });
+    expect(toggle).not.toBeDisabled();
+
+    await user.click(toggle);
+    expect(onToggleBranchFocus).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("Hide Other Branches reads 'Show All Branches' and still calls onToggleBranchFocus when branch focus is active (R8a)", async () => {
+    const user = userEvent.setup();
+    const { onToggleBranchFocus } = renderCodeNode({ isBranchFocusActive: true });
+
+    fireEvent.contextMenu(screen.getByText("python"));
+    expect(screen.queryByRole("menuitem", { name: "Hide Other Branches" })).toBeNull();
+    const toggle = screen.getByRole("menuitem", { name: "Show All Branches" });
+
+    await user.click(toggle);
+    expect(onToggleBranchFocus).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("menu")).toBeNull();
   });
 
   it("Escape and outside-click both close the menu", async () => {
