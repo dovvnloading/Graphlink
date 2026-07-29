@@ -542,7 +542,7 @@ def _restore_pycoder_payload(payload: dict[str, Any]) -> SceneNode:
 def _restore_code_sandbox_payload(payload: dict[str, Any]) -> SceneNode:
     x, y = _position(payload)
     return SceneNode(
-        id="", x=x, y=y, title="Execution Sandbox", kind="code_sandbox",
+        id="", x=x, y=y, title="Virtual Environment Runner", kind="code_sandbox",
         code_sandbox_requirements=str(payload.get("requirements", "")),
         code_sandbox_prompt=str(payload.get("prompt", "")),
         code_sandbox_code=str(payload.get("code", "")),

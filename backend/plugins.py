@@ -64,7 +64,7 @@ _PLUGINS = [
     ("Web Research", "Searches, retrieves, and summarizes cited web sources under a bounded network policy.", "Reasoning & Research"),
     ("Gitlink", "Loads a GitHub repository into structured XML context, prepares file-level changes, and only writes after explicit approval.", "Build & Execution"),
     ("Py-Coder", "Opens a Python execution environment to run code and get AI analysis.", "Build & Execution"),
-    ("Execution Sandbox", "Runs Python inside an isolated virtualenv with your full user-account privileges (isolates installed packages, not the operating system) and lets you declare per-node requirements.txt dependencies.", "Build & Execution"),
+    ("Virtual Environment Runner", "Runs Python inside an isolated virtualenv with your full user-account privileges (isolates installed packages, not the operating system) and lets you declare per-node requirements.txt dependencies.", "Build & Execution"),
     ("HTML Renderer", "Adds a node to render HTML code from a parent node.", "Build & Execution"),
     ("Artifact / Drafter", "A split-pane node for iteratively drafting and refining living documents (Markdown).", "Workflow & Drafting"),
 ]
@@ -189,12 +189,12 @@ def register_plugins(
             await bus.publish("scene")
             return node.id
 
-        if name == "Execution Sandbox":
+        if name == "Virtual Environment Runner":
             # R5.4: the fifth real node-creation plugin, same posture as
             # every prior real node-creation plugin above.
             if not parent_node_id or parent_node_id not in canvas_document.nodes:
                 notifications.show(
-                    "Please select a valid node to branch from before adding an Execution Sandbox node.",
+                    "Please select a valid node to branch from before adding a Virtual Environment Runner node.",
                     "warning",
                 )
                 await bus.publish("notification")

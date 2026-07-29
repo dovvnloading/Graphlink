@@ -132,7 +132,7 @@ describe("CodeExecutionApprovalPanel", () => {
     expect(screen.getByText(/there is no sandboxing/)).toBeInTheDocument();
     expect(
       screen.getByText(
-        /This will run AI-generated Python code in a persistent local session with the full privileges of your user account \(there is no sandboxing\)\. If execution fails, automatically repaired versions of this code may run under this same approval\./,
+        /This will run AI-generated Python code in a persistent local session with the full privileges of your user account \(there is no sandboxing\)\. If execution fails, you will be asked to approve each automatically repaired version before it runs\./,
       ),
     ).toBeInTheDocument();
   });
@@ -156,10 +156,10 @@ describe("CodeExecutionApprovalPanel", () => {
 
   // -- FIX C regression guard: code_sandbox requirements/repair disclosure --
 
-  it("FIX C: Code-Sandbox warning also discloses the repair-loop re-execution risk", () => {
+  it("FIX C: Code-Sandbox warning also discloses that repaired code needs its own approval", () => {
     renderPanel({ kind: "code_sandbox" });
     expect(
-      screen.getByText(/automatically repaired versions of this code may run under this same approval/),
+      screen.getByText(/you will be asked to approve each automatically repaired version before it runs/),
     ).toBeInTheDocument();
   });
 

@@ -375,10 +375,10 @@ describe("CodeSandboxNodeView", () => {
     expect(packagesList!.textContent).not.toContain("requests");
   });
 
-  it("FIX C: the approval panel also discloses the repair-loop re-execution risk for code_sandbox", () => {
+  it("FIX C: the approval panel also discloses that repaired code needs its own approval", () => {
     renderCodeSandboxNode({ codeSandboxAwaitingApproval: true, codeSandboxCode: "print(1)" });
     expect(
-      screen.getByText(/automatically repaired versions of this code may run under this same approval/),
+      screen.getByText(/you will be asked to approve each automatically repaired version before it runs/),
     ).toBeInTheDocument();
   });
 
@@ -419,7 +419,7 @@ describe("CodeSandboxNodeView", () => {
 
   it("manual collapse hides the body and shows only the header", () => {
     renderCodeSandboxNode({ isCollapsed: true });
-    expect(screen.getByText("Execution Sandbox")).toBeInTheDocument();
+    expect(screen.getByText("Virtual Environment Runner")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Run" })).toBeNull();
   });
 
@@ -432,7 +432,7 @@ describe("CodeSandboxNodeView", () => {
 
   it("LOD auto-collapse (zoom below threshold) also hides the body, even when isCollapsed is false", () => {
     renderCodeSandboxNodeAtZoom(0.2, { isCollapsed: false });
-    expect(screen.getByText("Execution Sandbox")).toBeInTheDocument();
+    expect(screen.getByText("Virtual Environment Runner")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Run" })).toBeNull();
   });
 
@@ -447,7 +447,7 @@ describe("CodeSandboxNodeView", () => {
     const user = userEvent.setup();
     const data = renderCodeSandboxNode();
 
-    fireEvent.contextMenu(screen.getByText("Execution Sandbox"));
+    fireEvent.contextMenu(screen.getByText("Virtual Environment Runner"));
     const menu = screen.getByRole("menu");
     expect(menu).toBeInTheDocument();
 
@@ -460,7 +460,7 @@ describe("CodeSandboxNodeView", () => {
     await user.click(items[0]);
     expect(data.onToggleCollapse).toHaveBeenCalledOnce();
 
-    fireEvent.contextMenu(screen.getByText("Execution Sandbox"));
+    fireEvent.contextMenu(screen.getByText("Virtual Environment Runner"));
     await user.click(screen.getByRole("menuitem", { name: "Delete Node" }));
     expect(data.onDelete).toHaveBeenCalledOnce();
   });
@@ -468,7 +468,7 @@ describe("CodeSandboxNodeView", () => {
   it("Escape and outside-click both close the node-level menu", async () => {
     const user = userEvent.setup();
     renderCodeSandboxNode();
-    const header = screen.getByText("Execution Sandbox");
+    const header = screen.getByText("Virtual Environment Runner");
 
     fireEvent.contextMenu(header);
     expect(screen.getByRole("menu")).toBeInTheDocument();

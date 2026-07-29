@@ -66,7 +66,7 @@ Attach these specialist nodes to a branch from the plugin picker:
 | Web Research | Reasoning and Research | Web retrieval, summarization, and source capture for real-time information. |
 | Gitlink | Build and Execution | Loads a GitHub repo into structured context, previews file-level changes, and writes only after approval. |
 | Py-Coder | Build and Execution | Runs Python with AI-assisted generation, execution, and analysis. |
-| Execution Sandbox | Build and Execution | Runs Python in a per-node virtualenv with declared dependencies (isolates installed packages, not the OS or filesystem/network access). |
+| Virtual Environment Runner | Build and Execution | Runs Python in a per-node virtualenv with declared dependencies (isolates installed packages, not the OS or filesystem/network access). |
 | HTML Renderer | Build and Execution | Renders HTML from a parent branch directly inside the app. |
 | Artifact / Drafter | Workflow and Drafting | A split-pane surface for drafting and refining long-form Markdown. |
 
@@ -152,7 +152,7 @@ The app reads these as fallbacks when no key is saved in Settings, or for model 
 
 - **Start** with a chat node or a starter prompt.
 - **Branch** by selecting a node and adding a plugin from the picker or controls; each new node begins a more specialized path (research, code, drafting, execution).
-- **Deliver** with build-oriented nodes — Gitlink for repo-aware change proposals, Py-Coder and Execution Sandbox for running code, Artifact / Drafter for documents.
+- **Deliver** with build-oriented nodes — Gitlink for repo-aware change proposals, Py-Coder and Virtual Environment Runner for running code, Artifact / Drafter for documents.
 - **Export** the whole canvas as a PNG, or export individual nodes — Chat as `.md`, Code as a source file (extension inferred from language, falling back to `.txt`), Image as `.png`.
 - **Ingest**: file attachments are modeled on the backend (a Document node kind exists) but aren't yet wired to any UI action — there is currently no way to attach or ingest a file from the interface.
 
@@ -164,7 +164,7 @@ Graphlink is a Python (FastAPI) backend paired with a Vite/React/TypeScript sing
 - **`backend/`** holds all real application and domain logic: the FastAPI app factory and a WebSocket pub/sub event bus, the node-graph/canvas model (chat, code, document, image, thinking, and other node kinds; connections; autosave; crash recovery), LLM dispatch, settings, chat-library management, and session load/save.
 - **`web_ui/`** is the React SPA (built with Vite) — the entire UI: the canvas surface, the app bar and composer chrome, and dialogs/overlays. It talks to the backend over the REST API and the WebSocket.
 - **`contracts/`** is build-time-only codegen that generates the TypeScript types and JSON Schemas for WebSocket payloads from the backend's Python dataclasses, keeping the two sides in sync.
-- **`graphlink_plugins/`** holds the domain logic behind the plugin nodes (web research, Gitlink, Py-Coder, Execution Sandbox) — no UI code, no Qt.
+- **`graphlink_plugins/`** holds the domain logic behind the plugin nodes (web research, Gitlink, Py-Coder, Virtual Environment Runner) — no UI code, no Qt.
 
 Your data lives entirely on your machine:
 

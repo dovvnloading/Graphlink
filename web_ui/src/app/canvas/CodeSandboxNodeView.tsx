@@ -9,8 +9,12 @@ import { CodeExecutionApprovalPanel } from "./CodeExecutionApprovalPanel";
 import { NodeMenu } from "./NodeMenu";
 
 /**
- * The Execution Sandbox node (Qt-removal plan R5.4) - the Code-Sandbox
- * plugin's React card. Same overall shell as every plugin-node sibling
+ * The Virtual Environment Runner node (Qt-removal plan R5.4, renamed under
+ * ADR-002 P0 from "Execution Sandbox" - that name oversold what is actually
+ * a plain OS subprocess running inside a venv, not OS-level isolation; the
+ * internal kind="code_sandbox" identifier/CSS classes/WS intents are
+ * UNCHANGED, only the display string moved) - the Code-Sandbox plugin's
+ * React card. Same overall shell as every plugin-node sibling
  * (PyCoderNodeView/GitlinkNodeView): collapse/expand OR-ed with LOD, a card
  * menu with outside-click/Escape dismiss, the shared react-markdown +
  * remarkGfm + rehypeHighlight pipeline, no dock-to-parent action.
@@ -218,7 +222,7 @@ export function CodeSandboxNodeView({ id, data, selected }: NodeProps<CodeSandbo
     >
       <Handle type="target" position={Position.Top} className="scene-node-handle" />
       <div className="scene-node-title chat-node-role">
-        <span>Execution Sandbox</span>
+        <span>Virtual Environment Runner</span>
         <button
           type="button"
           className="chat-node-collapse-btn"
@@ -270,7 +274,7 @@ export function CodeSandboxNodeView({ id, data, selected }: NodeProps<CodeSandbo
               Run
             </button>
             {data.pendingRequestId && (
-              <button type="button" onClick={() => data.onCancel()} title="Cancel Execution Sandbox request">
+              <button type="button" onClick={() => data.onCancel()} title="Cancel Virtual Environment Runner request">
                 Cancel
               </button>
             )}

@@ -505,6 +505,17 @@ class SceneNode:
     pycoder_analysis: str = ""  # AI's analysis of the last output
     pycoder_last_run_failed: bool = False
     pycoder_awaiting_approval: bool = False
+    # ADR-002 P0: a fingerprint (see graphlink_plugins.gitlink.agent's
+    # _fingerprint_changes, reused here rather than reinvented) of exactly
+    # what the CURRENT pycoder_awaiting_approval gate is asking about -
+    # {"code": pycoder_code}. Set the instant the gate opens (mirrors
+    # gitlink_change_fingerprint's own timing), checked immediately before
+    # the code it covers actually executes (AgentDispatcher.start_pycoder_
+    # run), and cleared everywhere pycoder_awaiting_approval itself is
+    # cleared, so a resolved/denied/superseded approval can never be
+    # replayed. Internal bookkeeping only - EXCLUDED from scene_payload(),
+    # same posture as code_sandbox_sandbox_id.
+    pycoder_approved_fingerprint: str | None = None
     pycoder_error: str = ""
     # R5.4: the Execution Sandbox node's real persisted shape - runs Python
     # inside an isolated per-node virtualenv (VirtualEnvSandbox, keyed by
@@ -554,6 +565,12 @@ class SceneNode:
     # and in complete_code_sandbox_run/fail_code_sandbox_run below. Unused
     # (default) for every other kind.
     code_sandbox_approval_requirements: str = ""
+    # ADR-002 P0: same mechanism as pycoder_approved_fingerprint above,
+    # fingerprinting {"code": code_sandbox_code, "manifest":
+    # code_sandbox_approval_requirements} instead - see that field's own
+    # comment for the full reasoning. Internal bookkeeping only, EXCLUDED
+    # from scene_payload().
+    code_sandbox_approved_fingerprint: str | None = None
     code_sandbox_error: str = ""
     # R6.1: Notes/Frames/Containers - shared color override for note/frame/
     # container kinds. Hex string like "#4a7c59"; None means "use the kind's
@@ -1707,6 +1724,7 @@ class SceneDocument:
         node.pycoder_analysis = str(analysis)
         node.pycoder_last_run_failed = bool(last_run_failed)
         node.pycoder_awaiting_approval = False
+        node.pycoder_approved_fingerprint = None
         node.pycoder_error = ""
         return node
 
@@ -1722,6 +1740,7 @@ class SceneDocument:
         if node is None:
             return None
         node.pycoder_awaiting_approval = False
+        node.pycoder_approved_fingerprint = None
         node.pycoder_error = str(message)
         return node
 
@@ -1731,11 +1750,16 @@ class SceneDocument:
     # NOTHING from graphlink_plugins.code_sandbox.
 
     def add_code_sandbox_node(self, x: float, y: float, parent_id: str) -> SceneNode:
-        """The Execution Sandbox node's creation primitive - same
+        """The Virtual Environment Runner node's creation primitive - same
         required-parent posture as every R5 sibling. Title is always the
-        fixed literal "Execution Sandbox" (matches backend/plugins.py's own
-        plugin display name). code_sandbox_sandbox_id is minted here, ONCE,
-        at creation time - a short uuid4 hex used purely as this node's
+        fixed literal "Virtual Environment Runner" (matches
+        backend/plugins.py's own plugin display name - renamed under
+        ADR-002 P0 from "Execution Sandbox", which oversold what is
+        actually a plain OS subprocess running inside a venv, not an
+        OS-level sandbox; the internal kind="code_sandbox" identifier is
+        UNCHANGED, since it's persisted wire/save-format state, not a
+        display string). code_sandbox_sandbox_id is minted here, ONCE, at
+        creation time - a short uuid4 hex used purely as this node's
         sandbox directory name (VirtualEnvSandbox re-sanitizes it again on
         its own side, but a short, already-safe id keeps the on-disk path
         short and human-scannable)."""
@@ -1746,7 +1770,7 @@ class SceneDocument:
             id=node_id,
             x=float(x),
             y=float(y),
-            title="Execution Sandbox",
+            title="Virtual Environment Runner",
             kind="code_sandbox",
             code_sandbox_sandbox_id=uuid.uuid4().hex[:12],
         )
@@ -1793,6 +1817,7 @@ class SceneDocument:
         node.code_sandbox_analysis = str(analysis)
         node.code_sandbox_awaiting_approval = False
         node.code_sandbox_approval_requirements = ""
+        node.code_sandbox_approved_fingerprint = None
         node.code_sandbox_error = ""
         return node
 
@@ -1805,6 +1830,7 @@ class SceneDocument:
             return None
         node.code_sandbox_awaiting_approval = False
         node.code_sandbox_approval_requirements = ""
+        node.code_sandbox_approved_fingerprint = None
         node.code_sandbox_error = str(message)
         return node
 
@@ -4204,7 +4230,7 @@ def register_canvas(
         # comment for the exact race this closes.
         node_for_check = document.nodes.get(node_id)
         if node_for_check is not None and node_for_check.pending_request_id:
-            notifications.show("Execution Sandbox is already busy for this node.", "info")
+            notifications.show("Virtual Environment Runner is already busy for this node.", "info")
             await bus.publish("notification")
             return None
         if node_for_check is not None:

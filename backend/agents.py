@@ -1772,6 +1772,7 @@ class AgentDispatcher:
 
                 # -- human-approval gate --------------------------------------
                 node.pycoder_code = current_code
+                node.pycoder_approved_fingerprint = _fingerprint_changes({"code": current_code})
                 node.pycoder_awaiting_approval = True
                 await bus.publish("scene")
                 approved = await approval_future
@@ -1791,6 +1792,21 @@ class AgentDispatcher:
                     if cancel_event.is_set():
                         notifications_state.show("Py-Coder execution cancelled.", "info")
                         await bus.publish("notification")
+                        return
+
+                    # ADR-002 P0: defense-in-depth, not the primary fix (the
+                    # repair re-gate below is) - the code about to execute
+                    # must be EXACTLY what the most recently resolved
+                    # approval gate covered. Always true today (nothing
+                    # mutates current_code between a gate and its matching
+                    # execute call); this exists to fail loudly rather than
+                    # silently execute unapproved content if a future change
+                    # ever breaks that invariant.
+                    if _fingerprint_changes({"code": current_code}) != node.pycoder_approved_fingerprint:
+                        on_failure(
+                            "Py-Coder execution blocked: the approved code no longer matches what is about to run."
+                        )
+                        await bus.publish("scene")
                         return
 
                     try:
@@ -1829,6 +1845,41 @@ class AgentDispatcher:
                         current_code = await asyncio.to_thread(
                             _call_pycoder_repair_agent, current_code, last_error, is_final
                         )
+                        if cancel_event.is_set():
+                            notifications_state.show("Py-Coder execution cancelled.", "info")
+                            await bus.publish("notification")
+                            return
+
+                        # ADR-002 P0: the repair agent just produced code the
+                        # user has never seen. The prior design let this run
+                        # automatically under the FIRST Approve click - the
+                        # confirmed gap the ADR-002 security review named
+                        # explicitly ("approval is not bound to what was
+                        # shown"; the old warning copy even disclosed this:
+                        # "automatically repaired versions of this code may
+                        # run under this same approval"). Every repaired
+                        # variant now goes through its own fresh gate, with a
+                        # NEW Future replacing the resolved one in this same
+                        # dict slot so cancel_pycoder/approve_code_execution/
+                        # deny_code_execution keep targeting whichever gate
+                        # is actually still open (see _resolve_approval's own
+                        # docstring - it always re-reads this slot, never
+                        # caches the future).
+                        request_entry = self._pycoder_requests.get(request_id)
+                        if request_entry is None:
+                            return
+                        repair_future: asyncio.Future = asyncio.get_running_loop().create_future()
+                        request_entry["approval_future"] = repair_future
+                        node.pycoder_code = current_code
+                        node.pycoder_approved_fingerprint = _fingerprint_changes({"code": current_code})
+                        node.pycoder_awaiting_approval = True
+                        await bus.publish("scene")
+                        approved = await repair_future
+                        node.pycoder_awaiting_approval = False
+                        if not approved:
+                            on_failure("Py-Coder run cancelled: repaired code was not approved.")
+                            await bus.publish("scene")
+                            return
 
                 # Every retry exhausted - still a real completed run (never
                 # on_failure), matching legacy's own `finished.emit(result)`
@@ -1938,7 +1989,7 @@ class AgentDispatcher:
         Composer-specific topic): CodeSandboxNode state is scene state, same
         as every other plugin node kind's own dispatch surface."""
         if node.pending_request_id and node.pending_request_id != _CODE_EXEC_RUN_CLAIM_PLACEHOLDER:
-            notifications_state.show("Execution Sandbox is already busy for this node.", "info")
+            notifications_state.show("Virtual Environment Runner is already busy for this node.", "info")
             await bus.publish("notification")
             return
 
@@ -2024,6 +2075,15 @@ class AgentDispatcher:
                 # point. See SceneNode.code_sandbox_approval_requirements's
                 # own comment for the full race this closes.
                 node.code_sandbox_approval_requirements = manifest
+                # ADR-002 P0: fingerprints exactly what this gate is asking
+                # about - see SceneNode.code_sandbox_approved_fingerprint's
+                # own comment. Frozen from the same already-correct local
+                # `manifest`/`current_code`, at the same moment, for the
+                # same staleness-avoidance reason as the requirements
+                # snapshot right above.
+                node.code_sandbox_approved_fingerprint = _fingerprint_changes(
+                    {"code": current_code, "manifest": manifest}
+                )
                 await bus.publish("scene")
                 approved = await approval_future
                 node.code_sandbox_awaiting_approval = False
@@ -2058,6 +2118,18 @@ class AgentDispatcher:
                 last_error = ""
                 try:
                     for attempt_index in range(max_attempts):
+                        # ADR-002 P0: defense-in-depth, not the primary fix
+                        # (the repair re-gate below is) - see
+                        # start_pycoder_run's identical check for the full
+                        # reasoning.
+                        if _fingerprint_changes(
+                            {"code": current_code, "manifest": manifest}
+                        ) != node.code_sandbox_approved_fingerprint:
+                            on_failure(
+                                "Sandbox execution blocked: the approved code no longer matches what is about to run."
+                            )
+                            await bus.publish("scene")
+                            return
                         final_output, final_return_code = await asyncio.to_thread(
                             sandbox.execute_code, current_code, _should_continue, _thread_emit_line
                         )
@@ -2069,6 +2141,38 @@ class AgentDispatcher:
                         current_code = await asyncio.to_thread(
                             _call_sandbox_repair_agent, current_code, last_error, manifest, prompt_text or None
                         )
+                        if not _should_continue():
+                            notifications_state.show("Sandbox execution cancelled.", "info")
+                            await bus.publish("notification")
+                            return
+
+                        # ADR-002 P0: same reasoning as start_pycoder_run's
+                        # identical repair re-gate - the repair agent just
+                        # produced code the user has never seen, so it must
+                        # not run under the approval that only ever covered
+                        # the FIRST version. Re-disclose the (unchanged)
+                        # manifest alongside it, since code_sandbox_approval_
+                        # requirements was already cleared once the initial
+                        # gate resolved above.
+                        request_entry = self._code_sandbox_requests.get(request_id)
+                        if request_entry is None:
+                            return
+                        repair_future: asyncio.Future = asyncio.get_running_loop().create_future()
+                        request_entry["approval_future"] = repair_future
+                        node.code_sandbox_code = current_code
+                        node.code_sandbox_approval_requirements = manifest
+                        node.code_sandbox_approved_fingerprint = _fingerprint_changes(
+                            {"code": current_code, "manifest": manifest}
+                        )
+                        node.code_sandbox_awaiting_approval = True
+                        await bus.publish("scene")
+                        repair_approved = await repair_future
+                        node.code_sandbox_awaiting_approval = False
+                        node.code_sandbox_approval_requirements = ""
+                        if not repair_approved:
+                            on_failure("Sandbox run cancelled: repaired code was not approved.")
+                            await bus.publish("scene")
+                            return
                     else:
                         # Structurally unreachable (mirrors legacy's own
                         # identical dead `else` branch - every loop path
