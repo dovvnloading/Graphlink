@@ -23,6 +23,7 @@ function renderGroupNode(overrides: Partial<GroupFlowNode["data"]> = {}) {
       isCollapsed: false,
       isLocked: true,
       itemIds: ["n1", "n2"],
+      memberKinds: ["chat", "chat"],
       onSetLabel,
       onToggleCollapsed,
       onToggleLock,
@@ -144,5 +145,58 @@ describe("GroupNodeView (container)", () => {
   it("never renders a Fit to Content button for kind=container (frame-only)", () => {
     renderGroupNode({ groupKind: "container" });
     expect(screen.queryByRole("button", { name: "Fit to Content" })).toBeNull();
+  });
+});
+
+describe("GroupNodeView collapsed-container hover preview (R6.1 follow-up)", () => {
+  it("shows a member-count + kind-breakdown tooltip on hover when collapsed", () => {
+    const { container } = renderGroupNode({
+      groupKind: "container",
+      isCollapsed: true,
+      memberKinds: ["chat", "chat", "code"],
+    });
+
+    expect(screen.queryByRole("tooltip")).toBeNull();
+
+    fireEvent.mouseEnter(container.querySelector(".group-node")!);
+    expect(screen.getByRole("tooltip")).toBeInTheDocument();
+    expect(screen.getByText("3 items")).toBeInTheDocument();
+    expect(screen.getByText("chat x2, code")).toBeInTheDocument();
+
+    fireEvent.mouseLeave(container.querySelector(".group-node")!);
+    expect(screen.queryByRole("tooltip")).toBeNull();
+  });
+
+  it("does not show the preview for a frame, even when collapsed and hovered (container-only, matching legacy)", () => {
+    const { container } = renderGroupNode({
+      groupKind: "frame",
+      isCollapsed: true,
+      memberKinds: ["chat"],
+    });
+
+    fireEvent.mouseEnter(container.querySelector(".group-node")!);
+    expect(screen.queryByRole("tooltip")).toBeNull();
+  });
+
+  it("does not show the preview for an EXPANDED container, even when hovered", () => {
+    const { container } = renderGroupNode({
+      groupKind: "container",
+      isCollapsed: false,
+      memberKinds: ["chat"],
+    });
+
+    fireEvent.mouseEnter(container.querySelector(".group-node")!);
+    expect(screen.queryByRole("tooltip")).toBeNull();
+  });
+
+  it("does not show the preview for an empty container", () => {
+    const { container } = renderGroupNode({
+      groupKind: "container",
+      isCollapsed: true,
+      memberKinds: [],
+    });
+
+    fireEvent.mouseEnter(container.querySelector(".group-node")!);
+    expect(screen.queryByRole("tooltip")).toBeNull();
   });
 });

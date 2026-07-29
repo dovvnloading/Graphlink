@@ -5122,6 +5122,53 @@ def test_create_container_validates_membership():
         doc.create_container(["ghost"])
 
 
+def test_create_frame_rejects_a_note_member():
+    # Regression test: create_frame used to only check that member ids
+    # existed, no kind restriction at all - legacy's own createFrame only
+    # ever accepted leaf content nodes, never a note. A note member would
+    # also be silently dropped from serialization (frame_source_map has no
+    # slot for one - see session_save.py), so rejecting it at creation
+    # time is the real fix, not a cosmetic parity detail.
+    doc = SceneDocument()
+    note = doc.add_note(0, 0)
+    with pytest.raises(SceneError):
+        doc.create_frame([note.id])
+    assert all(n.kind != "frame" for n in doc.nodes.values())
+
+
+def test_create_frame_rejects_a_frame_member():
+    # Legacy frames never nest (only Container can hold another
+    # Container/Frame) - create_frame used to allow this with nothing
+    # stopping it, and the frontend's drag cascade doesn't recurse into a
+    # frame member either, so a frame-in-frame would visibly desync from
+    # its own contents the moment the outer frame was dragged.
+    doc = SceneDocument()
+    m1 = doc.add_node(0, 0)
+    inner_frame = doc.create_frame([m1.id])
+    m2 = doc.add_node(300, 300)
+    with pytest.raises(SceneError):
+        doc.create_frame([inner_frame.id, m2.id])
+
+
+def test_create_frame_rejects_a_container_member():
+    doc = SceneDocument()
+    m1 = doc.add_node(0, 0)
+    container = doc.create_container([m1.id])
+    m2 = doc.add_node(300, 300)
+    with pytest.raises(SceneError):
+        doc.create_frame([container.id, m2.id])
+
+
+def test_create_container_still_accepts_a_note_member():
+    # Unlike create_frame above, containers were never restricted this way
+    # - confirm the new create_frame validation didn't accidentally leak
+    # into create_container.
+    doc = SceneDocument()
+    note = doc.add_note(0, 0)
+    container = doc.create_container([note.id])
+    assert container.item_ids == [note.id]
+
+
 def test_create_frame_sets_correct_defaults_and_initial_bbox():
     doc = SceneDocument()
     m1 = doc.add_node(0, 0)
@@ -5312,7 +5359,14 @@ def test_resize_frame_clamps_below_bbox_minimum():
     assert node.group_height == pytest.approx(510.0), "must clamp up to the auto-fit bbox height"
 
 
-def test_resize_frame_manual_override_survives_a_member_move():
+def test_resize_frame_grows_to_re_enclose_a_member_that_moves_far_outside_it():
+    # Regression test: _recompute_group_bounds used to keep the manual
+    # size FROZEN regardless of where members currently are, contradicting
+    # its own docstring's claim of "legacy never clips, always auto-grows
+    # to enclose members" - a member could move and visibly escape a
+    # manually-sized frame with nothing correcting for it. It must now
+    # grow (union with the live bbox), never stay smaller than the current
+    # content actually needs.
     doc = SceneDocument()
     m1, m2 = doc.add_node(0, 0), doc.add_node(300, 300)
     frame = doc.create_frame([m1.id, m2.id])
@@ -5321,12 +5375,122 @@ def test_resize_frame_manual_override_survives_a_member_move():
     doc.move_node(m2.id, 1000, 1000)
 
     node = doc.nodes[frame.id]
-    assert node.group_width == 800.0, "manual size must survive a member move"
-    assert node.group_height == 700.0
-    # New bbox-of-members center after the move: bbox is x=-40,y=-50,
-    # w=1300,h=1210 -> center (610, 555).
-    assert node.x == pytest.approx(610.0 - 400.0)
-    assert node.y == pytest.approx(555.0 - 350.0)
+    # The member moved far enough that the live auto-fit bbox (x=-40,
+    # y=-50, w=1300, h=1210) now fully contains the old manual-size rect
+    # (which was centered on the OLD bbox) - the union collapses to
+    # exactly the live bbox, i.e. it grew all the way back to auto-fit
+    # rather than clipping the member outside a frozen 800x700 box.
+    assert node.x == pytest.approx(-40.0)
+    assert node.y == pytest.approx(-50.0)
+    assert node.group_width == pytest.approx(1300.0)
+    assert node.group_height == pytest.approx(1210.0)
+
+
+def test_resize_frame_grows_only_the_axis_that_actually_needs_it():
+    # A subtler case than the "grows all the way back to auto-fit" test
+    # above: a smaller move that only pushes the live bbox past the
+    # manual rect on SOME edges, not all - the union must grow only what's
+    # actually needed per axis, not discard the manual size entirely.
+    doc = SceneDocument()
+    m1, m2 = doc.add_node(0, 0), doc.add_node(300, 300)
+    frame = doc.create_frame([m1.id, m2.id])
+    doc.resize_frame(frame.id, 800, 700)
+
+    doc.move_node(m2.id, 600, 300)  # only x moves further out; y unchanged
+
+    node = doc.nodes[frame.id]
+    # Live bbox after the move: x=-40, y=-50, w=900, h=510 (wider than
+    # before, same height). Manual-size rect re-anchored on this bbox's
+    # own center: x=10, y=-145, w=800, h=700. Union of the two:
+    # left=min(10,-40)=-40, top=min(-145,-50)=-145,
+    # right=max(810,860)=860, bottom=max(555,460)=555.
+    assert node.x == pytest.approx(-40.0)
+    assert node.y == pytest.approx(-145.0)
+    assert node.group_width == pytest.approx(900.0)
+    assert node.group_height == pytest.approx(700.0)
+
+
+def test_moving_a_frame_directly_pins_a_manual_position_anchor():
+    # Restores legacy's "an unlocked frame can be dragged independently of
+    # its members" capability: without this, dragging a frame (locked
+    # whole-group drag, or an unlocked frame moved on its own) was
+    # immediately meaningless - the very next member move recomputed the
+    # frame straight back to bbox-of-members-centered. move_node now pins
+    # group_manual_x/y and recomputes immediately, so the box unions the
+    # drag target with the still-distant members instead of discarding it.
+    doc = SceneDocument()
+    m1, m2 = doc.add_node(0, 0), doc.add_node(300, 300)
+    frame = doc.create_frame([m1.id, m2.id])
+
+    doc.move_node(frame.id, 100, 100)
+
+    node = doc.nodes[frame.id]
+    assert node.group_manual_x == pytest.approx(100.0)
+    assert node.group_manual_y == pytest.approx(100.0)
+    # Anchor rect (100,100,600,510) unioned with the untouched member bbox
+    # (-40,-50,600,510): left=min(100,-40)=-40, top=min(100,-50)=-50,
+    # right=max(700,560)=700, bottom=max(610,460)=610.
+    assert node.x == pytest.approx(-40.0)
+    assert node.y == pytest.approx(-50.0)
+    assert node.group_width == pytest.approx(740.0)
+    assert node.group_height == pytest.approx(660.0)
+
+
+def test_manual_position_anchor_survives_a_member_move_and_still_grows():
+    doc = SceneDocument()
+    m1, m2 = doc.add_node(0, 0), doc.add_node(300, 300)
+    frame = doc.create_frame([m1.id, m2.id])
+    doc.move_node(frame.id, 100, 100)
+
+    doc.move_node(m1.id, 0, 700)
+
+    node = doc.nodes[frame.id]
+    # The anchor (100, 100) must NOT have reverted to bbox-centering just
+    # because a member moved - it's still the position basis, unioned with
+    # the new live bbox: m1(0,700)-(220,820), m2(300,300)-(520,420) ->
+    # bbox x=-40,y=250,w=600,h=610. Anchor rect (100,100,740,660) union
+    # bbox (-40,250,600,610): left=min(100,-40)=-40, top=min(100,250)=100,
+    # right=max(840,560)=840, bottom=max(760,860)=860.
+    assert node.group_manual_x == pytest.approx(100.0)
+    assert node.group_manual_y == pytest.approx(100.0)
+    assert node.x == pytest.approx(-40.0)
+    assert node.y == pytest.approx(100.0)
+    assert node.group_width == pytest.approx(880.0)
+    assert node.group_height == pytest.approx(760.0)
+
+
+def test_fit_frame_to_content_clears_manual_position_anchor_too():
+    doc = SceneDocument()
+    m1, m2 = doc.add_node(0, 0), doc.add_node(300, 300)
+    frame = doc.create_frame([m1.id, m2.id])
+    doc.move_node(frame.id, 100, 100)
+
+    doc.fit_frame_to_content(frame.id)
+
+    node = doc.nodes[frame.id]
+    assert node.group_manual_x is None
+    assert node.group_manual_y is None
+    # Back to a pure auto-fit bbox of the (untouched) members.
+    assert node.x == pytest.approx(-40.0)
+    assert node.y == pytest.approx(-50.0)
+    assert node.group_width == pytest.approx(600.0)
+    assert node.group_height == pytest.approx(510.0)
+
+
+def test_moving_a_container_does_not_pin_a_manual_position_anchor():
+    # Containers have no manual-position concept, matching legacy (no lock,
+    # no independent-drag distinction for Container - it always owns and
+    # moves its children as one unit) and mirroring how group_manual_width/
+    # height are already frame-only.
+    doc = SceneDocument()
+    m1 = doc.add_node(0, 0)
+    container = doc.create_container([m1.id])
+
+    doc.move_node(container.id, 100, 100)
+
+    node = doc.nodes[container.id]
+    assert node.group_manual_x is None
+    assert node.group_manual_y is None
 
 
 def test_fit_frame_to_content_clears_manual_override():

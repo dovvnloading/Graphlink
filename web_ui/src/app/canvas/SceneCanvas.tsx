@@ -869,12 +869,18 @@ export function toFlowNodes(
       continue;
     }
     if (n.kind === "frame" || n.kind === "container") {
-      // R6.1: rendered BEHIND every other node (zIndex:-1 - React Flow paints
-      // in ascending zIndex order) since members are ordinary top-level flow
-      // nodes at their own absolute positions, never React Flow
-      // parentId/extent children of this node - see GroupNodeView.tsx's own
-      // module doc for why that is the deliberate, simpler equivalent of
-      // legacy's "auto-grow to enclose, never clip" behavior.
+      // R6.1/R6.1 follow-up: rendered BEHIND every other node (zIndex < 0 -
+      // React Flow paints in ascending zIndex order) since members are
+      // ordinary top-level flow nodes at their own absolute positions,
+      // never React Flow parentId/extent children of this node - see
+      // GroupNodeView.tsx's own module doc for why that is the deliberate,
+      // simpler equivalent of legacy's "auto-grow to enclose, never clip"
+      // behavior. Container sits BEHIND frame (-2 vs -1), matching
+      // legacy's own relative z-ordering (Frame=-2, Container=-3 there) -
+      // container membership can nest a frame inside it (create_container
+      // has no kind restriction, unlike create_frame), so without this
+      // distinction a nested frame would have undefined stacking against
+      // its own parent container's background.
       //
       // width/height are set on the FLOW NODE OBJECT itself (not just inside
       // `data`) - the documented xyflow mechanism that lets <NodeResizer/>
@@ -883,13 +889,12 @@ export function toFlowNodes(
       // GROUP_FALLBACK_WIDTH/HEIGHT covers the (should-be-unreachable, see
       // canvasConstants.ts) case of a null groupWidth/groupHeight.
       //
-      // draggable: an unlocked frame gets draggable:false (a deliberate
-      // simplification vs. legacy's own independently-draggable-when-
-      // unlocked behavior, confirmed as not worth preserving - see
-      // GroupNodeView.tsx's doc) - every locked frame and every container
-      // (which has no lock concept, always drags as a group) stays
-      // draggable, and its own onNodesChange drag carries its itemIds
-      // members along by the identical delta (see onNodesChange below).
+      // draggable: always true now (R6.1 follow-up restores legacy's own
+      // "an unlocked frame can still be dragged independently of its
+      // members" behavior - see groupDragKindOf/applyGroupDragDelta below,
+      // which gate the MEMBER-cascade on lock state, not draggability
+      // itself; backend/canvas.py's move_node pins a manual position
+      // anchor so the drag actually sticks instead of snapping back).
       const group = n as SceneNodeRowWithGroups;
       flowNodes.push({
         id: n.id,
@@ -897,8 +902,8 @@ export function toFlowNodes(
         position: { x: n.x, y: n.y },
         width: group.groupWidth ?? GROUP_FALLBACK_WIDTH,
         height: group.groupHeight ?? GROUP_FALLBACK_HEIGHT,
-        zIndex: -1,
-        draggable: n.kind === "container" || group.isLocked,
+        zIndex: n.kind === "container" ? -2 : -1,
+        draggable: true,
         data: {
           groupKind: n.kind,
           label: n.content,
@@ -907,6 +912,14 @@ export function toFlowNodes(
           isCollapsed: n.isCollapsed,
           isLocked: group.isLocked,
           itemIds: group.itemIds,
+          // R6.1 follow-up: a simplified equivalent of legacy's collapsed-
+          // container hover "ghost frame" preview - just member kinds, not
+          // a rendered miniature of actual content. Looked up from the
+          // SAME nodesById map the dockedChildren computation above
+          // already builds once per call; a stale/dangling item_ids entry
+          // (a member deleted out from under a group) is silently skipped,
+          // matching _bbox_of_members' own posture on the backend.
+          memberKinds: group.itemIds.map((id) => nodesById.get(id)?.kind).filter((kind): kind is string => !!kind),
           onSetLabel: (text: string) => store.setGroupLabel(n.id, text),
           onToggleCollapsed: () => store.toggleGroupCollapsed(n.id),
           onToggleLock: () => store.toggleFrameLock(n.id),
@@ -1005,19 +1018,72 @@ export function applyGroupDragDelta(
   if (!groupDragKindOf(draggedNode) || !draggedNode) return [];
   const deltaX = scaledPosition.x - draggedNode.position.x;
   const deltaY = scaledPosition.y - draggedNode.position.y;
-  const itemIds = (draggedNode.data as { itemIds?: string[] }).itemIds ?? [];
-  const memberChanges: NodeChange<SceneFlowNode>[] = [];
+  return collectGroupMemberDeltaChanges(nodes, draggedNode, deltaX, deltaY, new Set([draggedId]));
+}
+
+// R6.1 follow-up: recurses into any member that is itself a group (a
+// container nesting a frame or another container - create_container has
+// no kind restriction, unlike create_frame - see backend/canvas.py's own
+// docstrings), so dragging the OUTER group carries the FULL nested tree,
+// not just its direct itemIds. Without this, an inner group's own
+// members stayed put while only the inner group's single bounding node
+// moved with the outer drag, visibly desyncing it from its own contents -
+// a real, reachable bug given nesting is legitimately possible today.
+// `visited` is a defensive cycle guard (creation-time validation should
+// make a cycle unreachable, but this must never infinite-loop even if one
+// existed) and also prevents re-visiting the node being dragged itself.
+function collectGroupMemberDeltaChanges(
+  nodes: SceneFlowNode[],
+  groupNode: SceneFlowNode,
+  deltaX: number,
+  deltaY: number,
+  visited: Set<string>,
+): NodeChange<SceneFlowNode>[] {
+  const itemIds = (groupNode.data as { itemIds?: string[] }).itemIds ?? [];
+  const changes: NodeChange<SceneFlowNode>[] = [];
   for (const memberId of itemIds) {
+    if (visited.has(memberId)) continue;
     const member = nodes.find((n) => n.id === memberId);
     if (!member) continue;
-    memberChanges.push({
+    visited.add(memberId);
+    changes.push({
       id: memberId,
       type: "position",
       dragging: true,
       position: { x: member.position.x + deltaX, y: member.position.y + deltaY },
     });
+    if (member.type === "frame" || member.type === "container") {
+      changes.push(...collectGroupMemberDeltaChanges(nodes, member, deltaX, deltaY, visited));
+    }
   }
-  return memberChanges;
+  return changes;
+}
+
+// R6.1 follow-up: the id-only counterpart to collectGroupMemberDeltaChanges
+// above, for the two call sites that need "every node this group drag
+// carries along, transitively" without also computing a position delta -
+// the smart-guide exclusion set (a carried member must never be an
+// alignment candidate for the group dragging it) and the drag-end commit
+// loop (every carried member's SETTLED position must be persisted via
+// moveNode, not just the outer group's directly-listed itemIds - without
+// this, a nested group's own members would visually follow the drag but
+// snap back the moment the scene re-syncs, since their moved position was
+// never actually committed).
+function collectTransitiveMemberIds(
+  nodes: SceneFlowNode[],
+  groupNode: SceneFlowNode,
+  visited: Set<string> = new Set(),
+): Set<string> {
+  const itemIds = (groupNode.data as { itemIds?: string[] }).itemIds ?? [];
+  for (const memberId of itemIds) {
+    if (visited.has(memberId)) continue;
+    visited.add(memberId);
+    const member = nodes.find((n) => n.id === memberId);
+    if (member && (member.type === "frame" || member.type === "container")) {
+      collectTransitiveMemberIds(nodes, member, visited);
+    }
+  }
+  return visited;
 }
 
 // R7.5b-1: legacy's exact faded-connections opacity (graphlink_connections.py's
@@ -1383,7 +1449,7 @@ function CanvasInner({
             const movingSize = measuredNodeSize(reactFlow, change.id);
             if (moving && movingSize) {
               const memberIds = groupDragKindOf(moving)
-                ? new Set((moving.data as { itemIds?: string[] }).itemIds ?? [])
+                ? collectTransitiveMemberIds(nodes, moving)
                 : new Set<string>();
               const candidates: Rect[] = [];
               for (const n of nodes) {
@@ -1414,8 +1480,7 @@ function CanvasInner({
         if (settled) {
           store.moveNode(change.id, settled.position.x, settled.position.y);
           if (groupDragKindOf(settled)) {
-            const itemIds = (settled.data as { itemIds?: string[] }).itemIds ?? [];
-            for (const memberId of itemIds) {
+            for (const memberId of collectTransitiveMemberIds(nodes, settled)) {
               const member = nodes.find((n) => n.id === memberId);
               if (member) memberMoveIntents.push({ id: memberId, x: member.position.x, y: member.position.y });
             }

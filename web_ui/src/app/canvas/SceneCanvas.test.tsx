@@ -1207,7 +1207,7 @@ describe("toFlowNodes (R6.1 frame/container nodes)", () => {
     });
   });
 
-  it("an UNLOCKED frame gets draggable:false", () => {
+  it("an UNLOCKED frame is STILL draggable:true (R6.1 follow-up: restores independent-of-members dragging)", () => {
     const scene = baseScene({
       nodes: [groupNode({ id: "frame-1", kind: "frame", isLocked: false, groupWidth: 300, groupHeight: 200 })],
       edges: [],
@@ -1216,7 +1216,10 @@ describe("toFlowNodes (R6.1 frame/container nodes)", () => {
 
     const flowNodes = toFlowNodes(scene, store);
     const frameFlowNode = flowNodes.find((n) => n.id === "frame-1");
-    expect(frameFlowNode!.draggable).toBe(false);
+    // Draggable regardless of lock state now - groupDragKindOf (tested
+    // separately below) is what gates whether a drag carries members
+    // along, not whether the frame can be dragged at all.
+    expect(frameFlowNode!.draggable).toBe(true);
   });
 
   it("a container is ALWAYS draggable regardless of isLocked (containers have no lock concept)", () => {
@@ -1233,6 +1236,37 @@ describe("toFlowNodes (R6.1 frame/container nodes)", () => {
     expect(containerFlowNode!.type).toBe("container");
     expect(containerFlowNode!.draggable).toBe(true);
     expect((containerFlowNode!.data as { groupKind: string }).groupKind).toBe("container");
+  });
+
+  it("a container's zIndex sits BEHIND a frame's (-2 vs -1), so a nested frame-in-container stacks correctly", () => {
+    const scene = baseScene({
+      nodes: [
+        groupNode({ id: "frame-1", kind: "frame", groupWidth: 300, groupHeight: 200 }),
+        groupNode({ id: "container-1", kind: "container", groupWidth: 300, groupHeight: 200 }),
+      ],
+      edges: [],
+    });
+    const store = makeStore();
+
+    const flowNodes = toFlowNodes(scene, store);
+    expect(flowNodes.find((n) => n.id === "frame-1")!.zIndex).toBe(-1);
+    expect(flowNodes.find((n) => n.id === "container-1")!.zIndex).toBe(-2);
+  });
+
+  it("computes memberKinds from the current member nodes, skipping a stale/dangling item id", () => {
+    const scene = baseScene({
+      nodes: [
+        baseNode({ id: "m1", kind: "chat" }),
+        baseNode({ id: "m2", kind: "code" }),
+        groupNode({ id: "container-1", kind: "container", itemIds: ["m1", "m2", "gone"] }),
+      ],
+      edges: [],
+    });
+    const store = makeStore();
+
+    const flowNodes = toFlowNodes(scene, store);
+    const data = flowNodes.find((n) => n.id === "container-1")!.data as { memberKinds: string[] };
+    expect(data.memberKinds).toEqual(["chat", "code"]);
   });
 
   it("falls back to GROUP_FALLBACK_WIDTH/HEIGHT when groupWidth/groupHeight are null", () => {
@@ -1632,6 +1666,60 @@ describe("applyGroupDragDelta (R6.1 group-drag)", () => {
       } as unknown as SceneFlowNode,
     ];
     expect(applyGroupDragDelta(nodes, "frame-1", { x: 10, y: 10 })).toEqual([]);
+  });
+
+  it("R6.1 follow-up: dragging an outer container cascades into a NESTED group's own members too", () => {
+    // Regression test: applyGroupDragDelta used to only shift a dragged
+    // group's DIRECT itemIds by a flat delta - if a member was itself a
+    // group (container-of-container, or a frame nested inside a
+    // container), that inner group's own members never moved, visibly
+    // desyncing it from its own contents. Nesting is legitimately
+    // possible (create_container has no kind restriction).
+    const nodes: SceneFlowNode[] = [
+      {
+        id: "outer-container",
+        type: "container",
+        position: { x: 0, y: 0 },
+        data: { itemIds: ["inner-frame"] },
+      } as unknown as SceneFlowNode,
+      {
+        id: "inner-frame",
+        type: "frame",
+        position: { x: 50, y: 50 },
+        data: { isLocked: true, itemIds: ["leaf-1"] },
+      } as unknown as SceneFlowNode,
+      { id: "leaf-1", type: "chat", position: { x: 70, y: 90 }, data: {} } as unknown as SceneFlowNode,
+    ];
+
+    // The outer container moved from (0,0) to (10,20): delta (10,20).
+    const changes = applyGroupDragDelta(nodes, "outer-container", { x: 10, y: 20 });
+
+    const byId = new Map(
+      (changes as unknown as Array<{ id: string; position: { x: number; y: number } }>).map((c) => [c.id, c]),
+    );
+    expect(byId.size).toBe(2);
+    expect(byId.get("inner-frame")!.position).toEqual({ x: 60, y: 70 });
+    // The innermost leaf moved by the SAME delta too, not left behind.
+    expect(byId.get("leaf-1")!.position).toEqual({ x: 80, y: 110 });
+  });
+
+  it("R6.1 follow-up: a cycle in group membership never infinite-loops (defensive - creation-time validation should prevent this)", () => {
+    const nodes: SceneFlowNode[] = [
+      {
+        id: "container-a",
+        type: "container",
+        position: { x: 0, y: 0 },
+        data: { itemIds: ["container-b"] },
+      } as unknown as SceneFlowNode,
+      {
+        id: "container-b",
+        type: "container",
+        position: { x: 10, y: 10 },
+        data: { itemIds: ["container-a"] },
+      } as unknown as SceneFlowNode,
+    ];
+
+    expect(() => applyGroupDragDelta(nodes, "container-a", { x: 5, y: 5 })).not.toThrow();
   });
 });
 
