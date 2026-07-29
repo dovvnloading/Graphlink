@@ -256,7 +256,22 @@ describe("toFlowNodes (R8a Open Document View wiring)", () => {
     expect(chatFlowNode).toBeDefined();
 
     (chatFlowNode!.data as { onOpenDocumentView: () => void }).onOpenDocumentView();
-    expect(onOpenDocumentView).toHaveBeenCalledWith("Hello world");
+    expect(onOpenDocumentView).toHaveBeenCalledWith("Hello world", "Assistant message");
+  });
+
+  it("a chat node's onOpenDocumentView labels the source as the user's own message when isUser is true", () => {
+    const scene = baseScene({
+      nodes: [baseNode({ id: "chat-1", kind: "chat", content: "Hello world", isUser: true })],
+      edges: [],
+    });
+    const store = makeStore();
+    const onOpenDocumentView = vi.fn();
+
+    const flowNodes = toFlowNodes(scene, store, onOpenDocumentView);
+    const chatFlowNode = flowNodes.find((n) => n.id === "chat-1");
+
+    (chatFlowNode!.data as { onOpenDocumentView: () => void }).onOpenDocumentView();
+    expect(onOpenDocumentView).toHaveBeenCalledWith("Hello world", "Your message");
   });
 
   it("a chat node with blank/whitespace-only content does NOT invoke the callback, and shows a notification instead", () => {
@@ -296,6 +311,7 @@ describe("toFlowNodes (R8a Open Document View wiring)", () => {
     (conversationFlowNode!.data as { onOpenDocumentView: () => void }).onOpenDocumentView();
     expect(onOpenDocumentView).toHaveBeenCalledWith(
       "## Conversation Transcript\n\n### 1. User\n\nhi\n\n### 2. Assistant\n\nhello there",
+      "Conversation transcript",
     );
   });
 
