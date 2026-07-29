@@ -221,6 +221,15 @@ GROUP_MEMBER_DEFAULT_WIDTH = 220.0
 GROUP_MEMBER_DEFAULT_HEIGHT = 120.0
 GROUP_COLLAPSED_WIDTH = 260.0
 GROUP_COLLAPSED_HEIGHT = 50.0
+# create_frame's member-kind allowlist gate, as an EXCLUDE-list rather than
+# an allowlist of the ~12 leaf content kinds: legacy's own createFrame only
+# ever accepted leaf content nodes (never a Note, never another Frame or
+# Container - see graphlink_scene.py's own selection filter), which this
+# reproduces the semantics of without needing to enumerate (and keep in
+# sync with) every current or future leaf kind. create_container has no
+# equivalent restriction - container membership can legitimately nest
+# (a container may hold another container or a frame).
+GROUP_INELIGIBLE_FRAME_MEMBER_KINDS = frozenset({"note", "frame", "container"})
 
 # R6.2: Chart node - legacy ChartItem's own MIN_WIDTH/MIN_HEIGHT/MAX_WIDTH/
 # MAX_HEIGHT bounds, enforced server-side by resize_chart below (the
@@ -589,6 +598,22 @@ class SceneNode:
     # no manual-resize capability (no resize_container method exists).
     group_manual_width: float | None = None
     group_manual_height: float | None = None
+    # frame kind only - the position counterpart to group_manual_width/
+    # height above: set by move_node whenever a frame is dragged directly
+    # (locked whole-group drag OR an independently-dragged unlocked frame),
+    # cleared back to None by fit_frame_to_content. Exists so an unlocked
+    # frame's own drag actually sticks - without an explicit anchor, the
+    # very next member move would recompute the frame straight back to
+    # bbox-of-members-centered, silently undoing the drag (legacy let an
+    # unlocked frame's outline be repositioned independently of its
+    # members; this is that same capability, ported). See
+    # _recompute_group_bounds for how this anchor is unioned with the live
+    # bbox so it still can never clip a member, matching legacy's own
+    # rect.united() guarantee. Same wire/kind-scoping posture as
+    # group_manual_width/height above (server-side only, unused for
+    # container).
+    group_manual_x: float | None = None
+    group_manual_y: float | None = None
     # frame/container's current effective on-canvas size, kept live by
     # _recompute_group_bounds: the fixed GROUP_COLLAPSED_WIDTH/HEIGHT pill
     # while is_collapsed, else group_manual_width/height verbatim while a
@@ -1858,6 +1883,24 @@ class SceneDocument:
         height = (bottom - top) + GROUP_PADDING_TOP + GROUP_PADDING
         return x, y, width, height
 
+    @staticmethod
+    def _union_rect(
+        a: tuple[float, float, float, float], b: tuple[float, float, float, float]
+    ) -> tuple[float, float, float, float]:
+        """The smallest (x, y, width, height) rect that fully contains both
+        inputs - legacy's own QRectF.united(), ported. The single primitive
+        _recompute_group_bounds uses to guarantee a frame's manual size
+        and/or manually-dragged position never clips a member: whichever
+        direction the live content has drifted, the result grows to cover
+        it, never shrinks below either input."""
+        ax, ay, aw, ah = a
+        bx, by, bw, bh = b
+        left = min(ax, bx)
+        top = min(ay, by)
+        right = max(ax + aw, bx + bw)
+        bottom = max(ay + ah, by + bh)
+        return left, top, right - left, bottom - top
+
     def _recompute_group_bounds(self, node_id: str) -> None:
         """The core "legacy never clips, always auto-grows to enclose
         members" recompute - plain server-side math, NOT a React Flow
@@ -1866,17 +1909,25 @@ class SceneDocument:
         only ever calls this with a live frame/container id, but a caller
         that races a delete must never crash here).
 
-        Three cases, in priority order:
+        Priority order:
         1. Collapsed: skip the bbox computation entirely, snap to the fixed
            GROUP_COLLAPSED_WIDTH/HEIGHT pill size. x/y are left untouched -
            a collapsed pill stays wherever it was expanded from.
-        2. Frame with a manual size override (group_manual_width/height both
-           set): the override's WIDTH/HEIGHT stay exactly as manually set,
-           but x/y still re-centers so the manually-sized rect stays
-           centered on the live bbox-of-members center point.
-        3. Otherwise (auto-fit - every container, and every frame with no
-           override): x/y/width/height all come straight from the padded
-           bbox-of-members.
+        2. Frame with a manual size override and/or a manually-dragged
+           position (group_manual_width/height and/or group_manual_x/y
+           set): build a rect from whichever of those four are set (falling
+           back to the frame's current group_width/height for an unset
+           size, or the live bbox-of-members' own center for an unset
+           position), then UNION that rect with the live bbox-of-members -
+           never just substitute it. This is what makes both a manual
+           resize AND an independent drag stick (survive the very next
+           member move) without ever letting a member visually escape the
+           frame: if the live content has grown past the manual rect on any
+           edge, the union grows to re-enclose it instead of clipping or
+           silently reverting to bbox-centering.
+        3. Otherwise (auto-fit - every container, and every frame with
+           nothing manual set): x/y/width/height come straight from the
+           padded bbox-of-members.
         """
         node = self.nodes.get(node_id)
         if node is None or node.kind not in ("frame", "container"):
@@ -1885,16 +1936,26 @@ class SceneDocument:
             node.group_width = GROUP_COLLAPSED_WIDTH
             node.group_height = GROUP_COLLAPSED_HEIGHT
             return
-        if node.kind == "frame" and node.group_manual_width is not None and node.group_manual_height is not None:
-            bx, by, bw, bh = self._bbox_of_members(node.item_ids)
-            center_x, center_y = bx + bw / 2.0, by + bh / 2.0
-            node.group_width = node.group_manual_width
-            node.group_height = node.group_manual_height
-            node.x = center_x - node.group_width / 2.0
-            node.y = center_y - node.group_height / 2.0
+        bx, by, bw, bh = self._bbox_of_members(node.item_ids)
+        has_manual = node.kind == "frame" and (
+            node.group_manual_width is not None
+            or node.group_manual_height is not None
+            or node.group_manual_x is not None
+            or node.group_manual_y is not None
+        )
+        if has_manual:
+            width = node.group_manual_width if node.group_manual_width is not None else (node.group_width or bw)
+            height = node.group_manual_height if node.group_manual_height is not None else (node.group_height or bh)
+            if node.group_manual_x is not None and node.group_manual_y is not None:
+                anchor_x, anchor_y = node.group_manual_x, node.group_manual_y
+            else:
+                anchor_x = bx + bw / 2.0 - width / 2.0
+                anchor_y = by + bh / 2.0 - height / 2.0
+            node.x, node.y, node.group_width, node.group_height = self._union_rect(
+                (anchor_x, anchor_y, width, height), (bx, by, bw, bh)
+            )
             return
-        x, y, width, height = self._bbox_of_members(node.item_ids)
-        node.x, node.y, node.group_width, node.group_height = x, y, width, height
+        node.x, node.y, node.group_width, node.group_height = bx, by, bw, bh
 
     def _detach_from_existing_group(self, member_id: str, group_kind: str) -> None:
         """Part of create_frame/create_container's shared validation: if
@@ -1920,16 +1981,28 @@ class SceneDocument:
 
     def create_frame(self, item_ids: list[str]) -> SceneNode:
         """Group an existing set of nodes into a new frame. Validates every
-        id exists BEFORE any mutation (fail fast, no partial detach), then
-        detaches each from any frame it was already a member of (see
+        id exists AND is an eligible leaf-content kind BEFORE any mutation
+        (fail fast, no partial detach) - GROUP_INELIGIBLE_FRAME_MEMBER_KINDS
+        rejects a note or another frame/container, matching legacy's own
+        createFrame selection filter (frames never nest, and never absorb a
+        note - a note member would also be silently dropped from this
+        frame's own membership on save/reload, since frame_source_map has
+        no slot for one; see session_save.py). Then detaches each surviving
+        candidate from any frame it was already a member of (see
         _detach_from_existing_group). is_locked defaults True (the legacy
         frame default - locked). Initial x/y/width/height come from the
         padded bbox-of-members, computed immediately via
         _recompute_group_bounds right after construction."""
         ids = list(item_ids)
         for member_id in ids:
-            if member_id not in self.nodes:
+            member = self.nodes.get(member_id)
+            if member is None:
                 raise SceneError(f"unknown member node: {member_id}")
+            if member.kind in GROUP_INELIGIBLE_FRAME_MEMBER_KINDS:
+                raise SceneError(
+                    f"node {member_id} (kind={member.kind!r}) cannot be a frame member - "
+                    f"frames only group leaf content nodes, never a note or another frame/container"
+                )
         for member_id in ids:
             self._detach_from_existing_group(member_id, "frame")
         node_id = f"n{next(self._counter)}"
@@ -2054,9 +2127,13 @@ class SceneDocument:
         self._recompute_group_bounds(node_id)
 
     def fit_frame_to_content(self, node_id: str) -> None:
-        """Frame kind only. Clears the manual size override back to None
-        (auto-fit) and forces an immediate bbox recompute - the exact
-        inverse of resize_frame."""
+        """Frame kind only. Clears BOTH the manual size override (set by
+        resize_frame) AND the manual position anchor (set by move_node
+        whenever this frame was dragged directly - see that method's own
+        comment) back to None, a full reset to pure auto-fit, then forces
+        an immediate bbox recompute. The size half is the exact inverse of
+        resize_frame; the position half is what makes this button also undo
+        an independent unlocked-frame drag, not just a resize."""
         node = self.nodes.get(node_id)
         if node is None:
             raise SceneError(f"unknown node: {node_id}")
@@ -2064,6 +2141,8 @@ class SceneDocument:
             raise SceneError(f"node is not a frame node: {node_id}")
         node.group_manual_width = None
         node.group_manual_height = None
+        node.group_manual_x = None
+        node.group_manual_y = None
         self._recompute_group_bounds(node_id)
 
     def ungroup(self, node_id: str) -> None:
@@ -2592,6 +2671,20 @@ class SceneDocument:
         if node is None:
             raise SceneError(f"unknown node: {node_id}")
         node.x, node.y = float(x), float(y)
+        if node.kind == "frame":
+            # R6.1 follow-up: dragging a frame directly - a locked whole-
+            # group drag (the frontend commits the frame's own position
+            # before its members') OR an unlocked frame dragged
+            # independently of its members - pins an explicit position
+            # anchor. Without this, the very next member move would
+            # recompute this frame straight back to bbox-of-members-
+            # centered, silently undoing the drag. Harmless for a locked
+            # drag: members move by the identical delta, so the anchor and
+            # the live bbox stay in agreement. See _recompute_group_bounds
+            # for how this anchor is unioned with live content so it still
+            # can never clip a member.
+            node.group_manual_x, node.group_manual_y = node.x, node.y
+            self._recompute_group_bounds(node_id)
         # R6.1: keep every frame/container this node is a member of enclosing
         # it - a node is a member of at most one frame AND at most one
         # container simultaneously (see item_ids's own field comment), so

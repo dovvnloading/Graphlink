@@ -21,8 +21,9 @@ import { GROUP_RESIZE_MIN_HEIGHT, GROUP_RESIZE_MIN_WIDTH } from "./canvasConstan
  * children - see that same backend comment for why this is the deliberate,
  * simpler equivalent of legacy's "auto-grow, never clip" behavior) - so
  * paint order alone is what keeps this box visually behind its members:
- * SceneCanvas.tsx's toFlowNodes sets zIndex:-1 on every frame/container flow
- * node for exactly that.
+ * SceneCanvas.tsx's toFlowNodes sets zIndex to -1 for a frame and -2 for a
+ * container (container further back, matching legacy's own relative
+ * ordering) for exactly that.
  *
  * Sizing: `width`/`height` are set on the FLOW NODE OBJECT itself (not just
  * inside `data`) in SceneCanvas.tsx's toFlowNodes - the documented xyflow
@@ -32,11 +33,19 @@ import { GROUP_RESIZE_MIN_HEIGHT, GROUP_RESIZE_MIN_WIDTH } from "./canvasConstan
  *
  * Drag: a locked frame's (or any container's) own body is the intentional
  * group-drag handle - see SceneCanvas.tsx's onNodesChange for the delta
- * application to itemIds members. An UNLOCKED frame has draggable:false set
- * on its flow node (also in toFlowNodes) - a deliberate simplification vs.
- * legacy's own "unlocked frame can still be dragged independently" behavior,
- * confirmed as not worth preserving; its position is entirely server-
- * computed from its members either way.
+ * application to itemIds members, which now cascades recursively into any
+ * member that is itself a group (container-of-container, or a frame nested
+ * inside a container). An UNLOCKED frame is ALSO draggable (restored,
+ * matching legacy's own "an unlocked frame can be dragged independently of
+ * its members" behavior) - it just doesn't carry members along; see
+ * groupDragKindOf in SceneCanvas.tsx, which gates the member cascade on
+ * lock state, not draggability itself.
+ *
+ * Collapsed container hover preview: a simplified equivalent of legacy's
+ * timer-based "ghost frame" (a rendered miniature preview of expanded
+ * contents on hover, without actually expanding). This shows a lightweight
+ * tooltip listing member count and kinds instead of a full content
+ * render - container-only, matching legacy (frames never had this).
  */
 
 export interface GroupNodeData extends Record<string, unknown> {
@@ -47,6 +56,7 @@ export interface GroupNodeData extends Record<string, unknown> {
   isCollapsed: boolean;
   isLocked: boolean;
   itemIds: string[];
+  memberKinds: string[];
   onSetLabel: (text: string) => void;
   onToggleCollapsed: () => void;
   onToggleLock: () => void;
@@ -65,6 +75,8 @@ export function GroupNodeView({ id, data, selected }: NodeProps<GroupFlowNode>) 
   // Same "programmatic unmount fires a redundant blur" guard as
   // NoteNodeView's own editor - see that component's doc comment.
   const skipBlurRef = useRef(false);
+  const [hovered, setHovered] = useState(false);
+  const showGhostPreview = !isFrame && data.isCollapsed && hovered && data.memberKinds.length > 0;
 
   function beginEdit() {
     setDraft(data.label);
@@ -110,7 +122,10 @@ export function GroupNodeView({ id, data, selected }: NodeProps<GroupFlowNode>) 
         (data.isCollapsed ? " collapsed" : "")
       }
       style={{ width: "100%", height: "100%", backgroundColor: data.color ?? undefined }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
     >
+      {showGhostPreview && <GhostPreview memberKinds={data.memberKinds} />}
       <NodeResizer
         nodeId={id}
         isVisible={isFrame && !data.isCollapsed}
@@ -156,6 +171,27 @@ export function GroupNodeView({ id, data, selected }: NodeProps<GroupFlowNode>) 
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+// R6.1 follow-up: the simplified ghost-preview tooltip - member count plus
+// a per-kind breakdown ("3 items: chat x2, code x1"), not a rendered
+// miniature of each member's actual content the way legacy's real
+// ghost-frame preview was. Kinds are counted (not listed one-by-one) since
+// a container can easily hold a dozen+ members - a flat list would be
+// noisier than useful at that size.
+function GhostPreview({ memberKinds }: { memberKinds: string[] }) {
+  const counts = new Map<string, number>();
+  for (const kind of memberKinds) counts.set(kind, (counts.get(kind) ?? 0) + 1);
+  const breakdown = [...counts.entries()].map(([kind, count]) => `${kind}${count > 1 ? ` x${count}` : ""}`);
+
+  return (
+    <div className="group-node-ghost-preview nodrag" role="tooltip">
+      <span className="group-node-ghost-preview-count">
+        {memberKinds.length} item{memberKinds.length === 1 ? "" : "s"}
+      </span>
+      <span className="group-node-ghost-preview-breakdown">{breakdown.join(", ")}</span>
     </div>
   );
 }
