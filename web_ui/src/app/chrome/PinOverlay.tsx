@@ -94,7 +94,7 @@ export function PinOverlay({ store }: { store: SceneStore }) {
   }
 
   return (
-    <Popover name="pins" label="Navigation pins" className="pins-popover">
+    <Popover name="pins" label="Navigation pins" className="pins-popover" anchored>
       <div className="pins-header">
         <span className="pins-title">PINS</span>
         <button type="button" className="pins-add" onClick={addPinHere}>

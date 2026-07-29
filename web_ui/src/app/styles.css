@@ -1125,20 +1125,6 @@ body,
   }
 }
 
-.app-popover-layer {
-  position: absolute;
-  top: var(--gl-chrome-inset);
-  right: var(--gl-chrome-inset);
-  z-index: var(--gl-z-app-layer);
-}
-
-.app-plugins-layer {
-  position: absolute;
-  top: var(--gl-chrome-inset);
-  right: var(--gl-chrome-inset);
-  z-index: var(--gl-z-app-layer);
-}
-
 .overlay-popover {
   background-color: var(--gl-surface-node-body);
   border: 1px solid var(--gl-surface-border);
@@ -1159,6 +1145,18 @@ body,
      tuned distance that happens to work for one consumer. */
   max-height: calc(100vh - 96px);
   overflow-y: auto;
+}
+
+/* R8a (UI/UX issue list finding #27): View/Plugins/Pins used to render
+   inside a wrapper div hard-positioned at a fixed corner of the canvas
+   (.app-popover-layer/.app-plugins-layer/.app-pins-layer, since removed) -
+   position: fixed here is computed and set by useAnchoredPlacement in
+   overlays.tsx (top/left as inline style), portaled to document.body so it
+   resolves against the real viewport rather than whatever ancestor it
+   would otherwise have rendered under. */
+.overlay-popover-anchored {
+  position: fixed;
+  z-index: var(--gl-z-app-layer);
 }
 
 .overlay-scrim {
@@ -1796,13 +1794,6 @@ body,
 }
 
 /* -- R2.4 pin overlay ------------------------------------------------------ */
-
-.app-pins-layer {
-  position: absolute;
-  top: var(--gl-chrome-inset);
-  left: var(--gl-chrome-inset);
-  z-index: var(--gl-z-app-layer);
-}
 
 .pins-popover {
   width: 240px;
