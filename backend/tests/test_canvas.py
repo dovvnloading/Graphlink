@@ -26,6 +26,7 @@ from backend.canvas import (
     SceneDocument,
     SceneEmptyPromptError,
     SceneError,
+    _format_branches_for_comparison,
     _history_token_text,
     _history_turn_text,
     _research_result_wire,
@@ -6774,3 +6775,183 @@ def test_generate_key_takeaway_sends_the_nodes_own_text_not_the_branch_history(m
         assert "the parent question" not in seen[0]
 
     asyncio.run(run())
+
+
+# -- ADR-002 Workstream 1: "Compare Branches" ---------------------------------
+#
+# The second sequenced item after "Branch from here" (that workstream's fork
+# primitive) - takes 2+ existing chat nodes and drops a single agent-authored
+# comparison into a new note linked back to every source branch.
+
+
+def test_format_branches_for_comparison_labels_each_section_and_flattens_turns():
+    branches = [
+        ("Branch 1", [{"role": "user", "content": "question one"}, {"role": "assistant", "content": "answer one"}]),
+        ("Branch 2", [{"role": "user", "content": "question two"}]),
+    ]
+    result = _format_branches_for_comparison(branches)
+    assert "=== Branch 1 ===" in result
+    assert "=== Branch 2 ===" in result
+    assert "User: question one" in result
+    assert "Assistant: answer one" in result
+    assert "User: question two" in result
+    # Branch 1's section must come before Branch 2's.
+    assert result.index("Branch 1") < result.index("Branch 2")
+
+
+def test_format_branches_for_comparison_skips_blank_turns():
+    branches = [("Branch 1", [{"role": "user", "content": "   "}, {"role": "assistant", "content": "real answer"}])]
+    result = _format_branches_for_comparison(branches)
+    assert "real answer" in result
+    assert result.count("\n\n") <= 1, "a blank turn must not inject a stray blank line"
+
+
+def test_format_branches_for_comparison_flattens_a_content_parts_multimodal_turn():
+    """A turn whose "content" is an R8a content_parts LIST (not a plain
+    string - e.g. text plus a staged image) must be flattened to its text
+    part via _history_turn_text, never stringified as a raw Python list -
+    that would leak a repr artifact like "[{'type':" into what the agent
+    reads."""
+    branches = [
+        (
+            "Branch 1",
+            [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "look at this image"},
+                    {"type": "image", "image_bytes": "base64-ignored-here"},
+                ],
+            }],
+        ),
+    ]
+    result = _format_branches_for_comparison(branches)
+    assert "look at this image" in result
+    assert "[{" not in result, "a content_parts list must never be stringified via repr"
+    assert "'type'" not in result
+
+
+def test_compare_branches_creates_a_note_linked_to_all_sources(monkeypatch):
+    monkeypatch.setattr(
+        agents_module.BranchComparisonAgent, "get_response",
+        lambda self, text: "Branch Comparison\n\nAgreements:\n• both agree",
+    )
+
+    async def run():
+        bus, document, recorder, _ = make_bus_with_dispatcher()
+        root = document.add_chat_node(0, 0, "root question", True)
+        first = document.add_chat_node(0, 160, "first answer", False, parent_id=root.id)
+        second = document.add_chat_node(460, 160, "second answer", False, parent_id=root.id)
+        scene_publishes_before = recorder.topics_seen().count("scene")
+
+        note_id = await bus.dispatch_intent("scene", "compareBranches", [[first.id, second.id]])
+
+        assert note_id is not None
+        note = document.nodes[note_id]
+        assert note.kind == "note"
+        assert note.content == "Branch Comparison\n\nAgreements:\n• both agree"
+        assert note.is_branch_comparison is True
+        assert note.item_ids == [first.id, second.id]
+        assert note.color == NOTE_AGENT_BODY_COLOR
+        assert note.header_color == NOTE_AGENT_HEADER_COLOR
+        # Positioned below-and-between the two sources, offset to the side -
+        # same "clears the source's width" convention as the single-node
+        # note agents.
+        assert note.x == (first.x + second.x) / 2 + NOTE_AGENT_X_OFFSET
+        assert note.y == max(first.y, second.y)
+        assert recorder.topics_seen().count("scene") > scene_publishes_before
+
+    asyncio.run(run())
+
+
+def test_compare_branches_sends_each_branchs_own_full_history_not_just_its_own_content(monkeypatch):
+    # UNLIKE generate_key_takeaway (one node's own text only), comparing
+    # branches needs each branch's FULL conversation, so an agent can
+    # actually judge agreements/differences across turns, not just leaves.
+    seen = []
+    monkeypatch.setattr(
+        agents_module.BranchComparisonAgent, "get_response",
+        lambda self, text: seen.append(text) or "Branch Comparison",
+    )
+
+    async def run():
+        bus, document, _, _ = make_bus_with_dispatcher()
+        root = document.add_chat_node(0, 0, "shared root question", True)
+        first = document.add_chat_node(0, 160, "first branch reply", False, parent_id=root.id)
+        second = document.add_chat_node(460, 160, "second branch reply", False, parent_id=root.id)
+
+        await bus.dispatch_intent("scene", "compareBranches", [[first.id, second.id]])
+
+        assert len(seen) == 1
+        formatted = seen[0]
+        assert "shared root question" in formatted, "each branch's full history must be included, not just its own leaf"
+        assert "first branch reply" in formatted
+        assert "second branch reply" in formatted
+
+    asyncio.run(run())
+
+
+def test_compare_branches_rejects_fewer_than_two_ids():
+    async def run():
+        bus, document, _, _ = make_bus_with_dispatcher()
+        only = document.add_chat_node(0, 0, "solo", True)
+        node_count_before = len(document.nodes)
+
+        assert await bus.dispatch_intent("scene", "compareBranches", [[]]) is None
+        assert await bus.dispatch_intent("scene", "compareBranches", [[only.id]]) is None
+        assert len(document.nodes) == node_count_before, "no note should be created"
+
+    asyncio.run(run())
+
+
+def test_compare_branches_dedupes_repeated_ids_before_the_minimum_check():
+    async def run():
+        bus, document, _, _ = make_bus_with_dispatcher()
+        only = document.add_chat_node(0, 0, "solo", True)
+
+        result = await bus.dispatch_intent("scene", "compareBranches", [[only.id, only.id]])
+        assert result is None, "the same id twice must still fail the real 2-distinct-branches minimum"
+
+    asyncio.run(run())
+
+
+def test_compare_branches_rejects_a_non_chat_node(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        agents_module.BranchComparisonAgent, "get_response",
+        lambda self, text: calls.append(text) or "should not happen",
+    )
+
+    async def run():
+        bus, document, _, _ = make_bus_with_dispatcher()
+        chat = document.add_chat_node(0, 0, "a real chat node", True)
+        note = document.add_note(0, 0)
+
+        result = await bus.dispatch_intent("scene", "compareBranches", [[chat.id, note.id]])
+
+        assert result is None
+        assert calls == [], "a non-chat node in the selection must block the agent call entirely"
+
+    asyncio.run(run())
+
+
+def test_compare_branches_rejects_an_unknown_node_id():
+    async def run():
+        bus, document, _, _ = make_bus_with_dispatcher()
+        chat = document.add_chat_node(0, 0, "a real chat node", True)
+        result = await bus.dispatch_intent("scene", "compareBranches", [[chat.id, "does-not-exist"]])
+        assert result is None
+
+    asyncio.run(run())
+
+
+def test_mark_branch_comparison_note_rejects_a_non_note_node():
+    doc = SceneDocument()
+    chat = doc.add_chat_node(0, 0, "not a note", True)
+    with pytest.raises(SceneError):
+        doc.mark_branch_comparison_note(chat.id, ["x", "y"])
+
+
+def test_mark_branch_comparison_note_rejects_an_unknown_node_id():
+    doc = SceneDocument()
+    with pytest.raises(SceneError):
+        doc.mark_branch_comparison_note("does-not-exist", ["x", "y"])

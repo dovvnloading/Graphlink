@@ -597,12 +597,27 @@ class SceneNode:
     # Both default False; unused for every other kind.
     is_system_prompt: bool = False
     is_summary_note: bool = False
+    # ADR-002 Workstream 1 ("Compare Branches") - note kind only, a NEW badge
+    # flag alongside the two above, marking a note as the output of the
+    # Compare Branches agent rather than a plain/system-prompt/summary note.
+    # Deliberately NOT is_summary_note: that flag is legacy's own "Group
+    # Summary" concept (an arbitrary multi-select of any node kinds,
+    # summarized - never ported, since it depended on a multi-select model
+    # the app didn't have yet), which is semantically a different feature
+    # from comparing conversation branches specifically. Reusing it here
+    # would make a future real port of Group Summary collide with this one.
+    is_branch_comparison: bool = False
     # frame/container membership: the ids of the member nodes this group
     # currently encloses. In this implementation a node can be a member of
     # AT MOST ONE frame AND AT MOST ONE container simultaneously (never two
     # frames, never two containers) - create_frame/create_container's own
     # detach-from-existing-same-kind-group rule enforces this (see below).
-    # Unused (default empty list) for every other kind.
+    # ALSO reused (ADR-002 Workstream 1) by an is_branch_comparison note to
+    # record the source chat-node ids it was compared from - a second,
+    # unrelated "list of node ids this node references" use of the same
+    # field rather than a new one, exactly like frame/container's own
+    # membership use above. Unused (default empty list) for every other
+    # case.
     item_ids: list[str] = field(default_factory=list)
     # frame kind only - legacy default is LOCKED (True), unlike every other
     # bool field on this dataclass (which all default False). Containers
@@ -1886,6 +1901,21 @@ class SceneDocument:
             raise SceneError(f"unknown node: {node_id}")
         node.content = str(content)
 
+    def mark_branch_comparison_note(self, node_id: str, source_node_ids: list[str]) -> None:
+        """ADR-002 Workstream 1 ("Compare Branches"): stamps an already-created
+        note as the output of the Compare Branches agent and records which
+        branches it compared - called once, immediately after add_note +
+        set_note_content, mirroring set_group_color's own "extra setter call
+        right after creation" shape (see the WS intent wrapper in
+        register_canvas)."""
+        node = self.nodes.get(node_id)
+        if node is None:
+            raise SceneError(f"unknown node: {node_id}")
+        if node.kind != "note":
+            raise SceneError(f"node is not a note node: {node_id}")
+        node.is_branch_comparison = True
+        node.item_ids = list(source_node_ids)
+
     def _bbox_of_members(self, item_ids: list[str]) -> tuple[float, float, float, float]:
         """Compute the padded union rect (x, y, width, height) enclosing
         every member id's ESTIMATED footprint - GROUP_MEMBER_DEFAULT_WIDTH/
@@ -3014,6 +3044,9 @@ class SceneDocument:
                     "headerColor": n.header_color,
                     "isSystemPrompt": n.is_system_prompt,
                     "isSummaryNote": n.is_summary_note,
+                    # ADR-002 Workstream 1 ("Compare Branches") - see
+                    # SceneNode.is_branch_comparison's own comment.
+                    "isBranchComparison": n.is_branch_comparison,
                     "itemIds": list(n.item_ids),
                     "isLocked": n.is_locked,
                     "groupWidth": n.group_width,
@@ -3210,6 +3243,29 @@ def _chart_source_text(branch_history: list[dict]) -> str:
         speaker = "User" if turn.get("role") == "user" else "Assistant"
         lines.append(f"{speaker}: {content}")
     return "\n\n".join(lines)
+
+
+def _format_branches_for_comparison(branches: list[tuple[str, list[dict]]]) -> str:
+    """ADR-002 Workstream 1 ("Compare Branches"): flattens 2+ labeled
+    chat_branch_history results into the single plain-text block
+    BranchComparisonAgent.get_response expects - one labeled section per
+    branch, each turn formatted "Speaker: text" (same convention as
+    _chart_source_text above), but built on _history_turn_text rather than
+    that function's own simpler `str(turn.get("content") or "")` - a turn
+    carrying R8a attachment content_parts (a list, not a plain string)
+    needs _history_turn_text's real flattening or it would stringify the
+    raw list instead of extracting the text part."""
+    sections = []
+    for label, history in branches:
+        lines = []
+        for turn in history:
+            text = _history_turn_text(turn).strip()
+            if not text:
+                continue
+            speaker = "User" if turn.get("role") == "user" else "Assistant"
+            lines.append(f"{speaker}: {text}")
+        sections.append(f"=== {label} ===\n" + "\n\n".join(lines))
+    return "\n\n".join(sections)
 
 
 def _placeholder_chart_data(chart_type: str) -> dict[str, Any]:
@@ -4020,6 +4076,75 @@ def register_canvas(
         # other - the same 100px stagger legacy used.
         return await _generate_note_from_node(source_node_id, "explainer", NOTE_AGENT_X_OFFSET, 100)
 
+    async def compare_branches(node_ids):
+        """ADR-002 Workstream 1 ("Compare Branches") - the second sequenced
+        item after "Branch from here" (that same workstream's fork
+        primitive). Takes 2+ existing chat nodes, walks each one's own
+        chat_branch_history, and drops a single agent-authored comparison
+        into a new note linked back to every source branch (note.item_ids
+        - see mark_branch_comparison_note).
+
+        Deliberately no auto-selection fallback, unlike the single-node
+        note agents above: there is no sensible single "the selected node"
+        default here - the caller (App.tsx's own Compare Branches shortcut)
+        must supply 2+ real ids up front, the same "the frontend already
+        gathered React Flow's own multi-selection" contract create_frame/
+        create_container already use."""
+        ids = list(dict.fromkeys(str(i) for i in (node_ids or [])))  # de-dupe, preserve order
+        if len(ids) < 2:
+            notifications.show("Select at least 2 branches to compare.", "warning")
+            await bus.publish("notification")
+            return None
+
+        sources = []
+        for node_id in ids:
+            node = document.nodes.get(node_id)
+            if node is None or node.kind != "chat":
+                notifications.show("Every selected node must be a real chat message to compare.", "warning")
+                await bus.publish("notification")
+                return None
+            sources.append(node)
+
+        branches = [
+            (f"Branch {index + 1}", document.chat_branch_history(node.id))
+            for index, node in enumerate(sources)
+        ]
+        formatted = _format_branches_for_comparison(branches)
+
+        # Positioned below-and-right of the source branches, the same
+        # "offset to the side" convention _generate_note_from_node uses for
+        # a single source - averaged/maxed across all sources here since
+        # there's more than one.
+        avg_x = sum(node.x for node in sources) / len(sources)
+        max_y = max(node.y for node in sources)
+
+        result_holder: dict[str, str] = {}
+
+        async def _on_success(text):
+            if any(node_id not in document.nodes for node_id in ids):
+                # A source was deleted mid-flight - same liveness posture as
+                # _generate_note_from_node's own on_success guard.
+                return
+            note = document.add_note(avg_x + NOTE_AGENT_X_OFFSET, max_y)
+            document.set_note_content(note.id, text)
+            document.set_group_color(note.id, NOTE_AGENT_BODY_COLOR, NOTE_AGENT_HEADER_COLOR)
+            document.mark_branch_comparison_note(note.id, ids)
+            result_holder["node_id"] = note.id
+            await bus.publish("scene")
+
+        def _on_failure(message):
+            # start_branch_comparison already surfaced the notification.
+            pass
+
+        await agent_dispatcher.start_branch_comparison(
+            bus=bus,
+            notifications_state=notifications,
+            source_text=formatted,
+            on_success=_on_success,
+            on_failure=_on_failure,
+        )
+        return result_holder.get("node_id")
+
     async def resize_chart(node_id, width, height):
         document.resize_chart(node_id, width, height)
         await publish_scene()
@@ -4557,6 +4682,7 @@ def register_canvas(
     # graphlink_note_agent.py's own docstring for why they were dead stubs.
     bus.register_intent("scene", "generateKeyTakeaway", generate_key_takeaway)
     bus.register_intent("scene", "generateExplainerNote", generate_explainer_note)
+    bus.register_intent("scene", "compareBranches", compare_branches)
     bus.register_intent("scene", "resizeChart", resize_chart)
     bus.register_intent("scene", "toggleChartAspectLock", toggle_chart_aspect_lock)
     bus.register_intent("scene", "moveNode", move_node)

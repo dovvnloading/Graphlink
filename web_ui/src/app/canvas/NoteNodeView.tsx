@@ -30,7 +30,11 @@ import { GroupColorPicker, NOTE_SYSTEM_PROMPT_BORDER_COLOR } from "./GroupColorP
  * isSummaryNote gets a small "grouped items" badge (no border change) - both
  * badges are purely presentational, neither is user-togglable from this
  * view (they are set once at creation, by the plugin/creation path that made
- * the note).
+ * the note). isBranchComparison (ADR-002 Workstream 1, "Compare Branches")
+ * gets a third badge the same way - a distinct icon/tooltip from
+ * isSummaryNote's, since it is a different feature (see backend/canvas.py's
+ * SceneNode.is_branch_comparison for why they aren't the same flag), showing
+ * how many source branches compareSourceNodeIds records.
  */
 
 export interface NoteNodeData extends Record<string, unknown> {
@@ -39,6 +43,8 @@ export interface NoteNodeData extends Record<string, unknown> {
   headerColor: string | null;
   isSystemPrompt: boolean;
   isSummaryNote: boolean;
+  isBranchComparison: boolean;
+  compareSourceNodeIds: string[];
   onSetContent: (content: string) => void;
   onSetColor: (color: string | null, headerColor: string | null) => void;
   onDelete: () => void;
@@ -116,6 +122,15 @@ export function NoteNodeView({ data, selected }: NodeProps<NoteFlowNode>) {
           {data.isSummaryNote && (
             <span className="note-node-badge" title="Summary Note" aria-label="Summary Note">
               ⧉
+            </span>
+          )}
+          {data.isBranchComparison && (
+            <span
+              className="note-node-badge"
+              title={`Branch Comparison (${data.compareSourceNodeIds.length} sources)`}
+              aria-label="Branch Comparison"
+            >
+              ⇄
             </span>
           )}
         </span>

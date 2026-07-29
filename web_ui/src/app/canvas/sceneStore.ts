@@ -670,6 +670,15 @@ export class SceneStore {
     this.transport.intent("scene", "createContainer", [itemIds]);
   }
 
+  // ADR-002 Workstream 1 ("Compare Branches") - same fire-and-forget shape
+  // as createFrame/createContainer above: the frontend already gathered
+  // React Flow's own multi-selection (App.tsx's GlobalShortcuts), the
+  // backend validates/does the work, and the resulting note arrives
+  // through the next scene snapshot like any other mutation.
+  compareBranches(nodeIds: string[]): void {
+    this.transport.intent("scene", "compareBranches", [nodeIds]);
+  }
+
   // Shared setter for frame/container header-note/title text (backend/
   // canvas.py's set_group_label) - reused verbatim for both kinds, same
   // posture as setGroupColor below.

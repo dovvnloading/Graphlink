@@ -115,6 +115,8 @@ function GlobalShortcuts({ store }: { store: SceneStore }) {
           return applyGrouping("frame");
         case "create-container":
           return applyGrouping("container");
+        case "compare-branches":
+          return applyCompareBranches();
         case "toggle-palette":
           return overlays.toggle("palette", "dialog");
         case "toggle-search":
@@ -135,6 +137,21 @@ function GlobalShortcuts({ store }: { store: SceneStore }) {
       if (ids.length === 0) return; // legacy: bare return, no message
       if (kind === "frame") store.createFrame(ids);
       else store.createContainer(ids);
+    }
+
+    // ADR-002 Workstream 1 ("Compare Branches"): same selection-gathering
+    // shape as applyGrouping above, but forwards even a single selected id
+    // rather than bare-returning on anything short of the real minimum -
+    // compare_branches's own backend validation shows an informative
+    // notification ("Select at least 2 branches to compare") for that near-
+    // miss case, which is more helpful than legacy's silent "nothing
+    // selected" convention when the user very clearly attempted a real
+    // action (bare-returning is still correct for the genuine zero-selected
+    // case - nothing to give feedback about there).
+    function applyCompareBranches() {
+      const ids = reactFlow.getNodes().filter((n) => n.selected).map((n) => n.id);
+      if (ids.length === 0) return;
+      store.compareBranches(ids);
     }
 
     function onKeyDown(event: KeyboardEvent) {
