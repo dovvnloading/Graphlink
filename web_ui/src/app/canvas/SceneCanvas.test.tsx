@@ -1109,6 +1109,9 @@ interface GroupTestFields {
   headerColor: string | null;
   isSystemPrompt: boolean;
   isSummaryNote: boolean;
+  // ADR-002 Workstream 1 ("Compare Branches") - same "generated type
+  // doesn't carry this yet" situation as every other field here.
+  isBranchComparison: boolean;
   itemIds: string[];
   isLocked: boolean;
   groupWidth: number | null;
@@ -1122,6 +1125,7 @@ function groupNode(overrides: Partial<SceneNodeRow & GroupTestFields> = {}): Sce
     headerColor: null,
     isSystemPrompt: false,
     isSummaryNote: false,
+    isBranchComparison: false,
     itemIds: [],
     isLocked: true,
     groupWidth: null,
@@ -1158,6 +1162,28 @@ describe("toFlowNodes (R6.1 note node)", () => {
       headerColor: "#3f7dc9",
       isSystemPrompt: true,
       isSummaryNote: false,
+    });
+  });
+
+  it("maps a note's isBranchComparison and reuses itemIds as compareSourceNodeIds (ADR-002 Workstream 1)", () => {
+    const scene = baseScene({
+      nodes: [
+        groupNode({
+          id: "note-1",
+          kind: "note",
+          isBranchComparison: true,
+          itemIds: ["chat-1", "chat-2"],
+        }),
+      ],
+      edges: [],
+    });
+    const store = makeStore();
+
+    const flowNodes = toFlowNodes(scene, store);
+    const noteFlowNode = flowNodes.find((n) => n.id === "note-1");
+    expect(noteFlowNode!.data).toMatchObject({
+      isBranchComparison: true,
+      compareSourceNodeIds: ["chat-1", "chat-2"],
     });
   });
 

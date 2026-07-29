@@ -74,7 +74,7 @@ import graphlink_task_config as config
 from graphlink_artifact_agent import ArtifactAgent
 from graphlink_chart_agent import ChartDataAgent
 from graphlink_chat_agent import ChatAgent
-from graphlink_note_agent import ExplainerAgent, KeyTakeawayAgent
+from graphlink_note_agent import BranchComparisonAgent, ExplainerAgent, KeyTakeawayAgent
 from graphlink_licensing import SettingsManager  # type hint only
 from graphlink_plugins.common.github_client import GitHubRestClient
 from graphlink_plugins.gitlink.agent import GitlinkAgent, _fingerprint_changes, _is_repo_text_path
@@ -357,6 +357,12 @@ class AgentDispatcher:
         # request_id -> True; no task/cancel_event to store, since the legacy
         # workers these replace had no stop() either.
         self._note_requests: dict[str, bool] = {}
+        # ADR-002 Workstream 1 ("Compare Branches") - a SEPARATE busy-guard
+        # from _note_requests above: comparing branches and generating a Key
+        # Takeaway/Explainer Note are unrelated features, so one running
+        # must never block the other. Same "request_id -> True, no task/
+        # cancel_event" shape - this is directly awaited, not scheduled.
+        self._branch_comparison_requests: dict[str, bool] = {}
         # R5.4: Py-Coder's REPL subprocess outlives any single run (state
         # persists between calls, same as legacy's own PyCoderReplManager -
         # see that class's own docstring in graphlink_plugins/pycoder/domain.py
@@ -2394,6 +2400,68 @@ class AgentDispatcher:
         finally:
             self._note_requests.pop(request_id, None)
 
+    async def start_branch_comparison(
+        self,
+        *,
+        bus: SessionBus,
+        notifications_state,
+        source_text: str,
+        on_success,
+        on_failure,
+    ) -> None:
+        """ADR-002 Workstream 1 ("Compare Branches"): mirrors start_note_
+        generation's own shape exactly (directly awaited - the result is a
+        brand new note node and there is no pre-existing node to attach a
+        spinner to; single dict-registry busy guard; WATCHDOG_TIMEOUT_
+        SECONDS; on_success/on_failure callbacks) but with its own
+        _branch_comparison_requests guard rather than reusing
+        _note_requests - see that field's own comment for why. source_text
+        is already the fully-formatted multi-branch block
+        (backend/canvas.py's _format_branches_for_comparison) - this method
+        itself is agnostic to how many branches went into it."""
+        if self._branch_comparison_requests:
+            notifications_state.show("A branch comparison is already being generated.", "info")
+            await bus.publish("notification")
+            return
+
+        request_id = uuid.uuid4().hex
+        self._branch_comparison_requests[request_id] = True
+
+        async def _invoke(fn, *a):
+            if inspect.iscoroutinefunction(fn):
+                await fn(*a)
+            else:
+                fn(*a)
+
+        try:
+            text = await asyncio.wait_for(
+                asyncio.to_thread(_call_branch_comparison_agent, source_text),
+                timeout=WATCHDOG_TIMEOUT_SECONDS,
+            )
+            if not str(text or "").strip():
+                message = "Branch comparison returned an empty response. Please try again."
+                await _invoke(on_failure, message)
+                notifications_state.show(message, "error")
+                await bus.publish("notification")
+            else:
+                await _invoke(on_success, text)
+        except asyncio.TimeoutError:
+            message = (
+                "Branch comparison stopped responding before the request completed. "
+                "Please try again."
+            )
+            await _invoke(on_failure, message)
+            notifications_state.show(message, "error")
+            await bus.publish("notification")
+        except Exception as exc:
+            logger.exception("branch comparison dispatch failed")
+            message = f"Branch comparison failed: {exc}"
+            await _invoke(on_failure, message)
+            notifications_state.show(message, "error")
+            await bus.publish("notification")
+        finally:
+            self._branch_comparison_requests.pop(request_id, None)
+
 
 # R8a: the two note agents, keyed by the `note_kind` start_note_generation
 # takes. Kept as data rather than an if/elif so adding a third note agent is
@@ -2411,6 +2479,13 @@ def _call_note_agent(note_kind: str, source_text: str) -> str:
     if agent_cls is None:
         raise ValueError(f"unknown note kind: {note_kind}")
     return agent_cls().get_response(source_text)
+
+
+def _call_branch_comparison_agent(source_text: str) -> str:
+    """Runs inside asyncio.to_thread - the blocking driver for
+    start_branch_comparison above, mirroring _call_note_agent's own shape
+    (fresh agent instance per call)."""
+    return BranchComparisonAgent().get_response(source_text)
 
 
 def _call_pycoder_execution_agent(conversation_history, user_prompt) -> str:

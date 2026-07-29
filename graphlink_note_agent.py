@@ -147,6 +147,50 @@ No markdown formatting, no special characters."""
         return self.clean_text(response['message']['content'])
 
 
+class BranchComparisonAgent:
+    """ADR-002 Workstream 1 ("Compare Branches"): compares 2+ independent
+    conversation branches that diverged from the same starting point.
+    Genuinely new (not ported from anywhere) - GraphLink's branching
+    workflow never had a compare feature at all until this one. Same
+    "one chat call, no tools, no history" shape as KeyTakeawayAgent/
+    ExplainerAgent above, and reuses their shared clean_agent_markdown_
+    response post-processor rather than inventing a new formatter."""
+
+    def __init__(self):
+        self.system_prompt = """You are a branch-comparison analyst. You will be given two or more independent conversation branches that were explored from the same starting point. Compare them and format your response exactly like this:
+
+Branch Comparison
+
+Agreements:
+• [a point where the branches agree, or "None found" if there are none]
+
+Differences:
+• [a point where the branches diverge - name which branch says what]
+
+Unique Findings:
+• [something only one branch surfaced - name which branch]
+
+Unresolved Questions:
+• [an open question none of the branches resolved]
+
+Reference specific claims from the branches, not generic observations. Keep it focused and concrete. No markdown formatting, no special characters."""
+
+    def clean_text(self, text):
+        return clean_agent_markdown_response(
+            text,
+            required_title="Branch Comparison",
+            section_markers=["Agreements:", "Differences:", "Unique Findings:", "Unresolved Questions:"],
+        )
+
+    def get_response(self, formatted_branches_text):
+        messages = [
+            {'role': 'system', 'content': self.system_prompt},
+            {'role': 'user', 'content': f"Compare these branches:\n\n{formatted_branches_text}"},
+        ]
+        response = api_provider.chat(task=config.TASK_CHAT, messages=messages)
+        return self.clean_text(response['message']['content'])
+
+
 class ExplainerAgent:
     """Simplifies complex topics into plain language."""
 

@@ -59,6 +59,12 @@ interface SceneNodeGroupFields {
   headerColor: string | null;
   isSystemPrompt: boolean;
   isSummaryNote: boolean;
+  // ADR-002 Workstream 1 ("Compare Branches") - note kind only, same
+  // "generated type doesn't carry this yet" situation as every other
+  // field on this interface. itemIds (already here, for frame/container
+  // membership) doubles as the source branch node ids for a comparison
+  // note - see backend/canvas.py's SceneNode.item_ids comment.
+  isBranchComparison: boolean;
   itemIds: string[];
   isLocked: boolean;
   groupWidth: number | null;
@@ -867,6 +873,11 @@ export function toFlowNodes(
           headerColor: note.headerColor,
           isSystemPrompt: note.isSystemPrompt,
           isSummaryNote: note.isSummaryNote,
+          // ADR-002 Workstream 1: itemIds doubles as the source branch ids
+          // for a Compare Branches result note - see SceneNodeGroupFields'
+          // own comment.
+          isBranchComparison: note.isBranchComparison,
+          compareSourceNodeIds: note.itemIds,
           onSetContent: (content: string) => store.setNoteContent(n.id, content),
           onSetColor: (color: string | null, headerColor: string | null) =>
             store.setGroupColor(n.id, color, headerColor),

@@ -596,6 +596,13 @@ describe("SceneStore", () => {
     expect(intents).toEqual([{ topic: "scene", intent: "createContainer", args: [["n1", "n2"]] }]);
   });
 
+  it("compareBranches sends the scene-topic compareBranches intent with [nodeIds] (ADR-002 Workstream 1)", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.compareBranches(["n1", "n2", "n3"]);
+    expect(intents).toEqual([{ topic: "scene", intent: "compareBranches", args: [["n1", "n2", "n3"]] }]);
+  });
+
   it("setGroupLabel sends the scene-topic setGroupLabel intent with [nodeId, text]", () => {
     const { transport, intents } = makeFakeTransport();
     const store = new SceneStore(transport);

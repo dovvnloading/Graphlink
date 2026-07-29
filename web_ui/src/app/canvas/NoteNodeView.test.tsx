@@ -20,6 +20,8 @@ function renderNoteNode(overrides: Partial<NoteFlowNode["data"]> = {}) {
       headerColor: null,
       isSystemPrompt: false,
       isSummaryNote: false,
+      isBranchComparison: false,
+      compareSourceNodeIds: [],
       onSetContent,
       onSetColor,
       onDelete,
@@ -135,6 +137,19 @@ describe("NoteNodeView", () => {
     );
     expect(container.querySelector(".note-node.system-prompt")).toBeNull();
     expect(screen.getByTitle("Summary Note")).toBeInTheDocument();
+  });
+
+  // ADR-002 Workstream 1 ("Compare Branches") - a third, distinct badge
+  // alongside isSystemPrompt/isSummaryNote above.
+  it("isBranchComparison renders a distinct badge showing the source-branch count, absent otherwise", () => {
+    renderNoteNode({ isBranchComparison: false });
+    expect(screen.queryByTitle(/Branch Comparison/)).toBeNull();
+
+    renderNoteNode({ isBranchComparison: true, compareSourceNodeIds: ["n1", "n2", "n3"] });
+    expect(screen.getByLabelText("Branch Comparison")).toBeInTheDocument();
+    expect(screen.getByTitle("Branch Comparison (3 sources)")).toBeInTheDocument();
+    // Distinct from isSummaryNote's own badge - never conflated.
+    expect(screen.queryByTitle("Summary Note")).toBeNull();
   });
 
   it("Delete button calls onDelete", async () => {

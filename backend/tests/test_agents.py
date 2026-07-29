@@ -4963,3 +4963,109 @@ def test_start_note_generation_agent_exception_surfaces_and_clears_the_slot(monk
         assert dispatcher._note_requests == {}, "the slot must not leak after a failure"
 
     asyncio.run(run())
+
+
+# -- ADR-002 Workstream 1: start_branch_comparison ("Compare Branches") ------
+#
+# Mirrors start_note_generation's own test shape exactly - same busy-guard/
+# timeout/empty-response/exception coverage - but against the SEPARATE
+# _branch_comparison_requests slot, proving the two features' busy states
+# are genuinely independent (see that field's own comment for why).
+
+
+def test_start_branch_comparison_calls_on_success_then_clears_the_slot(monkeypatch):
+    monkeypatch.setattr(
+        agents_module.BranchComparisonAgent, "get_response",
+        lambda self, text: f"Branch Comparison\n\nAgreements:\n• from {text}",
+    )
+
+    async def run():
+        bus, notifications, dispatcher = _make_note_env()
+        successes, failures = [], []
+        await dispatcher.start_branch_comparison(
+            bus=bus, notifications_state=notifications,
+            source_text="=== Branch 1 ===\n...",
+            on_success=successes.append, on_failure=failures.append,
+        )
+        assert successes == ["Branch Comparison\n\nAgreements:\n• from === Branch 1 ===\n..."]
+        assert failures == []
+        assert dispatcher._branch_comparison_requests == {}
+        assert notifications.visible is False
+
+    asyncio.run(run())
+
+
+def test_start_branch_comparison_rejects_a_second_concurrent_run(monkeypatch):
+    monkeypatch.setattr(agents_module.BranchComparisonAgent, "get_response", lambda self, text: "ok")
+
+    async def run():
+        bus, notifications, dispatcher = _make_note_env()
+        dispatcher._branch_comparison_requests["already-running"] = True
+        successes = []
+        await dispatcher.start_branch_comparison(
+            bus=bus, notifications_state=notifications, source_text="x",
+            on_success=successes.append, on_failure=lambda m: None,
+        )
+        assert successes == [], "the busy guard must not run a second agent"
+        assert notifications.visible is True
+        assert notifications.msg_type == "info"
+        assert dispatcher._branch_comparison_requests == {"already-running": True}
+
+    asyncio.run(run())
+
+
+def test_start_branch_comparison_does_not_share_a_busy_slot_with_note_generation(monkeypatch):
+    # The whole reason for a SEPARATE dict: an in-flight Key Takeaway must
+    # never block an unrelated Compare Branches call, and vice versa.
+    monkeypatch.setattr(agents_module.BranchComparisonAgent, "get_response", lambda self, text: "Branch Comparison")
+
+    async def run():
+        bus, notifications, dispatcher = _make_note_env()
+        dispatcher._note_requests["unrelated-takeaway"] = True
+        successes = []
+        await dispatcher.start_branch_comparison(
+            bus=bus, notifications_state=notifications, source_text="x",
+            on_success=successes.append, on_failure=lambda m: None,
+        )
+        assert successes == ["Branch Comparison"], "an in-flight note generation must not block this"
+
+    asyncio.run(run())
+
+
+def test_start_branch_comparison_empty_response_fails_instead_of_creating_a_blank_note(monkeypatch):
+    monkeypatch.setattr(agents_module.BranchComparisonAgent, "get_response", lambda self, text: "   ")
+
+    async def run():
+        bus, notifications, dispatcher = _make_note_env()
+        successes, failures = [], []
+        await dispatcher.start_branch_comparison(
+            bus=bus, notifications_state=notifications, source_text="x",
+            on_success=successes.append, on_failure=failures.append,
+        )
+        assert successes == [], "an empty agent response must not become a note"
+        assert len(failures) == 1
+        assert notifications.msg_type == "error"
+        assert dispatcher._branch_comparison_requests == {}
+
+    asyncio.run(run())
+
+
+def test_start_branch_comparison_agent_exception_surfaces_and_clears_the_slot(monkeypatch):
+    def _boom(self, text):
+        raise RuntimeError("model exploded")
+
+    monkeypatch.setattr(agents_module.BranchComparisonAgent, "get_response", _boom)
+
+    async def run():
+        bus, notifications, dispatcher = _make_note_env()
+        successes, failures = [], []
+        await dispatcher.start_branch_comparison(
+            bus=bus, notifications_state=notifications, source_text="x",
+            on_success=successes.append, on_failure=failures.append,
+        )
+        assert successes == []
+        assert "model exploded" in failures[0]
+        assert notifications.msg_type == "error"
+        assert dispatcher._branch_comparison_requests == {}, "the slot must not leak after a failure"
+
+    asyncio.run(run())

@@ -30,6 +30,17 @@ describe("resolveShortcut", () => {
     expect(resolveShortcut(key("G", { shift: true }))).toBe("create-container");
   });
 
+  // ADR-002 Workstream 1 ("Compare Branches") - a genuinely new binding, not
+  // a legacy port.
+  it("treats Ctrl+Shift+C as Compare Branches", () => {
+    expect(resolveShortcut(key("c", { shift: true }))).toBe("compare-branches");
+    expect(resolveShortcut(key("C", { shift: true }))).toBe("compare-branches");
+  });
+
+  it("does NOT bind bare Ctrl+C - it must stay the browser's native copy shortcut", () => {
+    expect(resolveShortcut(key("c"))).toBeNull();
+  });
+
   it("is case-insensitive, since Shift/CapsLock change event.key's case", () => {
     expect(resolveShortcut(key("T"))).toBe("new-chat");
   });
@@ -63,7 +74,10 @@ describe("resolveShortcut", () => {
 describe("isGatedWhileTyping", () => {
   // The exact membership of legacy's GATED_SHORTCUTS
   // (graphlink_web_island_host.py:735-745), which legacy itself
-  // contract-tests. Mirrored here so a future edit to the set has to be
+  // contract-tests, PLUS "compare-branches" (ADR-002 Workstream 1 - a new
+  // shortcut, not a legacy port, gated for the same reason as its closest
+  // sibling create-frame/create-container - see shortcuts.ts's own
+  // comment). Mirrored here so a future edit to the set has to be
   // deliberate rather than incidental.
   const GATED: ShortcutId[] = [
     "new-chat",
@@ -71,6 +85,7 @@ describe("isGatedWhileTyping", () => {
     "toggle-search",
     "create-frame",
     "create-container",
+    "compare-branches",
     "navigate-up",
     "navigate-down",
     "navigate-left",
@@ -86,8 +101,8 @@ describe("isGatedWhileTyping", () => {
     expect(isGatedWhileTyping(id)).toBe(false);
   });
 
-  it("gates exactly the 9 legacy combinations, no more and no fewer", () => {
+  it("gates exactly the 9 legacy combinations plus compare-branches (10 total), no more and no fewer", () => {
     const all: ShortcutId[] = [...GATED, ...EXEMPT];
-    expect(all.filter(isGatedWhileTyping)).toHaveLength(9);
+    expect(all.filter(isGatedWhileTyping)).toHaveLength(10);
   });
 });

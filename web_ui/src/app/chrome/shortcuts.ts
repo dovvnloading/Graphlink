@@ -23,6 +23,7 @@ export type ShortcutId =
   | "save-chat"
   | "create-frame"
   | "create-container"
+  | "compare-branches"
   | "toggle-palette"
   | "toggle-search"
   | "navigate-up"
@@ -40,6 +41,12 @@ export type ShortcutId =
  * as intentional exemptions - Ctrl+S is non-destructive and reflexively
  * expected mid-sentence, and Ctrl+K is the palette's own summon key (its
  * handler was made idempotent specifically so the exemption is safe).
+ *
+ * "compare-branches" is a genuinely NEW shortcut (ADR-002 Workstream 1,
+ * not a legacy port) but gated here for the exact same reason as its
+ * closest sibling create-frame/create-container: a canvas-wide,
+ * selection-driven action that should never fire mid-sentence while
+ * typing in the composer or a node's own editable field.
  */
 const GATED_WHILE_TYPING = new Set<ShortcutId>([
   "new-chat",
@@ -47,6 +54,7 @@ const GATED_WHILE_TYPING = new Set<ShortcutId>([
   "toggle-search",
   "create-frame",
   "create-container",
+  "compare-branches",
   "navigate-up",
   "navigate-down",
   "navigate-left",
@@ -104,6 +112,12 @@ export function resolveShortcut(event: ShortcutKeyEvent): ShortcutId | null {
     // bindings (graphlink_window.py:312-313), not one with a modifier.
     case "g":
       return event.shiftKey ? "create-container" : "create-frame";
+    // ADR-002 Workstream 1: Ctrl+Shift+C only (never bare Ctrl+C, which
+    // must stay the browser's native copy shortcut) - "compare-branches"
+    // is a new binding, not a legacy port, so there's no existing key to
+    // match.
+    case "c":
+      return event.shiftKey ? "compare-branches" : null;
     default:
       return null;
   }
