@@ -336,6 +336,22 @@ def test_token_counter_payload_totals_all_three():
     assert set(payload) == {"inputTokens", "outputTokens", "contextTokens", "totalTokens"}
 
 
+def test_set_output_text_estimates_the_same_way_as_set_input_text():
+    state = TokenCounterState()
+    state.set_output_text("a four word reply")
+    assert state.output_tokens == 4
+    assert state.input_tokens == 0
+    assert state.context_tokens == 0
+
+
+def test_set_context_text_estimates_the_same_way_as_set_input_text():
+    state = TokenCounterState()
+    state.set_context_text("some prior branch history text")
+    assert state.context_tokens == 5
+    assert state.input_tokens == 0
+    assert state.output_tokens == 0
+
+
 # -- notifications -------------------------------------------------------------
 
 

@@ -2,11 +2,13 @@
 
 TokenCounterBridge was always a passive display - window_actions.py pushed
 counts into it via update_counts() after real tokenization elsewhere.
-Nothing populates outputTokens/contextTokens yet (no send flow until R4, no
-conversation history until R3), so this mirrors that: inputTokens tracks the
-live composer draft for real (a whitespace-split estimate - tiktoken is not
-a dependency yet; swap in real tokenization here once R4 wires it), the rest
-sit at 0 rather than showing a fabricated number.
+inputTokens tracks the live composer draft (a whitespace-split estimate -
+tiktoken is not a dependency yet; swap in real tokenization here if it ever
+becomes one). outputTokens/contextTokens are set by backend/canvas.py's
+send_message/regenerate_response intents once a reply completes -
+outputTokens from the reply text itself, contextTokens from the prior
+branch history the reply was generated from (excluding, for a fresh send,
+the message just typed - inputTokens already owns that text).
 """
 
 from __future__ import annotations
@@ -29,6 +31,12 @@ class TokenCounterState:
 
     def set_input_text(self, text: str) -> None:
         self.input_tokens = estimate_tokens(text)
+
+    def set_output_text(self, text: str) -> None:
+        self.output_tokens = estimate_tokens(text)
+
+    def set_context_text(self, text: str) -> None:
+        self.context_tokens = estimate_tokens(text)
 
     def payload(self) -> dict[str, Any]:
         total = self.input_tokens + self.output_tokens + self.context_tokens

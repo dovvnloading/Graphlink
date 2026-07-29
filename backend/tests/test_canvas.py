@@ -24,6 +24,8 @@ from backend.canvas import (
     SceneDocument,
     SceneEmptyPromptError,
     SceneError,
+    _history_token_text,
+    _history_turn_text,
     _research_result_wire,
     register_canvas,
 )
@@ -36,7 +38,7 @@ import api_provider
 import graphlink_task_config as task_config
 from graphlink_navigation_pins import NavigationPinRecord
 from graphlink_plugins.web_research.domain import ResearchCitation, ResearchResult, ResearchSource
-from backend.token_counter import estimate_tokens
+from backend.token_counter import estimate_tokens, register_token_counter
 
 
 # -- document invariants ----------------------------------------------------
@@ -1257,6 +1259,45 @@ def test_regenerate_response_intent_mutates_the_existing_node_in_place_not_a_new
     asyncio.run(run())
 
 
+def test_regenerate_response_sets_output_and_context_tokens_and_publishes_token_counter():
+    # R8a: regenerate reuses the SAME chat_branch_history(parent_id) call it
+    # already made for the real LLM request as contextTokens too - unlike
+    # send_message, there is no fresh draft text to exclude, so it needs no
+    # adjustment before counting.
+    async def run():
+        bus, document, recorder, dispatcher = make_bus_with_dispatcher()
+
+        def first_reply(task, messages, **kwargs):
+            return {"message": {"content": "original reply"}}
+
+        with patch.object(api_provider, "USE_API_MODE", False), \
+                patch.object(api_provider, "LOCAL_PROVIDER_TYPE", task_config.LOCAL_PROVIDER_OLLAMA), \
+                patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
+                patch.object(api_provider, "chat", first_reply):
+            await bus.dispatch_intent("scene", "sendMessage", ["hi there"])
+            entry = next(iter(dispatcher._requests.values()))
+            await entry["task"]
+
+        assistant_node = next(n for n in document.nodes.values() if n.kind == "chat" and n.is_user is False)
+
+        def regenerated_reply(task, messages, **kwargs):
+            return {"message": {"content": "a fresh regenerated reply"}}
+
+        with patch.object(api_provider, "USE_API_MODE", False), \
+                patch.object(api_provider, "LOCAL_PROVIDER_TYPE", task_config.LOCAL_PROVIDER_OLLAMA), \
+                patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
+                patch.object(api_provider, "chat", regenerated_reply):
+            await bus.dispatch_intent("scene", "regenerateResponse", [assistant_node.id])
+            entry = next(iter(dispatcher._requests.values()))
+            await entry["task"]
+
+        assert bus.token_counter.output_tokens == estimate_tokens("a fresh regenerated reply")
+        assert bus.token_counter.context_tokens == estimate_tokens("hi there")
+        assert recorder.topics_seen().count("token-counter") >= 1
+
+    asyncio.run(run())
+
+
 def test_regenerate_response_does_not_stream_unlike_an_ordinary_send():
     # R4.4 regression: start_chat_reply's stream=True default is for
     # send_message's Composer-send surface only. regenerate_response passes
@@ -1894,7 +1935,15 @@ def make_bus_with_dispatcher():
     composer_document = ComposerDocument()
     bus.register_topic("app-composer", composer_document.payload)
     agent_dispatcher = AgentDispatcher(_FakeSettingsManager())
-    document = register_canvas(bus, notifications, agent_dispatcher, composer_document)
+    # R8a: a real, bus-registered TokenCounterState - not left at
+    # register_canvas's own throwaway default - so tests can assert on
+    # send_message/regenerateResponse's outputTokens/contextTokens wiring
+    # via bus.token_counter, the same "bolt an extra reference onto the
+    # bus" convention backend/app.py itself uses for canvas_document/
+    # agent_dispatcher (SessionBus has no fixed attribute set).
+    token_counter = register_token_counter(bus)
+    document = register_canvas(bus, notifications, agent_dispatcher, composer_document, token_counter)
+    bus.token_counter = token_counter
     recorder = Recorder()
     bus.attach(recorder)
     return bus, document, recorder, agent_dispatcher
@@ -1990,6 +2039,102 @@ def test_send_message_intent_dispatches_a_real_agent_reply():
         assert any(e.source == node_id and e.target == reply_node.id for e in document.edges.values())
         assert document.last_chat_node_id == reply_node.id
         assert recorder.topics_seen().count("scene") >= 2, "user node + reply node both publish scene"
+
+    asyncio.run(run())
+
+
+# -- history-to-text flattening (R8a token counter wiring) -------------------
+
+
+def test_history_turn_text_returns_a_plain_string_content_as_is():
+    assert _history_turn_text({"role": "user", "content": "hello there"}) == "hello there"
+
+
+def test_history_turn_text_extracts_only_the_text_part_from_content_parts():
+    turn = {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "look at this"},
+            {"type": "image", "image_bytes": "base64stuff"},
+        ],
+    }
+    assert _history_turn_text(turn) == "look at this"
+
+
+def test_history_turn_text_returns_empty_string_for_a_content_parts_list_with_no_text_part():
+    turn = {"role": "user", "content": [{"type": "image", "image_bytes": "base64stuff"}]}
+    assert _history_turn_text(turn) == ""
+
+
+def test_history_token_text_joins_turns_and_skips_empty_ones():
+    history = [
+        {"role": "user", "content": "first turn"},
+        {"role": "assistant", "content": ""},
+        {"role": "user", "content": [{"type": "image", "image_bytes": "x"}]},
+        {"role": "assistant", "content": "second turn"},
+    ]
+    assert _history_token_text(history) == "first turn\n\nsecond turn"
+
+
+def test_send_message_sets_output_tokens_from_the_reply_and_publishes_token_counter():
+    # R8a: outputTokens/contextTokens used to sit at 0 forever - nothing in
+    # the backend ever set them. This is the first real assertion that a
+    # plain chat send wires them up.
+    async def run():
+        bus, document, recorder, dispatcher = make_bus_with_dispatcher()
+
+        def fake_chat(task, messages, **kwargs):
+            return {"message": {"content": "four word reply here"}}
+
+        with patch.object(api_provider, "USE_API_MODE", False), \
+                patch.object(api_provider, "LOCAL_PROVIDER_TYPE", task_config.LOCAL_PROVIDER_OLLAMA), \
+                patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
+                patch.object(api_provider, "chat", fake_chat):
+            await bus.dispatch_intent("scene", "sendMessage", ["hello there"])
+            entry = next(iter(dispatcher._requests.values()))
+            await entry["task"]
+
+        assert bus.token_counter.output_tokens == estimate_tokens("four word reply here")
+        assert recorder.topics_seen().count("token-counter") >= 1
+
+    asyncio.run(run())
+
+
+def test_send_message_sets_context_tokens_from_prior_history_not_the_new_message():
+    # contextTokens must reflect the branch history the reply was generated
+    # FROM - not the message just typed (inputTokens, set live from the
+    # composer draft, already owns that text - counting it again here would
+    # inflate payload()'s total). Verified by sending a SECOND message and
+    # checking contextTokens matches the FIRST exchange's own text, not the
+    # second message's.
+    async def run():
+        bus, document, recorder, dispatcher = make_bus_with_dispatcher()
+
+        def first_reply(task, messages, **kwargs):
+            return {"message": {"content": "first reply"}}
+
+        with patch.object(api_provider, "USE_API_MODE", False), \
+                patch.object(api_provider, "LOCAL_PROVIDER_TYPE", task_config.LOCAL_PROVIDER_OLLAMA), \
+                patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
+                patch.object(api_provider, "chat", first_reply):
+            await bus.dispatch_intent("scene", "sendMessage", ["first message"])
+            entry = next(iter(dispatcher._requests.values()))
+            await entry["task"]
+
+        def second_reply(task, messages, **kwargs):
+            return {"message": {"content": "second reply"}}
+
+        with patch.object(api_provider, "USE_API_MODE", False), \
+                patch.object(api_provider, "LOCAL_PROVIDER_TYPE", task_config.LOCAL_PROVIDER_OLLAMA), \
+                patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
+                patch.object(api_provider, "chat", second_reply):
+            await bus.dispatch_intent("scene", "sendMessage", ["second message, much longer than the first"])
+
+        # contextTokens is set synchronously, before the reply dispatch even
+        # starts (unlike outputTokens, which needs the reply to complete) -
+        # no need to await the dispatcher's background task here.
+        expected = estimate_tokens("first message") + estimate_tokens("first reply")
+        assert bus.token_counter.context_tokens == expected
 
     asyncio.run(run())
 

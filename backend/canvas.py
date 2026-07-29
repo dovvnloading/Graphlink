@@ -53,7 +53,7 @@ from backend.response_parsing import (
     PLACEHOLDER_ASSISTANT_REASONING,
     PLACEHOLDER_EMPTY_RESPONSE,
 )
-from backend.token_counter import estimate_tokens
+from backend.token_counter import TokenCounterState, estimate_tokens
 
 
 # R7.2: ported from graphlink_app/graphlink_session/content_codec.py, not
@@ -2956,6 +2956,31 @@ def _research_result_wire(result) -> dict[str, Any]:
     }
 
 
+def _history_turn_text(turn: dict) -> str:
+    """Flattens one chat_branch_history entry's "content" into plain text,
+    for callers whose interface is a flat string (token estimation here;
+    _chart_source_text below has its own, separate flattening for
+    ChartDataAgent). A turn's content is a plain str for an ordinary
+    message, or (R8a attachments) a content_parts list of {"type", ...}
+    dicts - only the "text" part has a token-count analog, so image/audio
+    parts are skipped rather than stringified."""
+    content = turn.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return " ".join(
+            part.get("text", "") for part in content if isinstance(part, dict) and part.get("type") == "text"
+        )
+    return ""
+
+
+def _history_token_text(history: list[dict]) -> str:
+    """Joins an entire chat_branch_history's turns into one string for
+    token_counter.py's set_context_text (which, like set_input_text, takes
+    a single flat string and estimates it via whitespace-split)."""
+    return "\n\n".join(text for text in (_history_turn_text(turn) for turn in history) if text)
+
+
 def _chart_source_text(branch_history: list[dict]) -> str:
     """R6.2: flattens chat_branch_history's own {"role","content"} list (the
     SAME branch walk web_research/pycoder/gitlink already reuse via
@@ -3011,6 +3036,7 @@ def register_canvas(
     notifications: NotificationState,
     agent_dispatcher: AgentDispatcher,
     composer_document: ComposerDocument,
+    token_counter: TokenCounterState | None = None,
 ) -> SceneDocument:
     """Give a session its canvas document + the scene/grid topics and every
     R1 intent. Intent names for grid mirror GridControlBridge's @Slot names
@@ -3018,7 +3044,17 @@ def register_canvas(
 
     R4: agent_dispatcher/composer_document are threaded through so
     sendMessage's real Send action (below) can hand off to the real agent
-    dispatch pipeline instead of the R3-era deferred notice."""
+    dispatch pipeline instead of the R3-era deferred notice. token_counter
+    (R8a) lets sendMessage/regenerateResponse set real outputTokens/
+    contextTokens once a reply completes - see those intents' own comments.
+    Optional (default a throwaway, unregistered instance) only so the ~30
+    pre-R8a canvas/agents tests that call register_canvas with 4 positional
+    args keep working unchanged - the real (and only) production call site,
+    backend/app.py's _configure_session, always passes the session's real,
+    bus-registered one."""
+
+    if token_counter is None:
+        token_counter = TokenCounterState()
 
     document = SceneDocument()
 
@@ -3050,6 +3086,21 @@ def register_canvas(
 
     async def publish_grid():
         await bus.publish("grid-control")
+
+    async def publish_token_counter():
+        # R8a: guarded, unlike publish_scene/publish_grid above - "scene"
+        # and "grid-control" are registered a few lines above in THIS same
+        # function, always present by construction. token_counter's own
+        # topic is registered elsewhere (backend/token_counter.py's
+        # register_token_counter, called once per session in
+        # backend/app.py), and the ~30 pre-R8a canvas/agents tests that
+        # construct a bare SessionBus + register_canvas directly (with the
+        # optional token_counter left at its unregistered default above)
+        # never call it - has_topic keeps sendMessage/regenerateResponse
+        # working in exactly those tests instead of raising
+        # UnknownTopicError the first time either intent runs.
+        if bus.has_topic("token-counter"):
+            await bus.publish("token-counter")
 
     # -- scene intents (async: they publish after mutating) ---------------
 
@@ -3230,12 +3281,35 @@ def register_canvas(
         await publish_scene()
         history = document.chat_branch_history(node.id)
 
-        def _on_reply(reply_text):
+        # R8a (token counter wiring): contextTokens is the branch history the
+        # reply will be generated FROM - explicitly NOT `history` above,
+        # which already includes the message just sent (inputTokens, set
+        # live as the draft was typed in Composer.tsx, already owns that
+        # text; counting it again here would inflate payload()'s total).
+        # Rooted at node's own parent, the same "history before this node"
+        # walk every specialized agent flow below (web research/artifact/
+        # gitlink/pycoder/sandbox) already uses via _branch_parent_edge -
+        # applied to the plain-chat path for the first time here.
+        context_parent_edge = document._branch_parent_edge(node.id)
+        context_history = (
+            document.chat_branch_history(context_parent_edge.source) if context_parent_edge else []
+        )
+        token_counter.set_context_text(_history_token_text(context_history))
+        await publish_token_counter()
+
+        async def _on_reply(reply_text):
             # R6.3: the assistant's reply has completed (regardless of
             # whether parse_response below finds anything node-worthy in
             # it) - grow total_session_tokens by its estimated count too,
             # same as the user's own message text just above.
             document.add_session_tokens(reply_text)
+            # R8a: outputTokens reflects what the model actually returned,
+            # regardless of whether parse_response below finds anything
+            # node-worthy in it (the empty-reply early return just below)
+            # - the reply happened and consumed real output tokens either
+            # way.
+            token_counter.set_output_text(reply_text)
+            await publish_token_counter()
             # R4.3b: port legacy handle_response's _parse_response retrofit -
             # split the flat reply into thinking/text/code parts and create
             # separate thinking-kind/code-kind CHILD nodes instead of
@@ -3340,8 +3414,21 @@ def register_canvas(
             return None
 
         history = document.chat_branch_history(parent_id)
+        # R8a (token counter wiring): unlike send_message, `history` here
+        # already excludes the node being regenerated (rooted at parent_id,
+        # not node_id) - there is no fresh draft text to double-count
+        # against, so it's usable directly as contextTokens with no
+        # adjustment.
+        token_counter.set_context_text(_history_token_text(history))
+        await publish_token_counter()
 
         async def _on_reply(reply_text):
+            # R8a: outputTokens reflects what the model actually returned,
+            # ahead of every early-return below - a regenerate that comes
+            # back empty, or lands after the node was deleted mid-flight,
+            # still consumed real output tokens.
+            token_counter.set_output_text(reply_text)
+            await publish_token_counter()
             # (1) Empty/whitespace reply: keep ORIGINAL content, notify, stop.
             # Checked FIRST - exact legacy order (window_actions.py:544-546),
             # even before the liveness check below (see its own comment).

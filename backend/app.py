@@ -177,7 +177,9 @@ def _configure_session(
     # canvas document outside this closure. SessionBus has no fixed attribute
     # set (no __slots__), so this is a plain, minimal bolt-on attribute, not
     # a SessionBus API change.
-    bus.canvas_document = register_canvas(bus, notifications_state, agent_dispatcher, composer_document)
+    bus.canvas_document = register_canvas(
+        bus, notifications_state, agent_dispatcher, composer_document, token_counter
+    )
 
     # R2.5: about, plugins, settings, chat library.
     register_about(bus)
