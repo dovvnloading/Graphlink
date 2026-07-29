@@ -338,7 +338,7 @@ export const HELP_SECTIONS: HelpSection[] = [
         "items": [
           {
             "action": "Ollama (Local)",
-            "description": "Use local Ollama when you want on-device chat and reasoning. You can choose a default chat model and switch between Quick mode and Thinking mode for different response styles."
+            "description": "Use local Ollama when you want on-device chat and reasoning. You can choose a default chat model and set a reasoning level - Off, Low, Medium, or High - to control how much the model thinks before responding."
           },
           {
             "action": "API Endpoint Mode",
