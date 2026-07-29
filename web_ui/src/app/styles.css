@@ -1714,9 +1714,23 @@ body,
   color: var(--gl-surface-text-primary);
 }
 
+/* R8a (UI/UX issue list findings #3/#25 - a literal duplicate entry, one
+   bug): this layer and .app-search-layer both centre on the same top-
+   centre band. Before this fix both used the same --gl-chrome-inset top,
+   so a banner showing while search was open fully covered it (measured
+   live: .search-overlay-shell renders at top:16/height:42 relative to
+   .app-canvas-region, and a real .notification-banner renders 40px tall -
+   two 40px+ elements at an identical top offset is total overlap, not a
+   near-miss). Search keeps the stable slot (it's the one the user is
+   actively looking at/typing into); the banner gets a second band below
+   it with real clearance - 68px clears search's own measured bottom
+   (16+42=58) by 10px, so the two can never touch regardless of which
+   shows first. The z-index gap (still --gl-z-notification over
+   --gl-z-search) stays as a second guarantee in case a longer banner
+   message ever wraps taller than assumed here. */
 .app-notification-layer {
   position: absolute;
-  top: var(--gl-chrome-inset);
+  top: calc(var(--gl-chrome-inset) + 52px);
   left: 50%;
   transform: translateX(-50%);
   z-index: var(--gl-z-notification);
