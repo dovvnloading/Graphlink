@@ -21,18 +21,18 @@ import { NodeMenu } from "./NodeMenu";
  * node is never a branch point/reparented, same as code/thinking/html/image),
  * per-bubble copy + delete-from-history, Send (appends a real user message
  * and triggers the real agent reply via the backend agent layer - see
- * sendConversationMessage's own backend docstring), and (R4.3) Cancel: a
+ * sendConversationMessage's own backend docstring), (R4.3) Cancel: a
  * real per-node cancel affordance, the exact same conditional-render pattern
  * as the Composer's own Cancel button (Composer.tsx) applied one level down
  * - per-node instead of per-session. Cancel is rendered only while this
  * node's own data.pendingRequestId is non-null (this node has an in-flight
  * reply of its own), and Send is additionally disabled while that same
  * field is set, so a second send can't be issued mid-flight for this node.
- * Still deferred, with an honest disabled+title label rather than a silent
- * drop (same audit convention every prior node kind in this plan has
- * followed): Open Document View (the document-viewer island isn't wired
- * into the SPA overlay system yet - same reason ChatNodeView's own menu
- * defers it).
+ * (R8a) Open Document View is real too: it opens the shared
+ * DocumentViewDialog (frontend-only, no backend intent) with this node's
+ * entire history formatted as a numbered markdown transcript - see
+ * DocumentViewDialog.tsx / SceneCanvas.tsx's toFlowNodes for the transcript
+ * formatter.
  *
  * Card menu deliberately does NOT include "Hide Other Branches" or "Include
  * Previous Branch Context": the legacy PluginNodeContextMenu for this node
@@ -56,6 +56,7 @@ export interface ConversationNodeData extends Record<string, unknown> {
   onSend: (text: string) => void;
   onDeleteMessage: (index: number) => void;
   onCancel: () => void;
+  onOpenDocumentView: () => void;
 }
 
 export type ConversationFlowNode = Node<ConversationNodeData, "conversation">;
@@ -74,12 +75,14 @@ function ConversationNodeMenu({
   isCollapsed,
   onToggleCollapse,
   onDelete,
+  onOpenDocumentView,
   onClose,
 }: {
   position: MenuPosition;
   isCollapsed: boolean;
   onToggleCollapse: () => void;
   onDelete: () => void;
+  onOpenDocumentView: () => void;
   onClose: () => void;
 }) {
 
@@ -88,7 +91,17 @@ function ConversationNodeMenu({
       {/* Order verified against the legacy PluginNodeContextMenu's own
           construction order for this node kind: Open Document View,
           Collapse/Expand, Delete Node - nothing else. */}
-      <button type="button" role="menuitem" disabled title="Document view integration isn't wired into the SPA yet">
+      {/* R8a: real. Opens the shared DocumentViewDialog (frontend-only, no
+          backend intent) with this node's entire history formatted as a
+          numbered markdown transcript. */}
+      <button
+        type="button"
+        role="menuitem"
+        onClick={() => {
+          onOpenDocumentView();
+          onClose();
+        }}
+      >
         Open Document View
       </button>
       <button
@@ -304,6 +317,7 @@ export function ConversationNodeView({ data, selected }: NodeProps<ConversationF
           isCollapsed={data.isCollapsed}
           onToggleCollapse={data.onToggleCollapse}
           onDelete={data.onDelete}
+          onOpenDocumentView={data.onOpenDocumentView}
           onClose={() => setMenuPosition(null)}
         />
       )}

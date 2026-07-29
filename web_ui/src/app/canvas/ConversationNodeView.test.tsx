@@ -13,6 +13,7 @@ function renderConversationNode(overrides: Partial<ConversationFlowNode["data"]>
   const onSend = vi.fn();
   const onDeleteMessage = vi.fn();
   const onCancel = vi.fn();
+  const onOpenDocumentView = vi.fn();
   const props = {
     id: "n0",
     selected: false,
@@ -28,6 +29,7 @@ function renderConversationNode(overrides: Partial<ConversationFlowNode["data"]>
       onSend,
       onDeleteMessage,
       onCancel,
+      onOpenDocumentView,
       ...overrides,
     },
   } as unknown as NodeProps<ConversationFlowNode>;
@@ -37,7 +39,7 @@ function renderConversationNode(overrides: Partial<ConversationFlowNode["data"]>
       <ConversationNodeView {...props} />
     </ReactFlowProvider>,
   );
-  return { onToggleCollapse, onDelete, onSend, onDeleteMessage, onCancel };
+  return { onToggleCollapse, onDelete, onSend, onDeleteMessage, onCancel, onOpenDocumentView };
 }
 
 // Directly sets the React Flow internal Zustand store's transform/zoom
@@ -61,6 +63,7 @@ function renderConversationNodeAtZoom(zoom: number, overrides: Partial<Conversat
   const onSend = vi.fn();
   const onDeleteMessage = vi.fn();
   const onCancel = vi.fn();
+  const onOpenDocumentView = vi.fn();
   const props = {
     id: "n0",
     selected: false,
@@ -73,6 +76,7 @@ function renderConversationNodeAtZoom(zoom: number, overrides: Partial<Conversat
       onSend,
       onDeleteMessage,
       onCancel,
+      onOpenDocumentView,
       ...overrides,
     },
   } as unknown as NodeProps<ConversationFlowNode>;
@@ -182,7 +186,7 @@ describe("ConversationNodeView", () => {
     expect(screen.queryByRole("menuitem", { name: "Delete Node" })).toBeNull();
   });
 
-  it("the node-level right-click menu shows exactly 3 items: Open Document View (disabled, exact title), Collapse/Expand (real), Delete Node (real)", async () => {
+  it("the node-level right-click menu shows exactly 3 items: Open Document View (real), Collapse/Expand (real), Delete Node (real)", async () => {
     const user = userEvent.setup();
     const { onDelete, onToggleCollapse } = renderConversationNode();
 
@@ -195,10 +199,7 @@ describe("ConversationNodeView", () => {
     expect(items).toHaveLength(3);
 
     const docView = screen.getByRole("menuitem", { name: "Open Document View" });
-    expect(docView).toBeDisabled();
-    // Copied verbatim from ChatNodeView.tsx's own disabled "Open Document
-    // View" menu item title string.
-    expect(docView).toHaveAttribute("title", "Document view integration isn't wired into the SPA yet");
+    expect(docView).toBeEnabled();
 
     const collapseItem = screen.getByRole("menuitem", { name: "Collapse" });
     expect(collapseItem).toBeEnabled();
@@ -218,6 +219,18 @@ describe("ConversationNodeView", () => {
     fireEvent.contextMenu(header);
     await user.click(screen.getByRole("menuitem", { name: "Delete Node" }));
     expect(onDelete).toHaveBeenCalledOnce();
+  });
+
+  it("Open Document View calls onOpenDocumentView then closes the menu", async () => {
+    const user = userEvent.setup();
+    const { onOpenDocumentView } = renderConversationNode();
+
+    const header = screen.getByText("Conversation");
+    fireEvent.contextMenu(header);
+    await user.click(screen.getByRole("menuitem", { name: "Open Document View" }));
+
+    expect(onOpenDocumentView).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("menu")).toBeNull();
   });
 
   it("the node-level menu's Collapse/Expand label flips when isCollapsed is true", () => {
