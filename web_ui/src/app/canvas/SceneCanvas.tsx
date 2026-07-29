@@ -425,6 +425,13 @@ export function toFlowNodes(
           // "Hide Other Branches"` regardless of which node's menu is open.
           isBranchFocusActive: branchFocusOriginId !== null,
           onToggleBranchFocus: () => onToggleBranchFocus(n.id),
+          // ADR-002 Workstream 1: stages this node as sceneStore's
+          // replyTargetNodeId - the composer's next Send then reads and
+          // consumes it (see sceneStore.ts's sendMessage). `store` is
+          // already threaded into toFlowNodes, so no new parameter is
+          // needed here (unlike onToggleBranchFocus, which lives as local
+          // state on SceneCanvas itself, not on the store).
+          onBranchFromHere: () => store.setReplyTargetNodeId(n.id),
           // R6.3: the node's own scroll position within its content area -
           // read on mount by ChatNodeView (restore) and reported (debounced)
           // via the new setChatScrollValue intent on every scroll. Defaults

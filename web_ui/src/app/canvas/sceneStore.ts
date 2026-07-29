@@ -80,6 +80,14 @@ export class SceneStore {
   // node was selected when a plugin was launched" to executePlugin without
   // either component reaching into the other's internals.
   private selectedNodeId: string | null = null;
+  // ADR-002 Workstream 1 ("Branch from here"): which chat node the NEXT
+  // sendMessage should reply to instead of the current branch tip - local
+  // UI state only, same posture as selectedNodeId above. Set by a chat
+  // node's own context-menu action (ChatNodeView.tsx, wired in
+  // toFlowNodes below), read by Composer.tsx to show a "Replying to"
+  // indicator, and consumed-then-cleared by sendMessage itself so it never
+  // silently applies to a later, unrelated send.
+  private replyTargetNodeId: string | null = null;
 
   constructor(private readonly transport: WsTransport) {}
 
@@ -119,12 +127,19 @@ export class SceneStore {
   getDragConfig = (): DragSpeedState => this.dragConfig;
   getFontConfig = (): FontControlState => this.fontConfig;
   getSelectedNodeId = (): string | null => this.selectedNodeId;
+  getReplyTargetNodeId = (): string | null => this.replyTargetNodeId;
 
   // R5.1: no-op-if-unchanged, same discipline as every other setter here that
   // guards a redundant assignment before paying for an emit() fan-out.
   setSelectedNodeId(id: string | null): void {
     if (id === this.selectedNodeId) return;
     this.selectedNodeId = id;
+    this.emit();
+  }
+
+  setReplyTargetNodeId(id: string | null): void {
+    if (id === this.replyTargetNodeId) return;
+    this.replyTargetNodeId = id;
     this.emit();
   }
 
@@ -519,8 +534,18 @@ export class SceneStore {
   // split is a prerequisite for calling the real agent layer); the backend
   // surfaces that honestly via the existing notification topic, no fake
   // response synthesized here.
+  //
+  // ADR-002 Workstream 1: consumes replyTargetNodeId (if a "Branch from
+  // here" pick is pending) as this one send's branch_from_node_id override,
+  // then clears it - so it applies to exactly one send, never lingers onto
+  // a later, unrelated one. Callers never pass a branch target directly;
+  // they call setReplyTargetNodeId first (see that setter's own comment).
   sendMessage(text: string): void {
-    this.transport.intent("scene", "sendMessage", [text]);
+    const branchFromNodeId = this.replyTargetNodeId;
+    const args: unknown[] = [text];
+    if (branchFromNodeId !== null) args.push(branchFromNodeId);
+    this.transport.intent("scene", "sendMessage", args);
+    if (branchFromNodeId !== null) this.setReplyTargetNodeId(null);
   }
 
   moveNode(id: string, x: number, y: number): void {

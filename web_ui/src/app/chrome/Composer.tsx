@@ -64,6 +64,19 @@ export function Composer({
   const overlays = useOverlays();
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
+  // ADR-002 Workstream 1 ("Branch from here"): sceneStore's own
+  // replyTargetNodeId/scene, subscribed here (not just in SceneCanvas) so
+  // this indicator re-renders both when a node is picked and when the
+  // target's own content changes or the node itself is deleted. A stale
+  // target (deleted mid-pick) is treated as no target - same "derive an
+  // effective value, don't force-clear the store" posture SceneCanvas.tsx's
+  // own isBranchFocusOriginValid already uses for the sibling "Hide Other
+  // Branches" feature - so a dangling id can never render a fork indicator
+  // for a node that no longer exists.
+  const scene = useSyncExternalStore(sceneStore.subscribe, sceneStore.getScene);
+  const replyTargetNodeId = useSyncExternalStore(sceneStore.subscribe, sceneStore.getReplyTargetNodeId);
+  const replyTargetNode = replyTargetNodeId ? scene.nodes.find((n) => n.id === replyTargetNodeId) : undefined;
+
   useLayoutEffect(() => {
     const input = inputRef.current;
     if (!input) return;
@@ -82,6 +95,26 @@ export function Composer({
 
   return (
     <div className="composer-dock">
+      {replyTargetNode && (
+        // ADR-002 Workstream 1: the "Branch from here" pick, staged via a
+        // chat node's own context menu (ChatNodeView.tsx) and cleared
+        // either by this button or automatically once consumed by the next
+        // Send (sceneStore.ts's sendMessage).
+        <div className="composer-reply-target" aria-label="Branching from">
+          <span className="composer-reply-target-label">Branching from</span>
+          <span className="composer-reply-target-preview">
+            {replyTargetNode.content.trim().slice(0, 80) || "(empty message)"}
+          </span>
+          <button
+            type="button"
+            className="composer-reply-target-clear"
+            aria-label="Cancel branching from this message"
+            onClick={() => sceneStore.setReplyTargetNodeId(null)}
+          >
+            ×
+          </button>
+        </div>
+      )}
       {composer.context.items.length > 0 && (
         // R8a: real staged attachments. Metadata only - the composer never
         // receives raw bytes/extracted text, just what StagedAttachment.

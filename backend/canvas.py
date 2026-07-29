@@ -189,6 +189,15 @@ ORGANIZE_SPACING_Y = 180
 # find_branch_position packing algorithm (a later refinement).
 MESSAGE_VERTICAL_SPACING = 160
 
+# ADR-002 Workstream 1: how far apart real branch siblings (2+ chat-kind
+# children of the same parent, from "Branch from here") fan out
+# horizontally, so a genuine divergence doesn't render as two nodes stacked
+# exactly on top of each other. 460px clears a chat node's own current CSS
+# width (420px, styles.css's .chat-node) with room to spare, same "clears
+# the node's width, not just MESSAGE_VERTICAL_SPACING" reasoning the Key
+# Takeaway/Explainer Note offset just below already uses.
+BRANCH_HORIZONTAL_SPACING = 460
+
 # R8a: where a generated Key Takeaway / Explainer Note lands relative to its
 # source chat node, and how it is tinted. 400px clears a chat node's own
 # width (~292px) with room to spare, matching the legacy offset. The colours
@@ -2417,7 +2426,12 @@ class SceneDocument:
         del self.nodes[node_id]
         self._detach_node_from_membership(node_id)
 
-    def send_message(self, text: str, content_parts: list[dict[str, Any]] | None = None) -> SceneNode:
+    def send_message(
+        self,
+        text: str,
+        content_parts: list[dict[str, Any]] | None = None,
+        branch_from_node_id: str | None = None,
+    ) -> SceneNode:
         """The Composer's real Send action (R3.3): create a real user
         ChatNode continuing the current branch (last_chat_node_id), or
         start a fresh root if none exists yet. Positioning is a simple
@@ -2427,15 +2441,48 @@ class SceneDocument:
 
         R8a: content_parts carries real attachments (image/audio) staged in
         the composer - optional, additive, threaded straight to
-        add_chat_node."""
-        parent_id = self.last_chat_node_id
-        if parent_id is not None and parent_id in self.nodes:
+        add_chat_node.
+
+        ADR-002 Workstream 1 ("Branch from here"): branch_from_node_id, when
+        given and still a real node, OVERRIDES last_chat_node_id for this
+        one send - the actual fork primitive. Before this, last_chat_node_id
+        was the ONLY way to pick a parent, so a second real branch (two
+        children of one parent) was reachable only by manual edge
+        manipulation, never through the UI - see that field's own comment
+        ("until real node selection exists"). A bad/stale id (deleted node,
+        typo) falls through to the ordinary last_chat_node_id path rather
+        than raising, same defensive posture chat_branch_history's walk
+        already uses for an unknown id.
+
+        When branching onto a parent that already has one or more chat-kind
+        children (a genuine divergence, not a fresh continuation), the new
+        sibling fans out horizontally by BRANCH_HORIZONTAL_SPACING per
+        existing child instead of landing on the exact same (x, y) as an
+        existing branch - which would render as one node silently hiding
+        another.
+
+        last_chat_node_id is updated to the new node afterward exactly as
+        an ordinary send would be, override or not - so the branch just
+        created becomes the active one for the NEXT (non-overridden) send,
+        the same continue-from-here behavior as always."""
+        if branch_from_node_id is not None and branch_from_node_id in self.nodes:
+            parent_id: str | None = branch_from_node_id
             parent = self.nodes[parent_id]
-            x, y = parent.x, parent.y + MESSAGE_VERTICAL_SPACING
+            sibling_count = sum(
+                1
+                for e in self.edges.values()
+                if e.source == parent_id and (target := self.nodes.get(e.target)) is not None and target.kind == "chat"
+            )
+            x, y = parent.x + sibling_count * BRANCH_HORIZONTAL_SPACING, parent.y + MESSAGE_VERTICAL_SPACING
         else:
-            parent_id = None
-            chat_node_count = sum(1 for n in self.nodes.values() if n.kind == "chat")
-            x, y = 0.0, chat_node_count * MESSAGE_VERTICAL_SPACING
+            parent_id = self.last_chat_node_id
+            if parent_id is not None and parent_id in self.nodes:
+                parent = self.nodes[parent_id]
+                x, y = parent.x, parent.y + MESSAGE_VERTICAL_SPACING
+            else:
+                parent_id = None
+                chat_node_count = sum(1 for n in self.nodes.values() if n.kind == "chat")
+                x, y = 0.0, chat_node_count * MESSAGE_VERTICAL_SPACING
         node = self.add_chat_node(x, y, text, True, parent_id=parent_id, content_parts=content_parts)
         self.last_chat_node_id = node.id
         return node
@@ -3409,11 +3456,16 @@ def register_canvas(
         document.set_chat_scroll_value(node_id, value)
         await publish_scene()
 
-    async def send_message(text):
+    async def send_message(text, branch_from_node_id=None):
         # R3.3: the real Send action - a real user ChatNode, continuing the
         # active branch. R4: the assistant's reply is now a real agent
         # dispatch call, not a deferred notice - see backend/agents.py.
         #
+        # ADR-002 Workstream 1: branch_from_node_id is optional (older
+        # frontend builds calling with just [text] still work unchanged -
+        # dispatch_intent unpacks positionally, so a missing trailing arg
+        # just uses this parameter's own default) - see
+        # SceneDocument.send_message's own docstring for the fork mechanics.
         # R8a: consult whatever is staged in the composer right now. This is
         # WHY composer_document is threaded into register_canvas at all (see
         # this function's own docstring) - take_staged_attachments() pops
@@ -3430,7 +3482,7 @@ def register_canvas(
         media_parts = [item.content_part for item in staged if item.content_part is not None]
         content_parts = [{"type": "text", "text": full_text}, *media_parts] if media_parts else None
 
-        node = document.send_message(full_text, content_parts=content_parts)
+        node = document.send_message(full_text, content_parts=content_parts, branch_from_node_id=branch_from_node_id)
         if staged:
             # The staged list is now empty (popped above) - republish so the
             # composer's attachment chips clear the instant Send fires,
