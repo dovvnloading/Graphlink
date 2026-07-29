@@ -49,7 +49,7 @@ body,
   flex-direction: column;
   height: 100%;
   background-color: var(--gl-surface-window);
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
   font-family: var(--gl-font-family);
 }
 
@@ -79,7 +79,7 @@ body,
 }
 
 .app-conn-open {
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
 }
 
 .app-canvas-region {
@@ -153,7 +153,7 @@ body,
   font-size: 11px;
   font-weight: 600;
   font-family: inherit;
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
   background-color: var(--gl-neutral-button-background);
   border: 1px solid var(--gl-neutral-button-border);
   border-radius: 7px;
@@ -178,7 +178,7 @@ body,
 .app-ping-error {
   margin: 8px 0 0;
   font-size: 11px;
-  color: var(--gl-status-error, var(--gl-surface-text));
+  color: var(--gl-semantic-status-error, var(--gl-surface-text-primary));
 }
 
 /* -- R1 canvas (React Flow) ---------------------------------------------- */
@@ -219,7 +219,7 @@ body,
   padding: 6px 10px;
   font-weight: 600;
   font-size: var(--gl-node-font-size, inherit);
-  color: var(--gl-node-font-color, var(--gl-surface-text));
+  color: var(--gl-node-font-color, var(--gl-surface-text-primary));
   background-color: var(--gl-surface-inset, var(--gl-surface-node-body));
   border-bottom: 1px solid var(--gl-surface-border);
 }
@@ -240,7 +240,7 @@ body,
 }
 
 .scene-canvas .react-flow__edge.selected .react-flow__edge-path {
-  stroke: var(--gl-surface-text);
+  stroke: var(--gl-surface-text-primary);
 }
 
 .scene-minimap {
@@ -317,7 +317,7 @@ body,
 }
 
 .chat-node-collapse-btn:hover {
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
   background-color: var(--gl-neutral-button-hover);
 }
 
@@ -370,7 +370,7 @@ body,
 }
 
 .chat-node-content a {
-  color: var(--gl-palette-selection, var(--gl-surface-text));
+  color: var(--gl-palette-selection, var(--gl-surface-text-primary));
 }
 
 .chat-node-content blockquote {
@@ -429,7 +429,7 @@ body,
 }
 
 .chat-node-content .hljs {
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
   background: transparent;
 }
 
@@ -454,7 +454,7 @@ body,
 .chat-node-content .hljs-variable,
 .chat-node-content .hljs-template-tag,
 .chat-node-content .hljs-template-variable {
-  color: var(--gl-palette-selection, var(--gl-surface-text));
+  color: var(--gl-palette-selection, var(--gl-surface-text-primary));
 }
 
 .chat-node-content .hljs-emphasis {
@@ -489,7 +489,7 @@ body,
   text-align: left;
   font-size: 12px;
   font-family: inherit;
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
   background: transparent;
   border: none;
   border-radius: 6px;
@@ -585,7 +585,7 @@ body,
 
 .document-node-metadata-row dd {
   margin: 0;
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
   word-break: break-word;
 }
 
@@ -754,7 +754,7 @@ body,
 }
 
 .html-node-header-btn:hover:not(:disabled) {
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
   background-color: var(--gl-neutral-button-hover);
 }
 
@@ -810,7 +810,7 @@ body,
   font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
   font-size: 11px;
   padding: 8px 10px;
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
   background-color: var(--gl-surface-inset, var(--gl-surface-window));
   border: 1px solid var(--gl-surface-border);
   border-radius: 6px;
@@ -843,7 +843,7 @@ body,
   font-weight: 600;
   font-family: inherit;
   padding: 4px 10px;
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
   background-color: var(--gl-neutral-button-background);
   border: 1px solid var(--gl-neutral-button-border);
   border-radius: 6px;
@@ -972,7 +972,7 @@ body,
   font-weight: 600;
   font-family: inherit;
   padding: 5px 10px;
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
   background: transparent;
   border: 1px solid transparent;
   border-radius: 6px;
@@ -1060,7 +1060,7 @@ body,
   font-weight: 600;
   font-family: inherit;
   padding: 6px 10px;
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
   background: transparent;
   border: 1px solid transparent;
   border-radius: 6px;
@@ -1183,7 +1183,7 @@ body,
 .overlay-dialog-title {
   font-size: 13px;
   font-weight: 700;
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
 }
 
 .overlay-dialog-close {
@@ -1199,7 +1199,7 @@ body,
 }
 
 .overlay-dialog-close:hover {
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
   background-color: var(--gl-neutral-button-hover);
 }
 
@@ -1244,7 +1244,7 @@ body,
   font-weight: 600;
   font-family: inherit;
   padding: 4px 8px;
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
   background-color: var(--gl-neutral-button-background);
   border: 1px solid var(--gl-neutral-button-border);
   border-radius: 6px;
@@ -1268,8 +1268,17 @@ body,
   cursor: pointer;
 }
 
+/* R8a (UI/UX issue list finding #23): had cursor:pointer with no hover
+   state at all - felt dead under the mouse. Border brightening rather than
+   a background/opacity change since the swatch's own background IS the
+   colour value being picked and must never be altered by interaction
+   state. */
+.view-color-swatch:hover {
+  border-color: var(--gl-surface-text-muted);
+}
+
 .view-color-swatch.active {
-  border-color: var(--gl-surface-text);
+  border-color: var(--gl-surface-text-primary);
 }
 
 .view-check-row {
@@ -1278,7 +1287,7 @@ body,
   gap: 7px;
   margin-top: 8px;
   font-size: 11px;
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
 }
 
 .view-select {
@@ -1287,7 +1296,7 @@ body,
   font-family: inherit;
   padding: 5px 8px;
   margin-bottom: 6px;
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
   background-color: var(--gl-neutral-button-background);
   border: 1px solid var(--gl-neutral-button-border);
   border-radius: 6px;
@@ -1374,7 +1383,7 @@ body,
   background-color: var(--gl-surface-inset, var(--gl-surface-window));
   border: 1px solid var(--gl-surface-border);
   font-size: 11px;
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
 }
 
 .composer-attachment-chip-kind {
@@ -1410,7 +1419,7 @@ body,
 
 .composer-attachment-chip-remove:hover {
   background-color: var(--gl-surface-border);
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
 }
 
 .composer-input-wrap {
@@ -1424,7 +1433,7 @@ body,
   font-size: 13px;
   line-height: 1.4;
   padding: 6px 4px 2px;
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
   background-color: transparent;
   border: none;
 }
@@ -1493,7 +1502,7 @@ body,
   gap: 5px;
   padding: 4px 8px;
   font-family: inherit;
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
   background-color: transparent;
   border: none;
   border-radius: 6px;
@@ -1583,7 +1592,7 @@ body,
 }
 
 .composer-cancel-button {
-  color: var(--gl-status-error, var(--gl-neutral-button-icon));
+  color: var(--gl-semantic-status-error, var(--gl-neutral-button-icon));
 }
 
 /* The sole accent affordance on the card: solid fill + fully circular,
@@ -1637,7 +1646,7 @@ body,
   padding: 8px 10px;
   text-align: left;
   font-family: inherit;
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
   background: transparent;
   border: none;
   border-radius: 7px;
@@ -1698,11 +1707,11 @@ body,
 .token-counter-value {
   font-size: 11px;
   font-weight: 600;
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
 }
 
 .token-counter-total .token-counter-value {
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
 }
 
 .app-notification-layer {
@@ -1722,25 +1731,34 @@ body,
   border: 1px solid var(--gl-surface-border);
   background-color: var(--gl-surface-node-body);
   font-size: 12px;
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
 }
 
 .notification-error {
-  border-color: var(--gl-status-error, var(--gl-surface-border));
+  border-color: var(--gl-semantic-status-error, var(--gl-surface-border));
 }
 
 .notification-dismiss {
   font-size: 14px;
   font-family: inherit;
   line-height: 1;
+  /* R8a (UI/UX issue list finding #26): this was the one close/dismiss
+     button in the app with no padding at all - its click target was the
+     bare glyph's own advance width (~9x14px). Matches .overlay-dialog-close
+     and .search-overlay-icon-btn's shape (padding + rounded corners + a
+     hover background, not just a color change) rather than inventing a
+     third convention for the same kind of control. */
+  padding: 4px 8px;
   color: var(--gl-surface-text-muted);
   background: transparent;
   border: none;
+  border-radius: 6px;
   cursor: pointer;
 }
 
 .notification-dismiss:hover {
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-neutral-button-hover);
 }
 
 /* -- R2.4 pin overlay ------------------------------------------------------ */
@@ -1775,7 +1793,7 @@ body,
   font-weight: 600;
   font-family: inherit;
   padding: 3px 8px;
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
   background-color: var(--gl-neutral-button-background);
   border: 1px solid var(--gl-neutral-button-border);
   border-radius: 6px;
@@ -1792,7 +1810,7 @@ body,
   font-family: inherit;
   padding: 5px 8px;
   margin-bottom: 6px;
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
   background-color: var(--gl-surface-inset, var(--gl-surface-node-body));
   border: 1px solid var(--gl-surface-border);
   border-radius: 6px;
@@ -1825,7 +1843,7 @@ body,
   font-size: 11px;
   font-family: inherit;
   padding: 4px 6px;
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
   background: transparent;
   border: none;
   border-radius: 5px;
@@ -1854,7 +1872,7 @@ body,
 
 .pins-edit-button:hover,
 .pins-remove:hover {
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
   background-color: var(--gl-neutral-button-hover);
 }
 
@@ -1873,7 +1891,7 @@ body,
   font-weight: 600;
   font-family: inherit;
   padding: 4px 6px;
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
   background-color: var(--gl-surface-node-body);
   border: 1px solid var(--gl-surface-border);
   border-radius: 5px;
@@ -1884,7 +1902,7 @@ body,
   font-family: inherit;
   resize: vertical;
   padding: 4px 6px;
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
   background-color: var(--gl-surface-node-body);
   border: 1px solid var(--gl-surface-border);
   border-radius: 5px;
@@ -1893,7 +1911,7 @@ body,
 .pins-edit-error {
   margin: 0;
   font-size: 10px;
-  color: var(--gl-status-error, var(--gl-surface-text));
+  color: var(--gl-semantic-status-error, var(--gl-surface-text-primary));
 }
 
 .pins-edit-actions {
@@ -1907,7 +1925,7 @@ body,
   font-weight: 600;
   font-family: inherit;
   padding: 4px 8px;
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
   background-color: var(--gl-neutral-button-background);
   border: 1px solid var(--gl-neutral-button-border);
   border-radius: 5px;
@@ -1941,7 +1959,7 @@ body,
   font-size: 14px;
   font-family: inherit;
   padding: 14px 16px;
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
   background: transparent;
   border: none;
   border-bottom: 1px solid var(--gl-surface-border);
@@ -1961,7 +1979,7 @@ body,
 .palette-result {
   padding: 8px 10px;
   font-size: 12px;
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
   border-radius: 7px;
   cursor: pointer;
 }
@@ -2000,7 +2018,7 @@ body,
   font-size: 12px;
   font-family: inherit;
   padding: 5px 8px;
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
   background-color: var(--gl-surface-inset, var(--gl-surface-window));
   border: 1px solid var(--gl-surface-border);
   border-radius: 6px;
@@ -2014,11 +2032,11 @@ body,
 }
 
 .search-overlay-count[data-tone="active"] {
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
 }
 
 .search-overlay-count[data-tone="error"] {
-  color: var(--gl-status-error, var(--gl-surface-text-muted));
+  color: var(--gl-semantic-status-error, var(--gl-surface-text-muted));
 }
 
 .search-overlay-icon-btn {
@@ -2033,7 +2051,7 @@ body,
 }
 
 .search-overlay-icon-btn:hover {
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
   background-color: var(--gl-neutral-button-hover);
 }
 
@@ -2048,7 +2066,7 @@ body,
   margin: 0;
   font-size: 18px;
   font-weight: 700;
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
 }
 
 .about-version {
@@ -2153,13 +2171,13 @@ body,
 
 .help-rail-button:hover {
   background-color: var(--gl-neutral-button-hover);
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
 }
 
 .help-rail-button.active {
   background-color: var(--gl-neutral-button-hover);
   border-color: var(--gl-surface-border);
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
 }
 
 .help-content {
@@ -2175,7 +2193,7 @@ body,
   margin: 0 0 4px;
   font-size: 16px;
   font-weight: 700;
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
 }
 
 .help-content-description {
@@ -2215,7 +2233,7 @@ body,
   margin: 0 0 2px;
   font-size: 12px;
   font-weight: 650;
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
 }
 
 .help-item-description {
@@ -2280,13 +2298,13 @@ body,
 
 .plugin-picker-category-btn:hover {
   background-color: var(--gl-neutral-button-hover);
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
 }
 
 .plugin-picker-category-btn.active {
   background-color: var(--gl-neutral-button-hover);
   border-color: var(--gl-surface-border);
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
 }
 
 .plugin-picker-content {
@@ -2309,7 +2327,7 @@ body,
   margin: 0;
   font-size: 13px;
   font-weight: 700;
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
 }
 
 .plugin-picker-meta {
@@ -2446,7 +2464,7 @@ body,
 
 .settings-rail-button.active {
   background-color: var(--gl-neutral-button-hover);
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
 }
 
 .settings-page {
@@ -2454,7 +2472,7 @@ body,
   min-width: 0;
   padding: 16px;
   overflow-y: auto;
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
   font-size: 13px;
 }
 
@@ -2479,7 +2497,7 @@ body,
   padding: 8px;
   font-size: 13px;
   font-family: inherit;
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
   background-color: var(--gl-surface-inset, var(--gl-surface-window));
   border: 1px solid var(--gl-surface-border);
   border-radius: 6px;
@@ -2489,7 +2507,18 @@ body,
   display: flex;
   align-items: center;
   gap: 8px;
+  /* R8a (UI/UX issue list finding #23): negative margin cancels the added
+     padding so neighbouring rows keep their prior 16px rhythm (from
+     .settings-general-page's own gap) - the row only visually grows on
+     hover, via the background box the padding creates room for. */
+  margin: -4px -6px;
+  padding: 4px 6px;
+  border-radius: 6px;
   cursor: pointer;
+}
+
+.settings-checkbox-row:hover {
+  background-color: var(--gl-neutral-button-hover);
 }
 
 .settings-fieldset {
@@ -2528,11 +2557,19 @@ body,
   padding: 8px 14px;
   font-size: 13px;
   font-family: inherit;
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
   background-color: var(--gl-neutral-button-hover);
   border: 1px solid var(--gl-surface-border);
   border-radius: 6px;
   cursor: pointer;
+}
+
+/* R8a (UI/UX issue list finding #23): had no hover at all. Its resting
+   background already IS --gl-neutral-button-hover, so reusing that token
+   for :hover would be invisible - --gl-neutral-button-border is the next
+   step up the same neutral scale. */
+.settings-button:hover:not(:disabled) {
+  background-color: var(--gl-neutral-button-border);
 }
 
 .settings-button:disabled {
@@ -2593,7 +2630,7 @@ body,
   height: 100%;
   display: flex;
   flex-direction: column;
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
 }
 
 /* -- header: search + New Chat, persistent, never selection-gated -- */
@@ -2634,7 +2671,7 @@ body,
   padding: 9px 12px 9px 32px;
   font-size: 13px;
   font-family: inherit;
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
   background-color: var(--gl-surface-inset, var(--gl-surface-window));
   border: 1px solid var(--gl-surface-border);
   border-radius: 8px;
@@ -2722,7 +2759,7 @@ body,
   margin: 0;
   font-size: 13px;
   font-weight: 600;
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
 }
 
 .library-empty-state-sub {
@@ -2868,7 +2905,7 @@ body,
   font: inherit;
   font-size: 13px;
   font-weight: 600;
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
   background-color: var(--gl-surface-inset, var(--gl-surface-window));
   border: 1px solid var(--gl-surface-text-muted);
   border-radius: 6px;
@@ -3019,7 +3056,7 @@ body,
   font-size: 12px;
   line-height: 1.4;
   padding: 8px 10px;
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
   background-color: var(--gl-surface-inset, var(--gl-surface-window));
   border: 1px solid var(--gl-surface-border);
   border-radius: 6px;
@@ -3063,9 +3100,16 @@ body,
 }
 
 .conversation-node-cancel-btn {
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
   background-color: var(--gl-neutral-button-background);
   border: 1px solid var(--gl-neutral-button-border);
+}
+
+/* R8a (UI/UX issue list finding #23): only its solid-fill sibling (send-btn
+   above) had a hover - this bordered-neutral shape had none. Shared with
+   every other node kind's identically-reciped Cancel button below. */
+.conversation-node-cancel-btn:hover:enabled {
+  background-color: var(--gl-neutral-button-hover);
 }
 
 /* -- R5.1 web research node -------------------------------------------------- */
@@ -3101,7 +3145,7 @@ body,
   font-family: inherit;
   font-size: 12px;
   padding: 8px 10px;
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
   background-color: var(--gl-surface-inset, var(--gl-surface-window));
   border: 1px solid var(--gl-surface-border);
   border-radius: 6px;
@@ -3149,9 +3193,15 @@ body,
 }
 
 .web-research-node-cancel-btn {
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
   background-color: var(--gl-neutral-button-background);
   border: 1px solid var(--gl-neutral-button-border);
+}
+
+/* R8a (UI/UX issue list finding #23): see .conversation-node-cancel-btn's
+   identical comment above - same shape, same gap, same fix. */
+.web-research-node-cancel-btn:hover:enabled {
+  background-color: var(--gl-neutral-button-hover);
 }
 
 /* Stage stepper - pending/active/done, one pill per STAGE_STEPS entry. */
@@ -3171,7 +3221,7 @@ body,
 }
 
 .web-research-node-step.active {
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
   border-color: var(--gl-semantic-status-info, currentColor);
 }
 
@@ -3250,7 +3300,7 @@ body,
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
 }
 
 .web-research-node-source-status {
@@ -3361,7 +3411,7 @@ body,
   font-size: 12px;
   line-height: 1.4;
   padding: 8px 10px;
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
   background-color: var(--gl-surface-inset, var(--gl-surface-window));
   border: 1px solid var(--gl-surface-border);
   border-radius: 6px;
@@ -3409,9 +3459,15 @@ body,
 }
 
 .artifact-node-cancel-btn {
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
   background-color: var(--gl-neutral-button-background);
   border: 1px solid var(--gl-neutral-button-border);
+}
+
+/* R8a (UI/UX issue list finding #23): see .conversation-node-cancel-btn's
+   identical comment above - same shape, same gap, same fix. */
+.artifact-node-cancel-btn:hover:enabled {
+  background-color: var(--gl-neutral-button-hover);
 }
 
 /* -- R5.3 gitlink node ---------------------------------------------------- */
@@ -3454,11 +3510,11 @@ body,
 }
 
 .gitlink-node-tab:hover {
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
 }
 
 .gitlink-node-tab.active {
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
   border-bottom-color: var(--gl-surface-text-muted);
 }
 
@@ -3502,7 +3558,7 @@ body,
   font-family: inherit;
   font-size: 12px;
   padding: 8px 10px;
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
   background-color: var(--gl-surface-inset, var(--gl-surface-window));
   border: 1px solid var(--gl-surface-border);
   border-radius: 6px;
@@ -3524,7 +3580,7 @@ body,
   font-weight: 600;
   font-family: inherit;
   padding: 5px 12px;
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
   background-color: var(--gl-neutral-button-background);
   border: 1px solid var(--gl-neutral-button-border);
   border-radius: 6px;
@@ -3557,7 +3613,7 @@ body,
   font-family: inherit;
   font-size: 11px;
   padding: 6px 8px;
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
   background: transparent;
   border: none;
   cursor: pointer;
@@ -3589,7 +3645,7 @@ body,
   gap: 6px;
   padding: 4px 8px;
   font-size: 11px;
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
 }
 
 .gitlink-node-file-count {
@@ -3616,14 +3672,14 @@ body,
 }
 
 .gitlink-node-stat-value {
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
   font-weight: 600;
 }
 
 .gitlink-node-context-summary {
   margin: 0;
   font-size: 12px;
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
 }
 
 .gitlink-node-context-xml {
@@ -3635,7 +3691,7 @@ body,
   word-break: break-word;
   max-height: 320px;
   overflow: auto;
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
   background-color: var(--gl-surface-inset, var(--gl-surface-window));
   border: 1px solid var(--gl-surface-border);
   border-radius: 6px;
@@ -3730,9 +3786,20 @@ body,
 }
 
 .gitlink-node-apply-dialog-actions button:first-child {
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
   background-color: var(--gl-neutral-button-background);
   border: 1px solid var(--gl-neutral-button-border);
+}
+
+/* R8a (UI/UX issue list finding #23): neither of these two buttons had any
+   hover at all. Same brightening as .code-exec-approval-approve-btn's
+   identical recipe (both wrap AI-generated-code apply/execute prompts). */
+.gitlink-node-apply-dialog-actions button:last-child:hover:enabled {
+  filter: brightness(1.1);
+}
+
+.gitlink-node-apply-dialog-actions button:first-child:hover:enabled {
+  background-color: var(--gl-neutral-button-hover);
 }
 
 .gitlink-node-apply-dialog-actions button:disabled {
@@ -3783,7 +3850,7 @@ body,
 }
 
 .pycoder-node-mode-btn:hover {
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
 }
 
 .pycoder-node-mode-btn.active {
@@ -3805,7 +3872,7 @@ body,
   font-size: 12px;
   line-height: 1.4;
   padding: 8px 10px;
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
   background-color: var(--gl-surface-inset, var(--gl-surface-window));
   border: 1px solid var(--gl-surface-border);
   border-radius: 6px;
@@ -3851,7 +3918,7 @@ body,
   font-weight: 600;
   font-family: inherit;
   padding: 5px 12px;
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
   background-color: var(--gl-neutral-button-background);
   border: 1px solid var(--gl-neutral-button-border);
   border-radius: 6px;
@@ -3930,7 +3997,7 @@ body,
   word-break: break-word;
   max-height: 240px;
   overflow: auto;
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
   background-color: var(--gl-surface-inset, var(--gl-surface-window));
   border: 1px solid var(--gl-surface-border);
   border-radius: 6px;
@@ -3984,7 +4051,7 @@ body,
   word-break: break-word;
   max-height: 120px;
   overflow: auto;
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
   background-color: var(--gl-surface-inset, var(--gl-surface-window));
   border: 1px solid var(--gl-surface-border);
   border-radius: 6px;
@@ -4017,10 +4084,22 @@ body,
   border: none;
 }
 
+/* R8a (UI/UX issue list finding #23): Approve/Deny are the most
+   consequential controls in a mandatory security prompt and had zero
+   hover feedback - felt dead under the mouse next to responsive toolbar
+   chips. */
+.code-exec-approval-approve-btn:hover:enabled {
+  filter: brightness(1.1);
+}
+
 .code-exec-approval-deny-btn {
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
   background-color: var(--gl-neutral-button-background);
   border: 1px solid var(--gl-neutral-button-border);
+}
+
+.code-exec-approval-deny-btn:hover:enabled {
+  background-color: var(--gl-neutral-button-hover);
 }
 
 .code-exec-approval-actions button:disabled {
@@ -4103,7 +4182,7 @@ body,
   font-family: inherit;
   font-size: 11px;
   padding: 6px 8px;
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
   background-color: var(--gl-surface-inset, var(--gl-surface-window));
   border: 1px solid var(--gl-surface-border);
   border-radius: 6px;
@@ -4187,9 +4266,15 @@ body,
   cursor: pointer;
 }
 
+/* R8a (UI/UX issue list finding #23): same gap as .view-color-swatch above -
+   border-only, since the swatch's own fill is the colour being picked. */
+.group-color-swatch:hover {
+  border-color: var(--gl-surface-text-muted);
+}
+
 .group-color-swatch.active {
-  border-color: var(--gl-surface-text-bright, var(--gl-surface-text));
-  box-shadow: 0 0 0 1px var(--gl-surface-text-bright, var(--gl-surface-text));
+  border-color: var(--gl-surface-text-bright, var(--gl-surface-text-primary));
+  box-shadow: 0 0 0 1px var(--gl-surface-text-bright, var(--gl-surface-text-primary));
 }
 
 .group-color-reset {
@@ -4198,7 +4283,7 @@ body,
   font-weight: 600;
   font-family: inherit;
   padding: 5px 8px;
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
   background-color: var(--gl-neutral-button-background);
   border: 1px solid var(--gl-neutral-button-border);
   border-radius: 6px;
@@ -4238,7 +4323,7 @@ body,
   padding: 6px 8px;
   font-size: 11px;
   font-weight: 600;
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
   background-color: var(--gl-surface-inset, var(--gl-surface-node-body));
   border-bottom: 1px solid var(--gl-surface-border);
   border-radius: 9px 9px 0 0;
@@ -4263,7 +4348,7 @@ body,
   font-weight: 600;
   font-family: inherit;
   padding: 2px 4px;
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
   background-color: var(--gl-surface-inset-deep, var(--gl-surface-window));
   border: 1px solid var(--gl-surface-text-muted);
   border-radius: 4px;
@@ -4294,7 +4379,7 @@ body,
 }
 
 .group-node-btn:hover {
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
   background-color: var(--gl-neutral-button-hover);
 }
 
@@ -4405,6 +4490,6 @@ body,
 }
 
 .chart-node-btn:hover {
-  color: var(--gl-surface-text);
+  color: var(--gl-surface-text-primary);
   background-color: var(--gl-neutral-button-hover);
 }
