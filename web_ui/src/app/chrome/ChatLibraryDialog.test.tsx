@@ -214,7 +214,19 @@ describe("ChatLibraryDialog", () => {
     expect(screen.getByText("First Chat")).toBeInTheDocument();
   });
 
-  it("Escape while renaming closes the whole dialog (the app's global Escape-to-close policy) without committing a rename", async () => {
+  it("Escape while renaming cancels the rename WITHOUT closing the dialog (R8a finding #16)", async () => {
+    // This test used to assert the opposite - Escape closing the whole
+    // dialog mid-rename, mislabeled as "the app's global Escape-to-close
+    // policy" - which was exactly the bug the UI/UX issue list's finding
+    // #16 named this component as its own worked example of: the rename
+    // input's own onKeyDown already called event.preventDefault() on
+    // Escape (see onRenameKeyDown below), but overlays.tsx's document-level
+    // handler ran in capture phase with an unconditional stopPropagation(),
+    // so that preventDefault() could never matter - the global handler
+    // always won and closed the dialog out from under an in-progress
+    // rename. overlays.tsx now runs on bubble phase and checks
+    // event.defaultPrevented before closing anything, so this component's
+    // own already-correct handler finally has a chance to run.
     const { user, intents } = setup();
     await user.click(screen.getByText("open library"));
 
@@ -222,7 +234,15 @@ describe("ChatLibraryDialog", () => {
     await user.keyboard("{Escape}");
 
     expect(intents.filter((i) => i[1] === "renameChat")).toEqual([]);
-    expect(screen.queryByRole("dialog")).toBeNull();
+    // Reverts exactly like the Cancel (x) button does, not "the dialog is
+    // now gone" - the rename INPUT is gone (cancelled) and the original
+    // title is back, but Chat Library stays open underneath it. Checked by
+    // role, not just the accessible name: the pencil button that RESTARTS
+    // a rename carries the identical "Rename ..." label, so a label-only
+    // query would find that instead and pass even if cancelling had failed.
+    expect(screen.queryByRole("textbox", { name: 'Rename "First Chat"' })).toBeNull();
+    expect(screen.getByText("First Chat")).toBeInTheDocument();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
   });
 
   it("deleting a row: trash opens an inline scoped confirm, confirming dispatches deleteChat for THAT row only", async () => {

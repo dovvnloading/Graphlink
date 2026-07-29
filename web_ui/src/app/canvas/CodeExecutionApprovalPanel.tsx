@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
+import { useFocusEscapeBackstop } from "../overlays/overlays";
 
 /**
  * The mandatory human-approval gate (Qt-removal plan R5.4, corrected in the
@@ -139,7 +140,16 @@ function toPythonFence(code: string): string {
 // Deny, Approve) - deliberately narrower than overlays.tsx's own shared
 // FOCUSABLE selector (which also matches inputs/selects/links/textareas),
 // since nothing else in this panel's markup is ever meant to receive focus.
-const FOCUSABLE = 'button, [tabindex]:not([tabindex="-1"])';
+//
+// R8a (UI/UX issue list finding #17): excludes [disabled], the same fix
+// overlays.tsx's own Dialog needed and for the identical reason - `busy`
+// (below) disables BOTH Deny and Approve simultaneously while a click is
+// in flight, and an undisabled trap boundary computed against a disabled
+// "last" button never actually receives Tab natively, so the wrap-around
+// branch below silently never fires and focus walks out of a panel whose
+// entire reason to exist is that focus must NEVER leave it during a
+// mandatory code-execution approval.
+const FOCUSABLE = 'button:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 export interface CodeExecutionApprovalPanelProps {
   /** No longer used to register with any shared overlay registry (there is
@@ -218,6 +228,18 @@ export function CodeExecutionApprovalPanel({
     panel.addEventListener("keydown", onKeyDown);
     return () => panel.removeEventListener("keydown", onKeyDown);
   }, [awaitingApproval]);
+
+  // R8a (finding #17): shares overlays.tsx's own backstop rather than a
+  // second hand-written copy - see that hook's own doc comment for why an
+  // unconditional version (which THIS file tried first) is actually wrong
+  // here specifically: two of these panels can be open at once for
+  // different nodes (FIX B, this file's own module doc), and an
+  // unconditional "redirect whenever focus lands outside, full stop"
+  // listener on each one infinite-loops the instant either redirects,
+  // since each treats the other's redirect as its own escape and redirects
+  // back. The shared hook's Tab-gating avoids this generally, not just for
+  // Dialog's own close()-restores-focus race.
+  useFocusEscapeBackstop(panelRef, awaitingApproval, FOCUSABLE);
 
   if (!awaitingApproval) return null;
 

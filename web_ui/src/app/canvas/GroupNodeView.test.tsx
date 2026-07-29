@@ -82,7 +82,11 @@ describe("GroupNodeView (frame)", () => {
     fireEvent.doubleClick(container.querySelector(".group-node-header")!);
     const input = screen.getByRole("textbox") as HTMLInputElement;
     fireEvent.change(input, { target: { value: "Throwaway" } });
-    fireEvent.keyDown(input, { key: "Escape" });
+    // R8a finding #16: must claim the event (preventDefault -> dispatchEvent
+    // returns false) or overlays.tsx's document-level Escape handler would
+    // also close whatever dialog/popover is open elsewhere - see
+    // NoteNodeView's identical guard and overlays.tsx's own comment.
+    expect(fireEvent.keyDown(input, { key: "Escape" })).toBe(false);
 
     expect(onSetLabel).not.toHaveBeenCalled();
     expect(screen.queryByRole("textbox")).toBeNull();

@@ -68,6 +68,13 @@ export function NoteNodeView({ data, selected }: NodeProps<NoteFlowNode>) {
 
   function onKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key === "Escape") {
+      // R8a (UI/UX issue list finding #16): claims Escape so the overlay
+      // system's own document-level handler (overlays.tsx) - which now
+      // checks event.defaultPrevented before closing anything - doesn't
+      // also close an unrelated open popover behind this note. Without
+      // this, Escape while editing a note with e.g. Pins open would revert
+      // the note AND close Pins in the same keystroke.
+      event.preventDefault();
       skipBlurRef.current = true;
       setDraft(data.content);
       setEditing(false);
