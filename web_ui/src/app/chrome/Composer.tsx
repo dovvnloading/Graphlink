@@ -2,6 +2,7 @@ import { useLayoutEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import type { SceneStore } from "../canvas/sceneStore";
 import { Popover, useOverlays } from "../overlays/overlays";
 import type { ComposerStore } from "./composerStore";
+import { TokenCounter } from "./TokenCounter";
 
 /**
  * The composer dock (Qt-removal plan R2.3/R3.3/R4.3) - ComposerApp's SPA
@@ -49,7 +50,15 @@ function Icon({ name }: { name: "attach" | "send" | "chevron" | "stop" }) {
   );
 }
 
-export function Composer({ store, sceneStore }: { store: ComposerStore; sceneStore: SceneStore }) {
+export function Composer({
+  store,
+  sceneStore,
+  showTokenCounter = true,
+}: {
+  store: ComposerStore;
+  sceneStore: SceneStore;
+  showTokenCounter?: boolean;
+}) {
   const composer = useSyncExternalStore(store.subscribe, store.getComposer);
   const streamText = useSyncExternalStore(store.subscribe, store.getStreamText);
   const overlays = useOverlays();
@@ -196,6 +205,8 @@ export function Composer({ store, sceneStore }: { store: ComposerStore; sceneSto
           </span>
           <Icon name="chevron" />
         </button>
+
+        {showTokenCounter && <TokenCounter store={store} />}
 
         <div className="composer-send-group">
           {composer.request.canCancel && (

@@ -120,6 +120,11 @@ const PINNED_APP_CSS_LITERALS: Record<string, string[]> = {
     // color, so it's added to the ratchet rather than tokenized alone.
     "rgba(0, 0, 0, 0.45)",
     "rgba(0, 0, 0, 0.45)",
+    // R8a follow-up: .token-counter-popout's box-shadow - the Token usage
+    // hover fold-out (TokenCounter.tsx), same reasoning as the composer
+    // entries just above: reuses the SAME shared popover shadow rather
+    // than being tokenized alone.
+    "rgba(0, 0, 0, 0.45)",
     "rgba(0, 0, 0, 0.55)",
     "rgba(0, 0, 0, 0.45)",
     "rgba(0, 0, 0, 0.45)",

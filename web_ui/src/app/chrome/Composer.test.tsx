@@ -491,14 +491,37 @@ describe("Composer", () => {
 });
 
 describe("TokenCounter", () => {
-  it("renders all four counts", () => {
+  it("shows only the compact total until hovered", () => {
     const { store } = makeStore({
       tokenCounter: { inputTokens: 3, outputTokens: 2, contextTokens: 1, totalTokens: 6 },
     });
     // @ts-expect-error - test double
     render(<TokenCounter store={store} />);
-    expect(screen.getByText("3")).toBeInTheDocument();
+
+    expect(screen.getByRole("button", { name: "Token usage: 6 total" })).toBeInTheDocument();
     expect(screen.getByText("6")).toBeInTheDocument();
+    // Input/Output/Context only exist inside the hover popout - not shown yet.
+    expect(screen.queryByText("3")).toBeNull();
+    expect(screen.queryByRole("status", { name: "Token usage breakdown" })).toBeNull();
+  });
+
+  it("reveals all four counts in a popout on hover, and hides them again on unhover", async () => {
+    const user = userEvent.setup();
+    const { store } = makeStore({
+      tokenCounter: { inputTokens: 3, outputTokens: 2, contextTokens: 1, totalTokens: 6 },
+    });
+    // @ts-expect-error - test double
+    render(<TokenCounter store={store} />);
+
+    await user.hover(screen.getByRole("button", { name: "Token usage: 6 total" }));
+    const popout = screen.getByRole("status", { name: "Token usage breakdown" });
+    expect(popout).toBeInTheDocument();
+    expect(screen.getByText("3")).toBeInTheDocument();
+    expect(screen.getByText("2")).toBeInTheDocument();
+    expect(screen.getByText("1")).toBeInTheDocument();
+
+    await user.unhover(screen.getByRole("button", { name: "Token usage: 6 total" }));
+    expect(screen.queryByRole("status", { name: "Token usage breakdown" })).toBeNull();
   });
 });
 
