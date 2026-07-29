@@ -1,7 +1,7 @@
 import { ReactFlowProvider } from "@xyflow/react";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { CommandPalette } from "./CommandPalette";
 import { initialSceneState } from "../canvas/sceneStore";
 import { OverlayProvider, useOverlays } from "../overlays/overlays";
@@ -72,6 +72,23 @@ describe("CommandPalette", () => {
     // "Zoom In" then "Zoom Out" per the registry order.
     await user.keyboard("{ArrowDown}{Enter}");
     expect(screen.queryByLabelText("Search commands")).toBeNull();
+  });
+
+  it("scrolls the highlighted row into view as the selection moves", async () => {
+    // jsdom doesn't implement scrollIntoView - stub it so the effect that
+    // calls it doesn't throw, then assert it actually ran for the newly
+    // selected row rather than just that navigation still works.
+    const scrollIntoView = vi.fn();
+    HTMLElement.prototype.scrollIntoView = scrollIntoView;
+    const user = setup();
+    await user.click(screen.getByText("open palette"));
+    scrollIntoView.mockClear(); // opening itself selects index 0 - not the interaction under test
+
+    await user.keyboard("{ArrowDown}");
+
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: "nearest" });
+    const selected = document.querySelector('[aria-selected="true"]');
+    expect(scrollIntoView.mock.instances[scrollIntoView.mock.instances.length - 1]).toBe(selected);
   });
 
   it("executing an 'open X' command leaves that surface open, not just closed", async () => {

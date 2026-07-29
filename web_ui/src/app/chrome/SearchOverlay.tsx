@@ -5,10 +5,8 @@ import { useOverlays } from "../overlays/overlays";
 
 /**
  * The search overlay (Qt-removal plan R2.4) - search-overlay island's
- * successor. Searches live node titles (real, today); once R3 nodes carry
- * real text content, matching extends to it the same way the legacy
- * SearchOverlay matched conversation text - no interface change needed,
- * just a richer haystack per node.
+ * successor. Searches both a node's title and its full text content, the
+ * same haystack the legacy SearchOverlay matched conversation text against.
  */
 export function SearchOverlay({ store }: { store: SceneStore }) {
   const scene = useSyncExternalStore(store.subscribe, store.getScene);
@@ -37,7 +35,9 @@ export function SearchOverlay({ store }: { store: SceneStore }) {
   const matches = useMemo(() => {
     const term = query.toLowerCase().trim();
     if (!term) return [];
-    return scene.nodes.filter((n) => n.title.toLowerCase().includes(term));
+    return scene.nodes.filter(
+      (n) => n.title.toLowerCase().includes(term) || n.content.toLowerCase().includes(term),
+    );
   }, [query, scene.nodes]);
 
   function jumpTo(index: number) {

@@ -2221,6 +2221,10 @@ body,
   flex-direction: column;
   padding: 16px 20px;
   overflow-y: auto;
+  /* Some Help sections overflow and get a scrollbar, others don't - without
+     reserving the gutter unconditionally, every click between them shifted
+     all the content sideways by the scrollbar's own width. */
+  scrollbar-gutter: stable;
 }
 
 .help-content-title {
@@ -2508,6 +2512,11 @@ body,
   overflow-y: auto;
   color: var(--gl-surface-text-primary);
   font-size: 13px;
+  /* Some tabs (Ollama, Llama.cpp, API Endpoint) overflow and get a
+     scrollbar, others (General, Integrations) don't - without reserving
+     the gutter unconditionally, switching tabs shifted every field/label/
+     button sideways by the scrollbar's own width. */
+  scrollbar-gutter: stable;
 }
 
 .settings-general-page {
