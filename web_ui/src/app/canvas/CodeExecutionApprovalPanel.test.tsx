@@ -234,4 +234,53 @@ describe("CodeExecutionApprovalPanel", () => {
     expect(screen.getByRole("button", { name: "Approve" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Deny" })).toBeEnabled();
   });
+
+  // -- R8a finding #17: focus trap must exclude disabled buttons ------------
+
+  it("R8a finding #17: while busy, Tab from the code display does not leak focus out of the panel", () => {
+    // Before this fix, FOCUSABLE included disabled buttons: with busy=true
+    // both Deny and Approve are disabled, so "last" was the disabled
+    // Approve button. Tab from the code display (first, not last) never
+    // matched the wrap condition, preventDefault() never fired, and the
+    // browser's own native Tab order - which correctly skips disabled
+    // buttons - walked straight out of the panel (its only other two
+    // stops both being disabled) onto whatever's next in the document.
+    // This is the one thing this panel exists to make impossible during a
+    // mandatory security approval.
+    renderPanel({ busy: true });
+    const codeDisplay = document.querySelector(".code-exec-approval-code") as HTMLElement;
+    const dialog = screen.getByRole("dialog");
+    codeDisplay.focus();
+    expect(document.activeElement).toBe(codeDisplay);
+
+    fireEvent.keyDown(dialog, { key: "Tab" });
+
+    expect(dialog.contains(document.activeElement)).toBe(true);
+  });
+
+  it("R8a finding #17: a focus escape past the trap is pulled back into the panel (backstop)", () => {
+    // Simulates a leak the primary trap missed by some cause other than the
+    // now-fixed disabled-button one. This panel shares overlays.tsx's own
+    // Tab-gated useFocusEscapeBackstop (see that hook's doc comment) rather
+    // than a hand-written unconditional listener - an earlier draft of this
+    // fix used an unconditional one and infinite-looped the instant two
+    // panels were open at once (see the "FIX B" test below), each treating
+    // the other's redirect as its own escape. The gating means the backstop
+    // only acts right after a real Tab keydown - fireEvent.keyDown(document,
+    // ...), not user.keyboard, for the same reason as overlays.test.tsx's
+    // twin of this test: dispatching directly at document arms the flag via
+    // this hook's capture-phase listener without also reaching the panel's
+    // own bubble-phase trap, isolating "Tab pressed but the primary trap
+    // missed it" from "Tab was handled correctly."
+    renderPanel({ busy: false });
+    const outside = document.createElement("button");
+    document.body.appendChild(outside);
+    try {
+      fireEvent.keyDown(document, { key: "Tab" });
+      outside.focus();
+      expect(screen.getByRole("dialog").contains(document.activeElement)).toBe(true);
+    } finally {
+      outside.remove();
+    }
+  });
 });

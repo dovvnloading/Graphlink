@@ -58,6 +58,22 @@ export function PinOverlay({ store }: { store: SceneStore }) {
     setDraftError(null);
   }
 
+  // R8a (UI/UX issue list finding #16): neither the title input nor the
+  // note textarea below had ANY onKeyDown, so Escape while editing a pin
+  // fell straight through to overlays.tsx's own document-level handler,
+  // which closed the whole Pins popover - discarding the entire panel,
+  // not just cancelling the one pin's edit. Same bug class already fixed
+  // for Chat Library's rename input and the Note/Frame inline label
+  // editors, missed here originally since this file has no `key ===
+  // "Escape"` literal to grep for at all - there was no handler to find,
+  // only one to add.
+  function onEditKeyDown(event: React.KeyboardEvent) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      cancelEditing();
+    }
+  }
+
   function saveEditing() {
     const trimmedTitle = draftTitle.trim();
     if (!trimmedTitle) {
@@ -111,6 +127,7 @@ export function PinOverlay({ store }: { store: SceneStore }) {
                   className="pins-edit-title"
                   value={draftTitle}
                   onChange={(e) => setDraftTitle(e.target.value)}
+                  onKeyDown={onEditKeyDown}
                   aria-label="Pin title"
                   autoFocus
                 />
@@ -118,6 +135,7 @@ export function PinOverlay({ store }: { store: SceneStore }) {
                   className="pins-edit-note"
                   value={draftNote}
                   onChange={(e) => setDraftNote(e.target.value)}
+                  onKeyDown={onEditKeyDown}
                   aria-label="Pin note"
                   rows={2}
                 />

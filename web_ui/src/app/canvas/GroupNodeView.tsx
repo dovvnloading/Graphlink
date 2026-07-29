@@ -78,6 +78,11 @@ export function GroupNodeView({ id, data, selected }: NodeProps<GroupFlowNode>) 
 
   function onKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
     if (event.key === "Escape") {
+      // R8a (UI/UX issue list finding #16): claims Escape so overlays.tsx's
+      // own document-level handler doesn't also close an unrelated open
+      // popover behind this frame/container - see NoteNodeView's identical
+      // guard for the full reasoning.
+      event.preventDefault();
       skipBlurRef.current = true;
       setDraft(data.label);
       setEditing(false);

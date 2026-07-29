@@ -67,7 +67,13 @@ describe("NoteNodeView", () => {
 
     const textarea = screen.getByRole("textbox") as HTMLTextAreaElement;
     fireEvent.change(textarea, { target: { value: "throwaway edit" } });
-    fireEvent.keyDown(textarea, { key: "Escape" });
+    // fireEvent's own return value is the DOM dispatchEvent() result - false
+    // means something called preventDefault(). R8a finding #16: this MUST
+    // be false, or overlays.tsx's document-level Escape handler (which now
+    // checks event.defaultPrevented before closing anything) would also
+    // close whatever dialog/popover happens to be open elsewhere the
+    // instant a note revert fires - see overlays.tsx's own comment.
+    expect(fireEvent.keyDown(textarea, { key: "Escape" })).toBe(false);
 
     expect(onSetContent).not.toHaveBeenCalled();
     expect(screen.queryByRole("textbox")).toBeNull();
