@@ -4470,7 +4470,7 @@ def test_add_code_sandbox_node_creates_child_with_defaults_and_mints_sandbox_id(
     parent = doc.add_chat_node(0, 0, "wire up sandbox", True)
     node = doc.add_code_sandbox_node(10, 20, parent.id)
     assert node.kind == "code_sandbox"
-    assert node.title == "Execution Sandbox"
+    assert node.title == "Virtual Environment Runner"
     assert node.code_sandbox_sandbox_id, "a sandbox id must be minted at creation time"
     assert node.code_sandbox_requirements == ""
     assert node.code_sandbox_prompt == ""

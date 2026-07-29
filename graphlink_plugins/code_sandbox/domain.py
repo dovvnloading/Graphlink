@@ -49,6 +49,7 @@ from pathlib import Path
 
 import api_provider
 import graphlink_task_config as config
+from graphlink_process_env import safe_subprocess_env
 
 
 class SandboxStage(Enum):
@@ -60,7 +61,12 @@ class SandboxStage(Enum):
 
 
 def _subprocess_kwargs():
-    kwargs = {}
+    # ADR-002 P0: env= is explicit-allowlist, not inherited - see
+    # graphlink_process_env's own module doc for why. Every venv-create/
+    # pip-install/script-execute call in this file goes through
+    # _run_subprocess below, which passes these kwargs, so this is the one
+    # place that needs to set it.
+    kwargs = {"env": safe_subprocess_env()}
     if sys.platform == "win32":
         kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
     return kwargs

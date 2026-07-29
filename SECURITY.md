@@ -18,7 +18,7 @@ If you discover a security issue in Graphlink:
 Areas that deserve extra care in this project include:
 
 - local storage of API keys and GitHub tokens
-- execution-oriented plugins such as Execution Sandbox and Py-Coder
+- execution-oriented plugins such as Virtual Environment Runner and Py-Coder
 - GitHub-backed repository access
 - provider configuration and outbound API requests
 - file import and export flows

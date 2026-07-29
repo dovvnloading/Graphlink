@@ -314,7 +314,7 @@ export const HELP_SECTIONS: HelpSection[] = [
             "description": "A coding workspace with AI-driven and manual modes, generated code, terminal output, and final analysis tabs. Use it for fast implementation, debugging, code generation, and lightweight computation."
           },
           {
-            "action": "Execution Sandbox",
+            "action": "Virtual Environment Runner",
             "description": "Runs Python in a per-node virtualenv with declared dependencies - the venv isolates installed packages, not the operating system; code still runs with your full account privileges. Choose this over Py-Coder when you need dependency-aware execution or a cleaner reproducible runtime."
           },
           {
@@ -426,7 +426,7 @@ export const HELP_SECTIONS: HelpSection[] = [
           },
           {
             "action": "Coding and Debugging",
-            "description": "Ask for code on the main canvas, move promising results into Py-Coder for iteration, and switch to Execution Sandbox when dependencies or reproducibility matter. This keeps ideation and execution connected."
+            "description": "Ask for code on the main canvas, move promising results into Py-Coder for iteration, and switch to Virtual Environment Runner when dependencies or reproducibility matter. This keeps ideation and execution connected."
           },
           {
             "action": "Planning and Execution",

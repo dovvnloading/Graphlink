@@ -394,13 +394,13 @@ def test_execute_plugin_pycoder_creates_a_real_pycoder_node():
 def test_execute_plugin_execution_sandbox_requires_parent():
     bus, notifications, canvas_document = _make_plugins_bus()
 
-    result = asyncio.run(bus.dispatch_intent("app-plugins", "executePlugin", ["Execution Sandbox"]))
+    result = asyncio.run(bus.dispatch_intent("app-plugins", "executePlugin", ["Virtual Environment Runner"]))
 
     assert result is None
     assert notifications.visible is True
     assert notifications.msg_type == "warning"
     assert notifications.message == (
-        "Please select a valid node to branch from before adding an Execution Sandbox node."
+        "Please select a valid node to branch from before adding a Virtual Environment Runner node."
     )
     assert not any(n.kind == "code_sandbox" for n in canvas_document.nodes.values())
 
@@ -409,7 +409,7 @@ def test_execute_plugin_execution_sandbox_rejects_unknown_parent_id():
     bus, notifications, canvas_document = _make_plugins_bus()
 
     result = asyncio.run(
-        bus.dispatch_intent("app-plugins", "executePlugin", ["Execution Sandbox", "ghost-node-id"])
+        bus.dispatch_intent("app-plugins", "executePlugin", ["Virtual Environment Runner", "ghost-node-id"])
     )
 
     assert result is None
@@ -436,13 +436,13 @@ def test_execute_plugin_execution_sandbox_creates_a_real_code_sandbox_node():
     bus.attach(recorder)
 
     result = asyncio.run(
-        bus.dispatch_intent("app-plugins", "executePlugin", ["Execution Sandbox", parent.id])
+        bus.dispatch_intent("app-plugins", "executePlugin", ["Virtual Environment Runner", parent.id])
     )
 
     assert result is not None
     node = canvas_document.nodes[result]
     assert node.kind == "code_sandbox"
-    assert node.title == "Execution Sandbox"
+    assert node.title == "Virtual Environment Runner"
     assert node.code_sandbox_sandbox_id, "a sandbox id must be minted at creation time"
     assert any(
         e.source == parent.id and e.target == node.id for e in canvas_document.edges.values()
@@ -704,7 +704,7 @@ def test_every_plugin_now_has_a_real_creation_branch():
     # collect zero cases) that every _PLUGINS entry has moved off the
     # generic deferred notice.
     handled = {
-        "Web Research", "Artifact / Drafter", "Gitlink", "Py-Coder", "Execution Sandbox",
+        "Web Research", "Artifact / Drafter", "Gitlink", "Py-Coder", "Virtual Environment Runner",
         "System Prompt", "Conversation Node", "HTML Renderer",
     }
     assert handled == {name for name, _description, _category in _PLUGINS}

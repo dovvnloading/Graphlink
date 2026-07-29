@@ -41,6 +41,7 @@ from enum import Enum
 
 import api_provider
 import graphlink_task_config as config
+from graphlink_process_env import safe_subprocess_env
 
 
 class PyCoderStage(Enum):
@@ -98,7 +99,11 @@ while True:
     status = "ERROR" if failed else "OK"
     print("\\n---GRAPHLINK_EXEC_BOUNDARY:{nonce}:" + status + "---", flush=True)
 """
-        kwargs = {}
+        # ADR-002 P0: env= is explicit-allowlist, not inherited - see
+        # graphlink_process_env's own module doc. Without this, the REPL
+        # subprocess would inherit the backend's full os.environ, including
+        # any provider API key configured as an environment variable.
+        kwargs = {'env': safe_subprocess_env()}
         # Hide the console window on Windows
         if sys.platform == 'win32':
             kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW

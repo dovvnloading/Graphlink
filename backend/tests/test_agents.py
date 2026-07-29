@@ -3478,6 +3478,7 @@ def _make_pycoder_node(**overrides):
         pycoder_analysis="",
         pycoder_last_run_failed=False,
         pycoder_awaiting_approval=False,
+        pycoder_approved_fingerprint=None,
         pycoder_error="",
     )
     defaults.update(overrides)
@@ -3494,10 +3495,34 @@ def _make_code_sandbox_node(**overrides):
         code_sandbox_output="",
         code_sandbox_analysis="",
         code_sandbox_awaiting_approval=False,
+        code_sandbox_approval_requirements="",
+        code_sandbox_approved_fingerprint=None,
         code_sandbox_error="",
     )
     defaults.update(overrides)
     return SimpleNamespace(**defaults)
+
+
+async def _approve_every_gate_until_done(dispatcher, request_id, task, requests_dict_name, max_iterations=400):
+    """ADR-002 P0 test helper: the repair loop now opens a FRESH approval
+    gate (a new asyncio.Future replacing the resolved one in the same dict
+    slot) before every repaired execution attempt, instead of reusing the
+    original approval. There is no single moment to "resolve the future" the
+    way the old one-gate-per-run tests could (see this section's own
+    docstring for why resolving before the task even starts still works for
+    a SINGLE gate) - so this polls, approving whatever gate is currently
+    open, until the task completes. approve_code_execution/deny_code_
+    execution are idempotent on an already-resolved future (see
+    AgentDispatcher._resolve_approval's own `future.done()` guard), so
+    calling this every tick is safe even when no new gate has opened yet."""
+    requests = getattr(dispatcher, requests_dict_name)
+    for _ in range(max_iterations):
+        if task.done():
+            return
+        if request_id in requests:
+            dispatcher.approve_code_execution(request_id)
+        await asyncio.sleep(0.005)
+    raise AssertionError("task did not complete after repeatedly approving every gate")
 
 
 def _make_code_exec_env():
@@ -3794,9 +3819,10 @@ def test_pycoder_ai_driven_repair_loop_exhausts_retries_calls_on_success_with_la
         agents_module.PyCoderExecutionAgent, "get_response",
         lambda self, history, prompt: "[TOOL:PYTHON]\nbroken\n[/TOOL]",
     )
+    repair_calls = []
     monkeypatch.setattr(
         agents_module.PyCoderRepairAgent, "get_response",
-        lambda self, code, error, is_final_attempt: "still broken",
+        lambda self, code, error, is_final_attempt: repair_calls.append(1) or f"still broken v{len(repair_calls)}",
     )
     monkeypatch.setattr(
         agents_module.PyCoderAnalysisAgent, "get_response",
@@ -3805,9 +3831,21 @@ def test_pycoder_ai_driven_repair_loop_exhausts_retries_calls_on_success_with_la
     fake_repl = _FakeRepl(script=[("err", True)])  # every execute() call fails
     monkeypatch.setattr(AgentDispatcher, "get_pycoder_repl", lambda self, node_id: fake_repl)
 
+    # ADR-002 P0 regression guard: every repaired variant must open its own
+    # fresh gate - a local SimpleNamespace subclass (NOT a patch on the
+    # shared builtin SimpleNamespace type) counts how many times
+    # pycoder_awaiting_approval transitions to True, since its final value is
+    # always False by the time the run completes and would hide a regression
+    # back to "one gate, reused for every repair".
+    class _CountingNode(SimpleNamespace):
+        def __setattr__(self, name, value):
+            if name == "pycoder_awaiting_approval" and value is True:
+                self.__dict__["gate_open_count"] = self.__dict__.get("gate_open_count", 0) + 1
+            super().__setattr__(name, value)
+
     async def run():
         bus, notifications, dispatcher = _make_code_exec_env()
-        node = _make_pycoder_node(pycoder_mode="ai_driven")
+        node = _CountingNode(**_make_pycoder_node(pycoder_mode="ai_driven").__dict__, gate_open_count=0)
         successes = []
 
         await dispatcher.start_pycoder_run(
@@ -3816,7 +3854,7 @@ def test_pycoder_ai_driven_repair_loop_exhausts_retries_calls_on_success_with_la
             on_success=lambda *a: successes.append(a), on_failure=lambda m: None,
         )
         request_id, entry = next(iter(dispatcher._pycoder_requests.items()))
-        dispatcher.approve_code_execution(request_id)
+        await _approve_every_gate_until_done(dispatcher, request_id, entry["task"], "_pycoder_requests")
         await entry["task"]
 
         assert len(successes) == 1, "an exhausted repair loop is still a completed run, never on_failure"
@@ -3824,6 +3862,104 @@ def test_pycoder_ai_driven_repair_loop_exhausts_retries_calls_on_success_with_la
         assert last_run_failed is True
         assert analysis.startswith("**PROCESS FAILED**")
         assert len(fake_repl.calls) == 4, "max_retries=4, matching legacy exactly"
+        assert repair_calls == [1, 1, 1], "3 repairs between the 4 execute attempts"
+        assert node.gate_open_count == 4, (
+            "ADR-002 P0: one gate for the original code, plus one fresh gate per repaired "
+            "variant (3) - repaired code must never run under the original approval"
+        )
+
+    asyncio.run(run())
+
+
+def test_pycoder_ai_driven_repair_gate_denied_stops_immediately_without_further_repairs(monkeypatch):
+    """ADR-002 P0: denying a LATER gate (a repaired variant, not the
+    original code) must stop the run with its own distinct message, and must
+    not fall through to yet another repair attempt."""
+    monkeypatch.setattr(
+        agents_module.PyCoderExecutionAgent, "get_response",
+        lambda self, history, prompt: "[TOOL:PYTHON]\nbroken\n[/TOOL]",
+    )
+    monkeypatch.setattr(
+        agents_module.PyCoderRepairAgent, "get_response",
+        lambda self, code, error, is_final_attempt: "still broken",
+    )
+    fake_repl = _FakeRepl(script=[("err", True)])  # every execute() call fails
+    monkeypatch.setattr(AgentDispatcher, "get_pycoder_repl", lambda self, node_id: fake_repl)
+
+    async def run():
+        bus, notifications, dispatcher = _make_code_exec_env()
+        node = _make_pycoder_node(pycoder_mode="ai_driven")
+        failures = []
+
+        await dispatcher.start_pycoder_run(
+            bus=bus, notifications_state=notifications, node=node, node_id="n1",
+            mode="ai_driven", prompt="do something impossible", code="", conversation_history=[],
+            on_success=lambda *a: None, on_failure=failures.append,
+        )
+        request_id, entry = next(iter(dispatcher._pycoder_requests.items()))
+
+        # Approve the FIRST gate (the original code) only.
+        for _ in range(200):
+            if node.pycoder_awaiting_approval:
+                break
+            await asyncio.sleep(0.005)
+        assert dispatcher.approve_code_execution(request_id) is True
+
+        # Wait for the SECOND gate (the repaired code) to open, then deny it.
+        for _ in range(200):
+            if len(fake_repl.calls) >= 1 and node.pycoder_awaiting_approval:
+                break
+            await asyncio.sleep(0.005)
+        assert node.pycoder_awaiting_approval is True, "the repaired variant must open its own gate"
+        assert dispatcher.deny_code_execution(request_id) is True
+        await entry["task"]
+
+        assert failures == ["Py-Coder run cancelled: repaired code was not approved."]
+        assert len(fake_repl.calls) == 1, "denying the repair gate must prevent the repaired code from ever running"
+        assert node.pycoder_awaiting_approval is False
+        assert dispatcher._pycoder_requests == {}
+        assert node.pending_request_id is None
+
+    asyncio.run(run())
+
+
+def test_pycoder_execution_blocked_when_approved_fingerprint_does_not_match(monkeypatch):
+    """ADR-002 P0 defense-in-depth: if node.pycoder_approved_fingerprint
+    ever disagrees with the code about to execute (simulating a future bug
+    that mutates current_code without opening a fresh gate), the run must
+    fail loudly instead of silently executing unapproved content."""
+    monkeypatch.setattr(
+        agents_module.PyCoderExecutionAgent, "get_response",
+        lambda self, history, prompt: "[TOOL:PYTHON]\nprint(1)\n[/TOOL]",
+    )
+    fake_repl = _FakeRepl(script=[("1", False)])
+    monkeypatch.setattr(AgentDispatcher, "get_pycoder_repl", lambda self, node_id: fake_repl)
+
+    async def run():
+        bus, notifications, dispatcher = _make_code_exec_env()
+        node = _make_pycoder_node(pycoder_mode="ai_driven")
+        failures = []
+
+        await dispatcher.start_pycoder_run(
+            bus=bus, notifications_state=notifications, node=node, node_id="n1",
+            mode="ai_driven", prompt="add 1", code="", conversation_history=[],
+            on_success=lambda *a: None, on_failure=failures.append,
+        )
+        request_id, entry = next(iter(dispatcher._pycoder_requests.items()))
+        for _ in range(200):
+            if node.pycoder_awaiting_approval:
+                break
+            await asyncio.sleep(0.005)
+        # Tamper with the fingerprint the way a hypothetical future bug that
+        # mutated the code without re-gating would leave it mismatched.
+        node.pycoder_approved_fingerprint = "not-the-real-fingerprint"
+        assert dispatcher.approve_code_execution(request_id) is True
+        await entry["task"]
+
+        assert failures == [
+            "Py-Coder execution blocked: the approved code no longer matches what is about to run."
+        ]
+        assert fake_repl.calls == [], "execution must never happen once the fingerprint check fails"
 
     asyncio.run(run())
 
@@ -4043,6 +4179,215 @@ def test_code_sandbox_approved_full_success_flow_runs_venv_and_analyzes(monkeypa
         assert node.code_sandbox_awaiting_approval is False
         assert dispatcher._code_sandbox_requests == {}
         assert node.pending_request_id is None
+
+    asyncio.run(run())
+
+
+def test_code_sandbox_repair_loop_requires_a_fresh_approval_for_each_repaired_attempt(monkeypatch):
+    """ADR-002 P0: the code_sandbox twin of the pycoder repair-gate test
+    above - same confirmed gap, same fix, same shape."""
+    monkeypatch.setattr(
+        agents_module.SandboxGenerationAgent, "get_response",
+        lambda self, history, prompt, manifest: "[TOOL:PYTHON]\nbroken\n[/TOOL]",
+    )
+    repair_calls = []
+    monkeypatch.setattr(
+        agents_module.SandboxRepairAgent, "get_response",
+        lambda self, code, error, manifest, original_prompt=None: repair_calls.append(1) or "still broken",
+    )
+    monkeypatch.setattr(
+        agents_module.PyCoderAnalysisAgent, "get_response",
+        lambda self, original_prompt, code, code_output: "explains the persistent failure",
+    )
+
+    class _FailingSandbox:
+        def __init__(self, sandbox_id):
+            self.sandbox_id = sandbox_id
+            self.execute_calls = []
+
+        def ensure_base_environment(self, should_continue, emit_line=None):
+            pass
+
+        def sync_requirements(self, manifest, should_continue, emit_line=None):
+            pass
+
+        def execute_code(self, code, should_continue, emit_line=None):
+            self.execute_calls.append(code)
+            return "Traceback (most recent call last):\nboom", 1
+
+    fake_sandbox_holder = {}
+
+    def _make_sandbox(sandbox_id):
+        sandbox = _FailingSandbox(sandbox_id)
+        fake_sandbox_holder["sandbox"] = sandbox
+        return sandbox
+
+    monkeypatch.setattr(agents_module, "VirtualEnvSandbox", _make_sandbox)
+
+    class _CountingNode(SimpleNamespace):
+        def __setattr__(self, name, value):
+            if name == "code_sandbox_awaiting_approval" and value is True:
+                self.__dict__["gate_open_count"] = self.__dict__.get("gate_open_count", 0) + 1
+            super().__setattr__(name, value)
+
+    async def run():
+        bus, notifications, dispatcher = _make_code_exec_env()
+        node = _CountingNode(**_make_code_sandbox_node().__dict__, gate_open_count=0)
+        successes = []
+
+        await dispatcher.start_code_sandbox_run(
+            bus=bus, notifications_state=notifications, node=node, node_id="n1",
+            sandbox_id="sandbox-42", prompt="do something impossible", existing_code="",
+            requirements_manifest="", conversation_history=[],
+            on_success=lambda *a: successes.append(a), on_failure=lambda m: None,
+        )
+        request_id, entry = next(iter(dispatcher._code_sandbox_requests.items()))
+        await _approve_every_gate_until_done(dispatcher, request_id, entry["task"], "_code_sandbox_requests")
+        await entry["task"]
+
+        assert len(successes) == 1, "an exhausted repair loop is still a completed run, never on_failure"
+        sandbox = fake_sandbox_holder["sandbox"]
+        assert len(sandbox.execute_calls) == 3, "max_attempts=3, matching the existing sandbox behavior"
+        assert repair_calls == [1, 1], "2 repairs between the 3 execute attempts"
+        assert node.gate_open_count == 3, (
+            "ADR-002 P0: one gate for the original code, plus one fresh gate per repaired "
+            "variant (2) - repaired code must never run under the original approval"
+        )
+
+    asyncio.run(run())
+
+
+def test_code_sandbox_repair_gate_denied_stops_immediately_without_further_repairs(monkeypatch):
+    monkeypatch.setattr(
+        agents_module.SandboxGenerationAgent, "get_response",
+        lambda self, history, prompt, manifest: "[TOOL:PYTHON]\nbroken\n[/TOOL]",
+    )
+    monkeypatch.setattr(
+        agents_module.SandboxRepairAgent, "get_response",
+        lambda self, code, error, manifest, original_prompt=None: "still broken",
+    )
+
+    class _FailingSandbox:
+        def __init__(self, sandbox_id):
+            self.execute_calls = []
+
+        def ensure_base_environment(self, should_continue, emit_line=None):
+            pass
+
+        def sync_requirements(self, manifest, should_continue, emit_line=None):
+            pass
+
+        def execute_code(self, code, should_continue, emit_line=None):
+            self.execute_calls.append(code)
+            return "Traceback (most recent call last):\nboom", 1
+
+    fake_sandbox_holder = {}
+
+    def _make_sandbox(sandbox_id):
+        sandbox = _FailingSandbox(sandbox_id)
+        fake_sandbox_holder["sandbox"] = sandbox
+        return sandbox
+
+    monkeypatch.setattr(agents_module, "VirtualEnvSandbox", _make_sandbox)
+
+    async def run():
+        bus, notifications, dispatcher = _make_code_exec_env()
+        node = _make_code_sandbox_node()
+        failures = []
+
+        await dispatcher.start_code_sandbox_run(
+            bus=bus, notifications_state=notifications, node=node, node_id="n1",
+            sandbox_id="sandbox-42", prompt="do something impossible", existing_code="",
+            requirements_manifest="", conversation_history=[],
+            on_success=lambda *a: None, on_failure=failures.append,
+        )
+        request_id, entry = next(iter(dispatcher._code_sandbox_requests.items()))
+
+        for _ in range(200):
+            if node.code_sandbox_awaiting_approval:
+                break
+            await asyncio.sleep(0.005)
+        assert dispatcher.approve_code_execution(request_id) is True
+
+        for _ in range(200):
+            if "sandbox" in fake_sandbox_holder:
+                break
+            await asyncio.sleep(0.005)
+        sandbox = fake_sandbox_holder["sandbox"]
+        for _ in range(200):
+            if len(sandbox.execute_calls) >= 1 and node.code_sandbox_awaiting_approval:
+                break
+            await asyncio.sleep(0.005)
+        assert node.code_sandbox_awaiting_approval is True, "the repaired variant must open its own gate"
+        assert dispatcher.deny_code_execution(request_id) is True
+        await entry["task"]
+
+        assert failures == ["Sandbox run cancelled: repaired code was not approved."]
+        assert len(sandbox.execute_calls) == 1, (
+            "denying the repair gate must prevent the repaired code from ever running"
+        )
+        assert node.code_sandbox_awaiting_approval is False
+        assert dispatcher._code_sandbox_requests == {}
+        assert node.pending_request_id is None
+
+    asyncio.run(run())
+
+
+def test_code_sandbox_execution_blocked_when_approved_fingerprint_does_not_match(monkeypatch):
+    monkeypatch.setattr(
+        agents_module.SandboxGenerationAgent, "get_response",
+        lambda self, history, prompt, manifest: "[TOOL:PYTHON]\nprint(1)\n[/TOOL]",
+    )
+
+    class _FakeSandbox:
+        def __init__(self, sandbox_id):
+            self.execute_calls = []
+
+        def ensure_base_environment(self, should_continue, emit_line=None):
+            pass
+
+        def sync_requirements(self, manifest, should_continue, emit_line=None):
+            pass
+
+        def execute_code(self, code, should_continue, emit_line=None):
+            self.execute_calls.append(code)
+            return "1", 0
+
+    fake_sandbox_holder = {}
+
+    def _make_sandbox(sandbox_id):
+        sandbox = _FakeSandbox(sandbox_id)
+        fake_sandbox_holder["sandbox"] = sandbox
+        return sandbox
+
+    monkeypatch.setattr(agents_module, "VirtualEnvSandbox", _make_sandbox)
+
+    async def run():
+        bus, notifications, dispatcher = _make_code_exec_env()
+        node = _make_code_sandbox_node()
+        failures = []
+
+        await dispatcher.start_code_sandbox_run(
+            bus=bus, notifications_state=notifications, node=node, node_id="n1",
+            sandbox_id="sandbox-42", prompt="print 1", existing_code="",
+            requirements_manifest="", conversation_history=[],
+            on_success=lambda *a: None, on_failure=failures.append,
+        )
+        request_id, entry = next(iter(dispatcher._code_sandbox_requests.items()))
+        for _ in range(200):
+            if node.code_sandbox_awaiting_approval:
+                break
+            await asyncio.sleep(0.005)
+        node.code_sandbox_approved_fingerprint = "not-the-real-fingerprint"
+        assert dispatcher.approve_code_execution(request_id) is True
+        await entry["task"]
+
+        assert failures == [
+            "Sandbox execution blocked: the approved code no longer matches what is about to run."
+        ]
+        assert fake_sandbox_holder["sandbox"].execute_calls == [], (
+            "execution must never happen once the fingerprint check fails"
+        )
 
     asyncio.run(run())
 

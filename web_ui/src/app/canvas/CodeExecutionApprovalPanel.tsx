@@ -110,22 +110,26 @@ export type CodeExecutionKind = "pycoder" | "code_sandbox";
 // module comment) - do NOT soften or paraphrase either of these. The
 // "there is no sandboxing" / "isolates installed packages, not the operating
 // system" substrings are the load-bearing honesty this copy exists for, and
-// are directly regression-tested in CodeExecutionApprovalPanel.test.tsx. The
-// repair-loop-reexecution sentence is appended to BOTH kinds (post-review
-// FIX C) since backend/agents.py's start_code_sandbox_run has the exact same
-// "approve once, repair-and-retry under that one approval" behavior as
-// start_pycoder_run's ai_driven path - omitting it for code_sandbox would be
-// disclosing only half of what one Approve click actually authorizes.
+// are directly regression-tested in CodeExecutionApprovalPanel.test.tsx.
+//
+// ADR-002 P0 UPDATE: the second sentence used to read "...automatically
+// repaired versions of this code may run under this same approval" - that
+// was true of the old implementation and is NOT true anymore.
+// backend/agents.py's start_pycoder_run/start_code_sandbox_run now open a
+// FRESH approval gate (a new panel, this same component, re-rendered) for
+// every repaired variant before it runs - see either function's own "ADR-002
+// P0" comment at its repair-loop re-gate. The sentence below reflects that
+// corrected behavior; do not revert it to the old wording.
 const WARNING_TEXT: Record<CodeExecutionKind, string> = {
   pycoder:
-    "This will run AI-generated Python code in a persistent local session with the full privileges of your user account (there is no sandboxing). If execution fails, automatically repaired versions of this code may run under this same approval.",
+    "This will run AI-generated Python code in a persistent local session with the full privileges of your user account (there is no sandboxing). If execution fails, you will be asked to approve each automatically repaired version before it runs.",
   code_sandbox:
-    "This will run Python code inside an isolated virtual environment with the full privileges of your user account (the environment isolates installed packages, not the operating system). If execution fails, automatically repaired versions of this code may run under this same approval.",
+    "This will run Python code inside an isolated virtual environment with the full privileges of your user account (the environment isolates installed packages, not the operating system). If execution fails, you will be asked to approve each automatically repaired version before it runs.",
 };
 
 const DIALOG_TITLE: Record<CodeExecutionKind, string> = {
   pycoder: "Approve Py-Coder Execution?",
-  code_sandbox: "Approve Sandbox Execution?",
+  code_sandbox: "Approve Virtual Environment Runner Execution?",
 };
 
 /** Wraps the pending code in a markdown fenced ```python code block so

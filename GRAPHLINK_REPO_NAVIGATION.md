@@ -168,7 +168,7 @@ Several `backend/` modules (`composer.py`, `chat_library.py`, `plugins.py`, `ses
 | `artifact` | Artifact / Drafter | `ArtifactNodeView.tsx` |
 | `gitlink` | Gitlink | `GitlinkNodeView.tsx` |
 | `pycoder` | Py-Coder | `PyCoderNodeView.tsx` |
-| `code_sandbox` | Execution Sandbox | `CodeSandboxNodeView.tsx` |
+| `code_sandbox` | Virtual Environment Runner | `CodeSandboxNodeView.tsx` |
 | `note` | (System Prompt picker entry creates one) | `NoteNodeView.tsx` |
 | `frame` | (Create Frame command) | `GroupNodeView.tsx` (shared with `container`, distinguished by `data.groupKind`) |
 | `container` | (Create Container command) | `GroupNodeView.tsx` |
@@ -247,7 +247,7 @@ This is the live registration order in `backend/plugins.py::_PLUGINS` / `_CATEGO
 
 - `Gitlink` - creates a `gitlink` node.
 - `Py-Coder` - creates a `pycoder` node.
-- `Execution Sandbox` - creates a `code_sandbox` node.
+- `Virtual Environment Runner` - creates a `code_sandbox` node.
 - `HTML Renderer` - creates an `html` node (starts with empty content).
 
 ### Workflow & Drafting
