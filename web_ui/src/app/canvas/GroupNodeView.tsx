@@ -1,5 +1,5 @@
 import { NodeResizer, type Node, type NodeProps } from "@xyflow/react";
-import { useRef, useState } from "react";
+import { useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { GroupColorPicker } from "./GroupColorPicker";
 import { GROUP_RESIZE_MIN_HEIGHT, GROUP_RESIZE_MIN_WIDTH } from "./canvasConstants";
 
@@ -29,7 +29,12 @@ import { GROUP_RESIZE_MIN_HEIGHT, GROUP_RESIZE_MIN_WIDTH } from "./canvasConstan
  * inside `data`) in SceneCanvas.tsx's toFlowNodes - the documented xyflow
  * mechanism for letting <NodeResizer/> drive the node WRAPPER element's own
  * size directly. This component's own root div therefore fills that wrapper
- * (100%/100%) rather than carrying its own pixel width/height.
+ * (100%/100%) rather than carrying its own pixel width/height. A collapsed
+ * group is NOT a CSS-only illusion - backend/canvas.py's
+ * _recompute_group_bounds pins group_width/group_height to the fixed
+ * GROUP_COLLAPSED_WIDTH/HEIGHT (260x50) while collapsed, so the wrapper
+ * really does shrink to that footprint; the pill treatment below relies on
+ * that being a small, fixed, wide-and-short box.
  *
  * Drag: a locked frame's (or any container's) own body is the intentional
  * group-drag handle - see SceneCanvas.tsx's onNodesChange for the delta
@@ -40,6 +45,20 @@ import { GROUP_RESIZE_MIN_HEIGHT, GROUP_RESIZE_MIN_WIDTH } from "./canvasConstan
  * its members" behavior) - it just doesn't carry members along; see
  * groupDragKindOf in SceneCanvas.tsx, which gates the member cascade on
  * lock state, not draggability itself.
+ *
+ * Visual system ("Quiet Frame", R8a visual-quality pass): the box itself is
+ * a near-invisible tint at rest - no permanent header bar, no full-opacity
+ * border - so it reads as a boundary around its members rather than a card
+ * competing with them. Identity (label + the 5 actions) lives in small
+ * floating chips anchored above the top-left corner, which only fully
+ * assert themselves on hover/selection. The one deliberate exception is the
+ * Collapse/Expand toggle, which stays dimly visible even at rest (see
+ * .group-node-collapse-btn) since it is the single action a user needs to
+ * discover without first knowing to hover a near-invisible box.
+ * <NodeResizer/>'s handles follow the same rule: `isVisible` is gated on
+ * `hovered || selected`, never rendered unconditionally - this was the
+ * literal, named complaint that triggered this pass (resize scaffolding
+ * permanently exposed on every expanded frame).
  *
  * Collapsed container hover preview: a simplified equivalent of legacy's
  * timer-based "ghost frame" (a rendered miniature preview of expanded
@@ -68,6 +87,22 @@ export interface GroupNodeData extends Record<string, unknown> {
 
 export type GroupFlowNode = Node<GroupNodeData, "frame" | "container">;
 
+// Kills the resizer's connecting outline entirely (dots only, no wireframe
+// rectangle) - a cross-judge borrow from the design-panel review: a full
+// connecting line reintroduces the "exposed scaffolding" look this pass
+// exists to remove. Inline style (not a CSS class) so it wins outright over
+// @xyflow/react's own resize-control stylesheet regardless of import order.
+const RESIZE_HANDLE_STYLE: CSSProperties = {
+  width: 6,
+  height: 6,
+  borderRadius: 0,
+  backgroundColor: "var(--gl-palette-selection)",
+  border: "1px solid var(--gl-surface-window)",
+};
+const RESIZE_LINE_STYLE: CSSProperties = {
+  borderColor: "transparent",
+};
+
 export function GroupNodeView({ id, data, selected }: NodeProps<GroupFlowNode>) {
   const isFrame = data.groupKind === "frame";
   const [editing, setEditing] = useState(false);
@@ -77,6 +112,17 @@ export function GroupNodeView({ id, data, selected }: NodeProps<GroupFlowNode>) 
   const skipBlurRef = useRef(false);
   const [hovered, setHovered] = useState(false);
   const showGhostPreview = !isFrame && data.isCollapsed && hovered && data.memberKinds.length > 0;
+  const hasBodyColor = data.color !== null;
+  const hasHeaderColor = data.headerColor !== null;
+  // Expanded chips reflect ONLY an explicit header color, leaving the body
+  // tint visible around them - the collapsed pill IS the whole visible
+  // object, so it falls back to the body color too (same headerColor-first
+  // fallback GroupColorPicker's own swatch trigger already uses).
+  const chipStyle: CSSProperties | undefined = hasHeaderColor
+    ? { backgroundColor: data.headerColor ?? undefined }
+    : undefined;
+  const pillStyle: CSSProperties | undefined =
+    hasHeaderColor || hasBodyColor ? { backgroundColor: data.headerColor ?? data.color ?? undefined } : undefined;
 
   function beginEdit() {
     setDraft(data.label);
@@ -113,13 +159,71 @@ export function GroupNodeView({ id, data, selected }: NodeProps<GroupFlowNode>) 
     commit(draft);
   }
 
+  const labelNode = editing ? (
+    <input
+      type="text"
+      className="group-node-label-input nodrag"
+      value={draft}
+      onChange={(event) => setDraft(event.target.value)}
+      onKeyDown={onKeyDown}
+      onBlur={onBlur}
+      autoFocus
+    />
+  ) : (
+    <span className="group-node-label">{data.label}</span>
+  );
+
+  // Lock/Fit cluster, then a divider, then Color/Ungroup - shared by both
+  // the floating controls chip (expanded) and the pill's control row
+  // (collapsed). The divider only renders for frames, since containers have
+  // no left cluster (no Lock, no Fit) to separate from the right one.
+  const controlsCluster = (
+    <>
+      {isFrame && (
+        <button
+          type="button"
+          className="group-node-btn"
+          title={data.isLocked ? "Unlock" : "Lock"}
+          aria-label={data.isLocked ? "Unlock" : "Lock"}
+          onClick={data.onToggleLock}
+        >
+          <GroupIcon name={data.isLocked ? "unlock" : "lock"} />
+        </button>
+      )}
+      {isFrame && !data.isCollapsed && (
+        <button
+          type="button"
+          className="group-node-btn"
+          title="Fit to Content"
+          aria-label="Fit to Content"
+          onClick={data.onFitToContent}
+        >
+          <GroupIcon name="fit" />
+        </button>
+      )}
+      {isFrame && <span className="group-node-controls-divider" aria-hidden="true" />}
+      <GroupColorPicker color={data.color} headerColor={data.headerColor} onSelect={data.onSetColor} />
+      <button
+        type="button"
+        className="group-node-btn group-node-ungroup-btn"
+        title="Ungroup"
+        aria-label="Ungroup"
+        onClick={data.onUngroup}
+      >
+        <GroupIcon name="ungroup" />
+      </button>
+    </>
+  );
+
   return (
     <div
       className={
         "group-node" +
         ` ${data.groupKind}-group-node` +
         (selected ? " selected" : "") +
-        (data.isCollapsed ? " collapsed" : "")
+        (data.isCollapsed ? " collapsed" : "") +
+        (hasBodyColor ? " has-body-color" : "") +
+        (hasHeaderColor ? " has-header-color" : "")
       }
       style={{ width: "100%", height: "100%", backgroundColor: data.color ?? undefined }}
       onMouseEnter={() => setHovered(true)}
@@ -128,49 +232,58 @@ export function GroupNodeView({ id, data, selected }: NodeProps<GroupFlowNode>) 
       {showGhostPreview && <GhostPreview memberKinds={data.memberKinds} />}
       <NodeResizer
         nodeId={id}
-        isVisible={isFrame && !data.isCollapsed}
+        isVisible={isFrame && !data.isCollapsed && (hovered || selected)}
         minWidth={GROUP_RESIZE_MIN_WIDTH}
         minHeight={GROUP_RESIZE_MIN_HEIGHT}
         onResizeEnd={(_event, params) => data.onResize(params.width, params.height)}
+        handleStyle={RESIZE_HANDLE_STYLE}
+        lineStyle={RESIZE_LINE_STYLE}
       />
-      <div
-        className="group-node-header"
-        style={{ backgroundColor: data.headerColor ?? undefined }}
-        onDoubleClick={beginEdit}
-      >
-        {editing ? (
-          <input
-            type="text"
-            className="group-node-label-input nodrag"
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={onKeyDown}
-            onBlur={onBlur}
-            autoFocus
-          />
-        ) : (
-          <span className="group-node-label">{data.label}</span>
-        )}
-        <div className="group-node-controls nodrag">
-          <button type="button" className="group-node-btn" onClick={data.onToggleCollapsed}>
-            {data.isCollapsed ? "Expand" : "Collapse"}
-          </button>
-          {isFrame && (
-            <button type="button" className="group-node-btn" onClick={data.onToggleLock}>
-              {data.isLocked ? "Unlock" : "Lock"}
+      {data.isCollapsed ? (
+        <div
+          className="group-node-header group-node-pill-header"
+          style={pillStyle}
+          onDoubleClick={beginEdit}
+        >
+          {labelNode}
+          <div className="group-node-controls nodrag">
+            <button
+              type="button"
+              className="group-node-btn"
+              title="Expand"
+              aria-label="Expand"
+              onClick={data.onToggleCollapsed}
+            >
+              <GroupIcon name="expand" />
             </button>
-          )}
-          {isFrame && !data.isCollapsed && (
-            <button type="button" className="group-node-btn" onClick={data.onFitToContent}>
-              Fit to Content
-            </button>
-          )}
-          <GroupColorPicker color={data.color} headerColor={data.headerColor} onSelect={data.onSetColor} />
-          <button type="button" className="group-node-btn group-node-ungroup-btn" onClick={data.onUngroup}>
-            Ungroup
-          </button>
+            {controlsCluster}
+          </div>
         </div>
-      </div>
+      ) : (
+        <div className="group-node-topbar">
+          <div
+            className="group-node-header group-node-label-chip nodrag"
+            style={chipStyle}
+            onDoubleClick={beginEdit}
+          >
+            {labelNode}
+          </div>
+          <div className="group-node-controls-row nodrag">
+            <button
+              type="button"
+              className="group-node-btn group-node-collapse-btn"
+              title="Collapse"
+              aria-label="Collapse"
+              onClick={data.onToggleCollapsed}
+            >
+              <GroupIcon name="collapse" />
+            </button>
+            <div className="group-node-controls-chip" style={chipStyle}>
+              {controlsCluster}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -193,5 +306,45 @@ function GhostPreview({ memberKinds }: { memberKinds: string[] }) {
       </span>
       <span className="group-node-ghost-preview-breakdown">{breakdown.join(", ")}</span>
     </div>
+  );
+}
+
+// R8a visual-quality pass: small hand-authored stroke icons (fill:none,
+// stroke:currentColor, matching the same convention Composer.tsx's own
+// Icon() already established) replacing the previous text-label buttons -
+// every control is now an icon-only 22x22px hit target with the action name
+// carried as aria-label/title instead of visible text, per the design-panel
+// review's unanimous "icon-only, hover-reveal" recommendation.
+type GroupIconName = "collapse" | "expand" | "lock" | "unlock" | "fit" | "ungroup";
+
+const GROUP_ICON_PATHS: Record<GroupIconName, ReactNode> = {
+  collapse: <path d="M4 6l4 4 4-4" />,
+  expand: <path d="M4 10l4-4 4 4" />,
+  lock: (
+    <>
+      <rect x="4" y="7" width="8" height="6" rx="1.2" />
+      <path d="M6 7V5a2 2 0 0 1 4 0v2" />
+    </>
+  ),
+  unlock: (
+    <>
+      <rect x="4" y="7" width="8" height="6" rx="1.2" />
+      <path d="M6 7V5a2 2 0 0 1 4 0v1" />
+    </>
+  ),
+  fit: <path d="M3 6V3h3M13 6V3h-3M3 10v3h3M13 10v3h-3" />,
+  ungroup: (
+    <>
+      <rect x="2" y="5" width="5.5" height="5.5" rx="1" />
+      <rect x="8.5" y="5" width="5.5" height="5.5" rx="1" />
+    </>
+  ),
+};
+
+function GroupIcon({ name }: { name: GroupIconName }) {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 16 16" className="group-node-icon">
+      {GROUP_ICON_PATHS[name]}
+    </svg>
   );
 }

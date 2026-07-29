@@ -4378,17 +4378,17 @@ body,
 }
 
 .group-color-swatch-trigger {
-  width: 16px;
-  height: 16px;
+  width: 14px;
+  height: 14px;
   padding: 0;
   border-radius: 50%;
   background-color: var(--gl-neutral-button-background);
-  border: 1px solid var(--gl-neutral-button-border);
+  border: 1px solid var(--gl-surface-border);
   cursor: pointer;
 }
 
 .group-color-swatch-trigger:hover {
-  border-color: var(--gl-surface-text-muted);
+  border-color: var(--gl-surface-border-strong);
 }
 
 /* R8a: the code-execution approval prompt is a BLOCKING security decision, so
@@ -4483,10 +4483,56 @@ body,
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
-  background-color: var(--gl-surface-node-body);
-  border: 1px solid var(--gl-surface-border);
-  border-radius: 10px;
-  opacity: 0.92;
+  background-color: color-mix(in srgb, var(--gl-surface-node-body) 55%, transparent);
+  border: 1px solid color-mix(in srgb, var(--gl-surface-border) 45%, transparent);
+  border-radius: var(--gl-radius-lg);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--gl-surface-text-bright) 3%, transparent);
+  opacity: 1;
+  transition:
+    background-color var(--gl-motion-fast) var(--gl-motion-ease),
+    border-color var(--gl-motion-fast) var(--gl-motion-ease),
+    box-shadow var(--gl-motion-base) var(--gl-motion-ease);
+}
+
+.group-node:hover {
+  background-color: color-mix(in srgb, var(--gl-surface-node-body) 75%, transparent);
+  border-color: var(--gl-surface-border);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--gl-surface-text-bright) 3%, transparent),
+    var(--gl-shadow-1);
+}
+
+.group-node.selected {
+  background-color: color-mix(in srgb, var(--gl-surface-node-body) 75%, transparent);
+  border-color: var(--gl-surface-border);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--gl-surface-text-bright) 3%, transparent),
+    0 0 0 1px var(--gl-surface-border-strong),
+    var(--gl-shadow-2);
+}
+
+/* Custom body color (GroupColorPicker) is applied inline on the root and
+   always wins over the background-color rules above; only the border needs
+   its own dark-hairline treatment here so it stays legible against every
+   swatch, including the light ones (Yellow/Orange). */
+.group-node.has-body-color {
+  border-color: color-mix(in srgb, var(--gl-surface-inset-deep) 55%, transparent);
+}
+
+.group-node.has-body-color:hover,
+.group-node.has-body-color.selected {
+  border-color: color-mix(in srgb, var(--gl-surface-inset-deep) 75%, transparent);
+}
+
+/* Collapsed: .group-node-pill-header below carries ALL visible chrome
+   (fill, border, radius); the root becomes a plain invisible sizing box so
+   its own radius-lg rectangle never peeks out from behind the pill's
+   fully-rounded corners. Placed after :hover/.selected so it wins
+   regardless of which of those also match. */
+.group-node.collapsed {
+  background-color: transparent;
+  border-color: transparent;
+  box-shadow: none;
 }
 
 /* R6.1 follow-up: the collapsed-container hover preview - a simplified
@@ -4525,31 +4571,151 @@ body,
   color: var(--gl-surface-text-muted);
 }
 
-.group-node.selected {
-  border-color: var(--gl-surface-border-strong, var(--gl-surface-text-muted));
+/* -- Expanded chrome: a floating label chip + a hover-revealed controls
+   chip, anchored above the box's top-left corner, replacing the old
+   full-width header bar (R8a: that permanent bar plus a full-opacity
+   border was the "ugly hard edge box" complaint). ---------------------- */
+
+.group-node-topbar {
+  position: absolute;
+  top: -26px;
+  left: 6px;
+  right: 6px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  pointer-events: none;
 }
 
-.group-node-header {
+.group-node-topbar > * {
+  pointer-events: auto;
+}
+
+.group-node-label-chip {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--gl-surface-text-muted);
+  background-color: var(--gl-surface-node-body);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-sm);
+  cursor: default;
+  transition:
+    color var(--gl-motion-fast) var(--gl-motion-ease),
+    border-color var(--gl-motion-fast) var(--gl-motion-ease);
+}
+
+.group-node:hover .group-node-label-chip {
+  color: var(--gl-surface-text-secondary);
+  border-color: var(--gl-surface-border-strong);
+}
+
+.group-node.selected .group-node-label-chip {
+  color: var(--gl-surface-text-primary);
+  border-color: var(--gl-surface-border-strong);
+}
+
+.group-node-controls-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.group-node-controls-chip {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  background-color: var(--gl-surface-node-body);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-sm);
+  opacity: 0;
+  transform: translateX(-4px);
+  pointer-events: none;
+  transition:
+    opacity var(--gl-motion-fast) var(--gl-motion-ease),
+    transform var(--gl-motion-fast) var(--gl-motion-ease);
+}
+
+.group-node:hover .group-node-controls-chip,
+.group-node.selected .group-node-controls-chip {
+  opacity: 1;
+  transform: translateX(0);
+  pointer-events: auto;
+}
+
+.group-node-controls-divider {
+  width: 1px;
+  height: 14px;
+  flex-shrink: 0;
+  background-color: var(--gl-surface-border);
+}
+
+.group-node.has-header-color .group-node-label-chip,
+.group-node.has-header-color .group-node-controls-chip {
+  color: var(--gl-surface-text-bright);
+  border-color: color-mix(in srgb, var(--gl-surface-inset-deep) 65%, transparent);
+}
+
+/* The one control that stays discoverable without hovering first - see
+   GroupNodeView.tsx's doc comment for why Collapse/Expand is exempted from
+   the hover-reveal rule every other control follows. */
+.group-node-collapse-btn {
+  opacity: 0.6;
+}
+
+.group-node-collapse-btn:hover,
+.group-node:hover .group-node-collapse-btn,
+.group-node.selected .group-node-collapse-btn {
+  opacity: 1;
+}
+
+/* -- Collapsed chrome: a fixed-size pill. backend/canvas.py pins
+   group_width/group_height to GROUP_COLLAPSED_WIDTH/HEIGHT (260x50) while
+   collapsed, so this is a real fixed footprint, not just a CSS trick. --- */
+
+.group-node-pill-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 6px 8px;
+  width: 100%;
+  height: 100%;
+  padding: 0 10px;
   font-size: 11px;
   font-weight: 600;
-  color: var(--gl-surface-text-primary);
-  background-color: var(--gl-surface-inset, var(--gl-surface-node-body));
-  border-bottom: 1px solid var(--gl-surface-border);
-  border-radius: 9px 9px 0 0;
+  color: var(--gl-surface-text-secondary);
+  background-color: var(--gl-surface-node-body);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 9999px;
   cursor: default;
+  transition:
+    border-color var(--gl-motion-fast) var(--gl-motion-ease),
+    box-shadow var(--gl-motion-base) var(--gl-motion-ease);
 }
 
-.group-node.collapsed .group-node-header {
-  border-bottom: none;
-  border-radius: 9px;
+.group-node.collapsed:hover .group-node-pill-header {
+  border-color: var(--gl-surface-border-strong);
+  box-shadow: var(--gl-shadow-1);
+}
+
+.group-node.collapsed.selected .group-node-pill-header {
+  border-color: var(--gl-surface-border-strong);
+  box-shadow: 0 0 0 1px var(--gl-surface-border-strong), var(--gl-shadow-2);
+}
+
+.group-node.has-body-color .group-node-pill-header,
+.group-node.has-header-color .group-node-pill-header {
+  color: var(--gl-surface-text-bright);
+  border-color: color-mix(in srgb, var(--gl-surface-inset-deep) 65%, transparent);
 }
 
 .group-node-label {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -4580,21 +4746,35 @@ body,
 }
 
 .group-node-btn {
-  font-size: 10px;
-  font-weight: 600;
-  font-family: inherit;
-  padding: 3px 7px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
   color: var(--gl-surface-text-muted);
   background: transparent;
   border: none;
-  border-radius: 5px;
+  border-radius: var(--gl-radius-sm);
   cursor: pointer;
-  white-space: nowrap;
+  transition:
+    background-color var(--gl-motion-fast) var(--gl-motion-ease),
+    color var(--gl-motion-fast) var(--gl-motion-ease);
 }
 
 .group-node-btn:hover {
   color: var(--gl-surface-text-primary);
   background-color: var(--gl-neutral-button-hover);
+}
+
+.group-node-icon {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .group-node-ungroup-btn {
