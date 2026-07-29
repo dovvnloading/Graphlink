@@ -1550,10 +1550,18 @@ body,
   text-transform: uppercase;
 }
 
+/* R8a (UI/UX issue list finding #7): was max-width, a cap rather than a
+   fixed size, so a shorter label (e.g. reasoning level "Off") left the
+   button narrower than a longer one ("Medium"), and the adjacent control
+   visibly shifted sideways every time the value changed. A fixed width
+   keeps both the Reasoning and Model controls one stable size regardless
+   of which option/model is currently selected - long model ids still
+   ellipsis-truncate via the properties below, they just no longer resize
+   the button itself while doing it. */
 .control-value {
   font-size: 11px;
   font-weight: 600;
-  max-width: 140px;
+  width: 140px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
