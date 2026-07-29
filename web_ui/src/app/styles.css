@@ -1147,6 +1147,18 @@ body,
   min-width: 230px;
   max-width: 320px;
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  /* R8a (UI/UX issue list findings #4/#13 - a literal duplicate entry, one
+     bug): every popover through this shared base class - View, Plugins,
+     Pins, Reasoning, Model - is hosted inside .app-canvas-region, which is
+     overflow:hidden (see that rule's own comment). Before this, content
+     taller than the available space (e.g. ViewPopover's FONT section on a
+     short window) was silently clipped away with no scrollbar and no
+     indication anything was missing. 96px reserves room for the chrome
+     above/below the canvas region on a typical window without needing to
+     know any specific popover's anchor point - a real backstop, not a
+     tuned distance that happens to work for one consumer. */
+  max-height: calc(100vh - 96px);
+  overflow-y: auto;
 }
 
 .overlay-scrim {
