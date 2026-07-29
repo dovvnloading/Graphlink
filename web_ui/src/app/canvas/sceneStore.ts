@@ -527,6 +527,22 @@ export class SceneStore {
     this.transport.intent("scene", "moveNode", [id, x, y]);
   }
 
+  // R6.1 follow-up: a group drag's commit (the group's own node PLUS every
+  // transitive member) uses this instead of N individual moveNode calls -
+  // see backend/canvas.py's SceneDocument.move_nodes for why calling
+  // moveNode once per node published a scene snapshot after EACH one
+  // landed, rendering as a visible stretch-then-resettle glitch on every
+  // group drag release once the group-bounds recompute could genuinely
+  // grow a box (rather than staying frozen, the bug the growth logic
+  // itself was fixing).
+  moveNodes(positions: Array<{ id: string; x: number; y: number }>): void {
+    this.transport.intent(
+      "scene",
+      "moveNodes",
+      [positions.map((p) => [p.id, p.x, p.y])],
+    );
+  }
+
   removeNodes(ids: string[]): void {
     if (ids.length > 0) this.transport.intent("scene", "removeNodes", [ids]);
   }

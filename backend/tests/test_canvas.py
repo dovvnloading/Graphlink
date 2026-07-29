@@ -5493,6 +5493,94 @@ def test_moving_a_container_does_not_pin_a_manual_position_anchor():
     assert node.group_manual_y is None
 
 
+def test_move_nodes_updates_every_position_in_one_batch():
+    doc = SceneDocument()
+    m1, m2 = doc.add_node(0, 0), doc.add_node(10, 10)
+
+    doc.move_nodes([(m1.id, 100, 200), (m2.id, 300, 400)])
+
+    assert (doc.nodes[m1.id].x, doc.nodes[m1.id].y) == (100.0, 200.0)
+    assert (doc.nodes[m2.id].x, doc.nodes[m2.id].y) == (300.0, 400.0)
+
+
+def test_move_nodes_skips_an_unknown_id_without_raising():
+    doc = SceneDocument()
+    m1 = doc.add_node(0, 0)
+    doc.move_nodes([(m1.id, 5, 5), ("ghost", 1, 1)])  # must not raise
+    assert (doc.nodes[m1.id].x, doc.nodes[m1.id].y) == (5.0, 5.0)
+
+
+def test_move_nodes_recomputes_a_group_exactly_once_using_the_fully_settled_positions():
+    # The whole point of the batch primitive: a locked-frame drag commits
+    # the frame's own new position AND both members' new positions in ONE
+    # call, so _recompute_group_bounds only ever sees the fully-settled
+    # bbox - never a transient state where only some members have caught
+    # up (which move_node called N times, once per node, would produce -
+    # and which, combined with the union-growth geometry, rendered as a
+    # visible stretch-then-resettle glitch on every group drag release).
+    doc = SceneDocument()
+    m1, m2 = doc.add_node(0, 0), doc.add_node(300, 300)
+    frame = doc.create_frame([m1.id, m2.id])
+
+    # Drag the whole group by delta (+50, +50): the frame's own commit
+    # plus both members', exactly what SceneCanvas.tsx's onNodesChange now
+    # sends as one batch instead of three sequential moveNode calls.
+    doc.move_nodes(
+        [
+            (frame.id, frame.x + 50, frame.y + 50),
+            (m1.id, 50, 50),
+            (m2.id, 350, 350),
+        ]
+    )
+
+    node = doc.nodes[frame.id]
+    # Members moved by the identical delta, so the auto-fit bbox shifted
+    # by the same (+50, +50) - the frame's manual position anchor (from
+    # its own direct move) and the live bbox agree exactly, same as a
+    # correct locked-group drag always should.
+    assert node.x == pytest.approx(-40.0 + 50.0)
+    assert node.y == pytest.approx(-50.0 + 50.0)
+    assert node.group_width == pytest.approx(600.0)
+    assert node.group_height == pytest.approx(510.0)
+
+
+def test_move_nodes_recomputes_a_container_holding_a_moved_member():
+    doc = SceneDocument()
+    m1 = doc.add_node(0, 0)
+    container = doc.create_container([m1.id])
+
+    doc.move_nodes([(m1.id, 1000, 1000)])
+
+    node = doc.nodes[container.id]
+    # Containers have no manual anchor - pure auto-fit, same as move_node.
+    assert node.x == pytest.approx(1000.0 - 40.0)
+    assert node.y == pytest.approx(1000.0 - 50.0)
+
+
+def test_move_nodes_intent_publishes_the_scene_exactly_once_for_a_whole_group_drag():
+    async def run():
+        bus, document, recorder = make_bus()
+        m1_id = await bus.dispatch_intent("scene", "addNode", [0, 0])
+        m2_id = await bus.dispatch_intent("scene", "addNode", [300, 300])
+        frame_id = await bus.dispatch_intent("scene", "createFrame", [[m1_id, m2_id]])
+        frame = document.nodes[frame_id]
+
+        publishes_before = recorder.topics_seen().count("scene")
+        await bus.dispatch_intent(
+            "scene",
+            "moveNodes",
+            [[[frame_id, frame.x + 20, frame.y + 20], [m1_id, 20, 20], [m2_id, 320, 320]]],
+        )
+
+        assert recorder.topics_seen().count("scene") - publishes_before == 1, (
+            "a whole group drag's commit must publish exactly once, not once per node moved"
+        )
+        assert (document.nodes[m1_id].x, document.nodes[m1_id].y) == (20.0, 20.0)
+        assert (document.nodes[m2_id].x, document.nodes[m2_id].y) == (320.0, 320.0)
+
+    asyncio.run(run())
+
+
 def test_fit_frame_to_content_clears_manual_override():
     doc = SceneDocument()
     m1, m2 = doc.add_node(0, 0), doc.add_node(300, 300)

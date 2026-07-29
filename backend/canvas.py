@@ -2696,6 +2696,47 @@ class SceneDocument:
                 self._recompute_group_bounds(group.id)
         return node
 
+    def move_nodes(self, positions: list[tuple[str, float, float]]) -> None:
+        """Atomically commit a BATCH of node positions - the group-drag
+        counterpart to move_node above. A group drag's commit touches the
+        group's own node AND every one of its (possibly nested-transitive)
+        members; calling move_node once per node in that set publishes a
+        scene snapshot after EACH individual position lands, so the
+        frontend briefly renders N genuinely inconsistent intermediate
+        states (some members caught up, some not) before the last one
+        commits - and since _recompute_group_bounds now correctly grows a
+        frame/container's box to enclose whatever the CURRENT bbox-of-
+        members is (see that method's own comment), those intermediate
+        states aren't just "slightly stale", they visibly stretch and
+        resettle each time - a real, user-visible glitch on every group
+        drag release, not a cosmetic footnote.
+
+        This updates every position in ONE pass first, THEN recomputes
+        bounds exactly once per affected group (deduplicated - both "this
+        IS a group that moved" and "this owns a node that moved" collapse
+        to the same set), using the fully-settled positions throughout.
+        Callers still using move_node for a single, non-group node stay
+        unaffected - this is purely additive."""
+        moved_ids: set[str] = set()
+        for node_id, x, y in positions:
+            node = self.nodes.get(node_id)
+            if node is None:
+                continue
+            node.x, node.y = float(x), float(y)
+            moved_ids.add(node_id)
+            if node.kind == "frame":
+                node.group_manual_x, node.group_manual_y = node.x, node.y
+        affected_groups: set[str] = set()
+        for moved_id in moved_ids:
+            moved_node = self.nodes.get(moved_id)
+            if moved_node is not None and moved_node.kind in ("frame", "container"):
+                affected_groups.add(moved_id)
+        for group in self.nodes.values():
+            if group.kind in ("frame", "container") and moved_ids.intersection(group.item_ids):
+                affected_groups.add(group.id)
+        for group_id in affected_groups:
+            self._recompute_group_bounds(group_id)
+
     def remove_nodes(self, node_ids: list[str]) -> None:
         for node_id in node_ids:
             node = self.nodes.pop(node_id, None)
@@ -4282,6 +4323,13 @@ def register_canvas(
         document.move_node(node_id, x, y)
         await publish_scene()
 
+    async def move_nodes(positions):
+        # positions: a JSON array of [node_id, x, y] triples - see
+        # SceneDocument.move_nodes's own docstring for why a group drag's
+        # commit uses this batched intent instead of N calls to moveNode.
+        document.move_nodes([(p[0], p[1], p[2]) for p in positions])
+        await publish_scene()
+
     async def remove_nodes(node_ids):
         ids = list(node_ids)
         # R5.4: a deleted Py-Coder node's REPL subprocess must not outlive
@@ -4434,6 +4482,7 @@ def register_canvas(
     bus.register_intent("scene", "resizeChart", resize_chart)
     bus.register_intent("scene", "toggleChartAspectLock", toggle_chart_aspect_lock)
     bus.register_intent("scene", "moveNode", move_node)
+    bus.register_intent("scene", "moveNodes", move_nodes)
     bus.register_intent("scene", "removeNodes", remove_nodes)
     bus.register_intent("scene", "connectNodes", connect_nodes)
     bus.register_intent("scene", "removeEdges", remove_edges)

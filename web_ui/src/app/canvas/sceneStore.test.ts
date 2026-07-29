@@ -173,6 +173,29 @@ describe("SceneStore", () => {
     ]);
   });
 
+  it("moveNodes sends the scene-topic moveNodes intent with one [id, x, y] triple per position", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.moveNodes([
+      { id: "frame-1", x: 120, y: 220 },
+      { id: "m1", x: 20, y: 20 },
+      { id: "m2", x: 320, y: 320 },
+    ]);
+    expect(intents).toEqual([
+      {
+        topic: "scene",
+        intent: "moveNodes",
+        args: [
+          [
+            ["frame-1", 120, 220],
+            ["m1", 20, 20],
+            ["m2", 320, 320],
+          ],
+        ],
+      },
+    ]);
+  });
+
   it("sends chat-node intents with the backend's registered names and shapes", () => {
     const { transport, intents } = makeFakeTransport();
     const store = new SceneStore(transport);
