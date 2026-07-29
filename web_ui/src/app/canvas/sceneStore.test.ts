@@ -748,6 +748,63 @@ describe("SceneStore", () => {
     expect(store.getSelectedNodeId()).toBe("n1");
   });
 
+  // -- ADR-002 Workstream 1: "Branch from here" ------------------------------
+
+  it("setReplyTargetNodeId/getReplyTargetNodeId update state and notify listeners", () => {
+    const { transport } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    const seen = vi.fn();
+    store.subscribe(seen);
+
+    expect(store.getReplyTargetNodeId()).toBeNull();
+    store.setReplyTargetNodeId("n1");
+    expect(store.getReplyTargetNodeId()).toBe("n1");
+    expect(seen).toHaveBeenCalledTimes(1);
+
+    store.setReplyTargetNodeId(null);
+    expect(store.getReplyTargetNodeId()).toBeNull();
+    expect(seen).toHaveBeenCalledTimes(2);
+  });
+
+  it("setReplyTargetNodeId is a no-op (no re-emit) when the id is unchanged", () => {
+    const { transport } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    const seen = vi.fn();
+    store.subscribe(seen);
+
+    store.setReplyTargetNodeId("n1");
+    expect(seen).toHaveBeenCalledTimes(1);
+    store.setReplyTargetNodeId("n1");
+    expect(seen).toHaveBeenCalledTimes(1);
+  });
+
+  it("sendMessage with no pending reply target sends just [text] - unmodified default behavior", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.sendMessage("hello");
+    expect(intents).toEqual([{ topic: "scene", intent: "sendMessage", args: ["hello"] }]);
+  });
+
+  it("sendMessage consumes a pending reply target as the branch_from_node_id arg, then clears it", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.setReplyTargetNodeId("n-root");
+
+    store.sendMessage("branching off root");
+    expect(intents).toEqual([
+      { topic: "scene", intent: "sendMessage", args: ["branching off root", "n-root"] },
+    ]);
+    expect(store.getReplyTargetNodeId()).toBeNull();
+
+    // A SECOND send, with no reply target pending anymore, must NOT replay
+    // the stale target - proving it was genuinely consumed, not just read.
+    store.sendMessage("a normal follow-up");
+    expect(intents).toEqual([
+      { topic: "scene", intent: "sendMessage", args: ["branching off root", "n-root"] },
+      { topic: "scene", intent: "sendMessage", args: ["a normal follow-up"] },
+    ]);
+  });
+
   it("showInfoNotification sends the notification-topic showInfo intent, not scene", () => {
     const { transport, intents } = makeFakeTransport();
     const store = new SceneStore(transport);

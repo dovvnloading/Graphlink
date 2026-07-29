@@ -16,8 +16,10 @@ import pytest
 import backend.agents as agents_module
 from backend.agents import AgentDispatcher
 from backend.canvas import (
+    BRANCH_HORIZONTAL_SPACING,
     DRAG_FACTOR_MAX,
     DRAG_FACTOR_MIN,
+    MESSAGE_VERTICAL_SPACING,
     NOTE_AGENT_BODY_COLOR,
     NOTE_AGENT_HEADER_COLOR,
     NOTE_AGENT_X_OFFSET,
@@ -1086,6 +1088,93 @@ def test_send_message_after_deleting_the_active_node_continues_from_its_parent()
     assert any(e.source == first.id and e.target == third.id for e in doc.edges.values())
 
 
+# -- ADR-002 Workstream 1: "Branch from here" (send_message's branch_from_node_id) --
+
+
+def test_send_message_branch_from_node_id_overrides_last_chat_node_id():
+    """The actual fork primitive: replying from an EARLIER node than the
+    current branch tip, producing a real second child (genuine divergence)
+    instead of only ever continuing from last_chat_node_id."""
+    doc = SceneDocument()
+    root = doc.send_message("root message")
+    tip = doc.send_message("continues from root")  # last_chat_node_id is now `tip`
+    assert doc.last_chat_node_id == tip.id
+
+    branch = doc.send_message("a different reply to root", branch_from_node_id=root.id)
+
+    assert any(e.source == root.id and e.target == branch.id for e in doc.edges.values())
+    assert not any(e.source == tip.id and e.target == branch.id for e in doc.edges.values())
+    # root now genuinely has two children - a real divergence.
+    children_of_root = [e.target for e in doc.edges.values() if e.source == root.id]
+    assert set(children_of_root) == {tip.id, branch.id}
+
+
+def test_send_message_branch_from_node_id_becomes_the_new_active_branch():
+    """last_chat_node_id updates to the branch just created, exactly like an
+    ordinary send - so the NEXT plain send (no override) continues the new
+    branch, not the one that was active before "Branch from here" was used."""
+    doc = SceneDocument()
+    root = doc.send_message("root message")
+    doc.send_message("continues from root")
+
+    branch = doc.send_message("branching off root", branch_from_node_id=root.id)
+    assert doc.last_chat_node_id == branch.id
+
+    continuation = doc.send_message("continuing the new branch")
+    assert any(e.source == branch.id and e.target == continuation.id for e in doc.edges.values())
+
+
+def test_send_message_branch_from_node_id_fans_out_siblings_so_they_do_not_overlap():
+    doc = SceneDocument()
+    root = doc.send_message("root message")
+    first_reply = doc.send_message("first reply", branch_from_node_id=root.id)
+    second_reply = doc.send_message("second reply", branch_from_node_id=root.id)
+
+    assert first_reply.y == second_reply.y == root.y + MESSAGE_VERTICAL_SPACING
+    assert first_reply.x == root.x
+    assert second_reply.x == root.x + BRANCH_HORIZONTAL_SPACING
+    assert first_reply.x != second_reply.x, "two real siblings must never render at the exact same position"
+
+
+def test_send_message_branch_from_node_id_fan_out_ignores_non_chat_children():
+    """A docked/generated non-chat child (thinking, code, a generated note)
+    under the same parent must never count toward the fan-out index - only
+    real conversational branches are genuine "siblings" for this purpose."""
+    doc = SceneDocument()
+    root = doc.send_message("root message")
+    doc.add_thinking_node(root.x, root.y, "some reasoning", parent_id=root.id)
+    doc.add_code_node(root.x, root.y, "print(1)", "python", parent_id=root.id)
+
+    first_reply = doc.send_message("first real branch", branch_from_node_id=root.id)
+    assert first_reply.x == root.x, "non-chat children must not shift the first real branch's fan-out index"
+
+    second_reply = doc.send_message("second real branch", branch_from_node_id=root.id)
+    assert second_reply.x == root.x + BRANCH_HORIZONTAL_SPACING
+
+
+def test_send_message_branch_from_node_id_unknown_id_falls_back_to_last_chat_node_id():
+    """A stale/bad id (a deleted node, a typo) must never raise or silently
+    create a dangling reference - same defensive posture chat_branch_
+    history's own walk already uses for an unknown node id."""
+    doc = SceneDocument()
+    tip = doc.send_message("hello")
+
+    node = doc.send_message("still works", branch_from_node_id="nonexistent-node-id")
+
+    assert any(e.source == tip.id and e.target == node.id for e in doc.edges.values())
+    assert doc.last_chat_node_id == node.id
+
+
+def test_send_message_branch_from_node_id_none_is_the_ordinary_unmodified_path():
+    """Backward compatibility: omitting branch_from_node_id (its default)
+    must behave byte-identical to before this feature existed."""
+    doc = SceneDocument()
+    first = doc.send_message("first")
+    second = doc.send_message("second")
+    assert any(e.source == first.id and e.target == second.id for e in doc.edges.values())
+    assert doc.last_chat_node_id == second.id
+
+
 # -- R4: chat_branch_history --------------------------------------------------
 
 
@@ -2040,6 +2129,44 @@ def test_send_message_intent_dispatches_a_real_agent_reply():
         assert any(e.source == node_id and e.target == reply_node.id for e in document.edges.values())
         assert document.last_chat_node_id == reply_node.id
         assert recorder.topics_seen().count("scene") >= 2, "user node + reply node both publish scene"
+
+    asyncio.run(run())
+
+
+def test_send_message_intent_with_branch_from_node_id_overrides_the_parent():
+    """ADR-002 Workstream 1, WS-intent level: confirms the optional third
+    positional arg (dispatch_intent unpacks the args list positionally)
+    threads through register_canvas's own send_message wrapper into
+    SceneDocument.send_message's branch_from_node_id - not just the bare
+    method call already covered above."""
+    async def run():
+        bus, document, recorder, dispatcher = make_bus_with_dispatcher()
+
+        def fake_chat(task, messages, **kwargs):
+            return {"message": {"content": "reply"}}
+
+        async def send(text, *extra_args):
+            pending_before = set(dispatcher._requests.keys())
+            node_id = await bus.dispatch_intent("scene", "sendMessage", [text, *extra_args])
+            new_request_id = next(iter(set(dispatcher._requests.keys()) - pending_before))
+            await dispatcher._requests[new_request_id]["task"]
+            return node_id
+
+        with patch.object(api_provider, "USE_API_MODE", False), \
+                patch.object(api_provider, "LOCAL_PROVIDER_TYPE", task_config.LOCAL_PROVIDER_OLLAMA), \
+                patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
+                patch.object(api_provider, "chat", fake_chat):
+            root_id = await send("root message")
+            await send("continues from root, becomes the tip")
+            branch_id = await send("a different reply to root", root_id)
+
+        assert any(e.source == root_id and e.target == branch_id for e in document.edges.values())
+        # The full pipeline also lands an assistant reply as branch_id's own
+        # child, and last_chat_node_id follows THAT (see send_message
+        # intent's own _on_reply) - so the active branch now descends from
+        # branch_id, not from the original tip's own reply chain.
+        active_parent_edge = document._branch_parent_edge(document.last_chat_node_id)
+        assert active_parent_edge is not None and active_parent_edge.source == branch_id
 
     asyncio.run(run())
 

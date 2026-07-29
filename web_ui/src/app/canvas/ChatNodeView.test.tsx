@@ -36,6 +36,7 @@ function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}) {
   const onOpenDocumentView = vi.fn();
   const onScrollChange = vi.fn();
   const onToggleBranchFocus = vi.fn();
+  const onBranchFromHere = vi.fn();
   const props = {
     id: "n0",
     selected: false,
@@ -57,6 +58,7 @@ function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}) {
       onScrollChange,
       isBranchFocusActive: false,
       onToggleBranchFocus,
+      onBranchFromHere,
       ...overrides,
     },
   } as unknown as NodeProps<ChatFlowNode>;
@@ -69,7 +71,7 @@ function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}) {
   return {
     onToggleCollapse, onDelete, onUndockChild, onRegenerate, onGenerateImage,
     onGenerateChart, onGenerateKeyTakeaway, onGenerateExplainerNote,
-    onOpenDocumentView, onScrollChange, onToggleBranchFocus, container,
+    onOpenDocumentView, onScrollChange, onToggleBranchFocus, onBranchFromHere, container,
   };
 }
 
@@ -363,6 +365,35 @@ describe("ChatNodeView Hide Other Branches / Show All Branches (R8a)", () => {
     await user.click(item);
     expect(onToggleBranchFocus).toHaveBeenCalledOnce();
     expect(screen.queryByRole("menu")).toBeNull();
+  });
+});
+
+// ADR-002 Workstream 1: "Branch from Here" - stages this node as the
+// composer's next reply target instead of creating anything itself; the
+// actual fork happens server-side once the user sends a message.
+describe("ChatNodeView Branch from Here (ADR-002 Workstream 1)", () => {
+  it("calls onBranchFromHere and closes the menu when clicked, for a user node", async () => {
+    const user = userEvent.setup();
+    const { onBranchFromHere } = renderChatNode({ isUser: true });
+
+    fireEvent.contextMenu(screen.getByText("You"));
+    const item = screen.getByRole("menuitem", { name: "Branch from Here" });
+    expect(item).not.toBeDisabled();
+
+    await user.click(item);
+    expect(onBranchFromHere).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("is also available (not gated on isUser) for an assistant node", async () => {
+    const user = userEvent.setup();
+    const { onBranchFromHere } = renderChatNode({ isUser: false });
+
+    fireEvent.contextMenu(screen.getByText("Assistant"));
+    const item = screen.getByRole("menuitem", { name: "Branch from Here" });
+
+    await user.click(item);
+    expect(onBranchFromHere).toHaveBeenCalledOnce();
   });
 });
 

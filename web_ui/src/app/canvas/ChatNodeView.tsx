@@ -85,6 +85,13 @@ export interface ChatNodeData extends Record<string, unknown> {
   onScrollChange: (value: number) => void;
   isBranchFocusActive: boolean;
   onToggleBranchFocus: () => void;
+  // ADR-002 Workstream 1 ("Branch from here"): marks this node as the reply
+  // target for the composer's NEXT send, instead of only ever continuing
+  // from the current branch tip (sceneStore's replyTargetNodeId - see that
+  // field's own comment). The actual fork happens server-side
+  // (SceneDocument.send_message's branch_from_node_id) once the user
+  // types a message and sends it; this callback only stages the pick.
+  onBranchFromHere: () => void;
 }
 
 export type ChatFlowNode = Node<ChatNodeData, "chat">;
@@ -125,6 +132,7 @@ function ChatNodeMenu({
   onOpenDocumentView,
   isBranchFocusActive,
   onToggleBranchFocus,
+  onBranchFromHere,
   onClose,
 }: {
   position: MenuPosition;
@@ -144,6 +152,7 @@ function ChatNodeMenu({
   onOpenDocumentView: () => void;
   isBranchFocusActive: boolean;
   onToggleBranchFocus: () => void;
+  onBranchFromHere: () => void;
   onClose: () => void;
 }) {
   const [chartMenuOpen, setChartMenuOpen] = useState(false);
@@ -190,6 +199,22 @@ function ChatNodeMenu({
         }}
       >
         {isBranchFocusActive ? "Show All Branches" : "Hide Other Branches"}
+      </button>
+      {/* ADR-002 Workstream 1: stages this node as the composer's next reply
+          target (sceneStore's replyTargetNodeId) - available regardless of
+          isUser, since either a user message or an assistant reply is a
+          valid point to fork a new branch from. The composer shows a
+          "Replying to" indicator once set; the actual second-child branch
+          is created server-side the moment the user sends. */}
+      <button
+        type="button"
+        role="menuitem"
+        onClick={() => {
+          onBranchFromHere();
+          onClose();
+        }}
+      >
+        Branch from Here
       </button>
       {/* Real (not disabled) - matches the legacy's own `if docked_children:`
           guard exactly. One button per docked child, each undocking that
@@ -421,6 +446,7 @@ export function ChatNodeView({ id, data, selected }: NodeProps<ChatFlowNode>) {
           onOpenDocumentView={data.onOpenDocumentView}
           isBranchFocusActive={data.isBranchFocusActive}
           onToggleBranchFocus={data.onToggleBranchFocus}
+          onBranchFromHere={data.onBranchFromHere}
           onClose={() => setMenuPosition(null)}
         />
       )}

@@ -5,6 +5,7 @@ import { Composer } from "./Composer";
 import { TokenCounter } from "./TokenCounter";
 import { NotificationBanner } from "./NotificationBanner";
 import { initialComposerState, initialNotificationState, initialTokenCounterState } from "./composerStore";
+import { initialSceneState } from "../canvas/sceneStore";
 import { OverlayProvider } from "../overlays/overlays";
 
 function makeStore(
@@ -47,9 +48,19 @@ function makeStore(
   };
 }
 
-function makeSceneStore() {
+function makeSceneStore(overrides: { replyTargetNodeId?: string | null; scene?: object } = {}) {
   const sendMessage = vi.fn();
-  return { sceneStore: { sendMessage }, sendMessage };
+  const setReplyTargetNodeId = vi.fn();
+  const scene = { ...initialSceneState, ...overrides.scene };
+  const replyTargetNodeId = overrides.replyTargetNodeId ?? null;
+  const sceneStore = {
+    sendMessage,
+    setReplyTargetNodeId,
+    subscribe: () => () => {},
+    getScene: () => scene,
+    getReplyTargetNodeId: () => replyTargetNodeId,
+  };
+  return { sceneStore, sendMessage, setReplyTargetNodeId };
 }
 
 describe("Composer", () => {
@@ -316,7 +327,7 @@ describe("Composer", () => {
     render(
       <OverlayProvider>
         {/* @ts-expect-error - test double */}
-        <Composer store={store} />
+        <Composer store={store} sceneStore={makeSceneStore().sceneStore} />
       </OverlayProvider>,
     );
     await user.click(screen.getByText("Off"));
@@ -522,6 +533,67 @@ describe("TokenCounter", () => {
 
     await user.unhover(screen.getByRole("button", { name: "Token usage: 6 total" }));
     expect(screen.queryByRole("status", { name: "Token usage breakdown" })).toBeNull();
+  });
+});
+
+// ADR-002 Workstream 1: the "Branch from here" reply-target indicator.
+describe("Composer reply target (ADR-002 Workstream 1)", () => {
+  it("renders nothing when no reply target is pending", () => {
+    const { store } = makeStore();
+    const { sceneStore } = makeSceneStore({ replyTargetNodeId: null });
+    render(
+      <OverlayProvider>
+        {/* @ts-expect-error - test double */}
+        <Composer store={store} sceneStore={sceneStore} />
+      </OverlayProvider>,
+    );
+    expect(screen.queryByLabelText("Branching from")).toBeNull();
+  });
+
+  it("shows a preview of the target node's content when a reply target is pending", () => {
+    const { store } = makeStore();
+    const { sceneStore } = makeSceneStore({
+      replyTargetNodeId: "n-root",
+      scene: { nodes: [{ id: "n-root", content: "the original root message" }] },
+    });
+    render(
+      <OverlayProvider>
+        {/* @ts-expect-error - test double */}
+        <Composer store={store} sceneStore={sceneStore} />
+      </OverlayProvider>,
+    );
+    const indicator = screen.getByLabelText("Branching from");
+    expect(indicator).toBeInTheDocument();
+    expect(screen.getByText("the original root message")).toBeInTheDocument();
+  });
+
+  it("does not render an indicator for a stale target whose node no longer exists", () => {
+    const { store } = makeStore();
+    const { sceneStore } = makeSceneStore({ replyTargetNodeId: "deleted-node", scene: { nodes: [] } });
+    render(
+      <OverlayProvider>
+        {/* @ts-expect-error - test double */}
+        <Composer store={store} sceneStore={sceneStore} />
+      </OverlayProvider>,
+    );
+    expect(screen.queryByLabelText("Branching from")).toBeNull();
+  });
+
+  it("the clear button calls sceneStore.setReplyTargetNodeId(null)", async () => {
+    const user = userEvent.setup();
+    const { store } = makeStore();
+    const { sceneStore, setReplyTargetNodeId } = makeSceneStore({
+      replyTargetNodeId: "n-root",
+      scene: { nodes: [{ id: "n-root", content: "root" }] },
+    });
+    render(
+      <OverlayProvider>
+        {/* @ts-expect-error - test double */}
+        <Composer store={store} sceneStore={sceneStore} />
+      </OverlayProvider>,
+    );
+    await user.click(screen.getByLabelText("Cancel branching from this message"));
+    expect(setReplyTargetNodeId).toHaveBeenCalledWith(null);
   });
 });
 

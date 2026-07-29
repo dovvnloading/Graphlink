@@ -1450,6 +1450,60 @@ body,
   color: var(--gl-surface-text-primary);
 }
 
+/* ADR-002 Workstream 1 ("Branch from here"): the pending fork indicator,
+   same chrome vocabulary as .composer-attachment-chip above but a single
+   full-width bar rather than a wrapped row of chips - there is only ever
+   one reply target at a time. */
+.composer-reply-target {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px 5px 10px;
+  border-radius: 8px;
+  background-color: var(--gl-surface-inset, var(--gl-surface-window));
+  border: 1px solid var(--gl-surface-border);
+  font-size: 11px;
+  color: var(--gl-surface-text-primary);
+}
+
+.composer-reply-target-label {
+  flex-shrink: 0;
+  color: var(--gl-surface-text-muted);
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.03em;
+}
+
+.composer-reply-target-preview {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-reply-target-clear {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background-color: transparent;
+  color: var(--gl-surface-text-muted);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.composer-reply-target-clear:hover {
+  background-color: var(--gl-surface-border);
+  color: var(--gl-surface-text-primary);
+}
+
 .composer-input-wrap {
   display: flex;
 }

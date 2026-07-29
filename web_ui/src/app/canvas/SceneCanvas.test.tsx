@@ -259,6 +259,23 @@ describe("toFlowNodes (R8a Open Document View wiring)", () => {
     expect(onOpenDocumentView).toHaveBeenCalledWith("Hello world", "Assistant message");
   });
 
+  it("a chat node's onBranchFromHere calls store.setReplyTargetNodeId with its own id (ADR-002 Workstream 1)", () => {
+    const scene = baseScene({
+      nodes: [baseNode({ id: "chat-1", kind: "chat", content: "Hello world" })],
+      edges: [],
+    });
+    const store = makeStore();
+    const setReplyTargetSpy = vi.spyOn(store, "setReplyTargetNodeId");
+    const onOpenDocumentView = vi.fn();
+
+    const flowNodes = toFlowNodes(scene, store, onOpenDocumentView);
+    const chatFlowNode = flowNodes.find((n) => n.id === "chat-1");
+    expect(chatFlowNode).toBeDefined();
+
+    (chatFlowNode!.data as { onBranchFromHere: () => void }).onBranchFromHere();
+    expect(setReplyTargetSpy).toHaveBeenCalledWith("chat-1");
+  });
+
   it("a chat node's onOpenDocumentView labels the source as the user's own message when isUser is true", () => {
     const scene = baseScene({
       nodes: [baseNode({ id: "chat-1", kind: "chat", content: "Hello world", isUser: true })],
