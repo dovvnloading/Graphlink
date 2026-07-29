@@ -375,6 +375,24 @@ def test_notification_dismiss_intent_publishes():
     asyncio.run(run())
 
 
+def test_notification_show_info_intent_publishes_a_fixed_info_type():
+    # The one frontend-triggerable "show" entry point (Document View's
+    # empty-content guard is its first real caller) - fixed to msg_type
+    # "info" regardless of what the frontend passes, since only the
+    # message string travels over the wire.
+    async def run():
+        bus, _, _, notifications, recorder = make_bus()
+        await bus.dispatch_intent("notification", "showInfo", ["No document view content is available for this node yet."])
+        assert notifications.payload() == {
+            "visible": True,
+            "message": "No document view content is available for this node yet.",
+            "msgType": "info",
+        }
+        assert recorder.topics_seen().count("notification") == 1
+
+    asyncio.run(run())
+
+
 # -- R7.5d follow-up: the composer must DISPLAY the same persisted reasoning
 # level it writes. The first R7.5d pass wired only the write half, leaving the
 # composer's own private reasoning_level as the display source - and since

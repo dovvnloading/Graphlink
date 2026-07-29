@@ -725,6 +725,19 @@ describe("SceneStore", () => {
     expect(store.getSelectedNodeId()).toBe("n1");
   });
 
+  it("showInfoNotification sends the notification-topic showInfo intent, not scene", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.showInfoNotification("No document view content is available for this node yet.");
+    expect(intents).toEqual([
+      {
+        topic: "notification",
+        intent: "showInfo",
+        args: ["No document view content is available for this node yet."],
+      },
+    ]);
+  });
+
   it("dispose() unsubscribes every topic", () => {
     const { transport, listeners } = makeFakeTransport();
     const store = new SceneStore(transport);

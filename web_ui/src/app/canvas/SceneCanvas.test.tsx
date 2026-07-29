@@ -259,12 +259,13 @@ describe("toFlowNodes (R8a Open Document View wiring)", () => {
     expect(onOpenDocumentView).toHaveBeenCalledWith("Hello world");
   });
 
-  it("a chat node with blank/whitespace-only content does NOT invoke the callback", () => {
+  it("a chat node with blank/whitespace-only content does NOT invoke the callback, and shows a notification instead", () => {
     const scene = baseScene({
       nodes: [baseNode({ id: "chat-1", kind: "chat", content: "   " })],
       edges: [],
     });
     const store = makeStore();
+    const notifySpy = vi.spyOn(store, "showInfoNotification");
     const onOpenDocumentView = vi.fn();
 
     const flowNodes = toFlowNodes(scene, store, onOpenDocumentView);
@@ -273,6 +274,7 @@ describe("toFlowNodes (R8a Open Document View wiring)", () => {
 
     (chatFlowNode!.data as { onOpenDocumentView: () => void }).onOpenDocumentView();
     expect(onOpenDocumentView).not.toHaveBeenCalled();
+    expect(notifySpy).toHaveBeenCalledWith("No document view content is available for this node yet.");
   });
 
   it("a conversation node's onOpenDocumentView invokes the callback with the properly formatted transcript", () => {
@@ -297,12 +299,13 @@ describe("toFlowNodes (R8a Open Document View wiring)", () => {
     );
   });
 
-  it("a conversation node with an empty history does NOT invoke the callback", () => {
+  it("a conversation node with an empty history does NOT invoke the callback, and shows a notification instead", () => {
     const scene = baseScene({
       nodes: [baseNode({ id: "conv-1", kind: "conversation", history: [] })],
       edges: [],
     });
     const store = makeStore();
+    const notifySpy = vi.spyOn(store, "showInfoNotification");
     const onOpenDocumentView = vi.fn();
 
     const flowNodes = toFlowNodes(scene, store, onOpenDocumentView);
@@ -311,6 +314,7 @@ describe("toFlowNodes (R8a Open Document View wiring)", () => {
 
     (conversationFlowNode!.data as { onOpenDocumentView: () => void }).onOpenDocumentView();
     expect(onOpenDocumentView).not.toHaveBeenCalled();
+    expect(notifySpy).toHaveBeenCalledWith("No document view content is available for this node yet.");
   });
 
   it("toFlowNodes called with only two arguments (the existing ~50 call sites in this file) still compiles and does not throw when onOpenDocumentView would otherwise fire", () => {
