@@ -146,7 +146,7 @@ def _configure_session(
 
     # R2: notifications, moved ahead of canvas - R3.3's sendMessage intent
     # needs a real NotificationState to give an honest agent-dispatch notice.
-    notifications_state = register_notifications(bus)
+    notifications_state = register_notifications(bus, settings_manager)
     # R6.7: a no-op unless graphlink_desktop.py's own running.lock sentinel
     # found the prior run didn't reach a clean shutdown - see
     # backend/crash_recovery.py's module docstring for the full mechanism.

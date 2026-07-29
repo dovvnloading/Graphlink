@@ -199,6 +199,16 @@ body,
   border-radius: 8px;
   overflow: hidden;
   font-size: 12px;
+  /* R8a (UI/UX issue list finding #11): the View popover's FONT section -
+     family/size/color, --gl-node-font-* set on .scene-canvas by
+     SceneCanvas.tsx - used to round-trip into scene state with nothing
+     consuming it. Applied here, the shared base every node kind renders
+     through, rather than per-kind content rules (markdown headers, code
+     blocks) so headings/monospace keep their own intentional typography;
+     this is the node's title bar and any plain body text that doesn't set
+     its own font-size. Falls back to the pre-existing literal when unset
+     (e.g. in tests that render a node outside SceneCanvas). */
+  font-family: var(--gl-node-font-family, inherit);
 }
 
 .scene-node.selected {
@@ -208,7 +218,8 @@ body,
 .scene-node-title {
   padding: 6px 10px;
   font-weight: 600;
-  color: var(--gl-surface-text);
+  font-size: var(--gl-node-font-size, inherit);
+  color: var(--gl-node-font-color, var(--gl-surface-text));
   background-color: var(--gl-surface-inset, var(--gl-surface-node-body));
   border-bottom: 1px solid var(--gl-surface-border);
 }
@@ -219,8 +230,8 @@ body,
 
 .scene-node-body {
   padding: 8px 10px;
-  color: var(--gl-surface-text-muted);
-  font-size: 11px;
+  color: var(--gl-node-font-color, var(--gl-surface-text-muted));
+  font-size: var(--gl-node-font-size, 11px);
 }
 
 .scene-canvas .react-flow__edge-path {
