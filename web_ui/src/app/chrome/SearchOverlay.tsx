@@ -15,7 +15,18 @@ export function SearchOverlay({ store }: { store: SceneStore }) {
   const [query, setQuery] = useState("");
   const [currentIndex, setCurrentIndex] = useState(-1);
   const inputRef = useRef<HTMLInputElement>(null);
+  const shellRef = useRef<HTMLDivElement | null>(null);
   const isOpen = overlays.isOpen("search");
+
+  // Unlike every other popover (Pins, View, Plugins, Reasoning, Model),
+  // this shell was never registered as a surface element - it renders a
+  // bare div rather than the shared <Popover>, so the outside-click
+  // light-dismiss effect in overlays.tsx could never find it and clicking
+  // away did nothing at all.
+  useEffect(() => {
+    overlays.registerSurfaceElement("search", shellRef.current);
+    return () => overlays.registerSurfaceElement("search", null);
+  });
 
   // Reset during render on the false->true transition - see
   // CommandPalette's identical fix for the full rationale.
@@ -81,7 +92,7 @@ export function SearchOverlay({ store }: { store: SceneStore }) {
   const tone = matches.length === 0 && query ? "error" : current > 0 ? "active" : "idle";
 
   return (
-    <div className="search-overlay-shell">
+    <div className="search-overlay-shell" ref={shellRef}>
       <input
         ref={inputRef}
         className="search-overlay-input"

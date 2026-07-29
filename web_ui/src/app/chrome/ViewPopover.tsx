@@ -18,7 +18,7 @@ export function ViewPopover({ store }: { store: SceneStore }) {
   const dragPercent = Math.round(scene.dragFactor * 100);
 
   return (
-    <Popover name="view" className="view-popover">
+    <Popover name="view" label="View settings" className="view-popover">
       <section className="view-section" aria-label="Drag speed">
         <p className="view-section-title">DRAG</p>
         <input

@@ -204,7 +204,7 @@ export function AppBar({ store }: { store: SceneStore }) {
       >
         <span aria-hidden="true">&#8942;</span>
       </button>
-      <Popover name="toolbar-overflow" className="appbar-overflow-menu">
+      <Popover name="toolbar-overflow" label="More toolbar actions" className="appbar-overflow-menu">
         <button
           type="button"
           className="appbar-overflow-item"
