@@ -165,9 +165,6 @@
     "showTokenCounter": {
       "type": "boolean"
     },
-    "theme": {
-      "type": "string"
-    },
     "viewingApiProvider": {
       "type": "string"
     }
@@ -176,7 +173,6 @@
     "schemaVersion",
     "revision",
     "activeSection",
-    "theme",
     "showTokenCounter",
     "enableSystemPrompt",
     "notificationPreferences",

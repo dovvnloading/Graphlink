@@ -32,7 +32,6 @@ class Recorder:
 def test_settings_payload_shape_matches_generated_validator_shape(manager):
     payload = settings_payload(manager)
     assert set(payload) == {
-        "theme",
         "showTokenCounter",
         "enableSystemPrompt",
         "notificationPreferences",
@@ -42,7 +41,6 @@ def test_settings_payload_shape_matches_generated_validator_shape(manager):
 
 def test_settings_payload_reflects_real_manager_defaults(manager):
     payload = settings_payload(manager)
-    assert payload["theme"] == "dark"
     # R8a: the token counter overlay is off by default - opt-in, not opt-out.
     assert payload["showTokenCounter"] is False
     assert payload["enableSystemPrompt"] is True
@@ -80,7 +78,6 @@ def test_register_settings_publishes_active_section_alongside_manager_state(mana
     asyncio.run(bus.publish("app-settings"))
     payload = recorder.messages[0]["payload"]
     assert payload["activeSection"] == "general"
-    assert payload["theme"] == "dark"
 
 
 def test_set_active_section_intent_updates_only_local_ui_state(manager):
@@ -92,18 +89,6 @@ def test_set_active_section_intent_updates_only_local_ui_state(manager):
     asyncio.run(bus.dispatch_intent("app-settings", "setActiveSection", ["integrations"]))
     payload = recorder.messages[-1]["payload"]
     assert payload["activeSection"] == "integrations"
-
-
-def test_set_theme_intent_persists_to_the_real_settings_manager(manager):
-    bus = SessionBus("settings-theme-test")
-    register_settings(bus, manager)
-
-    asyncio.run(bus.dispatch_intent("app-settings", "setTheme", ["light"]))
-    assert manager.get_theme() == "light"
-    # A fresh manager reading the same file proves it was actually persisted,
-    # not just mutated in memory.
-    reloaded = SettingsManager(manager.state_file)
-    assert reloaded.get_theme() == "light"
 
 
 def test_set_show_token_counter_intent(manager):
@@ -178,17 +163,17 @@ def test_an_old_settings_file_without_schema_version_is_backfilled(tmp_path):
     import json
 
     state_file = tmp_path / "session.dat"
-    state_file.write_text(json.dumps({"theme": "mono"}), encoding="utf-8")
+    state_file.write_text(json.dumps({"show_token_counter": True}), encoding="utf-8")
 
     old_manager = SettingsManager(state_file)
 
     # Backfilled in memory immediately, the same as every other pre-existing
-    # key here (theme, show_token_counter, ...) - none of those write back to
-    # disk until the next explicit set_*() call either, so schema_version
+    # key here (show_token_counter, ...) - none of those write back to disk
+    # until the next explicit set_*() call either, so schema_version
     # matching that existing pattern is correct, not a gap.
     assert old_manager.get_schema_version() == SettingsManager.CURRENT_SCHEMA_VERSION
 
-    old_manager.set_theme("mono")  # any setter call persists the whole (now-backfilled) state
+    old_manager.set_show_token_counter(False)  # any setter call persists the whole (now-backfilled) state
     assert json.loads(state_file.read_text(encoding="utf-8"))["schema_version"] == SettingsManager.CURRENT_SCHEMA_VERSION
 
 

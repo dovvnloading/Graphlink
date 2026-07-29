@@ -85,8 +85,6 @@ class SettingsManager:
         try:
             with open(self.state_file, 'r') as f:
                 state = json.load(f)
-                if 'theme' not in state:
-                    state['theme'] = 'dark'
                 if 'show_token_counter' not in state:
                     state['show_token_counter'] = False
                 state_changed = False
@@ -232,7 +230,6 @@ class SettingsManager:
     def _create_initial_state(self):
         state = {
             "schema_version": self.CURRENT_SCHEMA_VERSION,
-            "theme": "dark",
             "show_token_counter": False,
             "ollama_chat_model": "",
             "ollama_title_model": "",
@@ -369,13 +366,6 @@ class SettingsManager:
 
     def get_schema_version(self):
         return self.state.get("schema_version", self.CURRENT_SCHEMA_VERSION)
-
-    def get_theme(self):
-        return self.state.get("theme", "dark")
-
-    def set_theme(self, theme_name):
-        self.state['theme'] = theme_name
-        self._save_state()
 
     def get_show_token_counter(self):
         # R8a: off by default - the overlay is opt-in now, not opt-out.

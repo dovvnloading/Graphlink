@@ -35,7 +35,6 @@ class AppSettingsStatePayload:
     schemaVersion: int
     revision: int
     activeSection: str
-    theme: str
     showTokenCounter: bool
     enableSystemPrompt: bool
     notificationPreferences: dict[str, bool]

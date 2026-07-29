@@ -362,10 +362,6 @@ export const HELP_SECTIONS: HelpSection[] = [
         "title": "Personalization and Feedback",
         "items": [
           {
-            "action": "Appearance",
-            "description": "Theme and appearance settings restyle the app, including flyouts and node accents, around the current palette. This is mainly cosmetic, but it helps tailor the workspace to your preference."
-          },
-          {
             "action": "Token Counter",
             "description": "When enabled, the token counter shows prompt, context, output, and running session totals. It is useful when you want a sense of branch size or model budget."
           },

@@ -49,12 +49,6 @@ function basename(path: string): string {
   return path.split(/[\\/]/).pop() || path;
 }
 
-const THEME_OPTIONS = [
-  { value: "dark", label: "Dark" },
-  { value: "muted", label: "Muted" },
-  { value: "mono", label: "Monochromatic" },
-];
-
 const NOTIFICATION_TYPE_LABELS: Record<string, string> = {
   info: "Info",
   success: "Success",
@@ -95,7 +89,6 @@ const initialState: AppSettingsState = {
   minCompatibleSchemaVersion: 1,
   revision: 0,
   activeSection: "General",
-  theme: "dark",
   showTokenCounter: true,
   enableSystemPrompt: true,
   notificationPreferences: {},
@@ -146,23 +139,15 @@ function GeneralPage({
   state: AppSettingsState;
   transport: WsTransport;
 }) {
+  // R8a (UI/UX issue list finding #9): a Theme select (Dark/Muted/
+  // Monochromatic) used to live here. It persisted a real setTheme intent,
+  // but nothing in the SPA ever applied the value - no data-theme attribute,
+  // no alternate token set, the app rendered identically no matter what was
+  // selected. Removed rather than wired up: building two real alternate
+  // palettes is a design decision, not a bug fix, and a persisted preference
+  // that provably does nothing is worse than no preference at all.
   return (
     <div className="settings-general-page">
-      <label className="settings-field">
-        <span className="settings-field-label">Theme</span>
-        <select
-          className="settings-select"
-          value={state.theme}
-          onChange={(event) => transport.intent("app-settings", "setTheme", [event.target.value])}
-        >
-          {THEME_OPTIONS.map(({ value, label }) => (
-            <option key={value} value={value}>
-              {label}
-            </option>
-          ))}
-        </select>
-      </label>
-
       <label className="settings-checkbox-row">
         <input
           type="checkbox"
