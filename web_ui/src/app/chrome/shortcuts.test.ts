@@ -41,6 +41,17 @@ describe("resolveShortcut", () => {
     expect(resolveShortcut(key("c"))).toBeNull();
   });
 
+  // ADR-002 Workstream 1 ("Synthesize Branches") - a genuinely new binding,
+  // not a legacy port. "M" (Merge/coMbine) since "S" is already save-chat.
+  it("treats Ctrl+Shift+M as Synthesize Branches", () => {
+    expect(resolveShortcut(key("m", { shift: true }))).toBe("synthesize-branches");
+    expect(resolveShortcut(key("M", { shift: true }))).toBe("synthesize-branches");
+  });
+
+  it("does NOT bind bare Ctrl+M", () => {
+    expect(resolveShortcut(key("m"))).toBeNull();
+  });
+
   it("is case-insensitive, since Shift/CapsLock change event.key's case", () => {
     expect(resolveShortcut(key("T"))).toBe("new-chat");
   });
@@ -74,11 +85,11 @@ describe("resolveShortcut", () => {
 describe("isGatedWhileTyping", () => {
   // The exact membership of legacy's GATED_SHORTCUTS
   // (graphlink_web_island_host.py:735-745), which legacy itself
-  // contract-tests, PLUS "compare-branches" (ADR-002 Workstream 1 - a new
-  // shortcut, not a legacy port, gated for the same reason as its closest
-  // sibling create-frame/create-container - see shortcuts.ts's own
-  // comment). Mirrored here so a future edit to the set has to be
-  // deliberate rather than incidental.
+  // contract-tests, PLUS "compare-branches"/"synthesize-branches" (ADR-002
+  // Workstream 1 - new shortcuts, not legacy ports, gated for the same
+  // reason as their closest sibling create-frame/create-container - see
+  // shortcuts.ts's own comment). Mirrored here so a future edit to the set
+  // has to be deliberate rather than incidental.
   const GATED: ShortcutId[] = [
     "new-chat",
     "toggle-library",
@@ -86,6 +97,7 @@ describe("isGatedWhileTyping", () => {
     "create-frame",
     "create-container",
     "compare-branches",
+    "synthesize-branches",
     "navigate-up",
     "navigate-down",
     "navigate-left",
@@ -101,8 +113,8 @@ describe("isGatedWhileTyping", () => {
     expect(isGatedWhileTyping(id)).toBe(false);
   });
 
-  it("gates exactly the 9 legacy combinations plus compare-branches (10 total), no more and no fewer", () => {
+  it("gates exactly the 9 legacy combinations plus compare-branches/synthesize-branches (11 total), no more and no fewer", () => {
     const all: ShortcutId[] = [...GATED, ...EXEMPT];
-    expect(all.filter(isGatedWhileTyping)).toHaveLength(10);
+    expect(all.filter(isGatedWhileTyping)).toHaveLength(11);
   });
 });

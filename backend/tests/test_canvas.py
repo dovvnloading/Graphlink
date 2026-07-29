@@ -6955,3 +6955,194 @@ def test_mark_branch_comparison_note_rejects_an_unknown_node_id():
     doc = SceneDocument()
     with pytest.raises(SceneError):
         doc.mark_branch_comparison_note("does-not-exist", ["x", "y"])
+
+
+# -- ADR-002 Workstream 1: "Synthesize Branches" ------------------------------
+#
+# The third sequenced item ("fork -> compare -> synthesize -> status/
+# lifecycle UI") - takes 2+ existing chat nodes plus the user's own free-text
+# instructions and drops a single agent-authored CHAT node (not a note, unlike
+# Compare Branches) continuing the branch tree from the FIRST selected
+# source, while recording every source (via item_ids, same reuse as Compare's
+# note) plus the instructions and the provider/model that produced it.
+
+
+def test_synthesize_branches_creates_a_chat_node_continuing_from_the_first_source(monkeypatch):
+    monkeypatch.setattr(
+        agents_module.BranchSynthesisAgent, "get_response",
+        lambda self, text, instructions: "Combined answer drawing on both branches.",
+    )
+
+    async def run():
+        bus, document, recorder, _ = make_bus_with_dispatcher()
+        root = document.add_chat_node(0, 0, "root question", True)
+        first = document.add_chat_node(0, 160, "first answer", False, parent_id=root.id)
+        second = document.add_chat_node(460, 160, "second answer", False, parent_id=root.id)
+        scene_publishes_before = recorder.topics_seen().count("scene")
+
+        node_id = await bus.dispatch_intent(
+            "scene", "synthesizeBranches", [[first.id, second.id], "merge the best of both"],
+        )
+
+        assert node_id is not None
+        node = document.nodes[node_id]
+        assert node.kind == "chat"
+        assert node.is_user is False
+        assert node.content == "Combined answer drawing on both branches."
+        assert node.is_branch_synthesis is True
+        assert node.item_ids == [first.id, second.id]
+        assert node.synthesis_instructions == "merge the best of both"
+        # Continues the branch tree from the FIRST selected source, not a
+        # parentless node like Compare Branches' note.
+        parent_edge = document._branch_parent_edge(node.id)
+        assert parent_edge is not None
+        assert parent_edge.source == first.id
+        # Positioned below every source, averaged across all of them.
+        assert node.x == (first.x + second.x) / 2
+        assert node.y == max(first.y, second.y) + MESSAGE_VERTICAL_SPACING
+        assert document.last_chat_node_id == node.id
+        assert recorder.topics_seen().count("scene") > scene_publishes_before
+
+    asyncio.run(run())
+
+
+def test_synthesize_branches_stamps_provider_and_model_from_the_composer_route(monkeypatch):
+    monkeypatch.setattr(
+        agents_module.BranchSynthesisAgent, "get_response",
+        lambda self, text, instructions: "Combined answer.",
+    )
+
+    async def run():
+        bus, document, _, _ = make_bus_with_dispatcher()
+        root = document.add_chat_node(0, 0, "root question", True)
+        first = document.add_chat_node(0, 160, "first answer", False, parent_id=root.id)
+        second = document.add_chat_node(460, 160, "second answer", False, parent_id=root.id)
+
+        node_id = await bus.dispatch_intent(
+            "scene", "synthesizeBranches", [[first.id, second.id], "merge them"],
+        )
+
+        node = document.nodes[node_id]
+        # ComposerDocument() in make_bus_with_dispatcher has no route_reader
+        # wired - route()'s own honest "no settings manager wired" fallback
+        # (see backend/composer.py) reports Ollama (Local) with an empty
+        # model, which is exactly what should land on the node.
+        assert node.provider == "Ollama (Local)"
+        assert node.model == ""
+
+    asyncio.run(run())
+
+
+def test_synthesize_branches_sends_each_branchs_own_full_history_and_the_instructions(monkeypatch):
+    seen = []
+    monkeypatch.setattr(
+        agents_module.BranchSynthesisAgent, "get_response",
+        lambda self, text, instructions: seen.append((text, instructions)) or "Combined answer.",
+    )
+
+    async def run():
+        bus, document, _, _ = make_bus_with_dispatcher()
+        root = document.add_chat_node(0, 0, "shared root question", True)
+        first = document.add_chat_node(0, 160, "first branch reply", False, parent_id=root.id)
+        second = document.add_chat_node(460, 160, "second branch reply", False, parent_id=root.id)
+
+        await bus.dispatch_intent(
+            "scene", "synthesizeBranches", [[first.id, second.id], "pick the simpler one"],
+        )
+
+        assert len(seen) == 1
+        formatted, instructions = seen[0]
+        assert "shared root question" in formatted, "each branch's full history must be included, not just its own leaf"
+        assert "first branch reply" in formatted
+        assert "second branch reply" in formatted
+        assert instructions == "pick the simpler one"
+
+    asyncio.run(run())
+
+
+def test_synthesize_branches_rejects_fewer_than_two_ids():
+    async def run():
+        bus, document, _, _ = make_bus_with_dispatcher()
+        only = document.add_chat_node(0, 0, "solo", True)
+        node_count_before = len(document.nodes)
+
+        assert await bus.dispatch_intent("scene", "synthesizeBranches", [[], "combine them"]) is None
+        assert await bus.dispatch_intent("scene", "synthesizeBranches", [[only.id], "combine them"]) is None
+        assert len(document.nodes) == node_count_before, "no node should be created"
+
+    asyncio.run(run())
+
+
+def test_synthesize_branches_dedupes_repeated_ids_before_the_minimum_check():
+    async def run():
+        bus, document, _, _ = make_bus_with_dispatcher()
+        only = document.add_chat_node(0, 0, "solo", True)
+
+        result = await bus.dispatch_intent("scene", "synthesizeBranches", [[only.id, only.id], "combine"])
+        assert result is None, "the same id twice must still fail the real 2-distinct-branches minimum"
+
+    asyncio.run(run())
+
+
+def test_synthesize_branches_rejects_a_non_chat_node(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        agents_module.BranchSynthesisAgent, "get_response",
+        lambda self, text, instructions: calls.append(text) or "should not happen",
+    )
+
+    async def run():
+        bus, document, _, _ = make_bus_with_dispatcher()
+        chat = document.add_chat_node(0, 0, "a real chat node", True)
+        note = document.add_note(0, 0)
+
+        result = await bus.dispatch_intent("scene", "synthesizeBranches", [[chat.id, note.id], "combine"])
+
+        assert result is None
+        assert calls == [], "a non-chat node in the selection must block the agent call entirely"
+
+    asyncio.run(run())
+
+
+def test_synthesize_branches_rejects_an_unknown_node_id():
+    async def run():
+        bus, document, _, _ = make_bus_with_dispatcher()
+        chat = document.add_chat_node(0, 0, "a real chat node", True)
+        result = await bus.dispatch_intent("scene", "synthesizeBranches", [[chat.id, "does-not-exist"], "combine"])
+        assert result is None
+
+    asyncio.run(run())
+
+
+def test_synthesize_branches_rejects_blank_instructions(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        agents_module.BranchSynthesisAgent, "get_response",
+        lambda self, text, instructions: calls.append(text) or "should not happen",
+    )
+
+    async def run():
+        bus, document, _, _ = make_bus_with_dispatcher()
+        first = document.add_chat_node(0, 0, "first", True)
+        second = document.add_chat_node(0, 160, "second", True)
+
+        for blank in ["", "   ", None]:
+            result = await bus.dispatch_intent("scene", "synthesizeBranches", [[first.id, second.id], blank])
+            assert result is None
+
+        assert calls == [], "blank instructions must block the agent call entirely"
+
+    asyncio.run(run())
+
+
+def test_mark_branch_synthesis_rejects_a_non_chat_node():
+    doc = SceneDocument()
+    note = doc.add_note(0, 0)
+    with pytest.raises(SceneError):
+        doc.mark_branch_synthesis(note.id, ["x", "y"], "instructions", "Anthropic Claude", "claude-sonnet-5")
+
+
+def test_mark_branch_synthesis_rejects_an_unknown_node_id():
+    doc = SceneDocument()
+    with pytest.raises(SceneError):
+        doc.mark_branch_synthesis("does-not-exist", ["x", "y"], "instructions", None, None)

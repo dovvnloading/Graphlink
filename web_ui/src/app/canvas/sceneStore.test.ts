@@ -812,6 +812,87 @@ describe("SceneStore", () => {
     ]);
   });
 
+  // -- ADR-002 Workstream 1: "Synthesize Branches" ---------------------------
+
+  it("setSynthesizeTargetNodeIds/getSynthesizeTargetNodeIds update state, notify listeners, and clear any pending reply target", () => {
+    const { transport } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    const seen = vi.fn();
+    store.subscribe(seen);
+
+    expect(store.getSynthesizeTargetNodeIds()).toBeNull();
+    store.setSynthesizeTargetNodeIds(["n1", "n2"]);
+    expect(store.getSynthesizeTargetNodeIds()).toEqual(["n1", "n2"]);
+    expect(seen).toHaveBeenCalledTimes(1);
+
+    store.setSynthesizeTargetNodeIds(null);
+    expect(store.getSynthesizeTargetNodeIds()).toBeNull();
+    expect(seen).toHaveBeenCalledTimes(2);
+  });
+
+  it("setSynthesizeTargetNodeIds and setReplyTargetNodeId are mutually exclusive - setting one clears the other", () => {
+    const { transport } = makeFakeTransport();
+    const store = new SceneStore(transport);
+
+    store.setReplyTargetNodeId("n-root");
+    expect(store.getReplyTargetNodeId()).toBe("n-root");
+
+    store.setSynthesizeTargetNodeIds(["n1", "n2"]);
+    expect(store.getSynthesizeTargetNodeIds()).toEqual(["n1", "n2"]);
+    expect(store.getReplyTargetNodeId()).toBeNull();
+
+    store.setReplyTargetNodeId("n-other");
+    expect(store.getReplyTargetNodeId()).toBe("n-other");
+    expect(store.getSynthesizeTargetNodeIds()).toBeNull();
+  });
+
+  it("setReplyTargetNodeId still emits when it clears a pending synthesize target, even if its own id is unchanged (null -> null)", () => {
+    const { transport } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    const seen = vi.fn();
+    store.setSynthesizeTargetNodeIds(["n1", "n2"]);
+    store.subscribe(seen);
+
+    // replyTargetNodeId is already null, but a synthesize target IS pending -
+    // this must still count as a real state change and emit.
+    store.setReplyTargetNodeId(null);
+    expect(seen).toHaveBeenCalledTimes(1);
+    expect(store.getSynthesizeTargetNodeIds()).toBeNull();
+  });
+
+  it("sendMessage with a pending synthesize target fires synthesizeBranches with [nodeIds, text] instead of sendMessage, then clears it", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.setSynthesizeTargetNodeIds(["n1", "n2"]);
+
+    store.sendMessage("merge the best of both");
+    expect(intents).toEqual([
+      { topic: "scene", intent: "synthesizeBranches", args: [["n1", "n2"], "merge the best of both"] },
+    ]);
+    expect(store.getSynthesizeTargetNodeIds()).toBeNull();
+
+    // A SECOND send, with no synthesize target pending anymore, must fall
+    // through to an ordinary sendMessage - proving it was genuinely
+    // consumed, not just read.
+    store.sendMessage("a normal follow-up");
+    expect(intents).toEqual([
+      { topic: "scene", intent: "synthesizeBranches", args: [["n1", "n2"], "merge the best of both"] },
+      { topic: "scene", intent: "sendMessage", args: ["a normal follow-up"] },
+    ]);
+  });
+
+  it("sendMessage prefers a pending synthesize target over a pending reply target (the two are already mutually exclusive, but this proves the check order)", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.setReplyTargetNodeId("n-root");
+    store.setSynthesizeTargetNodeIds(["n1", "n2"]);
+
+    store.sendMessage("combine them");
+    expect(intents).toEqual([
+      { topic: "scene", intent: "synthesizeBranches", args: [["n1", "n2"], "combine them"] },
+    ]);
+  });
+
   it("showInfoNotification sends the notification-topic showInfo intent, not scene", () => {
     const { transport, intents } = makeFakeTransport();
     const store = new SceneStore(transport);

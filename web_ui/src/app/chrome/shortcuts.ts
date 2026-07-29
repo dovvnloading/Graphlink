@@ -24,6 +24,7 @@ export type ShortcutId =
   | "create-frame"
   | "create-container"
   | "compare-branches"
+  | "synthesize-branches"
   | "toggle-palette"
   | "toggle-search"
   | "navigate-up"
@@ -42,11 +43,13 @@ export type ShortcutId =
  * expected mid-sentence, and Ctrl+K is the palette's own summon key (its
  * handler was made idempotent specifically so the exemption is safe).
  *
- * "compare-branches" is a genuinely NEW shortcut (ADR-002 Workstream 1,
- * not a legacy port) but gated here for the exact same reason as its
- * closest sibling create-frame/create-container: a canvas-wide,
- * selection-driven action that should never fire mid-sentence while
- * typing in the composer or a node's own editable field.
+ * "compare-branches" and "synthesize-branches" are genuinely NEW shortcuts
+ * (ADR-002 Workstream 1, not legacy ports) but gated here for the exact
+ * same reason as their closest sibling create-frame/create-container: a
+ * canvas-wide, selection-driven action that should never fire mid-sentence
+ * while typing in the composer or a node's own editable field -
+ * "synthesize-branches" doubly so, since its effect is staging a
+ * selection that then hijacks the very next Send.
  */
 const GATED_WHILE_TYPING = new Set<ShortcutId>([
   "new-chat",
@@ -55,6 +58,7 @@ const GATED_WHILE_TYPING = new Set<ShortcutId>([
   "create-frame",
   "create-container",
   "compare-branches",
+  "synthesize-branches",
   "navigate-up",
   "navigate-down",
   "navigate-left",
@@ -118,6 +122,12 @@ export function resolveShortcut(event: ShortcutKeyEvent): ShortcutId | null {
     // match.
     case "c":
       return event.shiftKey ? "compare-branches" : null;
+    // ADR-002 Workstream 1 ("Synthesize Branches"): Ctrl+Shift+M only, same
+    // "new binding, no legacy key to match" posture as compare-branches
+    // above. "M" for Merge/coMbine - "S" (the mnemonic match for Synthesize)
+    // is already save-chat's key.
+    case "m":
+      return event.shiftKey ? "synthesize-branches" : null;
     default:
       return null;
   }

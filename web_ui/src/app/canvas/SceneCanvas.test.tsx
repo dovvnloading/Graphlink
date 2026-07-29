@@ -1520,6 +1520,82 @@ describe("toFlowNodes (R6.3 chat node scroll value)", () => {
   });
 });
 
+// ADR-002 Workstream 1 ("Synthesize Branches"). Same situation as
+// R63TestFields above - provider/model/isBranchSynthesis/
+// synthesisInstructions aren't in the generated SceneNodeRow type yet (see
+// SceneCanvas.tsx's own SceneNodeSynthesisFields comment). itemIds is
+// already declared elsewhere in this file via GroupTestFields (an
+// UNRELATED note-kind reuse) - re-declared here rather than shared since
+// this helper intersects it independently, for the chat-kind reuse.
+interface SynthesisTestFields {
+  provider: string | null;
+  model: string | null;
+  isBranchSynthesis: boolean;
+  synthesisInstructions: string;
+  itemIds: string[];
+}
+
+function withSynthesisFields(
+  node: SceneNodeRow,
+  overrides: Partial<SynthesisTestFields> = {},
+): SceneNodeRow & SynthesisTestFields {
+  return {
+    ...node,
+    provider: null,
+    model: null,
+    isBranchSynthesis: false,
+    synthesisInstructions: "",
+    itemIds: [],
+    ...overrides,
+  } as SceneNodeRow & SynthesisTestFields;
+}
+
+describe("toFlowNodes (ADR-002 Workstream 1 - Synthesize Branches provenance)", () => {
+  it("maps a synthesis result chat node's provider/model/instructions/source ids onto the flow node's data", () => {
+    const scene = baseScene({
+      nodes: [
+        withSynthesisFields(baseNode({ id: "chat-1", kind: "chat", content: "Combined answer" }), {
+          provider: "Anthropic Claude",
+          model: "claude-sonnet-5",
+          isBranchSynthesis: true,
+          synthesisInstructions: "merge the best of both",
+          itemIds: ["chat-a", "chat-b"],
+        }),
+      ],
+      edges: [],
+    });
+    const store = makeStore();
+
+    const flowNodes = toFlowNodes(scene, store);
+    const chatFlowNode = flowNodes.find((n) => n.id === "chat-1");
+    expect(chatFlowNode!.data).toMatchObject({
+      provider: "Anthropic Claude",
+      model: "claude-sonnet-5",
+      isBranchSynthesis: true,
+      synthesisInstructions: "merge the best of both",
+      synthesisSourceNodeIds: ["chat-a", "chat-b"],
+    });
+  });
+
+  it("defaults to no provenance for an ordinary chat node (the vast majority - field absent, ahead of codegen regenerating SceneNodeRow)", () => {
+    const scene = baseScene({
+      nodes: [baseNode({ id: "chat-1", kind: "chat", content: "Hello" })],
+      edges: [],
+    });
+    const store = makeStore();
+
+    const flowNodes = toFlowNodes(scene, store);
+    const chatFlowNode = flowNodes.find((n) => n.id === "chat-1");
+    expect(chatFlowNode!.data).toMatchObject({
+      provider: undefined,
+      model: undefined,
+      isBranchSynthesis: undefined,
+      synthesisInstructions: undefined,
+      synthesisSourceNodeIds: undefined,
+    });
+  });
+});
+
 describe("toFlowNodes (R6.3 html node splitter state)", () => {
   it("maps a saved htmlSplitterState onto the flow node's data", () => {
     const scene = baseScene({

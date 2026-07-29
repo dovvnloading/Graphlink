@@ -108,6 +108,26 @@ interface SceneNodeR63Fields {
 }
 type SceneNodeRowWithR63 = SceneNodeRow & SceneNodeR63Fields;
 
+// ADR-002 Workstream 1 ("Synthesize Branches"). Same situation as
+// SceneNodeGroupFields/SceneNodeChartFields/SceneNodeR63Fields above - the
+// generated SceneNodeRow type hasn't been regenerated yet to carry
+// provider/model/isBranchSynthesis/synthesisInstructions (backend/canvas.py's
+// scene_payload() contract for this increment). itemIds is declared again
+// here (already present on SceneNodeGroupFields, for the UNRELATED note-kind
+// Compare Branches reuse) rather than shared between the two interfaces -
+// this one is intersected with SceneNodeRow independently, in the chat-kind
+// branch below, so there is no actual overlap at runtime; see
+// SceneNode.item_ids's own comment on backend/canvas.py for the two,
+// deliberately distinct uses of that one generic field.
+interface SceneNodeSynthesisFields {
+  provider: string | null;
+  model: string | null;
+  isBranchSynthesis: boolean;
+  synthesisInstructions: string;
+  itemIds: string[];
+}
+type SceneNodeRowWithSynthesis = SceneNodeRow & SceneNodeSynthesisFields;
+
 /**
  * The React Flow canvas (Qt-removal plan R1) - the QGraphicsScene/ChatView
  * successor. R1 scope: pan/zoom, model-driven grid (size/style/color/opacity
@@ -385,6 +405,7 @@ export function toFlowNodes(
         if (target?.isDocked) dockedChildren.push({ id: target.id, label: target.title });
       }
       const chatR63 = n as SceneNodeRowWithR63;
+      const chatSynthesis = n as SceneNodeRowWithSynthesis;
       flowNodes.push({
         id: n.id,
         type: "chat" as const,
@@ -438,6 +459,16 @@ export function toFlowNodes(
           // needed here (unlike onToggleBranchFocus, which lives as local
           // state on SceneCanvas itself, not on the store).
           onBranchFromHere: () => store.setReplyTargetNodeId(n.id),
+          // ADR-002 Workstream 1 ("Synthesize Branches"): provenance carried
+          // by the result node - see SceneNodeSynthesisFields' own comment.
+          // provider/model are None/absent for every ordinary chat node
+          // (the vast majority), rendered as no badge at all - see
+          // ChatNodeView.tsx's own guard.
+          provider: chatSynthesis.provider,
+          model: chatSynthesis.model,
+          isBranchSynthesis: chatSynthesis.isBranchSynthesis,
+          synthesisInstructions: chatSynthesis.synthesisInstructions,
+          synthesisSourceNodeIds: chatSynthesis.itemIds,
           // R6.3: the node's own scroll position within its content area -
           // read on mount by ChatNodeView (restore) and reported (debounced)
           // via the new setChatScrollValue intent on every scroll. Defaults

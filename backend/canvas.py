@@ -390,6 +390,34 @@ class SceneNode:
     # way is_docked/image_asset_id are generic fields even though today only
     # one kind populates them); unused (default None) for every other kind.
     pending_request_id: str | None = None
+    # ADR-002 Workstream 1 ("Synthesize Branches"): the provider/model that
+    # produced this node's content, e.g. "Anthropic Claude" / "claude-sonnet-5"
+    # - resolved from ComposerDocument.route() at creation time. Generic
+    # (like pending_request_id above) rather than synthesis-only, since any
+    # future agent-authored node could reasonably want the same provenance;
+    # today only synthesize_branches populates it. None means "not recorded"
+    # (every node created before this field existed, and every ordinary chat
+    # reply, which already shows its route live in the Composer rather than
+    # per-message).
+    provider: str | None = None
+    model: str | None = None
+    # ADR-002 Workstream 1 ("Synthesize Branches"): marks a chat-kind node as
+    # the output of the Synthesize Branches agent (as opposed to an ordinary
+    # user/assistant message) - the chat-node equivalent of is_branch_
+    # comparison below, which does the same job for note-kind nodes. A
+    # distinct flag rather than reusing is_branch_comparison: that flag's
+    # own kind-check (mark_branch_comparison_note raises for a non-note
+    # node) would need loosening for no benefit, and the two features
+    # render completely different UI (a badge on a note vs. a badge + the
+    # instructions/provider/model fields below on a chat node).
+    is_branch_synthesis: bool = False
+    # ADR-002 Workstream 1 ("Synthesize Branches"): the free-text instructions
+    # the user typed to steer the synthesis (e.g. "merge the best parts of
+    # each"), recorded on the result node so its provenance is fully
+    # inspectable later - the ADR's own acceptance criterion for this
+    # feature. Chat-kind only in practice; unused (default empty string) for
+    # every other kind and for ordinary (non-synthesis) chat nodes.
+    synthesis_instructions: str = ""
     # R5.1: the Web Research node's real persisted shape - `content` (reused,
     # same pattern as code/thinking/html) holds the query text; these six
     # fields track one research run's live progress/outcome. Unused
@@ -1916,6 +1944,32 @@ class SceneDocument:
         node.is_branch_comparison = True
         node.item_ids = list(source_node_ids)
 
+    def mark_branch_synthesis(
+        self,
+        node_id: str,
+        source_node_ids: list[str],
+        instructions: str,
+        provider: str | None,
+        model: str | None,
+    ) -> None:
+        """ADR-002 Workstream 1 ("Synthesize Branches"): stamps an
+        already-created CHAT node as the output of the Synthesize Branches
+        agent - mirrors mark_branch_comparison_note's own "extra setter call
+        right after creation" shape, adapted for a chat-kind result instead
+        of a note-kind one (see SceneNode.is_branch_synthesis's own comment
+        for why this is a distinct method/flag rather than reusing Compare
+        Branches')."""
+        node = self.nodes.get(node_id)
+        if node is None:
+            raise SceneError(f"unknown node: {node_id}")
+        if node.kind != "chat":
+            raise SceneError(f"node is not a chat node: {node_id}")
+        node.is_branch_synthesis = True
+        node.item_ids = list(source_node_ids)
+        node.synthesis_instructions = str(instructions)
+        node.provider = provider
+        node.model = model
+
     def _bbox_of_members(self, item_ids: list[str]) -> tuple[float, float, float, float]:
         """Compute the padded union rect (x, y, width, height) enclosing
         every member id's ESTIMATED footprint - GROUP_MEMBER_DEFAULT_WIDTH/
@@ -2980,6 +3034,13 @@ class SceneDocument:
                         {"role": m["role"], "content": m["content"]} for m in n.history
                     ],
                     "pendingRequestId": n.pending_request_id,
+                    # ADR-002 Workstream 1 ("Synthesize Branches") - see
+                    # SceneNode.provider/model/is_branch_synthesis/
+                    # synthesis_instructions's own comments.
+                    "provider": n.provider,
+                    "model": n.model,
+                    "isBranchSynthesis": n.is_branch_synthesis,
+                    "synthesisInstructions": n.synthesis_instructions,
                     "researchStage": n.research_stage,
                     "researchCompleted": n.research_completed,
                     "researchTotal": n.research_total,
@@ -4145,6 +4206,89 @@ def register_canvas(
         )
         return result_holder.get("node_id")
 
+    async def synthesize_branches(node_ids, instructions):
+        """ADR-002 Workstream 1 ("Synthesize Branches") - the third
+        sequenced item in that workstream's own "fork -> compare ->
+        synthesize -> status/lifecycle UI" order, following compare_
+        branches above. Same validation contract as that function (2+
+        de-duped ids, every one a real chat node, no auto-selection
+        fallback), plus one more: instructions must be non-blank, since an
+        empty steering prompt would leave the agent nothing to follow.
+
+        Unlike Compare (whose result is a parentless note), Synthesize's
+        result is a real CHAT node continuing the branch tree from the
+        FIRST selected source - a genuine next step in the conversation,
+        not a side annotation - so last_chat_node_id is updated to it
+        exactly like an ordinary send. Every source is still recorded (via
+        item_ids, the same multi-purpose-field reuse Compare's note
+        already established) so full provenance survives even though only
+        one edge can be structural. Provider/model are stamped from
+        composer_document.route() - the same route a plain send would
+        actually use - onto the result node (see SceneNode.provider/model's
+        own comment)."""
+        ids = list(dict.fromkeys(str(i) for i in (node_ids or [])))  # de-dupe, preserve order
+        if len(ids) < 2:
+            notifications.show("Select at least 2 branches to synthesize.", "warning")
+            await bus.publish("notification")
+            return None
+
+        clean_instructions = str(instructions or "").strip()
+        if not clean_instructions:
+            notifications.show("Enter instructions for how to combine the branches.", "warning")
+            await bus.publish("notification")
+            return None
+
+        sources = []
+        for node_id in ids:
+            node = document.nodes.get(node_id)
+            if node is None or node.kind != "chat":
+                notifications.show("Every selected node must be a real chat message to synthesize.", "warning")
+                await bus.publish("notification")
+                return None
+            sources.append(node)
+
+        branches = [
+            (f"Branch {index + 1}", document.chat_branch_history(node.id))
+            for index, node in enumerate(sources)
+        ]
+        formatted = _format_branches_for_comparison(branches)
+
+        parent = sources[0]
+        avg_x = sum(node.x for node in sources) / len(sources)
+        max_y = max(node.y for node in sources)
+        route = composer_document.route()
+
+        result_holder: dict[str, str] = {}
+
+        async def _on_success(text):
+            if any(node_id not in document.nodes for node_id in ids):
+                # A source was deleted mid-flight - same liveness posture as
+                # compare_branches's own on_success guard.
+                return
+            node = document.add_chat_node(
+                avg_x, max_y + MESSAGE_VERTICAL_SPACING, text, False, parent_id=parent.id,
+            )
+            document.mark_branch_synthesis(
+                node.id, ids, clean_instructions, route.get("provider"), route.get("modelLabel"),
+            )
+            document.last_chat_node_id = node.id
+            result_holder["node_id"] = node.id
+            await bus.publish("scene")
+
+        def _on_failure(message):
+            # start_branch_synthesis already surfaced the notification.
+            pass
+
+        await agent_dispatcher.start_branch_synthesis(
+            bus=bus,
+            notifications_state=notifications,
+            source_text=formatted,
+            instructions=clean_instructions,
+            on_success=_on_success,
+            on_failure=_on_failure,
+        )
+        return result_holder.get("node_id")
+
     async def resize_chart(node_id, width, height):
         document.resize_chart(node_id, width, height)
         await publish_scene()
@@ -4683,6 +4827,7 @@ def register_canvas(
     bus.register_intent("scene", "generateKeyTakeaway", generate_key_takeaway)
     bus.register_intent("scene", "generateExplainerNote", generate_explainer_note)
     bus.register_intent("scene", "compareBranches", compare_branches)
+    bus.register_intent("scene", "synthesizeBranches", synthesize_branches)
     bus.register_intent("scene", "resizeChart", resize_chart)
     bus.register_intent("scene", "toggleChartAspectLock", toggle_chart_aspect_lock)
     bus.register_intent("scene", "moveNode", move_node)

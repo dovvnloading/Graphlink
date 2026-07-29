@@ -88,6 +88,19 @@ export class SceneStore {
   // indicator, and consumed-then-cleared by sendMessage itself so it never
   // silently applies to a later, unrelated send.
   private replyTargetNodeId: string | null = null;
+  // ADR-002 Workstream 1 ("Synthesize Branches"): which 2+ chat nodes the
+  // NEXT sendMessage should synthesize instead of sending an ordinary
+  // reply - the list-valued sibling of replyTargetNodeId above, same local-
+  // UI-state-only posture. Set by App.tsx's Synthesize Branches shortcut
+  // (which already gathers React Flow's own multi-selection, the same
+  // mechanism compareBranches below uses), read by Composer.tsx to show a
+  // "Synthesizing N branches" indicator, and consumed-then-cleared by
+  // sendMessage itself so it never silently applies to a later, unrelated
+  // send. Mutually exclusive with replyTargetNodeId - setting one clears
+  // the other (see both setters below) since a send cannot simultaneously
+  // be "a reply to X" and "a synthesis of X, Y" - showing both indicators
+  // at once would be confusing and only one intent can actually fire.
+  private synthesizeTargetNodeIds: string[] | null = null;
 
   constructor(private readonly transport: WsTransport) {}
 
@@ -128,6 +141,7 @@ export class SceneStore {
   getFontConfig = (): FontControlState => this.fontConfig;
   getSelectedNodeId = (): string | null => this.selectedNodeId;
   getReplyTargetNodeId = (): string | null => this.replyTargetNodeId;
+  getSynthesizeTargetNodeIds = (): string[] | null => this.synthesizeTargetNodeIds;
 
   // R5.1: no-op-if-unchanged, same discipline as every other setter here that
   // guards a redundant assignment before paying for an emit() fan-out.
@@ -138,8 +152,15 @@ export class SceneStore {
   }
 
   setReplyTargetNodeId(id: string | null): void {
-    if (id === this.replyTargetNodeId) return;
+    if (id === this.replyTargetNodeId && this.synthesizeTargetNodeIds === null) return;
     this.replyTargetNodeId = id;
+    this.synthesizeTargetNodeIds = null;
+    this.emit();
+  }
+
+  setSynthesizeTargetNodeIds(ids: string[] | null): void {
+    this.synthesizeTargetNodeIds = ids;
+    this.replyTargetNodeId = null;
     this.emit();
   }
 
@@ -540,7 +561,21 @@ export class SceneStore {
   // then clears it - so it applies to exactly one send, never lingers onto
   // a later, unrelated one. Callers never pass a branch target directly;
   // they call setReplyTargetNodeId first (see that setter's own comment).
+  //
+  // ADR-002 Workstream 1 ("Synthesize Branches"): checked FIRST, ahead of
+  // replyTargetNodeId - if a synthesis selection is staged, this send's
+  // text is the user's synthesis instructions, not an ordinary message, so
+  // it fires the dedicated synthesizeBranches intent instead of sendMessage
+  // and returns early. The two staging fields are already kept mutually
+  // exclusive by their own setters, so this branch and the replyTargetNodeId
+  // branch below it can never both apply to the same call.
   sendMessage(text: string): void {
+    const synthesizeNodeIds = this.synthesizeTargetNodeIds;
+    if (synthesizeNodeIds !== null) {
+      this.transport.intent("scene", "synthesizeBranches", [synthesizeNodeIds, text]);
+      this.setSynthesizeTargetNodeIds(null);
+      return;
+    }
     const branchFromNodeId = this.replyTargetNodeId;
     const args: unknown[] = [text];
     if (branchFromNodeId !== null) args.push(branchFromNodeId);

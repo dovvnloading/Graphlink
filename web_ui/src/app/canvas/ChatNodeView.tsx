@@ -92,6 +92,19 @@ export interface ChatNodeData extends Record<string, unknown> {
   // (SceneDocument.send_message's branch_from_node_id) once the user
   // types a message and sends it; this callback only stages the pick.
   onBranchFromHere: () => void;
+  // ADR-002 Workstream 1 ("Synthesize Branches"): provenance for a
+  // Synthesize Branches result node - null/false/"" for every ordinary chat
+  // node (the vast majority), which renders no badge/label at all (see the
+  // render guards below). provider/model come from ComposerDocument.route()
+  // at the moment the synthesis ran (backend/canvas.py's synthesize_
+  // branches), NOT a live "current route" - they are a frozen record of
+  // what actually produced this specific node's content, matching the
+  // ADR's own "provider/model provenance" acceptance criterion.
+  provider: string | null;
+  model: string | null;
+  isBranchSynthesis: boolean;
+  synthesisInstructions: string;
+  synthesisSourceNodeIds: string[];
 }
 
 export type ChatFlowNode = Node<ChatNodeData, "chat">;
@@ -407,6 +420,26 @@ export function ChatNodeView({ id, data, selected }: NodeProps<ChatFlowNode>) {
           {data.dockedChildren.length > 0 && (
             <span className="chat-node-docked-badge" title="Docked items">
               {data.dockedChildren.length}
+            </span>
+          )}
+          {data.isBranchSynthesis && (
+            // ADR-002 Workstream 1 ("Synthesize Branches"): reuses the same
+            // "join/combine" glyph as NoteNodeView's Compare Branches badge
+            // (⇄) - the two features are different renderers (note vs.
+            // chat) so there is no shared component to factor this into,
+            // but the visual vocabulary for "derived from multiple
+            // branches" stays consistent across both.
+            <span
+              className="chat-node-synthesis-badge"
+              title={`Branch Synthesis (${data.synthesisSourceNodeIds.length} sources): ${data.synthesisInstructions}`}
+              aria-label="Branch Synthesis"
+            >
+              ⇄
+            </span>
+          )}
+          {data.model && (
+            <span className="chat-node-model-badge" title={data.provider ?? undefined}>
+              {data.model}
             </span>
           )}
         </span>
