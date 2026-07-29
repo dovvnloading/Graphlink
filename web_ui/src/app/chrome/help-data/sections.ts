@@ -274,10 +274,6 @@ export const HELP_SECTIONS: HelpSection[] = [
             "description": "Pins mark important places on the canvas and are saved with the chat. Use the Pins toolbar button to reveal the overlay and jump back to major milestones or hotspots."
           },
           {
-            "action": "Connection Pins",
-            "description": "Ctrl + left-click a connection to add a routing pin and shape the line, then Ctrl + right-click a pin to remove it. This is especially helpful when several branches overlap visually."
-          },
-          {
             "action": "Grid and Guide Controls",
             "description": "The controls overlay can enable snap-to-grid, smart guides, orthogonal routing, font controls, and faded connections. These tools are useful when a canvas needs visual cleanup rather than new AI output."
           },
@@ -351,10 +347,6 @@ export const HELP_SECTIONS: HelpSection[] = [
           {
             "action": "Per-Task Model Selection",
             "description": "Graphlink can store different models for title generation, main chat, chart generation, image generation, web validation, and web summarization. This lets you optimize cost and quality across different tools."
-          },
-          {
-            "action": "Live Provider Reconfiguration",
-            "description": "Switching modes reinitializes the active provider for the current session. If a provider is missing credentials or cannot initialize, the app warns you before you keep working."
           }
         ]
       },
@@ -363,7 +355,7 @@ export const HELP_SECTIONS: HelpSection[] = [
         "items": [
           {
             "action": "Token Counter",
-            "description": "When enabled, the token counter shows prompt, context, output, and running session totals. It is useful when you want a sense of branch size or model budget."
+            "description": "When enabled, the token counter estimates how many tokens your current draft will use before you send it. It is useful for keeping an eye on how large a request is getting."
           },
           {
             "action": "Provider-Specific Guidance",
