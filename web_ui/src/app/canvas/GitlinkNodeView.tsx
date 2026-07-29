@@ -99,6 +99,7 @@ export interface GitlinkNodeData extends Record<string, unknown> {
   onFetchRepositories: () => Promise<string[]>;
   onLoadTree: (repo: string, branch: string) => void;
   onSetLocalRoot: (localRoot: string) => void;
+  onBrowseLocalRoot: () => void;
   onImportSnapshot: (repo: string, branch: string) => void;
   onBuildContext: (scopeMode: string, selectedPaths: string[]) => void;
   onFetchContext: () => Promise<string>;
@@ -422,29 +423,36 @@ export function GitlinkNodeView({ id, data, selected }: NodeProps<GitlinkFlowNod
                 </select>
               </label>
 
-              <label className="gitlink-node-field-row">
-                <span className="gitlink-node-field-label">Local root (no browse - deferred)</span>
-                <input
-                  type="text"
-                  className="gitlink-node-input"
-                  value={localRootDraft}
-                  onChange={(event) => setLocalRootDraft(event.target.value)}
-                  onBlur={commitLocalRoot}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      event.preventDefault();
-                      // Do NOT call commitLocalRoot() here too - .blur() below
-                      // synchronously fires the onBlur={commitLocalRoot}
-                      // handler above, so calling it directly here as well
-                      // would dispatch the WS intent twice per Enter press
-                      // (R5.3 post-review FIX 8).
-                      (event.target as HTMLInputElement).blur();
-                    }
-                  }}
-                  placeholder="C:\path\to\local\checkout"
-                  aria-label="Local root"
-                />
-              </label>
+              <div className="gitlink-node-field-row">
+                <label className="gitlink-node-field-row">
+                  <span className="gitlink-node-field-label">Local root</span>
+                  <input
+                    type="text"
+                    className="gitlink-node-input"
+                    value={localRootDraft}
+                    onChange={(event) => setLocalRootDraft(event.target.value)}
+                    onBlur={commitLocalRoot}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        // Do NOT call commitLocalRoot() here too - .blur() below
+                        // synchronously fires the onBlur={commitLocalRoot}
+                        // handler above, so calling it directly here as well
+                        // would dispatch the WS intent twice per Enter press
+                        // (R5.3 post-review FIX 8).
+                        (event.target as HTMLInputElement).blur();
+                      }
+                    }}
+                    placeholder="C:\path\to\local\checkout"
+                    aria-label="Local root"
+                  />
+                </label>
+                <div className="gitlink-node-inline-row">
+                  <button type="button" disabled={busy} onClick={data.onBrowseLocalRoot}>
+                    Browse…
+                  </button>
+                </div>
+              </div>
 
               <div className="gitlink-node-inline-row">
                 <button

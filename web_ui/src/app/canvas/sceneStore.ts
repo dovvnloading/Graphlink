@@ -392,6 +392,15 @@ export class SceneStore {
     this.transport.intent("scene", "setGitlinkLocalRoot", [nodeId, localRoot]);
   }
 
+  // Opens the real native OS folder picker (backend/native_dialogs.py, the
+  // same primitive Settings' Ollama/Llama.cpp Scan Folder buttons already
+  // use) and, on a folder being picked, sets it server-side exactly like
+  // setGitlinkLocalRoot above - fire-and-forget, the new value arrives back
+  // through the next scene snapshot rather than a direct reply.
+  pickGitlinkLocalRoot(nodeId: string): void {
+    this.transport.intent("scene", "pickGitlinkLocalRoot", [nodeId]);
+  }
+
   importGitlinkSnapshot(nodeId: string, repo: string, branch: string): void {
     this.transport.intent("scene", "importGitlinkSnapshot", [nodeId, repo, branch]);
   }
