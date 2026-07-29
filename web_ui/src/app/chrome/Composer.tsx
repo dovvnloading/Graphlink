@@ -143,6 +143,18 @@ export function Composer({ store, sceneStore }: { store: ComposerStore; sceneSto
           aria-haspopup="dialog"
           aria-pressed={overlays.isOpen("reasoning")}
           disabled={!composer.capabilities.reasoningSelection || !composer.request.canSend}
+          /* R8a (UI/UX issue list finding #11): its two disabled-reason
+             neighbours (Attach, Model) both explain themselves via title -
+             this button had none at all, so a greyed-out Reasoning chip in
+             API mode looked like just another broken control rather than a
+             provider limitation. */
+          title={
+            !composer.capabilities.reasoningSelection
+              ? "Reasoning mode is only available for local Ollama and Llama.cpp providers"
+              : !composer.request.canSend
+                ? "Wait for the current response to finish"
+                : undefined
+          }
           onClick={() => overlays.toggle("reasoning", "popover")}
         >
           <span className="control-kicker">Reasoning</span>

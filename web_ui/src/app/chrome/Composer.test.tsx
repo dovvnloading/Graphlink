@@ -344,6 +344,52 @@ describe("Composer", () => {
     expect(container.querySelector('[data-overlay-trigger="reasoning"]')).not.toBeDisabled();
   });
 
+  it("R8a finding #11: Reasoning trigger explains itself via title when disabled for provider reasons", () => {
+    const { store } = makeStore({
+      composer: {
+        capabilities: { ...initialComposerState.capabilities, reasoningSelection: false },
+        request: { ...initialComposerState.request, canSend: true },
+      },
+    });
+    const { container } = render(
+      <OverlayProvider>
+        {/* @ts-expect-error - test double */}
+        <Composer store={store} sceneStore={makeSceneStore().sceneStore} />
+      </OverlayProvider>,
+    );
+    expect(container.querySelector('[data-overlay-trigger="reasoning"]')).toHaveAttribute(
+      "title",
+      "Reasoning mode is only available for local Ollama and Llama.cpp providers",
+    );
+  });
+
+  it("R8a finding #11: Reasoning trigger explains itself via title when disabled because a request is busy", () => {
+    const { store } = makeStore();
+    const { container } = render(
+      <OverlayProvider>
+        {/* @ts-expect-error - test double */}
+        <Composer store={store} sceneStore={makeSceneStore().sceneStore} />
+      </OverlayProvider>,
+    );
+    expect(container.querySelector('[data-overlay-trigger="reasoning"]')).toHaveAttribute(
+      "title",
+      "Wait for the current response to finish",
+    );
+  });
+
+  it("R8a finding #11: Reasoning trigger has no title at all when it is enabled - nothing to explain", () => {
+    const { store } = makeStore({
+      composer: { request: { ...initialComposerState.request, canSend: true } },
+    });
+    const { container } = render(
+      <OverlayProvider>
+        {/* @ts-expect-error - test double */}
+        <Composer store={store} sceneStore={makeSceneStore().sceneStore} />
+      </OverlayProvider>,
+    );
+    expect(container.querySelector('[data-overlay-trigger="reasoning"]')).not.toHaveAttribute("title");
+  });
+
   it("the Attach button is disabled when capabilities.attachments is false, even with canSend true", () => {
     const { store } = makeStore({
       composer: {
