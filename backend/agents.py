@@ -74,7 +74,7 @@ import graphlink_task_config as config
 from graphlink_artifact_agent import ArtifactAgent
 from graphlink_chart_agent import ChartDataAgent
 from graphlink_chat_agent import ChatAgent
-from graphlink_note_agent import BranchComparisonAgent, ExplainerAgent, KeyTakeawayAgent
+from graphlink_note_agent import BranchComparisonAgent, BranchSynthesisAgent, ExplainerAgent, KeyTakeawayAgent
 from graphlink_licensing import SettingsManager  # type hint only
 from graphlink_plugins.common.github_client import GitHubRestClient
 from graphlink_plugins.gitlink.agent import GitlinkAgent, _fingerprint_changes, _is_repo_text_path
@@ -363,6 +363,11 @@ class AgentDispatcher:
         # must never block the other. Same "request_id -> True, no task/
         # cancel_event" shape - this is directly awaited, not scheduled.
         self._branch_comparison_requests: dict[str, bool] = {}
+        # ADR-002 Workstream 1 ("Synthesize Branches") - a THIRD independent
+        # busy-guard, same reasoning as _branch_comparison_requests above:
+        # Compare and Synthesize are unrelated user gestures over the same
+        # underlying selection, so one running must never block the other.
+        self._branch_synthesis_requests: dict[str, bool] = {}
         # R5.4: Py-Coder's REPL subprocess outlives any single run (state
         # persists between calls, same as legacy's own PyCoderReplManager -
         # see that class's own docstring in graphlink_plugins/pycoder/domain.py
@@ -2462,6 +2467,71 @@ class AgentDispatcher:
         finally:
             self._branch_comparison_requests.pop(request_id, None)
 
+    async def start_branch_synthesis(
+        self,
+        *,
+        bus: SessionBus,
+        notifications_state,
+        source_text: str,
+        instructions: str,
+        on_success,
+        on_failure,
+    ) -> None:
+        """ADR-002 Workstream 1 ("Synthesize Branches"): mirrors start_branch_
+        comparison's own shape exactly (directly awaited - the result is a
+        brand new chat node and there is no pre-existing node to attach a
+        spinner to; single dict-registry busy guard; WATCHDOG_TIMEOUT_
+        SECONDS; on_success/on_failure callbacks) but with its own
+        _branch_synthesis_requests guard rather than reusing
+        _branch_comparison_requests - see that field's own comment for why.
+        source_text is already the fully-formatted multi-branch block
+        (backend/canvas.py's _format_branches_for_comparison, reused
+        verbatim here - a labeled-branches text block is equally valid
+        input whether the agent on the other end compares or synthesizes);
+        instructions is the user's own free text steering the synthesis."""
+        if self._branch_synthesis_requests:
+            notifications_state.show("A branch synthesis is already being generated.", "info")
+            await bus.publish("notification")
+            return
+
+        request_id = uuid.uuid4().hex
+        self._branch_synthesis_requests[request_id] = True
+
+        async def _invoke(fn, *a):
+            if inspect.iscoroutinefunction(fn):
+                await fn(*a)
+            else:
+                fn(*a)
+
+        try:
+            text = await asyncio.wait_for(
+                asyncio.to_thread(_call_branch_synthesis_agent, source_text, instructions),
+                timeout=WATCHDOG_TIMEOUT_SECONDS,
+            )
+            if not str(text or "").strip():
+                message = "Branch synthesis returned an empty response. Please try again."
+                await _invoke(on_failure, message)
+                notifications_state.show(message, "error")
+                await bus.publish("notification")
+            else:
+                await _invoke(on_success, text)
+        except asyncio.TimeoutError:
+            message = (
+                "Branch synthesis stopped responding before the request completed. "
+                "Please try again."
+            )
+            await _invoke(on_failure, message)
+            notifications_state.show(message, "error")
+            await bus.publish("notification")
+        except Exception as exc:
+            logger.exception("branch synthesis dispatch failed")
+            message = f"Branch synthesis failed: {exc}"
+            await _invoke(on_failure, message)
+            notifications_state.show(message, "error")
+            await bus.publish("notification")
+        finally:
+            self._branch_synthesis_requests.pop(request_id, None)
+
 
 # R8a: the two note agents, keyed by the `note_kind` start_note_generation
 # takes. Kept as data rather than an if/elif so adding a third note agent is
@@ -2486,6 +2556,13 @@ def _call_branch_comparison_agent(source_text: str) -> str:
     start_branch_comparison above, mirroring _call_note_agent's own shape
     (fresh agent instance per call)."""
     return BranchComparisonAgent().get_response(source_text)
+
+
+def _call_branch_synthesis_agent(source_text: str, instructions: str) -> str:
+    """Runs inside asyncio.to_thread - the blocking driver for
+    start_branch_synthesis above, mirroring _call_branch_comparison_agent's
+    own shape (fresh agent instance per call)."""
+    return BranchSynthesisAgent().get_response(source_text, instructions)
 
 
 def _call_pycoder_execution_agent(conversation_history, user_prompt) -> str:

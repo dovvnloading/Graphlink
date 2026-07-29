@@ -191,6 +191,38 @@ Reference specific claims from the branches, not generic observations. Keep it f
         return self.clean_text(response['message']['content'])
 
 
+class BranchSynthesisAgent:
+    """ADR-002 Workstream 1 ("Synthesize Branches"): combines 2+ independent
+    conversation branches into one answer, steered by the user's own
+    free-text instructions (e.g. "merge the best parts" or "pick whichever
+    branch's approach is simpler and explain why"). Deliberately NOT run
+    through clean_agent_markdown_response like the note agents above: its
+    result becomes a real chat-kind node rendered through the same Markdown
+    pipeline as an ordinary assistant reply (see SceneDocument.synthesize_
+    branches's own docstring), not a plain-text note - stripping markdown
+    from it would be actively wrong, not just unnecessary. No fixed
+    section-header format either, unlike the note agents: the whole point is
+    that the user's instructions shape the output, so a required template
+    would fight them."""
+
+    def __init__(self):
+        self.system_prompt = """You are a branch-synthesis assistant. You will be given two or more independent conversation branches that were explored from the same starting point, plus instructions from the user describing how to combine them. Follow the user's instructions to produce a single, coherent answer that draws on the branches as source material. Reference specific content from the branches rather than generic observations. You may use normal Markdown formatting (headings, bold, code blocks, lists) since your answer will be rendered as a real chat message, not a plain-text note."""
+
+    def get_response(self, formatted_branches_text, instructions):
+        messages = [
+            {'role': 'system', 'content': self.system_prompt},
+            {
+                'role': 'user',
+                'content': (
+                    f"Instructions: {instructions}\n\n"
+                    f"Branches:\n\n{formatted_branches_text}"
+                ),
+            },
+        ]
+        response = api_provider.chat(task=config.TASK_CHAT, messages=messages)
+        return str(response['message']['content'] or "").strip()
+
+
 class ExplainerAgent:
     """Simplifies complex topics into plain language."""
 

@@ -5069,3 +5069,114 @@ def test_start_branch_comparison_agent_exception_surfaces_and_clears_the_slot(mo
         assert dispatcher._branch_comparison_requests == {}, "the slot must not leak after a failure"
 
     asyncio.run(run())
+
+
+# -- ADR-002 Workstream 1: start_branch_synthesis ("Synthesize Branches") ----
+#
+# Mirrors start_branch_comparison's own test shape exactly - same busy-guard/
+# timeout/empty-response/exception coverage - but against the SEPARATE
+# _branch_synthesis_requests slot, proving Compare and Synthesize's busy
+# states are genuinely independent (see that field's own comment for why).
+
+
+def test_start_branch_synthesis_calls_on_success_then_clears_the_slot(monkeypatch):
+    monkeypatch.setattr(
+        agents_module.BranchSynthesisAgent, "get_response",
+        lambda self, text, instructions: f"Combined from {text} per '{instructions}'",
+    )
+
+    async def run():
+        bus, notifications, dispatcher = _make_note_env()
+        successes, failures = [], []
+        await dispatcher.start_branch_synthesis(
+            bus=bus, notifications_state=notifications,
+            source_text="=== Branch 1 ===\n...", instructions="merge them",
+            on_success=successes.append, on_failure=failures.append,
+        )
+        assert successes == ["Combined from === Branch 1 ===\n... per 'merge them'"]
+        assert failures == []
+        assert dispatcher._branch_synthesis_requests == {}
+        assert notifications.visible is False
+
+    asyncio.run(run())
+
+
+def test_start_branch_synthesis_rejects_a_second_concurrent_run(monkeypatch):
+    monkeypatch.setattr(agents_module.BranchSynthesisAgent, "get_response", lambda self, text, instructions: "ok")
+
+    async def run():
+        bus, notifications, dispatcher = _make_note_env()
+        dispatcher._branch_synthesis_requests["already-running"] = True
+        successes = []
+        await dispatcher.start_branch_synthesis(
+            bus=bus, notifications_state=notifications, source_text="x", instructions="y",
+            on_success=successes.append, on_failure=lambda m: None,
+        )
+        assert successes == [], "the busy guard must not run a second agent"
+        assert notifications.visible is True
+        assert notifications.msg_type == "info"
+        assert dispatcher._branch_synthesis_requests == {"already-running": True}
+
+    asyncio.run(run())
+
+
+def test_start_branch_synthesis_does_not_share_a_busy_slot_with_branch_comparison(monkeypatch):
+    # The whole reason for a SEPARATE dict: an in-flight Compare Branches
+    # call must never block an unrelated Synthesize Branches call, and vice
+    # versa - they are unrelated user gestures over the same kind of
+    # selection.
+    monkeypatch.setattr(
+        agents_module.BranchSynthesisAgent, "get_response",
+        lambda self, text, instructions: "Combined answer.",
+    )
+
+    async def run():
+        bus, notifications, dispatcher = _make_note_env()
+        dispatcher._branch_comparison_requests["unrelated-comparison"] = True
+        successes = []
+        await dispatcher.start_branch_synthesis(
+            bus=bus, notifications_state=notifications, source_text="x", instructions="y",
+            on_success=successes.append, on_failure=lambda m: None,
+        )
+        assert successes == ["Combined answer."], "an in-flight branch comparison must not block this"
+
+    asyncio.run(run())
+
+
+def test_start_branch_synthesis_empty_response_fails_instead_of_creating_a_blank_node(monkeypatch):
+    monkeypatch.setattr(agents_module.BranchSynthesisAgent, "get_response", lambda self, text, instructions: "   ")
+
+    async def run():
+        bus, notifications, dispatcher = _make_note_env()
+        successes, failures = [], []
+        await dispatcher.start_branch_synthesis(
+            bus=bus, notifications_state=notifications, source_text="x", instructions="y",
+            on_success=successes.append, on_failure=failures.append,
+        )
+        assert successes == [], "an empty agent response must not become a node"
+        assert len(failures) == 1
+        assert notifications.msg_type == "error"
+        assert dispatcher._branch_synthesis_requests == {}
+
+    asyncio.run(run())
+
+
+def test_start_branch_synthesis_agent_exception_surfaces_and_clears_the_slot(monkeypatch):
+    def _boom(self, text, instructions):
+        raise RuntimeError("model exploded")
+
+    monkeypatch.setattr(agents_module.BranchSynthesisAgent, "get_response", _boom)
+
+    async def run():
+        bus, notifications, dispatcher = _make_note_env()
+        successes, failures = [], []
+        await dispatcher.start_branch_synthesis(
+            bus=bus, notifications_state=notifications, source_text="x", instructions="y",
+            on_success=successes.append, on_failure=failures.append,
+        )
+        assert successes == []
+        assert "model exploded" in failures[0]
+        assert notifications.msg_type == "error"
+        assert dispatcher._branch_synthesis_requests == {}, "the slot must not leak after a failure"
+
+    asyncio.run(run())

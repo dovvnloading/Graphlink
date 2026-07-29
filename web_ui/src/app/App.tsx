@@ -117,6 +117,8 @@ function GlobalShortcuts({ store }: { store: SceneStore }) {
           return applyGrouping("container");
         case "compare-branches":
           return applyCompareBranches();
+        case "synthesize-branches":
+          return applySynthesizeBranches();
         case "toggle-palette":
           return overlays.toggle("palette", "dialog");
         case "toggle-search":
@@ -152,6 +154,46 @@ function GlobalShortcuts({ store }: { store: SceneStore }) {
       const ids = reactFlow.getNodes().filter((n) => n.selected).map((n) => n.id);
       if (ids.length === 0) return;
       store.compareBranches(ids);
+    }
+
+    // ADR-002 Workstream 1 ("Synthesize Branches"): STAGES the selection
+    // rather than firing an intent immediately (unlike applyCompareBranches
+    // above) - synthesis needs the user's own free-text instructions first,
+    // gathered by the Composer's very next Send (see sceneStore.
+    // setSynthesizeTargetNodeIds's own comment).
+    //
+    // UNLIKE applyCompareBranches/applyGrouping, this function DOES
+    // duplicate synthesize_branches's own "2+ ids, every one a real chat
+    // node" backend validation here, client-side, rather than deferring to
+    // it - a deliberate divergence from this file's usual "let the backend
+    // validate" posture. The reason: an invalid selection here doesn't just
+    // fail an immediate, nothing-lost action (Compare Branches' own near-
+    // miss case) - it stages a pending synthesis that the user then types
+    // real, possibly substantial instructions against. Without this check,
+    // pressing Send on that staged-but-invalid selection fires
+    // synthesizeBranches, and sceneStore.sendMessage/Composer.tsx's send()
+    // both optimistically clear the staged selection and the draft text
+    // immediately (the same fire-and-forget posture every WS intent in this
+    // app uses) - by the time the backend's own rejection notification
+    // arrives, the user's typed instructions are already gone with no
+    // recovery. Catching the same 2-invalid-selection cases HERE, before
+    // any instructions get typed, closes that hole entirely. The backend's
+    // own validation stays exactly as-is (defense in depth for any other
+    // caller), this is additive.
+    function applySynthesizeBranches() {
+      const selected = reactFlow.getNodes().filter((n) => n.selected);
+      if (selected.length === 0) return; // legacy-style bare return: nothing attempted, nothing to report
+      const allChat = selected.every((n) => n.type === "chat");
+      const ids = selected.map((n) => n.id);
+      if (!allChat) {
+        store.showInfoNotification("Every selected node must be a real chat message to synthesize.");
+        return;
+      }
+      if (ids.length < 2) {
+        store.showInfoNotification("Select at least 2 branches to synthesize.");
+        return;
+      }
+      store.setSynthesizeTargetNodeIds(ids);
     }
 
     function onKeyDown(event: KeyboardEvent) {

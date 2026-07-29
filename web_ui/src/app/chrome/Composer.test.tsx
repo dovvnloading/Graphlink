@@ -48,19 +48,29 @@ function makeStore(
   };
 }
 
-function makeSceneStore(overrides: { replyTargetNodeId?: string | null; scene?: object } = {}) {
+function makeSceneStore(
+  overrides: {
+    replyTargetNodeId?: string | null;
+    synthesizeTargetNodeIds?: string[] | null;
+    scene?: object;
+  } = {},
+) {
   const sendMessage = vi.fn();
   const setReplyTargetNodeId = vi.fn();
+  const setSynthesizeTargetNodeIds = vi.fn();
   const scene = { ...initialSceneState, ...overrides.scene };
   const replyTargetNodeId = overrides.replyTargetNodeId ?? null;
+  const synthesizeTargetNodeIds = overrides.synthesizeTargetNodeIds ?? null;
   const sceneStore = {
     sendMessage,
     setReplyTargetNodeId,
+    setSynthesizeTargetNodeIds,
     subscribe: () => () => {},
     getScene: () => scene,
     getReplyTargetNodeId: () => replyTargetNodeId,
+    getSynthesizeTargetNodeIds: () => synthesizeTargetNodeIds,
   };
-  return { sceneStore, sendMessage, setReplyTargetNodeId };
+  return { sceneStore, sendMessage, setReplyTargetNodeId, setSynthesizeTargetNodeIds };
 }
 
 describe("Composer", () => {
@@ -594,6 +604,62 @@ describe("Composer reply target (ADR-002 Workstream 1)", () => {
     );
     await user.click(screen.getByLabelText("Cancel branching from this message"));
     expect(setReplyTargetNodeId).toHaveBeenCalledWith(null);
+  });
+});
+
+describe("Composer synthesize target (ADR-002 Workstream 1)", () => {
+  it("renders nothing when no synthesize target is pending", () => {
+    const { store } = makeStore();
+    const { sceneStore } = makeSceneStore({ synthesizeTargetNodeIds: null });
+    render(
+      <OverlayProvider>
+        {/* @ts-expect-error - test double */}
+        <Composer store={store} sceneStore={sceneStore} />
+      </OverlayProvider>,
+    );
+    expect(screen.queryByLabelText("Synthesizing branches")).toBeNull();
+  });
+
+  it("shows a count when a synthesize target is pending", () => {
+    const { store } = makeStore();
+    const { sceneStore } = makeSceneStore({ synthesizeTargetNodeIds: ["n1", "n2", "n3"] });
+    render(
+      <OverlayProvider>
+        {/* @ts-expect-error - test double */}
+        <Composer store={store} sceneStore={sceneStore} />
+      </OverlayProvider>,
+    );
+    const indicator = screen.getByLabelText("Synthesizing branches");
+    expect(indicator).toBeInTheDocument();
+    expect(screen.getByText("Synthesizing 3 branches")).toBeInTheDocument();
+  });
+
+  it("changes the composer placeholder to steer the user toward instructions, only while synthesizing", () => {
+    const { store } = makeStore();
+    const { sceneStore } = makeSceneStore({ synthesizeTargetNodeIds: ["n1", "n2"] });
+    render(
+      <OverlayProvider>
+        {/* @ts-expect-error - test double */}
+        <Composer store={store} sceneStore={sceneStore} />
+      </OverlayProvider>,
+    );
+    expect(screen.getByPlaceholderText("Describe how to combine these branches…")).toBeInTheDocument();
+  });
+
+  it("the clear button calls sceneStore.setSynthesizeTargetNodeIds(null)", async () => {
+    const user = userEvent.setup();
+    const { store } = makeStore();
+    const { sceneStore, setSynthesizeTargetNodeIds } = makeSceneStore({
+      synthesizeTargetNodeIds: ["n1", "n2"],
+    });
+    render(
+      <OverlayProvider>
+        {/* @ts-expect-error - test double */}
+        <Composer store={store} sceneStore={sceneStore} />
+      </OverlayProvider>,
+    );
+    await user.click(screen.getByLabelText("Cancel synthesizing these branches"));
+    expect(setSynthesizeTargetNodeIds).toHaveBeenCalledWith(null);
   });
 });
 

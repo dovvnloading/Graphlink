@@ -77,6 +77,19 @@ export function Composer({
   const replyTargetNodeId = useSyncExternalStore(sceneStore.subscribe, sceneStore.getReplyTargetNodeId);
   const replyTargetNode = replyTargetNodeId ? scene.nodes.find((n) => n.id === replyTargetNodeId) : undefined;
 
+  // ADR-002 Workstream 1 ("Synthesize Branches"): the list-valued sibling of
+  // replyTargetNodeId above - same subscription reasoning (re-renders if a
+  // staged node is deleted mid-pick). sceneStore keeps the two mutually
+  // exclusive (see setSynthesizeTargetNodeIds's own comment), so in practice
+  // at most one of replyTargetNode/synthesizeTargetNodeIds is ever non-empty
+  // - each indicator below still guards on its own value independently
+  // rather than on an explicit else, so that invariant is never load-bearing
+  // for correctness here, only for which one the user happens to see.
+  const synthesizeTargetNodeIds = useSyncExternalStore(
+    sceneStore.subscribe,
+    sceneStore.getSynthesizeTargetNodeIds,
+  );
+
   useLayoutEffect(() => {
     const input = inputRef.current;
     if (!input) return;
@@ -85,6 +98,7 @@ export function Composer({
   }, [composer.draft.text]);
 
   const modelLabel = composer.route.modelLabel || composer.route.modelId || "Select a model";
+  const isSynthesizing = !!synthesizeTargetNodeIds && synthesizeTargetNodeIds.length > 0;
 
   function send() {
     const text = composer.draft.text.trim();
@@ -110,6 +124,28 @@ export function Composer({
             className="composer-reply-target-clear"
             aria-label="Cancel branching from this message"
             onClick={() => sceneStore.setReplyTargetNodeId(null)}
+          >
+            ×
+          </button>
+        </div>
+      )}
+      {isSynthesizing && (
+        // ADR-002 Workstream 1 ("Synthesize Branches"): the selection staged
+        // via App.tsx's Synthesize Branches shortcut, cleared either by this
+        // button or automatically once consumed by the next Send
+        // (sceneStore.ts's sendMessage). No per-node preview (unlike
+        // "Branching from" above) - N branches' worth of previews would
+        // clutter the composer for little benefit; the count is enough
+        // context to confirm the right selection is staged.
+        <div className="composer-synthesize-target" aria-label="Synthesizing branches">
+          <span className="composer-synthesize-target-label">
+            Synthesizing {synthesizeTargetNodeIds!.length} branches
+          </span>
+          <button
+            type="button"
+            className="composer-synthesize-target-clear"
+            aria-label="Cancel synthesizing these branches"
+            onClick={() => sceneStore.setSynthesizeTargetNodeIds(null)}
           >
             ×
           </button>
@@ -154,7 +190,11 @@ export function Composer({
               send();
             }
           }}
-          placeholder="Ask about this graph…"
+          placeholder={
+            isSynthesizing
+              ? "Describe how to combine these branches…"
+              : "Ask about this graph…"
+          }
           aria-label="Message composer"
           rows={1}
           spellCheck

@@ -735,6 +735,32 @@ body,
   border-radius: 999px;
 }
 
+/* ADR-002 Workstream 1 ("Synthesize Branches"): the "derived from multiple
+   branches" glyph, only rendered on a synthesis-result chat node - same
+   font-size/color vocabulary as .note-node-badge (Compare Branches'
+   sibling), not a pill like .chat-node-docked-badge above, since this is a
+   single glyph rather than a count. */
+.chat-node-synthesis-badge {
+  font-size: 12px;
+  line-height: 1;
+  color: var(--gl-surface-text-muted);
+}
+
+/* ADR-002 Workstream 1 ("Synthesize Branches"): the provider/model
+   provenance label, only rendered when the node actually carries one
+   (today: synthesis results only). Deliberately plain text, not a pill -
+   this can be a full model name/id and a pill would either truncate it or
+   force a fixed width that doesn't fit most names. */
+.chat-node-model-badge {
+  font-size: 10px;
+  line-height: 1;
+  color: var(--gl-surface-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 140px;
+}
+
 /* -- R3.17/R3.18 html view node -------------------------------------------- */
 
 .html-node {
@@ -1500,6 +1526,55 @@ body,
 }
 
 .composer-reply-target-clear:hover {
+  background-color: var(--gl-surface-border);
+  color: var(--gl-surface-text-primary);
+}
+
+/* ADR-002 Workstream 1 ("Synthesize Branches"): the pending synthesis
+   indicator - same chrome/layout as .composer-reply-target above (no
+   separate preview span, just the label, since a count is all this one
+   shows). Kept as a distinct class rather than reusing .composer-reply-
+   target: the two indicators are mutually exclusive at render time (see
+   Composer.tsx), but sharing one class would couple their styling even
+   though they are conceptually different features. */
+.composer-synthesize-target {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px 5px 10px;
+  border-radius: 8px;
+  background-color: var(--gl-surface-inset, var(--gl-surface-window));
+  border: 1px solid var(--gl-surface-border);
+  font-size: 11px;
+  color: var(--gl-surface-text-primary);
+}
+
+.composer-synthesize-target-label {
+  flex: 1;
+  color: var(--gl-surface-text-muted);
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.03em;
+}
+
+.composer-synthesize-target-clear {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background-color: transparent;
+  color: var(--gl-surface-text-muted);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.composer-synthesize-target-clear:hover {
   background-color: var(--gl-surface-border);
   color: var(--gl-surface-text-primary);
 }

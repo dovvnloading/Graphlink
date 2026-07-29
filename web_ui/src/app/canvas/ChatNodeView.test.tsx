@@ -397,6 +397,57 @@ describe("ChatNodeView Branch from Here (ADR-002 Workstream 1)", () => {
   });
 });
 
+// ADR-002 Workstream 1 ("Synthesize Branches"): the result node's own
+// provenance badge/label - both absent for every ordinary chat node (the
+// vast majority), rendered only when the node actually carries them.
+describe("ChatNodeView Synthesize Branches provenance (ADR-002 Workstream 1)", () => {
+  it("renders no synthesis badge or model label for an ordinary chat node", () => {
+    renderChatNode({
+      isBranchSynthesis: false,
+      synthesisInstructions: "",
+      synthesisSourceNodeIds: [],
+      provider: null,
+      model: null,
+    });
+    expect(screen.queryByLabelText("Branch Synthesis")).toBeNull();
+  });
+
+  it("renders the synthesis badge with a tooltip naming the source count and instructions", () => {
+    renderChatNode({
+      isBranchSynthesis: true,
+      synthesisInstructions: "merge the best of both",
+      synthesisSourceNodeIds: ["chat-a", "chat-b"],
+      provider: "Anthropic Claude",
+      model: "claude-sonnet-5",
+    });
+    const badge = screen.getByLabelText("Branch Synthesis");
+    expect(badge).toHaveTextContent("⇄");
+    expect(badge).toHaveAttribute("title", "Branch Synthesis (2 sources): merge the best of both");
+  });
+
+  it("renders the model label with the provider as its tooltip, only when model is set", () => {
+    renderChatNode({
+      isBranchSynthesis: true,
+      synthesisInstructions: "merge them",
+      synthesisSourceNodeIds: ["chat-a", "chat-b"],
+      provider: "Anthropic Claude",
+      model: "claude-sonnet-5",
+    });
+    expect(screen.getByText("claude-sonnet-5")).toHaveAttribute("title", "Anthropic Claude");
+  });
+
+  it("renders no model label when model is null, even if isBranchSynthesis is true", () => {
+    renderChatNode({
+      isBranchSynthesis: true,
+      synthesisInstructions: "merge them",
+      synthesisSourceNodeIds: ["chat-a", "chat-b"],
+      provider: null,
+      model: null,
+    });
+    expect(screen.queryByText("claude-sonnet-5")).toBeNull();
+  });
+});
+
 // R6.3: the node's own scroll position within .chat-node-content.
 describe("ChatNodeView scroll position (R6.3)", () => {
   it("restores the saved chatScrollValue into .chat-node-content's scrollTop once on mount", () => {
