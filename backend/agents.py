@@ -229,7 +229,7 @@ def _apply_mode(mode_text: str, settings_manager: SettingsManager) -> None:
     if mode_text == config.MODE_OLLAMA_LOCAL:
         api_provider.initialize_local_provider(
             config.LOCAL_PROVIDER_OLLAMA,
-            {"reasoning_mode": settings_manager.get_ollama_reasoning_mode()},
+            {"reasoning_level": settings_manager.get_ollama_reasoning_level()},
         )
     elif mode_text == config.MODE_LLAMACPP_LOCAL:
         api_provider.initialize_local_provider(
