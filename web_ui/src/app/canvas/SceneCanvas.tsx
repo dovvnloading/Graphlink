@@ -1404,7 +1404,12 @@ function CanvasInner({
       // member's local position updates in lockstep with its group, every
       // drag frame.
       const memberChanges: NodeChange<SceneFlowNode>[] = [];
-      const memberMoveIntents: Array<{ id: string; x: number; y: number }> = [];
+      // Every drag-end position this change batch produces - the dragged
+      // node(s) own settled position AND every cascaded group member -
+      // collected here and committed as ONE atomic store.moveNodes call
+      // below, never as individual moveNode calls (see that call site's
+      // own comment for why).
+      const settledMoveIntents: Array<{ id: string; x: number; y: number }> = [];
       // R7.5b-3: guides produced by this frame's drag changes - applied via
       // one setSmartGuideLines call after the map, cleared on drag end.
       // DELIBERATE deviation for multi-select drags (review-confirmed):
@@ -1478,11 +1483,16 @@ function CanvasInner({
         const settled = nodes.find((n) => n.id === change.id);
         dragStartRef.current.delete(change.id);
         if (settled) {
-          store.moveNode(change.id, settled.position.x, settled.position.y);
+          // R6.1 follow-up: collected, not committed here directly - see
+          // the single store.moveNodes call below for why a group drag's
+          // whole commit (the group's own node plus every cascaded member)
+          // must land as ONE atomic batch, not N individual moveNode
+          // calls.
+          settledMoveIntents.push({ id: change.id, x: settled.position.x, y: settled.position.y });
           if (groupDragKindOf(settled)) {
             for (const memberId of collectTransitiveMemberIds(nodes, settled)) {
               const member = nodes.find((n) => n.id === memberId);
-              if (member) memberMoveIntents.push({ id: memberId, x: member.position.x, y: member.position.y });
+              if (member) settledMoveIntents.push({ id: memberId, x: member.position.x, y: member.position.y });
             }
           }
           // R7.5b-3 review fix: RF's drag-stop change carries its own
@@ -1492,16 +1502,26 @@ function CanvasInner({
           // node visibly bounce off its corrected position on release, then
           // reconcile after the backend echo. Return the settled (last
           // corrected frame's) position instead, which is also exactly what
-          // moveNode just committed - local state and the wire now agree at
+          // the batch below commits - local state and the wire now agree at
           // the instant of release.
           return { ...change, position: { ...settled.position } };
         }
         return change;
       });
-      // Persist each carried-along member's settled position too - the same
-      // moveNode call site the group's own commit above uses, fired after
-      // the map so every real change's own drag-end has already run.
-      for (const move of memberMoveIntents) store.moveNode(move.id, move.x, move.y);
+      // R6.1 follow-up: ONE atomic batch for the WHOLE drag-end (the
+      // dragged node's own settled position plus every cascaded member),
+      // not the group's own moveNode call followed by N separate member
+      // moveNode calls. Each individual moveNode intent publishes its own
+      // scene snapshot the instant it lands - calling it once per node in
+      // a group drag meant the frontend rendered N genuinely inconsistent
+      // intermediate states (some members caught up, some not) in rapid
+      // succession right after release, and since a frame/container's
+      // bounds correctly grow to enclose whatever the CURRENT member bbox
+      // is, those intermediate states visibly stretched and resettled
+      // instead of just being briefly stale - a real glitch on every group
+      // drag, not a cosmetic footnote. moveNodes commits every position in
+      // one pass server-side and publishes exactly once.
+      if (settledMoveIntents.length > 0) store.moveNodes(settledMoveIntents);
       // Guides re-derive every drag frame (legacy cleared + re-added its
       // QGraphicsLineItems per recompute); drag end always clears.
       if (sawDragging) setSmartGuideLines(frameGuides);
