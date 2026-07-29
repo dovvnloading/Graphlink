@@ -910,6 +910,25 @@ body,
 
 .app-topbar {
   gap: 8px;
+  /* R8a (UI/UX issue list finding #5): deliberately NO overflow-x: hidden
+     here, despite that being the obvious "stop the whole document from
+     spilling sideways" backstop. It was tried and reverted after review
+     caught it silently breaking the fix it was meant to protect: per the
+     CSS overflow spec, when overflow-x computes to anything other than
+     visible, a overflow-y of visible on the SAME element is force-coerced
+     to auto instead - it cannot stay visible, regardless of which value
+     was explicitly authored. .appbar-overflow-menu is a descendant of this
+     element (position: absolute, top: 100%, extending below this row by
+     design every time it opens) - an auto-coerced overflow-y here clips it
+     completely, confirmed live via getComputedStyle/elementFromPoint. There
+     is no ancestor position for a horizontal-only backstop that does not
+     have this exact problem, since the popover must stay inside .appbar's
+     @container subtree (see .appbar's own comment) and therefore inside
+     ANY ancestor between it and the document too. The real backstop is
+     therefore the tier breakpoints below being correctly margined instead
+     of a defensive CSS property: measured live, the four buttons that never
+     collapse (Library/Save/the overflow trigger/Settings) need ~207px, well
+     under the narrowest breakpoint's 420px floor. */
 }
 
 .appbar {
@@ -917,6 +936,24 @@ body,
   align-items: center;
   gap: 4px;
   flex: 1;
+  /* flex: 1 alone gives a flex item min-width: auto, i.e. it can never
+     shrink below the summed min-content width of its 12 buttons - that is
+     what forced .app-topbar wider than the window in the first place.
+     min-width: 0 lets it actually shrink. position: relative anchors
+     .appbar-overflow-menu (a Popover - overlays.tsx - which supplies no
+     positioning of its own; every other Popover consumer gets one from a
+     dedicated App.tsx wrapper div, which does not exist here). The
+     container-type/name pair is what the @container queries below key off -
+     deliberately NOT `overflow: hidden` here despite that being the more
+     obvious pairing: an overflow:hidden ancestor clips ANY descendant that
+     paints past its box regardless of the descendant's own position scheme,
+     and the overflow menu is exactly such a descendant every time it opens.
+     (NodeMenu.tsx - a portal - was tried here first specifically to dodge
+     that; it introduced a worse bug instead, see AppBar.tsx's own comment.) */
+  min-width: 0;
+  position: relative;
+  container-type: inline-size;
+  container-name: appbar;
 }
 
 .appbar-btn {
@@ -961,18 +998,120 @@ body,
   font-size: 9px;
 }
 
-.appbar-mode-select {
-  font-size: 11px;
-  font-family: inherit;
-  padding: 4px 8px;
-  color: var(--gl-surface-text);
-  background-color: var(--gl-neutral-button-background);
-  border: 1px solid var(--gl-neutral-button-border);
-  border-radius: 6px;
+/* R8a (finding #5): the overflow trigger + its menu. Hidden by default;
+   the container-query block below reveals the trigger once ANY tier has
+   collapsed, and reveals each overflow-menu item once ITS OWN tier has
+   collapsed - the item's data-tier is the same value used inline, so the
+   two stay in lockstep without any JS wiring them together. */
+.appbar-overflow-trigger {
+  display: none;
+  padding: 5px 8px;
+  font-size: 14px;
+  line-height: 1;
 }
 
-.appbar-mode-select:disabled {
-  opacity: 0.45;
+/* .overlay-popover (the base class Popover always applies alongside this
+   one) already supplies background-color/border/box-shadow and a default
+   position/sizing - only what's genuinely DIFFERENT for a button-list menu
+   is overridden here (tighter padding/min-width/radius, matching node
+   context menus' own convention, plus a height cap this list can actually
+   need and the base class doesn't have). Position is the one property
+   .overlay-popover never sets for ANY consumer - View/Plugins/Pins get
+   theirs from a dedicated wrapper div in App.tsx; this one has no such
+   wrapper, so it's set directly here, anchored to .appbar's own right edge
+   (position: relative on .appbar above) rather than precisely under the
+   trigger button a few buttons to its left - the same "close, not
+   pixel-precise" anchoring posture every other toolbar popover in this app
+   already has (finding BAD-UX #27, a separate, pre-existing issue this does
+   not attempt to fix). z-index matches node context menus - the highest
+   ordinary-content tier below the modal/approval tiers. */
+.appbar-overflow-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 6px;
+  z-index: var(--gl-z-node-menu);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 170px;
+  padding: 6px;
+  border-radius: 8px;
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
+}
+
+.appbar-overflow-item {
+  display: none;
+  width: 100%;
+  text-align: left;
+  font-size: 11px;
+  font-weight: 600;
+  font-family: inherit;
+  padding: 6px 10px;
+  color: var(--gl-surface-text);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.appbar-overflow-item:hover {
+  background-color: var(--gl-neutral-button-hover);
+}
+
+/* Mirrors .appbar-btn-checkable.checked (the inline chips' own real-open-
+   state styling) - a separate rule rather than sharing that class, since
+   .appbar-overflow-item already needs its own base rule (full-width,
+   left-aligned, tier-gated display) incompatible with .appbar-btn's. Note
+   this can never actually render true in practice: OverlayProvider is
+   single-open, so by the time any of Pins/View/Plugins/About/Help becomes
+   the open surface, "toolbar-overflow" has already stopped being it, and
+   this whole menu has unmounted. Kept anyway for the same reason the inline
+   copy has it - matching what the component's own contract (real state, not
+   latched clicks) promises, not for an effect anyone will currently see. */
+.appbar-overflow-item.checked {
+  background-color: var(--gl-neutral-button-background);
+  border-color: var(--gl-neutral-button-border);
+}
+
+/* Breakpoints are tuned against this toolbar's own real button widths -
+   verified live by resizing the running app, not guessed. Tier 1 (About/
+   Help/Export PNG - least-frequently-used) collapses first; tier 3 (the
+   four zoom/fit controls, which have keyboard/wheel equivalents elsewhere)
+   collapses last, right before the floor of Library/Save/Settings, which
+   never collapse - those three are exactly what finding #5 flagged as
+   becoming unreachable, so they are the one tier that does not exist. */
+@container appbar (max-width: 820px) {
+  .appbar-overflow-trigger {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .appbar-tier[data-tier="1"] {
+    display: none;
+  }
+  .appbar-overflow-item[data-tier="1"] {
+    display: block;
+  }
+}
+
+@container appbar (max-width: 620px) {
+  .appbar-tier[data-tier="2"] {
+    display: none;
+  }
+  .appbar-overflow-item[data-tier="2"] {
+    display: block;
+  }
+}
+
+@container appbar (max-width: 420px) {
+  .appbar-tier[data-tier="3"] {
+    display: none;
+  }
+  .appbar-overflow-item[data-tier="3"] {
+    display: block;
+  }
 }
 
 .app-popover-layer {
