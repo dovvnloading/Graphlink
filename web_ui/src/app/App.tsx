@@ -22,7 +22,6 @@ import { PinOverlay } from "./chrome/PinOverlay";
 import { PluginPicker } from "./chrome/PluginPicker";
 import { SearchOverlay } from "./chrome/SearchOverlay";
 import { SettingsDialog } from "./chrome/SettingsDialog";
-import { TokenCounter } from "./chrome/TokenCounter";
 import { ViewPopover } from "./chrome/ViewPopover";
 import { OverlayProvider, useOverlays } from "./overlays/overlays";
 
@@ -242,16 +241,15 @@ function App() {
                 <PinOverlay store={sceneStore} />
                 <ViewPopover store={sceneStore} />
                 <PluginPicker transport={transport} store={sceneStore} />
-                {settingsVisibility.showTokenCounter !== false && (
-                  <div className="app-token-counter-layer">
-                    <TokenCounter store={composerStore} />
-                  </div>
-                )}
                 <div className="app-notification-layer">
                   <NotificationBanner store={composerStore} />
                 </div>
                 <div className="app-composer-layer">
-                  <Composer store={composerStore} sceneStore={sceneStore} />
+                  <Composer
+                    store={composerStore}
+                    sceneStore={sceneStore}
+                    showTokenCounter={settingsVisibility.showTokenCounter !== false}
+                  />
                 </div>
                 <CommandPalette store={sceneStore} />
                 <AboutDialog transport={transport} />

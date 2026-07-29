@@ -1341,31 +1341,24 @@ body,
 
 /* R8a: the composer used to be a <footer> spanning the full window width,
    docked flush at the bottom with no visual container of its own. It's now
-   a floating island - a sibling of app-token-counter-layer/
-   app-notification-layer inside app-canvas-region - so the canvas renders
-   full-bleed behind it.
+   a floating island - a sibling of app-notification-layer inside
+   app-canvas-region - so the canvas renders full-bleed behind it.
 
-   It shares the bottom-left and bottom-right corners with two other real
-   pieces of chrome (the token counter, the minimap), so its box reserves
-   REAL space on both sides rather than relying on a thin, easy-to-erode
-   margin: `left: 230px` clears the token counter's measured footprint
-   (16px inset + ~193px content + a real gap, not a bare few px), `right:
-   232px` clears the minimap's footprint (16px margin + 200px + 16px) the
-   same way. The card centers WITHIN that narrowed box via flex, not the
-   full viewport, so centering can never land it in territory either
-   neighbor already owns - a structural guarantee, not a tuned distance
-   that happens to work today. bottom:64px on top of that gives the
-   token-counter side a SECOND, independent vertical guarantee (its ~41px
-   height plus the 16px inset it shares with this layer still leaves real
-   clearance even if the horizontal reservation above were ever wrong).
-   And on both sides, --gl-z-canvas-hud gives the token counter and the
-   minimap themselves a THIRD guarantee: outranking every app-layer
-   surface regardless of position (see .scene-minimap's and
-   .app-token-counter-layer's own comments) - "should never be able to"
-   means no single mechanism carries that promise alone. pointer-
-   events:none on the layer + pointer-events:auto on the card keeps the
-   canvas clickable/draggable everywhere the card doesn't visually cover
-   it. */
+   It shares the bottom-right corner with one other real piece of chrome
+   (the minimap), so its box reserves REAL space rather than relying on a
+   thin, easy-to-erode margin: `right: 232px` clears the minimap's
+   footprint (16px margin + 200px + 16px). The card centers WITHIN that
+   narrowed box via flex, not the full viewport, so centering can never
+   land it on top of the minimap - a structural guarantee, not a tuned
+   distance that happens to work today. `left: 230px` is a symmetric
+   holdover from when the token counter was ALSO a standalone bottom-left
+   neighbor this box had to clear (R8a follow-up folded it into the
+   composer's own control row instead - see TokenCounter.tsx - so nothing
+   occupies that corner anymore); left unchanged since a slightly wider
+   left margin than strictly necessary today isn't a bug, and narrowing it
+   isn't part of this change. pointer-events:none on the layer + pointer-
+   events:auto on the card keeps the canvas clickable/draggable everywhere
+   the card doesn't visually cover it. */
 .app-composer-layer {
   position: absolute;
   left: 230px;
@@ -1714,22 +1707,39 @@ body,
   color: var(--gl-surface-text-muted);
 }
 
-.app-token-counter-layer {
-  position: absolute;
-  bottom: var(--gl-chrome-inset);
-  left: var(--gl-chrome-inset);
-  /* R8a: outranks the composer/app-layer tier, same reasoning as the
-     minimap - see .scene-minimap's own comment. */
-  z-index: var(--gl-z-canvas-hud);
+/* R8a follow-up: Token usage is now a hover fold-out living inside the
+   composer's own control row (TokenCounter.tsx), not a standalone widget
+   floating at the canvas's bottom-left corner - it no longer needs its
+   own positioned layer or z-index tier at all; it reflows with the
+   composer exactly like Reasoning/Model already do. */
+
+.token-counter-trigger {
+  position: relative;
+  display: flex;
 }
 
-.token-counter {
+.token-counter-summary .control-value {
+  min-width: 2ch;
+  text-align: right;
+}
+
+.token-counter-popout {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
   display: flex;
   gap: 12px;
-  padding: 6px 12px;
+  padding: 12px 14px;
   background-color: var(--gl-surface-node-body);
   border: 1px solid var(--gl-surface-border);
-  border-radius: 8px;
+  border-radius: 10px;
+  /* Same box-shadow as .overlay-popover's shared chrome (see that rule's
+     own comment + no-raw-colors.test.ts's pinned-literal ratchet) - this
+     popout intentionally looks like every other floating panel in the
+     app, it just isn't driven by the shared overlay system (a hover
+     fold-out has no "open surface" to register - see TokenCounter.tsx). */
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  white-space: nowrap;
 }
 
 .token-counter-row {
