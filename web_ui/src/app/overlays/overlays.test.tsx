@@ -243,6 +243,29 @@ describe("overlay system (the OverlayManager contract)", () => {
     await user.keyboard("{Escape}");
     expect(document.activeElement).toBe(opener);
   });
+
+  it("opening a second surface without closing the first does not clobber the original opener", async () => {
+    // Regression: open() used to unconditionally overwrite the restore
+    // target on every call. The system is single-open - opening View while
+    // Settings is already showing replaces it without ever calling
+    // close() - so this used to capture View's own trigger as the restore
+    // target instead of keeping Settings' original opener. Closing View
+    // afterward then tried to restore focus onto an element already
+    // inside Settings' unmounted subtree, silently failed the
+    // document.contains() check, and left focus on document.body.
+    const user = setup();
+    const settingsOpener = screen.getByRole("button", { name: /^Settings/ });
+    await user.click(settingsOpener);
+    expect(screen.getByRole("dialog", { name: "Settings" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /^View/ }));
+    expect(screen.getByText("view popover body")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Settings" })).toBeNull();
+
+    await user.keyboard("{Escape}");
+
+    expect(document.activeElement).toBe(settingsOpener);
+  });
 });
 
 describe("anchored popover placement (R8a finding #27)", () => {

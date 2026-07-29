@@ -61,11 +61,25 @@ export function OverlayProvider({ children }: { children: ReactNode }) {
   const surfaceElements = useRef(new Map<string, HTMLElement>());
   const restoreFocusRef = useRef<HTMLElement | null>(null);
 
-  const open = useCallback((name: string, tier: OverlayTier) => {
-    restoreFocusRef.current = document.activeElement as HTMLElement | null;
-    setOpenSurface(name);
-    setOpenTier(tier);
-  }, []);
+  const open = useCallback(
+    (name: string, tier: OverlayTier) => {
+      // Only capture a new restore target when nothing is currently open.
+      // The system is single-open: opening surface B while A is already
+      // showing replaces A without ever calling close() - unconditionally
+      // overwriting restoreFocusRef here used to clobber A's own opener
+      // with document.activeElement (an element inside A, about to
+      // unmount), so closing B later tried to restore focus onto a
+      // detached node, silently failed the document.contains() check in
+      // close() below, and left focus on document.body instead of back on
+      // A's original trigger.
+      if (openSurface === null) {
+        restoreFocusRef.current = document.activeElement as HTMLElement | null;
+      }
+      setOpenSurface(name);
+      setOpenTier(tier);
+    },
+    [openSurface],
+  );
 
   const close = useCallback(() => {
     setOpenSurface(null);

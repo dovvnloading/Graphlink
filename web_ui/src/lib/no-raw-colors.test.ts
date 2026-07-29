@@ -101,9 +101,13 @@ function findColorLiteralsInInlineStyles(source: string): string[] {
 //     existing token: --gl-shadow-3 is `0 8px 28px rgba(0,0,0,0.55)`, so it
 //     shares geometry with one and alpha with the other but equals neither.
 //   - `rgba(0,0,0,0.43)` is a scrim with no token of any kind.
-//   - `var(--gl-accent, #6ea8fe)`'s fallback is load-bearing: --gl-accent is
-//     not defined in the generated token files, so the literal is what
-//     actually renders. Dropping it would remove the color entirely.
+//
+// R8a (UI/UX audit POLISH finding #3): `#6ea8fe` - the load-bearing
+// fallback var(--gl-accent, #6ea8fe) described above used to rely on - is
+// gone from this list. .about-links a now uses --gl-palette-selection
+// (the same greyscale link token .chat-node-content a already uses)
+// instead of an undefined token whose hex fallback was the only
+// saturated color in the app's otherwise entirely greyscale palette.
 const PINNED_APP_CSS_LITERALS: Record<string, string[]> = {
   "app\\styles.css": [
     "rgba(0, 0, 0, 0.45)",
@@ -118,7 +122,6 @@ const PINNED_APP_CSS_LITERALS: Record<string, string[]> = {
     "rgba(0, 0, 0, 0.45)",
     "rgba(0, 0, 0, 0.55)",
     "rgba(0, 0, 0, 0.45)",
-    "#6ea8fe",
     "rgba(0, 0, 0, 0.45)",
   ],
 };
