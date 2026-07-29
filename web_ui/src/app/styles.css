@@ -91,6 +91,31 @@ body,
   overflow: hidden;
 }
 
+/* R8a follow-up: a real docked flex sibling of EVERYTHING else in this
+   region (the canvas, composer, token counter, search bar, notification
+   banner, pins/view/plugin popovers - all of it), not just the React Flow
+   canvas - restoring legacy's QHBoxLayout(doc_viewer_panel, chat_view)
+   shape at the level it actually needs to apply. Opening Document View
+   shrinks .app-canvas-content, so every piece of floating chrome inside it
+   (most of which is positioned via fixed pixel insets relative to this
+   region's own width) reflows around the panel instead of rendering
+   underneath/through it. Absolutely positioned so it escapes
+   .app-canvas-region's own align-items/justify-content (vestigial from an
+   early placeholder-only layout) exactly like .scene-canvas already did
+   before this existed - the same proven shape, just one level up. */
+.app-canvas-layout-row {
+  position: absolute;
+  inset: 0;
+  display: flex;
+}
+
+.app-canvas-content {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+}
+
 .app-canvas-placeholder {
   text-align: center;
 }
@@ -182,19 +207,6 @@ body,
 }
 
 /* -- R1 canvas (React Flow) ---------------------------------------------- */
-
-.scene-canvas-row {
-  position: absolute;
-  inset: 0;
-  display: flex;
-}
-
-.scene-canvas-flex-area {
-  position: relative;
-  flex: 1;
-  min-width: 0;
-  height: 100%;
-}
 
 .scene-canvas {
   position: absolute;
@@ -2161,24 +2173,42 @@ body,
 }
 
 /* -- Document view panel (R8a follow-up) ------------------------------------
-   Docked flush-left, border-right only, fixed width - restores legacy's
+   Docked flush-left, border-right only - restores legacy's
    DocumentViewerPanel chrome (a permanent embedded QWidget, corner_radius=0,
    .setFixedWidth(500)) instead of the floating-card look every centered
-   Dialog uses. See DocumentViewPanel.tsx's own doc comment. */
+   Dialog uses, PLUS a real slide transition and a drag-to-resize handle
+   legacy never had. See DocumentViewPanel.tsx's own doc comment for why the
+   outer element's width animates while the inner content stays fixed-width. */
 
 .document-view-panel {
+  position: relative;
   flex-shrink: 0;
-  width: 500px;
-  max-width: 45vw;
+  width: 0;
+  height: 100%;
+  box-sizing: border-box;
+  background-color: var(--gl-surface-node-body);
+  border-right: 1px solid transparent;
+  overflow: hidden;
+  transition:
+    width 220ms ease,
+    border-color 220ms ease;
+}
+
+.document-view-panel-open {
+  border-right-color: var(--gl-surface-border);
+}
+
+.document-view-panel-resizing {
+  transition: none;
+}
+
+.document-view-panel-inner {
   height: 100%;
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
   gap: 10px;
   padding: 10px;
-  background-color: var(--gl-surface-node-body);
-  border-right: 1px solid var(--gl-surface-border);
-  overflow: hidden;
 }
 
 .document-view-panel-header {
@@ -2188,13 +2218,28 @@ body,
   gap: 8px;
 }
 
-.document-view-panel-title {
+.document-view-panel-heading {
   flex: 1;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.document-view-panel-title {
   font-size: 14px;
   font-weight: 700;
 }
 
+.document-view-panel-subtitle {
+  font-size: 11px;
+  color: var(--gl-surface-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.document-view-panel-copy,
 .document-view-panel-close {
   flex-shrink: 0;
   padding: 6px 14px;
@@ -2207,8 +2252,14 @@ body,
   cursor: pointer;
 }
 
+.document-view-panel-copy:hover:enabled,
 .document-view-panel-close:hover {
   background-color: var(--gl-neutral-button-hover);
+}
+
+.document-view-panel-copy:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 
 .document-view-panel-scroll {
@@ -2219,6 +2270,22 @@ body,
   padding: 8px 12px;
   border: 1px solid var(--gl-surface-border);
   border-radius: 6px;
+}
+
+.document-view-panel-resize-handle {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.document-view-panel-resize-handle:hover,
+.document-view-panel-resizing .document-view-panel-resize-handle {
+  background-color: var(--gl-palette-selection);
+  opacity: 0.5;
 }
 
 .help-rail {

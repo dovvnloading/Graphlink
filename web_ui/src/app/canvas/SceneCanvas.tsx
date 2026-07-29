@@ -27,7 +27,6 @@ import { CodeNodeView, type CodeFlowNode } from "./CodeNodeView";
 import { CodeSandboxNodeView, type CodeSandboxFlowNode } from "./CodeSandboxNodeView";
 import { ConversationNodeView, type ConversationFlowNode, type ConversationMessage } from "./ConversationNodeView";
 import { DocumentNodeView, type DocumentFlowNode } from "./DocumentNodeView";
-import { DocumentViewPanel } from "./DocumentViewPanel";
 import { GitlinkNodeView, type GitlinkFlowNode } from "./GitlinkNodeView";
 import { GroupNodeView, type GroupFlowNode } from "./GroupNodeView";
 import { HtmlNodeView, type HtmlFlowNode } from "./HtmlNodeView";
@@ -343,7 +342,7 @@ export function computeDimmedNodeIds(scene: SceneState, originId: string | null)
 export function toFlowNodes(
   scene: SceneState,
   store: SceneStore,
-  onOpenDocumentView: (markdown: string) => void = () => {},
+  onOpenDocumentView: (markdown: string, sourceLabel: string) => void = () => {},
   branchFocusOriginId: string | null = null,
   onToggleBranchFocus: (nodeId: string) => void = () => {},
 ): SceneFlowNode[] {
@@ -416,7 +415,7 @@ export function toFlowNodes(
           // conversationHistoryToDocumentMarkdown's own doc above for the
           // sibling conversation-node guard).
           onOpenDocumentView: () => {
-            if (n.content.trim()) onOpenDocumentView(n.content);
+            if (n.content.trim()) onOpenDocumentView(n.content, n.isUser ? "Your message" : "Assistant message");
             else store.showInfoNotification(NO_DOCUMENT_VIEW_CONTENT_MESSAGE);
           },
           // R8a: "Hide Other Branches" - isBranchFocusActive is scene-wide
@@ -620,7 +619,7 @@ export function toFlowNodes(
           // above guards on non-blank content.
           onOpenDocumentView: () => {
             const markdown = conversationHistoryToDocumentMarkdown(n.history);
-            if (markdown) onOpenDocumentView(markdown);
+            if (markdown) onOpenDocumentView(markdown, "Conversation transcript");
             else store.showInfoNotification(NO_DOCUMENT_VIEW_CONTENT_MESSAGE);
           },
         },
@@ -1163,7 +1162,13 @@ function useCssVar(name: string, fallback: string): string {
   return value;
 }
 
-function CanvasInner({ store }: { store: SceneStore }) {
+function CanvasInner({
+  store,
+  onOpenDocumentView,
+}: {
+  store: SceneStore;
+  onOpenDocumentView: (markdown: string, sourceLabel: string) => void;
+}) {
   const scene = useSyncExternalStore(store.subscribe, store.getScene);
   const grid = useSyncExternalStore(store.subscribe, store.getGrid);
   // Hoisted above onNodesChange: smart guides (R7.5b-3) need node
@@ -1225,24 +1230,12 @@ function CanvasInner({ store }: { store: SceneStore }) {
 
   // R8a: Open Document View - the read-only markdown panel a chat/
   // conversation node's card menu opens (see toFlowNodes' own
-  // onOpenDocumentView field on each of those two branches). The displayed
-  // markdown is local-only state (never scene state, same posture as
-  // hoveredEdgeId/smartGuideLines above) - SceneCanvas is the only place
-  // that knows how to open this panel. Deliberately its OWN open/closed
-  // boolean, not a name in the shared OverlayProvider registry: legacy's
-  // DocumentViewerPanel was a permanent embedded QWidget outside Qt's
-  // OverlayManager entirely (see DocumentViewPanel.tsx's own doc comment),
-  // so this restores that same independence rather than reusing the
-  // Dialog/Popover single-open-surface system a docked panel was never
-  // part of.
-  const [documentViewContent, setDocumentViewContent] = useState<string | null>(null);
-  const [isDocumentViewOpen, setIsDocumentViewOpen] = useState(false);
-  const onOpenDocumentView = useCallback((markdown: string) => {
-    setDocumentViewContent(markdown);
-    setIsDocumentViewOpen(true);
-  }, []);
-  const onCloseDocumentView = useCallback(() => setIsDocumentViewOpen(false), []);
-
+  // onOpenDocumentView field on each of those two branches). Lives in App
+  // now, not here: the panel is a real docked layout sibling of this WHOLE
+  // canvas region (composer/token-counter/search/etc included), not just
+  // this component's own canvas div, so its open/closed state has to live
+  // above all of them (see App.tsx).
+  //
   // R8a: "Hide Other Branches" - which node id branch focus is currently
   // anchored to, or null when off. Also local-only state (never scene
   // state), same posture as documentViewContent above - it is a pure
@@ -1502,18 +1495,7 @@ function CanvasInner({ store }: { store: SceneStore }) {
   );
 
   return (
-    <>
-      {/* R8a follow-up: a real docked flex sibling of the canvas, restoring
-          legacy's QHBoxLayout(doc_viewer_panel, chat_view) shape - opening
-          it visibly shrinks .scene-canvas-flex-area instead of overlaying
-          on top of the graph (see DocumentViewPanel.tsx's own doc comment
-          for why this is no longer one of the shared Dialog/Popover tiers). */}
-      <div className="scene-canvas-row">
-      {isDocumentViewOpen && (
-        <DocumentViewPanel content={documentViewContent} onClose={onCloseDocumentView} />
-      )}
-      <div className="scene-canvas-flex-area">
-      <div className="scene-canvas" ref={canvasWrapperRef} onDoubleClick={onDoubleClick}>
+    <div className="scene-canvas" ref={canvasWrapperRef} onDoubleClick={onDoubleClick}>
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -1594,10 +1576,7 @@ function CanvasInner({ store }: { store: SceneStore }) {
           </ViewportPortal>
         )}
       </ReactFlow>
-      </div>
-      </div>
-      </div>
-    </>
+    </div>
   );
 }
 
@@ -1605,6 +1584,12 @@ function CanvasInner({ store }: { store: SceneStore }) {
 // the R2.4 PinOverlay (jump-to-pin via setCenter) need the same React Flow
 // instance the canvas renders into - pins moved out to their own overlay,
 // ported with real search + rename/note editing (R2.4).
-export function SceneCanvas({ store }: { store: SceneStore }) {
-  return <CanvasInner store={store} />;
+export function SceneCanvas({
+  store,
+  onOpenDocumentView,
+}: {
+  store: SceneStore;
+  onOpenDocumentView: (markdown: string, sourceLabel: string) => void;
+}) {
+  return <CanvasInner store={store} onOpenDocumentView={onOpenDocumentView} />;
 }

@@ -1,5 +1,5 @@
 import { ReactFlowProvider, useReactFlow } from "@xyflow/react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { TOPIC_VALIDATORS } from "../lib/api-contract/topics";
 import type { AppSettingsState } from "../lib/bridge-core/generated/app-settings-state";
 import { isTextEditable } from "../lib/bridge-core/textFocus";
@@ -9,6 +9,7 @@ import { SceneStore } from "./canvas/sceneStore";
 import { resolveTreeNavigationTarget, type TreeNavigationDirection } from "./canvas/treeNavigation";
 import { requestNewChat } from "./chrome/commands";
 import { isGatedWhileTyping, resolveShortcut, type ShortcutId } from "./chrome/shortcuts";
+import { DocumentViewPanel } from "./canvas/DocumentViewPanel";
 import { AboutDialog } from "./chrome/AboutDialog";
 import { AppBar } from "./chrome/AppBar";
 import { ChatLibraryDialog } from "./chrome/ChatLibraryDialog";
@@ -164,6 +165,21 @@ function App() {
   // has it off.
   const [settingsVisibility, setSettingsVisibility] = useState<SettingsVisibilityState>({ showTokenCounter: false });
 
+  // R8a follow-up: Open Document View's state lives here, not inside
+  // SceneCanvas, because the panel is now a real docked layout sibling of
+  // EVERYTHING in .app-canvas-region (composer/token-counter/search/etc
+  // included, not just the canvas) - see .app-canvas-layout-row below and
+  // DocumentViewPanel.tsx's own doc comment.
+  const [documentViewContent, setDocumentViewContent] = useState<string | null>(null);
+  const [documentViewSourceLabel, setDocumentViewSourceLabel] = useState<string | null>(null);
+  const [isDocumentViewOpen, setIsDocumentViewOpen] = useState(false);
+  const onOpenDocumentView = useCallback((markdown: string, sourceLabel: string) => {
+    setDocumentViewContent(markdown);
+    setDocumentViewSourceLabel(sourceLabel);
+    setIsDocumentViewOpen(true);
+  }, []);
+  const onCloseDocumentView = useCallback(() => setIsDocumentViewOpen(false), []);
+
   const transport = useMemo(() => new WsTransport(defaultWsUrl()), []);
   const sceneStore = useMemo(() => new SceneStore(transport), [transport]);
   const composerStore = useMemo(() => new ComposerStore(transport), [transport]);
@@ -211,29 +227,39 @@ function App() {
           </header>
 
           <main className="app-canvas-region">
-            <SceneCanvas store={sceneStore} />
-            <div className="app-search-layer">
-              <SearchOverlay store={sceneStore} />
-            </div>
-            <PinOverlay store={sceneStore} />
-            <ViewPopover store={sceneStore} />
-            <PluginPicker transport={transport} store={sceneStore} />
-            {settingsVisibility.showTokenCounter !== false && (
-              <div className="app-token-counter-layer">
-                <TokenCounter store={composerStore} />
+            <div className="app-canvas-layout-row">
+              <DocumentViewPanel
+                isOpen={isDocumentViewOpen}
+                content={documentViewContent}
+                sourceLabel={documentViewSourceLabel}
+                onClose={onCloseDocumentView}
+              />
+              <div className="app-canvas-content">
+                <SceneCanvas store={sceneStore} onOpenDocumentView={onOpenDocumentView} />
+                <div className="app-search-layer">
+                  <SearchOverlay store={sceneStore} />
+                </div>
+                <PinOverlay store={sceneStore} />
+                <ViewPopover store={sceneStore} />
+                <PluginPicker transport={transport} store={sceneStore} />
+                {settingsVisibility.showTokenCounter !== false && (
+                  <div className="app-token-counter-layer">
+                    <TokenCounter store={composerStore} />
+                  </div>
+                )}
+                <div className="app-notification-layer">
+                  <NotificationBanner store={composerStore} />
+                </div>
+                <div className="app-composer-layer">
+                  <Composer store={composerStore} sceneStore={sceneStore} />
+                </div>
+                <CommandPalette store={sceneStore} />
+                <AboutDialog transport={transport} />
+                <HelpDialog />
+                <SettingsDialog transport={transport} />
+                <ChatLibraryDialog transport={transport} />
               </div>
-            )}
-            <div className="app-notification-layer">
-              <NotificationBanner store={composerStore} />
             </div>
-            <div className="app-composer-layer">
-              <Composer store={composerStore} sceneStore={sceneStore} />
-            </div>
-            <CommandPalette store={sceneStore} />
-            <AboutDialog transport={transport} />
-            <HelpDialog />
-            <SettingsDialog transport={transport} />
-            <ChatLibraryDialog transport={transport} />
           </main>
         </div>
       </ReactFlowProvider>
