@@ -29,6 +29,7 @@ from backend.canvas import (
     _research_result_wire,
     register_canvas,
 )
+from backend import native_dialogs
 from backend.attachments import StagedAttachment
 from backend.composer import ComposerDocument
 from backend.events import SessionBus
@@ -3978,6 +3979,91 @@ def test_set_gitlink_local_root_intent_publishes_scene():
         await bus.dispatch_intent("scene", "setGitlinkLocalRoot", [node.id, "C:/checkout"])
 
         assert document.nodes[node.id].gitlink_local_root == "C:/checkout"
+
+    asyncio.run(run())
+
+
+def test_pick_gitlink_local_root_sets_the_field_from_the_picked_folder(monkeypatch):
+    # R8a (UI/UX audit POLISH finding #1): the "no browse - deferred" label
+    # is gone - this is the real un-defer, wiring the same native_dialogs.
+    # pick_folder primitive Settings' Ollama/Llama.cpp pages already use.
+    async def _fake_pick_folder(directory=""):
+        return "C:/repos/checkout"
+
+    monkeypatch.setattr(native_dialogs, "pick_folder", _fake_pick_folder)
+
+    async def run():
+        bus, notifications, document, _dispatcher = _make_gitlink_plugins_bus()
+        parent = document.add_node(0, 0, "parent")
+        node = document.add_gitlink_node(0, 0, parent.id)
+
+        await bus.dispatch_intent("scene", "pickGitlinkLocalRoot", [node.id])
+
+        assert document.nodes[node.id].gitlink_local_root == "C:/repos/checkout"
+
+    asyncio.run(run())
+
+
+def test_pick_gitlink_local_root_is_a_no_op_when_cancelled(monkeypatch):
+    async def _fake_pick_folder(directory=""):
+        return None
+
+    monkeypatch.setattr(native_dialogs, "pick_folder", _fake_pick_folder)
+
+    async def run():
+        bus, notifications, document, _dispatcher = _make_gitlink_plugins_bus()
+        parent = document.add_node(0, 0, "parent")
+        node = document.add_gitlink_node(0, 0, parent.id)
+        document.set_gitlink_local_root(node.id, "C:/original")
+
+        await bus.dispatch_intent("scene", "pickGitlinkLocalRoot", [node.id])
+
+        assert document.nodes[node.id].gitlink_local_root == "C:/original"
+
+    asyncio.run(run())
+
+
+def test_pick_gitlink_local_root_seeds_the_dialog_with_the_current_value(monkeypatch):
+    seen_directories = []
+
+    async def _fake_pick_folder(directory=""):
+        seen_directories.append(directory)
+        return None
+
+    monkeypatch.setattr(native_dialogs, "pick_folder", _fake_pick_folder)
+
+    async def run():
+        bus, notifications, document, _dispatcher = _make_gitlink_plugins_bus()
+        parent = document.add_node(0, 0, "parent")
+        node = document.add_gitlink_node(0, 0, parent.id)
+        document.set_gitlink_local_root(node.id, "C:/existing/checkout")
+
+        await bus.dispatch_intent("scene", "pickGitlinkLocalRoot", [node.id])
+
+        assert seen_directories == ["C:/existing/checkout"]
+
+    asyncio.run(run())
+
+
+def test_pick_gitlink_local_root_shows_a_notification_when_the_dialog_itself_raises(monkeypatch):
+    async def _boom(directory=""):
+        raise OSError("no folder dialog available")
+
+    monkeypatch.setattr(native_dialogs, "pick_folder", _boom)
+
+    async def run():
+        bus, notifications, document, _dispatcher = _make_gitlink_plugins_bus()
+        recorder = Recorder()
+        bus.attach(recorder)
+        parent = document.add_node(0, 0, "parent")
+        node = document.add_gitlink_node(0, 0, parent.id)
+
+        await bus.dispatch_intent("scene", "pickGitlinkLocalRoot", [node.id])
+
+        assert document.nodes[node.id].gitlink_local_root == ""
+        assert notifications.visible is True
+        assert notifications.msg_type == "error"
+        assert recorder.topics_seen().count("notification") >= 1
 
     asyncio.run(run())
 

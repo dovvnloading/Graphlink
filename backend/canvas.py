@@ -25,6 +25,7 @@ import binascii
 import itertools
 import logging
 import math
+import os
 import uuid
 from dataclasses import dataclass, field
 from types import SimpleNamespace
@@ -39,6 +40,7 @@ from graphlink_grid_view_settings import (
 )
 from graphlink_navigation_pins import NavigationPinRecord, NavigationPinStore
 
+from backend import native_dialogs
 from backend.agents import (
     _CODE_EXEC_RUN_CLAIM_PLACEHOLDER,
     _GITLINK_RUN_CLAIM_PLACEHOLDER,
@@ -3851,6 +3853,29 @@ def register_canvas(
         document.set_gitlink_local_root(node_id, local_root)
         await publish_scene()
 
+    async def pick_gitlink_local_root(node_id):
+        # R8a (UI/UX audit POLISH finding #1): the field's own label used to
+        # say "no browse - deferred", dating from before native_dialogs.py
+        # existed. pick_folder is already generic and already used by
+        # Settings' Ollama/Llama.cpp Scan Folder buttons - this just wires
+        # the same primitive to Gitlink's own local-root field instead of
+        # requiring the user to type a path by hand. A cancelled dialog is
+        # a quiet no-op, matching every other pick_folder call site.
+        node = document.nodes.get(node_id)
+        if node is None:
+            return
+        directory = node.gitlink_local_root or os.path.expanduser("~")
+        try:
+            folder = await native_dialogs.pick_folder(directory=directory)
+        except Exception as exc:  # noqa: BLE001 - a local folder path, not a credential
+            notifications.show(f"Could not open the folder picker: {exc}", "error")
+            await bus.publish("notification")
+            return
+        if not folder:
+            return
+        document.set_gitlink_local_root(node_id, folder)
+        await publish_scene()
+
     async def import_gitlink_snapshot(node_id, repo, branch):
         node = document.nodes.get(node_id)
         if node is None or node.pending_request_id:
@@ -3958,6 +3983,7 @@ def register_canvas(
     bus.register_intent("scene", "fetchGitlinkRepositories", fetch_gitlink_repositories)
     bus.register_intent("scene", "loadGitlinkRepoTree", load_gitlink_repo_tree)
     bus.register_intent("scene", "setGitlinkLocalRoot", set_gitlink_local_root)
+    bus.register_intent("scene", "pickGitlinkLocalRoot", pick_gitlink_local_root)
     bus.register_intent("scene", "importGitlinkSnapshot", import_gitlink_snapshot)
     bus.register_intent("scene", "buildGitlinkContext", build_gitlink_context)
     bus.register_intent("scene", "fetchGitlinkContext", fetch_gitlink_context)

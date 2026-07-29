@@ -650,12 +650,13 @@ describe("toFlowNodes (R5.3 gitlink node)", () => {
     expect(glFlowNode!.data).toMatchObject({ pendingRequestId: null, gitlinkChangeFingerprint: null });
   });
 
-  it("onFetchRepositories/onLoadTree/onSetLocalRoot/onImportSnapshot/onBuildContext/onFetchContext/onRun/onApply all resolve to this node's id", () => {
+  it("onFetchRepositories/onLoadTree/onSetLocalRoot/onBrowseLocalRoot/onImportSnapshot/onBuildContext/onFetchContext/onRun/onApply all resolve to this node's id", () => {
     const scene = baseScene({ nodes: [baseNode({ id: "gl-1", kind: "gitlink" })], edges: [] });
     const store = makeStore();
     const fetchReposSpy = vi.spyOn(store, "fetchGitlinkRepositories").mockResolvedValue([]);
     const loadTreeSpy = vi.spyOn(store, "loadGitlinkRepoTree");
     const setRootSpy = vi.spyOn(store, "setGitlinkLocalRoot");
+    const browseRootSpy = vi.spyOn(store, "pickGitlinkLocalRoot");
     const importSpy = vi.spyOn(store, "importGitlinkSnapshot");
     const buildContextSpy = vi.spyOn(store, "buildGitlinkContext");
     const fetchContextSpy = vi.spyOn(store, "fetchGitlinkContext").mockResolvedValue("");
@@ -668,6 +669,7 @@ describe("toFlowNodes (R5.3 gitlink node)", () => {
       onFetchRepositories: () => Promise<string[]>;
       onLoadTree: (repo: string, branch: string) => void;
       onSetLocalRoot: (localRoot: string) => void;
+      onBrowseLocalRoot: () => void;
       onImportSnapshot: (repo: string, branch: string) => void;
       onBuildContext: (scopeMode: string, selectedPaths: string[]) => void;
       onFetchContext: () => Promise<string>;
@@ -681,6 +683,8 @@ describe("toFlowNodes (R5.3 gitlink node)", () => {
     expect(loadTreeSpy).toHaveBeenCalledWith("gl-1", "owner/repo", "main");
     data.onSetLocalRoot("C:/repos/repo");
     expect(setRootSpy).toHaveBeenCalledWith("gl-1", "C:/repos/repo");
+    data.onBrowseLocalRoot();
+    expect(browseRootSpy).toHaveBeenCalledWith("gl-1");
     data.onImportSnapshot("owner/repo", "main");
     expect(importSpy).toHaveBeenCalledWith("gl-1", "owner/repo", "main");
     data.onBuildContext("full", ["a.py"]);

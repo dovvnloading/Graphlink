@@ -401,6 +401,13 @@ describe("SceneStore", () => {
     ]);
   });
 
+  it("pickGitlinkLocalRoot sends the scene-topic pickGitlinkLocalRoot intent with [nodeId]", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.pickGitlinkLocalRoot("n1");
+    expect(intents).toEqual([{ topic: "scene", intent: "pickGitlinkLocalRoot", args: ["n1"] }]);
+  });
+
   it("importGitlinkSnapshot sends the scene-topic importGitlinkSnapshot intent with [nodeId, repo, branch]", () => {
     const { transport, intents } = makeFakeTransport();
     const store = new SceneStore(transport);

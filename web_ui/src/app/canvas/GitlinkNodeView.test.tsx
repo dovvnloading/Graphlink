@@ -36,6 +36,7 @@ function baseData(overrides: Partial<GitlinkFlowNode["data"]> = {}): GitlinkFlow
     onFetchRepositories: vi.fn().mockResolvedValue([]),
     onLoadTree: vi.fn(),
     onSetLocalRoot: vi.fn(),
+    onBrowseLocalRoot: vi.fn(),
     onImportSnapshot: vi.fn(),
     onBuildContext: vi.fn(),
     onFetchContext: vi.fn().mockResolvedValue(""),
@@ -118,12 +119,13 @@ function renderGitlinkNodeWithRerender(overrides: Partial<GitlinkFlowNode["data"
   return { data, rerenderWithData };
 }
 
-/** Every one of the nine WS-backed callback props, for a single spy-and-assert-zero-calls check. */
-function allNineSpies(data: GitlinkFlowNode["data"]) {
+/** Every one of the ten WS-backed callback props, for a single spy-and-assert-zero-calls check. */
+function allTenSpies(data: GitlinkFlowNode["data"]) {
   return [
     data.onFetchRepositories,
     data.onLoadTree,
     data.onSetLocalRoot,
+    data.onBrowseLocalRoot,
     data.onImportSnapshot,
     data.onBuildContext,
     data.onFetchContext,
@@ -185,7 +187,7 @@ describe("GitlinkNodeView", () => {
   it("typing into repo/branch fields calls no WS method - only clicking Load Repo Tree does", async () => {
     const user = userEvent.setup();
     const data = renderGitlinkNode();
-    const spies = allNineSpies(data);
+    const spies = allTenSpies(data);
 
     await user.type(screen.getByRole("textbox", { name: "Repository" }), "owner/repo");
     await user.type(screen.getByRole("textbox", { name: "Branch" }), "main");
@@ -248,6 +250,14 @@ describe("GitlinkNodeView", () => {
     expect(data.onSetLocalRoot).toHaveBeenCalledWith("C:/repos/thing");
   });
 
+  it("clicking Browse… next to Local root calls onBrowseLocalRoot", async () => {
+    const user = userEvent.setup();
+    const data = renderGitlinkNode();
+
+    await user.click(screen.getByRole("button", { name: "Browse…" }));
+    expect(data.onBrowseLocalRoot).toHaveBeenCalledOnce();
+  });
+
   it("Import Repo Snapshot uses the current repo/branch draft field values", async () => {
     const user = userEvent.setup();
     const data = renderGitlinkNode();
@@ -265,7 +275,7 @@ describe("GitlinkNodeView", () => {
     const data = renderGitlinkNode({
       gitlinkRepoFilePaths: ["src/a.py", "src/b.py", "readme.md"],
     });
-    const spies = allNineSpies(data);
+    const spies = allTenSpies(data);
 
     await user.type(screen.getByRole("textbox", { name: "Filter files" }), "src/");
     expect(screen.getByText("src/a.py")).toBeInTheDocument();

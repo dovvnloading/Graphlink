@@ -718,6 +718,7 @@ export function toFlowNodes(
           onFetchRepositories: () => store.fetchGitlinkRepositories(n.id),
           onLoadTree: (repo: string, branch: string) => store.loadGitlinkRepoTree(n.id, repo, branch),
           onSetLocalRoot: (localRoot: string) => store.setGitlinkLocalRoot(n.id, localRoot),
+          onBrowseLocalRoot: () => store.pickGitlinkLocalRoot(n.id),
           onImportSnapshot: (repo: string, branch: string) => store.importGitlinkSnapshot(n.id, repo, branch),
           onBuildContext: (scopeMode: string, selectedPaths: string[]) =>
             store.buildGitlinkContext(n.id, scopeMode, selectedPaths),
