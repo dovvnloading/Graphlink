@@ -20,13 +20,15 @@ import "@xyflow/react/dist/style.css";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { SceneNodeRow, SceneState } from "../../lib/bridge-core/generated/scene-state";
 import type { StreamListener } from "../../lib/ws/transport";
+import { useOverlays } from "../overlays/overlays";
 import { ArtifactNodeView, type ArtifactFlowNode } from "./ArtifactNodeView";
 import { ChartNodeView, type ChartFlowNode } from "./ChartNodeView";
 import { ChatNodeView, type ChatFlowNode } from "./ChatNodeView";
 import { CodeNodeView, type CodeFlowNode } from "./CodeNodeView";
 import { CodeSandboxNodeView, type CodeSandboxFlowNode } from "./CodeSandboxNodeView";
-import { ConversationNodeView, type ConversationFlowNode } from "./ConversationNodeView";
+import { ConversationNodeView, type ConversationFlowNode, type ConversationMessage } from "./ConversationNodeView";
 import { DocumentNodeView, type DocumentFlowNode } from "./DocumentNodeView";
+import { DocumentViewDialog } from "./DocumentViewDialog";
 import { GitlinkNodeView, type GitlinkFlowNode } from "./GitlinkNodeView";
 import { GroupNodeView, type GroupFlowNode } from "./GroupNodeView";
 import { HtmlNodeView, type HtmlFlowNode } from "./HtmlNodeView";
@@ -186,10 +188,35 @@ const EDGE_TYPES = {
   orthogonal: OrthogonalEdge,
 };
 
+// R8a: ports the deleted Qt app's own `_history_to_markdown` +
+// `_build_document_section("Conversation Transcript", ...)`
+// (graphlink_window.py) byte-for-byte - the exact markdown a conversation
+// node's "Open Document View" menu item renders. Numbering is 1-based over
+// ALL messages (including blank ones that get skipped), since legacy's own
+// `enumerate(history, start=1)` numbers BEFORE filtering - a skipped message
+// still consumes its number. Returns "" when no message survives (empty
+// history, or every message blank) - this is what toFlowNodes' own
+// "don't open on nothing" guard below keys off of.
+export function conversationHistoryToDocumentMarkdown(history: ConversationMessage[]): string {
+  const blocks: string[] = [];
+  history.forEach((message, index) => {
+    const trimmed = message.content.trim();
+    if (!trimmed) return;
+    const role = message.role === "user" ? "User" : "Assistant";
+    blocks.push(`### ${index + 1}. ${role}\n\n${trimmed}`);
+  });
+  if (blocks.length === 0) return "";
+  return `## Conversation Transcript\n\n${blocks.join("\n\n")}`;
+}
+
 // Exported standalone for direct unit testing (same posture as
 // scaleDragPosition in sceneStore.ts) - covers the parentChatNodeId
 // derivation below without needing a full <ReactFlow> mount.
-export function toFlowNodes(scene: SceneState, store: SceneStore): SceneFlowNode[] {
+export function toFlowNodes(
+  scene: SceneState,
+  store: SceneStore,
+  onOpenDocumentView: (markdown: string) => void = () => {},
+): SceneFlowNode[] {
   // Looked up per-chat-node below to build dockedChildren - a docked node is
   // omitted from the returned array entirely (see the "thinking" branch), so
   // this is the only remaining way a chat node's dock badge/menu can find it.
@@ -244,6 +271,14 @@ export function toFlowNodes(scene: SceneState, store: SceneStore): SceneFlowNode
           // arrives through the next scene snapshot.
           onGenerateKeyTakeaway: () => store.generateKeyTakeaway(n.id),
           onGenerateExplainerNote: () => store.generateExplainerNote(n.id),
+          // R8a: Open Document View - shows this node's own message text
+          // verbatim in the read-only document modal. Guards on non-blank
+          // content the same way legacy's own document-view action silently
+          // no-op'd on nothing (see conversationHistoryToDocumentMarkdown's
+          // own doc above for the sibling conversation-node guard).
+          onOpenDocumentView: () => {
+            if (n.content.trim()) onOpenDocumentView(n.content);
+          },
           // R6.3: the node's own scroll position within its content area -
           // read on mount by ChatNodeView (restore) and reported (debounced)
           // via the new setChatScrollValue intent on every scroll. Defaults
@@ -412,6 +447,16 @@ export function toFlowNodes(scene: SceneState, store: SceneStore): SceneFlowNode
           // non-null request id to target.
           onCancel: () => {
             if (n.pendingRequestId) store.cancelConversationRequest(n.pendingRequestId);
+          },
+          // R8a: Open Document View - the node's ENTIRE message history,
+          // formatted as a numbered transcript (see
+          // conversationHistoryToDocumentMarkdown's own doc above). Guards
+          // on a non-empty formatted result (empty history, or every
+          // message blank, both format to "") the same way the chat branch
+          // above guards on non-blank content.
+          onOpenDocumentView: () => {
+            const markdown = conversationHistoryToDocumentMarkdown(n.history);
+            if (markdown) onOpenDocumentView(markdown);
           },
         },
       });
@@ -990,6 +1035,22 @@ function CanvasInner({ store }: { store: SceneStore }) {
   const [smartGuideLines, setSmartGuideLines] = useState<GuideLine[]>([]);
   const visibleGuideLines = scene.smartGuides ? smartGuideLines : [];
 
+  // R8a: Open Document View - the read-only markdown modal a chat/
+  // conversation node's card menu opens (see toFlowNodes' own
+  // onOpenDocumentView field on each of those two branches). The displayed
+  // markdown is local-only state (never scene state, same posture as
+  // hoveredEdgeId/smartGuideLines above) - SceneCanvas is the only place
+  // that knows how to open this dialog.
+  const overlays = useOverlays();
+  const [documentViewContent, setDocumentViewContent] = useState<string | null>(null);
+  const onOpenDocumentView = useCallback(
+    (markdown: string) => {
+      setDocumentViewContent(markdown);
+      overlays.open("document-view", "dialog");
+    },
+    [overlays],
+  );
+
   // R6.3: viewport (pan/zoom) reporting - see makeDebouncedViewportReport's
   // own doc above. onMove fires on every frame of a pan/zoom gesture (never
   // just once at the end, unlike NodeResizer's onResizeEnd), so the debounce
@@ -1013,8 +1074,8 @@ function CanvasInner({ store }: { store: SceneStore }) {
 
   useEffect(() => {
     if (draggingRef.current) return;
-    setNodes((current) => withPreservedSelection(toFlowNodes(scene, store), current));
-  }, [scene, store]);
+    setNodes((current) => withPreservedSelection(toFlowNodes(scene, store, onOpenDocumentView), current));
+  }, [scene, store, onOpenDocumentView]);
 
   const edges = useMemo(() => toFlowEdges(scene, hoveredEdgeId), [scene, hoveredEdgeId]);
 
@@ -1208,7 +1269,8 @@ function CanvasInner({ store }: { store: SceneStore }) {
   );
 
   return (
-    <div className="scene-canvas" onDoubleClick={onDoubleClick}>
+    <>
+      <div className="scene-canvas" onDoubleClick={onDoubleClick}>
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -1289,7 +1351,9 @@ function CanvasInner({ store }: { store: SceneStore }) {
           </ViewportPortal>
         )}
       </ReactFlow>
-    </div>
+      </div>
+      <DocumentViewDialog content={documentViewContent} />
+    </>
   );
 }
 

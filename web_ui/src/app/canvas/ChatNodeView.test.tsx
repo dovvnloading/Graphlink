@@ -33,6 +33,7 @@ function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}) {
   const onGenerateChart = vi.fn();
   const onGenerateKeyTakeaway = vi.fn();
   const onGenerateExplainerNote = vi.fn();
+  const onOpenDocumentView = vi.fn();
   const onScrollChange = vi.fn();
   const props = {
     id: "n0",
@@ -51,6 +52,7 @@ function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}) {
       onGenerateChart,
       onGenerateKeyTakeaway,
       onGenerateExplainerNote,
+      onOpenDocumentView,
       onScrollChange,
       ...overrides,
     },
@@ -64,7 +66,7 @@ function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}) {
   return {
     onToggleCollapse, onDelete, onUndockChild, onRegenerate, onGenerateImage,
     onGenerateChart, onGenerateKeyTakeaway, onGenerateExplainerNote,
-    onScrollChange, container,
+    onOpenDocumentView, onScrollChange, container,
   };
 }
 
@@ -103,12 +105,15 @@ describe("ChatNodeView", () => {
     const hideBranches = screen.getByRole("menuitem", { name: "Hide Other Branches" });
     expect(hideBranches).toBeDisabled();
     expect(hideBranches).toHaveAttribute("title", "Branch visibility isn't built yet");
+    // R8a: these three were disabled stubs until their agents/dialog were
+    // wired up (Open Document View: the shared DocumentViewDialog; Key
+    // Takeaway/Explainer Note: ported back from the deleted Qt app). This
+    // assertion is deliberately inverted rather than removed - it was the
+    // guard that encoded the stub as correct, so it has to now encode the
+    // opposite.
     const docView = screen.getByRole("menuitem", { name: "Open Document View" });
-    expect(docView).toBeDisabled();
-    // R8a: these two were disabled stubs until their agents were ported
-    // back from the deleted Qt app. This assertion is deliberately inverted
-    // rather than removed - it was the guard that encoded the stub as
-    // correct, so it has to now encode the opposite.
+    expect(docView).not.toBeDisabled();
+    expect(docView).not.toHaveAttribute("title");
     for (const name of ["Generate Key Takeaway", "Generate Explainer Note"]) {
       const item = screen.getByRole("menuitem", { name });
       expect(item).not.toBeDisabled();
@@ -179,6 +184,17 @@ describe("ChatNodeView", () => {
     await user.click(generateImage);
     expect(onGenerateImage).toHaveBeenCalledOnce();
     expect(screen.queryByRole("menu")).toBeNull(); // onClose fires after onGenerateImage
+  });
+
+  it("Open Document View calls onOpenDocumentView then closes the menu", async () => {
+    const user = userEvent.setup();
+    const { onOpenDocumentView } = renderChatNode({ isUser: false });
+
+    fireEvent.contextMenu(screen.getByText("Assistant"));
+    await user.click(screen.getByRole("menuitem", { name: "Open Document View" }));
+
+    expect(onOpenDocumentView).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("menu")).toBeNull();
   });
 
   it("Generate Key Takeaway calls onGenerateKeyTakeaway then closes the menu", async () => {

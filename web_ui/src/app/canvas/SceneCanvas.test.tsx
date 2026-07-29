@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   applyGroupDragDelta,
+  conversationHistoryToDocumentMarkdown,
   groupDragKindOf,
   handleSelectionChange,
   isOrthogonalEligible,
@@ -10,6 +11,7 @@ import {
   withPreservedSelection,
   type SceneFlowNode,
 } from "./SceneCanvas";
+import type { ConversationMessage } from "./ConversationNodeView";
 import { SceneStore, initialSceneState } from "./sceneStore";
 import type { WsTransport } from "../../lib/ws/transport";
 import type { SceneNodeRow, SceneState } from "../../lib/bridge-core/generated/scene-state";
@@ -201,6 +203,127 @@ describe("toFlowNodes (R4.4a Generate/Regenerate Image wiring)", () => {
 
     (imageFlowNode!.data as { onRegenerate: () => void }).onRegenerate();
     expect(intentSpy).toHaveBeenCalledWith("image-1");
+  });
+});
+
+describe("conversationHistoryToDocumentMarkdown (R8a Open Document View transcript formatter)", () => {
+  it("formats two messages with 1-based numbered headings, joined by a blank line", () => {
+    const history: ConversationMessage[] = [
+      { role: "user", content: "hi" },
+      { role: "assistant", content: "hello there" },
+    ];
+    expect(conversationHistoryToDocumentMarkdown(history)).toBe(
+      "## Conversation Transcript\n\n### 1. User\n\nhi\n\n### 2. Assistant\n\nhello there",
+    );
+  });
+
+  it("skips a blank message but its number still counts (legacy enumerate-before-filter behavior)", () => {
+    const history: ConversationMessage[] = [
+      { role: "user", content: "first" },
+      { role: "assistant", content: "   " },
+      { role: "user", content: "third" },
+    ];
+    const result = conversationHistoryToDocumentMarkdown(history);
+    expect(result).toBe("## Conversation Transcript\n\n### 1. User\n\nfirst\n\n### 3. User\n\nthird");
+    expect(result).not.toContain("### 2.");
+  });
+
+  it("returns an empty string for an empty history", () => {
+    expect(conversationHistoryToDocumentMarkdown([])).toBe("");
+  });
+
+  it("returns an empty string when every message is blank", () => {
+    const history: ConversationMessage[] = [
+      { role: "user", content: "" },
+      { role: "assistant", content: "   " },
+    ];
+    expect(conversationHistoryToDocumentMarkdown(history)).toBe("");
+  });
+});
+
+describe("toFlowNodes (R8a Open Document View wiring)", () => {
+  it("a chat node's onOpenDocumentView invokes the third-argument callback with its own content", () => {
+    const scene = baseScene({
+      nodes: [baseNode({ id: "chat-1", kind: "chat", content: "Hello world" })],
+      edges: [],
+    });
+    const store = makeStore();
+    const onOpenDocumentView = vi.fn();
+
+    const flowNodes = toFlowNodes(scene, store, onOpenDocumentView);
+    const chatFlowNode = flowNodes.find((n) => n.id === "chat-1");
+    expect(chatFlowNode).toBeDefined();
+
+    (chatFlowNode!.data as { onOpenDocumentView: () => void }).onOpenDocumentView();
+    expect(onOpenDocumentView).toHaveBeenCalledWith("Hello world");
+  });
+
+  it("a chat node with blank/whitespace-only content does NOT invoke the callback", () => {
+    const scene = baseScene({
+      nodes: [baseNode({ id: "chat-1", kind: "chat", content: "   " })],
+      edges: [],
+    });
+    const store = makeStore();
+    const onOpenDocumentView = vi.fn();
+
+    const flowNodes = toFlowNodes(scene, store, onOpenDocumentView);
+    const chatFlowNode = flowNodes.find((n) => n.id === "chat-1");
+    expect(chatFlowNode).toBeDefined();
+
+    (chatFlowNode!.data as { onOpenDocumentView: () => void }).onOpenDocumentView();
+    expect(onOpenDocumentView).not.toHaveBeenCalled();
+  });
+
+  it("a conversation node's onOpenDocumentView invokes the callback with the properly formatted transcript", () => {
+    const history: ConversationMessage[] = [
+      { role: "user", content: "hi" },
+      { role: "assistant", content: "hello there" },
+    ];
+    const scene = baseScene({
+      nodes: [baseNode({ id: "conv-1", kind: "conversation", history })],
+      edges: [],
+    });
+    const store = makeStore();
+    const onOpenDocumentView = vi.fn();
+
+    const flowNodes = toFlowNodes(scene, store, onOpenDocumentView);
+    const conversationFlowNode = flowNodes.find((n) => n.id === "conv-1");
+    expect(conversationFlowNode).toBeDefined();
+
+    (conversationFlowNode!.data as { onOpenDocumentView: () => void }).onOpenDocumentView();
+    expect(onOpenDocumentView).toHaveBeenCalledWith(
+      "## Conversation Transcript\n\n### 1. User\n\nhi\n\n### 2. Assistant\n\nhello there",
+    );
+  });
+
+  it("a conversation node with an empty history does NOT invoke the callback", () => {
+    const scene = baseScene({
+      nodes: [baseNode({ id: "conv-1", kind: "conversation", history: [] })],
+      edges: [],
+    });
+    const store = makeStore();
+    const onOpenDocumentView = vi.fn();
+
+    const flowNodes = toFlowNodes(scene, store, onOpenDocumentView);
+    const conversationFlowNode = flowNodes.find((n) => n.id === "conv-1");
+    expect(conversationFlowNode).toBeDefined();
+
+    (conversationFlowNode!.data as { onOpenDocumentView: () => void }).onOpenDocumentView();
+    expect(onOpenDocumentView).not.toHaveBeenCalled();
+  });
+
+  it("toFlowNodes called with only two arguments (the existing ~50 call sites in this file) still compiles and does not throw when onOpenDocumentView would otherwise fire", () => {
+    const scene = baseScene({
+      nodes: [baseNode({ id: "chat-1", kind: "chat", content: "Hello world" })],
+      edges: [],
+    });
+    const store = makeStore();
+
+    const flowNodes = toFlowNodes(scene, store);
+    const chatFlowNode = flowNodes.find((n) => n.id === "chat-1");
+    expect(chatFlowNode).toBeDefined();
+
+    expect(() => (chatFlowNode!.data as { onOpenDocumentView: () => void }).onOpenDocumentView()).not.toThrow();
   });
 });
 

@@ -1950,6 +1950,18 @@ body,
   height: 100%;
 }
 
+/* -- Document view dialog (R8a) -------------------------------------------- */
+
+.document-view-dialog {
+  min-width: 480px;
+  width: min(760px, calc(100vw - 64px));
+}
+
+.document-view-dialog .chat-node-content {
+  max-height: none;
+  overflow: visible;
+}
+
 .help-rail {
   width: 220px;
   flex-shrink: 0;

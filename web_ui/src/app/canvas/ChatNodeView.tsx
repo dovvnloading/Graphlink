@@ -15,10 +15,8 @@ import { NodeMenu } from "./NodeMenu";
  * honest disabled+title label rather than a fake action or a silent drop
  * (an R3.4 live-drive audit found several legacy ChatNode menu items had
  * been dropped with zero acknowledgment - fixed here): Regenerate (assistant
- * nodes only, needs the R4 agent layer), Open Document View (the
- * document-viewer island isn't wired into the SPA overlay system yet), and
- * Hide Other Branches (the legacy scene's
- * branch-visibility toggle has no backend/frontend equivalent at all yet -
+ * nodes only, needs the R4 agent layer), and Hide Other Branches (the
+ * legacy scene's branch-visibility toggle has no backend/frontend equivalent at all yet -
  * unscoped, not owned by any R-phase). One legacy item is still deliberately
  * NOT listed even as disabled: "Generate Group Summary" is itself
  * conditionally hidden in the legacy menu (only when a multi-selection
@@ -46,6 +44,9 @@ import { NodeMenu } from "./NodeMenu";
  * agent layer had been stale since R4 - the very layer Regenerate/Image/
  * Chart already use. Both now dispatch real intents that drop the agent's
  * output into a new note beside this node (graphlink_note_agent.py).
+ * "Open Document View" is likewise no longer deferred as of this change: it
+ * now opens DocumentViewDialog.tsx with this node's own content
+ * (frontend-only, no backend intent - the content is already client-side).
  * "Export" is
  * likewise no longer deferred as of R7.5a: it downloads the node's raw
  * content (not the rendered markdown) as a .md file via downloadTextFile -
@@ -76,6 +77,7 @@ export interface ChatNodeData extends Record<string, unknown> {
   onGenerateChart: (chartType: string) => void;
   onGenerateKeyTakeaway: () => void;
   onGenerateExplainerNote: () => void;
+  onOpenDocumentView: () => void;
   onScrollChange: (value: number) => void;
 }
 
@@ -114,6 +116,7 @@ function ChatNodeMenu({
   onGenerateChart,
   onGenerateKeyTakeaway,
   onGenerateExplainerNote,
+  onOpenDocumentView,
   onClose,
 }: {
   position: MenuPosition;
@@ -130,6 +133,7 @@ function ChatNodeMenu({
   onGenerateChart: (chartType: string) => void;
   onGenerateKeyTakeaway: () => void;
   onGenerateExplainerNote: () => void;
+  onOpenDocumentView: () => void;
   onClose: () => void;
 }) {
   const [chartMenuOpen, setChartMenuOpen] = useState(false);
@@ -192,7 +196,16 @@ function ChatNodeMenu({
           ))}
         </>
       )}
-      <button type="button" role="menuitem" disabled title="Document view integration isn't wired into the SPA yet">
+      {/* R8a: real. Opens the shared DocumentViewDialog (frontend-only, no
+          backend intent) with this node's own content - already client-side. */}
+      <button
+        type="button"
+        role="menuitem"
+        onClick={() => {
+          onOpenDocumentView();
+          onClose();
+        }}
+      >
         Open Document View
       </button>
       {/* R8a: real. Each runs its agent over THIS node's text and drops the
@@ -388,6 +401,7 @@ export function ChatNodeView({ id, data, selected }: NodeProps<ChatFlowNode>) {
           onGenerateChart={data.onGenerateChart}
           onGenerateKeyTakeaway={data.onGenerateKeyTakeaway}
           onGenerateExplainerNote={data.onGenerateExplainerNote}
+          onOpenDocumentView={data.onOpenDocumentView}
           onClose={() => setMenuPosition(null)}
         />
       )}
