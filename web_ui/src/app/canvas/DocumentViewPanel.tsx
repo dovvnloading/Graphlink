@@ -1,7 +1,5 @@
 import { useCallback, useRef, useState } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import rehypeHighlight from "rehype-highlight";
+import { DocumentViewMarkdown } from "./DocumentViewMarkdown";
 
 const DEFAULT_WIDTH = 500;
 const MIN_WIDTH = 320;
@@ -31,7 +29,18 @@ const MAX_WIDTH = 900;
  *
  * Closing it only ever happens via its own Close button, matching legacy
  * exactly - it was never part of Qt's OverlayManager, so no scrim, no
- * Escape-to-close, no focus trap here either.
+ * Escape-to-close, no focus trap here either. (Full redesign, stage 4 of 4,
+ * revisits the Escape-to-close piece specifically - see that stage's own
+ * notes for why it's being added without adopting the rest of the modal
+ * treatment.)
+ *
+ * Full redesign, stage 1 of 4 ("content rendering upgrades"): the markdown
+ * body itself is now rendered by DocumentViewMarkdown.tsx (heading anchors,
+ * a code-block copy button + language badge, wide-table scroll wrapper,
+ * image zoom, GitHub-style callouts) rather than a bare
+ * `<ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>`
+ * - see that component's own doc comment for the full plugin-pipeline
+ * rationale.
  */
 export function DocumentViewPanel({
   isOpen,
@@ -131,9 +140,7 @@ export function DocumentViewPanel({
           </button>
         </header>
         <div className="document-view-panel-scroll chat-node-content">
-          <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
-            {content ?? ""}
-          </ReactMarkdown>
+          <DocumentViewMarkdown content={content ?? ""} />
         </div>
       </div>
       <div

@@ -44,7 +44,7 @@ import { NodeMenu } from "./NodeMenu";
  * Chart already use. Both now dispatch real intents that drop the agent's
  * output into a new note beside this node (graphlink_note_agent.py).
  * "Open Document View" is likewise no longer deferred as of this change: it
- * now opens DocumentViewDialog.tsx with this node's own content
+ * now opens DocumentViewPanel.tsx with this node's own content
  * (frontend-only, no backend intent - the content is already client-side).
  * "Export" is
  * likewise no longer deferred as of R7.5a: it downloads the node's raw
@@ -370,7 +370,7 @@ function ChatNodeMenu({
           ))}
         </>
       )}
-      {/* R8a: real. Opens the shared DocumentViewDialog (frontend-only, no
+      {/* R8a: real. Opens the shared DocumentViewPanel (frontend-only, no
           backend intent) with this node's own content - already client-side. */}
       <button
         type="button"

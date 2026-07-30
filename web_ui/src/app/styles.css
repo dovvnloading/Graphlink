@@ -2450,6 +2450,154 @@ body,
   opacity: 0.5;
 }
 
+/* Document View full redesign, stage 1 ("content rendering upgrades") -
+   DocumentViewMarkdown.tsx's own component overrides/plugin output. Scoped
+   here rather than folded into .chat-node-content's shared markdown-body
+   rules (styles.css:349+) since only Document View uses these classes
+   today - see that component's own doc comment for why this isn't a
+   shared, app-wide markdown-renderer change. */
+
+.document-view-heading-anchor {
+  margin-left: 6px;
+  text-decoration: none;
+  color: var(--gl-surface-text-muted);
+  font-weight: 400;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+h1:hover > .document-view-heading-anchor,
+h2:hover > .document-view-heading-anchor,
+h3:hover > .document-view-heading-anchor,
+h4:hover > .document-view-heading-anchor,
+h5:hover > .document-view-heading-anchor,
+h6:hover > .document-view-heading-anchor {
+  opacity: 1;
+}
+
+.document-view-code-block {
+  margin: 8px 0;
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.document-view-code-block-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px;
+  background-color: var(--gl-surface-inset, var(--gl-surface-window));
+  border-bottom: 1px solid var(--gl-surface-border);
+  font-size: 11px;
+}
+
+.document-view-code-block-language {
+  color: var(--gl-surface-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.document-view-code-block-copy {
+  padding: 2px 8px;
+  font-size: 11px;
+  font-family: inherit;
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-neutral-button-background);
+  border: 1px solid var(--gl-neutral-button-border);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.document-view-code-block-copy:hover {
+  background-color: var(--gl-neutral-button-hover);
+}
+
+/* The header bar above already provides the block chrome (border/corners) -
+   the inner <pre> (rendered by .chat-node-content's own shared rule at
+   styles.css:349+) must not double it up. */
+.document-view-code-block pre {
+  margin: 0;
+  border: none;
+  border-radius: 0;
+}
+
+.document-view-table-wrapper {
+  overflow-x: auto;
+  margin: 8px 0;
+}
+
+/* GitHub-style callouts (remark-github-blockquote-alert's own output shape:
+   a <div class="markdown-alert markdown-alert-{type}"> wrapping a
+   <p class="markdown-alert-title"> + the rest of the blockquote content) -
+   styled with this app's own tokens rather than importing the package's
+   own alert.css, which hard-codes GitHub's own color variables, not this
+   app's theme system. Only 4 semantic-status tokens exist
+   (error/info/success/warning) for GitHub's 5 alert types - "important"
+   reuses --gl-palette-selection (an accent color, not a status color, but
+   visually distinct from the other 4) rather than inventing a new token
+   for one alert type. */
+.markdown-alert {
+  margin: 8px 0;
+  padding: 8px 12px;
+  border-left: 3px solid var(--gl-surface-border);
+  border-radius: 4px;
+  background-color: var(--gl-surface-inset, var(--gl-surface-window));
+}
+
+.markdown-alert > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown-alert-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+.markdown-alert-title .octicon {
+  fill: currentColor;
+  flex-shrink: 0;
+}
+
+.markdown-alert-note {
+  border-left-color: var(--gl-semantic-status-info);
+}
+.markdown-alert-note .markdown-alert-title {
+  color: var(--gl-semantic-status-info);
+}
+
+.markdown-alert-tip {
+  border-left-color: var(--gl-semantic-status-success);
+}
+.markdown-alert-tip .markdown-alert-title {
+  color: var(--gl-semantic-status-success);
+}
+
+.markdown-alert-important {
+  border-left-color: var(--gl-palette-selection);
+}
+.markdown-alert-important .markdown-alert-title {
+  color: var(--gl-palette-selection);
+}
+
+.markdown-alert-warning {
+  border-left-color: var(--gl-semantic-status-warning);
+}
+.markdown-alert-warning .markdown-alert-title {
+  color: var(--gl-semantic-status-warning);
+}
+
+.markdown-alert-caution {
+  border-left-color: var(--gl-semantic-status-error);
+}
+.markdown-alert-caution .markdown-alert-title {
+  color: var(--gl-semantic-status-error);
+}
+
 .help-rail {
   width: 220px;
   flex-shrink: 0;
