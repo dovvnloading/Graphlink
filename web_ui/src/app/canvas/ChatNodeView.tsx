@@ -5,6 +5,7 @@ import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import { CHAT_SCROLL_REPORT_DEBOUNCE_MS, LOD_ZOOM_THRESHOLD } from "./canvasConstants";
 import { downloadTextFile } from "./downloadTextFile";
+import { GROUP_MONO_COLORS, GROUP_NAMED_COLORS } from "./GroupColorPicker";
 import { NodeMenu } from "./NodeMenu";
 
 /**
@@ -105,6 +106,23 @@ export interface ChatNodeData extends Record<string, unknown> {
   isBranchSynthesis: boolean;
   synthesisInstructions: string;
   synthesisSourceNodeIds: string[];
+  // ADR-002 Workstream 1 ("Branch status and lifecycle"): the final
+  // sequenced item after fork/compare/synthesize. branchStatus is one of
+  // exactly "active" (the default)/"accepted"/"rejected"/"superseded" -
+  // per-node, no inheritance from or cascade to any other node (see
+  // backend/canvas.py's SceneNode.branch_status comment). isFinalDeliverable
+  // is server-computed (n.id === the document's one final_deliverable_
+  // node_id pointer), never client-derived, so at most one node in the
+  // whole scene can ever read true. onCollapseBranch("Collapse Branch"/
+  // "Expand Branch" menu item) reuses is_collapsed but flips it across
+  // this node's ENTIRE chat-kind subtree server-side, not just this one
+  // node - deliberately separate from onToggleCollapse above, which is
+  // the existing single-node collapse.
+  branchStatus: string;
+  isFinalDeliverable: boolean;
+  onSetBranchStatus: (status: string) => void;
+  onSetFinalDeliverable: (isFinal: boolean) => void;
+  onCollapseBranch: (collapsed: boolean) => void;
 }
 
 export type ChatFlowNode = Node<ChatNodeData, "chat">;
@@ -127,6 +145,34 @@ const CHART_TYPE_OPTIONS: { value: string; label: string }[] = [
   { value: "sankey", label: "Sankey" },
 ];
 
+// ADR-002 Workstream 1 ("Branch status and lifecycle"): the exactly-4
+// legal values (must match backend/canvas.py's SceneDocument.
+// BRANCH_STATUS_VALUES), in the order they render in the Mark Status
+// submenu.
+const BRANCH_STATUS_OPTIONS: { value: string; label: string }[] = [
+  { value: "active", label: "Active" },
+  { value: "accepted", label: "Accepted" },
+  { value: "rejected", label: "Rejected" },
+  { value: "superseded", label: "Superseded" },
+];
+
+// ADR-002 Workstream 1 ("Branch status and lifecycle"): the status-dot
+// badge's colors REUSE GroupColorPicker.tsx's own named palette verbatim
+// (looked up by name, not by array index, so a future reordering of that
+// palette can't silently retarget these) rather than defining new hex
+// literals - that palette is the one place in this codebase with real,
+// visually-distinct color values for a "pick one of several named
+// semantic colors" concept (the --gl-semantic-status-* CSS token names
+// exist for exactly this kind of status vocabulary, but their current
+// values are indistinguishable placeholder grays - see that token's own
+// definition for why this reuses GroupColorPicker's palette instead).
+const BRANCH_STATUS_COLORS: Record<string, string> = {
+  active: GROUP_MONO_COLORS.find((c) => c.name === "Mid Gray")!.hex,
+  accepted: GROUP_NAMED_COLORS.find((c) => c.name === "Green")!.hex,
+  rejected: GROUP_NAMED_COLORS.find((c) => c.name === "Red")!.hex,
+  superseded: GROUP_NAMED_COLORS.find((c) => c.name === "Orange")!.hex,
+};
+
 function ChatNodeMenu({
   position,
   nodeId,
@@ -146,6 +192,11 @@ function ChatNodeMenu({
   isBranchFocusActive,
   onToggleBranchFocus,
   onBranchFromHere,
+  branchStatus,
+  isFinalDeliverable,
+  onSetBranchStatus,
+  onSetFinalDeliverable,
+  onCollapseBranch,
   onClose,
 }: {
   position: MenuPosition;
@@ -166,9 +217,15 @@ function ChatNodeMenu({
   isBranchFocusActive: boolean;
   onToggleBranchFocus: () => void;
   onBranchFromHere: () => void;
+  branchStatus: string;
+  isFinalDeliverable: boolean;
+  onSetBranchStatus: (status: string) => void;
+  onSetFinalDeliverable: (isFinal: boolean) => void;
+  onCollapseBranch: (collapsed: boolean) => void;
   onClose: () => void;
 }) {
   const [chartMenuOpen, setChartMenuOpen] = useState(false);
+  const [statusMenuOpen, setStatusMenuOpen] = useState(false);
 
 
   return (
@@ -228,6 +285,68 @@ function ChatNodeMenu({
         }}
       >
         Branch from Here
+      </button>
+      {/* ADR-002 Workstream 1 ("Branch status and lifecycle"): the final
+          sequenced item after fork/compare/synthesize, grouped here right
+          after Branch from Here since all three below are branch-lifecycle
+          actions. Mark Status reuses the exact click-to-expand submenu
+          idiom Generate Chart below already established (chartMenuOpen),
+          not a new interaction pattern - role="menuitemradio"/aria-checked
+          marks the currently active status. */}
+      <button
+        type="button"
+        role="menuitem"
+        aria-haspopup="true"
+        aria-expanded={statusMenuOpen}
+        onClick={() => setStatusMenuOpen((open) => !open)}
+      >
+        Mark Status
+      </button>
+      {statusMenuOpen && (
+        <div className="chat-node-submenu" role="menu" aria-label="Branch status">
+          {BRANCH_STATUS_OPTIONS.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              role="menuitemradio"
+              aria-checked={option.value === branchStatus}
+              onClick={() => {
+                onSetBranchStatus(option.value);
+                onClose();
+              }}
+            >
+              {option.value === branchStatus ? "✓ " : ""}
+              {option.label}
+            </button>
+          ))}
+        </div>
+      )}
+      <button
+        type="button"
+        role="menuitem"
+        onClick={() => {
+          onSetFinalDeliverable(!isFinalDeliverable);
+          onClose();
+        }}
+      >
+        {isFinalDeliverable ? "Unmark Final Deliverable" : "Mark as Final Deliverable"}
+      </button>
+      {/* "Collapse Branch"/"Expand Branch" flips off THIS node's own
+          isCollapsed (same value/direction the plain single-node
+          "Expand"/"Collapse" item above already reads) but applies
+          server-side across the whole chat-kind subtree rooted here, not
+          just this one node - see onCollapseBranch's own comment on
+          ChatNodeData. Deliberately NOT automatic when status is set to
+          "rejected" above - status and collapse stay decoupled. */}
+      <button
+        type="button"
+        role="menuitem"
+        onClick={() => {
+          onCollapseBranch(!isCollapsed);
+          onClose();
+        }}
+      >
+        {isCollapsed ? "Expand Branch" : "Collapse Branch"}
       </button>
       {/* Real (not disabled) - matches the legacy's own `if docked_children:`
           guard exactly. One button per docked child, each undocking that
@@ -417,6 +536,17 @@ export function ChatNodeView({ id, data, selected }: NodeProps<ChatFlowNode>) {
       <div className="scene-node-title chat-node-role">
         <span className="chat-node-role-group">
           <span>{data.isUser ? "You" : "Assistant"}</span>
+          {/* ADR-002 Workstream 1 ("Branch status and lifecycle"): always
+              rendered (unlike every other badge here, which is conditional)
+              - branchStatus always has a real value ("active" for the vast
+              majority of nodes, never null/undefined), so this is always
+              meaningful to show, not just for a rare marked case. */}
+          <span
+            className="chat-node-status-badge"
+            style={{ backgroundColor: BRANCH_STATUS_COLORS[data.branchStatus] ?? BRANCH_STATUS_COLORS.active }}
+            title={`Branch status: ${data.branchStatus}`}
+            aria-label={`Branch status: ${data.branchStatus}`}
+          />
           {data.dockedChildren.length > 0 && (
             <span className="chat-node-docked-badge" title="Docked items">
               {data.dockedChildren.length}
@@ -440,6 +570,20 @@ export function ChatNodeView({ id, data, selected }: NodeProps<ChatFlowNode>) {
           {data.model && (
             <span className="chat-node-model-badge" title={data.provider ?? undefined}>
               {data.model}
+            </span>
+          )}
+          {data.isFinalDeliverable && (
+            // ADR-002 Workstream 1 ("Branch status and lifecycle"): reuses
+            // the synthesis badge's "single glyph, no pill" shape - at most
+            // one node in the whole scene can ever show this (server-
+            // computed against the document's one final_deliverable_
+            // node_id pointer).
+            <span
+              className="chat-node-final-badge"
+              title="Final Deliverable"
+              aria-label="Final Deliverable"
+            >
+              ★
             </span>
           )}
         </span>
@@ -480,6 +624,11 @@ export function ChatNodeView({ id, data, selected }: NodeProps<ChatFlowNode>) {
           isBranchFocusActive={data.isBranchFocusActive}
           onToggleBranchFocus={data.onToggleBranchFocus}
           onBranchFromHere={data.onBranchFromHere}
+          branchStatus={data.branchStatus}
+          isFinalDeliverable={data.isFinalDeliverable}
+          onSetBranchStatus={data.onSetBranchStatus}
+          onSetFinalDeliverable={data.onSetFinalDeliverable}
+          onCollapseBranch={data.onCollapseBranch}
           onClose={() => setMenuPosition(null)}
         />
       )}

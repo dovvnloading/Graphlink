@@ -37,6 +37,9 @@ function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}) {
   const onScrollChange = vi.fn();
   const onToggleBranchFocus = vi.fn();
   const onBranchFromHere = vi.fn();
+  const onSetBranchStatus = vi.fn();
+  const onSetFinalDeliverable = vi.fn();
+  const onCollapseBranch = vi.fn();
   const props = {
     id: "n0",
     selected: false,
@@ -59,6 +62,11 @@ function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}) {
       isBranchFocusActive: false,
       onToggleBranchFocus,
       onBranchFromHere,
+      branchStatus: "active",
+      isFinalDeliverable: false,
+      onSetBranchStatus,
+      onSetFinalDeliverable,
+      onCollapseBranch,
       ...overrides,
     },
   } as unknown as NodeProps<ChatFlowNode>;
@@ -71,7 +79,8 @@ function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}) {
   return {
     onToggleCollapse, onDelete, onUndockChild, onRegenerate, onGenerateImage,
     onGenerateChart, onGenerateKeyTakeaway, onGenerateExplainerNote,
-    onOpenDocumentView, onScrollChange, onToggleBranchFocus, onBranchFromHere, container,
+    onOpenDocumentView, onScrollChange, onToggleBranchFocus, onBranchFromHere,
+    onSetBranchStatus, onSetFinalDeliverable, onCollapseBranch, container,
   };
 }
 
@@ -445,6 +454,107 @@ describe("ChatNodeView Synthesize Branches provenance (ADR-002 Workstream 1)", (
       model: null,
     });
     expect(screen.queryByText("claude-sonnet-5")).toBeNull();
+  });
+});
+
+// ADR-002 Workstream 1 ("Branch status and lifecycle"): the final sequenced
+// item after fork/compare/synthesize - status marking, Final Deliverable,
+// and collapsing a whole branch.
+describe("ChatNodeView branch status badge (ADR-002 Workstream 1)", () => {
+  it("always renders the status dot, even for the default 'active' status", () => {
+    renderChatNode({ branchStatus: "active" });
+    const dot = screen.getByLabelText("Branch status: active");
+    expect(dot).toHaveAttribute("title", "Branch status: active");
+  });
+
+  it("renders a distinct status dot for accepted/rejected/superseded", () => {
+    renderChatNode({ branchStatus: "accepted" });
+    expect(screen.getByLabelText("Branch status: accepted")).toBeInTheDocument();
+  });
+
+  it("renders no Final Deliverable badge when isFinalDeliverable is false", () => {
+    renderChatNode({ isFinalDeliverable: false });
+    expect(screen.queryByLabelText("Final Deliverable")).toBeNull();
+  });
+
+  it("renders the Final Deliverable badge when isFinalDeliverable is true", () => {
+    renderChatNode({ isFinalDeliverable: true });
+    const badge = screen.getByLabelText("Final Deliverable");
+    expect(badge).toHaveTextContent("★");
+  });
+});
+
+describe("ChatNodeView Mark Status menu (ADR-002 Workstream 1)", () => {
+  it("opens the submenu and shows all 4 status options with the current one checked", async () => {
+    const user = userEvent.setup();
+    renderChatNode({ branchStatus: "rejected" });
+
+    fireEvent.contextMenu(screen.getByText("You"));
+    await user.click(screen.getByRole("menuitem", { name: "Mark Status" }));
+
+    expect(screen.getByRole("menuitemradio", { name: "Active" })).toHaveAttribute("aria-checked", "false");
+    const rejectedOption = screen.getByRole("menuitemradio", { name: "✓ Rejected" });
+    expect(rejectedOption).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("clicking a status option calls onSetBranchStatus with that value and closes the menu", async () => {
+    const user = userEvent.setup();
+    const { onSetBranchStatus } = renderChatNode({ branchStatus: "active" });
+
+    fireEvent.contextMenu(screen.getByText("You"));
+    await user.click(screen.getByRole("menuitem", { name: "Mark Status" }));
+    await user.click(screen.getByRole("menuitemradio", { name: "Accepted" }));
+
+    expect(onSetBranchStatus).toHaveBeenCalledWith("accepted");
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+});
+
+describe("ChatNodeView Mark as Final Deliverable (ADR-002 Workstream 1)", () => {
+  it("shows 'Mark as Final Deliverable' and calls onSetFinalDeliverable(true) when not yet marked", async () => {
+    const user = userEvent.setup();
+    const { onSetFinalDeliverable } = renderChatNode({ isFinalDeliverable: false });
+
+    fireEvent.contextMenu(screen.getByText("You"));
+    const item = screen.getByRole("menuitem", { name: "Mark as Final Deliverable" });
+    await user.click(item);
+
+    expect(onSetFinalDeliverable).toHaveBeenCalledWith(true);
+  });
+
+  it("shows 'Unmark Final Deliverable' and calls onSetFinalDeliverable(false) when already marked", async () => {
+    const user = userEvent.setup();
+    const { onSetFinalDeliverable } = renderChatNode({ isFinalDeliverable: true });
+
+    fireEvent.contextMenu(screen.getByText("You"));
+    const item = screen.getByRole("menuitem", { name: "Unmark Final Deliverable" });
+    await user.click(item);
+
+    expect(onSetFinalDeliverable).toHaveBeenCalledWith(false);
+  });
+});
+
+describe("ChatNodeView Collapse Branch (ADR-002 Workstream 1)", () => {
+  it("shows 'Collapse Branch' and calls onCollapseBranch(true) when not collapsed", async () => {
+    const user = userEvent.setup();
+    const { onCollapseBranch } = renderChatNode({ isCollapsed: false });
+
+    fireEvent.contextMenu(screen.getByText("You"));
+    const item = screen.getByRole("menuitem", { name: "Collapse Branch" });
+    await user.click(item);
+
+    expect(onCollapseBranch).toHaveBeenCalledWith(true);
+  });
+
+  it("shows 'Expand Branch' and calls onCollapseBranch(false) when already collapsed", async () => {
+    const user = userEvent.setup();
+    const { onCollapseBranch } = renderChatNode({ isCollapsed: true });
+
+    fireEvent.contextMenu(screen.getByText("You"));
+    const item = screen.getByRole("menuitem", { name: "Expand Branch" });
+    await user.click(item);
+
+    expect(onCollapseBranch).toHaveBeenCalledWith(false);
   });
 });
 

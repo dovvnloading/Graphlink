@@ -336,6 +336,28 @@ def _restore_chat_payload(payload: dict[str, Any]) -> SceneNode:
         is_collapsed=bool(payload.get("is_collapsed", False)),
         history=_restore_history(payload.get("conversation_history")),
         chat_scroll_value=float(payload.get("scroll_value", 0.0) or 0.0),
+        # ADR-002 Workstream 1 ("Branch status and lifecycle") - confirmed,
+        # pre-existing gap fixed inline: provider/model/is_branch_synthesis/
+        # synthesis_instructions (Synthesize Branches) already synced live
+        # to the frontend via scene_payload() but were silently dropped on
+        # load (session_save.py's own docstring at the matching fix has the
+        # full story). item_ids (also part of a synthesis node's real
+        # shape) is deliberately NOT set here - it references OTHER nodes
+        # by their original id, which isn't resolvable until every node has
+        # a new id; see _restore_branch_provenance_item_ids's own second-
+        # pass restoration below. branch_status is this same pass's own
+        # new field; an unrecognized/future value downgrades to "active"
+        # rather than crashing the load, the same defensive posture this
+        # function already uses for every other field.
+        provider=payload.get("provider"),
+        model=payload.get("model"),
+        is_branch_synthesis=bool(payload.get("is_branch_synthesis", False)),
+        synthesis_instructions=str(payload.get("synthesis_instructions", "") or ""),
+        branch_status=(
+            payload.get("branch_status")
+            if payload.get("branch_status") in SceneDocument.BRANCH_STATUS_VALUES
+            else "active"
+        ),
     )
 
 
@@ -678,6 +700,18 @@ def _restore_notes(document: SceneDocument, notes_data: list) -> dict[int, str]:
             )
             document.set_note_content(note.id, str(note_payload.get("content", "")))
             document.set_group_color(note.id, note_payload.get("color"), note_payload.get("header_color"))
+            # ADR-002 Workstream 1 ("Branch status and lifecycle") -
+            # confirmed, pre-existing gap fixed inline: is_branch_comparison
+            # (Compare Branches) already synced live to the frontend via
+            # scene_payload() but was silently dropped on load. A plain
+            # scalar poke, not a document method call, matching this
+            # function's own established posture for fields that don't
+            # need a dedicated setter (_restore_web_payload/_restore_image_
+            # payload already assign SceneNode fields directly the same
+            # way). item_ids is deliberately NOT set here - same
+            # not-yet-resolvable-reference reasoning as the chat-kind case;
+            # see _restore_branch_provenance_item_ids below.
+            note.is_branch_comparison = bool(note_payload.get("is_branch_comparison", False))
         except Exception:
             continue
         notes_map[index] = note.id
@@ -898,6 +932,56 @@ def _restore_system_prompt_and_summary_connections(
                     continue
 
 
+def _restore_branch_provenance_item_ids(
+    document: SceneDocument,
+    node_payloads: list,
+    all_nodes_map: dict[int, str],
+    nodes_by_id: dict[str, str],
+    notes_data: list,
+    notes_map: dict[int, str],
+) -> None:
+    """ADR-002 Workstream 1 ("Branch status and lifecycle") - confirmed,
+    pre-existing gap fixed inline: a Synthesize Branches chat node's or a
+    Compare Branches note's own item_ids (the source branch node ids - see
+    SceneNode.item_ids's own comment on backend/canvas.py) reference OTHER
+    nodes by their ORIGINAL saved id, which is re-minted on load - the same
+    "translate through nodes_by_id, once every node has a resolved new id"
+    idiom _restore_system_prompt_and_summary_connections above already
+    uses. Runs as its own pass AFTER both the main node-restore loop and
+    _restore_notes have already completed (not inline inside
+    _restore_chat_payload/_restore_notes themselves, which run too early -
+    a synthesis/comparison result's own sources may not have a resolved new
+    id yet at that point). An id no longer present in nodes_by_id (a source
+    deleted before save, or a genuinely stale/corrupt reference) is
+    silently dropped from the restored list rather than aborting the load -
+    matching this file's own established defensive posture elsewhere."""
+    for index, node_payload in enumerate(node_payloads):
+        if not isinstance(node_payload, dict) or not node_payload.get("is_branch_synthesis"):
+            continue
+        new_id = all_nodes_map.get(index)
+        if new_id is None or new_id not in document.nodes:
+            continue
+        raw_item_ids = node_payload.get("item_ids")
+        if isinstance(raw_item_ids, list):
+            document.nodes[new_id].item_ids = [
+                nodes_by_id[str(i)] for i in raw_item_ids if str(i) in nodes_by_id
+            ]
+
+    if not isinstance(notes_data, list):
+        return
+    for index, note_payload in enumerate(notes_data):
+        if not isinstance(note_payload, dict) or not note_payload.get("is_branch_comparison"):
+            continue
+        new_id = notes_map.get(index)
+        if new_id is None or new_id not in document.nodes:
+            continue
+        raw_item_ids = note_payload.get("item_ids")
+        if isinstance(raw_item_ids, list):
+            document.nodes[new_id].item_ids = [
+                nodes_by_id[str(i)] for i in raw_item_ids if str(i) in nodes_by_id
+            ]
+
+
 def _restore_pins(document: SceneDocument, pins_data: list) -> None:
     if not isinstance(pins_data, list) or not pins_data:
         return
@@ -983,6 +1067,14 @@ def restore_chat_into_document(
 
     notes_map = _restore_notes(document, notes_data)
 
+    # ADR-002 Workstream 1 ("Branch status and lifecycle") - confirmed,
+    # pre-existing gap fixed inline: must run AFTER both the main
+    # node-restore loop and _restore_notes above, since it translates
+    # cross-node references (a synthesis/comparison result's own source
+    # ids) that aren't resolvable until every node it might reference has
+    # its own new id - see that function's own docstring.
+    _restore_branch_provenance_item_ids(document, node_payloads, all_nodes_map, nodes_by_id, notes_data, notes_map)
+
     charts_map, charts_by_id = _restore_charts(document, chat_data.get("charts", []), all_nodes_map, nodes_by_id)
 
     node_slot_count = len(node_payloads)
@@ -1014,3 +1106,19 @@ def restore_chat_into_document(
         document.total_session_tokens = int(total_tokens)
     except (TypeError, ValueError):
         document.total_session_tokens = 0
+
+    # ADR-002 Workstream 1 ("Branch status and lifecycle"): translated
+    # through nodes_by_id, same as every other cross-node reference above -
+    # a missing/stale/deleted-before-save reference is silently treated as
+    # "no deliverable marked" rather than aborting the load. The kind_by_
+    # new_id check (found by adversarial review) mirrors SceneDocument.
+    # set_final_deliverable's own chat-kind-only validation - without it, a
+    # malformed/hand-edited save file pointing this at a non-chat node would
+    # load successfully and violate that invariant for the rest of the
+    # session, since this path (unlike the live setter) has no SceneError
+    # to raise against.
+    raw_final_id = chat_data.get("final_deliverable_node_id")
+    if raw_final_id and str(raw_final_id) in nodes_by_id:
+        final_new_id = nodes_by_id[str(raw_final_id)]
+        if kind_by_new_id.get(final_new_id) == "chat":
+            document.final_deliverable_node_id = final_new_id

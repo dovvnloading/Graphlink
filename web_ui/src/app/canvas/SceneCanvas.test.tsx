@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   applyGroupDragDelta,
   computeDimmedNodeIds,
+  computeNonAcceptedNodeIds,
   conversationHistoryToDocumentMarkdown,
   groupDragKindOf,
   handleSelectionChange,
@@ -1593,6 +1594,200 @@ describe("toFlowNodes (ADR-002 Workstream 1 - Synthesize Branches provenance)", 
       synthesisInstructions: undefined,
       synthesisSourceNodeIds: undefined,
     });
+  });
+});
+
+// ADR-002 Workstream 1 ("Branch status and lifecycle"). Same situation as
+// SynthesisTestFields above - branchStatus/isFinalDeliverable aren't in the
+// generated SceneNodeRow type yet (see SceneCanvas.tsx's own
+// SceneNodeBranchLifecycleFields comment).
+interface BranchLifecycleTestFields {
+  branchStatus: string;
+  isFinalDeliverable: boolean;
+}
+
+function withBranchLifecycleFields(
+  node: SceneNodeRow,
+  overrides: Partial<BranchLifecycleTestFields> = {},
+): SceneNodeRow & BranchLifecycleTestFields {
+  return {
+    ...node,
+    branchStatus: "active",
+    isFinalDeliverable: false,
+    ...overrides,
+  } as SceneNodeRow & BranchLifecycleTestFields;
+}
+
+describe("toFlowNodes (ADR-002 Workstream 1 - Branch status and lifecycle)", () => {
+  it("maps a chat node's branchStatus/isFinalDeliverable onto the flow node's data", () => {
+    const scene = baseScene({
+      nodes: [
+        withBranchLifecycleFields(baseNode({ id: "chat-1", kind: "chat", content: "hi" }), {
+          branchStatus: "accepted",
+          isFinalDeliverable: true,
+        }),
+      ],
+      edges: [],
+    });
+    const store = makeStore();
+
+    const flowNodes = toFlowNodes(scene, store);
+    const chatFlowNode = flowNodes.find((n) => n.id === "chat-1");
+    expect(chatFlowNode!.data).toMatchObject({ branchStatus: "accepted", isFinalDeliverable: true });
+  });
+
+  it("onSetBranchStatus calls store.setBranchStatus with this node's own id and the given status", () => {
+    const scene = baseScene({
+      nodes: [withBranchLifecycleFields(baseNode({ id: "chat-1", kind: "chat", content: "hi" }))],
+      edges: [],
+    });
+    const store = makeStore();
+    const spy = vi.spyOn(store, "setBranchStatus");
+
+    const flowNodes = toFlowNodes(scene, store);
+    const data = flowNodes.find((n) => n.id === "chat-1")!.data as { onSetBranchStatus: (status: string) => void };
+    data.onSetBranchStatus("rejected");
+    expect(spy).toHaveBeenCalledWith("chat-1", "rejected");
+  });
+
+  it("onSetFinalDeliverable calls store.setFinalDeliverable with this node's own id and the given flag", () => {
+    const scene = baseScene({
+      nodes: [withBranchLifecycleFields(baseNode({ id: "chat-1", kind: "chat", content: "hi" }))],
+      edges: [],
+    });
+    const store = makeStore();
+    const spy = vi.spyOn(store, "setFinalDeliverable");
+
+    const flowNodes = toFlowNodes(scene, store);
+    const data = flowNodes.find((n) => n.id === "chat-1")!.data as { onSetFinalDeliverable: (isFinal: boolean) => void };
+    data.onSetFinalDeliverable(true);
+    expect(spy).toHaveBeenCalledWith("chat-1", true);
+  });
+
+  it("onCollapseBranch calls store.collapseBranch with this node's own id and the given flag", () => {
+    const scene = baseScene({
+      nodes: [withBranchLifecycleFields(baseNode({ id: "chat-1", kind: "chat", content: "hi" }))],
+      edges: [],
+    });
+    const store = makeStore();
+    const spy = vi.spyOn(store, "collapseBranch");
+
+    const flowNodes = toFlowNodes(scene, store);
+    const data = flowNodes.find((n) => n.id === "chat-1")!.data as { onCollapseBranch: (collapsed: boolean) => void };
+    data.onCollapseBranch(true);
+    expect(spy).toHaveBeenCalledWith("chat-1", true);
+  });
+});
+
+describe("computeNonAcceptedNodeIds (ADR-002 Workstream 1 - Focus Accepted Paths)", () => {
+  function lifecycleNode(overrides: Partial<SceneNodeRow & BranchLifecycleTestFields> = {}) {
+    return withBranchLifecycleFields(baseNode(overrides), overrides);
+  }
+
+  it("returns an empty set when no chat node is rejected or superseded", () => {
+    const scene = baseScene({
+      nodes: [
+        lifecycleNode({ id: "root", kind: "chat", branchStatus: "active" }),
+        lifecycleNode({ id: "child", kind: "chat", branchStatus: "accepted" }),
+      ],
+      edges: [{ id: "e1", source: "root", target: "child" }],
+    });
+    expect(computeNonAcceptedNodeIds(scene)).toEqual(new Set());
+  });
+
+  it("excludes a rejected root and every one of its chat-kind descendants", () => {
+    const scene = baseScene({
+      nodes: [
+        lifecycleNode({ id: "root", kind: "chat", branchStatus: "active" }),
+        lifecycleNode({ id: "rejected", kind: "chat", branchStatus: "rejected" }),
+        lifecycleNode({ id: "grandchild", kind: "chat", branchStatus: "active" }),
+        lifecycleNode({ id: "other-branch", kind: "chat", branchStatus: "active" }),
+      ],
+      edges: [
+        { id: "e1", source: "root", target: "rejected" },
+        { id: "e2", source: "rejected", target: "grandchild" },
+        { id: "e3", source: "root", target: "other-branch" },
+      ],
+    });
+    const excluded = computeNonAcceptedNodeIds(scene);
+    expect(excluded).toEqual(new Set(["rejected", "grandchild"]));
+  });
+
+  it("an explicit accepted override reactivates a sub-branch beneath a rejected ancestor", () => {
+    const scene = baseScene({
+      nodes: [
+        lifecycleNode({ id: "root", kind: "chat", branchStatus: "active" }),
+        lifecycleNode({ id: "rejected", kind: "chat", branchStatus: "rejected" }),
+        lifecycleNode({ id: "reactivated", kind: "chat", branchStatus: "accepted" }),
+        lifecycleNode({ id: "below-reactivated", kind: "chat", branchStatus: "active" }),
+      ],
+      edges: [
+        { id: "e1", source: "root", target: "rejected" },
+        { id: "e2", source: "rejected", target: "reactivated" },
+        { id: "e3", source: "reactivated", target: "below-reactivated" },
+      ],
+    });
+    const excluded = computeNonAcceptedNodeIds(scene);
+    // "rejected" itself stays excluded, but its "accepted" child and
+    // everything below that child is reactivated.
+    expect(excluded).toEqual(new Set(["rejected"]));
+  });
+
+  it("pulls in non-chat content nodes via their chat anchor", () => {
+    const scene = baseScene({
+      nodes: [
+        lifecycleNode({ id: "root", kind: "chat", branchStatus: "active" }),
+        lifecycleNode({ id: "rejected", kind: "chat", branchStatus: "rejected" }),
+        baseNode({ id: "code-child", kind: "code" }),
+      ],
+      edges: [
+        { id: "e1", source: "root", target: "rejected" },
+        { id: "e2", source: "rejected", target: "code-child" },
+      ],
+    });
+    const excluded = computeNonAcceptedNodeIds(scene);
+    expect(excluded.has("code-child")).toBe(true);
+  });
+
+  it("does not exclude a node whose branchStatus is superseded from touching an unrelated sibling branch", () => {
+    const scene = baseScene({
+      nodes: [
+        lifecycleNode({ id: "root", kind: "chat", branchStatus: "active" }),
+        lifecycleNode({ id: "superseded", kind: "chat", branchStatus: "superseded" }),
+        lifecycleNode({ id: "sibling", kind: "chat", branchStatus: "active" }),
+      ],
+      edges: [
+        { id: "e1", source: "root", target: "superseded" },
+        { id: "e2", source: "root", target: "sibling" },
+      ],
+    });
+    const excluded = computeNonAcceptedNodeIds(scene);
+    expect(excluded).toEqual(new Set(["superseded"]));
+  });
+
+  // Found by adversarial review: a node with a genuinely healthy (canonical,
+  // tie-break-winning) parent must never be excluded just because it ALSO
+  // happens to receive a second, unrelated edge from a rejected node
+  // elsewhere in the graph - SceneDocument.connect has no cycle/multi-parent
+  // validation, so this is structurally reachable even though the UI has no
+  // direct multi-parent-creation gesture (e.g. an unrelated manual edge).
+  it("does not exclude a node via a second, non-canonical incoming edge from an unrelated rejected node", () => {
+    const scene = baseScene({
+      nodes: [
+        lifecycleNode({ id: "healthy-root", kind: "chat", branchStatus: "active" }),
+        lifecycleNode({ id: "shared", kind: "chat", branchStatus: "active" }),
+        lifecycleNode({ id: "rejected", kind: "chat", branchStatus: "rejected" }),
+      ],
+      edges: [
+        // "shared"'s canonical parent (first edge whose target is "shared").
+        { id: "e1", source: "healthy-root", target: "shared" },
+        // A second, unrelated incoming edge from a rejected node - must not
+        // exclude "shared", since its real parent is healthy.
+        { id: "e2", source: "rejected", target: "shared" },
+      ],
+    });
+    const excluded = computeNonAcceptedNodeIds(scene);
+    expect(excluded).toEqual(new Set(["rejected"]));
   });
 });
 

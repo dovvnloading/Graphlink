@@ -561,3 +561,161 @@ def test_resolve_node_payload_list_tolerates_double_nested_legacy_shape():
     document = SceneDocument()
     restore_chat_into_document(document, {"data": {"data": {"nodes": [_chat("nested")]}}}, [], [])
     assert len(document.nodes) == 1
+
+
+# -- ADR-002 Workstream 1: "Branch status and lifecycle" ---------------------
+#
+# Includes the confirmed, pre-existing gap fixed inline in this same pass:
+# provider/model/is_branch_synthesis/synthesis_instructions/item_ids
+# (Synthesize Branches) and is_branch_comparison/item_ids (Compare Branches)
+# already synced live to the frontend but were silently dropped on load
+# before this fix - see backend/session_save.py's own comment on the
+# matching serializers.
+
+
+def test_restore_chat_payload_restores_synthesis_provenance_scalars():
+    document = _restore(nodes=[
+        _chat(
+            "n0", raw_content="Combined answer", is_user=False,
+            provider="Anthropic Claude", model="claude-sonnet-5",
+            is_branch_synthesis=True, synthesis_instructions="merge them",
+            branch_status="accepted",
+        ),
+    ])
+    node = next(iter(document.nodes.values()))
+    assert node.provider == "Anthropic Claude"
+    assert node.model == "claude-sonnet-5"
+    assert node.is_branch_synthesis is True
+    assert node.synthesis_instructions == "merge them"
+    assert node.branch_status == "accepted"
+
+
+def test_restore_chat_payload_downgrades_an_unrecognized_branch_status_to_active():
+    document = _restore(nodes=[_chat("n0", branch_status="archived")])
+    node = next(iter(document.nodes.values()))
+    assert node.branch_status == "active"
+
+
+def test_restore_chat_payload_defaults_branch_status_to_active_when_absent():
+    document = _restore(nodes=[_chat("n0")])
+    node = next(iter(document.nodes.values()))
+    assert node.branch_status == "active"
+
+
+def test_restore_notes_restores_is_branch_comparison():
+    document = _restore(notes=[
+        {"content": "cmp", "position": {"x": 0, "y": 0}, "size": {"width": 1, "height": 1},
+         "is_branch_comparison": True},
+    ])
+    note = next(iter(document.nodes.values()))
+    assert note.is_branch_comparison is True
+
+
+def test_restore_notes_defaults_is_branch_comparison_to_false_when_absent():
+    document = _restore(notes=[
+        {"content": "plain", "position": {"x": 0, "y": 0}, "size": {"width": 1, "height": 1}},
+    ])
+    note = next(iter(document.nodes.values()))
+    assert note.is_branch_comparison is False
+
+
+def test_restore_translates_a_synthesis_nodes_item_ids_to_the_re_minted_source_ids():
+    document = _restore(nodes=[
+        _chat("src-1", raw_content="first branch reply"),
+        _chat("src-2", raw_content="second branch reply"),
+        _chat(
+            "result", raw_content="Combined answer", is_user=False,
+            is_branch_synthesis=True, item_ids=["src-1", "src-2"],
+        ),
+    ])
+    src1 = next(n for n in document.nodes.values() if n.content == "first branch reply")
+    src2 = next(n for n in document.nodes.values() if n.content == "second branch reply")
+    result = next(n for n in document.nodes.values() if n.content == "Combined answer")
+    assert set(result.item_ids) == {src1.id, src2.id}
+    assert src1.id != "src-1", "ids must be re-minted on load, not reused verbatim - a weak assertion here would miss a translation bug"
+
+
+def test_restore_translates_a_comparison_notes_item_ids_to_the_re_minted_source_ids():
+    document = _restore(
+        nodes=[
+            _chat("src-1", raw_content="first branch reply"),
+            _chat("src-2", raw_content="second branch reply"),
+        ],
+        notes=[
+            {"content": "Branch Comparison", "position": {"x": 0, "y": 0}, "size": {"width": 1, "height": 1},
+             "is_branch_comparison": True, "item_ids": ["src-1", "src-2"]},
+        ],
+    )
+    src1 = next(n for n in document.nodes.values() if n.content == "first branch reply")
+    src2 = next(n for n in document.nodes.values() if n.content == "second branch reply")
+    note = next(n for n in document.nodes.values() if n.kind == "note")
+    assert set(note.item_ids) == {src1.id, src2.id}
+
+
+def test_restore_drops_a_synthesis_item_id_that_does_not_resolve_to_any_node():
+    document = _restore(nodes=[
+        _chat(
+            "result", raw_content="Combined answer", is_user=False,
+            is_branch_synthesis=True, item_ids=["deleted-before-save", "also-missing"],
+        ),
+    ])
+    result = next(iter(document.nodes.values()))
+    assert result.item_ids == []
+
+
+def test_restore_only_translates_item_ids_for_a_flagged_synthesis_or_comparison_node():
+    # An ordinary chat/note node's item_ids (unset, empty by default) must
+    # not be touched by the second-pass translation just because OTHER
+    # nodes in the same load happen to be flagged.
+    document = _restore(
+        nodes=[
+            _chat("src-1", raw_content="source"),
+            _chat("ordinary", raw_content="just a normal reply"),
+            _chat(
+                "result", raw_content="Combined answer", is_user=False,
+                is_branch_synthesis=True, item_ids=["src-1"],
+            ),
+        ],
+    )
+    ordinary = next(n for n in document.nodes.values() if n.content == "just a normal reply")
+    assert ordinary.item_ids == []
+
+
+def test_restore_translates_final_deliverable_node_id():
+    # "legacy-uuid-1234" (not "n0"/"n1"/...) is deliberate: a fresh
+    # SceneDocument's own id counter also happens to mint "n0" first, so a
+    # payload id of "n0" would coincidentally match the real new id even if
+    # translation were silently broken - this id can never collide.
+    document = _restore(
+        nodes=[_chat("legacy-uuid-1234", raw_content="the deliverable")],
+        final_deliverable_node_id="legacy-uuid-1234",
+    )
+    node = next(iter(document.nodes.values()))
+    assert document.final_deliverable_node_id == node.id
+    assert node.id != "legacy-uuid-1234", "ids must be re-minted on load - a weak assertion here would miss a translation bug"
+
+
+def test_restore_final_deliverable_node_id_defaults_to_none_when_absent():
+    document = _restore(nodes=[_chat("n0")])
+    assert document.final_deliverable_node_id is None
+
+
+def test_restore_final_deliverable_node_id_stale_reference_is_dropped():
+    document = _restore(nodes=[_chat("n0")], final_deliverable_node_id="does-not-exist")
+    assert document.final_deliverable_node_id is None
+
+
+def test_restore_final_deliverable_node_id_rejects_a_resolved_non_chat_node():
+    # Found by adversarial review: the live setter (SceneDocument.
+    # set_final_deliverable) rejects non-chat nodes; this defends the same
+    # invariant against a malformed/hand-edited save file that references
+    # one, which this load path has no SceneError to raise against.
+    document = _restore(
+        nodes=[
+            _chat("parent"),
+            {"node_type": "code", "id": "code-1", "code": "print(1)", "language": "python",
+             "position": {"x": 0, "y": 0}, "parent_content_node_index": 0},
+        ],
+        final_deliverable_node_id="code-1",
+    )
+    assert document.final_deliverable_node_id is None

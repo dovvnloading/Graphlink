@@ -7146,3 +7146,252 @@ def test_mark_branch_synthesis_rejects_an_unknown_node_id():
     doc = SceneDocument()
     with pytest.raises(SceneError):
         doc.mark_branch_synthesis("does-not-exist", ["x", "y"], "instructions", None, None)
+
+
+# -- ADR-002 Workstream 1: "Branch status and lifecycle" ---------------------
+#
+# The fourth and final sequenced item ("fork -> compare -> synthesize ->
+# status/lifecycle UI"): marking a branch Active/Accepted/Rejected/Superseded,
+# a document-level Final Deliverable pointer, and collapsing a whole
+# chat-kind subtree without deleting it.
+
+
+def test_set_branch_status_accepts_every_legal_value():
+    doc = SceneDocument()
+    node = doc.add_chat_node(0, 0, "hi", True)
+    assert node.branch_status == "active"
+    for status in ("accepted", "rejected", "superseded", "active"):
+        doc.set_branch_status(node.id, status)
+        assert doc.nodes[node.id].branch_status == status
+
+
+def test_set_branch_status_rejects_an_invalid_value():
+    doc = SceneDocument()
+    node = doc.add_chat_node(0, 0, "hi", True)
+    with pytest.raises(SceneError):
+        doc.set_branch_status(node.id, "archived")
+    assert doc.nodes[node.id].branch_status == "active", "a rejected call must not mutate the node"
+
+
+def test_set_branch_status_rejects_a_non_chat_node():
+    doc = SceneDocument()
+    note = doc.add_note(0, 0)
+    with pytest.raises(SceneError):
+        doc.set_branch_status(note.id, "accepted")
+
+
+def test_set_branch_status_rejects_an_unknown_node_id():
+    doc = SceneDocument()
+    with pytest.raises(SceneError):
+        doc.set_branch_status("does-not-exist", "accepted")
+
+
+def test_set_branch_status_has_no_effect_on_sibling_branches():
+    # Deliberately no auto-exclusivity - see set_branch_status's own comment.
+    doc = SceneDocument()
+    root = doc.add_chat_node(0, 0, "root", True)
+    first = doc.add_chat_node(0, 160, "first", False, parent_id=root.id)
+    second = doc.add_chat_node(460, 160, "second", False, parent_id=root.id)
+    doc.set_branch_status(first.id, "accepted")
+    assert doc.nodes[first.id].branch_status == "accepted"
+    assert doc.nodes[second.id].branch_status == "active", "marking one branch must never touch its sibling"
+
+
+def test_set_final_deliverable_marks_and_unmarks():
+    doc = SceneDocument()
+    node = doc.add_chat_node(0, 0, "hi", True)
+    assert doc.final_deliverable_node_id is None
+    doc.set_final_deliverable(node.id, True)
+    assert doc.final_deliverable_node_id == node.id
+    doc.set_final_deliverable(node.id, False)
+    assert doc.final_deliverable_node_id is None
+
+
+def test_set_final_deliverable_is_exclusive_marking_a_new_node_supersedes_the_old_one():
+    doc = SceneDocument()
+    first = doc.add_chat_node(0, 0, "first", True)
+    second = doc.add_chat_node(0, 160, "second", True)
+    doc.set_final_deliverable(first.id, True)
+    assert doc.final_deliverable_node_id == first.id
+    doc.set_final_deliverable(second.id, True)
+    assert doc.final_deliverable_node_id == second.id, "the new mark must silently supersede the old one"
+
+
+def test_set_final_deliverable_unmarking_a_different_node_than_the_current_one_is_a_no_op():
+    doc = SceneDocument()
+    first = doc.add_chat_node(0, 0, "first", True)
+    second = doc.add_chat_node(0, 160, "second", True)
+    doc.set_final_deliverable(first.id, True)
+    doc.set_final_deliverable(second.id, False)
+    assert doc.final_deliverable_node_id == first.id, "unmarking a node that doesn't hold the pointer must not clear it"
+
+
+def test_set_final_deliverable_rejects_a_non_chat_node():
+    doc = SceneDocument()
+    note = doc.add_note(0, 0)
+    with pytest.raises(SceneError):
+        doc.set_final_deliverable(note.id, True)
+
+
+def test_set_final_deliverable_rejects_an_unknown_node_id():
+    doc = SceneDocument()
+    with pytest.raises(SceneError):
+        doc.set_final_deliverable("does-not-exist", True)
+
+
+def test_chat_subtree_ids_includes_root_and_every_chat_descendant():
+    doc = SceneDocument()
+    root = doc.add_chat_node(0, 0, "root", True)
+    child = doc.add_chat_node(0, 160, "child", False, parent_id=root.id)
+    grandchild = doc.add_chat_node(0, 320, "grandchild", True, parent_id=child.id)
+    sibling = doc.add_chat_node(460, 160, "sibling", False, parent_id=root.id)
+    ids = set(doc._chat_subtree_ids(root.id))
+    assert ids == {root.id, child.id, grandchild.id, sibling.id}
+
+
+def test_chat_subtree_ids_starting_from_a_child_excludes_its_own_ancestors_and_siblings():
+    doc = SceneDocument()
+    root = doc.add_chat_node(0, 0, "root", True)
+    child = doc.add_chat_node(0, 160, "child", False, parent_id=root.id)
+    sibling = doc.add_chat_node(460, 160, "sibling", False, parent_id=root.id)
+    ids = set(doc._chat_subtree_ids(child.id))
+    assert ids == {child.id}
+    assert root.id not in ids
+    assert sibling.id not in ids
+
+
+def test_chat_subtree_ids_excludes_non_chat_content_children():
+    doc = SceneDocument()
+    root = doc.add_chat_node(0, 0, "root", True)
+    doc.add_code_node(0, 160, "print(1)", "python", parent_id=root.id)
+    ids = set(doc._chat_subtree_ids(root.id))
+    assert ids == {root.id}
+
+
+def test_collapse_branch_collapses_the_whole_chat_subtree_but_not_content_children():
+    doc = SceneDocument()
+    root = doc.add_chat_node(0, 0, "root", True)
+    child = doc.add_chat_node(0, 160, "child", False, parent_id=root.id)
+    code = doc.add_code_node(0, 320, "print(1)", "python", parent_id=child.id)
+
+    doc.collapse_branch(root.id, True)
+
+    assert doc.nodes[root.id].is_collapsed is True
+    assert doc.nodes[child.id].is_collapsed is True
+    assert doc.nodes[code.id].is_collapsed is False, "collapse must not cascade into non-chat content children"
+
+
+def test_collapse_branch_expand_reverses_it():
+    doc = SceneDocument()
+    root = doc.add_chat_node(0, 0, "root", True)
+    child = doc.add_chat_node(0, 160, "child", False, parent_id=root.id)
+    doc.collapse_branch(root.id, True)
+    doc.collapse_branch(root.id, False)
+    assert doc.nodes[root.id].is_collapsed is False
+    assert doc.nodes[child.id].is_collapsed is False
+
+
+def test_collapse_branch_rejects_a_non_chat_node():
+    doc = SceneDocument()
+    note = doc.add_note(0, 0)
+    with pytest.raises(SceneError):
+        doc.collapse_branch(note.id, True)
+
+
+def test_collapse_branch_rejects_an_unknown_node_id():
+    doc = SceneDocument()
+    with pytest.raises(SceneError):
+        doc.collapse_branch("does-not-exist", True)
+
+
+def test_scene_payload_includes_branch_status_and_final_deliverable():
+    doc = SceneDocument()
+    node = doc.add_chat_node(0, 0, "hi", True)
+    doc.set_branch_status(node.id, "accepted")
+    doc.set_final_deliverable(node.id, True)
+    other = doc.add_chat_node(0, 160, "other", True)
+
+    rows = {n["id"]: n for n in doc.scene_payload()["nodes"]}
+    assert rows[node.id]["branchStatus"] == "accepted"
+    assert rows[node.id]["isFinalDeliverable"] is True
+    assert rows[other.id]["branchStatus"] == "active"
+    assert rows[other.id]["isFinalDeliverable"] is False
+
+
+def test_clear_for_load_resets_final_deliverable_node_id():
+    doc = SceneDocument()
+    node = doc.add_chat_node(0, 0, "hi", True)
+    doc.set_final_deliverable(node.id, True)
+    doc.clear_for_load()
+    assert doc.final_deliverable_node_id is None
+
+
+def test_delete_chat_node_clears_final_deliverable_node_id_when_the_marked_node_is_deleted():
+    # Found by adversarial review: unlike last_chat_node_id, which
+    # re-points to the deleted node's own parent, final_deliverable_node_id
+    # is cleared entirely rather than silently promoted onto a node the
+    # user never actually marked.
+    doc = SceneDocument()
+    root = doc.add_chat_node(0, 0, "root", True)
+    child = doc.add_chat_node(0, 160, "child", False, parent_id=root.id)
+    doc.set_final_deliverable(child.id, True)
+
+    doc.delete_chat_node(child.id)
+
+    assert doc.final_deliverable_node_id is None
+
+
+def test_delete_chat_node_leaves_final_deliverable_node_id_untouched_when_a_different_node_is_deleted():
+    doc = SceneDocument()
+    root = doc.add_chat_node(0, 0, "root", True)
+    child = doc.add_chat_node(0, 160, "child", False, parent_id=root.id)
+    other = doc.add_chat_node(460, 160, "other", False, parent_id=root.id)
+    doc.set_final_deliverable(child.id, True)
+
+    doc.delete_chat_node(other.id)
+
+    assert doc.final_deliverable_node_id == child.id
+
+
+def test_set_branch_status_intent_dispatches_and_publishes_scene():
+    async def run():
+        bus, document, recorder, _ = make_bus_with_dispatcher()
+        node = document.add_chat_node(0, 0, "hi", True)
+        scene_publishes_before = recorder.topics_seen().count("scene")
+
+        await bus.dispatch_intent("scene", "setBranchStatus", [node.id, "accepted"])
+
+        assert document.nodes[node.id].branch_status == "accepted"
+        assert recorder.topics_seen().count("scene") > scene_publishes_before
+
+    asyncio.run(run())
+
+
+def test_set_final_deliverable_intent_dispatches_and_publishes_scene():
+    async def run():
+        bus, document, recorder, _ = make_bus_with_dispatcher()
+        node = document.add_chat_node(0, 0, "hi", True)
+        scene_publishes_before = recorder.topics_seen().count("scene")
+
+        await bus.dispatch_intent("scene", "setFinalDeliverable", [node.id, True])
+
+        assert document.final_deliverable_node_id == node.id
+        assert recorder.topics_seen().count("scene") > scene_publishes_before
+
+    asyncio.run(run())
+
+
+def test_collapse_branch_intent_dispatches_and_publishes_scene():
+    async def run():
+        bus, document, recorder, _ = make_bus_with_dispatcher()
+        root = document.add_chat_node(0, 0, "root", True)
+        child = document.add_chat_node(0, 160, "child", False, parent_id=root.id)
+        scene_publishes_before = recorder.topics_seen().count("scene")
+
+        await bus.dispatch_intent("scene", "collapseBranch", [root.id, True])
+
+        assert document.nodes[root.id].is_collapsed is True
+        assert document.nodes[child.id].is_collapsed is True
+        assert recorder.topics_seen().count("scene") > scene_publishes_before
+
+    asyncio.run(run())

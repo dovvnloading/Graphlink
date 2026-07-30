@@ -101,6 +101,16 @@ export class SceneStore {
   // be "a reply to X" and "a synthesis of X, Y" - showing both indicators
   // at once would be confusing and only one intent can actually fire.
   private synthesizeTargetNodeIds: string[] | null = null;
+  // ADR-002 Workstream 1 ("Branch status and lifecycle"): "reduce a complex
+  // graph to its accepted paths" - a view-only review lens, NOT persisted
+  // scene state (same "local UI state only" posture as branchFocusOriginId,
+  // which lives as plain useState inside SceneCanvas.tsx for the sibling
+  // "Hide Other Branches" feature). Lives HERE rather than as component
+  // state because its trigger (a checkbox in ViewPopover.tsx) and its
+  // consumer (SceneCanvas.tsx's toFlowNodes) are two separate components -
+  // the same reason selectedNodeId/replyTargetNodeId already live on this
+  // store rather than in whichever single component happens to set them.
+  private focusAcceptedPaths = false;
 
   constructor(private readonly transport: WsTransport) {}
 
@@ -142,6 +152,7 @@ export class SceneStore {
   getSelectedNodeId = (): string | null => this.selectedNodeId;
   getReplyTargetNodeId = (): string | null => this.replyTargetNodeId;
   getSynthesizeTargetNodeIds = (): string[] | null => this.synthesizeTargetNodeIds;
+  getFocusAcceptedPaths = (): boolean => this.focusAcceptedPaths;
 
   // R5.1: no-op-if-unchanged, same discipline as every other setter here that
   // guards a redundant assignment before paying for an emit() fan-out.
@@ -161,6 +172,12 @@ export class SceneStore {
   setSynthesizeTargetNodeIds(ids: string[] | null): void {
     this.synthesizeTargetNodeIds = ids;
     this.replyTargetNodeId = null;
+    this.emit();
+  }
+
+  setFocusAcceptedPaths(value: boolean): void {
+    if (value === this.focusAcceptedPaths) return;
+    this.focusAcceptedPaths = value;
     this.emit();
   }
 
@@ -712,6 +729,22 @@ export class SceneStore {
   // through the next scene snapshot like any other mutation.
   compareBranches(nodeIds: string[]): void {
     this.transport.intent("scene", "compareBranches", [nodeIds]);
+  }
+
+  // ADR-002 Workstream 1 ("Branch status and lifecycle") - three plain
+  // fire-and-forget setters, same posture as setGroupLabel/setGroupColor
+  // below: the backend validates/does the work, and the new value arrives
+  // through the next scene snapshot like any other mutation.
+  setBranchStatus(nodeId: string, status: string): void {
+    this.transport.intent("scene", "setBranchStatus", [nodeId, status]);
+  }
+
+  setFinalDeliverable(nodeId: string, isFinal: boolean): void {
+    this.transport.intent("scene", "setFinalDeliverable", [nodeId, isFinal]);
+  }
+
+  collapseBranch(nodeId: string, collapsed: boolean): void {
+    this.transport.intent("scene", "collapseBranch", [nodeId, collapsed]);
   }
 
   // Shared setter for frame/container header-note/title text (backend/

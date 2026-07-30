@@ -418,6 +418,27 @@ class SceneNode:
     # feature. Chat-kind only in practice; unused (default empty string) for
     # every other kind and for ordinary (non-synthesis) chat nodes.
     synthesis_instructions: str = ""
+    # ADR-002 Workstream 1 ("Branch status and lifecycle"): the final,
+    # sequenced item after fork/compare/synthesize. One of exactly "active"
+    # (the default - every existing and newly-created chat node starts
+    # here, no migration needed), "accepted", "rejected", "superseded".
+    # Chat-kind only, mirroring is_branch_synthesis's own chat-only scoping
+    # - "a branch" is fundamentally a chain of chat nodes in this data
+    # model (see chat_branch_history/get_branch_root, both of which only
+    # ever walk chat-kind edges). Deliberately PER-NODE with NO write-time
+    # inheritance/cascade to ancestors or descendants - every other
+    # status-like flag on this dataclass (is_collapsed, is_docked,
+    # is_branch_synthesis, is_branch_comparison below) is scoped exactly
+    # this way, and there is no materialized "Branch" object anywhere in
+    # this file to cascade through even if inheritance were wanted (a
+    # branch is discovered by walking _branch_parent_edge upward on
+    # demand, never stored as a set - see that method's own comment).
+    # "Reduce a graph to its accepted paths" is delivered by a separate,
+    # frontend-only, read-time subtree derivation over this field
+    # (SceneCanvas.tsx's computeNonAcceptedNodeIds) - the same posture
+    # "Hide Other Branches" already uses for a different subtree question,
+    # not by inventing write-time cascade bookkeeping here.
+    branch_status: str = "active"
     # R5.1: the Web Research node's real persisted shape - `content` (reused,
     # same pattern as code/thinking/html) holds the query text; these six
     # fields track one research run's live progress/outcome. Unused
@@ -825,6 +846,17 @@ class SceneDocument:
     # Qt-free stand-in for "the currently active branch" until real node
     # selection exists. None means the next message starts a fresh root.
     last_chat_node_id: str | None = None
+    # ADR-002 Workstream 1 ("Branch status and lifecycle"): the one node
+    # currently marked as this document's Final Deliverable, or None if
+    # none is marked. A document-level singular pointer, mirroring
+    # last_chat_node_id above, rather than a per-node SceneNode flag -
+    # deliberately, since "Final Deliverable" is inherently singular ("the
+    # one true output of this document") and a pointer makes exclusivity
+    # free (set_final_deliverable just overwrites it) instead of requiring
+    # a hunt for whichever other node currently holds the flag to clear it
+    # first. Reset in clear_for_load below, same list last_chat_node_id is
+    # already in.
+    final_deliverable_node_id: str | None = None
     # R3.21: in-memory, session-scoped store for image-node bytes, keyed by
     # asset id (see SceneNode.image_asset_id) -> (raw_bytes, mime_type).
     # TRANSPORT DECISION: images travel to the client via a dedicated GET
@@ -915,6 +947,7 @@ class SceneDocument:
         self.image_assets.clear()
         self.pins.clear()
         self.last_chat_node_id = None
+        self.final_deliverable_node_id = None
         self.zoom_factor = 1.0
         self.scroll_x = 0.0
         self.scroll_y = 0.0
@@ -1970,6 +2003,53 @@ class SceneDocument:
         node.provider = provider
         node.model = model
 
+    #: ADR-002 Workstream 1 ("Branch status and lifecycle"): the exactly-4
+    #: legal values for SceneNode.branch_status - shared by the setter's
+    #: validation and session_load.py's own defensive downgrade-to-"active"
+    #: read-back, so the one legal set is never duplicated out of sync.
+    BRANCH_STATUS_VALUES = frozenset({"active", "accepted", "rejected", "superseded"})
+
+    def set_branch_status(self, node_id: str, status: str) -> None:
+        """ADR-002 Workstream 1 ("Branch status and lifecycle"): marks a
+        single chat node's own branch_status - deliberately no "has
+        siblings" / "is a fork root" requirement (any chat node may be
+        marked, mirroring mark_branch_comparison_note's own kind-only
+        validation), and deliberately no side effect on any OTHER node -
+        marking one branch Accepted does not auto-reject its siblings, the
+        first cross-node side-effecting setter would have been a new kind
+        of mutation nothing else in this file does, and Synthesize Branches
+        already established that 2+ branches can be simultaneously
+        legitimate (its own item_ids records multiple sources at once) -
+        forcing exclusivity here would fight that existing workflow."""
+        node = self.nodes.get(node_id)
+        if node is None:
+            raise SceneError(f"unknown node: {node_id}")
+        if node.kind != "chat":
+            raise SceneError(f"node is not a chat node: {node_id}")
+        status = str(status)
+        if status not in self.BRANCH_STATUS_VALUES:
+            raise SceneError(f"invalid branch status: {status}")
+        node.branch_status = status
+
+    def set_final_deliverable(self, node_id: str, is_final: bool) -> None:
+        """ADR-002 Workstream 1 ("Branch status and lifecycle"): sets or
+        clears final_deliverable_node_id - EXCLUSIVE by construction (the
+        single-pointer shape means marking a new node silently supersedes
+        whichever one held it before; no separate "clear the old one" step
+        needed, unlike a per-node flag would require). Orthogonal to
+        branch_status on purpose - no validation ties them together (a
+        "rejected" node CAN technically be marked Final Deliverable; this
+        is not blocked, though not a realistic path either)."""
+        node = self.nodes.get(node_id)
+        if node is None:
+            raise SceneError(f"unknown node: {node_id}")
+        if node.kind != "chat":
+            raise SceneError(f"node is not a chat node: {node_id}")
+        if is_final:
+            self.final_deliverable_node_id = node_id
+        elif self.final_deliverable_node_id == node_id:
+            self.final_deliverable_node_id = None
+
     def _bbox_of_members(self, item_ids: list[str]) -> tuple[float, float, float, float]:
         """Compute the padded union rect (x, y, width, height) enclosing
         every member id's ESTIMATED footprint - GROUP_MEMBER_DEFAULT_WIDTH/
@@ -2468,6 +2548,39 @@ class SceneDocument:
             return edge
         return None
 
+    def _chat_subtree_ids(self, root_id: str) -> list[str]:
+        """ADR-002 Workstream 1 ("Branch status and lifecycle"): the
+        DOWNWARD counterpart to _branch_parent_edge's upward walk above -
+        every chat-kind node's id in root_id's own subtree (root_id
+        itself, plus every descendant reachable through chat-kind edges),
+        via BFS. No such downward/forward walk existed anywhere in this
+        file before this feature - every other edge scan here is either
+        this file's own upward parent-walk pattern or an explicitly
+        one-hop-only scan (delete_chat_node's direct-children reparent,
+        send_message's sibling-fan-out count) - so this is new, not a
+        rename of something existing. Chat-kind only: a code/document/
+        thinking/image node hanging directly off a chat node in this
+        subtree is NOT included - collapsing a branch does not cascade
+        into its content children, matching how a single chat node's own
+        collapse already never cascades into ITS children either."""
+        result = [root_id]
+        visited = {root_id}
+        frontier = [root_id]
+        while frontier:
+            next_frontier = []
+            for nid in frontier:
+                for edge in self.edges.values():
+                    if edge.source != nid:
+                        continue
+                    target = self.nodes.get(edge.target)
+                    if target is None or target.kind != "chat" or target.id in visited:
+                        continue
+                    visited.add(target.id)
+                    result.append(target.id)
+                    next_frontier.append(target.id)
+            frontier = next_frontier
+        return result
+
     def delete_chat_node(self, node_id: str) -> None:
         """Delete one chat node WITHOUT orphaning its branch: children are
         re-parented to the deleted node's own parent (or become roots if it
@@ -2506,6 +2619,15 @@ class SceneDocument:
             # The active branch continues from wherever it now ends: the
             # deleted node's own parent (None if it had none either).
             self.last_chat_node_id = parent_id
+
+        # ADR-002 Workstream 1 ("Branch status and lifecycle") - found by
+        # adversarial review: unlike last_chat_node_id above, this is
+        # cleared entirely rather than re-pointed to the parent. The parent
+        # was never itself marked Final Deliverable, so silently promoting
+        # it would misattribute a status the user never gave it; requiring
+        # a fresh, explicit re-mark is the safe behavior.
+        if self.final_deliverable_node_id == node_id:
+            self.final_deliverable_node_id = None
 
         del self.nodes[node_id]
         self._detach_node_from_membership(node_id)
@@ -2785,6 +2907,31 @@ class SceneDocument:
         if node.kind in ("frame", "container"):
             self._recompute_group_bounds(node_id)
 
+    def collapse_branch(self, node_id: str, collapsed: bool) -> None:
+        """ADR-002 Workstream 1 ("Branch status and lifecycle"): "Collapse
+        a rejected branch without deleting it" - reuses the existing,
+        already-fully-wired is_collapsed field verbatim (wire sync, save,
+        load, and ChatNodeView.tsx's collapsed-pill rendering all already
+        work for it), applied across node_id's own chat-kind subtree via
+        _chat_subtree_ids instead of just node_id itself - the one
+        genuinely new piece this needs. Deliberately NOT automatic when a
+        branch is marked "rejected" via set_branch_status: status (a
+        semantic label) and collapse (a view state) are kept decoupled on
+        purpose, so a branch can be Rejected-but-still-expanded during
+        review, and marking status never has a side effect on any other
+        node's state (matching set_branch_status's own "no implicit side
+        effects" posture). Bulk-sets uniformly across the whole subtree,
+        so a node that had previously been individually expanded/collapsed
+        differently loses that distinction the first time this runs - an
+        accepted, stated tradeoff, not solved here."""
+        node = self.nodes.get(node_id)
+        if node is None:
+            raise SceneError(f"unknown node: {node_id}")
+        if node.kind != "chat":
+            raise SceneError(f"node is not a chat node: {node_id}")
+        for nid in self._chat_subtree_ids(node_id):
+            self.nodes[nid].is_collapsed = bool(collapsed)
+
     def set_all_conversational_collapsed(self, collapsed: bool) -> None:
         """R7.5e: Collapse All / Expand All - the bulk counterpart to
         set_chat_collapsed above. Mirrors legacy's
@@ -3041,6 +3188,11 @@ class SceneDocument:
                     "model": n.model,
                     "isBranchSynthesis": n.is_branch_synthesis,
                     "synthesisInstructions": n.synthesis_instructions,
+                    # ADR-002 Workstream 1 ("Branch status and lifecycle") -
+                    # see SceneNode.branch_status/SceneDocument.
+                    # final_deliverable_node_id's own comments.
+                    "branchStatus": n.branch_status,
+                    "isFinalDeliverable": n.id == self.final_deliverable_node_id,
                     "researchStage": n.research_stage,
                     "researchCompleted": n.research_completed,
                     "researchTotal": n.research_total,
@@ -3559,6 +3711,25 @@ def register_canvas(
 
     async def set_chat_collapsed(node_id, collapsed):
         document.set_chat_collapsed(node_id, collapsed)
+        await publish_scene()
+
+    # ADR-002 Workstream 1 ("Branch status and lifecycle"): three plain
+    # setter intents, same "no try/except SceneError guard, a bad node_id
+    # propagates as a generic WS intent error" posture as set_chat_collapsed
+    # immediately above (see send_artifact_message's own comment on this
+    # accepted pattern for simple setters, as opposed to the defensive
+    # pre-check pattern used where a delete could realistically race an
+    # in-flight agent dispatch - none of these three ever dispatch an agent).
+    async def set_branch_status(node_id, status):
+        document.set_branch_status(node_id, status)
+        await publish_scene()
+
+    async def set_final_deliverable(node_id, is_final):
+        document.set_final_deliverable(node_id, is_final)
+        await publish_scene()
+
+    async def collapse_branch(node_id, collapsed):
+        document.collapse_branch(node_id, collapsed)
         await publish_scene()
 
     async def collapse_all_nodes():
@@ -4796,6 +4967,9 @@ def register_canvas(
     bus.register_intent("scene", "setNodeDocked", set_node_docked)
     bus.register_intent("scene", "deleteChatNode", delete_chat_node)
     bus.register_intent("scene", "setChatCollapsed", set_chat_collapsed)
+    bus.register_intent("scene", "setBranchStatus", set_branch_status)
+    bus.register_intent("scene", "setFinalDeliverable", set_final_deliverable)
+    bus.register_intent("scene", "collapseBranch", collapse_branch)
     bus.register_intent("scene", "collapseAllNodes", collapse_all_nodes)
     bus.register_intent("scene", "expandAllNodes", expand_all_nodes)
     bus.register_intent("scene", "setChatScrollValue", set_chat_scroll_value)

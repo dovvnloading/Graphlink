@@ -19,13 +19,17 @@ function OpenViewOnMount({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
-function makeStore(sceneOverrides: Partial<typeof initialSceneState> = {}) {
+function makeStore(
+  sceneOverrides: Partial<typeof initialSceneState> = {},
+  focusAcceptedPaths = false,
+) {
   const listeners = new Set<() => void>();
   const scene = { ...initialSceneState, ...sceneOverrides };
   const setFadeConnections = vi.fn();
   const setSnapToGrid = vi.fn();
   const setOrthogonalConnections = vi.fn();
   const setSmartGuides = vi.fn();
+  const setFocusAcceptedPaths = vi.fn();
   const store = {
     subscribe: (l: () => void) => {
       listeners.add(l);
@@ -35,6 +39,10 @@ function makeStore(sceneOverrides: Partial<typeof initialSceneState> = {}) {
     getGrid: () => initialGridState,
     getDragConfig: () => initialDragSpeedState,
     getFontConfig: () => initialFontControlState,
+    // ADR-002 Workstream 1 ("Branch status and lifecycle"): NOT part of
+    // `scene` - see sceneStore.ts's own comment on why this field is
+    // local UI state rather than backend-synced.
+    getFocusAcceptedPaths: () => focusAcceptedPaths,
     setDragFactor: vi.fn(),
     setGridSize: vi.fn(),
     setGridOpacityPercent: vi.fn(),
@@ -44,11 +52,12 @@ function makeStore(sceneOverrides: Partial<typeof initialSceneState> = {}) {
     setFadeConnections,
     setOrthogonalConnections,
     setSmartGuides,
+    setFocusAcceptedPaths,
     setFontFamily: vi.fn(),
     setFontSize: vi.fn(),
     setFontColor: vi.fn(),
   };
-  return { store, setFadeConnections, setSnapToGrid, setOrthogonalConnections, setSmartGuides };
+  return { store, setFadeConnections, setSnapToGrid, setOrthogonalConnections, setSmartGuides, setFocusAcceptedPaths };
 }
 
 function renderOpen(store: unknown) {
@@ -140,6 +149,33 @@ describe("ViewPopover (R7.5b-3 Smart Guides checkbox)", () => {
 
     expect(setSmartGuides).toHaveBeenCalledWith(true);
     expect(setOrthogonalConnections).not.toHaveBeenCalled();
+    expect(setFadeConnections).not.toHaveBeenCalled();
+  });
+});
+
+// ADR-002 Workstream 1 ("Branch status and lifecycle"): same posture as the
+// other checkbox describe blocks above - only the new control is covered.
+describe("ViewPopover (ADR-002 Workstream 1 Focus Accepted Paths checkbox)", () => {
+  it("reflects focusAcceptedPaths=false as unchecked and =true as checked", () => {
+    const off = makeStore({}, false);
+    const { unmount } = renderOpen(off.store);
+    expect(screen.getByRole("checkbox", { name: "Focus Accepted Paths" })).not.toBeChecked();
+    unmount();
+
+    const on = makeStore({}, true);
+    renderOpen(on.store);
+    expect(screen.getByRole("checkbox", { name: "Focus Accepted Paths" })).toBeChecked();
+  });
+
+  it("calls store.setFocusAcceptedPaths with the new value on toggle, independent of the other toggles", async () => {
+    const user = userEvent.setup();
+    const { store, setFocusAcceptedPaths, setSmartGuides, setFadeConnections } = makeStore({}, false);
+    renderOpen(store);
+
+    await user.click(screen.getByRole("checkbox", { name: "Focus Accepted Paths" }));
+
+    expect(setFocusAcceptedPaths).toHaveBeenCalledWith(true);
+    expect(setSmartGuides).not.toHaveBeenCalled();
     expect(setFadeConnections).not.toHaveBeenCalled();
   });
 });
