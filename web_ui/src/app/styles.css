@@ -2699,6 +2699,132 @@ h6:hover > .document-view-heading-anchor {
   transition: width 80ms linear;
 }
 
+/* Document View full redesign, stage 3 ("in-document search/find") -
+   DocumentViewSearch.tsx's search bar, the header's "Find" toggle, and the
+   <mark> elements rehypeHighlightSearchMatches produces. */
+
+.document-view-panel-search-toggle {
+  flex-shrink: 0;
+  padding: 6px 14px;
+  font-size: 12px;
+  font-family: inherit;
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-neutral-button-background);
+  border: 1px solid var(--gl-neutral-button-border);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.document-view-panel-search-toggle:hover:enabled {
+  background-color: var(--gl-neutral-button-hover);
+}
+
+.document-view-panel-search-toggle:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.document-view-panel-search-toggle[aria-expanded="true"] {
+  background-color: var(--gl-neutral-button-hover);
+  border-color: var(--gl-palette-selection);
+}
+
+.document-view-search {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 0;
+}
+
+.document-view-search-input {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  font-size: 12px;
+  font-family: inherit;
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-surface-inset, var(--gl-surface-window));
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 4px;
+}
+
+.document-view-search-count {
+  flex-shrink: 0;
+  min-width: 56px;
+  font-size: 11px;
+  color: var(--gl-surface-text-muted);
+  text-align: right;
+}
+
+.document-view-search-nav,
+.document-view-search-close {
+  flex-shrink: 0;
+  padding: 4px 8px;
+  font-size: 12px;
+  font-family: inherit;
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-neutral-button-background);
+  border: 1px solid var(--gl-neutral-button-border);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.document-view-search-nav:hover:enabled,
+.document-view-search-close:hover {
+  background-color: var(--gl-neutral-button-hover);
+}
+
+.document-view-search-nav:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* Neither literal is a new raw-color exception: color-mix() references an
+   existing token rather than introducing a hex/rgba value, so it falls
+   outside no-raw-colors.test.ts's scan by construction (that scanner only
+   matches #hex and rgba()/rgb() literals). --gl-semantic-search-highlight
+   is a token this design system already defines specifically for this
+   purpose (gl-vars-dev.css) but had never been referenced anywhere until
+   now - using it here instead of overloading --gl-palette-selection (the
+   generic "this one is selected/active" accent used elsewhere in this
+   file) is both more semantically correct and gives a wider contrast
+   margin for the current-match text below. The current match (the one
+   Next/Previous navigates to) gets the token solid, with
+   --gl-surface-inset-deep (an existing, even-darker-than-window token,
+   already used elsewhere in this file as a text-on-accent color - see
+   styles.css around line 5235) as the contrasting text color, falling back
+   to --gl-surface-window if that token is ever absent. */
+mark.document-view-search-match {
+  background-color: color-mix(in srgb, var(--gl-semantic-search-highlight) 35%, transparent);
+  color: inherit;
+  border-radius: 2px;
+}
+
+mark.document-view-search-match-current {
+  background-color: var(--gl-semantic-search-highlight);
+  color: var(--gl-surface-inset-deep, var(--gl-surface-window));
+}
+
+/* Standard visually-hidden technique (content present for assistive tech,
+   removed from visual layout and the tab order isn't affected since this
+   is never itself focusable) - same shape as the pre-existing
+   .library-visually-hidden elsewhere in this file, scoped to Document
+   View's own naming convention rather than reusing that one across an
+   unrelated feature. Used by DocumentViewSearch.tsx's debounced,
+   screen-reader-only match-count announcement. */
+.document-view-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .help-rail {
   width: 220px;
   flex-shrink: 0;

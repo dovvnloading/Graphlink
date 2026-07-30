@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DocumentViewMarkdown } from "./DocumentViewMarkdown";
 import { DocumentViewToc } from "./DocumentViewToc";
+import { DocumentViewSearch } from "./DocumentViewSearch";
 import { extractHeadings } from "./documentViewHeadings";
+
+const SEARCH_MATCH_SELECTOR = ".document-view-search-match";
+const SEARCH_MATCH_CURRENT_CLASS = "document-view-search-match-current";
 
 const DEFAULT_WIDTH = 500;
 const MIN_WIDTH = 320;
@@ -55,6 +59,21 @@ const MAX_WIDTH = 900;
  * different (or shorter) one never starts the reader in the middle of the
  * new content or shows a stale progress percentage before the next scroll
  * event fires.
+ *
+ * Full redesign, stage 3 of 4 ("in-document search/find"): a "Find" toggle
+ * opens DocumentViewSearch.tsx's search bar. The query itself is passed down
+ * to DocumentViewMarkdown, which highlights matches declaratively (a
+ * rehype plugin, see documentViewSearchHighlight.ts); the match COUNT and
+ * which one is "current" are derived back out of the rendered DOM here (the
+ * real `<mark>` elements actually produced), rather than computed
+ * independently from the query/content, so the "n of m" display can never
+ * drift from what's actually highlighted on screen. Both the query and the
+ * current-match index reset - the former whenever `content` changes
+ * (grouped with stage 2's own content-change reset below), the latter
+ * whenever the query itself changes (jumping back to the first match of a
+ * newly-typed search, matching standard find-bar behavior) - using the same
+ * render-phase "adjust state when a value changes" idiom stage 2 already
+ * established, not a useEffect.
  */
 export function DocumentViewPanel({
   isOpen,
@@ -134,6 +153,16 @@ export function DocumentViewPanel({
     setReadingProgress(scrollable > 0 ? Math.min(100, Math.max(0, (el.scrollTop / scrollable) * 100)) : 0);
   }, []);
 
+  // Stage 3: in-document search/find. `searchQuery` is the only piece
+  // DocumentViewMarkdown needs (to highlight matches); `currentMatchIndex`
+  // and `matchCount` are purely local to navigating those already-rendered
+  // matches, resolved against the real DOM below. Declared before the
+  // content-change reset block below, which references these setters.
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
+  const [matchCount, setMatchCount] = useState(0);
+
   // A new document (or the panel closing and a different one opening next)
   // must never start the reader mid-scroll from whatever the PREVIOUS
   // document left scrollTop at, and the progress bar must not show a stale
@@ -147,15 +176,63 @@ export function DocumentViewPanel({
   // scrollTop reset can't join that same conditional - refs may never be
   // read or written during render (react-hooks/refs) - so it stays in its
   // own plain effect below, which itself calls no setState at all.
+  //
+  // Stage 3's search state resets here too - a different document means the
+  // previous search (if any) no longer applies to what's on screen.
   const [lastRenderedContent, setLastRenderedContent] = useState(content);
   if (content !== lastRenderedContent) {
     setLastRenderedContent(content);
     setReadingProgress(0);
+    setIsSearchOpen(false);
+    setSearchQuery("");
   }
 
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = 0;
   }, [content]);
+
+  // A newly-typed query starts back at the first match, matching standard
+  // find-bar behavior - the previous query's current-match position has no
+  // meaning against a different set of matches.
+  const [lastSearchQuery, setLastSearchQuery] = useState(searchQuery);
+  if (searchQuery !== lastSearchQuery) {
+    setLastSearchQuery(searchQuery);
+    setCurrentMatchIndex(0);
+  }
+
+  const onSearchNext = useCallback(() => {
+    setCurrentMatchIndex((i) => (matchCount === 0 ? 0 : (i + 1) % matchCount));
+  }, [matchCount]);
+
+  const onSearchPrevious = useCallback(() => {
+    setCurrentMatchIndex((i) => (matchCount === 0 ? 0 : (i - 1 + matchCount) % matchCount));
+  }, [matchCount]);
+
+  const onSearchClose = useCallback(() => {
+    setIsSearchOpen(false);
+    setSearchQuery("");
+  }, []);
+
+  // Runs after every render where the highlighted matches could have
+  // changed (new content, new query) or the user navigated to a different
+  // one - reads the actual <mark> elements DocumentViewMarkdown produced
+  // (the source of truth for "how many matches" and "which one is
+  // current"), rather than recomputing that independently and risking it
+  // drifting from what's really on screen.
+  useEffect(() => {
+    const container = scrollRef.current;
+    if (!container) return;
+    const allMatches = Array.from(container.querySelectorAll<HTMLElement>(SEARCH_MATCH_SELECTOR));
+    setMatchCount(allMatches.length);
+    for (const el of allMatches) el.classList.remove(SEARCH_MATCH_CURRENT_CLASS);
+    if (allMatches.length === 0) return;
+
+    const current = allMatches[Math.min(currentMatchIndex, allMatches.length - 1)];
+    current.classList.add(SEARCH_MATCH_CURRENT_CLASS);
+    const containerRect = container.getBoundingClientRect();
+    const currentRect = current.getBoundingClientRect();
+    container.scrollTop += currentRect.top - containerRect.top;
+  }, [content, searchQuery, currentMatchIndex]);
 
   return (
     <aside
@@ -179,6 +256,17 @@ export function DocumentViewPanel({
           <DocumentViewToc headings={headings} scrollContainerRef={scrollRef} />
           <button
             type="button"
+            className="document-view-panel-search-toggle"
+            onClick={() => (isSearchOpen ? onSearchClose() : setIsSearchOpen(true))}
+            disabled={!content}
+            title="Find in document"
+            aria-label="Find in document"
+            aria-expanded={isSearchOpen}
+          >
+            Find
+          </button>
+          <button
+            type="button"
             className="document-view-panel-copy"
             onClick={onCopy}
             disabled={!content}
@@ -191,6 +279,16 @@ export function DocumentViewPanel({
             Close
           </button>
         </header>
+        <DocumentViewSearch
+          isOpen={isSearchOpen}
+          query={searchQuery}
+          onQueryChange={setSearchQuery}
+          matchCount={matchCount}
+          currentMatchNumber={matchCount === 0 ? 0 : currentMatchIndex + 1}
+          onNext={onSearchNext}
+          onPrevious={onSearchPrevious}
+          onClose={onSearchClose}
+        />
         <div
           className="document-view-panel-progress"
           role="progressbar"
@@ -202,7 +300,7 @@ export function DocumentViewPanel({
           <div className="document-view-panel-progress-fill" style={{ width: `${readingProgress}%` }} />
         </div>
         <div className="document-view-panel-scroll chat-node-content" ref={scrollRef} onScroll={onScroll}>
-          <DocumentViewMarkdown content={content ?? ""} />
+          <DocumentViewMarkdown content={content ?? ""} searchQuery={searchQuery} />
         </div>
       </div>
       <div
