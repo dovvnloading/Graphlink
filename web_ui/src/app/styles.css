@@ -2598,6 +2598,107 @@ h6:hover > .document-view-heading-anchor {
   color: var(--gl-semantic-status-error);
 }
 
+/* Document View full redesign, stage 2 ("table of contents + reading
+   progress") - DocumentViewToc.tsx's own toggle + dropdown, and
+   DocumentViewPanel.tsx's reading-progress bar. */
+
+.document-view-toc {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.document-view-toc-toggle {
+  padding: 6px 14px;
+  font-size: 12px;
+  font-family: inherit;
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-neutral-button-background);
+  border: 1px solid var(--gl-neutral-button-border);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.document-view-toc-toggle:hover {
+  background-color: var(--gl-neutral-button-hover);
+}
+
+.document-view-toc-toggle[aria-expanded="true"] {
+  background-color: var(--gl-neutral-button-hover);
+  border-color: var(--gl-palette-selection);
+}
+
+/* z-index matches --gl-z-app-layer's own documented tier ("app-bar
+   popovers, plugin picker, pin overlay") - this dropdown is the same kind
+   of small, anchored, non-portaled popover, just scoped to Document
+   View's own chrome instead of the app bar. */
+.document-view-toc-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: var(--gl-z-app-layer);
+  min-width: 220px;
+  max-width: 320px;
+  max-height: 320px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  background-color: var(--gl-surface-window);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 6px;
+  /* Same box-shadow as .overlay-popover's shared chrome (and every other
+     floating/popover surface in this file) - reused verbatim rather than
+     an ad-hoc value, matching this stylesheet's own no-raw-colors policy
+     (see the file's own top-of-file comment) which pins a small, shared
+     set of raw-color exceptions rather than tolerating a new one per
+     component. */
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+}
+
+.document-view-toc-item {
+  text-align: left;
+  padding: 5px 8px;
+  font-size: 12px;
+  font-family: inherit;
+  color: var(--gl-surface-text-primary);
+  background-color: transparent;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.document-view-toc-item:hover {
+  background-color: var(--gl-neutral-button-hover);
+}
+
+.document-view-toc-item.active {
+  color: var(--gl-palette-selection);
+  font-weight: 600;
+}
+
+.document-view-toc-depth-2 {
+  padding-left: 20px;
+}
+
+.document-view-toc-depth-3 {
+  padding-left: 32px;
+}
+
+.document-view-panel-progress {
+  flex-shrink: 0;
+  height: 2px;
+  background-color: var(--gl-surface-border);
+}
+
+.document-view-panel-progress-fill {
+  height: 100%;
+  background-color: var(--gl-palette-selection);
+  transition: width 80ms linear;
+}
+
 .help-rail {
   width: 220px;
   flex-shrink: 0;
