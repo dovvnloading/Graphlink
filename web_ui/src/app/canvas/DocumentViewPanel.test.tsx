@@ -144,4 +144,58 @@ describe("DocumentViewPanel", () => {
       expect(await screen.findByText("Copied")).toBeInTheDocument();
     });
   });
+
+  // Document View full redesign, stage 2 ("table of contents + reading
+  // progress"). The outline toggle's own detailed behavior (opening,
+  // active-section highlighting, scroll-to-heading) is covered in
+  // DocumentViewToc.test.tsx - these tests only cover DocumentViewPanel's
+  // own wiring: whether the toggle shows up at all for a given content
+  // shape, the reading-progress bar's scroll-driven width, and the
+  // reset-on-new-content behavior.
+  describe("table of contents + reading progress (stage 2)", () => {
+    it("shows the Outline toggle when the content has 2+ headings", () => {
+      renderPanel({ content: "# One\n\n## Two" });
+      expect(screen.getByRole("button", { name: "Outline" })).toBeInTheDocument();
+    });
+
+    it("shows no Outline toggle when the content has fewer than 2 headings", () => {
+      renderPanel({ content: "just a paragraph, no headings" });
+      expect(screen.queryByRole("button", { name: "Outline" })).toBeNull();
+    });
+
+    it("renders a reading-progress bar starting at 0", () => {
+      renderPanel({ content: "some content" });
+      const bar = screen.getByRole("progressbar", { name: "Reading progress" });
+      expect(bar).toHaveAttribute("aria-valuenow", "0");
+    });
+
+    it("updates the reading-progress bar as the content area scrolls", () => {
+      const { container } = renderPanel({ content: "some content" });
+      const scrollArea = container.querySelector(".document-view-panel-scroll") as HTMLDivElement;
+      Object.defineProperty(scrollArea, "scrollHeight", { value: 1000, configurable: true });
+      Object.defineProperty(scrollArea, "clientHeight", { value: 500, configurable: true });
+      scrollArea.scrollTop = 250;
+
+      fireEvent.scroll(scrollArea);
+
+      const bar = screen.getByRole("progressbar", { name: "Reading progress" });
+      // 250 / (1000 - 500) * 100 = 50
+      expect(bar).toHaveAttribute("aria-valuenow", "50");
+    });
+
+    it("resets scroll position and reading progress when content changes to a new document", () => {
+      const { container, rerender } = renderPanel({ content: "first document" });
+      const scrollArea = container.querySelector(".document-view-panel-scroll") as HTMLDivElement;
+      Object.defineProperty(scrollArea, "scrollHeight", { value: 1000, configurable: true });
+      Object.defineProperty(scrollArea, "clientHeight", { value: 500, configurable: true });
+      scrollArea.scrollTop = 400;
+      fireEvent.scroll(scrollArea);
+      expect(screen.getByRole("progressbar", { name: "Reading progress" })).toHaveAttribute("aria-valuenow", "80");
+
+      rerender(<DocumentViewPanel isOpen content="a completely different document" sourceLabel={null} onClose={vi.fn()} />);
+
+      expect(scrollArea.scrollTop).toBe(0);
+      expect(screen.getByRole("progressbar", { name: "Reading progress" })).toHaveAttribute("aria-valuenow", "0");
+    });
+  });
 });

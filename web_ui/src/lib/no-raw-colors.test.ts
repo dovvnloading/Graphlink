@@ -127,6 +127,10 @@ const PINNED_APP_CSS_LITERALS: Record<string, string[]> = {
     "rgba(0, 0, 0, 0.45)",
     "rgba(0, 0, 0, 0.55)",
     "rgba(0, 0, 0, 0.45)",
+    // Document View full redesign, stage 2: .document-view-toc-dropdown's
+    // box-shadow (DocumentViewToc.tsx's outline popover) - same shared
+    // popover shadow reuse as every entry above.
+    "rgba(0, 0, 0, 0.45)",
     "rgba(0, 0, 0, 0.45)",
     // R6.1 follow-up: .group-node-ghost-preview's box-shadow (the
     // collapsed-container hover preview, GroupNodeView.tsx) - same shared

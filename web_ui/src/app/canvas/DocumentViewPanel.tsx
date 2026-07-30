@@ -1,5 +1,7 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DocumentViewMarkdown } from "./DocumentViewMarkdown";
+import { DocumentViewToc } from "./DocumentViewToc";
+import { extractHeadings } from "./documentViewHeadings";
 
 const DEFAULT_WIDTH = 500;
 const MIN_WIDTH = 320;
@@ -41,6 +43,18 @@ const MAX_WIDTH = 900;
  * `<ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>`
  * - see that component's own doc comment for the full plugin-pipeline
  * rationale.
+ *
+ * Full redesign, stage 2 of 4 ("table of contents + reading progress"): a
+ * DocumentViewToc.tsx outline toggle in the header (self-hidden under 2
+ * headings - see its own doc comment) and a thin reading-progress bar
+ * (scroll percentage through `.document-view-panel-scroll`, computed here
+ * rather than in a separate component since it needs the exact same scroll
+ * container the ToC's own scroll-to-heading logic needs a ref to anyway).
+ * Both reset - scroll position back to the top, progress back to 0 - the
+ * moment `content` changes, so switching from a long document to a
+ * different (or shorter) one never starts the reader in the middle of the
+ * new content or shows a stale progress percentage before the next scroll
+ * event fires.
  */
 export function DocumentViewPanel({
   isOpen,
@@ -106,6 +120,43 @@ export function DocumentViewPanel({
     });
   }, [content]);
 
+  // Stage 2: table of contents + reading progress. Extracted from the raw
+  // markdown source (not queried from the rendered DOM) - see
+  // documentViewHeadings.ts's own doc comment for why this is both simpler
+  // and available before the very first paint.
+  const headings = useMemo(() => extractHeadings(content ?? ""), [content]);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [readingProgress, setReadingProgress] = useState(0);
+
+  const onScroll = useCallback((event: React.UIEvent<HTMLDivElement>) => {
+    const el = event.currentTarget;
+    const scrollable = el.scrollHeight - el.clientHeight;
+    setReadingProgress(scrollable > 0 ? Math.min(100, Math.max(0, (el.scrollTop / scrollable) * 100)) : 0);
+  }, []);
+
+  // A new document (or the panel closing and a different one opening next)
+  // must never start the reader mid-scroll from whatever the PREVIOUS
+  // document left scrollTop at, and the progress bar must not show a stale
+  // percentage until the next real scroll event fires. Split across two
+  // mechanisms, each satisfying a different lint rule this project
+  // enforces: the `readingProgress` reset uses React's own recommended
+  // "adjust state when a prop changes" pattern - a plain conditional
+  // during render, not a useEffect, avoiding the extra
+  // render-then-effect-then-rerender cascade a `useEffect([content])`
+  // calling setState would cause (react-hooks/set-state-in-effect). The
+  // scrollTop reset can't join that same conditional - refs may never be
+  // read or written during render (react-hooks/refs) - so it stays in its
+  // own plain effect below, which itself calls no setState at all.
+  const [lastRenderedContent, setLastRenderedContent] = useState(content);
+  if (content !== lastRenderedContent) {
+    setLastRenderedContent(content);
+    setReadingProgress(0);
+  }
+
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = 0;
+  }, [content]);
+
   return (
     <aside
       className={[
@@ -125,6 +176,7 @@ export function DocumentViewPanel({
             <span className="document-view-panel-title">Document View</span>
             {sourceLabel && <span className="document-view-panel-subtitle">{sourceLabel}</span>}
           </div>
+          <DocumentViewToc headings={headings} scrollContainerRef={scrollRef} />
           <button
             type="button"
             className="document-view-panel-copy"
@@ -139,7 +191,17 @@ export function DocumentViewPanel({
             Close
           </button>
         </header>
-        <div className="document-view-panel-scroll chat-node-content">
+        <div
+          className="document-view-panel-progress"
+          role="progressbar"
+          aria-label="Reading progress"
+          aria-valuenow={Math.round(readingProgress)}
+          aria-valuemin={0}
+          aria-valuemax={100}
+        >
+          <div className="document-view-panel-progress-fill" style={{ width: `${readingProgress}%` }} />
+        </div>
+        <div className="document-view-panel-scroll chat-node-content" ref={scrollRef} onScroll={onScroll}>
           <DocumentViewMarkdown content={content ?? ""} />
         </div>
       </div>
