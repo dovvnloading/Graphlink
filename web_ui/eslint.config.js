@@ -21,6 +21,18 @@ export default tseslint.config(
     rules: {
       ...reactHooks.configs.recommended.rules,
       "react-refresh/only-export-components": ["warn", { allowConstantExport: true }],
+      // Document View redesign (stage 1): react-markdown's component
+      // overrides always receive a `node` prop (its own hast node) that
+      // must never be spread onto the real DOM element it's rendering -
+      // the standard, widely-adopted convention for "destructured but
+      // deliberately discarded" is a leading underscore, which this
+      // codebase had no prior need for (nothing previously discarded a
+      // destructured prop this way) and @typescript-eslint's recommended
+      // preset does not ignore by default.
+      "@typescript-eslint/no-unused-vars": [
+        "error",
+        { argsIgnorePattern: "^_", varsIgnorePattern: "^_", destructuredArrayIgnorePattern: "^_" },
+      ],
     },
   },
   {

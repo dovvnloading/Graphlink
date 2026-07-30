@@ -121,8 +121,8 @@ describe("ChatNodeView", () => {
     const hideBranches = screen.getByRole("menuitem", { name: "Hide Other Branches" });
     expect(hideBranches).not.toBeDisabled();
     expect(hideBranches).not.toHaveAttribute("title");
-    // R8a: these three were disabled stubs until their agents/dialog were
-    // wired up (Open Document View: the shared DocumentViewDialog; Key
+    // R8a: these three were disabled stubs until their agents/panel were
+    // wired up (Open Document View: the shared DocumentViewPanel; Key
     // Takeaway/Explainer Note: ported back from the deleted Qt app). This
     // assertion is deliberately inverted rather than removed - it was the
     // guard that encoded the stub as correct, so it has to now encode the

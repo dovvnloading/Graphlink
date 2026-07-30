@@ -29,9 +29,9 @@ import { NodeMenu } from "./NodeMenu";
  * reply of its own), and Send is additionally disabled while that same
  * field is set, so a second send can't be issued mid-flight for this node.
  * (R8a) Open Document View is real too: it opens the shared
- * DocumentViewDialog (frontend-only, no backend intent) with this node's
+ * DocumentViewPanel (frontend-only, no backend intent) with this node's
  * entire history formatted as a numbered markdown transcript - see
- * DocumentViewDialog.tsx / SceneCanvas.tsx's toFlowNodes for the transcript
+ * DocumentViewPanel.tsx / SceneCanvas.tsx's toFlowNodes for the transcript
  * formatter.
  *
  * Card menu deliberately does NOT include "Hide Other Branches" or "Include
@@ -91,7 +91,7 @@ function ConversationNodeMenu({
       {/* Order verified against the legacy PluginNodeContextMenu's own
           construction order for this node kind: Open Document View,
           Collapse/Expand, Delete Node - nothing else. */}
-      {/* R8a: real. Opens the shared DocumentViewDialog (frontend-only, no
+      {/* R8a: real. Opens the shared DocumentViewPanel (frontend-only, no
           backend intent) with this node's entire history formatted as a
           numbered markdown transcript. */}
       <button
