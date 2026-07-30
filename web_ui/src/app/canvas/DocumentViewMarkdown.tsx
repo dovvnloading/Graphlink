@@ -8,6 +8,7 @@ import rehypeAutolinkHeadings from "rehype-autolink-headings";
 import rehypeExternalLinks from "rehype-external-links";
 import Zoom from "react-medium-image-zoom";
 import "react-medium-image-zoom/dist/styles.css";
+import { rehypeHighlightSearchMatches } from "./documentViewSearchHighlight";
 
 /**
  * Document View's enhanced markdown renderer (full redesign, stage 1 of 4 -
@@ -54,6 +55,14 @@ import "react-medium-image-zoom/dist/styles.css";
  * properties in styles.css rather than importing the package's own
  * alert.css (which hard-codes GitHub's own light/dark color variables, not
  * this app's theme system).
+ *
+ * 5. rehypeHighlightSearchMatches (stage 3, "in-document search/find"): runs
+ *    last, after rehype-highlight has already tokenized code blocks into
+ *    their own syntax-highlighting spans - see that plugin's own doc
+ *    comment (documentViewSearchHighlight.ts) for why it only matches
+ *    within a single text node, and why the query is regex-escaped first.
+ *    A no-op when `searchQuery` is empty/undefined, so the common case
+ *    (search bar closed) adds no extra tree-walk cost beyond an early return.
  */
 
 function CodeBlock({ node: _node, children, ...props }: JSX.IntrinsicElements["pre"] & ExtraProps) {
@@ -128,7 +137,7 @@ function ZoomImage({ node: _node, ...props }: JSX.IntrinsicElements["img"] & Ext
   );
 }
 
-export function DocumentViewMarkdown({ content }: { content: string }) {
+export function DocumentViewMarkdown({ content, searchQuery }: { content: string; searchQuery?: string }) {
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm, remarkAlert]}
@@ -144,6 +153,7 @@ export function DocumentViewMarkdown({ content }: { content: string }) {
         ],
         rehypeHighlight,
         [rehypeExternalLinks, { target: "_blank", rel: ["nofollow", "noopener", "noreferrer"] }],
+        [rehypeHighlightSearchMatches, searchQuery ?? ""],
       ]}
       components={{ pre: CodeBlock, table: TableWrapper, img: ZoomImage }}
     >

@@ -69,10 +69,22 @@ export function DocumentViewToc({
       if (event.key === "Escape") setIsOpen(false);
     }
     document.addEventListener("pointerdown", onPointerDown, true);
-    document.addEventListener("keydown", onKeyDown, true);
+    // Bubble phase (no capture), unlike the pointerdown listener above -
+    // caught by adversarial review: stage 3's search bar (DocumentViewSearch)
+    // calls stopPropagation() on its own Escape handler specifically so
+    // dismissing just the search input doesn't also close this dropdown if
+    // both happen to be open at once. A capture-phase listener here would
+    // run during the capture leg of dispatch - BEFORE the event ever
+    // reaches the search input's own bubble-phase handler - making that
+    // stopPropagation() call a no-op against this listener. Bubble phase
+    // lets an inner element's stopPropagation() genuinely take effect,
+    // while every other Escape-closes-this-dropdown scenario (focus
+    // elsewhere in the panel, or nowhere in particular) is unaffected,
+    // since nothing else in this panel calls stopPropagation on Escape.
+    document.addEventListener("keydown", onKeyDown);
     return () => {
       document.removeEventListener("pointerdown", onPointerDown, true);
-      document.removeEventListener("keydown", onKeyDown, true);
+      document.removeEventListener("keydown", onKeyDown);
     };
   }, [isOpen]);
 

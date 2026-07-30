@@ -1,7 +1,25 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DocumentViewPanel } from "./DocumentViewPanel";
+
+// jsdom implements no IntersectionObserver - DocumentViewToc.tsx's own
+// scrollspy effect needs one the moment its dropdown is actually opened
+// (most tests here never open it, but the stage-3 ToC/search interaction
+// test below does). Same minimal fake DocumentViewToc.test.tsx uses.
+class FakeIntersectionObserver {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+  takeRecords() {
+    return [];
+  }
+}
+
+beforeEach(() => {
+  // @ts-expect-error - test double, not the real browser API
+  global.IntersectionObserver = FakeIntersectionObserver;
+});
 
 function renderPanel(overrides: Partial<React.ComponentProps<typeof DocumentViewPanel>> = {}) {
   const props = {
@@ -196,6 +214,148 @@ describe("DocumentViewPanel", () => {
 
       expect(scrollArea.scrollTop).toBe(0);
       expect(screen.getByRole("progressbar", { name: "Reading progress" })).toHaveAttribute("aria-valuenow", "0");
+    });
+  });
+
+  // Document View full redesign, stage 3 ("in-document search/find"). The
+  // search bar's own detailed UI behavior (typing, Enter/Shift+Enter,
+  // Escape, disabled states) is covered in DocumentViewSearch.test.tsx, and
+  // the highlighting/matching logic itself in
+  // documentViewSearchHighlight.test.ts - these tests cover only
+  // DocumentViewPanel's own wiring: deriving match count and the
+  // current-match highlight from the real rendered <mark> elements, and the
+  // reset-on-new-content behavior.
+  describe("in-document search/find (stage 3)", () => {
+    it("shows the Find toggle, disabled when there is no content", () => {
+      renderPanel({ content: null });
+      expect(screen.getByRole("button", { name: "Find in document" })).toBeDisabled();
+    });
+
+    it("opens the search bar on Find click", async () => {
+      const user = userEvent.setup();
+      renderPanel({ content: "the cat sat on the mat" });
+
+      await user.click(screen.getByRole("button", { name: "Find in document" }));
+      expect(screen.getByRole("search")).toBeInTheDocument();
+    });
+
+    function countText(container: HTMLElement): string | null {
+      return container.querySelector(".document-view-search-count")?.textContent ?? null;
+    }
+
+    it("typing a query highlights every match and shows a match count, starting on the first match", async () => {
+      const user = userEvent.setup();
+      const { container } = renderPanel({ content: "the cat sat on the cat mat" });
+
+      await user.click(screen.getByRole("button", { name: "Find in document" }));
+      await user.type(screen.getByRole("textbox", { name: "Search query" }), "cat");
+
+      const matches = container.querySelectorAll(".document-view-search-match");
+      expect(matches).toHaveLength(2);
+      expect(countText(container)).toBe("1 of 2");
+      expect(matches[0]).toHaveClass("document-view-search-match-current");
+      expect(matches[1]).not.toHaveClass("document-view-search-match-current");
+    });
+
+    it("Next/Previous move the current-match highlight, wrapping around at either end", async () => {
+      const user = userEvent.setup();
+      const { container } = renderPanel({ content: "the cat sat on the cat mat" });
+      await user.click(screen.getByRole("button", { name: "Find in document" }));
+      await user.type(screen.getByRole("textbox", { name: "Search query" }), "cat");
+
+      await user.click(screen.getByRole("button", { name: "Next match" }));
+      let matches = container.querySelectorAll(".document-view-search-match");
+      expect(matches[1]).toHaveClass("document-view-search-match-current");
+      expect(countText(container)).toBe("2 of 2");
+
+      // Wraps from the last match back to the first.
+      await user.click(screen.getByRole("button", { name: "Next match" }));
+      matches = container.querySelectorAll(".document-view-search-match");
+      expect(matches[0]).toHaveClass("document-view-search-match-current");
+      expect(countText(container)).toBe("1 of 2");
+
+      // Wraps from the first match back to the last, going the other way.
+      await user.click(screen.getByRole("button", { name: "Previous match" }));
+      matches = container.querySelectorAll(".document-view-search-match");
+      expect(matches[1]).toHaveClass("document-view-search-match-current");
+      expect(countText(container)).toBe("2 of 2");
+    });
+
+    it("closing the search bar clears all highlighting", async () => {
+      const user = userEvent.setup();
+      const { container } = renderPanel({ content: "the cat sat on the cat mat" });
+      await user.click(screen.getByRole("button", { name: "Find in document" }));
+      await user.type(screen.getByRole("textbox", { name: "Search query" }), "cat");
+      expect(container.querySelectorAll(".document-view-search-match")).toHaveLength(2);
+
+      await user.click(screen.getByRole("button", { name: "Close search" }));
+
+      expect(screen.queryByRole("search")).toBeNull();
+      expect(container.querySelectorAll(".document-view-search-match")).toHaveLength(0);
+    });
+
+    it("clicking the header Find toggle closed also clears highlighting, the same as the bar's own Close button", async () => {
+      // Regression test: the toggle button's onClick originally only
+      // flipped isSearchOpen, leaving searchQuery (and therefore every
+      // highlighted <mark>) untouched - closing the search UI via the
+      // header toggle left matches permanently stuck highlighted with no
+      // visible control left to clear them. Caught by adversarial review,
+      // confirmed independently by three separate reviewers.
+      const user = userEvent.setup();
+      const { container } = renderPanel({ content: "the cat sat on the cat mat" });
+      const findToggle = screen.getByRole("button", { name: "Find in document" });
+
+      await user.click(findToggle);
+      await user.type(screen.getByRole("textbox", { name: "Search query" }), "cat");
+      expect(container.querySelectorAll(".document-view-search-match")).toHaveLength(2);
+
+      await user.click(findToggle);
+
+      expect(screen.queryByRole("search")).toBeNull();
+      expect(container.querySelectorAll(".document-view-search-match")).toHaveLength(0);
+    });
+
+    it("resets the search bar and clears highlighting when content changes to a new document", async () => {
+      const user = userEvent.setup();
+      const { container, rerender } = renderPanel({ content: "the cat sat" });
+      await user.click(screen.getByRole("button", { name: "Find in document" }));
+      await user.type(screen.getByRole("textbox", { name: "Search query" }), "cat");
+      expect(container.querySelectorAll(".document-view-search-match")).toHaveLength(1);
+
+      rerender(
+        <DocumentViewPanel isOpen content="a completely different document" sourceLabel={null} onClose={vi.fn()} />,
+      );
+
+      expect(screen.queryByRole("search")).toBeNull();
+      expect(container.querySelectorAll(".document-view-search-match")).toHaveLength(0);
+    });
+
+    it("Escape in the search input closes only the search bar, even with the ToC outline also open", async () => {
+      // Regression test: DocumentViewToc's own Escape listener originally
+      // ran in the capture phase, which always fires before the search
+      // input's bubble-phase stopPropagation() could take effect - so
+      // pressing Escape to dismiss just the search bar silently closed the
+      // ToC outline too. Caught by adversarial review.
+      // Order matters for this repro: opening search FIRST, then ToC,
+      // avoids ToC's own (unrelated, pre-existing) outside-pointerdown-close
+      // handler from closing it again before Escape is even pressed -
+      // clicking ToC's own "Outline" toggle is inside its own root, not an
+      // "outside" click, so this is the one ordering where both stay open
+      // at once, matching the actual scenario adversarial review found.
+      const user = userEvent.setup();
+      renderPanel({ content: "# One\n\n## Two\n\nthe cat sat" });
+
+      await user.click(screen.getByRole("button", { name: "Find in document" }));
+      await user.click(screen.getByRole("button", { name: "Outline" }));
+      expect(screen.getByRole("menu", { name: "Table of contents" })).toBeInTheDocument();
+      expect(screen.getByRole("search")).toBeInTheDocument();
+
+      const searchInput = screen.getByRole("textbox", { name: "Search query" });
+      searchInput.focus();
+      await user.keyboard("{Escape}");
+
+      expect(screen.queryByRole("search")).toBeNull();
+      expect(screen.getByRole("menu", { name: "Table of contents" })).toBeInTheDocument();
     });
   });
 });
