@@ -2364,6 +2364,17 @@ body,
   transition: none;
 }
 
+/* Stage 4 ("drawer UX polish"): applied to BOTH the outer aside and the
+   inner content div (same class, same declared width) when the Expand
+   toggle is on - the outer aside's own existing width transition (above)
+   still applies, so expanding/collapsing slides exactly like opening/
+   closing does. Only takes effect at all because DocumentViewPanel.tsx
+   omits the competing inline `style={{width}}` while expanded, rather than
+   this needing `!important` to win against it. */
+.document-view-panel-expanded {
+  width: min(1400px, 92vw);
+}
+
 .document-view-panel-inner {
   height: 100%;
   box-sizing: border-box;
@@ -2391,6 +2402,13 @@ body,
 .document-view-panel-title {
   font-size: 14px;
   font-weight: 700;
+  /* Defensive, matching the subtitle's own existing truncation just below -
+     harmless at any width this row already comfortably fits, and a cheap
+     safeguard against the row ever overflowing rather than forcing it to. */
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .document-view-panel-subtitle {
@@ -2823,6 +2841,73 @@ mark.document-view-search-match-current {
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
   border: 0;
+}
+
+/* Document View full redesign, stage 4 ("drawer UX polish") - a small
+   toolbar row (font-size stepper + Expand/Collapse), separate from the
+   main header - see DocumentViewPanel.tsx's own inline comment for why
+   these don't live in the header alongside Outline/Find/Copy/Close. */
+
+.document-view-panel-toolbar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.document-view-panel-font-stepper {
+  flex-shrink: 0;
+  display: flex;
+  gap: 2px;
+}
+
+.document-view-panel-font-step {
+  padding: 6px 8px;
+  font-size: 12px;
+  font-family: inherit;
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-neutral-button-background);
+  border: 1px solid var(--gl-neutral-button-border);
+  cursor: pointer;
+}
+
+.document-view-panel-font-step:first-child {
+  border-radius: 4px 0 0 4px;
+}
+
+.document-view-panel-font-step:last-child {
+  border-radius: 0 4px 4px 0;
+  margin-left: -1px;
+}
+
+.document-view-panel-font-step:hover:enabled {
+  background-color: var(--gl-neutral-button-hover);
+}
+
+.document-view-panel-font-step:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.document-view-panel-expand-toggle {
+  flex-shrink: 0;
+  padding: 6px 14px;
+  font-size: 12px;
+  font-family: inherit;
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-neutral-button-background);
+  border: 1px solid var(--gl-neutral-button-border);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.document-view-panel-expand-toggle:hover {
+  background-color: var(--gl-neutral-button-hover);
+}
+
+.document-view-panel-expand-toggle[aria-pressed="true"] {
+  background-color: var(--gl-neutral-button-hover);
+  border-color: var(--gl-palette-selection);
 }
 
 .help-rail {

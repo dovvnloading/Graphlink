@@ -92,12 +92,12 @@ describe("DocumentViewPanel", () => {
 
   it("renders a resize handle", () => {
     renderPanel();
-    expect(screen.getByRole("separator", { name: "Resize Document View panel" })).toBeInTheDocument();
+    expect(screen.getByRole("separator", { name: "Resize Document View panel. Press Enter to reset to the default width." })).toBeInTheDocument();
   });
 
   it("dragging the resize handle changes the panel's width, and releasing ends the drag cleanly", () => {
     const { container } = renderPanel();
-    const handle = screen.getByRole("separator", { name: "Resize Document View panel" });
+    const handle = screen.getByRole("separator", { name: "Resize Document View panel. Press Enter to reset to the default width." });
     const panel = container.querySelector(".document-view-panel") as HTMLElement;
 
     fireEvent.pointerDown(handle, { clientX: 500, pointerId: 1 });
@@ -119,7 +119,7 @@ describe("DocumentViewPanel", () => {
 
   it("clamps the resize width to the configured min/max range", () => {
     const { container } = renderPanel();
-    const handle = screen.getByRole("separator", { name: "Resize Document View panel" });
+    const handle = screen.getByRole("separator", { name: "Resize Document View panel. Press Enter to reset to the default width." });
     const panel = container.querySelector(".document-view-panel") as HTMLElement;
 
     fireEvent.pointerDown(handle, { clientX: 500, pointerId: 1 });
@@ -356,6 +356,243 @@ describe("DocumentViewPanel", () => {
 
       expect(screen.queryByRole("search")).toBeNull();
       expect(screen.getByRole("menu", { name: "Table of contents" })).toBeInTheDocument();
+    });
+  });
+
+  describe("drawer UX polish (stage 4)", () => {
+    it("Escape closes the panel", async () => {
+      const user = userEvent.setup();
+      const onClose = vi.fn();
+      renderPanel({ onClose });
+
+      await user.keyboard("{Escape}");
+      expect(onClose).toHaveBeenCalledOnce();
+    });
+
+    it("does not close the panel on Escape while the search bar is open - closes search instead", async () => {
+      const user = userEvent.setup();
+      const onClose = vi.fn();
+      renderPanel({ onClose, content: "the cat sat" });
+
+      await user.click(screen.getByRole("button", { name: "Find in document" }));
+      expect(screen.getByRole("search")).toBeInTheDocument();
+
+      await user.keyboard("{Escape}");
+
+      expect(onClose).not.toHaveBeenCalled();
+      expect(screen.queryByRole("search")).toBeNull();
+    });
+
+    it("closes only the search bar via the panel's own Escape handling when focus has moved elsewhere in the panel (not the search input itself)", async () => {
+      // Regression test: the test above passes even with the panel's own
+      // isSearchOpen deferral branch deleted entirely, because the search
+      // input auto-focuses and its OWN pre-existing (stage 3) Escape
+      // handler intercepts the keystroke first, via stopPropagation, before
+      // it ever reaches the panel's document-level listener. Caught by
+      // adversarial review: that left the actual new branch this stage
+      // added completely untested. Moving focus off the input first forces
+      // the keystroke through the panel's own listener instead.
+      const user = userEvent.setup();
+      const onClose = vi.fn();
+      renderPanel({ onClose, content: "the cat sat" });
+
+      await user.click(screen.getByRole("button", { name: "Find in document" }));
+      const searchInput = screen.getByRole("textbox", { name: "Search query" });
+      expect(searchInput).toHaveFocus();
+      searchInput.blur();
+      expect(document.activeElement).not.toBe(searchInput);
+
+      await user.keyboard("{Escape}");
+
+      expect(onClose).not.toHaveBeenCalled();
+      expect(screen.queryByRole("search")).toBeNull();
+    });
+
+    it("closes only one of search/ToC (not both) from a single Escape press when both are open and focus is outside the search input", async () => {
+      // Regression test for a confirmed adversarial-review finding: the
+      // panel's own isSearchOpen branch didn't stop the event from also
+      // reaching DocumentViewToc's own, separate document-level Escape
+      // listener, so with both open and focus left on the Outline toggle
+      // (not inside the search input), a single Escape press closed BOTH at
+      // once instead of just one.
+      const user = userEvent.setup();
+      const onClose = vi.fn();
+      renderPanel({ onClose, content: "# One\n\n## Two\n\nthe cat sat" });
+
+      await user.click(screen.getByRole("button", { name: "Find in document" }));
+      await user.click(screen.getByRole("button", { name: "Outline" }));
+      expect(screen.getByRole("search")).toBeInTheDocument();
+      expect(screen.getByRole("menu", { name: "Table of contents" })).toBeInTheDocument();
+
+      await user.keyboard("{Escape}");
+
+      expect(onClose).not.toHaveBeenCalled();
+      const searchStillOpen = screen.queryByRole("search") !== null;
+      const tocStillOpen = screen.queryByRole("menu") !== null;
+      expect(searchStillOpen).not.toBe(tocStillOpen);
+    });
+
+    it("does not close the panel on Escape while the ToC outline is open - closes the outline instead", async () => {
+      const user = userEvent.setup();
+      const onClose = vi.fn();
+      renderPanel({ onClose, content: "# One\n\n## Two" });
+
+      await user.click(screen.getByRole("button", { name: "Outline" }));
+      expect(screen.getByRole("menu", { name: "Table of contents" })).toBeInTheDocument();
+
+      await user.keyboard("{Escape}");
+
+      expect(onClose).not.toHaveBeenCalled();
+      expect(screen.queryByRole("menu")).toBeNull();
+    });
+
+    it("does not listen for Escape while closed", async () => {
+      const user = userEvent.setup();
+      const onClose = vi.fn();
+      renderPanel({ onClose, isOpen: false });
+
+      await user.keyboard("{Escape}");
+      expect(onClose).not.toHaveBeenCalled();
+    });
+
+    it("double-clicking the resize handle resets the width to the default", () => {
+      const { container } = renderPanel();
+      const handle = screen.getByRole("separator", { name: "Resize Document View panel. Press Enter to reset to the default width." });
+      const panel = container.querySelector(".document-view-panel") as HTMLElement;
+
+      fireEvent.pointerDown(handle, { clientX: 500, pointerId: 1 });
+      fireEvent.pointerMove(handle, { clientX: 700, pointerId: 1 });
+      fireEvent.pointerUp(handle, { clientX: 700, pointerId: 1 });
+      expect(panel.style.width).toBe("700px");
+
+      fireEvent.doubleClick(handle);
+      expect(panel.style.width).toBe("500px");
+    });
+
+    it("is keyboard-focusable and pressing Enter resets the width to the default", () => {
+      // Regression test for a confirmed adversarial-review finding: the
+      // resize handle's double-click-to-reset had no keyboard equivalent -
+      // a plain, non-focusable div with no way to trigger it without a
+      // mouse.
+      const { container } = renderPanel();
+      const handle = screen.getByRole("separator", { name: "Resize Document View panel. Press Enter to reset to the default width." });
+      const panel = container.querySelector(".document-view-panel") as HTMLElement;
+      expect(handle).toHaveAttribute("tabIndex", "0");
+
+      fireEvent.pointerDown(handle, { clientX: 500, pointerId: 1 });
+      fireEvent.pointerMove(handle, { clientX: 700, pointerId: 1 });
+      fireEvent.pointerUp(handle, { clientX: 700, pointerId: 1 });
+      expect(panel.style.width).toBe("700px");
+
+      fireEvent.keyDown(handle, { key: "Enter" });
+      expect(panel.style.width).toBe("500px");
+    });
+
+    it("pressing Space on the focused resize handle also resets the width", () => {
+      const { container } = renderPanel();
+      const handle = screen.getByRole("separator", { name: "Resize Document View panel. Press Enter to reset to the default width." });
+      const panel = container.querySelector(".document-view-panel") as HTMLElement;
+
+      fireEvent.pointerDown(handle, { clientX: 500, pointerId: 1 });
+      fireEvent.pointerMove(handle, { clientX: 650, pointerId: 1 });
+      fireEvent.pointerUp(handle, { clientX: 650, pointerId: 1 });
+      expect(panel.style.width).toBe("650px");
+
+      fireEvent.keyDown(handle, { key: " " });
+      expect(panel.style.width).toBe("500px");
+    });
+
+    describe("Expand/Collapse toggle", () => {
+      it("expanding removes the inline width so the CSS class takes over, and shows 'Collapse'", () => {
+        const { container } = renderPanel();
+        const panel = container.querySelector(".document-view-panel") as HTMLElement;
+        expect(panel.style.width).toBe("500px");
+
+        fireEvent.click(screen.getByRole("button", { name: "Expand" }));
+
+        expect(panel).toHaveClass("document-view-panel-expanded");
+        expect(panel.style.width).toBe("");
+        expect(screen.getByRole("button", { name: "Collapse" })).toBeInTheDocument();
+      });
+
+      it("collapsing restores the exact width from before expanding", () => {
+        const { container } = renderPanel();
+        const panel = container.querySelector(".document-view-panel") as HTMLElement;
+        const handle = screen.getByRole("separator", { name: "Resize Document View panel. Press Enter to reset to the default width." });
+
+        fireEvent.pointerDown(handle, { clientX: 500, pointerId: 1 });
+        fireEvent.pointerMove(handle, { clientX: 650, pointerId: 1 });
+        fireEvent.pointerUp(handle, { clientX: 650, pointerId: 1 });
+        expect(panel.style.width).toBe("650px");
+
+        fireEvent.click(screen.getByRole("button", { name: "Expand" }));
+        expect(panel).not.toHaveClass("document-view-panel-resizing");
+        fireEvent.click(screen.getByRole("button", { name: "Collapse" }));
+
+        expect(panel).not.toHaveClass("document-view-panel-expanded");
+        expect(panel.style.width).toBe("650px");
+      });
+
+      it("starting a manual drag while expanded exits expanded mode", () => {
+        const { container } = renderPanel();
+        const panel = container.querySelector(".document-view-panel") as HTMLElement;
+        const handle = screen.getByRole("separator", { name: "Resize Document View panel. Press Enter to reset to the default width." });
+
+        fireEvent.click(screen.getByRole("button", { name: "Expand" }));
+        expect(panel).toHaveClass("document-view-panel-expanded");
+
+        fireEvent.pointerDown(handle, { clientX: 500, pointerId: 1 });
+        expect(panel).not.toHaveClass("document-view-panel-expanded");
+
+        fireEvent.pointerMove(handle, { clientX: 600, pointerId: 1 });
+        expect(panel.style.width).toBe("600px");
+      });
+    });
+
+    describe("font-size stepper", () => {
+      function scrollFontSize(container: HTMLElement): string {
+        return (container.querySelector(".document-view-panel-scroll") as HTMLElement).style.fontSize;
+      }
+
+      it("applies no inline font-size at the default step", () => {
+        const { container } = renderPanel();
+        expect(scrollFontSize(container)).toBe("");
+      });
+
+      it("increasing steps up applies a larger em multiplier", () => {
+        const { container } = renderPanel();
+        fireEvent.click(screen.getByRole("button", { name: "Increase text size" }));
+        expect(scrollFontSize(container)).toBe("1.15em");
+      });
+
+      it("decreasing steps down applies a smaller em multiplier", () => {
+        const { container } = renderPanel();
+        fireEvent.click(screen.getByRole("button", { name: "Decrease text size" }));
+        expect(scrollFontSize(container)).toBe("0.85em");
+      });
+
+      it("returning to the default step removes the inline font-size again", () => {
+        const { container } = renderPanel();
+        fireEvent.click(screen.getByRole("button", { name: "Increase text size" }));
+        expect(scrollFontSize(container)).toBe("1.15em");
+
+        fireEvent.click(screen.getByRole("button", { name: "Decrease text size" }));
+        expect(scrollFontSize(container)).toBe("");
+      });
+
+      it("disables Decrease at the smallest step and Increase at the largest", () => {
+        renderPanel();
+        const decrease = screen.getByRole("button", { name: "Decrease text size" });
+        const increase = screen.getByRole("button", { name: "Increase text size" });
+
+        fireEvent.click(decrease);
+        expect(decrease).toBeDisabled();
+
+        fireEvent.click(increase);
+        fireEvent.click(increase);
+        fireEvent.click(increase);
+        expect(increase).toBeDisabled();
+      });
     });
   });
 });
