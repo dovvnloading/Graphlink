@@ -11,6 +11,18 @@ const DEFAULT_WIDTH = 500;
 const MIN_WIDTH = 320;
 const MAX_WIDTH = 900;
 
+// Stage 4: relative multipliers, not absolute pixel values - the actual
+// inherited body font-size in `.document-view-panel-scroll` is never set
+// explicitly by this file (it cascades down from ambient app chrome), so
+// hard-coding a "base" px value here could drift from whatever that
+// ambient size actually is. `1` (the default/middle step) omits the inline
+// style entirely (see the render below), leaving today's already-shipped,
+// already-verified rendering completely undisturbed; only stepping away
+// from it applies an explicit `Nem` override, scaled relative to whatever
+// the ambient size already was.
+const FONT_SIZE_STEPS = [0.85, 1, 1.15, 1.3];
+const DEFAULT_FONT_SIZE_STEP_INDEX = 1;
+
 /**
  * Document View panel (Qt-removal plan R7.6b's stub, redone as a real
  * docked panel, then refined further). Legacy's DocumentViewerPanel/
@@ -33,12 +45,11 @@ const MAX_WIDTH = 900;
  * constant-width inner block via the outer's overflow:hidden instead reads
  * as a real slide, the same technique most CSS-only drawer components use.
  *
- * Closing it only ever happens via its own Close button, matching legacy
- * exactly - it was never part of Qt's OverlayManager, so no scrim, no
- * Escape-to-close, no focus trap here either. (Full redesign, stage 4 of 4,
- * revisits the Escape-to-close piece specifically - see that stage's own
- * notes for why it's being added without adopting the rest of the modal
- * treatment.)
+ * Closing it only ever happens via its own Close button OR Escape (added in
+ * stage 4 - see below), matching legacy's shape otherwise: it was never part
+ * of Qt's OverlayManager, so still no scrim and no focus trap - Escape-to-
+ * close was the one specific piece of modal-like behavior worth adding on
+ * its own, not a signal that the rest of that treatment is coming too.
  *
  * Full redesign, stage 1 of 4 ("content rendering upgrades"): the markdown
  * body itself is now rendered by DocumentViewMarkdown.tsx (heading anchors,
@@ -74,6 +85,55 @@ const MAX_WIDTH = 900;
  * newly-typed search, matching standard find-bar behavior) - using the same
  * render-phase "adjust state when a value changes" idiom stage 2 already
  * established, not a useEffect.
+ *
+ * Full redesign, stage 4 of 4 ("drawer UX polish"), the last of the four:
+ *
+ * - Escape-to-close: a document-level listener, scoped to `isOpen` (matching
+ *   DocumentViewToc.tsx's and DocumentViewSearch.tsx's own precedent for
+ *   global-but-scoped key handling in this panel). Defers rather than
+ *   closing the whole panel if a more specific, nested transient UI should
+ *   consume the keystroke instead: the search bar (checked via
+ *   `isSearchOpen`, which this component already owns) or the ToC outline
+ *   dropdown (checked via a DOM query for its own class, since that
+ *   component owns its open state privately - reading the rendered DOM as
+ *   ground truth for "is this open" rather than lifting that state up
+ *   matches the same technique this file's own search-match tracking above
+ *   already uses `SEARCH_MATCH_SELECTOR` for).
+ * - Remembered/resettable width: "remembered" here means for the lifetime of
+ *   the running app, not across a restart - this component is never
+ *   unmounted while the app runs (App.tsx mounts it once, `isOpen` only
+ *   toggles visibility), so `width` already survives every close/reopen for
+ *   free. Persisting it across a full app restart would need a new
+ *   backend-settings round trip (SettingsManager/backend/settings.py's
+ *   established pattern) for a single panel's pixel width - a disproportionate
+ *   amount of new backend surface for what this stage is scoped as: a
+ *   frontend-only polish pass, matching stages 1-3's own shape. "Resettable"
+ *   is a double-click on the resize handle, snapping back to
+ *   `DEFAULT_WIDTH` - a common, discoverable convention (e.g. VS Code's own
+ *   sidebar resize handle).
+ * - Expand/fullscreen toggle: `isExpanded` is independent of `width` - it
+ *   doesn't overwrite the user's own chosen/remembered width, it just
+ *   temporarily overrides the RENDERED size via a CSS class
+ *   (`.document-view-panel-expanded`) instead of the usual inline
+ *   `style={{width}}`, so un-expanding snaps right back to the exact width
+ *   the user had before. Starting a manual drag while expanded exits
+ *   expanded mode first (see onResizeStart) - dragging implies "I want
+ *   precise manual control now," and continuing to drag while a CSS class
+ *   was fighting the inline width would be visibly broken.
+ * - Font-size stepper: relative `em` multipliers, not absolute pixel values -
+ *   see FONT_SIZE_STEPS' own comment for why. Only scales inherited text
+ *   (paragraphs, lists, table cells, blockquotes, and code via its own
+ *   existing `em`-relative sizing) - headings keep their existing fixed
+ *   px hierarchy (15/14/13/12), a deliberate, small, out-of-scope-to-fix
+ *   limitation: proportionally scaling headings too would mean touching
+ *   `.chat-node-content`'s shared rules, used by every OTHER markdown
+ *   surface in the app (chat bubbles, notes), not just this panel - a much
+ *   larger blast radius than a "polish" pass warrants.
+ *
+ * Width, expanded state, and font-size step are NOT reset when `content`
+ * changes (unlike stage 2/3's scroll/progress/search state) - they describe
+ * how the user likes the PANEL sized/scaled, not anything about the specific
+ * document currently showing in it.
  */
 export function DocumentViewPanel({
   isOpen,
@@ -88,6 +148,9 @@ export function DocumentViewPanel({
 }) {
   const [width, setWidth] = useState(DEFAULT_WIDTH);
   const [isResizing, setIsResizing] = useState(false);
+  const [isExpanded, setIsExpanded] = useState(false);
+  const [fontSizeStepIndex, setFontSizeStepIndex] = useState(DEFAULT_FONT_SIZE_STEP_INDEX);
+  const panelRef = useRef<HTMLElement>(null);
   const dragStartRef = useRef<{ pointerX: number; startWidth: number } | null>(null);
 
   // Real Pointer Capture, not a window-level pointermove/pointerup pair:
@@ -107,6 +170,22 @@ export function DocumentViewPanel({
       event.preventDefault();
       dragStartRef.current = { pointerX: event.clientX, startWidth: width };
       setIsResizing(true);
+      // Dragging implies "give me precise manual control now" - this exits
+      // expanded mode so onResizeMove's own math (based on `width`'s last-
+      // remembered value, not whatever the expanded CSS class currently
+      // renders) takes over. Adversarial review correctly flagged an
+      // earlier draft of this comment for claiming that transition happens
+      // smoothly/gradually - it does not: `setIsResizing`/`setIsExpanded`
+      // land in the same React commit, so `.document-view-panel-resizing`'s
+      // `transition: none` (styles.css) is already active in the very
+      // render where the width also changes, meaning the panel visibly
+      // snaps straight to `width` on pointerdown itself, before any actual
+      // drag motion. This is deliberately left as an instant snap, not
+      // smoothed out: it's the same convention real window managers use for
+      // "un-maximize by starting to drag" (an immediate jump to the
+      // previous/restored size, not an animated shrink), which users
+      // already read as normal, expected behavior rather than a glitch.
+      setIsExpanded(false);
       // Feature-detected, not assumed: real browsers have supported Pointer
       // Capture for years, but the DOM environment this runs in (an older
       // WebView2/browser, or a test environment like jsdom) may not.
@@ -121,6 +200,36 @@ export function DocumentViewPanel({
     const next = start.startWidth + (event.clientX - start.pointerX);
     setWidth(Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, next)));
   }, []);
+
+  // Resets width to the default. If the panel happens to be Expanded when
+  // this runs, it's ALSO already been un-expanded by this point - not by
+  // this function, but as an unavoidable side effect of onResizeStart
+  // (bound to pointerdown) already having fired twice before either a
+  // dblclick or this handler's own Enter/Space path ever reaches here (a
+  // double-click is, unavoidably, two prior pointerdown/pointerup cycles;
+  // the keyboard path calls onResetWidth directly with no such prelude, so
+  // it does NOT itself touch `isExpanded`). Left as-is deliberately, not
+  // worked around: "reset" reasonably means "back to the normal, default-
+  // width, non-expanded state" as a whole, not just the `width` number in
+  // isolation.
+  const onResetWidth = useCallback(() => {
+    setWidth(DEFAULT_WIDTH);
+  }, []);
+
+  const onResizeHandleKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLDivElement>) => {
+      // Adversarial-review finding: double-click-to-reset had no keyboard
+      // equivalent at all - the handle was a plain, non-focusable div, so a
+      // keyboard-only user had no way to invoke it. Enter/Space (not arrow-
+      // key resizing, which would be a larger, separate feature) mirrors
+      // the double-click's own single action.
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        onResetWidth();
+      }
+    },
+    [onResetWidth],
+  );
 
   const onResizeEnd = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     dragStartRef.current = null;
@@ -234,20 +343,80 @@ export function DocumentViewPanel({
     container.scrollTop += currentRect.top - containerRect.top;
   }, [content, searchQuery, currentMatchIndex]);
 
+  // Stage 4: Escape-to-close. Deferring to a more specific, nested transient
+  // UI - the search bar (this component's own `isSearchOpen`) or the ToC
+  // outline dropdown (no state access here, so checked via the rendered DOM
+  // instead, scoped to this panel's own root) - means each one still closes
+  // on its own first Escape press, exactly as stage 2/3 already established,
+  // rather than this new listener closing the ENTIRE panel out from under
+  // whichever of those was actually still open.
+  //
+  // Adversarial-review finding, confirmed and fixed: when both the search
+  // bar and the ToC dropdown were open at once, and focus was anywhere OTHER
+  // than inside the search input, one Escape press closed BOTH - not just
+  // the search bar this branch means to defer to. DocumentViewToc.tsx's own
+  // Escape listener is a SEPARATE `document`-level listener that closes
+  // itself unconditionally whenever it's open, with no awareness of
+  // anything else reacting to the same keystroke; merely calling
+  // `onSearchClose()` and returning here does nothing to stop that OTHER
+  // listener from also firing on the very same dispatch. Plain
+  // `stopPropagation()` would not fix this either - both listeners are
+  // attached to the SAME target (`document`), and per the DOM event model
+  // `stopPropagation()` only prevents an event from reaching FURTHER
+  // targets (e.g. document -> window), not other listeners already
+  // registered on the target it's currently at; only
+  // `stopImmediatePropagation()` prevents sibling listeners on the same
+  // node from running. Calling it here means this branch's "close search,
+  // leave everything else alone" intent is actually enforced, regardless of
+  // which of this listener's or ToC's own listener happens to be registered
+  // first for a given interaction order.
+  useEffect(() => {
+    if (!isOpen) return;
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      if (isSearchOpen) {
+        onSearchClose();
+        event.stopImmediatePropagation();
+        return;
+      }
+      if (panelRef.current?.querySelector(".document-view-toc-dropdown")) return;
+      onClose();
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [isOpen, isSearchOpen, onSearchClose, onClose]);
+
+  const onFontSizeDecrease = useCallback(() => {
+    setFontSizeStepIndex((i) => Math.max(0, i - 1));
+  }, []);
+
+  const onFontSizeIncrease = useCallback(() => {
+    setFontSizeStepIndex((i) => Math.min(FONT_SIZE_STEPS.length - 1, i + 1));
+  }, []);
+
+  const fontSizeMultiplier = FONT_SIZE_STEPS[fontSizeStepIndex];
+
   return (
     <aside
+      ref={panelRef}
       className={[
         "document-view-panel",
         isOpen ? "document-view-panel-open" : "",
         isResizing ? "document-view-panel-resizing" : "",
+        isExpanded ? "document-view-panel-expanded" : "",
       ]
         .filter(Boolean)
         .join(" ")}
       aria-label="Document View"
       aria-hidden={!isOpen}
-      style={{ width: isOpen ? width : 0 }}
+      style={{ width: isOpen ? (isExpanded ? undefined : width) : 0 }}
     >
-      <div className="document-view-panel-inner" style={{ width }}>
+      <div
+        className={["document-view-panel-inner", isExpanded ? "document-view-panel-expanded" : ""]
+          .filter(Boolean)
+          .join(" ")}
+        style={{ width: isExpanded ? undefined : width }}
+      >
         <header className="document-view-panel-header">
           <div className="document-view-panel-heading">
             <span className="document-view-panel-title">Document View</span>
@@ -279,6 +448,48 @@ export function DocumentViewPanel({
             Close
           </button>
         </header>
+        {/* A separate row, not folded into the header above: with the main
+            header already carrying 5 controls (title + Outline/Find/Copy/
+            Close), adding these 3 more (font stepper x2, Expand) there too
+            would overflow this panel's own supported MIN_WIDTH (320px) -
+            confirmed by rough measurement, not just a hunch (~444px of
+            fixed-width buttons alone against a ~300px content budget at
+            MIN_WIDTH, before even the title). This row has far fewer
+            neighbors competing for space. */}
+        <div className="document-view-panel-toolbar">
+          <div className="document-view-panel-font-stepper">
+            <button
+              type="button"
+              className="document-view-panel-font-step"
+              onClick={onFontSizeDecrease}
+              disabled={fontSizeStepIndex === 0}
+              title="Decrease text size"
+              aria-label="Decrease text size"
+            >
+              A-
+            </button>
+            <button
+              type="button"
+              className="document-view-panel-font-step"
+              onClick={onFontSizeIncrease}
+              disabled={fontSizeStepIndex === FONT_SIZE_STEPS.length - 1}
+              title="Increase text size"
+              aria-label="Increase text size"
+            >
+              A+
+            </button>
+          </div>
+          <button
+            type="button"
+            className="document-view-panel-expand-toggle"
+            onClick={() => setIsExpanded((expanded) => !expanded)}
+            title={isExpanded ? "Collapse" : "Expand"}
+            aria-label={isExpanded ? "Collapse" : "Expand"}
+            aria-pressed={isExpanded}
+          >
+            {isExpanded ? "Collapse" : "Expand"}
+          </button>
+        </div>
         <DocumentViewSearch
           isOpen={isSearchOpen}
           query={searchQuery}
@@ -299,7 +510,12 @@ export function DocumentViewPanel({
         >
           <div className="document-view-panel-progress-fill" style={{ width: `${readingProgress}%` }} />
         </div>
-        <div className="document-view-panel-scroll chat-node-content" ref={scrollRef} onScroll={onScroll}>
+        <div
+          className="document-view-panel-scroll chat-node-content"
+          ref={scrollRef}
+          onScroll={onScroll}
+          style={{ fontSize: fontSizeMultiplier === 1 ? undefined : `${fontSizeMultiplier}em` }}
+        >
           <DocumentViewMarkdown content={content ?? ""} searchQuery={searchQuery} />
         </div>
       </div>
@@ -309,9 +525,13 @@ export function DocumentViewPanel({
         onPointerMove={onResizeMove}
         onPointerUp={onResizeEnd}
         onPointerCancel={onResizeEnd}
+        onDoubleClick={onResetWidth}
+        onKeyDown={onResizeHandleKeyDown}
         role="separator"
+        tabIndex={0}
         aria-orientation="vertical"
-        aria-label="Resize Document View panel"
+        aria-label="Resize Document View panel. Press Enter to reset to the default width."
+        title="Drag to resize, double-click or Enter to reset"
       />
     </aside>
   );

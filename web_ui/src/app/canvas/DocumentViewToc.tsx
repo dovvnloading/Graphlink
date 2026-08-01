@@ -66,7 +66,26 @@ export function DocumentViewToc({
       if (rootRef.current && !rootRef.current.contains(event.target as Node)) setIsOpen(false);
     }
     function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") setIsOpen(false);
+      if (event.key !== "Escape") return;
+      setIsOpen(false);
+      // stopImmediatePropagation(), not plain stopPropagation() - both this
+      // listener and DocumentViewPanel.tsx's own Escape-to-close-the-whole-
+      // panel listener are attached to the SAME target (`document`), and
+      // per the DOM event model plain stopPropagation() only blocks an
+      // event from reaching FURTHER targets (document -> window), not
+      // other listeners already registered on the target it's currently
+      // at - only stopImmediatePropagation() does that. An earlier version
+      // of this comment claimed plain stopPropagation() here was "defense
+      // in depth" against exactly this kind of same-target listener, which
+      // adversarial review found was simply incorrect (verified by
+      // temporarily removing the call and confirming a same-target sibling
+      // listener was unaffected either way) - stopImmediatePropagation is
+      // the one that actually delivers that guarantee, regardless of
+      // whether this listener or the panel's own happens to be registered
+      // first for a given interaction order (DocumentViewPanel.tsx's own
+      // Escape handler now calls it too, for the same reason, in the
+      // branch where IT is the one closing something).
+      event.stopImmediatePropagation();
     }
     document.addEventListener("pointerdown", onPointerDown, true);
     // Bubble phase (no capture), unlike the pointerdown listener above -
@@ -77,10 +96,7 @@ export function DocumentViewToc({
     // run during the capture leg of dispatch - BEFORE the event ever
     // reaches the search input's own bubble-phase handler - making that
     // stopPropagation() call a no-op against this listener. Bubble phase
-    // lets an inner element's stopPropagation() genuinely take effect,
-    // while every other Escape-closes-this-dropdown scenario (focus
-    // elsewhere in the panel, or nowhere in particular) is unaffected,
-    // since nothing else in this panel calls stopPropagation on Escape.
+    // lets an inner element's stopPropagation() genuinely take effect.
     document.addEventListener("keydown", onKeyDown);
     return () => {
       document.removeEventListener("pointerdown", onPointerDown, true);
