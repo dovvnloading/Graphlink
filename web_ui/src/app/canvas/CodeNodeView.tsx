@@ -1,10 +1,8 @@
 import { Handle, Position, useStore, type Node, type NodeProps } from "@xyflow/react";
 import { useState } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import rehypeHighlight from "rehype-highlight";
 import { LOD_ZOOM_THRESHOLD } from "./canvasConstants";
 import { downloadTextFile } from "./downloadTextFile";
+import { NodeMarkdown } from "./NodeMarkdown";
 import { NodeMenu } from "./NodeMenu";
 
 /**
@@ -13,8 +11,8 @@ import { NodeMenu } from "./NodeMenu";
  * never generated here). Unlike ChatNodeView, code nodes have no manual
  * collapse toggle - they only ever auto-collapse on zoom (LOD), since there's
  * no per-node state worth toggling by hand. Real: render (syntax-highlighted,
- * via the same react-markdown + rehype-highlight pipeline chat nodes already
- * pull in - no new highlighter dependency), delete (generic cascade-delete;
+ * via the shared NodeMarkdown.tsx renderer every node kind now uses - node
+ * redesign stage 1), delete (generic cascade-delete;
  * code nodes are never branch points, so there's no reparent rule to honor),
  * copy, and (as of R4.3c) Regenerate Response - conditionally rendered
  * (not merely disabled) on parentChatNodeId being non-null, matching
@@ -207,10 +205,8 @@ export function CodeNodeView({ id, data, selected }: NodeProps<CodeFlowNode>) {
         <span>{data.language || "code"}</span>
       </div>
       {!collapsed && (
-        <div className="scene-node-body code-node-content">
-          <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
-            {toFencedCodeBlock(data.code, data.language)}
-          </ReactMarkdown>
+        <div className="scene-node-body code-node-content chat-node-content">
+          <NodeMarkdown content={toFencedCodeBlock(data.code, data.language)} />
         </div>
       )}
       <Handle type="source" position={Position.Bottom} className="scene-node-handle" />

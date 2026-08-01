@@ -1,9 +1,7 @@
 import { useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import rehypeHighlight from "rehype-highlight";
 import { useFocusEscapeBackstop } from "../overlays/overlays";
+import { NodeMarkdown } from "./NodeMarkdown";
 
 /**
  * The mandatory human-approval gate (Qt-removal plan R5.4, corrected in the
@@ -80,13 +78,24 @@ import { useFocusEscapeBackstop } from "../overlays/overlays";
  * a request other than the one the server is actually holding.
  *
  * Security note, not a style preference: the pending code is rendered
- * through the exact same react-markdown + remarkGfm + rehypeHighlight
- * pipeline every sibling node view uses (see GitlinkNodeView's own
- * toDiffFence/CodeNodeView's own toFencedCodeBlock for the same technique
- * applied to different content) - no rehype-raw, no
- * dangerouslySetInnerHTML anywhere in this file. Fencing it as ```python
- * only affects syntax-colorization; the pipeline never interprets any of it
- * as live markup either way.
+ * through NodeMarkdown.tsx, the shared renderer every node view uses (node
+ * redesign stage 1) - no rehype-raw, no dangerouslySetInnerHTML anywhere in
+ * this file or that one. Fencing it as ```python (toPythonFence below, the
+ * same technique GitlinkNodeView's own toDiffFence/CodeNodeView's own
+ * toFencedCodeBlock use) only affects syntax-colorization; the pipeline
+ * never interprets any of it as live markup either way. Adversarial review
+ * caught this call site as the one the stage-1 migration initially missed:
+ * this is the security-critical human-approval gate for code about to run
+ * with the full privileges of the user's own account, and NodeMarkdown's
+ * own SafeAnchor override is exactly the guard that matters here - the
+ * pending code being reviewed is itself LLM-generated (Py-Coder's
+ * AI-driven mode / Code-Sandbox's own generation step), and a fenced code
+ * block can be broken out of early by an embedded ``` line (toPythonFence
+ * does no backtick-escaping, matching every sibling fence helper), letting
+ * a crafted comment/string smuggle a real markdown link past the fence -
+ * without SafeAnchor, a javascript: href in that smuggled link would have
+ * rendered as a live, clickable anchor in the one dialog whose entire
+ * purpose is a considered human review before approving execution.
  *
  * Requirements disclosure (post-review FIX C): CodeSandboxNode's one
  * mandatory approval step must show the requirements.txt-style manifest that
@@ -133,17 +142,19 @@ const DIALOG_TITLE: Record<CodeExecutionKind, string> = {
 };
 
 /** Wraps the pending code in a markdown fenced ```python code block so
- * ReactMarkdown + rehype-highlight can syntax-highlight it for free - same
- * technique CodeNodeView's own toFencedCodeBlock / GitlinkNodeView's own
- * toDiffFence use for their own content. */
+ * NodeMarkdown's own CodeBlock override can syntax-highlight it for free -
+ * same technique CodeNodeView's own toFencedCodeBlock / GitlinkNodeView's
+ * own toDiffFence use for their own content. */
 function toPythonFence(code: string): string {
   return "```python\n" + code + "\n```";
 }
 
-// Scoped to THIS panel's own three intended focus stops (the code display,
-// Deny, Approve) - deliberately narrower than overlays.tsx's own shared
-// FOCUSABLE selector (which also matches inputs/selects/links/textareas),
-// since nothing else in this panel's markup is ever meant to receive focus.
+// Scoped to THIS panel's own intended focus stops (the code display region,
+// its own Copy button - a real, additional stop since the node redesign
+// migrated this panel to NodeMarkdown's CodeBlock, which renders one - Deny,
+// Approve) - deliberately narrower than overlays.tsx's own shared FOCUSABLE
+// selector (which also matches inputs/selects/links/textareas), since
+// nothing else in this panel's markup is ever meant to receive focus.
 //
 // R8a (UI/UX issue list finding #17): excludes [disabled], the same fix
 // overlays.tsx's own Dialog needed and for the identical reason - `busy`
@@ -205,10 +216,13 @@ export function CodeExecutionApprovalPanel({
     if (awaitingApproval) denyButtonRef.current?.focus();
   }, [awaitingApproval]);
 
-  // Tab focus trap scoped to this panel's own three focusable stops (the
-  // scrollable code display, Deny, Approve) - Tab/Shift+Tab must never let
-  // focus escape to the rest of the page while a mandatory approval is
-  // pending. Deliberately has NO Escape branch at all (unlike overlays.tsx's
+  // Tab focus trap scoped to this panel's own focusable stops (the
+  // scrollable code display region, its Copy button, Deny, Approve) -
+  // Tab/Shift+Tab must never let focus escape to the rest of the page while
+  // a mandatory approval is pending. Computed dynamically via
+  // querySelectorAll below, not a hardcoded count, so it stays correct
+  // regardless of exactly how many focusable elements NodeMarkdown's own
+  // output happens to contain. Deliberately has NO Escape branch at all (unlike overlays.tsx's
   // own Dialog focus trap, which lives alongside that component's Escape-
   // closes-everything effect) - see module doc's FIX A.
   useEffect(() => {
@@ -284,9 +298,7 @@ export function CodeExecutionApprovalPanel({
             role="region"
             aria-label="Pending code"
           >
-            <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
-              {toPythonFence(code)}
-            </ReactMarkdown>
+            <NodeMarkdown content={toPythonFence(code)} />
           </div>
           <div className="code-exec-approval-actions">
             <button

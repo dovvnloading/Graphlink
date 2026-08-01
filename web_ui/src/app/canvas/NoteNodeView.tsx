@@ -1,9 +1,7 @@
 import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
 import { useRef, useState } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import rehypeHighlight from "rehype-highlight";
 import { GroupColorPicker, NOTE_SYSTEM_PROMPT_BORDER_COLOR } from "./GroupColorPicker";
+import { NodeMarkdown } from "./NodeMarkdown";
 
 /**
  * The note node (Qt-removal plan R6.1) - the free-floating markdown sticky
@@ -22,8 +20,8 @@ import { GroupColorPicker, NOTE_SYSTEM_PROMPT_BORDER_COLOR } from "./GroupColorP
  * once created - the Handle elements are what let that edge draw a visible
  * connector line, same as every other kind.
  *
- * Real: render (markdown body, same react-markdown + rehype-highlight
- * pipeline every other node kind pulls in), double-click-to-edit (plain
+ * Real: render (markdown body, the shared NodeMarkdown.tsx renderer every
+ * other node kind now uses - node redesign stage 1), double-click-to-edit (plain
  * textarea, native browser undo - no custom undo/redo stack, confirmed as an
  * accepted simplification), color popover (shared GroupColorPicker), delete.
  * isSystemPrompt gets a dashed border + a small gear badge in the header;
@@ -153,9 +151,14 @@ export function NoteNodeView({ data, selected }: NodeProps<NoteFlowNode>) {
             spellCheck={false}
           />
         ) : (
-          <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
-            {data.content}
-          </ReactMarkdown>
+          // Nested wrapper (not applied to the outer scene-node-body div,
+          // which is shared with the textarea above) - same established
+          // pattern ArtifactBubble/ConversationBubble already use to scope
+          // .chat-node-content's shared markdown-body rules to just the
+          // rendered markdown, not a sibling edit control.
+          <div className="chat-node-content note-node-markdown">
+            <NodeMarkdown content={data.content} />
+          </div>
         )}
       </div>
       <Handle type="source" position={Position.Bottom} className="scene-node-handle" />

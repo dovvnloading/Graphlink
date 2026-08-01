@@ -1,9 +1,7 @@
 import { Handle, Position, useStore, type Node, type NodeProps } from "@xyflow/react";
 import { useState } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import rehypeHighlight from "rehype-highlight";
 import { LOD_ZOOM_THRESHOLD } from "./canvasConstants";
+import { NodeMarkdown } from "./NodeMarkdown";
 import { NodeMenu } from "./NodeMenu";
 
 /**
@@ -25,8 +23,8 @@ import { NodeMenu } from "./NodeMenu";
  * "Undock" item here, matching the legacy menu (only ChatNode's menu offers
  * the reverse direction).
  *
- * Real: render (markdown thinking text, same react-markdown + rehype-
- * highlight pipeline every other node kind pulls in), delete (generic
+ * Real: render (markdown thinking text, the shared NodeMarkdown.tsx renderer
+ * every other node kind now uses - node redesign stage 1), delete (generic
  * cascade-delete - a thinking node is never a branch point/reparented, same
  * as CodeNode), copy, dock, and now Hide Other Branches / Show All Branches -
  * a scene-wide toggle (SceneCanvas.tsx owns the graph walk and the dimming
@@ -136,10 +134,8 @@ export function ThinkingNodeView({ data, selected }: NodeProps<ThinkingFlowNode>
         <span>Thinking</span>
       </div>
       {!collapsed && (
-        <div className="scene-node-body thinking-node-content">
-          <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
-            {data.thinkingText}
-          </ReactMarkdown>
+        <div className="scene-node-body thinking-node-content chat-node-content">
+          <NodeMarkdown content={data.thinkingText} />
         </div>
       )}
       <Handle type="source" position={Position.Bottom} className="scene-node-handle" />

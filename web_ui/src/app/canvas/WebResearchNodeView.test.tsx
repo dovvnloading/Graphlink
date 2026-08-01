@@ -281,9 +281,13 @@ describe("WebResearchNodeView", () => {
 
   // -- markdown link safety ------------------------------------------------
 
-  it("opens a real http(s) link via window.open on click", async () => {
-    const user = userEvent.setup();
-    const openSpy = vi.spyOn(window, "open").mockImplementation(() => null);
+  // Node redesign stage 1: this view's own bespoke onClick+window.open
+  // anchor override was removed in favor of NodeMarkdown.tsx's shared
+  // SafeAnchor, which renders a real http(s) link declaratively (a native
+  // href + target="_blank"/rel, supplied by rehypeExternalLinks) rather
+  // than intercepting the click - so there is no window.open call to
+  // assert on anymore, just the resulting anchor's own attributes.
+  it("renders a real http(s) link as a genuine, hardened anchor (no onClick/window.open interception)", () => {
     renderWebResearchNode({
       researchStage: "completed",
       researchResult: makeResult({
@@ -291,25 +295,11 @@ describe("WebResearchNodeView", () => {
       }),
     });
 
-    await user.click(screen.getByText("real link"));
-    expect(openSpy).toHaveBeenCalledTimes(1);
-    expect(openSpy).toHaveBeenCalledWith("https://example.com/page", "_blank", "noopener,noreferrer");
-    openSpy.mockRestore();
-  });
-
-  it("never calls window.open for a javascript: href", async () => {
-    const user = userEvent.setup();
-    const openSpy = vi.spyOn(window, "open").mockImplementation(() => null);
-    renderWebResearchNode({
-      researchStage: "completed",
-      researchResult: makeResult({
-        answerMarkdown: "[bad link](javascript:alert(1))",
-      }),
-    });
-
-    await user.click(screen.getByText("bad link"));
-    expect(openSpy).not.toHaveBeenCalled();
-    openSpy.mockRestore();
+    const link = screen.getByRole("link", { name: "real link" });
+    expect(link).toHaveAttribute("href", "https://example.com/page");
+    expect(link).toHaveAttribute("target", "_blank");
+    expect(link.getAttribute("rel")).toContain("noopener");
+    expect(link.getAttribute("rel")).toContain("noreferrer");
   });
 
   it("renders a non-http(s) link with no href at all, so middle-click/context-menu has no raw href to bypass onClick with", () => {

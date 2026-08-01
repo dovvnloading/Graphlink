@@ -1,11 +1,9 @@
 import { Handle, Position, useStore, type Node, type NodeProps } from "@xyflow/react";
 import { useEffect, useState } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import rehypeHighlight from "rehype-highlight";
 import type { StreamListener } from "../../lib/ws/transport";
 import { LOD_ZOOM_THRESHOLD } from "./canvasConstants";
 import { CodeExecutionApprovalPanel } from "./CodeExecutionApprovalPanel";
+import { NodeMarkdown } from "./NodeMarkdown";
 import { NodeMenu } from "./NodeMenu";
 
 /**
@@ -16,8 +14,8 @@ import { NodeMenu } from "./NodeMenu";
  * UNCHANGED, only the display string moved) - the Code-Sandbox plugin's
  * React card. Same overall shell as every plugin-node sibling
  * (PyCoderNodeView/GitlinkNodeView): collapse/expand OR-ed with LOD, a card
- * menu with outside-click/Escape dismiss, the shared react-markdown +
- * remarkGfm + rehypeHighlight pipeline, no dock-to-parent action.
+ * menu with outside-click/Escape dismiss, the shared NodeMarkdown.tsx
+ * renderer (node redesign stage 1), no dock-to-parent action.
  *
  * Unlike Py-Coder, there is no mode toggle here - backend/canvas.py's own
  * start_code_sandbox_run docstring is explicit that there is "no
@@ -290,9 +288,7 @@ export function CodeSandboxNodeView({ id, data, selected }: NodeProps<CodeSandbo
             <div className="code-sandbox-node-section">
               <span className="code-sandbox-node-section-label">Code</span>
               <div className="chat-node-content code-sandbox-node-code">
-                <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
-                  {toPythonFence(data.codeSandboxCode)}
-                </ReactMarkdown>
+                <NodeMarkdown content={toPythonFence(data.codeSandboxCode)} />
               </div>
             </div>
           )}
@@ -315,9 +311,7 @@ export function CodeSandboxNodeView({ id, data, selected }: NodeProps<CodeSandbo
             <div className="code-sandbox-node-section">
               <span className="code-sandbox-node-section-label">Analysis</span>
               <div className="chat-node-content code-sandbox-node-analysis">
-                <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
-                  {data.codeSandboxAnalysis}
-                </ReactMarkdown>
+                <NodeMarkdown content={data.codeSandboxAnalysis} />
               </div>
             </div>
           )}

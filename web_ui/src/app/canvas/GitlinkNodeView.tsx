@@ -1,18 +1,16 @@
 import { Handle, Position, useStore, type Node, type NodeProps } from "@xyflow/react";
 import { useEffect, useRef, useState } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import rehypeHighlight from "rehype-highlight";
 import { LOD_ZOOM_THRESHOLD } from "./canvasConstants";
 import { Dialog, useOverlays } from "../overlays/overlays";
+import { NodeMarkdown } from "./NodeMarkdown";
 import { NodeMenu } from "./NodeMenu";
 
 /**
  * The Gitlink node (Qt-removal plan R5.3) - the Gitlink plugin's React card.
  * Same overall shell as every plugin-node sibling (ArtifactNodeView/
  * WebResearchNodeView): collapse/expand OR-ed with LOD, a card menu with
- * outside-click/Escape dismiss, the shared react-markdown + remarkGfm +
- * rehypeHighlight pipeline, no dock-to-parent action. Unlike its siblings,
+ * outside-click/Escape dismiss, the shared NodeMarkdown.tsx renderer (node
+ * redesign stage 1), no dock-to-parent action. Unlike its siblings,
  * this node is a three-tab workflow (Setup / Context / Proposal) rather than
  * one linear scroll - the underlying task (pick a repo, scope a context,
  * generate a change set, review a diff, apply it to real local files) has
@@ -44,9 +42,9 @@ import { NodeMenu } from "./NodeMenu";
  *
  * Security note, not a style preference: the Proposal tab renders BOTH
  * data.gitlinkProposalMarkdown and data.gitlinkPreviewText (a unified diff)
- * through the exact same react-markdown + remarkGfm + rehypeHighlight
- * pipeline every sibling node view uses - no rehype-raw, no
- * dangerouslySetInnerHTML anywhere in this file. The diff text is wrapped in
+ * through the exact same NodeMarkdown.tsx pipeline every sibling node view
+ * uses - no rehype-raw, no dangerouslySetInnerHTML anywhere in this file or
+ * that one. The diff text is wrapped in
  * a fenced ```diff code block first (toDiffFence, mirroring CodeNodeView's
  * own toFencedCodeBlock) purely so rehype-highlight can colorize it - it is
  * never treated as anything but inert text by the markdown pipeline, exactly
@@ -561,9 +559,7 @@ export function GitlinkNodeView({ id, data, selected }: NodeProps<GitlinkFlowNod
             <div className="gitlink-node-proposal-tab" role="tabpanel">
               {data.gitlinkProposalMarkdown ? (
                 <div className="chat-node-content gitlink-node-proposal-markdown">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
-                    {data.gitlinkProposalMarkdown}
-                  </ReactMarkdown>
+                  <NodeMarkdown content={data.gitlinkProposalMarkdown} />
                 </div>
               ) : (
                 <p className="gitlink-node-empty">No change set generated yet.</p>
@@ -571,9 +567,7 @@ export function GitlinkNodeView({ id, data, selected }: NodeProps<GitlinkFlowNod
 
               {data.gitlinkPreviewText && (
                 <div className="chat-node-content gitlink-node-proposal-diff">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
-                    {toDiffFence(data.gitlinkPreviewText)}
-                  </ReactMarkdown>
+                  <NodeMarkdown content={toDiffFence(data.gitlinkPreviewText)} />
                 </div>
               )}
 

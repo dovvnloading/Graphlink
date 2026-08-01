@@ -1,9 +1,7 @@
 import { Handle, Position, useStore, type Node, type NodeProps } from "@xyflow/react";
 import { useState } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import rehypeHighlight from "rehype-highlight";
 import { LOD_ZOOM_THRESHOLD } from "./canvasConstants";
+import { NodeMarkdown } from "./NodeMarkdown";
 import { NodeMenu } from "./NodeMenu";
 
 /**
@@ -11,21 +9,20 @@ import { NodeMenu } from "./NodeMenu";
  * React card. One vertical card, same overall shell as its plugin-node
  * siblings (ConversationNodeView/WebResearchNodeView): collapse/expand OR-ed
  * with LOD, a card menu with outside-click/Escape dismiss, the shared
- * react-markdown + remarkGfm + rehypeHighlight pipeline. Deliberately NOT a
- * literal two-pane split-view clone of the legacy widget - every prior
- * node/plugin port in this codebase re-composes the legacy widget's layout
- * into one card instead, and this follows that same convention: a document
- * preview on top, the instruction turn history below it, then the
- * instruction input at the bottom.
+ * NodeMarkdown.tsx renderer (node redesign stage 1) every text-bearing node
+ * kind now uses. Deliberately NOT a literal two-pane split-view clone of the
+ * legacy widget - every prior node/plugin port in this codebase re-composes
+ * the legacy widget's layout into one card instead, and this follows that
+ * same convention: a document preview on top, the instruction turn history
+ * below it, then the instruction input at the bottom.
  *
- * Security note, not a style preference: this reuses react-markdown/
- * remarkGfm/rehypeHighlight UNCHANGED - no rehype-raw, no
- * dangerouslySetInnerHTML anywhere in this file. Without rehype-raw,
- * react-markdown never interprets embedded HTML in either the document
- * preview or a turn bubble as live markup; it renders as inert text. That is
- * the same raw-text-can-never-become-a-live-DOM-element guarantee the legacy
- * app's escape-then-render pipeline gave, achieved here by construction
- * instead of an explicit escape step.
+ * Security note, not a style preference: NodeMarkdown.tsx's own pipeline has
+ * no rehype-raw, no dangerouslySetInnerHTML anywhere in this file or that
+ * one. Without rehype-raw, react-markdown never interprets embedded HTML in
+ * either the document preview or a turn bubble as live markup; it renders as
+ * inert text. That is the same raw-text-can-never-become-a-live-DOM-element
+ * guarantee the legacy app's escape-then-render pipeline gave, achieved here
+ * by construction instead of an explicit escape step.
  *
  * Card menu mirrors WebResearchNodeMenu's own posture: Collapse/Expand +
  * Delete Node only - no "Open Document View" placeholder (that is a legacy
@@ -118,9 +115,7 @@ function ArtifactBubble({ message }: { message: ArtifactMessage }) {
           shared-class convention ConversationBubble's own -content div
           establishes across every sibling node kind. */}
       <div className="chat-node-content artifact-node-bubble-content">
-        <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
-          {message.content}
-        </ReactMarkdown>
+        <NodeMarkdown content={message.content} />
       </div>
     </div>
   );
@@ -175,9 +170,7 @@ export function ArtifactNodeView({ data, selected }: NodeProps<ArtifactFlowNode>
           <div className="artifact-node-document">
             {hasContent ? (
               <div className="chat-node-content artifact-node-document-content">
-                <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
-                  {data.artifactContent}
-                </ReactMarkdown>
+                <NodeMarkdown content={data.artifactContent} />
               </div>
             ) : (
               <p className="artifact-node-empty">Document is currently empty.</p>

@@ -346,9 +346,22 @@ body,
   background-color: var(--gl-neutral-button-hover);
 }
 
+/* Markdown body inside a chat bubble - the same rule set as the document
+   viewer's own .document-viewer-markdown, duplicated here since that island
+   builds to a separate bundle and isn't importable into the SPA.
+   Document View's own scroll container also carries this class
+   (DocumentViewPanel.tsx: "document-view-panel-scroll chat-node-content"),
+   so every change here is shared by both surfaces - deliberately, not
+   incidentally (node redesign stage 2's own comment below explains why).
+   Kept as ONE rule block (adversarial review flagged an earlier draft that
+   split this into two non-adjacent .chat-node-content{} blocks with no
+   selector-duplication lint to catch a future silent conflict between
+   them) - if a future change needs to add more properties here, add them
+   to THIS block, not a new one further down the file. */
 .chat-node-content {
   max-height: 560px;
   overflow-y: auto;
+  line-height: 1.55;
 }
 
 .chat-node-content > :first-child {
@@ -359,26 +372,36 @@ body,
   margin-bottom: 0;
 }
 
-/* Markdown body inside a chat bubble - the same rule set as the document
-   viewer's own .document-viewer-markdown, duplicated here since that island
-   builds to a separate bundle and isn't importable into the SPA. */
+/* Node redesign, stage 2 ("typography and heading hierarchy"): headings
+   were fixed px values (15/14/13/12) set independently of this element's
+   own font-size, which itself is driven by the user-configurable
+   --gl-node-font-size custom property (SceneCanvas.tsx, View popover) -
+   defaulting to 9pt (~12px) but adjustable up to 16pt (~21px). At many
+   real settings, and always at the low end of that range, those fixed
+   heading sizes rendered SMALLER than or barely larger than the body text
+   they were supposed to head - an inverted hierarchy, not a style choice.
+   `em` here scales relative to whatever this element's own computed
+   font-size actually is (inherited from --gl-node-font-size, or the
+   fallback below in a context with no such variable, e.g. an isolated
+   component test), so headings are now ALWAYS meaningfully larger than
+   body text, at any font-size setting. */
 .chat-node-content h1,
 .chat-node-content h2,
 .chat-node-content h3,
 .chat-node-content h4,
 .chat-node-content h5,
 .chat-node-content h6 {
-  margin: 0 0 8px 0;
+  margin: 14px 0 6px 0;
   font-weight: 700;
   line-height: 1.3;
 }
 
-.chat-node-content h1 { font-size: 15px; }
-.chat-node-content h2 { font-size: 14px; }
-.chat-node-content h3 { font-size: 13px; }
+.chat-node-content h1 { font-size: 1.5em; }
+.chat-node-content h2 { font-size: 1.3em; }
+.chat-node-content h3 { font-size: 1.15em; }
 .chat-node-content h4,
 .chat-node-content h5,
-.chat-node-content h6 { font-size: 12px; }
+.chat-node-content h6 { font-size: 1.05em; }
 
 .chat-node-content p {
   margin: 0 0 10px 0;
@@ -400,7 +423,7 @@ body,
 
 .chat-node-content blockquote {
   margin: 0 0 10px 0;
-  padding-left: 10px;
+  padding: 2px 0 2px 10px;
   border-left: 3px solid var(--gl-surface-border);
   color: var(--gl-surface-text-muted);
 }
@@ -414,7 +437,9 @@ body,
 .chat-node-content code {
   font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
   font-size: 0.9em;
+  color: var(--gl-surface-text-primary);
   background-color: var(--gl-neutral-button-hover);
+  border: 1px solid var(--gl-surface-border);
   border-radius: 3px;
   padding: 2px 4px;
 }
@@ -430,6 +455,7 @@ body,
 
 .chat-node-content pre code {
   background-color: transparent;
+  border: none;
   border-radius: 0;
   padding: 0;
   font-size: 0.85em;
@@ -2541,6 +2567,66 @@ h6:hover > .document-view-heading-anchor {
 }
 
 .document-view-table-wrapper {
+  overflow-x: auto;
+  margin: 8px 0;
+}
+
+/* Node redesign, stage 1 ("shared node markdown renderer") -
+   NodeMarkdown.tsx's own component overrides, shared by every text-bearing
+   node kind. Deliberately parallel to .document-view-code-block/
+   .document-view-table-wrapper just above (same shape, same reasoning -
+   the header bar supplies the block's own chrome, so the inner <pre>
+   rendered by .chat-node-content's shared rule must not double it up) but
+   NOT the same selector: two independent class families sharing one base
+   class (chat-node-content) is the established pattern here, not a
+   duplication to collapse - Document View has no per-user font-size lever,
+   nodes do (--gl-node-font-size), so this version's own chrome text sizes
+   in `em` to track it, where Document View's own uses a fixed px. */
+.node-md-code-block {
+  margin: 8px 0;
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.node-md-code-block-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px;
+  background-color: var(--gl-surface-inset, var(--gl-surface-window));
+  border-bottom: 1px solid var(--gl-surface-border);
+  font-size: 0.85em;
+}
+
+.node-md-code-block-language {
+  color: var(--gl-surface-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.node-md-code-block-copy {
+  padding: 2px 8px;
+  font-size: 1em;
+  font-family: inherit;
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-neutral-button-background);
+  border: 1px solid var(--gl-neutral-button-border);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.node-md-code-block-copy:hover {
+  background-color: var(--gl-neutral-button-hover);
+}
+
+.node-md-code-block pre {
+  margin: 0;
+  border: none;
+  border-radius: 0;
+}
+
+.node-md-table-wrapper {
   overflow-x: auto;
   margin: 8px 0;
 }

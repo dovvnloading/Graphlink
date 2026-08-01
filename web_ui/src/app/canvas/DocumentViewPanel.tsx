@@ -121,14 +121,20 @@ const DEFAULT_FONT_SIZE_STEP_INDEX = 1;
  *   precise manual control now," and continuing to drag while a CSS class
  *   was fighting the inline width would be visibly broken.
  * - Font-size stepper: relative `em` multipliers, not absolute pixel values -
- *   see FONT_SIZE_STEPS' own comment for why. Only scales inherited text
- *   (paragraphs, lists, table cells, blockquotes, and code via its own
- *   existing `em`-relative sizing) - headings keep their existing fixed
- *   px hierarchy (15/14/13/12), a deliberate, small, out-of-scope-to-fix
- *   limitation: proportionally scaling headings too would mean touching
- *   `.chat-node-content`'s shared rules, used by every OTHER markdown
- *   surface in the app (chat bubbles, notes), not just this panel - a much
- *   larger blast radius than a "polish" pass warrants.
+ *   see FONT_SIZE_STEPS' own comment for why. At the time this stage
+ *   shipped, `.chat-node-content` h1-h6 were fixed px values independent of
+ *   this stepper (only paragraphs/lists/table cells/blockquotes/code
+ *   scaled) - a deliberate, documented limitation, since proportionally
+ *   scaling headings too would have meant touching a rule set shared by
+ *   every OTHER markdown surface in the app (chat bubbles, notes), a much
+ *   larger blast radius than this "polish" pass warranted at the time.
+ *   A LATER, separate change (the node redesign's own stage 2, fixing an
+ *   unrelated inverted-heading-hierarchy bug in node cards) converted those
+ *   same shared h1-h6 rules to `em`, as a deliberate, independent decision
+ *   for THAT change's own reasons - which means headings in THIS panel now
+ *   scale with this stepper too, incidentally, not because this stage was
+ *   revisited. Documented here so this comment doesn't keep asserting an
+ *   invariant the shared CSS no longer holds.
  *
  * Width, expanded state, and font-size step are NOT reset when `content`
  * changes (unlike stage 2/3's scroll/progress/search state) - they describe
