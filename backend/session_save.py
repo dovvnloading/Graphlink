@@ -232,7 +232,7 @@ def _serialize_document_node(node: SceneNode) -> dict[str, Any]:
 
 
 def _serialize_image_node(node: SceneNode, document: SceneDocument) -> dict[str, Any]:
-    asset = document.image_assets.get(node.image_asset_id)
+    asset = document.image_assets.get(node.state.image_asset_id)
     image_bytes = asset[0] if asset is not None else b""
     return {
         "node_type": "image",

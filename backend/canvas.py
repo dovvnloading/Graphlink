@@ -85,6 +85,7 @@ from backend.domain.model import (
     SceneNode,
     THINKING_TITLE_PREVIEW_LENGTH,
 )
+from backend.domain.node_states import ImageState
 
 
 

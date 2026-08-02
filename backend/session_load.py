@@ -184,7 +184,14 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from backend.canvas import SceneDocument, SceneNode, SUPPORTED_CHART_TYPES, _content_codec, _placeholder_chart_data
+from backend.canvas import (
+    ImageState,
+    SceneDocument,
+    SceneNode,
+    SUPPORTED_CHART_TYPES,
+    _content_codec,
+    _placeholder_chart_data,
+)
 from graphlink_chart_data import ChartDataError, canonicalize_chart_data
 from graphlink_navigation_pins import NavigationPinRecord
 
@@ -396,7 +403,7 @@ def _restore_image_payload(payload: dict[str, Any], document: SceneDocument) -> 
     import uuid as _uuid
 
     x, y = _position(payload)
-    node = SceneNode(id="", x=x, y=y, title="Image", kind="image")
+    node = SceneNode(id="", x=x, y=y, title="Image", kind="image", state=ImageState())
     raw_b64 = payload.get("image_bytes")
     if isinstance(raw_b64, str) and raw_b64:
         try:
@@ -406,7 +413,7 @@ def _restore_image_payload(payload: dict[str, Any], document: SceneDocument) -> 
         if image_bytes:
             asset_id = f"img{_uuid.uuid4().hex}"
             document.image_assets[asset_id] = (image_bytes, "image/png")
-            node.image_asset_id = asset_id
+            node.state.image_asset_id = asset_id
     node.content = str(payload.get("prompt", ""))
     return node
 
