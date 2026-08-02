@@ -1,10 +1,13 @@
 import { useRef, useState, type JSX } from "react";
 import ReactMarkdown, { type ExtraProps } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
 import { remarkAlert } from "remark-github-blockquote-alert";
 import rehypeHighlight from "rehype-highlight";
+import rehypeKatex from "rehype-katex";
 import Zoom from "react-medium-image-zoom";
 import "react-medium-image-zoom/dist/styles.css";
+import "katex/dist/katex.min.css";
 
 /**
  * Shared markdown renderer for scene NODE cards (node redesign, stage 1 of 4
@@ -17,6 +20,14 @@ import "react-medium-image-zoom/dist/styles.css";
  * hardened external links). This brings all of those to every node kind at
  * once, through one shared component, rather than duplicating the pipeline
  * ten times.
+ *
+ * Node redesign, stage 4: LaTeX math via remark-math + rehype-katex (inline
+ * `$...$` and block `$$...$$`), scoped to this file only - DocumentViewMarkdown.tsx
+ * does not render attached documents' math today, and adding it there is a
+ * separate, un-asked-for change. katex.min.css is imported directly here
+ * (same "import the library's own dist CSS in this file" pattern
+ * react-medium-image-zoom's own stylesheet already uses just below) rather
+ * than duplicated into styles.css.
  *
  * A SIBLING of DocumentViewMarkdown.tsx, not a shared import from it -
  * mirrors that file's own doc comment's reasoning in the opposite direction:
@@ -168,8 +179,8 @@ function SafeAnchor({ node: _node, href, children, ...props }: JSX.IntrinsicElem
 export function NodeMarkdown({ content }: { content: string }) {
   return (
     <ReactMarkdown
-      remarkPlugins={[remarkGfm, remarkAlert]}
-      rehypePlugins={[rehypeHighlight]}
+      remarkPlugins={[remarkGfm, remarkAlert, remarkMath]}
+      rehypePlugins={[rehypeHighlight, rehypeKatex]}
       components={{ pre: CodeBlock, table: TableWrapper, img: ZoomImage, a: SafeAnchor }}
     >
       {content}

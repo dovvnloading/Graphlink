@@ -2743,6 +2743,20 @@ h6:hover > .document-view-heading-anchor {
   margin: 8px 0;
 }
 
+/* Node redesign, stage 4: LaTeX math (rehype-katex's own output, not a
+   custom component override - KaTeX's default color is unset/inherited
+   currentColor, so it already picks up .chat-node-content's own text
+   color/em-relative sizing correctly with no extra rule needed here).
+   A wide block equation gets the SAME horizontal-scroll treatment
+   .node-md-table-wrapper above already applies to a wide table, since
+   node cards have a fixed width and no other escape hatch exists;
+   KaTeX's own margin (1em) is trimmed to this file's 8px vertical rhythm
+   to match every other block element's own spacing. */
+.katex-display {
+  overflow-x: auto;
+  margin: 8px 0;
+}
+
 /* GitHub-style callouts (remark-github-blockquote-alert's own output shape:
    a <div class="markdown-alert markdown-alert-{type}"> wrapping a
    <p class="markdown-alert-title"> + the rest of the blockquote content) -
