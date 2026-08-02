@@ -11,14 +11,14 @@ until its own watchdog timeout). This module replaces that pattern with
 ONE registry every dispatch surface claims into and releases from, so
 cancel_all() can walk every in-flight run regardless of kind.
 
-Stage 2.3 migrates the 3 pilot surfaces named in ADR-002 (chat/
-conversation, chart, note) - see that document for why the remaining 9
-slots (image, web research, artifact, gitlink x2, pycoder, code sandbox,
-branch comparison, branch synthesis) are deliberately deferred to stage
-2.4 rather than folded in here: several of those have real per-kind
-shape differences (approval futures, cancellation tokens instead of
-threading.Event, no-cancel-at-all) that deserve their own migration and
-verification pass rather than being rushed alongside this one.
+Stage 2.3 migrated the 3 pilot surfaces named in ADR-002 (chat/
+conversation, chart, note); stage 2.4's own first slice added branch
+comparison/branch synthesis (structurally identical to chart/note, no
+primitive changes needed). Stage 2.4b (this revision) extends RunHandle/
+RunRegistry with `on_cancel` and `approval_future` - see RunHandle's own
+docstring below - clearing the way for the remaining 7 fire-and-forget
+surfaces (image, web research, artifact, gitlink x2, pycoder, code
+sandbox), each migrated in its own slice rather than all at once.
 
 Two access shapes coexist because the pilots themselves have two
 genuinely different dispatch shapes:
@@ -52,13 +52,16 @@ RunHandle.task, where present, is held ONLY to keep the asyncio.Task
 alive (the event loop holds only a weak reference to scheduled tasks) -
 never call .cancel() on it. None of the 12 pre-existing dicts' task
 references were ever cancelled directly either; the only cancellation
-mechanism anywhere in this codebase is cooperative, via
-RunHandle.cancel_event, which callers other than the run itself trip and
-the run's own code observes at its next checkpoint. cancel_all() below
-preserves this exactly: it walks every claimed handle and sets
-cancel_event on the ones that have one, silently no-oping on kinds (like
-chart/note) that have none - the same honestly-documented "this kind
-cannot be cancelled" limitation those two already had before this
+mechanisms anywhere in this codebase are cooperative - RunHandle.
+cancel_event (threading.Event, the majority shape) or RunHandle.
+on_cancel (a generic callable, for kinds like web_research whose own
+cancellation primitive is not a threading.Event) - which callers other
+than the run itself trip and the run's own code observes at its next
+checkpoint. cancel_all() below preserves this exactly: it walks every
+claimed handle and fires whichever of the two mechanisms is present,
+silently no-oping on kinds (like chart/note/branch_comparison/branch_
+synthesis) that have neither - the same honestly-documented "this kind
+cannot be cancelled" limitation those already had before their own
 migration, just visible in one place now instead of being invisible to
 cancel_all() entirely.
 """
@@ -85,12 +88,41 @@ class RunHandle:
     informational only (logging/introspection) - it is NEVER consulted
     by RunRegistry.is_busy/claim, because every pilot's busy check is
     session-wide, not per-node (a second chat send while one is already
-    running is rejected regardless of which node either one targets)."""
+    running is rejected regardless of which node either one targets).
+
+    `cancel_event`/`on_cancel` (ADR-002 stage 2.4b) are two alternative
+    cancellation mechanisms, never both set on the same handle: most
+    cancellable kinds use a plain threading.Event (the majority shape,
+    kept as its own field for the common case), but web_research's
+    cancellation primitive is a CancellationToken (graphlink_plugins/
+    web_research/domain.py) - a structurally different class with its own
+    .cancel() method, not an Event. `on_cancel` is a generic escape hatch
+    for exactly that: any zero-arg callable a RunRegistry.cancel()/
+    cancel_all() caller can invoke without needing to know which concrete
+    cancellation primitive is behind it.
+
+    `approval_future` (ADR-002 stage 2.4b) is unrelated to cancellation -
+    it is Py-Coder/Execution Sandbox's "waiting for a human to approve or
+    deny" mechanism (see AgentDispatcher.start_pycoder_run's own
+    docstring). Deliberately NOT read or resolved by RunRegistry.cancel()/
+    cancel_all() below - those two kinds' own cancel_pycoder/
+    cancel_code_sandbox methods resolve it directly (an immediate,
+    definite unblock, not the cooperative-flag semantics cancel_event
+    represents), and only a full-session-disconnect auto-denies every
+    still-pending approval, via cancel_all_pending_approvals below - a
+    THIRD, deliberately separate cleanup mechanism from cancel()/
+    cancel_all(), mirroring the one it replaces (AgentDispatcher's own
+    pre-migration cancel_all_pending_approvals). Mutated in place after
+    claim() on both kinds (a fresh Future replaces the old one on every
+    repair-loop iteration) - callers must always read
+    handle.approval_future fresh, never cache a reference to it."""
 
     kind: str
     request_id: str
     node_id: str | None = None
     cancel_event: threading.Event | None = None
+    on_cancel: Callable[[], None] | None = None
+    approval_future: asyncio.Future | None = None
     task: asyncio.Task | None = None
 
 
@@ -110,6 +142,8 @@ class RunRegistry:
         *,
         node_id: str | None = None,
         cancel_event: threading.Event | None = None,
+        on_cancel: Callable[[], None] | None = None,
+        approval_future: asyncio.Future | None = None,
     ) -> RunHandle:
         """Synchronous by design - see this module's own docstring for
         why callers must call this in the same synchronous stretch as
@@ -119,6 +153,8 @@ class RunRegistry:
             request_id=uuid.uuid4().hex,
             node_id=node_id,
             cancel_event=cancel_event,
+            on_cancel=on_cancel,
+            approval_future=approval_future,
         )
         self._handles[handle.request_id] = handle
         return handle
@@ -135,20 +171,55 @@ class RunRegistry:
     def values(self):
         return self._handles.values()
 
-    def cancel(self, request_id: str) -> bool:
+    def cancel(self, request_id: str, *, kind: str | None = None) -> bool:
+        """`kind`, when given, rejects a request_id that resolves to a
+        DIFFERENT kind than expected - load-bearing once more than one
+        cancellable kind shares a registry: AgentDispatcher.cancel()
+        (backing the cancelChatRequest WS intent) passes kind="chat" so a
+        stale or mismatched request_id can never trip an unrelated
+        in-flight run of a different kind instead of being safely
+        rejected. Returns True if either cancellation mechanism present
+        on the handle actually fired - False for a kind with neither
+        (e.g. chart/note today), matching every pre-existing dict-based
+        cancel_* method's own "kind that cannot be cancelled" contract."""
         handle = self._handles.get(request_id)
-        if handle is None or handle.cancel_event is None:
+        if handle is None or (kind is not None and handle.kind != kind):
             return False
-        handle.cancel_event.set()
-        return True
+        fired = False
+        if handle.cancel_event is not None:
+            handle.cancel_event.set()
+            fired = True
+        if handle.on_cancel is not None:
+            handle.on_cancel()
+            fired = True
+        return fired
 
     def cancel_all(self) -> None:
-        """See this module's own docstring for why kinds with no
-        cancel_event (chart, note) are silently skipped rather than
-        treated as an error."""
+        """See this module's own docstring for why kinds with neither
+        cancel_event nor on_cancel (chart, note, branch_comparison,
+        branch_synthesis) are silently skipped rather than treated as an
+        error."""
         for handle in self._handles.values():
             if handle.cancel_event is not None:
                 handle.cancel_event.set()
+            if handle.on_cancel is not None:
+                handle.on_cancel()
+
+    def cancel_all_pending_approvals(self, kinds: tuple[str, ...]) -> None:
+        """Auto-denies every still-undone approval_future among handles
+        whose kind is in `kinds` - the third, deliberately separate
+        cleanup mechanism from cancel()/cancel_all() described in
+        RunHandle's own docstring. `future.done()` is checked first so an
+        already-resolved future (e.g. a human approved it a moment before
+        the last tab closed) is never clobbered - same guard every
+        pre-existing approval-resolving method in this codebase already
+        applies."""
+        for handle in list(self._handles.values()):
+            if handle.kind not in kinds:
+                continue
+            future = handle.approval_future
+            if future is not None and not future.done():
+                future.set_result(False)
 
 
 async def _invoke(fn, *args) -> None:
