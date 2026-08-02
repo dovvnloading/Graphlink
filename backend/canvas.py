@@ -21,7 +21,6 @@ stay here, as does the entire register_canvas closure set.
 
 from __future__ import annotations
 
-import base64
 import os
 from typing import Any
 
@@ -38,12 +37,6 @@ from backend.agents import (
 from backend.composer import ComposerDocument
 from backend.events import SessionBus
 from backend.notifications import NotificationState
-from backend.response_parsing import (
-    parse_response,
-    PLACEHOLDER_GENERATED_CONTENT,
-    PLACEHOLDER_ASSISTANT_REASONING,
-    PLACEHOLDER_EMPTY_RESPONSE,
-)
 from backend.token_counter import TokenCounterState
 
 # ADR-002 stage 2.2: the scene data model + content codec were relocated
@@ -235,6 +228,23 @@ def _placeholder_chart_data(chart_type: str) -> dict[str, Any]:
     }
 
 
+# ADR-002 stage 2.6: register_canvas's own body split into one
+# register_*_intents(bus, document, ...) function per feature area, each
+# relocated VERBATIM into backend/api/ - see that package's own docstring.
+# Placed HERE (after the 6 helper functions above, not with this module's
+# other imports at the top) because backend/api/intents_chat.py imports
+# _history_token_text back from this module - a two-way relationship
+# resolved by import ORDER: by the time Python reaches this line, every
+# helper function above has already been assigned into this module's own
+# namespace, so intents_chat.py's own `from backend.canvas import
+# _history_token_text` (evaluated when the import below first pulls that
+# module in) succeeds instead of hitting a partially-initialized module.
+from backend.api.intents_chat import register_chat_intents  # noqa: E402
+from backend.api.intents_chat_image import register_chat_image_intents  # noqa: E402
+from backend.api.intents_conversation import register_conversation_intents  # noqa: E402
+from backend.api.intents_nodes import register_node_intents  # noqa: E402
+
+
 def register_canvas(
     bus: SessionBus,
     notifications: NotificationState,
@@ -291,502 +301,17 @@ def register_canvas(
     async def publish_grid():
         await bus.publish("grid-control")
 
-    async def publish_token_counter():
-        # R8a: guarded, unlike publish_scene/publish_grid above - "scene"
-        # and "grid-control" are registered a few lines above in THIS same
-        # function, always present by construction. token_counter's own
-        # topic is registered elsewhere (backend/token_counter.py's
-        # register_token_counter, called once per session in
-        # backend/app.py), and the ~30 pre-R8a canvas/agents tests that
-        # construct a bare SessionBus + register_canvas directly (with the
-        # optional token_counter left at its unregistered default above)
-        # never call it - has_topic keeps sendMessage/regenerateResponse
-        # working in exactly those tests instead of raising
-        # UnknownTopicError the first time either intent runs.
-        if bus.has_topic("token-counter"):
-            await bus.publish("token-counter")
+    # publish_token_counter (R8a) formerly lived here too - its only two
+    # consumers, sendMessage and regenerateResponse, both relocated into
+    # backend/api/intents_chat.py at ADR-002 stage 2.6, which gets its own
+    # equivalent from backend/api/_shared.py's make_publish_token_counter
+    # instead. Nothing in register_canvas's own remaining body calls it, so
+    # it was removed here rather than left as dead code.
 
-    # -- scene intents (async: they publish after mutating) ---------------
-
-    async def add_node(x, y, title=""):
-        node = document.add_node(x, y, title)
-        await publish_scene()
-        return node.id
-
-    async def add_chat_node(x, y, content, is_user, parent_id=None):
-        node = document.add_chat_node(x, y, content, is_user, parent_id)
-        await publish_scene()
-        return node.id
-
-    async def add_code_node(x, y, code, language, parent_id=None):
-        node = document.add_code_node(x, y, code, language, parent_id)
-        await publish_scene()
-        return node.id
-
-    async def add_document_node(
-        x,
-        y,
-        title,
-        content,
-        attachment_kind,
-        parent_id,
-        file_path="",
-        mime_type="",
-        duration_seconds=None,
-        byte_size=None,
-        preview_label="",
-    ):
-        node = document.add_document_node(
-            x,
-            y,
-            title,
-            content,
-            attachment_kind,
-            parent_id,
-            file_path=file_path,
-            mime_type=mime_type,
-            duration_seconds=duration_seconds,
-            byte_size=byte_size,
-            preview_label=preview_label,
-        )
-        await publish_scene()
-        return node.id
-
-    async def add_thinking_node(x, y, thinking_text, parent_id):
-        node = document.add_thinking_node(x, y, thinking_text, parent_id)
-        await publish_scene()
-        return node.id
-
-    async def add_html_node(x, y, html_content, parent_id):
-        node = document.add_html_node(x, y, html_content, parent_id)
-        await publish_scene()
-        return node.id
-
-    async def set_html_splitter_state(node_id, value):
-        document.set_html_splitter_state(node_id, value)
-        await publish_scene()
-
-    async def add_image_node(x, y, image_bytes_base64, prompt, parent_id, mime_type="image/png"):
-        # Unlike every prior wrapper, the WS intent transport is JSON, which
-        # cannot carry raw bytes - the caller sends base64 text, decoded here
-        # before it ever reaches SceneDocument (which only ever deals in real
-        # bytes, same as the HTTP asset route on the read side).
-        image_bytes = base64.b64decode(image_bytes_base64)
-        node = document.add_image_node(x, y, image_bytes, prompt, parent_id, mime_type=mime_type)
-        await publish_scene()
-        return node.id
-
-    async def add_conversation_node(x, y, parent_id):
-        node = document.add_conversation_node(x, y, parent_id)
-        await publish_scene()
-        return node.id
-
-    async def send_conversation_message(node_id, text):
-        # R4.3: the real user-message-send action for a conversation node -
-        # appends a real user message, then dispatches a real agent reply
-        # through AgentDispatcher.start_conversation_reply, the ConversationNode
-        # counterpart of send_message's ChatNode dispatch above. The reply
-        # lands via _on_reply calling document.append_conversation_assistant_message
-        # directly - same established relationship as send_message's own
-        # _on_reply calling document.add_chat_node directly.
-        node = document.send_conversation_message(node_id, text)
-        await publish_scene()
-
-        def _on_reply(reply_text):
-            # R4.3b: deliberate, confirmed-correct omission, NOT an oversight -
-            # ConversationNode is exempt from the response_parsing retrofit
-            # applied to send_message's _on_reply above. The true legacy
-            # handler for a conversation node's reply is
-            # graphlink_window_actions.py's WindowActionsMixin.
-            # handle_conversation_node_response (NOT handle_response), which
-            # just calls target_node.add_ai_message(response_text) directly -
-            # it never calls self._parse_response and never creates any
-            # child node. A ConversationNode is a self-contained mega-node
-            # with a flat plain-text-only history and no child-node concept
-            # at all in legacy.
-            document.append_conversation_assistant_message(node_id, reply_text)
-
-        await agent_dispatcher.start_conversation_reply(
-            bus=bus,
-            notifications_state=notifications,
-            node=node,
-            conversation_history=node.history,
-            on_reply=_on_reply,
-        )
-        return node.id
-
-    async def append_conversation_assistant_message(node_id, text):
-        # Unlike send_conversation_message, this represents a real reply
-        # landing once ConversationNode gets real agent dispatch, not a
-        # deferral - so no notification fires.
-        node = document.append_conversation_assistant_message(node_id, text)
-        await publish_scene()
-        return node.id
-
-    async def delete_conversation_message(node_id, message_index):
-        document.delete_conversation_message(node_id, message_index)
-        await publish_scene()
-
-    async def set_node_docked(node_id, docked):
-        document.set_node_docked(node_id, docked)
-        await publish_scene()
-
-    async def delete_chat_node(node_id):
-        document.delete_chat_node(node_id)
-        await publish_scene()
-
-    async def set_chat_collapsed(node_id, collapsed):
-        document.set_chat_collapsed(node_id, collapsed)
-        await publish_scene()
-
-    # ADR-002 Workstream 1 ("Branch status and lifecycle"): three plain
-    # setter intents, same "no try/except SceneError guard, a bad node_id
-    # propagates as a generic WS intent error" posture as set_chat_collapsed
-    # immediately above (see send_artifact_message's own comment on this
-    # accepted pattern for simple setters, as opposed to the defensive
-    # pre-check pattern used where a delete could realistically race an
-    # in-flight agent dispatch - none of these three ever dispatch an agent).
-    async def set_branch_status(node_id, status):
-        document.set_branch_status(node_id, status)
-        await publish_scene()
-
-    async def set_final_deliverable(node_id, is_final):
-        document.set_final_deliverable(node_id, is_final)
-        await publish_scene()
-
-    async def collapse_branch(node_id, collapsed):
-        document.collapse_branch(node_id, collapsed)
-        await publish_scene()
-
-    async def collapse_all_nodes():
-        document.set_all_conversational_collapsed(True)
-        await publish_scene()
-
-    async def expand_all_nodes():
-        document.set_all_conversational_collapsed(False)
-        await publish_scene()
-
-    async def set_chat_scroll_value(node_id, value):
-        document.set_chat_scroll_value(node_id, value)
-        await publish_scene()
-
-    async def send_message(text, branch_from_node_id=None):
-        # R3.3: the real Send action - a real user ChatNode, continuing the
-        # active branch. R4: the assistant's reply is now a real agent
-        # dispatch call, not a deferred notice - see backend/agents.py.
-        #
-        # ADR-002 Workstream 1: branch_from_node_id is optional (older
-        # frontend builds calling with just [text] still work unchanged -
-        # dispatch_intent unpacks positionally, so a missing trailing arg
-        # just uses this parameter's own default) - see
-        # SceneDocument.send_message's own docstring for the fork mechanics.
-        # R8a: consult whatever is staged in the composer right now. This is
-        # WHY composer_document is threaded into register_canvas at all (see
-        # this function's own docstring) - take_staged_attachments() pops
-        # and clears in one step, so a mid-flight staging change can never
-        # land on the send that follows it, and never leaks into the next.
-        staged = composer_document.take_staged_attachments()
-        full_text = text
-        for item in staged:
-            if item.extracted_text is not None:
-                full_text += (
-                    f"\n\n--- Attached: {item.name} ({item.context_label}) ---\n"
-                    f"{item.extracted_text}\n--- end attachment ---"
-                )
-        media_parts = [item.content_part for item in staged if item.content_part is not None]
-        content_parts = [{"type": "text", "text": full_text}, *media_parts] if media_parts else None
-
-        node = document.send_message(full_text, content_parts=content_parts, branch_from_node_id=branch_from_node_id)
-        if staged:
-            # The staged list is now empty (popped above) - republish so the
-            # composer's attachment chips clear the instant Send fires,
-            # rather than waiting for the reply's own later publish().
-            await bus.publish("app-composer")
-        # R6.3: grow the real, live-growing session token count by the
-        # user's own new message text - see add_session_tokens's own
-        # comment on SceneDocument.
-        document.add_session_tokens(full_text)
-        await publish_scene()
-        history = document.chat_branch_history(node.id)
-
-        # R8a (token counter wiring): contextTokens is the branch history the
-        # reply will be generated FROM - explicitly NOT `history` above,
-        # which already includes the message just sent (inputTokens, set
-        # live as the draft was typed in Composer.tsx, already owns that
-        # text; counting it again here would inflate payload()'s total).
-        # Rooted at node's own parent, the same "history before this node"
-        # walk every specialized agent flow below (web research/artifact/
-        # gitlink/pycoder/sandbox) already uses via _branch_parent_edge -
-        # applied to the plain-chat path for the first time here.
-        context_parent_edge = document._branch_parent_edge(node.id)
-        context_history = (
-            document.chat_branch_history(context_parent_edge.source) if context_parent_edge else []
-        )
-        token_counter.set_context_text(_history_token_text(context_history))
-        await publish_token_counter()
-
-        async def _on_reply(reply_text):
-            # R6.3: the assistant's reply has completed (regardless of
-            # whether parse_response below finds anything node-worthy in
-            # it) - grow total_session_tokens by its estimated count too,
-            # same as the user's own message text just above.
-            document.add_session_tokens(reply_text)
-            # R8a: outputTokens reflects what the model actually returned,
-            # regardless of whether parse_response below finds anything
-            # node-worthy in it (the empty-reply early return just below)
-            # - the reply happened and consumed real output tokens either
-            # way.
-            token_counter.set_output_text(reply_text)
-            await publish_token_counter()
-            # R4.3b: port legacy handle_response's _parse_response retrofit -
-            # split the flat reply into thinking/text/code parts and create
-            # separate thinking-kind/code-kind CHILD nodes instead of
-            # dumping the raw, unparsed reply into one flat node.
-            parsed_parts = parse_response(reply_text)
-            if not parsed_parts:
-                # Mirrors legacy handle_response's own outer gate
-                # (`if text_content or parsed_parts:`) - a genuinely empty/
-                # whitespace-only reply creates NO node at all, not a
-                # "[Empty Response]" placeholder node. Currently unreachable
-                # in practice (api_provider._compose_reasoned_response raises
-                # rather than returning blank content), but the gate is kept
-                # so a future provider path can never silently diverge from
-                # legacy here. last_chat_node_id is deliberately left
-                # untouched - it already points at the user's own message
-                # node (set by send_message just above), matching legacy's
-                # own fallback of leaving current_node at user_node when no
-                # assistant node gets created.
-                return
-
-            text_parts = [p["content"] for p in parsed_parts if p["type"] == "text"]
-            text_content = "\n\n".join(text_parts)
-
-            placeholder_text = text_content
-            if not placeholder_text:
-                if any(p["type"] == "code" for p in parsed_parts):
-                    placeholder_text = PLACEHOLDER_GENERATED_CONTENT
-                elif any(p["type"] == "thinking" for p in parsed_parts):
-                    placeholder_text = PLACEHOLDER_ASSISTANT_REASONING
-                else:
-                    # Unreachable given parse_response's own invariants (a
-                    # non-empty parts list with no text/code part must
-                    # contain a thinking part) - legacy's handle_response has
-                    # this exact same dead branch; kept verbatim for
-                    # structural parity rather than optimized away.
-                    placeholder_text = PLACEHOLDER_EMPTY_RESPONSE
-
-            ax, ay = node.x, node.y + MESSAGE_VERTICAL_SPACING
-            ai_node = document.add_chat_node(ax, ay, placeholder_text, False, parent_id=node.id)
-
-            # NOTE: these two calls MUST use the `document.` prefix. Bare
-            # `add_code_node(...)` / `add_thinking_node(...)` would silently
-            # resolve to this enclosing register_canvas scope's own async WS-
-            # intent wrapper closures of the same name (defined earlier,
-            # above send_message) instead of raising a NameError - producing
-            # an unawaited coroutine that never runs and never errors, so no
-            # node would be created and nothing would look wrong until the
-            # scene state was actually inspected.
-            for part in parsed_parts:
-                if part["type"] == "thinking":
-                    document.add_thinking_node(
-                        ax - MESSAGE_VERTICAL_SPACING, ay + MESSAGE_VERTICAL_SPACING,
-                        part["content"], parent_id=ai_node.id,
-                    )
-                elif part["type"] == "code":
-                    document.add_code_node(
-                        ax + MESSAGE_VERTICAL_SPACING, ay + MESSAGE_VERTICAL_SPACING,
-                        part["content"], part["language"], parent_id=ai_node.id,
-                    )
-
-            # Always the real chat node's id, never a code/thinking child's -
-            # add_code_node/add_thinking_node are documented above (see their
-            # own docstrings) as NOT branch points, and last_chat_node_id
-            # specifically drives the next real send's branch-continuation
-            # (chat_branch_history), which only makes sense pointed at a real
-            # chat node.
-            document.last_chat_node_id = ai_node.id
-
-        await agent_dispatcher.start_chat_reply(
-            bus=bus,
-            notifications_state=notifications,
-            composer_document=composer_document,
-            conversation_history=history,
-            on_reply=_on_reply,
-            # R6.1: lets AgentDispatcher resolve a branch-attached System
-            # Prompt note override (see backend/agents.py's
-            # _resolve_branch_system_prompt) - node.id is the just-created
-            # user ChatNode "about to be sent", the walk starts from here.
-            canvas_document=document,
-            node_id=node.id,
-        )
-        return node.id
-
-    async def regenerate_response(node_id):
-        try:
-            node_to_regenerate, parent_id = document.regenerate_response(node_id)
-        except SceneError:
-            # Deliberate: ALL THREE of regenerate_response's SceneErrors funnel
-            # into this ONE legacy-parity message. app.py's _handle_message
-            # would otherwise turn a raised SceneError into a generic
-            # "intent failed" WS error - and transport.ts's intent() is
-            # fire-and-forget (no id), so that error is ONLY ever
-            # console.error'd, never shown to the user (confirmed by reading
-            # transport.ts's handleMessage). A stale click racing a delete, or
-            # a future caller passing a bad kind, must never go silently to the
-            # console when legacy's real, reachable case shows a visible
-            # banner - so this is the one deliberate divergence from every
-            # other register_canvas wrapper's convention of letting SceneError
-            # bubble to the generic WS error path.
-            notifications.show("This node has no parent and cannot be regenerated.", "warning")
-            await bus.publish("notification")
-            return None
-
-        history = document.chat_branch_history(parent_id)
-        # R8a (token counter wiring): unlike send_message, `history` here
-        # already excludes the node being regenerated (rooted at parent_id,
-        # not node_id) - there is no fresh draft text to double-count
-        # against, so it's usable directly as contextTokens with no
-        # adjustment.
-        token_counter.set_context_text(_history_token_text(history))
-        await publish_token_counter()
-
-        async def _on_reply(reply_text):
-            # R8a: outputTokens reflects what the model actually returned,
-            # ahead of every early-return below - a regenerate that comes
-            # back empty, or lands after the node was deleted mid-flight,
-            # still consumed real output tokens.
-            token_counter.set_output_text(reply_text)
-            await publish_token_counter()
-            # (1) Empty/whitespace reply: keep ORIGINAL content, notify, stop.
-            # Checked FIRST - exact legacy order (window_actions.py:544-546),
-            # even before the liveness check below (see its own comment).
-            if not reply_text or not reply_text.strip():
-                notifications.show(
-                    "The model returned an empty response. The original response has been kept.",
-                    "warning",
-                )
-                await bus.publish("notification")
-                return
-
-            # (2) Deleted mid-flight: silent no-op, matches
-            # window_actions.py:548 (`if not old_node or not old_node.scene():
-            # return` - no notification_banner call there either).
-            if node_to_regenerate.id not in document.nodes:
-                return
-
-            # (3) Teardown BEFORE parse/mutate - exact legacy step order.
-            # Runs unconditionally on any non-empty, still-alive reply, even if
-            # the new reply has no code/thinking parts at all - this is why
-            # document/image children are deleted but never recreated
-            # (parse_response structurally only emits thinking/text/code).
-            document.remove_associated_content_children(node_to_regenerate.id)
-
-            parsed_parts = parse_response(reply_text)
-            text_parts = [p["content"] for p in parsed_parts if p["type"] == "text"]
-            text_content = "\n\n".join(text_parts)
-
-            # THE SIMPLE 1-WAY TERNARY - NOT send_message's 3-way priority
-            # chain. PLACEHOLDER_ASSISTANT_REASONING is NEVER touched by this
-            # path. Exact match to legacy line 561:
-            # `text_content if text_content else "[Generated Content]"`.
-            placeholder_text = text_content if text_content else PLACEHOLDER_GENERATED_CONTENT
-            document.update_chat_node_content(node_to_regenerate.id, placeholder_text)
-
-            # NOTE: `document.` prefix is REQUIRED - bare add_code_node/
-            # add_thinking_node would silently resolve to this same
-            # register_canvas scope's own WS-intent wrapper closures instead of
-            # raising (identical hazard already documented on send_message's
-            # own _on_reply above this function).
-            bx, by = node_to_regenerate.x, node_to_regenerate.y
-            for part in parsed_parts:
-                if part["type"] == "thinking":
-                    document.add_thinking_node(
-                        bx - MESSAGE_VERTICAL_SPACING, by + MESSAGE_VERTICAL_SPACING,
-                        part["content"], parent_id=node_to_regenerate.id,
-                    )
-                elif part["type"] == "code":
-                    document.add_code_node(
-                        bx + MESSAGE_VERTICAL_SPACING, by + MESSAGE_VERTICAL_SPACING,
-                        part["content"], part["language"], parent_id=node_to_regenerate.id,
-                    )
-
-            # last_chat_node_id: DELIBERATELY untouched. See §5.
-
-        await agent_dispatcher.start_chat_reply(
-            bus=bus,
-            notifications_state=notifications,
-            composer_document=composer_document,
-            conversation_history=history,
-            on_reply=_on_reply,
-            # R4.4: deliberately NOT streamed - see the design spec's own
-            # deferral list. Regenerate replaces an EXISTING node's content
-            # rather than creating a new one, and streaming it would light
-            # up the Composer dock's live preview for a click on some other
-            # node in the canvas, with no way for the frontend to tell that
-            # apart from an actual Composer send.
-            stream=False,
-            # R6.1: same branch-system-prompt-override resolution as
-            # send_message above - parent_id (not node_to_regenerate.id) so
-            # the walk starts from the SAME node chat_branch_history just
-            # built `history` from, a moment above.
-            canvas_document=document,
-            node_id=parent_id,
-        )
-        return node_to_regenerate.id
-
-    async def _dispatch_image(parent_chat_node_id, prompt):
-        # R4.4a: shared internal path for both generateImage and
-        # regenerateImage below - each resolves its own (parent_chat_node_id,
-        # prompt) pair from a different source-node kind, then both funnel
-        # through this one dispatch + success-primitive call. Runs on
-        # agent_dispatcher's INDEPENDENT "image" run kind, never its "chat"
-        # kind - see backend/agents.py's AgentDispatcher docstring for why
-        # chat and image generation must be able to run concurrently.
-        async def _on_reply(image_bytes):
-            if parent_chat_node_id not in document.nodes:
-                # Mid-flight delete, silent no-op - same posture as
-                # regenerate_response's own liveness check above.
-                return
-            document.add_generated_image_reply(parent_chat_node_id, prompt, image_bytes)
-            await bus.publish("scene")
-
-        await agent_dispatcher.start_image_reply(
-            bus=bus,
-            notifications_state=notifications,
-            prompt=prompt,
-            on_reply=_on_reply,
-        )
-
-    async def generate_image(chat_node_id):
-        try:
-            parent_chat_node_id, prompt = document.resolve_generate_image(chat_node_id)
-        except SceneError as exc:
-            # Two genuinely distinct SceneErrors here, NOT collapsed into one
-            # generic message: SceneEmptyPromptError lets this wrapper tell
-            # "empty prompt" apart from "wrong kind/unknown node" via
-            # isinstance, without string-sniffing exc's own text.
-            if isinstance(exc, SceneEmptyPromptError):
-                notifications.show("The selected node has no text to use as a prompt.", "warning")
-            else:
-                notifications.show("This node can't be used to generate an image.", "warning")
-            await bus.publish("notification")
-            return None
-        await _dispatch_image(parent_chat_node_id, prompt)
-        return None
-
-    async def regenerate_image(image_node_id):
-        try:
-            parent_chat_node_id, prompt = document.resolve_regenerate_image(image_node_id)
-        except SceneError:
-            # Unlike generate_image above, both of resolve_regenerate_image's
-            # SceneErrors (unknown/wrong-kind/no-parent, and the
-            # SceneEmptyPromptError empty-content variant) share ONE message
-            # here - the exact wording this feature's design spec settled on.
-            notifications.show("This image has no prompt to regenerate from.", "warning")
-            await bus.publish("notification")
-            return None
-        await _dispatch_image(parent_chat_node_id, prompt)
-        return None
+    register_node_intents(bus, document, agent_dispatcher)
+    register_conversation_intents(bus, document, notifications, agent_dispatcher)
+    register_chat_intents(bus, document, notifications, agent_dispatcher, composer_document, token_counter)
+    register_chat_image_intents(bus, document, notifications, agent_dispatcher)
 
     async def run_web_research(node_id, query_text):
         if agent_dispatcher.is_web_research_busy():
@@ -850,8 +375,9 @@ def register_canvas(
         # instruction, then dispatches a real agent reply through
         # AgentDispatcher.start_artifact_reply. No try/except SceneError guard
         # here (an unknown node_id propagates as a generic WS intent error) -
-        # same posture as send_conversation_message above, not
-        # run_web_research's defensive pre-check pattern: there is no
+        # same posture as send_conversation_message (backend/api/
+        # intents_conversation.py, ADR-002 stage 2.6), not
+        # run_web_research's defensive pre-check pattern above: there is no
         # persisted progress/error state on this node that an unguarded call
         # could corrupt, so a stale click racing a delete has nothing
         # destructive to protect against.
@@ -1563,72 +1089,6 @@ def register_canvas(
     bus.register_intent("scene", "fitFrameToContent", fit_frame_to_content)
     bus.register_intent("scene", "ungroup", ungroup)
 
-    async def move_node(node_id, x, y):
-        document.move_node(node_id, x, y)
-        await publish_scene()
-
-    async def move_nodes(positions):
-        # positions: a JSON array of [node_id, x, y] triples - see
-        # SceneDocument.move_nodes's own docstring for why a group drag's
-        # commit uses this batched intent instead of N calls to moveNode.
-        document.move_nodes([(p[0], p[1], p[2]) for p in positions])
-        await publish_scene()
-
-    async def remove_nodes(node_ids):
-        ids = list(node_ids)
-        # R5.4: a deleted Py-Coder node's REPL subprocess must not outlive
-        # it - kind is captured BEFORE document.remove_nodes pops the node,
-        # since afterward there is nothing left to read it from.
-        pycoder_ids = [
-            node_id for node_id in ids
-            if document.nodes.get(node_id) is not None and document.nodes[node_id].kind == "pycoder"
-        ]
-        # R5.4 post-review FIX 2: a deleted pycoder/code_sandbox node's
-        # DISPATCHER-SIDE in-flight request must not outlive it either - captured
-        # here, BEFORE document.remove_nodes pops the node, for the same reason
-        # pycoder_ids above is. dispose_pycoder_repl alone only tears down the
-        # REPL subprocess; it does nothing about a request parked on `await
-        # approval_future` on AgentDispatcher's own self._runs registry
-        # ("pycoder"/"code_sandbox" kinds), which has NO timeout by design (the whole
-        # point is "wait for a human, however long that takes"). Without this,
-        # deleting a node mid-approval-pause would leave that future - and the
-        # asyncio.Task awaiting it - alive forever, and a stale/duplicate
-        # approve-or-deny message arriving later could still resolve it, lazily
-        # recreating a REPL or spinning up a fresh sandbox subprocess for a
-        # node_id no longer present anywhere in the scene.
-        code_exec_cancels = [
-            (document.nodes[node_id].kind, document.nodes[node_id].pending_request_id)
-            for node_id in ids
-            if document.nodes.get(node_id) is not None
-            and document.nodes[node_id].kind in ("pycoder", "code_sandbox")
-            and document.nodes[node_id].pending_request_id
-        ]
-        document.remove_nodes(ids)
-        for node_id in pycoder_ids:
-            await agent_dispatcher.dispose_pycoder_repl(node_id)
-        for kind, request_id in code_exec_cancels:
-            # cancel_pycoder/cancel_code_sandbox resolve any pending
-            # approval_future with False (exactly like a manual Cancel/Deny)
-            # and trip the run's cancel_event - a safe no-op if request_id
-            # does not name a live registry entry of the matching kind (e.g.
-            # it was only ever the synchronous busy-claim placeholder, never
-            # a real dispatcher request_id, or the request already finished
-            # on its own between the capture above and here).
-            if kind == "pycoder":
-                agent_dispatcher.cancel_pycoder(request_id)
-            else:
-                agent_dispatcher.cancel_code_sandbox(request_id)
-        await publish_scene()
-
-    async def connect_nodes(source, target):
-        edge = document.connect(source, target)
-        await publish_scene()
-        return edge.id
-
-    async def remove_edges(edge_ids):
-        document.remove_edges(list(edge_ids))
-        await publish_scene()
-
     async def add_pin(title, x, y, note=""):
         record = NavigationPinRecord.create(title=title, x=x, y=y, note=note)
         document.pins.add(record)
@@ -1676,37 +1136,6 @@ def register_canvas(
         document.set_view_state(zoom_factor, scroll_x, scroll_y)
         await publish_scene()
 
-    bus.register_intent("scene", "addNode", add_node)
-    bus.register_intent("scene", "addChatNode", add_chat_node)
-    bus.register_intent("scene", "addCodeNode", add_code_node)
-    bus.register_intent("scene", "addDocumentNode", add_document_node)
-    bus.register_intent("scene", "addThinkingNode", add_thinking_node)
-    bus.register_intent("scene", "addHtmlNode", add_html_node)
-    bus.register_intent("scene", "setHtmlSplitterState", set_html_splitter_state)
-    bus.register_intent("scene", "addImageNode", add_image_node)
-    bus.register_intent("scene", "addConversationNode", add_conversation_node)
-    bus.register_intent("scene", "sendConversationMessage", send_conversation_message)
-    bus.register_intent(
-        "scene", "appendConversationAssistantMessage", append_conversation_assistant_message
-    )
-    bus.register_intent("scene", "deleteConversationMessage", delete_conversation_message)
-    bus.register_intent("scene", "setNodeDocked", set_node_docked)
-    bus.register_intent("scene", "deleteChatNode", delete_chat_node)
-    bus.register_intent("scene", "setChatCollapsed", set_chat_collapsed)
-    bus.register_intent("scene", "setBranchStatus", set_branch_status)
-    bus.register_intent("scene", "setFinalDeliverable", set_final_deliverable)
-    bus.register_intent("scene", "collapseBranch", collapse_branch)
-    bus.register_intent("scene", "collapseAllNodes", collapse_all_nodes)
-    bus.register_intent("scene", "expandAllNodes", expand_all_nodes)
-    bus.register_intent("scene", "setChatScrollValue", set_chat_scroll_value)
-    bus.register_intent("scene", "sendMessage", send_message)
-    bus.register_intent("scene", "regenerateResponse", regenerate_response)
-    # R4.4a: "Generate Image from Text" (ChatNode) and "Regenerate Image"
-    # (ImageNode) - two intents because the two entry points resolve from
-    # genuinely different source-node kinds with different validation rules,
-    # both funneling through the shared _dispatch_image helper above.
-    bus.register_intent("scene", "generateImage", generate_image)
-    bus.register_intent("scene", "regenerateImage", regenerate_image)
     # R5.1: Web Research node run/cancel - node creation itself lives in
     # backend/plugins.py's executePlugin (the "Web Research" branch), not
     # here; these two intents drive an EXISTING web_research-kind node.
@@ -1730,11 +1159,6 @@ def register_canvas(
     bus.register_intent("scene", "synthesizeBranches", synthesize_branches)
     bus.register_intent("scene", "resizeChart", resize_chart)
     bus.register_intent("scene", "toggleChartAspectLock", toggle_chart_aspect_lock)
-    bus.register_intent("scene", "moveNode", move_node)
-    bus.register_intent("scene", "moveNodes", move_nodes)
-    bus.register_intent("scene", "removeNodes", remove_nodes)
-    bus.register_intent("scene", "connectNodes", connect_nodes)
-    bus.register_intent("scene", "removeEdges", remove_edges)
     bus.register_intent("scene", "addPin", add_pin)
     bus.register_intent("scene", "movePin", move_pin)
     bus.register_intent("scene", "removePin", remove_pin)
@@ -1749,14 +1173,6 @@ def register_canvas(
     bus.register_intent("scene", "setSmartGuides", set_smart_guides)
     bus.register_intent("scene", "setDragFactor", set_drag_factor)
     bus.register_intent("scene", "setViewState", set_view_state)
-    # R4.3: per-node cancel for a ConversationNode's in-flight reply. Reuses
-    # the exact intent NAME "cancelChatRequest" already registered on the
-    # "app-composer" topic by R4.2 - SessionBus keys handlers by the
-    # (topic, intent) tuple (see backend/events.py), so this is a second,
-    # independent registration on a different topic, not a collision. It
-    # points at the same underlying agent_dispatcher.cancel, which is purely
-    # request_id-keyed and does not care which topic invoked it.
-    bus.register_intent("scene", "cancelChatRequest", lambda request_id: agent_dispatcher.cancel(request_id))
 
     async def organize_nodes():
         document.organize()
