@@ -109,6 +109,7 @@ from graphlink_plugins.web_research.service import WebResearchService
 from graphlink_prompts import BASE_SYSTEM_PROMPT
 
 from backend.events import SessionBus  # type hint only
+from backend.run_lifecycle import RunRegistry, run_single_shot
 
 logger = logging.getLogger(__name__)
 
@@ -259,14 +260,21 @@ class AgentDispatcher:
 
     def __init__(self, settings_manager: SettingsManager):
         self._settings_manager = settings_manager
-        # request_id -> {"cancel_event": threading.Event, "task": asyncio.Task}
-        self._requests: dict[str, dict] = {}
+        # ADR-002 stage 2.3: the chat/conversation, chart, and note pilot
+        # surfaces below claim into this ONE shared registry instead of
+        # three independent dicts - see backend/run_lifecycle.py's own
+        # docstring for the full reasoning and for why the other 9
+        # dispatch surfaces still keep their own dict for now (deferred to
+        # stage 2.4). "chat" is one shared kind for both start_chat_reply
+        # and start_conversation_reply, mirroring the single dict they
+        # already shared before this migration.
+        self._runs = RunRegistry()
         # R4.4a: an INDEPENDENT in-flight slot for image generation, separate
-        # from self._requests (chat/conversation). Preserves legacy's real,
+        # from self._runs's "chat" kind (chat/conversation). Preserves legacy's real,
         # verified concurrent capability - graphlink_window.py's
         # self.chat_thread/self.image_gen_thread are separate, never-aliased
         # attributes, so a chat request and an image-generation request
-        # genuinely run concurrently today. Reusing self._requests for image
+        # genuinely run concurrently today. Reusing chat's "kind" for image
         # generation too would be a real, visible behavior regression (a user
         # could no longer send a chat message while an image generates), so
         # this stays a second, independent dict rather than a new key inside
@@ -277,25 +285,25 @@ class AgentDispatcher:
         # not a deliberate concurrent-multi-image feature; start_image_reply
         # below gives an honest "already generating" refusal instead of
         # replicating that hazard. request_id -> {"task": asyncio.Task} - no
-        # "cancel_event" key here, unlike self._requests: image generation
-        # has no cancellation at all (see start_image_reply's own docstring).
+        # "cancel_event" key here, unlike chat: image generation has no
+        # cancellation at all (see start_image_reply's own docstring).
         self._image_requests: dict[str, dict] = {}
         # R5.1: a THIRD independent in-flight-request slot, separate from both
-        # self._requests (chat/conversation) and self._image_requests - a web
+        # chat (self._runs) and self._image_requests - a web
         # research run and a chat/image request must be able to run
         # concurrently, same reasoning R4.4a used for _image_requests being
-        # independent from _requests. request_id -> {"cancel_token":
+        # independent from chat. request_id -> {"cancel_token":
         # CancellationToken, "task": asyncio.Task}.
         self._web_research_requests: dict[str, dict] = {}
         # R5.2: a FOURTH independent in-flight-request slot, separate from
-        # self._requests (chat/conversation), self._image_requests, and
+        # chat (self._runs), self._image_requests, and
         # self._web_research_requests - an artifact-generation request must be
         # able to run concurrently with any of those three, same reasoning as
         # every prior independent slot above. request_id -> {"cancel_event":
         # threading.Event, "task": asyncio.Task}.
         self._artifact_requests: dict[str, dict] = {}
         # R5.3: a FIFTH independent in-flight-request slot, separate from
-        # self._requests/self._image_requests/self._web_research_requests/
+        # chat/self._image_requests/self._web_research_requests/
         # self._artifact_requests - a Gitlink Generate Change Set run must be
         # able to run concurrently with any of those four, same reasoning as
         # every prior independent slot above. request_id -> {"cancel_event":
@@ -327,38 +335,24 @@ class AgentDispatcher:
         # Sandbox Run must be able to run concurrently with any of the seven
         # slots above. Same shape as self._pycoder_requests.
         self._code_sandbox_requests: dict[str, dict] = {}
-        # R6.2: a NINTH independent in-flight-request GUARD - unlike the
-        # eight dict-of-tasks slots above, start_chart_generation is
-        # DIRECTLY AWAITED by its caller rather than scheduled via
-        # asyncio.create_task (see that method's own docstring for why: it
-        # is a single combined create+generate action with no pre-existing
-        # node to attach a spinner to, so the caller genuinely needs the
-        # result - including the brand new node id - back in the same round
-        # trip, the same shape as the Gitlink read-only helpers just below).
-        # request_id -> True; this dict's only job is answering "is a chart
-        # generation already running for this session", so two overlapping
-        # generateChart calls (e.g. two tabs on the same session) cannot
-        # race each other - there is no task/cancel_event to store since
-        # there is no background task and no cancellation primitive (same
-        # reasoning as self._image_requests: ChartDataAgent.get_response has
-        # no checkpoint to insert one at, and its own legacy caller,
-        # ChartWorkerThread, has no stop() method either).
-        self._chart_requests: dict[str, bool] = {}
-        # R8a: a TENTH independent in-flight-request GUARD, same directly-
-        # awaited shape (and therefore same dict-of-sentinels rather than
-        # dict-of-tasks) as self._chart_requests above, for the same reason:
-        # Key Takeaway / Explainer Note each create a brand new note node, so
-        # the caller needs the result back in the same round trip and there is
-        # no pre-existing node to hang a spinner on. ONE guard covers both
-        # agents deliberately - they are the same user-facing gesture
+        # R6.2/R8a, migrated to self._runs by ADR-002 stage 2.3: chart
+        # generation ("chart" kind) and Key Takeaway/Explainer Note
+        # generation ("note" kind, ONE guard covering both agents
+        # deliberately - they are the same user-facing gesture
         # ("summarise this node into a note") differing only in prompt, and
-        # letting a takeaway and an explainer run concurrently would race two
-        # notes onto overlapping canvas positions for no benefit.
-        # request_id -> True; no task/cancel_event to store, since the legacy
-        # workers these replace had no stop() either.
-        self._note_requests: dict[str, bool] = {}
+        # letting a takeaway and an explainer run concurrently would race
+        # two notes onto overlapping canvas positions for no benefit) are
+        # both DIRECTLY AWAITED by their caller rather than scheduled via
+        # asyncio.create_task (see start_chart_generation's own docstring
+        # for why: each is a single combined create+generate action with no
+        # pre-existing node to attach a spinner to, so the caller genuinely
+        # needs the result - including the brand new node id - back in the
+        # same round trip). Neither has a cancel_event: ChartDataAgent/the
+        # note agents have no cancellation checkpoint of their own, and
+        # their legacy callers had no stop() method either.
+        #
         # ADR-002 Workstream 1 ("Compare Branches") - a SEPARATE busy-guard
-        # from _note_requests above: comparing branches and generating a Key
+        # from note generation above: comparing branches and generating a Key
         # Takeaway/Explainer Note are unrelated features, so one running
         # must never block the other. Same "request_id -> True, no task/
         # cancel_event" shape - this is directly awaited, not scheduled.
@@ -548,25 +542,25 @@ class AgentDispatcher:
         return None
 
     def cancel(self, request_id: str) -> bool:
-        entry = self._requests.get(request_id)
-        if entry is None:
-            return False
-        entry["cancel_event"].set()
-        return True
+        return self._runs.cancel(request_id)
 
     def cancel_all(self) -> None:
         """Trip the cancel event on every in-flight request for this
-        session. Called when a session's last WS connection disconnects
-        (backend/app.py's ws_endpoint) - without this, a client that sends a
-        message and immediately closes the tab leaves the real outbound LLM
-        call (potentially a billed API request) running server-side,
-        untethered, for up to WATCHDOG_TIMEOUT_SECONDS with no way for the
-        client to ever cancel it (cancelChatRequest needs a live socket).
-        Same cooperative-cancellation semantics as cancel() - this does not
-        forcibly kill the in-flight thread, it only requests it stop at its
-        next checkpoint, same as the timeout path already does."""
-        for entry in self._requests.values():
-            entry["cancel_event"].set()
+        session that has one. Called when a session's last WS connection
+        disconnects (backend/app.py's ws_endpoint) - without this, a client
+        that sends a message and immediately closes the tab leaves the real
+        outbound LLM call (potentially a billed API request) running
+        server-side, untethered, for up to WATCHDOG_TIMEOUT_SECONDS with no
+        way for the client to ever cancel it (cancelChatRequest needs a live
+        socket). Same cooperative-cancellation semantics as cancel() - this
+        does not forcibly kill the in-flight thread, it only requests it
+        stop at its next checkpoint, same as the timeout path already does.
+
+        Delegates to self._runs.cancel_all(), which walks every claimed
+        handle (chat/chart/note as of ADR-002 stage 2.3) and silently
+        no-ops on kinds with no cancel_event - see
+        backend/run_lifecycle.py's own docstring."""
+        self._runs.cancel_all()
 
     def cancel_web_research(self, request_id: str) -> bool:
         entry = self._web_research_requests.get(request_id)
@@ -631,7 +625,7 @@ class AgentDispatcher:
         every other caller (including start_conversation_reply) omits them,
         which simply falls back to persona()'s existing resolution, byte-
         identical to this method's pre-R6.1 behavior."""
-        if self._requests:
+        if self._runs.is_busy("chat"):
             # Single-request-per-session guard: never start a second
             # concurrent request while one is already in flight.
             notifications_state.show("A response is already being generated.", "info")
@@ -649,8 +643,12 @@ class AgentDispatcher:
             await bus.publish("notification")
             return
 
-        request_id = uuid.uuid4().hex
+        # Claimed SYNCHRONOUSLY, with no `await` between the is_busy() check
+        # above and this claim - see backend/run_lifecycle.py's own
+        # docstring for why that ordering is load-bearing, not incidental.
         cancel_event = threading.Event()
+        handle = self._runs.claim("chat", node_id=node_id, cancel_event=cancel_event)
+        request_id = handle.request_id
 
         async def _run():
             on_begin(request_id)
@@ -801,7 +799,7 @@ class AgentDispatcher:
                 # Unconditional on every exit path (success, timeout, cancel,
                 # other error) so the caller's state always returns to a
                 # usable idle state.
-                self._requests.pop(request_id, None)
+                self._runs.release(request_id)
                 on_end()
                 await bus.publish(state_topic)
 
@@ -812,8 +810,12 @@ class AgentDispatcher:
         # loop (backend/app.py) - if this handler awaited the full chat call
         # inline, no further message on that same socket (including a
         # cancelChatRequest intent) would even be read off the wire until the
-        # handler returned, making cooperative cancellation impossible.
-        self._requests[request_id] = {"cancel_event": cancel_event, "task": asyncio.create_task(_run())}
+        # handler returned, making cooperative cancellation impossible. The
+        # claim itself already landed above, before this task was even
+        # created - this line only attaches the task reference (anti-GC
+        # only, see backend/run_lifecycle.py - never used for real
+        # cancellation).
+        self._runs.attach_task(handle, asyncio.create_task(_run()))
 
     async def start_chat_reply(
         self,
@@ -906,9 +908,9 @@ class AgentDispatcher:
         a ConversationNode's pending_request_id do; the frontend shows a
         transient "Generating image..." notification instead of a per-node
         spinner). Guarded by self._image_requests, a dict kept fully
-        SEPARATE from self._requests (chat/conversation) - see that field's
-        own comment in __init__ for why this must stay independent rather
-        than reusing the existing single-slot guard.
+        SEPARATE from chat/conversation's own slot (self._runs's "chat"
+        kind) - see that field's own comment in __init__ for why this must
+        stay independent rather than reusing the existing single-slot guard.
 
         No cancel_event is constructed or passed - api_provider.generate_image
         has no cancellation_event parameter at all and its body has no
@@ -926,7 +928,7 @@ class AgentDispatcher:
             # Single in-flight-image-request-per-session guard, mirroring
             # _dispatch's own "A response is already being generated." guard
             # in shape but tracked on the independent self._image_requests
-            # dict, never self._requests.
+            # dict, never chat's own slot.
             notifications_state.show("An image is already being generated.", "info")
             await bus.publish("notification")
             return
@@ -997,9 +999,9 @@ class AgentDispatcher:
         exactly one caller (backend/canvas.py's run_web_research), so
         on_begin/on_end are inlined here directly rather than taking
         _dispatch's generic parameters. Guarded by self._web_research_requests,
-        a dict kept fully SEPARATE from both self._requests (chat/
-        conversation) and self._image_requests - see that field's own
-        comment in __init__ for why this must stay independent.
+        a dict kept fully SEPARATE from both chat/conversation's own slot
+        (self._runs's "chat" kind) and self._image_requests - see that
+        field's own comment in __init__ for why this must stay independent.
 
         Cooperative cancellation only, via a CancellationToken (not a
         threading.Event, since WebResearchService.run's own pipeline stages
@@ -1128,9 +1130,10 @@ class AgentDispatcher:
         returns a two-element tuple and must run its own fail-closed
         tag-parsing/raise (see ArtifactAgent.get_response) before any
         mutation callback fires. Guarded by self._artifact_requests, a dict
-        kept fully SEPARATE from self._requests (chat/conversation),
-        self._image_requests, and self._web_research_requests - see that
-        field's own comment in __init__ for why this must stay independent.
+        kept fully SEPARATE from chat/conversation's own slot (self._runs's
+        "chat" kind), self._image_requests, and self._web_research_requests
+        - see that field's own comment in __init__ for why this must stay
+        independent.
 
         Cooperative cancellation only, via a threading.Event (not the
         CancellationToken web-research uses - ArtifactAgent has no such
@@ -2253,12 +2256,11 @@ class AgentDispatcher:
         shows a blocking loading animation for the duration, not a
         fire-and-forget spinner elsewhere - the same UX this mirrors.
 
-        Still guarded by self._chart_requests (see that field's own comment
-        in __init__), now storing a plain sentinel rather than a task
-        reference - there is no background task to hold onto, only a
-        "one generation in flight for this session" marker, so two
-        overlapping generateChart calls (e.g. from two tabs open on the same
-        session) cannot race each other.
+        Still guarded by self._runs's "chart" kind (ADR-002 stage 2.3 -
+        see backend/run_lifecycle.py) - there is no background task to
+        hold onto, only a "one generation in flight for this session"
+        marker, so two overlapping generateChart calls (e.g. from two tabs
+        open on the same session) cannot race each other.
 
         No cancel_event: ChartDataAgent has no cancellation checkpoint of
         its own, and its own legacy caller (ChartWorkerThread) has no
@@ -2289,49 +2291,40 @@ class AgentDispatcher:
         double Artifact's own single-call shape, but nowhere near Web
         Research's ~10-call chain that justified ITS own 900s bump, and 420s
         already carries ample headroom for two calls at any realistic
-        per-call latency."""
-        if self._chart_requests:
-            notifications_state.show("A chart is already being generated.", "info")
-            await bus.publish("notification")
-            return
+        per-call latency.
 
-        request_id = uuid.uuid4().hex
-        self._chart_requests[request_id] = True
-
-        async def _invoke(fn, *a):
-            if inspect.iscoroutinefunction(fn):
-                await fn(*a)
-            else:
-                fn(*a)
-
-        try:
-            result = await asyncio.wait_for(
-                asyncio.to_thread(_call_chart_agent, source_text, chart_type),
-                timeout=WATCHDOG_TIMEOUT_SECONDS,
-            )
-            if isinstance(result, dict) and "error" in result:
-                message = str(result["error"])
-                await _invoke(on_failure, message)
-                notifications_state.show(f"Chart generation failed: {message}", "error")
-                await bus.publish("notification")
-            else:
-                await _invoke(on_success, result)
-        except asyncio.TimeoutError:
-            message = (
+        ADR-002 stage 2.3: the guard/timeout/exception/notify skeleton
+        below now lives once, shared with start_note_generation, in
+        backend/run_lifecycle.py's run_single_shot - see that function's
+        own docstring. Every message string and every branch's exact
+        behavior (including the asymmetry where a top-level "error" key
+        hands on_failure the RAW error text but prefixes the toast
+        notification with "Chart generation failed: ") is unchanged from
+        this method's pre-2.3 body."""
+        await run_single_shot(
+            self._runs,
+            kind="chart",
+            bus=bus,
+            notifications_state=notifications_state,
+            node_id=node_id,
+            timeout=WATCHDOG_TIMEOUT_SECONDS,
+            call=lambda: _call_chart_agent(source_text, chart_type),
+            validate=lambda result: (
+                str(result["error"]) if isinstance(result, dict) and "error" in result else None
+            ),
+            on_success=on_success,
+            on_failure=on_failure,
+            busy_message="A chart is already being generated.",
+            timeout_message=(
                 "Chart generation stopped responding before the request completed. "
                 "Please try again."
-            )
-            await _invoke(on_failure, message)
-            notifications_state.show(message, "error")
-            await bus.publish("notification")
-        except Exception as exc:
-            logger.exception("chart generation dispatch failed (parent node %s)", node_id)
-            message = f"Chart generation failed: {exc}"
-            await _invoke(on_failure, message)
-            notifications_state.show(message, "error")
-            await bus.publish("notification")
-        finally:
-            self._chart_requests.pop(request_id, None)
+            ),
+            exception_prefix="Chart generation failed",
+            log_exception=lambda exc: logger.exception(
+                "chart generation dispatch failed (parent node %s)", node_id
+            ),
+            validate_notify=lambda message: f"Chart generation failed: {message}",
+        )
 
     async def start_note_generation(
         self,
@@ -2357,53 +2350,41 @@ class AgentDispatcher:
         which agent class runs and how failures are worded - the guard,
         timeout, callback and cleanup logic are identical, and duplicating
         them would be two places to fix every future bug in.
+
+        ADR-002 stage 2.3: that shared skeleton now lives once, in
+        backend/run_lifecycle.py's run_single_shot, shared with
+        start_chart_generation too - see that function's own docstring.
+        Every message string and every branch's exact behavior is
+        unchanged from this method's pre-2.3 body.
         """
         label = NOTE_AGENT_LABELS.get(note_kind, "Note")
 
-        if self._note_requests:
-            notifications_state.show(f"A {label.lower()} is already being generated.", "info")
-            await bus.publish("notification")
-            return
-
-        request_id = uuid.uuid4().hex
-        self._note_requests[request_id] = True
-
-        async def _invoke(fn, *a):
-            if inspect.iscoroutinefunction(fn):
-                await fn(*a)
-            else:
-                fn(*a)
-
-        try:
-            text = await asyncio.wait_for(
-                asyncio.to_thread(_call_note_agent, note_kind, source_text),
-                timeout=WATCHDOG_TIMEOUT_SECONDS,
-            )
-            if not str(text or "").strip():
+        await run_single_shot(
+            self._runs,
+            kind="note",
+            bus=bus,
+            notifications_state=notifications_state,
+            node_id=node_id,
+            timeout=WATCHDOG_TIMEOUT_SECONDS,
+            call=lambda: _call_note_agent(note_kind, source_text),
+            validate=lambda text: (
                 # An agent that returns nothing usable must not silently
                 # create an empty note - that reads as a broken feature.
-                message = f"{label} generation returned an empty response. Please try again."
-                await _invoke(on_failure, message)
-                notifications_state.show(message, "error")
-                await bus.publish("notification")
-            else:
-                await _invoke(on_success, text)
-        except asyncio.TimeoutError:
-            message = (
+                f"{label} generation returned an empty response. Please try again."
+                if not str(text or "").strip() else None
+            ),
+            on_success=on_success,
+            on_failure=on_failure,
+            busy_message=f"A {label.lower()} is already being generated.",
+            timeout_message=(
                 f"{label} generation stopped responding before the request completed. "
                 "Please try again."
-            )
-            await _invoke(on_failure, message)
-            notifications_state.show(message, "error")
-            await bus.publish("notification")
-        except Exception as exc:
-            logger.exception("%s generation dispatch failed (source node %s)", label, node_id)
-            message = f"{label} generation failed: {exc}"
-            await _invoke(on_failure, message)
-            notifications_state.show(message, "error")
-            await bus.publish("notification")
-        finally:
-            self._note_requests.pop(request_id, None)
+            ),
+            exception_prefix=f"{label} generation failed",
+            log_exception=lambda exc: logger.exception(
+                "%s generation dispatch failed (source node %s)", label, node_id
+            ),
+        )
 
     async def start_branch_comparison(
         self,
@@ -2419,8 +2400,8 @@ class AgentDispatcher:
         brand new note node and there is no pre-existing node to attach a
         spinner to; single dict-registry busy guard; WATCHDOG_TIMEOUT_
         SECONDS; on_success/on_failure callbacks) but with its own
-        _branch_comparison_requests guard rather than reusing
-        _note_requests - see that field's own comment for why. source_text
+        _branch_comparison_requests guard rather than reusing the "note"
+        kind in self._runs - see that field's own comment for why. source_text
         is already the fully-formatted multi-branch block
         (backend/canvas.py's _format_branches_for_comparison) - this method
         itself is agnostic to how many branches went into it."""

@@ -36,3 +36,26 @@ def _chat_stream_delegates_to_patched_chat(monkeypatch):
 
     monkeypatch.setattr(api_provider, "chat_stream", _generic_chat_stream)
     yield
+
+
+def chat_slots(dispatcher):
+    """ADR-002 stage 2.3 test adapter: reproduces the pre-migration
+    dict[request_id, {"cancel_event": ..., "task": ...}] shape that every
+    chat/conversation test in this suite was written against, filtered to
+    AgentDispatcher._runs's "chat" kind - see backend/run_lifecycle.py for
+    the real (RunHandle-based) production shape this is adapting. Returns
+    a plain dict so callers can keep using .values()/.items()/.keys()/
+    subscript/len()/== {} exactly as they did against the old dict."""
+    return {
+        handle.request_id: {"cancel_event": handle.cancel_event, "task": handle.task}
+        for handle in dispatcher._runs.values()
+        if handle.kind == "chat"
+    }
+
+
+def busy_count(dispatcher, kind):
+    """ADR-002 stage 2.3 test adapter: the count-based equivalent of the
+    old dict-of-sentinels' len()/truthiness checks for a "directly-
+    awaited, single-shot" kind (chart, note) now living in
+    AgentDispatcher._runs."""
+    return sum(1 for handle in dispatcher._runs.values() if handle.kind == kind)

@@ -37,6 +37,7 @@ from backend.attachments import StagedAttachment
 from backend.composer import ComposerDocument
 from backend.events import SessionBus
 from backend.notifications import NotificationState
+from backend.tests.conftest import chat_slots
 
 import api_provider
 import graphlink_task_config as task_config
@@ -920,7 +921,7 @@ def test_send_conversation_message_intent_dispatches_a_real_agent_reply():
             assert rows[node_id]["pendingRequestId"] == document.nodes[node_id].pending_request_id
 
             release.set()
-            entry = next(iter(dispatcher._requests.values()))
+            entry = next(iter(chat_slots(dispatcher).values()))
             await entry["task"]
 
         assert document.nodes[node_id].history == [
@@ -960,7 +961,7 @@ def test_send_conversation_message_reply_with_code_fence_lands_raw_and_unparsed(
             await bus.dispatch_intent(
                 "scene", "sendConversationMessage", [node_id, "show me some code"]
             )
-            entry = next(iter(dispatcher._requests.values()))
+            entry = next(iter(chat_slots(dispatcher).values()))
             await entry["task"]
 
         assert document.nodes[node_id].history == [
@@ -1324,7 +1325,7 @@ def test_regenerate_response_intent_mutates_the_existing_node_in_place_not_a_new
                 patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
                 patch.object(api_provider, "chat", first_reply):
             user_id = await bus.dispatch_intent("scene", "sendMessage", ["hi"])
-            entry = next(iter(dispatcher._requests.values()))
+            entry = next(iter(chat_slots(dispatcher).values()))
             await entry["task"]
 
         assistant_node = next(n for n in document.nodes.values() if n.kind == "chat" and n.id != user_id)
@@ -1339,7 +1340,7 @@ def test_regenerate_response_intent_mutates_the_existing_node_in_place_not_a_new
                 patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
                 patch.object(api_provider, "chat", regenerated_reply):
             returned_id = await bus.dispatch_intent("scene", "regenerateResponse", [assistant_node.id])
-            entry = next(iter(dispatcher._requests.values()))
+            entry = next(iter(chat_slots(dispatcher).values()))
             await entry["task"]
 
         assert returned_id == assistant_node.id, "the same node id, never a new node"
@@ -1366,7 +1367,7 @@ def test_regenerate_response_sets_output_and_context_tokens_and_publishes_token_
                 patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
                 patch.object(api_provider, "chat", first_reply):
             await bus.dispatch_intent("scene", "sendMessage", ["hi there"])
-            entry = next(iter(dispatcher._requests.values()))
+            entry = next(iter(chat_slots(dispatcher).values()))
             await entry["task"]
 
         assistant_node = next(n for n in document.nodes.values() if n.kind == "chat" and n.is_user is False)
@@ -1379,7 +1380,7 @@ def test_regenerate_response_sets_output_and_context_tokens_and_publishes_token_
                 patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
                 patch.object(api_provider, "chat", regenerated_reply):
             await bus.dispatch_intent("scene", "regenerateResponse", [assistant_node.id])
-            entry = next(iter(dispatcher._requests.values()))
+            entry = next(iter(chat_slots(dispatcher).values()))
             await entry["task"]
 
         assert bus.token_counter.output_tokens == estimate_tokens("a fresh regenerated reply")
@@ -1408,7 +1409,7 @@ def test_regenerate_response_does_not_stream_unlike_an_ordinary_send():
                 patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
                 patch.object(api_provider, "chat", first_reply):
             user_id = await bus.dispatch_intent("scene", "sendMessage", ["hi"])
-            entry = next(iter(dispatcher._requests.values()))
+            entry = next(iter(chat_slots(dispatcher).values()))
             await entry["task"]
 
         assistant_node = next(n for n in document.nodes.values() if n.kind == "chat" and n.id != user_id)
@@ -1422,7 +1423,7 @@ def test_regenerate_response_does_not_stream_unlike_an_ordinary_send():
                 patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
                 patch.object(api_provider, "chat", regenerated_reply):
             await bus.dispatch_intent("scene", "regenerateResponse", [assistant_node.id])
-            entry = next(iter(dispatcher._requests.values()))
+            entry = next(iter(chat_slots(dispatcher).values()))
             await entry["task"]
 
         stream_frames = [m for m in recorder.messages if m.get("kind") == "stream"]
@@ -1444,7 +1445,7 @@ def test_regenerate_response_replaces_code_child_not_accumulates():
                 patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
                 patch.object(api_provider, "chat", first_reply):
             user_id = await bus.dispatch_intent("scene", "sendMessage", ["write code"])
-            entry = next(iter(dispatcher._requests.values()))
+            entry = next(iter(chat_slots(dispatcher).values()))
             await entry["task"]
 
         assistant_node = next(n for n in document.nodes.values() if n.kind == "chat" and n.id != user_id)
@@ -1458,7 +1459,7 @@ def test_regenerate_response_replaces_code_child_not_accumulates():
                 patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
                 patch.object(api_provider, "chat", second_reply):
             await bus.dispatch_intent("scene", "regenerateResponse", [assistant_node.id])
-            entry = next(iter(dispatcher._requests.values()))
+            entry = next(iter(chat_slots(dispatcher).values()))
             await entry["task"]
 
         code_nodes = [n for n in document.nodes.values() if n.kind == "code"]
@@ -1480,7 +1481,7 @@ def test_regenerate_response_document_and_image_children_torn_down_but_never_rec
                 patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
                 patch.object(api_provider, "chat", first_reply):
             user_id = await bus.dispatch_intent("scene", "sendMessage", ["attach files"])
-            entry = next(iter(dispatcher._requests.values()))
+            entry = next(iter(chat_slots(dispatcher).values()))
             await entry["task"]
 
         assistant_node = next(n for n in document.nodes.values() if n.kind == "chat" and n.id != user_id)
@@ -1497,7 +1498,7 @@ def test_regenerate_response_document_and_image_children_torn_down_but_never_rec
                 patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
                 patch.object(api_provider, "chat", plain_reply):
             await bus.dispatch_intent("scene", "regenerateResponse", [assistant_node.id])
-            entry = next(iter(dispatcher._requests.values()))
+            entry = next(iter(chat_slots(dispatcher).values()))
             await entry["task"]
 
         assert document_node.id not in document.nodes
@@ -1575,7 +1576,7 @@ def test_send_with_a_staged_image_produces_real_multimodal_content_parts():
                 patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
                 patch.object(api_provider, "chat", capture_reply):
             user_id = await bus.dispatch_intent("scene", "sendMessage", ["what is this?"])
-            entry = next(iter(dispatcher._requests.values()))
+            entry = next(iter(chat_slots(dispatcher).values()))
             await entry["task"]
 
         user_node = document.nodes[user_id]
@@ -1619,7 +1620,7 @@ def test_send_with_a_staged_document_merges_extracted_text_into_plain_content():
                 patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
                 patch.object(api_provider, "chat", capture_reply):
             user_id = await bus.dispatch_intent("scene", "sendMessage", ["please review"])
-            entry = next(iter(dispatcher._requests.values()))
+            entry = next(iter(chat_slots(dispatcher).values()))
             await entry["task"]
 
         user_node = document.nodes[user_id]
@@ -1656,7 +1657,7 @@ def test_send_republishes_app_composer_immediately_so_staged_chips_clear_on_send
             composer_publishes = [m for m in recorder.messages if m.get("topic") == "app-composer"]
             assert composer_publishes, "send_message must republish app-composer synchronously, before the reply"
             assert composer_publishes[-1]["payload"]["context"]["items"] == []
-            entry = next(iter(dispatcher._requests.values()))
+            entry = next(iter(chat_slots(dispatcher).values()))
             await entry["task"]
 
     asyncio.run(run())
@@ -1674,7 +1675,7 @@ def test_regenerate_response_empty_reply_keeps_original_content_and_notifies():
                 patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
                 patch.object(api_provider, "chat", first_reply):
             user_id = await bus.dispatch_intent("scene", "sendMessage", ["show me code"])
-            entry = next(iter(dispatcher._requests.values()))
+            entry = next(iter(chat_slots(dispatcher).values()))
             await entry["task"]
 
         assistant_node = next(n for n in document.nodes.values() if n.kind == "chat" and n.id != user_id)
@@ -1689,7 +1690,7 @@ def test_regenerate_response_empty_reply_keeps_original_content_and_notifies():
                 patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
                 patch.object(api_provider, "chat", empty_reply):
             await bus.dispatch_intent("scene", "regenerateResponse", [assistant_node.id])
-            entry = next(iter(dispatcher._requests.values()))
+            entry = next(iter(chat_slots(dispatcher).values()))
             await entry["task"]
 
         assert document.nodes[assistant_node.id].content == "Here's code:", "original content is kept"
@@ -1716,7 +1717,7 @@ def test_regenerate_response_reasoning_only_reply_uses_generated_content_not_rea
                 patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
                 patch.object(api_provider, "chat", first_reply):
             user_id = await bus.dispatch_intent("scene", "sendMessage", ["think about it"])
-            entry = next(iter(dispatcher._requests.values()))
+            entry = next(iter(chat_slots(dispatcher).values()))
             await entry["task"]
 
         assistant_node = next(n for n in document.nodes.values() if n.kind == "chat" and n.id != user_id)
@@ -1729,7 +1730,7 @@ def test_regenerate_response_reasoning_only_reply_uses_generated_content_not_rea
                 patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
                 patch.object(api_provider, "chat", reasoning_only_reply):
             await bus.dispatch_intent("scene", "regenerateResponse", [assistant_node.id])
-            entry = next(iter(dispatcher._requests.values()))
+            entry = next(iter(chat_slots(dispatcher).values()))
             await entry["task"]
 
         # The critical differentiator: regenerate's ternary is 1-way, unlike
@@ -1758,7 +1759,7 @@ def test_regenerate_response_node_deleted_mid_flight_is_a_silent_noop():
                 patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
                 patch.object(api_provider, "chat", first_reply):
             user_id = await bus.dispatch_intent("scene", "sendMessage", ["hi"])
-            entry = next(iter(dispatcher._requests.values()))
+            entry = next(iter(chat_slots(dispatcher).values()))
             await entry["task"]
 
         assistant_node = next(n for n in document.nodes.values() if n.kind == "chat" and n.id != user_id)
@@ -1782,7 +1783,7 @@ def test_regenerate_response_node_deleted_mid_flight_is_a_silent_noop():
             document.remove_nodes([assistant_node.id])
 
             release.set()
-            entry = next(iter(dispatcher._requests.values()))
+            entry = next(iter(chat_slots(dispatcher).values()))
             await entry["task"]
 
         assert assistant_node.id not in document.nodes
@@ -1799,7 +1800,7 @@ def test_regenerate_response_unknown_node_id_shows_notification_not_a_crash():
         result = await bus.dispatch_intent("scene", "regenerateResponse", ["ghost"])
 
         assert result is None
-        assert dispatcher._requests == {}, "no dispatch was ever scheduled"
+        assert chat_slots(dispatcher) == {}, "no dispatch was ever scheduled"
         notice = await bus.publish("notification")
         assert notice["visible"] is True
         assert notice["msgType"] == "warning"
@@ -1820,7 +1821,7 @@ def test_regenerate_response_shares_the_single_in_flight_guard():
                 patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
                 patch.object(api_provider, "chat", first_reply):
             user_id = await bus.dispatch_intent("scene", "sendMessage", ["hi"])
-            entry = next(iter(dispatcher._requests.values()))
+            entry = next(iter(chat_slots(dispatcher).values()))
             await entry["task"]
 
         assistant_node = next(n for n in document.nodes.values() if n.kind == "chat" and n.id != user_id)
@@ -1840,20 +1841,20 @@ def test_regenerate_response_shares_the_single_in_flight_guard():
             # Occupy the single in-flight slot with an ordinary sendMessage.
             await bus.dispatch_intent("scene", "sendMessage", ["second message"])
             await asyncio.to_thread(started.wait, 5)
-            assert len(dispatcher._requests) == 1
+            assert len(chat_slots(dispatcher)) == 1
 
             returned = await bus.dispatch_intent("scene", "regenerateResponse", [assistant_node.id])
             # Validation (a real chat node with a parent) still succeeds - the
             # guard lives one layer deeper, inside AgentDispatcher._dispatch.
             assert returned == assistant_node.id
-            assert len(dispatcher._requests) == 1, "still just the original sendMessage in flight"
+            assert len(chat_slots(dispatcher)) == 1, "still just the original sendMessage in flight"
 
             notice = await bus.publish("notification")
             assert notice["visible"] is True
             assert notice["message"] == "A response is already being generated."
 
             release.set()
-            entry = next(iter(dispatcher._requests.values()))
+            entry = next(iter(chat_slots(dispatcher).values()))
             await entry["task"]
 
     asyncio.run(run())
@@ -1877,7 +1878,7 @@ def test_regenerate_response_of_a_non_tip_node_leaves_last_chat_node_id_untouche
                 patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
                 patch.object(api_provider, "chat", first_reply):
             user1_id = await bus.dispatch_intent("scene", "sendMessage", ["first"])
-            entry = next(iter(dispatcher._requests.values()))
+            entry = next(iter(chat_slots(dispatcher).values()))
             await entry["task"]
 
         old_node = next(n for n in document.nodes.values() if n.kind == "chat" and n.id != user1_id)
@@ -1890,7 +1891,7 @@ def test_regenerate_response_of_a_non_tip_node_leaves_last_chat_node_id_untouche
                 patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
                 patch.object(api_provider, "chat", second_reply):
             await bus.dispatch_intent("scene", "sendMessage", ["second"])
-            entry = next(iter(dispatcher._requests.values()))
+            entry = next(iter(chat_slots(dispatcher).values()))
             await entry["task"]
 
         tip_id = document.last_chat_node_id
@@ -1904,7 +1905,7 @@ def test_regenerate_response_of_a_non_tip_node_leaves_last_chat_node_id_untouche
                 patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
                 patch.object(api_provider, "chat", regenerated_reply):
             await bus.dispatch_intent("scene", "regenerateResponse", [old_node.id])
-            entry = next(iter(dispatcher._requests.values()))
+            entry = next(iter(chat_slots(dispatcher).values()))
             await entry["task"]
 
         assert document.last_chat_node_id == tip_id, \
@@ -1918,8 +1919,8 @@ def test_regenerate_response_shares_the_single_in_flight_guard_in_reverse():
     # Mirror of test_regenerate_response_shares_the_single_in_flight_guard:
     # this occupies the slot with a regenerateResponse first, then asserts a
     # concurrent ordinary sendMessage is bounced. Both directions exercise
-    # the exact same AgentDispatcher._dispatch guard (`if self._requests:`),
-    # caller-agnostic - see backend/tests/test_agents.py's own cross-channel
+    # the exact same AgentDispatcher._dispatch guard (`if self._runs.is_busy
+    # ("chat"):`), caller-agnostic - see backend/tests/test_agents.py's own cross-channel
     # guard tests for the underlying primitive this is layered on top of.
     async def run():
         bus, document, recorder, dispatcher = make_bus_with_dispatcher()
@@ -1932,7 +1933,7 @@ def test_regenerate_response_shares_the_single_in_flight_guard_in_reverse():
                 patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
                 patch.object(api_provider, "chat", first_reply):
             user_id = await bus.dispatch_intent("scene", "sendMessage", ["hi"])
-            entry = next(iter(dispatcher._requests.values()))
+            entry = next(iter(chat_slots(dispatcher).values()))
             await entry["task"]
 
         assistant_node = next(n for n in document.nodes.values() if n.kind == "chat" and n.id != user_id)
@@ -1952,21 +1953,21 @@ def test_regenerate_response_shares_the_single_in_flight_guard_in_reverse():
             # Occupy the single in-flight slot with a regenerateResponse this time.
             await bus.dispatch_intent("scene", "regenerateResponse", [assistant_node.id])
             await asyncio.to_thread(started.wait, 5)
-            assert len(dispatcher._requests) == 1
+            assert len(chat_slots(dispatcher)) == 1
 
             returned = await bus.dispatch_intent("scene", "sendMessage", ["second message"])
             # sendMessage's own domain mutation (a new user ChatNode) still
             # happens unconditionally - the guard lives one layer deeper,
             # inside AgentDispatcher._dispatch, same as the forward direction.
             assert returned is not None
-            assert len(dispatcher._requests) == 1, "still just the original regenerateResponse in flight"
+            assert len(chat_slots(dispatcher)) == 1, "still just the original regenerateResponse in flight"
 
             notice = await bus.publish("notification")
             assert notice["visible"] is True
             assert notice["message"] == "A response is already being generated."
 
             release.set()
-            entry = next(iter(dispatcher._requests.values()))
+            entry = next(iter(chat_slots(dispatcher).values()))
             await entry["task"]
 
     asyncio.run(run())
@@ -2116,7 +2117,7 @@ def test_send_message_intent_dispatches_a_real_agent_reply():
             # The reply lands inside a scheduled (not awaited) background
             # task - grab it from the dispatcher's registry and await it
             # directly rather than assuming the intent itself blocks for it.
-            entry = next(iter(dispatcher._requests.values()))
+            entry = next(iter(chat_slots(dispatcher).values()))
             await entry["task"]
 
         assert document.nodes[node_id].content == "what is this graph about?"
@@ -2147,10 +2148,10 @@ def test_send_message_intent_with_branch_from_node_id_overrides_the_parent():
             return {"message": {"content": "reply"}}
 
         async def send(text, *extra_args):
-            pending_before = set(dispatcher._requests.keys())
+            pending_before = set(chat_slots(dispatcher).keys())
             node_id = await bus.dispatch_intent("scene", "sendMessage", [text, *extra_args])
-            new_request_id = next(iter(set(dispatcher._requests.keys()) - pending_before))
-            await dispatcher._requests[new_request_id]["task"]
+            new_request_id = next(iter(set(chat_slots(dispatcher).keys()) - pending_before))
+            await chat_slots(dispatcher)[new_request_id]["task"]
             return node_id
 
         with patch.object(api_provider, "USE_API_MODE", False), \
@@ -2220,7 +2221,7 @@ def test_send_message_sets_output_tokens_from_the_reply_and_publishes_token_coun
                 patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
                 patch.object(api_provider, "chat", fake_chat):
             await bus.dispatch_intent("scene", "sendMessage", ["hello there"])
-            entry = next(iter(dispatcher._requests.values()))
+            entry = next(iter(chat_slots(dispatcher).values()))
             await entry["task"]
 
         assert bus.token_counter.output_tokens == estimate_tokens("four word reply here")
@@ -2247,7 +2248,7 @@ def test_send_message_sets_context_tokens_from_prior_history_not_the_new_message
                 patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
                 patch.object(api_provider, "chat", first_reply):
             await bus.dispatch_intent("scene", "sendMessage", ["first message"])
-            entry = next(iter(dispatcher._requests.values()))
+            entry = next(iter(chat_slots(dispatcher).values()))
             await entry["task"]
 
         def second_reply(task, messages, **kwargs):
@@ -2293,7 +2294,7 @@ def test_send_message_reply_that_is_genuinely_empty_creates_no_assistant_node():
                 patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
                 patch.object(api_provider, "chat", fake_chat):
             node_id = await bus.dispatch_intent("scene", "sendMessage", ["hello"])
-            entry = next(iter(dispatcher._requests.values()))
+            entry = next(iter(chat_slots(dispatcher).values()))
             await entry["task"]
 
         reply_nodes = [n for n in document.nodes.values() if n.id != node_id]
@@ -2319,7 +2320,7 @@ def test_send_message_reply_with_code_fence_creates_code_child_and_edge():
                 patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
                 patch.object(api_provider, "chat", fake_chat):
             user_node_id = await bus.dispatch_intent("scene", "sendMessage", ["write me a hello world"])
-            entry = next(iter(dispatcher._requests.values()))
+            entry = next(iter(chat_slots(dispatcher).values()))
             await entry["task"]
 
         assistant_nodes = [
@@ -2360,7 +2361,7 @@ def test_send_message_reply_that_is_only_thinking_uses_reasoning_placeholder():
                 patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
                 patch.object(api_provider, "chat", fake_chat):
             user_node_id = await bus.dispatch_intent("scene", "sendMessage", ["what are you thinking?"])
-            entry = next(iter(dispatcher._requests.values()))
+            entry = next(iter(chat_slots(dispatcher).values()))
             await entry["task"]
 
         assistant_nodes = [
@@ -2409,7 +2410,7 @@ def test_send_message_reply_with_thinking_text_and_code_creates_both_children_on
                 patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
                 patch.object(api_provider, "chat", fake_chat):
             user_node_id = await bus.dispatch_intent("scene", "sendMessage", ["plan it out"])
-            entry = next(iter(dispatcher._requests.values()))
+            entry = next(iter(chat_slots(dispatcher).values()))
             await entry["task"]
 
         assistant_nodes = [
@@ -6432,7 +6433,7 @@ def test_total_session_tokens_starts_at_zero_and_grows_after_send_message_and_re
                 patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
                 patch.object(api_provider, "chat", fake_chat):
             await bus.dispatch_intent("scene", "sendMessage", [user_text])
-            entry = next(iter(dispatcher._requests.values()))
+            entry = next(iter(chat_slots(dispatcher).values()))
             await entry["task"]
 
         expected = estimate_tokens(user_text) + estimate_tokens(reply_text)

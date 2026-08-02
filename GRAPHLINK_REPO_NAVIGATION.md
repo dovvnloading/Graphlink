@@ -136,7 +136,9 @@ Several `backend/` modules (`composer.py`, `chat_library.py`, `plugins.py`, `ses
 - `backend/settings.py`
   - `SettingsManager`-backed `register_settings()`: the `app-settings` topic and every settings intent (General, Ollama, Llama.cpp, API Endpoint, Integrations, GitHub token). Reads defaults from `graphlink_task_config.py`'s task-keyed model dict.
 - `backend/agents.py` (now the largest file in the repo, ~156KB)
-  - `AgentDispatcher` (one instance per session, never a module-level singleton) - owns in-flight request tracking/cancellation for chat/conversation requests (`self._requests`) and image generation (a separate slot), `bootstrap_provider_state()` (process-global `api_provider` state, set up once per process from the shared `SettingsManager`), and `register_agents()`.
+  - `AgentDispatcher` (one instance per session, never a module-level singleton) - owns in-flight request tracking/cancellation across its 13 dispatch surfaces, `bootstrap_provider_state()` (process-global `api_provider` state, set up once per process from the shared `SettingsManager`), and `register_agents()`. As of ADR-002 stage 2.3, 3 pilot surfaces (chat/conversation, chart, note) claim into one shared `self._runs` (a `backend/run_lifecycle.py` `RunRegistry`) instead of their own private dict; the remaining 9 surfaces (image, web research, artifact, gitlink x2, pycoder, code sandbox, branch comparison, branch synthesis) still keep independent dicts, deferred to stage 2.4.
+- `backend/run_lifecycle.py`
+  - `RunHandle`/`RunRegistry` (claim/release/cancel/cancel_all/is_busy) and `run_single_shot()` - the ADR-002 stage 2.3 primitive `backend/agents.py`'s pilot surfaces claim into, see that module's own docstring.
 - `backend/response_parsing.py`
   - `parse_response()` - splits a flat LLM reply into ordered thinking/text/code parts, shared by the ordinary send path and the regenerate path (both in `backend/canvas.py`). `ConversationNode` is the one confirmed exception - it never routes through this parser.
 - `graphlink_task_config.py`, `graphlink_settings_store.py`, `graphlink_prompts.py`, `graphlink_model_catalog.py` (repo root)
