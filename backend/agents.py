@@ -335,33 +335,26 @@ class AgentDispatcher:
         # Sandbox Run must be able to run concurrently with any of the seven
         # slots above. Same shape as self._pycoder_requests.
         self._code_sandbox_requests: dict[str, dict] = {}
-        # R6.2/R8a, migrated to self._runs by ADR-002 stage 2.3: chart
-        # generation ("chart" kind) and Key Takeaway/Explainer Note
-        # generation ("note" kind, ONE guard covering both agents
-        # deliberately - they are the same user-facing gesture
-        # ("summarise this node into a note") differing only in prompt, and
-        # letting a takeaway and an explainer run concurrently would race
-        # two notes onto overlapping canvas positions for no benefit) are
-        # both DIRECTLY AWAITED by their caller rather than scheduled via
-        # asyncio.create_task (see start_chart_generation's own docstring
-        # for why: each is a single combined create+generate action with no
-        # pre-existing node to attach a spinner to, so the caller genuinely
-        # needs the result - including the brand new node id - back in the
-        # same round trip). Neither has a cancel_event: ChartDataAgent/the
-        # note agents have no cancellation checkpoint of their own, and
-        # their legacy callers had no stop() method either.
-        #
-        # ADR-002 Workstream 1 ("Compare Branches") - a SEPARATE busy-guard
-        # from note generation above: comparing branches and generating a Key
-        # Takeaway/Explainer Note are unrelated features, so one running
-        # must never block the other. Same "request_id -> True, no task/
-        # cancel_event" shape - this is directly awaited, not scheduled.
-        self._branch_comparison_requests: dict[str, bool] = {}
-        # ADR-002 Workstream 1 ("Synthesize Branches") - a THIRD independent
-        # busy-guard, same reasoning as _branch_comparison_requests above:
-        # Compare and Synthesize are unrelated user gestures over the same
-        # underlying selection, so one running must never block the other.
-        self._branch_synthesis_requests: dict[str, bool] = {}
+        # R6.2/R8a/ADR-002 Workstream 1, migrated to self._runs by ADR-002
+        # stage 2.3 (chart, note) and stage 2.4 (branch_comparison, branch_
+        # synthesis): chart generation, Key Takeaway/Explainer Note
+        # generation (ONE guard covering both agents deliberately - they
+        # are the same user-facing gesture ("summarise this node into a
+        # note") differing only in prompt, and letting a takeaway and an
+        # explainer run concurrently would race two notes onto overlapping
+        # canvas positions for no benefit), Compare Branches, and Synthesize
+        # Branches are all FOUR independent single-slot kinds sharing this
+        # one registry, all DIRECTLY AWAITED by their caller rather than
+        # scheduled via asyncio.create_task (see start_chart_generation's
+        # own docstring for why: each is a single combined create+generate
+        # action with no pre-existing node to attach a spinner to, so the
+        # caller genuinely needs the result back in the same round trip).
+        # None of the four has a cancel_event: none of their agents have a
+        # cancellation checkpoint of their own, and their legacy callers
+        # had no stop() method either. Compare and Synthesize are kept as
+        # separate kinds from each other and from note, not folded into
+        # one - they are unrelated user gestures over possibly-overlapping
+        # selections, so one running must never block another.
         # R5.4: Py-Coder's REPL subprocess outlives any single run (state
         # persists between calls, same as legacy's own PyCoderReplManager -
         # see that class's own docstring in graphlink_plugins/pycoder/domain.py
@@ -2398,55 +2391,42 @@ class AgentDispatcher:
         """ADR-002 Workstream 1 ("Compare Branches"): mirrors start_note_
         generation's own shape exactly (directly awaited - the result is a
         brand new note node and there is no pre-existing node to attach a
-        spinner to; single dict-registry busy guard; WATCHDOG_TIMEOUT_
-        SECONDS; on_success/on_failure callbacks) but with its own
-        _branch_comparison_requests guard rather than reusing the "note"
-        kind in self._runs - see that field's own comment for why. source_text
-        is already the fully-formatted multi-branch block
-        (backend/canvas.py's _format_branches_for_comparison) - this method
-        itself is agnostic to how many branches went into it."""
-        if self._branch_comparison_requests:
-            notifications_state.show("A branch comparison is already being generated.", "info")
-            await bus.publish("notification")
-            return
+        spinner to; single-slot busy guard; WATCHDOG_TIMEOUT_SECONDS;
+        on_success/on_failure callbacks) but with its own "branch_
+        comparison" kind in self._runs rather than reusing "note" - see
+        that field's own comment in __init__ for why. source_text is
+        already the fully-formatted multi-branch block (backend/canvas.py's
+        _format_branches_for_comparison) - this method itself is agnostic
+        to how many branches went into it.
 
-        request_id = uuid.uuid4().hex
-        self._branch_comparison_requests[request_id] = True
-
-        async def _invoke(fn, *a):
-            if inspect.iscoroutinefunction(fn):
-                await fn(*a)
-            else:
-                fn(*a)
-
-        try:
-            text = await asyncio.wait_for(
-                asyncio.to_thread(_call_branch_comparison_agent, source_text),
-                timeout=WATCHDOG_TIMEOUT_SECONDS,
-            )
-            if not str(text or "").strip():
-                message = "Branch comparison returned an empty response. Please try again."
-                await _invoke(on_failure, message)
-                notifications_state.show(message, "error")
-                await bus.publish("notification")
-            else:
-                await _invoke(on_success, text)
-        except asyncio.TimeoutError:
-            message = (
+        ADR-002 stage 2.4: the guard/timeout/exception/notify skeleton
+        below now lives once, in backend/run_lifecycle.py's
+        run_single_shot - the same primitive start_chart_generation/
+        start_note_generation already share. Every message string and
+        every branch's exact behavior is unchanged from this method's
+        pre-2.4 body."""
+        await run_single_shot(
+            self._runs,
+            kind="branch_comparison",
+            bus=bus,
+            notifications_state=notifications_state,
+            node_id=None,
+            timeout=WATCHDOG_TIMEOUT_SECONDS,
+            call=lambda: _call_branch_comparison_agent(source_text),
+            validate=lambda text: (
+                "Branch comparison returned an empty response. Please try again."
+                if not str(text or "").strip() else None
+            ),
+            on_success=on_success,
+            on_failure=on_failure,
+            busy_message="A branch comparison is already being generated.",
+            timeout_message=(
                 "Branch comparison stopped responding before the request completed. "
                 "Please try again."
-            )
-            await _invoke(on_failure, message)
-            notifications_state.show(message, "error")
-            await bus.publish("notification")
-        except Exception as exc:
-            logger.exception("branch comparison dispatch failed")
-            message = f"Branch comparison failed: {exc}"
-            await _invoke(on_failure, message)
-            notifications_state.show(message, "error")
-            await bus.publish("notification")
-        finally:
-            self._branch_comparison_requests.pop(request_id, None)
+            ),
+            exception_prefix="Branch comparison failed",
+            log_exception=lambda exc: logger.exception("branch comparison dispatch failed"),
+        )
 
     async def start_branch_synthesis(
         self,
@@ -2461,57 +2441,40 @@ class AgentDispatcher:
         """ADR-002 Workstream 1 ("Synthesize Branches"): mirrors start_branch_
         comparison's own shape exactly (directly awaited - the result is a
         brand new chat node and there is no pre-existing node to attach a
-        spinner to; single dict-registry busy guard; WATCHDOG_TIMEOUT_
-        SECONDS; on_success/on_failure callbacks) but with its own
-        _branch_synthesis_requests guard rather than reusing
-        _branch_comparison_requests - see that field's own comment for why.
-        source_text is already the fully-formatted multi-branch block
-        (backend/canvas.py's _format_branches_for_comparison, reused
-        verbatim here - a labeled-branches text block is equally valid
-        input whether the agent on the other end compares or synthesizes);
-        instructions is the user's own free text steering the synthesis."""
-        if self._branch_synthesis_requests:
-            notifications_state.show("A branch synthesis is already being generated.", "info")
-            await bus.publish("notification")
-            return
+        spinner to; single-slot busy guard; WATCHDOG_TIMEOUT_SECONDS;
+        on_success/on_failure callbacks) but with its own "branch_synthesis"
+        kind in self._runs rather than reusing "branch_comparison" - see
+        that field's own comment in __init__ for why. source_text is
+        already the fully-formatted multi-branch block (backend/canvas.py's
+        _format_branches_for_comparison, reused verbatim here - a
+        labeled-branches text block is equally valid input whether the
+        agent on the other end compares or synthesizes); instructions is
+        the user's own free text steering the synthesis.
 
-        request_id = uuid.uuid4().hex
-        self._branch_synthesis_requests[request_id] = True
-
-        async def _invoke(fn, *a):
-            if inspect.iscoroutinefunction(fn):
-                await fn(*a)
-            else:
-                fn(*a)
-
-        try:
-            text = await asyncio.wait_for(
-                asyncio.to_thread(_call_branch_synthesis_agent, source_text, instructions),
-                timeout=WATCHDOG_TIMEOUT_SECONDS,
-            )
-            if not str(text or "").strip():
-                message = "Branch synthesis returned an empty response. Please try again."
-                await _invoke(on_failure, message)
-                notifications_state.show(message, "error")
-                await bus.publish("notification")
-            else:
-                await _invoke(on_success, text)
-        except asyncio.TimeoutError:
-            message = (
+        ADR-002 stage 2.4: shares run_single_shot with start_branch_
+        comparison above - see that method's own docstring."""
+        await run_single_shot(
+            self._runs,
+            kind="branch_synthesis",
+            bus=bus,
+            notifications_state=notifications_state,
+            node_id=None,
+            timeout=WATCHDOG_TIMEOUT_SECONDS,
+            call=lambda: _call_branch_synthesis_agent(source_text, instructions),
+            validate=lambda text: (
+                "Branch synthesis returned an empty response. Please try again."
+                if not str(text or "").strip() else None
+            ),
+            on_success=on_success,
+            on_failure=on_failure,
+            busy_message="A branch synthesis is already being generated.",
+            timeout_message=(
                 "Branch synthesis stopped responding before the request completed. "
                 "Please try again."
-            )
-            await _invoke(on_failure, message)
-            notifications_state.show(message, "error")
-            await bus.publish("notification")
-        except Exception as exc:
-            logger.exception("branch synthesis dispatch failed")
-            message = f"Branch synthesis failed: {exc}"
-            await _invoke(on_failure, message)
-            notifications_state.show(message, "error")
-            await bus.publish("notification")
-        finally:
-            self._branch_synthesis_requests.pop(request_id, None)
+            ),
+            exception_prefix="Branch synthesis failed",
+            log_exception=lambda exc: logger.exception("branch synthesis dispatch failed"),
+        )
 
 
 # R8a: the two note agents, keyed by the `note_kind` start_note_generation
