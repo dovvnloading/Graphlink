@@ -37,7 +37,14 @@ from backend.attachments import StagedAttachment
 from backend.composer import ComposerDocument
 from backend.events import SessionBus
 from backend.notifications import NotificationState
-from backend.tests.conftest import chat_slots, gitlink_run_slots, image_slots, web_research_slots
+from backend.tests.conftest import (
+    chat_slots,
+    code_sandbox_slots,
+    gitlink_run_slots,
+    image_slots,
+    pycoder_slots,
+    web_research_slots,
+)
 
 import api_provider
 import graphlink_task_config as task_config
@@ -5051,7 +5058,7 @@ def test_remove_nodes_does_not_touch_the_repl_dict_when_no_pycoder_node_is_delet
 def test_remove_nodes_cancels_the_dispatchers_pycoder_request_when_deleted_mid_approval_pause(monkeypatch):
     """R5.4 post-review FIX 2: dispose_pycoder_repl (proven above) only tears
     down the REPL subprocess - it does nothing about a request genuinely
-    parked on `await approval_future` in AgentDispatcher._pycoder_requests,
+    parked on `await approval_future` on AgentDispatcher's own self._runs registry ("pycoder" kind),
     which has NO timeout by design (the whole point is "wait for a human,
     however long that takes"). Deleting the node mid-pause must ALSO
     resolve/cancel that dispatcher-side request (mirrors a manual Cancel
@@ -5069,7 +5076,7 @@ def test_remove_nodes_cancels_the_dispatchers_pycoder_request_when_deleted_mid_a
         pycoder_node = document.add_pycoder_node(0, 0, parent.id)
 
         await bus.dispatch_intent("scene", "runPyCoder", [pycoder_node.id, "do something"])
-        request_id, entry = next(iter(dispatcher._pycoder_requests.items()))
+        request_id, entry = next(iter(pycoder_slots(dispatcher).items()))
 
         # Let the pipeline genuinely reach the approval gate (a real
         # asyncio.to_thread hop for PyCoderExecutionAgent.get_response, then a
@@ -5082,13 +5089,13 @@ def test_remove_nodes_cancels_the_dispatchers_pycoder_request_when_deleted_mid_a
                 break
             await asyncio.sleep(0.005)
         assert pycoder_node.pycoder_awaiting_approval is True, "must genuinely be parked on the approval gate"
-        assert request_id in dispatcher._pycoder_requests
+        assert request_id in pycoder_slots(dispatcher)
 
         await bus.dispatch_intent("scene", "removeNodes", [[pycoder_node.id]])
         await entry["task"]
 
         assert pycoder_node.id not in document.nodes
-        assert dispatcher._pycoder_requests == {}, (
+        assert pycoder_slots(dispatcher) == {}, (
             "the orphaned dispatcher-side request must be resolved and popped - "
             "not left parked on approval_future forever"
         )
@@ -5111,20 +5118,20 @@ def test_remove_nodes_cancels_the_dispatchers_code_sandbox_request_when_deleted_
         sandbox_node = document.add_code_sandbox_node(0, 0, parent.id)
 
         await bus.dispatch_intent("scene", "runCodeSandbox", [sandbox_node.id, "do something"])
-        request_id, entry = next(iter(dispatcher._code_sandbox_requests.items()))
+        request_id, entry = next(iter(code_sandbox_slots(dispatcher).items()))
 
         for _ in range(200):
             if sandbox_node.code_sandbox_awaiting_approval or entry["task"].done():
                 break
             await asyncio.sleep(0.005)
         assert sandbox_node.code_sandbox_awaiting_approval is True, "must genuinely be parked on the approval gate"
-        assert request_id in dispatcher._code_sandbox_requests
+        assert request_id in code_sandbox_slots(dispatcher)
 
         await bus.dispatch_intent("scene", "removeNodes", [[sandbox_node.id]])
         await entry["task"]
 
         assert sandbox_node.id not in document.nodes
-        assert dispatcher._code_sandbox_requests == {}, (
+        assert code_sandbox_slots(dispatcher) == {}, (
             "the orphaned dispatcher-side request must be resolved and popped - "
             "not left parked on approval_future forever"
         )
@@ -5163,7 +5170,7 @@ def test_code_sandbox_approval_requirements_snapshot_is_decoupled_from_the_live_
         await bus.dispatch_intent("scene", "setCodeSandboxRequirements", [sandbox_node.id, "numpy"])
 
         await bus.dispatch_intent("scene", "runCodeSandbox", [sandbox_node.id, "do something"])
-        request_id, entry = next(iter(dispatcher._code_sandbox_requests.items()))
+        request_id, entry = next(iter(code_sandbox_slots(dispatcher).items()))
 
         for _ in range(200):
             if sandbox_node.code_sandbox_awaiting_approval or entry["task"].done():
