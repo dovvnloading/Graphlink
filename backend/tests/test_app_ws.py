@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from backend import BACKEND_VERSION
 from backend.app import create_app
 from backend.session_context import get_session_context
+from backend.tests.conftest import chat_slots
 
 # R7.2: api_provider/graphlink_task_config sit at the repo root, a sibling
 # of backend/ - already importable, no ordering constraint.
@@ -178,7 +179,7 @@ def test_disconnect_cancels_any_in_flight_chat_request(monkeypatch):
         assert call_started.is_set(), "fake_chat never started - dispatch did not fire"
 
         session = client.app.state.bus.session("cancel-test")
-        in_flight = list(get_session_context(session).agent_dispatcher._requests.values())
+        in_flight = list(chat_slots(get_session_context(session).agent_dispatcher).values())
         assert len(in_flight) == 1
         cancel_event = in_flight[0]["cancel_event"]
         assert not cancel_event.is_set()

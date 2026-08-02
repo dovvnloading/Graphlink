@@ -31,6 +31,7 @@ from backend.canvas import SceneDocument, register_canvas
 from backend.composer import ComposerDocument
 from backend.events import SessionBus
 from backend.notifications import NotificationState
+from backend.tests.conftest import busy_count, chat_slots
 
 import api_provider
 import graphlink_task_config as config
@@ -132,11 +133,11 @@ def test_successful_reply_calls_on_reply_with_the_agent_text(monkeypatch):
         # The reply happens inside a scheduled (not awaited) task - grab the
         # task reference start_chat_reply left in the registry and await it
         # directly rather than assuming start_chat_reply itself blocks.
-        entry = next(iter(dispatcher._requests.values()))
+        entry = next(iter(chat_slots(dispatcher).values()))
         await entry["task"]
 
         assert replies == ["canned reply"]
-        assert dispatcher._requests == {}
+        assert chat_slots(dispatcher) == {}
         assert composer_document.request_state == "idle"
 
     asyncio.run(run())
@@ -163,7 +164,7 @@ def test_provider_not_configured_returns_quickly_with_an_error_notification(monk
             on_reply=lambda text: None,
         )
 
-        assert dispatcher._requests == {}, "no task/thread work started"
+        assert chat_slots(dispatcher) == {}, "no task/thread work started"
         assert chat_calls == [], "api_provider.chat was never reached"
         assert notifications.visible is True
         assert notifications.msg_type == "error"
@@ -198,7 +199,7 @@ def test_cancellation_mid_flight_fires_info_notification_and_clears_registry(mon
             conversation_history=[{"role": "user", "content": "hi"}],
             on_reply=lambda text: None,
         )
-        request_id, entry = next(iter(dispatcher._requests.items()))
+        request_id, entry = next(iter(chat_slots(dispatcher).items()))
 
         # Wait until the worker thread has actually entered chat() before
         # cancelling, so this is a genuine mid-flight cancel.
@@ -207,7 +208,7 @@ def test_cancellation_mid_flight_fires_info_notification_and_clears_registry(mon
 
         await entry["task"]
 
-        assert dispatcher._requests == {}
+        assert chat_slots(dispatcher) == {}
         assert notifications.visible is True
         assert notifications.msg_type == "info"
         assert notifications.message == "Request cancelled."
@@ -241,10 +242,10 @@ def test_timeout_fires_the_exact_message_and_clears_registry(monkeypatch):
             conversation_history=[{"role": "user", "content": "hi"}],
             on_reply=lambda text: None,
         )
-        entry = next(iter(dispatcher._requests.values()))
+        entry = next(iter(chat_slots(dispatcher).values()))
         await entry["task"]
 
-        assert dispatcher._requests == {}
+        assert chat_slots(dispatcher) == {}
         assert notifications.visible is True
         assert notifications.msg_type == "error"
         assert notifications.message == (
@@ -293,13 +294,13 @@ def test_concurrent_calls_second_rejected_first_completes_third_succeeds(monkeyp
         )
         assert notifications.visible is True
         assert notifications.message == "A response is already being generated."
-        assert len(dispatcher._requests) == 1
+        assert len(chat_slots(dispatcher)) == 1
 
         release.set()
-        entry = next(iter(dispatcher._requests.values()))
+        entry = next(iter(chat_slots(dispatcher).values()))
         await entry["task"]
         assert replies == ["first reply"]
-        assert dispatcher._requests == {}
+        assert chat_slots(dispatcher) == {}
 
         # Third call, after the first has fully completed, succeeds normally.
         monkeypatch.setattr(api_provider, "chat", lambda task, messages, **kwargs: {"message": {"content": "third reply"}})
@@ -310,7 +311,7 @@ def test_concurrent_calls_second_rejected_first_completes_third_succeeds(monkeyp
             conversation_history=[{"role": "user", "content": "third"}],
             on_reply=replies.append,
         )
-        entry = next(iter(dispatcher._requests.values()))
+        entry = next(iter(chat_slots(dispatcher).values()))
         await entry["task"]
         assert replies == ["first reply", "third reply"]
 
@@ -454,7 +455,7 @@ def test_send_message_uses_the_branch_attached_system_prompt_note_instead_of_the
         document.connect(note.id, root.id)
 
         await bus.dispatch_intent("scene", "sendMessage", ["continue the branch"])
-        entry = next(iter(dispatcher._requests.values()))
+        entry = next(iter(chat_slots(dispatcher).values()))
         await entry["task"]
 
         assert captured["persona_text"] == "Custom branch persona."
@@ -484,7 +485,7 @@ def test_send_message_falls_back_to_the_default_persona_when_no_note_is_attached
         register_canvas(bus, notifications, dispatcher, composer_document)
 
         await bus.dispatch_intent("scene", "sendMessage", ["first message, no note attached"])
-        entry = next(iter(dispatcher._requests.values()))
+        entry = next(iter(chat_slots(dispatcher).values()))
         await entry["task"]
 
         assert captured["persona_text"] == dispatcher.persona()
@@ -521,7 +522,7 @@ def test_regenerate_response_also_resolves_the_branch_attached_system_prompt_not
         document.connect(note.id, root.id)
 
         await bus.dispatch_intent("scene", "regenerateResponse", [assistant_reply.id])
-        entry = next(iter(dispatcher._requests.values()))
+        entry = next(iter(chat_slots(dispatcher).values()))
         await entry["task"]
 
         assert captured["persona_text"] == "Custom branch persona."
@@ -672,22 +673,22 @@ def test_two_sessions_concurrent_inflight_no_cross_contamination(monkeypatch):
         await asyncio.to_thread(b_started.wait, 5)
         assert a_started.is_set() and b_started.is_set()
 
-        assert len(dispatcher_a._requests) == 1
-        assert len(dispatcher_b._requests) == 1
-        assert set(dispatcher_a._requests.keys()).isdisjoint(dispatcher_b._requests.keys())
+        assert len(chat_slots(dispatcher_a)) == 1
+        assert len(chat_slots(dispatcher_b)) == 1
+        assert set(chat_slots(dispatcher_a).keys()).isdisjoint(chat_slots(dispatcher_b).keys())
         assert composer_a.request_state == "generating"
         assert composer_b.request_state == "generating"
 
         # Release out of start order - completion order must not matter.
         b_release.set()
-        await next(iter(dispatcher_b._requests.values()))["task"]
+        await next(iter(chat_slots(dispatcher_b).values()))["task"]
         a_release.set()
-        await next(iter(dispatcher_a._requests.values()))["task"]
+        await next(iter(chat_slots(dispatcher_a).values()))["task"]
 
         assert replies_a == ["reply for A"]
         assert replies_b == ["reply for B"]
-        assert dispatcher_a._requests == {}
-        assert dispatcher_b._requests == {}
+        assert chat_slots(dispatcher_a) == {}
+        assert chat_slots(dispatcher_b) == {}
         assert composer_a.request_state == "idle"
         assert composer_b.request_state == "idle"
         assert notif_a.visible is False
@@ -697,8 +698,8 @@ def test_two_sessions_concurrent_inflight_no_cross_contamination(monkeypatch):
 
 
 def test_rapid_fire_double_send_same_session_second_is_rejected(monkeypatch):
-    """start_chat_reply has no `await` between the `if self._requests:`
-    emptiness check and the dict insertion at the bottom - so two calls
+    """start_chat_reply has no `await` between the `if self._runs.is_busy
+    ("chat"):` check and the registry claim right after it - so two calls
     fired back-to-back on the same dispatcher, with no await of the first's
     completion in between, must never both be admitted. This is the closest
     this transport model gets to "two sendMessage frames arriving one right
@@ -724,11 +725,11 @@ def test_rapid_fire_double_send_same_session_second_is_rejected(monkeypatch):
             conversation_history=[{"role": "user", "content": "two"}], on_reply=replies.append,
         )
 
-        assert len(dispatcher._requests) == 1, "both calls must never be admitted concurrently"
+        assert len(chat_slots(dispatcher)) == 1, "both calls must never be admitted concurrently"
         assert notifications.message == "A response is already being generated."
 
         release.set()
-        await next(iter(dispatcher._requests.values()))["task"]
+        await next(iter(chat_slots(dispatcher).values()))["task"]
         assert replies == ["first"]
 
     asyncio.run(run())
@@ -784,11 +785,11 @@ def test_conversation_reply_sets_then_clears_pending_request_id_and_calls_on_rep
         assert node.pending_request_id is not None, "set mid-flight, before the blocking call returns"
 
         release.set()
-        entry = next(iter(dispatcher._requests.values()))
+        entry = next(iter(chat_slots(dispatcher).values()))
         await entry["task"]
 
         assert replies == ["canned reply"]
-        assert dispatcher._requests == {}
+        assert chat_slots(dispatcher) == {}
         assert node.pending_request_id is None
 
     asyncio.run(run())
@@ -810,7 +811,7 @@ def test_conversation_reply_publishes_scene_not_app_composer_on_begin_and_end(mo
             conversation_history=[{"role": "user", "content": "hi"}],
             on_reply=lambda text: None,
         )
-        entry = next(iter(dispatcher._requests.values()))
+        entry = next(iter(chat_slots(dispatcher).values()))
         await entry["task"]
 
         assert "app-composer" not in recorder.topics
@@ -842,7 +843,7 @@ def test_conversation_reply_provider_not_configured_returns_quickly_with_an_erro
             on_reply=lambda text: None,
         )
 
-        assert dispatcher._requests == {}, "no task/thread work started"
+        assert chat_slots(dispatcher) == {}, "no task/thread work started"
         assert chat_calls == [], "api_provider.chat was never reached"
         assert node.pending_request_id is None, "never touched on the fail-fast path"
         assert notifications.visible is True
@@ -877,14 +878,14 @@ def test_conversation_reply_cancellation_mid_flight_fires_info_notification_and_
             conversation_history=[{"role": "user", "content": "hi"}],
             on_reply=lambda text: None,
         )
-        request_id, entry = next(iter(dispatcher._requests.items()))
+        request_id, entry = next(iter(chat_slots(dispatcher).items()))
 
         await asyncio.to_thread(started.wait, 5)
         assert dispatcher.cancel(request_id) is True
 
         await entry["task"]
 
-        assert dispatcher._requests == {}
+        assert chat_slots(dispatcher) == {}
         assert node.pending_request_id is None
         assert notifications.visible is True
         assert notifications.msg_type == "info"
@@ -913,10 +914,10 @@ def test_conversation_reply_timeout_fires_the_exact_message_and_clears_registry(
             conversation_history=[{"role": "user", "content": "hi"}],
             on_reply=lambda text: None,
         )
-        entry = next(iter(dispatcher._requests.values()))
+        entry = next(iter(chat_slots(dispatcher).values()))
         await entry["task"]
 
-        assert dispatcher._requests == {}
+        assert chat_slots(dispatcher) == {}
         assert node.pending_request_id is None
         assert notifications.visible is True
         assert notifications.msg_type == "error"
@@ -951,10 +952,10 @@ def test_conversation_on_reply_raising_still_clears_pending_request_id_and_frees
             conversation_history=[{"role": "user", "content": "hi"}],
             on_reply=raising_on_reply,
         )
-        entry = next(iter(dispatcher._requests.values()))
+        entry = next(iter(chat_slots(dispatcher).values()))
         await entry["task"]
 
-        assert dispatcher._requests == {}
+        assert chat_slots(dispatcher) == {}
         assert node.pending_request_id is None
         assert notifications.visible is True
         assert notifications.msg_type == "error"
@@ -972,7 +973,7 @@ def test_conversation_on_reply_raising_still_clears_pending_request_id_and_frees
             conversation_history=[{"role": "user", "content": "hi again"}],
             on_reply=replies.append,
         )
-        entry = next(iter(dispatcher._requests.values()))
+        entry = next(iter(chat_slots(dispatcher).values()))
         await entry["task"]
         assert replies == ["next reply"]
         assert node.pending_request_id is None
@@ -1022,15 +1023,15 @@ def test_composer_call_in_flight_blocks_a_concurrent_conversation_call_on_the_sa
         assert notifications.visible is True
         assert notifications.message == "A response is already being generated."
         assert node.pending_request_id is None, "the bounced call must never touch the node"
-        assert len(dispatcher._requests) == 1, "only the composer's original request stays in flight"
+        assert len(chat_slots(dispatcher)) == 1, "only the composer's original request stays in flight"
 
         release.set()
-        entry = next(iter(dispatcher._requests.values()))
+        entry = next(iter(chat_slots(dispatcher).values()))
         await entry["task"]
 
         assert composer_replies == ["composer reply"]
         assert conversation_replies == [], "the bounced call never ran at all"
-        assert dispatcher._requests == {}
+        assert chat_slots(dispatcher) == {}
 
     asyncio.run(run())
 
@@ -1072,15 +1073,15 @@ def test_conversation_call_in_flight_blocks_a_concurrent_composer_call_on_the_sa
         assert notifications.visible is True
         assert notifications.message == "A response is already being generated."
         assert composer_document.request_state == "idle", "the bounced call must never touch composer state"
-        assert len(dispatcher._requests) == 1, "only the conversation node's original request stays in flight"
+        assert len(chat_slots(dispatcher)) == 1, "only the conversation node's original request stays in flight"
 
         release.set()
-        entry = next(iter(dispatcher._requests.values()))
+        entry = next(iter(chat_slots(dispatcher).values()))
         await entry["task"]
 
         assert conversation_replies == ["conversation reply"]
         assert composer_replies == [], "the bounced call never ran at all"
-        assert dispatcher._requests == {}
+        assert chat_slots(dispatcher) == {}
         assert node.pending_request_id is None
 
     asyncio.run(run())
@@ -1162,8 +1163,8 @@ def test_start_image_reply_second_call_while_in_flight_is_rejected_with_info_not
 
 def test_image_request_and_chat_request_run_concurrently_both_dicts_non_empty(monkeypatch):
     """THE key concurrency-slot regression guard (R4.4a): a chat/composer
-    request occupies self._requests while an image-generation request
-    occupies the SEPARATE self._image_requests dict at the same time -
+    request occupies self._runs's "chat" kind while an image-generation
+    request occupies the SEPARATE self._image_requests dict at the same time -
     neither blocks nor is blocked by the other, and both dicts are
     simultaneously non-empty at least once, proving these are two genuinely
     independent slots rather than aliases of the same guard (the whole point
@@ -1209,12 +1210,12 @@ def test_image_request_and_chat_request_run_concurrently_both_dicts_non_empty(mo
         # THE key assertion: both slots are genuinely occupied at the same
         # time - neither request bounced the other, and neither notification
         # fired.
-        assert len(dispatcher._requests) == 1
+        assert len(chat_slots(dispatcher)) == 1
         assert len(dispatcher._image_requests) == 1
         assert notifications.visible is False, "neither call should have been rejected"
 
         chat_release.set()
-        chat_entry = next(iter(dispatcher._requests.values()))
+        chat_entry = next(iter(chat_slots(dispatcher).values()))
         await chat_entry["task"]
         image_release.set()
         image_entry = next(iter(dispatcher._image_requests.values()))
@@ -1222,7 +1223,7 @@ def test_image_request_and_chat_request_run_concurrently_both_dicts_non_empty(mo
 
         assert chat_replies == ["chat reply"]
         assert image_replies == [b"image-bytes"]
-        assert dispatcher._requests == {}
+        assert chat_slots(dispatcher) == {}
         assert dispatcher._image_requests == {}
         assert composer_document.request_state == "idle"
 
@@ -1375,11 +1376,11 @@ def test_streaming_happy_path_recorder_receives_ordered_stream_frames_and_on_rep
             conversation_history=[{"role": "user", "content": "hi"}],
             on_reply=replies.append,
         )
-        entry = next(iter(dispatcher._requests.values()))
+        entry = next(iter(chat_slots(dispatcher).values()))
         await entry["task"]
 
         assert replies == ["Hello"]
-        assert dispatcher._requests == {}
+        assert chat_slots(dispatcher) == {}
         assert composer_document.request_state == "idle"
 
         assert recorder.frames, "must have received at least one stream frame"
@@ -1422,7 +1423,7 @@ def test_cancel_mid_stream_no_on_reply_and_stream_frames_still_end_with_done_tru
             conversation_history=[{"role": "user", "content": "hi"}],
             on_reply=replies.append,
         )
-        request_id, entry = next(iter(dispatcher._requests.items()))
+        request_id, entry = next(iter(chat_slots(dispatcher).items()))
 
         await asyncio.to_thread(started.wait, 5)
         assert dispatcher.cancel(request_id) is True
@@ -1430,7 +1431,7 @@ def test_cancel_mid_stream_no_on_reply_and_stream_frames_still_end_with_done_tru
         await entry["task"]
 
         assert replies == [], "cancel discards everything - no partial-text on_reply, matching R4.2 precedent"
-        assert dispatcher._requests == {}
+        assert chat_slots(dispatcher) == {}
         assert notifications.visible is True
         assert notifications.msg_type == "info"
         assert notifications.message == "Request cancelled."
@@ -1461,11 +1462,11 @@ def test_stream_error_mid_way_generic_notification_and_stream_frames_still_end_d
             conversation_history=[{"role": "user", "content": "hi"}],
             on_reply=replies.append,
         )
-        entry = next(iter(dispatcher._requests.values()))
+        entry = next(iter(chat_slots(dispatcher).values()))
         await entry["task"]
 
         assert replies == []
-        assert dispatcher._requests == {}
+        assert chat_slots(dispatcher) == {}
         assert notifications.visible is True
         assert notifications.msg_type == "error"
         assert notifications.message == "AI response failed: boom"
@@ -1500,7 +1501,7 @@ def test_throttle_batches_many_small_chunks_into_materially_fewer_publish_stream
             conversation_history=[{"role": "user", "content": "hi"}],
             on_reply=replies.append,
         )
-        entry = next(iter(dispatcher._requests.values()))
+        entry = next(iter(chat_slots(dispatcher).values()))
         await entry["task"]
 
         assert replies == [expected]
@@ -1548,7 +1549,7 @@ def test_completion_handoff_parity_streaming_send_message_creates_identical_node
         document = register_canvas(bus, notifications, dispatcher, composer_document)
 
         user_node_id = await bus.dispatch_intent("scene", "sendMessage", ["plan it out"])
-        entry = next(iter(dispatcher._requests.values()))
+        entry = next(iter(chat_slots(dispatcher).values()))
         await entry["task"]
 
         assistant_nodes = [
@@ -1582,8 +1583,8 @@ def test_completion_handoff_parity_streaming_send_message_creates_identical_node
 
 def test_image_request_runs_independently_while_a_chat_stream_is_paused_mid_flight(monkeypatch):
     """R4.4 spec section 6, item 8: cross-slot concurrency during an active
-    stream. A chat stream paused mid-flight (self._requests) must not block,
-    or be blocked by, a concurrent image-generation request
+    stream. A chat stream paused mid-flight (self._runs's "chat" kind) must
+    not block, or be blocked by, a concurrent image-generation request
     (self._image_requests) - the two independent slots this dispatcher
     already guarantees (R4.4a) must keep holding under streaming too."""
     chat_started = threading.Event()
@@ -1618,7 +1619,7 @@ def test_image_request_runs_independently_while_a_chat_stream_is_paused_mid_flig
         # actually broadcast it before asserting.
         await asyncio.sleep(0.15)
 
-        assert len(dispatcher._requests) == 1
+        assert len(chat_slots(dispatcher)) == 1
         assert recorder.frames, "at least the first buffered delta should have flushed by now"
 
         await dispatcher.start_image_reply(
@@ -1631,15 +1632,15 @@ def test_image_request_runs_independently_while_a_chat_stream_is_paused_mid_flig
         # still-paused chat stream.
         assert image_replies == [b"image-bytes"]
         assert dispatcher._image_requests == {}
-        assert len(dispatcher._requests) == 1, "the chat stream is still in flight, untouched by the image request"
+        assert len(chat_slots(dispatcher)) == 1, "the chat stream is still in flight, untouched by the image request"
         assert notifications.visible is False, "neither request was rejected"
 
         chat_release.set()
-        chat_entry = next(iter(dispatcher._requests.values()))
+        chat_entry = next(iter(chat_slots(dispatcher).values()))
         await chat_entry["task"]
 
         assert chat_replies == ["final chat reply"]
-        assert dispatcher._requests == {}
+        assert chat_slots(dispatcher) == {}
         assert recorder.frames[-1]["done"] is True, "stream frames kept recording throughout the image request"
 
     asyncio.run(run())
@@ -1975,8 +1976,8 @@ def test_cancel_web_research_returns_false_for_an_unknown_request_id():
 
 def test_web_research_request_and_chat_request_run_concurrently_both_dicts_non_empty(monkeypatch):
     """THE key concurrency-slot regression guard (R5.1, mirrors R4.4a's own
-    chat/image guard test): a chat/composer request occupies self._requests
-    while a web-research request occupies the SEPARATE
+    chat/image guard test): a chat/composer request occupies self._runs's
+    "chat" kind while a web-research request occupies the SEPARATE
     self._web_research_requests dict at the same time - neither blocks nor is
     blocked by the other, and both dicts are simultaneously non-empty at
     least once."""
@@ -2029,12 +2030,12 @@ def test_web_research_request_and_chat_request_run_concurrently_both_dicts_non_e
         # THE key assertion: both slots are genuinely occupied at the same
         # time - neither request bounced the other, and neither notification
         # fired.
-        assert len(dispatcher._requests) == 1
+        assert len(chat_slots(dispatcher)) == 1
         assert len(dispatcher._web_research_requests) == 1
         assert notifications.visible is False, "neither call should have been rejected"
 
         chat_release.set()
-        chat_entry = next(iter(dispatcher._requests.values()))
+        chat_entry = next(iter(chat_slots(dispatcher).values()))
         await chat_entry["task"]
         research_release.set()
         research_entry = next(iter(dispatcher._web_research_requests.values()))
@@ -2042,7 +2043,7 @@ def test_web_research_request_and_chat_request_run_concurrently_both_dicts_non_e
 
         assert chat_replies == ["chat reply"]
         assert research_successes == [SimpleNamespace(answer_markdown="research result")]
-        assert dispatcher._requests == {}
+        assert chat_slots(dispatcher) == {}
         assert dispatcher._web_research_requests == {}
         assert composer_document.request_state == "idle"
 
@@ -2408,8 +2409,8 @@ def test_cancel_artifact_returns_false_for_an_unknown_request_id():
 def test_artifact_request_and_chat_request_run_concurrently_both_dicts_non_empty(monkeypatch):
     """THE key concurrency-slot regression guard (R5.2, mirrors R4.4a/R5.1's
     own chat/image and chat/web-research guards): a chat/composer request
-    occupies self._requests while an artifact-generation request occupies the
-    SEPARATE self._artifact_requests dict at the same time - neither blocks
+    occupies self._runs's "chat" kind while an artifact-generation request
+    occupies the SEPARATE self._artifact_requests dict at the same time - neither blocks
     nor is blocked by the other, and both dicts are simultaneously non-empty
     at least once."""
     chat_started = threading.Event()
@@ -2458,12 +2459,12 @@ def test_artifact_request_and_chat_request_run_concurrently_both_dicts_non_empty
         # THE key assertion: both slots are genuinely occupied at the same
         # time - neither request bounced the other, and neither notification
         # fired.
-        assert len(dispatcher._requests) == 1
+        assert len(chat_slots(dispatcher)) == 1
         assert len(dispatcher._artifact_requests) == 1
         assert notifications.visible is False, "neither call should have been rejected"
 
         chat_release.set()
-        chat_entry = next(iter(dispatcher._requests.values()))
+        chat_entry = next(iter(chat_slots(dispatcher).values()))
         await chat_entry["task"]
         artifact_release.set()
         artifact_entry = next(iter(dispatcher._artifact_requests.values()))
@@ -2471,7 +2472,7 @@ def test_artifact_request_and_chat_request_run_concurrently_both_dicts_non_empty
 
         assert chat_replies == ["chat reply"]
         assert artifact_replies == [("artifact document", "artifact message")]
-        assert dispatcher._requests == {}
+        assert chat_slots(dispatcher) == {}
         assert dispatcher._artifact_requests == {}
         assert composer_document.request_state == "idle"
 
@@ -3361,8 +3362,8 @@ def test_gitlink_apply_no_changes_payload_in_intent_signature():
 def test_gitlink_request_and_other_kind_request_run_concurrently(monkeypatch):
     """Mirrors the other cross-kind concurrency tests: a Gitlink Run request
     must run concurrently with (neither blocking nor blocked by) a chat/
-    composer request - self._gitlink_requests and self._requests are two
-    genuinely independent slots."""
+    composer request - self._gitlink_requests and self._runs's "chat" kind
+    are two genuinely independent slots."""
     chat_started = threading.Event()
     chat_release = threading.Event()
     gitlink_started = threading.Event()
@@ -3409,12 +3410,12 @@ def test_gitlink_request_and_other_kind_request_run_concurrently(monkeypatch):
         await asyncio.to_thread(chat_started.wait, 5)
         await asyncio.to_thread(gitlink_started.wait, 5)
 
-        assert len(dispatcher._requests) == 1
+        assert len(chat_slots(dispatcher)) == 1
         assert len(dispatcher._gitlink_requests) == 1
         assert notifications.visible is False, "neither call should have been rejected"
 
         chat_release.set()
-        chat_entry = next(iter(dispatcher._requests.values()))
+        chat_entry = next(iter(chat_slots(dispatcher).values()))
         await chat_entry["task"]
         gitlink_release.set()
         gitlink_entry = next(iter(dispatcher._gitlink_requests.values()))
@@ -3422,7 +3423,7 @@ def test_gitlink_request_and_other_kind_request_run_concurrently(monkeypatch):
 
         assert chat_replies == ["chat reply"]
         assert len(gitlink_successes) == 1
-        assert dispatcher._requests == {}
+        assert chat_slots(dispatcher) == {}
         assert dispatcher._gitlink_requests == {}
 
     asyncio.run(run())
@@ -4708,7 +4709,7 @@ def test_start_chart_generation_calls_on_success_with_the_parsed_result_then_cle
 
         assert successes == [{"type": "bar", "title": "T", "labels": ["A", "B"], "values": [1, 2]}]
         assert failures == []
-        assert dispatcher._chart_requests == {}
+        assert busy_count(dispatcher, "chart") == 0
         assert notifications.visible is False
 
     asyncio.run(run())
@@ -4763,13 +4764,13 @@ def test_start_chart_generation_second_call_while_in_flight_is_rejected(monkeypa
         assert notifications.visible is True
         assert notifications.msg_type == "info"
         assert notifications.message == "A chart is already being generated."
-        assert len(dispatcher._chart_requests) == 1
+        assert busy_count(dispatcher, "chart") == 1
 
         release.set()
         await first_call_task
 
         assert successes == [{"type": "bar", "title": "T", "labels": ["A"], "values": [1]}]
-        assert dispatcher._chart_requests == {}
+        assert busy_count(dispatcher, "chart") == 0
 
     asyncio.run(run())
 
@@ -4801,7 +4802,7 @@ def test_start_chart_generation_top_level_error_key_calls_on_failure_and_shows_n
 
         assert successes == [], "on_success must never be called on a top-level error-key response"
         assert failures == ["Could not find sufficient data to generate a bar chart."]
-        assert dispatcher._chart_requests == {}
+        assert busy_count(dispatcher, "chart") == 0
         assert notifications.visible is True
         assert notifications.msg_type == "error"
         assert notifications.message == (
@@ -4837,9 +4838,82 @@ def test_start_chart_generation_timeout_fires_the_exact_message_and_clears_the_s
 
         assert successes == []
         assert len(failures) == 1 and "stopped responding" in failures[0]
-        assert dispatcher._chart_requests == {}, "the slot must not leak/deadlock future requests"
+        assert busy_count(dispatcher, "chart") == 0, "the slot must not leak/deadlock future requests"
         assert notifications.visible is True
         assert notifications.msg_type == "error"
+
+    asyncio.run(run())
+
+
+def test_chart_request_and_chat_request_run_concurrently_both_busy(monkeypatch):
+    """ADR-002 stage 2.3 regression guard: chat and chart now claim into
+    the SAME self._runs registry (previously two fully disjoint dicts),
+    so this isolation is no longer structural by construction - it
+    depends entirely on RunRegistry.is_busy()'s kind filter being correct.
+    Mirrors every OTHER cross-kind concurrency test in this file (e.g.
+    test_image_request_and_chat_request_run_concurrently_both_dicts_non_empty
+    above): both must be simultaneously in flight, neither blocking nor
+    blocked by the other, and neither bounced by a busy notification."""
+    chat_started = threading.Event()
+    chat_release = threading.Event()
+    chart_started = threading.Event()
+    chart_release = threading.Event()
+
+    def blocking_chat(task, messages, **kwargs):
+        chat_started.set()
+        chat_release.wait(5)
+        return {"message": {"content": "chat reply"}}
+
+    def blocking_get_response(self, text, chart_type):
+        chart_started.set()
+        chart_release.wait(5)
+        return '{"type": "bar", "title": "T", "labels": ["A"], "values": [1]}'
+
+    _configure_fake_ollama(monkeypatch, blocking_chat)
+    monkeypatch.setattr(agents_module.ChartDataAgent, "get_response", blocking_get_response)
+
+    async def run():
+        bus, notifications, composer_document, dispatcher = _make_dispatch_env()
+        chat_replies = []
+        chart_successes = []
+
+        await dispatcher.start_chat_reply(
+            bus=bus,
+            notifications_state=notifications,
+            composer_document=composer_document,
+            conversation_history=[{"role": "user", "content": "hi"}],
+            on_reply=chat_replies.append,
+        )
+        # start_chart_generation is directly awaited by ITS caller (unlike
+        # chat's fire-and-forget shape) - the test itself schedules it as a
+        # background task to race it against the still-in-flight chat
+        # request, mirroring test_start_chart_generation_second_call_
+        # while_in_flight_is_rejected's own approach above.
+        chart_task = asyncio.create_task(
+            dispatcher.start_chart_generation(
+                bus=bus, notifications_state=notifications, node_id="n1",
+                chart_type="bar", source_text="text", on_success=chart_successes.append,
+                on_failure=lambda message: None,
+            )
+        )
+
+        await asyncio.to_thread(chat_started.wait, 5)
+        await asyncio.to_thread(chart_started.wait, 5)
+
+        # THE key assertion: both are genuinely in flight at the same time -
+        # neither bounced the other with a busy notification.
+        assert len(chat_slots(dispatcher)) == 1
+        assert busy_count(dispatcher, "chart") == 1
+        assert notifications.visible is False, "neither call should have been rejected"
+
+        chat_release.set()
+        chat_entry = next(iter(chat_slots(dispatcher).values()))
+        await chat_entry["task"]
+        chart_release.set()
+        await chart_task
+
+        assert chat_replies == ["chat reply"]
+        assert chart_successes == [{"type": "bar", "title": "T", "labels": ["A"], "values": [1]}]
 
     asyncio.run(run())
 
@@ -4877,7 +4951,7 @@ def test_start_note_generation_takeaway_calls_on_success_then_clears_the_slot(mo
         )
         assert successes == ["Key Takeaway\n\nMain Points:\n• from the source node's text"]
         assert failures == []
-        assert dispatcher._note_requests == {}
+        assert busy_count(dispatcher, "note") == 0
         assert notifications.visible is False
 
     asyncio.run(run())
@@ -4907,7 +4981,7 @@ def test_start_note_generation_rejects_a_second_concurrent_run(monkeypatch):
 
     async def run():
         bus, notifications, dispatcher = _make_note_env()
-        dispatcher._note_requests["already-running"] = True
+        seed = dispatcher._runs.claim("note")
         successes = []
         await dispatcher.start_note_generation(
             bus=bus, notifications_state=notifications, node_id="n1",
@@ -4917,9 +4991,10 @@ def test_start_note_generation_rejects_a_second_concurrent_run(monkeypatch):
         assert successes == [], "the busy guard must not run a second agent"
         assert notifications.visible is True
         assert notifications.msg_type == "info"
-        # The pre-existing sentinel must survive - the guard rejects, it
+        # The pre-existing claim must survive - the guard rejects, it
         # must never clear someone else's in-flight slot.
-        assert dispatcher._note_requests == {"already-running": True}
+        assert dispatcher._runs.get(seed.request_id) is seed
+        assert busy_count(dispatcher, "note") == 1
 
     asyncio.run(run())
 
@@ -4938,7 +5013,7 @@ def test_start_note_generation_empty_response_fails_instead_of_creating_a_blank_
         assert successes == [], "an empty agent response must not become a note"
         assert len(failures) == 1
         assert notifications.msg_type == "error"
-        assert dispatcher._note_requests == {}
+        assert busy_count(dispatcher, "note") == 0
 
     asyncio.run(run())
 
@@ -4960,7 +5035,75 @@ def test_start_note_generation_agent_exception_surfaces_and_clears_the_slot(monk
         assert successes == []
         assert "model exploded" in failures[0]
         assert notifications.msg_type == "error"
-        assert dispatcher._note_requests == {}, "the slot must not leak after a failure"
+        assert busy_count(dispatcher, "note") == 0, "the slot must not leak after a failure"
+
+    asyncio.run(run())
+
+
+def test_note_request_and_chat_request_run_concurrently_both_busy(monkeypatch):
+    """ADR-002 stage 2.3 regression guard, note's counterpart to
+    test_chart_request_and_chat_request_run_concurrently_both_busy above -
+    same reasoning: chat and note now claim into the SAME self._runs
+    registry, so this isolation depends entirely on RunRegistry.is_busy()'s
+    kind filter rather than being structural by construction."""
+    chat_started = threading.Event()
+    chat_release = threading.Event()
+    note_started = threading.Event()
+    note_release = threading.Event()
+
+    def blocking_chat(task, messages, **kwargs):
+        chat_started.set()
+        chat_release.wait(5)
+        return {"message": {"content": "chat reply"}}
+
+    def blocking_get_response(self, text):
+        note_started.set()
+        note_release.wait(5)
+        return "Key Takeaway\n\nMain Points:\n• done"
+
+    _configure_fake_ollama(monkeypatch, blocking_chat)
+    monkeypatch.setattr(agents_module.KeyTakeawayAgent, "get_response", blocking_get_response)
+
+    async def run():
+        bus, notifications, composer_document, dispatcher = _make_dispatch_env()
+        chat_replies = []
+        note_successes = []
+
+        await dispatcher.start_chat_reply(
+            bus=bus,
+            notifications_state=notifications,
+            composer_document=composer_document,
+            conversation_history=[{"role": "user", "content": "hi"}],
+            on_reply=chat_replies.append,
+        )
+        # start_note_generation is directly awaited by ITS caller (same
+        # shape as chart) - schedule it as a background task to race it
+        # against the still-in-flight chat request.
+        note_task = asyncio.create_task(
+            dispatcher.start_note_generation(
+                bus=bus, notifications_state=notifications, node_id="n1",
+                note_kind="takeaway", source_text="x", on_success=note_successes.append,
+                on_failure=lambda message: None,
+            )
+        )
+
+        await asyncio.to_thread(chat_started.wait, 5)
+        await asyncio.to_thread(note_started.wait, 5)
+
+        # THE key assertion: both are genuinely in flight at the same time -
+        # neither bounced the other with a busy notification.
+        assert len(chat_slots(dispatcher)) == 1
+        assert busy_count(dispatcher, "note") == 1
+        assert notifications.visible is False, "neither call should have been rejected"
+
+        chat_release.set()
+        chat_entry = next(iter(chat_slots(dispatcher).values()))
+        await chat_entry["task"]
+        note_release.set()
+        await note_task
+
+        assert chat_replies == ["chat reply"]
+        assert note_successes == ["Key Takeaway\n\nMain Points:\n• done"]
 
     asyncio.run(run())
 
@@ -5021,7 +5164,7 @@ def test_start_branch_comparison_does_not_share_a_busy_slot_with_note_generation
 
     async def run():
         bus, notifications, dispatcher = _make_note_env()
-        dispatcher._note_requests["unrelated-takeaway"] = True
+        dispatcher._runs.claim("note")
         successes = []
         await dispatcher.start_branch_comparison(
             bus=bus, notifications_state=notifications, source_text="x",

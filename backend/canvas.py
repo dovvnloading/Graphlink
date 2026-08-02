@@ -740,7 +740,7 @@ def register_canvas(
         # prompt) pair from a different source-node kind, then both funnel
         # through this one dispatch + success-primitive call. Runs on
         # agent_dispatcher's INDEPENDENT self._image_requests slot, never
-        # self._requests - see backend/agents.py's AgentDispatcher docstring
+        # its "chat" run kind - see backend/agents.py's AgentDispatcher docstring
         # for why chat and image generation must be able to run concurrently.
         async def _on_reply(image_bytes):
             if parent_chat_node_id not in document.nodes:
