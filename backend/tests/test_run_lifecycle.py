@@ -140,3 +140,135 @@ def test_values_lists_every_claimed_handle_regardless_of_kind():
     a = registry.claim("chat")
     b = registry.claim("chart")
     assert {h.request_id for h in registry.values()} == {a.request_id, b.request_id}
+
+
+# -- ADR-002 stage 2.4b: on_cancel / approval_future / kind-filtered cancel --
+
+
+def test_claim_captures_on_cancel():
+    registry = RunRegistry()
+    on_cancel = lambda: None  # noqa: E731 - identity check only, never called here
+    handle = registry.claim("web_research", on_cancel=on_cancel)
+    assert handle.on_cancel is on_cancel
+    assert handle.cancel_event is None
+
+
+def test_claim_captures_approval_future():
+    async def run():
+        registry = RunRegistry()
+        future = asyncio.get_running_loop().create_future()
+        handle = registry.claim("pycoder", approval_future=future)
+        assert handle.approval_future is future
+        assert handle.cancel_event is None
+        assert handle.on_cancel is None
+
+    asyncio.run(run())
+
+
+def test_cancel_fires_on_cancel_when_present_instead_of_cancel_event():
+    registry = RunRegistry()
+    fired = []
+    handle = registry.claim("web_research", on_cancel=lambda: fired.append(True))
+    assert registry.cancel(handle.request_id) is True
+    assert fired == [True]
+
+
+def test_cancel_returns_false_for_a_handle_with_neither_cancel_event_nor_on_cancel():
+    registry = RunRegistry()
+    handle = registry.claim("chart")
+    assert registry.cancel(handle.request_id) is False
+
+
+def test_cancel_with_matching_kind_succeeds():
+    registry = RunRegistry()
+    cancel_event = threading.Event()
+    handle = registry.claim("artifact", cancel_event=cancel_event)
+    assert registry.cancel(handle.request_id, kind="artifact") is True
+    assert cancel_event.is_set()
+
+
+def test_cancel_with_mismatched_kind_is_rejected_and_does_not_trip_the_event():
+    """The load-bearing hardening this revision adds: a request_id that
+    resolves to a DIFFERENT kind than the caller expected must never trip
+    that unrelated run's cancellation - see RunRegistry.cancel's own
+    docstring."""
+    registry = RunRegistry()
+    cancel_event = threading.Event()
+    handle = registry.claim("artifact", cancel_event=cancel_event)
+    assert registry.cancel(handle.request_id, kind="chat") is False
+    assert not cancel_event.is_set(), "a mismatched kind must not trip the wrong run's cancellation"
+
+
+def test_cancel_all_fires_on_cancel_for_every_handle_that_has_one():
+    registry = RunRegistry()
+    chat_cancel = threading.Event()
+    registry.claim("chat", cancel_event=chat_cancel)
+    web_fired = []
+    registry.claim("web_research", on_cancel=lambda: web_fired.append(True))
+    chart_handle = registry.claim("chart")  # neither mechanism
+
+    registry.cancel_all()
+
+    assert chat_cancel.is_set()
+    assert web_fired == [True]
+    assert registry.get(chart_handle.request_id) is not None, "cancel_all() must not release anything"
+
+
+def test_cancel_all_pending_approvals_resolves_only_listed_kinds_with_false():
+    async def run():
+        registry = RunRegistry()
+        loop = asyncio.get_running_loop()
+        pycoder_future = loop.create_future()
+        sandbox_future = loop.create_future()
+        chat_future_stray = loop.create_future()  # a kind NOT in the listed set
+
+        registry.claim("pycoder", approval_future=pycoder_future)
+        registry.claim("code_sandbox", approval_future=sandbox_future)
+        registry.claim("chat", approval_future=chat_future_stray)
+
+        registry.cancel_all_pending_approvals(("pycoder", "code_sandbox"))
+
+        assert pycoder_future.done() and pycoder_future.result() is False
+        assert sandbox_future.done() and sandbox_future.result() is False
+        assert not chat_future_stray.done(), "a kind outside the listed set must not be touched"
+
+    asyncio.run(run())
+
+
+def test_cancel_all_pending_approvals_never_clobbers_an_already_resolved_future():
+    async def run():
+        registry = RunRegistry()
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
+        future.set_result(True)  # a human approved it a moment before disconnect
+
+        registry.claim("pycoder", approval_future=future)
+        registry.cancel_all_pending_approvals(("pycoder", "code_sandbox"))
+
+        assert future.result() is True, "an already-resolved future must never be clobbered"
+
+    asyncio.run(run())
+
+
+def test_cancel_all_pending_approvals_on_a_handle_with_no_approval_future_is_a_safe_noop():
+    registry = RunRegistry()
+    registry.claim("pycoder")  # no approval_future passed
+    registry.cancel_all_pending_approvals(("pycoder", "code_sandbox"))  # must not raise
+
+
+def test_approval_future_can_be_replaced_in_place_on_the_same_handle():
+    """Mirrors the real mid-run repair-loop pattern (a fresh Future
+    replaces the old one on the same handle) - proves RunHandle is a
+    plain, mutable dataclass, not frozen, so this reassignment works."""
+    async def run():
+        registry = RunRegistry()
+        loop = asyncio.get_running_loop()
+        first = loop.create_future()
+        handle = registry.claim("pycoder", approval_future=first)
+
+        second = loop.create_future()
+        handle.approval_future = second
+
+        assert registry.get(handle.request_id).approval_future is second
+
+    asyncio.run(run())

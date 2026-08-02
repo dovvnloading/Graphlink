@@ -535,7 +535,15 @@ class AgentDispatcher:
         return None
 
     def cancel(self, request_id: str) -> bool:
-        return self._runs.cancel(request_id)
+        """kind="chat": ADR-002 stage 2.4b hardening - once more than one
+        cancellable kind can share self._runs, a stale or mismatched
+        request_id sent via the cancelChatRequest WS intent must never be
+        able to trip a DIFFERENT kind's in-flight run instead of being
+        safely rejected. Harmless no-op today (chat is still the only
+        cancel_event-bearing kind in self._runs), but load-bearing the
+        moment a second one joins - see RunRegistry.cancel's own
+        docstring."""
+        return self._runs.cancel(request_id, kind="chat")
 
     def cancel_all(self) -> None:
         """Trip the cancel event on every in-flight request for this
