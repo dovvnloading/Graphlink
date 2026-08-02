@@ -130,6 +130,21 @@ async function goToLlamaCpp(
   act(() => push({ ...snapshot, ...overrides, activeSection: "llama.cpp (local)" }));
 }
 
+// Settings' selects are CustomSelect.tsx (chrome/CustomSelect.tsx), not
+// native <select> - opening one and picking an option is a click on the
+// trigger button (named via aria-label, matching the field's own visible
+// label) followed by a click on the option button that appears (findBy,
+// not getBy: the option panel portals to document.body asynchronously
+// after the trigger click).
+async function chooseCustomOption(
+  user: ReturnType<typeof userEvent.setup>,
+  triggerName: string,
+  optionName: string,
+) {
+  await user.click(screen.getByRole("button", { name: triggerName }));
+  await user.click(await screen.findByRole("button", { name: optionName }));
+}
+
 describe("SettingsDialog", () => {
   it("navigating sections fires setActiveSection with the clicked section's key", async () => {
     const { user, intents } = setup();
@@ -203,7 +218,7 @@ describe("SettingsDialog", () => {
     const { user, push, intents } = setup();
     await goToOllama(user, push);
 
-    await user.selectOptions(screen.getByLabelText("Chat Naming Model"), "Use chat model");
+    await chooseCustomOption(user, "Chat Naming Model", "Use chat model");
 
     expect(intents).toContainEqual(["app-settings", "setOllamaModelAssignment", ["task_title", "inherit"]]);
   });
@@ -212,16 +227,15 @@ describe("SettingsDialog", () => {
     const { user, push } = setup();
     await goToOllama(user, push);
 
-    const chatSelect = screen.getByLabelText("Chat Model") as HTMLSelectElement;
-    const optionLabels = Array.from(chatSelect.options).map((o) => o.textContent);
-    expect(optionLabels).not.toContain("Use chat model");
+    await user.click(screen.getByRole("button", { name: "Chat Model" }));
+    expect(screen.queryByRole("button", { name: "Use chat model" })).toBeNull();
   });
 
   it("switching a task to explicit reveals a text field; typing fires setOllamaModelAssignment", async () => {
     const { user, push, intents } = setup();
     await goToOllama(user, push);
 
-    await user.selectOptions(screen.getByLabelText("Chart Generation Model"), "Custom model ID...");
+    await chooseCustomOption(user, "Chart Generation Model", "Custom model ID...");
     await user.type(screen.getByLabelText("Chart Generation Model (custom model ID)"), "x");
 
     expect(intents).toContainEqual(["app-settings", "setOllamaModelAssignment", ["task_chart", "x"]]);
@@ -291,7 +305,7 @@ describe("SettingsDialog", () => {
     const { user, push, intents } = setup();
     await goToApiEndpoint(user, push);
 
-    await user.selectOptions(screen.getByLabelText("API Provider"), "Anthropic Claude");
+    await chooseCustomOption(user, "API Provider", "Anthropic Claude");
 
     expect(intents).toContainEqual(["app-settings", "setViewingApiProvider", ["Anthropic Claude"]]);
   });
@@ -493,7 +507,10 @@ describe("SettingsDialog", () => {
     expect(screen.queryByLabelText("Scanned Chat Model")).toBeNull();
 
     await goToLlamaCpp(user, push, { llamaCppScannedModels: ["C:/models/a.gguf"] });
-    await user.selectOptions(screen.getByLabelText("Scanned Chat Model"), "C:/models/a.gguf");
+    // basename(path) is what the option is actually labeled - see
+    // CustomSelect's options={state.llamaCppScannedModels.map(...)} call in
+    // SettingsDialog.tsx, not the raw path.
+    await chooseCustomOption(user, "Scanned Chat Model", "a.gguf");
 
     expect(intents).toContainEqual(["app-settings", "setLlamaCppChatModelPath", ["C:/models/a.gguf"]]);
   });
@@ -505,7 +522,9 @@ describe("SettingsDialog", () => {
       llamaCppChatModelPath: "C:/models/not-in-the-scanned-list.gguf",
     });
 
-    expect(screen.getByLabelText("Scanned Chat Model")).toHaveValue("");
+    // CustomSelect's trigger is a <button>, not a native <select> - its
+    // "current value" is its own displayed text, not a .value DOM property.
+    expect(screen.getByRole("button", { name: "Scanned Chat Model" })).toHaveTextContent("Select a scanned model...");
   });
 
   it("Chat Model File shows 'No file selected' by default and Browse fires pickLlamaCppChatModelFile", async () => {
