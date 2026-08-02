@@ -301,24 +301,28 @@ class AgentDispatcher:
         # Cancellable via a plain threading.Event, same shape as chat -
         # unlike web_research's CancellationToken.
         #
-        # R5.3: a FIFTH independent in-flight-request slot, separate from
-        # chat/image/artifact/web_research - a Gitlink Generate Change Set
-        # run must be able to run concurrently with any of those four, same
-        # reasoning as every prior independent slot above. request_id ->
-        # {"cancel_event": threading.Event, "task": asyncio.Task} - Run is
-        # cancellable via threading.Event, same shape as chat/artifact -
-        # unlike web_research's CancellationToken/on_cancel.
-        self._gitlink_requests: dict[str, dict] = {}
-        # R5.3: a SIXTH independent in-flight-request slot - Gitlink's Apply
-        # (the disk-write step) must be able to run concurrently with a
-        # Gitlink Run on a DIFFERENT node, or with any other kind's dispatch.
-        # request_id -> {"task": asyncio.Task} - NO "cancel_event" key here,
-        # matching image's own shape: legacy has zero cancel affordance for
-        # the disk-write step either. (Same-node concurrent Run+Apply is
-        # additionally blocked by node.pending_request_id - see
-        # register_canvas's own busy checks in backend/canvas.py - this dict
-        # split is about cross-request bookkeeping, not the same-node guard.)
-        self._gitlink_apply_requests: dict[str, dict] = {}
+        # R5.3/ADR-002 stage 2.4f: Gitlink Run ("gitlink_run" kind) and
+        # Gitlink Apply ("gitlink_apply" kind), both also sharing self._runs
+        # now, must be able to run concurrently with any of chat/image/
+        # artifact/web_research, same reasoning as every prior independent
+        # kind above. Run is cancellable via a plain threading.Event, same
+        # shape as chat/artifact. Apply has no cancel_event at all -
+        # matching image's own shape, legacy has zero cancel affordance for
+        # the disk-write step either.
+        #
+        # UNLIKE every kind migrated so far, self._runs's is_busy("gitlink_
+        # run"/"gitlink_apply") is NOT the real busy guard for either of
+        # these two - node.pending_request_id (a per-SceneNode field) is,
+        # shared across BOTH kinds so a Run cannot start while an Apply is
+        # in flight on the SAME node, and vice versa (see
+        # start_gitlink_run's/start_gitlink_apply's own docstrings for the
+        # full synchronous-claim reasoning this preserves unchanged). This
+        # registry is pure task/cancel_event bookkeeping for these two
+        # kinds, deliberately NEVER consulted as the busy gate - a
+        # session could have Gitlink Runs in flight on two DIFFERENT nodes
+        # simultaneously, which self._runs's own kind-scoped is_busy() alone
+        # could never distinguish (it has no per-node concept - see
+        # RunHandle's own docstring in backend/run_lifecycle.py).
         # R5.4: a SEVENTH independent in-flight-request slot - a Py-Coder Run
         # must be able to run concurrently with any of the six existing
         # slots above, same reasoning as every prior independent slot.
@@ -474,11 +478,10 @@ class AgentDispatcher:
                 future.set_result(False)
 
     def cancel_gitlink(self, request_id: str) -> bool:
-        entry = self._gitlink_requests.get(request_id)
-        if entry is None:
-            return False
-        entry["cancel_event"].set()
-        return True
+        """kind="gitlink_run": ADR-002 stage 2.4f - see RunRegistry.cancel's
+        own docstring for why kind= is passed now that gitlink_run shares
+        self._runs with other cancel_event-bearing kinds."""
+        return self._runs.cancel(request_id, kind="gitlink_run")
 
     def persona(self) -> str:
         """Mirror legacy graphlink_window.py's `_get_current_system_prompt`:
@@ -1430,15 +1433,27 @@ class AgentDispatcher:
         _run() actually got a turn on the event loop, leaving a real gap
         between "Run was requested" and "Run's sub-task actually started"
         during which a second concurrent Run or an Apply for the same node
-        could slip past the busy check above."""
+        could slip past the busy check above.
+
+        ADR-002 stage 2.4f: self._runs.claim() now happens in that SAME
+        synchronous stretch, immediately alongside node.pending_request_id's
+        own claim - not at the old dict-literal write site (which sat
+        after this method's first `await`, see backend/run_lifecycle.py's
+        own docstring for why that would reopen a race for a kind that DID
+        need one). Unlike every prior migrated kind, is_busy("gitlink_run")
+        is never checked anywhere - see this field's own comment in
+        __init__ for why node.pending_request_id remains the sole real
+        guard, this registry claim exists purely to carry cancel_event/task
+        bookkeeping into the shared cancel()/cancel_all() sweep."""
         if node.pending_request_id and node.pending_request_id != _GITLINK_RUN_CLAIM_PLACEHOLDER:
             notifications_state.show("Gitlink is already busy for this node.", "info")
             await bus.publish("notification")
             return
 
-        request_id = uuid.uuid4().hex
-        node.pending_request_id = request_id
         cancel_event = threading.Event()
+        handle = self._runs.claim("gitlink_run", node_id=node_id, cancel_event=cancel_event)
+        request_id = handle.request_id
+        node.pending_request_id = request_id
         await bus.publish("scene")
 
         async def _run():
@@ -1484,7 +1499,7 @@ class AgentDispatcher:
                 notifications_state.show(f"Gitlink generation failed: {exc}", "error")
                 await bus.publish("notification")
             finally:
-                self._gitlink_requests.pop(request_id, None)
+                self._runs.release(request_id)
                 # R5.3 post-review FIX 4(c): only clear if this task's OWN
                 # request_id is still the one recorded - a stale,
                 # already-superseded task finishing late must never clobber
@@ -1493,9 +1508,7 @@ class AgentDispatcher:
                     node.pending_request_id = None
                 await bus.publish("scene")
 
-        self._gitlink_requests[request_id] = {
-            "cancel_event": cancel_event, "task": asyncio.create_task(_run())
-        }
+        self._runs.attach_task(handle, asyncio.create_task(_run()))
 
     async def start_gitlink_apply(
         self,
@@ -1545,17 +1558,31 @@ class AgentDispatcher:
         node.pending_request_id back to None before returning, since none of
         those paths ever reach _run()'s own finally block - without that
         clear, a legitimately-rejected Apply would leave the node
-        permanently stuck "busy"."""
+        permanently stuck "busy".
+
+        ADR-002 stage 2.4f: self._runs.claim() now happens in that SAME
+        synchronous stretch as node.pending_request_id's own claim, for
+        the same reason start_gitlink_run's own claim moved there (see
+        this field's own comment in __init__: node.pending_request_id
+        remains the sole real busy guard, this registry claim is pure
+        task bookkeeping). Consequently EVERY one of the 5 early-return
+        branches below - which already clear node.pending_request_id
+        before returning - must ALSO release this registry claim, or it
+        leaks forever on every rejected Apply (none of those branches
+        ever reach _run()'s own finally, the only other place a release
+        happens)."""
         if node.pending_request_id:
             notifications_state.show("Gitlink is already busy for this node.", "info")
             await bus.publish("notification")
             return
 
-        request_id = uuid.uuid4().hex
+        handle = self._runs.claim("gitlink_apply", node_id=node_id)
+        request_id = handle.request_id
         node.pending_request_id = request_id
 
         if not node.gitlink_pending_changes:
             node.pending_request_id = None
+            self._runs.release(request_id)
             on_failure("There is no approved change set to write.")
             await bus.publish("scene")
             return
@@ -1563,6 +1590,7 @@ class AgentDispatcher:
         local_root_text = (local_root or "").strip()
         if not local_root_text:
             node.pending_request_id = None
+            self._runs.release(request_id)
             on_failure("Select or import a local repository path before applying changes.")
             await bus.publish("scene")
             return
@@ -1580,6 +1608,7 @@ class AgentDispatcher:
         local_root_exists = await asyncio.to_thread(local_root_path.exists)
         if not local_root_exists:
             node.pending_request_id = None
+            self._runs.release(request_id)
             on_failure("The selected local repository path does not exist.")
             await bus.publish("scene")
             return
@@ -1591,6 +1620,7 @@ class AgentDispatcher:
             or current_fingerprint != node.gitlink_change_fingerprint
         ):
             node.pending_request_id = None
+            self._runs.release(request_id)
             on_failure("The proposed change set changed after approval. Review it again before applying.")
             await bus.publish("scene")
             return
@@ -1607,6 +1637,7 @@ class AgentDispatcher:
         # gitlink_change_local_root.
         if local_root_text != (node.gitlink_change_local_root or ""):
             node.pending_request_id = None
+            self._runs.release(request_id)
             on_failure(
                 "The local repository path changed since this proposal was generated. "
                 "Regenerate the change set before applying."
@@ -1647,7 +1678,7 @@ class AgentDispatcher:
                 notifications_state.show(f"Gitlink apply failed: {exc}", "error")
                 await bus.publish("notification")
             finally:
-                self._gitlink_apply_requests.pop(request_id, None)
+                self._runs.release(request_id)
                 # R5.3 post-review FIX 4(c): only clear if this task's OWN
                 # request_id is still the one recorded - same stale-task
                 # guard as start_gitlink_run's own finally block above.
@@ -1655,7 +1686,7 @@ class AgentDispatcher:
                     node.pending_request_id = None
                 await bus.publish("scene")
 
-        self._gitlink_apply_requests[request_id] = {"task": asyncio.create_task(_run())}
+        self._runs.attach_task(handle, asyncio.create_task(_run()))
 
     # -- R5.4: Py-Coder / Execution Sandbox -----------------------------------
     #

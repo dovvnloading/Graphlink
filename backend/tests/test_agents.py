@@ -31,7 +31,15 @@ from backend.canvas import SceneDocument, register_canvas
 from backend.composer import ComposerDocument
 from backend.events import SessionBus
 from backend.notifications import NotificationState
-from backend.tests.conftest import artifact_slots, busy_count, chat_slots, image_slots, web_research_slots
+from backend.tests.conftest import (
+    artifact_slots,
+    busy_count,
+    chat_slots,
+    gitlink_apply_slots,
+    gitlink_run_slots,
+    image_slots,
+    web_research_slots,
+)
 
 import api_provider
 import graphlink_task_config as config
@@ -2811,7 +2819,7 @@ def test_start_gitlink_run_with_changes_calls_on_success_with_fingerprint(monkey
             on_success=lambda *args: successes.append(args),
             on_failure=lambda message: None,
         )
-        entry = next(iter(dispatcher._gitlink_requests.values()))
+        entry = next(iter(gitlink_run_slots(dispatcher).values()))
         await entry["task"]
 
         assert len(successes) == 1
@@ -2820,7 +2828,7 @@ def test_start_gitlink_run_with_changes_calls_on_success_with_fingerprint(monkey
         assert fingerprint == agents_module._fingerprint_changes(fake_result["files"])
         assert "octocat/hello-world" in proposal_markdown
         assert local_root == "", "the exact local_root this run used must be forwarded to on_success (FIX 2)"
-        assert dispatcher._gitlink_requests == {}
+        assert gitlink_run_slots(dispatcher) == {}
         assert node.pending_request_id is None
         assert notifications.visible is False
 
@@ -2846,7 +2854,7 @@ def test_start_gitlink_run_no_changes_calls_on_success_with_empty_files_and_none
             on_success=lambda *args: successes.append(args),
             on_failure=lambda message: None,
         )
-        entry = next(iter(dispatcher._gitlink_requests.values()))
+        entry = next(iter(gitlink_run_slots(dispatcher).values()))
         await entry["task"]
 
         assert len(successes) == 1
@@ -2881,11 +2889,11 @@ def test_start_gitlink_run_timeout_fires_the_exact_message_and_clears_the_slot(m
             on_success=lambda *args: successes.append(args),
             on_failure=lambda message: None,
         )
-        entry = next(iter(dispatcher._gitlink_requests.values()))
+        entry = next(iter(gitlink_run_slots(dispatcher).values()))
         await entry["task"]
 
         assert successes == []
-        assert dispatcher._gitlink_requests == {}
+        assert gitlink_run_slots(dispatcher) == {}
         assert node.pending_request_id is None
         assert notifications.visible is True
         assert notifications.msg_type == "error"
@@ -2923,7 +2931,7 @@ def test_start_gitlink_run_cancel_mid_flight_fires_info_notification_and_never_c
             on_success=lambda *args: successes.append(args),
             on_failure=lambda message: None,
         )
-        request_id, entry = next(iter(dispatcher._gitlink_requests.items()))
+        request_id, entry = next(iter(gitlink_run_slots(dispatcher).items()))
 
         await asyncio.to_thread(started.wait, 5)
         assert dispatcher.cancel_gitlink(request_id) is True
@@ -2931,7 +2939,7 @@ def test_start_gitlink_run_cancel_mid_flight_fires_info_notification_and_never_c
         await entry["task"]
 
         assert successes == [], "a cancelled run must never call on_success, even on a late return"
-        assert dispatcher._gitlink_requests == {}
+        assert gitlink_run_slots(dispatcher) == {}
         assert node.pending_request_id is None
         assert notifications.visible is True
         assert notifications.msg_type == "info"
@@ -2957,7 +2965,7 @@ def test_start_gitlink_run_busy_node_refuses_immediately_without_creating_a_requ
             on_success=lambda *args: None, on_failure=lambda message: None,
         )
 
-        assert dispatcher._gitlink_requests == {}
+        assert gitlink_run_slots(dispatcher) == {}
         assert notifications.visible is True
         assert notifications.msg_type == "info"
 
@@ -2995,7 +3003,7 @@ def test_gitlink_apply_rejects_client_fingerprint_mismatch(monkeypatch):
             "The proposed change set changed after approval. Review it again before applying."
         ]
         assert successes == []
-        assert dispatcher._gitlink_apply_requests == {}, "no apply task must ever have been scheduled"
+        assert gitlink_apply_slots(dispatcher) == {}, "no apply task must ever have been scheduled"
 
     import tempfile
     with tempfile.TemporaryDirectory() as tmp:
@@ -3032,7 +3040,7 @@ def test_gitlink_apply_rejects_when_pending_changes_mutated_between_generation_a
         assert failures == [
             "The proposed change set changed after approval. Review it again before applying."
         ]
-        assert dispatcher._gitlink_apply_requests == {}
+        assert gitlink_apply_slots(dispatcher) == {}
 
     asyncio.run(run())
 
@@ -3070,7 +3078,7 @@ def test_gitlink_apply_freezes_changes_before_await(monkeypatch, tmp_path):
             client_fingerprint=fingerprint, local_root=str(tmp_path),
             on_success=successes.append, on_failure=lambda message: None,
         )
-        entry = next(iter(dispatcher._gitlink_apply_requests.values()))
+        entry = next(iter(gitlink_apply_slots(dispatcher).values()))
         await entry["task"]
 
         assert successes == [1]
@@ -3100,7 +3108,7 @@ def test_gitlink_apply_busy_guard_blocks_concurrent_run_and_apply(tmp_path):
             context_xml="<x/>", context_summary="s", local_root="",
             on_success=lambda *args: None, on_failure=lambda message: None,
         )
-        assert dispatcher._gitlink_requests == {}, "Run must refuse immediately for a busy node"
+        assert gitlink_run_slots(dispatcher) == {}, "Run must refuse immediately for a busy node"
 
         failures = []
         await dispatcher.start_gitlink_apply(
@@ -3108,7 +3116,7 @@ def test_gitlink_apply_busy_guard_blocks_concurrent_run_and_apply(tmp_path):
             client_fingerprint=fingerprint, local_root=str(tmp_path),
             on_success=lambda written_files: None, on_failure=failures.append,
         )
-        assert dispatcher._gitlink_apply_requests == {}, "Apply must refuse immediately for a busy node"
+        assert gitlink_apply_slots(dispatcher) == {}, "Apply must refuse immediately for a busy node"
         assert failures == [], "the busy guard shows a notification, not an on_failure call"
         assert notifications.visible is True
         assert notifications.message == "Gitlink is already busy for this node."
@@ -3134,7 +3142,7 @@ def test_gitlink_apply_no_pending_changes_calls_on_failure_without_touching_appl
         )
 
         assert failures == ["There is no approved change set to write."]
-        assert dispatcher._gitlink_apply_requests == {}
+        assert gitlink_apply_slots(dispatcher) == {}
 
     asyncio.run(run())
 
@@ -3157,7 +3165,7 @@ def test_gitlink_apply_missing_local_root_calls_on_failure(monkeypatch):
         )
 
         assert failures == ["Select or import a local repository path before applying changes."]
-        assert dispatcher._gitlink_apply_requests == {}
+        assert gitlink_apply_slots(dispatcher) == {}
 
     asyncio.run(run())
 
@@ -3181,7 +3189,7 @@ def test_gitlink_apply_nonexistent_local_root_calls_on_failure(monkeypatch):
         )
 
         assert failures == ["The selected local repository path does not exist."]
-        assert dispatcher._gitlink_apply_requests == {}
+        assert gitlink_apply_slots(dispatcher) == {}
 
     asyncio.run(run())
 
@@ -3205,11 +3213,11 @@ def test_gitlink_apply_success_calls_on_success_with_written_files_count(monkeyp
             client_fingerprint=fingerprint, local_root=str(tmp_path),
             on_success=successes.append, on_failure=lambda message: None,
         )
-        entry = next(iter(dispatcher._gitlink_apply_requests.values()))
+        entry = next(iter(gitlink_apply_slots(dispatcher).values()))
         await entry["task"]
 
         assert successes == [3]
-        assert dispatcher._gitlink_apply_requests == {}
+        assert gitlink_apply_slots(dispatcher) == {}
         assert node.pending_request_id is None
         assert notifications.visible is True
         assert notifications.msg_type == "info"
@@ -3246,11 +3254,11 @@ def test_gitlink_apply_rollback_message_surfaced_verbatim(monkeypatch, tmp_path)
             client_fingerprint=fingerprint, local_root=str(tmp_path),
             on_success=lambda written_files: None, on_failure=failures.append,
         )
-        entry = next(iter(dispatcher._gitlink_apply_requests.values()))
+        entry = next(iter(gitlink_apply_slots(dispatcher).values()))
         await entry["task"]
 
         assert failures == [f"Failed to write approved changes: {rollback_message}"]
-        assert dispatcher._gitlink_apply_requests == {}
+        assert gitlink_apply_slots(dispatcher) == {}
         assert notifications.visible is True
         assert notifications.msg_type == "error"
 
@@ -3281,12 +3289,12 @@ def test_gitlink_apply_timeout_fires_the_exact_message_and_clears_the_slot(monke
             client_fingerprint=fingerprint, local_root=str(tmp_path),
             on_success=lambda written_files: None, on_failure=failures.append,
         )
-        entry = next(iter(dispatcher._gitlink_apply_requests.values()))
+        entry = next(iter(gitlink_apply_slots(dispatcher).values()))
         await entry["task"]
 
         assert len(failures) == 1
         assert "stopped responding" in failures[0]
-        assert dispatcher._gitlink_apply_requests == {}
+        assert gitlink_apply_slots(dispatcher) == {}
         assert node.pending_request_id is None
 
     asyncio.run(run())
@@ -3339,7 +3347,7 @@ def test_gitlink_apply_rejects_when_local_root_changed_since_generation(monkeypa
             "The local repository path changed since this proposal was generated. "
             "Regenerate the change set before applying."
         ]
-        assert dispatcher._gitlink_apply_requests == {}, "no apply task must ever have been scheduled"
+        assert gitlink_apply_slots(dispatcher) == {}, "no apply task must ever have been scheduled"
 
     asyncio.run(run())
 
@@ -3385,7 +3393,7 @@ def test_gitlink_apply_cannot_be_replayed_after_success(monkeypatch, tmp_path):
             client_fingerprint=fingerprint, local_root=str(tmp_path),
             on_success=_on_success, on_failure=_on_failure,
         )
-        entry = next(iter(dispatcher._gitlink_apply_requests.values()))
+        entry = next(iter(gitlink_apply_slots(dispatcher).values()))
         await entry["task"]
 
         assert len(apply_calls) == 1
@@ -3405,7 +3413,7 @@ def test_gitlink_apply_cannot_be_replayed_after_success(monkeypatch, tmp_path):
 
         assert failures == ["There is no approved change set to write."]
         assert len(apply_calls) == 1, "apply_change_set must NOT be invoked on the replay attempt"
-        assert dispatcher._gitlink_apply_requests == {}
+        assert gitlink_apply_slots(dispatcher) == {}
 
     asyncio.run(run())
 
@@ -3486,16 +3494,16 @@ def test_two_concurrent_start_gitlink_apply_calls_for_the_same_node_only_one_rea
         # is rejected via the plain "already busy" notification branch (no
         # on_failure call for that branch - see start_gitlink_apply's own
         # busy-check at the very top).
-        assert len(dispatcher._gitlink_apply_requests) == 1, (
+        assert len(gitlink_apply_slots(dispatcher)) == 1, (
             "only ONE Apply may ever be admitted for this node at a time"
         )
-        entry = next(iter(dispatcher._gitlink_apply_requests.values()))
+        entry = next(iter(gitlink_apply_slots(dispatcher).values()))
         await entry["task"]
 
         assert call_count["n"] == 1, "only ONE of the two concurrent calls may ever reach the write path"
         assert successes == [1], "the admitted call's on_success must fire exactly once"
         assert failures == [], "the rejected call is refused via the busy notification, not on_failure"
-        assert dispatcher._gitlink_apply_requests == {}
+        assert gitlink_apply_slots(dispatcher) == {}
         assert node.pending_request_id is None, (
             "the busy slot must be fully released once the admitted Apply finishes"
         )
@@ -3531,8 +3539,8 @@ def test_gitlink_apply_no_changes_payload_in_intent_signature():
 def test_gitlink_request_and_other_kind_request_run_concurrently(monkeypatch):
     """Mirrors the other cross-kind concurrency tests: a Gitlink Run request
     must run concurrently with (neither blocking nor blocked by) a chat/
-    composer request - self._gitlink_requests and self._runs's "chat" kind
-    are two genuinely independent slots."""
+    composer request - self._runs's "gitlink_run" and "chat" kinds are two
+    genuinely independent slots."""
     chat_started = threading.Event()
     chat_release = threading.Event()
     gitlink_started = threading.Event()
@@ -3580,20 +3588,20 @@ def test_gitlink_request_and_other_kind_request_run_concurrently(monkeypatch):
         await asyncio.to_thread(gitlink_started.wait, 5)
 
         assert len(chat_slots(dispatcher)) == 1
-        assert len(dispatcher._gitlink_requests) == 1
+        assert len(gitlink_run_slots(dispatcher)) == 1
         assert notifications.visible is False, "neither call should have been rejected"
 
         chat_release.set()
         chat_entry = next(iter(chat_slots(dispatcher).values()))
         await chat_entry["task"]
         gitlink_release.set()
-        gitlink_entry = next(iter(dispatcher._gitlink_requests.values()))
+        gitlink_entry = next(iter(gitlink_run_slots(dispatcher).values()))
         await gitlink_entry["task"]
 
         assert chat_replies == ["chat reply"]
         assert len(gitlink_successes) == 1
         assert chat_slots(dispatcher) == {}
-        assert dispatcher._gitlink_requests == {}
+        assert gitlink_run_slots(dispatcher) == {}
 
     asyncio.run(run())
 
