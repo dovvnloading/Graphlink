@@ -33,50 +33,6 @@ def assign_history(target_node, history):
         target_node.conversation_history = clone_history(history)
 
 
-def resolve_context_anchor(node):
-    cursor = node
-    seen = set()
-    fallback = None
-
-    while cursor and id(cursor) not in seen:
-        seen.add(id(cursor))
-
-        if hasattr(cursor, "conversation_history"):
-            if fallback is None:
-                fallback = cursor
-            if getattr(cursor, "conversation_history", None):
-                return cursor
-
-        cursor = getattr(cursor, "parent_content_node", None) or getattr(cursor, "parent_node", None)
-
-    return fallback
-
-
-def resolve_branch_parent(node):
-    if node is None:
-        return None
-
-    if hasattr(node, "children"):
-        return node
-
-    parent_content_node = getattr(node, "parent_content_node", None)
-    if parent_content_node is not None and hasattr(parent_content_node, "children"):
-        return parent_content_node
-
-    parent_node = getattr(node, "parent_node", None)
-    if parent_node is not None and hasattr(parent_node, "children"):
-        return parent_node
-
-    return None
-
-
-def get_node_history(node):
-    context_anchor = resolve_context_anchor(node)
-    if not context_anchor or not hasattr(context_anchor, "conversation_history"):
-        return []
-    return clone_history(getattr(context_anchor, "conversation_history", []))
-
-
 def trim_history(history, token_estimator, max_tokens=8000, system_prompt_estimate=500, reserve_tokens=0):
     normalized_history = clone_history(history)
     current_tokens = max(0, system_prompt_estimate) + max(0, reserve_tokens)

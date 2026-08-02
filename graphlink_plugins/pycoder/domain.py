@@ -4,11 +4,11 @@ REPL and the three LLM-calling agents without ever pulling the Qt stack into
 the FastAPI process.
 
 Moved here VERBATIM (same code, same behavior) from graphlink_agents_pycoder.py:
-PyCoderStage, PyCoderStatus, PythonREPL, PyCoderReplManager,
-PyCoderExecutionAgent, PyCoderRepairAgent, PyCoderAnalysisAgent - all of these
-were already pure/Qt-free in the legacy file (confirmed by reading it directly
-before this split: zero Qt references anywhere in this block). The ONLY
-change from the legacy source is the config import: `graphlink_config` (which
+PyCoderStage, PyCoderStatus, PythonREPL, PyCoderExecutionAgent,
+PyCoderRepairAgent, PyCoderAnalysisAgent - all of these were already
+pure/Qt-free in the legacy file (confirmed by reading it directly before
+this split: zero Qt references anywhere in this block). The ONLY change
+from the legacy source is the config import: `graphlink_config` (which
 transitively imports Qt's GUI/widget modules at module scope) becomes
 `graphlink_task_config` (the R4.1 Qt-free split), mirroring the exact same
 swap graphlink_plugins/gitlink/agent.py already made for the same reason.
@@ -18,16 +18,14 @@ CodeExecutionWorker, PyCoderExecutionWorker, PyCoderAgentWorker - the three
 Qt worker-thread subclasses. They still import these classes below (via this
 module) directly rather than defining them inline.
 
-backend/agents.py's own new AgentDispatcher pipeline (R5.4) does NOT use
-PyCoderReplManager - that class's weakref.WeakKeyDictionary keying strategy
-is bound to a live scene-graph node object's own identity, which does not
-survive the port (a backend SceneNode's node_id is a plain string, never
-weakly referenceable, and no GC signal reaches the session layer when a
-SceneNode dataclass instance is dropped). PyCoderReplManager is kept here, unmodified,
-purely so the legacy Qt app's own graphlink_window_actions.py can keep using
-it exactly as before. The new backend instead does explicit, string-keyed
-REPL lifecycle management on AgentDispatcher itself (see that module's
-_pycoder_repls/get_pycoder_repl/dispose_pycoder_repl).
+backend/agents.py's own new AgentDispatcher pipeline (R5.4) does not use
+PyCoderReplManager - it does explicit, string-keyed REPL lifecycle
+management on AgentDispatcher itself instead (see that module's
+_pycoder_repls/get_pycoder_repl/dispose_pycoder_repl). ADR-002 stage 2.1:
+PyCoderReplManager itself is deleted as confirmed-dead code - its only
+remaining caller was the legacy Qt app's graphlink_window_actions.py,
+which no longer exists anywhere in the repo (deleted at the R7.6b
+Qt-removal cutover).
 """
 
 import base64
@@ -37,7 +35,6 @@ import subprocess
 import sys
 import tempfile
 import uuid
-import weakref
 from enum import Enum
 from pathlib import Path
 
@@ -178,50 +175,6 @@ while True:
             self.process.kill()
             self.process.wait()
             self.process = None
-
-
-class PyCoderReplManager:
-    """Owns the PythonREPL subprocess for each PyCoderNode, keyed by node
-    identity. PyCoderNode used to construct and stop its own REPL directly;
-    ownership moves here so the node no longer manages a live subprocess.
-
-    A weakref.finalize callback registered at REPL-creation time stops the
-    subprocess once the owning node is garbage collected, regardless of
-    whether stop()/dispose() was ever called first. This is load-bearing,
-    not just a safety net: ChatScene.clear() (the "New Chat"/chat-switch
-    path) never calls PyCoderNode.dispose() at all - only Python's own GC,
-    via this finalizer, stops the REPL on that path. dispose() (the
-    individual right-click-delete path) still calls stop() directly for
-    immediate, deterministic cleanup rather than waiting on GC.
-
-    A plain dict keyed by node would keep every node alive forever (the
-    dict entry itself would be a strong reference), which would prevent the
-    very GC this manager relies on - hence WeakKeyDictionary.
-
-    R5.4: this class stays legacy-only (the Qt app's graphlink_window_actions.py
-    is its only remaining caller) - see this module's own docstring for why
-    the new backend's AgentDispatcher does not use it.
-    """
-
-    def __init__(self):
-        self._repls = weakref.WeakKeyDictionary()
-        self._finalizers = weakref.WeakKeyDictionary()
-
-    def get_repl(self, node):
-        repl = self._repls.get(node)
-        if repl is None:
-            repl = PythonREPL()
-            self._repls[node] = repl
-            self._finalizers[node] = weakref.finalize(node, repl.stop)
-        return repl
-
-    def stop(self, node):
-        finalizer = self._finalizers.pop(node, None)
-        if finalizer is not None:
-            finalizer.detach()
-        repl = self._repls.pop(node, None)
-        if repl is not None:
-            repl.stop()
 
 
 class PyCoderExecutionAgent:
