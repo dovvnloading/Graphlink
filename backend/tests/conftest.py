@@ -40,17 +40,22 @@ def _chat_stream_delegates_to_patched_chat(monkeypatch):
 
 def _run_slots(dispatcher, kind):
     """ADR-002 stage 2.3+ test adapter: reproduces the pre-migration
-    dict[request_id, {"cancel_event": ..., "task": ...}] shape that every
-    fire-and-forget dispatch surface's tests in this suite were written
-    against, filtered to one AgentDispatcher._runs kind - see
-    backend/run_lifecycle.py for the real (RunHandle-based) production
-    shape this is adapting. Returns a plain dict so callers can keep using
-    .values()/.items()/.keys()/subscript/len()/== {} exactly as they did
-    against the old dict (a kind with no cancel_event, like image, simply
-    carries cancel_event: None in the returned dict - harmless, since no
-    pre-existing test for such a kind ever read that key)."""
+    dict[request_id, {"cancel_event": ..., "approval_future": ..., "task":
+    ...}] shape that every fire-and-forget dispatch surface's tests in
+    this suite were written against, filtered to one AgentDispatcher._runs
+    kind - see backend/run_lifecycle.py for the real (RunHandle-based)
+    production shape this is adapting. Returns a plain dict so callers can
+    keep using .values()/.items()/.keys()/subscript/len()/== {} exactly as
+    they did against the old dict (a kind with no cancel_event/
+    approval_future, like image, simply carries None for those keys in the
+    returned dict - harmless, since no pre-existing test for such a kind
+    ever read them)."""
     return {
-        handle.request_id: {"cancel_event": handle.cancel_event, "task": handle.task}
+        handle.request_id: {
+            "cancel_event": handle.cancel_event,
+            "approval_future": handle.approval_future,
+            "task": handle.task,
+        }
         for handle in dispatcher._runs.values()
         if handle.kind == kind
     }
@@ -74,6 +79,14 @@ def gitlink_run_slots(dispatcher):
 
 def gitlink_apply_slots(dispatcher):
     return _run_slots(dispatcher, "gitlink_apply")
+
+
+def pycoder_slots(dispatcher):
+    return _run_slots(dispatcher, "pycoder")
+
+
+def code_sandbox_slots(dispatcher):
+    return _run_slots(dispatcher, "code_sandbox")
 
 
 def web_research_slots(dispatcher):

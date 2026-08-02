@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 from backend import BACKEND_VERSION
 from backend.app import create_app
 from backend.session_context import get_session_context
-from backend.tests.conftest import chat_slots
+from backend.tests.conftest import chat_slots, pycoder_slots
 
 # R7.2: api_provider/graphlink_task_config sit at the repo root, a sibling
 # of backend/ - already importable, no ordering constraint.
@@ -245,8 +245,8 @@ def test_disconnect_auto_denies_any_pending_pycoder_approval(monkeypatch):
 
         session = client.app.state.bus.session("pycoder-disconnect-test")
         agent_dispatcher = get_session_context(session).agent_dispatcher
-        assert agent_dispatcher._pycoder_requests, "runPyCoder never created a request entry"
-        entry = next(iter(agent_dispatcher._pycoder_requests.values()))
+        assert pycoder_slots(agent_dispatcher), "runPyCoder never created a request entry"
+        entry = next(iter(pycoder_slots(agent_dispatcher).values()))
         approval_future = entry["approval_future"]
         assert not approval_future.done(), "the pipeline must genuinely be parked on the gate here"
     # Exiting the `with` block closes the websocket, running ws_endpoint's

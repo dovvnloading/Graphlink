@@ -1588,8 +1588,8 @@ def register_canvas(
         # here, BEFORE document.remove_nodes pops the node, for the same reason
         # pycoder_ids above is. dispose_pycoder_repl alone only tears down the
         # REPL subprocess; it does nothing about a request parked on `await
-        # approval_future` in AgentDispatcher._pycoder_requests/
-        # _code_sandbox_requests, which has NO timeout by design (the whole
+        # approval_future` on AgentDispatcher's own self._runs registry
+        # ("pycoder"/"code_sandbox" kinds), which has NO timeout by design (the whole
         # point is "wait for a human, however long that takes"). Without this,
         # deleting a node mid-approval-pause would leave that future - and the
         # asyncio.Task awaiting it - alive forever, and a stale/duplicate
@@ -1609,11 +1609,11 @@ def register_canvas(
         for kind, request_id in code_exec_cancels:
             # cancel_pycoder/cancel_code_sandbox resolve any pending
             # approval_future with False (exactly like a manual Cancel/Deny)
-            # and pop the request out of the dispatcher's own dict - a safe
-            # no-op if request_id does not name a live entry (e.g. it was only
-            # ever the synchronous busy-claim placeholder, never a real
-            # dispatcher request_id, or the request already finished on its
-            # own between the capture above and here).
+            # and trip the run's cancel_event - a safe no-op if request_id
+            # does not name a live registry entry of the matching kind (e.g.
+            # it was only ever the synchronous busy-claim placeholder, never
+            # a real dispatcher request_id, or the request already finished
+            # on its own between the capture above and here).
             if kind == "pycoder":
                 agent_dispatcher.cancel_pycoder(request_id)
             else:

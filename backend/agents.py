@@ -323,21 +323,25 @@ class AgentDispatcher:
         # simultaneously, which self._runs's own kind-scoped is_busy() alone
         # could never distinguish (it has no per-node concept - see
         # RunHandle's own docstring in backend/run_lifecycle.py).
-        # R5.4: a SEVENTH independent in-flight-request slot - a Py-Coder Run
-        # must be able to run concurrently with any of the six existing
-        # slots above, same reasoning as every prior independent slot.
-        # request_id -> {"cancel_event": threading.Event, "approval_future":
-        # asyncio.Future[bool], "task": asyncio.Task}. approval_future is the
-        # ENTIRE "waiting for human approval" mechanism (see
-        # start_pycoder_run's own docstring) - created eagerly, before the
-        # background task even starts, so cancel_pycoder/
-        # cancel_all_pending_approvals can always resolve it even if the
-        # pipeline has not reached its own `await approval_future` yet.
-        self._pycoder_requests: dict[str, dict] = {}
-        # R5.4: an EIGHTH independent in-flight-request slot - a Execution
-        # Sandbox Run must be able to run concurrently with any of the seven
-        # slots above. Same shape as self._pycoder_requests.
-        self._code_sandbox_requests: dict[str, dict] = {}
+        # R5.4/ADR-002 stage 2.4g: Py-Coder Run ("pycoder" kind) and
+        # Execution Sandbox Run ("code_sandbox" kind), also sharing
+        # self._runs now, must be able to run concurrently with any of the
+        # kinds above, same reasoning as every prior independent kind. Same
+        # per-node busy-guard shape as gitlink_run/gitlink_apply above
+        # (node.pending_request_id via _CODE_EXEC_RUN_CLAIM_PLACEHOLDER,
+        # this registry pure task/cancel_event/approval_future bookkeeping,
+        # never the busy gate) - and the FIRST two kinds to use RunHandle.
+        # approval_future, the ENTIRE "waiting for human approval"
+        # mechanism (see start_pycoder_run's own docstring), created
+        # eagerly at claim time, before the background task even starts,
+        # so cancel_pycoder/cancel_all_pending_approvals can always resolve
+        # it even if the pipeline has not reached its own `await
+        # approval_future` yet. Mutated IN PLACE on handle (a plain,
+        # non-frozen dataclass) on every repair-loop iteration - a fresh
+        # Future replaces the old one on the SAME handle object, never a
+        # new claim - see start_pycoder_run's/start_code_sandbox_run's own
+        # repair-loop comments for why callers must always re-read this
+        # field fresh, never cache a captured reference.
         # R6.2/R8a/ADR-002 Workstream 1, migrated to self._runs by ADR-002
         # stage 2.3 (chart, note) and stage 2.4 (branch_comparison, branch_
         # synthesis): chart generation, Key Takeaway/Explainer Note
@@ -405,45 +409,59 @@ class AgentDispatcher:
         unblock by resolving approval_future - see start_pycoder_run's own
         docstring). Mirrors legacy's own stop() calling
         self._approval_event.set() to unblock a parked worker - otherwise
-        Cancel would only work pre- or post-pause, never during it."""
-        entry = self._pycoder_requests.get(request_id)
-        if entry is None:
+        Cancel would only work pre- or post-pause, never during it.
+
+        ADR-002 stage 2.4g: kind="pycoder" is checked explicitly (unlike
+        _resolve_approval below, which needs no such check) because this
+        method unconditionally calls handle.cancel_event.set() - a foreign
+        kind's handle could have cancel_event=None (chart/note/...) and
+        AttributeError. Before this migration each kind's own private dict
+        gave this isolation for free; self._runs sharing one namespace
+        across every kind means it must be checked explicitly now - same
+        reasoning as cancel_artifact's own kind= filter (stage 2.4d)."""
+        handle = self._runs.get(request_id)
+        if handle is None or handle.kind != "pycoder":
             return False
-        entry["cancel_event"].set()
-        future = entry.get("approval_future")
+        handle.cancel_event.set()
+        future = handle.approval_future
         if future is not None and not future.done():
             future.set_result(False)
         return True
 
     def cancel_code_sandbox(self, request_id: str) -> bool:
         """Mirrors cancel_pycoder exactly (same shape, same reasoning)."""
-        entry = self._code_sandbox_requests.get(request_id)
-        if entry is None:
+        handle = self._runs.get(request_id)
+        if handle is None or handle.kind != "code_sandbox":
             return False
-        entry["cancel_event"].set()
-        future = entry.get("approval_future")
+        handle.cancel_event.set()
+        future = handle.approval_future
         if future is not None and not future.done():
             future.set_result(False)
         return True
 
     def _resolve_approval(self, request_id: str, approved: bool) -> bool:
         """The shared approve/deny primitive backing approve_code_execution/
-        deny_code_execution below - request_id is a shared uuid4 namespace
-        across BOTH self._pycoder_requests and self._code_sandbox_requests
-        (one lookup across two dicts, not four kind-specific intents/
-        methods), mirroring the WS intent layer's own two-shared-intents
-        design (approveCodeExecution/denyCodeExecution, not four separate
-        per-kind intents).
+        deny_code_execution below - looks up request_id directly in
+        self._runs (a shared uuid4 namespace across every migrated kind,
+        not just pycoder/code_sandbox), mirroring the WS intent layer's own
+        two-shared-intents design (approveCodeExecution/denyCodeExecution,
+        not four separate per-kind intents). No explicit kind check needed
+        here (unlike cancel_pycoder/cancel_code_sandbox above): handle.
+        approval_future is None for every kind except pycoder/code_sandbox
+        (only those two ever pass one to claim()), so that field alone is
+        already the correct discriminator - a chat/chart/.../gitlink
+        request_id is naturally rejected by the `is None` check below,
+        exactly as it was naturally absent from the old two-dict lookup.
 
         Guarding with `future.done()` is LOAD-BEARING, not defensive fluff -
         a duplicate/stale approve-or-deny message (e.g. a double-click, or a
         message that arrives after cancel_pycoder/cancel_code_sandbox/
         cancel_all_pending_approvals already resolved this same future)
         would otherwise raise asyncio.InvalidStateError."""
-        entry = self._pycoder_requests.get(request_id) or self._code_sandbox_requests.get(request_id)
-        if entry is None:
+        handle = self._runs.get(request_id)
+        if handle is None or handle.approval_future is None:
             return False
-        future = entry["approval_future"]
+        future = handle.approval_future
         if not future.done():
             future.set_result(approved)
         return True
@@ -458,24 +476,28 @@ class AgentDispatcher:
         """Called ONLY from backend/app.py's ws_endpoint disconnect handler,
         ONLY when the session's last connection drops (session.connection_
         count == 0) - a DELIBERATE, SCOPED extension of that existing
-        disconnect contract, applied ONLY to these two new slots (see
+        disconnect contract, applied ONLY to these two kinds (see
         backend/app.py's own comment for why this is not retrofitted onto
-        the pre-existing web_research/artifact/gitlink slots: every one of
-        those already self-terminates via asyncio.wait_for(...,
-        timeout=...), but an approval pause has NO timeout by design - the
-        whole point is "wait for a human, however long that takes" - so
-        without this auto-deny it would hang forever, permanently locking
-        node.pending_request_id on an abandoned tab).
+        the other migrated kinds: every one of those already self-
+        terminates via asyncio.wait_for(..., timeout=...), but an approval
+        pause has NO timeout by design - the whole point is "wait for a
+        human, however long that takes" - so without this auto-deny it
+        would hang forever, permanently locking node.pending_request_id on
+        an abandoned tab).
 
-        Walks both dicts and resolves any undone future with False
-        (auto-deny) - the same future.done() guard as _resolve_approval
-        applies here for the same reason (a request that already resolved,
-        e.g. because a human approved it a moment before the last tab
-        closed, must not be clobbered)."""
-        for entry in list(self._pycoder_requests.values()) + list(self._code_sandbox_requests.values()):
-            future = entry.get("approval_future")
-            if future is not None and not future.done():
-                future.set_result(False)
+        Delegates to self._runs.cancel_all_pending_approvals(), which walks
+        both kinds and resolves any undone future with False (auto-deny) -
+        the same future.done() guard as _resolve_approval applies here for
+        the same reason (a request that already resolved, e.g. because a
+        human approved it a moment before the last tab closed, must not be
+        clobbered). backend/app.py's ws_endpoint calls this AFTER cancel_all()
+        - by then cancel_all() has already tripped these two kinds'
+        cancel_event too (now that they share self._runs with every other
+        cancellable kind), closing a real pre-existing gap: a disconnect
+        mid-EXECUTION (past the approval gate) previously left pycoder/
+        code_sandbox's cancel_event untripped entirely, since neither
+        lived in the dict cancel_all() used to walk."""
+        self._runs.cancel_all_pending_approvals(("pycoder", "code_sandbox"))
 
     def cancel_gitlink(self, request_id: str) -> bool:
         """kind="gitlink_run": ADR-002 stage 2.4f - see RunRegistry.cancel's
@@ -1706,9 +1728,8 @@ class AgentDispatcher:
     # asyncio.to_thread, but the PAUSE between them (waiting for a human to
     # approve or deny the candidate code) needs no thread-crossing at all: it
     # collapses into a plain `asyncio.Future[bool]`
-    # (self._pycoder_requests[request_id]["approval_future"] /
-    # self._code_sandbox_requests[request_id]["approval_future"]), created
-    # BEFORE the background task even starts. `approved = await
+    # (self._runs's "pycoder"/"code_sandbox" handle's own approval_future
+    # field), created BEFORE the background task even starts. `approved = await
     # approval_future` IS the entire "waiting for approval" state - nothing
     # else is needed. This replaces legacy's two independently-blocking
     # mechanisms on two different threads (a QThread worker parked on a
@@ -1763,16 +1784,24 @@ class AgentDispatcher:
         polling hook the way Execution Sandbox's subprocess does) - but the
         approval PAUSE itself is genuinely, immediately interruptible by
         Cancel, since cancel_pycoder resolves this same approval_future.
-        """
+
+        ADR-002 stage 2.4g: self._runs.claim() now happens in the SAME
+        synchronous stretch as node.pending_request_id's own claim - same
+        pattern as gitlink_run/gitlink_apply (stage 2.4f): node.pending_
+        request_id remains the sole real busy guard, this registry claim
+        is pure task/cancel_event/approval_future bookkeeping."""
         if node.pending_request_id and node.pending_request_id != _CODE_EXEC_RUN_CLAIM_PLACEHOLDER:
             notifications_state.show("Py-Coder is already busy for this node.", "info")
             await bus.publish("notification")
             return
 
-        request_id = uuid.uuid4().hex
-        node.pending_request_id = request_id
         cancel_event = threading.Event()
         approval_future: asyncio.Future = asyncio.get_running_loop().create_future()
+        handle = self._runs.claim(
+            "pycoder", node_id=node_id, cancel_event=cancel_event, approval_future=approval_future
+        )
+        request_id = handle.request_id
+        node.pending_request_id = request_id
         await bus.publish("scene")
 
         async def _run():
@@ -1941,17 +1970,20 @@ class AgentDispatcher:
                         # "automatically repaired versions of this code may
                         # run under this same approval"). Every repaired
                         # variant now goes through its own fresh gate, with a
-                        # NEW Future replacing the resolved one in this same
-                        # dict slot so cancel_pycoder/approve_code_execution/
+                        # NEW Future replacing the resolved one on this same
+                        # handle so cancel_pycoder/approve_code_execution/
                         # deny_code_execution keep targeting whichever gate
                         # is actually still open (see _resolve_approval's own
-                        # docstring - it always re-reads this slot, never
-                        # caches the future).
-                        request_entry = self._pycoder_requests.get(request_id)
-                        if request_entry is None:
+                        # docstring - it always re-reads this field fresh,
+                        # never caches the future). The liveness re-check
+                        # (self._runs.get(request_id) is None) mirrors the
+                        # pre-migration dict-membership check exactly - see
+                        # start_web_research's own _guarded_progress for the
+                        # same "was this released out from under me" pattern.
+                        if self._runs.get(request_id) is None:
                             return
                         repair_future: asyncio.Future = asyncio.get_running_loop().create_future()
-                        request_entry["approval_future"] = repair_future
+                        handle.approval_future = repair_future
                         node.pycoder_code = current_code
                         node.pycoder_approved_fingerprint = _fingerprint_changes({"code": current_code})
                         node.pycoder_awaiting_approval = True
@@ -1985,16 +2017,12 @@ class AgentDispatcher:
                 notifications_state.show(f"Py-Coder execution failed: {exc}", "error")
                 await bus.publish("notification")
             finally:
-                self._pycoder_requests.pop(request_id, None)
+                self._runs.release(request_id)
                 if node.pending_request_id == request_id:
                     node.pending_request_id = None
                 await bus.publish("scene")
 
-        self._pycoder_requests[request_id] = {
-            "cancel_event": cancel_event,
-            "approval_future": approval_future,
-            "task": asyncio.create_task(_run()),
-        }
+        self._runs.attach_task(handle, asyncio.create_task(_run()))
 
     async def start_code_sandbox_run(
         self,
@@ -2069,16 +2097,24 @@ class AgentDispatcher:
         `_dispatch`'s own "unconditional final flush on every exit path"
         guarantee for its own stream. `topic="scene"` (not a
         Composer-specific topic): CodeSandboxNode state is scene state, same
-        as every other plugin node kind's own dispatch surface."""
+        as every other plugin node kind's own dispatch surface.
+
+        ADR-002 stage 2.4g: shares the same self._runs claim pattern as
+        start_pycoder_run above - node.pending_request_id remains the sole
+        real busy guard, this registry claim is pure task/cancel_event/
+        approval_future bookkeeping."""
         if node.pending_request_id and node.pending_request_id != _CODE_EXEC_RUN_CLAIM_PLACEHOLDER:
             notifications_state.show("Virtual Environment Runner is already busy for this node.", "info")
             await bus.publish("notification")
             return
 
-        request_id = uuid.uuid4().hex
-        node.pending_request_id = request_id
         cancel_event = threading.Event()
         approval_future: asyncio.Future = asyncio.get_running_loop().create_future()
+        handle = self._runs.claim(
+            "code_sandbox", node_id=node_id, cancel_event=cancel_event, approval_future=approval_future
+        )
+        request_id = handle.request_id
+        node.pending_request_id = request_id
         await bus.publish("scene")
 
         def _should_continue() -> bool:
@@ -2235,12 +2271,13 @@ class AgentDispatcher:
                         # the FIRST version. Re-disclose the (unchanged)
                         # manifest alongside it, since code_sandbox_approval_
                         # requirements was already cleared once the initial
-                        # gate resolved above.
-                        request_entry = self._code_sandbox_requests.get(request_id)
-                        if request_entry is None:
+                        # gate resolved above. Liveness re-check mirrors
+                        # start_pycoder_run's own (self._runs.get(request_id)
+                        # is None) - see that method's own comment.
+                        if self._runs.get(request_id) is None:
                             return
                         repair_future: asyncio.Future = asyncio.get_running_loop().create_future()
-                        request_entry["approval_future"] = repair_future
+                        handle.approval_future = repair_future
                         node.code_sandbox_code = current_code
                         node.code_sandbox_approval_requirements = manifest
                         node.code_sandbox_approved_fingerprint = _fingerprint_changes(
@@ -2278,18 +2315,14 @@ class AgentDispatcher:
                 notifications_state.show(f"Sandbox execution failed: {exc}", "error")
                 await bus.publish("notification")
             finally:
-                self._code_sandbox_requests.pop(request_id, None)
+                self._runs.release(request_id)
                 if node.pending_request_id == request_id:
                     node.pending_request_id = None
                 line_queue.put_nowait(_STREAM_DONE)
                 await drain_task
                 await bus.publish("scene")
 
-        self._code_sandbox_requests[request_id] = {
-            "cancel_event": cancel_event,
-            "approval_future": approval_future,
-            "task": asyncio.create_task(_run()),
-        }
+        self._runs.attach_task(handle, asyncio.create_task(_run()))
 
     # -- R6.2: Chart node -----------------------------------------------------
 
