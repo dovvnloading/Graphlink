@@ -5112,8 +5112,8 @@ def test_note_request_and_chat_request_run_concurrently_both_busy(monkeypatch):
 #
 # Mirrors start_note_generation's own test shape exactly - same busy-guard/
 # timeout/empty-response/exception coverage - but against the SEPARATE
-# _branch_comparison_requests slot, proving the two features' busy states
-# are genuinely independent (see that field's own comment for why).
+# "branch_comparison" kind in self._runs, proving the two features' busy
+# states are genuinely independent (see that field's own comment for why).
 
 
 def test_start_branch_comparison_calls_on_success_then_clears_the_slot(monkeypatch):
@@ -5132,7 +5132,7 @@ def test_start_branch_comparison_calls_on_success_then_clears_the_slot(monkeypat
         )
         assert successes == ["Branch Comparison\n\nAgreements:\n• from === Branch 1 ===\n..."]
         assert failures == []
-        assert dispatcher._branch_comparison_requests == {}
+        assert busy_count(dispatcher, "branch_comparison") == 0
         assert notifications.visible is False
 
     asyncio.run(run())
@@ -5143,7 +5143,7 @@ def test_start_branch_comparison_rejects_a_second_concurrent_run(monkeypatch):
 
     async def run():
         bus, notifications, dispatcher = _make_note_env()
-        dispatcher._branch_comparison_requests["already-running"] = True
+        seed = dispatcher._runs.claim("branch_comparison")
         successes = []
         await dispatcher.start_branch_comparison(
             bus=bus, notifications_state=notifications, source_text="x",
@@ -5152,7 +5152,10 @@ def test_start_branch_comparison_rejects_a_second_concurrent_run(monkeypatch):
         assert successes == [], "the busy guard must not run a second agent"
         assert notifications.visible is True
         assert notifications.msg_type == "info"
-        assert dispatcher._branch_comparison_requests == {"already-running": True}
+        # The pre-existing claim must survive - the guard rejects, it
+        # must never clear someone else's in-flight slot.
+        assert dispatcher._runs.get(seed.request_id) is seed
+        assert busy_count(dispatcher, "branch_comparison") == 1
 
     asyncio.run(run())
 
@@ -5188,7 +5191,7 @@ def test_start_branch_comparison_empty_response_fails_instead_of_creating_a_blan
         assert successes == [], "an empty agent response must not become a note"
         assert len(failures) == 1
         assert notifications.msg_type == "error"
-        assert dispatcher._branch_comparison_requests == {}
+        assert busy_count(dispatcher, "branch_comparison") == 0
 
     asyncio.run(run())
 
@@ -5209,7 +5212,7 @@ def test_start_branch_comparison_agent_exception_surfaces_and_clears_the_slot(mo
         assert successes == []
         assert "model exploded" in failures[0]
         assert notifications.msg_type == "error"
-        assert dispatcher._branch_comparison_requests == {}, "the slot must not leak after a failure"
+        assert busy_count(dispatcher, "branch_comparison") == 0, "the slot must not leak after a failure"
 
     asyncio.run(run())
 
@@ -5218,8 +5221,8 @@ def test_start_branch_comparison_agent_exception_surfaces_and_clears_the_slot(mo
 #
 # Mirrors start_branch_comparison's own test shape exactly - same busy-guard/
 # timeout/empty-response/exception coverage - but against the SEPARATE
-# _branch_synthesis_requests slot, proving Compare and Synthesize's busy
-# states are genuinely independent (see that field's own comment for why).
+# "branch_synthesis" kind in self._runs, proving Compare and Synthesize's
+# busy states are genuinely independent (see that field's own comment for why).
 
 
 def test_start_branch_synthesis_calls_on_success_then_clears_the_slot(monkeypatch):
@@ -5238,7 +5241,7 @@ def test_start_branch_synthesis_calls_on_success_then_clears_the_slot(monkeypatc
         )
         assert successes == ["Combined from === Branch 1 ===\n... per 'merge them'"]
         assert failures == []
-        assert dispatcher._branch_synthesis_requests == {}
+        assert busy_count(dispatcher, "branch_synthesis") == 0
         assert notifications.visible is False
 
     asyncio.run(run())
@@ -5249,7 +5252,7 @@ def test_start_branch_synthesis_rejects_a_second_concurrent_run(monkeypatch):
 
     async def run():
         bus, notifications, dispatcher = _make_note_env()
-        dispatcher._branch_synthesis_requests["already-running"] = True
+        seed = dispatcher._runs.claim("branch_synthesis")
         successes = []
         await dispatcher.start_branch_synthesis(
             bus=bus, notifications_state=notifications, source_text="x", instructions="y",
@@ -5258,7 +5261,8 @@ def test_start_branch_synthesis_rejects_a_second_concurrent_run(monkeypatch):
         assert successes == [], "the busy guard must not run a second agent"
         assert notifications.visible is True
         assert notifications.msg_type == "info"
-        assert dispatcher._branch_synthesis_requests == {"already-running": True}
+        assert dispatcher._runs.get(seed.request_id) is seed
+        assert busy_count(dispatcher, "branch_synthesis") == 1
 
     asyncio.run(run())
 
@@ -5275,7 +5279,7 @@ def test_start_branch_synthesis_does_not_share_a_busy_slot_with_branch_compariso
 
     async def run():
         bus, notifications, dispatcher = _make_note_env()
-        dispatcher._branch_comparison_requests["unrelated-comparison"] = True
+        dispatcher._runs.claim("branch_comparison")
         successes = []
         await dispatcher.start_branch_synthesis(
             bus=bus, notifications_state=notifications, source_text="x", instructions="y",
@@ -5299,7 +5303,7 @@ def test_start_branch_synthesis_empty_response_fails_instead_of_creating_a_blank
         assert successes == [], "an empty agent response must not become a node"
         assert len(failures) == 1
         assert notifications.msg_type == "error"
-        assert dispatcher._branch_synthesis_requests == {}
+        assert busy_count(dispatcher, "branch_synthesis") == 0
 
     asyncio.run(run())
 
@@ -5320,6 +5324,134 @@ def test_start_branch_synthesis_agent_exception_surfaces_and_clears_the_slot(mon
         assert successes == []
         assert "model exploded" in failures[0]
         assert notifications.msg_type == "error"
-        assert dispatcher._branch_synthesis_requests == {}, "the slot must not leak after a failure"
+        assert busy_count(dispatcher, "branch_synthesis") == 0, "the slot must not leak after a failure"
+
+    asyncio.run(run())
+
+
+def test_branch_comparison_request_and_chat_request_run_concurrently_both_busy(monkeypatch):
+    """ADR-002 stage 2.4 regression guard, branch_comparison's counterpart
+    to test_chart_request_and_chat_request_run_concurrently_both_busy
+    (stage 2.3) - same reasoning: chat and branch_comparison now claim
+    into the SAME self._runs registry, so this isolation depends entirely
+    on RunRegistry.is_busy()'s kind filter rather than being structural by
+    construction."""
+    chat_started = threading.Event()
+    chat_release = threading.Event()
+    comparison_started = threading.Event()
+    comparison_release = threading.Event()
+
+    def blocking_chat(task, messages, **kwargs):
+        chat_started.set()
+        chat_release.wait(5)
+        return {"message": {"content": "chat reply"}}
+
+    def blocking_get_response(self, text):
+        comparison_started.set()
+        comparison_release.wait(5)
+        return "Branch Comparison\n\nAgreements:\n• done"
+
+    _configure_fake_ollama(monkeypatch, blocking_chat)
+    monkeypatch.setattr(agents_module.BranchComparisonAgent, "get_response", blocking_get_response)
+
+    async def run():
+        bus, notifications, composer_document, dispatcher = _make_dispatch_env()
+        chat_replies = []
+        comparison_successes = []
+
+        await dispatcher.start_chat_reply(
+            bus=bus,
+            notifications_state=notifications,
+            composer_document=composer_document,
+            conversation_history=[{"role": "user", "content": "hi"}],
+            on_reply=chat_replies.append,
+        )
+        # start_branch_comparison is directly awaited by ITS caller (same
+        # shape as chart/note) - schedule it as a background task to race
+        # it against the still-in-flight chat request.
+        comparison_task = asyncio.create_task(
+            dispatcher.start_branch_comparison(
+                bus=bus, notifications_state=notifications, source_text="x",
+                on_success=comparison_successes.append, on_failure=lambda message: None,
+            )
+        )
+
+        await asyncio.to_thread(chat_started.wait, 5)
+        await asyncio.to_thread(comparison_started.wait, 5)
+
+        # THE key assertion: both are genuinely in flight at the same time -
+        # neither bounced the other with a busy notification.
+        assert len(chat_slots(dispatcher)) == 1
+        assert busy_count(dispatcher, "branch_comparison") == 1
+        assert notifications.visible is False, "neither call should have been rejected"
+
+        chat_release.set()
+        chat_entry = next(iter(chat_slots(dispatcher).values()))
+        await chat_entry["task"]
+        comparison_release.set()
+        await comparison_task
+
+        assert chat_replies == ["chat reply"]
+        assert comparison_successes == ["Branch Comparison\n\nAgreements:\n• done"]
+
+    asyncio.run(run())
+
+
+def test_branch_synthesis_request_and_chat_request_run_concurrently_both_busy(monkeypatch):
+    """ADR-002 stage 2.4 regression guard, branch_synthesis's counterpart
+    to test_branch_comparison_request_and_chat_request_run_concurrently_
+    both_busy above - same reasoning."""
+    chat_started = threading.Event()
+    chat_release = threading.Event()
+    synthesis_started = threading.Event()
+    synthesis_release = threading.Event()
+
+    def blocking_chat(task, messages, **kwargs):
+        chat_started.set()
+        chat_release.wait(5)
+        return {"message": {"content": "chat reply"}}
+
+    def blocking_get_response(self, text, instructions):
+        synthesis_started.set()
+        synthesis_release.wait(5)
+        return "Combined answer."
+
+    _configure_fake_ollama(monkeypatch, blocking_chat)
+    monkeypatch.setattr(agents_module.BranchSynthesisAgent, "get_response", blocking_get_response)
+
+    async def run():
+        bus, notifications, composer_document, dispatcher = _make_dispatch_env()
+        chat_replies = []
+        synthesis_successes = []
+
+        await dispatcher.start_chat_reply(
+            bus=bus,
+            notifications_state=notifications,
+            composer_document=composer_document,
+            conversation_history=[{"role": "user", "content": "hi"}],
+            on_reply=chat_replies.append,
+        )
+        synthesis_task = asyncio.create_task(
+            dispatcher.start_branch_synthesis(
+                bus=bus, notifications_state=notifications, source_text="x", instructions="y",
+                on_success=synthesis_successes.append, on_failure=lambda message: None,
+            )
+        )
+
+        await asyncio.to_thread(chat_started.wait, 5)
+        await asyncio.to_thread(synthesis_started.wait, 5)
+
+        assert len(chat_slots(dispatcher)) == 1
+        assert busy_count(dispatcher, "branch_synthesis") == 1
+        assert notifications.visible is False, "neither call should have been rejected"
+
+        chat_release.set()
+        chat_entry = next(iter(chat_slots(dispatcher).values()))
+        await chat_entry["task"]
+        synthesis_release.set()
+        await synthesis_task
+
+        assert chat_replies == ["chat reply"]
+        assert synthesis_successes == ["Combined answer."]
 
     asyncio.run(run())
