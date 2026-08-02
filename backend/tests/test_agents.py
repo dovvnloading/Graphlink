@@ -31,7 +31,7 @@ from backend.canvas import SceneDocument, register_canvas
 from backend.composer import ComposerDocument
 from backend.events import SessionBus
 from backend.notifications import NotificationState
-from backend.tests.conftest import artifact_slots, busy_count, chat_slots, image_slots
+from backend.tests.conftest import artifact_slots, busy_count, chat_slots, image_slots, web_research_slots
 
 import api_provider
 import graphlink_task_config as config
@@ -1691,11 +1691,11 @@ def test_start_web_research_calls_on_success_with_the_result_then_clears_the_slo
             on_success=successes.append,
             on_failure=lambda exc: None,
         )
-        entry = next(iter(dispatcher._web_research_requests.values()))
+        entry = next(iter(web_research_slots(dispatcher).values()))
         await entry["task"]
 
         assert successes == [fake_result]
-        assert dispatcher._web_research_requests == {}
+        assert web_research_slots(dispatcher) == {}
         assert node.pending_request_id is None
         assert notifications.visible is False
 
@@ -1748,15 +1748,15 @@ def test_start_web_research_second_call_while_in_flight_is_rejected_first_still_
         assert notifications.visible is True
         assert notifications.msg_type == "info"
         assert notifications.message == "A web research request is already running."
-        assert len(dispatcher._web_research_requests) == 1
+        assert len(web_research_slots(dispatcher)) == 1
         assert node2.pending_request_id is None, "the bounced call must never touch node2"
 
         release.set()
-        entry = next(iter(dispatcher._web_research_requests.values()))
+        entry = next(iter(web_research_slots(dispatcher).values()))
         await entry["task"]
 
         assert successes == [SimpleNamespace(answer_markdown="first result")]
-        assert dispatcher._web_research_requests == {}
+        assert web_research_slots(dispatcher) == {}
 
     asyncio.run(run())
 
@@ -1785,11 +1785,11 @@ def test_start_web_research_research_failure_forwards_via_on_failure_and_shows_e
             on_success=lambda result: None,
             on_failure=failures.append,
         )
-        entry = next(iter(dispatcher._web_research_requests.values()))
+        entry = next(iter(web_research_slots(dispatcher).values()))
         await entry["task"]
 
         assert failures == [failure]
-        assert dispatcher._web_research_requests == {}
+        assert web_research_slots(dispatcher) == {}
         assert node.pending_request_id is None
         assert notifications.visible is True
         assert notifications.msg_type == "error"
@@ -1822,11 +1822,11 @@ def test_start_web_research_request_cancelled_forwards_via_on_failure_and_shows_
             on_success=lambda result: None,
             on_failure=failures.append,
         )
-        entry = next(iter(dispatcher._web_research_requests.values()))
+        entry = next(iter(web_research_slots(dispatcher).values()))
         await entry["task"]
 
         assert failures == [cancelled_exc]
-        assert dispatcher._web_research_requests == {}
+        assert web_research_slots(dispatcher) == {}
         assert node.pending_request_id is None
         assert notifications.visible is True
         assert notifications.msg_type == "info"
@@ -1857,13 +1857,13 @@ def test_start_web_research_generic_exception_forwards_via_on_failure_and_shows_
             on_success=lambda result: None,
             on_failure=failures.append,
         )
-        entry = next(iter(dispatcher._web_research_requests.values()))
+        entry = next(iter(web_research_slots(dispatcher).values()))
         await entry["task"]
 
         assert len(failures) == 1
         assert isinstance(failures[0], RuntimeError)
         assert str(failures[0]) == "boom"
-        assert dispatcher._web_research_requests == {}
+        assert web_research_slots(dispatcher) == {}
         assert node.pending_request_id is None
         assert notifications.visible is True
         assert notifications.msg_type == "error"
@@ -1897,7 +1897,7 @@ def test_start_web_research_timeout_fires_the_exact_message_and_clears_the_slot(
             on_success=lambda result: None,
             on_failure=failures.append,
         )
-        entry = next(iter(dispatcher._web_research_requests.values()))
+        entry = next(iter(web_research_slots(dispatcher).values()))
         await entry["task"]
 
         assert len(failures) == 1
@@ -1907,7 +1907,7 @@ def test_start_web_research_timeout_fires_the_exact_message_and_clears_the_slot(
         )
         assert str(failures[0]) == expected_message
         assert failures[0].code == "watchdog_timeout"
-        assert dispatcher._web_research_requests == {}, "the slot must not leak/deadlock future requests"
+        assert web_research_slots(dispatcher) == {}, "the slot must not leak/deadlock future requests"
         assert node.pending_request_id is None
         assert notifications.visible is True
         assert notifications.msg_type == "error"
@@ -1921,7 +1921,7 @@ def test_start_web_research_stale_progress_event_after_timeout_is_dropped(monkey
     not actually killed when wait_for's timeout fires (Future.cancel() on an
     already-running thread is a no-op), so a slow WebResearchService.run()
     can keep calling progress() well after this request's own finally block
-    has already popped _web_research_requests and cleared
+    has already released its registry claim and cleared
     node.pending_request_id. That stale event must be dropped, not delivered
     to on_progress - otherwise it can resurrect a since-failed node's stage
     or clobber a new run started on the same node afterward."""
@@ -1953,9 +1953,9 @@ def test_start_web_research_stale_progress_event_after_timeout_is_dropped(monkey
             on_success=lambda result: None,
             on_failure=lambda exc: None,
         )
-        entry = next(iter(dispatcher._web_research_requests.values()))
+        entry = next(iter(web_research_slots(dispatcher).values()))
         await entry["task"]
-        assert dispatcher._web_research_requests == {}, "slot must already be cleared by the timeout branch"
+        assert web_research_slots(dispatcher) == {}, "slot must already be cleared by the timeout branch"
 
         # Give the still-running background thread time to reach its
         # progress() call and for run_coroutine_threadsafe's scheduled
@@ -1975,13 +1975,115 @@ def test_cancel_web_research_returns_false_for_an_unknown_request_id():
     assert dispatcher.cancel_web_research("no-such-request") is False
 
 
+def test_cancel_web_research_actually_trips_the_real_cancellation_token(monkeypatch):
+    """ADR-002 stage 2.4e: the first real proof, through the actual public
+    dispatcher method, that RunHandle.on_cancel genuinely reaches the real
+    CancellationToken passed into WebResearchService.run - not just that
+    cancel_web_research() returns True (which a stub on_cancel would also
+    satisfy)."""
+    started = threading.Event()
+    release = threading.Event()
+    seen_token = {}
+
+    def blocking_run(self, request, *, token=None, progress=None):
+        seen_token["token"] = token
+        started.set()
+        release.wait(5)
+        return SimpleNamespace(answer_markdown="result")
+
+    monkeypatch.setattr(agents_module.WebResearchService, "run", blocking_run)
+
+    async def run():
+        bus, notifications, dispatcher = _make_web_research_env()
+        node = _make_node()
+
+        task = asyncio.create_task(
+            dispatcher.start_web_research(
+                bus=bus, notifications_state=notifications, node=node, node_id="n1",
+                query="q", branch_history=[], on_progress=lambda event: None,
+                on_success=lambda result: None, on_failure=lambda exc: None,
+            )
+        )
+        await asyncio.to_thread(started.wait, 5)
+        request_id = next(iter(web_research_slots(dispatcher).keys()))
+
+        assert dispatcher.cancel_web_research(request_id) is True
+        assert seen_token["token"].is_set(), "cancel_web_research must trip the SAME token WebResearchService.run received"
+
+        release.set()
+        await task
+
+    asyncio.run(run())
+
+
+def test_cancel_web_research_and_cancel_chat_cannot_trip_each_others_request_id(monkeypatch):
+    """Web research's counterpart to
+    test_cancel_artifact_and_cancel_chat_cannot_trip_each_others_request_id
+    (stage 2.4d) - chat and web_research are now both cancellable kinds
+    (via cancel_event and on_cancel respectively) sharing self._runs."""
+    chat_started = threading.Event()
+    chat_release = threading.Event()
+    research_started = threading.Event()
+    research_release = threading.Event()
+
+    def blocking_chat(task, messages, **kwargs):
+        chat_started.set()
+        chat_release.wait(5)
+        return {"message": {"content": "chat reply"}}
+
+    def blocking_run(self, request, *, token=None, progress=None):
+        research_started.set()
+        research_release.wait(5)
+        return SimpleNamespace(answer_markdown="result")
+
+    _configure_fake_ollama(monkeypatch, blocking_chat)
+    monkeypatch.setattr(agents_module.WebResearchService, "run", blocking_run)
+
+    async def run():
+        bus, notifications, composer_document, dispatcher = _make_dispatch_env()
+        node = _make_node()
+
+        await dispatcher.start_chat_reply(
+            bus=bus, notifications_state=notifications, composer_document=composer_document,
+            conversation_history=[{"role": "user", "content": "hi"}], on_reply=lambda text: None,
+        )
+        research_task = asyncio.create_task(
+            dispatcher.start_web_research(
+                bus=bus, notifications_state=notifications, node=node, node_id="n1",
+                query="q", branch_history=[], on_progress=lambda event: None,
+                on_success=lambda result: None, on_failure=lambda exc: None,
+            )
+        )
+        await asyncio.to_thread(chat_started.wait, 5)
+        await asyncio.to_thread(research_started.wait, 5)
+
+        chat_request_id, chat_entry = next(iter(chat_slots(dispatcher).items()))
+        research_request_id = next(iter(web_research_slots(dispatcher).keys()))
+        chat_cancel_event = chat_entry["cancel_event"]
+
+        assert dispatcher.cancel_web_research(chat_request_id) is False, (
+            "a chat request_id must never be accepted by cancel_web_research"
+        )
+        assert not chat_cancel_event.is_set(), "the mismatched call must not have tripped chat's own event"
+
+        assert dispatcher.cancel(research_request_id) is False, (
+            "a web_research request_id must never be accepted by the generic cancel() (cancelChatRequest)"
+        )
+
+        chat_release.set()
+        research_release.set()
+        await chat_entry["task"]
+        await research_task
+
+    asyncio.run(run())
+
+
 def test_web_research_request_and_chat_request_run_concurrently_both_dicts_non_empty(monkeypatch):
     """THE key concurrency-slot regression guard (R5.1, mirrors R4.4a's own
     chat/image guard test): a chat/composer request occupies self._runs's
     "chat" kind while a web-research request occupies the SEPARATE
-    self._web_research_requests dict at the same time - neither blocks nor is
-    blocked by the other, and both dicts are simultaneously non-empty at
-    least once."""
+    "web_research" kind at the same time - neither blocks nor is blocked by
+    the other, and both are simultaneously non-empty at least once."""
     chat_started = threading.Event()
     chat_release = threading.Event()
     research_started = threading.Event()
@@ -2032,20 +2134,20 @@ def test_web_research_request_and_chat_request_run_concurrently_both_dicts_non_e
         # time - neither request bounced the other, and neither notification
         # fired.
         assert len(chat_slots(dispatcher)) == 1
-        assert len(dispatcher._web_research_requests) == 1
+        assert len(web_research_slots(dispatcher)) == 1
         assert notifications.visible is False, "neither call should have been rejected"
 
         chat_release.set()
         chat_entry = next(iter(chat_slots(dispatcher).values()))
         await chat_entry["task"]
         research_release.set()
-        research_entry = next(iter(dispatcher._web_research_requests.values()))
+        research_entry = next(iter(web_research_slots(dispatcher).values()))
         await research_entry["task"]
 
         assert chat_replies == ["chat reply"]
         assert research_successes == [SimpleNamespace(answer_markdown="research result")]
         assert chat_slots(dispatcher) == {}
-        assert dispatcher._web_research_requests == {}
+        assert web_research_slots(dispatcher) == {}
         assert composer_document.request_state == "idle"
 
     asyncio.run(run())
@@ -2083,7 +2185,7 @@ def test_start_web_research_progress_ordering_on_progress_invoked_in_the_same_or
             on_success=lambda result: None,
             on_failure=lambda exc: None,
         )
-        entry = next(iter(dispatcher._web_research_requests.values()))
+        entry = next(iter(web_research_slots(dispatcher).values()))
         await entry["task"]
 
         assert progress_calls == events
@@ -2130,7 +2232,7 @@ def test_start_web_research_constructs_web_research_service_with_no_override_the
             on_success=lambda result: None,
             on_failure=lambda exc: None,
         )
-        entry = next(iter(dispatcher._web_research_requests.values()))
+        entry = next(iter(web_research_slots(dispatcher).values()))
         await entry["task"]
 
     asyncio.run(run())
@@ -2550,8 +2652,8 @@ def test_artifact_request_and_web_research_request_run_concurrently(monkeypatch)
     """Mirrors test_web_research_request_and_chat_request_run_concurrently_
     both_dicts_non_empty: an artifact-generation request must also be able to
     run concurrently with a web-research request - self._runs's "artifact"
-    kind and self._web_research_requests are two more genuinely independent
-    slots, neither blocking nor blocked by the other."""
+    and "web_research" kinds are two more genuinely independent slots,
+    neither blocking nor blocked by the other."""
     research_started = threading.Event()
     research_release = threading.Event()
     artifact_started = threading.Event()
@@ -2600,12 +2702,12 @@ def test_artifact_request_and_web_research_request_run_concurrently(monkeypatch)
         await asyncio.to_thread(research_started.wait, 5)
         await asyncio.to_thread(artifact_started.wait, 5)
 
-        assert len(dispatcher._web_research_requests) == 1
+        assert len(web_research_slots(dispatcher)) == 1
         assert len(artifact_slots(dispatcher)) == 1
         assert notifications.visible is False, "neither call should have been rejected"
 
         research_release.set()
-        research_entry = next(iter(dispatcher._web_research_requests.values()))
+        research_entry = next(iter(web_research_slots(dispatcher).values()))
         await research_entry["task"]
         artifact_release.set()
         artifact_entry = next(iter(artifact_slots(dispatcher).values()))
@@ -2613,7 +2715,7 @@ def test_artifact_request_and_web_research_request_run_concurrently(monkeypatch)
 
         assert research_successes == [SimpleNamespace(answer_markdown="research result")]
         assert artifact_replies == [("artifact document", "artifact message")]
-        assert dispatcher._web_research_requests == {}
+        assert web_research_slots(dispatcher) == {}
         assert artifact_slots(dispatcher) == {}
 
     asyncio.run(run())
