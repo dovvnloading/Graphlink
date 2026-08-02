@@ -1,5 +1,5 @@
 import { Handle, Position, useStore, type Node, type NodeProps } from "@xyflow/react";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { LOD_ZOOM_THRESHOLD } from "./canvasConstants";
 import { NodeMarkdown } from "./NodeMarkdown";
 import { NodeMenu } from "./NodeMenu";
@@ -169,6 +169,43 @@ function ConversationBubbleMenu({
   );
 }
 
+// Node redesign follow-up ("per-bubble chrome"): hand-authored stroke icons
+// for the bubble header's hover-revealed quick-action row, matching the SAME
+// file-local-icon-component convention this codebase already established
+// (GroupNodeView.tsx's own GroupIcon, ChatNodeView.tsx's own ChatNodeIcon) -
+// not a shared icon import, even where a glyph (copy/check) is conceptually
+// identical to ChatNodeIcon's own. "trash" is new here: Delete from History
+// has no analogue among ChatNodeView's own quick actions (Branch from
+// Here/Open Document View don't apply to a single message inside a growing
+// conversation node).
+type ConversationBubbleIconName = "copy" | "check" | "trash";
+
+const CONVERSATION_BUBBLE_ICON_PATHS: Record<ConversationBubbleIconName, ReactNode> = {
+  copy: (
+    <>
+      <rect x="2.5" y="2.5" width="8" height="8" rx="1.2" />
+      <rect x="5.5" y="5.5" width="8" height="8" rx="1.2" />
+    </>
+  ),
+  check: <path d="M3.5 8.5 6.5 11.5 12.5 4.5" />,
+  trash: (
+    <>
+      <path d="M3 4.5h10" />
+      <path d="M6 4.5V3a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v1.5" />
+      <path d="M4.5 4.5l.6 8a1 1 0 0 0 1 .9h3.8a1 1 0 0 0 1-.9l.6-8" />
+      <path d="M6.5 7v4M9.5 7v4" />
+    </>
+  ),
+};
+
+function ConversationBubbleIcon({ name }: { name: ConversationBubbleIconName }) {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 16 16" className="chat-node-icon">
+      {CONVERSATION_BUBBLE_ICON_PATHS[name]}
+    </svg>
+  );
+}
+
 // -- bubble ------------------------------------------------------------------
 
 function ConversationBubble({
@@ -181,6 +218,39 @@ function ConversationBubble({
   onDeleteMessage: (index: number) => void;
 }) {
   const [menuPosition, setMenuPosition] = useState<MenuPosition | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  // Adversarial review caught a real bug: bubbles are keyed by array index
+  // (see the render loop below), and deleting an earlier message shifts
+  // every later one down a slot - React reconciles the shifted bubble into
+  // the SAME component instance that used to sit at that index, carrying
+  // over its local `copied` state. Without this reset, copying message 0
+  // then deleting it left the check-glyph flash stuck on whatever message
+  // slid into slot 0, even though nobody ever copied ITS content.
+  //
+  // Fixed with React's own "adjusting state when a prop changes" pattern
+  // (setState during render, not inside a useEffect - the lint rule this
+  // codebase enforces, react-hooks/set-state-in-effect, flagged an earlier
+  // draft that called setCopied(false) from an effect keyed on
+  // message.content instead): comparing against a value tracked across
+  // renders and resetting synchronously, before paint, whenever this
+  // instance's message actually changes out from under it.
+  const [trackedContent, setTrackedContent] = useState(message.content);
+  if (message.content !== trackedContent) {
+    setTrackedContent(message.content);
+    setCopied(false);
+  }
+
+  // Same direct navigator.clipboard call (not routed through
+  // ConversationBubbleMenu's own "Copy Message" item) as ChatNodeView's own
+  // quick-action Copy button, for the identical reason: this one needs its
+  // own transient "copied" flash independent of the menu's lifecycle.
+  function onQuickCopy() {
+    navigator.clipboard.writeText(message.content).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  }
 
   return (
     <div
@@ -194,6 +264,67 @@ function ConversationBubble({
         setMenuPosition({ x: event.clientX, y: event.clientY });
       }}
     >
+      {/* Per-bubble chrome, extending node redesign stage 3's ChatNodeView
+          treatment to conversation-node bubbles: an avatar chip (reuses
+          .chat-node-avatar verbatim - same 16px circular chip, same
+          role-differentiated background shade, styled here via a
+          .conversation-node-bubble.user override in styles.css) and a
+          hover-revealed quick-action row surfacing the SAME 2 items
+          ConversationBubbleMenu below already offers (Copy Message, Delete
+          from History) - there are only 2 in this menu, so both qualify as
+          "most reached for", unlike ChatNodeView's pick of 3 out of a larger
+          menu.
+
+          Unlike ChatNodeView, the avatar here is NOT aria-hidden alone - an
+          adversarial review caught that ChatNodeView's own aria-hidden
+          choice is only safe because a VISIBLE "You"/"Assistant" span sits
+          right next to it (its own comment says so explicitly); this bubble
+          had no such text anywhere, so a screen-reader user had zero way to
+          tell who said what. The new .conversation-node-bubble-role span is
+          that visible, accessible label - the avatar stays aria-hidden
+          exactly because this text now carries the semantics, mirroring
+          ChatNodeView's own reasoning instead of skipping the part that
+          made it valid.
+
+          Quick-action labels also include this bubble's 1-based position
+          (adversarial review finding): with N messages in one node card,
+          unqualified "Copy Message"/"Delete from History" names would be
+          identical across every bubble, leaving a screen-reader user no way
+          to tell which button acts on which message - unlike ChatNodeView,
+          where each button is the only one of its name on that whole node. */}
+      <div className="conversation-node-bubble-header">
+        {/* Grouped together (not 2 separate top-level flex children) for the
+            same reason .chat-node-role-group exists on ChatNodeView's own
+            header - a 3rd top-level child would get pushed to the CENTER
+            by this row's justify-content:space-between, instead of sitting
+            with the avatar on the left where it belongs. */}
+        <span className="conversation-node-bubble-role-group">
+          <span className="chat-node-avatar" aria-hidden="true">
+            {message.role === "user" ? "U" : "A"}
+          </span>
+          <span className="conversation-node-bubble-role">{message.role === "user" ? "You" : "Assistant"}</span>
+        </span>
+        <span className="chat-node-quick-actions">
+          <button
+            type="button"
+            className="chat-node-quick-action nodrag"
+            onClick={onQuickCopy}
+            title={`Copy message ${index + 1}`}
+            aria-label={`Copy message ${index + 1}`}
+          >
+            <ConversationBubbleIcon name={copied ? "check" : "copy"} />
+          </button>
+          <button
+            type="button"
+            className="chat-node-quick-action nodrag"
+            onClick={() => onDeleteMessage(index)}
+            title={`Delete message ${index + 1} from history`}
+            aria-label={`Delete message ${index + 1} from history`}
+          >
+            <ConversationBubbleIcon name="trash" />
+          </button>
+        </span>
+      </div>
       {/* Reuses .chat-node-content's markdown-body rule set (headings,
           lists, code, tables, hljs) - the same shared-class convention
           .chat-node-menu already establishes across every sibling node's

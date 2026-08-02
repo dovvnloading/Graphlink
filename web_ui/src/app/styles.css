@@ -827,7 +827,8 @@ body,
   border-radius: 999px;
 }
 
-.chat-node.user .chat-node-avatar {
+.chat-node.user .chat-node-avatar,
+.conversation-node-bubble.user .chat-node-avatar {
   color: var(--gl-surface-window);
   background-color: var(--gl-surface-text-muted);
 }
@@ -861,6 +862,7 @@ body,
 
 .chat-node:hover .chat-node-quick-actions,
 .chat-node.selected .chat-node-quick-actions,
+.conversation-node-bubble:hover .chat-node-quick-actions,
 .chat-node-quick-actions:focus-within {
   opacity: 1;
   transform: translateX(0);
@@ -4072,6 +4074,39 @@ mark.document-view-search-match-current {
 
 .conversation-node-bubble.user {
   background-color: var(--gl-neutral-button-hover);
+}
+
+/* Per-bubble chrome (extends node redesign stage 3's ChatNodeView treatment
+   here): avatar+role-label group on the left, hover-revealed quick actions
+   on the right - the same space-between layout .chat-node-role uses (and
+   the same 2-top-level-children requirement - see
+   .conversation-node-bubble-role-group's own comment below). */
+.conversation-node-bubble-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+/* Groups the avatar with its visible role label, mirroring
+   .chat-node-role-group's own reasoning exactly: a 3rd top-level flex
+   child (the role label, added alongside the avatar) would otherwise get
+   pushed to the CENTER of .conversation-node-bubble-header's space-between
+   layout instead of sitting on the left with the avatar. */
+.conversation-node-bubble-role-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Accessibility fix (adversarial review): the avatar chip is aria-hidden,
+   so a real, visible role label is required for it to be safe to hide -
+   ChatNodeView's own "You"/"Assistant" span played this role there; this
+   bubble had nothing equivalent until now. Small/muted since a bubble's
+   header has far less vertical room than a full node's title bar. */
+.conversation-node-bubble-role {
+  font-size: 0.85em;
+  color: var(--gl-surface-text-muted);
 }
 
 /* Reuses .chat-node-content's full markdown-body rule set (headings, lists,
