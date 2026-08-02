@@ -2,13 +2,18 @@
 
 TokenCounterBridge was always a passive display - window_actions.py pushed
 counts into it via update_counts() after real tokenization elsewhere.
-inputTokens tracks the live composer draft (a whitespace-split estimate -
-tiktoken is not a dependency yet; swap in real tokenization here if it ever
-becomes one). outputTokens/contextTokens are set by backend/canvas.py's
-send_message/regenerate_response intents once a reply completes -
-outputTokens from the reply text itself, contextTokens from the prior
-branch history the reply was generated from (excluding, for a fresh send,
-the message just typed - inputTokens already owns that text).
+inputTokens tracks the live composer draft. outputTokens/contextTokens are
+set by backend/canvas.py's send_message/regenerate_response intents once a
+reply completes - outputTokens from the reply text itself, contextTokens
+from the prior branch history the reply was generated from (excluding, for
+a fresh send, the message just typed - inputTokens already owns that text).
+
+ADR-016 stage 16.2 (partial): estimate_tokens delegates to
+graphlink_token_estimator's tiktoken-backed TokenEstimator instead of a
+whitespace word count - tiktoken has been a real dependency since it was
+added for graphlink_chart_agent.py; this counter just hadn't been updated
+to use it. Still a pre-flight estimate, not the provider's own reported
+usage (that real-usage accounting is the rest of ADR-016).
 """
 
 from __future__ import annotations
@@ -17,10 +22,11 @@ from dataclasses import dataclass
 from typing import Any
 
 from backend.events import SessionBus
+from graphlink_token_estimator import TokenEstimator
 
 
 def estimate_tokens(text: str) -> int:
-    return len(text.split())
+    return TokenEstimator().count_tokens(text)
 
 
 @dataclass

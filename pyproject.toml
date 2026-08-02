@@ -89,6 +89,8 @@ py-modules = [
     "graphlink_memory",
     "graphlink_model_catalog",
     "graphlink_navigation_pins",
+    "graphlink_note_agent",
+    "graphlink_process_env",
     "graphlink_prompts",
     "graphlink_secrets",
     "graphlink_task_config",

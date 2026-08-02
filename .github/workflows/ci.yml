@@ -19,6 +19,21 @@ name: CI
 #
 # R7.6b: graphlink_app/tests/ is gone from this list because graphlink_app/
 # itself was deleted at the Qt-removal cutover.
+#
+# ADR-015 stage 15.1: build-check is a third, independent job. It exists
+# because `pip install -r requirements.txt` (the python-tests job, above)
+# never actually builds this project's own wheel - so a broken py-modules
+# list (a real incident: graphlink_note_agent and graphlink_process_env were
+# both missing, the latter silently disabling the subprocess secret-scrubbing
+# allowlist) shipped invisibly. This job builds the wheel, twine-checks its
+# metadata, and imports backend.agents from a clean venv with the repo
+# checkout NOT on sys.path (Push-Location $env:TEMP before the import test) -
+# the same failure mode a `pip install .` from the loose repo directory would
+# hide. `build`/`twine` are installed directly in this job rather than added
+# to requirements.txt: they are CI-only tooling, not an app runtime
+# dependency, and requirements.txt's hash-lock is compiled against the
+# project's pinned Python 3.12 - regenerating it from a different interpreter
+# risks a lock that resolves differently than what 3.12 actually needs.
 
 on:
   pull_request:
@@ -26,16 +41,30 @@ on:
   push:
     branches: [main]
 
+# ADR-015 stage 15.2: least-privilege token (this workflow only ever reads
+# the checkout - no job pushes, comments, or creates releases), and a
+# concurrency group so a rapid string of pushes to the same PR/branch cancels
+# the now-stale in-flight run instead of queueing redundant Windows minutes
+# behind it.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   python-tests:
     name: Python tests (offscreen)
     runs-on: windows-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
+          cache: pip
 
       - name: Install dependencies
         run: pip install -r requirements.txt
@@ -46,26 +75,77 @@ jobs:
       - name: Run pytest
         run: python -m pytest -q
 
+      - name: pip-audit (known-vulnerability scan of the locked dependency set)
+        run: pip install --quiet pip-audit && python -m pip_audit -r requirements.txt
+
+  build-check:
+    name: Build check (wheel builds, installs, and imports cleanly)
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install build tooling
+        run: pip install build twine
+
+      - name: Build the wheel
+        run: python -m build --wheel
+
+      - name: Twine check (validates package metadata, incl. the version string)
+        # python -m twine, not a bare `twine` invocation: pip's script-install
+        # directory isn't reliably on PATH across runner/pip configurations
+        # (confirmed locally - `twine` alone was not found even right after
+        # `pip install twine` succeeded), and the module form has no such
+        # dependency.
+        run: python -m twine check dist/*.whl
+
+      - name: Install wheel + real runtime deps into a clean venv, import backend.agents
+        shell: pwsh
+        run: |
+          python -m venv wheel_test_venv
+          wheel_test_venv\Scripts\pip.exe install --quiet -r requirements.txt
+          $wheel = Get-ChildItem dist\*.whl | Select-Object -First 1
+          wheel_test_venv\Scripts\pip.exe install --quiet --no-deps $wheel.FullName
+          Push-Location $env:TEMP
+          try {
+            & "$env:GITHUB_WORKSPACE\wheel_test_venv\Scripts\python.exe" -c "import backend.agents, graphlink_note_agent, graphlink_process_env; print('OK: backend.agents and all py-modules import cleanly from the installed wheel')"
+          } finally {
+            Pop-Location
+          }
+
   frontend-checks:
     name: Frontend checks (npm run check)
     runs-on: windows-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       # check:schema shells out to the Python codegen script (stdlib-only,
       # no pip install needed) to prove the generated TS/JSON Schema
       # artifacts aren't stale relative to the Python dataclasses.
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
+          cache: pip
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version-file: web_ui/.nvmrc
+          cache: npm
+          cache-dependency-path: web_ui/package-lock.json
 
       - name: Install npm dependencies
         working-directory: web_ui
         run: npm ci
+
+      - name: npm audit (known-vulnerability scan, high+critical only)
+        working-directory: web_ui
+        run: npm audit --audit-level=high
 
       - name: Run checks (schema drift, typecheck, lint, vitest, build)
         working-directory: web_ui

@@ -388,7 +388,7 @@ class AgentDispatcher:
         shape, just keyed by node_id instead of node identity."""
         repl = self._pycoder_repls.get(node_id)
         if repl is None:
-            repl = PythonREPL()
+            repl = PythonREPL(node_id=node_id)
             self._pycoder_repls[node_id] = repl
         return repl
 

@@ -1,0 +1,36 @@
+# ADR-015 stage 15.2: supply-chain hygiene. Three ecosystems, matching the
+# three real dependency surfaces in this repo - the Python backend
+# (requirements.txt / pyproject.toml), the web_ui SPA (package-lock.json),
+# and the CI workflow's own actions (now SHA-pinned; Dependabot is what
+# actually bumps those pins over time, using the "# v4"-style version
+# comments left next to each SHA).
+version: 2
+updates:
+  # Labels below are scoped to labels that already exist on this repo
+  # (verified via `gh api repos/dovvnloading/Graphlink/labels`) - a label
+  # Dependabot can't find is silently not applied, so this list is
+  # deliberately not aspirational.
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+
+  - package-ecosystem: "npm"
+    directory: "/web_ui"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "github_actions"

@@ -35,9 +35,11 @@ import json
 import re
 import subprocess
 import sys
+import tempfile
 import uuid
 import weakref
 from enum import Enum
+from pathlib import Path
 
 import api_provider
 import graphlink_task_config as config
@@ -74,11 +76,22 @@ class PythonREPL:
     matched as an exact full line, so program output that happens to contain
     the marker text can no longer truncate the result or desync every
     subsequent call (audit finding B4).
+
+    ADR-005 stage 5.1: the subprocess runs with cwd set to a per-node scratch
+    directory, never the app's own working directory. Without this, LLM-
+    generated code with a relative path (open("config.json", "w")) could
+    clobber real application files, and python -c's sys.path[0] == '' would
+    make every app module (including graphlink_secrets) directly importable
+    by executed code. Mirrors VirtualEnvSandbox's own base_dir pattern in
+    graphlink_plugins/code_sandbox/domain.py exactly (same safe-id
+    sanitization, same tempdir root convention, sibling directory name).
     """
-    def __init__(self):
+    def __init__(self, node_id=None):
         self.process = None
         self.last_run_failed = False
         self._boundary_prefix = ""
+        safe_id = re.sub(r"[^A-Za-z0-9_-]", "_", node_id or "default")
+        self.cwd = Path(tempfile.gettempdir()) / "graphlink_pycoder_repls" / safe_id
 
     def start(self):
         nonce = uuid.uuid4().hex
@@ -108,6 +121,11 @@ while True:
         if sys.platform == 'win32':
             kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
 
+        # ADR-005 stage 5.1: cwd= a scratch dir, never the app's own cwd (see
+        # this class's own docstring). mkdir here, not in __init__, so a REPL
+        # that is constructed but never started never touches the filesystem.
+        self.cwd.mkdir(parents=True, exist_ok=True)
+
         self.process = subprocess.Popen(
             [sys.executable, '-c', script],
             stdin=subprocess.PIPE,
@@ -115,6 +133,7 @@ while True:
             stderr=subprocess.STDOUT,
             text=True,
             bufsize=1,
+            cwd=str(self.cwd),
             **kwargs
         )
 

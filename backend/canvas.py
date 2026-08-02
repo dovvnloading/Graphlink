@@ -3432,7 +3432,8 @@ def _history_turn_text(turn: dict) -> str:
 def _history_token_text(history: list[dict]) -> str:
     """Joins an entire chat_branch_history's turns into one string for
     token_counter.py's set_context_text (which, like set_input_text, takes
-    a single flat string and estimates it via whitespace-split)."""
+    a single flat string and estimates it via the real tiktoken-backed
+    estimator - ADR-016 stage 16.2)."""
     return "\n\n".join(text for text in (_history_turn_text(turn) for turn in history) if text)
 
 
