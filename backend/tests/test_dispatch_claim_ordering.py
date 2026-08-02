@@ -40,6 +40,7 @@ AGENTS_PY = Path(__file__).resolve().parents[1] / "agents.py"
 MIGRATED_METHODS = [
     ("_dispatch", "chat"),
     ("start_image_reply", "image"),
+    ("start_artifact_reply", "artifact"),
 ]
 
 
