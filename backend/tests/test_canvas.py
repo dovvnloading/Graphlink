@@ -37,7 +37,7 @@ from backend.attachments import StagedAttachment
 from backend.composer import ComposerDocument
 from backend.events import SessionBus
 from backend.notifications import NotificationState
-from backend.tests.conftest import chat_slots, image_slots, web_research_slots
+from backend.tests.conftest import chat_slots, gitlink_run_slots, image_slots, web_research_slots
 
 import api_provider
 import graphlink_task_config as task_config
@@ -4413,13 +4413,13 @@ def test_two_concurrent_run_gitlink_change_set_calls_for_the_same_node_only_one_
         # scheduling always lets the FIRST-created task ("task A") win.
         assert results == [node.id, None], "exactly one of the two concurrent calls must be admitted"
 
-        entries = list(dispatcher._gitlink_requests.values())
+        entries = list(gitlink_run_slots(dispatcher).values())
         assert len(entries) == 1, "only ONE Run may ever be admitted for this node at a time"
         await entries[0]["task"]
 
         assert call_count["n"] == 1, "only ONE of the two concurrent calls may ever reach the LLM"
         assert document.nodes[node.id].gitlink_change_state == "previewed"
-        assert dispatcher._gitlink_requests == {}
+        assert gitlink_run_slots(dispatcher) == {}
         assert document.nodes[node.id].pending_request_id is None, (
             "the busy slot must be fully released once the admitted Run finishes"
         )

@@ -68,6 +68,14 @@ def artifact_slots(dispatcher):
     return _run_slots(dispatcher, "artifact")
 
 
+def gitlink_run_slots(dispatcher):
+    return _run_slots(dispatcher, "gitlink_run")
+
+
+def gitlink_apply_slots(dispatcher):
+    return _run_slots(dispatcher, "gitlink_apply")
+
+
 def web_research_slots(dispatcher):
     """Note: web_research's cancellation mechanism is RunHandle.on_cancel
     (a bound CancellationToken.cancel), not cancel_event - _run_slots'
