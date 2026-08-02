@@ -3,6 +3,7 @@ import type { WsTransport } from "../../lib/ws/transport";
 import { TOPIC_VALIDATORS } from "../../lib/api-contract/topics";
 import type { AppSettingsState } from "../../lib/bridge-core/generated/app-settings-state";
 import { Dialog } from "../overlays/overlays";
+import { CustomSelect } from "./CustomSelect";
 
 /**
  * The settings dialog (Qt-removal plan R2.5d, extended R7.4a-c) - settings
@@ -290,20 +291,15 @@ function ApiProviderPage({
 
   return (
     <div className="settings-general-page">
-      <label className="settings-field">
+      <div className="settings-field">
         <span className="settings-field-label">API Provider</span>
-        <select
-          className="settings-select"
+        <CustomSelect
+          ariaLabel="API Provider"
           value={viewingProvider}
-          onChange={(event) => transport.intent("app-settings", "setViewingApiProvider", [event.target.value])}
-        >
-          {API_PROVIDERS.map((provider) => (
-            <option key={provider} value={provider}>
-              {provider}
-            </option>
-          ))}
-        </select>
-      </label>
+          options={API_PROVIDERS.map((provider) => ({ id: provider, label: provider }))}
+          onChange={(id) => transport.intent("app-settings", "setViewingApiProvider", [id])}
+        />
+      </div>
 
       <p className="settings-update-status">
         {viewingProvider === state.activeApiProvider
@@ -474,26 +470,28 @@ function OllamaTaskField({
     setUiMode(isSpecial ? value : "explicit");
   }
 
+  const modeOptions = [
+    ...(task !== "task_chat" ? [{ id: "inherit", label: "Use chat model" }] : []),
+    { id: "auto", label: "Auto - choose a compatible installed model" },
+    { id: "explicit", label: "Custom model ID..." },
+  ];
+
   return (
     <>
-      <label className="settings-field">
+      <div className="settings-field">
         <span className="settings-field-label">{OLLAMA_TASK_LABELS[task]}</span>
-        <select
-          className="settings-select"
+        <CustomSelect
+          ariaLabel={OLLAMA_TASK_LABELS[task]}
           value={uiMode}
-          onChange={(event) => {
-            const nextMode = event.target.value;
+          options={modeOptions}
+          onChange={(nextMode) => {
             setUiMode(nextMode);
             if (nextMode !== "explicit") {
               transport.intent("app-settings", "setOllamaModelAssignment", [task, nextMode]);
             }
           }}
-        >
-          {task !== "task_chat" && <option value="inherit">Use chat model</option>}
-          <option value="auto">Auto - choose a compatible installed model</option>
-          <option value="explicit">Custom model ID...</option>
-        </select>
-      </label>
+        />
+      </div>
       {uiMode === "explicit" && (
         <label className="settings-field">
           <span className="settings-field-label">{OLLAMA_TASK_LABELS[task]} (custom model ID)</span>
@@ -740,21 +738,18 @@ function LlamaCppPage({ state, transport }: { state: AppSettingsState; transport
       </datalist>
 
       {state.llamaCppScannedModels.length > 0 && (
-        <label className="settings-field">
+        <div className="settings-field">
           <span className="settings-field-label">Scanned Chat Model</span>
-          <select
-            className="settings-select"
+          <CustomSelect
+            ariaLabel="Scanned Chat Model"
             value={scannedChatValue}
-            onChange={(event) => transport.intent("app-settings", "setLlamaCppChatModelPath", [event.target.value])}
-          >
-            <option value="">Select a scanned model...</option>
-            {state.llamaCppScannedModels.map((path) => (
-              <option key={path} value={path}>
-                {basename(path)}
-              </option>
-            ))}
-          </select>
-        </label>
+            options={[
+              { id: "", label: "Select a scanned model..." },
+              ...state.llamaCppScannedModels.map((path) => ({ id: path, label: basename(path) })),
+            ]}
+            onChange={(path) => transport.intent("app-settings", "setLlamaCppChatModelPath", [path])}
+          />
+        </div>
       )}
 
       <div className="settings-field">
@@ -770,21 +765,18 @@ function LlamaCppPage({ state, transport }: { state: AppSettingsState; transport
       </div>
 
       {state.llamaCppScannedModels.length > 0 && (
-        <label className="settings-field">
+        <div className="settings-field">
           <span className="settings-field-label">Scanned Naming Model</span>
-          <select
-            className="settings-select"
+          <CustomSelect
+            ariaLabel="Scanned Naming Model"
             value={scannedTitleValue}
-            onChange={(event) => transport.intent("app-settings", "setLlamaCppTitleModelPath", [event.target.value])}
-          >
-            <option value="">Select a scanned model...</option>
-            {state.llamaCppScannedModels.map((path) => (
-              <option key={path} value={path}>
-                {basename(path)}
-              </option>
-            ))}
-          </select>
-        </label>
+            options={[
+              { id: "", label: "Select a scanned model..." },
+              ...state.llamaCppScannedModels.map((path) => ({ id: path, label: basename(path) })),
+            ]}
+            onChange={(path) => transport.intent("app-settings", "setLlamaCppTitleModelPath", [path])}
+          />
+        </div>
       )}
 
       <div className="settings-field">

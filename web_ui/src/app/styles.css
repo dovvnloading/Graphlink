@@ -20,6 +20,7 @@
   --gl-z-search: 22; /* search overlay, above the other app layers */
   --gl-z-notification: 30; /* banner must beat app layers, not dialogs */
   --gl-z-scrim: 40; /* modal scrim + the dialog it dims for */
+  --gl-z-dialog-popover: 45; /* CustomSelect.tsx's own dropdown panel - must render above an already-open modal dialog (Settings), unlike --gl-z-app-layer's own popovers, which are never open at the same time as a dialog */
   --gl-z-node-menu: 60; /* PORTALED node context menus (NodeMenu.tsx) */
   --gl-z-approval: 80; /* blocking code-execution prompt - outranks all */
 
@@ -3547,6 +3548,64 @@ mark.document-view-search-match-current {
   background-color: var(--gl-surface-inset, var(--gl-surface-window));
   border: 1px solid var(--gl-surface-border);
   border-radius: 6px;
+}
+
+/* CustomSelect.tsx's own trigger button - fills the exact same box
+   .settings-select's native <select> used to occupy (same padding/font-
+   size/colors/border/radius), but as a real button with a chevron so it
+   can open .custom-select-panel below instead of the browser's own
+   unstyleable native dropdown. */
+.custom-select-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-surface-inset, var(--gl-surface-window));
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.custom-select-trigger:hover:enabled {
+  border-color: var(--gl-surface-border-strong, var(--gl-surface-text-muted));
+}
+
+.custom-select-trigger:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.custom-select-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.custom-select-chevron {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Reuses .overlay-popover/.overlay-popover-anchored verbatim for
+   background/border/shadow/position:fixed (see CustomSelect.tsx's own doc
+   comment) - only the z-index needs overriding here, since this panel must
+   render above an already-open modal Settings dialog
+   (--gl-z-scrim), unlike every OTHER consumer of .overlay-popover-anchored
+   (View/Plugins/Pins), which is never open at the same time as a dialog. */
+.custom-select-panel {
+  z-index: var(--gl-z-dialog-popover);
 }
 
 .settings-checkbox-row {
