@@ -44,6 +44,7 @@ from backend.crash_recovery import maybe_show_crash_notice
 from backend.events import EventBus, SessionBus, UnknownIntentError, UnknownTopicError
 from backend.notifications import register_notifications
 from backend.plugins import register_plugins
+from backend.session_context import SessionContext, attach_session_context, get_session_context
 from backend.settings import register_settings
 from backend.token_counter import register_token_counter
 
@@ -161,24 +162,30 @@ def _configure_session(
     composer_document = register_composer(bus, token_counter, settings_manager, notifications_state)
 
     # R4 (doc/QT_REMOVAL_PLAN.md): the agent-dispatch service - one
-    # AgentDispatcher per session (never a module-level singleton). Bolted
-    # onto the bus (same pattern as canvas_document below) so ws_endpoint's
+    # AgentDispatcher per session (never a module-level singleton). Reachable
+    # via SessionContext (backend/session_context.py) so ws_endpoint's
     # disconnect handler can reach it and cancel any in-flight request when
     # this session's last connection drops - see AgentDispatcher.cancel_all's
     # own docstring for why that matters.
     agent_dispatcher = register_agents(bus, composer_document, notifications_state, settings_manager)
-    bus.agent_dispatcher = agent_dispatcher
 
     # R1 (doc/QT_REMOVAL_PLAN.md): scene document + grid topics.
-    # R3.21: stash the document on its own SessionBus so backend/assets.py's
+    # R3.21: the document is reachable via SessionContext so backend/assets.py's
     # GET /api/assets/{id} route (registered once, globally, on the app) can
-    # reach the SAME per-session SceneDocument register_canvas() built here -
+    # reach the SAME per-session SceneDocument register_canvas() builds here -
     # there was previously no way to get from a session id back to its
-    # canvas document outside this closure. SessionBus has no fixed attribute
-    # set (no __slots__), so this is a plain, minimal bolt-on attribute, not
-    # a SessionBus API change.
-    bus.canvas_document = register_canvas(
+    # canvas document outside this closure.
+    canvas_document = register_canvas(
         bus, notifications_state, agent_dispatcher, composer_document, token_counter
+    )
+
+    # ADR-002 stage 2.1d: ONE typed reference from here on
+    # (backend/session_context.py), replacing what used to be two loose
+    # dynamic bus attributes (bus.agent_dispatcher/bus.canvas_document) that
+    # any OTHER module reading them had no way to know might not exist on a
+    # SessionBus built outside this function.
+    attach_session_context(
+        bus, SessionContext(agent_dispatcher=agent_dispatcher, canvas_document=canvas_document)
     )
 
     # R2.5: about, plugins, settings, chat library.
@@ -186,7 +193,7 @@ def _configure_session(
     # R5.1: register_plugins needs the same session's canvas_document (built
     # just above) so "Web Research" can create a real node - this ordering
     # (canvas_document exists before register_plugins runs) is load-bearing.
-    register_plugins(bus, notifications_state, bus.canvas_document)
+    register_plugins(bus, notifications_state, canvas_document)
     # R7.4a: register_settings now takes notifications_state too, so the
     # API-provider page's save-validation/init-failure paths can surface a
     # real banner (same load-bearing ordering precedent as register_plugins/
@@ -197,7 +204,7 @@ def _configure_session(
     # (built above) so loadChat can actually restore a session into it, and
     # notifications_state so a failed/empty load can surface a real banner -
     # same load-bearing ordering precedent as register_plugins above.
-    register_chat_library(bus, chat_db_path, bus.canvas_document, notifications_state)
+    register_chat_library(bus, chat_db_path, canvas_document, notifications_state)
 
 
 def create_app(
@@ -286,19 +293,35 @@ def create_app(
             # another tab/window on the same session should not lose its
             # in-flight request just because a different tab closed.
             if session.connection_count == 0:
-                session.agent_dispatcher.cancel_all()
-                # R5.4: a DELIBERATE, SCOPED extension of this disconnect
-                # contract, applied ONLY to the Py-Coder/Execution Sandbox
-                # approval-pause slots - not retrofitted onto the
-                # pre-existing web_research/artifact/gitlink slots (a real,
-                # separate, out-of-scope gap: every one of those already
-                # self-terminates via asyncio.wait_for(..., timeout=...), so
-                # cancel_all() alone is enough for them). An approval pause
-                # has NO timeout by design (the whole point is "wait for a
-                # human, however long that takes"), so without this
-                # extension an abandoned tab's in-flight approval would hang
-                # forever, permanently locking node.pending_request_id.
-                session.agent_dispatcher.cancel_all_pending_approvals()
+                # ADR-002 stage 2.1d adversarial review finding: guarded to
+                # match the exact R6.7 precedent above (bus.session()'s own
+                # try/except) - an uncaught exception inside this finally
+                # block would otherwise vanish into uvicorn's own
+                # "uvicorn.error" logger, which does not propagate to root
+                # and never reaches graphlink.log. get_session_context()
+                # cannot actually raise here today (session only ever
+                # reaches this point via a successful bus.session() call
+                # above, which guarantees a SessionContext is already
+                # attached), but the cost of guarding it is one log line
+                # against a failure mode that is otherwise silent forever.
+                try:
+                    agent_dispatcher = get_session_context(session).agent_dispatcher
+                except Exception:
+                    logger.exception("post-disconnect cleanup failed for session_id=%r", session.session_id)
+                else:
+                    agent_dispatcher.cancel_all()
+                    # R5.4: a DELIBERATE, SCOPED extension of this disconnect
+                    # contract, applied ONLY to the Py-Coder/Execution Sandbox
+                    # approval-pause slots - not retrofitted onto the
+                    # pre-existing web_research/artifact/gitlink slots (a real,
+                    # separate, out-of-scope gap: every one of those already
+                    # self-terminates via asyncio.wait_for(..., timeout=...), so
+                    # cancel_all() alone is enough for them). An approval pause
+                    # has NO timeout by design (the whole point is "wait for a
+                    # human, however long that takes"), so without this
+                    # extension an abandoned tab's in-flight approval would hang
+                    # forever, permanently locking node.pending_request_id.
+                    agent_dispatcher.cancel_all_pending_approvals()
 
     resolved_spa = SPA_DIST_DIR if spa_dir is None else spa_dir
     if resolved_spa.is_dir():

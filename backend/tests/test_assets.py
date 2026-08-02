@@ -12,6 +12,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from backend.app import create_app
+from backend.session_context import get_session_context
 
 
 def make_client(tmp_path: Path | None = None) -> TestClient:
@@ -35,7 +36,7 @@ def make_client(tmp_path: Path | None = None) -> TestClient:
 def test_get_asset_returns_exact_bytes_and_stored_mime_type():
     client = make_client()
     bus = client.app.state.bus
-    document = bus.session("default").canvas_document
+    document = get_session_context(bus.session("default")).canvas_document
     parent = document.add_node(0, 0, "parent")
     node = document.add_image_node(
         0, 0, b"\x89PNG\r\n\x1a\nsome raw image bytes", "a test image", parent.id, mime_type="image/png"
@@ -51,7 +52,7 @@ def test_get_asset_returns_exact_bytes_and_stored_mime_type():
 def test_get_asset_respects_the_mime_type_it_was_stored_with():
     client = make_client()
     bus = client.app.state.bus
-    document = bus.session("default").canvas_document
+    document = get_session_context(bus.session("default")).canvas_document
     parent = document.add_node(0, 0, "parent")
     node = document.add_image_node(0, 0, b"jpeg-ish bytes", "prompt", parent.id, mime_type="image/jpeg")
 
@@ -73,7 +74,7 @@ def test_get_asset_for_unknown_id_returns_404_json():
 def test_get_asset_scopes_by_session_query_param():
     client = make_client()
     bus = client.app.state.bus
-    document_a = bus.session("session-a").canvas_document
+    document_a = get_session_context(bus.session("session-a")).canvas_document
     parent = document_a.add_node(0, 0, "parent")
     node = document_a.add_image_node(0, 0, b"session-a bytes", "prompt", parent.id)
 
@@ -98,11 +99,11 @@ def test_asset_ids_do_not_collide_across_sessions_with_identical_creation_order(
     client = make_client()
     bus = client.app.state.bus
 
-    document_a = bus.session("session-a").canvas_document
+    document_a = get_session_context(bus.session("session-a")).canvas_document
     parent_a = document_a.add_node(0, 0, "parent")
     node_a = document_a.add_image_node(0, 0, b"session-a bytes", "prompt", parent_a.id)
 
-    document_b = bus.session("session-b").canvas_document
+    document_b = get_session_context(bus.session("session-b")).canvas_document
     parent_b = document_b.add_node(0, 0, "parent")
     node_b = document_b.add_image_node(0, 0, b"session-b bytes", "prompt", parent_b.id)
 
@@ -123,7 +124,7 @@ _CHART_DATA = {"type": "bar", "title": "Widgets Sold", "labels": ["Q1", "Q2"], "
 def test_export_chart_returns_a_real_higher_resolution_png():
     client = make_client()
     bus = client.app.state.bus
-    document = bus.session("default").canvas_document
+    document = get_session_context(bus.session("default")).canvas_document
     parent = document.add_node(0, 0, "parent")
     chart = document.add_chart_node(0, 0, parent.id, "bar", dict(_CHART_DATA))
 
@@ -144,7 +145,7 @@ def test_export_chart_returns_a_real_higher_resolution_png():
 def test_export_chart_content_disposition_uses_the_sanitized_title():
     client = make_client()
     bus = client.app.state.bus
-    document = bus.session("default").canvas_document
+    document = get_session_context(bus.session("default")).canvas_document
     parent = document.add_node(0, 0, "parent")
     chart = document.add_chart_node(
         0, 0, parent.id, "bar", {"type": "bar", "title": "Q1 Sales / Report!!", "labels": ["a"], "values": [1.0]}
@@ -167,7 +168,7 @@ def test_export_chart_for_unknown_node_returns_404_json():
 def test_export_chart_for_a_non_chart_node_returns_404_json():
     client = make_client()
     bus = client.app.state.bus
-    document = bus.session("default").canvas_document
+    document = get_session_context(bus.session("default")).canvas_document
     node = document.add_node(0, 0, "plain node")
 
     response = client.get(f"/api/assets/chart/{node.id}/export")
@@ -179,7 +180,7 @@ def test_export_chart_for_a_non_chart_node_returns_404_json():
 def test_export_chart_scopes_by_session_query_param():
     client = make_client()
     bus = client.app.state.bus
-    document_a = bus.session("session-a").canvas_document
+    document_a = get_session_context(bus.session("session-a")).canvas_document
     parent_a = document_a.add_node(0, 0, "parent")
     chart_a = document_a.add_chart_node(0, 0, parent_a.id, "bar", dict(_CHART_DATA))
 
