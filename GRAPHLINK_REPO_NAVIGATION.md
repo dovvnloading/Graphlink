@@ -19,7 +19,7 @@ Last refreshed: 2026-07-27 (post R7.6b Qt-removal cutover)
   - 18 loose top-level `.py` modules at the repo root (see list below) - unchanged content, just living at the repo root now instead of inside `graphlink_app/`.
   - `tests/` - not a package (no `__init__.py`). Currently one file, `test_no_qt_anywhere.py`, the permanent Qt-removal gate.
   - `doc/` - **gitignored** (`.gitignore` has `/doc/`), local-only planning scratch. It is never pushed to the remote and is not part of what a clone or contributor sees. Treat it as a historical record of past planning, not shipped documentation - do not "fix" its content as if it were user-facing.
-- 18 loose top-level `.py` modules (unchanged content, relocated over R7.2 and earlier increments): `api_provider.py`, `graphlink_artifact_agent.py`, `graphlink_audio.py`, `graphlink_chart_agent.py`, `graphlink_chart_data.py`, `graphlink_chart_rendering.py`, `graphlink_chat_agent.py`, `graphlink_desktop.py`, `graphlink_grid_view_settings.py`, `graphlink_licensing.py`, `graphlink_memory.py`, `graphlink_model_catalog.py`, `graphlink_navigation_pins.py`, `graphlink_prompts.py`, `graphlink_secrets.py`, `graphlink_task_config.py`, `graphlink_token_estimator.py`, `graphlink_version.py`.
+- 18 loose top-level `.py` modules (unchanged content, relocated over R7.2 and earlier increments): `api_provider.py`, `graphlink_artifact_agent.py`, `graphlink_audio.py`, `graphlink_chart_agent.py`, `graphlink_chart_data.py`, `graphlink_chart_rendering.py`, `graphlink_chat_agent.py`, `graphlink_desktop.py`, `graphlink_grid_view_settings.py`, `graphlink_memory.py`, `graphlink_model_catalog.py`, `graphlink_navigation_pins.py`, `graphlink_prompts.py`, `graphlink_secrets.py`, `graphlink_settings_store.py`, `graphlink_task_config.py`, `graphlink_token_estimator.py`, `graphlink_version.py`.
 - Real entry point: `graphlink_desktop.py` (repo root). `pyproject.toml`'s `[project.gui-scripts]` reads `graphlink = "graphlink_desktop:main"`.
 - Runtime modes exposed in Settings: `Ollama (Local)`, `Llama.cpp (Local)`, `API Endpoint` (OpenAI-Compatible / Anthropic Claude / Google Gemini). The AppBar's own provider-mode `<select>` is still hardcoded-disabled to one option (`Ollama (Local)`) with `title="Switching provider modes isn't available yet"` - see the Architecture Truths section.
 - Runtime persistence outside the repo:
@@ -139,7 +139,7 @@ Several `backend/` modules (`composer.py`, `chat_library.py`, `plugins.py`, `ses
   - `AgentDispatcher` (one instance per session, never a module-level singleton) - owns in-flight request tracking/cancellation for chat/conversation requests (`self._requests`) and image generation (a separate slot), `bootstrap_provider_state()` (process-global `api_provider` state, set up once per process from the shared `SettingsManager`), and `register_agents()`.
 - `backend/response_parsing.py`
   - `parse_response()` - splits a flat LLM reply into ordered thinking/text/code parts, shared by the ordinary send path and the regenerate path (both in `backend/canvas.py`). `ConversationNode` is the one confirmed exception - it never routes through this parser.
-- `graphlink_task_config.py`, `graphlink_licensing.py`, `graphlink_prompts.py`, `graphlink_model_catalog.py` (repo root)
+- `graphlink_task_config.py`, `graphlink_settings_store.py`, `graphlink_prompts.py`, `graphlink_model_catalog.py` (repo root)
   - Task keys/mode labels, persisted `SettingsManager` state, global prompt text, and the model-catalog helpers `api_provider.py`/`backend/settings.py` consume.
 
 ### Shared chrome, dialogs, and overlays
@@ -315,7 +315,7 @@ This is the practical lookup map for where code actually lives today.
 
 - `api_provider.py` - provider abstraction for Ollama/Llama.cpp/OpenAI-compatible/Anthropic/Gemini; local model scanning; `chat()`/`generate_image()`.
 - `graphlink_secrets.py` - Windows DPAPI secret encryption for `~/.graphlink/session.dat`.
-- `graphlink_licensing.py` - `SettingsManager`, the persisted-settings authority `backend/settings.py` wraps.
+- `graphlink_settings_store.py` - `SettingsManager`, the persisted-settings authority `backend/settings.py` wraps.
 - `graphlink_task_config.py` - task keys, mode labels, `API_PROVIDER_*` constants.
 - `graphlink_desktop.py` - the real entry point (see Runtime Ownership Map).
 - `graphlink_memory.py` - branch/history helpers used by `backend/canvas.py::send_message`.
@@ -334,7 +334,7 @@ This is the practical lookup map for where code actually lives today.
 
 - `api_provider.py`
 - `graphlink_task_config.py`
-- `graphlink_licensing.py`
+- `graphlink_settings_store.py`
 - `backend/settings.py` (+ `web_ui/src/app/chrome/SettingsDialog.tsx`)
 
 ### You want to change prompt send, response parsing, or agent dispatch
@@ -380,7 +380,7 @@ This is the practical lookup map for where code actually lives today.
 ### You want to change settings, secrets, or provider credential storage
 
 - `backend/settings.py`
-- `graphlink_licensing.py`
+- `graphlink_settings_store.py`
 - `graphlink_secrets.py` (DPAPI encryption)
 - `web_ui/src/app/chrome/SettingsDialog.tsx`
 

@@ -65,7 +65,7 @@ const API_PROVIDER_OPENAI = "OpenAI-Compatible";
 const API_PROVIDER_ANTHROPIC = "Anthropic Claude";
 const API_PROVIDER_GEMINI = "Google Gemini";
 const API_PROVIDERS = [API_PROVIDER_OPENAI, API_PROVIDER_ANTHROPIC, API_PROVIDER_GEMINI] as const;
-// Mirrors SettingsManager.get_api_base_url()'s own default (graphlink_licensing.py).
+// Mirrors SettingsManager.get_api_base_url()'s own default (graphlink_settings_store.py).
 const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 
 // Mirrors graphlink_task_config.py's TASK_* constants exactly.

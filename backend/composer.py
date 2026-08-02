@@ -51,7 +51,7 @@ from backend.settings import (
     apply_openai_reasoning_level,
 )
 from backend.token_counter import TokenCounterState
-from graphlink_licensing import SettingsManager
+from graphlink_settings_store import SettingsManager
 
 REASONING_OPTIONS = [
     {"id": "off", "label": "Off", "description": "No extended reasoning - the fastest, most direct answers."},

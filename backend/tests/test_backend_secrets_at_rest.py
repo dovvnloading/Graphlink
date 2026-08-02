@@ -2,7 +2,7 @@
 
 Ported from graphlink_app/tests/test_secrets_at_rest.py (Qt-removal plan
 R7.4a) - 100% Qt-free already (confirmed by import grep: only json, pathlib,
-graphlink_secrets, graphlink_licensing.SettingsManager), it just needed a
+graphlink_secrets, graphlink_settings_store.SettingsManager), it just needed a
 new home now that the R7.4a API-provider settings page makes this the
 active, exercised secrets path rather than a deferred one. Named
 test_backend_* (not test_secrets_at_rest.py) because the legacy file of
@@ -33,7 +33,7 @@ CI runner).
 import json
 
 import graphlink_secrets
-from graphlink_licensing import SettingsManager
+from graphlink_settings_store import SettingsManager
 
 
 class TestProtectUnprotectPrimitives:

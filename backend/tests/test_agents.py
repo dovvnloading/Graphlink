@@ -21,7 +21,7 @@ from types import SimpleNamespace
 
 import pytest
 
-# R7.2: api_provider/graphlink_task_config/graphlink_licensing (imported
+# R7.2: api_provider/graphlink_task_config/graphlink_settings_store (imported
 # below, directly or via backend.agents) sit at the repo root, a sibling of
 # backend/ - already on sys.path whenever this package is, no ordering
 # constraint relative to the import below.
@@ -34,7 +34,7 @@ from backend.notifications import NotificationState
 
 import api_provider
 import graphlink_task_config as config
-from graphlink_licensing import SettingsManager
+from graphlink_settings_store import SettingsManager
 from graphlink_plugins.web_research.domain import RequestCancelled, ResearchFailure
 
 

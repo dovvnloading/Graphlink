@@ -75,7 +75,7 @@ from graphlink_artifact_agent import ArtifactAgent
 from graphlink_chart_agent import ChartDataAgent
 from graphlink_chat_agent import ChatAgent
 from graphlink_note_agent import BranchComparisonAgent, BranchSynthesisAgent, ExplainerAgent, KeyTakeawayAgent
-from graphlink_licensing import SettingsManager  # type hint only
+from graphlink_settings_store import SettingsManager  # type hint only
 from graphlink_plugins.common.github_client import GitHubRestClient
 from graphlink_plugins.gitlink.agent import GitlinkAgent, _fingerprint_changes, _is_repo_text_path
 from graphlink_plugins.gitlink.repository import (

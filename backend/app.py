@@ -31,7 +31,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from graphlink_licensing import SettingsManager
+from graphlink_settings_store import SettingsManager
 
 from backend import BACKEND_VERSION
 from backend.about import register_about
