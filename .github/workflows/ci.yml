@@ -127,11 +127,15 @@ jobs:
 
       # check:schema shells out to the Python codegen script (stdlib-only,
       # no pip install needed) to prove the generated TS/JSON Schema
-      # artifacts aren't stale relative to the Python dataclasses.
+      # artifacts aren't stale relative to the Python dataclasses. No
+      # cache: pip here (unlike the other two jobs' setup-python) - this
+      # step never runs a pip install, so the cache dir never gets
+      # populated and setup-python's own post-job cache-save step fails
+      # ("Cache folder path is retrieved for pip but doesn't exist on
+      # disk") - confirmed live on PR #212's first CI run.
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
-          cache: pip
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
