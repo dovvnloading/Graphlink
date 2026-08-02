@@ -1,36 +1,70 @@
-# ADR-015 stage 15.2: supply-chain hygiene. Three ecosystems, matching the
-# three real dependency surfaces in this repo - the Python backend
-# (requirements.txt / pyproject.toml), the web_ui SPA (package-lock.json),
-# and the CI workflow's own actions (now SHA-pinned; Dependabot is what
-# actually bumps those pins over time, using the "# v4"-style version
-# comments left next to each SHA).
+# ADR-015 stage 15.2: supply-chain hygiene.
+#
+# Deliberately tuned for a solo-maintainer repo. The first version of this
+# file used weekly + ungrouped + default limits, and opened 13 separate PRs
+# the moment it merged - including major-version jumps (vite 6->8,
+# typescript 5->7) that would have broken the build. That is noise, not
+# safety, and noise gets ignored, which defeats the point.
+#
+# What changed:
+# - groups: one PR per ecosystem instead of one per package.
+# - schedule: monthly, not weekly.
+# - ignore major bumps: a major version of vite/typescript/react is a
+#   deliberate migration to plan, never a bot-authored PR to rubber-stamp.
+#   Minor/patch (where security fixes actually land) still flow through.
+# - open-pull-requests-limit: 1 per ecosystem, so a stale PR blocks new
+#   noise instead of stacking on top of it.
+#
+# Security alerts are NOT affected by any of this - GitHub's security
+# updates ignore these limits and still open promptly when a real CVE
+# lands. This file only governs routine version bumps.
 version: 2
 updates:
-  # Labels below are scoped to labels that already exist on this repo
-  # (verified via `gh api repos/dovvnloading/Graphlink/labels`) - a label
-  # Dependabot can't find is silently not applied, so this list is
-  # deliberately not aspirational.
   - package-ecosystem: "pip"
     directory: "/"
     schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 10
+      interval: "monthly"
+    open-pull-requests-limit: 1
+    groups:
+      python-dependencies:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
     labels:
       - "dependencies"
 
   - package-ecosystem: "npm"
     directory: "/web_ui"
     schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 10
+      interval: "monthly"
+    open-pull-requests-limit: 1
+    groups:
+      frontend-dependencies:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
     labels:
       - "dependencies"
 
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 5
+      interval: "monthly"
+    open-pull-requests-limit: 1
+    groups:
+      github-actions:
+        patterns:
+          - "*"
     labels:
       - "dependencies"
       - "github_actions"
