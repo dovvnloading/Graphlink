@@ -16,6 +16,12 @@ backend/api/intents_chat.py - factored here anyway (not left as a local
 closure there) only because intents_chat.py is already the tightest of
 the split modules against the ADR's 300-line-per-registration-function
 cap; see that module's own docstring.
+
+make_publish_grid (ADR-002 stage 2.6 PR3) is publish_scene's grid-control
+counterpart, needed once backend/api/intents_grid.py's own
+register_grid_intents becomes the last consumer of register_canvas's
+former local `publish_grid` closure. Relocated verbatim from
+backend/canvas.py's former register_canvas (former lines 302-303).
 """
 
 from __future__ import annotations
@@ -28,6 +34,13 @@ def make_publish_scene(bus: SessionBus):
         await bus.publish("scene")
 
     return publish_scene
+
+
+def make_publish_grid(bus: SessionBus):
+    async def publish_grid():
+        await bus.publish("grid-control")
+
+    return publish_grid
 
 
 def make_publish_token_counter(bus: SessionBus):
