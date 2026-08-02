@@ -47,6 +47,12 @@ FORBIDDEN_MODULES = (
 
 FORBIDDEN_CALL_ATTRS = {"publish", "dispatch_intent", "register_topic", "register_intent"}
 
+# Dynamic-import escape hatches (adversarial-review finding: the AST import
+# checks below can't see a module name smuggled in as a string). Banning the
+# callables outright is coarse but correct for a domain layer that has no
+# legitimate dynamic-import use case.
+FORBIDDEN_CALL_NAMES = {"__import__", "import_module"}
+
 
 def _domain_trees():
     paths = sorted(DOMAIN_DIR.rglob("*.py"))
@@ -70,7 +76,19 @@ def test_domain_imports_no_backend_infrastructure():
                 names = [alias.name for alias in node.names]
             elif isinstance(node, ast.ImportFrom):
                 # Relative imports (level > 0) are within-domain and allowed.
-                names = [] if node.level > 0 else [node.module or ""]
+                # For absolute ImportFrom, check BOTH the module itself AND
+                # each module.name composition - adversarial-review finding:
+                # `from backend import events` has node.module == "backend"
+                # (not forbidden) with the forbidden module hiding in
+                # node.names, and that spelling is idiomatic in this codebase
+                # (backend/canvas.py's own `from backend import
+                # native_dialogs`), so it was a realistic accidental bypass,
+                # not just a contrived one.
+                if node.level > 0:
+                    names = []
+                else:
+                    module = node.module or ""
+                    names = [module] + [f"{module}.{alias.name}" for alias in node.names]
             else:
                 continue
             offenders.extend(
@@ -82,12 +100,15 @@ def test_domain_imports_no_backend_infrastructure():
 
 
 def test_domain_never_calls_bus_shaped_methods():
-    offenders = [
-        f"{path.name}:{node.lineno} calls .{node.func.attr}(...)"
-        for path, tree in _domain_trees()
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and node.func.attr in FORBIDDEN_CALL_ATTRS
-    ]
+    offenders = []
+    for path, tree in _domain_trees():
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            if isinstance(node.func, ast.Attribute) and node.func.attr in (
+                FORBIDDEN_CALL_ATTRS | FORBIDDEN_CALL_NAMES
+            ):
+                offenders.append(f"{path.name}:{node.lineno} calls .{node.func.attr}(...)")
+            elif isinstance(node.func, ast.Name) and node.func.id in FORBIDDEN_CALL_NAMES:
+                offenders.append(f"{path.name}:{node.lineno} calls {node.func.id}(...)")
     assert not offenders, "domain purity violated:\n" + "\n".join(offenders)

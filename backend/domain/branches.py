@@ -19,6 +19,8 @@ backend/session_load.py) both resolve through the MRO unchanged.
 
 from __future__ import annotations
 
+from typing import Any
+
 from backend.domain.model import (
     BRANCH_HORIZONTAL_SPACING,
     MESSAGE_VERTICAL_SPACING,

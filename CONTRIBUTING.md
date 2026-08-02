@@ -43,7 +43,7 @@ This starts the Python backend (FastAPI via uvicorn) on a free localhost port in
 - Launch the app from the repo root (`python graphlink_desktop.py`), not from a subdirectory.
 - Prefer editing the real implementation modules in:
   - `graphlink_plugins/` (repo root - Qt-free plugin domain logic: `web_research/`, `gitlink/`, `pycoder/`, `code_sandbox/`, `common/`)
-  - `backend/canvas.py` (the node/graph/connection domain model - chat, code, document, thinking, html, image, conversation, web_research, artifact, gitlink, pycoder, code_sandbox, note, frame/container, and chart node kinds all live here, with no UI code)
+  - `backend/domain/` (the node/graph/connection domain model - chat, code, document, thinking, html, image, conversation, web_research, artifact, gitlink, pycoder, code_sandbox, note, frame/container, and chart node kinds all live here, with no UI code; purity gated by `tests/test_domain_purity.py`) and `backend/canvas.py` (the scene/grid topic + intent wiring on top of it)
   - `web_ui/src/app/` (the actual UI - `canvas/` for the React Flow graph surface, `chrome/` for the app bar and composer, `overlays/` for dialogs and popovers)
 - Keep changes focused. UI cleanup, plugin behavior, persistence updates, and provider changes should be easy to review independently.
 

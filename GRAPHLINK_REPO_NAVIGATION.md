@@ -72,7 +72,7 @@ Every prior revision of this document described a flat-import Qt app with packag
 
 ### 6. Connections are one unified edge model now, not 13 parallel lists
 
-The old Qt app kept a separate `ConnectionItem`-family list per relationship kind (`content_connections`, `document_connections`, `pycoder_connections`, `gitlink_connections`, ... 13 in total) plus a distinct `children` object-tree relationship. `backend/canvas.py`'s `SceneDocument` collapses all of that into one `nodes: dict[str, SceneNode]` + `edges: dict[str, SceneEdge]` model - an edge is just an edge, created via `SceneDocument.connect(source, target)`. The old distinctions (structural parent vs. child-list vs. connection-line) only resurface at the save/load boundary: `backend/session_save.py`'s `_classify_edges` reconstructs the legacy four-bucket split purely to write a byte-compatible `chats.db` row: it is a save-time projection, not a live in-memory structure.
+The old Qt app kept a separate `ConnectionItem`-family list per relationship kind (`content_connections`, `document_connections`, `pycoder_connections`, `gitlink_connections`, ... 13 in total) plus a distinct `children` object-tree relationship. `backend/domain/graph.py`'s `SceneDocument` (split out of `backend/canvas.py` at ADR-002 stage 2.2) collapses all of that into one `nodes: dict[str, SceneNode]` + `edges: dict[str, SceneEdge]` model - an edge is just an edge, created via `SceneDocument.connect(source, target)`. The old distinctions (structural parent vs. child-list vs. connection-line) only resurface at the save/load boundary: `backend/session_save.py`'s `_classify_edges` reconstructs the legacy four-bucket split purely to write a byte-compatible `chats.db` row: it is a save-time projection, not a live in-memory structure.
 
 ### 7. Every plugin picker entry is now a real, working node-creation path
 
@@ -88,7 +88,7 @@ Several `backend/` modules (`composer.py`, `chat_library.py`, `plugins.py`, `ses
 
 ### 10. Attachments/ingest exist in the data model but are not reachable from the UI today
 
-`backend/canvas.py` has a full `DocumentNode` model (pdf/docx/audio metadata) and a wired `addDocumentNode` WS intent, but `web_ui/src/app/canvas/sceneStore.ts`'s `addDocumentNode()` is only ever called from its own test file - no real UI component invokes it. `backend/composer.py`'s payload also hardcodes `"attachments": False` in its capabilities. `pypdf`, `python-docx`, and `reportlab` are present in `requirements.in`/`pyproject.toml` but are not imported anywhere in the current codebase - they read as unused/legacy-holdover dependencies right now, not evidence of a working ingest path.
+`backend/domain/` has a full document-node model (pdf/docx/audio metadata, `backend/domain/model.py` + `graph.py`) and a wired `addDocumentNode` WS intent, but `web_ui/src/app/canvas/sceneStore.ts`'s `addDocumentNode()` is only ever called from its own test file - no real UI component invokes it. `backend/composer.py`'s payload also hardcodes `"attachments": False` in its capabilities. `pypdf`, `python-docx`, and `reportlab` are present in `requirements.in`/`pyproject.toml` but are not imported anywhere in the current codebase - they read as unused/legacy-holdover dependencies right now, not evidence of a working ingest path.
 
 ## Runtime Ownership Map
 
@@ -107,9 +107,9 @@ Several `backend/` modules (`composer.py`, `chat_library.py`, `plugins.py`, `ses
 
 ### Canvas, graph surface, and layout
 
-- `backend/canvas.py` (the largest file in the repo, ~4,150 lines)
-  - `SceneNode`, `SceneEdge`, `SceneDocument`, `register_canvas()`
-  - Owns every node kind's creation/deletion/reparenting, the unified edge model, frame/container/note/chart creation, branch-root resolution, collapse/expand, view-state (drag speed, grid, fade connections, orthogonal routing, smart guides), navigation pins, and the `sendMessage`/`regenerateResponse`/`generateImage` entry points that hand off into `backend/agents.py`.
+- `backend/domain/` + `backend/canvas.py` (split at ADR-002 stage 2.2; before it, canvas.py was one ~5,100-line file owning both halves)
+  - `backend/domain/`: `SceneNode`/`SceneEdge` (`model.py`), `SceneDocument` (`graph.py`, composed as `SceneDocument(BranchOps, GroupOps)` from `branches.py`/`groups.py`) - every node kind's creation/deletion/reparenting, the unified edge model, frame/container/note/chart creation, branch-root resolution, collapse/expand, view-state. Purity gated by `tests/test_domain_purity.py`.
+  - `backend/canvas.py`: `register_canvas()` - every scene/grid topic + intent wrapper, navigation-pin intents, and the `sendMessage`/`regenerateResponse`/`generateImage` entry points that hand off into `backend/agents.py`.
 - `web_ui/src/app/canvas/SceneCanvas.tsx` + `sceneStore.ts`
   - The React Flow graph surface: node/edge rendering, drag/connect/select, view-state sync, LOD-ish rendering handled per-node-component rather than a shared proxy layer.
 - `web_ui/src/app/canvas/smartGuides.ts`, `treeNavigation.ts`, `exportCanvasPng.ts`, `downloadTextFile.ts`
@@ -135,7 +135,7 @@ Several `backend/` modules (`composer.py`, `chat_library.py`, `plugins.py`, `ses
   - Provider/runtime abstraction for Ollama, direct Llama.cpp (GGUF), OpenAI-compatible endpoints, Anthropic Claude, and Gemini. Local model scanning (Ollama manifests, GGUF files), modality handling, `chat()`, `generate_image()`.
 - `backend/settings.py`
   - `SettingsManager`-backed `register_settings()`: the `app-settings` topic and every settings intent (General, Ollama, Llama.cpp, API Endpoint, Integrations, GitHub token). Reads defaults from `graphlink_task_config.py`'s task-keyed model dict.
-- `backend/agents.py` (largest single-purpose file after `canvas.py`, ~136KB)
+- `backend/agents.py` (now the largest file in the repo, ~156KB)
   - `AgentDispatcher` (one instance per session, never a module-level singleton) - owns in-flight request tracking/cancellation for chat/conversation requests (`self._requests`) and image generation (a separate slot), `bootstrap_provider_state()` (process-global `api_provider` state, set up once per process from the shared `SettingsManager`), and `register_agents()`.
 - `backend/response_parsing.py`
   - `parse_response()` - splits a flat LLM reply into ordered thinking/text/code parts, shared by the ordinary send path and the regenerate path (both in `backend/canvas.py`). `ConversationNode` is the one confirmed exception - it never routes through this parser.
@@ -153,7 +153,7 @@ Several `backend/` modules (`composer.py`, `chat_library.py`, `plugins.py`, `ses
 
 ## Concrete Node and Connection Taxonomy
 
-### Real node kinds today (verified directly against `backend/canvas.py`'s `kind=` literals, 16 total)
+### Real node kinds today (verified directly against the `kind=` literals now in `backend/domain/graph.py`, 16 total)
 
 | `kind` string | User-facing name (plugin picker, where applicable) | React component |
 |---|---|---|
@@ -182,7 +182,7 @@ Several `backend/` modules (`composer.py`, `chat_library.py`, `plugins.py`, `ses
 
 ### Other persisted scene objects
 
-- notes, frames, containers, charts, navigation pins - all live as `SceneNode`/dedicated-model entries in `backend/canvas.py`, same as every node kind above.
+- notes, frames, containers, charts, navigation pins - all live as `SceneNode`/dedicated-model entries in `backend/domain/` (`model.py`/`graph.py`), same as every node kind above.
 
 ## Core Runtime Flows
 
@@ -228,7 +228,7 @@ Several `backend/` modules (`composer.py`, `chat_library.py`, `plugins.py`, `ses
 
 1. `backend/plugins.py::get_plugin_categories()` supplies the `app-plugins` topic's static category/plugin listing (a from-scratch reimplementation of the deleted `PluginPortal`'s algorithm, not an import).
 2. `PluginPicker.tsx` renders that listing and dispatches the `app-plugins` topic's `executePlugin` intent with the selected plugin name and the currently-selected node id.
-3. `execute_plugin()` validates the plugin name and required parent, then calls the matching `SceneDocument.add_*_node()` method in `backend/canvas.py` and publishes `scene` - every one of the 8 picker entries does real node creation today (see Architecture Truths #7).
+3. `execute_plugin()` validates the plugin name and required parent, then calls the matching `SceneDocument.add_*_node()` method (defined in `backend/domain/graph.py`, invoked via canvas.py's wrappers) and publishes `scene` - every one of the 8 picker entries does real node creation today (see Architecture Truths #7).
 
 ## Plugin Catalog As Registered Today
 
@@ -347,14 +347,14 @@ This is the practical lookup map for where code actually lives today.
 
 ### You want to change canvas behavior, graph layout, or view-state (grid/drag-speed/fade/orthogonal/smart-guides)
 
-- `backend/canvas.py` (`SceneDocument`, view-state intents)
+- `backend/domain/graph.py` (`SceneDocument`, the view-state model) + `backend/canvas.py` (the view-state intents)
 - `web_ui/src/app/canvas/SceneCanvas.tsx` + `sceneStore.ts`
 - `web_ui/src/app/canvas/smartGuides.ts` (pure geometry)
 - `web_ui/src/app/chrome/ViewPopover.tsx` (the consolidated drag/grid/font popover)
 
 ### You want to add or modify a node kind
 
-- Backend model + intents: `backend/canvas.py`
+- Backend model: `backend/domain/` (`model.py` fields, `graph.py` methods); intents: `backend/canvas.py`
 - React component: a new `web_ui/src/app/canvas/*NodeView.tsx`
 - Persistence: `backend/session_load.py` and `backend/session_save.py` (both need the new kind's restore/classify logic)
 - Contract: a new payload field/shape in `contracts/graphlink_scene_payload.py` if the node needs new wire fields, then `python contracts/codegen.py --write` to regenerate the TS side
@@ -401,7 +401,7 @@ This is the practical lookup map for where code actually lives today.
 ## Short Working Rules For Future Sessions
 
 - The migration is complete. Do not describe this codebase as "mid-migration" or reference compatibility wrappers - there are none, and `graphlink_app/` does not exist.
-- Treat `backend/canvas.py`'s `SceneDocument` as the graph schema authority - nodes, edges, and view-state all live there, in one unified model (not 13 parallel connection lists).
+- Treat `backend/domain/`'s `SceneDocument` (`graph.py`, data model in `model.py`) as the graph schema authority - nodes, edges, and view-state all live there, in one unified model (not 13 parallel connection lists). `backend/canvas.py` is the wire/orchestration layer and the stable import surface.
 - Treat `backend/agents.py`'s `AgentDispatcher` as the execution/cancellation authority for every LLM-backed request; it is instantiated once per session, never as a module-level singleton.
 - Treat `backend/plugins.py` as the plugin catalog authority - every entry is a real node-creation path today, not a deferred notice.
 - Treat `backend/app.py::_is_allowed_ws_origin` as a real security control, not incidental scaffolding - do not relax its exact-match policy without understanding the DNS-rebinding threat model in its own docstring.
