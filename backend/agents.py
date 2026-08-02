@@ -269,44 +269,38 @@ class AgentDispatcher:
         # and start_conversation_reply, mirroring the single dict they
         # already shared before this migration.
         self._runs = RunRegistry()
-        # R4.4a: an INDEPENDENT in-flight slot for image generation, separate
-        # from self._runs's "chat" kind (chat/conversation). Preserves legacy's real,
-        # verified concurrent capability - graphlink_window.py's
-        # self.chat_thread/self.image_gen_thread are separate, never-aliased
-        # attributes, so a chat request and an image-generation request
-        # genuinely run concurrently today. Reusing chat's "kind" for image
-        # generation too would be a real, visible behavior regression (a user
-        # could no longer send a chat message while an image generates), so
-        # this stays a second, independent dict rather than a new key inside
-        # the existing one. Still single-slot PER KIND (one image request at
-        # a time, same as chat): legacy's generate_image() silently
-        # overwrites self.image_gen_thread with no guard if fired twice (a
-        # latent bug - the orphaned old QThread keeps running unreferenced),
-        # not a deliberate concurrent-multi-image feature; start_image_reply
-        # below gives an honest "already generating" refusal instead of
-        # replicating that hazard. request_id -> {"task": asyncio.Task} - no
-        # "cancel_event" key here, unlike chat: image generation has no
-        # cancellation at all (see start_image_reply's own docstring).
-        self._image_requests: dict[str, dict] = {}
-        # R5.1: a THIRD independent in-flight-request slot, separate from both
-        # chat (self._runs) and self._image_requests - a web
-        # research run and a chat/image request must be able to run
-        # concurrently, same reasoning R4.4a used for _image_requests being
+        # R4.4a/ADR-002 stage 2.4c: image generation ("image" kind, also
+        # sharing self._runs now) is an INDEPENDENT single-slot kind,
+        # separate from chat - preserves legacy's real, verified concurrent
+        # capability (graphlink_window.py's self.chat_thread/
+        # self.image_gen_thread were separate, never-aliased attributes, so
+        # a chat request and an image-generation request genuinely run
+        # concurrently today). No cancel_event/on_cancel: image generation
+        # has no cancellation at all (see start_image_reply's own
+        # docstring) - legacy's own generate_image() silently overwrote
+        # self.image_gen_thread with no guard if fired twice (a latent bug,
+        # not a deliberate concurrent-multi-image feature); start_image_
+        # reply gives an honest "already generating" refusal instead of
+        # replicating that hazard.
+        #
+        # R5.1: a THIRD independent in-flight-request slot, separate from
+        # both chat and image - a web research run and a chat/image request
+        # must be able to run concurrently, same reasoning as image being
         # independent from chat. request_id -> {"cancel_token":
         # CancellationToken, "task": asyncio.Task}.
         self._web_research_requests: dict[str, dict] = {}
         # R5.2: a FOURTH independent in-flight-request slot, separate from
-        # chat (self._runs), self._image_requests, and
-        # self._web_research_requests - an artifact-generation request must be
-        # able to run concurrently with any of those three, same reasoning as
-        # every prior independent slot above. request_id -> {"cancel_event":
-        # threading.Event, "task": asyncio.Task}.
+        # chat, image, and self._web_research_requests - an
+        # artifact-generation request must be able to run concurrently with
+        # any of those three, same reasoning as every prior independent
+        # slot above. request_id -> {"cancel_event": threading.Event,
+        # "task": asyncio.Task}.
         self._artifact_requests: dict[str, dict] = {}
         # R5.3: a FIFTH independent in-flight-request slot, separate from
-        # chat/self._image_requests/self._web_research_requests/
-        # self._artifact_requests - a Gitlink Generate Change Set run must be
-        # able to run concurrently with any of those four, same reasoning as
-        # every prior independent slot above. request_id -> {"cancel_event":
+        # chat/image/self._web_research_requests/self._artifact_requests -
+        # a Gitlink Generate Change Set run must be able to run
+        # concurrently with any of those four, same reasoning as every
+        # prior independent slot above. request_id -> {"cancel_event":
         # threading.Event, "task": asyncio.Task} - Run is cancellable,
         # mirrors self._web_research_requests' exact shape.
         self._gitlink_requests: dict[str, dict] = {}
@@ -314,9 +308,9 @@ class AgentDispatcher:
         # (the disk-write step) must be able to run concurrently with a
         # Gitlink Run on a DIFFERENT node, or with any other kind's dispatch.
         # request_id -> {"task": asyncio.Task} - NO "cancel_event" key here,
-        # matching self._image_requests' shape: legacy has zero cancel
-        # affordance for the disk-write step either. (Same-node concurrent
-        # Run+Apply is additionally blocked by node.pending_request_id - see
+        # matching image's own shape: legacy has zero cancel affordance for
+        # the disk-write step either. (Same-node concurrent Run+Apply is
+        # additionally blocked by node.pending_request_id - see
         # register_canvas's own busy checks in backend/canvas.py - this dict
         # split is about cross-request bookkeeping, not the same-node guard.)
         self._gitlink_apply_requests: dict[str, dict] = {}
@@ -908,33 +902,46 @@ class AgentDispatcher:
         "generating" flag to toggle the way ComposerDocument.request_state or
         a ConversationNode's pending_request_id do; the frontend shows a
         transient "Generating image..." notification instead of a per-node
-        spinner). Guarded by self._image_requests, a dict kept fully
-        SEPARATE from chat/conversation's own slot (self._runs's "chat"
-        kind) - see that field's own comment in __init__ for why this must
-        stay independent rather than reusing the existing single-slot guard.
+        spinner). Guarded by self._runs's "image" kind, kept fully SEPARATE
+        from chat/conversation's own "chat" kind - see that field's own
+        comment in __init__ for why this must stay independent rather than
+        reusing the existing single-slot guard.
 
-        No cancel_event is constructed or passed - api_provider.generate_image
-        has no cancellation_event parameter at all and its body has no
-        checkpoint to insert one at (it is one blocking network POST), and
-        legacy itself has zero real cancel affordance for image generation
-        either (ImageGenerationWorkerThread.stop() exists but is never called
-        from any UI path). The WATCHDOG_TIMEOUT_SECONDS ceiling IS still
-        applied here even though legacy has none for image generation - a
-        deliberate, explicitly-flagged improvement (leaving this as the only
-        dispatch surface with no ceiling against a hung external HTTP call
-        would be an unforced gap, not considered legacy design), not silent
-        parity.
-        """
-        if self._image_requests:
+        No cancel_event/on_cancel is passed to claim() - api_provider.
+        generate_image has no cancellation_event parameter at all and its
+        body has no checkpoint to insert one at (it is one blocking network
+        POST), and legacy itself has zero real cancel affordance for image
+        generation either (ImageGenerationWorkerThread.stop() exists but is
+        never called from any UI path). The WATCHDOG_TIMEOUT_SECONDS
+        ceiling IS still applied here even though legacy has none for image
+        generation - a deliberate, explicitly-flagged improvement (leaving
+        this as the only dispatch surface with no ceiling against a hung
+        external HTTP call would be an unforced gap, not considered legacy
+        design), not silent parity.
+
+        ADR-002 stage 2.4c: migrated onto self._runs (RunRegistry) -
+        claim()/release()/attach_task() directly, the same fire-and-forget
+        pattern _dispatch's own chat/conversation migration established in
+        stage 2.3 (claim SYNCHRONOUSLY in this coroutine, before scheduling
+        the background task; release happens inside that task's own
+        finally). Not run_single_shot: this surface is fire-and-forget
+        (NOT awaited by its own caller), the other of the two dispatch
+        shapes that primitive does not cover - see backend/run_lifecycle.py's
+        own docstring."""
+        if self._runs.is_busy("image"):
             # Single in-flight-image-request-per-session guard, mirroring
             # _dispatch's own "A response is already being generated." guard
-            # in shape but tracked on the independent self._image_requests
-            # dict, never chat's own slot.
+            # in shape but tracked on the independent "image" kind, never
+            # chat's own.
             notifications_state.show("An image is already being generated.", "info")
             await bus.publish("notification")
             return
 
-        request_id = uuid.uuid4().hex
+        # Claimed SYNCHRONOUSLY, with no `await` between the is_busy() check
+        # above and this claim - same load-bearing ordering _dispatch's own
+        # claim relies on, see backend/run_lifecycle.py's own docstring.
+        handle = self._runs.claim("image")
+        request_id = handle.request_id
 
         async def _run():
             try:
@@ -974,13 +981,14 @@ class AgentDispatcher:
                 # Unconditional on every exit path so the slot never leaks -
                 # a future request must always be admitted once this one is
                 # done, success or failure.
-                self._image_requests.pop(request_id, None)
+                self._runs.release(request_id)
 
         # NOT awaited here, same load-bearing reason _dispatch's own _run
         # task is not awaited inline - the WS connection's read loop must
         # keep reading further messages on this same socket while a
-        # generation is in flight.
-        self._image_requests[request_id] = {"task": asyncio.create_task(_run())}
+        # generation is in flight. The claim itself already landed above,
+        # before this task was even created.
+        self._runs.attach_task(handle, asyncio.create_task(_run()))
 
     async def start_web_research(
         self,
@@ -1000,8 +1008,8 @@ class AgentDispatcher:
         exactly one caller (backend/canvas.py's run_web_research), so
         on_begin/on_end are inlined here directly rather than taking
         _dispatch's generic parameters. Guarded by self._web_research_requests,
-        a dict kept fully SEPARATE from both chat/conversation's own slot
-        (self._runs's "chat" kind) and self._image_requests - see that
+        a dict kept fully SEPARATE from both chat/conversation's own "chat"
+        kind and image's own "image" kind (both in self._runs) - see that
         field's own comment in __init__ for why this must stay independent.
 
         Cooperative cancellation only, via a CancellationToken (not a
@@ -1131,10 +1139,10 @@ class AgentDispatcher:
         returns a two-element tuple and must run its own fail-closed
         tag-parsing/raise (see ArtifactAgent.get_response) before any
         mutation callback fires. Guarded by self._artifact_requests, a dict
-        kept fully SEPARATE from chat/conversation's own slot (self._runs's
-        "chat" kind), self._image_requests, and self._web_research_requests
-        - see that field's own comment in __init__ for why this must stay
-        independent.
+        kept fully SEPARATE from chat/conversation's own "chat" kind,
+        image's own "image" kind (both in self._runs), and
+        self._web_research_requests - see that field's own comment in
+        __init__ for why this must stay independent.
 
         Cooperative cancellation only, via a threading.Event (not the
         CancellationToken web-research uses - ArtifactAgent has no such

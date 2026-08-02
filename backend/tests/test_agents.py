@@ -31,7 +31,7 @@ from backend.canvas import SceneDocument, register_canvas
 from backend.composer import ComposerDocument
 from backend.events import SessionBus
 from backend.notifications import NotificationState
-from backend.tests.conftest import busy_count, chat_slots
+from backend.tests.conftest import busy_count, chat_slots, image_slots
 
 import api_provider
 import graphlink_task_config as config
@@ -1112,11 +1112,11 @@ def test_start_image_reply_calls_on_reply_with_the_image_bytes(monkeypatch):
         await dispatcher.start_image_reply(
             bus=bus, notifications_state=notifications, prompt="a cat", on_reply=replies.append,
         )
-        entry = next(iter(dispatcher._image_requests.values()))
+        entry = next(iter(image_slots(dispatcher).values()))
         await entry["task"]
 
         assert replies == [b"canned-image-bytes"]
-        assert dispatcher._image_requests == {}
+        assert image_slots(dispatcher) == {}
         assert notifications.visible is False
 
     asyncio.run(run())
@@ -1150,13 +1150,13 @@ def test_start_image_reply_second_call_while_in_flight_is_rejected_with_info_not
         assert notifications.visible is True
         assert notifications.msg_type == "info"
         assert notifications.message == "An image is already being generated."
-        assert len(dispatcher._image_requests) == 1
+        assert len(image_slots(dispatcher)) == 1
 
         release.set()
-        entry = next(iter(dispatcher._image_requests.values()))
+        entry = next(iter(image_slots(dispatcher).values()))
         await entry["task"]
         assert replies == [b"first-image-bytes"]
-        assert dispatcher._image_requests == {}
+        assert image_slots(dispatcher) == {}
 
     asyncio.run(run())
 
@@ -1164,12 +1164,12 @@ def test_start_image_reply_second_call_while_in_flight_is_rejected_with_info_not
 def test_image_request_and_chat_request_run_concurrently_both_dicts_non_empty(monkeypatch):
     """THE key concurrency-slot regression guard (R4.4a): a chat/composer
     request occupies self._runs's "chat" kind while an image-generation
-    request occupies the SEPARATE self._image_requests dict at the same time -
-    neither blocks nor is blocked by the other, and both dicts are
-    simultaneously non-empty at least once, proving these are two genuinely
-    independent slots rather than aliases of the same guard (the whole point
-    of AgentDispatcher._image_requests existing as its own field - see its
-    comment in backend/agents.py)."""
+    request occupies the SEPARATE "image" kind at the same time - neither
+    blocks nor is blocked by the other, and both are simultaneously
+    non-empty at least once, proving these are two genuinely independent
+    slots rather than aliases of the same guard (the whole point of
+    "image" existing as its own kind - see AgentDispatcher's own comment
+    in backend/agents.py)."""
     chat_started = threading.Event()
     chat_release = threading.Event()
     image_started = threading.Event()
@@ -1211,20 +1211,20 @@ def test_image_request_and_chat_request_run_concurrently_both_dicts_non_empty(mo
         # time - neither request bounced the other, and neither notification
         # fired.
         assert len(chat_slots(dispatcher)) == 1
-        assert len(dispatcher._image_requests) == 1
+        assert len(image_slots(dispatcher)) == 1
         assert notifications.visible is False, "neither call should have been rejected"
 
         chat_release.set()
         chat_entry = next(iter(chat_slots(dispatcher).values()))
         await chat_entry["task"]
         image_release.set()
-        image_entry = next(iter(dispatcher._image_requests.values()))
+        image_entry = next(iter(image_slots(dispatcher).values()))
         await image_entry["task"]
 
         assert chat_replies == ["chat reply"]
         assert image_replies == [b"image-bytes"]
         assert chat_slots(dispatcher) == {}
-        assert dispatcher._image_requests == {}
+        assert image_slots(dispatcher) == {}
         assert composer_document.request_state == "idle"
 
     asyncio.run(run())
@@ -1254,10 +1254,10 @@ def test_start_image_reply_runtime_error_cases_forward_the_exact_message_verbati
         await dispatcher.start_image_reply(
             bus=bus, notifications_state=notifications, prompt="a cat", on_reply=lambda image_bytes: None,
         )
-        entry = next(iter(dispatcher._image_requests.values()))
+        entry = next(iter(image_slots(dispatcher).values()))
         await entry["task"]
 
-        assert dispatcher._image_requests == {}
+        assert image_slots(dispatcher) == {}
         assert notifications.visible is True
         assert notifications.msg_type == "error"
         assert notifications.message == f"Image generation failed: {error_message}"
@@ -1279,10 +1279,10 @@ def test_start_image_reply_timeout_fires_the_exact_message_and_clears_the_slot(m
         await dispatcher.start_image_reply(
             bus=bus, notifications_state=notifications, prompt="a cat", on_reply=lambda image_bytes: None,
         )
-        entry = next(iter(dispatcher._image_requests.values()))
+        entry = next(iter(image_slots(dispatcher).values()))
         await entry["task"]
 
-        assert dispatcher._image_requests == {}, "the slot must not leak/deadlock future requests"
+        assert image_slots(dispatcher) == {}, "the slot must not leak/deadlock future requests"
         assert notifications.visible is True
         assert notifications.msg_type == "error"
         assert notifications.message == (
@@ -1303,16 +1303,16 @@ def test_start_image_reply_slot_does_not_leak_a_subsequent_request_is_admitted_a
         await dispatcher.start_image_reply(
             bus=bus, notifications_state=notifications, prompt="a cat", on_reply=lambda image_bytes: None,
         )
-        entry = next(iter(dispatcher._image_requests.values()))
+        entry = next(iter(image_slots(dispatcher).values()))
         await entry["task"]
-        assert dispatcher._image_requests == {}
+        assert image_slots(dispatcher) == {}
 
         monkeypatch.setattr(api_provider, "generate_image", lambda prompt, **kwargs: b"next-bytes")
         replies = []
         await dispatcher.start_image_reply(
             bus=bus, notifications_state=notifications, prompt="a dog", on_reply=replies.append,
         )
-        entry = next(iter(dispatcher._image_requests.values()))
+        entry = next(iter(image_slots(dispatcher).values()))
         await entry["task"]
         assert replies == [b"next-bytes"]
 
@@ -1585,8 +1585,9 @@ def test_image_request_runs_independently_while_a_chat_stream_is_paused_mid_flig
     """R4.4 spec section 6, item 8: cross-slot concurrency during an active
     stream. A chat stream paused mid-flight (self._runs's "chat" kind) must
     not block, or be blocked by, a concurrent image-generation request
-    (self._image_requests) - the two independent slots this dispatcher
-    already guarantees (R4.4a) must keep holding under streaming too."""
+    (self._runs's "image" kind) - the two independent slots this
+    dispatcher already guarantees (R4.4a) must keep holding under
+    streaming too."""
     chat_started = threading.Event()
     chat_release = threading.Event()
 
@@ -1625,13 +1626,13 @@ def test_image_request_runs_independently_while_a_chat_stream_is_paused_mid_flig
         await dispatcher.start_image_reply(
             bus=bus, notifications_state=notifications, prompt="a cat", on_reply=image_replies.append,
         )
-        image_entry = next(iter(dispatcher._image_requests.values()))
+        image_entry = next(iter(image_slots(dispatcher).values()))
         await image_entry["task"]
 
         # The image request completed independently, without waiting on the
         # still-paused chat stream.
         assert image_replies == [b"image-bytes"]
-        assert dispatcher._image_requests == {}
+        assert image_slots(dispatcher) == {}
         assert len(chat_slots(dispatcher)) == 1, "the chat stream is still in flight, untouched by the image request"
         assert notifications.visible is False, "neither request was rejected"
 
