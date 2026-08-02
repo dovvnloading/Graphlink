@@ -31,7 +31,7 @@ from backend.canvas import SceneDocument, register_canvas
 from backend.composer import ComposerDocument
 from backend.events import SessionBus
 from backend.notifications import NotificationState
-from backend.tests.conftest import busy_count, chat_slots, image_slots
+from backend.tests.conftest import artifact_slots, busy_count, chat_slots, image_slots
 
 import api_provider
 import graphlink_task_config as config
@@ -2214,11 +2214,11 @@ def test_start_artifact_reply_calls_on_reply_with_the_tuple_then_clears_the_slot
             history=[{"role": "user", "content": "add a section"}],
             on_reply=lambda new_content, ai_message: replies.append((new_content, ai_message)),
         )
-        entry = next(iter(dispatcher._artifact_requests.values()))
+        entry = next(iter(artifact_slots(dispatcher).values()))
         await entry["task"]
 
         assert replies == [("the new document", "an ai message")]
-        assert dispatcher._artifact_requests == {}
+        assert artifact_slots(dispatcher) == {}
         assert node.pending_request_id is None
         assert notifications.visible is False
 
@@ -2265,15 +2265,15 @@ def test_start_artifact_reply_second_call_while_in_flight_is_rejected(monkeypatc
         assert notifications.visible is True
         assert notifications.msg_type == "info"
         assert notifications.message == "An artifact request is already running."
-        assert len(dispatcher._artifact_requests) == 1
+        assert len(artifact_slots(dispatcher)) == 1
         assert node2.pending_request_id is None, "the bounced call must never touch node2"
 
         release.set()
-        entry = next(iter(dispatcher._artifact_requests.values()))
+        entry = next(iter(artifact_slots(dispatcher).values()))
         await entry["task"]
 
         assert replies == [("first document", "first message")]
-        assert dispatcher._artifact_requests == {}
+        assert artifact_slots(dispatcher) == {}
 
     asyncio.run(run())
 
@@ -2304,11 +2304,11 @@ def test_start_artifact_reply_missing_tag_failure_shows_error_notification_and_n
             history=[],
             on_reply=lambda new_content, ai_message: on_reply_calls.append((new_content, ai_message)),
         )
-        entry = next(iter(dispatcher._artifact_requests.values()))
+        entry = next(iter(artifact_slots(dispatcher).values()))
         await entry["task"]
 
         assert on_reply_calls == [], "on_reply must never be called on a tag-parsing failure"
-        assert dispatcher._artifact_requests == {}
+        assert artifact_slots(dispatcher) == {}
         assert node.pending_request_id is None
         assert notifications.visible is True
         assert notifications.msg_type == "error"
@@ -2343,11 +2343,11 @@ def test_start_artifact_reply_timeout_fires_the_exact_message_and_clears_the_slo
             history=[],
             on_reply=lambda new_content, ai_message: replies.append((new_content, ai_message)),
         )
-        entry = next(iter(dispatcher._artifact_requests.values()))
+        entry = next(iter(artifact_slots(dispatcher).values()))
         await entry["task"]
 
         assert replies == []
-        assert dispatcher._artifact_requests == {}, "the slot must not leak/deadlock future requests"
+        assert artifact_slots(dispatcher) == {}, "the slot must not leak/deadlock future requests"
         assert node.pending_request_id is None
         assert notifications.visible is True
         assert notifications.msg_type == "error"
@@ -2385,15 +2385,15 @@ def test_cancel_artifact_drops_the_result_and_never_calls_on_reply_even_on_a_lat
         )
         await asyncio.to_thread(started.wait, 5)
 
-        request_id = next(iter(dispatcher._artifact_requests.keys()))
+        request_id = next(iter(artifact_slots(dispatcher).keys()))
         assert dispatcher.cancel_artifact(request_id) is True
 
         release.set()
-        entry = next(iter(dispatcher._artifact_requests.values()))
+        entry = next(iter(artifact_slots(dispatcher).values()))
         await entry["task"]
 
         assert replies == [], "on_reply must never be called once the request is cancelled"
-        assert dispatcher._artifact_requests == {}
+        assert artifact_slots(dispatcher) == {}
         assert node.pending_request_id is None
         assert notifications.visible is True
         assert notifications.msg_type == "info"
@@ -2407,13 +2407,79 @@ def test_cancel_artifact_returns_false_for_an_unknown_request_id():
     assert dispatcher.cancel_artifact("no-such-request") is False
 
 
+def test_cancel_artifact_and_cancel_chat_cannot_trip_each_others_request_id(monkeypatch):
+    """ADR-002 stage 2.4d: the FIRST real exercise, through the actual
+    public dispatcher methods (not the raw registry - see
+    backend/tests/test_run_lifecycle.py's own unit-level proof), of
+    RunRegistry.cancel()'s kind= filter added in stage 2.4b. Chat and
+    artifact are now both cancel_event-bearing kinds sharing self._runs -
+    a chat request_id handed to cancel_artifact(), or an artifact
+    request_id handed to cancel() (the generic one backing
+    cancelChatRequest), must be rejected rather than tripping the WRONG
+    run's cancellation."""
+    chat_started = threading.Event()
+    chat_release = threading.Event()
+    artifact_started = threading.Event()
+    artifact_release = threading.Event()
+
+    def blocking_chat(task, messages, **kwargs):
+        chat_started.set()
+        chat_release.wait(5)
+        return {"message": {"content": "chat reply"}}
+
+    def blocking_get_response(self, current_artifact, history):
+        artifact_started.set()
+        artifact_release.wait(5)
+        return "updated document", "an ai message"
+
+    _configure_fake_ollama(monkeypatch, blocking_chat)
+    monkeypatch.setattr(agents_module.ArtifactAgent, "get_response", blocking_get_response)
+
+    async def run():
+        bus, notifications, composer_document, dispatcher = _make_dispatch_env()
+        node = _make_node()
+
+        await dispatcher.start_chat_reply(
+            bus=bus, notifications_state=notifications, composer_document=composer_document,
+            conversation_history=[{"role": "user", "content": "hi"}], on_reply=lambda text: None,
+        )
+        await dispatcher.start_artifact_reply(
+            bus=bus, notifications_state=notifications, node=node,
+            current_artifact="old", history=[], on_reply=lambda content, msg: None,
+        )
+        await asyncio.to_thread(chat_started.wait, 5)
+        await asyncio.to_thread(artifact_started.wait, 5)
+
+        chat_request_id, chat_entry = next(iter(chat_slots(dispatcher).items()))
+        artifact_request_id, artifact_entry = next(iter(artifact_slots(dispatcher).items()))
+        chat_cancel_event = chat_entry["cancel_event"]
+        artifact_cancel_event = artifact_entry["cancel_event"]
+
+        assert dispatcher.cancel_artifact(chat_request_id) is False, (
+            "a chat request_id must never be accepted by cancel_artifact"
+        )
+        assert not chat_cancel_event.is_set(), "the mismatched call must not have tripped chat's own event"
+
+        assert dispatcher.cancel(artifact_request_id) is False, (
+            "an artifact request_id must never be accepted by the generic cancel() (cancelChatRequest)"
+        )
+        assert not artifact_cancel_event.is_set(), "the mismatched call must not have tripped artifact's own event"
+
+        chat_release.set()
+        artifact_release.set()
+        await chat_entry["task"]
+        await artifact_entry["task"]
+
+    asyncio.run(run())
+
+
 def test_artifact_request_and_chat_request_run_concurrently_both_dicts_non_empty(monkeypatch):
     """THE key concurrency-slot regression guard (R5.2, mirrors R4.4a/R5.1's
     own chat/image and chat/web-research guards): a chat/composer request
     occupies self._runs's "chat" kind while an artifact-generation request
-    occupies the SEPARATE self._artifact_requests dict at the same time - neither blocks
-    nor is blocked by the other, and both dicts are simultaneously non-empty
-    at least once."""
+    occupies the SEPARATE "artifact" kind at the same time - neither blocks
+    nor is blocked by the other, and both are simultaneously non-empty at
+    least once."""
     chat_started = threading.Event()
     chat_release = threading.Event()
     artifact_started = threading.Event()
@@ -2461,20 +2527,20 @@ def test_artifact_request_and_chat_request_run_concurrently_both_dicts_non_empty
         # time - neither request bounced the other, and neither notification
         # fired.
         assert len(chat_slots(dispatcher)) == 1
-        assert len(dispatcher._artifact_requests) == 1
+        assert len(artifact_slots(dispatcher)) == 1
         assert notifications.visible is False, "neither call should have been rejected"
 
         chat_release.set()
         chat_entry = next(iter(chat_slots(dispatcher).values()))
         await chat_entry["task"]
         artifact_release.set()
-        artifact_entry = next(iter(dispatcher._artifact_requests.values()))
+        artifact_entry = next(iter(artifact_slots(dispatcher).values()))
         await artifact_entry["task"]
 
         assert chat_replies == ["chat reply"]
         assert artifact_replies == [("artifact document", "artifact message")]
         assert chat_slots(dispatcher) == {}
-        assert dispatcher._artifact_requests == {}
+        assert artifact_slots(dispatcher) == {}
         assert composer_document.request_state == "idle"
 
     asyncio.run(run())
@@ -2483,9 +2549,9 @@ def test_artifact_request_and_chat_request_run_concurrently_both_dicts_non_empty
 def test_artifact_request_and_web_research_request_run_concurrently(monkeypatch):
     """Mirrors test_web_research_request_and_chat_request_run_concurrently_
     both_dicts_non_empty: an artifact-generation request must also be able to
-    run concurrently with a web-research request - self._artifact_requests
-    and self._web_research_requests are two more genuinely independent slots,
-    neither blocking nor blocked by the other."""
+    run concurrently with a web-research request - self._runs's "artifact"
+    kind and self._web_research_requests are two more genuinely independent
+    slots, neither blocking nor blocked by the other."""
     research_started = threading.Event()
     research_release = threading.Event()
     artifact_started = threading.Event()
@@ -2535,20 +2601,20 @@ def test_artifact_request_and_web_research_request_run_concurrently(monkeypatch)
         await asyncio.to_thread(artifact_started.wait, 5)
 
         assert len(dispatcher._web_research_requests) == 1
-        assert len(dispatcher._artifact_requests) == 1
+        assert len(artifact_slots(dispatcher)) == 1
         assert notifications.visible is False, "neither call should have been rejected"
 
         research_release.set()
         research_entry = next(iter(dispatcher._web_research_requests.values()))
         await research_entry["task"]
         artifact_release.set()
-        artifact_entry = next(iter(dispatcher._artifact_requests.values()))
+        artifact_entry = next(iter(artifact_slots(dispatcher).values()))
         await artifact_entry["task"]
 
         assert research_successes == [SimpleNamespace(answer_markdown="research result")]
         assert artifact_replies == [("artifact document", "artifact message")]
         assert dispatcher._web_research_requests == {}
-        assert dispatcher._artifact_requests == {}
+        assert artifact_slots(dispatcher) == {}
 
     asyncio.run(run())
 

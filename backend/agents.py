@@ -289,20 +289,21 @@ class AgentDispatcher:
         # independent from chat. request_id -> {"cancel_token":
         # CancellationToken, "task": asyncio.Task}.
         self._web_research_requests: dict[str, dict] = {}
-        # R5.2: a FOURTH independent in-flight-request slot, separate from
-        # chat, image, and self._web_research_requests - an
-        # artifact-generation request must be able to run concurrently with
-        # any of those three, same reasoning as every prior independent
-        # slot above. request_id -> {"cancel_event": threading.Event,
-        # "task": asyncio.Task}.
-        self._artifact_requests: dict[str, dict] = {}
+        # R5.2/ADR-002 stage 2.4d: artifact generation ("artifact" kind,
+        # also sharing self._runs now) is a FOURTH independent single-slot
+        # kind, separate from chat/image - an artifact-generation request
+        # must be able to run concurrently with any of those two plus web
+        # research, same reasoning as every prior independent slot above.
+        # Cancellable via a plain threading.Event, same shape as chat -
+        # unlike web_research's CancellationToken.
+        #
         # R5.3: a FIFTH independent in-flight-request slot, separate from
-        # chat/image/self._web_research_requests/self._artifact_requests -
-        # a Gitlink Generate Change Set run must be able to run
-        # concurrently with any of those four, same reasoning as every
-        # prior independent slot above. request_id -> {"cancel_event":
-        # threading.Event, "task": asyncio.Task} - Run is cancellable,
-        # mirrors self._web_research_requests' exact shape.
+        # chat/image/artifact/self._web_research_requests - a Gitlink
+        # Generate Change Set run must be able to run concurrently with any
+        # of those four, same reasoning as every prior independent slot
+        # above. request_id -> {"cancel_event": threading.Event, "task":
+        # asyncio.Task} - Run is cancellable, mirrors
+        # self._web_research_requests' exact shape.
         self._gitlink_requests: dict[str, dict] = {}
         # R5.3: a SIXTH independent in-flight-request slot - Gitlink's Apply
         # (the disk-write step) must be able to run concurrently with a
@@ -572,11 +573,13 @@ class AgentDispatcher:
         return bool(self._web_research_requests)
 
     def cancel_artifact(self, request_id: str) -> bool:
-        entry = self._artifact_requests.get(request_id)
-        if entry is None:
-            return False
-        entry["cancel_event"].set()
-        return True
+        """kind="artifact": ADR-002 stage 2.4d - the first surface to
+        actually exercise RunRegistry.cancel()'s kind= filter (added in
+        stage 2.4b) for real, now that artifact shares self._runs
+        alongside chat/image, both also cancel_event-bearing. Without
+        this filter a stale or mismatched request_id could trip the wrong
+        kind's in-flight run - see RunRegistry.cancel's own docstring."""
+        return self._runs.cancel(request_id, kind="artifact")
 
     async def _dispatch(
         self,
@@ -1138,11 +1141,11 @@ class AgentDispatcher:
         contract and a fixed driver function, while _call_artifact_agent
         returns a two-element tuple and must run its own fail-closed
         tag-parsing/raise (see ArtifactAgent.get_response) before any
-        mutation callback fires. Guarded by self._artifact_requests, a dict
+        mutation callback fires. Guarded by self._runs's "artifact" kind,
         kept fully SEPARATE from chat/conversation's own "chat" kind,
-        image's own "image" kind (both in self._runs), and
-        self._web_research_requests - see that field's own comment in
-        __init__ for why this must stay independent.
+        image's own "image" kind, and self._web_research_requests - see
+        that field's own comment in __init__ for why this must stay
+        independent.
 
         Cooperative cancellation only, via a threading.Event (not the
         CancellationToken web-research uses - ArtifactAgent has no such
@@ -1158,14 +1161,28 @@ class AgentDispatcher:
         call-count as chat's own _call_chat_agent - Web Research's own 900s
         bump exists specifically because WebResearchService.run chains ~10
         sequential calls inside one outer timeout, which does not apply
-        here."""
-        if self._artifact_requests:
+        here.
+
+        ADR-002 stage 2.4d: migrated onto self._runs - claim()/release()/
+        attach_task() directly, the exact same fire-and-forget pattern
+        chat's own _dispatch and image's own start_image_reply already
+        use. node.pending_request_id below is set inside _run() itself,
+        AFTER the claim already landed in this outer coroutine - it is a
+        UI-bookkeeping side channel only (never consulted for the busy
+        guard, unlike gitlink_run/pycoder/code_sandbox's use of the same
+        field), so it needs no claim-ordering treatment of its own."""
+        if self._runs.is_busy("artifact"):
             notifications_state.show("An artifact request is already running.", "info")
             await bus.publish("notification")
             return
 
-        request_id = uuid.uuid4().hex
+        # Claimed SYNCHRONOUSLY, with no `await` between the is_busy()
+        # check above and this claim - same load-bearing ordering
+        # _dispatch's/start_image_reply's own claims rely on, see
+        # backend/run_lifecycle.py's own docstring.
         cancel_event = threading.Event()
+        handle = self._runs.claim("artifact", node_id=getattr(node, "id", None), cancel_event=cancel_event)
+        request_id = handle.request_id
 
         async def _run():
             node.pending_request_id = request_id
@@ -1197,13 +1214,11 @@ class AgentDispatcher:
                 notifications_state.show(f"Artifact generation failed: {exc}", "error")
                 await bus.publish("notification")
             finally:
-                self._artifact_requests.pop(request_id, None)
+                self._runs.release(request_id)
                 node.pending_request_id = None
                 await bus.publish("scene")
 
-        self._artifact_requests[request_id] = {
-            "cancel_event": cancel_event, "task": asyncio.create_task(_run())
-        }
+        self._runs.attach_task(handle, asyncio.create_task(_run()))
 
     # -- R5.3: Gitlink ------------------------------------------------------
     #

@@ -64,6 +64,10 @@ def image_slots(dispatcher):
     return _run_slots(dispatcher, "image")
 
 
+def artifact_slots(dispatcher):
+    return _run_slots(dispatcher, "artifact")
+
+
 def busy_count(dispatcher, kind):
     """ADR-002 stage 2.3 test adapter: the count-based equivalent of the
     old dict-of-sentinels' len()/truthiness checks for a "directly-
