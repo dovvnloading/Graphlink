@@ -38,19 +38,30 @@ def _chat_stream_delegates_to_patched_chat(monkeypatch):
     yield
 
 
-def chat_slots(dispatcher):
-    """ADR-002 stage 2.3 test adapter: reproduces the pre-migration
+def _run_slots(dispatcher, kind):
+    """ADR-002 stage 2.3+ test adapter: reproduces the pre-migration
     dict[request_id, {"cancel_event": ..., "task": ...}] shape that every
-    chat/conversation test in this suite was written against, filtered to
-    AgentDispatcher._runs's "chat" kind - see backend/run_lifecycle.py for
-    the real (RunHandle-based) production shape this is adapting. Returns
-    a plain dict so callers can keep using .values()/.items()/.keys()/
-    subscript/len()/== {} exactly as they did against the old dict."""
+    fire-and-forget dispatch surface's tests in this suite were written
+    against, filtered to one AgentDispatcher._runs kind - see
+    backend/run_lifecycle.py for the real (RunHandle-based) production
+    shape this is adapting. Returns a plain dict so callers can keep using
+    .values()/.items()/.keys()/subscript/len()/== {} exactly as they did
+    against the old dict (a kind with no cancel_event, like image, simply
+    carries cancel_event: None in the returned dict - harmless, since no
+    pre-existing test for such a kind ever read that key)."""
     return {
         handle.request_id: {"cancel_event": handle.cancel_event, "task": handle.task}
         for handle in dispatcher._runs.values()
-        if handle.kind == "chat"
+        if handle.kind == kind
     }
+
+
+def chat_slots(dispatcher):
+    return _run_slots(dispatcher, "chat")
+
+
+def image_slots(dispatcher):
+    return _run_slots(dispatcher, "image")
 
 
 def busy_count(dispatcher, kind):

@@ -37,7 +37,7 @@ from backend.attachments import StagedAttachment
 from backend.composer import ComposerDocument
 from backend.events import SessionBus
 from backend.notifications import NotificationState
-from backend.tests.conftest import chat_slots
+from backend.tests.conftest import chat_slots, image_slots
 
 import api_provider
 import graphlink_task_config as task_config
@@ -2803,7 +2803,7 @@ def test_generate_image_intent_empty_content_shows_warning_and_never_dispatches(
 
         assert result is None
         assert calls == [], "api_provider.generate_image must never be reached"
-        assert dispatcher._image_requests == {}
+        assert image_slots(dispatcher) == {}
         notice = await bus.publish("notification")
         assert notice["visible"] is True
         assert notice["msgType"] == "warning"
@@ -2817,7 +2817,7 @@ def test_generate_image_intent_unknown_node_shows_the_wrong_kind_message():
         bus, document, recorder, dispatcher = make_bus_with_dispatcher()
         result = await bus.dispatch_intent("scene", "generateImage", ["ghost"])
         assert result is None
-        assert dispatcher._image_requests == {}
+        assert image_slots(dispatcher) == {}
         notice = await bus.publish("notification")
         assert notice["visible"] is True
         assert notice["msgType"] == "warning"
@@ -2844,7 +2844,7 @@ def test_regenerate_image_intent_unknown_node_shows_the_no_prompt_message():
         bus, document, recorder, dispatcher = make_bus_with_dispatcher()
         result = await bus.dispatch_intent("scene", "regenerateImage", ["ghost"])
         assert result is None
-        assert dispatcher._image_requests == {}
+        assert image_slots(dispatcher) == {}
         notice = await bus.publish("notification")
         assert notice["visible"] is True
         assert notice["msgType"] == "warning"
@@ -2888,7 +2888,7 @@ def test_generate_image_intent_full_success_round_trip_creates_two_nodes_and_rep
         with patch.object(api_provider, "generate_image", lambda prompt, **kwargs: b"real-png-bytes"):
             result = await bus.dispatch_intent("scene", "generateImage", [chat.id])
             assert result is None
-            entry = next(iter(dispatcher._image_requests.values()))
+            entry = next(iter(image_slots(dispatcher).values()))
             await entry["task"]
 
         assert len(document.nodes) == node_count_before + 2
@@ -2898,7 +2898,7 @@ def test_generate_image_intent_full_success_round_trip_creates_two_nodes_and_rep
         assert new_image.content == "a cat wearing a hat"
         assert document.get_image_asset(new_image.image_asset_id) == (b"real-png-bytes", "image/png")
         assert recorder.topics_seen().count("scene") > scene_publishes_before
-        assert dispatcher._image_requests == {}
+        assert image_slots(dispatcher) == {}
 
     asyncio.run(run())
 
@@ -2913,7 +2913,7 @@ def test_regenerate_image_intent_full_success_round_trip_creates_two_nodes_using
         with patch.object(api_provider, "generate_image", lambda prompt, **kwargs: b"new-png-bytes"):
             result = await bus.dispatch_intent("scene", "regenerateImage", [old_image.id])
             assert result is None
-            entry = next(iter(dispatcher._image_requests.values()))
+            entry = next(iter(image_slots(dispatcher).values()))
             await entry["task"]
 
         assert len(document.nodes) == node_count_before + 2, "old image node is left untouched, not replaced"
@@ -2946,12 +2946,12 @@ def test_dispatch_image_mid_flight_delete_of_the_parent_is_a_silent_noop():
             document.remove_nodes([chat.id])
 
             release.set()
-            entry = next(iter(dispatcher._image_requests.values()))
+            entry = next(iter(image_slots(dispatcher).values()))
             await entry["task"]
 
         assert chat.id not in document.nodes
         assert not any(n.kind == "image" for n in document.nodes.values()), "no new nodes were created"
-        assert dispatcher._image_requests == {}
+        assert image_slots(dispatcher) == {}
         notice = await bus.publish("notification")
         assert notice["visible"] is False, "deleted-mid-flight is a silent no-op - no notification fires"
 
