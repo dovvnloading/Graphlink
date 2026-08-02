@@ -1,9 +1,7 @@
 import { Handle, Position, useStore, type Node, type NodeProps } from "@xyflow/react";
 import { useState } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import rehypeHighlight from "rehype-highlight";
 import { LOD_ZOOM_THRESHOLD } from "./canvasConstants";
+import { NodeMarkdown } from "./NodeMarkdown";
 import { NodeMenu } from "./NodeMenu";
 
 /**
@@ -14,9 +12,9 @@ import { NodeMenu } from "./NodeMenu";
  * the only R3 kind shaped like a real message list rather than one flat text
  * block.
  *
- * Real: render (one ConversationBubble per history entry, same react-markdown
- * + remarkGfm + rehypeHighlight pipeline every other text-bearing node view
- * in this codebase already uses), collapse/expand (manual toggle OR-ed with
+ * Real: render (one ConversationBubble per history entry, the shared
+ * NodeMarkdown.tsx renderer every other text-bearing node view in this
+ * codebase now uses - node redesign stage 1), collapse/expand (manual toggle OR-ed with
  * LOD auto-collapse, same as Chat/Document), delete (generic - a conversation
  * node is never a branch point/reparented, same as code/thinking/html/image),
  * per-bubble copy + delete-from-history, Send (appends a real user message
@@ -201,9 +199,7 @@ function ConversationBubble({
           .chat-node-menu already establishes across every sibling node's
           menu, applied here to markdown styling instead. */}
       <div className="chat-node-content conversation-node-bubble-content">
-        <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
-          {message.content}
-        </ReactMarkdown>
+        <NodeMarkdown content={message.content} />
       </div>
       {menuPosition && (
         <ConversationBubbleMenu

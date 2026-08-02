@@ -41,13 +41,28 @@ describe("CodeExecutionApprovalPanel", () => {
 
   // -- FIX A regression guard: zero passive-dismissal affordances -----------
 
-  it("FIX A: there is no close/X button anywhere - Approve and Deny are the only two buttons rendered", () => {
+  it("FIX A: there is no close/X button anywhere - Deny and Approve are the only two RESOLVING buttons rendered", () => {
+    // The node redesign migrated this panel's code display to NodeMarkdown,
+    // which renders its own "Copy" button inside the code block - a real,
+    // legitimate 3rd button, but not a resolution mechanism: it neither
+    // dismisses the panel nor calls onApprove/onDeny, so FIX A's actual
+    // security property (the ONLY two ways to make this panel go away are
+    // Approve and Deny) still holds - this test now asserts that precisely,
+    // rather than a stale exact-button-count that predates Copy existing.
     renderPanel();
     const buttons = screen.getAllByRole("button");
-    expect(buttons).toHaveLength(2);
-    expect(buttons.map((b) => b.textContent)).toEqual(["Deny", "Approve"]);
+    expect(buttons.map((b) => b.textContent)).toEqual(["Copy", "Deny", "Approve"]);
     expect(screen.queryByRole("button", { name: /close/i })).toBeNull();
     expect(screen.queryByLabelText(/close/i)).toBeNull();
+  });
+
+  it("FIX A: clicking Copy does not resolve the panel (not Approve, not Deny, stays open)", async () => {
+    const user = userEvent.setup();
+    const { onApprove, onDeny } = renderPanel();
+    await user.click(screen.getByRole("button", { name: "Copy code" }));
+    expect(onApprove).not.toHaveBeenCalled();
+    expect(onDeny).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
   });
 
   it("FIX A: pressing Escape does NOT dismiss the panel and does NOT call onApprove/onDeny", () => {

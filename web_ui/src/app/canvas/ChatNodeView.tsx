@@ -1,11 +1,9 @@
 import { Handle, Position, useStore, type Node, type NodeProps } from "@xyflow/react";
 import { useEffect, useRef, useState } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import rehypeHighlight from "rehype-highlight";
 import { CHAT_SCROLL_REPORT_DEBOUNCE_MS, LOD_ZOOM_THRESHOLD } from "./canvasConstants";
 import { downloadTextFile } from "./downloadTextFile";
 import { GROUP_MONO_COLORS, GROUP_NAMED_COLORS } from "./GroupColorPicker";
+import { NodeMarkdown } from "./NodeMarkdown";
 import { NodeMenu } from "./NodeMenu";
 
 /**
@@ -598,9 +596,7 @@ export function ChatNodeView({ id, data, selected }: NodeProps<ChatFlowNode>) {
       </div>
       {!collapsed && (
         <div className="scene-node-body chat-node-content" ref={contentRef} onScroll={onScroll}>
-          <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
-            {data.content}
-          </ReactMarkdown>
+          <NodeMarkdown content={data.content} />
         </div>
       )}
       <Handle type="source" position={Position.Bottom} className="scene-node-handle" />

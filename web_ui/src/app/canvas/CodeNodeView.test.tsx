@@ -46,9 +46,19 @@ function renderCodeNode(overrides: Partial<CodeFlowNode["data"]> = {}) {
 }
 
 describe("CodeNodeView", () => {
+  // Node redesign stage 1: NodeMarkdown's own code-block language badge now
+  // ALSO renders the language string (e.g. "python") inside the code block
+  // itself, alongside this view's own title-bar label - both legitimately
+  // say "python" at once, so every query below is scoped to
+  // .code-node-language (the title bar specifically) rather than a bare
+  // screen.getByText, which would now be ambiguous.
+  function titleLabel(container: HTMLElement): HTMLElement {
+    return container.querySelector(".code-node-language") as HTMLElement;
+  }
+
   it("renders the language label and syntax-highlighted code content", () => {
     const { container } = renderCodeNode();
-    expect(screen.getByText("python")).toBeInTheDocument();
+    expect(titleLabel(container)).toHaveTextContent("python");
     // Proves the fenced-code-block-through-ReactMarkdown+rehype-highlight
     // pipeline actually ran (not just plain-text rendering of the raw code).
     expect(container.querySelector(".hljs")).not.toBeNull();
@@ -62,12 +72,12 @@ describe("CodeNodeView", () => {
 
   it("right-click opens a menu with real Copy Code/Delete Code Block/Export/Hide Other Branches", async () => {
     const user = userEvent.setup();
-    const { onDelete } = renderCodeNode();
+    const { onDelete, container } = renderCodeNode();
 
     const writeText = vi.fn();
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
 
-    const label = screen.getByText("python");
+    const label = titleLabel(container);
     fireEvent.contextMenu(label);
     expect(screen.getByRole("menu")).toBeInTheDocument();
 
@@ -84,7 +94,7 @@ describe("CodeNodeView", () => {
 
   it("clicking Export downloads the raw code as a language-appropriate file, then closes the menu (R7.5a)", async () => {
     const user = userEvent.setup();
-    renderCodeNode({ code: "print('hi')", language: "python" });
+    const { container } = renderCodeNode({ code: "print('hi')", language: "python" });
 
     const captured: { anchor?: HTMLAnchorElement } = {};
     const clickSpy = vi
@@ -93,7 +103,7 @@ describe("CodeNodeView", () => {
         captured.anchor = this;
       });
 
-    fireEvent.contextMenu(screen.getByText("python"));
+    fireEvent.contextMenu(titleLabel(container));
     await user.click(screen.getByRole("menuitem", { name: "Export" }));
 
     await waitFor(() => expect(clickSpy).toHaveBeenCalled());
@@ -107,14 +117,14 @@ describe("CodeNodeView", () => {
 
   it("falls back to a .txt extension for an unrecognized language (R7.5a)", async () => {
     const user = userEvent.setup();
-    renderCodeNode({ language: "brainfuck" });
+    const { container } = renderCodeNode({ language: "brainfuck" });
 
     const captured: { anchor?: HTMLAnchorElement } = {};
     vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
       captured.anchor = this;
     });
 
-    fireEvent.contextMenu(screen.getByText("brainfuck"));
+    fireEvent.contextMenu(titleLabel(container));
     await user.click(screen.getByRole("menuitem", { name: "Export" }));
 
     await waitFor(() => expect(captured.anchor).toBeDefined());
@@ -123,9 +133,9 @@ describe("CodeNodeView", () => {
 
   it("Regenerate Response renders enabled and fires onRegenerate then closes the menu when parentChatNodeId is non-null", async () => {
     const user = userEvent.setup();
-    const { onRegenerate } = renderCodeNode({ parentChatNodeId: "chat-1" });
+    const { onRegenerate, container } = renderCodeNode({ parentChatNodeId: "chat-1" });
 
-    fireEvent.contextMenu(screen.getByText("python"));
+    fireEvent.contextMenu(titleLabel(container));
     const regenerate = screen.getByRole("menuitem", { name: "Regenerate Response" });
     expect(regenerate).not.toBeDisabled();
 
@@ -135,16 +145,16 @@ describe("CodeNodeView", () => {
   });
 
   it("Regenerate Response is absent from the DOM entirely (not merely disabled) when parentChatNodeId is null", () => {
-    renderCodeNode({ parentChatNodeId: null });
-    fireEvent.contextMenu(screen.getByText("python"));
+    const { container } = renderCodeNode({ parentChatNodeId: null });
+    fireEvent.contextMenu(titleLabel(container));
     expect(screen.queryByRole("menuitem", { name: "Regenerate Response" })).toBeNull();
   });
 
   it("Hide Other Branches reads 'Hide Other Branches' and calls onToggleBranchFocus then closes the menu when branch focus is inactive (R8a)", async () => {
     const user = userEvent.setup();
-    const { onToggleBranchFocus } = renderCodeNode({ isBranchFocusActive: false });
+    const { onToggleBranchFocus, container } = renderCodeNode({ isBranchFocusActive: false });
 
-    fireEvent.contextMenu(screen.getByText("python"));
+    fireEvent.contextMenu(titleLabel(container));
     const toggle = screen.getByRole("menuitem", { name: "Hide Other Branches" });
     expect(toggle).not.toBeDisabled();
 
@@ -155,9 +165,9 @@ describe("CodeNodeView", () => {
 
   it("Hide Other Branches reads 'Show All Branches' and still calls onToggleBranchFocus when branch focus is active (R8a)", async () => {
     const user = userEvent.setup();
-    const { onToggleBranchFocus } = renderCodeNode({ isBranchFocusActive: true });
+    const { onToggleBranchFocus, container } = renderCodeNode({ isBranchFocusActive: true });
 
-    fireEvent.contextMenu(screen.getByText("python"));
+    fireEvent.contextMenu(titleLabel(container));
     expect(screen.queryByRole("menuitem", { name: "Hide Other Branches" })).toBeNull();
     const toggle = screen.getByRole("menuitem", { name: "Show All Branches" });
 
@@ -168,8 +178,8 @@ describe("CodeNodeView", () => {
 
   it("Escape and outside-click both close the menu", async () => {
     const user = userEvent.setup();
-    renderCodeNode();
-    const label = screen.getByText("python");
+    const { container } = renderCodeNode();
+    const label = titleLabel(container);
 
     fireEvent.contextMenu(label);
     expect(screen.getByRole("menu")).toBeInTheDocument();

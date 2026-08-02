@@ -1,18 +1,16 @@
 import { Handle, Position, useStore, type Node, type NodeProps } from "@xyflow/react";
 import { useState } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import rehypeHighlight from "rehype-highlight";
 import { LOD_ZOOM_THRESHOLD } from "./canvasConstants";
 import { CodeExecutionApprovalPanel } from "./CodeExecutionApprovalPanel";
+import { NodeMarkdown } from "./NodeMarkdown";
 import { NodeMenu } from "./NodeMenu";
 
 /**
  * The Py-Coder node (Qt-removal plan R5.4) - the Py-Coder plugin's React
  * card. Same overall shell as every plugin-node sibling (ArtifactNodeView/
  * GitlinkNodeView): collapse/expand OR-ed with LOD, a card menu with
- * outside-click/Escape dismiss, the shared react-markdown + remarkGfm +
- * rehypeHighlight pipeline, no dock-to-parent action.
+ * outside-click/Escape dismiss, the shared NodeMarkdown.tsx renderer (node
+ * redesign stage 1), no dock-to-parent action.
  *
  * Mode + single input economy: the AI-driven/Manual toggle commits
  * IMMEDIATELY on click via data.onSetMode (backend/canvas.py registers a
@@ -258,9 +256,7 @@ export function PyCoderNodeView({ id, data, selected }: NodeProps<PyCoderFlowNod
             <div className="pycoder-node-section">
               <span className="pycoder-node-section-label">Code</span>
               <div className="chat-node-content pycoder-node-code">
-                <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
-                  {toPythonFence(data.pycoderCode)}
-                </ReactMarkdown>
+                <NodeMarkdown content={toPythonFence(data.pycoderCode)} />
               </div>
             </div>
           )}
@@ -269,9 +265,7 @@ export function PyCoderNodeView({ id, data, selected }: NodeProps<PyCoderFlowNod
             <div className="pycoder-node-section">
               <span className="pycoder-node-section-label">Output</span>
               <div className="chat-node-content pycoder-node-output">
-                <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
-                  {toPlainFence(data.pycoderOutput)}
-                </ReactMarkdown>
+                <NodeMarkdown content={toPlainFence(data.pycoderOutput)} />
               </div>
             </div>
           )}
@@ -280,9 +274,7 @@ export function PyCoderNodeView({ id, data, selected }: NodeProps<PyCoderFlowNod
             <div className="pycoder-node-section">
               <span className="pycoder-node-section-label">Analysis</span>
               <div className="chat-node-content pycoder-node-analysis">
-                <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
-                  {data.pycoderAnalysis}
-                </ReactMarkdown>
+                <NodeMarkdown content={data.pycoderAnalysis} />
               </div>
             </div>
           )}

@@ -1,16 +1,14 @@
 import { Handle, Position, useStore, type Node, type NodeProps } from "@xyflow/react";
 import { useState } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import rehypeHighlight from "rehype-highlight";
 import { LOD_ZOOM_THRESHOLD } from "./canvasConstants";
+import { NodeMarkdown } from "./NodeMarkdown";
 import { NodeMenu } from "./NodeMenu";
 
 /**
  * The web-research node (Qt-removal plan R5.1) - the Web Research plugin's
  * React card. Same overall shape as ConversationNodeView (collapse/expand
  * OR-ed with LOD, a card menu with outside-click/Escape dismiss, the shared
- * react-markdown + remarkGfm + rehypeHighlight pipeline), but instead of a
+ * NodeMarkdown.tsx renderer (node redesign stage 1)), but instead of a
  * growing message list this node drives ONE research run at a time and
  * renders it as: a query input + Run/Cancel, an in-progress stage stepper,
  * and - once a result exists - the synthesized answer, its warnings, and its
@@ -298,44 +296,18 @@ export function WebResearchNodeView({ data, selected }: NodeProps<WebResearchFlo
             <div className="web-research-node-result">
               {/* Reuses .chat-node-content's full markdown-body rule set
                   verbatim (same shared-class convention
-                  ConversationBubble's own -content div establishes), with a
-                  custom anchor renderer: answerMarkdown is LLM-generated from
-                  untrusted web evidence, so a javascript:/file: scheme must
-                  never be allowed to navigate - only a real http(s) link ever
-                  reaches window.open, everything else is inert. The href
-                  attribute itself is only set for http(s) links - an
-                  onClick-only guard leaves the raw (unsafe) href on the DOM
-                  node, which the browser's own middle-click/auxclick and
-                  "open link in new tab"/"copy link" context-menu actions read
-                  directly, bypassing onClick entirely. Omitting href for
-                  every other scheme removes that native escape hatch. */}
+                  ConversationBubble's own -content div establishes).
+                  answerMarkdown is LLM-generated from untrusted web
+                  evidence, so a javascript:/file: scheme must never be
+                  allowed to navigate - this view USED to carry its own
+                  bespoke anchor override for exactly that reason, but
+                  NodeMarkdown.tsx's own SafeAnchor now provides the
+                  identical http(s)-only allowlist (and every OTHER node
+                  kind's markdown gets the same protection too, which none
+                  of them had before - see NodeMarkdown.tsx's own doc
+                  comment), so this view no longer needs a special case. */}
               <div className="chat-node-content web-research-node-answer">
-                <ReactMarkdown
-                  remarkPlugins={[remarkGfm]}
-                  rehypePlugins={[rehypeHighlight]}
-                  components={{
-                    a: ({ href, children }) => {
-                      const isHttpUrl = !!href && /^https?:\/\//i.test(href.trim());
-                      if (!isHttpUrl) {
-                        // No href at all - nothing for middle-click/context-menu to act on.
-                        return <>{children}</>;
-                      }
-                      return (
-                        <a
-                          href={href}
-                          onClick={(event) => {
-                            event.preventDefault();
-                            window.open(href, "_blank", "noopener,noreferrer");
-                          }}
-                        >
-                          {children}
-                        </a>
-                      );
-                    },
-                  }}
-                >
-                  {data.researchResult.answerMarkdown}
-                </ReactMarkdown>
+                <NodeMarkdown content={data.researchResult.answerMarkdown} />
               </div>
 
               {data.researchResult.warnings.length > 0 && (
