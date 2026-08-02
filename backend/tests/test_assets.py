@@ -42,7 +42,7 @@ def test_get_asset_returns_exact_bytes_and_stored_mime_type():
         0, 0, b"\x89PNG\r\n\x1a\nsome raw image bytes", "a test image", parent.id, mime_type="image/png"
     )
 
-    response = client.get(f"/api/assets/{node.image_asset_id}")
+    response = client.get(f"/api/assets/{node.state.image_asset_id}")
 
     assert response.status_code == 200
     assert response.content == b"\x89PNG\r\n\x1a\nsome raw image bytes"
@@ -56,7 +56,7 @@ def test_get_asset_respects_the_mime_type_it_was_stored_with():
     parent = document.add_node(0, 0, "parent")
     node = document.add_image_node(0, 0, b"jpeg-ish bytes", "prompt", parent.id, mime_type="image/jpeg")
 
-    response = client.get(f"/api/assets/{node.image_asset_id}")
+    response = client.get(f"/api/assets/{node.state.image_asset_id}")
 
     assert response.status_code == 200
     assert response.headers["content-type"] == "image/jpeg"
@@ -79,11 +79,11 @@ def test_get_asset_scopes_by_session_query_param():
     node = document_a.add_image_node(0, 0, b"session-a bytes", "prompt", parent.id)
 
     # The default session has no such asset.
-    default_response = client.get(f"/api/assets/{node.image_asset_id}")
+    default_response = client.get(f"/api/assets/{node.state.image_asset_id}")
     assert default_response.status_code == 404
 
     # The session it was actually created under does.
-    scoped_response = client.get(f"/api/assets/{node.image_asset_id}?session=session-a")
+    scoped_response = client.get(f"/api/assets/{node.state.image_asset_id}?session=session-a")
     assert scoped_response.status_code == 200
     assert scoped_response.content == b"session-a bytes"
 
@@ -107,12 +107,12 @@ def test_asset_ids_do_not_collide_across_sessions_with_identical_creation_order(
     parent_b = document_b.add_node(0, 0, "parent")
     node_b = document_b.add_image_node(0, 0, b"session-b bytes", "prompt", parent_b.id)
 
-    assert node_a.image_asset_id != node_b.image_asset_id
+    assert node_a.state.image_asset_id != node_b.state.image_asset_id
 
-    response_a = client.get(f"/api/assets/{node_a.image_asset_id}?session=session-b")
+    response_a = client.get(f"/api/assets/{node_a.state.image_asset_id}?session=session-b")
     assert response_a.status_code == 404
 
-    response_b = client.get(f"/api/assets/{node_b.image_asset_id}?session=session-a")
+    response_b = client.get(f"/api/assets/{node_b.state.image_asset_id}?session=session-a")
     assert response_b.status_code == 404
 
 

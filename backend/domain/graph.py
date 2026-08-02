@@ -84,6 +84,7 @@ from backend.domain.model import (
     SceneNode,
     THINKING_TITLE_PREVIEW_LENGTH,
 )
+from backend.domain.node_states import ImageState
 
 
 def _estimate_tokens(text: str) -> int:
@@ -140,7 +141,8 @@ class SceneDocument(BranchOps, GroupOps):
     # already in.
     final_deliverable_node_id: str | None = None
     # R3.21: in-memory, session-scoped store for image-node bytes, keyed by
-    # asset id (see SceneNode.image_asset_id) -> (raw_bytes, mime_type).
+    # asset id (see backend/domain/node_states.py's ImageState.image_asset_id,
+    # ADR-002 stage 2.5) -> (raw_bytes, mime_type).
     # TRANSPORT DECISION: images travel to the client via a dedicated GET
     # /api/assets/{id} HTTP route (backend/assets.py), NEVER inlined into
     # scene_payload(). scene_payload() resends every node on every
@@ -526,7 +528,7 @@ class SceneDocument(BranchOps, GroupOps):
             title=title,
             kind="image",
             content=str(prompt),
-            image_asset_id=asset_id,
+            state=ImageState(image_asset_id=asset_id),
         )
         self.nodes[node_id] = node
         self.connect(parent_id, node_id)
@@ -1584,8 +1586,15 @@ class SceneDocument(BranchOps, GroupOps):
                 # R3.21: an image node's bytes must not outlive the node -
                 # evict its image_assets entry too, or a long session's
                 # deleted images would accumulate in memory forever.
-                if node.image_asset_id:
-                    self.image_assets.pop(node.image_asset_id, None)
+                # ADR-002 stage 2.5: image_asset_id lives on node.state now
+                # (ImageState), not directly on SceneNode - getattr rather
+                # than a `node.kind == "image"` check since node.state is
+                # None for every non-image kind (nothing to evict either
+                # way), same duck-typed posture as this file's other
+                # cross-kind scans.
+                image_asset_id = getattr(node.state, "image_asset_id", None)
+                if image_asset_id:
+                    self.image_assets.pop(image_asset_id, None)
                 # R6.2: a chart node's rendered PNG lives in the SAME
                 # image_assets dict (reused, not a parallel store - see
                 # chart_asset_id's own field comment on SceneNode) - same
@@ -1679,7 +1688,7 @@ class SceneDocument(BranchOps, GroupOps):
                     "byteSize": n.byte_size,
                     "previewLabel": n.preview_label,
                     "isDocked": n.is_docked,
-                    "imageAssetId": n.image_asset_id,
+                    "imageAssetId": n.state.image_asset_id if isinstance(n.state, ImageState) else "",
                     "history": [
                         {"role": m["role"], "content": m["content"]} for m in n.history
                     ],

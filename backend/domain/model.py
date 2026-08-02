@@ -13,6 +13,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from backend.domain.node_states import NodeState
+
 # Dark-theme grid swatches. The Qt bridge derived 3 of 5 from the live
 # QPalette; the backend is Qt-free by law (test_no_qt_anywhere.py), so until
 # the R2 theme service exists these are the dark theme's actual values,
@@ -228,11 +230,6 @@ class SceneNode:
     # time from this flag (scan nodes whose parent edge points at it), never
     # stored on the parent itself. Unused (default) for every other kind.
     is_docked: bool = False
-    # R3.21 (doc/QT_REMOVAL_PLAN.md): the image node's real persisted shape -
-    # an opaque reference key into SceneDocument.image_assets. Image bytes
-    # never live on the node itself (see the transport-decision comment on
-    # image_assets below). Unused (default) for every other kind.
-    image_asset_id: str = ""
     # R3.25 (doc/QT_REMOVAL_PLAN.md): the ConversationNode's real persisted
     # shape - graphlink_conversation_node.py's conversation_history, a
     # growing list of {"role": "user"|"assistant", "content": text} dicts
@@ -246,8 +243,8 @@ class SceneNode:
     # marker - the id of the AgentDispatcher request currently generating a
     # reply for this node, or None when idle. Generic across any kind that
     # ever gets its own real dispatch slot (not conversation-only, the same
-    # way is_docked/image_asset_id are generic fields even though today only
-    # one kind populates them); unused (default None) for every other kind.
+    # way is_docked is a generic field even though today only one kind
+    # populates it); unused (default None) for every other kind.
     pending_request_id: str | None = None
     # ADR-002 Workstream 1 ("Synthesize Branches"): the provider/model that
     # produced this node's content, e.g. "Anthropic Claude" / "claude-sonnet-5"
@@ -661,6 +658,12 @@ class SceneNode:
     # exists) - this is purely the data-model capability so R6.4's session
     # loader has somewhere to put it when an OLD saved session has it.
     content_parts: list[dict[str, Any]] | None = None
+    # ADR-002 stage 2.5 (backend-only): the typed per-kind payload - see
+    # backend/domain/node_states.py's own docstring. None for a kind not
+    # yet migrated, or for a kind (placeholder/thinking/conversation) that
+    # has no kind-specific fields at all; otherwise the NodeState subclass
+    # matching this node's own kind (e.g. ImageState for kind="image").
+    state: NodeState | None = None
 
 
 @dataclass

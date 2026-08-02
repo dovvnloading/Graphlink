@@ -596,7 +596,7 @@ def test_add_image_node_creates_a_real_image_kind_node():
     assert node.kind == "image"
     assert node.content == "a cat wearing a hat"
     assert node.title == "a cat wearing a hat"
-    assert node.image_asset_id != ""
+    assert node.state.image_asset_id != ""
     assert any(e.source == parent.id and e.target == node.id for e in doc.edges.values())
 
 
@@ -611,7 +611,7 @@ def test_add_image_node_stores_the_asset_retrievable_with_correct_bytes_and_mime
     doc = SceneDocument()
     parent = doc.add_node(0, 0, "parent")
     node = doc.add_image_node(0, 0, b"raw-png-bytes", "prompt", parent.id, mime_type="image/png")
-    asset = doc.get_image_asset(node.image_asset_id)
+    asset = doc.get_image_asset(node.state.image_asset_id)
     assert asset == (b"raw-png-bytes", "image/png")
 
 
@@ -643,7 +643,7 @@ def test_scene_payload_includes_image_asset_id_defaulted_for_other_kinds():
     rows = {n["id"]: n for n in doc.scene_payload()["nodes"]}
     assert rows["n0"]["imageAssetId"] == ""
     assert rows[parent.id]["imageAssetId"] == ""
-    assert rows[image_node.id]["imageAssetId"] == image_node.image_asset_id
+    assert rows[image_node.id]["imageAssetId"] == image_node.state.image_asset_id
     assert rows[image_node.id]["imageAssetId"] != ""
 
 
@@ -651,7 +651,7 @@ def test_image_node_deletion_goes_through_remove_nodes_and_evicts_the_asset():
     doc = SceneDocument()
     parent = doc.add_node(0, 0, "parent")
     node = doc.add_image_node(10, 10, b"doomed bytes", "doomed image", parent.id)
-    asset_id = node.image_asset_id
+    asset_id = node.state.image_asset_id
     assert not hasattr(doc, "delete_image_node"), "image nodes are not branch points - no special delete method"
 
     assert doc.get_image_asset(asset_id) is not None
@@ -672,9 +672,52 @@ def test_non_image_node_deletion_does_not_touch_image_assets():
     doc.remove_nodes([code_node.id])
 
     assert code_node.id not in doc.nodes
-    assert doc.get_image_asset(image_node.image_asset_id) == (b"keep me", "image/png"), (
+    assert doc.get_image_asset(image_node.state.image_asset_id) == (b"keep me", "image/png"), (
         "deleting a node with no image_asset_id must not touch image_assets at all"
     )
+
+
+def test_deleting_one_node_of_every_kind_does_not_raise():
+    """ADR-002 stage 2.5 regression net: remove_nodes() has generic,
+    kind-agnostic cross-kind scans (the image_asset_id/chart_asset_id
+    eviction above being the first two) that used to rely on every
+    SceneNode carrying every kind's fields with a safe default. As fields
+    migrate onto per-kind node.state objects one kind at a time, a scan
+    that isn't updated in lockstep raises AttributeError the moment ANY
+    node of a DIFFERENT kind is deleted - not just that scan's own kind.
+    This creates one node of every real, currently-creatable kind and
+    deletes them all in a single remove_nodes call, so a future migration
+    PR that misses a cross-kind scan fails here immediately, independent
+    of any kind-specific test suite."""
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    frame_member = doc.add_code_node(0, 0, "x = 1", "python", parent_id=parent.id)
+    container_member = doc.add_code_node(0, 0, "y = 2", "python", parent_id=parent.id)
+    nodes = [
+        parent,
+        doc.add_node(0, 0, "placeholder"),
+        doc.add_chat_node(0, 0, "hi", True),
+        frame_member,
+        container_member,
+        doc.add_document_node(0, 0, "doc", "content", "document", parent.id),
+        doc.add_thinking_node(0, 0, "thinking...", parent.id),
+        doc.add_html_node(0, 0, "<p>hi</p>", parent.id),
+        doc.add_image_node(0, 0, b"bytes", "prompt", parent.id),
+        doc.add_conversation_node(0, 0, parent.id),
+        doc.add_web_research_node(0, 0, parent.id),
+        doc.add_artifact_node(0, 0, parent.id),
+        doc.add_gitlink_node(0, 0, parent.id),
+        doc.add_pycoder_node(0, 0, parent.id),
+        doc.add_code_sandbox_node(0, 0, parent.id),
+        doc.add_note(0, 0),
+        doc.add_chart_node(0, 0, parent.id, "bar", {"labels": ["a"], "values": [1.0]}),
+        doc.create_frame([frame_member.id]),
+        doc.create_container([container_member.id]),
+    ]
+
+    doc.remove_nodes([n.id for n in nodes])
+
+    assert doc.nodes == {}
 
 
 def test_add_image_node_intent_creates_a_real_node_and_publishes():
@@ -690,7 +733,7 @@ def test_add_image_node_intent_creates_a_real_node_and_publishes():
         )
         assert document.nodes[node_id].kind == "image"
         assert document.nodes[node_id].content == "a generated image"
-        asset = document.get_image_asset(document.nodes[node_id].image_asset_id)
+        asset = document.get_image_asset(document.nodes[node_id].state.image_asset_id)
         assert asset == (image_bytes, "image/jpeg"), "base64 payload must decode back to the exact original bytes"
         assert any(
             e.source == parent_id and e.target == node_id for e in document.edges.values()
@@ -1286,7 +1329,7 @@ def test_remove_associated_content_children_evicts_image_assets_via_remove_nodes
     doc = SceneDocument()
     chat = doc.add_chat_node(0, 0, "assistant reply", False)
     image_node = doc.add_image_node(10, 10, b"doomed bytes", "prompt", chat.id)
-    asset_id = image_node.image_asset_id
+    asset_id = image_node.state.image_asset_id
     assert doc.get_image_asset(asset_id) is not None
 
     doc.remove_associated_content_children(chat.id)
@@ -2774,7 +2817,7 @@ def test_add_generated_image_reply_gains_exactly_one_image_asset_entry():
     assets_before = dict(doc.image_assets)
     _, new_image_node = doc.add_generated_image_reply(chat.id, "a cat", b"png-bytes", mime_type="image/jpeg")
     assert len(doc.image_assets) == len(assets_before) + 1
-    assert doc.get_image_asset(new_image_node.image_asset_id) == (b"png-bytes", "image/jpeg")
+    assert doc.get_image_asset(new_image_node.state.image_asset_id) == (b"png-bytes", "image/jpeg")
 
 
 def test_add_generated_image_reply_leaves_last_chat_node_id_untouched():
@@ -2903,7 +2946,7 @@ def test_generate_image_intent_full_success_round_trip_creates_two_nodes_and_rep
         new_image = next(n for n in document.nodes.values() if n.kind == "image")
         assert new_chat.content == 'Generated image for prompt: "a cat wearing a hat"'
         assert new_image.content == "a cat wearing a hat"
-        assert document.get_image_asset(new_image.image_asset_id) == (b"real-png-bytes", "image/png")
+        assert document.get_image_asset(new_image.state.image_asset_id) == (b"real-png-bytes", "image/png")
         assert recorder.topics_seen().count("scene") > scene_publishes_before
         assert image_slots(dispatcher) == {}
 
@@ -2927,7 +2970,7 @@ def test_regenerate_image_intent_full_success_round_trip_creates_two_nodes_using
         assert old_image.id in document.nodes
         new_image = next(n for n in document.nodes.values() if n.kind == "image" and n.id != old_image.id)
         assert new_image.content == "a cat"
-        assert document.get_image_asset(new_image.image_asset_id) == (b"new-png-bytes", "image/png")
+        assert document.get_image_asset(new_image.state.image_asset_id) == (b"new-png-bytes", "image/png")
 
     asyncio.run(run())
 
