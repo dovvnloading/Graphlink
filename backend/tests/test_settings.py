@@ -5,7 +5,7 @@ import asyncio
 import ollama
 import pytest
 import webview
-from graphlink_licensing import SettingsManager
+from graphlink_settings_store import SettingsManager
 
 import api_provider
 import graphlink_task_config as config
@@ -148,7 +148,7 @@ def test_clear_github_token_intent(manager):
     assert settings_payload(manager)["githubTokenConfigured"] is False
 
 
-# -- R7.3: SettingsManager.schema_version (graphlink_licensing.py) - ported
+# -- R7.3: SettingsManager.schema_version (graphlink_settings_store.py) - ported
 # -- from graphlink_app/tests/test_schema_version.py's own Qt-free class.
 # -- Its sibling TestChatPayloadSchemaVersion is NOT ported here: it exercises
 # -- graphlink_scene.ChatScene/graphlink_session.serializers.SceneSerializer,

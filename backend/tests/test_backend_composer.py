@@ -6,7 +6,7 @@ import pytest
 
 import api_provider
 import graphlink_task_config as config
-from graphlink_licensing import SettingsManager
+from graphlink_settings_store import SettingsManager
 
 from backend.composer import ComposerDocument, ComposerError, register_composer
 from backend.events import SessionBus

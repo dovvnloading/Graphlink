@@ -14,7 +14,7 @@ tests/test_no_qt_anywhere.py.
 BACKEND_VERSION = "0.1.0"
 
 # R7.2: the Qt-free domain modules backend/ depends on (api_provider,
-# graphlink_task_config, graphlink_licensing, the graphlink_plugins/ package,
+# graphlink_task_config, graphlink_settings_store, the graphlink_plugins/ package,
 # ...) used to live inside graphlink_app/, reached via a sys.path.insert here.
 # They now sit as ordinary siblings of this package at the repo root, so no
 # path manipulation is needed: whatever already put this package's own parent

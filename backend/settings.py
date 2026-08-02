@@ -2,7 +2,7 @@
 Llama.cpp pages (Qt-removal plan R2.5d, extended R7.4a, R7.4b, R7.4c).
 
 Unlike composer.py/plugins.py this is a genuine REUSE, not a
-reimplementation: SettingsManager (graphlink_licensing.py) and its own
+reimplementation: SettingsManager (graphlink_settings_store.py) and its own
 imports (graphlink_secrets, graphlink_model_catalog) carry zero PySide6
 coupling, confirmed via a runtime sys.modules check in
 test_settings_never_imports_qt below. api_provider.py,
@@ -64,7 +64,7 @@ import ollama
 
 import api_provider
 import graphlink_task_config as config
-from graphlink_licensing import SettingsManager
+from graphlink_settings_store import SettingsManager
 from graphlink_model_catalog import AUTO_MODEL, INHERIT_MODEL
 
 from backend import native_dialogs

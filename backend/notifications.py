@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from backend.events import SessionBus
 
 if TYPE_CHECKING:
-    from graphlink_licensing import SettingsManager
+    from graphlink_settings_store import SettingsManager
 
 MessageType = Literal["info", "success", "warning", "error"]
 

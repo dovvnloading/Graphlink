@@ -7,7 +7,7 @@ unchecking a type had no effect on whether its banner appeared.
 """
 
 import pytest
-from graphlink_licensing import SettingsManager
+from graphlink_settings_store import SettingsManager
 
 from backend.events import SessionBus
 from backend.notifications import NotificationState, register_notifications
