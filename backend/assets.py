@@ -14,9 +14,10 @@ parallel asset store.
 This route needs to reach the SAME SceneDocument instance register_canvas()
 built for a given session - not a fresh one - so it goes through the same
 EventBus.session(session_id) lookup /ws already uses (and defaults to
-"default" the same way), then reads the document off the SessionBus. See
-backend/app.py's _configure_session for the (small) structural change that
-makes the document reachable there.
+"default" the same way), then reads the document via
+backend/session_context.py's get_session_context(), which is what makes
+the document reachable here at all - see backend/app.py's
+_configure_session for where it's attached.
 
 R6.2 ALSO adds a second, genuinely new route: GET /api/assets/chart/{node_id}
 /export. Unlike the cached display PNG above, chart export is a real 3x-
@@ -33,6 +34,7 @@ from fastapi import FastAPI, Response
 from fastapi.responses import JSONResponse
 
 from backend.events import EventBus
+from backend.session_context import get_session_context
 from graphlink_chart_rendering import render_chart_png
 
 # 3x the display resolution - mirrors legacy ChartItem.EXPORT_SCALE exactly.
@@ -63,7 +65,7 @@ def register_assets(app: FastAPI, bus: EventBus) -> None:
 
     @app.get("/api/assets/{asset_id}")
     async def get_asset(asset_id: str, session: str = "default") -> Response:
-        document = bus.session(session).canvas_document
+        document = get_session_context(bus.session(session)).canvas_document
         asset = document.get_image_asset(asset_id)
         if asset is None:
             return JSONResponse({"error": "unknown asset"}, status_code=404)
@@ -72,7 +74,7 @@ def register_assets(app: FastAPI, bus: EventBus) -> None:
 
     @app.get("/api/assets/chart/{node_id}/export")
     async def export_chart(node_id: str, session: str = "default") -> Response:
-        document = bus.session(session).canvas_document
+        document = get_session_context(bus.session(session)).canvas_document
         node = document.nodes.get(node_id)
         if node is None or node.kind != "chart":
             return JSONResponse({"error": "unknown chart"}, status_code=404)

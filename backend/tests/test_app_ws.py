@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from backend import BACKEND_VERSION
 from backend.app import create_app
+from backend.session_context import get_session_context
 
 # R7.2: api_provider/graphlink_task_config sit at the repo root, a sibling
 # of backend/ - already importable, no ordering constraint.
@@ -177,7 +178,7 @@ def test_disconnect_cancels_any_in_flight_chat_request(monkeypatch):
         assert call_started.is_set(), "fake_chat never started - dispatch did not fire"
 
         session = client.app.state.bus.session("cancel-test")
-        in_flight = list(session.agent_dispatcher._requests.values())
+        in_flight = list(get_session_context(session).agent_dispatcher._requests.values())
         assert len(in_flight) == 1
         cancel_event = in_flight[0]["cancel_event"]
         assert not cancel_event.is_set()
@@ -242,8 +243,9 @@ def test_disconnect_auto_denies_any_pending_pycoder_approval(monkeypatch):
         ws.receive_json()  # (2) awaiting-approval publish
 
         session = client.app.state.bus.session("pycoder-disconnect-test")
-        assert session.agent_dispatcher._pycoder_requests, "runPyCoder never created a request entry"
-        entry = next(iter(session.agent_dispatcher._pycoder_requests.values()))
+        agent_dispatcher = get_session_context(session).agent_dispatcher
+        assert agent_dispatcher._pycoder_requests, "runPyCoder never created a request entry"
+        entry = next(iter(agent_dispatcher._pycoder_requests.values()))
         approval_future = entry["approval_future"]
         assert not approval_future.done(), "the pipeline must genuinely be parked on the gate here"
     # Exiting the `with` block closes the websocket, running ws_endpoint's
