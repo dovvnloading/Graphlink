@@ -1,5 +1,5 @@
 import { Handle, Position, useStore, type Node, type NodeProps } from "@xyflow/react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { CHAT_SCROLL_REPORT_DEBOUNCE_MS, LOD_ZOOM_THRESHOLD } from "./canvasConstants";
 import { downloadTextFile } from "./downloadTextFile";
 import { GROUP_MONO_COLORS, GROUP_NAMED_COLORS } from "./GroupColorPicker";
@@ -491,10 +491,65 @@ export function makeDebouncedScrollReport(
   };
 }
 
+// Node redesign, stage 3 ("card chrome"): hand-authored stroke icons for
+// the header's hover-revealed quick-action row, matching the SAME
+// convention this codebase already established twice (GroupNodeView.tsx's
+// own GroupIcon, Composer.tsx's own Icon) rather than a fourth, different
+// icon approach - fill:none/stroke:currentColor, one small file-local
+// component per file that needs icons, not a shared icon library.
+type ChatNodeIconName = "copy" | "check" | "branch" | "document";
+
+const CHAT_NODE_ICON_PATHS: Record<ChatNodeIconName, ReactNode> = {
+  copy: (
+    <>
+      <rect x="2.5" y="2.5" width="8" height="8" rx="1.2" />
+      <rect x="5.5" y="5.5" width="8" height="8" rx="1.2" />
+    </>
+  ),
+  check: <path d="M3.5 8.5 6.5 11.5 12.5 4.5" />,
+  branch: (
+    <>
+      <circle cx="4.5" cy="3.5" r="1.4" />
+      <circle cx="4.5" cy="12.5" r="1.4" />
+      <circle cx="11.5" cy="8" r="1.4" />
+      <path d="M4.5 4.9V11.1" />
+      <path d="M4.5 8H7a3 3 0 0 0 3-3" />
+    </>
+  ),
+  document: (
+    <>
+      <path d="M4 2h5l3 3v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1Z" />
+      <path d="M9 2v3h3" />
+    </>
+  ),
+};
+
+function ChatNodeIcon({ name }: { name: ChatNodeIconName }) {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 16 16" className="chat-node-icon">
+      {CHAT_NODE_ICON_PATHS[name]}
+    </svg>
+  );
+}
+
 export function ChatNodeView({ id, data, selected }: NodeProps<ChatFlowNode>) {
   const zoom = useStore((s) => s.transform[2]);
   const lodCollapsed = zoom < LOD_ZOOM_THRESHOLD;
   const collapsed = data.isCollapsed || lodCollapsed;
+  const [copied, setCopied] = useState(false);
+
+  // Node redesign, stage 3: the header's hover-revealed quick-action Copy
+  // button - deliberately a SEPARATE, direct navigator.clipboard call, not
+  // routed through the card menu's own "Copy Text" item (ChatNodeMenu,
+  // below), since this one needs its own transient "copied" flash feedback
+  // (matching the established pattern DocumentViewPanel.tsx/NodeMarkdown.tsx's
+  // own CodeBlock already use) independent of the menu's lifecycle.
+  function onQuickCopy() {
+    navigator.clipboard.writeText(data.content).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  }
   const [menuPosition, setMenuPosition] = useState<MenuPosition | null>(null);
 
   // R6.3: restore the saved scroll position once on mount (an empty dep
@@ -533,6 +588,25 @@ export function ChatNodeView({ id, data, selected }: NodeProps<ChatFlowNode>) {
       <Handle type="target" position={Position.Top} className="scene-node-handle" />
       <div className="scene-node-title chat-node-role">
         <span className="chat-node-role-group">
+          {/* Node redesign, stage 3: a small avatar chip - purely visual
+              (aria-hidden, the real role text right after it already
+              carries the semantics) - so scanning a dense graph of many
+              chat nodes doesn't depend on reading "You"/"Assistant" text
+              at small zoom levels. User/Assistant differentiated by the
+              same background shade .chat-node.user already tints its own
+              title bar with, not a new color - this app's palette stays
+              deliberately greyscale. Suppressed while collapsed - an
+              adversarial review measured a real overflow: the collapsed
+              pill is only 290px, and this chip stacked with the header's
+              existing conditional badges (model/synthesis/docked/final,
+              which can legitimately all co-occur) plus the quick-actions
+              row below pushed the collapse button entirely outside
+              .scene-node's overflow:hidden clip, making it unclickable. */}
+          {!collapsed && (
+            <span className="chat-node-avatar" aria-hidden="true">
+              {data.isUser ? "U" : "A"}
+            </span>
+          )}
           <span>{data.isUser ? "You" : "Assistant"}</span>
           {/* ADR-002 Workstream 1 ("Branch status and lifecycle"): always
               rendered (unlike every other badge here, which is conditional)
@@ -585,14 +659,65 @@ export function ChatNodeView({ id, data, selected }: NodeProps<ChatFlowNode>) {
             </span>
           )}
         </span>
-        <button
-          type="button"
-          className="chat-node-collapse-btn"
-          aria-label={data.isCollapsed ? "Expand" : "Collapse"}
-          onClick={data.onToggleCollapse}
-        >
-          {data.isCollapsed ? "▸" : "▾"}
-        </button>
+        {/* A single wrapper span, not two separate top-level flex children -
+            .chat-node-role's own layout is justify-content:space-between
+            (see .chat-node-role-group's own comment above for why a 3rd
+            top-level child gets pushed to the CENTER by that, not grouped
+            with the collapse button on the right where it belongs). */}
+        <span className="chat-node-title-actions">
+          {/* Node redesign, stage 3: hover-revealed quick actions - the 3
+              most-reached-for items from the card menu below (Copy Text,
+              Branch from here, Open Document View), surfaced without a
+              right-click. Hidden by default (opacity:0, matching
+              .group-node-controls-chip's own established hover-reveal
+              convention exactly) and revealed on hover OR while selected,
+              so they're still discoverable without a mouse hovering right
+              there after a click-to-select. nodrag on every button - these
+              sit inside a React Flow node, and without it a click here
+              would also start dragging the card. */}
+          {/* Suppressed while collapsed - same overflow reason as the
+              avatar chip's own comment above; this row alone was the
+              larger contributor to the measured overflow. */}
+          {!collapsed && (
+            <span className="chat-node-quick-actions">
+              <button
+                type="button"
+                className="chat-node-quick-action nodrag"
+                onClick={onQuickCopy}
+                title="Copy text"
+                aria-label="Copy text"
+              >
+                <ChatNodeIcon name={copied ? "check" : "copy"} />
+              </button>
+              <button
+                type="button"
+                className="chat-node-quick-action nodrag"
+                onClick={data.onBranchFromHere}
+                title="Branch from here"
+                aria-label="Branch from here"
+              >
+                <ChatNodeIcon name="branch" />
+              </button>
+              <button
+                type="button"
+                className="chat-node-quick-action nodrag"
+                onClick={data.onOpenDocumentView}
+                title="Open Document View"
+                aria-label="Open Document View"
+              >
+                <ChatNodeIcon name="document" />
+              </button>
+            </span>
+          )}
+          <button
+            type="button"
+            className="chat-node-collapse-btn"
+            aria-label={data.isCollapsed ? "Expand" : "Collapse"}
+            onClick={data.onToggleCollapse}
+          >
+            {data.isCollapsed ? "▸" : "▾"}
+          </button>
+        </span>
       </div>
       {!collapsed && (
         <div className="scene-node-body chat-node-content" ref={contentRef} onScroll={onScroll}>

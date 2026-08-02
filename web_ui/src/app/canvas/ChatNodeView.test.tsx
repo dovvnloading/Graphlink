@@ -24,7 +24,7 @@ afterEach(() => {
 // useStore(zoom) read - not RF's node-mounting/measurement pipeline - a
 // bare ReactFlowProvider is enough, and the component renders immediately
 // visible with no jsdom polyfills required.
-function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}) {
+function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}, selected: boolean = false) {
   const onToggleCollapse = vi.fn();
   const onDelete = vi.fn();
   const onUndockChild = vi.fn();
@@ -42,7 +42,7 @@ function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}) {
   const onCollapseBranch = vi.fn();
   const props = {
     id: "n0",
-    selected: false,
+    selected,
     data: {
       content: "Hello **world**",
       isUser: true,
@@ -555,6 +555,101 @@ describe("ChatNodeView Collapse Branch (ADR-002 Workstream 1)", () => {
     await user.click(item);
 
     expect(onCollapseBranch).toHaveBeenCalledWith(false);
+  });
+});
+
+// Node redesign, stage 3 ("card chrome"): the avatar chip and the header's
+// hover-revealed quick-action row (Copy/Branch from Here/Open Document
+// View) - all 3 buttons deliberately call the SAME handlers the card menu
+// below already uses, just reached without a right-click first.
+describe("ChatNodeView Stage 3 card chrome: avatar + quick actions", () => {
+  it("renders the avatar chip with 'U' for a user node and 'A' for an assistant node, both aria-hidden", () => {
+    const { container: userContainer } = renderChatNode({ isUser: true });
+    const userAvatar = userContainer.querySelector(".chat-node-avatar");
+    expect(userAvatar).toHaveTextContent("U");
+    expect(userAvatar).toHaveAttribute("aria-hidden", "true");
+
+    const { container: assistantContainer } = renderChatNode({ isUser: false });
+    expect(assistantContainer.querySelector(".chat-node-avatar")).toHaveTextContent("A");
+  });
+
+  it("the quick-action Copy button copies data.content directly (not routed through the card menu) and flashes a check glyph", async () => {
+    const user = userEvent.setup();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    renderChatNode({ content: "Hello **world**" });
+
+    const copyBtn = screen.getByRole("button", { name: "Copy text" });
+    expect(copyBtn.querySelector("path")).toBeNull(); // rest state: the copy glyph is two rects, no path
+
+    await user.click(copyBtn);
+
+    expect(writeText).toHaveBeenCalledWith("Hello **world**");
+    await waitFor(() => expect(copyBtn.querySelector("path")).not.toBeNull()); // check glyph flashed
+  });
+
+  it("the quick-action Branch from Here button calls onBranchFromHere directly, without opening the card menu", async () => {
+    const user = userEvent.setup();
+    const { onBranchFromHere } = renderChatNode();
+
+    await user.click(screen.getByRole("button", { name: "Branch from here" }));
+    expect(onBranchFromHere).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("the quick-action Open Document View button calls onOpenDocumentView directly, without opening the card menu", async () => {
+    const user = userEvent.setup();
+    const { onOpenDocumentView } = renderChatNode();
+
+    await user.click(screen.getByRole("button", { name: "Open Document View" }));
+    expect(onOpenDocumentView).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("all three quick-action buttons carry the nodrag class", () => {
+    renderChatNode();
+    for (const name of ["Copy text", "Branch from here", "Open Document View"]) {
+      expect(screen.getByRole("button", { name })).toHaveClass("nodrag");
+    }
+  });
+
+  it("the check glyph reverts back to the copy glyph 1500ms after copying", async () => {
+    const user = userEvent.setup();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    renderChatNode();
+
+    const copyBtn = screen.getByRole("button", { name: "Copy text" });
+    await user.click(copyBtn);
+    await waitFor(() => expect(copyBtn.querySelector("path")).not.toBeNull());
+
+    await waitFor(() => expect(copyBtn.querySelector("path")).toBeNull(), { timeout: 2000 });
+  });
+
+  it("adds the selected class to the card when the selected prop is true", () => {
+    const { container } = renderChatNode({}, true);
+    expect(container.querySelector(".chat-node")).toHaveClass("selected");
+  });
+
+  // An adversarial review (node redesign stage 3) found that the avatar chip
+  // and quick-actions row, stacked with the header's existing conditional
+  // badges (model/synthesis/docked/final - which can legitimately all
+  // co-occur on one node), overflowed the 290px collapsed pill and pushed
+  // the collapse button itself outside .scene-node's overflow:hidden clip,
+  // making it unclickable. Both are now suppressed while collapsed.
+  describe("suppressed while collapsed (overflow fix)", () => {
+    it("hides the avatar chip and the quick-actions row, but keeps the collapse button, when isCollapsed is true", () => {
+      const { container } = renderChatNode({ isCollapsed: true, model: "claude-opus-4-1-20250805" });
+      expect(container.querySelector(".chat-node-avatar")).toBeNull();
+      expect(container.querySelector(".chat-node-quick-actions")).toBeNull();
+      expect(screen.getByRole("button", { name: "Expand" })).toBeInTheDocument();
+    });
+
+    it("shows the avatar chip and the quick-actions row again once expanded", () => {
+      const { container } = renderChatNode({ isCollapsed: false });
+      expect(container.querySelector(".chat-node-avatar")).not.toBeNull();
+      expect(container.querySelector(".chat-node-quick-actions")).not.toBeNull();
+    });
   });
 });
 
