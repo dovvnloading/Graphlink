@@ -41,6 +41,7 @@ MIGRATED_METHODS = [
     ("_dispatch", "chat"),
     ("start_image_reply", "image"),
     ("start_artifact_reply", "artifact"),
+    ("start_web_research", "web_research"),
 ]
 
 

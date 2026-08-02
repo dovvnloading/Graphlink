@@ -37,7 +37,7 @@ from backend.attachments import StagedAttachment
 from backend.composer import ComposerDocument
 from backend.events import SessionBus
 from backend.notifications import NotificationState
-from backend.tests.conftest import chat_slots, image_slots
+from backend.tests.conftest import chat_slots, image_slots, web_research_slots
 
 import api_provider
 import graphlink_task_config as task_config
@@ -3346,7 +3346,7 @@ def test_run_web_research_intent_unknown_node_shows_notification_not_a_crash():
         result = await bus.dispatch_intent("scene", "runWebResearch", ["ghost", "a query"])
 
         assert result is None
-        assert dispatcher._web_research_requests == {}
+        assert web_research_slots(dispatcher) == {}
         notice = await bus.publish("notification")
         assert notice["visible"] is True
         assert notice["msgType"] == "warning"
@@ -3413,11 +3413,11 @@ def test_run_web_research_mid_flight_delete_of_the_node_is_a_silent_noop():
             document.remove_nodes([node.id])
 
             release.set()
-            entry = next(iter(dispatcher._web_research_requests.values()))
+            entry = next(iter(web_research_slots(dispatcher).values()))
             await entry["task"]
 
         assert node.id not in document.nodes
-        assert dispatcher._web_research_requests == {}
+        assert web_research_slots(dispatcher) == {}
         notice = await bus.publish("notification")
         assert notice["visible"] is False, "deleted-mid-flight is a silent no-op - no notification fires"
 
@@ -3486,7 +3486,7 @@ def test_run_web_research_on_a_different_node_while_one_is_busy_does_not_clobber
             assert notice["message"] == "A web research request is already running."
 
             release.set()
-            entry = next(iter(dispatcher._web_research_requests.values()))
+            entry = next(iter(web_research_slots(dispatcher).values()))
             await entry["task"]
 
         assert node_a.research_stage == "completed"

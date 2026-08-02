@@ -68,6 +68,16 @@ def artifact_slots(dispatcher):
     return _run_slots(dispatcher, "artifact")
 
 
+def web_research_slots(dispatcher):
+    """Note: web_research's cancellation mechanism is RunHandle.on_cancel
+    (a bound CancellationToken.cancel), not cancel_event - _run_slots'
+    returned "cancel_event" key is always None for this kind. No
+    pre-existing test in this suite ever read a "cancel_token" key
+    directly (only .values()/len()/== {}/entry["task"]), so this is a
+    safe, faithful adapter."""
+    return _run_slots(dispatcher, "web_research")
+
+
 def busy_count(dispatcher, kind):
     """ADR-002 stage 2.3 test adapter: the count-based equivalent of the
     old dict-of-sentinels' len()/truthiness checks for a "directly-

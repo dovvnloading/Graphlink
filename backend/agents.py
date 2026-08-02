@@ -283,12 +283,16 @@ class AgentDispatcher:
         # reply gives an honest "already generating" refusal instead of
         # replicating that hazard.
         #
-        # R5.1: a THIRD independent in-flight-request slot, separate from
-        # both chat and image - a web research run and a chat/image request
-        # must be able to run concurrently, same reasoning as image being
-        # independent from chat. request_id -> {"cancel_token":
-        # CancellationToken, "task": asyncio.Task}.
-        self._web_research_requests: dict[str, dict] = {}
+        # R5.1/ADR-002 stage 2.4e: web research ("web_research" kind, also
+        # sharing self._runs now) is a THIRD independent single-slot kind,
+        # separate from chat/image - a web research run must be able to run
+        # concurrently with either, same reasoning as image being
+        # independent from chat. Cancellable via RunHandle.on_cancel
+        # (cancel_token.cancel), not cancel_event - CancellationToken
+        # (graphlink_plugins/web_research/domain.py) is a structurally
+        # different class WebResearchService.run's own pipeline stages
+        # already accept as `token:`, not a threading.Event.
+        #
         # R5.2/ADR-002 stage 2.4d: artifact generation ("artifact" kind,
         # also sharing self._runs now) is a FOURTH independent single-slot
         # kind, separate from chat/image - an artifact-generation request
@@ -298,12 +302,12 @@ class AgentDispatcher:
         # unlike web_research's CancellationToken.
         #
         # R5.3: a FIFTH independent in-flight-request slot, separate from
-        # chat/image/artifact/self._web_research_requests - a Gitlink
-        # Generate Change Set run must be able to run concurrently with any
-        # of those four, same reasoning as every prior independent slot
-        # above. request_id -> {"cancel_event": threading.Event, "task":
-        # asyncio.Task} - Run is cancellable, mirrors
-        # self._web_research_requests' exact shape.
+        # chat/image/artifact/web_research - a Gitlink Generate Change Set
+        # run must be able to run concurrently with any of those four, same
+        # reasoning as every prior independent slot above. request_id ->
+        # {"cancel_event": threading.Event, "task": asyncio.Task} - Run is
+        # cancellable via threading.Event, same shape as chat/artifact -
+        # unlike web_research's CancellationToken/on_cancel.
         self._gitlink_requests: dict[str, dict] = {}
         # R5.3: a SIXTH independent in-flight-request slot - Gitlink's Apply
         # (the disk-write step) must be able to run concurrently with a
@@ -559,18 +563,18 @@ class AgentDispatcher:
         self._runs.cancel_all()
 
     def cancel_web_research(self, request_id: str) -> bool:
-        entry = self._web_research_requests.get(request_id)
-        if entry is None:
-            return False
-        entry["cancel_token"].cancel()
-        return True
+        """kind="web_research": ADR-002 stage 2.4e - the first surface to
+        actually exercise RunHandle.on_cancel (added in stage 2.4b), since
+        CancellationToken.cancel is not a threading.Event.set. See
+        RunRegistry.cancel's own docstring for why kind= is passed."""
+        return self._runs.cancel(request_id, kind="web_research")
 
     def is_web_research_busy(self) -> bool:
         """Lets callers check the single-slot guard before mutating scene
         state, so a Run click on a node other than the one already running
         doesn't reset that node's progress/error fields only to be rejected
         a moment later by start_web_research's own busy check."""
-        return bool(self._web_research_requests)
+        return self._runs.is_busy("web_research")
 
     def cancel_artifact(self, request_id: str) -> bool:
         """kind="artifact": ADR-002 stage 2.4d - the first surface to
@@ -1010,10 +1014,11 @@ class AgentDispatcher:
         start_image_reply above - NOT a variant of _dispatch, since there is
         exactly one caller (backend/canvas.py's run_web_research), so
         on_begin/on_end are inlined here directly rather than taking
-        _dispatch's generic parameters. Guarded by self._web_research_requests,
-        a dict kept fully SEPARATE from both chat/conversation's own "chat"
-        kind and image's own "image" kind (both in self._runs) - see that
-        field's own comment in __init__ for why this must stay independent.
+        _dispatch's generic parameters. Guarded by self._runs's
+        "web_research" kind, kept fully SEPARATE from both
+        chat/conversation's own "chat" kind and image's own "image" kind -
+        see that field's own comment in __init__ for why this must stay
+        independent.
 
         Cooperative cancellation only, via a CancellationToken (not a
         threading.Event, since WebResearchService.run's own pipeline stages
@@ -1021,14 +1026,24 @@ class AgentDispatcher:
         graphlink_plugins/web_research/domain.py) - same honestly-documented
         limitation as existing chat/image dispatch: this does not force-kill
         a call already blocked inside a single blocking call with no
-        checkpoint until it returns."""
-        if self._web_research_requests:
+        checkpoint until it returns.
+
+        ADR-002 stage 2.4e: migrated onto self._runs, using RunHandle.
+        on_cancel (cancel_token.cancel, a plain bound-method callable) -
+        the first surface to actually need it, since CancellationToken has
+        no cancel_event-compatible Event to pass instead."""
+        if self._runs.is_busy("web_research"):
             notifications_state.show("A web research request is already running.", "info")
             await bus.publish("notification")
             return
 
-        request_id = uuid.uuid4().hex
+        # Claimed SYNCHRONOUSLY, with no `await` between the is_busy()
+        # check above and this claim - same load-bearing ordering every
+        # other migrated surface's claim relies on, see
+        # backend/run_lifecycle.py's own docstring.
         cancel_token = CancellationToken()
+        handle = self._runs.claim("web_research", node_id=node_id, on_cancel=cancel_token.cancel)
+        request_id = handle.request_id
         request = WebResearchRequest(
             request_id=request_id,
             node_id=node_id,
@@ -1056,14 +1071,14 @@ class AgentDispatcher:
                 # comment on WATCHDOG_TIMEOUT_SECONDS above for the chat
                 # path's identical limitation), so a slow service.run() can
                 # keep calling progress() well after this request's own
-                # finally block has already popped _web_research_requests
+                # finally block has already released its registry claim
                 # and cleared node.pending_request_id. Re-check liveness here
-                # (on the loop thread, so no race with the pop above) and
+                # (on the loop thread, so no race with the release above) and
                 # drop the event if this request is no longer the active one
                 # - otherwise a stale progress tick can resurrect a
                 # since-failed/cancelled node's stage, or clobber a brand
                 # new run started on the same node in the meantime.
-                if request_id not in self._web_research_requests:
+                if self._runs.get(request_id) is None:
                     return
                 await _invoke(on_progress, event)
 
@@ -1117,13 +1132,11 @@ class AgentDispatcher:
                 await bus.publish("notification")
                 await bus.publish("scene")
             finally:
-                self._web_research_requests.pop(request_id, None)
+                self._runs.release(request_id)
                 node.pending_request_id = None
                 await bus.publish("scene")
 
-        self._web_research_requests[request_id] = {
-            "cancel_token": cancel_token, "task": asyncio.create_task(_run())
-        }
+        self._runs.attach_task(handle, asyncio.create_task(_run()))
 
     async def start_artifact_reply(
         self,
@@ -1143,9 +1156,9 @@ class AgentDispatcher:
         tag-parsing/raise (see ArtifactAgent.get_response) before any
         mutation callback fires. Guarded by self._runs's "artifact" kind,
         kept fully SEPARATE from chat/conversation's own "chat" kind,
-        image's own "image" kind, and self._web_research_requests - see
-        that field's own comment in __init__ for why this must stay
-        independent.
+        image's own "image" kind, and web_research's own "web_research"
+        kind - see that field's own comment in __init__ for why this must
+        stay independent.
 
         Cooperative cancellation only, via a threading.Event (not the
         CancellationToken web-research uses - ArtifactAgent has no such
