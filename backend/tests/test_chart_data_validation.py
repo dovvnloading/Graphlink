@@ -2,14 +2,15 @@
 validate_chart_data's use of that same contract (Qt-removal plan R7.3).
 
 R7.3 gap: graphlink_chart_data.py and graphlink_chart_agent.py are both
-confirmed Qt-free survivor modules backend/ imports directly (canvas.py:32,
-agents.py:75) - live production logic, not legacy-only code. Before this
+confirmed Qt-free survivor modules backend/ imports directly (from
+backend/domain/graph.py and backend/agents.py) - live production logic, not legacy-only code. Before this
 file, their own validation/rejection rules had no backend/tests coverage at
 all: backend/tests/test_canvas.py's chart tests only cover the "unsupported
 chart_type string" rejection path (SceneDocument.add_chart_node's own guard),
 never canonicalize_chart_data's own ChartDataError branch for malformed-but-
 otherwise-valid-type data (non-finite numbers, wrong container types, sankey
-cycles) - the exact defensive `except ChartDataError` at canvas.py:3503 this
+cycles) - the exact defensive `except ChartDataError` guard in canvas.py's
+generateChart wrapper this
 file's absence left completely unexercised. Ported from graphlink_app/tests/
 test_chart_nodes.py's own Qt-free test functions (the file's other tests
 construct a real Qt ChatScene and stay behind).
