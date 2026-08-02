@@ -5452,7 +5452,8 @@ mark.document-view-search-match-current {
 }
 
 .group-node:hover .group-node-controls-chip,
-.group-node.selected .group-node-controls-chip {
+.group-node.selected .group-node-controls-chip,
+.group-node-controls-chip:focus-within {
   opacity: 1;
   transform: translateX(0);
   pointer-events: auto;
