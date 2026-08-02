@@ -167,6 +167,33 @@ describe("NodeMarkdown", () => {
     });
   });
 
+  describe("LaTeX math (node redesign, stage 4)", () => {
+    it("renders inline math ($...$) as a KaTeX span", () => {
+      const { container } = render(<NodeMarkdown content="The area is $x^2$ square units." />);
+      expect(container.querySelector(".katex")).not.toBeNull();
+      expect(container.querySelector(".katex-display")).toBeNull();
+    });
+
+    it("renders block math ($$...$$ on its own lines) as a KaTeX display block", () => {
+      const { container } = render(<NodeMarkdown content={"$$\n\\int_0^1 x^2\\,dx\n$$"} />);
+      expect(container.querySelector(".katex-display")).not.toBeNull();
+    });
+
+    it("does not crash on malformed LaTeX - renders KaTeX's own inline error instead of throwing", () => {
+      const { container } = render(<NodeMarkdown content="Broken: $\\frac{1}{$" />);
+      expect(container.querySelector(".katex-error")).not.toBeNull();
+    });
+
+    it("leaves an ordinary dollar amount alone (not treated as math)", () => {
+      // remark-math requires the closing delimiter on non-whitespace content
+      // to trigger - a lone "$5" with no matching close is exactly the kind
+      // of prose (chat/note content routinely mentions prices) that must
+      // not get swallowed into a broken inline-math parse.
+      render(<NodeMarkdown content="It costs $5 and that's final." />);
+      expect(screen.getByText(/It costs \$5 and that's final\./)).toBeInTheDocument();
+    });
+  });
+
   describe("GitHub-style callouts", () => {
     it("renders a > [!NOTE] blockquote as a styled alert with the NOTE title", () => {
       const { container } = render(<NodeMarkdown content={"> [!NOTE]\n> Useful information."} />);
