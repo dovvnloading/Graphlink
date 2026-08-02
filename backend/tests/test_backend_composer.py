@@ -323,10 +323,16 @@ def test_capabilities_cancellation_is_a_genuine_permanent_capability():
 # -- token counter -------------------------------------------------------------
 
 
-def test_estimate_tokens_is_whitespace_split():
+def test_estimate_tokens_uses_the_real_tiktoken_estimator():
+    # ADR-016 stage 16.2: real BPE tokenization, not a whitespace word count.
+    # These are cl100k_base's actual counts (not word counts) - verified
+    # directly against graphlink_token_estimator.TokenEstimator, not assumed.
+    # Multi-space runs are the clearest tell: BPE tokenizes extra whitespace
+    # as its own token(s), which a word count (str.split() collapses runs)
+    # would never show - "  extra   spaces  " is 2 words but 5 real tokens.
     assert estimate_tokens("") == 0
     assert estimate_tokens("one two three") == 3
-    assert estimate_tokens("  extra   spaces  ") == 2
+    assert estimate_tokens("  extra   spaces  ") == 5
 
 
 def test_token_counter_payload_totals_all_three():

@@ -2262,7 +2262,14 @@ def test_send_message_sets_context_tokens_from_prior_history_not_the_new_message
         # contextTokens is set synchronously, before the reply dispatch even
         # starts (unlike outputTokens, which needs the reply to complete) -
         # no need to await the dispatcher's background task here.
-        expected = estimate_tokens("first message") + estimate_tokens("first reply")
+        #
+        # ADR-016 stage 16.2: expected must match _history_token_text's own
+        # "\n\n".join(...) of the two turns, not a sum of two separate
+        # estimate_tokens() calls - that sum-of-parts shortcut only held
+        # under the old whitespace-split estimator (str.split() treats "\n\n"
+        # as zero-width, so the sum happened to equal the joined count); real
+        # BPE tokenization is not additive across a separator like this.
+        expected = estimate_tokens("first message\n\nfirst reply")
         assert bus.token_counter.context_tokens == expected
 
     asyncio.run(run())
