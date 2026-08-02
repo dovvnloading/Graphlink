@@ -532,6 +532,21 @@ function ChatNodeIcon({ name }: { name: ChatNodeIconName }) {
   );
 }
 
+// Node redesign, stage 3's own deferred sub-item ("content fade + Show more,
+// replacing the hard 560px cutoff"), implemented now: must match
+// .chat-node-content's own max-height in styles.css exactly, or the fade/
+// button would appear (or fail to appear) at the wrong point.
+export const CHAT_CONTENT_COLLAPSED_MAX_HEIGHT = 560;
+
+/** Pure comparison, exported standalone for the same direct-unit-testability
+ * reason makeDebouncedScrollReport above already is - jsdom never lays out
+ * real content (scrollHeight is always 0 there), so the actual measurement
+ * can only be exercised in a real browser, but this comparison itself can be
+ * tested with plain numbers. */
+export function contentExceedsCollapsedHeight(scrollHeight: number): boolean {
+  return scrollHeight > CHAT_CONTENT_COLLAPSED_MAX_HEIGHT;
+}
+
 export function ChatNodeView({ id, data, selected }: NodeProps<ChatFlowNode>) {
   const zoom = useStore((s) => s.transform[2]);
   const lodCollapsed = zoom < LOD_ZOOM_THRESHOLD;
@@ -576,6 +591,45 @@ export function ChatNodeView({ id, data, selected }: NodeProps<ChatFlowNode>) {
   function onScroll(event: React.UIEvent<HTMLDivElement>) {
     makeDebouncedScrollReport(scrollTimerRef, data.onScrollChange)(event.currentTarget.scrollTop);
   }
+
+  // Node redesign, stage 3's own deferred sub-item, implemented now: content
+  // taller than the collapsed cap gets a fade + "Show more" toggle instead of
+  // just an internal scrollbar with no indication there's more below.
+  // Measures contentRef itself (the capped, overflow-y:auto element), not a
+  // separate inner wrapper - scrollHeight already reports the element's true,
+  // UNCAPPED content height regardless of its own max-height-clipped
+  // clientHeight, so no extra DOM node is needed (and none was added: an
+  // earlier draft wrapped NodeMarkdown in its own measurement div, which
+  // broke the .chat-node-content > :first-child/:last-child margin-reset
+  // rules just below by making them target that wrapper instead of the
+  // markdown's own first/last element - caught before this ever shipped).
+  const [contentExpanded, setContentExpanded] = useState(false);
+  const [contentOverflows, setContentOverflows] = useState(false);
+
+  useEffect(() => {
+    const contentEl = contentRef.current;
+    if (!contentEl) return undefined;
+
+    function measure() {
+      setContentOverflows(contentExceedsCollapsedHeight(contentEl!.scrollHeight));
+    }
+    measure();
+
+    // Catches height changes a single measurement on mount would miss - e.g.
+    // an embedded image (NodeMarkdown's own ZoomImage) has no intrinsic
+    // height until it finishes loading, well after this effect first runs.
+    // Observing contentEl itself still works once content crosses the
+    // 560px cap: at that crossing point the element's OWN rendered height
+    // changes (uncapped natural size -> capped 560px), which is exactly
+    // the resize event this needs to catch; further growth past the cap
+    // doesn't change the boolean this is tracking, so no further event is
+    // needed. vitest.setup.ts's ResizeObserver stub never fires its
+    // callback, so only the synchronous measure() call above is exercised
+    // in tests; this is a real-browser-only refinement on top of it.
+    const observer = new ResizeObserver(measure);
+    observer.observe(contentEl);
+    return () => observer.disconnect();
+  }, [data.content]);
 
   return (
     <div
@@ -720,8 +774,26 @@ export function ChatNodeView({ id, data, selected }: NodeProps<ChatFlowNode>) {
         </span>
       </div>
       {!collapsed && (
-        <div className="scene-node-body chat-node-content" ref={contentRef} onScroll={onScroll}>
-          <NodeMarkdown content={data.content} />
+        <div className="chat-node-content-shell">
+          <div
+            className={`scene-node-body chat-node-content${contentExpanded ? " expanded" : ""}`}
+            ref={contentRef}
+            onScroll={onScroll}
+          >
+            <NodeMarkdown content={data.content} />
+          </div>
+          {contentOverflows && !contentExpanded && (
+            <div className="chat-node-content-fade" aria-hidden="true" />
+          )}
+          {contentOverflows && (
+            <button
+              type="button"
+              className="chat-node-show-more nodrag"
+              onClick={() => setContentExpanded((expanded) => !expanded)}
+            >
+              {contentExpanded ? "Show less" : "Show more"}
+            </button>
+          )}
         </div>
       )}
       <Handle type="source" position={Position.Bottom} className="scene-node-handle" />
