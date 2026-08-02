@@ -35,7 +35,7 @@ If you need to rebuild the mental model quickly, open files in this order:
 
 1. `graphlink_desktop.py` - the whole launch story
 2. `backend/app.py` - FastAPI app factory, WS event bus wiring, WS origin validation
-3. `backend/canvas.py` - the node/graph/connection domain model (by far the largest file in the repo)
+3. `backend/domain/graph.py` - the node/graph/connection domain model (`SceneDocument`, composed from `backend/domain/branches.py` + `backend/domain/groups.py` mixins; data model in `backend/domain/model.py`) - split out of `backend/canvas.py` at ADR-002 stage 2.2, purity enforced by `tests/test_domain_purity.py`
 4. `backend/agents.py` - LLM dispatch (`AgentDispatcher`)
 5. `backend/composer.py` - composer draft/reasoning state
 6. `backend/settings.py` - provider/model settings, DPAPI-backed secrets
@@ -263,7 +263,8 @@ This is the practical lookup map for where code actually lives today.
 ### `backend/` (all Python domain logic - no UI code anywhere in this package)
 
 - `app.py` - FastAPI app factory, `/ws` endpoint, WS origin validation, static SPA serving.
-- `canvas.py` - the node/graph/connection domain model (`SceneNode`, `SceneEdge`, `SceneDocument`), every node kind's creation/mutation, view-state, navigation pins, `send_message`/`regenerate_response`/`generateImage`.
+- `canvas.py` - the canvas ORCHESTRATION/WIRE layer only since ADR-002 stage 2.2: `register_canvas()` (every scene/grid topic + intent) and the wire-only helpers. Still the compatibility import surface - `from backend.canvas import SceneDocument/SceneNode/_content_codec/...` all keep working (canvas re-imports them for its own use).
+- `domain/` - the pure scene domain, split out of canvas.py at ADR-002 stage 2.2 and permanently gated by `tests/test_domain_purity.py` (AST check: no fastapi/events/notifications/agents/token_counter imports, no bus-shaped calls): `model.py` (`SceneNode`, `SceneEdge`, errors, layout/appearance constants), `content_codec.py` (the shared `_content_codec` namespace - ONE instance), `graph.py` (`SceneDocument`, composed as `class SceneDocument(BranchOps, GroupOps)` with core node/edge/chart/view-state methods), `branches.py` (`BranchOps`: branch-tree semantics, `send_message`/`chat_branch_history`/`delete_chat_node`/branch status), `groups.py` (`GroupOps`: frame/container geometry). Patch seams: names bound in `domain/*` resolve in THOSE modules' namespaces - patch `backend.domain.graph.<name>`, never `backend.canvas.<name>`, for document behavior.
 - `agents.py` - `AgentDispatcher`, provider bootstrap, per-request cancellation.
 - `composer.py` - composer draft/reasoning-level state, `app-composer` topic.
 - `settings.py` - `register_settings()`, `app-settings` topic, every provider's settings intents.
