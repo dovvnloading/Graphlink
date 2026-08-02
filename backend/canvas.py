@@ -16,7 +16,14 @@ tests, incl. the private _content_codec namespace - the SAME shared
 instance, identity preserved) keeps working unchanged. Wire-only helpers
 (_research_result_wire, _history_turn_text, _history_token_text,
 _chart_source_text, _format_branches_for_comparison, _placeholder_chart_data)
-stay here, as does the entire register_canvas closure set.
+stay here.
+
+ADR-002 stage 2.6 (PR1-3) relocated register_canvas's own former
+~1570-line closure set, feature area by feature area, into
+backend/api/intents_*.py (see that package's own docstring). register_canvas
+is now a thin orchestrator: it constructs the shared SceneDocument,
+registers the handful of topics with no natural feature home, then calls
+each register_*_intents function in turn.
 """
 
 from __future__ import annotations
@@ -24,8 +31,6 @@ from __future__ import annotations
 from typing import Any
 
 from graphlink_chart_data import SUPPORTED_CHART_TYPES
-from graphlink_grid_view_settings import GRID_STYLE_PRESETS
-from graphlink_navigation_pins import NavigationPinRecord
 
 from backend.agents import AgentDispatcher
 from backend.composer import ComposerDocument
@@ -241,8 +246,12 @@ from backend.api.intents_chat_image import register_chat_image_intents  # noqa: 
 from backend.api.intents_code_sandbox import register_code_sandbox_intents  # noqa: E402
 from backend.api.intents_conversation import register_conversation_intents  # noqa: E402
 from backend.api.intents_gitlink import register_gitlink_intents  # noqa: E402
+from backend.api.intents_grid import register_grid_intents  # noqa: E402
+from backend.api.intents_groups import register_groups_intents  # noqa: E402
 from backend.api.intents_nodes import register_node_intents  # noqa: E402
+from backend.api.intents_pins import register_pins_intents  # noqa: E402
 from backend.api.intents_pycoder import register_pycoder_intents  # noqa: E402
+from backend.api.intents_view import register_view_intents  # noqa: E402
 from backend.api.intents_web_research import register_web_research_intents  # noqa: E402
 
 
@@ -296,18 +305,14 @@ def register_canvas(
         },
     )
 
-    async def publish_scene():
-        await bus.publish("scene")
-
-    async def publish_grid():
-        await bus.publish("grid-control")
-
-    # publish_token_counter (R8a) formerly lived here too - its only two
-    # consumers, sendMessage and regenerateResponse, both relocated into
-    # backend/api/intents_chat.py at ADR-002 stage 2.6, which gets its own
-    # equivalent from backend/api/_shared.py's make_publish_token_counter
-    # instead. Nothing in register_canvas's own remaining body calls it, so
-    # it was removed here rather than left as dead code.
+    # publish_scene/publish_grid (former lines 299-303) and
+    # publish_token_counter (R8a, former lines 305-310) all formerly lived
+    # here too. Every one of their consumers has now relocated into
+    # backend/api/ modules (ADR-002 stage 2.6, PR1-3), each of which gets
+    # its own equivalent via backend/api/_shared.py's make_publish_scene/
+    # make_publish_grid/make_publish_token_counter instead. Nothing in
+    # register_canvas's own remaining body calls any of the three, so all
+    # three were removed here rather than left as dead code.
 
     register_node_intents(bus, document, agent_dispatcher)
     register_conversation_intents(bus, document, notifications, agent_dispatcher)
@@ -322,177 +327,9 @@ def register_canvas(
     register_pycoder_intents(bus, document, notifications, agent_dispatcher)
     register_code_sandbox_intents(bus, document, notifications, agent_dispatcher)
 
-    # -- R6.1: Notes/Frames/Containers -----------------------------------------
-
-    async def add_note(x, y, is_system_prompt=False, is_summary_note=False):
-        node = document.add_note(
-            x, y, is_system_prompt=is_system_prompt, is_summary_note=is_summary_note,
-        )
-        await publish_scene()
-        return node.id
-
-    async def set_note_content(node_id, content):
-        document.set_note_content(node_id, content)
-        await publish_scene()
-
-    async def create_frame(item_ids):
-        node = document.create_frame(list(item_ids))
-        await publish_scene()
-        return node.id
-
-    async def create_container(item_ids):
-        node = document.create_container(list(item_ids))
-        await publish_scene()
-        return node.id
-
-    async def set_group_label(node_id, text):
-        document.set_group_label(node_id, text)
-        await publish_scene()
-
-    async def set_group_color(node_id, color, header_color):
-        document.set_group_color(node_id, color, header_color)
-        await publish_scene()
-
-    async def toggle_frame_lock(node_id):
-        document.toggle_frame_lock(node_id)
-        await publish_scene()
-
-    async def toggle_group_collapsed(node_id):
-        document.toggle_group_collapsed(node_id)
-        await publish_scene()
-
-    async def resize_frame(node_id, width, height):
-        document.resize_frame(node_id, width, height)
-        await publish_scene()
-
-    async def fit_frame_to_content(node_id):
-        document.fit_frame_to_content(node_id)
-        await publish_scene()
-
-    async def ungroup(node_id):
-        document.ungroup(node_id)
-        await publish_scene()
-
-    bus.register_intent("scene", "addNote", add_note)
-    bus.register_intent("scene", "setNoteContent", set_note_content)
-    bus.register_intent("scene", "createFrame", create_frame)
-    bus.register_intent("scene", "createContainer", create_container)
-    bus.register_intent("scene", "setGroupLabel", set_group_label)
-    bus.register_intent("scene", "setGroupColor", set_group_color)
-    bus.register_intent("scene", "toggleFrameLock", toggle_frame_lock)
-    bus.register_intent("scene", "toggleGroupCollapsed", toggle_group_collapsed)
-    bus.register_intent("scene", "resizeFrame", resize_frame)
-    bus.register_intent("scene", "fitFrameToContent", fit_frame_to_content)
-    bus.register_intent("scene", "ungroup", ungroup)
-
-    async def add_pin(title, x, y, note=""):
-        record = NavigationPinRecord.create(title=title, x=x, y=y, note=note)
-        document.pins.add(record)
-        await publish_scene()
-        return record.pin_id
-
-    async def move_pin(pin_id, x, y):
-        document.pins.move(pin_id, x, y)
-        await publish_scene()
-
-    async def remove_pin(pin_id):
-        document.pins.remove(pin_id)
-        await publish_scene()
-
-    async def update_pin(pin_id, title, note):
-        # NavigationPinRecord.create() validation (non-empty/length-bounded
-        # title, length-bounded note) runs via with_updates -> create's own
-        # field validators, same as add_pin's path - a bad edit raises
-        # NavigationPinValidationError, which is a ValueError subclass and
-        # therefore already reported to the caller as an intent error.
-        document.pins.update(pin_id, title=str(title), note=str(note))
-        await publish_scene()
-
-    async def set_snap_to_grid(enabled):
-        document.snap_to_grid = bool(enabled)
-        await publish_scene()
-
-    async def set_fade_connections(enabled):
-        document.fade_connections_enabled = bool(enabled)
-        await publish_scene()
-
-    async def set_orthogonal_routing(enabled):
-        document.orthogonal_routing = bool(enabled)
-        await publish_scene()
-
-    async def set_smart_guides(enabled):
-        document.smart_guides = bool(enabled)
-        await publish_scene()
-
-    async def set_drag_factor(factor):
-        document.set_drag_factor(factor)
-        await publish_scene()
-
-    async def set_view_state(zoom_factor, scroll_x, scroll_y):
-        document.set_view_state(zoom_factor, scroll_x, scroll_y)
-        await publish_scene()
-
-    bus.register_intent("scene", "addPin", add_pin)
-    bus.register_intent("scene", "movePin", move_pin)
-    bus.register_intent("scene", "removePin", remove_pin)
-    bus.register_intent("scene", "updatePin", update_pin)
-    bus.register_intent("scene", "setSnapToGrid", set_snap_to_grid)
-    bus.register_intent("scene", "setFadeConnections", set_fade_connections)
-    # Intent name matches the legacy GridControlBridge's own
-    # setOrthogonalConnections Slot name 1:1, same convention as
-    # setSnapToGrid/setFadeConnections above - the Python function name above
-    # doesn't need to match.
-    bus.register_intent("scene", "setOrthogonalConnections", set_orthogonal_routing)
-    bus.register_intent("scene", "setSmartGuides", set_smart_guides)
-    bus.register_intent("scene", "setDragFactor", set_drag_factor)
-    bus.register_intent("scene", "setViewState", set_view_state)
-
-    async def organize_nodes():
-        document.organize()
-        await publish_scene()
-
-    async def set_font_family(family):
-        document.set_font(family=family)
-        await publish_scene()
-
-    async def set_font_size(size_pt):
-        document.set_font(size_pt=size_pt)
-        await publish_scene()
-
-    async def set_font_color(color_hex):
-        document.set_font(color=color_hex)
-        await publish_scene()
-
-    bus.register_intent("scene", "organizeNodes", organize_nodes)
-    # Font intent names == FontControlBridge's @Slot names, same 1:1 rule as
-    # grid; they live on the scene topic because the VALUES are scene state.
-    bus.register_intent("scene", "setFontFamily", set_font_family)
-    bus.register_intent("scene", "setFontSize", set_font_size)
-    bus.register_intent("scene", "setFontColor", set_font_color)
-
-    # -- grid intents (names == GridControlBridge @Slot names) -------------
-
-    async def set_grid_size(size):
-        document.grid.grid_size = int(size)
-        await publish_grid()
-
-    async def set_grid_opacity_percent(percent):
-        document.grid.grid_opacity = max(0, min(100, int(percent))) / 100.0
-        await publish_grid()
-
-    async def set_grid_style(style):
-        if style not in GRID_STYLE_PRESETS:
-            raise SceneError(f"unknown grid style: {style}")
-        document.grid.grid_style = str(style)
-        await publish_grid()
-
-    async def set_grid_color(color_hex):
-        document.grid.grid_color = str(color_hex)
-        await publish_grid()
-
-    bus.register_intent("grid-control", "setGridSize", set_grid_size)
-    bus.register_intent("grid-control", "setGridOpacityPercent", set_grid_opacity_percent)
-    bus.register_intent("grid-control", "setGridStyle", set_grid_style)
-    bus.register_intent("grid-control", "setGridColor", set_grid_color)
+    register_groups_intents(bus, document)
+    register_pins_intents(bus, document)
+    register_view_intents(bus, document)
+    register_grid_intents(bus, document)
 
     return document
