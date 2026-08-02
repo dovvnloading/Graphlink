@@ -4738,6 +4738,64 @@ def test_cancel_pycoder_and_cancel_code_sandbox_cannot_trip_each_others_or_a_for
     asyncio.run(run())
 
 
+def test_cancel_all_trips_a_pycoder_run_that_is_mid_execution_past_the_approval_gate(monkeypatch):
+    """ADR-002 stage 2.4g: proves the NEW capability this migration slice
+    unlocks - previously pycoder's cancel_event lived in its own private
+    dict that cancel_all() never walked at all, so a session disconnect
+    mid-EXECUTION (already past any approval gate, blocked in the REPL)
+    left the run running server-side, untethered, until it finished on
+    its own. Now that pycoder shares self._runs with every other
+    cancellable kind, cancel_all() - the same method backend/app.py's
+    disconnect handler calls first, before cancel_all_pending_approvals()
+    - genuinely reaches it too. Uses manual mode deliberately: it has no
+    approval gate at all, so this isolates the EXECUTE-stage cancellation
+    specifically from the (already separately tested) approval-pause
+    auto-deny path."""
+    started = threading.Event()
+    release = threading.Event()
+
+    class _BlockingRepl:
+        last_run_failed = False
+
+        def execute(self, code):
+            started.set()
+            release.wait(5)
+            return "output"
+
+    monkeypatch.setattr(AgentDispatcher, "get_pycoder_repl", lambda self, node_id: _BlockingRepl())
+
+    async def run():
+        bus, notifications, dispatcher = _make_code_exec_env()
+        node = _make_pycoder_node(pycoder_mode="manual")
+        failures = []
+
+        # start_pycoder_run is itself fire-and-forget - it schedules _run()
+        # internally and returns almost immediately, well before execution
+        # reaches the REPL. Await it directly (not wrapped in create_task);
+        # the REAL background work is entry["task"] below, grabbed only
+        # after this returns and the registry claim has landed.
+        await dispatcher.start_pycoder_run(
+            bus=bus, notifications_state=notifications, node=node, node_id="n1",
+            mode="manual", prompt="", code="print(1)", conversation_history=[],
+            on_success=lambda *a: None, on_failure=failures.append,
+        )
+        entry = next(iter(pycoder_slots(dispatcher).values()))
+        await asyncio.to_thread(started.wait, 5)
+
+        # THE key action: cancel_all() - exactly what backend/app.py's
+        # disconnect handler calls - must trip this run's cancel_event even
+        # though it is mid-execution, with no approval gate involved at all.
+        dispatcher.cancel_all()
+
+        release.set()
+        await entry["task"]
+
+        assert notifications.visible is True
+        assert notifications.message == "Py-Coder execution cancelled."
+
+    asyncio.run(run())
+
+
 def test_cancel_code_sandbox_returns_false_for_an_unknown_request_id():
     dispatcher = AgentDispatcher(_FakeSettingsManager())
     assert dispatcher.cancel_code_sandbox("no-such-request") is False
