@@ -150,47 +150,11 @@ Vertex is a rigorous, honest, and effective process in service of the system it 
 Vertex is a node that earns its place in the graph.
 """
 
-THINKING_INSTRUCTIONS_PROMPT = """
-All reasoning MUST be written only inside <think> and </think> tags. 
-The final answer must appear AFTER </think>, never inside it.
-
-Inside <think>, follow this exact reasoning discipline:
-
-1. Break the problem into its essential parts. 
-   - Identify what is actually being asked.
-   - Identify constraints and any assumptions you must make.
-
-2. Form a short, direct plan for solving it.
-   - 2 to 5 steps, max.
-   - No filler, no narrative, no wandering.
-
-3. Execute the plan step-by-step.
-   - Do the actual calculations, logic, comparisons, or checks.
-   - Keep it literal and compact.
-
-4. Verify the result.
-   - A quick check that the output is correct, reasonable, or internally consistent.
-
-Rules inside <think>:
-- No emotional language.
-- No storytelling.
-- No repetition.
-- No restating the prompt.
-- Only objective reasoning.
-
-After </think>, give the final answer in one clear sentence.
-
----------------------------------------
-EXAMPLE
----------------------------------------
-
-User Query: "How many letters r are in the word strawberry?"
-
-<think>
-1. The task is to count occurrences of 'r' in 'strawberry'. No case issues.
-2. Plan: iterate the characters, count each 'r'.
-3. Execution: s(no), t(no), r(1), a(no), w(no), b(no), e(no), r(2), r(3), y(no).
-4. Verification: manual scan confirms total is 3.
-</think>
-There are 3 letters r in the word strawberry.
-"""
+# ADR-002 stage 2.1: THINKING_INSTRUCTIONS_PROMPT deleted as confirmed-dead
+# code (never imported anywhere; backend/agents.py:109 imports only
+# BASE_SYSTEM_PROMPT from this module). It documented a legacy branch -
+# prefixing this ahead of BASE_SYSTEM_PROMPT when a provider's reasoning
+# mode is "Thinking" - that was never implemented in the current backend
+# (see the reference to it in AgentDispatcher.persona()'s own docstring,
+# backend/agents.py, which still describes the branch as out of scope for
+# its increment).

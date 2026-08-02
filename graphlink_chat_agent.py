@@ -1,20 +1,29 @@
 """Qt-free chat-agent core (Qt-removal plan R4.2 prerequisite).
 
-`resolve_branch_system_prompt`/`ChatWorker`/`ChatAgent` moved out of
-graphlink_agents_core.py: that module's unconditional
-`from PySide6.QtCore import QThread, Signal, QPointF` (needed only by its
-`*WorkerThread` classes) meant importing anything from it - including these
-three Qt-free symbols - pulled PySide6 into the process. That made them
-unimportable from backend/ despite containing zero Qt code themselves,
-exactly the R4.1 problem R4.1 itself didn't reach (it only split
-graphlink_config.py).
-
-graphlink_agents_core.py re-exports all three unchanged for its own
-ChatWorkerThread (which calls resolve_branch_system_prompt) and every
-legacy Qt call site - see its own import line.
+`ChatWorker`/`ChatAgent` moved out of graphlink_agents_core.py: that
+module's unconditional `from PySide6.QtCore import QThread, Signal,
+QPointF` (needed only by its `*WorkerThread` classes) meant importing
+anything from it - including these Qt-free symbols - pulled PySide6 into
+the process. That made them unimportable from backend/ despite containing
+zero Qt code themselves, exactly the R4.1 problem R4.1 itself didn't reach
+(it only split graphlink_config.py).
 
 This file must stay Qt-free forever - it exists to be importable from
 backend/, which test_no_qt_anywhere.py holds to zero tolerance.
+
+ADR-002 stage 2.1: this module used to also define
+`resolve_branch_system_prompt`, a Qt-era fallback (walked live
+QGraphicsScene objects - parent_node/scene()/system_prompt_connections)
+for when ChatWorker.run() was called without a pre-resolved system prompt.
+Deleted as confirmed-dead: every real caller (backend/agents.py's
+_call_chat_agent and _call_chat_agent_stream, both via ChatAgent.__init__'s
+self.system_prompt, which is never empty/None) always passes
+resolved_system_prompt, so the fallback branch was unreachable in the
+current backend and would have crashed immediately if it were ever
+reached (it dereferences QGraphicsScene APIs that do not exist on a
+backend SceneNode). The real, live equivalent is
+AgentDispatcher._resolve_branch_system_prompt in backend/agents.py - an
+independent reimplementation against SceneDocument, not this function.
 """
 
 import json
@@ -23,39 +32,6 @@ import graphlink_task_config as config
 import api_provider
 from graphlink_token_estimator import TokenEstimator
 from graphlink_memory import trim_history
-
-
-def resolve_branch_system_prompt(current_node, default_system_prompt):
-    """Resolve the effective system prompt for a chat branch.
-
-    Walks up to the branch root and, if a system-prompt note is attached there, uses its
-    content instead of the default. This reads live QGraphicsScene objects
-    (``parent_node``/``scene()``/``system_prompt_connections``/``prompt_note.content``),
-    so it MUST run on the GUI thread - QGraphicsScene is not thread-safe, and doing this
-    walk from a worker thread races node deletion / scene.clear() and can crash or read
-    torn state. Callers resolve it here on the UI thread and hand the resulting string
-    to the worker, which never touches the scene.
-
-    Returns the final system prompt string (the default if nothing overrides it).
-    """
-    final_system_prompt = default_system_prompt
-    if not (default_system_prompt or "").strip():
-        return default_system_prompt
-    if not current_node:
-        return final_system_prompt
-
-    root_node = current_node
-    while root_node.parent_node:
-        root_node = root_node.parent_node
-
-    if root_node.scene():
-        for conn in root_node.scene().system_prompt_connections:
-            if conn.end_node == root_node:
-                prompt_note = conn.start_node
-                if prompt_note.content:
-                    final_system_prompt = prompt_note.content
-                break
-    return final_system_prompt
 
 
 class ChatWorker:
@@ -81,11 +57,13 @@ class ChatWorker:
 
         Args:
             conversation_history (list): The list of messages in the conversation.
-            current_node (QGraphicsItem): The current node context. Only used to resolve the
-                branch system prompt when `resolved_system_prompt` is not supplied.
+            current_node: Kept for signature compatibility with every real caller
+                (backend/agents.py) and ChatAgent.get_response, which forwards it
+                unchanged - no longer read inside this method (ADR-002 stage 2.1:
+                its only use was the deleted Qt-era fallback branch below).
             resolved_system_prompt (str, optional): The branch system prompt already
-                resolved on the GUI thread. When provided, the scene is NOT walked here -
-                this is how the worker-thread path avoids touching QGraphicsScene (#20).
+                resolved by the caller (AgentDispatcher._resolve_branch_system_prompt
+                in backend/agents.py). Every real caller supplies this.
             on_chunk (callable, optional): Qt-removal R4.4 token streaming. When provided,
                 routes through api_provider.chat_stream(...) instead of api_provider.chat(...),
                 invoking on_chunk(delta, reset) as incremental text arrives. Additive and
@@ -98,11 +76,7 @@ class ChatWorker:
         Raises:
             Exception: Propagates exceptions from the API provider.
         """
-        if resolved_system_prompt is not None:
-            final_system_prompt = resolved_system_prompt
-        else:
-            # Legacy/direct path (no pre-resolution): safe only on the GUI thread.
-            final_system_prompt = resolve_branch_system_prompt(current_node, self.system_prompt)
+        final_system_prompt = resolved_system_prompt
         use_system_prompt = bool((final_system_prompt or "").strip())
 
         try:
