@@ -2,7 +2,13 @@ import { ReactFlowProvider, type NodeProps } from "@xyflow/react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ChatNodeView, makeDebouncedScrollReport, type ChatFlowNode } from "./ChatNodeView";
+import {
+  CHAT_CONTENT_COLLAPSED_MAX_HEIGHT,
+  ChatNodeView,
+  contentExceedsCollapsedHeight,
+  makeDebouncedScrollReport,
+  type ChatFlowNode,
+} from "./ChatNodeView";
 
 // R7.5a: jsdom implements neither URL.createObjectURL nor
 // URL.revokeObjectURL - same hand-installed-fakes pattern
@@ -40,47 +46,61 @@ function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}, selected:
   const onSetBranchStatus = vi.fn();
   const onSetFinalDeliverable = vi.fn();
   const onCollapseBranch = vi.fn();
-  const props = {
-    id: "n0",
-    selected,
-    data: {
-      content: "Hello **world**",
-      isUser: true,
-      isCollapsed: false,
-      dockedChildren: [],
-      chatScrollValue: 0,
-      onToggleCollapse,
-      onDelete,
-      onUndockChild,
-      onRegenerate,
-      onGenerateImage,
-      onGenerateChart,
-      onGenerateKeyTakeaway,
-      onGenerateExplainerNote,
-      onOpenDocumentView,
-      onScrollChange,
-      isBranchFocusActive: false,
-      onToggleBranchFocus,
-      onBranchFromHere,
-      branchStatus: "active",
-      isFinalDeliverable: false,
-      onSetBranchStatus,
-      onSetFinalDeliverable,
-      onCollapseBranch,
-      ...overrides,
-    },
-  } as unknown as NodeProps<ChatFlowNode>;
+  function buildProps(dataOverrides: Partial<ChatFlowNode["data"]>) {
+    return {
+      id: "n0",
+      selected,
+      data: {
+        content: "Hello **world**",
+        isUser: true,
+        isCollapsed: false,
+        dockedChildren: [],
+        chatScrollValue: 0,
+        onToggleCollapse,
+        onDelete,
+        onUndockChild,
+        onRegenerate,
+        onGenerateImage,
+        onGenerateChart,
+        onGenerateKeyTakeaway,
+        onGenerateExplainerNote,
+        onOpenDocumentView,
+        onScrollChange,
+        isBranchFocusActive: false,
+        onToggleBranchFocus,
+        onBranchFromHere,
+        branchStatus: "active",
+        isFinalDeliverable: false,
+        onSetBranchStatus,
+        onSetFinalDeliverable,
+        onCollapseBranch,
+        ...dataOverrides,
+      },
+    } as unknown as NodeProps<ChatFlowNode>;
+  }
 
-  const { container } = render(
+  const { container, rerender } = render(
     <ReactFlowProvider>
-      <ChatNodeView {...props} />
+      <ChatNodeView {...buildProps(overrides)} />
     </ReactFlowProvider>,
   );
+  // Re-renders with a fresh set of data overrides (merged over the same
+  // defaults above) - only needed by tests that must trigger a NEW commit
+  // (e.g. the content-overflow measurement effect below, keyed on
+  // data.content) after first mutating the rendered DOM directly.
+  function rerenderWithData(dataOverrides: Partial<ChatFlowNode["data"]>) {
+    rerender(
+      <ReactFlowProvider>
+        <ChatNodeView {...buildProps(dataOverrides)} />
+      </ReactFlowProvider>,
+    );
+  }
   return {
     onToggleCollapse, onDelete, onUndockChild, onRegenerate, onGenerateImage,
     onGenerateChart, onGenerateKeyTakeaway, onGenerateExplainerNote,
     onOpenDocumentView, onScrollChange, onToggleBranchFocus, onBranchFromHere,
     onSetBranchStatus, onSetFinalDeliverable, onCollapseBranch, container,
+    rerenderWithData,
   };
 }
 
@@ -650,6 +670,69 @@ describe("ChatNodeView Stage 3 card chrome: avatar + quick actions", () => {
       expect(container.querySelector(".chat-node-avatar")).not.toBeNull();
       expect(container.querySelector(".chat-node-quick-actions")).not.toBeNull();
     });
+  });
+});
+
+// Node redesign, stage 3's own deferred sub-item ("content fade + Show
+// more"), implemented later: replaces .chat-node-content's hard 560px
+// scroll-only cutoff with a fade + toggle. jsdom never lays out real
+// content (scrollHeight is always 0), so these tests override scrollHeight
+// directly on the rendered content div, then trigger a fresh measurement by
+// re-rendering with a new data.content (the measurement effect's own
+// dependency) - the override survives the re-render since React reuses the
+// same DOM node.
+describe("ChatNodeView content fade + Show more/Show less", () => {
+  it("renders no fade or Show more button when content fits within the collapsed cap (jsdom's real, always-0 scrollHeight)", () => {
+    const { container } = renderChatNode();
+    expect(container.querySelector(".chat-node-content-fade")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Show more" })).toBeNull();
+  });
+
+  it("shows a fade and a Show more button once the content's real scrollHeight exceeds the collapsed cap", () => {
+    const { container, rerenderWithData } = renderChatNode({ content: "first" });
+    const contentEl = container.querySelector(".chat-node-content") as HTMLDivElement;
+    Object.defineProperty(contentEl, "scrollHeight", { value: 900, configurable: true });
+
+    rerenderWithData({ content: "second" });
+
+    expect(container.querySelector(".chat-node-content-fade")).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Show more" })).toBeInTheDocument();
+  });
+
+  it("clicking Show more expands the content and hides the fade; clicking Show less collapses it back", async () => {
+    const user = userEvent.setup();
+    const { container, rerenderWithData } = renderChatNode({ content: "first" });
+    const contentEl = container.querySelector(".chat-node-content") as HTMLDivElement;
+    Object.defineProperty(contentEl, "scrollHeight", { value: 900, configurable: true });
+    rerenderWithData({ content: "second" });
+
+    await user.click(screen.getByRole("button", { name: "Show more" }));
+    expect(contentEl).toHaveClass("expanded");
+    expect(container.querySelector(".chat-node-content-fade")).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Show less" }));
+    expect(contentEl).not.toHaveClass("expanded");
+    expect(container.querySelector(".chat-node-content-fade")).not.toBeNull();
+  });
+
+  it("the Show more/Show less toggle carries the nodrag class", () => {
+    const { container, rerenderWithData } = renderChatNode({ content: "first" });
+    const contentEl = container.querySelector(".chat-node-content") as HTMLDivElement;
+    Object.defineProperty(contentEl, "scrollHeight", { value: 900, configurable: true });
+    rerenderWithData({ content: "second" });
+
+    expect(screen.getByRole("button", { name: "Show more" })).toHaveClass("nodrag");
+  });
+});
+
+describe("contentExceedsCollapsedHeight", () => {
+  it("is false at or under the collapsed cap", () => {
+    expect(contentExceedsCollapsedHeight(0)).toBe(false);
+    expect(contentExceedsCollapsedHeight(CHAT_CONTENT_COLLAPSED_MAX_HEIGHT)).toBe(false);
+  });
+
+  it("is true once over the collapsed cap", () => {
+    expect(contentExceedsCollapsedHeight(CHAT_CONTENT_COLLAPSED_MAX_HEIGHT + 1)).toBe(true);
   });
 });
 

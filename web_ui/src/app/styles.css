@@ -390,6 +390,49 @@ body,
   margin-bottom: 0;
 }
 
+/* Node redesign, stage 3's own deferred sub-item ("content fade + Show
+   more"), implemented now: replaces the hard 560px scroll-only cutoff with
+   a fade + toggle, matching how most chat UIs handle a long message.
+   Scoped to ChatNodeView only - .thinking-node-content/.code-node-content
+   share the base .chat-node-content rule above but never render this
+   wrapper/fade/button, so they keep their existing scroll-only behavior
+   unchanged. */
+.chat-node-content-shell {
+  position: relative;
+}
+
+.chat-node-content.expanded {
+  max-height: none;
+}
+
+.chat-node-content-fade {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 48px;
+  background: linear-gradient(to bottom, transparent, var(--gl-surface-node-body));
+  pointer-events: none;
+}
+
+.chat-node-show-more {
+  display: block;
+  width: 100%;
+  padding: 4px 0;
+  font-size: 0.85em;
+  font-family: inherit;
+  color: var(--gl-surface-text-muted);
+  background: transparent;
+  border: none;
+  border-top: 1px solid var(--gl-surface-border);
+  cursor: pointer;
+}
+
+.chat-node-show-more:hover {
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-neutral-button-hover);
+}
+
 /* Node redesign, stage 2 ("typography and heading hierarchy"): headings
    were fixed px values (15/14/13/12) set independently of this element's
    own font-size, which itself is driven by the user-configurable
