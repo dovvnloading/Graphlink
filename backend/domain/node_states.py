@@ -319,6 +319,122 @@ class ContainerState(NodeState):
 
 
 @dataclass
+class GitlinkState(NodeState):
+    """Relocated verbatim from SceneNode's nineteen gitlink fields (former
+    backend/domain/model.py fields, R5.3) - the Gitlink node's real
+    persisted shape: reads a GitHub repo (or a local checkout) into
+    structured XML context, proposes an LLM change set, and only writes to
+    disk after an explicit, fingerprint-verified approval.
+
+    - gitlink_repo/gitlink_branch/gitlink_scope_mode/gitlink_local_root:
+      the node's live repo/branch/scope-mode/local-checkout-path
+      selection, set by store_gitlink_repo_tree, store_gitlink_snapshot_
+      root, set_gitlink_local_root and store_gitlink_context (backend/
+      domain/graph.py).
+    - gitlink_imported_root: mirrors legacy repo_state["imported_root"] -
+      remembers which local path a prior Import Repo Snapshot produced, so
+      a later run can reuse it without re-downloading. Server-side
+      bookkeeping ONLY: deliberately absent from scene_payload()/
+      SceneNodeRow - there is no wire field for it, nothing on the
+      frontend ever needs to read it directly (gitlink_local_root is
+      what's shown/edited).
+    - gitlink_repo_file_paths/gitlink_selected_paths: the scanned
+      text-file path list and the user's Build-Context selection out of
+      it.
+    - gitlink_task_prompt: the natural-language ask for the current
+      Generate Change Set run.
+    - gitlink_context_xml: DESIGNED ceiling of 180,000 chars (repository.
+      py's MAX_CONTEXT_CHARS) - an order of magnitude above this state's
+      other fields' implicit ceilings. scene_payload() resends every node
+      on roughly 20 undebounced triggers (see SceneDocument.image_assets'
+      own comment) - inlining a 180KB text blob there would reproduce
+      that exact cost on every unrelated mutation for the rest of the
+      session. EXCLUDED from scene_payload() on purpose; served on demand
+      via the read-only fetchGitlinkContext intent instead (see
+      fetch_gitlink_context_xml, backend/domain/graph.py). Deleted
+      automatically when the node is deleted - no separate eviction
+      bookkeeping needed (unlike image_assets, this never leaves this
+      dataclass instance).
+    - gitlink_context_stats: repository.py's build_context_bundle returns
+      a mixed int/str dict (scanned_files/loaded_files/included_files/
+      load_errors/context_omissions are ints; source_root/summary are
+      strings) - store_gitlink_context stringifies every value before
+      assigning here so the wire field this feeds (scene_payload()'s
+      "gitlinkContextStats") stays honestly dict[str, str] end to end,
+      matching how graphlink_scene_payload.py's SceneNodeRow types it for
+      codegen. DEVIATION from a literal-verbatim forward: unlike R5.1's
+      providerSnapshot (typed dict[str, str] but always populated as {}
+      at runtime, so the type is never really exercised),
+      gitlink_context_stats IS genuinely populated with int values at
+      runtime - forwarding it unmodified would make the generated
+      validateSceneState() reject every real context-build result. The
+      str-coercion in store_gitlink_context is load-bearing, not a
+      defensive formality.
+    - gitlink_context_summary: built purely from aggregate file counts
+      (repository.py's build_context_bundle), never from paths/content -
+      two different Build Context results (e.g. selecting a different
+      single file each time) can produce an IDENTICAL summary string.
+    - gitlink_context_version: R5.3 post-review FIX 6 - a genuine
+      MONOTONIC per-node counter, incremented unconditionally every time
+      store_gitlink_context lands a successful Build Context result -
+      unlike gitlink_context_summary above, this can never collide.
+      Without this field, two DIFFERENT Build Context results could
+      produce an identical summary string, tricking the frontend's
+      lazy-fetch-once guard (keyed on data.gitlinkContextSummary) into
+      skipping a real refetch and showing stale XML. UNLIKE
+      gitlink_context_xml/gitlink_change_local_root, this DOES need to be
+      on the wire (see scene_payload()) - the frontend reads it to detect
+      "a new build landed" even when the summary text happens to repeat.
+    - gitlink_proposal_markdown/gitlink_pending_changes/
+      gitlink_preview_text: landed by complete_gitlink_run - the
+      human-readable proposal, the structured change list Apply actually
+      acts on, and the diff-style preview text.
+    - gitlink_change_fingerprint: a fingerprint (see
+      graphlink_plugins.gitlink.agent's _fingerprint_changes) of the
+      currently-previewed gitlink_pending_changes, checked by
+      start_gitlink_apply (backend/agents.py) immediately before writing,
+      so a stale/superseded approval can never be replayed.
+    - gitlink_change_local_root: R5.3 post-review FIX 2 - the local_root
+      the approved change set's WRITE DESTINATION was bound to at Run
+      time (see complete_gitlink_run). _fingerprint_changes only hashes
+      file content/paths/operations, never local_root - this field is
+      deliberately NOT hashed itself, since it is reused verbatim from
+      gitlink/agent.py, shared with the legacy Qt app. Without this
+      separate binding, a still-valid fingerprint would let previously-
+      reviewed content be written into a directory that was never diffed
+      or shown to the user, if gitlink_local_root changes between Run and
+      Apply (see start_gitlink_apply's fourth check in backend/agents.py).
+      Plain internal bookkeeping field, like gitlink_context_xml: NEVER
+      added to scene_payload()/the codegen dataclass source - the
+      frontend never reads this directly, only the backend enforces it.
+    - gitlink_change_state: draft | previewed | applying | applied - see
+      complete_gitlink_run/fail_gitlink_apply (backend/domain/graph.py)
+      for the transitions.
+    - gitlink_error: the current run/apply's error banner text, cleared
+      on the next attempt."""
+
+    gitlink_repo: str = ""
+    gitlink_branch: str = ""
+    gitlink_scope_mode: str = "selected"
+    gitlink_local_root: str = ""
+    gitlink_imported_root: str = ""
+    gitlink_repo_file_paths: list[str] = field(default_factory=list)
+    gitlink_selected_paths: list[str] = field(default_factory=list)
+    gitlink_task_prompt: str = ""
+    gitlink_context_xml: str = ""
+    gitlink_context_stats: dict[str, str] = field(default_factory=dict)
+    gitlink_context_summary: str = ""
+    gitlink_context_version: int = 0
+    gitlink_proposal_markdown: str = ""
+    gitlink_pending_changes: list[dict[str, Any]] = field(default_factory=list)
+    gitlink_preview_text: str = ""
+    gitlink_change_fingerprint: str | None = None
+    gitlink_change_local_root: str | None = None
+    gitlink_change_state: str = "draft"
+    gitlink_error: str = ""
+
+
+@dataclass
 class ChatState(NodeState):
     """Relocated verbatim from SceneNode's eight chat-only fields (former
     backend/domain/model.py fields). SceneNode's own `content` field

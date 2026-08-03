@@ -92,6 +92,7 @@ from backend.domain.node_states import (
     ContainerState,
     DocumentState,
     FrameState,
+    GitlinkState,
     HtmlState,
     ImageState,
     NoteState,
@@ -812,6 +813,7 @@ class SceneDocument(BranchOps, GroupOps):
             y=float(y),
             title="Gitlink",
             kind="gitlink",
+            state=GitlinkState(),
         )
         self.nodes[node_id] = node
         self.connect(parent_id, node_id)
@@ -826,7 +828,9 @@ class SceneDocument(BranchOps, GroupOps):
         node = self.nodes.get(node_id)
         if node is None:
             raise SceneError(f"unknown node: {node_id}")
-        node.gitlink_local_root = str(local_root)
+        if node.kind != "gitlink":
+            raise SceneError(f"node is not a gitlink node: {node_id}")
+        node.state.gitlink_local_root = str(local_root)
         return node
 
     def store_gitlink_repo_tree(self, node_id: str, repo: str, branch: str, file_paths: list[str]) -> SceneNode:
@@ -836,9 +840,11 @@ class SceneDocument(BranchOps, GroupOps):
         node = self.nodes.get(node_id)
         if node is None:
             raise SceneError(f"unknown node: {node_id}")
-        node.gitlink_repo = str(repo)
-        node.gitlink_branch = str(branch)
-        node.gitlink_repo_file_paths = list(file_paths)
+        if node.kind != "gitlink":
+            raise SceneError(f"node is not a gitlink node: {node_id}")
+        node.state.gitlink_repo = str(repo)
+        node.state.gitlink_branch = str(branch)
+        node.state.gitlink_repo_file_paths = list(file_paths)
         return node
 
     def store_gitlink_snapshot_root(self, node_id: str, repo: str, branch: str, local_root: str) -> SceneNode:
@@ -849,10 +855,12 @@ class SceneDocument(BranchOps, GroupOps):
         node = self.nodes.get(node_id)
         if node is None:
             raise SceneError(f"unknown node: {node_id}")
-        node.gitlink_repo = str(repo)
-        node.gitlink_branch = str(branch)
-        node.gitlink_local_root = str(local_root)
-        node.gitlink_imported_root = str(local_root)
+        if node.kind != "gitlink":
+            raise SceneError(f"node is not a gitlink node: {node_id}")
+        node.state.gitlink_repo = str(repo)
+        node.state.gitlink_branch = str(branch)
+        node.state.gitlink_local_root = str(local_root)
+        node.state.gitlink_imported_root = str(local_root)
         return node
 
     def store_gitlink_context(
@@ -884,12 +892,14 @@ class SceneDocument(BranchOps, GroupOps):
         node = self.nodes.get(node_id)
         if node is None:
             raise SceneError(f"unknown node: {node_id}")
-        node.gitlink_scope_mode = str(scope_mode)
-        node.gitlink_selected_paths = list(selected_paths)
-        node.gitlink_context_xml = str(context_xml)
-        node.gitlink_context_stats = {str(k): str(v) for k, v in (context_stats or {}).items()}
-        node.gitlink_context_summary = str(context_summary)
-        node.gitlink_context_version += 1
+        if node.kind != "gitlink":
+            raise SceneError(f"node is not a gitlink node: {node_id}")
+        node.state.gitlink_scope_mode = str(scope_mode)
+        node.state.gitlink_selected_paths = list(selected_paths)
+        node.state.gitlink_context_xml = str(context_xml)
+        node.state.gitlink_context_stats = {str(k): str(v) for k, v in (context_stats or {}).items()}
+        node.state.gitlink_context_summary = str(context_summary)
+        node.state.gitlink_context_version += 1
         return node
 
     def fetch_gitlink_context_xml(self, node_id: str) -> str:
@@ -900,7 +910,9 @@ class SceneDocument(BranchOps, GroupOps):
         node = self.nodes.get(node_id)
         if node is None:
             raise SceneError(f"unknown node: {node_id}")
-        return node.gitlink_context_xml
+        if node.kind != "gitlink":
+            raise SceneError(f"node is not a gitlink node: {node_id}")
+        return node.state.gitlink_context_xml
 
     def start_gitlink_run(self, node_id: str, task_prompt: str) -> SceneNode:
         """Begin one Generate Change Set run: stores the task prompt and
@@ -915,8 +927,8 @@ class SceneDocument(BranchOps, GroupOps):
             raise SceneError(f"unknown node: {node_id}")
         if node.kind != "gitlink":
             raise SceneError(f"node is not a gitlink node: {node_id}")
-        node.gitlink_task_prompt = str(task_prompt)
-        node.gitlink_error = ""
+        node.state.gitlink_task_prompt = str(task_prompt)
+        node.state.gitlink_error = ""
         return node
 
     def complete_gitlink_run(
@@ -949,17 +961,17 @@ class SceneDocument(BranchOps, GroupOps):
         node = self.nodes.get(node_id)
         if node is None:
             raise SceneError(f"unknown node: {node_id}")
-        node.gitlink_proposal_markdown = str(proposal_markdown)
-        node.gitlink_pending_changes = list(pending_changes or [])
-        node.gitlink_preview_text = str(preview_text)
-        if node.gitlink_pending_changes:
-            node.gitlink_change_state = "previewed"
-            node.gitlink_change_fingerprint = fingerprint
-            node.gitlink_change_local_root = str(local_root).strip()
+        node.state.gitlink_proposal_markdown = str(proposal_markdown)
+        node.state.gitlink_pending_changes = list(pending_changes or [])
+        node.state.gitlink_preview_text = str(preview_text)
+        if node.state.gitlink_pending_changes:
+            node.state.gitlink_change_state = "previewed"
+            node.state.gitlink_change_fingerprint = fingerprint
+            node.state.gitlink_change_local_root = str(local_root).strip()
         else:
-            node.gitlink_change_state = "draft"
-            node.gitlink_change_fingerprint = None
-            node.gitlink_change_local_root = None
+            node.state.gitlink_change_state = "draft"
+            node.state.gitlink_change_fingerprint = None
+            node.state.gitlink_change_local_root = None
         return node
 
     def fail_gitlink_run(self, node_id: str, message: str) -> SceneNode | None:
@@ -974,7 +986,7 @@ class SceneDocument(BranchOps, GroupOps):
         node = self.nodes.get(node_id)
         if node is None:
             return None
-        node.gitlink_error = str(message)
+        node.state.gitlink_error = str(message)
         return node
 
     def complete_gitlink_apply(self, node_id: str, written_files: int) -> SceneNode:
@@ -995,11 +1007,11 @@ class SceneDocument(BranchOps, GroupOps):
         node = self.nodes.get(node_id)
         if node is None:
             raise SceneError(f"unknown node: {node_id}")
-        node.gitlink_change_state = "applied"
-        node.gitlink_error = ""
-        node.gitlink_pending_changes = []
-        node.gitlink_change_fingerprint = None
-        node.gitlink_change_local_root = None
+        node.state.gitlink_change_state = "applied"
+        node.state.gitlink_error = ""
+        node.state.gitlink_pending_changes = []
+        node.state.gitlink_change_fingerprint = None
+        node.state.gitlink_change_local_root = None
         return node
 
     def fail_gitlink_apply(self, node_id: str, message: str) -> SceneNode | None:
@@ -1014,10 +1026,10 @@ class SceneDocument(BranchOps, GroupOps):
         node = self.nodes.get(node_id)
         if node is None:
             return None
-        node.gitlink_change_state = "previewed"
-        node.gitlink_change_fingerprint = None
-        node.gitlink_change_local_root = None
-        node.gitlink_error = str(message)
+        node.state.gitlink_change_state = "previewed"
+        node.state.gitlink_change_fingerprint = None
+        node.state.gitlink_change_local_root = None
+        node.state.gitlink_error = str(message)
         return node
 
     # -- R5.4: Py-Coder node --------------------------------------------------
@@ -1744,30 +1756,50 @@ class SceneDocument(BranchOps, GroupOps):
                     "researchError": n.state.research_error if isinstance(n.state, WebResearchState) else "",
                     "researchResult": n.state.research_result if isinstance(n.state, WebResearchState) else None,
                     "artifactContent": n.state.artifact_content if isinstance(n.state, ArtifactState) else "",
-                    "gitlinkRepo": n.gitlink_repo,
-                    "gitlinkBranch": n.gitlink_branch,
-                    "gitlinkScopeMode": n.gitlink_scope_mode,
-                    "gitlinkLocalRoot": n.gitlink_local_root,
-                    "gitlinkRepoFilePaths": list(n.gitlink_repo_file_paths),
-                    "gitlinkSelectedPaths": list(n.gitlink_selected_paths),
-                    "gitlinkTaskPrompt": n.gitlink_task_prompt,
-                    # gitlinkContextXml is DELIBERATELY OMITTED - see the
-                    # field's own comment on SceneNode. Served on demand via
-                    # the fetchGitlinkContext intent instead.
-                    "gitlinkContextStats": dict(n.gitlink_context_stats),
-                    "gitlinkContextSummary": n.gitlink_context_summary,
+                    "gitlinkRepo": n.state.gitlink_repo if isinstance(n.state, GitlinkState) else "",
+                    "gitlinkBranch": n.state.gitlink_branch if isinstance(n.state, GitlinkState) else "",
+                    "gitlinkScopeMode": (
+                        n.state.gitlink_scope_mode if isinstance(n.state, GitlinkState) else "selected"
+                    ),
+                    "gitlinkLocalRoot": n.state.gitlink_local_root if isinstance(n.state, GitlinkState) else "",
+                    "gitlinkRepoFilePaths": (
+                        list(n.state.gitlink_repo_file_paths) if isinstance(n.state, GitlinkState) else []
+                    ),
+                    "gitlinkSelectedPaths": (
+                        list(n.state.gitlink_selected_paths) if isinstance(n.state, GitlinkState) else []
+                    ),
+                    "gitlinkTaskPrompt": n.state.gitlink_task_prompt if isinstance(n.state, GitlinkState) else "",
+                    # gitlinkContextXml is DELIBERATELY OMITTED - see
+                    # GitlinkState's own comment. Served on demand via the
+                    # fetchGitlinkContext intent instead.
+                    "gitlinkContextStats": (
+                        dict(n.state.gitlink_context_stats) if isinstance(n.state, GitlinkState) else {}
+                    ),
+                    "gitlinkContextSummary": (
+                        n.state.gitlink_context_summary if isinstance(n.state, GitlinkState) else ""
+                    ),
                     # R5.3 post-review FIX 6: UNLIKE gitlinkContextXml (and
                     # unlike gitlink_change_local_root, never on the wire at
-                    # all), this genuinely needs to be here - see the field's
-                    # own comment on SceneNode for why gitlinkContextSummary
+                    # all), this genuinely needs to be here - see
+                    # GitlinkState's own comment for why gitlinkContextSummary
                     # alone cannot be trusted as a lazy-fetch-once cache key.
-                    "gitlinkContextVersion": n.gitlink_context_version,
-                    "gitlinkProposalMarkdown": n.gitlink_proposal_markdown,
-                    "gitlinkPendingChanges": [dict(c) for c in n.gitlink_pending_changes],
-                    "gitlinkPreviewText": n.gitlink_preview_text,
-                    "gitlinkChangeFingerprint": n.gitlink_change_fingerprint,
-                    "gitlinkChangeState": n.gitlink_change_state,
-                    "gitlinkError": n.gitlink_error,
+                    "gitlinkContextVersion": (
+                        n.state.gitlink_context_version if isinstance(n.state, GitlinkState) else 0
+                    ),
+                    "gitlinkProposalMarkdown": (
+                        n.state.gitlink_proposal_markdown if isinstance(n.state, GitlinkState) else ""
+                    ),
+                    "gitlinkPendingChanges": (
+                        [dict(c) for c in n.state.gitlink_pending_changes] if isinstance(n.state, GitlinkState) else []
+                    ),
+                    "gitlinkPreviewText": n.state.gitlink_preview_text if isinstance(n.state, GitlinkState) else "",
+                    "gitlinkChangeFingerprint": (
+                        n.state.gitlink_change_fingerprint if isinstance(n.state, GitlinkState) else None
+                    ),
+                    "gitlinkChangeState": (
+                        n.state.gitlink_change_state if isinstance(n.state, GitlinkState) else "draft"
+                    ),
+                    "gitlinkError": n.state.gitlink_error if isinstance(n.state, GitlinkState) else "",
                     "pycoderMode": n.pycoder_mode,
                     "pycoderPrompt": n.pycoder_prompt,
                     "pycoderCode": n.pycoder_code,

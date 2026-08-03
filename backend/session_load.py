@@ -189,6 +189,7 @@ from backend.canvas import (
     ChatState,
     CodeState,
     DocumentState,
+    GitlinkState,
     HtmlState,
     ImageState,
     SceneDocument,
@@ -538,27 +539,30 @@ def _restore_gitlink_payload(payload: dict[str, Any]) -> SceneNode:
 
     return SceneNode(
         id="", x=x, y=y, title="Gitlink", kind="gitlink",
-        gitlink_task_prompt=str(payload.get("task_prompt", "")),
-        gitlink_repo=str(repo_state.get("repo", "")),
-        gitlink_branch=str(repo_state.get("branch", "")),
-        gitlink_scope_mode=str(repo_state.get("scope_mode", "selected")),
-        gitlink_local_root=str(repo_state.get("local_root", "")),
-        gitlink_imported_root=str(repo_state.get("imported_root", "")),
-        gitlink_repo_file_paths=list(payload.get("repo_file_paths") or []),
-        gitlink_selected_paths=list(payload.get("selected_paths") or []),
-        gitlink_context_xml=str(payload.get("context_xml", "")),
-        gitlink_context_stats={str(k): str(v) for k, v in context_stats.items()},
-        gitlink_pending_changes=pending_changes,
-        # Derived, not persisted - see this module's own docstring for why
-        # the exact legacy rendering can't be recovered, and why a simple
-        # honest summary is the documented substitute.
-        gitlink_proposal_markdown=_build_simple_proposal_markdown(pending_changes),
-        gitlink_preview_text=str(payload.get("preview_text", "")),
-        # Never persisted in legacy either - always reset on restore there
-        # too, matching backend's own complete_gitlink_run contract.
-        gitlink_change_fingerprint=None,
-        gitlink_change_local_root=None,
-        gitlink_change_state="previewed" if pending_changes else "draft",
+        state=GitlinkState(
+            gitlink_task_prompt=str(payload.get("task_prompt", "")),
+            gitlink_repo=str(repo_state.get("repo", "")),
+            gitlink_branch=str(repo_state.get("branch", "")),
+            gitlink_scope_mode=str(repo_state.get("scope_mode", "selected")),
+            gitlink_local_root=str(repo_state.get("local_root", "")),
+            gitlink_imported_root=str(repo_state.get("imported_root", "")),
+            gitlink_repo_file_paths=list(payload.get("repo_file_paths") or []),
+            gitlink_selected_paths=list(payload.get("selected_paths") or []),
+            gitlink_context_xml=str(payload.get("context_xml", "")),
+            gitlink_context_stats={str(k): str(v) for k, v in context_stats.items()},
+            gitlink_pending_changes=pending_changes,
+            # Derived, not persisted - see this module's own docstring for
+            # why the exact legacy rendering can't be recovered, and why a
+            # simple honest summary is the documented substitute.
+            gitlink_proposal_markdown=_build_simple_proposal_markdown(pending_changes),
+            gitlink_preview_text=str(payload.get("preview_text", "")),
+            # Never persisted in legacy either - always reset on restore
+            # there too, matching backend's own complete_gitlink_run
+            # contract.
+            gitlink_change_fingerprint=None,
+            gitlink_change_local_root=None,
+            gitlink_change_state="previewed" if pending_changes else "draft",
+        ),
         history=_restore_history(payload.get("conversation_history")),
         is_collapsed=bool(payload.get("is_collapsed", False)),
     )
