@@ -181,16 +181,16 @@ def _serialize_history(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
 # nodes at all, mirroring session_load.py's equivalent restorers.
 
 def _serialize_chat_node(node: SceneNode) -> dict[str, Any]:
-    if node.content_parts is not None:
-        raw_content = _content_codec.process_content_for_serialization(node.content_parts)
+    if node.state.content_parts is not None:
+        raw_content = _content_codec.process_content_for_serialization(node.state.content_parts)
     else:
         raw_content = node.content
     return {
         "node_type": "chat",
         "raw_content": raw_content,
-        "is_user": bool(node.is_user),
+        "is_user": bool(node.state.is_user),
         "conversation_history": _serialize_history(node.history),
-        "scroll_value": node.chat_scroll_value,
+        "scroll_value": node.state.chat_scroll_value,
         "is_collapsed": bool(node.is_collapsed),
         # ADR-002 Workstream 1 ("Branch status and lifecycle") - confirmed,
         # pre-existing gap fixed inline: provider/model/is_branch_synthesis/
@@ -202,12 +202,12 @@ def _serialize_chat_node(node: SceneNode) -> dict[str, Any]:
         # synthesis result's provenance and its badge. branch_status is
         # this same pass's own new field, added alongside rather than in a
         # separate edit.
-        "provider": node.provider,
-        "model": node.model,
-        "is_branch_synthesis": bool(node.is_branch_synthesis),
-        "synthesis_instructions": node.synthesis_instructions,
+        "provider": node.state.provider,
+        "model": node.state.model,
+        "is_branch_synthesis": bool(node.state.is_branch_synthesis),
+        "synthesis_instructions": node.state.synthesis_instructions,
         "item_ids": list(node.item_ids),
-        "branch_status": node.branch_status,
+        "branch_status": node.state.branch_status,
     }
 
 

@@ -99,7 +99,7 @@ def test_add_chat_node_creates_a_real_chat_kind_node():
     node = doc.add_chat_node(10, 20, "Hello there, this is a real message", True)
     assert node.kind == "chat"
     assert node.content == "Hello there, this is a real message"
-    assert node.is_user is True
+    assert node.state.is_user is True
     assert node.is_collapsed is False
     assert node.title == "Hello there, this is a real message"[:60]
 
@@ -1117,7 +1117,7 @@ def test_send_message_starts_a_root_branch():
     doc = SceneDocument()
     node = doc.send_message("hello there")
     assert node.kind == "chat"
-    assert node.is_user is True
+    assert node.state.is_user is True
     assert node.content == "hello there"
     assert doc.last_chat_node_id == node.id
 
@@ -1296,7 +1296,7 @@ def test_update_chat_node_content_mutates_content_only_leaves_title_and_flags_un
     assert returned is node
     assert node.content == "new content"
     assert node.title == original_title
-    assert node.is_user is False
+    assert node.state.is_user is False
     assert node.is_collapsed is False
     assert node.kind == "chat"
 
@@ -1420,7 +1420,7 @@ def test_regenerate_response_sets_output_and_context_tokens_and_publishes_token_
             entry = next(iter(chat_slots(dispatcher).values()))
             await entry["task"]
 
-        assistant_node = next(n for n in document.nodes.values() if n.kind == "chat" and n.is_user is False)
+        assistant_node = next(n for n in document.nodes.values() if n.kind == "chat" and n.state.is_user is False)
 
         def regenerated_reply(task, messages, **kwargs):
             return {"message": {"content": "a fresh regenerated reply"}}
@@ -1599,7 +1599,7 @@ def test_send_with_no_staged_attachments_is_byte_identical_to_before_r8a():
             user_id = await bus.dispatch_intent("scene", "sendMessage", ["plain hello"])
 
         user_node = document.nodes[user_id]
-        assert user_node.content_parts is None
+        assert user_node.state.content_parts is None
         assert user_node.content == "plain hello"
         assert composer_document.staged_attachments == []
 
@@ -1634,14 +1634,14 @@ def test_send_with_a_staged_image_produces_real_multimodal_content_parts():
         # existing consumer of .content (title, chat-library preview, copy,
         # export) keeps working unchanged.
         assert user_node.content == "what is this?"
-        assert user_node.content_parts == [
+        assert user_node.state.content_parts == [
             {"type": "text", "text": "what is this?"},
             {"type": "image_bytes", "data": real_bytes},
         ]
         # The REAL call api_provider.chat received - this is what proves the
         # attachment reached the model, not just the node's own storage.
         sent_content = capture_reply.seen_messages[-1]["content"]
-        assert sent_content == user_node.content_parts
+        assert sent_content == user_node.state.content_parts
         # Staging is consumed exactly once - popped and cleared by Send.
         assert composer_document.staged_attachments == []
 
@@ -1674,7 +1674,7 @@ def test_send_with_a_staged_document_merges_extracted_text_into_plain_content():
             await entry["task"]
 
         user_node = document.nodes[user_id]
-        assert user_node.content_parts is None, "a text-only attachment must never create content_parts"
+        assert user_node.state.content_parts is None, "a text-only attachment must never create content_parts"
         assert user_node.content.startswith("please review")
         assert "notes.txt" in user_node.content
         assert "file body here" in user_node.content
@@ -2171,13 +2171,13 @@ def test_send_message_intent_dispatches_a_real_agent_reply():
             await entry["task"]
 
         assert document.nodes[node_id].content == "what is this graph about?"
-        assert document.nodes[node_id].is_user is True
+        assert document.nodes[node_id].state.is_user is True
 
         reply_nodes = [n for n in document.nodes.values() if n.kind == "chat" and n.id != node_id]
         assert len(reply_nodes) == 1
         reply_node = reply_nodes[0]
         assert reply_node.content == "a real agent reply"
-        assert reply_node.is_user is False
+        assert reply_node.state.is_user is False
         assert any(e.source == node_id and e.target == reply_node.id for e in document.edges.values())
         assert document.last_chat_node_id == reply_node.id
         assert recorder.topics_seen().count("scene") >= 2, "user node + reply node both publish scene"
@@ -2807,7 +2807,7 @@ def test_add_generated_image_reply_new_chat_node_content_is_the_exact_wrapper_st
     chat = doc.add_chat_node(0, 0, "draw a cat", True)
     new_chat_node, new_image_node = doc.add_generated_image_reply(chat.id, "a cat wearing a hat", b"png-bytes")
     assert new_chat_node.content == 'Generated image for prompt: "a cat wearing a hat"'
-    assert new_chat_node.is_user is False
+    assert new_chat_node.state.is_user is False
     assert new_image_node.content == "a cat wearing a hat"
 
 
@@ -6536,10 +6536,10 @@ def test_set_chat_scroll_value_accepts_chat_kind_and_rejects_others():
     doc = SceneDocument()
     chat_node = doc.add_chat_node(0, 0, "hi", True)
     other_node = doc.add_node(0, 0, "placeholder")
-    assert chat_node.chat_scroll_value == 0.0
+    assert chat_node.state.chat_scroll_value == 0.0
 
     doc.set_chat_scroll_value(chat_node.id, 123.0)
-    assert chat_node.chat_scroll_value == 123.0
+    assert chat_node.state.chat_scroll_value == 123.0
     payload_node = next(n for n in doc.scene_payload()["nodes"] if n["id"] == chat_node.id)
     assert payload_node["chatScrollValue"] == 123.0
 
@@ -6558,7 +6558,7 @@ def test_set_chat_scroll_value_intent_mutates_and_publishes_scene():
         recorder.messages.clear()
 
         await bus.dispatch_intent("scene", "setChatScrollValue", [chat_id, 88.0])
-        assert document.nodes[chat_id].chat_scroll_value == 88.0
+        assert document.nodes[chat_id].state.chat_scroll_value == 88.0
         assert recorder.topics_seen().count("scene") == 1
 
         with pytest.raises(Exception):
@@ -6576,7 +6576,7 @@ def test_scene_payload_round_trips_content_parts_with_base64_encoded_image_bytes
     doc = SceneDocument()
     chat_node = doc.add_chat_node(0, 0, "look at this", True)
     raw_image_bytes = b"\x89PNG\r\n raw bytes here"
-    chat_node.content_parts = [
+    chat_node.state.content_parts = [
         {"type": "text", "text": "look at this"},
         {"type": "image_bytes", "data": raw_image_bytes},
     ]
@@ -6590,8 +6590,8 @@ def test_scene_payload_round_trips_content_parts_with_base64_encoded_image_bytes
 
     # The in-memory field itself must be untouched by building the wire
     # payload - still real bytes, never mutated into base64 text in place.
-    assert chat_node.content_parts[1]["data"] == raw_image_bytes
-    assert isinstance(chat_node.content_parts[1]["data"], bytes)
+    assert chat_node.state.content_parts[1]["data"] == raw_image_bytes
+    assert isinstance(chat_node.state.content_parts[1]["data"], bytes)
 
 
 def test_scene_payload_content_parts_is_none_not_empty_list_when_unset():
@@ -6601,7 +6601,7 @@ def test_scene_payload_content_parts_is_none_not_empty_list_when_unset():
     # null, never [].
     doc = SceneDocument()
     chat_node = doc.add_chat_node(0, 0, "plain text only", True)
-    assert chat_node.content_parts is None
+    assert chat_node.state.content_parts is None
 
     payload_node = next(n for n in doc.scene_payload()["nodes"] if n["id"] == chat_node.id)
     assert payload_node["contentParts"] is None
@@ -7048,11 +7048,11 @@ def test_synthesize_branches_creates_a_chat_node_continuing_from_the_first_sourc
         assert node_id is not None
         node = document.nodes[node_id]
         assert node.kind == "chat"
-        assert node.is_user is False
+        assert node.state.is_user is False
         assert node.content == "Combined answer drawing on both branches."
-        assert node.is_branch_synthesis is True
+        assert node.state.is_branch_synthesis is True
         assert node.item_ids == [first.id, second.id]
-        assert node.synthesis_instructions == "merge the best of both"
+        assert node.state.synthesis_instructions == "merge the best of both"
         # Continues the branch tree from the FIRST selected source, not a
         # parentless node like Compare Branches' note.
         parent_edge = document._branch_parent_edge(node.id)
@@ -7088,8 +7088,8 @@ def test_synthesize_branches_stamps_provider_and_model_from_the_composer_route(m
         # wired - route()'s own honest "no settings manager wired" fallback
         # (see backend/composer.py) reports Ollama (Local) with an empty
         # model, which is exactly what should land on the node.
-        assert node.provider == "Ollama (Local)"
-        assert node.model == ""
+        assert node.state.provider == "Ollama (Local)"
+        assert node.state.model == ""
 
     asyncio.run(run())
 
@@ -7220,10 +7220,10 @@ def test_mark_branch_synthesis_rejects_an_unknown_node_id():
 def test_set_branch_status_accepts_every_legal_value():
     doc = SceneDocument()
     node = doc.add_chat_node(0, 0, "hi", True)
-    assert node.branch_status == "active"
+    assert node.state.branch_status == "active"
     for status in ("accepted", "rejected", "superseded", "active"):
         doc.set_branch_status(node.id, status)
-        assert doc.nodes[node.id].branch_status == status
+        assert doc.nodes[node.id].state.branch_status == status
 
 
 def test_set_branch_status_rejects_an_invalid_value():
@@ -7231,7 +7231,7 @@ def test_set_branch_status_rejects_an_invalid_value():
     node = doc.add_chat_node(0, 0, "hi", True)
     with pytest.raises(SceneError):
         doc.set_branch_status(node.id, "archived")
-    assert doc.nodes[node.id].branch_status == "active", "a rejected call must not mutate the node"
+    assert doc.nodes[node.id].state.branch_status == "active", "a rejected call must not mutate the node"
 
 
 def test_set_branch_status_rejects_a_non_chat_node():
@@ -7254,8 +7254,8 @@ def test_set_branch_status_has_no_effect_on_sibling_branches():
     first = doc.add_chat_node(0, 160, "first", False, parent_id=root.id)
     second = doc.add_chat_node(460, 160, "second", False, parent_id=root.id)
     doc.set_branch_status(first.id, "accepted")
-    assert doc.nodes[first.id].branch_status == "accepted"
-    assert doc.nodes[second.id].branch_status == "active", "marking one branch must never touch its sibling"
+    assert doc.nodes[first.id].state.branch_status == "accepted"
+    assert doc.nodes[second.id].state.branch_status == "active", "marking one branch must never touch its sibling"
 
 
 def test_set_final_deliverable_marks_and_unmarks():
@@ -7422,7 +7422,7 @@ def test_set_branch_status_intent_dispatches_and_publishes_scene():
 
         await bus.dispatch_intent("scene", "setBranchStatus", [node.id, "accepted"])
 
-        assert document.nodes[node.id].branch_status == "accepted"
+        assert document.nodes[node.id].state.branch_status == "accepted"
         assert recorder.topics_seen().count("scene") > scene_publishes_before
 
     asyncio.run(run())

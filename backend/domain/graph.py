@@ -87,6 +87,7 @@ from backend.domain.model import (
 from backend.domain.node_states import (
     ArtifactState,
     ChartState,
+    ChatState,
     CodeState,
     ContainerState,
     DocumentState,
@@ -266,8 +267,9 @@ class SceneDocument(BranchOps, GroupOps):
 
         R8a: content_parts is the real multimodal attachment payload
         (image_bytes/audio_file parts) - the data-model capability
-        SceneNode.content_parts has carried since R6.3, finally populated by
-        a real caller. Optional and additive: every existing caller keeps
+        ChatState.content_parts (backend/domain/node_states.py) has carried
+        since R6.3, finally populated by a real caller. Optional and
+        additive: every existing caller keeps
         passing only (x, y, content, is_user, parent_id) and gets exactly
         the plain-text node it always did."""
         if parent_id is not None and parent_id not in self.nodes:
@@ -281,8 +283,7 @@ class SceneDocument(BranchOps, GroupOps):
             title=title,
             kind="chat",
             content=str(content),
-            is_user=bool(is_user),
-            content_parts=content_parts,
+            state=ChatState(is_user=bool(is_user), content_parts=content_parts),
         )
         self.nodes[node_id] = node
         if parent_id is not None:
@@ -1510,7 +1511,7 @@ class SceneDocument(BranchOps, GroupOps):
             raise SceneError(f"unknown node: {node_id}")
         if node.kind != "chat":
             raise SceneError(f"node is not a chat node: {node_id}")
-        node.chat_scroll_value = float(value)
+        node.state.chat_scroll_value = float(value)
 
     def set_node_docked(self, node_id: str, docked: bool) -> None:
         """R3.13: a single generic setter handling both dock (docked=True)
@@ -1702,7 +1703,7 @@ class SceneDocument(BranchOps, GroupOps):
                     "title": n.title,
                     "kind": n.kind,
                     "content": n.content,
-                    "isUser": n.is_user,
+                    "isUser": n.state.is_user if isinstance(n.state, ChatState) else False,
                     "isCollapsed": n.is_collapsed,
                     "code": n.state.code if isinstance(n.state, CodeState) else "",
                     "language": n.state.language if isinstance(n.state, CodeState) else "",
@@ -1719,16 +1720,20 @@ class SceneDocument(BranchOps, GroupOps):
                     ],
                     "pendingRequestId": n.pending_request_id,
                     # ADR-002 Workstream 1 ("Synthesize Branches") - see
-                    # SceneNode.provider/model/is_branch_synthesis/
-                    # synthesis_instructions's own comments.
-                    "provider": n.provider,
-                    "model": n.model,
-                    "isBranchSynthesis": n.is_branch_synthesis,
-                    "synthesisInstructions": n.synthesis_instructions,
+                    # ChatState's own comment, backend/domain/node_states.py.
+                    "provider": n.state.provider if isinstance(n.state, ChatState) else None,
+                    "model": n.state.model if isinstance(n.state, ChatState) else None,
+                    "isBranchSynthesis": n.state.is_branch_synthesis if isinstance(n.state, ChatState) else False,
+                    "synthesisInstructions": (
+                        n.state.synthesis_instructions if isinstance(n.state, ChatState) else ""
+                    ),
                     # ADR-002 Workstream 1 ("Branch status and lifecycle") -
-                    # see SceneNode.branch_status/SceneDocument.
-                    # final_deliverable_node_id's own comments.
-                    "branchStatus": n.branch_status,
+                    # see ChatState's own comment/SceneDocument.
+                    # final_deliverable_node_id's own comment. "active" (not
+                    # "") is the correct non-chat fallback - it is
+                    # branch_status's own real pre-migration default, not an
+                    # empty placeholder.
+                    "branchStatus": n.state.branch_status if isinstance(n.state, ChatState) else "active",
                     "isFinalDeliverable": n.id == self.final_deliverable_node_id,
                     "researchStage": n.state.research_stage if isinstance(n.state, WebResearchState) else "",
                     "researchCompleted": n.state.research_completed if isinstance(n.state, WebResearchState) else 0,
@@ -1817,7 +1822,7 @@ class SceneDocument(BranchOps, GroupOps):
                     "chartSourceNodeId": n.state.chart_source_node_id if isinstance(n.state, ChartState) else "",
                     # R6.3: HTML splitter + chat scroll gaps.
                     "htmlSplitterState": n.state.html_splitter_state if isinstance(n.state, HtmlState) else None,
-                    "chatScrollValue": n.chat_scroll_value,
+                    "chatScrollValue": n.state.chat_scroll_value if isinstance(n.state, ChatState) else 0.0,
                     # R6.3: null (not []) when content_parts is None - "no
                     # multimodal content" must stay distinguishable from
                     # "multimodal content that happens to be empty". Any
@@ -1828,7 +1833,7 @@ class SceneDocument(BranchOps, GroupOps):
                     # own output shape exactly, while n.content_parts itself
                     # (in memory) keeps holding real bytes, per the field's
                     # own contract.
-                    "contentParts": _content_parts_wire(n.content_parts),
+                    "contentParts": _content_parts_wire(n.state.content_parts if isinstance(n.state, ChatState) else None),
                 }
                 for n in self.nodes.values()
             ],
@@ -1887,8 +1892,9 @@ class SceneDocument(BranchOps, GroupOps):
 
 
 def _content_parts_wire(parts: list[dict[str, Any]] | None) -> list[dict[str, Any]] | None:
-    """R6.3: scene_payload()'s wire-side transform for SceneNode.content_parts
-    - a pure mapping function, NOT a SceneDocument method (same posture as
+    """R6.3: scene_payload()'s wire-side transform for ChatState's own
+    content_parts (backend/domain/node_states.py) - a pure mapping
+    function, NOT a SceneDocument method (same posture as
     _research_result_wire below). None stays None (never []), so "no
     multimodal content" and "multimodal content that happens to be empty"
     remain distinguishable on the wire. Any part that is a dict carrying raw

@@ -186,6 +186,7 @@ from typing import Any
 
 from backend.canvas import (
     ArtifactState,
+    ChatState,
     CodeState,
     DocumentState,
     HtmlState,
@@ -339,15 +340,8 @@ def _restore_chat_payload(payload: dict[str, Any]) -> SceneNode:
     return SceneNode(
         id="", x=x, y=y, title="Chat", kind="chat",
         content=content_text,
-        content_parts=content_parts,
-        # Legacy's own restore-time default is True (data.get("is_user",
-        # True)) - deliberately NOT False, unlike every other bool field on
-        # this dataclass. Getting this backwards would silently relabel
-        # every AI response in an old save as if the user had typed it.
-        is_user=bool(payload.get("is_user", True)),
         is_collapsed=bool(payload.get("is_collapsed", False)),
         history=_restore_history(payload.get("conversation_history")),
-        chat_scroll_value=float(payload.get("scroll_value", 0.0) or 0.0),
         # ADR-002 Workstream 1 ("Branch status and lifecycle") - confirmed,
         # pre-existing gap fixed inline: provider/model/is_branch_synthesis/
         # synthesis_instructions (Synthesize Branches) already synced live
@@ -361,14 +355,24 @@ def _restore_chat_payload(payload: dict[str, Any]) -> SceneNode:
         # new field; an unrecognized/future value downgrades to "active"
         # rather than crashing the load, the same defensive posture this
         # function already uses for every other field.
-        provider=payload.get("provider"),
-        model=payload.get("model"),
-        is_branch_synthesis=bool(payload.get("is_branch_synthesis", False)),
-        synthesis_instructions=str(payload.get("synthesis_instructions", "") or ""),
-        branch_status=(
-            payload.get("branch_status")
-            if payload.get("branch_status") in SceneDocument.BRANCH_STATUS_VALUES
-            else "active"
+        state=ChatState(
+            content_parts=content_parts,
+            # Legacy's own restore-time default is True (data.get("is_user",
+            # True)) - deliberately NOT False, unlike every other bool field
+            # on this dataclass. Getting this backwards would silently
+            # relabel every AI response in an old save as if the user had
+            # typed it.
+            is_user=bool(payload.get("is_user", True)),
+            chat_scroll_value=float(payload.get("scroll_value", 0.0) or 0.0),
+            provider=payload.get("provider"),
+            model=payload.get("model"),
+            is_branch_synthesis=bool(payload.get("is_branch_synthesis", False)),
+            synthesis_instructions=str(payload.get("synthesis_instructions", "") or ""),
+            branch_status=(
+                payload.get("branch_status")
+                if payload.get("branch_status") in SceneDocument.BRANCH_STATUS_VALUES
+                else "active"
+            ),
         ),
     )
 

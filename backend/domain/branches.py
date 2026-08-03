@@ -60,24 +60,25 @@ class BranchOps:
         already-created CHAT node as the output of the Synthesize Branches
         agent - mirrors mark_branch_comparison_note's own "extra setter call
         right after creation" shape, adapted for a chat-kind result instead
-        of a note-kind one (see SceneNode.is_branch_synthesis's own comment
-        for why this is a distinct method/flag rather than reusing Compare
-        Branches')."""
+        of a note-kind one (see ChatState's own comment, backend/domain/
+        node_states.py, for why this is a distinct method/flag rather than
+        reusing Compare Branches')."""
         node = self.nodes.get(node_id)
         if node is None:
             raise SceneError(f"unknown node: {node_id}")
         if node.kind != "chat":
             raise SceneError(f"node is not a chat node: {node_id}")
-        node.is_branch_synthesis = True
+        node.state.is_branch_synthesis = True
         node.item_ids = list(source_node_ids)
-        node.synthesis_instructions = str(instructions)
-        node.provider = provider
-        node.model = model
+        node.state.synthesis_instructions = str(instructions)
+        node.state.provider = provider
+        node.state.model = model
 
     #: ADR-002 Workstream 1 ("Branch status and lifecycle"): the exactly-4
-    #: legal values for SceneNode.branch_status - shared by the setter's
-    #: validation and session_load.py's own defensive downgrade-to-"active"
-    #: read-back, so the one legal set is never duplicated out of sync.
+    #: legal values for ChatState's own branch_status (backend/domain/
+    #: node_states.py) - shared by the setter's validation and
+    #: session_load.py's own defensive downgrade-to-"active" read-back, so
+    #: the one legal set is never duplicated out of sync.
     BRANCH_STATUS_VALUES = frozenset({"active", "accepted", "rejected", "superseded"})
 
     def set_branch_status(self, node_id: str, status: str) -> None:
@@ -100,7 +101,7 @@ class BranchOps:
         status = str(status)
         if status not in self.BRANCH_STATUS_VALUES:
             raise SceneError(f"invalid branch status: {status}")
-        node.branch_status = status
+        node.state.branch_status = status
 
     def set_final_deliverable(self, node_id: str, is_final: bool) -> None:
         """ADR-002 Workstream 1 ("Branch status and lifecycle"): sets or
@@ -316,9 +317,17 @@ class BranchOps:
             # attachments has content_parts=None and this is byte-identical
             # to before: a plain string, exactly as every other consumer of
             # this history already expects.
+            #
+            # ADR-002 stage 2.5: is_user/content_parts live on node.state
+            # now (ChatState), not directly on SceneNode - getattr with the
+            # field's own original default (False/None) rather than a
+            # node.kind == "chat" check, since this method's own docstring
+            # promises to stop quietly on a stray non-chat node/edge shape,
+            # never raise. Same duck-typed posture as remove_nodes's own
+            # image_asset_id/chart_asset_id reads (backend/domain/graph.py).
             history.append({
-                "role": "user" if node.is_user else "assistant",
-                "content": node.content_parts if node.content_parts else node.content,
+                "role": "user" if getattr(node.state, "is_user", False) else "assistant",
+                "content": getattr(node.state, "content_parts", None) or node.content,
             })
             parent_edge = self._branch_parent_edge(current_id)
             current_id = parent_edge.source if parent_edge is not None else None

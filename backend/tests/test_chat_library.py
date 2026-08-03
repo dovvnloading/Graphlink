@@ -368,7 +368,7 @@ def test_load_chat_intent_restores_a_real_node_into_the_canvas_document(db_path)
 
     assert len(document.nodes) == 1
     node = next(iter(document.nodes.values()))
-    assert node.kind == "chat" and node.content == "Hi" and node.is_user is True
+    assert node.kind == "chat" and node.content == "Hi" and node.state.is_user is True
     assert notifications.visible and notifications.msg_type == "success"
     scene_messages = [m for m in recorder.messages if m["topic"] == "scene"]
     assert scene_messages, "loadChat must publish a fresh scene snapshot"

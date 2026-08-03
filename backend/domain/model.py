@@ -163,7 +163,6 @@ class SceneNode:
     # no separate field, same reuse pattern as R3.5's code text and R3.13's
     # thinking text living in this same field.
     content: str = ""
-    is_user: bool = False
     is_collapsed: bool = False
     # R3.13 (doc/QT_REMOVAL_PLAN.md): the ThinkingNode/docked-child increment -
     # whether this node is currently docked into its parent's collapsed
@@ -187,57 +186,6 @@ class SceneNode:
     # way is_docked is a generic field even though today only one kind
     # populates it); unused (default None) for every other kind.
     pending_request_id: str | None = None
-    # ADR-002 Workstream 1 ("Synthesize Branches"): the provider/model that
-    # produced this node's content, e.g. "Anthropic Claude" / "claude-sonnet-5"
-    # - resolved from ComposerDocument.route() at creation time. Generic
-    # (like pending_request_id above) rather than synthesis-only, since any
-    # future agent-authored node could reasonably want the same provenance;
-    # today only synthesize_branches populates it. None means "not recorded"
-    # (every node created before this field existed, and every ordinary chat
-    # reply, which already shows its route live in the Composer rather than
-    # per-message).
-    provider: str | None = None
-    model: str | None = None
-    # ADR-002 Workstream 1 ("Synthesize Branches"): marks a chat-kind node as
-    # the output of the Synthesize Branches agent (as opposed to an ordinary
-    # user/assistant message) - the chat-node equivalent of NoteState's own
-    # is_branch_comparison (backend/domain/node_states.py), which does the
-    # same job for note-kind nodes. A distinct flag rather than reusing
-    # is_branch_comparison: that flag's own kind-check
-    # (mark_branch_comparison_note raises for a non-note node) would need
-    # loosening for no benefit, and the two features render completely
-    # different UI (a badge on a note vs. a badge + the instructions/
-    # provider/model fields below on a chat node).
-    is_branch_synthesis: bool = False
-    # ADR-002 Workstream 1 ("Synthesize Branches"): the free-text instructions
-    # the user typed to steer the synthesis (e.g. "merge the best parts of
-    # each"), recorded on the result node so its provenance is fully
-    # inspectable later - the ADR's own acceptance criterion for this
-    # feature. Chat-kind only in practice; unused (default empty string) for
-    # every other kind and for ordinary (non-synthesis) chat nodes.
-    synthesis_instructions: str = ""
-    # ADR-002 Workstream 1 ("Branch status and lifecycle"): the final,
-    # sequenced item after fork/compare/synthesize. One of exactly "active"
-    # (the default - every existing and newly-created chat node starts
-    # here, no migration needed), "accepted", "rejected", "superseded".
-    # Chat-kind only, mirroring is_branch_synthesis's own chat-only scoping
-    # - "a branch" is fundamentally a chain of chat nodes in this data
-    # model (see chat_branch_history/get_branch_root, both of which only
-    # ever walk chat-kind edges). Deliberately PER-NODE with NO write-time
-    # inheritance/cascade to ancestors or descendants - every other
-    # status-like flag on this dataclass (is_collapsed, is_docked,
-    # is_branch_synthesis) - and NoteState's own is_branch_comparison
-    # (backend/domain/node_states.py) - is scoped exactly this way, and
-    # there is no materialized "Branch" object anywhere in
-    # this file to cascade through even if inheritance were wanted (a
-    # branch is discovered by walking _branch_parent_edge upward on
-    # demand, never stored as a set - see that method's own comment).
-    # "Reduce a graph to its accepted paths" is delivered by a separate,
-    # frontend-only, read-time subtree derivation over this field
-    # (SceneCanvas.tsx's computeNonAcceptedNodeIds) - the same posture
-    # "Hide Other Branches" already uses for a different subtree question,
-    # not by inventing write-time cascade bookkeeping here.
-    branch_status: str = "active"
     # R5.3: the Gitlink node's real persisted shape - reads a GitHub repo (or
     # a local checkout) into structured XML context, proposes an LLM change
     # set, and only writes to disk after an explicit, fingerprint-verified
@@ -423,32 +371,6 @@ class SceneNode:
     # membership use above. Unused (default empty list) for every other
     # case.
     item_ids: list[str] = field(default_factory=list)
-    # R6.3: ChatNode's persisted scroll position within its own content
-    # area (legacy's own scroll_value field). Unlike HtmlState's own
-    # html_splitter_state (backend/domain/node_states.py, ADR-002 stage
-    # 2.5), 0.0 (scrolled to the top) IS the genuine default for a node
-    # that has never been scrolled, so this is a plain float, not an
-    # Optional - there is no "unset" state worth distinguishing here. chat
-    # kind only; unused (default 0.0) for every other kind.
-    chat_scroll_value: float = 0.0
-    # R6.3: the RAW (already-decoded - "data" holds real Python bytes, never
-    # base64 text) multimodal parts list for a chat node whose legacy
-    # raw_content was a list of typed parts (e.g. an inline pasted image)
-    # rather than a plain string - see content_codec.py's own
-    # process_content_for_serialization/_for_deserialization, which this
-    # increment does not call directly (see scene_payload()'s own comment
-    # for the wire-side base64 encoding step this field feeds). None for the
-    # overwhelmingly common plain-text case, where `content` above is the
-    # only source of truth. ADDITIVE, not a replacement for `content`: even
-    # when this is populated, `content` continues to hold a flattened-text
-    # mirror (join of the text-type parts, or a placeholder like "[Image]"
-    # for non-text parts) so every existing piece of code that already reads
-    # `content` as a plain string keeps working unchanged. chat kind only;
-    # unused (default None) for every other kind. Nothing in this increment
-    # creates multimodal content yet (no image-paste-into-composer feature
-    # exists) - this is purely the data-model capability so R6.4's session
-    # loader has somewhere to put it when an OLD saved session has it.
-    content_parts: list[dict[str, Any]] | None = None
     # ADR-002 stage 2.5 (backend-only): the typed per-kind payload - see
     # backend/domain/node_states.py's own docstring. None for a kind not
     # yet migrated, or for a kind (placeholder/thinking/conversation) that

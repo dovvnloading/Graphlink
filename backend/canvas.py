@@ -85,7 +85,15 @@ from backend.domain.model import (
     SceneNode,
     THINKING_TITLE_PREVIEW_LENGTH,
 )
-from backend.domain.node_states import ArtifactState, CodeState, DocumentState, HtmlState, ImageState, WebResearchState
+from backend.domain.node_states import (
+    ArtifactState,
+    ChatState,
+    CodeState,
+    DocumentState,
+    HtmlState,
+    ImageState,
+    WebResearchState,
+)
 
 
 
