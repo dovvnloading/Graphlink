@@ -80,13 +80,13 @@ def register_assets(app: FastAPI, bus: EventBus) -> None:
             return JSONResponse({"error": "unknown chart"}, status_code=404)
 
         png_bytes = render_chart_png(
-            node.chart_type,
-            node.chart_data,
-            node.chart_width,
-            node.chart_height,
+            node.state.chart_type,
+            node.state.chart_data,
+            node.state.chart_width,
+            node.state.chart_height,
             dpi_scale=CHART_EXPORT_DPI_SCALE,
         )
-        title = node.chart_data.get("title") if isinstance(node.chart_data, dict) else ""
+        title = node.state.chart_data.get("title") if isinstance(node.state.chart_data, dict) else ""
         filename = _sanitize_chart_filename(title)
         return Response(
             content=png_bytes,

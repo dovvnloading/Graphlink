@@ -84,7 +84,18 @@ from backend.domain.model import (
     SceneNode,
     THINKING_TITLE_PREVIEW_LENGTH,
 )
-from backend.domain.node_states import ArtifactState, CodeState, HtmlState, ImageState, NoteState
+from backend.domain.node_states import (
+    ArtifactState,
+    ChartState,
+    CodeState,
+    ContainerState,
+    DocumentState,
+    FrameState,
+    HtmlState,
+    ImageState,
+    NoteState,
+    WebResearchState,
+)
 
 
 def _estimate_tokens(text: str) -> int:
@@ -347,8 +358,8 @@ class SceneDocument(BranchOps, GroupOps):
         DocumentNode.__init__: `self.title = title`, no slicing), and none
         of the legacy view-layer formatting (byte-size/duration strings,
         preview_label auto-fill, audio-preview suppression) happens here -
-        see the R3.9 comment on the SceneNode dataclass fields for those
-        exact rules.
+        see DocumentState's own docstring (backend/domain/node_states.py)
+        for those exact rules.
         """
         if parent_id not in self.nodes:
             raise SceneError(f"unknown parent node: {parent_id}")
@@ -367,12 +378,14 @@ class SceneDocument(BranchOps, GroupOps):
             title=str(title),
             kind="document",
             content=str(content),
-            attachment_kind=normalized_kind,
-            file_path=str(file_path),
-            mime_type=str(mime_type),
-            duration_seconds=duration_seconds,
-            byte_size=byte_size,
-            preview_label=str(preview_label),
+            state=DocumentState(
+                attachment_kind=normalized_kind,
+                file_path=str(file_path),
+                mime_type=str(mime_type),
+                duration_seconds=duration_seconds,
+                byte_size=byte_size,
+                preview_label=str(preview_label),
+            ),
         )
         self.nodes[node_id] = node
         self.connect(parent_id, node_id)
@@ -641,6 +654,7 @@ class SceneDocument(BranchOps, GroupOps):
             y=float(y),
             title="Web Research",
             kind="web_research",
+            state=WebResearchState(),
         )
         self.nodes[node_id] = node
         self.connect(parent_id, node_id)
@@ -658,11 +672,11 @@ class SceneDocument(BranchOps, GroupOps):
         if node.kind != "web_research":
             raise SceneError(f"node is not a web_research node: {node_id}")
         node.content = str(query)
-        node.research_stage = ""
-        node.research_completed = 0
-        node.research_total = 0
-        node.research_active_source_id = None
-        node.research_error = ""
+        node.state.research_stage = ""
+        node.state.research_completed = 0
+        node.state.research_total = 0
+        node.state.research_active_source_id = None
+        node.state.research_error = ""
         return node
 
     def apply_web_research_progress(self, node_id: str, event) -> SceneNode | None:
@@ -676,10 +690,10 @@ class SceneDocument(BranchOps, GroupOps):
         node = self.nodes.get(node_id)
         if node is None:
             return None
-        node.research_stage = event.stage.value
-        node.research_completed = event.completed
-        node.research_total = event.total
-        node.research_active_source_id = event.source_id
+        node.state.research_stage = event.stage.value
+        node.state.research_completed = event.completed
+        node.state.research_total = event.total
+        node.state.research_active_source_id = event.source_id
         return node
 
     def complete_web_research_run(self, node_id: str, result_wire: dict) -> SceneNode:
@@ -690,10 +704,10 @@ class SceneDocument(BranchOps, GroupOps):
         node = self.nodes.get(node_id)
         if node is None:
             raise SceneError(f"unknown node: {node_id}")
-        node.research_stage = "completed"
-        node.research_error = ""
-        node.research_active_source_id = None
-        node.research_result = result_wire
+        node.state.research_stage = "completed"
+        node.state.research_error = ""
+        node.state.research_active_source_id = None
+        node.state.research_result = result_wire
         return node
 
     def fail_web_research_run(self, node_id: str, *, cancelled: bool, message: str) -> SceneNode:
@@ -703,9 +717,9 @@ class SceneDocument(BranchOps, GroupOps):
         node = self.nodes.get(node_id)
         if node is None:
             raise SceneError(f"unknown node: {node_id}")
-        node.research_stage = "cancelled" if cancelled else "failed"
-        node.research_error = message
-        node.research_active_source_id = None
+        node.state.research_stage = "cancelled" if cancelled else "failed"
+        node.state.research_error = message
+        node.state.research_active_source_id = None
         return node
 
     # -- R5.2: artifact/drafter node -----------------------------------------
@@ -1313,19 +1327,22 @@ class SceneDocument(BranchOps, GroupOps):
             y=float(y),
             title=title,
             kind="chart",
-            chart_type=normalized_type,
-            chart_data=safe_chart_data,
-            chart_error=str(chart_error),
-            chart_source_node_id=parent_id or "",
+            state=ChartState(
+                chart_type=normalized_type,
+                chart_data=safe_chart_data,
+                chart_error=str(chart_error),
+                chart_source_node_id=parent_id or "",
+            ),
         )
 
         png_bytes = render_chart_png(
-            node.chart_type, node.chart_data, node.chart_width, node.chart_height, dpi_scale=1.0,
+            node.state.chart_type, node.state.chart_data, node.state.chart_width, node.state.chart_height,
+            dpi_scale=1.0,
         )
         asset_id = f"chart{uuid.uuid4().hex}"
         self.image_assets[asset_id] = (png_bytes, "image/png")
-        node.chart_asset_id = asset_id
-        node.chart_asset_version = 1
+        node.state.chart_asset_id = asset_id
+        node.state.chart_asset_version = 1
 
         self.nodes[node_id] = node
         if parent_id is not None:
@@ -1364,7 +1381,7 @@ class SceneDocument(BranchOps, GroupOps):
         clamped_width = min(CHART_MAX_WIDTH, max(CHART_MIN_WIDTH, requested_width))
         clamped_height = min(CHART_MAX_HEIGHT, max(CHART_MIN_HEIGHT, requested_height))
 
-        if node.chart_aspect_locked and requested_width > 0 and requested_height > 0:
+        if node.state.chart_aspect_locked and requested_width > 0 and requested_height > 0:
             aspect_ratio = requested_width / requested_height
             width_from_height = clamped_height * aspect_ratio
             height_from_width = clamped_width / aspect_ratio
@@ -1380,14 +1397,15 @@ class SceneDocument(BranchOps, GroupOps):
             clamped_width = min(CHART_MAX_WIDTH, max(CHART_MIN_WIDTH, clamped_width))
             clamped_height = min(CHART_MAX_HEIGHT, max(CHART_MIN_HEIGHT, clamped_height))
 
-        node.chart_width = clamped_width
-        node.chart_height = clamped_height
+        node.state.chart_width = clamped_width
+        node.state.chart_height = clamped_height
 
         png_bytes = render_chart_png(
-            node.chart_type, node.chart_data, node.chart_width, node.chart_height, dpi_scale=1.0,
+            node.state.chart_type, node.state.chart_data, node.state.chart_width, node.state.chart_height,
+            dpi_scale=1.0,
         )
-        self.image_assets[node.chart_asset_id] = (png_bytes, "image/png")
-        node.chart_asset_version += 1
+        self.image_assets[node.state.chart_asset_id] = (png_bytes, "image/png")
+        node.state.chart_asset_version += 1
 
     def toggle_chart_aspect_lock(self, node_id: str) -> None:
         """Chart kind only (SceneError otherwise). Flips chart_aspect_locked.
@@ -1399,7 +1417,7 @@ class SceneDocument(BranchOps, GroupOps):
             raise SceneError(f"unknown node: {node_id}")
         if node.kind != "chart":
             raise SceneError(f"node is not a chart node: {node_id}")
-        node.chart_aspect_locked = not node.chart_aspect_locked
+        node.state.chart_aspect_locked = not node.state.chart_aspect_locked
 
     def update_chat_node_content(self, node_id: str, content: str) -> SceneNode:
         """The regenerate primitive: mutate an EXISTING chat node's content in
@@ -1521,7 +1539,7 @@ class SceneDocument(BranchOps, GroupOps):
             # the live bbox stay in agreement. See _recompute_group_bounds
             # for how this anchor is unioned with live content so it still
             # can never clip a member.
-            node.group_manual_x, node.group_manual_y = node.x, node.y
+            node.state.group_manual_x, node.state.group_manual_y = node.x, node.y
             self._recompute_group_bounds(node_id)
         # R6.1: keep every frame/container this node is a member of enclosing
         # it - a node is a member of at most one frame AND at most one
@@ -1563,7 +1581,7 @@ class SceneDocument(BranchOps, GroupOps):
             node.x, node.y = float(x), float(y)
             moved_ids.add(node_id)
             if node.kind == "frame":
-                node.group_manual_x, node.group_manual_y = node.x, node.y
+                node.state.group_manual_x, node.state.group_manual_y = node.x, node.y
         affected_groups: set[str] = set()
         for moved_id in moved_ids:
             moved_node = self.nodes.get(moved_id)
@@ -1600,10 +1618,14 @@ class SceneDocument(BranchOps, GroupOps):
                     self.image_assets.pop(image_asset_id, None)
                 # R6.2: a chart node's rendered PNG lives in the SAME
                 # image_assets dict (reused, not a parallel store - see
-                # chart_asset_id's own field comment on SceneNode) - same
-                # leak-prevention reasoning as image_asset_id just above.
-                if node.chart_asset_id:
-                    self.image_assets.pop(node.chart_asset_id, None)
+                # ChartState's own docstring, backend/domain/node_states.py)
+                # - same leak-prevention reasoning as image_asset_id just
+                # above, and the same ADR-002 stage 2.5 getattr posture
+                # (chart_asset_id lives on node.state now, None for every
+                # non-chart kind).
+                chart_asset_id = getattr(node.state, "chart_asset_id", None)
+                if chart_asset_id:
+                    self.image_assets.pop(chart_asset_id, None)
                 self._detach_node_from_membership(node_id)
 
     # -- edges -------------------------------------------------------------
@@ -1684,12 +1706,12 @@ class SceneDocument(BranchOps, GroupOps):
                     "isCollapsed": n.is_collapsed,
                     "code": n.state.code if isinstance(n.state, CodeState) else "",
                     "language": n.state.language if isinstance(n.state, CodeState) else "",
-                    "attachmentKind": n.attachment_kind,
-                    "filePath": n.file_path,
-                    "mimeType": n.mime_type,
-                    "durationSeconds": n.duration_seconds,
-                    "byteSize": n.byte_size,
-                    "previewLabel": n.preview_label,
+                    "attachmentKind": n.state.attachment_kind if isinstance(n.state, DocumentState) else "",
+                    "filePath": n.state.file_path if isinstance(n.state, DocumentState) else "",
+                    "mimeType": n.state.mime_type if isinstance(n.state, DocumentState) else "",
+                    "durationSeconds": n.state.duration_seconds if isinstance(n.state, DocumentState) else None,
+                    "byteSize": n.state.byte_size if isinstance(n.state, DocumentState) else None,
+                    "previewLabel": n.state.preview_label if isinstance(n.state, DocumentState) else "",
                     "isDocked": n.is_docked,
                     "imageAssetId": n.state.image_asset_id if isinstance(n.state, ImageState) else "",
                     "history": [
@@ -1708,12 +1730,14 @@ class SceneDocument(BranchOps, GroupOps):
                     # final_deliverable_node_id's own comments.
                     "branchStatus": n.branch_status,
                     "isFinalDeliverable": n.id == self.final_deliverable_node_id,
-                    "researchStage": n.research_stage,
-                    "researchCompleted": n.research_completed,
-                    "researchTotal": n.research_total,
-                    "researchActiveSourceId": n.research_active_source_id,
-                    "researchError": n.research_error,
-                    "researchResult": n.research_result,
+                    "researchStage": n.state.research_stage if isinstance(n.state, WebResearchState) else "",
+                    "researchCompleted": n.state.research_completed if isinstance(n.state, WebResearchState) else 0,
+                    "researchTotal": n.state.research_total if isinstance(n.state, WebResearchState) else 0,
+                    "researchActiveSourceId": (
+                        n.state.research_active_source_id if isinstance(n.state, WebResearchState) else None
+                    ),
+                    "researchError": n.state.research_error if isinstance(n.state, WebResearchState) else "",
+                    "researchResult": n.state.research_result if isinstance(n.state, WebResearchState) else None,
                     "artifactContent": n.state.artifact_content if isinstance(n.state, ArtifactState) else "",
                     "gitlinkRepo": n.gitlink_repo,
                     "gitlinkBranch": n.gitlink_branch,
@@ -1776,19 +1800,21 @@ class SceneDocument(BranchOps, GroupOps):
                     # NoteState's own comment, backend/domain/node_states.py.
                     "isBranchComparison": n.state.is_branch_comparison if isinstance(n.state, NoteState) else False,
                     "itemIds": list(n.item_ids),
-                    "isLocked": n.is_locked,
-                    "groupWidth": n.group_width,
-                    "groupHeight": n.group_height,
+                    "isLocked": n.state.is_locked if isinstance(n.state, FrameState) else True,
+                    "groupWidth": n.state.group_width if isinstance(n.state, (FrameState, ContainerState)) else None,
+                    "groupHeight": (
+                        n.state.group_height if isinstance(n.state, (FrameState, ContainerState)) else None
+                    ),
                     # R6.2: Chart node.
-                    "chartType": n.chart_type,
-                    "chartData": dict(n.chart_data),
-                    "chartError": n.chart_error,
-                    "chartAssetId": n.chart_asset_id,
-                    "chartAssetVersion": n.chart_asset_version,
-                    "chartWidth": n.chart_width,
-                    "chartHeight": n.chart_height,
-                    "chartAspectLocked": n.chart_aspect_locked,
-                    "chartSourceNodeId": n.chart_source_node_id,
+                    "chartType": n.state.chart_type if isinstance(n.state, ChartState) else "",
+                    "chartData": dict(n.state.chart_data) if isinstance(n.state, ChartState) else {},
+                    "chartError": n.state.chart_error if isinstance(n.state, ChartState) else "",
+                    "chartAssetId": n.state.chart_asset_id if isinstance(n.state, ChartState) else "",
+                    "chartAssetVersion": n.state.chart_asset_version if isinstance(n.state, ChartState) else 0,
+                    "chartWidth": n.state.chart_width if isinstance(n.state, ChartState) else 680.0,
+                    "chartHeight": n.state.chart_height if isinstance(n.state, ChartState) else 500.0,
+                    "chartAspectLocked": n.state.chart_aspect_locked if isinstance(n.state, ChartState) else True,
+                    "chartSourceNodeId": n.state.chart_source_node_id if isinstance(n.state, ChartState) else "",
                     # R6.3: HTML splitter + chat scroll gaps.
                     "htmlSplitterState": n.state.html_splitter_state if isinstance(n.state, HtmlState) else None,
                     "chatScrollValue": n.chat_scroll_value,

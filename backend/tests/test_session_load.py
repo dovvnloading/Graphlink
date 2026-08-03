@@ -109,7 +109,7 @@ def test_document_node_field_mapping():
     ])
     node = next(n for n in document.nodes.values() if n.kind == "document")
     assert node.title == "report.pdf" and node.content == "body text"
-    assert node.byte_size == 2048 and node.is_docked is True and node.is_collapsed is True
+    assert node.state.byte_size == 2048 and node.is_docked is True and node.is_collapsed is True
 
 
 def test_thinking_node_field_mapping():
@@ -225,7 +225,7 @@ def test_web_node_research_result_translates_snake_case_to_camel_case():
         },
     ])
     node = next(n for n in document.nodes.values() if n.kind == "web_research")
-    result = node.research_result
+    result = node.state.research_result
     assert result["requestId"] == "req-1"
     assert result["answerMarkdown"] == "Use fresh tomatoes."
     assert result["sources"][0]["sourceId"] == "s1"
@@ -239,8 +239,8 @@ def test_web_node_falls_back_to_summary_and_sources_for_older_shape_sessions():
          "research_result": {}, "position": {"x": 0, "y": 0}, "parent_node_index": 0},
     ])
     node = next(n for n in document.nodes.values() if n.kind == "web_research")
-    assert node.research_result["answerMarkdown"] == "the answer"
-    assert node.research_result["sources"] == [{"title": "t"}]
+    assert node.state.research_result["answerMarkdown"] == "the answer"
+    assert node.state.research_result["sources"] == [{"title": "t"}]
 
 
 def test_web_node_kind_is_web_research_not_web():
@@ -310,8 +310,8 @@ def test_chart_restores_with_size_and_aspect_lock_override():
         }],
     )
     chart = next(n for n in document.nodes.values() if n.kind == "chart")
-    assert chart.chart_width == 600.0 and chart.chart_height == 400.0
-    assert chart.chart_aspect_locked is False
+    assert chart.state.chart_width == 600.0 and chart.state.chart_height == 400.0
+    assert chart.state.chart_aspect_locked is False
 
 
 def test_chart_aspect_lock_is_applied_before_resize_not_after():
@@ -335,7 +335,7 @@ def test_chart_aspect_lock_is_applied_before_resize_not_after():
         }],
     )
     chart = next(n for n in document.nodes.values() if n.kind == "chart")
-    assert (chart.chart_width, chart.chart_height) == (440.0, 320.0)
+    assert (chart.state.chart_width, chart.state.chart_height) == (440.0, 320.0)
 
 
 def test_malformed_chart_is_skipped_without_aborting_the_rest_of_the_load():
@@ -371,7 +371,7 @@ def test_frame_membership_uses_items_key_not_item_indices():
     frame = next(n for n in document.nodes.values() if n.kind == "frame")
     member_kinds = {document.nodes[i].kind for i in frame.item_ids}
     assert member_kinds == {"chat"}
-    assert frame.group_manual_width is not None and frame.group_manual_height is not None
+    assert frame.state.group_manual_width is not None and frame.state.group_manual_height is not None
 
 
 def test_frame_falls_back_to_legacy_nodes_key():
@@ -397,7 +397,7 @@ def test_frame_unlocked_flag_is_applied():
         frames=[{"items": [0], "note": "Unlocked", "position": {"x": 0, "y": 0}, "is_locked": False}],
     )
     frame = next(n for n in document.nodes.values() if n.kind == "frame")
-    assert frame.is_locked is False
+    assert frame.state.is_locked is False
 
 
 # -- containers (nest frames/notes/charts, offset math) ----------------------

@@ -128,7 +128,7 @@ def test_export_chart_returns_a_real_higher_resolution_png():
     parent = document.add_node(0, 0, "parent")
     chart = document.add_chart_node(0, 0, parent.id, "bar", dict(_CHART_DATA))
 
-    display_bytes, _ = document.get_image_asset(chart.chart_asset_id)
+    display_bytes, _ = document.get_image_asset(chart.state.chart_asset_id)
     response = client.get(f"/api/assets/chart/{chart.id}/export")
 
     assert response.status_code == 200

@@ -20,7 +20,7 @@ conversation.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 class NodeState:
@@ -89,3 +89,229 @@ class NoteState(NodeState):
     is_system_prompt: bool = False
     is_summary_note: bool = False
     is_branch_comparison: bool = False
+
+
+@dataclass
+class DocumentState(NodeState):
+    """Relocated verbatim from SceneNode's six document-attachment fields
+    (former backend/domain/model.py fields, R3.9) - graphlink_scene.py's
+    add_document_node()/graphlink_node_document.py's DocumentNode.__init__
+    attachment metadata (title/content live on SceneNode's own core).
+    Stored VERBATIM, exactly as passed in - none of the legacy view-layer
+    formatting below happens here; reproducing it is the frontend's job
+    (same as the paint()/menu code it replaces). Formatting rules
+    extracted from graphlink_nodes/graphlink_node_document.py +
+    graphlink_audio.py, for the frontend to reproduce exactly in
+    TypeScript:
+
+    - Byte-size formatting (DocumentNode._format_byte_size): if byte_size
+      is falsy (None or 0) -> "Unknown". Else repeatedly divide by 1024.0
+      walking units ("B","KB","MB","GB","TB"), stopping at the first unit
+      where size < 1024.0 (or unit == "TB"); "B" formats as a bare integer
+      ("512 B"), every other unit formats with exactly one decimal place
+      ("1.5 MB").
+    - Duration formatting (graphlink_audio.format_duration): None ->
+      "Unknown". Else round(seconds) to the nearest whole second, clamp
+      negative to 0, divmod into hours/minutes/seconds; if hours > 0 format
+      "H:MM:SS" (hours unpadded, minutes/seconds zero-padded to 2 digits),
+      else "M:SS" (minutes unpadded, seconds zero-padded).
+    - Metadata rows (DocumentNode._build_metadata_rows), in this exact
+      order, each omitted entirely when its value is empty/None: Type
+      ("Audio file" if attachment_kind=="audio" else "Document", always
+      present) / Duration (formatted, only if duration_seconds is not
+      None) / Format (mime_type, only if truthy) / Size (formatted byte
+      size, only if byte_size is truthy) / Path (file_path, only if
+      truthy).
+    - preview_label auto-fill (DocumentNode._build_preview_label), used
+      only when the caller didn't supply one: for attachment_kind=="audio"
+      -> "Audio | {duration formatted, or 'Audio' if duration_seconds is
+      None}"; otherwise derived from title's file extension via
+      os.path.splitext: ".pdf" -> "PDF", ".docx" -> "DOCX", any other
+      extension -> that extension uppercased without its dot, no extension
+      -> "Document".
+    - Audio-preview-suppression heuristic
+      (DocumentNode._should_show_audio_preview): normalize both `content`
+      and the auto-built `audio_details` block the same way (join
+      right-stripped lines with "\\n", strip the whole string, lowercase).
+      Hide the content-preview panel (show only the metadata table) when:
+      normalized content is empty; OR normalized content == normalized
+      audio_details (content is nothing but the auto-generated metadata
+      block); OR normalized content startswith "audio attachment" AND
+      contains "duration:" (catches legacy-saved sessions whose persisted
+      content is an older/differently-valued metadata block). Otherwise
+      show the preview. `audio_details` itself is the joined lines: "Audio
+      attachment", then "Duration: {formatted}" if duration_seconds is not
+      None, "Format: {mime_type}" if truthy, "Size: {formatted byte size}"
+      if byte_size truthy, "Path: {file_path}" if truthy - same
+      presence/order rules as the metadata rows above."""
+
+    attachment_kind: str = ""
+    file_path: str = ""
+    mime_type: str = ""
+    duration_seconds: float | None = None
+    byte_size: int | None = None
+    preview_label: str = ""
+
+
+@dataclass
+class WebResearchState(NodeState):
+    """Relocated verbatim from SceneNode's six web-research fields (former
+    backend/domain/model.py fields, R5.1) - one research run's live
+    progress/outcome. SceneNode's own `content` field (reused, same
+    pattern as code/thinking/html) holds the query text - not duplicated
+    here. research_stage is one of the empty-string sentinel ("" - never
+    run) or the 9 ResearchStage enum values from
+    graphlink_plugins/web_research/domain.py's own .value strings:
+    "preparing" | "searching" | "fetching" | "extracting" | "validating" |
+    "synthesizing" | "completed" | "cancelled" | "failed".
+    research_result is the wire-shaped (camelCase) ResearchResult, or None
+    before the first run ever completes - deliberate stale-while-
+    revalidate (a NEW run does not clear this on start; see
+    start_web_research_run's own docstring)."""
+
+    research_stage: str = ""
+    research_completed: int = 0
+    research_total: int = 0
+    research_active_source_id: str | None = None
+    research_error: str = ""
+    research_result: dict | None = None
+
+
+@dataclass
+class ChartState(NodeState):
+    """Relocated verbatim from SceneNode's nine chart fields (former
+    backend/domain/model.py fields, R6.2) - graphlink_canvas_chart_item.py's
+    ChartItem, ported to a backend-rendered PNG (see
+    graphlink_chart_rendering.py's own module docstring for why -
+    matplotlib+FigureCanvasAgg was already Qt-free upstream; only the
+    QImage-wrapping step needed replacing).
+
+    - chart_type: one of SUPPORTED_CHART_TYPES (graphlink_chart_data.py):
+      "bar" | "line" | "pie" | "histogram" | "sankey".
+    - chart_data: ALREADY-canonicalized (canonicalize_chart_data's own
+      output shape) - add_chart_node does NOT call canonicalize_chart_data
+      itself; the caller (backend/agents.py's generateChart intent, via
+      AgentDispatcher.start_chart_generation) is responsible for that, so
+      it can catch ChartDataError itself and still create a placeholder
+      chart with chart_error set on failure, matching legacy's never-
+      hard-fail contract, rather than add_chart_node raising and aborting
+      node creation entirely.
+    - chart_error: non-empty if generation/canonicalization degraded to a
+      placeholder - the chart still has a real (if minimal) chart_asset_id
+      and renders SOMETHING, never a blank/broken state (mirrors
+      ChartDataAgent's own get_response/repair_chart_data/
+      heuristic_chart_data degrade-gracefully chain, which never
+      hard-fails outright for a genuine LLM response).
+    - chart_asset_id: opaque key into the EXISTING
+      SceneDocument.image_assets dict (REUSED, not a parallel store - same
+      dict R3.21's image nodes already use, see that field's own
+      transport-decision comment on image_assets) - the rendered
+      display-resolution PNG. Export (the 3x-resolution download)
+      re-renders fresh rather than reading this asset - see
+      backend/assets.py.
+    - chart_asset_version: incremented every time chart_asset_id's bytes
+      are (re)written (by add_chart_node's initial render, or
+      resize_chart's re-render) - lets the frontend cache-bust the <img>
+      src with a version query param after a resize re-render, since the
+      asset id itself never changes.
+    - chart_width/chart_height: default to legacy ChartItem.DEFAULT_WIDTH/
+      DEFAULT_HEIGHT - add_chart_node reads these dataclass defaults
+      directly off a freshly-constructed node's state (not a second
+      literal) when rendering a freshly-created chart's first PNG, so the
+      two can never drift apart. resize_chart clamps any later change into
+      [CHART_MIN_WIDTH, CHART_MAX_WIDTH] / [CHART_MIN_HEIGHT,
+      CHART_MAX_HEIGHT] (backend/domain/model.py).
+    - chart_aspect_locked: legacy ChartItem.aspect_ratio_locked's own
+      default (True, unlike most bool fields in this module which default
+      False) - resize_chart consults this to decide whether to re-derive a
+      dimension after clamping; toggle_chart_aspect_lock flips it without
+      touching size or re-rendering.
+    - chart_source_node_id: provenance - which node's content the chart
+      data was generated from, always the parent branch-point edge's
+      source in this implementation (legacy's rarer "different node" case
+      is a known, accepted simplification, not replicated)."""
+
+    chart_type: str = ""
+    chart_data: dict = field(default_factory=dict)
+    chart_error: str = ""
+    chart_asset_id: str = ""
+    chart_asset_version: int = 0
+    chart_width: float = 680.0
+    chart_height: float = 500.0
+    chart_aspect_locked: bool = True
+    chart_source_node_id: str = ""
+
+
+@dataclass
+class FrameState(NodeState):
+    """Relocated verbatim from SceneNode's frame-only fields (former
+    backend/domain/model.py fields, R6.1).
+
+    - is_locked: legacy default is LOCKED (True), unlike every other bool
+      field in this module (which all default False). Containers have no
+      lock concept at all - see create_container's own docstring for why
+      no lock toggle is exposed for them.
+    - group_manual_width/group_manual_height: the MANUAL resize override
+      recorded by resize_frame, cleared back to None by
+      fit_frame_to_content. This pair (unlike group_width/group_height
+      below) is the single, stable source of truth for "is this frame
+      currently manually sized": it is NEVER auto-populated by
+      _recompute_group_bounds's own auto-fit branch, only ever written by
+      resize_frame/fit_frame_to_content, so its None-ness survives a
+      collapse/expand round-trip untouched (unlike group_width/
+      group_height, which DO get temporarily overwritten with the fixed
+      collapsed-pill size while is_collapsed - see toggle_group_collapsed).
+      Deliberately excluded from scene_payload()/the wire - pure internal
+      bookkeeping, mirrors gitlink_imported_root's own "server-side only"
+      precedent.
+    - group_manual_x/group_manual_y: the position counterpart to
+      group_manual_width/height above - set by move_node whenever a frame
+      is dragged directly (locked whole-group drag OR an independently-
+      dragged unlocked frame), cleared back to None by
+      fit_frame_to_content. Exists so an unlocked frame's own drag
+      actually sticks - without an explicit anchor, the very next member
+      move would recompute the frame straight back to bbox-of-members-
+      centered, silently undoing the drag (legacy let an unlocked frame's
+      outline be repositioned independently of its members; this is that
+      same capability, ported). See _recompute_group_bounds for
+      how this anchor is unioned with the live bbox so it still can never
+      clip a member, matching legacy's own rect.united() guarantee. Same
+      wire/kind-scoping posture as group_manual_width/height above
+      (server-side only).
+    - group_width/group_height: the frame's current effective on-canvas
+      size, kept live by _recompute_group_bounds - the fixed
+      GROUP_COLLAPSED_WIDTH/HEIGHT pill while is_collapsed, else
+      group_manual_width/height verbatim while a manual override is
+      active, else the padded bbox-of-members auto-fit size. THIS is the
+      pair the wire contract names group_width/group_height and exposes as
+      groupWidth/groupHeight - group_manual_width/height above exist
+      purely so a frame's manual override survives a collapse/expand
+      round-trip without the collapsed-pill overwrite (this pair)
+      destroying it.
+
+    NOT shared with ContainerState despite group_width/group_height being
+    common to both: is_locked/group_manual_* are explicitly meaningless
+    for containers (no lock concept, no manual-resize capability - no
+    resize_container method exists), so forcing them onto a shared base
+    would resurrect the exact "every kind carries fields it never uses"
+    problem this migration exists to remove."""
+
+    is_locked: bool = True
+    group_manual_width: float | None = None
+    group_manual_height: float | None = None
+    group_manual_x: float | None = None
+    group_manual_y: float | None = None
+    group_width: float | None = None
+    group_height: float | None = None
+
+
+@dataclass
+class ContainerState(NodeState):
+    """Relocated verbatim from SceneNode's group_width/group_height fields
+    (former backend/domain/model.py fields, R6.1), as they apply to
+    container kind specifically - see FrameState's own docstring for why
+    this is a separate class rather than a shared base with FrameState,
+    despite the field-name overlap."""
+
+    group_width: float | None = None
+    group_height: float | None = None
