@@ -192,6 +192,7 @@ from backend.canvas import (
     GitlinkState,
     HtmlState,
     ImageState,
+    PycoderState,
     SceneDocument,
     SceneNode,
     SUPPORTED_CHART_TYPES,
@@ -573,14 +574,16 @@ def _restore_pycoder_payload(payload: dict[str, Any]) -> SceneNode:
     raw_mode = str(payload.get("mode", "AI_DRIVEN") or "AI_DRIVEN")
     return SceneNode(
         id="", x=x, y=y, title="Py-Coder", kind="pycoder",
-        # R6.4 translation: legacy persists the enum MEMBER NAME
-        # ("AI_DRIVEN"/"MANUAL", uppercase, via node.mode.name); backend
-        # wants "ai_driven"/"manual" (lowercase).
-        pycoder_mode=raw_mode.lower(),
-        pycoder_prompt=str(payload.get("prompt", "")),
-        pycoder_code=str(payload.get("code", "")),
-        pycoder_output=str(payload.get("output", "")),
-        pycoder_analysis=str(payload.get("analysis", "")),
+        state=PycoderState(
+            # R6.4 translation: legacy persists the enum MEMBER NAME
+            # ("AI_DRIVEN"/"MANUAL", uppercase, via node.mode.name); backend
+            # wants "ai_driven"/"manual" (lowercase).
+            pycoder_mode=raw_mode.lower(),
+            pycoder_prompt=str(payload.get("prompt", "")),
+            pycoder_code=str(payload.get("code", "")),
+            pycoder_output=str(payload.get("output", "")),
+            pycoder_analysis=str(payload.get("analysis", "")),
+        ),
         history=_restore_history(payload.get("conversation_history")),
         is_collapsed=bool(payload.get("is_collapsed", False)),
     )

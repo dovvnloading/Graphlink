@@ -315,11 +315,11 @@ def _serialize_pycoder_node(node: SceneNode) -> dict[str, Any]:
         "node_type": "pycoder",
         # Inverse of R6.4's own lowercase translation: legacy persists the
         # enum MEMBER NAME, uppercase.
-        "mode": node.pycoder_mode.upper(),
-        "prompt": node.pycoder_prompt,
-        "code": node.pycoder_code,
-        "output": node.pycoder_output,
-        "analysis": node.pycoder_analysis,
+        "mode": node.state.pycoder_mode.upper(),
+        "prompt": node.state.pycoder_prompt,
+        "code": node.state.pycoder_code,
+        "output": node.state.pycoder_output,
+        "analysis": node.state.pycoder_analysis,
         "conversation_history": _serialize_history(node.history),
         "is_collapsed": bool(node.is_collapsed),
     }
