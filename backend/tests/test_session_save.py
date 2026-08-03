@@ -467,6 +467,6 @@ def test_round_trip_preserves_compare_branches_full_shape():
     second2 = next(n for n in doc2.nodes.values() if n.content == "second branch reply")
     note2 = next(n for n in doc2.nodes.values() if n.kind == "note")
 
-    assert note2.is_branch_comparison is True
+    assert note2.state.is_branch_comparison is True
     assert set(note2.item_ids) == {first2.id, second2.id}
     assert note2.content == "Branch Comparison\n\nAgreements:\n• both agree"

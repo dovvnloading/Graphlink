@@ -45,7 +45,7 @@ class BranchOps:
             raise SceneError(f"unknown node: {node_id}")
         if node.kind != "note":
             raise SceneError(f"node is not a note node: {node_id}")
-        node.is_branch_comparison = True
+        node.state.is_branch_comparison = True
         node.item_ids = list(source_node_ids)
 
     def mark_branch_synthesis(

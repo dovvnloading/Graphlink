@@ -259,7 +259,7 @@ def register_plugins(
                     if edge.target == root.id
                     and edge.source in canvas_document.nodes
                     and canvas_document.nodes[edge.source].kind == "note"
-                    and canvas_document.nodes[edge.source].is_system_prompt
+                    and canvas_document.nodes[edge.source].state.is_system_prompt
                 ),
                 None,
             )

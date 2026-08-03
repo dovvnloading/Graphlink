@@ -73,3 +73,19 @@ class CodeState(NodeState):
 
     code: str = ""
     language: str = ""
+
+
+@dataclass
+class NoteState(NodeState):
+    """Relocated verbatim from SceneNode.is_system_prompt/is_summary_note/
+    is_branch_comparison (former backend/domain/model.py fields) - a
+    note's three mutually-independent badge flags. is_system_prompt/
+    is_summary_note are the legacy system-prompt/summary-note badges;
+    is_branch_comparison (ADR-002 Workstream 1, "Compare Branches") marks
+    a note as the output of the Compare Branches agent - deliberately a
+    separate flag from is_summary_note rather than reusing it, since that
+    flag is legacy's own unrelated "Group Summary" concept."""
+
+    is_system_prompt: bool = False
+    is_summary_note: bool = False
+    is_branch_comparison: bool = False

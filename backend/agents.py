@@ -553,7 +553,7 @@ class AgentDispatcher:
             if (
                 source_node is not None
                 and getattr(source_node, "kind", None) == "note"
-                and getattr(source_node, "is_system_prompt", False)
+                and getattr(source_node.state, "is_system_prompt", False)
             ):
                 return source_node.content
         return None

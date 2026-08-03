@@ -55,6 +55,7 @@ MIGRATED_KIND_FIELDS = {
     "html": ["html_splitter_state"],
     "artifact": ["artifact_content"],
     "code": ["code", "language"],
+    "note": ["is_system_prompt", "is_summary_note", "is_branch_comparison"],
 }
 
 
