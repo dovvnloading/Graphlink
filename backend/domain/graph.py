@@ -84,7 +84,7 @@ from backend.domain.model import (
     SceneNode,
     THINKING_TITLE_PREVIEW_LENGTH,
 )
-from backend.domain.node_states import ArtifactState, HtmlState, ImageState
+from backend.domain.node_states import ArtifactState, CodeState, HtmlState, ImageState
 
 
 def _estimate_tokens(text: str) -> int:
@@ -305,8 +305,7 @@ class SceneDocument(BranchOps, GroupOps):
             y=float(y),
             title=title,
             kind="code",
-            code=str(code),
-            language=str(language),
+            state=CodeState(code=str(code), language=str(language)),
         )
         self.nodes[node_id] = node
         if parent_id is not None:
@@ -1681,8 +1680,8 @@ class SceneDocument(BranchOps, GroupOps):
                     "content": n.content,
                     "isUser": n.is_user,
                     "isCollapsed": n.is_collapsed,
-                    "code": n.code,
-                    "language": n.language,
+                    "code": n.state.code if isinstance(n.state, CodeState) else "",
+                    "language": n.state.language if isinstance(n.state, CodeState) else "",
                     "attachmentKind": n.attachment_kind,
                     "filePath": n.file_path,
                     "mimeType": n.mime_type,

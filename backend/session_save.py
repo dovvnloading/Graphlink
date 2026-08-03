@@ -212,7 +212,7 @@ def _serialize_chat_node(node: SceneNode) -> dict[str, Any]:
 
 
 def _serialize_code_node(node: SceneNode) -> dict[str, Any]:
-    return {"node_type": "code", "code": node.code, "language": node.language}
+    return {"node_type": "code", "code": node.state.code, "language": node.state.language}
 
 
 def _serialize_document_node(node: SceneNode) -> dict[str, Any]:

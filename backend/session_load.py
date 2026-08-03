@@ -186,6 +186,7 @@ from typing import Any
 
 from backend.canvas import (
     ArtifactState,
+    CodeState,
     HtmlState,
     ImageState,
     SceneDocument,
@@ -374,8 +375,10 @@ def _restore_code_payload(payload: dict[str, Any]) -> SceneNode:
     x, y = _position(payload)
     return SceneNode(
         id="", x=x, y=y, title="Code", kind="code",
-        code=str(payload.get("code", "")),
-        language=str(payload.get("language", "")),
+        state=CodeState(
+            code=str(payload.get("code", "")),
+            language=str(payload.get("language", "")),
+        ),
     )
 
 
