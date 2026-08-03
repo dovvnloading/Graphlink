@@ -251,8 +251,8 @@ class SceneNodeRow:
     # two DIFFERENT builds (e.g. selecting a different single file each
     # time) could produce an IDENTICAL summary string, so the guard
     # incorrectly skipped refetching and showed stale XML. See
-    # backend/canvas.py's SceneNode.gitlink_context_version for the full
-    # rationale.
+    # backend/domain/node_states.py's GitlinkState.gitlink_context_version
+    # for the full rationale.
     gitlinkContextVersion: int = 0
     gitlinkProposalMarkdown: str = ""
     gitlinkPendingChanges: list[GitlinkPendingChangeRow] = field(default_factory=list)
@@ -273,9 +273,10 @@ class SceneNodeRow:
     # R5.4: the Execution Sandbox node's real persisted shape - populated for
     # kind=="code_sandbox" rows, defaulted for every other kind.
     # codeSandboxSandboxId is DELIBERATELY NOT one of these fields - see
-    # backend/canvas.py's own comment on SceneNode.code_sandbox_sandbox_id
-    # (pure internal directory-naming key, mirrors gitlink_imported_root's
-    # own "server-side bookkeeping only" precedent).
+    # backend/domain/node_states.py's own comment on
+    # CodeSandboxState.code_sandbox_sandbox_id (pure internal
+    # directory-naming key, mirrors gitlink_imported_root's own
+    # "server-side bookkeeping only" precedent).
     codeSandboxRequirements: str = ""
     codeSandboxPrompt: str = ""
     codeSandboxCode: str = ""
@@ -287,9 +288,9 @@ class SceneNodeRow:
     # specific pending approval refers to, frozen the instant
     # codeSandboxAwaitingApproval flips True - deliberately distinct from
     # codeSandboxRequirements above (the user's still-live, still-editable
-    # draft for the NEXT run). See backend/canvas.py's own comment on
-    # SceneNode.code_sandbox_approval_requirements for the full race this
-    # closes.
+    # draft for the NEXT run). See backend/domain/node_states.py's own
+    # comment on CodeSandboxState.code_sandbox_approval_requirements for the
+    # full race this closes.
     codeSandboxApprovalRequirements: str = ""
     codeSandboxError: str = ""
 

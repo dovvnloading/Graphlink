@@ -4657,14 +4657,14 @@ def test_add_code_sandbox_node_creates_child_with_defaults_and_mints_sandbox_id(
     node = doc.add_code_sandbox_node(10, 20, parent.id)
     assert node.kind == "code_sandbox"
     assert node.title == "Virtual Environment Runner"
-    assert node.code_sandbox_sandbox_id, "a sandbox id must be minted at creation time"
-    assert node.code_sandbox_requirements == ""
-    assert node.code_sandbox_prompt == ""
-    assert node.code_sandbox_code == ""
-    assert node.code_sandbox_output == ""
-    assert node.code_sandbox_analysis == ""
-    assert node.code_sandbox_awaiting_approval is False
-    assert node.code_sandbox_error == ""
+    assert node.state.code_sandbox_sandbox_id, "a sandbox id must be minted at creation time"
+    assert node.state.code_sandbox_requirements == ""
+    assert node.state.code_sandbox_prompt == ""
+    assert node.state.code_sandbox_code == ""
+    assert node.state.code_sandbox_output == ""
+    assert node.state.code_sandbox_analysis == ""
+    assert node.state.code_sandbox_awaiting_approval is False
+    assert node.state.code_sandbox_error == ""
     assert any(e.source == parent.id and e.target == node.id for e in doc.edges.values())
 
 
@@ -4673,7 +4673,7 @@ def test_add_code_sandbox_node_mints_a_different_id_per_node():
     parent = doc.add_node(0, 0, "parent")
     a = doc.add_code_sandbox_node(0, 0, parent.id)
     b = doc.add_code_sandbox_node(0, 0, parent.id)
-    assert a.code_sandbox_sandbox_id != b.code_sandbox_sandbox_id
+    assert a.state.code_sandbox_sandbox_id != b.state.code_sandbox_sandbox_id
 
 
 def test_add_code_sandbox_node_requires_a_parent_id():
@@ -4697,7 +4697,7 @@ def test_set_code_sandbox_requirements_sets_the_field():
     node = doc.add_code_sandbox_node(0, 0, parent.id)
     returned = doc.set_code_sandbox_requirements(node.id, "numpy\nrequests")
     assert returned is node
-    assert node.code_sandbox_requirements == "numpy\nrequests"
+    assert node.state.code_sandbox_requirements == "numpy\nrequests"
 
 
 def test_set_code_sandbox_requirements_unknown_node_raises_scene_error():
@@ -4709,15 +4709,15 @@ def test_start_code_sandbox_run_stores_prompt_and_clears_error_without_touching_
     doc = SceneDocument()
     parent = doc.add_node(0, 0, "parent")
     node = doc.add_code_sandbox_node(0, 0, parent.id)
-    node.code_sandbox_code = "print('previous run')"
-    node.code_sandbox_error = "a previous error"
+    node.state.code_sandbox_code = "print('previous run')"
+    node.state.code_sandbox_error = "a previous error"
 
     returned = doc.start_code_sandbox_run(node.id, "add a health check")
 
     assert returned is node
-    assert node.code_sandbox_prompt == "add a health check"
-    assert node.code_sandbox_error == ""
-    assert node.code_sandbox_code == "print('previous run')", (
+    assert node.state.code_sandbox_prompt == "add a health check"
+    assert node.state.code_sandbox_error == ""
+    assert node.state.code_sandbox_code == "print('previous run')", (
         "start_code_sandbox_run must not overwrite the existing code - the "
         "dispatch method decides generate-vs-reuse by reading it at call time"
     )
@@ -4740,21 +4740,21 @@ def test_complete_code_sandbox_run_sets_all_fields_and_clears_approval_and_error
     doc = SceneDocument()
     parent = doc.add_node(0, 0, "parent")
     node = doc.add_code_sandbox_node(0, 0, parent.id)
-    node.code_sandbox_awaiting_approval = True
-    node.code_sandbox_approval_requirements = "numpy"
-    node.code_sandbox_error = "stale error"
+    node.state.code_sandbox_awaiting_approval = True
+    node.state.code_sandbox_approval_requirements = "numpy"
+    node.state.code_sandbox_error = "stale error"
 
     returned = doc.complete_code_sandbox_run(node.id, "print(1)", "1", "analysis text")
 
     assert returned is node
-    assert node.code_sandbox_code == "print(1)"
-    assert node.code_sandbox_output == "1"
-    assert node.code_sandbox_analysis == "analysis text"
-    assert node.code_sandbox_awaiting_approval is False
-    assert node.code_sandbox_approval_requirements == "", (
+    assert node.state.code_sandbox_code == "print(1)"
+    assert node.state.code_sandbox_output == "1"
+    assert node.state.code_sandbox_analysis == "analysis text"
+    assert node.state.code_sandbox_awaiting_approval is False
+    assert node.state.code_sandbox_approval_requirements == "", (
         "the frozen approval snapshot must be cleared alongside awaiting_approval"
     )
-    assert node.code_sandbox_error == ""
+    assert node.state.code_sandbox_error == ""
 
 
 def test_complete_code_sandbox_run_is_a_silent_noop_for_a_deleted_node():
@@ -4765,23 +4765,23 @@ def test_fail_code_sandbox_run_sets_error_clears_approval_but_preserves_output()
     doc = SceneDocument()
     parent = doc.add_node(0, 0, "parent")
     node = doc.add_code_sandbox_node(0, 0, parent.id)
-    node.code_sandbox_code = "print(1)"
-    node.code_sandbox_output = "1"
-    node.code_sandbox_analysis = "old analysis"
-    node.code_sandbox_awaiting_approval = True
-    node.code_sandbox_approval_requirements = "numpy"
+    node.state.code_sandbox_code = "print(1)"
+    node.state.code_sandbox_output = "1"
+    node.state.code_sandbox_analysis = "old analysis"
+    node.state.code_sandbox_awaiting_approval = True
+    node.state.code_sandbox_approval_requirements = "numpy"
 
     returned = doc.fail_code_sandbox_run(node.id, "sandbox timed out")
 
     assert returned is node
-    assert node.code_sandbox_error == "sandbox timed out"
-    assert node.code_sandbox_awaiting_approval is False
-    assert node.code_sandbox_approval_requirements == "", (
+    assert node.state.code_sandbox_error == "sandbox timed out"
+    assert node.state.code_sandbox_awaiting_approval is False
+    assert node.state.code_sandbox_approval_requirements == "", (
         "the frozen approval snapshot must be cleared alongside awaiting_approval"
     )
-    assert node.code_sandbox_code == "print(1)"
-    assert node.code_sandbox_output == "1"
-    assert node.code_sandbox_analysis == "old analysis"
+    assert node.state.code_sandbox_code == "print(1)"
+    assert node.state.code_sandbox_output == "1"
+    assert node.state.code_sandbox_analysis == "old analysis"
 
 
 def test_fail_code_sandbox_run_is_a_silent_noop_for_a_deleted_node():
@@ -4933,10 +4933,10 @@ def test_run_code_sandbox_intent_dispatches_with_correct_node_fields():
         result = await bus.dispatch_intent("scene", "runCodeSandbox", [node.id, "generate a health check"])
 
         assert result == node.id
-        assert document.nodes[node.id].code_sandbox_prompt == "generate a health check"
+        assert document.nodes[node.id].state.code_sandbox_prompt == "generate a health check"
         assert len(fake_dispatcher.calls) == 1
         call = fake_dispatcher.calls[0]
-        assert call["sandbox_id"] == document.nodes[node.id].code_sandbox_sandbox_id
+        assert call["sandbox_id"] == document.nodes[node.id].state.code_sandbox_sandbox_id
         assert call["prompt"] == "generate a health check"
         assert call["existing_code"] == ""
         assert callable(call["on_success"])
@@ -5164,10 +5164,10 @@ def test_remove_nodes_cancels_the_dispatchers_code_sandbox_request_when_deleted_
         request_id, entry = next(iter(code_sandbox_slots(dispatcher).items()))
 
         for _ in range(200):
-            if sandbox_node.code_sandbox_awaiting_approval or entry["task"].done():
+            if sandbox_node.state.code_sandbox_awaiting_approval or entry["task"].done():
                 break
             await asyncio.sleep(0.005)
-        assert sandbox_node.code_sandbox_awaiting_approval is True, "must genuinely be parked on the approval gate"
+        assert sandbox_node.state.code_sandbox_awaiting_approval is True, "must genuinely be parked on the approval gate"
         assert request_id in code_sandbox_slots(dispatcher)
 
         await bus.dispatch_intent("scene", "removeNodes", [[sandbox_node.id]])
@@ -5190,13 +5190,13 @@ def test_code_sandbox_approval_requirements_snapshot_is_decoupled_from_the_live_
     the very top of its own _run(), BEFORE its one real await (the
     asyncio.to_thread call to SandboxGenerationAgent). A setCodeSandboxRequirements
     intent - ungated by any busy check - can land during that await window
-    and change the LIVE node.code_sandbox_requirements field before the
+    and change the LIVE node.state.code_sandbox_requirements field before the
     approval panel is ever shown. Uses the REAL AgentDispatcher
     (make_bus_with_dispatcher) driven through the real runCodeSandbox/
     setCodeSandboxRequirements WS intents, and genuinely parks on the
     approval gate (same polling idiom as
     test_remove_nodes_cancels_the_dispatchers_code_sandbox_request_when_deleted_mid_approval_pause
-    above), proving node.code_sandbox_approval_requirements - the frozen
+    above), proving node.state.code_sandbox_approval_requirements - the frozen
     snapshot this pending approval genuinely refers to - stays "numpy" even
     after a fresh setCodeSandboxRequirements changes the live draft field to
     "requests"."""
@@ -5216,11 +5216,11 @@ def test_code_sandbox_approval_requirements_snapshot_is_decoupled_from_the_live_
         request_id, entry = next(iter(code_sandbox_slots(dispatcher).items()))
 
         for _ in range(200):
-            if sandbox_node.code_sandbox_awaiting_approval or entry["task"].done():
+            if sandbox_node.state.code_sandbox_awaiting_approval or entry["task"].done():
                 break
             await asyncio.sleep(0.005)
-        assert sandbox_node.code_sandbox_awaiting_approval is True, "must genuinely be parked on the approval gate"
-        assert sandbox_node.code_sandbox_approval_requirements == "numpy", (
+        assert sandbox_node.state.code_sandbox_awaiting_approval is True, "must genuinely be parked on the approval gate"
+        assert sandbox_node.state.code_sandbox_approval_requirements == "numpy", (
             "the frozen snapshot must be populated the instant the approval gate opens"
         )
 
@@ -5228,11 +5228,11 @@ def test_code_sandbox_approval_requirements_snapshot_is_decoupled_from_the_live_
         # pending - exactly the real race this fix closes.
         await bus.dispatch_intent("scene", "setCodeSandboxRequirements", [sandbox_node.id, "requests"])
 
-        assert sandbox_node.code_sandbox_approval_requirements == "numpy", (
+        assert sandbox_node.state.code_sandbox_approval_requirements == "numpy", (
             "the disclosed approval snapshot must stay the frozen manifest this "
             "pending approval genuinely refers to, unaffected by a later live edit"
         )
-        assert sandbox_node.code_sandbox_requirements == "requests", (
+        assert sandbox_node.state.code_sandbox_requirements == "requests", (
             "the live draft field must still reflect the user's newest edit, "
             "proving the two fields are genuinely decoupled"
         )
@@ -5241,7 +5241,7 @@ def test_code_sandbox_approval_requirements_snapshot_is_decoupled_from_the_live_
         # real virtualenv.
         assert dispatcher.deny_code_execution(request_id) is True
         await entry["task"]
-        assert sandbox_node.code_sandbox_approval_requirements == "", (
+        assert sandbox_node.state.code_sandbox_approval_requirements == "", (
             "must be cleared once the approval resolves, mirroring "
             "code_sandbox_awaiting_approval's own clear"
         )

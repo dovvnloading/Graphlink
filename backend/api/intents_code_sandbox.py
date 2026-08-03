@@ -64,9 +64,9 @@ def register_code_sandbox_intents(
 
         await agent_dispatcher.start_code_sandbox_run(
             bus=bus, notifications_state=notifications, node=node, node_id=node_id,
-            sandbox_id=node.code_sandbox_sandbox_id,
-            prompt=node.code_sandbox_prompt, existing_code=node.code_sandbox_code,
-            requirements_manifest=node.code_sandbox_requirements,
+            sandbox_id=node.state.code_sandbox_sandbox_id,
+            prompt=node.state.code_sandbox_prompt, existing_code=node.state.code_sandbox_code,
+            requirements_manifest=node.state.code_sandbox_requirements,
             conversation_history=branch_history,
             on_success=_on_success, on_failure=_on_failure,
         )

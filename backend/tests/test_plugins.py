@@ -443,7 +443,7 @@ def test_execute_plugin_execution_sandbox_creates_a_real_code_sandbox_node():
     node = canvas_document.nodes[result]
     assert node.kind == "code_sandbox"
     assert node.title == "Virtual Environment Runner"
-    assert node.code_sandbox_sandbox_id, "a sandbox id must be minted at creation time"
+    assert node.state.code_sandbox_sandbox_id, "a sandbox id must be minted at creation time"
     assert any(
         e.source == parent.id and e.target == node.id for e in canvas_document.edges.values()
     )

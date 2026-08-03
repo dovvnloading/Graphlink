@@ -3690,8 +3690,16 @@ def _make_pycoder_node(**overrides):
 
 
 def _make_code_sandbox_node(**overrides):
-    defaults = dict(
-        pending_request_id=None,
+    """Duck-types a SceneNode for AgentDispatcher's code_sandbox methods,
+    which never check isinstance(node, SceneNode) (see this module's own
+    docstring). ADR-002 stage 2.5 PR10b: code_sandbox_* fields now live on
+    node.state (a nested SimpleNamespace here), matching real SceneNode
+    instances post-shim-removal - node.pending_request_id stays a
+    top-level attribute, matching the real dataclass's own core field.
+    Callers keep passing code_sandbox_* kwargs flat; this splits them into
+    the nested state automatically, so no call site needs to change
+    shape."""
+    state_defaults = dict(
         code_sandbox_sandbox_id="sandbox-test-1",
         code_sandbox_requirements="",
         code_sandbox_prompt="",
@@ -3703,8 +3711,13 @@ def _make_code_sandbox_node(**overrides):
         code_sandbox_approved_fingerprint=None,
         code_sandbox_error="",
     )
-    defaults.update(overrides)
-    return SimpleNamespace(**defaults)
+    node_overrides = {"pending_request_id": None}
+    for key, value in overrides.items():
+        if key in state_defaults:
+            state_defaults[key] = value
+        else:
+            node_overrides[key] = value
+    return SimpleNamespace(state=SimpleNamespace(**state_defaults), **node_overrides)
 
 
 async def _approve_every_gate_until_done(dispatcher, request_id, task, max_iterations=400):
@@ -4242,10 +4255,10 @@ def test_code_sandbox_blank_prompt_with_existing_code_reuses_it_without_calling_
         # this test only cares that generation was skipped, not about a full
         # execute cycle.
         for _ in range(200):
-            if node.code_sandbox_awaiting_approval or entry["task"].done():
+            if node.state.code_sandbox_awaiting_approval or entry["task"].done():
                 break
             await asyncio.sleep(0.005)
-        assert node.code_sandbox_code == "print('reuse me')", (
+        assert node.state.code_sandbox_code == "print('reuse me')", (
             "the EXISTING code must be what is shown for approval, unmodified"
         )
         dispatcher.deny_code_execution(request_id)
@@ -4276,7 +4289,7 @@ def test_code_sandbox_nonblank_prompt_always_regenerates_even_with_existing_code
         dispatcher.deny_code_execution(request_id)
         await entry["task"]
 
-        assert node.code_sandbox_code == "print('regenerated')", (
+        assert node.state.code_sandbox_code == "print('regenerated')", (
             "a non-blank prompt must always regenerate, ignoring any existing code"
         )
 
@@ -4308,7 +4321,7 @@ def test_code_sandbox_no_code_extracted_calls_on_success_with_placeholder_and_sk
             "[Sandbox was not executed]",
             "A direct answer, no code tool used.",
         )]
-        assert node.code_sandbox_awaiting_approval is False
+        assert node.state.code_sandbox_awaiting_approval is False
 
     asyncio.run(run())
 
@@ -4335,7 +4348,7 @@ def test_code_sandbox_denied_approval_calls_on_failure_with_the_exact_legacy_mes
         await entry["task"]
 
         assert failures == ["Sandbox run cancelled: execution was not approved."]
-        assert node.code_sandbox_awaiting_approval is False
+        assert node.state.code_sandbox_awaiting_approval is False
         assert code_sandbox_slots(dispatcher) == {}
         assert node.pending_request_id is None
 
@@ -4388,7 +4401,7 @@ def test_code_sandbox_approved_full_success_flow_runs_venv_and_analyzes(monkeypa
         assert code == "print('ok')"
         assert output == "ran: print('ok')"
         assert analysis == "sandbox ran fine"
-        assert node.code_sandbox_awaiting_approval is False
+        assert node.state.code_sandbox_awaiting_approval is False
         assert code_sandbox_slots(dispatcher) == {}
         assert node.pending_request_id is None
 
@@ -4436,7 +4449,11 @@ def test_code_sandbox_repair_loop_requires_a_fresh_approval_for_each_repaired_at
 
     monkeypatch.setattr(agents_module, "VirtualEnvSandbox", _make_sandbox)
 
-    class _CountingNode(SimpleNamespace):
+    # ADR-002 stage 2.5 PR10b: code_sandbox_awaiting_approval now lives on
+    # node.state (see _make_code_sandbox_node's own docstring), so this
+    # wraps the STATE object, not the node itself - mirroring the identical
+    # rewiring already done for pycoder's own gate counter above.
+    class _CountingState(SimpleNamespace):
         def __setattr__(self, name, value):
             if name == "code_sandbox_awaiting_approval" and value is True:
                 self.__dict__["gate_open_count"] = self.__dict__.get("gate_open_count", 0) + 1
@@ -4444,7 +4461,8 @@ def test_code_sandbox_repair_loop_requires_a_fresh_approval_for_each_repaired_at
 
     async def run():
         bus, notifications, dispatcher = _make_code_exec_env()
-        node = _CountingNode(**_make_code_sandbox_node().__dict__, gate_open_count=0)
+        node = _make_code_sandbox_node()
+        node.state = _CountingState(**vars(node.state), gate_open_count=0)
         successes = []
 
         await dispatcher.start_code_sandbox_run(
@@ -4461,7 +4479,7 @@ def test_code_sandbox_repair_loop_requires_a_fresh_approval_for_each_repaired_at
         sandbox = fake_sandbox_holder["sandbox"]
         assert len(sandbox.execute_calls) == 3, "max_attempts=3, matching the existing sandbox behavior"
         assert repair_calls == [1, 1], "2 repairs between the 3 execute attempts"
-        assert node.gate_open_count == 3, (
+        assert node.state.gate_open_count == 3, (
             "ADR-002 P0: one gate for the original code, plus one fresh gate per repaired "
             "variant (2) - repaired code must never run under the original approval"
         )
@@ -4516,7 +4534,7 @@ def test_code_sandbox_repair_gate_denied_stops_immediately_without_further_repai
         request_id, entry = next(iter(code_sandbox_slots(dispatcher).items()))
 
         for _ in range(200):
-            if node.code_sandbox_awaiting_approval:
+            if node.state.code_sandbox_awaiting_approval:
                 break
             await asyncio.sleep(0.005)
         assert dispatcher.approve_code_execution(request_id) is True
@@ -4527,10 +4545,10 @@ def test_code_sandbox_repair_gate_denied_stops_immediately_without_further_repai
             await asyncio.sleep(0.005)
         sandbox = fake_sandbox_holder["sandbox"]
         for _ in range(200):
-            if len(sandbox.execute_calls) >= 1 and node.code_sandbox_awaiting_approval:
+            if len(sandbox.execute_calls) >= 1 and node.state.code_sandbox_awaiting_approval:
                 break
             await asyncio.sleep(0.005)
-        assert node.code_sandbox_awaiting_approval is True, "the repaired variant must open its own gate"
+        assert node.state.code_sandbox_awaiting_approval is True, "the repaired variant must open its own gate"
         assert dispatcher.deny_code_execution(request_id) is True
         await entry["task"]
 
@@ -4538,7 +4556,7 @@ def test_code_sandbox_repair_gate_denied_stops_immediately_without_further_repai
         assert len(sandbox.execute_calls) == 1, (
             "denying the repair gate must prevent the repaired code from ever running"
         )
-        assert node.code_sandbox_awaiting_approval is False
+        assert node.state.code_sandbox_awaiting_approval is False
         assert code_sandbox_slots(dispatcher) == {}
         assert node.pending_request_id is None
 
@@ -4587,10 +4605,10 @@ def test_code_sandbox_execution_blocked_when_approved_fingerprint_does_not_match
         )
         request_id, entry = next(iter(code_sandbox_slots(dispatcher).items()))
         for _ in range(200):
-            if node.code_sandbox_awaiting_approval:
+            if node.state.code_sandbox_awaiting_approval:
                 break
             await asyncio.sleep(0.005)
-        node.code_sandbox_approved_fingerprint = "not-the-real-fingerprint"
+        node.state.code_sandbox_approved_fingerprint = "not-the-real-fingerprint"
         assert dispatcher.approve_code_execution(request_id) is True
         await entry["task"]
 
