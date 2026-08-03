@@ -143,7 +143,7 @@ def test_html_node_field_mapping():
          "position": {"x": 0, "y": 0}, "parent_node_index": 0},
     ])
     node = next(n for n in document.nodes.values() if n.kind == "html")
-    assert node.content == "<h1>Hi</h1>" and node.html_splitter_state == 0.4
+    assert node.content == "<h1>Hi</h1>" and node.state.html_splitter_state == 0.4
 
 
 def test_pycoder_mode_translates_enum_member_name_to_lowercase():

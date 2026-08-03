@@ -6498,10 +6498,10 @@ def test_set_html_splitter_state_accepts_html_kind_and_rejects_others():
     doc = SceneDocument()
     chat_node = doc.add_chat_node(0, 0, "hi", True)
     html_node = doc.add_html_node(0, 0, "<p>hi</p>", chat_node.id)
-    assert html_node.html_splitter_state is None
+    assert html_node.state.html_splitter_state is None
 
     doc.set_html_splitter_state(html_node.id, 0.35)
-    assert html_node.html_splitter_state == 0.35
+    assert html_node.state.html_splitter_state == 0.35
     payload_node = next(n for n in doc.scene_payload()["nodes"] if n["id"] == html_node.id)
     assert payload_node["htmlSplitterState"] == 0.35
 
@@ -6520,7 +6520,7 @@ def test_set_html_splitter_state_intent_mutates_and_publishes_scene():
         recorder.messages.clear()
 
         await bus.dispatch_intent("scene", "setHtmlSplitterState", [html_id, 0.6])
-        assert document.nodes[html_id].html_splitter_state == 0.6
+        assert document.nodes[html_id].state.html_splitter_state == 0.6
         assert recorder.topics_seen().count("scene") == 1
 
         with pytest.raises(Exception):

@@ -257,7 +257,7 @@ def _serialize_html_node(node: SceneNode) -> dict[str, Any]:
     return {
         "node_type": "html",
         "html_content": node.content,
-        "splitter_state": node.html_splitter_state,
+        "splitter_state": node.state.html_splitter_state,
         "conversation_history": _serialize_history(node.history),
         "is_collapsed": bool(node.is_collapsed),
     }

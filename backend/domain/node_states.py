@@ -36,3 +36,14 @@ class ImageState(NodeState):
     itself)."""
 
     image_asset_id: str = ""
+
+
+@dataclass
+class HtmlState(NodeState):
+    """Relocated verbatim from SceneNode.html_splitter_state (former
+    backend/domain/model.py field, R6.3) - an HtmlViewNode's persisted
+    draggable code/preview splitter position. None means "use the
+    frontend's own default", not "0" - a real 0.0 position (fully
+    collapsed to one side) must round-trip distinctly from "never set"."""
+
+    html_splitter_state: float | None = None
