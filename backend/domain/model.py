@@ -186,33 +186,6 @@ class SceneNode:
     # way is_docked is a generic field even though today only one kind
     # populates it); unused (default None) for every other kind.
     pending_request_id: str | None = None
-    # R5.4: the Py-Coder node's real persisted shape - reads a natural-
-    # language ask (ai_driven mode) or hand-typed code (manual mode), runs it
-    # in a persistent REPL subprocess, and reports the AI's analysis of the
-    # result. pending_request_id (generic, above) is reused unchanged as the
-    # busy marker for the ENTIRE span from Run-click through generation,
-    # through the human-approval pause, through execution, through analysis -
-    # same posture as Gitlink's Run/Apply. Unused (default) for every other
-    # kind.
-    pycoder_mode: str = "ai_driven"  # "ai_driven" | "manual"
-    pycoder_prompt: str = ""  # last natural-language ask (ai_driven only)
-    pycoder_code: str = ""  # current/last code - the thing that actually executes
-    pycoder_output: str = ""  # last REPL stdout
-    pycoder_analysis: str = ""  # AI's analysis of the last output
-    pycoder_last_run_failed: bool = False
-    pycoder_awaiting_approval: bool = False
-    # ADR-002 P0: a fingerprint (see graphlink_plugins.gitlink.agent's
-    # _fingerprint_changes, reused here rather than reinvented) of exactly
-    # what the CURRENT pycoder_awaiting_approval gate is asking about -
-    # {"code": pycoder_code}. Set the instant the gate opens (mirrors
-    # gitlink_change_fingerprint's own timing), checked immediately before
-    # the code it covers actually executes (AgentDispatcher.start_pycoder_
-    # run), and cleared everywhere pycoder_awaiting_approval itself is
-    # cleared, so a resolved/denied/superseded approval can never be
-    # replayed. Internal bookkeeping only - EXCLUDED from scene_payload(),
-    # same posture as code_sandbox_sandbox_id.
-    pycoder_approved_fingerprint: str | None = None
-    pycoder_error: str = ""
     # R5.4: the Execution Sandbox node's real persisted shape - runs Python
     # inside an isolated per-node virtualenv (VirtualEnvSandbox, keyed by
     # code_sandbox_sandbox_id) with a per-node requirements.txt manifest.
@@ -465,6 +438,88 @@ class SceneNode:
     @gitlink_error.setter
     def gitlink_error(self, value: str) -> None:
         self.state.gitlink_error = value
+
+    # -- ADR-002 stage 2.5 PR9a: transitional pycoder property shim --------
+    #
+    # PycoderState (backend/domain/node_states.py) now owns all 9 pycoder_*
+    # fields - see that class's own docstring. Same transitional shim as the
+    # gitlink block above: exists ONLY so backend/agents.py and the existing
+    # test suite keep working completely unchanged for the rest of this PR.
+    # Removed in the shim-removal follow-up PR, once every external site is
+    # converted to `.state.pycoder_x` directly and "pycoder" is added to
+    # tests/test_node_state_migration.py's MIGRATED_KIND_FIELDS.
+
+    @property
+    def pycoder_mode(self) -> str:
+        return self.state.pycoder_mode
+
+    @pycoder_mode.setter
+    def pycoder_mode(self, value: str) -> None:
+        self.state.pycoder_mode = value
+
+    @property
+    def pycoder_prompt(self) -> str:
+        return self.state.pycoder_prompt
+
+    @pycoder_prompt.setter
+    def pycoder_prompt(self, value: str) -> None:
+        self.state.pycoder_prompt = value
+
+    @property
+    def pycoder_code(self) -> str:
+        return self.state.pycoder_code
+
+    @pycoder_code.setter
+    def pycoder_code(self, value: str) -> None:
+        self.state.pycoder_code = value
+
+    @property
+    def pycoder_output(self) -> str:
+        return self.state.pycoder_output
+
+    @pycoder_output.setter
+    def pycoder_output(self, value: str) -> None:
+        self.state.pycoder_output = value
+
+    @property
+    def pycoder_analysis(self) -> str:
+        return self.state.pycoder_analysis
+
+    @pycoder_analysis.setter
+    def pycoder_analysis(self, value: str) -> None:
+        self.state.pycoder_analysis = value
+
+    @property
+    def pycoder_last_run_failed(self) -> bool:
+        return self.state.pycoder_last_run_failed
+
+    @pycoder_last_run_failed.setter
+    def pycoder_last_run_failed(self, value: bool) -> None:
+        self.state.pycoder_last_run_failed = value
+
+    @property
+    def pycoder_awaiting_approval(self) -> bool:
+        return self.state.pycoder_awaiting_approval
+
+    @pycoder_awaiting_approval.setter
+    def pycoder_awaiting_approval(self, value: bool) -> None:
+        self.state.pycoder_awaiting_approval = value
+
+    @property
+    def pycoder_approved_fingerprint(self) -> str | None:
+        return self.state.pycoder_approved_fingerprint
+
+    @pycoder_approved_fingerprint.setter
+    def pycoder_approved_fingerprint(self, value: str | None) -> None:
+        self.state.pycoder_approved_fingerprint = value
+
+    @property
+    def pycoder_error(self) -> str:
+        return self.state.pycoder_error
+
+    @pycoder_error.setter
+    def pycoder_error(self, value: str) -> None:
+        self.state.pycoder_error = value
 
 
 @dataclass

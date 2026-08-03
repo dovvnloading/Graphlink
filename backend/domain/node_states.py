@@ -435,6 +435,48 @@ class GitlinkState(NodeState):
 
 
 @dataclass
+class PycoderState(NodeState):
+    """Relocated verbatim from SceneNode's nine pycoder fields (former
+    backend/domain/model.py fields, R5.4) - the Py-Coder node's real
+    persisted shape: reads a natural-language ask (ai_driven mode) or
+    hand-typed code (manual mode), runs it in a persistent REPL
+    subprocess, and reports the AI's analysis of the result.
+    SceneNode's own pending_request_id field (core, not duplicated here)
+    is reused unchanged as the busy marker for the ENTIRE span from
+    Run-click through generation, through the human-approval pause,
+    through execution, through analysis - same posture as Gitlink's
+    Run/Apply.
+
+    - pycoder_mode: "ai_driven" | "manual".
+    - pycoder_prompt: last natural-language ask (ai_driven only).
+    - pycoder_code: current/last code - the thing that actually executes.
+    - pycoder_output: last REPL stdout.
+    - pycoder_analysis: AI's analysis of the last output.
+    - pycoder_approved_fingerprint: ADR-002 P0 - a fingerprint (see
+      graphlink_plugins.gitlink.agent's _fingerprint_changes, reused here
+      rather than reinvented) of exactly what the CURRENT
+      pycoder_awaiting_approval gate is asking about - {"code":
+      pycoder_code}. Set the instant the gate opens (mirrors
+      gitlink_change_fingerprint's own timing), checked immediately
+      before the code it covers actually executes
+      (AgentDispatcher.start_pycoder_run), and cleared everywhere
+      pycoder_awaiting_approval itself is cleared, so a
+      resolved/denied/superseded approval can never be replayed.
+      Internal bookkeeping only - EXCLUDED from scene_payload(), same
+      posture as CodeSandboxState's own sandbox_id."""
+
+    pycoder_mode: str = "ai_driven"
+    pycoder_prompt: str = ""
+    pycoder_code: str = ""
+    pycoder_output: str = ""
+    pycoder_analysis: str = ""
+    pycoder_last_run_failed: bool = False
+    pycoder_awaiting_approval: bool = False
+    pycoder_approved_fingerprint: str | None = None
+    pycoder_error: str = ""
+
+
+@dataclass
 class ChatState(NodeState):
     """Relocated verbatim from SceneNode's eight chat-only fields (former
     backend/domain/model.py fields). SceneNode's own `content` field

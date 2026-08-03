@@ -347,6 +347,20 @@ _EXPECTED_NON_OWNING_KIND_WIRE_DEFAULTS = {
     "gitlinkChangeFingerprint": None,
     "gitlinkChangeState": "draft",
     "gitlinkError": "",
+    # ADR-002 stage 2.5 PR9a: pycoder's 8 wire keys (pycoder_approved_
+    # fingerprint is excluded from scene_payload(), same posture as
+    # gitlink_context_xml), moved onto PycoderState behind the same
+    # transitional property shim as gitlink - "pycoder" is likewise
+    # deliberately NOT yet added to MIGRATED_KIND_FIELDS above, for the
+    # identical AST-gate-can't-tell-shim-from-bare-access reason.
+    "pycoderMode": "ai_driven",
+    "pycoderPrompt": "",
+    "pycoderCode": "",
+    "pycoderOutput": "",
+    "pycoderAnalysis": "",
+    "pycoderLastRunFailed": False,
+    "pycoderAwaitingApproval": False,
+    "pycoderError": "",
 }
 
 

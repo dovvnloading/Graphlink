@@ -96,6 +96,7 @@ from backend.domain.node_states import (
     HtmlState,
     ImageState,
     NoteState,
+    PycoderState,
     WebResearchState,
 )
 
@@ -1067,6 +1068,7 @@ class SceneDocument(BranchOps, GroupOps):
             y=float(y),
             title="Py-Coder",
             kind="pycoder",
+            state=PycoderState(),
         )
         self.nodes[node_id] = node
         self.connect(parent_id, node_id)
@@ -1079,9 +1081,11 @@ class SceneDocument(BranchOps, GroupOps):
         node = self.nodes.get(node_id)
         if node is None:
             raise SceneError(f"unknown node: {node_id}")
+        if node.kind != "pycoder":
+            raise SceneError(f"node is not a pycoder node: {node_id}")
         if mode not in ("ai_driven", "manual"):
             raise SceneError(f"unknown pycoder mode: {mode}")
-        node.pycoder_mode = str(mode)
+        node.state.pycoder_mode = str(mode)
         return node
 
     def start_pycoder_run(self, node_id: str, input_text: str) -> SceneNode:
@@ -1096,11 +1100,11 @@ class SceneDocument(BranchOps, GroupOps):
             raise SceneError(f"unknown node: {node_id}")
         if node.kind != "pycoder":
             raise SceneError(f"node is not a pycoder node: {node_id}")
-        if node.pycoder_mode == "manual":
-            node.pycoder_code = str(input_text)
+        if node.state.pycoder_mode == "manual":
+            node.state.pycoder_code = str(input_text)
         else:
-            node.pycoder_prompt = str(input_text)
-        node.pycoder_error = ""
+            node.state.pycoder_prompt = str(input_text)
+        node.state.pycoder_error = ""
         return node
 
     def complete_pycoder_run(
@@ -1112,17 +1116,21 @@ class SceneDocument(BranchOps, GroupOps):
         definition once a result lands), and any stale error banner is
         cleared. Silent no-op if the node is gone - same posture as
         fail_web_research_run's own liveness handling for a background
-        result landing after deletion."""
+        result landing after deletion. Not kind-guarded: only ever reached
+        via run_pycoder's own on_success closure (backend/api/
+        intents_pycoder.py), whose node_id was already validated by
+        start_pycoder_run's own guard earlier in the same request - same
+        posture as complete_gitlink_run/complete_gitlink_apply."""
         node = self.nodes.get(node_id)
         if node is None:
             return None
-        node.pycoder_code = str(code)
-        node.pycoder_output = str(output)
-        node.pycoder_analysis = str(analysis)
-        node.pycoder_last_run_failed = bool(last_run_failed)
-        node.pycoder_awaiting_approval = False
-        node.pycoder_approved_fingerprint = None
-        node.pycoder_error = ""
+        node.state.pycoder_code = str(code)
+        node.state.pycoder_output = str(output)
+        node.state.pycoder_analysis = str(analysis)
+        node.state.pycoder_last_run_failed = bool(last_run_failed)
+        node.state.pycoder_awaiting_approval = False
+        node.state.pycoder_approved_fingerprint = None
+        node.state.pycoder_error = ""
         return node
 
     def fail_pycoder_run(self, node_id: str, message: str) -> SceneNode | None:
@@ -1132,13 +1140,14 @@ class SceneDocument(BranchOps, GroupOps):
         forever. Deliberately does NOT clear pycoder_code/pycoder_output/
         pycoder_analysis - a failed re-run must never wipe out a previously
         completed result, only the error banner reflects the new failure
-        (stale-while-revalidate, same posture as fail_gitlink_run)."""
+        (stale-while-revalidate, same posture as fail_gitlink_run). Not
+        kind-guarded - see complete_pycoder_run's own comment."""
         node = self.nodes.get(node_id)
         if node is None:
             return None
-        node.pycoder_awaiting_approval = False
-        node.pycoder_approved_fingerprint = None
-        node.pycoder_error = str(message)
+        node.state.pycoder_awaiting_approval = False
+        node.state.pycoder_approved_fingerprint = None
+        node.state.pycoder_error = str(message)
         return node
 
     # -- R5.4: Execution Sandbox node ------------------------------------------
@@ -1800,14 +1809,18 @@ class SceneDocument(BranchOps, GroupOps):
                         n.state.gitlink_change_state if isinstance(n.state, GitlinkState) else "draft"
                     ),
                     "gitlinkError": n.state.gitlink_error if isinstance(n.state, GitlinkState) else "",
-                    "pycoderMode": n.pycoder_mode,
-                    "pycoderPrompt": n.pycoder_prompt,
-                    "pycoderCode": n.pycoder_code,
-                    "pycoderOutput": n.pycoder_output,
-                    "pycoderAnalysis": n.pycoder_analysis,
-                    "pycoderLastRunFailed": n.pycoder_last_run_failed,
-                    "pycoderAwaitingApproval": n.pycoder_awaiting_approval,
-                    "pycoderError": n.pycoder_error,
+                    "pycoderMode": n.state.pycoder_mode if isinstance(n.state, PycoderState) else "ai_driven",
+                    "pycoderPrompt": n.state.pycoder_prompt if isinstance(n.state, PycoderState) else "",
+                    "pycoderCode": n.state.pycoder_code if isinstance(n.state, PycoderState) else "",
+                    "pycoderOutput": n.state.pycoder_output if isinstance(n.state, PycoderState) else "",
+                    "pycoderAnalysis": n.state.pycoder_analysis if isinstance(n.state, PycoderState) else "",
+                    "pycoderLastRunFailed": (
+                        n.state.pycoder_last_run_failed if isinstance(n.state, PycoderState) else False
+                    ),
+                    "pycoderAwaitingApproval": (
+                        n.state.pycoder_awaiting_approval if isinstance(n.state, PycoderState) else False
+                    ),
+                    "pycoderError": n.state.pycoder_error if isinstance(n.state, PycoderState) else "",
                     # codeSandboxSandboxId is DELIBERATELY OMITTED - see the
                     # field's own comment on SceneNode (pure internal
                     # directory-naming key, mirrors gitlink_imported_root's
