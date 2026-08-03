@@ -164,7 +164,7 @@ def test_code_sandbox_field_mapping():
          "position": {"x": 0, "y": 0}, "parent_node_index": 0},
     ])
     node = next(n for n in document.nodes.values() if n.kind == "code_sandbox")
-    assert node.code_sandbox_requirements == "numpy" and node.code_sandbox_sandbox_id == "sbx-1"
+    assert node.state.code_sandbox_requirements == "numpy" and node.state.code_sandbox_sandbox_id == "sbx-1"
 
 
 def test_artifact_node_reuses_instruction_as_content_and_content_as_artifact_content():

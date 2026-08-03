@@ -373,7 +373,7 @@ class AgentDispatcher:
         # start_code_sandbox_run's own asyncio.to_thread-wrapped worker
         # function (exactly like _call_gitlink_agent constructs a fresh
         # GitlinkAgent per call) - the only state that must survive between
-        # runs is the plain string node.code_sandbox_sandbox_id, real
+        # runs is the plain string node.state.code_sandbox_sandbox_id, real
         # SceneNode state, not a live object.
         self._pycoder_repls: dict[str, PythonREPL] = {}
 
@@ -2179,8 +2179,8 @@ class AgentDispatcher:
                     return
 
                 # -- human-approval gate --------------------------------------
-                node.code_sandbox_code = current_code
-                node.code_sandbox_awaiting_approval = True
+                node.state.code_sandbox_code = current_code
+                node.state.code_sandbox_awaiting_approval = True
                 # R5.4 CODESANDBOX FIX (closing the requirements-disclosure
                 # staleness race): freeze the DISCLOSED manifest into its own
                 # snapshot field at the exact same moment the approval gate
@@ -2188,29 +2188,29 @@ class AgentDispatcher:
                 # top of this function, before this function's own
                 # generation-agent await. This introduces no new race: it
                 # only exposes a value already correctly frozen, never
-                # re-reading node.code_sandbox_requirements (the user's
+                # re-reading node.state.code_sandbox_requirements (the user's
                 # still-live, still-editable draft for the NEXT run) at this
-                # point. See SceneNode.code_sandbox_approval_requirements's
-                # own comment for the full race this closes.
-                node.code_sandbox_approval_requirements = manifest
+                # point. See CodeSandboxState.code_sandbox_approval_
+                # requirements's own comment for the full race this closes.
+                node.state.code_sandbox_approval_requirements = manifest
                 # ADR-002 P0: fingerprints exactly what this gate is asking
-                # about - see SceneNode.code_sandbox_approved_fingerprint's
-                # own comment. Frozen from the same already-correct local
-                # `manifest`/`current_code`, at the same moment, for the
-                # same staleness-avoidance reason as the requirements
-                # snapshot right above.
-                node.code_sandbox_approved_fingerprint = _fingerprint_changes(
+                # about - see CodeSandboxState.code_sandbox_approved_
+                # fingerprint's own comment. Frozen from the same
+                # already-correct local `manifest`/`current_code`, at the
+                # same moment, for the same staleness-avoidance reason as the
+                # requirements snapshot right above.
+                node.state.code_sandbox_approved_fingerprint = _fingerprint_changes(
                     {"code": current_code, "manifest": manifest}
                 )
                 await bus.publish("scene")
                 approved = await approval_future
-                node.code_sandbox_awaiting_approval = False
+                node.state.code_sandbox_awaiting_approval = False
                 # Cleared here too, immediately once the approval resolves -
                 # mirrors code_sandbox_awaiting_approval's own clear on this
                 # exact line (and canvas.py's complete_code_sandbox_run/
                 # fail_code_sandbox_run clear it again downstream, redundant
                 # but harmless, for every other path that lands there).
-                node.code_sandbox_approval_requirements = ""
+                node.state.code_sandbox_approval_requirements = ""
 
                 if not approved:
                     on_failure("Sandbox run cancelled: execution was not approved.")
@@ -2242,7 +2242,7 @@ class AgentDispatcher:
                         # reasoning.
                         if _fingerprint_changes(
                             {"code": current_code, "manifest": manifest}
-                        ) != node.code_sandbox_approved_fingerprint:
+                        ) != node.state.code_sandbox_approved_fingerprint:
                             on_failure(
                                 "Sandbox execution blocked: the approved code no longer matches what is about to run."
                             )
@@ -2278,16 +2278,16 @@ class AgentDispatcher:
                             return
                         repair_future: asyncio.Future = asyncio.get_running_loop().create_future()
                         handle.approval_future = repair_future
-                        node.code_sandbox_code = current_code
-                        node.code_sandbox_approval_requirements = manifest
-                        node.code_sandbox_approved_fingerprint = _fingerprint_changes(
+                        node.state.code_sandbox_code = current_code
+                        node.state.code_sandbox_approval_requirements = manifest
+                        node.state.code_sandbox_approved_fingerprint = _fingerprint_changes(
                             {"code": current_code, "manifest": manifest}
                         )
-                        node.code_sandbox_awaiting_approval = True
+                        node.state.code_sandbox_awaiting_approval = True
                         await bus.publish("scene")
                         repair_approved = await repair_future
-                        node.code_sandbox_awaiting_approval = False
-                        node.code_sandbox_approval_requirements = ""
+                        node.state.code_sandbox_awaiting_approval = False
+                        node.state.code_sandbox_approval_requirements = ""
                         if not repair_approved:
                             on_failure("Sandbox run cancelled: repaired code was not approved.")
                             await bus.publish("scene")
