@@ -4318,7 +4318,15 @@ def test_pycoder_ai_driven_repair_loop_exhausts_retries_calls_on_success_with_la
 def test_pycoder_ai_driven_repair_gate_denied_stops_immediately_without_further_repairs(monkeypatch):
     """ADR-002 P0: denying a LATER gate (a repaired variant, not the
     original code) must stop the run with its own distinct message, and must
-    not fall through to yet another repair attempt."""
+    not fall through to yet another repair attempt.
+
+    The `await entry["task"]` below is deliberately bounded (see its own
+    comment): this test's approve-then-deny handshake assumes each gate
+    genuinely blocks, and a mutation-testing audit proved that if the
+    FIRST gate ever stops blocking, the handshake slides out of sync and
+    this test parks forever on a Future nothing will resolve - hanging the
+    whole suite with no output, and masking the 5 other tests that DO
+    correctly catch that same regression."""
     monkeypatch.setattr(
         agents_module.PyCoderExecutionAgent, "get_response",
         lambda self, history, prompt: "[TOOL:PYTHON]\nbroken\n[/TOOL]",
@@ -4356,7 +4364,12 @@ def test_pycoder_ai_driven_repair_gate_denied_stops_immediately_without_further_
             await asyncio.sleep(0.005)
         assert node.state.pycoder_awaiting_approval is True, "the repaired variant must open its own gate"
         assert dispatcher.deny_code_execution(request_id) is True
-        await entry["task"]
+        # Bounded, not a bare await - see this test's own docstring. A
+        # regression that stops the first gate blocking desyncs the
+        # handshake above and leaves this task parked on an unresolvable
+        # Future; without this bound that is an infinite, output-less hang
+        # rather than a clean, located failure.
+        await asyncio.wait_for(entry["task"], timeout=10)
 
         assert failures == ["Py-Coder run cancelled: repaired code was not approved."]
         assert len(fake_repl.calls) == 1, "denying the repair gate must prevent the repaired code from ever running"
