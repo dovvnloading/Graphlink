@@ -186,85 +186,6 @@ class SceneNode:
     # way is_docked is a generic field even though today only one kind
     # populates it); unused (default None) for every other kind.
     pending_request_id: str | None = None
-    # R5.3: the Gitlink node's real persisted shape - reads a GitHub repo (or
-    # a local checkout) into structured XML context, proposes an LLM change
-    # set, and only writes to disk after an explicit, fingerprint-verified
-    # approval. Unused (default) for every other kind.
-    gitlink_repo: str = ""
-    gitlink_branch: str = ""
-    gitlink_scope_mode: str = "selected"
-    gitlink_local_root: str = ""
-    # Mirrors legacy repo_state["imported_root"] - remembers which local path
-    # a prior Import Repo Snapshot produced, so a later run can reuse it
-    # without re-downloading. Server-side bookkeeping ONLY: deliberately
-    # absent from scene_payload()/SceneNodeRow - there is no wire field for
-    # it, nothing on the frontend ever needs to read it directly (gitlink_
-    # local_root is what's shown/edited).
-    gitlink_imported_root: str = ""
-    gitlink_repo_file_paths: list[str] = field(default_factory=list)
-    gitlink_selected_paths: list[str] = field(default_factory=list)
-    gitlink_task_prompt: str = ""
-    # DESIGNED ceiling of 180,000 chars (repository.py's MAX_CONTEXT_CHARS) -
-    # an order of magnitude above this node's other fields' implicit
-    # ceilings. scene_payload() resends every node on roughly 20 undebounced
-    # triggers (see the image_assets comment above) - inlining a 180KB text
-    # blob there would reproduce that exact cost on every unrelated
-    # mutation for the rest of the session. EXCLUDED from scene_payload() on
-    # purpose; served on demand via the read-only fetchGitlinkContext intent
-    # instead (see fetch_gitlink_context_xml below). Deleted automatically
-    # when the node is deleted - no separate eviction bookkeeping needed
-    # (unlike image_assets, this never leaves this dataclass instance).
-    gitlink_context_xml: str = ""
-    # repository.py's build_context_bundle returns a mixed int/str dict
-    # (scanned_files/loaded_files/included_files/load_errors/
-    # context_omissions are ints; source_root/summary are strings) -
-    # store_gitlink_context stringifies every value before assigning here so
-    # the wire field this feeds (scene_payload()'s "gitlinkContextStats") stays
-    # honestly dict[str, str] end to end, matching how graphlink_scene_payload.py's
-    # SceneNodeRow types it for codegen. DEVIATION from a literal-verbatim
-    # forward: unlike R5.1's providerSnapshot (typed dict[str, str] but always
-    # populated as {} at runtime, so the type is never really exercised),
-    # gitlink_context_stats IS genuinely populated with int values at
-    # runtime - forwarding it unmodified would make the generated
-    # validateSceneState() reject every real context-build result. The
-    # str-coercion here is load-bearing, not a defensive formality.
-    gitlink_context_stats: dict[str, str] = field(default_factory=dict)
-    gitlink_context_summary: str = ""
-    # R5.3 post-review FIX 6: a genuine MONOTONIC per-node counter,
-    # incremented unconditionally every time store_gitlink_context lands a
-    # successful Build Context result (see that method below) - unlike
-    # gitlink_context_summary (built purely from aggregate file counts, per
-    # repository.py's build_context_bundle - never from paths/content), this
-    # can never collide. Without this field, two DIFFERENT Build Context
-    # results (e.g. selecting a different single file each time) could
-    # produce an IDENTICAL summary string, tricking the frontend's
-    # lazy-fetch-once guard (keyed on data.gitlinkContextSummary) into
-    # skipping a real refetch and showing stale XML. UNLIKE
-    # gitlink_context_xml/gitlink_change_local_root, this DOES need to be on
-    # the wire (see scene_payload() below) - the frontend reads it to detect
-    # "a new build landed" even when the summary text happens to repeat.
-    gitlink_context_version: int = 0
-    gitlink_proposal_markdown: str = ""
-    gitlink_pending_changes: list[dict[str, Any]] = field(default_factory=list)
-    gitlink_preview_text: str = ""
-    gitlink_change_fingerprint: str | None = None
-    # R5.3 post-review FIX 2: the local_root the approved change set's WRITE
-    # DESTINATION was bound to at Run time (see complete_gitlink_run below).
-    # _fingerprint_changes only hashes file content/paths/operations, never
-    # local_root - deliberately NOT modified, since it is reused verbatim
-    # from gitlink/agent.py, shared with the legacy Qt app. Without this
-    # separate binding, a still-valid fingerprint would let previously-
-    # reviewed content be written into a directory that was never diffed or
-    # shown to the user, if gitlink_local_root changes between Run and
-    # Apply (see start_gitlink_apply's fourth check in backend/agents.py).
-    # Plain internal bookkeeping field, like gitlink_context_xml: NEVER
-    # added to scene_payload()/the codegen dataclass source - the frontend
-    # never reads this directly, only the backend enforces it.
-    gitlink_change_local_root: str | None = None
-    # draft | previewed | applying | applied - see complete_gitlink_run/
-    # fail_gitlink_apply below for the transitions.
-    gitlink_change_state: str = "draft"
-    gitlink_error: str = ""
     # R5.4: the Py-Coder node's real persisted shape - reads a natural-
     # language ask (ai_driven mode) or hand-typed code (manual mode), runs it
     # in a persistent REPL subprocess, and reports the AI's analysis of the
@@ -377,6 +298,173 @@ class SceneNode:
     # has no kind-specific fields at all; otherwise the NodeState subclass
     # matching this node's own kind (e.g. ImageState for kind="image").
     state: NodeState | None = None
+
+    # -- ADR-002 stage 2.5 PR8a: transitional gitlink property shim --------
+    #
+    # GitlinkState (backend/domain/node_states.py) now owns all 19 gitlink_*
+    # fields - see that class's own docstring for what each one means. The
+    # properties below exist ONLY so backend/agents.py, backend/api/
+    # intents_gitlink.py, and the existing test suite keep working completely
+    # unchanged for the rest of this PR; each is a plain, unconditional
+    # delegation to self.state. Safe by construction, not by luck: every real
+    # `node.gitlink_x` call site was swept before this PR and is only ever
+    # reached on a node already established as kind="gitlink" (no getattr/
+    # hasattr-style defensive access anywhere touches these fields). Removed
+    # in the shim-removal follow-up PR, once every external site is converted
+    # to `.state.gitlink_x` directly and "gitlink" is added to
+    # tests/test_node_state_migration.py's MIGRATED_KIND_FIELDS.
+
+    @property
+    def gitlink_repo(self) -> str:
+        return self.state.gitlink_repo
+
+    @gitlink_repo.setter
+    def gitlink_repo(self, value: str) -> None:
+        self.state.gitlink_repo = value
+
+    @property
+    def gitlink_branch(self) -> str:
+        return self.state.gitlink_branch
+
+    @gitlink_branch.setter
+    def gitlink_branch(self, value: str) -> None:
+        self.state.gitlink_branch = value
+
+    @property
+    def gitlink_scope_mode(self) -> str:
+        return self.state.gitlink_scope_mode
+
+    @gitlink_scope_mode.setter
+    def gitlink_scope_mode(self, value: str) -> None:
+        self.state.gitlink_scope_mode = value
+
+    @property
+    def gitlink_local_root(self) -> str:
+        return self.state.gitlink_local_root
+
+    @gitlink_local_root.setter
+    def gitlink_local_root(self, value: str) -> None:
+        self.state.gitlink_local_root = value
+
+    @property
+    def gitlink_imported_root(self) -> str:
+        return self.state.gitlink_imported_root
+
+    @gitlink_imported_root.setter
+    def gitlink_imported_root(self, value: str) -> None:
+        self.state.gitlink_imported_root = value
+
+    @property
+    def gitlink_repo_file_paths(self) -> list[str]:
+        return self.state.gitlink_repo_file_paths
+
+    @gitlink_repo_file_paths.setter
+    def gitlink_repo_file_paths(self, value: list[str]) -> None:
+        self.state.gitlink_repo_file_paths = value
+
+    @property
+    def gitlink_selected_paths(self) -> list[str]:
+        return self.state.gitlink_selected_paths
+
+    @gitlink_selected_paths.setter
+    def gitlink_selected_paths(self, value: list[str]) -> None:
+        self.state.gitlink_selected_paths = value
+
+    @property
+    def gitlink_task_prompt(self) -> str:
+        return self.state.gitlink_task_prompt
+
+    @gitlink_task_prompt.setter
+    def gitlink_task_prompt(self, value: str) -> None:
+        self.state.gitlink_task_prompt = value
+
+    @property
+    def gitlink_context_xml(self) -> str:
+        return self.state.gitlink_context_xml
+
+    @gitlink_context_xml.setter
+    def gitlink_context_xml(self, value: str) -> None:
+        self.state.gitlink_context_xml = value
+
+    @property
+    def gitlink_context_stats(self) -> dict[str, str]:
+        return self.state.gitlink_context_stats
+
+    @gitlink_context_stats.setter
+    def gitlink_context_stats(self, value: dict[str, str]) -> None:
+        self.state.gitlink_context_stats = value
+
+    @property
+    def gitlink_context_summary(self) -> str:
+        return self.state.gitlink_context_summary
+
+    @gitlink_context_summary.setter
+    def gitlink_context_summary(self, value: str) -> None:
+        self.state.gitlink_context_summary = value
+
+    @property
+    def gitlink_context_version(self) -> int:
+        return self.state.gitlink_context_version
+
+    @gitlink_context_version.setter
+    def gitlink_context_version(self, value: int) -> None:
+        self.state.gitlink_context_version = value
+
+    @property
+    def gitlink_proposal_markdown(self) -> str:
+        return self.state.gitlink_proposal_markdown
+
+    @gitlink_proposal_markdown.setter
+    def gitlink_proposal_markdown(self, value: str) -> None:
+        self.state.gitlink_proposal_markdown = value
+
+    @property
+    def gitlink_pending_changes(self) -> list[dict[str, Any]]:
+        return self.state.gitlink_pending_changes
+
+    @gitlink_pending_changes.setter
+    def gitlink_pending_changes(self, value: list[dict[str, Any]]) -> None:
+        self.state.gitlink_pending_changes = value
+
+    @property
+    def gitlink_preview_text(self) -> str:
+        return self.state.gitlink_preview_text
+
+    @gitlink_preview_text.setter
+    def gitlink_preview_text(self, value: str) -> None:
+        self.state.gitlink_preview_text = value
+
+    @property
+    def gitlink_change_fingerprint(self) -> str | None:
+        return self.state.gitlink_change_fingerprint
+
+    @gitlink_change_fingerprint.setter
+    def gitlink_change_fingerprint(self, value: str | None) -> None:
+        self.state.gitlink_change_fingerprint = value
+
+    @property
+    def gitlink_change_local_root(self) -> str | None:
+        return self.state.gitlink_change_local_root
+
+    @gitlink_change_local_root.setter
+    def gitlink_change_local_root(self, value: str | None) -> None:
+        self.state.gitlink_change_local_root = value
+
+    @property
+    def gitlink_change_state(self) -> str:
+        return self.state.gitlink_change_state
+
+    @gitlink_change_state.setter
+    def gitlink_change_state(self, value: str) -> None:
+        self.state.gitlink_change_state = value
+
+    @property
+    def gitlink_error(self) -> str:
+        return self.state.gitlink_error
+
+    @gitlink_error.setter
+    def gitlink_error(self, value: str) -> None:
+        self.state.gitlink_error = value
 
 
 @dataclass

@@ -321,6 +321,32 @@ _EXPECTED_NON_OWNING_KIND_WIRE_DEFAULTS = {
     "isBranchSynthesis": False,
     "synthesisInstructions": "",
     "branchStatus": "active",
+    # ADR-002 stage 2.5 PR8a: gitlink's 16 wire keys, moved onto GitlinkState
+    # behind a transitional property shim (see SceneNode's own comment,
+    # backend/domain/model.py) - "gitlink" is deliberately NOT yet added to
+    # MIGRATED_KIND_FIELDS above (that AST gate can't tell shimmed property
+    # access from bare field access, and would false-positive on every
+    # still-unconverted external call site the shim exists to leave alone
+    # until the shim-removal PR). This dict is independent of that gate -
+    # it checks scene_payload()'s actual runtime VALUES, which are already
+    # fully correct in this PR, so the values are captured here now rather
+    # than deferred alongside MIGRATED_KIND_FIELDS.
+    "gitlinkRepo": "",
+    "gitlinkBranch": "",
+    "gitlinkScopeMode": "selected",
+    "gitlinkLocalRoot": "",
+    "gitlinkRepoFilePaths": [],
+    "gitlinkSelectedPaths": [],
+    "gitlinkTaskPrompt": "",
+    "gitlinkContextStats": {},
+    "gitlinkContextSummary": "",
+    "gitlinkContextVersion": 0,
+    "gitlinkProposalMarkdown": "",
+    "gitlinkPendingChanges": [],
+    "gitlinkPreviewText": "",
+    "gitlinkChangeFingerprint": None,
+    "gitlinkChangeState": "draft",
+    "gitlinkError": "",
 }
 
 

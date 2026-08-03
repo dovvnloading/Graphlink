@@ -71,7 +71,7 @@ def register_gitlink_intents(
         # requiring the user to type a path by hand. A cancelled dialog is
         # a quiet no-op, matching every other pick_folder call site.
         node = document.nodes.get(node_id)
-        if node is None:
+        if node is None or node.kind != "gitlink":
             return
         directory = node.gitlink_local_root or os.path.expanduser("~")
         try:
@@ -87,7 +87,11 @@ def register_gitlink_intents(
 
     async def import_gitlink_snapshot(node_id, repo, branch):
         node = document.nodes.get(node_id)
-        if node is None or node.pending_request_id:
+        if node is None or node.kind != "gitlink":
+            notifications.show("This node no longer exists.", "warning")
+            await bus.publish("notification")
+            return None
+        if node.pending_request_id:
             notifications.show("Gitlink is busy for this node.", "info")
             await bus.publish("notification")
             return None
@@ -102,7 +106,11 @@ def register_gitlink_intents(
 
     async def build_gitlink_context(node_id, scope_mode, selected_paths):
         node = document.nodes.get(node_id)
-        if node is None or node.pending_request_id:
+        if node is None or node.kind != "gitlink":
+            notifications.show("This node no longer exists.", "warning")
+            await bus.publish("notification")
+            return None
+        if node.pending_request_id:
             notifications.show("Gitlink is busy for this node.", "info")
             await bus.publish("notification")
             return None
@@ -171,7 +179,7 @@ def register_gitlink_intents(
 
     async def apply_gitlink_changes(node_id, fingerprint):
         node = document.nodes.get(node_id)
-        if node is None:
+        if node is None or node.kind != "gitlink":
             notifications.show("This node no longer exists.", "warning")
             await bus.publish("notification")
             return None

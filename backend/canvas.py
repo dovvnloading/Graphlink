@@ -90,6 +90,7 @@ from backend.domain.node_states import (
     ChatState,
     CodeState,
     DocumentState,
+    GitlinkState,
     HtmlState,
     ImageState,
     WebResearchState,

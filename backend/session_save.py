@@ -289,22 +289,22 @@ def _serialize_artifact_node(node: SceneNode) -> dict[str, Any]:
 def _serialize_gitlink_node(node: SceneNode) -> dict[str, Any]:
     return {
         "node_type": "gitlink",
-        "task_prompt": node.gitlink_task_prompt,
+        "task_prompt": node.state.gitlink_task_prompt,
         "repo_state": {
-            "repo": node.gitlink_repo,
-            "branch": node.gitlink_branch,
-            "scope_mode": node.gitlink_scope_mode,
-            "local_root": node.gitlink_local_root,
-            "imported_root": node.gitlink_imported_root,
+            "repo": node.state.gitlink_repo,
+            "branch": node.state.gitlink_branch,
+            "scope_mode": node.state.gitlink_scope_mode,
+            "local_root": node.state.gitlink_local_root,
+            "imported_root": node.state.gitlink_imported_root,
         },
-        "repo_file_paths": list(node.gitlink_repo_file_paths),
-        "selected_paths": list(node.gitlink_selected_paths),
-        "context_xml": node.gitlink_context_xml,
-        "context_stats": dict(node.gitlink_context_stats),
+        "repo_file_paths": list(node.state.gitlink_repo_file_paths),
+        "selected_paths": list(node.state.gitlink_selected_paths),
+        "context_xml": node.state.gitlink_context_xml,
+        "context_stats": dict(node.state.gitlink_context_stats),
         # Inverse of R6.4's own proposal_data["files"] -> gitlink_pending_changes
         # unpack.
-        "proposal_data": {"files": list(node.gitlink_pending_changes)},
-        "preview_text": node.gitlink_preview_text,
+        "proposal_data": {"files": list(node.state.gitlink_pending_changes)},
+        "preview_text": node.state.gitlink_preview_text,
         "conversation_history": _serialize_history(node.history),
         "is_collapsed": bool(node.is_collapsed),
     }
