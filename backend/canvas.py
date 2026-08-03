@@ -88,6 +88,7 @@ from backend.domain.model import (
 from backend.domain.node_states import (
     ArtifactState,
     ChatState,
+    CodeSandboxState,
     CodeState,
     DocumentState,
     GitlinkState,

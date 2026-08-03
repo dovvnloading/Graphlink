@@ -187,6 +187,7 @@ from typing import Any
 from backend.canvas import (
     ArtifactState,
     ChatState,
+    CodeSandboxState,
     CodeState,
     DocumentState,
     GitlinkState,
@@ -593,12 +594,14 @@ def _restore_code_sandbox_payload(payload: dict[str, Any]) -> SceneNode:
     x, y = _position(payload)
     return SceneNode(
         id="", x=x, y=y, title="Virtual Environment Runner", kind="code_sandbox",
-        code_sandbox_requirements=str(payload.get("requirements", "")),
-        code_sandbox_prompt=str(payload.get("prompt", "")),
-        code_sandbox_code=str(payload.get("code", "")),
-        code_sandbox_output=str(payload.get("output", "")),
-        code_sandbox_analysis=str(payload.get("analysis", "")),
-        code_sandbox_sandbox_id=str(payload.get("sandbox_id", "")),
+        state=CodeSandboxState(
+            code_sandbox_requirements=str(payload.get("requirements", "")),
+            code_sandbox_prompt=str(payload.get("prompt", "")),
+            code_sandbox_code=str(payload.get("code", "")),
+            code_sandbox_output=str(payload.get("output", "")),
+            code_sandbox_analysis=str(payload.get("analysis", "")),
+            code_sandbox_sandbox_id=str(payload.get("sandbox_id", "")),
+        ),
         history=_restore_history(payload.get("conversation_history")),
         is_collapsed=bool(payload.get("is_collapsed", False)),
     )
