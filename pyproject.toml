@@ -50,6 +50,28 @@ dev = ["pytest", "pytest-env"]
 # before test collection/session start, which is early enough.
 [tool.pytest.ini_options]
 env = ["QT_QPA_PLATFORM=offscreen"]
+# Hang diagnosis. pytest's built-in faulthandler dumps a full traceback of
+# every thread if any single test runs longer than this, naming the exact
+# test and line it is stuck on. Zero new dependencies (stdlib faulthandler,
+# already wired up by pytest itself) - deliberately chosen over adding
+# pytest-timeout, since requirements.txt is a hash-pinned pip-compile
+# lockfile and this gets the diagnosis without touching the dependency set.
+#
+# Added after a real incident: an approval-gate regression (deliberately
+# injected during a mutation-testing audit) made one async test park
+# forever on an asyncio Future that nothing would ever resolve. The suite
+# had no per-test bound, so it hung with zero output - indistinguishable
+# from tooling flakiness, and it burned significant time to diagnose by
+# hand. It also MASKED the real signal: 5 other tests correctly caught
+# that same regression, but their clean failures were never reported
+# because the run never finished.
+#
+# 60s is far above any legitimate test here (the entire suite runs in
+# ~50s; the slowest single test is a few seconds) and far below CI's own
+# 20-minute job timeout, so a real hang now self-identifies long before
+# the job is killed. Note this DUMPS and continues rather than failing the
+# test outright - the goal is turning a silent hang into a located one.
+faulthandler_timeout = 60
 
 [project.gui-scripts]
 # R7.6b: was `graphlink_app:main`, the Qt entry point, deleted at the cutover.
