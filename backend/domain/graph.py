@@ -84,7 +84,7 @@ from backend.domain.model import (
     SceneNode,
     THINKING_TITLE_PREVIEW_LENGTH,
 )
-from backend.domain.node_states import ImageState
+from backend.domain.node_states import HtmlState, ImageState
 
 
 def _estimate_tokens(text: str) -> int:
@@ -455,6 +455,7 @@ class SceneDocument(BranchOps, GroupOps):
             title=title,
             kind="html",
             content=str(html_content),
+            state=HtmlState(),
         )
         self.nodes[node_id] = node
         self.connect(parent_id, node_id)
@@ -470,7 +471,7 @@ class SceneDocument(BranchOps, GroupOps):
             raise SceneError(f"unknown node: {node_id}")
         if node.kind != "html":
             raise SceneError(f"node is not an html node: {node_id}")
-        node.html_splitter_state = float(value)
+        node.state.html_splitter_state = float(value)
 
     def add_image_node(
         self,
@@ -1787,7 +1788,7 @@ class SceneDocument(BranchOps, GroupOps):
                     "chartAspectLocked": n.chart_aspect_locked,
                     "chartSourceNodeId": n.chart_source_node_id,
                     # R6.3: HTML splitter + chat scroll gaps.
-                    "htmlSplitterState": n.html_splitter_state,
+                    "htmlSplitterState": n.state.html_splitter_state if isinstance(n.state, HtmlState) else None,
                     "chatScrollValue": n.chat_scroll_value,
                     # R6.3: null (not []) when content_parts is None - "no
                     # multimodal content" must stay distinguishable from

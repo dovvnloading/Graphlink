@@ -626,16 +626,10 @@ class SceneNode:
     # simplification, not replicated). Unused (default "") for every other
     # kind.
     chart_source_node_id: str = ""
-    # R6.3: HtmlViewNode's persisted draggable code/preview splitter
-    # position - legacy's own splitter_state field, not currently modeled at
-    # all before this increment. None means "use the frontend's own
-    # default", not "0" - a real 0.0 position (fully collapsed to one side)
-    # must round-trip distinctly from "never set". html kind only; unused
-    # (default None) for every other kind.
-    html_splitter_state: float | None = None
     # R6.3: ChatNode's persisted scroll position within its own content
-    # area (legacy's own scroll_value field). Unlike html_splitter_state
-    # above, 0.0 (scrolled to the top) IS the genuine default for a node
+    # area (legacy's own scroll_value field). Unlike HtmlState's own
+    # html_splitter_state (backend/domain/node_states.py, ADR-002 stage
+    # 2.5), 0.0 (scrolled to the top) IS the genuine default for a node
     # that has never been scrolled, so this is a plain float, not an
     # Optional - there is no "unset" state worth distinguishing here. chat
     # kind only; unused (default 0.0) for every other kind.

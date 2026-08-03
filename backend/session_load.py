@@ -185,6 +185,7 @@ import re
 from typing import Any
 
 from backend.canvas import (
+    HtmlState,
     ImageState,
     SceneDocument,
     SceneNode,
@@ -441,7 +442,7 @@ def _restore_html_payload(payload: dict[str, Any]) -> SceneNode:
     return SceneNode(
         id="", x=x, y=y, title="HTML", kind="html",
         content=str(payload.get("html_content", "")),
-        html_splitter_state=payload.get("splitter_state"),
+        state=HtmlState(html_splitter_state=payload.get("splitter_state")),
         history=_restore_history(payload.get("conversation_history")),
         is_collapsed=bool(payload.get("is_collapsed", False)),
     )
