@@ -1370,13 +1370,13 @@ class AgentDispatcher:
                 asyncio.to_thread(
                     _build_gitlink_context_bundle,
                     self._settings_manager,
-                    repo=node.gitlink_repo,
-                    branch=node.gitlink_branch,
+                    repo=node.state.gitlink_repo,
+                    branch=node.state.gitlink_branch,
                     scope_mode=scope_mode,
                     selected_paths=selected_paths,
-                    repo_file_paths=list(node.gitlink_repo_file_paths),
-                    local_root_hint=node.gitlink_local_root,
-                    imported_root_hint=node.gitlink_imported_root,
+                    repo_file_paths=list(node.state.gitlink_repo_file_paths),
+                    local_root_hint=node.state.gitlink_local_root,
+                    imported_root_hint=node.state.gitlink_imported_root,
                 ),
                 timeout=GITLINK_CONTEXT_TIMEOUT_SECONDS,
             )
@@ -1549,8 +1549,8 @@ class AgentDispatcher:
         actually be written happen in the SAME synchronous stretch of this
         coroutine, with ZERO await between them. Python asyncio is
         single-threaded; only an await yields control - so it is IMPOSSIBLE
-        (not merely unlikely) for node.gitlink_pending_changes to be mutated
-        between the recompute and the freeze immediately after it. This is a
+        (not merely unlikely) for node.state.gitlink_pending_changes to be
+        mutated between the recompute and the freeze immediately after it. This is a
         STRONGER guarantee than legacy's own check, because legacy's
         confirmation dialog is a real blocking call that pumps the Qt event
         loop (letting a background thread's finished signal run mid-dialog) -
@@ -1602,7 +1602,7 @@ class AgentDispatcher:
         request_id = handle.request_id
         node.pending_request_id = request_id
 
-        if not node.gitlink_pending_changes:
+        if not node.state.gitlink_pending_changes:
             node.pending_request_id = None
             self._runs.release(request_id)
             on_failure("There is no approved change set to write.")
@@ -1636,10 +1636,10 @@ class AgentDispatcher:
             return
 
         # --- Atomic check-and-freeze: NO await between these statements. ---
-        current_fingerprint = _fingerprint_changes(node.gitlink_pending_changes)
+        current_fingerprint = _fingerprint_changes(node.state.gitlink_pending_changes)
         if (
             client_fingerprint != current_fingerprint
-            or current_fingerprint != node.gitlink_change_fingerprint
+            or current_fingerprint != node.state.gitlink_change_fingerprint
         ):
             node.pending_request_id = None
             self._runs.release(request_id)
@@ -1657,7 +1657,7 @@ class AgentDispatcher:
         # consistent with how local_root_text itself is derived just above
         # and how document.complete_gitlink_run records
         # gitlink_change_local_root.
-        if local_root_text != (node.gitlink_change_local_root or ""):
+        if local_root_text != (node.state.gitlink_change_local_root or ""):
             node.pending_request_id = None
             self._runs.release(request_id)
             on_failure(
@@ -1666,15 +1666,15 @@ class AgentDispatcher:
             )
             await bus.publish("scene")
             return
-        changes_snapshot = [dict(item) for item in node.gitlink_pending_changes]
+        changes_snapshot = [dict(item) for item in node.state.gitlink_pending_changes]
         # --- End atomic section. Everything past this point operates ONLY on
-        # changes_snapshot, never on node.gitlink_pending_changes again. ---
+        # changes_snapshot, never on node.state.gitlink_pending_changes again. ---
 
         # R5.3 post-review FIX 5: request_id was already generated and
         # claimed into node.pending_request_id right after the busy check
         # above - NOT re-generated here. Only the change_state transition and
         # publish happen at this point now.
-        node.gitlink_change_state = "applying"
+        node.state.gitlink_change_state = "applying"
         await bus.publish("scene")
 
         async def _run():
@@ -2891,7 +2891,7 @@ def _build_gitlink_context_bundle(
     files build). This function only resolves the branch via GitHub when a
     snapshot actually needs to be ensured (scope_mode == "full" and no
     local_root) - matching the design spec's own literal parameter passing
-    (`branch_name=node.gitlink_branch`) rather than legacy's more eager
+    (`branch_name=node.state.gitlink_branch`) rather than legacy's more eager
     resolution. A local-root-backed build with a blank branch therefore
     proceeds using an empty branch string (harmless: build_context_bundle
     only reads files from local_root in that case, never from GitHub, and

@@ -88,11 +88,11 @@ def test_gitlink_node_packs_repo_state_and_proposal_data():
     doc = SceneDocument()
     parent = doc.add_chat_node(0, 0, "p", is_user=False)
     node = doc.add_gitlink_node(10, 10, parent.id)
-    node.gitlink_repo = "org/repo"
-    node.gitlink_branch = "main"
-    node.gitlink_scope_mode = "all"
-    node.gitlink_local_root = "/tmp/x"
-    node.gitlink_pending_changes = [{"path": "a.py"}]
+    node.state.gitlink_repo = "org/repo"
+    node.state.gitlink_branch = "main"
+    node.state.gitlink_scope_mode = "all"
+    node.state.gitlink_local_root = "/tmp/x"
+    node.state.gitlink_pending_changes = [{"path": "a.py"}]
     chat_data = build_chat_data(doc)
     payload = next(n for n in chat_data["nodes"] if n["node_type"] == "gitlink")
     assert payload["repo_state"] == {
@@ -363,16 +363,16 @@ def test_round_trip_preserves_gitlink_field_values():
     doc = SceneDocument()
     parent = doc.add_chat_node(0, 0, "p", is_user=False)
     node = doc.add_gitlink_node(10, 10, parent.id)
-    node.gitlink_repo = "org/repo"
-    node.gitlink_branch = "dev"
-    node.gitlink_pending_changes = [{"path": "a.py"}, {"path": "b.py"}]
+    node.state.gitlink_repo = "org/repo"
+    node.state.gitlink_branch = "dev"
+    node.state.gitlink_pending_changes = [{"path": "a.py"}, {"path": "b.py"}]
 
     doc2 = _round_trip(doc)
     node2 = next(n for n in doc2.nodes.values() if n.kind == "gitlink")
-    assert node2.gitlink_repo == "org/repo"
-    assert node2.gitlink_branch == "dev"
-    assert node2.gitlink_pending_changes == [{"path": "a.py"}, {"path": "b.py"}]
-    assert node2.gitlink_change_state == "previewed"
+    assert node2.state.gitlink_repo == "org/repo"
+    assert node2.state.gitlink_branch == "dev"
+    assert node2.state.gitlink_pending_changes == [{"path": "a.py"}, {"path": "b.py"}]
+    assert node2.state.gitlink_change_state == "previewed"
 
 
 # -- ADR-002 Workstream 1: "Branch status and lifecycle" ---------------------

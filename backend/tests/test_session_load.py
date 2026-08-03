@@ -189,11 +189,11 @@ def test_gitlink_node_unpacks_repo_state_and_synthesizes_proposal_markdown():
         },
     ])
     node = next(n for n in document.nodes.values() if n.kind == "gitlink")
-    assert node.gitlink_repo == "org/repo" and node.gitlink_branch == "main"
-    assert node.gitlink_pending_changes == [{"path": "a.py"}, {"path": "b.py"}]
-    assert "a.py" in node.gitlink_proposal_markdown and "b.py" in node.gitlink_proposal_markdown
-    assert node.gitlink_change_state == "previewed"
-    assert node.gitlink_change_fingerprint is None
+    assert node.state.gitlink_repo == "org/repo" and node.state.gitlink_branch == "main"
+    assert node.state.gitlink_pending_changes == [{"path": "a.py"}, {"path": "b.py"}]
+    assert "a.py" in node.state.gitlink_proposal_markdown and "b.py" in node.state.gitlink_proposal_markdown
+    assert node.state.gitlink_change_state == "previewed"
+    assert node.state.gitlink_change_fingerprint is None
 
 
 def test_gitlink_node_with_no_pending_changes_is_draft_state():
@@ -203,7 +203,7 @@ def test_gitlink_node_with_no_pending_changes_is_draft_state():
          "position": {"x": 0, "y": 0}, "parent_node_index": 0},
     ])
     node = next(n for n in document.nodes.values() if n.kind == "gitlink")
-    assert node.gitlink_change_state == "draft"
+    assert node.state.gitlink_change_state == "draft"
 
 
 # -- web research / research_result translation ------------------------------

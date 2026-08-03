@@ -3753,8 +3753,8 @@ def test_add_gitlink_node_creates_child():
     node = doc.add_gitlink_node(10, 20, parent.id)
     assert node.kind == "gitlink"
     assert node.title == "Gitlink"
-    assert node.gitlink_repo == ""
-    assert node.gitlink_change_state == "draft"
+    assert node.state.gitlink_repo == ""
+    assert node.state.gitlink_change_state == "draft"
     assert any(e.source == parent.id and e.target == node.id for e in doc.edges.values())
 
 
@@ -3784,7 +3784,7 @@ def test_set_gitlink_local_root_sets_the_field():
     node = doc.add_gitlink_node(0, 0, parent.id)
     returned = doc.set_gitlink_local_root(node.id, "C:/checkout/repo")
     assert returned is node
-    assert node.gitlink_local_root == "C:/checkout/repo"
+    assert node.state.gitlink_local_root == "C:/checkout/repo"
 
 
 def test_set_gitlink_local_root_unknown_node_raises_scene_error():
@@ -3798,9 +3798,9 @@ def test_store_gitlink_repo_tree():
     node = doc.add_gitlink_node(0, 0, parent.id)
     returned = doc.store_gitlink_repo_tree(node.id, "octocat/hello-world", "main", ["a.py", "b.py"])
     assert returned is node
-    assert node.gitlink_repo == "octocat/hello-world"
-    assert node.gitlink_branch == "main"
-    assert node.gitlink_repo_file_paths == ["a.py", "b.py"]
+    assert node.state.gitlink_repo == "octocat/hello-world"
+    assert node.state.gitlink_branch == "main"
+    assert node.state.gitlink_repo_file_paths == ["a.py", "b.py"]
 
 
 def test_store_gitlink_repo_tree_unknown_node_raises_scene_error():
@@ -3814,10 +3814,10 @@ def test_store_gitlink_snapshot_root_sets_repo_branch_local_root_and_imported_ro
     node = doc.add_gitlink_node(0, 0, parent.id)
     returned = doc.store_gitlink_snapshot_root(node.id, "octocat/hello-world", "main", "C:/tmp/snapshot")
     assert returned is node
-    assert node.gitlink_repo == "octocat/hello-world"
-    assert node.gitlink_branch == "main"
-    assert node.gitlink_local_root == "C:/tmp/snapshot"
-    assert node.gitlink_imported_root == "C:/tmp/snapshot"
+    assert node.state.gitlink_repo == "octocat/hello-world"
+    assert node.state.gitlink_branch == "main"
+    assert node.state.gitlink_local_root == "C:/tmp/snapshot"
+    assert node.state.gitlink_imported_root == "C:/tmp/snapshot"
 
 
 def test_store_gitlink_context_excluded_from_scene_payload():
@@ -3839,7 +3839,7 @@ def test_store_gitlink_context_excluded_from_scene_payload():
         context_summary="Scanned 3 files.",
     )
 
-    assert node.gitlink_context_xml == huge_xml, "the domain object DOES hold the full text"
+    assert node.state.gitlink_context_xml == huge_xml, "the domain object DOES hold the full text"
 
     row = {n["id"]: n for n in doc.scene_payload()["nodes"]}[node.id]
     assert "gitlinkContextXml" not in row
@@ -3875,7 +3875,7 @@ def test_store_gitlink_context_increments_version_even_with_an_identical_summary
     doc = SceneDocument()
     parent = doc.add_node(0, 0, "parent")
     node = doc.add_gitlink_node(0, 0, parent.id)
-    assert node.gitlink_context_version == 0, "a fresh node starts at 0"
+    assert node.state.gitlink_context_version == 0, "a fresh node starts at 0"
 
     doc.store_gitlink_context(
         node.id,
@@ -3885,7 +3885,7 @@ def test_store_gitlink_context_increments_version_even_with_an_identical_summary
         context_stats={"scanned_files": 1, "loaded_files": 1},
         context_summary="Scanned 1 files.",
     )
-    assert node.gitlink_context_version == 1
+    assert node.state.gitlink_context_version == 1
 
     # A second, genuinely DIFFERENT Build Context result (a different single
     # file selected) that happens to produce an IDENTICAL summary string.
@@ -3897,10 +3897,10 @@ def test_store_gitlink_context_increments_version_even_with_an_identical_summary
         context_stats={"scanned_files": 1, "loaded_files": 1},
         context_summary="Scanned 1 files.",
     )
-    assert node.gitlink_context_version == 2, (
+    assert node.state.gitlink_context_version == 2, (
         "the version must increase even when the summary string is identical to the prior build"
     )
-    assert node.gitlink_context_xml == "<gitlink_context>b.py content</gitlink_context>", (
+    assert node.state.gitlink_context_xml == "<gitlink_context>b.py content</gitlink_context>", (
         "the second build's own content must have actually landed"
     )
 
@@ -3933,13 +3933,13 @@ def test_start_gitlink_run_sets_task_prompt_and_clears_error():
     doc = SceneDocument()
     parent = doc.add_node(0, 0, "parent")
     node = doc.add_gitlink_node(0, 0, parent.id)
-    node.gitlink_error = "a previous error"
+    node.state.gitlink_error = "a previous error"
 
     returned = doc.start_gitlink_run(node.id, "add a health check endpoint")
 
     assert returned is node
-    assert node.gitlink_task_prompt == "add a health check endpoint"
-    assert node.gitlink_error == ""
+    assert node.state.gitlink_task_prompt == "add a health check endpoint"
+    assert node.state.gitlink_error == ""
 
 
 def test_start_gitlink_run_unknown_node_raises_scene_error():
@@ -3962,11 +3962,11 @@ def test_complete_gitlink_run_no_changes_stays_draft():
     returned = doc.complete_gitlink_run(node.id, "## Gitlink Proposal\n\nNo changes needed.", [], "", None, "")
 
     assert returned is node
-    assert node.gitlink_proposal_markdown == "## Gitlink Proposal\n\nNo changes needed."
-    assert node.gitlink_pending_changes == []
-    assert node.gitlink_change_state == "draft"
-    assert node.gitlink_change_fingerprint is None
-    assert node.gitlink_change_local_root is None, "an empty proposal must never leave a dangling local_root binding"
+    assert node.state.gitlink_proposal_markdown == "## Gitlink Proposal\n\nNo changes needed."
+    assert node.state.gitlink_pending_changes == []
+    assert node.state.gitlink_change_state == "draft"
+    assert node.state.gitlink_change_fingerprint is None
+    assert node.state.gitlink_change_local_root is None, "an empty proposal must never leave a dangling local_root binding"
 
 
 def test_complete_gitlink_run_with_changes_becomes_previewed_with_fingerprint():
@@ -3980,11 +3980,11 @@ def test_complete_gitlink_run_with_changes_becomes_previewed_with_fingerprint():
     )
 
     assert returned is node
-    assert node.gitlink_pending_changes == changes
-    assert node.gitlink_preview_text == "diff text"
-    assert node.gitlink_change_state == "previewed"
-    assert node.gitlink_change_fingerprint == "abc123fingerprint"
-    assert node.gitlink_change_local_root == "C:/checkout/repo", (
+    assert node.state.gitlink_pending_changes == changes
+    assert node.state.gitlink_preview_text == "diff text"
+    assert node.state.gitlink_change_state == "previewed"
+    assert node.state.gitlink_change_fingerprint == "abc123fingerprint"
+    assert node.state.gitlink_change_local_root == "C:/checkout/repo", (
         "R5.3 post-review FIX 2: the local_root this run used must be bound to the approval"
     )
 
@@ -4001,7 +4001,7 @@ def test_fail_gitlink_run_sets_error_and_is_a_silent_noop_for_a_deleted_node():
 
     returned = doc.fail_gitlink_run(node.id, "Gitlink generation failed: boom")
     assert returned is node
-    assert node.gitlink_error == "Gitlink generation failed: boom"
+    assert node.state.gitlink_error == "Gitlink generation failed: boom"
 
     assert doc.fail_gitlink_run("ghost", "too late") is None
 
@@ -4015,24 +4015,24 @@ def test_fail_gitlink_run_does_not_clear_a_previously_staged_proposal():
 
     doc.fail_gitlink_run(node.id, "a later re-run failed")
 
-    assert node.gitlink_pending_changes == changes, "a failed re-run must not wipe a valid staged proposal"
-    assert node.gitlink_change_state == "previewed"
-    assert node.gitlink_change_fingerprint == "fp1"
-    assert node.gitlink_error == "a later re-run failed"
+    assert node.state.gitlink_pending_changes == changes, "a failed re-run must not wipe a valid staged proposal"
+    assert node.state.gitlink_change_state == "previewed"
+    assert node.state.gitlink_change_fingerprint == "fp1"
+    assert node.state.gitlink_error == "a later re-run failed"
 
 
 def test_complete_gitlink_apply_sets_applied_and_clears_error():
     doc = SceneDocument()
     parent = doc.add_node(0, 0, "parent")
     node = doc.add_gitlink_node(0, 0, parent.id)
-    node.gitlink_change_state = "applying"
-    node.gitlink_error = "stale"
+    node.state.gitlink_change_state = "applying"
+    node.state.gitlink_error = "stale"
 
     returned = doc.complete_gitlink_apply(node.id, 2)
 
     assert returned is node
-    assert node.gitlink_change_state == "applied"
-    assert node.gitlink_error == ""
+    assert node.state.gitlink_change_state == "applied"
+    assert node.state.gitlink_error == ""
 
 
 def test_complete_gitlink_apply_clears_pending_changes_and_fingerprint_to_prevent_replay():
@@ -4046,18 +4046,18 @@ def test_complete_gitlink_apply_clears_pending_changes_and_fingerprint_to_preven
     node = doc.add_gitlink_node(0, 0, parent.id)
     changes = [{"path": "a.py", "operation": "update", "reason": "r", "content": "x"}]
     doc.complete_gitlink_run(node.id, "## Gitlink Proposal", changes, "diff text", "fp1", "C:/checkout")
-    node.gitlink_change_state = "applying"
+    node.state.gitlink_change_state = "applying"
 
     returned = doc.complete_gitlink_apply(node.id, 1)
 
     assert returned is node
-    assert node.gitlink_change_state == "applied"
-    assert node.gitlink_pending_changes == [], "the approval must be cleared so it cannot be replayed"
-    assert node.gitlink_change_fingerprint is None
-    assert node.gitlink_change_local_root is None, "a cleared approval must have no dangling bound fields"
+    assert node.state.gitlink_change_state == "applied"
+    assert node.state.gitlink_pending_changes == [], "the approval must be cleared so it cannot be replayed"
+    assert node.state.gitlink_change_fingerprint is None
+    assert node.state.gitlink_change_local_root is None, "a cleared approval must have no dangling bound fields"
     # Historical record of what was applied - deliberately left untouched.
-    assert node.gitlink_proposal_markdown == "## Gitlink Proposal"
-    assert node.gitlink_preview_text == "diff text"
+    assert node.state.gitlink_proposal_markdown == "## Gitlink Proposal"
+    assert node.state.gitlink_preview_text == "diff text"
 
 
 def test_complete_gitlink_apply_unknown_node_raises_scene_error():
@@ -4071,22 +4071,22 @@ def test_fail_gitlink_apply_reverts_to_previewed_and_clears_fingerprint():
     node = doc.add_gitlink_node(0, 0, parent.id)
     changes = [{"path": "a.py", "operation": "update", "reason": "r", "content": "x"}]
     doc.complete_gitlink_run(node.id, "## Gitlink Proposal", changes, "diff", "fp1", "C:/checkout")
-    node.gitlink_change_state = "applying"
+    node.state.gitlink_change_state = "applying"
 
     returned = doc.fail_gitlink_apply(
         node.id, "The proposed change set changed after approval. Review it again before applying."
     )
 
     assert returned is node
-    assert node.gitlink_change_state == "previewed"
-    assert node.gitlink_change_fingerprint is None, "a stale approval must never be replayable"
-    assert node.gitlink_change_local_root is None, "a cleared approval must have no dangling bound fields"
-    assert node.gitlink_error == (
+    assert node.state.gitlink_change_state == "previewed"
+    assert node.state.gitlink_change_fingerprint is None, "a stale approval must never be replayable"
+    assert node.state.gitlink_change_local_root is None, "a cleared approval must have no dangling bound fields"
+    assert node.state.gitlink_error == (
         "The proposed change set changed after approval. Review it again before applying."
     )
     # pending_changes/proposal_markdown themselves stay put - only the
     # fingerprint is invalidated, so the user can review and re-approve.
-    assert node.gitlink_pending_changes == changes
+    assert node.state.gitlink_pending_changes == changes
 
 
 def test_fail_gitlink_apply_is_a_silent_noop_for_a_deleted_node():
@@ -4133,7 +4133,7 @@ def test_scene_payload_gitlink_pending_changes_is_a_copy_not_the_live_list():
     row = {n["id"]: n for n in doc.scene_payload()["nodes"]}[node.id]
     row["gitlinkPendingChanges"][0]["path"] = "mutated.py"
 
-    assert node.gitlink_pending_changes[0]["path"] == "a.py", (
+    assert node.state.gitlink_pending_changes[0]["path"] == "a.py", (
         "mutating the payload copy must never mutate the live domain state"
     )
 
@@ -4164,7 +4164,7 @@ def test_set_gitlink_local_root_intent_publishes_scene():
 
         await bus.dispatch_intent("scene", "setGitlinkLocalRoot", [node.id, "C:/checkout"])
 
-        assert document.nodes[node.id].gitlink_local_root == "C:/checkout"
+        assert document.nodes[node.id].state.gitlink_local_root == "C:/checkout"
 
     asyncio.run(run())
 
@@ -4185,7 +4185,7 @@ def test_pick_gitlink_local_root_sets_the_field_from_the_picked_folder(monkeypat
 
         await bus.dispatch_intent("scene", "pickGitlinkLocalRoot", [node.id])
 
-        assert document.nodes[node.id].gitlink_local_root == "C:/repos/checkout"
+        assert document.nodes[node.id].state.gitlink_local_root == "C:/repos/checkout"
 
     asyncio.run(run())
 
@@ -4204,7 +4204,7 @@ def test_pick_gitlink_local_root_is_a_no_op_when_cancelled(monkeypatch):
 
         await bus.dispatch_intent("scene", "pickGitlinkLocalRoot", [node.id])
 
-        assert document.nodes[node.id].gitlink_local_root == "C:/original"
+        assert document.nodes[node.id].state.gitlink_local_root == "C:/original"
 
     asyncio.run(run())
 
@@ -4246,7 +4246,7 @@ def test_pick_gitlink_local_root_shows_a_notification_when_the_dialog_itself_rai
 
         await bus.dispatch_intent("scene", "pickGitlinkLocalRoot", [node.id])
 
-        assert document.nodes[node.id].gitlink_local_root == ""
+        assert document.nodes[node.id].state.gitlink_local_root == ""
         assert notifications.visible is True
         assert notifications.msg_type == "error"
         assert recorder.topics_seen().count("notification") >= 1
@@ -4329,7 +4329,7 @@ def test_run_gitlink_change_set_intent_dispatches_with_correct_node_fields():
         result = await bus.dispatch_intent("scene", "runGitlinkChangeSet", [node.id, "add a feature"])
 
         assert result == node.id
-        assert document.nodes[node.id].gitlink_task_prompt == "add a feature"
+        assert document.nodes[node.id].state.gitlink_task_prompt == "add a feature"
         assert len(fake_dispatcher.calls) == 1
         call = fake_dispatcher.calls[0]
         assert call["repo"] == "octocat/hello-world"
@@ -4468,7 +4468,7 @@ def test_two_concurrent_run_gitlink_change_set_calls_for_the_same_node_only_one_
         await entries[0]["task"]
 
         assert call_count["n"] == 1, "only ONE of the two concurrent calls may ever reach the LLM"
-        assert document.nodes[node.id].gitlink_change_state == "previewed"
+        assert document.nodes[node.id].state.gitlink_change_state == "previewed"
         assert gitlink_run_slots(dispatcher) == {}
         assert document.nodes[node.id].pending_request_id is None, (
             "the busy slot must be fully released once the admitted Run finishes"

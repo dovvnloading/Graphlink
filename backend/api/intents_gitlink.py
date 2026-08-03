@@ -73,7 +73,7 @@ def register_gitlink_intents(
         node = document.nodes.get(node_id)
         if node is None or node.kind != "gitlink":
             return
-        directory = node.gitlink_local_root or os.path.expanduser("~")
+        directory = node.state.gitlink_local_root or os.path.expanduser("~")
         try:
             folder = await native_dialogs.pick_folder(directory=directory)
         except Exception as exc:  # noqa: BLE001 - a local folder path, not a credential
@@ -97,7 +97,7 @@ def register_gitlink_intents(
             return None
         result = await agent_dispatcher.import_gitlink_snapshot(
             bus=bus, notifications_state=notifications, node=node, repo=repo, branch=branch,
-            local_root_hint=node.gitlink_local_root, imported_root_hint=node.gitlink_imported_root,
+            local_root_hint=node.state.gitlink_local_root, imported_root_hint=node.state.gitlink_imported_root,
         )
         if result is not None:
             document.store_gitlink_snapshot_root(node_id, *result)
@@ -166,10 +166,10 @@ def register_gitlink_intents(
 
         await agent_dispatcher.start_gitlink_run(
             bus=bus, notifications_state=notifications, node=node, node_id=node_id,
-            repo=node.gitlink_repo, branch=node.gitlink_branch,
-            scope_mode=node.gitlink_scope_mode, task_prompt=task_prompt,
-            context_xml=node.gitlink_context_xml, context_summary=node.gitlink_context_summary,
-            local_root=node.gitlink_local_root,
+            repo=node.state.gitlink_repo, branch=node.state.gitlink_branch,
+            scope_mode=node.state.gitlink_scope_mode, task_prompt=task_prompt,
+            context_xml=node.state.gitlink_context_xml, context_summary=node.state.gitlink_context_summary,
+            local_root=node.state.gitlink_local_root,
             on_success=_on_success, on_failure=_on_failure,
         )
         return node_id
@@ -192,7 +192,7 @@ def register_gitlink_intents(
 
         await agent_dispatcher.start_gitlink_apply(
             bus=bus, notifications_state=notifications, node=node, node_id=node_id,
-            client_fingerprint=fingerprint, local_root=node.gitlink_local_root,
+            client_fingerprint=fingerprint, local_root=node.state.gitlink_local_root,
             on_success=_on_success, on_failure=_on_failure,
         )
         return node_id
@@ -212,5 +212,5 @@ def register_gitlink_intents(
     # dispatcher method it calls. This closes the most obvious
     # content-injection bypass by construction, not by a runtime check: the
     # only content that ever reaches apply_change_set is server-held,
-    # already-normalized node.gitlink_pending_changes.
+    # already-normalized node.state.gitlink_pending_changes.
     bus.register_intent("scene", "applyGitlinkChanges", apply_gitlink_changes)
