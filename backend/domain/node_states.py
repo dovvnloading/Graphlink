@@ -62,3 +62,14 @@ class ArtifactState(NodeState):
     needed."""
 
     artifact_content: str = ""
+
+
+@dataclass
+class CodeState(NodeState):
+    """Relocated verbatim from SceneNode.code/SceneNode.language (former
+    backend/domain/model.py fields, R3.5) - a code-block node's raw text
+    and its declared language label (used for both the title's language
+    prefix and the frontend's syntax-highlighting choice)."""
+
+    code: str = ""
+    language: str = ""

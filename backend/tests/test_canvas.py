@@ -212,8 +212,8 @@ def test_add_code_node_creates_a_real_code_kind_node():
     doc = SceneDocument()
     node = doc.add_code_node(10, 20, "print('hi')", "python")
     assert node.kind == "code"
-    assert node.code == "print('hi')"
-    assert node.language == "python"
+    assert node.state.code == "print('hi')"
+    assert node.state.language == "python"
     assert node.title == "python: print('hi')"
 
 
@@ -1514,7 +1514,7 @@ def test_regenerate_response_replaces_code_child_not_accumulates():
 
         code_nodes = [n for n in document.nodes.values() if n.kind == "code"]
         assert len(code_nodes) == 1, "the old code child must be replaced, not accumulated"
-        assert code_nodes[0].code == "print('two')"
+        assert code_nodes[0].state.code == "print('two')"
 
     asyncio.run(run())
 
@@ -2141,8 +2141,8 @@ def test_add_code_node_intent_creates_a_real_node_and_publishes():
             "scene", "addCodeNode", [0, 0, "def f(): pass", "python"]
         )
         assert document.nodes[node_id].kind == "code"
-        assert document.nodes[node_id].code == "def f(): pass"
-        assert document.nodes[node_id].language == "python"
+        assert document.nodes[node_id].state.code == "def f(): pass"
+        assert document.nodes[node_id].state.language == "python"
         assert recorder.topics_seen().count("scene") == 1, "the mutation publishes"
 
     asyncio.run(run())
@@ -2383,8 +2383,8 @@ def test_send_message_reply_with_code_fence_creates_code_child_and_edge():
         code_nodes = [n for n in document.nodes.values() if n.kind == "code"]
         assert len(code_nodes) == 1
         code_node = code_nodes[0]
-        assert code_node.language == "python"
-        assert code_node.code == "print('hi')"
+        assert code_node.state.language == "python"
+        assert code_node.state.code == "print('hi')"
 
         assert any(
             e.source == assistant_node.id and e.target == code_node.id

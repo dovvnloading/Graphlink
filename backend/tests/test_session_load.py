@@ -71,7 +71,7 @@ def test_code_node_restores_and_connects_when_parent_resolves():
     assert len(document.nodes) == 2
     code_node = next(n for n in document.nodes.values() if n.kind == "code")
     chat_node = next(n for n in document.nodes.values() if n.kind == "chat")
-    assert code_node.code == "print(1)" and code_node.language == "python"
+    assert code_node.state.code == "print(1)" and code_node.state.language == "python"
     assert any(e.source == chat_node.id and e.target == code_node.id for e in document.edges.values())
 
 

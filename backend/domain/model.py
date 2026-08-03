@@ -164,10 +164,6 @@ class SceneNode:
     content: str = ""
     is_user: bool = False
     is_collapsed: bool = False
-    # R3.5: the code node's real persisted shape - unused/defaulted for
-    # every other kind.
-    code: str = ""
-    language: str = ""
     # R3.9 (doc/QT_REMOVAL_PLAN.md): the document node's real persisted shape -
     # graphlink_scene.py's add_document_node()/graphlink_node_document.py's
     # DocumentNode.__init__ attachment metadata (title/content above, plus
