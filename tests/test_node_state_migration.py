@@ -80,6 +80,14 @@ MIGRATED_KIND_FIELDS = {
         "is_user", "chat_scroll_value", "content_parts", "provider", "model",
         "is_branch_synthesis", "synthesis_instructions", "branch_status",
     ],
+    "gitlink": [
+        "gitlink_repo", "gitlink_branch", "gitlink_scope_mode", "gitlink_local_root",
+        "gitlink_imported_root", "gitlink_repo_file_paths", "gitlink_selected_paths",
+        "gitlink_task_prompt", "gitlink_context_xml", "gitlink_context_stats",
+        "gitlink_context_summary", "gitlink_context_version", "gitlink_proposal_markdown",
+        "gitlink_pending_changes", "gitlink_preview_text", "gitlink_change_fingerprint",
+        "gitlink_change_local_root", "gitlink_change_state", "gitlink_error",
+    ],
 }
 
 

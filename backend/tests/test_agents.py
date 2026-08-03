@@ -2742,8 +2742,15 @@ def test_artifact_request_and_web_research_request_run_concurrently(monkeypatch)
 
 
 def _make_gitlink_node(**overrides):
-    defaults = dict(
-        pending_request_id=None,
+    """Duck-types a SceneNode for AgentDispatcher's gitlink methods, which
+    never check isinstance(node, SceneNode) (see this module's own
+    docstring). ADR-002 stage 2.5 PR8b: gitlink_* fields now live on
+    node.state (a nested SimpleNamespace here), matching real SceneNode
+    instances post-shim-removal - node.pending_request_id stays a
+    top-level attribute, matching the real dataclass's own core field.
+    Callers keep passing gitlink_* kwargs flat; this splits them into the
+    nested state automatically, so no call site needs to change shape."""
+    state_defaults = dict(
         gitlink_repo="octocat/hello-world",
         gitlink_branch="main",
         gitlink_scope_mode="selected",
@@ -2763,8 +2770,13 @@ def _make_gitlink_node(**overrides):
         gitlink_change_state="draft",
         gitlink_error="",
     )
-    defaults.update(overrides)
-    return SimpleNamespace(**defaults)
+    node_overrides = {"pending_request_id": None}
+    for key, value in overrides.items():
+        if key in state_defaults:
+            state_defaults[key] = value
+        else:
+            node_overrides[key] = value
+    return SimpleNamespace(state=SimpleNamespace(**state_defaults), **node_overrides)
 
 
 def _make_gitlink_env():
@@ -3025,7 +3037,7 @@ def test_gitlink_apply_rejects_when_pending_changes_mutated_between_generation_a
         fingerprint_for_a = agents_module._fingerprint_changes(changes_a)
         # Simulates a second Run landing (mutating pending_changes) WITHOUT
         # going through complete_gitlink_run's own fingerprint-recording -
-        # node.gitlink_change_fingerprint is left stale, still pointing at A.
+        # node.state.gitlink_change_fingerprint is left stale, still pointing at A.
         node = _make_gitlink_node(
             gitlink_pending_changes=changes_b,
             gitlink_change_fingerprint=fingerprint_for_a,
@@ -3060,13 +3072,13 @@ def test_gitlink_apply_freezes_changes_before_await(monkeypatch, tmp_path):
 
     def mutating_apply_change_set(local_root, pending_changes):
         # Proves the write uses a DISTINCT, already-frozen list/copy - not
-        # node.gitlink_pending_changes itself.
-        assert pending_changes is not node.gitlink_pending_changes
+        # node.state.gitlink_pending_changes itself.
+        assert pending_changes is not node.state.gitlink_pending_changes
         captured["frozen_content"] = pending_changes[0]["content"]
         # Mutate the LIVE node list from inside this patched function, to
         # prove the write still used the original frozen snapshot's content,
         # not whatever the live list is mutated to afterward.
-        node.gitlink_pending_changes[0]["content"] = "mutated-after-freeze"
+        node.state.gitlink_pending_changes[0]["content"] = "mutated-after-freeze"
         return 1
 
     monkeypatch.setattr(agents_module, "apply_change_set", mutating_apply_change_set)
@@ -3087,7 +3099,7 @@ def test_gitlink_apply_freezes_changes_before_await(monkeypatch, tmp_path):
         assert captured["frozen_content"] == "original", (
             "the write must use the frozen snapshot's content, unaffected by the later mutation"
         )
-        assert node.gitlink_pending_changes[0]["content"] == "mutated-after-freeze"
+        assert node.state.gitlink_pending_changes[0]["content"] == "mutated-after-freeze"
 
     asyncio.run(run())
 
@@ -3399,9 +3411,9 @@ def test_gitlink_apply_cannot_be_replayed_after_success(monkeypatch, tmp_path):
         await entry["task"]
 
         assert len(apply_calls) == 1
-        assert node.gitlink_change_state == "applied"
-        assert node.gitlink_pending_changes == [], "the approval must be cleared on success (FIX 1)"
-        assert node.gitlink_change_fingerprint is None, "a consumed approval must never be replayable"
+        assert node.state.gitlink_change_state == "applied"
+        assert node.state.gitlink_pending_changes == [], "the approval must be cleared on success (FIX 1)"
+        assert node.state.gitlink_change_fingerprint is None, "a consumed approval must never be replayable"
         assert node.pending_request_id is None
 
         # Second Apply attempt with the SAME original fingerprint: must be
