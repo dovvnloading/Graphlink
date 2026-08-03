@@ -5414,6 +5414,155 @@ def test_code_sandbox_installs_the_frozen_manifest_not_a_live_edit_made_during_g
     asyncio.run(run())
 
 
+def test_code_sandbox_repair_gate_rediscloses_the_frozen_manifest_not_a_live_edit(monkeypatch):
+    """R5.4 CODESANDBOX FIX, repair-gate coverage: start_code_sandbox_run
+    freezes `manifest` once, but USES it at two separate approval gates -
+    the initial gate (covered by the two sibling tests above) and the
+    repair re-gate, which re-discloses the manifest and re-fingerprints
+    every repaired code variant before it may run (the ADR-002 P0
+    fresh-gate-per-repair fix). The repair gate sits after real awaits
+    (execute_code, the repair agent call), so the same ungated
+    setCodeSandboxRequirements edit can land before it opens - and
+    mutating EITHER of the repair gate's two freeze sites (its
+    `approval_requirements = manifest` re-disclosure, or its
+    `_fingerprint_changes({..., "manifest": manifest})` computation) to a
+    live re-read passed the entire suite silently before this test
+    existed: the sibling tests never reach the repair loop (their
+    execution succeeds on the first attempt, or they deny the initial
+    gate), and the repair-loop tests in test_agents.py run with the live
+    field and the frozen manifest both equal (""), making frozen and live
+    reads indistinguishable there.
+
+    Same threading.Event race as the siblings, but the block is on the
+    REPAIR agent call: generation succeeds instantly with code whose
+    first execution fails, the initial gate is approved with the frozen
+    "numpy" disclosure intact, and the live edit to "requests" lands
+    while the repair agent is provably in flight - after the initial
+    approval resolved (so the initial gate's own freeze cannot mask the
+    result) and before the repair gate opened. The repair gate must then
+    re-disclose "numpy" and fingerprint against "numpy", and the approved
+    repaired code must actually execute (which also proves the loop-top
+    fingerprint re-check compared against the frozen manifest - a live
+    comparison there would blocklist the run instead)."""
+    entered_repair = threading.Event()
+    release_repair = threading.Event()
+
+    monkeypatch.setattr(
+        agents_module.SandboxGenerationAgent, "get_response",
+        lambda self, history, prompt, manifest: "[TOOL:PYTHON]\nbroken\n[/TOOL]",
+    )
+
+    def _blocking_repair(self, code, error, manifest, original_prompt=None):
+        entered_repair.set()
+        release_repair.wait(timeout=5)
+        return "print('repaired')"
+
+    monkeypatch.setattr(agents_module.SandboxRepairAgent, "get_response", _blocking_repair)
+    monkeypatch.setattr(
+        agents_module.PyCoderAnalysisAgent, "get_response",
+        lambda self, original_prompt, code, code_output: "ok",
+    )
+
+    class _RecordingSandbox:
+        def __init__(self, sandbox_id):
+            self.sandbox_id = sandbox_id
+            self.sync_requirements_calls = []
+            self.execute_calls = []
+
+        def ensure_base_environment(self, should_continue, emit_line=None):
+            pass
+
+        def sync_requirements(self, manifest, should_continue, emit_line=None):
+            self.sync_requirements_calls.append(manifest)
+
+        def execute_code(self, code, should_continue, emit_line=None):
+            self.execute_calls.append(code)
+            if len(self.execute_calls) == 1:
+                return "Traceback (most recent call last):\nboom", 1
+            return "ran ok", 0
+
+    sandbox_holder = {}
+
+    def _make_sandbox(sandbox_id):
+        sandbox = _RecordingSandbox(sandbox_id)
+        sandbox_holder["sandbox"] = sandbox
+        return sandbox
+
+    monkeypatch.setattr(agents_module, "VirtualEnvSandbox", _make_sandbox)
+
+    async def run():
+        bus, document, _recorder, dispatcher = make_bus_with_dispatcher()
+        parent = document.add_node(0, 0, "parent")
+        sandbox_node = document.add_code_sandbox_node(0, 0, parent.id)
+
+        await bus.dispatch_intent("scene", "setCodeSandboxRequirements", [sandbox_node.id, "numpy"])
+        await bus.dispatch_intent("scene", "runCodeSandbox", [sandbox_node.id, "do something"])
+        request_id, entry = next(iter(code_sandbox_slots(dispatcher).items()))
+
+        # Initial gate: opens with the frozen disclosure, live field still
+        # untouched - approve it so execution proceeds and fails.
+        for _ in range(200):
+            if sandbox_node.state.code_sandbox_awaiting_approval or entry["task"].done():
+                break
+            await asyncio.sleep(0.005)
+        assert sandbox_node.state.code_sandbox_awaiting_approval is True
+        assert sandbox_node.state.code_sandbox_approval_requirements == "numpy"
+        assert dispatcher.approve_code_execution(request_id) is True
+
+        # The failing first execution sends the run into the repair agent,
+        # which blocks - the repair window.
+        for _ in range(200):
+            if entered_repair.is_set():
+                break
+            await asyncio.sleep(0.005)
+        assert entered_repair.is_set(), "the repair agent call never actually started"
+        assert sandbox_node.state.code_sandbox_awaiting_approval is False, (
+            "the repair gate must not have opened yet - the edit below has to land "
+            "during the repair window, not after the re-disclosure"
+        )
+
+        await bus.dispatch_intent("scene", "setCodeSandboxRequirements", [sandbox_node.id, "requests"])
+        assert sandbox_node.state.code_sandbox_requirements == "requests"
+
+        release_repair.set()
+
+        # Repair gate: must re-disclose and re-fingerprint the FROZEN
+        # manifest, not the live edit made during the repair window.
+        for _ in range(200):
+            if sandbox_node.state.code_sandbox_awaiting_approval or entry["task"].done():
+                break
+            await asyncio.sleep(0.005)
+        assert sandbox_node.state.code_sandbox_awaiting_approval is True, "must be parked on the repair gate"
+        assert sandbox_node.state.code_sandbox_code == "print('repaired')"
+        assert sandbox_node.state.code_sandbox_approval_requirements == "numpy", (
+            "the repair gate's re-disclosure must be the frozen manifest this run "
+            "actually installed and executes under, never a live edit made while "
+            "the repair agent was still in flight"
+        )
+        expected_fingerprint = agents_module._fingerprint_changes(
+            {"code": "print('repaired')", "manifest": "numpy"}
+        )
+        assert sandbox_node.state.code_sandbox_approved_fingerprint == expected_fingerprint, (
+            "the repair gate's fingerprint must be computed from the frozen "
+            "manifest ('numpy'), not the live draft field ('requests')"
+        )
+
+        assert dispatcher.approve_code_execution(request_id) is True
+        await entry["task"]
+
+        sandbox = sandbox_holder["sandbox"]
+        assert sandbox.execute_calls == ["broken", "print('repaired')"], (
+            "the approved repaired code must actually have executed - if the "
+            "loop-top fingerprint re-check had compared against a live re-read "
+            "it would have blocked this approved run instead"
+        )
+        assert sandbox.sync_requirements_calls == ["numpy"]
+        assert sandbox_node.state.code_sandbox_awaiting_approval is False
+        assert sandbox_node.state.code_sandbox_approval_requirements == ""
+
+    asyncio.run(run())
+
+
 # -- R6.1: Notes/Frames/Containers -------------------------------------------
 
 
