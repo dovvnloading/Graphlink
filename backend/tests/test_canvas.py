@@ -3554,7 +3554,7 @@ def test_add_artifact_node_creates_a_real_artifact_kind_node():
     node = doc.add_artifact_node(10, 20, parent.id)
     assert node.kind == "artifact"
     assert node.title == "Artifact"
-    assert node.artifact_content == ""
+    assert node.state.artifact_content == ""
     assert node.history == []
     assert any(e.source == parent.id and e.target == node.id for e in doc.edges.values())
 
@@ -3621,7 +3621,7 @@ def test_complete_artifact_generation_replaces_content_and_appends_assistant_tur
     )
 
     assert returned is node
-    assert node.artifact_content == "# Project Brief\n\nDraft content."
+    assert node.state.artifact_content == "# Project Brief\n\nDraft content."
     assert node.history == [
         {"role": "user", "content": "draft a project brief"},
         {"role": "assistant", "content": "Here's a first draft."},

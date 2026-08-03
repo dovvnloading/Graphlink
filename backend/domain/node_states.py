@@ -47,3 +47,18 @@ class HtmlState(NodeState):
     collapsed to one side) must round-trip distinctly from "never set"."""
 
     html_splitter_state: float | None = None
+
+
+@dataclass
+class ArtifactState(NodeState):
+    """Relocated verbatim from SceneNode.artifact_content (former
+    backend/domain/model.py field, R5.2) - the Artifact/Drafter node's
+    whole-document text. The model returns the WHOLE document every turn
+    (never a diff/patch - see complete_artifact_generation), so this
+    field is bounded by the model's own per-turn output ceiling, not by
+    session length. The turn-by-turn conversation reuses SceneNode's own
+    generic `history` list field (already used by ConversationNode)
+    rather than a second list-typed field here - only this one scalar is
+    needed."""
+
+    artifact_content: str = ""

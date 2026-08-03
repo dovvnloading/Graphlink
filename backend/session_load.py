@@ -185,6 +185,7 @@ import re
 from typing import Any
 
 from backend.canvas import (
+    ArtifactState,
     HtmlState,
     ImageState,
     SceneDocument,
@@ -493,7 +494,7 @@ def _restore_artifact_payload(payload: dict[str, Any]) -> SceneNode:
         # which every other kind already reuses for "the node's primary
         # editable text" - reused the same way here, not left to drop.
         content=str(payload.get("instruction", "")),
-        artifact_content=str(payload.get("content", "")),
+        state=ArtifactState(artifact_content=str(payload.get("content", ""))),
         history=_restore_history(payload.get("conversation_history")),
         is_collapsed=bool(payload.get("is_collapsed", False)),
     )

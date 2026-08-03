@@ -174,7 +174,7 @@ def test_artifact_node_reuses_instruction_as_content_and_content_as_artifact_con
          "position": {"x": 0, "y": 0}, "parent_node_index": 0},
     ])
     node = next(n for n in document.nodes.values() if n.kind == "artifact")
-    assert node.content == "write a poem" and node.artifact_content == "roses are red"
+    assert node.content == "write a poem" and node.state.artifact_content == "roses are red"
 
 
 def test_gitlink_node_unpacks_repo_state_and_synthesizes_proposal_markdown():
