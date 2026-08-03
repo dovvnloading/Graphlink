@@ -519,7 +519,7 @@ def test_execute_plugin_system_prompt_creates_a_note_attached_to_the_branch_root
     assert result is not None
     note = canvas_document.nodes[result]
     assert note.kind == "note"
-    assert note.is_system_prompt is True
+    assert note.state.is_system_prompt is True
     # Positioned above the ROOT (not `mid`), roughly matching legacy's
     # "200px above" placement.
     assert note.x == root.x
@@ -545,7 +545,7 @@ def test_execute_plugin_system_prompt_on_a_rootless_node_attaches_to_itself():
     assert result is not None
     note = canvas_document.nodes[result]
     assert note.kind == "note"
-    assert note.is_system_prompt is True
+    assert note.state.is_system_prompt is True
     assert any(e.source == note.id and e.target == lone.id for e in canvas_document.edges.values())
 
 

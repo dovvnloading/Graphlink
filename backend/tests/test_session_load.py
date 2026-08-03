@@ -294,7 +294,7 @@ def test_notes_restore_position_content_and_flags():
     note = next(iter(document.nodes.values()))
     assert note.kind == "note" and note.content == "sys prompt"
     assert (note.x, note.y) == (12.0, 34.0)
-    assert note.color == "#abcdef" and note.is_system_prompt is True
+    assert note.color == "#abcdef" and note.state.is_system_prompt is True
 
 
 # -- charts ---------------------------------------------------------------
@@ -608,7 +608,7 @@ def test_restore_notes_restores_is_branch_comparison():
          "is_branch_comparison": True},
     ])
     note = next(iter(document.nodes.values()))
-    assert note.is_branch_comparison is True
+    assert note.state.is_branch_comparison is True
 
 
 def test_restore_notes_defaults_is_branch_comparison_to_false_when_absent():
@@ -616,7 +616,7 @@ def test_restore_notes_defaults_is_branch_comparison_to_false_when_absent():
         {"content": "plain", "position": {"x": 0, "y": 0}, "size": {"width": 1, "height": 1}},
     ])
     note = next(iter(document.nodes.values()))
-    assert note.is_branch_comparison is False
+    assert note.state.is_branch_comparison is False
 
 
 def test_restore_translates_a_synthesis_nodes_item_ids_to_the_re_minted_source_ids():

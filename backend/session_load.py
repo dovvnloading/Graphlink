@@ -723,7 +723,7 @@ def _restore_notes(document: SceneDocument, notes_data: list) -> dict[int, str]:
             # way). item_ids is deliberately NOT set here - same
             # not-yet-resolvable-reference reasoning as the chat-kind case;
             # see _restore_branch_provenance_item_ids below.
-            note.is_branch_comparison = bool(note_payload.get("is_branch_comparison", False))
+            note.state.is_branch_comparison = bool(note_payload.get("is_branch_comparison", False))
         except Exception:
             continue
         notes_map[index] = note.id

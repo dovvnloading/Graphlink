@@ -5258,16 +5258,16 @@ def test_add_note_creates_a_note_with_correct_defaults():
     assert note.kind == "note"
     assert note.content == "Add note..."
     assert note.x == 10 and note.y == 20
-    assert note.is_system_prompt is False
-    assert note.is_summary_note is False
+    assert note.state.is_system_prompt is False
+    assert note.state.is_summary_note is False
     assert note.item_ids == []
 
 
 def test_add_note_accepts_system_prompt_and_summary_flags():
     doc = SceneDocument()
     note = doc.add_note(0, 0, is_system_prompt=True, is_summary_note=True)
-    assert note.is_system_prompt is True
-    assert note.is_summary_note is True
+    assert note.state.is_system_prompt is True
+    assert note.state.is_summary_note is True
 
 
 def test_add_note_has_no_parent_requirement():
@@ -6907,7 +6907,7 @@ def test_compare_branches_creates_a_note_linked_to_all_sources(monkeypatch):
         note = document.nodes[note_id]
         assert note.kind == "note"
         assert note.content == "Branch Comparison\n\nAgreements:\n• both agree"
-        assert note.is_branch_comparison is True
+        assert note.state.is_branch_comparison is True
         assert note.item_ids == [first.id, second.id]
         assert note.color == NOTE_AGENT_BODY_COLOR
         assert note.header_color == NOTE_AGENT_HEADER_COLOR

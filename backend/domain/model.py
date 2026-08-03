@@ -255,13 +255,14 @@ class SceneNode:
     model: str | None = None
     # ADR-002 Workstream 1 ("Synthesize Branches"): marks a chat-kind node as
     # the output of the Synthesize Branches agent (as opposed to an ordinary
-    # user/assistant message) - the chat-node equivalent of is_branch_
-    # comparison below, which does the same job for note-kind nodes. A
-    # distinct flag rather than reusing is_branch_comparison: that flag's
-    # own kind-check (mark_branch_comparison_note raises for a non-note
-    # node) would need loosening for no benefit, and the two features
-    # render completely different UI (a badge on a note vs. a badge + the
-    # instructions/provider/model fields below on a chat node).
+    # user/assistant message) - the chat-node equivalent of NoteState's own
+    # is_branch_comparison (backend/domain/node_states.py), which does the
+    # same job for note-kind nodes. A distinct flag rather than reusing
+    # is_branch_comparison: that flag's own kind-check
+    # (mark_branch_comparison_note raises for a non-note node) would need
+    # loosening for no benefit, and the two features render completely
+    # different UI (a badge on a note vs. a badge + the instructions/
+    # provider/model fields below on a chat node).
     is_branch_synthesis: bool = False
     # ADR-002 Workstream 1 ("Synthesize Branches"): the free-text instructions
     # the user typed to steer the synthesis (e.g. "merge the best parts of
@@ -280,8 +281,9 @@ class SceneNode:
     # ever walk chat-kind edges). Deliberately PER-NODE with NO write-time
     # inheritance/cascade to ancestors or descendants - every other
     # status-like flag on this dataclass (is_collapsed, is_docked,
-    # is_branch_synthesis, is_branch_comparison below) is scoped exactly
-    # this way, and there is no materialized "Branch" object anywhere in
+    # is_branch_synthesis) - and NoteState's own is_branch_comparison
+    # (backend/domain/node_states.py) - is scoped exactly this way, and
+    # there is no materialized "Branch" object anywhere in
     # this file to cascade through even if inheritance were wanted (a
     # branch is discovered by walking _branch_parent_edge upward on
     # demand, never stored as a set - see that method's own comment).
@@ -485,20 +487,6 @@ class SceneNode:
     # from its body fill) - None means "derive from color/default", again
     # entirely a frontend rendering decision. Unused for every other kind.
     header_color: str | None = None
-    # note kind only - the legacy system-prompt / summary-note badge flags.
-    # Both default False; unused for every other kind.
-    is_system_prompt: bool = False
-    is_summary_note: bool = False
-    # ADR-002 Workstream 1 ("Compare Branches") - note kind only, a NEW badge
-    # flag alongside the two above, marking a note as the output of the
-    # Compare Branches agent rather than a plain/system-prompt/summary note.
-    # Deliberately NOT is_summary_note: that flag is legacy's own "Group
-    # Summary" concept (an arbitrary multi-select of any node kinds,
-    # summarized - never ported, since it depended on a multi-select model
-    # the app didn't have yet), which is semantically a different feature
-    # from comparing conversation branches specifically. Reusing it here
-    # would make a future real port of Group Summary collide with this one.
-    is_branch_comparison: bool = False
     # frame/container membership: the ids of the member nodes this group
     # currently encloses. In this implementation a node can be a member of
     # AT MOST ONE frame AND AT MOST ONE container simultaneously (never two

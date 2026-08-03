@@ -369,8 +369,8 @@ def _serialize_note(node: SceneNode) -> dict[str, Any]:
         "size": {"width": 220.0, "height": 140.0},
         "color": node.color,
         "header_color": node.header_color,
-        "is_system_prompt": bool(node.is_system_prompt),
-        "is_summary_note": bool(node.is_summary_note),
+        "is_system_prompt": bool(node.state.is_system_prompt),
+        "is_summary_note": bool(node.state.is_summary_note),
         # Note provenance fields (role/source_ids/operation_id/
         # source_revisions/provider_snapshot) - dead even in legacy's own
         # persisted format (no SQL column for them ever existed; see
@@ -385,7 +385,7 @@ def _serialize_note(node: SceneNode) -> dict[str, Any]:
         # source-branch references. Unlike the dead legacy fields above,
         # this is a real, currently-populated field this backend itself
         # introduced - genuinely missing, not deliberately excluded.
-        "is_branch_comparison": bool(node.is_branch_comparison),
+        "is_branch_comparison": bool(node.state.is_branch_comparison),
         "item_ids": list(node.item_ids),
     }
 

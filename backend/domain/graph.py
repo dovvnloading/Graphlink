@@ -84,7 +84,7 @@ from backend.domain.model import (
     SceneNode,
     THINKING_TITLE_PREVIEW_LENGTH,
 )
-from backend.domain.node_states import ArtifactState, CodeState, HtmlState, ImageState
+from backend.domain.node_states import ArtifactState, CodeState, HtmlState, ImageState, NoteState
 
 
 def _estimate_tokens(text: str) -> int:
@@ -1235,8 +1235,10 @@ class SceneDocument(BranchOps, GroupOps):
             title="Note",
             kind="note",
             content="Add note...",
-            is_system_prompt=bool(is_system_prompt),
-            is_summary_note=bool(is_summary_note),
+            state=NoteState(
+                is_system_prompt=bool(is_system_prompt),
+                is_summary_note=bool(is_summary_note),
+            ),
         )
         self.nodes[node_id] = node
         return node
@@ -1768,11 +1770,11 @@ class SceneDocument(BranchOps, GroupOps):
                     # above - see those fields' own comments on SceneNode.
                     "color": n.color,
                     "headerColor": n.header_color,
-                    "isSystemPrompt": n.is_system_prompt,
-                    "isSummaryNote": n.is_summary_note,
+                    "isSystemPrompt": n.state.is_system_prompt if isinstance(n.state, NoteState) else False,
+                    "isSummaryNote": n.state.is_summary_note if isinstance(n.state, NoteState) else False,
                     # ADR-002 Workstream 1 ("Compare Branches") - see
-                    # SceneNode.is_branch_comparison's own comment.
-                    "isBranchComparison": n.is_branch_comparison,
+                    # NoteState's own comment, backend/domain/node_states.py.
+                    "isBranchComparison": n.state.is_branch_comparison if isinstance(n.state, NoteState) else False,
                     "itemIds": list(n.item_ids),
                     "isLocked": n.is_locked,
                     "groupWidth": n.group_width,
