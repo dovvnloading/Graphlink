@@ -76,7 +76,7 @@ def register_pycoder_intents(
 
         await agent_dispatcher.start_pycoder_run(
             bus=bus, notifications_state=notifications, node=node, node_id=node_id,
-            mode=node.pycoder_mode, prompt=node.pycoder_prompt, code=node.pycoder_code,
+            mode=node.state.pycoder_mode, prompt=node.state.pycoder_prompt, code=node.state.pycoder_code,
             conversation_history=branch_history,
             on_success=_on_success, on_failure=_on_failure,
         )

@@ -1882,12 +1882,12 @@ class AgentDispatcher:
                 current_code = code_match.group(1).strip()
 
                 # -- human-approval gate --------------------------------------
-                node.pycoder_code = current_code
-                node.pycoder_approved_fingerprint = _fingerprint_changes({"code": current_code})
-                node.pycoder_awaiting_approval = True
+                node.state.pycoder_code = current_code
+                node.state.pycoder_approved_fingerprint = _fingerprint_changes({"code": current_code})
+                node.state.pycoder_awaiting_approval = True
                 await bus.publish("scene")
                 approved = await approval_future
-                node.pycoder_awaiting_approval = False
+                node.state.pycoder_awaiting_approval = False
 
                 if not approved:
                     on_failure("Py-Coder run cancelled: execution was not approved.")
@@ -1913,7 +1913,7 @@ class AgentDispatcher:
                     # execute call); this exists to fail loudly rather than
                     # silently execute unapproved content if a future change
                     # ever breaks that invariant.
-                    if _fingerprint_changes({"code": current_code}) != node.pycoder_approved_fingerprint:
+                    if _fingerprint_changes({"code": current_code}) != node.state.pycoder_approved_fingerprint:
                         on_failure(
                             "Py-Coder execution blocked: the approved code no longer matches what is about to run."
                         )
@@ -1984,12 +1984,12 @@ class AgentDispatcher:
                             return
                         repair_future: asyncio.Future = asyncio.get_running_loop().create_future()
                         handle.approval_future = repair_future
-                        node.pycoder_code = current_code
-                        node.pycoder_approved_fingerprint = _fingerprint_changes({"code": current_code})
-                        node.pycoder_awaiting_approval = True
+                        node.state.pycoder_code = current_code
+                        node.state.pycoder_approved_fingerprint = _fingerprint_changes({"code": current_code})
+                        node.state.pycoder_awaiting_approval = True
                         await bus.publish("scene")
                         approved = await repair_future
-                        node.pycoder_awaiting_approval = False
+                        node.state.pycoder_awaiting_approval = False
                         if not approved:
                             on_failure("Py-Coder run cancelled: repaired code was not approved.")
                             await bus.publish("scene")

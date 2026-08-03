@@ -3661,8 +3661,15 @@ def test_agents_never_imports_qt():
 
 
 def _make_pycoder_node(**overrides):
-    defaults = dict(
-        pending_request_id=None,
+    """Duck-types a SceneNode for AgentDispatcher's pycoder methods, which
+    never check isinstance(node, SceneNode) (see this module's own
+    docstring). ADR-002 stage 2.5 PR9b: pycoder_* fields now live on
+    node.state (a nested SimpleNamespace here), matching real SceneNode
+    instances post-shim-removal - node.pending_request_id stays a
+    top-level attribute, matching the real dataclass's own core field.
+    Callers keep passing pycoder_* kwargs flat; this splits them into the
+    nested state automatically, so no call site needs to change shape."""
+    state_defaults = dict(
         pycoder_mode="ai_driven",
         pycoder_prompt="",
         pycoder_code="",
@@ -3673,8 +3680,13 @@ def _make_pycoder_node(**overrides):
         pycoder_approved_fingerprint=None,
         pycoder_error="",
     )
-    defaults.update(overrides)
-    return SimpleNamespace(**defaults)
+    node_overrides = {"pending_request_id": None}
+    for key, value in overrides.items():
+        if key in state_defaults:
+            state_defaults[key] = value
+        else:
+            node_overrides[key] = value
+    return SimpleNamespace(state=SimpleNamespace(**state_defaults), **node_overrides)
 
 
 def _make_code_sandbox_node(**overrides):
@@ -3937,7 +3949,7 @@ def test_pycoder_ai_driven_no_code_generated_calls_on_success_with_placeholder_a
             "Here is a direct answer, no code needed.",
             False,
         )]
-        assert node.pycoder_awaiting_approval is False, "no code ever means no approval gate"
+        assert node.state.pycoder_awaiting_approval is False, "no code ever means no approval gate"
 
     asyncio.run(run())
 
@@ -3968,7 +3980,7 @@ def test_pycoder_ai_driven_denied_approval_calls_on_failure_with_the_exact_legac
         await entry["task"]
 
         assert failures == ["Py-Coder run cancelled: execution was not approved."]
-        assert node.pycoder_awaiting_approval is False
+        assert node.state.pycoder_awaiting_approval is False
         assert pycoder_slots(dispatcher) == {}
         assert node.pending_request_id is None
 
@@ -4002,7 +4014,7 @@ def test_pycoder_ai_driven_approved_executes_successfully(monkeypatch):
         await entry["task"]
 
         assert successes == [("print(2)", "2", "the answer is 2", False)]
-        assert node.pycoder_awaiting_approval is False
+        assert node.state.pycoder_awaiting_approval is False
         assert fake_repl.calls == ["print(2)"]
         assert pycoder_slots(dispatcher) == {}
         assert node.pending_request_id is None
@@ -4032,8 +4044,11 @@ def test_pycoder_ai_driven_repair_loop_exhausts_retries_calls_on_success_with_la
     # shared builtin SimpleNamespace type) counts how many times
     # pycoder_awaiting_approval transitions to True, since its final value is
     # always False by the time the run completes and would hide a regression
-    # back to "one gate, reused for every repair".
-    class _CountingNode(SimpleNamespace):
+    # back to "one gate, reused for every repair". ADR-002 stage 2.5 PR9b:
+    # pycoder_awaiting_approval now lives on node.state (see
+    # _make_pycoder_node's own docstring), so this wraps the STATE object,
+    # not the node itself.
+    class _CountingState(SimpleNamespace):
         def __setattr__(self, name, value):
             if name == "pycoder_awaiting_approval" and value is True:
                 self.__dict__["gate_open_count"] = self.__dict__.get("gate_open_count", 0) + 1
@@ -4041,7 +4056,8 @@ def test_pycoder_ai_driven_repair_loop_exhausts_retries_calls_on_success_with_la
 
     async def run():
         bus, notifications, dispatcher = _make_code_exec_env()
-        node = _CountingNode(**_make_pycoder_node(pycoder_mode="ai_driven").__dict__, gate_open_count=0)
+        node = _make_pycoder_node(pycoder_mode="ai_driven")
+        node.state = _CountingState(**vars(node.state), gate_open_count=0)
         successes = []
 
         await dispatcher.start_pycoder_run(
@@ -4059,7 +4075,7 @@ def test_pycoder_ai_driven_repair_loop_exhausts_retries_calls_on_success_with_la
         assert analysis.startswith("**PROCESS FAILED**")
         assert len(fake_repl.calls) == 4, "max_retries=4, matching legacy exactly"
         assert repair_calls == [1, 1, 1], "3 repairs between the 4 execute attempts"
-        assert node.gate_open_count == 4, (
+        assert node.state.gate_open_count == 4, (
             "ADR-002 P0: one gate for the original code, plus one fresh gate per repaired "
             "variant (3) - repaired code must never run under the original approval"
         )
@@ -4096,23 +4112,23 @@ def test_pycoder_ai_driven_repair_gate_denied_stops_immediately_without_further_
 
         # Approve the FIRST gate (the original code) only.
         for _ in range(200):
-            if node.pycoder_awaiting_approval:
+            if node.state.pycoder_awaiting_approval:
                 break
             await asyncio.sleep(0.005)
         assert dispatcher.approve_code_execution(request_id) is True
 
         # Wait for the SECOND gate (the repaired code) to open, then deny it.
         for _ in range(200):
-            if len(fake_repl.calls) >= 1 and node.pycoder_awaiting_approval:
+            if len(fake_repl.calls) >= 1 and node.state.pycoder_awaiting_approval:
                 break
             await asyncio.sleep(0.005)
-        assert node.pycoder_awaiting_approval is True, "the repaired variant must open its own gate"
+        assert node.state.pycoder_awaiting_approval is True, "the repaired variant must open its own gate"
         assert dispatcher.deny_code_execution(request_id) is True
         await entry["task"]
 
         assert failures == ["Py-Coder run cancelled: repaired code was not approved."]
         assert len(fake_repl.calls) == 1, "denying the repair gate must prevent the repaired code from ever running"
-        assert node.pycoder_awaiting_approval is False
+        assert node.state.pycoder_awaiting_approval is False
         assert pycoder_slots(dispatcher) == {}
         assert node.pending_request_id is None
 
@@ -4120,7 +4136,7 @@ def test_pycoder_ai_driven_repair_gate_denied_stops_immediately_without_further_
 
 
 def test_pycoder_execution_blocked_when_approved_fingerprint_does_not_match(monkeypatch):
-    """ADR-002 P0 defense-in-depth: if node.pycoder_approved_fingerprint
+    """ADR-002 P0 defense-in-depth: if node.state.pycoder_approved_fingerprint
     ever disagrees with the code about to execute (simulating a future bug
     that mutates current_code without opening a fresh gate), the run must
     fail loudly instead of silently executing unapproved content."""
@@ -4143,12 +4159,12 @@ def test_pycoder_execution_blocked_when_approved_fingerprint_does_not_match(monk
         )
         request_id, entry = next(iter(pycoder_slots(dispatcher).items()))
         for _ in range(200):
-            if node.pycoder_awaiting_approval:
+            if node.state.pycoder_awaiting_approval:
                 break
             await asyncio.sleep(0.005)
         # Tamper with the fingerprint the way a hypothetical future bug that
         # mutated the code without re-gating would leave it mismatched.
-        node.pycoder_approved_fingerprint = "not-the-real-fingerprint"
+        node.state.pycoder_approved_fingerprint = "not-the-real-fingerprint"
         assert dispatcher.approve_code_execution(request_id) is True
         await entry["task"]
 

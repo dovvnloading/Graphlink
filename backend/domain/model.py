@@ -216,96 +216,15 @@ class SceneNode:
     # matching this node's own kind (e.g. ImageState for kind="image").
     state: NodeState | None = None
 
-    # -- ADR-002 stage 2.5 PR9a: transitional pycoder property shim --------
-    #
-    # PycoderState (backend/domain/node_states.py) now owns all 9 pycoder_*
-    # fields - see that class's own docstring. Same transitional shim as the
-    # gitlink block above: exists ONLY so backend/agents.py and the existing
-    # test suite keep working completely unchanged for the rest of this PR.
-    # Removed in the shim-removal follow-up PR, once every external site is
-    # converted to `.state.pycoder_x` directly and "pycoder" is added to
-    # tests/test_node_state_migration.py's MIGRATED_KIND_FIELDS.
-
-    @property
-    def pycoder_mode(self) -> str:
-        return self.state.pycoder_mode
-
-    @pycoder_mode.setter
-    def pycoder_mode(self, value: str) -> None:
-        self.state.pycoder_mode = value
-
-    @property
-    def pycoder_prompt(self) -> str:
-        return self.state.pycoder_prompt
-
-    @pycoder_prompt.setter
-    def pycoder_prompt(self, value: str) -> None:
-        self.state.pycoder_prompt = value
-
-    @property
-    def pycoder_code(self) -> str:
-        return self.state.pycoder_code
-
-    @pycoder_code.setter
-    def pycoder_code(self, value: str) -> None:
-        self.state.pycoder_code = value
-
-    @property
-    def pycoder_output(self) -> str:
-        return self.state.pycoder_output
-
-    @pycoder_output.setter
-    def pycoder_output(self, value: str) -> None:
-        self.state.pycoder_output = value
-
-    @property
-    def pycoder_analysis(self) -> str:
-        return self.state.pycoder_analysis
-
-    @pycoder_analysis.setter
-    def pycoder_analysis(self, value: str) -> None:
-        self.state.pycoder_analysis = value
-
-    @property
-    def pycoder_last_run_failed(self) -> bool:
-        return self.state.pycoder_last_run_failed
-
-    @pycoder_last_run_failed.setter
-    def pycoder_last_run_failed(self, value: bool) -> None:
-        self.state.pycoder_last_run_failed = value
-
-    @property
-    def pycoder_awaiting_approval(self) -> bool:
-        return self.state.pycoder_awaiting_approval
-
-    @pycoder_awaiting_approval.setter
-    def pycoder_awaiting_approval(self, value: bool) -> None:
-        self.state.pycoder_awaiting_approval = value
-
-    @property
-    def pycoder_approved_fingerprint(self) -> str | None:
-        return self.state.pycoder_approved_fingerprint
-
-    @pycoder_approved_fingerprint.setter
-    def pycoder_approved_fingerprint(self, value: str | None) -> None:
-        self.state.pycoder_approved_fingerprint = value
-
-    @property
-    def pycoder_error(self) -> str:
-        return self.state.pycoder_error
-
-    @pycoder_error.setter
-    def pycoder_error(self, value: str) -> None:
-        self.state.pycoder_error = value
-
     # -- ADR-002 stage 2.5 PR10a: transitional code_sandbox property shim --
     #
     # CodeSandboxState (backend/domain/node_states.py) now owns all 10
     # code_sandbox_* fields - see that class's own docstring. Same
-    # transitional shim as the gitlink/pycoder blocks above: exists ONLY so
+    # transitional shim as gitlink's and pycoder's own (both already removed
+    # in their own shim-removal follow-up PRs, PR8b/PR9b): exists ONLY so
     # backend/agents.py and the existing test suite keep working completely
-    # unchanged for the rest of this PR. Removed in the shim-removal
-    # follow-up PR, once every external site is converted to
+    # unchanged for the rest of this PR. Removed in code_sandbox's own
+    # shim-removal follow-up PR, once every external site is converted to
     # `.state.code_sandbox_x` directly and "code_sandbox" is added to
     # tests/test_node_state_migration.py's MIGRATED_KIND_FIELDS.
 

@@ -78,7 +78,7 @@ def test_pycoder_mode_translates_back_to_uppercase_enum_member_name():
     doc = SceneDocument()
     parent = doc.add_chat_node(0, 0, "p", is_user=False)
     node = doc.add_pycoder_node(10, 10, parent.id)
-    node.pycoder_mode = "manual"
+    node.state.pycoder_mode = "manual"
     chat_data = build_chat_data(doc)
     payload = next(n for n in chat_data["nodes"] if n["node_type"] == "pycoder")
     assert payload["mode"] == "MANUAL"
