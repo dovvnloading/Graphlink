@@ -5191,18 +5191,45 @@ def test_code_sandbox_approval_requirements_snapshot_is_decoupled_from_the_live_
     asyncio.to_thread call to SandboxGenerationAgent). A setCodeSandboxRequirements
     intent - ungated by any busy check - can land during that await window
     and change the LIVE node.state.code_sandbox_requirements field before the
-    approval panel is ever shown. Uses the REAL AgentDispatcher
-    (make_bus_with_dispatcher) driven through the real runCodeSandbox/
-    setCodeSandboxRequirements WS intents, and genuinely parks on the
-    approval gate (same polling idiom as
+    approval panel is ever shown.
+
+    The race genuinely needs to happen DURING that await, not merely before
+    the test asserts the gate is open - an earlier version of this test
+    dispatched the competing edit only after polling for
+    code_sandbox_awaiting_approval, by which point the mocked
+    SandboxGenerationAgent.get_response (an instant, non-yielding lambda)
+    had already returned and the gate had already opened; that version kept
+    passing even with the frozen `manifest` read at agents.py's approval-gate
+    site replaced with a live re-read of node.state.code_sandbox_requirements
+    (i.e. with the R5.4 fix itself reverted), because by the time the
+    competing edit landed there was nothing left to race against. This
+    version blocks get_response on a threading.Event (asyncio.to_thread runs
+    it on a worker thread, so a thread-level primitive, not an asyncio one,
+    is required to signal across it) so the test can observe the generation
+    call is genuinely in flight - i.e. that `manifest` has already been
+    captured from the live field but the approval gate has not yet opened -
+    before dispatching the competing edit, then release it. Uses the REAL
+    AgentDispatcher (make_bus_with_dispatcher) driven through the real
+    runCodeSandbox/setCodeSandboxRequirements WS intents, and genuinely
+    parks on the approval gate (same polling idiom as
     test_remove_nodes_cancels_the_dispatchers_code_sandbox_request_when_deleted_mid_approval_pause
     above), proving node.state.code_sandbox_approval_requirements - the frozen
-    snapshot this pending approval genuinely refers to - stays "numpy" even
-    after a fresh setCodeSandboxRequirements changes the live draft field to
-    "requests"."""
+    snapshot this pending approval genuinely refers to - lands as "numpy"
+    even though the live draft field was changed to "requests" while the
+    generation call was still in flight."""
+    entered_generation = threading.Event()
+    release_generation = threading.Event()
+
+    def _blocking_get_response(self, history, prompt, manifest):
+        entered_generation.set()
+        # Bounded wait, not an unconditional block: if the test's own logic
+        # is wrong and never releases this, the test fails on the assertion
+        # below rather than hanging the suite.
+        release_generation.wait(timeout=5)
+        return "[TOOL:PYTHON]\nprint(1)\n[/TOOL]"
+
     monkeypatch.setattr(
-        agents_module.SandboxGenerationAgent, "get_response",
-        lambda self, history, prompt, manifest: "[TOOL:PYTHON]\nprint(1)\n[/TOOL]",
+        agents_module.SandboxGenerationAgent, "get_response", _blocking_get_response,
     )
 
     async def run():
@@ -5212,29 +5239,67 @@ def test_code_sandbox_approval_requirements_snapshot_is_decoupled_from_the_live_
 
         await bus.dispatch_intent("scene", "setCodeSandboxRequirements", [sandbox_node.id, "numpy"])
 
+        # start_code_sandbox_run schedules the real work as a background
+        # task (agents.py's own self._runs.attach_task(handle,
+        # asyncio.create_task(_run()))) and returns immediately once that
+        # task is created - this await does NOT block until the run
+        # finishes, so control returns here while the worker thread is
+        # about to (or already has) called the blocked get_response.
         await bus.dispatch_intent("scene", "runCodeSandbox", [sandbox_node.id, "do something"])
-        request_id, entry = next(iter(code_sandbox_slots(dispatcher).items()))
 
+        for _ in range(200):
+            if entered_generation.is_set():
+                break
+            await asyncio.sleep(0.005)
+        assert entered_generation.is_set(), (
+            "the generation call never actually started - this test would silently "
+            "pass without exercising the race at all if it did not"
+        )
+        # At this exact point: `manifest` was already captured from the live
+        # field ("numpy") before this call started, but
+        # code_sandbox_approval_requirements has NOT been set yet - the gate
+        # has not opened. This is the real race window.
+        assert sandbox_node.state.code_sandbox_awaiting_approval is False, (
+            "the gate must not have opened yet - otherwise the edit below lands "
+            "after the freeze, not during it, and this test proves nothing"
+        )
+
+        # A fresh live-draft edit arrives WHILE the generation call - and
+        # therefore the freeze window - is still genuinely in flight.
+        await bus.dispatch_intent("scene", "setCodeSandboxRequirements", [sandbox_node.id, "requests"])
+        assert sandbox_node.state.code_sandbox_requirements == "requests"
+
+        # Let the still-blocked generation call return, so the gate can open.
+        release_generation.set()
+
+        request_id, entry = next(iter(code_sandbox_slots(dispatcher).items()))
         for _ in range(200):
             if sandbox_node.state.code_sandbox_awaiting_approval or entry["task"].done():
                 break
             await asyncio.sleep(0.005)
         assert sandbox_node.state.code_sandbox_awaiting_approval is True, "must genuinely be parked on the approval gate"
-        assert sandbox_node.state.code_sandbox_approval_requirements == "numpy", (
-            "the frozen snapshot must be populated the instant the approval gate opens"
-        )
-
-        # A fresh live-draft edit arrives WHILE this approval is still
-        # pending - exactly the real race this fix closes.
-        await bus.dispatch_intent("scene", "setCodeSandboxRequirements", [sandbox_node.id, "requests"])
 
         assert sandbox_node.state.code_sandbox_approval_requirements == "numpy", (
-            "the disclosed approval snapshot must stay the frozen manifest this "
-            "pending approval genuinely refers to, unaffected by a later live edit"
+            "the disclosed approval snapshot must reflect the manifest captured BEFORE "
+            "the generation call started - not the live field's value, which was "
+            "already changed to 'requests' for the entire duration of that call"
         )
         assert sandbox_node.state.code_sandbox_requirements == "requests", (
             "the live draft field must still reflect the user's newest edit, "
             "proving the two fields are genuinely decoupled"
+        )
+        # The approval fingerprint (agents.py's start_code_sandbox_run) is
+        # computed from the SAME frozen `manifest` local as the disclosure
+        # string above, not a live re-read - verify it independently rather
+        # than trusting that it happens to agree, since a prior adversarial
+        # review found this site had only fragile, accidental test coverage
+        # elsewhere (a fixture-default coincidence, not a targeted assertion).
+        expected_fingerprint = agents_module._fingerprint_changes(
+            {"code": sandbox_node.state.code_sandbox_code, "manifest": "numpy"}
+        )
+        assert sandbox_node.state.code_sandbox_approved_fingerprint == expected_fingerprint, (
+            "the approval fingerprint must be computed from the frozen manifest "
+            "('numpy'), not the live draft field ('requests')"
         )
 
         # Deny, so the background task completes cleanly without touching a
@@ -5244,6 +5309,106 @@ def test_code_sandbox_approval_requirements_snapshot_is_decoupled_from_the_live_
         assert sandbox_node.state.code_sandbox_approval_requirements == "", (
             "must be cleared once the approval resolves, mirroring "
             "code_sandbox_awaiting_approval's own clear"
+        )
+
+    asyncio.run(run())
+
+
+def test_code_sandbox_installs_the_frozen_manifest_not_a_live_edit_made_during_generation(monkeypatch):
+    """R5.4 CODESANDBOX FIX, install-site coverage: the disclosure string
+    (code_sandbox_approval_requirements) and the approval fingerprint are
+    not the only places `manifest` (frozen before the one real await in
+    AgentDispatcher.start_code_sandbox_run) must be used instead of a live
+    re-read of node.state.code_sandbox_requirements - the ACTUAL `pip
+    install` argument, passed to sandbox.sync_requirements, is frozen from
+    the exact same local. A previous version of the sibling test above
+    (test_code_sandbox_approval_requirements_snapshot_is_decoupled_from_the_live_draft_field)
+    only ever denied the approval, so it never reached sync_requirements at
+    all; an adversarial review found that mutating sync_requirements's call
+    site to read the live field instead of `manifest` passed the entire
+    suite silently - the sandbox would install whatever the user most
+    recently typed, not what was disclosed and approved. This test uses the
+    identical threading.Event race as that sibling test, but APPROVES
+    instead of denying, and asserts on a fake VirtualEnvSandbox's recorded
+    sync_requirements argument."""
+    entered_generation = threading.Event()
+    release_generation = threading.Event()
+
+    def _blocking_get_response(self, history, prompt, manifest):
+        entered_generation.set()
+        release_generation.wait(timeout=5)
+        return "[TOOL:PYTHON]\nprint(1)\n[/TOOL]"
+
+    monkeypatch.setattr(
+        agents_module.SandboxGenerationAgent, "get_response", _blocking_get_response,
+    )
+    monkeypatch.setattr(
+        agents_module.PyCoderAnalysisAgent, "get_response",
+        lambda self, original_prompt, code, code_output: "ok",
+    )
+
+    class _RecordingSandbox:
+        def __init__(self, sandbox_id):
+            self.sandbox_id = sandbox_id
+            self.sync_requirements_calls = []
+
+        def ensure_base_environment(self, should_continue, emit_line=None):
+            pass
+
+        def sync_requirements(self, manifest, should_continue, emit_line=None):
+            self.sync_requirements_calls.append(manifest)
+
+        def execute_code(self, code, should_continue, emit_line=None):
+            return "ran ok", 0
+
+    sandbox_holder = {}
+
+    def _make_sandbox(sandbox_id):
+        sandbox = _RecordingSandbox(sandbox_id)
+        sandbox_holder["sandbox"] = sandbox
+        return sandbox
+
+    monkeypatch.setattr(agents_module, "VirtualEnvSandbox", _make_sandbox)
+
+    async def run():
+        bus, document, _recorder, dispatcher = make_bus_with_dispatcher()
+        parent = document.add_node(0, 0, "parent")
+        sandbox_node = document.add_code_sandbox_node(0, 0, parent.id)
+
+        await bus.dispatch_intent("scene", "setCodeSandboxRequirements", [sandbox_node.id, "numpy"])
+        await bus.dispatch_intent("scene", "runCodeSandbox", [sandbox_node.id, "do something"])
+
+        for _ in range(200):
+            if entered_generation.is_set():
+                break
+            await asyncio.sleep(0.005)
+        assert entered_generation.is_set(), "the generation call never actually started"
+        assert sandbox_node.state.code_sandbox_awaiting_approval is False
+
+        # The live-draft edit lands while `manifest` is already captured as
+        # "numpy" but before the gate has opened - the exact race window.
+        await bus.dispatch_intent("scene", "setCodeSandboxRequirements", [sandbox_node.id, "requests"])
+        assert sandbox_node.state.code_sandbox_requirements == "requests"
+
+        release_generation.set()
+
+        request_id, entry = next(iter(code_sandbox_slots(dispatcher).items()))
+        for _ in range(200):
+            if sandbox_node.state.code_sandbox_awaiting_approval or entry["task"].done():
+                break
+            await asyncio.sleep(0.005)
+        assert sandbox_node.state.code_sandbox_awaiting_approval is True
+
+        # Approve (not deny) so execution proceeds to sync_requirements.
+        assert dispatcher.approve_code_execution(request_id) is True
+        await entry["task"]
+
+        sandbox = sandbox_holder["sandbox"]
+        assert sandbox.sync_requirements_calls == ["numpy"], (
+            "the sandbox must install the manifest that was frozen and disclosed "
+            "BEFORE the generation call started, never a live edit made while that "
+            "call was still in flight - installing 'requests' here would mean the "
+            "sandbox ran a package set the user never actually approved"
         )
 
     asyncio.run(run())
