@@ -22,9 +22,10 @@ collide with an unrelated attribute on a genuinely different type
 elsewhere in the codebase - see its own comment for exactly which shapes
 and why.
 
-test_scene_node_core_field_count (asserting the final <=15-field core
-exactly) is deferred to the stage's own exit PR, once every kind that has
-kind-specific fields has migrated - see backend/domain/node_states.py's
+test_scene_node_core_field_count is this stage's exit gate: it locks
+SceneNode's dataclass field count at exactly 14 (down from the original
+~95), the value PR10b (code_sandbox shim removal, the last kind with
+per-kind fields) actually reached - see backend/domain/node_states.py's
 own docstring for the full kind list and which 3 kinds need no state class
 at all.
 
@@ -41,9 +42,11 @@ memory.
 from __future__ import annotations
 
 import ast
+from dataclasses import fields as dataclass_fields
 from pathlib import Path
 
 from backend.domain.graph import SceneDocument
+from backend.domain.model import SceneNode
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCAN_DIRS = (REPO_ROOT / "backend", REPO_ROOT / "tests")
@@ -230,6 +233,31 @@ def test_migrated_kind_fields_accessed_only_via_state():
         "ADR-002 stage 2.5: migrated field accessed without going through "
         "node.state:\n" + "\n".join(offenders)
     )
+
+
+# The stage's exit shape: id/x/y/title/kind (identity+position+display),
+# content/is_collapsed/is_docked/history (the few fields still genuinely
+# shared across several kinds, not worth their own 1-field state classes),
+# pending_request_id (generic in-flight marker), color/header_color/
+# item_ids (note/frame/container's shared group fields), and state itself
+# (the per-kind payload). Order matches declaration order in
+# backend/domain/model.py.
+_EXPECTED_SCENE_NODE_CORE_FIELDS = [
+    "id", "x", "y", "title", "kind", "content", "is_collapsed", "is_docked",
+    "history", "pending_request_id", "color", "header_color", "item_ids", "state",
+]
+
+
+def test_scene_node_core_field_count():
+    """ADR-002 stage 2.5 exit gate (backend-only half - see the ADR's own
+    status table for why the wire-payload shrink is a separate, deferred
+    stage): SceneNode's dataclass field count is locked at exactly 14.
+    Asserts the exact field NAME set in order, not just len(...) == 14, so
+    a future PR that swaps one field for a different unrelated one (same
+    count, silently different shape) still fails this gate instead of
+    passing it by coincidence."""
+    actual = [f.name for f in dataclass_fields(SceneNode)]
+    assert actual == _EXPECTED_SCENE_NODE_CORE_FIELDS
 
 
 # Captured from SceneDocument.scene_payload()'s real output pre-migration
