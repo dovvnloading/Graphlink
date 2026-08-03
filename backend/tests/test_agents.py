@@ -3059,6 +3059,75 @@ def test_gitlink_apply_rejects_when_pending_changes_mutated_between_generation_a
     asyncio.run(run())
 
 
+def test_gitlink_apply_rejects_when_client_fingerprint_matches_live_data_but_not_the_originally_approved_one(
+    monkeypatch, tmp_path
+):
+    """Pins the 3-way fingerprint compare's third clause (audit finding G3,
+    doc/adr/AUDIT-2026-08-03-approval-guards-results.md): start_gitlink_apply
+    checks client-claimed vs freshly-recomputed vs originally-approved-and-
+    stored, not just client vs current. This constructs the ONE scenario
+    only the third clause catches: the client's claimed fingerprint agrees
+    with a fresh recompute of the LIVE pending_changes (so the first clause,
+    client-vs-current, passes clean) - but that live data was never actually
+    the thing recorded as approved (node.state.gitlink_change_fingerprint
+    still points at a DIFFERENT, earlier change set). The sibling test above
+    (test_gitlink_apply_rejects_when_pending_changes_mutated_between_
+    generation_and_apply) happens to pass a client_fingerprint that matches
+    the STALE stored value instead of the live data, which only ever
+    exercises the first clause - this is the direct test of the second
+    comparison, which a prior mutation-testing audit found had zero
+    coverage before this test existed."""
+    def raising_apply_change_set(local_root, pending_changes):
+        raise AssertionError(
+            "apply_change_set must never be reached when the live data was never actually approved"
+        )
+
+    monkeypatch.setattr(agents_module, "apply_change_set", raising_apply_change_set)
+
+    async def run():
+        bus, notifications, dispatcher = _make_gitlink_env()
+        changes_a = [{"path": "a.py", "operation": "update", "reason": "r", "content": "x"}]
+        changes_b = [{"path": "b.py", "operation": "update", "reason": "r2", "content": "y"}]
+        fingerprint_for_a = agents_module._fingerprint_changes(changes_a)
+        fingerprint_for_b = agents_module._fingerprint_changes(changes_b)
+        # Live pending_changes is B, and the client's own claim
+        # (fingerprint_for_b) genuinely matches a fresh recompute of that
+        # live data - clause 1 (client vs current) passes clean. But the
+        # STORED fingerprint still points at A, meaning B was never actually
+        # the change set recorded as approved. gitlink_change_local_root is
+        # deliberately set to match local_root_text below, so the SEPARATE
+        # local_root-binding check (a different guard entirely) cannot also
+        # trip and mask which check is actually being exercised here.
+        node = _make_gitlink_node(
+            gitlink_pending_changes=changes_b,
+            gitlink_change_fingerprint=fingerprint_for_a,
+            gitlink_local_root=str(tmp_path),
+            gitlink_change_local_root=str(tmp_path),
+        )
+        failures = []
+
+        await dispatcher.start_gitlink_apply(
+            bus=bus, notifications_state=notifications, node=node, node_id="n1",
+            client_fingerprint=fingerprint_for_b, local_root=str(tmp_path),
+            on_success=lambda written_files: None, on_failure=failures.append,
+        )
+        # The guard must trip SYNCHRONOUSLY, before any background task is
+        # ever created - matching every other rejection test in this file.
+        # If it does not (e.g. a future regression), fall through and await
+        # whatever task WAS scheduled so the failure surfaces as a clean
+        # assertion below, not a dangling unawaited task.
+        entry = next(iter(gitlink_apply_slots(dispatcher).values()), None)
+        if entry is not None:
+            await entry["task"]
+
+        assert failures == [
+            "The proposed change set changed after approval. Review it again before applying."
+        ]
+        assert gitlink_apply_slots(dispatcher) == {}
+
+    asyncio.run(run())
+
+
 def test_gitlink_apply_freezes_changes_before_await(monkeypatch, tmp_path):
     changes = [{"path": "a.py", "operation": "update", "reason": "r", "content": "original"}]
     fingerprint = agents_module._fingerprint_changes(changes)
@@ -3236,6 +3305,59 @@ def test_gitlink_apply_success_calls_on_success_with_written_files_count(monkeyp
         assert notifications.visible is True
         assert notifications.msg_type == "info"
         assert notifications.message == "Applied 3 file changes."
+
+    asyncio.run(run())
+
+
+def test_gitlink_apply_transitions_to_applying_before_the_write_starts(monkeypatch, tmp_path):
+    """Pins the state-machine transition (audit finding G6,
+    doc/adr/AUDIT-2026-08-03-approval-guards-results.md):
+    node.state.gitlink_change_state must already be "applying" by the time
+    the actual write (apply_change_set) is reached, not left at its prior
+    value (here, "draft" - the GitlinkState default, since this node is
+    constructed directly rather than via a real complete_gitlink_run call;
+    a real approved node would be "previewed" instead) while a write is
+    silently in flight. Unlike every other finding in this
+    audit, this field is UI/observability-only - no other check in this
+    file reads gitlink_change_state - so a regression here is a real, if
+    non-security, correctness bug (the frontend would show a stale status
+    while a write is actually happening)."""
+    changes = [{"path": "a.py", "operation": "update", "reason": "r", "content": "x"}]
+    fingerprint = agents_module._fingerprint_changes(changes)
+    node = _make_gitlink_node(
+        gitlink_pending_changes=changes, gitlink_change_fingerprint=fingerprint, gitlink_local_root=str(tmp_path),
+        gitlink_change_local_root=str(tmp_path),
+    )
+    observed_state = []
+
+    def capturing_apply_change_set(local_root, pending_changes):
+        # Called from the worker thread apply_change_set actually runs on
+        # (asyncio.to_thread) - a plain attribute read is safe here under
+        # CPython's GIL, same posture as the fake sandboxes' own call-capture
+        # mocks elsewhere in this file.
+        observed_state.append(node.state.gitlink_change_state)
+        return 1
+
+    monkeypatch.setattr(agents_module, "apply_change_set", capturing_apply_change_set)
+    monkeypatch.setattr(agents_module, "validate_pending_changes", lambda pending_changes: None)
+
+    async def run():
+        bus, notifications, dispatcher = _make_gitlink_env()
+        successes = []
+
+        await dispatcher.start_gitlink_apply(
+            bus=bus, notifications_state=notifications, node=node, node_id="n1",
+            client_fingerprint=fingerprint, local_root=str(tmp_path),
+            on_success=successes.append, on_failure=lambda message: None,
+        )
+        entry = next(iter(gitlink_apply_slots(dispatcher).values()))
+        await entry["task"]
+
+        assert successes == [1]
+        assert observed_state == ["applying"], (
+            'node.state.gitlink_change_state must already be "applying" by the time '
+            "the write actually starts"
+        )
 
     asyncio.run(run())
 
@@ -4000,6 +4122,103 @@ def test_pycoder_ai_driven_denied_approval_calls_on_failure_with_the_exact_legac
     asyncio.run(run())
 
 
+def test_pycoder_ai_driven_gate_discloses_the_current_runs_code_not_a_stale_value(monkeypatch):
+    """Pins the human-approval gate's disclosure integrity (audit finding P1,
+    doc/adr/AUDIT-2026-08-03-approval-guards-results.md): node.state.pycoder_code
+    must reflect the CURRENT run's extracted code the instant the gate opens,
+    before approval is even requested - never a stale value left over from a
+    prior run. Deliberately independent of the fingerprint-based tests (e.g.
+    test_pycoder_execution_blocked_when_approved_fingerprint_does_not_match):
+    the fingerprint binds approval to the internal `current_code` local
+    regardless of what is actually displayed, so a bug that silently stops
+    refreshing the disclosed field would pass every fingerprint check while
+    showing the human stale code to approve - a bait-and-switch on the
+    reviewer, not a code-execution bypass, but a real breach of informed
+    consent, which is the whole point of a human-approval gate."""
+    monkeypatch.setattr(
+        agents_module.PyCoderExecutionAgent, "get_response",
+        lambda self, history, prompt: "[TOOL:PYTHON]\nprint('fresh code')\n[/TOOL]",
+    )
+
+    async def run():
+        bus, notifications, dispatcher = _make_code_exec_env()
+        node = _make_pycoder_node(pycoder_mode="ai_driven")
+        # Simulates exactly the failure mode this test exists to catch: if
+        # the disclosure write at gate-open were ever silently dropped, this
+        # stale value would still be here when the human is asked to approve.
+        node.state.pycoder_code = "print('STALE FROM A PRIOR RUN')"
+
+        await dispatcher.start_pycoder_run(
+            bus=bus, notifications_state=notifications, node=node, node_id="n1",
+            mode="ai_driven", prompt="add 1+1", code="", conversation_history=[],
+            on_success=lambda *a: None, on_failure=lambda m: None,
+        )
+        request_id, entry = next(iter(pycoder_slots(dispatcher).items()))
+
+        for _ in range(200):
+            if node.state.pycoder_awaiting_approval or entry["task"].done():
+                break
+            await asyncio.sleep(0.005)
+        assert node.state.pycoder_awaiting_approval is True, "must genuinely be parked on the approval gate"
+        assert node.state.pycoder_code == "print('fresh code')", (
+            "the disclosed code must be the CURRENT run's extracted code the instant "
+            "the gate opens, not a stale value left over from a prior run"
+        )
+
+        assert dispatcher.deny_code_execution(request_id) is True
+        await entry["task"]
+
+    asyncio.run(run())
+
+
+def test_pycoder_ai_driven_initial_gate_fingerprint_is_computed_over_the_disclosed_code(monkeypatch):
+    """Hardens audit finding P2 (doc/adr/AUDIT-2026-08-03-approval-guards-results.md):
+    the existing fingerprint-mismatch coverage
+    (test_pycoder_execution_blocked_when_approved_fingerprint_does_not_match
+    and its repair-loop siblings) is real but INDIRECT - those tests only
+    catch a wrong-content fingerprint because a SEPARATE guard (the loop-top
+    re-check, a defense-in-depth check independent of the gate-open write
+    this test targets) happens to also depend on the same property and trips
+    first. If that separate re-check were ever weakened in the same change
+    as a bug here, this indirect coverage would silently disappear. This
+    asserts directly, independent of any other guard, that node.state.
+    pycoder_approved_fingerprint is exactly _fingerprint_changes({"code":
+    <the disclosed code>}) the instant the gate opens - never executing any
+    code, so no other check is ever in a position to also catch this."""
+    monkeypatch.setattr(
+        agents_module.PyCoderExecutionAgent, "get_response",
+        lambda self, history, prompt: "[TOOL:PYTHON]\nprint('exact code')\n[/TOOL]",
+    )
+
+    async def run():
+        bus, notifications, dispatcher = _make_code_exec_env()
+        node = _make_pycoder_node(pycoder_mode="ai_driven")
+
+        await dispatcher.start_pycoder_run(
+            bus=bus, notifications_state=notifications, node=node, node_id="n1",
+            mode="ai_driven", prompt="add 1+1", code="", conversation_history=[],
+            on_success=lambda *a: None, on_failure=lambda m: None,
+        )
+        request_id, entry = next(iter(pycoder_slots(dispatcher).items()))
+
+        for _ in range(200):
+            if node.state.pycoder_awaiting_approval or entry["task"].done():
+                break
+            await asyncio.sleep(0.005)
+        assert node.state.pycoder_awaiting_approval is True
+
+        expected_fingerprint = agents_module._fingerprint_changes({"code": node.state.pycoder_code})
+        assert node.state.pycoder_approved_fingerprint == expected_fingerprint, (
+            "the approval fingerprint must be computed directly over the disclosed "
+            "code, independent of any other guard that might happen to also verify this"
+        )
+
+        assert dispatcher.deny_code_execution(request_id) is True
+        await entry["task"]
+
+    asyncio.run(run())
+
+
 def test_pycoder_ai_driven_approved_executes_successfully(monkeypatch):
     monkeypatch.setattr(
         agents_module.PyCoderExecutionAgent, "get_response",
@@ -4144,6 +4363,69 @@ def test_pycoder_ai_driven_repair_gate_denied_stops_immediately_without_further_
         assert node.state.pycoder_awaiting_approval is False
         assert pycoder_slots(dispatcher) == {}
         assert node.pending_request_id is None
+
+    asyncio.run(run())
+
+
+def test_pycoder_ai_driven_repair_gate_discloses_the_repaired_code_not_the_original(monkeypatch):
+    """Pins the repair gate's disclosure integrity (audit finding P4,
+    doc/adr/AUDIT-2026-08-03-approval-guards-results.md): node.state.pycoder_code
+    must be updated to the REPAIRED code the instant the repair gate opens,
+    not left showing the original (pre-repair) code the human already saw at
+    the first gate. Deliberately independent of the fingerprint/fresh-Future
+    tests above (test_pycoder_ai_driven_repair_gate_denied_stops_immediately_
+    without_further_repairs, test_pycoder_ai_driven_repair_loop_exhausts_
+    retries_...): those bind approval to the internal `current_code` local
+    regardless of what is actually displayed, so a bug that stops refreshing
+    the disclosed field at the repair gate would pass every one of them
+    while showing the human the WRONG code to approve - exactly the
+    "approval is not bound to what was shown" gap the ADR-002 P0 security
+    review named explicitly, just at the disclosure layer instead of the
+    execution-binding layer those other tests already cover."""
+    monkeypatch.setattr(
+        agents_module.PyCoderExecutionAgent, "get_response",
+        lambda self, history, prompt: "[TOOL:PYTHON]\nbroken\n[/TOOL]",
+    )
+    monkeypatch.setattr(
+        agents_module.PyCoderRepairAgent, "get_response",
+        lambda self, code, error, is_final_attempt: "print('repaired')",
+    )
+    fake_repl = _FakeRepl(script=[("err", True)])  # every execute() call fails
+    monkeypatch.setattr(AgentDispatcher, "get_pycoder_repl", lambda self, node_id: fake_repl)
+
+    async def run():
+        bus, notifications, dispatcher = _make_code_exec_env()
+        node = _make_pycoder_node(pycoder_mode="ai_driven")
+        failures = []
+
+        await dispatcher.start_pycoder_run(
+            bus=bus, notifications_state=notifications, node=node, node_id="n1",
+            mode="ai_driven", prompt="do something impossible", code="", conversation_history=[],
+            on_success=lambda *a: None, on_failure=failures.append,
+        )
+        request_id, entry = next(iter(pycoder_slots(dispatcher).items()))
+
+        # Approve the FIRST gate (the original "broken" code) only.
+        for _ in range(200):
+            if node.state.pycoder_awaiting_approval:
+                break
+            await asyncio.sleep(0.005)
+        assert node.state.pycoder_code == "broken"
+        assert dispatcher.approve_code_execution(request_id) is True
+
+        # Wait for the SECOND gate (the repaired code) to open.
+        for _ in range(200):
+            if len(fake_repl.calls) >= 1 and node.state.pycoder_awaiting_approval:
+                break
+            await asyncio.sleep(0.005)
+        assert node.state.pycoder_awaiting_approval is True, "the repaired variant must open its own gate"
+        assert node.state.pycoder_code == "print('repaired')", (
+            "the repair gate's disclosure must show the REPAIRED code, not the "
+            "original (already-seen) code from the first gate"
+        )
+
+        assert dispatcher.deny_code_execution(request_id) is True
+        await entry["task"]
 
     asyncio.run(run())
 
