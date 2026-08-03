@@ -316,15 +316,6 @@ class SceneNode:
     # answer stays visible until this run replaces it on success, or
     # fails/cancels (leaving the stale result annotated by research_error).
     research_result: dict[str, Any] | None = None
-    # R5.2: the Artifact/Drafter node's real persisted shape - the model
-    # returns the WHOLE document every turn (whole-document replace, never a
-    # diff/patch - see complete_artifact_generation), so this field is
-    # bounded by the model's own per-turn output ceiling, not by session
-    # length. The turn-by-turn conversation reuses the existing generic
-    # `history` list field above (already used by ConversationNode) rather
-    # than a new list-typed field - only this one new scalar is needed.
-    # Unused (default) for every other kind.
-    artifact_content: str = ""
     # R5.3: the Gitlink node's real persisted shape - reads a GitHub repo (or
     # a local checkout) into structured XML context, proposes an LLM change
     # set, and only writes to disk after an explicit, fingerprint-verified

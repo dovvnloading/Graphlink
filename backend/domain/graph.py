@@ -84,7 +84,7 @@ from backend.domain.model import (
     SceneNode,
     THINKING_TITLE_PREVIEW_LENGTH,
 )
-from backend.domain.node_states import HtmlState, ImageState
+from backend.domain.node_states import ArtifactState, HtmlState, ImageState
 
 
 def _estimate_tokens(text: str) -> int:
@@ -729,6 +729,7 @@ class SceneDocument(BranchOps, GroupOps):
             y=float(y),
             title="Artifact",
             kind="artifact",
+            state=ArtifactState(),
         )
         self.nodes[node_id] = node
         self.connect(parent_id, node_id)
@@ -756,8 +757,8 @@ class SceneDocument(BranchOps, GroupOps):
     def complete_artifact_generation(self, node_id: str, new_content, ai_message: str) -> SceneNode:
         """Land a successful generation turn: WHOLE-DOCUMENT REPLACE (never an
         append/merge - the model returns the entire document every turn, see
-        the artifact_content field's own comment on SceneNode), plus append a
-        real assistant turn to history. Raises SceneError if the node is
+        ArtifactState's own comment, backend/domain/node_states.py), plus
+        append a real assistant turn to history. Raises SceneError if the node is
         gone - this WS wrapper does NOT pre-check liveness before calling
         this, same posture as send_conversation_message's own _on_reply, not
         web_research's more defensive pre-check pattern (there is no
@@ -766,7 +767,7 @@ class SceneDocument(BranchOps, GroupOps):
         node = self.nodes.get(node_id)
         if node is None:
             raise SceneError(f"unknown node: {node_id}")
-        node.artifact_content = str(new_content)
+        node.state.artifact_content = str(new_content)
         node.history.append({"role": "assistant", "content": str(ai_message)})
         return node
 
@@ -1712,7 +1713,7 @@ class SceneDocument(BranchOps, GroupOps):
                     "researchActiveSourceId": n.research_active_source_id,
                     "researchError": n.research_error,
                     "researchResult": n.research_result,
-                    "artifactContent": n.artifact_content,
+                    "artifactContent": n.state.artifact_content if isinstance(n.state, ArtifactState) else "",
                     "gitlinkRepo": n.gitlink_repo,
                     "gitlinkBranch": n.gitlink_branch,
                     "gitlinkScopeMode": n.gitlink_scope_mode,

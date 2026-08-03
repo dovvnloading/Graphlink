@@ -53,7 +53,7 @@ def register_artifact_intents(
             bus=bus,
             notifications_state=notifications,
             node=node,
-            current_artifact=node.artifact_content,
+            current_artifact=node.state.artifact_content,
             history=full_history,
             on_reply=_on_reply,
         )

@@ -280,7 +280,7 @@ def _serialize_artifact_node(node: SceneNode) -> dict[str, Any]:
     return {
         "node_type": "artifact",
         "instruction": node.content,
-        "content": node.artifact_content,
+        "content": node.state.artifact_content,
         "conversation_history": _serialize_history(node.history),
         "is_collapsed": bool(node.is_collapsed),
     }

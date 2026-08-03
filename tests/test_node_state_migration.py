@@ -47,6 +47,7 @@ SCAN_DIRS = (REPO_ROOT / "backend", REPO_ROOT / "tests")
 MIGRATED_KIND_FIELDS = {
     "image": ["image_asset_id"],
     "html": ["html_splitter_state"],
+    "artifact": ["artifact_content"],
 }
 
 
