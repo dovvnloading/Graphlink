@@ -117,7 +117,7 @@ def test_research_result_translates_camel_case_back_to_snake_case():
     doc = SceneDocument()
     parent = doc.add_chat_node(0, 0, "p", is_user=False)
     node = doc.add_web_research_node(10, 10, parent.id)
-    node.research_result = {
+    node.state.research_result = {
         "requestId": "r1", "originalQuery": "q", "effectiveQuery": "q2",
         "answerMarkdown": "answer", "sources": [{"sourceId": "s1", "canonicalUrl": "u"}],
         "citations": [{"sourceId": "s1", "claimContext": "c"}], "warnings": [], "providerSnapshot": {},

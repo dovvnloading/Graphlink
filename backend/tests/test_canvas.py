@@ -288,12 +288,12 @@ def test_add_document_node_creates_a_real_document_kind_node():
     assert node.kind == "document"
     assert node.title == "report.pdf"
     assert node.content == "some extracted text"
-    assert node.attachment_kind == "document"
-    assert node.file_path == "C:/files/report.pdf"
-    assert node.mime_type == "application/pdf"
-    assert node.duration_seconds is None
-    assert node.byte_size == 2048
-    assert node.preview_label == "PDF"
+    assert node.state.attachment_kind == "document"
+    assert node.state.file_path == "C:/files/report.pdf"
+    assert node.state.mime_type == "application/pdf"
+    assert node.state.duration_seconds is None
+    assert node.state.byte_size == 2048
+    assert node.state.preview_label == "PDF"
     assert any(e.source == parent.id and e.target == node.id for e in doc.edges.values())
 
 
@@ -301,7 +301,7 @@ def test_add_document_node_normalizes_attachment_kind_casing():
     doc = SceneDocument()
     parent = doc.add_node(0, 0, "parent")
     node = doc.add_document_node(0, 0, "voice.wav", "", "Audio", parent.id)
-    assert node.attachment_kind == "audio"
+    assert node.state.attachment_kind == "audio"
 
 
 def test_add_document_node_requires_a_parent_id():
@@ -369,10 +369,10 @@ def test_add_document_node_intent_creates_a_real_node_and_publishes():
             [10, 10, "audio.mp3", "", "audio", parent_id, "", "audio/mpeg", 125.4, 4096, ""],
         )
         assert document.nodes[node_id].kind == "document"
-        assert document.nodes[node_id].attachment_kind == "audio"
-        assert document.nodes[node_id].mime_type == "audio/mpeg"
-        assert document.nodes[node_id].duration_seconds == 125.4
-        assert document.nodes[node_id].byte_size == 4096
+        assert document.nodes[node_id].state.attachment_kind == "audio"
+        assert document.nodes[node_id].state.mime_type == "audio/mpeg"
+        assert document.nodes[node_id].state.duration_seconds == 125.4
+        assert document.nodes[node_id].state.byte_size == 4096
         assert any(
             e.source == parent_id and e.target == node_id for e in document.edges.values()
         )
@@ -3054,21 +3054,21 @@ def test_start_web_research_run_sets_content_and_resets_progress_fields():
     parent = doc.add_node(0, 0, "parent")
     node = doc.add_web_research_node(0, 0, parent.id)
     # Simulate a previous run's leftover progress state.
-    node.research_stage = "fetching"
-    node.research_completed = 2
-    node.research_total = 4
-    node.research_active_source_id = "s1-old"
-    node.research_error = "stale error"
+    node.state.research_stage = "fetching"
+    node.state.research_completed = 2
+    node.state.research_total = 4
+    node.state.research_active_source_id = "s1-old"
+    node.state.research_error = "stale error"
 
     returned = doc.start_web_research_run(node.id, "what is the capital of France?")
 
     assert returned is node
     assert node.content == "what is the capital of France?"
-    assert node.research_stage == ""
-    assert node.research_completed == 0
-    assert node.research_total == 0
-    assert node.research_active_source_id is None
-    assert node.research_error == ""
+    assert node.state.research_stage == ""
+    assert node.state.research_completed == 0
+    assert node.state.research_total == 0
+    assert node.state.research_active_source_id is None
+    assert node.state.research_error == ""
 
 
 def test_start_web_research_run_does_not_clear_a_stale_previous_result():
@@ -3079,11 +3079,11 @@ def test_start_web_research_run_does_not_clear_a_stale_previous_result():
     doc = SceneDocument()
     parent = doc.add_node(0, 0, "parent")
     node = doc.add_web_research_node(0, 0, parent.id)
-    node.research_result = {"answerMarkdown": "a previous stale answer"}
+    node.state.research_result = {"answerMarkdown": "a previous stale answer"}
 
     doc.start_web_research_run(node.id, "a follow-up question")
 
-    assert node.research_result == {"answerMarkdown": "a previous stale answer"}
+    assert node.state.research_result == {"answerMarkdown": "a previous stale answer"}
 
 
 def test_start_web_research_run_unknown_node_raises_scene_error():
@@ -3109,10 +3109,10 @@ def test_apply_web_research_progress_updates_stage_completed_total_source_id_fro
     returned = doc.apply_web_research_progress(node.id, fake_event)
 
     assert returned is node
-    assert node.research_stage == "fetching"
-    assert node.research_completed == 1
-    assert node.research_total == 4
-    assert node.research_active_source_id == "s1-abc123"
+    assert node.state.research_stage == "fetching"
+    assert node.state.research_completed == 1
+    assert node.state.research_total == 4
+    assert node.state.research_active_source_id == "s1-abc123"
 
 
 def test_apply_web_research_progress_is_a_silent_noop_for_a_deleted_or_unknown_node():
@@ -3127,17 +3127,17 @@ def test_complete_web_research_run_sets_result_and_clears_error_and_active_sourc
     doc = SceneDocument()
     parent = doc.add_node(0, 0, "parent")
     node = doc.add_web_research_node(0, 0, parent.id)
-    node.research_error = "a previous error"
-    node.research_active_source_id = "s1-still-active"
+    node.state.research_error = "a previous error"
+    node.state.research_active_source_id = "s1-still-active"
     result_wire = {"answerMarkdown": "the answer", "sources": []}
 
     returned = doc.complete_web_research_run(node.id, result_wire)
 
     assert returned is node
-    assert node.research_stage == "completed"
-    assert node.research_error == ""
-    assert node.research_active_source_id is None
-    assert node.research_result == result_wire
+    assert node.state.research_stage == "completed"
+    assert node.state.research_error == ""
+    assert node.state.research_active_source_id is None
+    assert node.state.research_result == result_wire
 
 
 def test_complete_web_research_run_unknown_node_raises_scene_error():
@@ -3149,14 +3149,14 @@ def test_fail_web_research_run_sets_cancelled_stage_and_message():
     doc = SceneDocument()
     parent = doc.add_node(0, 0, "parent")
     node = doc.add_web_research_node(0, 0, parent.id)
-    node.research_active_source_id = "s1-in-flight"
+    node.state.research_active_source_id = "s1-in-flight"
 
     returned = doc.fail_web_research_run(node.id, cancelled=True, message="Web research cancelled.")
 
     assert returned is node
-    assert node.research_stage == "cancelled"
-    assert node.research_error == "Web research cancelled."
-    assert node.research_active_source_id is None
+    assert node.state.research_stage == "cancelled"
+    assert node.state.research_error == "Web research cancelled."
+    assert node.state.research_active_source_id is None
 
 
 def test_fail_web_research_run_sets_failed_stage_and_message():
@@ -3167,19 +3167,19 @@ def test_fail_web_research_run_sets_failed_stage_and_message():
     returned = doc.fail_web_research_run(node.id, cancelled=False, message="The search provider failed.")
 
     assert returned is node
-    assert node.research_stage == "failed"
-    assert node.research_error == "The search provider failed."
+    assert node.state.research_stage == "failed"
+    assert node.state.research_error == "The search provider failed."
 
 
 def test_fail_web_research_run_does_not_clear_a_stale_previous_result():
     doc = SceneDocument()
     parent = doc.add_node(0, 0, "parent")
     node = doc.add_web_research_node(0, 0, parent.id)
-    node.research_result = {"answerMarkdown": "a previous stale answer"}
+    node.state.research_result = {"answerMarkdown": "a previous stale answer"}
 
     doc.fail_web_research_run(node.id, cancelled=False, message="boom")
 
-    assert node.research_result == {"answerMarkdown": "a previous stale answer"}
+    assert node.state.research_result == {"answerMarkdown": "a previous stale answer"}
 
 
 def test_fail_web_research_run_unknown_node_raises_scene_error():
@@ -3491,8 +3491,8 @@ def test_run_web_research_on_a_different_node_while_one_is_busy_does_not_clobber
         # Give node_b a pre-existing failed state to prove it survives.
         document.start_web_research_run(node_b.id, "node b's original query")
         document.fail_web_research_run(node_b.id, cancelled=False, message="node b failed earlier")
-        assert node_b.research_stage == "failed"
-        assert node_b.research_error == "node b failed earlier"
+        assert node_b.state.research_stage == "failed"
+        assert node_b.state.research_error == "node b failed earlier"
 
         started = threading.Event()
         release = threading.Event()
@@ -3526,8 +3526,8 @@ def test_run_web_research_on_a_different_node_while_one_is_busy_does_not_clobber
                 "scene", "runWebResearch", [node_b.id, "a brand new query for b"]
             )
             assert result_b is None
-            assert node_b.research_stage == "failed", "node_b's terminal state must survive the bounce"
-            assert node_b.research_error == "node b failed earlier"
+            assert node_b.state.research_stage == "failed", "node_b's terminal state must survive the bounce"
+            assert node_b.state.research_error == "node b failed earlier"
             assert node_b.content == "node b's original query", "node_b's content must not be overwritten"
 
             notice = await bus.publish("notification")
@@ -3539,8 +3539,8 @@ def test_run_web_research_on_a_different_node_while_one_is_busy_does_not_clobber
             entry = next(iter(web_research_slots(dispatcher).values()))
             await entry["task"]
 
-        assert node_a.research_stage == "completed"
-        assert node_a.research_result["answerMarkdown"] == "node a's result"
+        assert node_a.state.research_stage == "completed"
+        assert node_a.state.research_result["answerMarkdown"] == "node a's result"
 
     asyncio.run(run())
 
@@ -5363,7 +5363,7 @@ def test_create_frame_sets_correct_defaults_and_initial_bbox():
 
     assert frame.kind == "frame"
     assert frame.content == "Add note..."
-    assert frame.is_locked is True
+    assert frame.state.is_locked is True
     assert frame.is_collapsed is False
     assert frame.item_ids == [m1.id, m2.id]
     # Padded union rect: member footprints default to 220x120, so m1 spans
@@ -5372,8 +5372,8 @@ def test_create_frame_sets_correct_defaults_and_initial_bbox():
     # GROUP_PADDING_TOP=50 pads the top.
     assert frame.x == pytest.approx(-40.0)
     assert frame.y == pytest.approx(-50.0)
-    assert frame.group_width == pytest.approx(600.0)
-    assert frame.group_height == pytest.approx(510.0)
+    assert frame.state.group_width == pytest.approx(600.0)
+    assert frame.state.group_height == pytest.approx(510.0)
 
 
 def test_create_container_sets_correct_defaults():
@@ -5383,7 +5383,7 @@ def test_create_container_sets_correct_defaults():
     assert container.kind == "container"
     assert container.content == "New Container"
     assert container.item_ids == [m1.id]
-    assert container.group_width is not None and container.group_height is not None
+    assert container.state.group_width is not None and container.state.group_height is not None
 
 
 def test_create_frame_detaches_member_from_its_existing_frame():
@@ -5450,8 +5450,8 @@ def test_bbox_auto_grow_recompute_on_member_move():
     # union x:[0,1220]/y:[0,1120].
     assert node.x == pytest.approx(-40.0)
     assert node.y == pytest.approx(-50.0)
-    assert node.group_width == pytest.approx(1300.0)
-    assert node.group_height == pytest.approx(1210.0)
+    assert node.state.group_width == pytest.approx(1300.0)
+    assert node.state.group_height == pytest.approx(1210.0)
 
 
 def test_bbox_auto_grow_recompute_via_move_node_also_covers_container():
@@ -5472,11 +5472,11 @@ def test_moving_a_non_member_node_does_not_touch_unrelated_groups():
     m1 = doc.add_node(0, 0)
     frame = doc.create_frame([m1.id])
     bystander = doc.add_node(999, 999)
-    before = (doc.nodes[frame.id].x, doc.nodes[frame.id].y, doc.nodes[frame.id].group_width)
+    before = (doc.nodes[frame.id].x, doc.nodes[frame.id].y, doc.nodes[frame.id].state.group_width)
 
     doc.move_node(bystander.id, -50, -50)
 
-    after = (doc.nodes[frame.id].x, doc.nodes[frame.id].y, doc.nodes[frame.id].group_width)
+    after = (doc.nodes[frame.id].x, doc.nodes[frame.id].y, doc.nodes[frame.id].state.group_width)
     assert before == after
 
 
@@ -5485,19 +5485,19 @@ def test_toggle_group_collapsed_shrinks_to_pill_size_and_restores_on_expand():
     m1, m2 = doc.add_node(0, 0), doc.add_node(300, 300)
     frame = doc.create_frame([m1.id, m2.id])
     expanded_x, expanded_y = frame.x, frame.y
-    expanded_w, expanded_h = frame.group_width, frame.group_height
+    expanded_w, expanded_h = frame.state.group_width, frame.state.group_height
 
     doc.toggle_group_collapsed(frame.id)
     node = doc.nodes[frame.id]
     assert node.is_collapsed is True
-    assert node.group_width == 260.0
-    assert node.group_height == 50.0
+    assert node.state.group_width == 260.0
+    assert node.state.group_height == 50.0
 
     doc.toggle_group_collapsed(frame.id)
     node = doc.nodes[frame.id]
     assert node.is_collapsed is False
-    assert node.group_width == pytest.approx(expanded_w)
-    assert node.group_height == pytest.approx(expanded_h)
+    assert node.state.group_width == pytest.approx(expanded_w)
+    assert node.state.group_height == pytest.approx(expanded_h)
     assert node.x == pytest.approx(expanded_x)
     assert node.y == pytest.approx(expanded_y)
 
@@ -5507,8 +5507,8 @@ def test_toggle_group_collapsed_works_for_containers_too():
     m1 = doc.add_node(0, 0)
     container = doc.create_container([m1.id])
     doc.toggle_group_collapsed(container.id)
-    assert doc.nodes[container.id].group_width == 260.0
-    assert doc.nodes[container.id].group_height == 50.0
+    assert doc.nodes[container.id].state.group_width == 260.0
+    assert doc.nodes[container.id].state.group_height == 50.0
 
 
 def test_toggle_group_collapsed_rejects_non_group_kind():
@@ -5525,8 +5525,8 @@ def test_resize_frame_sets_manual_override_and_recenters():
 
     doc.resize_frame(frame.id, 800, 700)
     node = doc.nodes[frame.id]
-    assert node.group_width == 800.0
-    assert node.group_height == 700.0
+    assert node.state.group_width == 800.0
+    assert node.state.group_height == 700.0
     # bbox-of-members center is (260, 205) - see
     # test_create_frame_sets_correct_defaults_and_initial_bbox for the raw
     # bbox this is derived from (x=-40,y=-50,w=600,h=510).
@@ -5541,8 +5541,8 @@ def test_resize_frame_clamps_below_bbox_minimum():
 
     doc.resize_frame(frame.id, 1, 1)
     node = doc.nodes[frame.id]
-    assert node.group_width == pytest.approx(600.0), "must clamp up to the auto-fit bbox width"
-    assert node.group_height == pytest.approx(510.0), "must clamp up to the auto-fit bbox height"
+    assert node.state.group_width == pytest.approx(600.0), "must clamp up to the auto-fit bbox width"
+    assert node.state.group_height == pytest.approx(510.0), "must clamp up to the auto-fit bbox height"
 
 
 def test_resize_frame_grows_to_re_enclose_a_member_that_moves_far_outside_it():
@@ -5568,8 +5568,8 @@ def test_resize_frame_grows_to_re_enclose_a_member_that_moves_far_outside_it():
     # rather than clipping the member outside a frozen 800x700 box.
     assert node.x == pytest.approx(-40.0)
     assert node.y == pytest.approx(-50.0)
-    assert node.group_width == pytest.approx(1300.0)
-    assert node.group_height == pytest.approx(1210.0)
+    assert node.state.group_width == pytest.approx(1300.0)
+    assert node.state.group_height == pytest.approx(1210.0)
 
 
 def test_resize_frame_grows_only_the_axis_that_actually_needs_it():
@@ -5592,8 +5592,8 @@ def test_resize_frame_grows_only_the_axis_that_actually_needs_it():
     # right=max(810,860)=860, bottom=max(555,460)=555.
     assert node.x == pytest.approx(-40.0)
     assert node.y == pytest.approx(-145.0)
-    assert node.group_width == pytest.approx(900.0)
-    assert node.group_height == pytest.approx(700.0)
+    assert node.state.group_width == pytest.approx(900.0)
+    assert node.state.group_height == pytest.approx(700.0)
 
 
 def test_moving_a_frame_directly_pins_a_manual_position_anchor():
@@ -5611,15 +5611,15 @@ def test_moving_a_frame_directly_pins_a_manual_position_anchor():
     doc.move_node(frame.id, 100, 100)
 
     node = doc.nodes[frame.id]
-    assert node.group_manual_x == pytest.approx(100.0)
-    assert node.group_manual_y == pytest.approx(100.0)
+    assert node.state.group_manual_x == pytest.approx(100.0)
+    assert node.state.group_manual_y == pytest.approx(100.0)
     # Anchor rect (100,100,600,510) unioned with the untouched member bbox
     # (-40,-50,600,510): left=min(100,-40)=-40, top=min(100,-50)=-50,
     # right=max(700,560)=700, bottom=max(610,460)=610.
     assert node.x == pytest.approx(-40.0)
     assert node.y == pytest.approx(-50.0)
-    assert node.group_width == pytest.approx(740.0)
-    assert node.group_height == pytest.approx(660.0)
+    assert node.state.group_width == pytest.approx(740.0)
+    assert node.state.group_height == pytest.approx(660.0)
 
 
 def test_manual_position_anchor_survives_a_member_move_and_still_grows():
@@ -5637,12 +5637,12 @@ def test_manual_position_anchor_survives_a_member_move_and_still_grows():
     # bbox x=-40,y=250,w=600,h=610. Anchor rect (100,100,740,660) union
     # bbox (-40,250,600,610): left=min(100,-40)=-40, top=min(100,250)=100,
     # right=max(840,560)=840, bottom=max(760,860)=860.
-    assert node.group_manual_x == pytest.approx(100.0)
-    assert node.group_manual_y == pytest.approx(100.0)
+    assert node.state.group_manual_x == pytest.approx(100.0)
+    assert node.state.group_manual_y == pytest.approx(100.0)
     assert node.x == pytest.approx(-40.0)
     assert node.y == pytest.approx(100.0)
-    assert node.group_width == pytest.approx(880.0)
-    assert node.group_height == pytest.approx(760.0)
+    assert node.state.group_width == pytest.approx(880.0)
+    assert node.state.group_height == pytest.approx(760.0)
 
 
 def test_fit_frame_to_content_clears_manual_position_anchor_too():
@@ -5654,20 +5654,23 @@ def test_fit_frame_to_content_clears_manual_position_anchor_too():
     doc.fit_frame_to_content(frame.id)
 
     node = doc.nodes[frame.id]
-    assert node.group_manual_x is None
-    assert node.group_manual_y is None
+    assert node.state.group_manual_x is None
+    assert node.state.group_manual_y is None
     # Back to a pure auto-fit bbox of the (untouched) members.
     assert node.x == pytest.approx(-40.0)
     assert node.y == pytest.approx(-50.0)
-    assert node.group_width == pytest.approx(600.0)
-    assert node.group_height == pytest.approx(510.0)
+    assert node.state.group_width == pytest.approx(600.0)
+    assert node.state.group_height == pytest.approx(510.0)
 
 
 def test_moving_a_container_does_not_pin_a_manual_position_anchor():
     # Containers have no manual-position concept, matching legacy (no lock,
     # no independent-drag distinction for Container - it always owns and
     # moves its children as one unit) and mirroring how group_manual_width/
-    # height are already frame-only.
+    # height are already frame-only. ADR-002 stage 2.5 (PR6) strengthened
+    # this from "stayed None at runtime" to "structurally absent" -
+    # ContainerState (backend/domain/node_states.py) has no
+    # group_manual_x/y fields at all, unlike FrameState.
     doc = SceneDocument()
     m1 = doc.add_node(0, 0)
     container = doc.create_container([m1.id])
@@ -5675,8 +5678,8 @@ def test_moving_a_container_does_not_pin_a_manual_position_anchor():
     doc.move_node(container.id, 100, 100)
 
     node = doc.nodes[container.id]
-    assert node.group_manual_x is None
-    assert node.group_manual_y is None
+    assert not hasattr(node.state, "group_manual_x")
+    assert not hasattr(node.state, "group_manual_y")
 
 
 def test_move_nodes_updates_every_position_in_one_batch():
@@ -5726,8 +5729,8 @@ def test_move_nodes_recomputes_a_group_exactly_once_using_the_fully_settled_posi
     # correct locked-group drag always should.
     assert node.x == pytest.approx(-40.0 + 50.0)
     assert node.y == pytest.approx(-50.0 + 50.0)
-    assert node.group_width == pytest.approx(600.0)
-    assert node.group_height == pytest.approx(510.0)
+    assert node.state.group_width == pytest.approx(600.0)
+    assert node.state.group_height == pytest.approx(510.0)
 
 
 def test_move_nodes_recomputes_a_container_holding_a_moved_member():
@@ -5777,19 +5780,19 @@ def test_fit_frame_to_content_clears_manual_override():
     doc.fit_frame_to_content(frame.id)
 
     node = doc.nodes[frame.id]
-    assert node.group_manual_width is None
-    assert node.group_manual_height is None
+    assert node.state.group_manual_width is None
+    assert node.state.group_manual_height is None
     # Back to a pure auto-fit bbox of the CURRENT member positions.
     assert node.x == pytest.approx(-40.0)
     assert node.y == pytest.approx(-50.0)
-    assert node.group_width == pytest.approx(1300.0)
-    assert node.group_height == pytest.approx(1210.0)
+    assert node.state.group_width == pytest.approx(1300.0)
+    assert node.state.group_height == pytest.approx(1210.0)
 
     # And a further member move now auto-grows again (manual mode is truly
     # off, not just temporarily bypassed).
     doc.move_node(m1.id, -1000, -1000)
     node = doc.nodes[frame.id]
-    assert node.group_width > 1300.0
+    assert node.state.group_width > 1300.0
 
 
 def test_resize_frame_and_fit_frame_to_content_reject_container_kind():
@@ -5861,11 +5864,11 @@ def test_set_chat_collapsed_recomputes_frame_geometry_when_called_against_a_fram
     m1, m2 = doc.add_node(0, 0), doc.add_node(300, 300)
     frame = doc.create_frame([m1.id, m2.id])
     doc.set_chat_collapsed(frame.id, True)
-    assert (doc.nodes[frame.id].group_width, doc.nodes[frame.id].group_height) == (260, 50)
+    assert (doc.nodes[frame.id].state.group_width, doc.nodes[frame.id].state.group_height) == (260, 50)
 
     doc.set_chat_collapsed(frame.id, False)
 
-    assert doc.nodes[frame.id].group_width != 260 or doc.nodes[frame.id].group_height != 50
+    assert doc.nodes[frame.id].state.group_width != 260 or doc.nodes[frame.id].state.group_height != 50
 
 
 def test_deleting_a_member_node_removes_it_from_its_frame_and_recomputes():
@@ -5881,8 +5884,8 @@ def test_deleting_a_member_node_removes_it_from_its_frame_and_recomputes():
     # Recomputed bbox now covers only m2: x:[300,520]/y:[300,420].
     assert node.x == pytest.approx(300 - 40.0)
     assert node.y == pytest.approx(300 - 50.0)
-    assert node.group_width == pytest.approx(220 + 80.0)
-    assert node.group_height == pytest.approx(120 + 90.0)
+    assert node.state.group_width == pytest.approx(220 + 80.0)
+    assert node.state.group_height == pytest.approx(120 + 90.0)
 
 
 def test_deleting_the_last_member_auto_deletes_the_now_empty_frame():
@@ -5994,13 +5997,13 @@ def test_toggle_frame_lock_flips_is_locked_and_defaults_true():
     doc = SceneDocument()
     m1 = doc.add_node(0, 0)
     frame = doc.create_frame([m1.id])
-    assert frame.is_locked is True
+    assert frame.state.is_locked is True
 
     doc.toggle_frame_lock(frame.id)
-    assert doc.nodes[frame.id].is_locked is False
+    assert doc.nodes[frame.id].state.is_locked is False
 
     doc.toggle_frame_lock(frame.id)
-    assert doc.nodes[frame.id].is_locked is True
+    assert doc.nodes[frame.id].state.is_locked is True
 
 
 def test_toggle_frame_lock_rejects_container_kind():
@@ -6032,8 +6035,8 @@ def test_scene_payload_exposes_note_frame_and_container_fields():
     assert frame_row["isLocked"] is True
     assert frame_row["color"] == "#4a7c59"
     assert frame_row["headerColor"] == "#2f5b3c"
-    assert frame_row["groupWidth"] == frame.group_width
-    assert frame_row["groupHeight"] == frame.group_height
+    assert frame_row["groupWidth"] == frame.state.group_width
+    assert frame_row["groupHeight"] == frame.state.group_height
     # groupManualWidth/Height are deliberately NOT on the wire (internal
     # bookkeeping only, same posture as codeSandboxSandboxId).
     assert "groupManualWidth" not in frame_row
@@ -6065,7 +6068,7 @@ def test_note_frame_container_ws_intents_mutate_and_publish():
         assert document.nodes[frame_id].color == "#123456"
 
         await bus.dispatch_intent("scene", "toggleFrameLock", [frame_id])
-        assert document.nodes[frame_id].is_locked is False
+        assert document.nodes[frame_id].state.is_locked is False
 
         await bus.dispatch_intent("scene", "toggleGroupCollapsed", [frame_id])
         assert document.nodes[frame_id].is_collapsed is True
@@ -6074,10 +6077,10 @@ def test_note_frame_container_ws_intents_mutate_and_publish():
         assert document.nodes[frame_id].is_collapsed is False
 
         await bus.dispatch_intent("scene", "resizeFrame", [frame_id, 900, 800])
-        assert document.nodes[frame_id].group_width == 900
+        assert document.nodes[frame_id].state.group_width == 900
 
         await bus.dispatch_intent("scene", "fitFrameToContent", [frame_id])
-        assert document.nodes[frame_id].group_manual_width is None
+        assert document.nodes[frame_id].state.group_manual_width is None
 
         await bus.dispatch_intent("scene", "ungroup", [frame_id])
         assert frame_id not in document.nodes
@@ -6100,14 +6103,14 @@ def test_add_chart_node_creates_a_real_rendered_chart_connected_to_its_parent():
     chart = doc.add_chart_node(50, 60, parent.id, "bar", dict(_CHART_DATA))
 
     assert chart.kind == "chart"
-    assert chart.chart_type == "bar"
-    assert chart.chart_data == _CHART_DATA
-    assert chart.chart_source_node_id == parent.id
-    assert chart.chart_asset_version == 1
-    assert chart.chart_width == 680.0 and chart.chart_height == 500.0
-    assert chart.chart_aspect_locked is True
+    assert chart.state.chart_type == "bar"
+    assert chart.state.chart_data == _CHART_DATA
+    assert chart.state.chart_source_node_id == parent.id
+    assert chart.state.chart_asset_version == 1
+    assert chart.state.chart_width == 680.0 and chart.state.chart_height == 500.0
+    assert chart.state.chart_aspect_locked is True
     assert any(e.source == parent.id and e.target == chart.id for e in doc.edges.values())
-    asset = doc.get_image_asset(chart.chart_asset_id)
+    asset = doc.get_image_asset(chart.state.chart_asset_id)
     assert asset is not None
     png_bytes, mime_type = asset
     assert mime_type == "image/png"
@@ -6143,34 +6146,34 @@ def test_resize_chart_clamps_to_legacy_min_max_bounds():
     doc.toggle_chart_aspect_lock(chart.id)  # unlock so width/height are independent
 
     doc.resize_chart(chart.id, 10.0, 10.0)
-    assert chart.chart_width == 440.0 and chart.chart_height == 320.0
+    assert chart.state.chart_width == 440.0 and chart.state.chart_height == 320.0
 
     doc.resize_chart(chart.id, 999999.0, 999999.0)
-    assert chart.chart_width == 2400.0 and chart.chart_height == 1800.0
+    assert chart.state.chart_width == 2400.0 and chart.state.chart_height == 1800.0
 
 
 def test_resize_chart_preserves_aspect_ratio_when_locked():
     doc = SceneDocument()
     parent = doc.add_node(0, 0, "parent")
     chart = doc.add_chart_node(0, 0, parent.id, "bar", dict(_CHART_DATA))
-    assert chart.chart_aspect_locked is True
+    assert chart.state.chart_aspect_locked is True
 
     doc.resize_chart(chart.id, 1000.0, 500.0)  # 2:1 ratio, within bounds
 
-    assert chart.chart_width / chart.chart_height == pytest.approx(2.0, rel=1e-6)
+    assert chart.state.chart_width / chart.state.chart_height == pytest.approx(2.0, rel=1e-6)
 
 
 def test_resize_chart_rerenders_and_bumps_asset_version_overwriting_same_id():
     doc = SceneDocument()
     parent = doc.add_node(0, 0, "parent")
     chart = doc.add_chart_node(0, 0, parent.id, "bar", dict(_CHART_DATA))
-    original_asset_id = chart.chart_asset_id
+    original_asset_id = chart.state.chart_asset_id
     original_bytes, _ = doc.get_image_asset(original_asset_id)
 
     doc.resize_chart(chart.id, 900.0, 900.0)
 
-    assert chart.chart_asset_id == original_asset_id, "same id, overwritten in place"
-    assert chart.chart_asset_version == 2
+    assert chart.state.chart_asset_id == original_asset_id, "same id, overwritten in place"
+    assert chart.state.chart_asset_version == 2
     new_bytes, _ = doc.get_image_asset(original_asset_id)
     assert new_bytes != original_bytes
 
@@ -6186,15 +6189,15 @@ def test_toggle_chart_aspect_lock_flips_flag_without_touching_size():
     doc = SceneDocument()
     parent = doc.add_node(0, 0, "parent")
     chart = doc.add_chart_node(0, 0, parent.id, "bar", dict(_CHART_DATA))
-    width_before, height_before = chart.chart_width, chart.chart_height
+    width_before, height_before = chart.state.chart_width, chart.state.chart_height
 
     doc.toggle_chart_aspect_lock(chart.id)
 
-    assert chart.chart_aspect_locked is False
-    assert (chart.chart_width, chart.chart_height) == (width_before, height_before)
+    assert chart.state.chart_aspect_locked is False
+    assert (chart.state.chart_width, chart.state.chart_height) == (width_before, height_before)
 
     doc.toggle_chart_aspect_lock(chart.id)
-    assert chart.chart_aspect_locked is True
+    assert chart.state.chart_aspect_locked is True
 
 
 def test_toggle_chart_aspect_lock_rejects_a_non_chart_node():
@@ -6208,7 +6211,7 @@ def test_removing_a_chart_node_cleans_up_its_asset_from_image_assets():
     doc = SceneDocument()
     parent = doc.add_node(0, 0, "parent")
     chart = doc.add_chart_node(0, 0, parent.id, "bar", dict(_CHART_DATA))
-    asset_id = chart.chart_asset_id
+    asset_id = chart.state.chart_asset_id
     assert doc.get_image_asset(asset_id) is not None
 
     doc.remove_nodes([chart.id])
@@ -6227,7 +6230,7 @@ def test_scene_payload_exposes_all_chart_fields():
     assert row["chartType"] == "bar"
     assert row["chartData"] == _CHART_DATA
     assert row["chartError"] == "degraded"
-    assert row["chartAssetId"] == chart.chart_asset_id
+    assert row["chartAssetId"] == chart.state.chart_asset_id
     assert row["chartAssetVersion"] == 1
     assert row["chartWidth"] == 680.0
     assert row["chartHeight"] == 500.0

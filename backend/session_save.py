@@ -220,12 +220,12 @@ def _serialize_document_node(node: SceneNode) -> dict[str, Any]:
         "node_type": "document",
         "title": node.title,
         "content": node.content,
-        "attachment_kind": node.attachment_kind,
-        "file_path": node.file_path,
-        "mime_type": node.mime_type,
-        "duration_seconds": node.duration_seconds,
-        "byte_size": node.byte_size,
-        "preview_label": node.preview_label,
+        "attachment_kind": node.state.attachment_kind,
+        "file_path": node.state.file_path,
+        "mime_type": node.state.mime_type,
+        "duration_seconds": node.state.duration_seconds,
+        "byte_size": node.state.byte_size,
+        "preview_label": node.state.preview_label,
         "is_collapsed": bool(node.is_collapsed),
         "is_docked": bool(node.is_docked),
     }
@@ -264,7 +264,7 @@ def _serialize_html_node(node: SceneNode) -> dict[str, Any]:
 
 
 def _serialize_web_node(node: SceneNode) -> dict[str, Any]:
-    research_result = _camel_to_snake_deep(node.research_result) if node.research_result else {}
+    research_result = _camel_to_snake_deep(node.state.research_result) if node.state.research_result else {}
     return {
         # R6.5 translation (inverse of R6.4's own): backend kind
         # "web_research" -> legacy node_type "web".
@@ -404,8 +404,8 @@ def _serialize_pin(record) -> dict[str, Any]:
 
 def _serialize_frame(node: SceneNode, frame_source_index: dict[str, int]) -> dict[str, Any]:
     item_indices = [frame_source_index[i] for i in node.item_ids if i in frame_source_index]
-    width = node.group_width if node.group_width is not None else 0.0
-    height = node.group_height if node.group_height is not None else 0.0
+    width = node.state.group_width if node.state.group_width is not None else 0.0
+    height = node.state.group_height if node.state.group_height is not None else 0.0
     return {
         "id": node.id,
         "items": item_indices,
@@ -422,7 +422,7 @@ def _serialize_frame(node: SceneNode, frame_source_index: dict[str, int]) -> dic
         # (unlike legacy's QGraphicsItem coordinate model).
         "rect": {"x": node.x, "y": node.y, "width": width, "height": height},
         "expanded_rect": {"x": node.x, "y": node.y, "width": width, "height": height},
-        "is_locked": bool(node.is_locked),
+        "is_locked": bool(node.state.is_locked),
         "is_collapsed": bool(node.is_collapsed),
         "color": node.color,
         "header_color": node.header_color,
@@ -431,8 +431,8 @@ def _serialize_frame(node: SceneNode, frame_source_index: dict[str, int]) -> dic
 
 def _serialize_container(node: SceneNode, all_items_index: dict[str, int]) -> dict[str, Any]:
     item_indices = [all_items_index[i] for i in node.item_ids if i in all_items_index]
-    width = node.group_width if node.group_width is not None else 0.0
-    height = node.group_height if node.group_height is not None else 0.0
+    width = node.state.group_width if node.state.group_width is not None else 0.0
+    height = node.state.group_height if node.state.group_height is not None else 0.0
     return {
         "id": node.id,
         "items": item_indices,
@@ -453,20 +453,20 @@ def _serialize_chart(
     parent_index = nodes_index.get(parent_id) if parent_id is not None else None
     return {
         "id": node.id,
-        "data": dict(node.chart_data),
+        "data": dict(node.state.chart_data),
         "position": _position(node),
-        "size": {"width": node.chart_width, "height": node.chart_height},
-        "aspect_ratio_locked": bool(node.chart_aspect_locked),
+        "size": {"width": node.state.chart_width, "height": node.state.chart_height},
+        "aspect_ratio_locked": bool(node.state.chart_aspect_locked),
         "parent_node_index": parent_index,
         "parent_node_id": parent_id,
         # chart_source_node_id is always derived from parent_id in this
-        # backend (add_chart_node's own contract - see that field's comment
-        # on SceneNode) - legacy's rarer differs-from-parent case was
-        # already documented there as an accepted simplification, so
-        # source_node_id is simply the same id, never a genuinely distinct
-        # value.
+        # backend (add_chart_node's own contract - see ChartState's own
+        # docstring, backend/domain/node_states.py) - legacy's rarer
+        # differs-from-parent case was already documented there as an
+        # accepted simplification, so source_node_id is simply the same
+        # id, never a genuinely distinct value.
         "source_node_id": parent_id,
-        "data_error": node.chart_error or None,
+        "data_error": node.state.chart_error or None,
     }
 
 

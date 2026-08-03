@@ -29,6 +29,7 @@ from backend.domain.model import (
     SceneError,
     SceneNode,
 )
+from backend.domain.node_states import ContainerState, FrameState
 
 
 class GroupOps:
@@ -115,29 +116,37 @@ class GroupOps:
         if node is None or node.kind not in ("frame", "container"):
             return
         if node.is_collapsed:
-            node.group_width = GROUP_COLLAPSED_WIDTH
-            node.group_height = GROUP_COLLAPSED_HEIGHT
+            node.state.group_width = GROUP_COLLAPSED_WIDTH
+            node.state.group_height = GROUP_COLLAPSED_HEIGHT
             return
         bx, by, bw, bh = self._bbox_of_members(node.item_ids)
         has_manual = node.kind == "frame" and (
-            node.group_manual_width is not None
-            or node.group_manual_height is not None
-            or node.group_manual_x is not None
-            or node.group_manual_y is not None
+            node.state.group_manual_width is not None
+            or node.state.group_manual_height is not None
+            or node.state.group_manual_x is not None
+            or node.state.group_manual_y is not None
         )
         if has_manual:
-            width = node.group_manual_width if node.group_manual_width is not None else (node.group_width or bw)
-            height = node.group_manual_height if node.group_manual_height is not None else (node.group_height or bh)
-            if node.group_manual_x is not None and node.group_manual_y is not None:
-                anchor_x, anchor_y = node.group_manual_x, node.group_manual_y
+            width = (
+                node.state.group_manual_width
+                if node.state.group_manual_width is not None
+                else (node.state.group_width or bw)
+            )
+            height = (
+                node.state.group_manual_height
+                if node.state.group_manual_height is not None
+                else (node.state.group_height or bh)
+            )
+            if node.state.group_manual_x is not None and node.state.group_manual_y is not None:
+                anchor_x, anchor_y = node.state.group_manual_x, node.state.group_manual_y
             else:
                 anchor_x = bx + bw / 2.0 - width / 2.0
                 anchor_y = by + bh / 2.0 - height / 2.0
-            node.x, node.y, node.group_width, node.group_height = self._union_rect(
+            node.x, node.y, node.state.group_width, node.state.group_height = self._union_rect(
                 (anchor_x, anchor_y, width, height), (bx, by, bw, bh)
             )
             return
-        node.x, node.y, node.group_width, node.group_height = bx, by, bw, bh
+        node.x, node.y, node.state.group_width, node.state.group_height = bx, by, bw, bh
 
     def _detach_from_existing_group(self, member_id: str, group_kind: str) -> None:
         """Part of create_frame/create_container's shared validation: if
@@ -196,8 +205,8 @@ class GroupOps:
             kind="frame",
             content="Add note...",
             item_ids=ids,
-            is_locked=True,
             is_collapsed=False,
+            state=FrameState(is_locked=True),
         )
         self.nodes[node_id] = node
         self._recompute_group_bounds(node_id)
@@ -211,8 +220,8 @@ class GroupOps:
         node's frame membership. UNLIKE create_frame, item_ids here may
         include note/frame/container ids too - container membership can
         nest (a container may hold another container or a frame as one of
-        its members). is_locked is left at its dataclass default (True) but
-        is MEANINGLESS for containers - see the field's own comment; no
+        its members). ContainerState has no is_locked concept at all (see
+        that class's own docstring, backend/domain/node_states.py) - no
         toggle_container_lock exists and none should be added."""
         ids = list(item_ids)
         for member_id in ids:
@@ -230,6 +239,7 @@ class GroupOps:
             content="New Container",
             item_ids=ids,
             is_collapsed=False,
+            state=ContainerState(),
         )
         self.nodes[node_id] = node
         self._recompute_group_bounds(node_id)
@@ -271,7 +281,7 @@ class GroupOps:
             raise SceneError(f"unknown node: {node_id}")
         if node.kind != "frame":
             raise SceneError(f"node is not a frame node: {node_id}")
-        node.is_locked = not node.is_locked
+        node.state.is_locked = not node.state.is_locked
         self._recompute_group_bounds(node_id)
 
     def toggle_group_collapsed(self, node_id: str) -> None:
@@ -304,8 +314,8 @@ class GroupOps:
         if node.kind != "frame":
             raise SceneError(f"node is not a frame node: {node_id}")
         _, _, min_width, min_height = self._bbox_of_members(node.item_ids)
-        node.group_manual_width = max(float(width), min_width)
-        node.group_manual_height = max(float(height), min_height)
+        node.state.group_manual_width = max(float(width), min_width)
+        node.state.group_manual_height = max(float(height), min_height)
         self._recompute_group_bounds(node_id)
 
     def fit_frame_to_content(self, node_id: str) -> None:
@@ -321,10 +331,10 @@ class GroupOps:
             raise SceneError(f"unknown node: {node_id}")
         if node.kind != "frame":
             raise SceneError(f"node is not a frame node: {node_id}")
-        node.group_manual_width = None
-        node.group_manual_height = None
-        node.group_manual_x = None
-        node.group_manual_y = None
+        node.state.group_manual_width = None
+        node.state.group_manual_height = None
+        node.state.group_manual_x = None
+        node.state.group_manual_y = None
         self._recompute_group_bounds(node_id)
 
     def ungroup(self, node_id: str) -> None:

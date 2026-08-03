@@ -187,11 +187,13 @@ from typing import Any
 from backend.canvas import (
     ArtifactState,
     CodeState,
+    DocumentState,
     HtmlState,
     ImageState,
     SceneDocument,
     SceneNode,
     SUPPORTED_CHART_TYPES,
+    WebResearchState,
     _content_codec,
     _placeholder_chart_data,
 )
@@ -387,12 +389,14 @@ def _restore_document_payload(payload: dict[str, Any]) -> SceneNode:
     return SceneNode(
         id="", x=x, y=y, title=str(payload.get("title", "") or "Document"), kind="document",
         content=str(payload.get("content", "")),
-        attachment_kind=str(payload.get("attachment_kind", "document")),
-        file_path=str(payload.get("file_path", "")),
-        mime_type=str(payload.get("mime_type", "")),
-        duration_seconds=payload.get("duration_seconds"),
-        byte_size=payload.get("byte_size"),
-        preview_label=str(payload.get("preview_label", "") or ""),
+        state=DocumentState(
+            attachment_kind=str(payload.get("attachment_kind", "document")),
+            file_path=str(payload.get("file_path", "")),
+            mime_type=str(payload.get("mime_type", "")),
+            duration_seconds=payload.get("duration_seconds"),
+            byte_size=payload.get("byte_size"),
+            preview_label=str(payload.get("preview_label", "") or ""),
+        ),
         is_collapsed=bool(payload.get("is_collapsed", False)),
         is_docked=bool(payload.get("is_docked", False)),
     )
@@ -461,10 +465,11 @@ def _restore_web_payload(payload: dict[str, Any]) -> SceneNode:
         content=str(payload.get("query", "")),
         history=_restore_history(payload.get("conversation_history")),
         is_collapsed=bool(payload.get("is_collapsed", False)),
+        state=WebResearchState(),
     )
     research_result = payload.get("research_result")
     if isinstance(research_result, dict) and research_result:
-        node.research_result = _snake_to_camel_deep(research_result)
+        node.state.research_result = _snake_to_camel_deep(research_result)
     else:
         summary = payload.get("summary")
         sources = payload.get("sources")
@@ -475,7 +480,7 @@ def _restore_web_payload(payload: dict[str, Any]) -> SceneNode:
             # entirely. Synthesized as a minimal, best-effort
             # ResearchResult-shaped dict from the flat summary/sources pair
             # that IS present.
-            node.research_result = _snake_to_camel_deep({
+            node.state.research_result = _snake_to_camel_deep({
                 "request_id": "legacy",
                 "original_query": payload.get("query", ""),
                 "effective_query": payload.get("query", ""),
@@ -773,7 +778,7 @@ def _restore_charts(
             # late, since the requested (width, height) would already have
             # been silently overridden to preserve the default 680x500 ratio.
             aspect_locked = bool(chart_payload.get("aspect_ratio_locked", True))
-            if aspect_locked != chart.chart_aspect_locked:
+            if aspect_locked != chart.state.chart_aspect_locked:
                 document.toggle_chart_aspect_lock(chart.id)
             size = chart_payload.get("size")
             if isinstance(size, dict) and "width" in size and "height" in size:
@@ -808,7 +813,7 @@ def _restore_frames(
             frame = document.create_frame(member_ids)
             document.set_group_label(frame.id, str(frame_payload.get("note", "") or ""))
             document.set_group_color(frame.id, frame_payload.get("color"), frame_payload.get("header_color"))
-            if bool(frame_payload.get("is_locked", True)) != frame.is_locked:
+            if bool(frame_payload.get("is_locked", True)) != frame.state.is_locked:
                 document.toggle_frame_lock(frame.id)
             # R6.4 translation, NOT a gap: deserialize_frame sets
             # frame._user_resized = True whenever the payload's "rect" key

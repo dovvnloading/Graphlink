@@ -16,10 +16,10 @@ this same gate's own PR: a walk over ast.Attribute alone can't see a field
 name smuggled in as a getattr/setattr string argument.
 
 _KNOWN_NON_NODE_FIELD_ACCESS_SHAPES carves out a small, explicit,
-shape-based allowlist for the rare migrated field name (PR4's "code") that
-collides with an unrelated attribute on a genuinely different type
-elsewhere in the codebase - see its own comment for exactly which shapes
-and why.
+shape-based allowlist for the rare migrated field names (PR4's "code",
+PR6's "byte_size"/"mime_type"/"duration_seconds") that collide with an
+unrelated attribute on a genuinely different type elsewhere in the
+codebase - see its own comment for exactly which shapes and why.
 
 test_scene_node_core_field_count (asserting the final <=15-field core
 exactly) is deferred to the stage's own exit PR, once every kind that has
@@ -56,6 +56,25 @@ MIGRATED_KIND_FIELDS = {
     "artifact": ["artifact_content"],
     "code": ["code", "language"],
     "note": ["is_system_prompt", "is_summary_note", "is_branch_comparison"],
+    "document": [
+        "attachment_kind", "file_path", "mime_type", "duration_seconds", "byte_size", "preview_label",
+    ],
+    "web_research": [
+        "research_stage", "research_completed", "research_total",
+        "research_active_source_id", "research_error", "research_result",
+    ],
+    "chart": [
+        "chart_type", "chart_data", "chart_error", "chart_asset_id", "chart_asset_version",
+        "chart_width", "chart_height", "chart_aspect_locked", "chart_source_node_id",
+    ],
+    # is_locked/group_manual_* are frame-only; group_width/group_height are
+    # shared with "container" below (both entries list them - harmless
+    # duplication, _all_migrated_fields() unions into one set either way).
+    "frame": [
+        "is_locked", "group_manual_width", "group_manual_height",
+        "group_manual_x", "group_manual_y", "group_width", "group_height",
+    ],
+    "container": ["group_width", "group_height"],
 }
 
 
@@ -119,6 +138,17 @@ _KNOWN_NON_NODE_FIELD_ACCESS_SHAPES = {
         {"root": "failures", "file": "test_agents.py"},
     ),
     "language": (),
+    # PR6's "document" kind reuses byte_size/mime_type/duration_seconds,
+    # names that collide with backend/attachments.py's own, wholly
+    # unrelated StagedAttachment dataclass (a composer-staging concept,
+    # never a SceneNode) - confirmed via grep that every "staged = ..."
+    # binding repo-wide holds a StagedAttachment, never a SceneNode.
+    "byte_size": (
+        {"root": "staged", "file": None},
+        {"root": "self", "file": "attachments.py"},
+    ),
+    "mime_type": ({"root": "staged", "file": None},),
+    "duration_seconds": ({"root": "staged", "file": None},),
 }
 
 
@@ -203,3 +233,67 @@ def test_scene_payload_key_set_is_unchanged_by_the_migration():
     doc.add_chat_node(0, 0, "hi", True)
     row = doc.scene_payload()["nodes"][0]
     assert sorted(row.keys()) == _EXPECTED_SCENE_NODE_WIRE_KEYS
+
+
+# Every migrated field's wire VALUE for a node of a kind that does NOT own
+# it - captured from each field's own former bare-SceneNode-field default,
+# verified against git history at that field's own pre-migration commit,
+# NOT from the per-kind state class's own "zero value" default (those
+# usually, but do not always, coincide). This is the direct regression net
+# for a real bug an adversarial review caught on this exact migration
+# (ADR-002 stage 2.5 PR6): scene_payload()'s isinstance-guarded fallback
+# for isLocked/chartWidth/chartHeight/chartAspectLocked was written as
+# False/0.0/0.0/False (the type's zero value) instead of the field's real
+# original default True/680.0/500.0/True - a wire-compat regression the
+# key-set-only test above cannot see, since the key was always present,
+# only its fallback VALUE for a non-owning node's row was wrong. Grows one
+# entry per migrated field, alongside MIGRATED_KIND_FIELDS above.
+_EXPECTED_NON_OWNING_KIND_WIRE_DEFAULTS = {
+    "imageAssetId": "",
+    "htmlSplitterState": None,
+    "artifactContent": "",
+    "code": "",
+    "language": "",
+    "isSystemPrompt": False,
+    "isSummaryNote": False,
+    "isBranchComparison": False,
+    "attachmentKind": "",
+    "filePath": "",
+    "mimeType": "",
+    "durationSeconds": None,
+    "byteSize": None,
+    "previewLabel": "",
+    "researchStage": "",
+    "researchCompleted": 0,
+    "researchTotal": 0,
+    "researchActiveSourceId": None,
+    "researchError": "",
+    "researchResult": None,
+    "chartType": "",
+    "chartData": {},
+    "chartError": "",
+    "chartAssetId": "",
+    "chartAssetVersion": 0,
+    "chartWidth": 680.0,
+    "chartHeight": 500.0,
+    "chartAspectLocked": True,
+    "chartSourceNodeId": "",
+    "isLocked": True,
+    "groupWidth": None,
+    "groupHeight": None,
+}
+
+
+def test_migrated_field_wire_fallbacks_match_pre_migration_defaults():
+    doc = SceneDocument()
+    doc.add_chat_node(0, 0, "hi", True)
+    row = doc.scene_payload()["nodes"][0]
+    mismatches = [
+        f"{key}: got {row[key]!r}, expected {expected!r}"
+        for key, expected in _EXPECTED_NON_OWNING_KIND_WIRE_DEFAULTS.items()
+        if row.get(key) != expected
+    ]
+    assert not mismatches, (
+        "ADR-002 stage 2.5: migrated field's non-owning-kind wire fallback "
+        "does not match its pre-migration SceneNode default:\n" + "\n".join(mismatches)
+    )
