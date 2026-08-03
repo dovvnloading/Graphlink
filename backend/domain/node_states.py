@@ -21,6 +21,7 @@ conversation.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 
 class NodeState:
@@ -315,3 +316,86 @@ class ContainerState(NodeState):
 
     group_width: float | None = None
     group_height: float | None = None
+
+
+@dataclass
+class ChatState(NodeState):
+    """Relocated verbatim from SceneNode's eight chat-only fields (former
+    backend/domain/model.py fields). SceneNode's own `content` field
+    (core, not duplicated here) holds the chat message text - is_user/
+    content_parts describe HOW that text should render, never a second
+    copy of it.
+
+    - is_user: True for a user-authored message, False for an assistant
+      reply - graphlink_session/serializers.py's own raw_content/is_user/
+      is_collapsed shape, minus everything Qt-only (paint state, scroll
+      position, docked-child widgets).
+    - chat_scroll_value: persisted scroll position within this node's own
+      content area (legacy's own scroll_value field). Unlike HtmlState's
+      own html_splitter_state, 0.0 (scrolled to the top) IS the genuine
+      default for a node that has never been scrolled, so this is a plain
+      float, not an Optional - there is no "unset" state worth
+      distinguishing here.
+    - content_parts: the RAW (already-decoded - "data" holds real Python
+      bytes, never base64 text) multimodal parts list for a chat node
+      whose legacy raw_content was a list of typed parts (e.g. an inline
+      pasted image) rather than a plain string - see content_codec.py's
+      own process_content_for_serialization/_for_deserialization, which
+      this class does not call directly (see scene_payload()'s own
+      comment for the wire-side base64 encoding step this field feeds).
+      None for the overwhelmingly common plain-text case, where `content`
+      is the only source of truth. ADDITIVE, not a replacement for
+      `content`: even when this is populated, `content` continues to hold
+      a flattened-text mirror (join of the text-type parts, or a
+      placeholder like "[Image]" for non-text parts) so every existing
+      piece of code that already reads `content` as a plain string keeps
+      working unchanged.
+    - provider/model: the provider/model that produced this node's
+      content, e.g. "Anthropic Claude" / "claude-sonnet-5" - resolved from
+      ComposerDocument.route() at creation time. Not literally restricted
+      to synthesize_branches specifically, even though today only that one
+      flow populates it - any future agent-authored chat node could
+      reasonably want the same provenance recorded. None means "not
+      recorded" (every node created before this field existed, and every
+      ordinary chat reply, which already shows its route live in the
+      Composer rather than per-message).
+    - is_branch_synthesis: ADR-002 Workstream 1 ("Synthesize Branches") -
+      marks this node as the output of the Synthesize Branches agent (as
+      opposed to an ordinary user/assistant message) - the chat-node
+      equivalent of NoteState's own is_branch_comparison, which does the
+      same job for note-kind nodes. A distinct flag rather than reusing
+      is_branch_comparison: that flag's own kind-check
+      (mark_branch_comparison_note raises for a non-note node) would need
+      loosening for no benefit, and the two features render completely
+      different UI (a badge on a note vs. a badge + the instructions/
+      provider/model fields on a chat node).
+    - synthesis_instructions: the free-text instructions the user typed to
+      steer the synthesis (e.g. "merge the best parts of each"), recorded
+      on the result node so its provenance is fully inspectable later -
+      the ADR's own acceptance criterion for this feature.
+    - branch_status: ADR-002 Workstream 1 ("Branch status and lifecycle") -
+      the final, sequenced item after fork/compare/synthesize. One of
+      exactly "active" (the default - every existing and newly-created
+      chat node starts here), "accepted", "rejected", "superseded".
+      Chat-kind only, mirroring is_branch_synthesis's own chat-only
+      scoping - "a branch" is fundamentally a chain of chat nodes in this
+      data model (see chat_branch_history/get_branch_root, both of which
+      only ever walk chat-kind edges). Deliberately PER-NODE with NO
+      write-time inheritance/cascade to ancestors or descendants - there
+      is no materialized "Branch" object anywhere to cascade through even
+      if inheritance were wanted (a branch is discovered by walking
+      _branch_parent_edge upward on demand, never stored as a set).
+      "Reduce a graph to its accepted paths" is delivered by a separate,
+      frontend-only, read-time subtree derivation over this field
+      (SceneCanvas.tsx's own computeNonAcceptedNodeIds) - the same posture
+      "Hide Other Branches" already uses for a different subtree question,
+      not by inventing write-time cascade bookkeeping here."""
+
+    is_user: bool = False
+    chat_scroll_value: float = 0.0
+    content_parts: list[dict[str, Any]] | None = None
+    provider: str | None = None
+    model: str | None = None
+    is_branch_synthesis: bool = False
+    synthesis_instructions: str = ""
+    branch_status: str = "active"

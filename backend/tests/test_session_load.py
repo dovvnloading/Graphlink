@@ -36,7 +36,7 @@ def _restore(nodes=None, notes=None, pins=None, **chat_data_extra):
 def test_chat_node_is_user_defaults_true_when_key_missing():
     document = _restore(nodes=[{"node_type": "chat", "raw_content": "hey", "position": {"x": 0, "y": 0}}])
     node = next(iter(document.nodes.values()))
-    assert node.is_user is True
+    assert node.state.is_user is True
 
 
 def test_chat_node_raw_content_falls_back_to_legacy_text_key():
@@ -583,23 +583,23 @@ def test_restore_chat_payload_restores_synthesis_provenance_scalars():
         ),
     ])
     node = next(iter(document.nodes.values()))
-    assert node.provider == "Anthropic Claude"
-    assert node.model == "claude-sonnet-5"
-    assert node.is_branch_synthesis is True
-    assert node.synthesis_instructions == "merge them"
-    assert node.branch_status == "accepted"
+    assert node.state.provider == "Anthropic Claude"
+    assert node.state.model == "claude-sonnet-5"
+    assert node.state.is_branch_synthesis is True
+    assert node.state.synthesis_instructions == "merge them"
+    assert node.state.branch_status == "accepted"
 
 
 def test_restore_chat_payload_downgrades_an_unrecognized_branch_status_to_active():
     document = _restore(nodes=[_chat("n0", branch_status="archived")])
     node = next(iter(document.nodes.values()))
-    assert node.branch_status == "active"
+    assert node.state.branch_status == "active"
 
 
 def test_restore_chat_payload_defaults_branch_status_to_active_when_absent():
     document = _restore(nodes=[_chat("n0")])
     node = next(iter(document.nodes.values()))
-    assert node.branch_status == "active"
+    assert node.state.branch_status == "active"
 
 
 def test_restore_notes_restores_is_branch_comparison():

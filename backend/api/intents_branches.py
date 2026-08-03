@@ -195,8 +195,8 @@ def register_branches_intents(
         already established) so full provenance survives even though only
         one edge can be structural. Provider/model are stamped from
         composer_document.route() - the same route a plain send would
-        actually use - onto the result node (see SceneNode.provider/model's
-        own comment)."""
+        actually use - onto the result node (see ChatState's own comment,
+        backend/domain/node_states.py)."""
         ids = list(dict.fromkeys(str(i) for i in (node_ids or [])))  # de-dupe, preserve order
         if len(ids) < 2:
             notifications.show("Select at least 2 branches to synthesize.", "warning")

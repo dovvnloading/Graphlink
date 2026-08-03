@@ -349,8 +349,8 @@ def test_round_trip_preserves_every_edge_topologically():
     doc.connect(user.id, code.id)  # extra manual connection
 
     doc2 = _round_trip(doc)
-    user2 = next(n for n in doc2.nodes.values() if n.kind == "chat" and n.is_user)
-    ai2 = next(n for n in doc2.nodes.values() if n.kind == "chat" and not n.is_user)
+    user2 = next(n for n in doc2.nodes.values() if n.kind == "chat" and n.state.is_user)
+    ai2 = next(n for n in doc2.nodes.values() if n.kind == "chat" and not n.state.is_user)
     code2 = next(n for n in doc2.nodes.values() if n.kind == "code")
 
     assert len(doc2.edges) == len(doc.edges) == 3
@@ -445,12 +445,12 @@ def test_round_trip_preserves_synthesize_branches_full_shape():
     second2 = next(n for n in doc2.nodes.values() if n.content == "second branch reply")
     result2 = next(n for n in doc2.nodes.values() if n.content == "Combined answer")
 
-    assert result2.provider == "Anthropic Claude"
-    assert result2.model == "claude-sonnet-5"
-    assert result2.is_branch_synthesis is True
-    assert result2.synthesis_instructions == "merge them"
+    assert result2.state.provider == "Anthropic Claude"
+    assert result2.state.model == "claude-sonnet-5"
+    assert result2.state.is_branch_synthesis is True
+    assert result2.state.synthesis_instructions == "merge them"
     assert set(result2.item_ids) == {first2.id, second2.id}
-    assert result2.branch_status == "accepted"
+    assert result2.state.branch_status == "accepted"
     assert doc2.final_deliverable_node_id == result2.id
 
 

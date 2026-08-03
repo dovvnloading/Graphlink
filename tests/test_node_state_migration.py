@@ -17,9 +17,10 @@ name smuggled in as a getattr/setattr string argument.
 
 _KNOWN_NON_NODE_FIELD_ACCESS_SHAPES carves out a small, explicit,
 shape-based allowlist for the rare migrated field names (PR4's "code",
-PR6's "byte_size"/"mime_type"/"duration_seconds") that collide with an
-unrelated attribute on a genuinely different type elsewhere in the
-codebase - see its own comment for exactly which shapes and why.
+PR6's "byte_size"/"mime_type"/"duration_seconds", PR7's "provider") that
+collide with an unrelated attribute on a genuinely different type
+elsewhere in the codebase - see its own comment for exactly which shapes
+and why.
 
 test_scene_node_core_field_count (asserting the final <=15-field core
 exactly) is deferred to the stage's own exit PR, once every kind that has
@@ -75,6 +76,10 @@ MIGRATED_KIND_FIELDS = {
         "group_manual_x", "group_manual_y", "group_width", "group_height",
     ],
     "container": ["group_width", "group_height"],
+    "chat": [
+        "is_user", "chat_scroll_value", "content_parts", "provider", "model",
+        "is_branch_synthesis", "synthesis_instructions", "branch_status",
+    ],
 }
 
 
@@ -149,6 +154,17 @@ _KNOWN_NON_NODE_FIELD_ACCESS_SHAPES = {
     ),
     "mime_type": ({"root": "staged", "file": None},),
     "duration_seconds": ({"root": "staged", "file": None},),
+    # PR7's "chat" kind reuses "provider" (never "model" - confirmed no
+    # non-SceneNode ".model" access exists anywhere in SCAN_DIRS), which
+    # collides with two wholly unrelated types: a ResearchSource's own
+    # .provider (backend/canvas.py's _research_result_wire, iterating
+    # result.sources) and a ModelDescriptor's own .provider
+    # (backend/settings.py, iterating a get_available_model_descriptors()
+    # list) - neither is ever a SceneNode.
+    "provider": (
+        {"root": "s", "file": "canvas.py"},
+        {"root": "descriptor", "file": "settings.py"},
+    ),
 }
 
 
@@ -228,10 +244,26 @@ _EXPECTED_SCENE_NODE_WIRE_KEYS = sorted([
 ])
 
 
+def _non_owning_kind_node(doc):
+    """A node whose kind owns NONE of the currently-migrated fields, so
+    every scene_payload() isinstance guard hits its else-branch - the
+    right representative for both tests below. "thinking" is used
+    deliberately, not "chat": PR7 migrated chat's own 8 fields, so a chat
+    node can no longer serve this role - it would always hit the
+    isinstance-true branch for its OWN fields, silently skipping exactly
+    the class of bug these two tests exist to catch. "thinking" has zero
+    kind-specific fields (node.state stays None for it permanently, per
+    node_states.py's own docstring) and always will, since there is
+    nothing left to migrate off it - a stable choice regardless of which
+    kind migrates next."""
+    parent = doc.add_node(0, 0)
+    return doc.add_thinking_node(0, 0, "reasoning", parent_id=parent.id)
+
+
 def test_scene_payload_key_set_is_unchanged_by_the_migration():
     doc = SceneDocument()
-    doc.add_chat_node(0, 0, "hi", True)
-    row = doc.scene_payload()["nodes"][0]
+    _non_owning_kind_node(doc)
+    row = doc.scene_payload()["nodes"][-1]
     assert sorted(row.keys()) == _EXPECTED_SCENE_NODE_WIRE_KEYS
 
 
@@ -281,13 +313,21 @@ _EXPECTED_NON_OWNING_KIND_WIRE_DEFAULTS = {
     "isLocked": True,
     "groupWidth": None,
     "groupHeight": None,
+    "isUser": False,
+    "chatScrollValue": 0.0,
+    "contentParts": None,
+    "provider": None,
+    "model": None,
+    "isBranchSynthesis": False,
+    "synthesisInstructions": "",
+    "branchStatus": "active",
 }
 
 
 def test_migrated_field_wire_fallbacks_match_pre_migration_defaults():
     doc = SceneDocument()
-    doc.add_chat_node(0, 0, "hi", True)
-    row = doc.scene_payload()["nodes"][0]
+    _non_owning_kind_node(doc)
+    row = doc.scene_payload()["nodes"][-1]
     mismatches = [
         f"{key}: got {row[key]!r}, expected {expected!r}"
         for key, expected in _EXPECTED_NON_OWNING_KIND_WIRE_DEFAULTS.items()
