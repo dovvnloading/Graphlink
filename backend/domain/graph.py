@@ -88,6 +88,7 @@ from backend.domain.node_states import (
     ArtifactState,
     ChartState,
     ChatState,
+    CodeSandboxState,
     CodeState,
     ContainerState,
     DocumentState,
@@ -1178,7 +1179,7 @@ class SceneDocument(BranchOps, GroupOps):
             y=float(y),
             title="Virtual Environment Runner",
             kind="code_sandbox",
-            code_sandbox_sandbox_id=uuid.uuid4().hex[:12],
+            state=CodeSandboxState(code_sandbox_sandbox_id=uuid.uuid4().hex[:12]),
         )
         self.nodes[node_id] = node
         self.connect(parent_id, node_id)
@@ -1188,7 +1189,9 @@ class SceneDocument(BranchOps, GroupOps):
         node = self.nodes.get(node_id)
         if node is None:
             raise SceneError(f"unknown node: {node_id}")
-        node.code_sandbox_requirements = str(requirements_text)
+        if node.kind != "code_sandbox":
+            raise SceneError(f"node is not a code_sandbox node: {node_id}")
+        node.state.code_sandbox_requirements = str(requirements_text)
         return node
 
     def start_code_sandbox_run(self, node_id: str, input_text: str) -> SceneNode:
@@ -1204,8 +1207,8 @@ class SceneDocument(BranchOps, GroupOps):
             raise SceneError(f"unknown node: {node_id}")
         if node.kind != "code_sandbox":
             raise SceneError(f"node is not a code_sandbox node: {node_id}")
-        node.code_sandbox_prompt = str(input_text)
-        node.code_sandbox_error = ""
+        node.state.code_sandbox_prompt = str(input_text)
+        node.state.code_sandbox_error = ""
         return node
 
     def complete_code_sandbox_run(self, node_id: str, code: str, output: str, analysis: str) -> SceneNode | None:
@@ -1214,30 +1217,35 @@ class SceneDocument(BranchOps, GroupOps):
         an unrecovered failure after exhausting its own repair attempts
         surfaces as a failed run, see AgentDispatcher.start_code_sandbox_run,
         not as a "succeeded but flagged" result the way Py-Coder's repair
-        loop does)."""
+        loop does). Not kind-guarded: only ever reached via run_code_
+        sandbox's own on_success closure (backend/api/
+        intents_code_sandbox.py), whose node_id was already validated by
+        start_code_sandbox_run's own guard earlier in the same request -
+        same posture as complete_pycoder_run/complete_gitlink_run."""
         node = self.nodes.get(node_id)
         if node is None:
             return None
-        node.code_sandbox_code = str(code)
-        node.code_sandbox_output = str(output)
-        node.code_sandbox_analysis = str(analysis)
-        node.code_sandbox_awaiting_approval = False
-        node.code_sandbox_approval_requirements = ""
-        node.code_sandbox_approved_fingerprint = None
-        node.code_sandbox_error = ""
+        node.state.code_sandbox_code = str(code)
+        node.state.code_sandbox_output = str(output)
+        node.state.code_sandbox_analysis = str(analysis)
+        node.state.code_sandbox_awaiting_approval = False
+        node.state.code_sandbox_approval_requirements = ""
+        node.state.code_sandbox_approved_fingerprint = None
+        node.state.code_sandbox_error = ""
         return node
 
     def fail_code_sandbox_run(self, node_id: str, message: str) -> SceneNode | None:
         """Land a failed (or denied-approval, or cancelled) run - mirrors
         fail_pycoder_run exactly (same stale-while-revalidate posture, same
-        unconditional awaiting_approval clear)."""
+        unconditional awaiting_approval clear). Not kind-guarded - see
+        complete_code_sandbox_run's own comment."""
         node = self.nodes.get(node_id)
         if node is None:
             return None
-        node.code_sandbox_awaiting_approval = False
-        node.code_sandbox_approval_requirements = ""
-        node.code_sandbox_approved_fingerprint = None
-        node.code_sandbox_error = str(message)
+        node.state.code_sandbox_awaiting_approval = False
+        node.state.code_sandbox_approval_requirements = ""
+        node.state.code_sandbox_approved_fingerprint = None
+        node.state.code_sandbox_error = str(message)
         return node
 
     # -- R6.1: Notes/Frames/Containers ----------------------------------------
@@ -1821,27 +1829,40 @@ class SceneDocument(BranchOps, GroupOps):
                         n.state.pycoder_awaiting_approval if isinstance(n.state, PycoderState) else False
                     ),
                     "pycoderError": n.state.pycoder_error if isinstance(n.state, PycoderState) else "",
-                    # codeSandboxSandboxId is DELIBERATELY OMITTED - see the
-                    # field's own comment on SceneNode (pure internal
+                    # codeSandboxSandboxId is DELIBERATELY OMITTED - see
+                    # CodeSandboxState's own comment (pure internal
                     # directory-naming key, mirrors gitlink_imported_root's
                     # own "server-side bookkeeping only" precedent).
-                    "codeSandboxRequirements": n.code_sandbox_requirements,
-                    "codeSandboxPrompt": n.code_sandbox_prompt,
-                    "codeSandboxCode": n.code_sandbox_code,
-                    "codeSandboxOutput": n.code_sandbox_output,
-                    "codeSandboxAnalysis": n.code_sandbox_analysis,
-                    "codeSandboxAwaitingApproval": n.code_sandbox_awaiting_approval,
+                    "codeSandboxRequirements": (
+                        n.state.code_sandbox_requirements if isinstance(n.state, CodeSandboxState) else ""
+                    ),
+                    "codeSandboxPrompt": (
+                        n.state.code_sandbox_prompt if isinstance(n.state, CodeSandboxState) else ""
+                    ),
+                    "codeSandboxCode": n.state.code_sandbox_code if isinstance(n.state, CodeSandboxState) else "",
+                    "codeSandboxOutput": (
+                        n.state.code_sandbox_output if isinstance(n.state, CodeSandboxState) else ""
+                    ),
+                    "codeSandboxAnalysis": (
+                        n.state.code_sandbox_analysis if isinstance(n.state, CodeSandboxState) else ""
+                    ),
+                    "codeSandboxAwaitingApproval": (
+                        n.state.code_sandbox_awaiting_approval if isinstance(n.state, CodeSandboxState) else False
+                    ),
                     # R5.4 CODESANDBOX FIX: the frozen-at-approval-time
                     # snapshot, deliberately distinct from
                     # codeSandboxRequirements above (that one is the user's
                     # still-live, still-editable draft for the NEXT run) -
-                    # see the field's own comment on SceneNode.
-                    "codeSandboxApprovalRequirements": n.code_sandbox_approval_requirements,
-                    "codeSandboxError": n.code_sandbox_error,
+                    # see CodeSandboxState's own comment.
+                    "codeSandboxApprovalRequirements": (
+                        n.state.code_sandbox_approval_requirements if isinstance(n.state, CodeSandboxState) else ""
+                    ),
+                    "codeSandboxError": n.state.code_sandbox_error if isinstance(n.state, CodeSandboxState) else "",
                     # R6.1: Notes/Frames/Containers. groupManualWidth/Height
                     # are DELIBERATELY OMITTED, same "server-side bookkeeping
                     # only" posture as codeSandboxSandboxId/gitlinkImportedRoot
-                    # above - see those fields' own comments on SceneNode.
+                    # above - see those fields' own comments on
+                    # CodeSandboxState/GitlinkState.
                     "color": n.color,
                     "headerColor": n.header_color,
                     "isSystemPrompt": n.state.is_system_prompt if isinstance(n.state, NoteState) else False,

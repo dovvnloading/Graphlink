@@ -328,12 +328,12 @@ def _serialize_pycoder_node(node: SceneNode) -> dict[str, Any]:
 def _serialize_code_sandbox_node(node: SceneNode) -> dict[str, Any]:
     return {
         "node_type": "code_sandbox",
-        "prompt": node.code_sandbox_prompt,
-        "requirements": node.code_sandbox_requirements,
-        "code": node.code_sandbox_code,
-        "output": node.code_sandbox_output,
-        "analysis": node.code_sandbox_analysis,
-        "sandbox_id": node.code_sandbox_sandbox_id,
+        "prompt": node.state.code_sandbox_prompt,
+        "requirements": node.state.code_sandbox_requirements,
+        "code": node.state.code_sandbox_code,
+        "output": node.state.code_sandbox_output,
+        "analysis": node.state.code_sandbox_analysis,
+        "sandbox_id": node.state.code_sandbox_sandbox_id,
         "conversation_history": _serialize_history(node.history),
         "is_collapsed": bool(node.is_collapsed),
     }

@@ -361,6 +361,21 @@ _EXPECTED_NON_OWNING_KIND_WIRE_DEFAULTS = {
     "pycoderLastRunFailed": False,
     "pycoderAwaitingApproval": False,
     "pycoderError": "",
+    # ADR-002 stage 2.5 PR10a: code_sandbox's 8 wire keys (code_sandbox_
+    # sandbox_id/code_sandbox_approved_fingerprint are excluded from
+    # scene_payload(), same posture as gitlink_context_xml), moved onto
+    # CodeSandboxState behind the same transitional property shim as
+    # gitlink/pycoder - "code_sandbox" is likewise deliberately NOT yet
+    # added to MIGRATED_KIND_FIELDS above, for the identical AST-gate
+    # reason.
+    "codeSandboxRequirements": "",
+    "codeSandboxPrompt": "",
+    "codeSandboxCode": "",
+    "codeSandboxOutput": "",
+    "codeSandboxAnalysis": "",
+    "codeSandboxAwaitingApproval": False,
+    "codeSandboxApprovalRequirements": "",
+    "codeSandboxError": "",
 }
 
 

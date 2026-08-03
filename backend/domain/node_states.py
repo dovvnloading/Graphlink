@@ -477,6 +477,75 @@ class PycoderState(NodeState):
 
 
 @dataclass
+class CodeSandboxState(NodeState):
+    """Relocated verbatim from SceneNode's ten code_sandbox fields (former
+    backend/domain/model.py fields, R5.4) - the Execution Sandbox node's
+    real persisted shape: runs Python inside an isolated per-node
+    virtualenv (VirtualEnvSandbox, keyed by code_sandbox_sandbox_id) with
+    a per-node requirements.txt manifest. There is no mode field/toggle
+    here (unlike Py-Coder) - the real branch is "prompt blank AND code
+    already exists -> re-run existing code as-is; else -> generate from
+    prompt", resolved by the dispatch method checking code_sandbox_code
+    at call time (see AgentDispatcher.start_code_sandbox_run in
+    backend/agents.py).
+
+    - code_sandbox_sandbox_id: minted ONCE, at node-creation time (see
+      add_code_sandbox_node), and is a pure internal directory-naming
+      key - never shown or edited by the user, never even read by the
+      frontend. EXCLUDED from scene_payload() and from the codegen
+      SceneNodeRow source, mirroring gitlink_imported_root's own
+      "server-side bookkeeping only" precedent exactly.
+    - code_sandbox_requirements/code_sandbox_prompt/code_sandbox_code/
+      code_sandbox_output/code_sandbox_analysis: the user's live,
+      still-editable requirements manifest and prompt/code draft, and
+      the last run's stdout/analysis.
+    - code_sandbox_approval_requirements: R5.4 CODESANDBOX FIX (closing
+      the requirements-disclosure staleness race) - a display-only
+      SNAPSHOT of the EXACT requirements manifest string this specific
+      pending approval refers to - distinct from code_sandbox_
+      requirements (the user's still-live, still-editable draft for the
+      NEXT run). The real race this closes: AgentDispatcher.
+      start_code_sandbox_run (backend/agents.py) reads requirements_
+      manifest synchronously, at the very top of its own _run(), into a
+      local `manifest` variable - BEFORE the one real await in that
+      function (the asyncio.to_thread call to the generation agent). A
+      user can send a new setCodeSandboxRequirements intent during that
+      await window (it is ungated by any busy check), changing
+      code_sandbox_requirements to something different before the
+      approval panel is ever shown. Since the old approval panel
+      displayed the LIVE code_sandbox_requirements field, the disclosed
+      package list could differ from the manifest the backend actually
+      installs a moment later - showing the WRONG list is worse than
+      showing none for a security disclosure. This field is instead
+      populated from that SAME already-frozen local `manifest` variable,
+      at the exact moment code_sandbox_awaiting_approval flips True -
+      exposing a value already correctly frozen, not re-reading
+      anything live, so this introduces no new race. Cleared (empty
+      string) everywhere code_sandbox_awaiting_approval itself is
+      cleared: inline in start_code_sandbox_run immediately after the
+      approval future resolves, and in complete_code_sandbox_run/
+      fail_code_sandbox_run.
+    - code_sandbox_approved_fingerprint: ADR-002 P0 - same mechanism as
+      pycoder_approved_fingerprint, fingerprinting {"code":
+      code_sandbox_code, "manifest": code_sandbox_approval_requirements}
+      instead - see that field's own reasoning above. Internal
+      bookkeeping only, EXCLUDED from scene_payload().
+    - code_sandbox_error: the current run's error banner text, cleared
+      on the next attempt."""
+
+    code_sandbox_sandbox_id: str = ""
+    code_sandbox_requirements: str = ""
+    code_sandbox_prompt: str = ""
+    code_sandbox_code: str = ""
+    code_sandbox_output: str = ""
+    code_sandbox_analysis: str = ""
+    code_sandbox_awaiting_approval: bool = False
+    code_sandbox_approval_requirements: str = ""
+    code_sandbox_approved_fingerprint: str | None = None
+    code_sandbox_error: str = ""
+
+
+@dataclass
 class ChatState(NodeState):
     """Relocated verbatim from SceneNode's eight chat-only fields (former
     backend/domain/model.py fields). SceneNode's own `content` field

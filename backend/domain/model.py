@@ -186,61 +186,6 @@ class SceneNode:
     # way is_docked is a generic field even though today only one kind
     # populates it); unused (default None) for every other kind.
     pending_request_id: str | None = None
-    # R5.4: the Execution Sandbox node's real persisted shape - runs Python
-    # inside an isolated per-node virtualenv (VirtualEnvSandbox, keyed by
-    # code_sandbox_sandbox_id) with a per-node requirements.txt manifest.
-    # There is no mode field/toggle here (unlike Py-Coder) - the real branch
-    # is "prompt blank AND code already exists -> re-run existing code
-    # as-is; else -> generate from prompt", resolved by the dispatch method
-    # checking code_sandbox_code at call time (see
-    # AgentDispatcher.start_code_sandbox_run in backend/agents.py). Unused
-    # (default) for every other kind.
-    #
-    # code_sandbox_sandbox_id is minted ONCE, at node-creation time (see
-    # add_code_sandbox_node), and is a pure internal directory-naming key -
-    # never shown or edited by the user, never even read by the frontend.
-    # EXCLUDED from scene_payload() and from the codegen SceneNodeRow source,
-    # mirroring gitlink_imported_root's existing "server-side bookkeeping
-    # only, deliberately absent from scene_payload()" precedent exactly.
-    code_sandbox_sandbox_id: str = ""
-    code_sandbox_requirements: str = ""
-    code_sandbox_prompt: str = ""
-    code_sandbox_code: str = ""
-    code_sandbox_output: str = ""
-    code_sandbox_analysis: str = ""
-    code_sandbox_awaiting_approval: bool = False
-    # R5.4 CODESANDBOX FIX (closing the requirements-disclosure staleness
-    # race): a display-only SNAPSHOT of the EXACT requirements manifest
-    # string this specific pending approval refers to - distinct from
-    # code_sandbox_requirements (the user's still-live, still-editable draft
-    # for the NEXT run). The real race this closes: AgentDispatcher.
-    # start_code_sandbox_run (backend/agents.py) reads requirements_manifest
-    # synchronously, at the very top of its own _run(), into a local
-    # `manifest` variable - BEFORE the one real await in that function (the
-    # asyncio.to_thread call to the generation agent). A user can send a new
-    # setCodeSandboxRequirements intent during that await window (it is
-    # ungated by any busy check), changing code_sandbox_requirements to
-    # something different before the approval panel is ever shown. Since the
-    # old approval panel displayed the LIVE code_sandbox_requirements field,
-    # the disclosed package list could differ from the manifest the backend
-    # actually installs a moment later - showing the WRONG list is worse
-    # than showing none for a security disclosure. This field is instead
-    # populated from that SAME already-frozen local `manifest` variable, at
-    # the exact moment code_sandbox_awaiting_approval flips True - exposing a
-    # value already correctly frozen, not re-reading anything live, so this
-    # introduces no new race. Cleared (empty string) everywhere
-    # code_sandbox_awaiting_approval itself is cleared: inline in
-    # start_code_sandbox_run immediately after the approval future resolves,
-    # and in complete_code_sandbox_run/fail_code_sandbox_run below. Unused
-    # (default) for every other kind.
-    code_sandbox_approval_requirements: str = ""
-    # ADR-002 P0: same mechanism as pycoder_approved_fingerprint above,
-    # fingerprinting {"code": code_sandbox_code, "manifest":
-    # code_sandbox_approval_requirements} instead - see that field's own
-    # comment for the full reasoning. Internal bookkeeping only, EXCLUDED
-    # from scene_payload().
-    code_sandbox_approved_fingerprint: str | None = None
-    code_sandbox_error: str = ""
     # R6.1: Notes/Frames/Containers - shared color override for note/frame/
     # container kinds. Hex string like "#4a7c59"; None means "use the kind's
     # own default color", a rendering fallback that is entirely the
@@ -520,6 +465,97 @@ class SceneNode:
     @pycoder_error.setter
     def pycoder_error(self, value: str) -> None:
         self.state.pycoder_error = value
+
+    # -- ADR-002 stage 2.5 PR10a: transitional code_sandbox property shim --
+    #
+    # CodeSandboxState (backend/domain/node_states.py) now owns all 10
+    # code_sandbox_* fields - see that class's own docstring. Same
+    # transitional shim as the gitlink/pycoder blocks above: exists ONLY so
+    # backend/agents.py and the existing test suite keep working completely
+    # unchanged for the rest of this PR. Removed in the shim-removal
+    # follow-up PR, once every external site is converted to
+    # `.state.code_sandbox_x` directly and "code_sandbox" is added to
+    # tests/test_node_state_migration.py's MIGRATED_KIND_FIELDS.
+
+    @property
+    def code_sandbox_sandbox_id(self) -> str:
+        return self.state.code_sandbox_sandbox_id
+
+    @code_sandbox_sandbox_id.setter
+    def code_sandbox_sandbox_id(self, value: str) -> None:
+        self.state.code_sandbox_sandbox_id = value
+
+    @property
+    def code_sandbox_requirements(self) -> str:
+        return self.state.code_sandbox_requirements
+
+    @code_sandbox_requirements.setter
+    def code_sandbox_requirements(self, value: str) -> None:
+        self.state.code_sandbox_requirements = value
+
+    @property
+    def code_sandbox_prompt(self) -> str:
+        return self.state.code_sandbox_prompt
+
+    @code_sandbox_prompt.setter
+    def code_sandbox_prompt(self, value: str) -> None:
+        self.state.code_sandbox_prompt = value
+
+    @property
+    def code_sandbox_code(self) -> str:
+        return self.state.code_sandbox_code
+
+    @code_sandbox_code.setter
+    def code_sandbox_code(self, value: str) -> None:
+        self.state.code_sandbox_code = value
+
+    @property
+    def code_sandbox_output(self) -> str:
+        return self.state.code_sandbox_output
+
+    @code_sandbox_output.setter
+    def code_sandbox_output(self, value: str) -> None:
+        self.state.code_sandbox_output = value
+
+    @property
+    def code_sandbox_analysis(self) -> str:
+        return self.state.code_sandbox_analysis
+
+    @code_sandbox_analysis.setter
+    def code_sandbox_analysis(self, value: str) -> None:
+        self.state.code_sandbox_analysis = value
+
+    @property
+    def code_sandbox_awaiting_approval(self) -> bool:
+        return self.state.code_sandbox_awaiting_approval
+
+    @code_sandbox_awaiting_approval.setter
+    def code_sandbox_awaiting_approval(self, value: bool) -> None:
+        self.state.code_sandbox_awaiting_approval = value
+
+    @property
+    def code_sandbox_approval_requirements(self) -> str:
+        return self.state.code_sandbox_approval_requirements
+
+    @code_sandbox_approval_requirements.setter
+    def code_sandbox_approval_requirements(self, value: str) -> None:
+        self.state.code_sandbox_approval_requirements = value
+
+    @property
+    def code_sandbox_approved_fingerprint(self) -> str | None:
+        return self.state.code_sandbox_approved_fingerprint
+
+    @code_sandbox_approved_fingerprint.setter
+    def code_sandbox_approved_fingerprint(self, value: str | None) -> None:
+        self.state.code_sandbox_approved_fingerprint = value
+
+    @property
+    def code_sandbox_error(self) -> str:
+        return self.state.code_sandbox_error
+
+    @code_sandbox_error.setter
+    def code_sandbox_error(self, value: str) -> None:
+        self.state.code_sandbox_error = value
 
 
 @dataclass
