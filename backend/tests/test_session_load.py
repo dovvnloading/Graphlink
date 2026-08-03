@@ -153,7 +153,7 @@ def test_pycoder_mode_translates_enum_member_name_to_lowercase():
          "output": "1", "analysis": "ok", "position": {"x": 0, "y": 0}, "parent_node_index": 0},
     ])
     node = next(n for n in document.nodes.values() if n.kind == "pycoder")
-    assert node.pycoder_mode == "manual"
+    assert node.state.pycoder_mode == "manual"
 
 
 def test_code_sandbox_field_mapping():

@@ -88,6 +88,11 @@ MIGRATED_KIND_FIELDS = {
         "gitlink_pending_changes", "gitlink_preview_text", "gitlink_change_fingerprint",
         "gitlink_change_local_root", "gitlink_change_state", "gitlink_error",
     ],
+    "pycoder": [
+        "pycoder_mode", "pycoder_prompt", "pycoder_code", "pycoder_output", "pycoder_analysis",
+        "pycoder_last_run_failed", "pycoder_awaiting_approval", "pycoder_approved_fingerprint",
+        "pycoder_error",
+    ],
 }
 
 

@@ -1048,7 +1048,7 @@ class SceneDocument(BranchOps, GroupOps):
     # confirmed genuinely dead code (grepped the whole repo: their only
     # references were this definition and their own dedicated unit tests,
     # zero real call sites). The human-approval gate that actually runs
-    # mutates node.pycoder_code/pycoder_awaiting_approval directly inline
+    # mutates node.state.pycoder_code/pycoder_awaiting_approval directly inline
     # inside AgentDispatcher.start_pycoder_run (backend/agents.py) - these two
     # SceneDocument methods were a second, never-wired copy of that same
     # mutation, built ahead of the live dispatch path and then never rewired

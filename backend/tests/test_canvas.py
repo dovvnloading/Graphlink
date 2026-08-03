@@ -4492,14 +4492,14 @@ def test_add_pycoder_node_creates_child_with_defaults():
     node = doc.add_pycoder_node(10, 20, parent.id)
     assert node.kind == "pycoder"
     assert node.title == "Py-Coder"
-    assert node.pycoder_mode == "ai_driven"
-    assert node.pycoder_prompt == ""
-    assert node.pycoder_code == ""
-    assert node.pycoder_output == ""
-    assert node.pycoder_analysis == ""
-    assert node.pycoder_last_run_failed is False
-    assert node.pycoder_awaiting_approval is False
-    assert node.pycoder_error == ""
+    assert node.state.pycoder_mode == "ai_driven"
+    assert node.state.pycoder_prompt == ""
+    assert node.state.pycoder_code == ""
+    assert node.state.pycoder_output == ""
+    assert node.state.pycoder_analysis == ""
+    assert node.state.pycoder_last_run_failed is False
+    assert node.state.pycoder_awaiting_approval is False
+    assert node.state.pycoder_error == ""
     assert any(e.source == parent.id and e.target == node.id for e in doc.edges.values())
 
 
@@ -4526,7 +4526,7 @@ def test_set_pycoder_mode_sets_the_field():
     node = doc.add_pycoder_node(0, 0, parent.id)
     returned = doc.set_pycoder_mode(node.id, "manual")
     assert returned is node
-    assert node.pycoder_mode == "manual"
+    assert node.state.pycoder_mode == "manual"
 
 
 def test_set_pycoder_mode_rejects_unknown_mode():
@@ -4546,13 +4546,13 @@ def test_start_pycoder_run_ai_driven_stores_prompt_and_clears_error():
     doc = SceneDocument()
     parent = doc.add_node(0, 0, "parent")
     node = doc.add_pycoder_node(0, 0, parent.id)
-    node.pycoder_error = "a previous error"
+    node.state.pycoder_error = "a previous error"
 
     returned = doc.start_pycoder_run(node.id, "sort this list")
 
     assert returned is node
-    assert node.pycoder_prompt == "sort this list"
-    assert node.pycoder_error == ""
+    assert node.state.pycoder_prompt == "sort this list"
+    assert node.state.pycoder_error == ""
 
 
 def test_start_pycoder_run_manual_stores_code_not_prompt():
@@ -4563,8 +4563,8 @@ def test_start_pycoder_run_manual_stores_code_not_prompt():
 
     doc.start_pycoder_run(node.id, "print('hi')")
 
-    assert node.pycoder_code == "print('hi')"
-    assert node.pycoder_prompt == ""
+    assert node.state.pycoder_code == "print('hi')"
+    assert node.state.pycoder_prompt == ""
 
 
 def test_start_pycoder_run_unknown_node_raises_scene_error():
@@ -4584,18 +4584,18 @@ def test_complete_pycoder_run_sets_all_fields_and_clears_approval_and_error():
     doc = SceneDocument()
     parent = doc.add_node(0, 0, "parent")
     node = doc.add_pycoder_node(0, 0, parent.id)
-    node.pycoder_awaiting_approval = True
-    node.pycoder_error = "stale error"
+    node.state.pycoder_awaiting_approval = True
+    node.state.pycoder_error = "stale error"
 
     returned = doc.complete_pycoder_run(node.id, "print(1)", "1", "analysis text", False)
 
     assert returned is node
-    assert node.pycoder_code == "print(1)"
-    assert node.pycoder_output == "1"
-    assert node.pycoder_analysis == "analysis text"
-    assert node.pycoder_last_run_failed is False
-    assert node.pycoder_awaiting_approval is False
-    assert node.pycoder_error == ""
+    assert node.state.pycoder_code == "print(1)"
+    assert node.state.pycoder_output == "1"
+    assert node.state.pycoder_analysis == "analysis text"
+    assert node.state.pycoder_last_run_failed is False
+    assert node.state.pycoder_awaiting_approval is False
+    assert node.state.pycoder_error == ""
 
 
 def test_complete_pycoder_run_is_a_silent_noop_for_a_deleted_node():
@@ -4606,21 +4606,21 @@ def test_fail_pycoder_run_sets_error_clears_approval_but_preserves_output():
     doc = SceneDocument()
     parent = doc.add_node(0, 0, "parent")
     node = doc.add_pycoder_node(0, 0, parent.id)
-    node.pycoder_code = "print(1)"
-    node.pycoder_output = "1"
-    node.pycoder_analysis = "old analysis"
-    node.pycoder_awaiting_approval = True
+    node.state.pycoder_code = "print(1)"
+    node.state.pycoder_output = "1"
+    node.state.pycoder_analysis = "old analysis"
+    node.state.pycoder_awaiting_approval = True
 
     returned = doc.fail_pycoder_run(node.id, "execution timed out")
 
     assert returned is node
-    assert node.pycoder_error == "execution timed out"
-    assert node.pycoder_awaiting_approval is False
+    assert node.state.pycoder_error == "execution timed out"
+    assert node.state.pycoder_awaiting_approval is False
     # stale-while-revalidate: a failed run must not wipe out a previously
     # completed result.
-    assert node.pycoder_code == "print(1)"
-    assert node.pycoder_output == "1"
-    assert node.pycoder_analysis == "old analysis"
+    assert node.state.pycoder_code == "print(1)"
+    assert node.state.pycoder_output == "1"
+    assert node.state.pycoder_analysis == "old analysis"
 
 
 def test_fail_pycoder_run_is_a_silent_noop_for_a_deleted_node():
@@ -4817,7 +4817,7 @@ def test_set_pycoder_mode_intent_publishes_scene():
 
         await bus.dispatch_intent("scene", "setPyCoderMode", [node.id, "manual"])
 
-        assert document.nodes[node.id].pycoder_mode == "manual"
+        assert document.nodes[node.id].state.pycoder_mode == "manual"
 
     asyncio.run(run())
 
@@ -4874,7 +4874,7 @@ def test_run_pycoder_intent_dispatches_with_correct_node_fields():
         result = await bus.dispatch_intent("scene", "runPyCoder", [node.id, "sort this list"])
 
         assert result == node.id
-        assert document.nodes[node.id].pycoder_prompt == "sort this list"
+        assert document.nodes[node.id].state.pycoder_prompt == "sort this list"
         assert len(fake_dispatcher.calls) == 1
         call = fake_dispatcher.calls[0]
         assert call["mode"] == "ai_driven"
@@ -5128,10 +5128,10 @@ def test_remove_nodes_cancels_the_dispatchers_pycoder_request_when_deleted_mid_a
         # test_code_sandbox_blank_prompt_with_existing_code_reuses_it_...
         # uses for the equivalent code_sandbox gate.
         for _ in range(200):
-            if pycoder_node.pycoder_awaiting_approval or entry["task"].done():
+            if pycoder_node.state.pycoder_awaiting_approval or entry["task"].done():
                 break
             await asyncio.sleep(0.005)
-        assert pycoder_node.pycoder_awaiting_approval is True, "must genuinely be parked on the approval gate"
+        assert pycoder_node.state.pycoder_awaiting_approval is True, "must genuinely be parked on the approval gate"
         assert request_id in pycoder_slots(dispatcher)
 
         await bus.dispatch_intent("scene", "removeNodes", [[pycoder_node.id]])
