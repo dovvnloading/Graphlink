@@ -27,7 +27,7 @@ import os
 import time
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -37,6 +37,14 @@ from backend import BACKEND_VERSION
 from backend.about import register_about
 from backend.agents import bootstrap_provider_state, register_agents
 from backend.assets import register_assets
+from backend.auth import (
+    AUTH_HEADER,
+    AUTH_QUERY_PARAM,
+    extract_presented_token,
+    is_guarded_path,
+    resolve_configured_token,
+    token_matches,
+)
 from backend.canvas import register_canvas
 from backend.chat_library import register_chat_library
 from backend.composer import register_composer
@@ -212,8 +220,22 @@ def create_app(
     settings_state_file: Path | None = None,
     chat_db_path: Path | None = None,
     previous_run_crashed: bool = False,
+    auth_token: str | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Graphlink backend", version=BACKEND_VERSION)
+    # ADR-004 stage 4.1: the per-launch capability token gating /api/* and
+    # /ws - see backend/auth.py's own docstring for the threat (audit C5) and
+    # why a token rather than accounts. None means "auth disabled", which is
+    # what a bare create_app() in a test gets; the real launch path always
+    # passes one (asserted by tests/test_graphlink_desktop.py, so shipping
+    # with auth off is a test failure rather than a silent regression).
+    resolved_auth_token = resolve_configured_token(auth_token)
+    app.state.auth_token = resolved_auth_token
+    if resolved_auth_token is None:
+        logger.warning(
+            "no capability token configured - /api and /ws are UNAUTHENTICATED "
+            "(expected only in tests; the desktop shell always mints one)"
+        )
     # ONE SettingsManager for the whole app (it owns a single shared
     # ~/.graphlink/session.dat file), shared across every session rather
     # than reconstructed per-session - see backend/settings.py's docstring.
@@ -229,8 +251,45 @@ def create_app(
     )
     app.state.bus = bus
 
+    @app.middleware("http")
+    async def require_capability_token(request: Request, call_next):
+        """ADR-004 stage 4.1: gate every /api/* request on the capability
+        token. Registered as middleware rather than a per-route dependency
+        so a future route added under /api/ is covered by construction -
+        forgetting a decorator is exactly how this kind of guard rots.
+
+        Deliberately does NOT gate the SPA bootstrap (GET /, /assets/*, the
+        client-side-route catch-all): the initial page load cannot carry a
+        header, and those routes only serve the public build output. See
+        backend/auth.py's docstring.
+
+        Note this never sees WebSocket connections - Starlette's HTTP
+        middleware stack only runs for scope["type"] == "http", so /ws is
+        guarded separately inside ws_endpoint below. That is a real
+        constraint of the framework, not a stylistic split, and it is why
+        the two checks cannot be collapsed into one place.
+        """
+        if resolved_auth_token is not None and is_guarded_path(request.url.path):
+            presented = extract_presented_token(
+                request.headers.get(AUTH_HEADER),
+                request.query_params.get(AUTH_QUERY_PARAM),
+            )
+            if not token_matches(resolved_auth_token, presented):
+                # Uniform 401 with no detail: never distinguish "no token"
+                # from "wrong token" from "malformed header", so this is not
+                # an oracle for probing the token's shape.
+                logger.warning("rejected unauthenticated request: %s", request.url.path)
+                return JSONResponse({"error": "unauthorized"}, status_code=401)
+        return await call_next(request)
+
     @app.get("/api/health")
     async def health() -> JSONResponse:
+        # Gated like every other /api route (ADR-004 §1 says "every /api/*
+        # request", and this is deliberately not carved out): the only real
+        # caller is graphlink_desktop.py's own startup poll, which minted the
+        # token and passes it. Leaving it open would hand any local process a
+        # free "is Graphlink running, and what version" fingerprinting oracle
+        # for no benefit the shell needs.
         return JSONResponse({"status": "ok", "app": "graphlink", "version": BACKEND_VERSION})
 
     # R3.21: GET /api/assets/{id} - the image-node byte-serving route (see
@@ -252,6 +311,27 @@ def create_app(
             logger.warning("rejected WS handshake: origin=%r host=%r", origin, host_header)
             await websocket.close(code=1008)
             return
+        # ADR-004 stage 4.1: the capability token, checked IN ADDITION to the
+        # origin check above - defense in depth, and the two defend genuinely
+        # different threats. The origin check stops a malicious PAGE in the
+        # user's browser (which cannot forge Origin); it cannot stop a local
+        # PROCESS, which can send any Origin it likes or omit it entirely
+        # (the deliberately-allowed "absent Origin" branch in
+        # _is_allowed_ws_origin). The token is what closes that second hole -
+        # see backend/auth.py's docstring on audit finding C5.
+        if resolved_auth_token is not None:
+            presented = extract_presented_token(
+                websocket.headers.get(AUTH_HEADER),
+                websocket.query_params.get(AUTH_QUERY_PARAM),
+            )
+            if not token_matches(resolved_auth_token, presented):
+                logger.warning("rejected unauthenticated WS handshake: origin=%r", origin)
+                # 1008 (policy violation), matching the origin rejection just
+                # above - closed before accept(), so no session is created and
+                # an unauthenticated caller cannot reach the C6 session-growth
+                # vector either.
+                await websocket.close(code=1008)
+                return
         session_id = websocket.query_params.get("session", "default")
         try:
             session = bus.session(session_id)

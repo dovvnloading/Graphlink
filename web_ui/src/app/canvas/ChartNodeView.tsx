@@ -1,5 +1,6 @@
 import { Handle, NodeResizer, Position, useStore, type Node, type NodeProps } from "@xyflow/react";
 import { useEffect, useRef, useState } from "react";
+import { withAuthToken } from "../../lib/auth/token";
 import {
   CHART_MAX_HEIGHT,
   CHART_MAX_WIDTH,
@@ -84,7 +85,11 @@ export type ChartFlowNode = Node<ChartNodeData, "chart">;
  * as a different URL and actually refetches instead of serving a cached
  * response. */
 export function chartAssetUrl(chartAssetId: string, version: number): string {
-  return `/api/assets/${chartAssetId}?v=${version}`;
+  // ADR-004 stage 4.1: the capability token appends AFTER the `v` param
+  // (withAuthToken picks "&" because a query string already exists), same
+  // browser-image-loader-cannot-send-headers reason as ImageNodeView's own
+  // assetUrl. A no-op when no token is present.
+  return withAuthToken(`/api/assets/${chartAssetId}?v=${version}`);
 }
 
 /** The dedicated export endpoint (a real 3x-resolution re-render - see
@@ -93,7 +98,9 @@ export function chartAssetUrl(chartAssetId: string, version: number): string {
  * mirrors this app's single-session-per-window assumption everywhere else
  * (see lib/ws/transport.ts's own defaultWsUrl default parameter). */
 export function chartExportUrl(nodeId: string): string {
-  return `/api/assets/chart/${nodeId}/export?session=default`;
+  // ADR-004 stage 4.1: this one is a plain <a href> the user clicks, so it
+  // has no way to carry a header either - same query-param treatment.
+  return withAuthToken(`/api/assets/chart/${nodeId}/export?session=default`);
 }
 
 function chartTypeBadgeLabel(chartType: string): string {
