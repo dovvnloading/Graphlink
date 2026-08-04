@@ -30,6 +30,7 @@ These tests run on real DPAPI (Windows dev machines and the windows-latest
 CI runner).
 """
 
+import base64
 import json
 import os
 import stat
@@ -181,6 +182,62 @@ class TestLegacyPlaintextMigration:
 
         stored_twice = json.loads(state_file.read_text(encoding="utf-8"))["github_access_token"]
         assert stored_twice == stored_once
+
+    @staticmethod
+    def _corrupt_a_real_blob(secret: str) -> str:
+        """A real DPAPI blob (genuinely encrypted, then had a byte flipped) -
+        stands in for a session.dat migrated from a different Windows
+        account, or one damaged on disk. Still has the "dpapi:" prefix and
+        still decodes as valid base64 (so it passes graphlink_secrets'
+        cheap structural checks), but CryptUnprotectData can no longer
+        decrypt it - the exact shape that used to fool migration's old
+        "try to decrypt to decide if it's already encrypted" heuristic."""
+        real_blob = graphlink_secrets.protect(secret)
+        prefix, encoded = real_blob.split(":", 1)
+        raw_bytes = bytearray(base64.b64decode(encoded))
+        raw_bytes[0] ^= 0xFF
+        return f"{prefix}:{base64.b64encode(bytes(raw_bytes)).decode('ascii')}"
+
+    def test_a_foreign_or_corrupted_blob_is_left_alone_by_migration_not_double_wrapped(self, tmp_path):
+        # Regression for an adversarial-review finding: migration used to
+        # call protect() unconditionally on every stored secret, and
+        # protect()'s own idempotency check tries to DECRYPT the value to
+        # decide "already encrypted, leave alone". For a blob this account
+        # genuinely can't decrypt, that attempt fails, so the OLD code
+        # concluded it must be plaintext and RE-ENCRYPTED (double-wrapped)
+        # it under this account's key - turning the documented, tested
+        # "not configured" (unprotect() returning "" for an undecryptable
+        # blob) into a silently garbage "configured" key instead.
+        corrupted_blob = self._corrupt_a_real_blob("sk-genuine-secret")
+        assert graphlink_secrets.unprotect(corrupted_blob) == ""  # sanity: genuinely undecryptable
+
+        state_file = tmp_path / "session.dat"
+        self._write_legacy_state(state_file, openai_api_key=corrupted_blob)
+
+        manager = SettingsManager(state_file)
+
+        assert manager.get_openai_key() == ""  # clean "not configured" - not garbage
+        raw = json.loads(state_file.read_text(encoding="utf-8"))
+        assert raw["openai_api_key"] == corrupted_blob  # untouched on disk - no double-wrap
+
+    def test_a_foreign_or_corrupted_blob_stays_untouched_across_repeated_launches(self, tmp_path):
+        # Not a byte-for-byte file comparison - _load_state fills in
+        # unrelated missing default fields on this legacy-shaped fixture
+        # regardless of secrets, so the file IS rewritten for THAT reason.
+        # What must stay constant across every launch is the stored secret
+        # value itself: still the original corrupted blob, never
+        # re-wrapped, never replaced with "".
+        corrupted_blob = self._corrupt_a_real_blob("sk-genuine-secret")
+        state_file = tmp_path / "session.dat"
+        self._write_legacy_state(state_file, github_access_token=corrupted_blob)
+
+        SettingsManager(state_file)
+        first_stored = json.loads(state_file.read_text(encoding="utf-8"))["github_access_token"]
+        manager = SettingsManager(state_file)  # a second, then third launch
+        second_stored = json.loads(state_file.read_text(encoding="utf-8"))["github_access_token"]
+
+        assert first_stored == second_stored == corrupted_blob
+        assert manager.get_github_token() == ""
 
 
 class TestGracefulDegradationWithoutDpapi:

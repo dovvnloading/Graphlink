@@ -142,10 +142,52 @@ class SettingsManager:
         plaintext value, re-protect it and persist immediately so the plaintext leaves
         disk on the first launch after upgrading, not whenever the user next happens
         to touch a setting. Where DPAPI is unavailable, protect() returns the value
-        unchanged, so nothing is rewritten and nothing regresses."""
+        unchanged, so nothing is rewritten and nothing regresses.
+
+        Adversarial-review fix: only ever acts on a value that has NO "dpapi:"
+        prefix at all (a cheap, unambiguous check - graphlink_secrets.is_protected).
+        A value that already carries the prefix is left untouched here,
+        regardless of whether it happens to be currently decryptable.
+
+        This closes a real bug: the previous version called protect() on
+        every stored value unconditionally. protect()'s own idempotency
+        check (_is_encrypted_blob) tries to DECRYPT the value to decide
+        "already encrypted, leave alone" - and for a genuine DPAPI blob
+        that simply isn't decryptable right now (session.dat copied to a
+        different Windows account/machine, or a corrupted blob), decryption
+        fails, so protect() concluded it must be plaintext and
+        RE-ENCRYPTED (double-wrapped) it under the current account's key.
+        From then on the getter would successfully decrypt this new
+        wrapper and return the literal base64 text of the original
+        undecryptable blob as if it were the real secret - silent garbage,
+        not the documented, tested "" that unprotect() promises for an
+        undecryptable blob (test_undecryptable_blob_returns_empty_not_garbage).
+        A user migrating a profile to a new PC would see no warning
+        (secrets_encrypted_at_rest() stays True - DPAPI genuinely works on
+        the new account) but their provider would silently fail to
+        authenticate with garbage instead of cleanly prompting for a new
+        key.
+
+        Accepted tradeoff: a secret that is somehow stored as literal
+        PLAINTEXT that itself happens to start with "dpapi:" (e.g. typed as
+        a proxy master key while DPAPI was unavailable) will no longer be
+        auto-migrated to real encryption here - protect()'s own
+        prefix-collision handling (see its docstring) only ever mattered
+        for a value passed to protect() directly, e.g. from a fresh save;
+        there is no way to distinguish that case from a genuine
+        undecryptable blob without attempting decryption, which is exactly
+        the ambiguous check that caused the bug this closes. Silently
+        risking a corrupted credential turning into an accepted garbage
+        key is worse than a contrived, unmigrated edge case whose getter
+        already cleanly returns "" today whenever its literal text isn't
+        also valid base64 (the overwhelmingly common case for real typed
+        text) - so this tradeoff was deliberately made in the safer
+        direction."""
         migrated = False
         for key in self.SECRET_KEYS:
             current_value = str(self.state.get(key, "") or "")
+            if not current_value or graphlink_secrets.is_protected(current_value):
+                continue
             protected_value = self._protect_and_track(current_value)
             if protected_value != current_value:
                 self.state[key] = protected_value
