@@ -18,10 +18,12 @@ export interface AppSettingsState {
   enableSystemPrompt: boolean;
   notificationPreferences: Record<string, boolean>;
   githubTokenConfigured: boolean;
+  secretsEncryptedAtRest: boolean;
   activeApiProvider: string;
   viewingApiProvider: string;
   apiBaseUrl: string;
   apiKeyConfigured: Record<string, boolean>;
+  apiKeySource: Record<string, string>;
   apiModels: Record<string, string>;
   apiModelCatalog: ApiModelDescriptor[];
   apiCatalogStatus: string;
@@ -134,6 +136,11 @@ function checkAppSettingsState(value: unknown, path: string, errors: string[]): 
     else { if (typeof fieldValue !== "boolean") errors.push(`${path}.githubTokenConfigured` + ": expected boolean"); }
   }
   {
+    const fieldValue = value["secretsEncryptedAtRest"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.secretsEncryptedAtRest: missing required field`);
+    else { if (typeof fieldValue !== "boolean") errors.push(`${path}.secretsEncryptedAtRest` + ": expected boolean"); }
+  }
+  {
     const fieldValue = value["activeApiProvider"];
     if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.activeApiProvider: missing required field`);
     else { if (typeof fieldValue !== "string") errors.push(`${path}.activeApiProvider` + ": expected string"); }
@@ -153,6 +160,12 @@ function checkAppSettingsState(value: unknown, path: string, errors: string[]): 
     if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.apiKeyConfigured: missing required field`);
     else { if (!isRecord(fieldValue)) errors.push(`${path}.apiKeyConfigured` + ": expected object");
     else Object.entries(fieldValue as Record<string, unknown>).forEach(([k, v]) => { if (typeof v !== "boolean") errors.push(`${path}.apiKeyConfigured` + `[${JSON.stringify(k)}]` + ": expected boolean"); }); }
+  }
+  {
+    const fieldValue = value["apiKeySource"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.apiKeySource: missing required field`);
+    else { if (!isRecord(fieldValue)) errors.push(`${path}.apiKeySource` + ": expected object");
+    else Object.entries(fieldValue as Record<string, unknown>).forEach(([k, v]) => { if (typeof v !== "string") errors.push(`${path}.apiKeySource` + `[${JSON.stringify(k)}]` + ": expected string"); }); }
   }
   {
     const fieldValue = value["apiModels"];

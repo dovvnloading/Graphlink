@@ -3463,15 +3463,23 @@ mark.document-view-search-match-current {
 }
 
 .settings-dialog .overlay-dialog-body {
+  display: flex;
+  flex-direction: column;
   padding: 0;
   flex: 1;
   min-height: 0;
   overflow: hidden;
 }
 
+/* ADR-004 stage 4.4: the optional .settings-secrets-warning banner is now
+   a sibling before this element (see SettingsDialog.tsx) - flex:1 +
+   min-height:0 lets it share .overlay-dialog-body's column with that
+   banner instead of always claiming a fixed 100%, which would push the
+   rail/page below the dialog's clipped (overflow:hidden) bottom edge. */
 .settings-shell {
   display: flex;
-  height: 100%;
+  flex: 1;
+  min-height: 0;
 }
 
 .settings-rail {
@@ -3644,6 +3652,33 @@ mark.document-view-search-match-current {
 .settings-update-status {
   margin: 0;
   font-size: 12px;
+  color: var(--gl-surface-text-muted);
+}
+
+/* ADR-004 stage 4.4: persistent banner shown above .settings-shell when
+   DPAPI is unavailable/failing, so every secret is being saved in
+   plaintext. Reuses .settings-update-status's own 12px/margin:0 baseline
+   (see SettingsDialog.tsx) but layers on padding/background/border so it
+   reads as a standing alert rather than routine status text, and pins
+   flex-shrink:0 so .settings-shell's flex:1 never squeezes it. Uses the
+   warning (not error) semantic color - unlike .code-exec-approval-warning,
+   this is a degraded-but-functional state, not a blocked action. */
+.settings-secrets-warning {
+  flex-shrink: 0;
+  padding: 10px 16px;
+  line-height: 1.4;
+  color: var(--gl-semantic-status-warning, currentColor);
+  background-color: var(--gl-surface-inset, var(--gl-surface-window));
+  border-bottom: 1px solid var(--gl-surface-border);
+}
+
+/* ADR-004 stage 4.4: small note under the API Key input when the key
+   actually in effect is coming from an environment variable rather than a
+   saved Settings value (see SettingsDialog.tsx's apiKeySource check). Sits
+   inside .settings-field's own flex column, so its 6px gap already
+   provides the spacing above - only font styling is needed here. */
+.settings-field-hint {
+  font-size: 11px;
   color: var(--gl-surface-text-muted);
 }
 

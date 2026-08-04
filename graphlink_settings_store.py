@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -11,6 +12,8 @@ from graphlink_model_catalog import (
     assignment_values,
     normalize_model_id,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _is_llama_cpp_gguf_path(path_value) -> bool:
@@ -59,7 +62,78 @@ class SettingsManager:
         self.state = self._load_state()
         if self._state_needs_save:
             self._save_state()
+        # ADR-004 stage 4.4: this is only the INITIAL value - not re-probed
+        # on every settings_payload read, since dpapi_available() does a
+        # real WinAPI round-trip. It IS kept honest afterward: every real
+        # secret save routes through _protect_and_track (see that method's
+        # own docstring), which updates this flag from the actual outcome
+        # of that specific protect() call - a fix for an adversarial-review
+        # finding where a construction-time-only probe could silently
+        # diverge from reality (DPAPI failing or recovering between
+        # construction and a later save left the UI banner stuck on a
+        # stale answer). This initial probe must still run BEFORE
+        # _migrate_plaintext_secrets below so that call's own
+        # protect()-driven migration and this flag agree on the same
+        # DPAPI state from the very first observation.
+        self._secrets_encrypted_at_rest = graphlink_secrets.dpapi_available()
         self._migrate_plaintext_secrets()
+        # ADR-004 stage 4.4: self-heal permissions on every launch, not
+        # just on the next write - see _save_state's own comment for why
+        # POSIX 0600 matters here (session.dat holds the encrypted-or-
+        # plaintext API keys/GitHub token). No-op on Windows: os.chmod
+        # there only toggles the read-only attribute bit, which a
+        # freshly-written settings file never has anyway - real access
+        # control on Windows comes from the per-user profile + DPAPI's own
+        # account binding, not POSIX permission bits.
+        if self.state_file.exists():
+            try:
+                os.chmod(self.state_file, 0o600)
+            except OSError:
+                logger.warning(
+                    "could not chmod %s to 0600 - continuing with existing permissions", self.state_file
+                )
+
+    def secrets_encrypted_at_rest(self) -> bool:
+        """ADR-004 stage 4.4: the flag backend/settings.py's wire payload
+        surfaces as secretsEncryptedAtRest, and the Settings UI renders as
+        a persistent badge when False ("API keys are stored unencrypted on
+        this system") - see graphlink_secrets.dpapi_available's own
+        docstring for what the INITIAL value means, and _protect_and_track's
+        docstring for how it's kept accurate across real secret saves after
+        that."""
+        return self._secrets_encrypted_at_rest
+
+    def _protect_and_track(self, value: str) -> str:
+        """graphlink_secrets.protect(), plus refreshing the cached
+        secrets_encrypted_at_rest() flag from a REAL probe taken at the
+        same moment - adversarial-review fix for stage 4.4: the flag was
+        originally computed only once, from a synthetic probe at
+        construction, and never revisited. DPAPI genuinely failing (or
+        recovering) between construction and a later real secret save left
+        the flag - and the Settings UI banner it drives - stuck on a stale,
+        wrong answer for the rest of the process's life: a save could
+        silently fall back to plaintext while the banner kept claiming
+        everything was encrypted, or vice versa after a real recovery.
+
+        Deliberately re-probes via dpapi_available() rather than inferring
+        the outcome from `protected`'s shape (e.g. "does it start with
+        dpapi:") - a first attempt at this did exactly that and had its own
+        bug: protect() on an ALREADY-encrypted value that fails to
+        re-verify falls back to returning the input UNCHANGED, which still
+        carries the "dpapi:" prefix from before, so a shape check alone
+        would keep reporting encrypted==True even while DPAPI was fully
+        down for a re-saved existing secret. A fresh, value-independent
+        probe has no such blind spot.
+
+        Skipped for an empty value - saving a blank field is not a
+        meaningful moment to re-probe, and doing so 2-3x per
+        set_api_settings call (once per provider field) even when nothing
+        was actually typed would be pure waste."""
+        normalized = str(value or "")
+        protected = graphlink_secrets.protect(normalized)
+        if normalized:
+            self._secrets_encrypted_at_rest = graphlink_secrets.dpapi_available()
+        return protected
 
     def _migrate_plaintext_secrets(self):
         """Encrypt any legacy plaintext secret still on disk from before #14 was fixed.
@@ -72,7 +146,7 @@ class SettingsManager:
         migrated = False
         for key in self.SECRET_KEYS:
             current_value = str(self.state.get(key, "") or "")
-            protected_value = graphlink_secrets.protect(current_value)
+            protected_value = self._protect_and_track(current_value)
             if protected_value != current_value:
                 self.state[key] = protected_value
                 migrated = True
@@ -217,6 +291,17 @@ class SettingsManager:
             timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
             backup_path = self.state_file.with_name(f"{self.state_file.name}.corrupted-{timestamp}")
             self.state_file.replace(backup_path)
+            # ADR-004 stage 4.4 (adversarial-review fix): Path.replace is a
+            # rename, which preserves the source inode's mode bits exactly -
+            # this backup can hold the same encrypted-or-plaintext secrets
+            # the live file had, and is never touched again by any other
+            # code path (kept indefinitely "for forensic recovery"), so it
+            # needs its own explicit chmod rather than inheriting whatever
+            # permissions the original file happened to have.
+            try:
+                os.chmod(backup_path, 0o600)
+            except OSError:
+                logger.warning("could not chmod %s to 0600 - continuing with existing permissions", backup_path)
             print(
                 f"Warning: {self.state_file} could not be read ({error}). "
                 f"Backed it up to {backup_path} and reset settings to defaults."
@@ -353,6 +438,23 @@ class SettingsManager:
         tmp_path = self.state_file.with_name(self.state_file.name + ".tmp")
         try:
             with open(tmp_path, 'w') as f:
+                # ADR-004 stage 4.4 (adversarial-review fix): chmod the temp
+                # file immediately after opening it, BEFORE writing any
+                # content - chmod'ing only after fsync left a window where a
+                # crash (power loss, OOM-kill) between the write and the
+                # chmod orphaned a fully-written tmp file, holding the
+                # pending secret values, at umask-default (loose)
+                # permissions. Nothing on the next launch ever revisits that
+                # exact filename except the NEXT successful save, so the
+                # exposure could persist across many launches. Chmod'ing the
+                # file while it's still empty (right after open() creates
+                # it, before any secret bytes land) closes that window
+                # entirely. No-op on Windows (see __init__'s own comment on
+                # why POSIX permission bits don't apply there).
+                try:
+                    os.chmod(tmp_path, 0o600)
+                except OSError:
+                    logger.warning("could not chmod %s to 0600 before writing - continuing", tmp_path)
                 json.dump(data_to_save, f, indent=4)
                 f.flush()
                 os.fsync(f.fileno())
@@ -756,9 +858,9 @@ class SettingsManager:
     ):
         self.state["api_provider"] = provider
         self.state["api_base_url"] = base_url
-        self.state["openai_api_key"] = graphlink_secrets.protect(openai_key)
-        self.state["anthropic_api_key"] = graphlink_secrets.protect(anthropic_key)
-        self.state["gemini_api_key"] = graphlink_secrets.protect(gemini_key)
+        self.state["openai_api_key"] = self._protect_and_track(openai_key)
+        self.state["anthropic_api_key"] = self._protect_and_track(anthropic_key)
+        self.state["gemini_api_key"] = self._protect_and_track(gemini_key)
         self._save_state()
 
     def set_api_models(self, models_dict: dict, provider: str | None = None):
@@ -810,7 +912,7 @@ class SettingsManager:
         self._save_state()
 
     def set_github_token(self, token: str):
-        self.state["github_access_token"] = graphlink_secrets.protect(token)
+        self.state["github_access_token"] = self._protect_and_track(token)
         self._save_state()
 
     def reset_api_settings(self):

@@ -39,6 +39,7 @@ def test_settings_payload_shape_matches_generated_validator_shape(manager):
         "enableSystemPrompt",
         "notificationPreferences",
         "githubTokenConfigured",
+        "secretsEncryptedAtRest",
     }
 
 
@@ -788,6 +789,67 @@ def test_api_key_never_appears_in_the_settings_payload(manager, monkeypatch):
     payload = recorder.messages[-1]["payload"]
     assert payload["apiKeyConfigured"] == {"openai": True, "anthropic": False, "gemini": False}
     assert "sk-super-secret-key" not in str(payload)
+
+
+class TestApiKeySourceHelper:
+    """ADR-004 stage 4.4: _api_key_source is the single source of truth for
+    whether a provider's key is "stored", "environment", or "none" - a
+    stored key always wins over the environment, matching every OR-chain in
+    api_provider.py that tries the stored/argument key first."""
+
+    def test_stored_wins_even_when_the_environment_is_also_set(self, monkeypatch):
+        monkeypatch.setattr(api_provider, "env_api_key_configured", lambda provider: True)
+
+        assert settings_module._api_key_source(True, config.API_PROVIDER_OPENAI) == "stored"
+
+    def test_environment_when_nothing_is_stored_but_the_environment_is_set(self, monkeypatch):
+        monkeypatch.setattr(api_provider, "env_api_key_configured", lambda provider: True)
+
+        assert settings_module._api_key_source(False, config.API_PROVIDER_OPENAI) == "environment"
+
+    def test_none_when_neither_is_stored_nor_set_in_the_environment(self, monkeypatch):
+        monkeypatch.setattr(api_provider, "env_api_key_configured", lambda provider: False)
+
+        assert settings_module._api_key_source(False, config.API_PROVIDER_OPENAI) == "none"
+
+    def test_passes_the_right_provider_through_to_env_api_key_configured(self, monkeypatch):
+        seen = []
+        monkeypatch.setattr(api_provider, "env_api_key_configured", lambda provider: seen.append(provider) or False)
+
+        settings_module._api_key_source(False, config.API_PROVIDER_ANTHROPIC)
+
+        assert seen == [config.API_PROVIDER_ANTHROPIC]
+
+
+def test_api_key_source_on_the_wire_reports_environment_only_when_nothing_is_stored(manager, monkeypatch):
+    monkeypatch.setattr(api_provider, "initialize_api", lambda *a, **k: None)
+    monkeypatch.setattr(
+        api_provider,
+        "env_api_key_configured",
+        lambda provider: provider in (config.API_PROVIDER_OPENAI, config.API_PROVIDER_ANTHROPIC),
+    )
+    bus = SessionBus("settings-api-key-source-test")
+    register_settings(bus, manager)
+    recorder = Recorder()
+    bus.attach(recorder)
+    asyncio.run(bus.publish("app-settings"))
+
+    payload = recorder.messages[0]["payload"]
+    # OpenAI/Anthropic: env is set, nothing stored -> "environment". Gemini:
+    # neither -> "none".
+    assert payload["apiKeySource"] == {"openai": "environment", "anthropic": "environment", "gemini": "none"}
+
+    # Now save an OpenAI key - a stored key must flip that provider (and
+    # only that provider) to "stored", even though its env var is still set.
+    asyncio.run(
+        bus.dispatch_intent(
+            "app-settings",
+            "saveApiConfiguration",
+            [config.API_PROVIDER_OPENAI, "https://x/v1", "sk-test", _six_task_models()],
+        )
+    )
+    payload = recorder.messages[-1]["payload"]
+    assert payload["apiKeySource"] == {"openai": "stored", "anthropic": "environment", "gemini": "none"}
 
 
 def test_reset_api_settings_intent_clears_everything(manager, monkeypatch):
