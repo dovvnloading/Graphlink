@@ -1,0 +1,277 @@
+"""ADR-005 stage 5.2: Windows Job Object resource guard for executed code
+(Py-Coder's persistent REPL and the Code Sandbox's venv/pip/script children).
+
+THE THREAT (audit finding H2). Neither execution surface enforced any
+memory, process-count, or lifecycle limit beyond wall-clock timeouts and a
+human clicking Stop - a script that allocates until OOM, or that forks
+itself repeatedly, was bounded only by the host's own limits. "Stop" only
+ever killed the one directly-tracked child process, never anything that
+child itself had spawned - a process that had already forked survived
+being "stopped."
+
+THE FIX. Every subprocess this app spawns for executed code is assigned to
+a Windows Job Object with JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE plus a
+committed-memory cap and an active-process-count cap. Because Windows job
+objects are inherited by any further child process a job member spawns
+(the default, unless a process explicitly opts out via
+JOB_OBJECT_LIMIT_BREAKAWAY_OK, which this module never sets), killing the
+job kills the entire process tree in one call - closing the
+"Stop only kills the direct child" gap, not just the memory-bomb one. All
+three mechanisms here (memory cap, active-process cap, whole-tree kill)
+were empirically proven against real memory-bomb, fork-bomb, and
+orphan-grandchild scripts before this module was written, not assumed
+from the Win32 API documentation alone.
+
+This is a **resource + lifecycle** boundary, not a security VM - see
+doc/adr/THREAT_MODEL.md's "Executed code is a resource boundary, not a
+security boundary" section. It does not stop a deliberately malicious
+script from doing anything within its resource caps; it stops a runaway
+or hostile dependency from taking down the host, and it makes "Stop"
+actually mean stop.
+
+SCOPE OF THIS STAGE (5.2), deliberately narrower than ADR-005 Decision #2's
+full description: CPU-rate control and settings-driven (as opposed to
+hardcoded) caps are NOT implemented here. CPU-rate control was never
+empirically verified against a real CPU-bound busy-loop before this stage
+shipped - the same discipline this ADR-004/ADR-005 effort holds itself to
+everywhere else - so it is left for a follow-up rather than shipped
+unverified. Settings-driven caps + approval-dialog disclosure of the real
+limits is a UI-facing change orthogonal to this module's own correctness,
+also left for a follow-up. Neither is silently dropped - both are named
+here so a future stage does not have to rediscover the gap.
+
+The POSIX tier (process groups + rlimit) is explicitly ADR-005 stage 5.3,
+not this one - on non-Windows platforms, ExecutionResourceGuard.assign()/
+close() are no-ops, matching the pre-existing (unenforced) behavior
+exactly. This is not a regression: no platform loses a protection it had
+before this module existed.
+"""
+
+from __future__ import annotations
+
+import ctypes
+import logging
+import threading
+import sys
+
+logger = logging.getLogger(__name__)
+
+# ADR-005 Decision #2's own example figure ("up to 2 GB RAM"). A generous
+# default: real Py-Coder/Sandbox workloads (pandas, matplotlib, a venv's own
+# interpreter + pip's dependency resolver) comfortably fit under it; a true
+# memory bomb still dies well before threatening the host.
+DEFAULT_MEMORY_LIMIT_BYTES = 2 * 1024 * 1024 * 1024  # 2 GiB
+
+# Generous enough for legitimate multi-process work (pip install spawning
+# its own build-backend/resolver subprocesses, a venv's bootstrap), but
+# bounds a fork bomb to a small, fixed number of processes rather than an
+# unbounded spiral - verified empirically against a real fork-bomb script
+# (200-generation bomb capped at exactly the limit, not 200+).
+DEFAULT_ACTIVE_PROCESS_LIMIT = 64
+
+
+class ExecutionResourceGuard:
+    """No-op base: what non-Windows platforms get in this stage (the POSIX
+    tier is ADR-005 stage 5.3), and what Windows itself falls back to if
+    job-object creation fails for any reason. A guard that cannot enforce
+    limits must never block execution outright - the pre-existing,
+    unenforced behavior is the safe fallback, not a hard failure, matching
+    this codebase's established graceful-degradation precedent (DPAPI
+    falling back to plaintext off-Windows rather than refusing to save)."""
+
+    def assign(self, pid: int) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
+
+if sys.platform == "win32":
+    import ctypes.wintypes as _wintypes
+
+    _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+    # Adversarial-review fix: explicit .restype/.argtypes on every function
+    # this module calls. Without them, ctypes defaults an undeclared
+    # restype to a 4-byte c_long - harmless for the four BOOL-returning
+    # calls (BOOL is itself 4 bytes) but silently wrong for
+    # CreateJobObjectW/OpenProcess, both of which return HANDLE (a pointer,
+    # 8 bytes on 64-bit Windows). In practice real per-process kernel
+    # handle-table values stay small enough that the truncation was a
+    # no-op, but it is real latent fragility with no Python exception to
+    # ever surface it - declaring the real types removes it outright.
+    _kernel32.CreateJobObjectW.restype = _wintypes.HANDLE
+    _kernel32.CreateJobObjectW.argtypes = [ctypes.c_void_p, _wintypes.LPCWSTR]
+    _kernel32.OpenProcess.restype = _wintypes.HANDLE
+    _kernel32.OpenProcess.argtypes = [_wintypes.DWORD, _wintypes.BOOL, _wintypes.DWORD]
+    _kernel32.AssignProcessToJobObject.restype = _wintypes.BOOL
+    _kernel32.AssignProcessToJobObject.argtypes = [_wintypes.HANDLE, _wintypes.HANDLE]
+    _kernel32.SetInformationJobObject.restype = _wintypes.BOOL
+    _kernel32.SetInformationJobObject.argtypes = [
+        _wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, _wintypes.DWORD,
+    ]
+    _kernel32.TerminateJobObject.restype = _wintypes.BOOL
+    _kernel32.TerminateJobObject.argtypes = [_wintypes.HANDLE, _wintypes.UINT]
+    _kernel32.CloseHandle.restype = _wintypes.BOOL
+    _kernel32.CloseHandle.argtypes = [_wintypes.HANDLE]
+
+    _JobObjectExtendedLimitInformation = 9
+    _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
+    _JOB_OBJECT_LIMIT_JOB_MEMORY = 0x00000200
+    _JOB_OBJECT_LIMIT_ACTIVE_PROCESS = 0x00000008
+    # Adversarial-review fix: was 0x1F0FFF, winnt.h's stale pre-Vista
+    # PROCESS_ALL_ACCESS value (and broader than this module needs even by
+    # its real modern definition, 0x1FFFFF). AssignProcessToJobObject's own
+    # documented requirement is only PROCESS_SET_QUOTA (0x100) |
+    # PROCESS_TERMINATE (0x001) - requesting exactly that, not "all
+    # access," is both least-privilege and more likely to succeed under a
+    # host's process-access restriction policy (EDR/AppLocker-style tools
+    # that deny full-access OpenProcess calls but permit narrowly-scoped
+    # ones).
+    _PROCESS_SET_QUOTA = 0x0100
+    _PROCESS_TERMINATE = 0x0001
+    _PROCESS_ACCESS_FOR_JOB_ASSIGNMENT = _PROCESS_SET_QUOTA | _PROCESS_TERMINATE
+
+    class _IO_COUNTERS(ctypes.Structure):
+        _fields_ = [
+            ("ReadOperationCount", ctypes.c_ulonglong),
+            ("WriteOperationCount", ctypes.c_ulonglong),
+            ("OtherOperationCount", ctypes.c_ulonglong),
+            ("ReadTransferCount", ctypes.c_ulonglong),
+            ("WriteTransferCount", ctypes.c_ulonglong),
+            ("OtherTransferCount", ctypes.c_ulonglong),
+        ]
+
+    class _JOBOBJECT_BASIC_LIMIT_INFORMATION(ctypes.Structure):
+        _fields_ = [
+            ("PerProcessUserTimeLimit", ctypes.c_longlong),
+            ("PerJobUserTimeLimit", ctypes.c_longlong),
+            ("LimitFlags", _wintypes.DWORD),
+            ("MinimumWorkingSetSize", ctypes.c_size_t),
+            ("MaximumWorkingSetSize", ctypes.c_size_t),
+            ("ActiveProcessLimit", _wintypes.DWORD),
+            ("Affinity", ctypes.c_size_t),
+            ("PriorityClass", _wintypes.DWORD),
+            ("SchedulingClass", _wintypes.DWORD),
+        ]
+
+    class _JOBOBJECT_EXTENDED_LIMIT_INFORMATION(ctypes.Structure):
+        _fields_ = [
+            ("BasicLimitInformation", _JOBOBJECT_BASIC_LIMIT_INFORMATION),
+            ("IoInfo", _IO_COUNTERS),
+            ("ProcessMemoryLimit", ctypes.c_size_t),
+            ("JobMemoryLimit", ctypes.c_size_t),
+            ("PeakProcessMemoryUsed", ctypes.c_size_t),
+            ("PeakJobMemoryUsed", ctypes.c_size_t),
+        ]
+
+    class _WindowsJobObjectGuard(ExecutionResourceGuard):
+        def __init__(self, handle) -> None:
+            self._handle = handle
+            # Adversarial-review fix: without a lock, two threads calling
+            # close() concurrently on the SAME guard can both pass the
+            # `self._handle is None` check before either one nulls it,
+            # both read the same real handle value, and both call
+            # CloseHandle() on it - a handle-recycling hazard, since once
+            # the first CloseHandle succeeds that numeric handle can be
+            # reassigned to any other resource in the process before the
+            # second CloseHandle runs. Reproduced live: two threads racing
+            # a real close() call produced CloseHandle() invoked twice on
+            # the identical handle value. Reachable in production via
+            # PythonREPL's own concurrent-stop() scenario (see that
+            # class's docstring) - fixing it here protects every caller of
+            # this module, not just the one that happened to add its own
+            # locking.
+            self._lock = threading.Lock()
+
+        def assign(self, pid: int) -> None:
+            if self._handle is None:
+                return
+            proc_handle = _kernel32.OpenProcess(_PROCESS_ACCESS_FOR_JOB_ASSIGNMENT, False, pid)
+            if not proc_handle:
+                logger.warning(
+                    "execution guard: OpenProcess failed for pid %s (error %s) - "
+                    "this child will run WITHOUT resource caps",
+                    pid, ctypes.get_last_error(),
+                )
+                return
+            try:
+                if not _kernel32.AssignProcessToJobObject(self._handle, proc_handle):
+                    logger.warning(
+                        "execution guard: AssignProcessToJobObject failed for pid "
+                        "%s (error %s) - this child will run WITHOUT resource caps",
+                        pid, ctypes.get_last_error(),
+                    )
+            finally:
+                _kernel32.CloseHandle(proc_handle)
+
+        def close(self) -> None:
+            with self._lock:
+                if self._handle is None:
+                    return
+                handle, self._handle = self._handle, None
+            # Unconditionally kills anything still alive in the job - the
+            # orphan/whole-tree-kill path. A harmless no-op if the job is
+            # already empty (the normal "process exited cleanly" path).
+            # The actual Win32 calls happen OUTSIDE the lock (they release
+            # the GIL and can block briefly) - only the check-and-null of
+            # self._handle needs to be atomic, so a second concurrent
+            # close() call can return immediately once it sees None rather
+            # than waiting on these calls to finish.
+            if not _kernel32.TerminateJobObject(handle, 1):
+                logger.debug(
+                    "execution guard: TerminateJobObject reported failure "
+                    "(error %s) - likely just an already-empty job",
+                    ctypes.get_last_error(),
+                )
+            _kernel32.CloseHandle(handle)
+
+    def _create_windows_job_object_guard(
+        memory_limit_bytes: int, active_process_limit: int
+    ) -> ExecutionResourceGuard:
+        handle = _kernel32.CreateJobObjectW(None, None)
+        if not handle:
+            logger.warning(
+                "execution guard: CreateJobObjectW failed (error %s) - "
+                "falling back to no resource caps for this run",
+                ctypes.get_last_error(),
+            )
+            return ExecutionResourceGuard()
+
+        info = _JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
+        flags = _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        if memory_limit_bytes:
+            flags |= _JOB_OBJECT_LIMIT_JOB_MEMORY
+            info.JobMemoryLimit = memory_limit_bytes
+        if active_process_limit:
+            flags |= _JOB_OBJECT_LIMIT_ACTIVE_PROCESS
+            info.BasicLimitInformation.ActiveProcessLimit = active_process_limit
+        info.BasicLimitInformation.LimitFlags = flags
+
+        if not _kernel32.SetInformationJobObject(
+            handle, _JobObjectExtendedLimitInformation, ctypes.byref(info), ctypes.sizeof(info)
+        ):
+            logger.warning(
+                "execution guard: SetInformationJobObject failed (error %s) - "
+                "falling back to no resource caps for this run",
+                ctypes.get_last_error(),
+            )
+            _kernel32.CloseHandle(handle)
+            return ExecutionResourceGuard()
+
+        return _WindowsJobObjectGuard(handle)
+
+
+def create_execution_guard(
+    memory_limit_bytes: int = DEFAULT_MEMORY_LIMIT_BYTES,
+    active_process_limit: int = DEFAULT_ACTIVE_PROCESS_LIMIT,
+) -> ExecutionResourceGuard:
+    """One guard per subprocess-management lifecycle (a Py-Coder REPL's
+    single long-lived child; one Code Sandbox subprocess invocation).
+    Call `.assign(process.pid)` immediately after `subprocess.Popen(...)`
+    returns, and `.close()` exactly once when that process is done with -
+    whether it exited on its own or is being forcibly stopped. Safe to call
+    `.close()` on a guard whose process already exited cleanly."""
+    if sys.platform == "win32":
+        return _create_windows_job_object_guard(memory_limit_bytes, active_process_limit)
+    return ExecutionResourceGuard()

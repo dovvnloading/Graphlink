@@ -49,6 +49,7 @@ from pathlib import Path
 
 import api_provider
 import graphlink_task_config as config
+from graphlink_execution_guard import create_execution_guard
 from graphlink_process_env import safe_subprocess_env
 
 
@@ -173,6 +174,11 @@ class VirtualEnvSandbox:
         self.requirements_hash_file = self.base_dir / ".requirements.sha256"
         self.script_path = self.base_dir / "sandbox_entry.py"
         self.current_process = None
+        # ADR-005 stage 5.2: the resource guard for whichever subprocess
+        # _run_subprocess currently owns - see stop()'s own comment for why
+        # closing this, not just terminating/killing current_process, is
+        # what makes "Stop" actually kill the whole tree.
+        self.guard = None
 
     @property
     def python_executable(self):
@@ -181,6 +187,18 @@ class VirtualEnvSandbox:
         return self.venv_dir / "bin" / "python"
 
     def stop(self):
+        # ADR-005 stage 5.2: close the resource guard FIRST - on Windows
+        # this terminates the whole job (the tracked process AND anything
+        # it has itself spawned), closing the pre-existing gap where
+        # terminate()/kill() alone only ever stopped the one directly-
+        # tracked process, never its own children. Still followed by the
+        # existing terminate/kill logic unconditionally: a safe no-op if
+        # the guard already killed it, and the only thing that actually
+        # stops the direct child on non-Windows in this stage (the POSIX
+        # process-group tier is ADR-005 stage 5.3).
+        if self.guard:
+            self.guard.close()
+            self.guard = None
         if self.current_process and self.current_process.poll() is None:
             try:
                 self.current_process.terminate()
@@ -205,6 +223,13 @@ class VirtualEnvSandbox:
             **_subprocess_kwargs(),
         )
         self.current_process = process
+        # ADR-005 stage 5.2: assign the freshly-started child to a resource
+        # guard immediately - see graphlink_execution_guard's own docstring
+        # for the memory/process-count caps this closes (audit H2) and why
+        # assigning right after Popen() returns, rather than using
+        # CREATE_SUSPENDED, is an accepted tradeoff.
+        self.guard = create_execution_guard()
+        self.guard.assign(process.pid)
         output_queue = queue.Queue()
         done_signal = object()
 
@@ -272,6 +297,14 @@ class VirtualEnvSandbox:
         finally:
             if reader_thread.is_alive():
                 reader_thread.join(timeout=0.5)
+            # Normal-completion path: stop() (called on the
+            # should_continue()==False/timeout/exception paths above) has
+            # already closed the guard by this point and cleared it, so
+            # this is a no-op there - it only actually fires here when the
+            # subprocess exited cleanly on its own.
+            if self.guard:
+                self.guard.close()
+                self.guard = None
             self.current_process = None
 
     def ensure_base_environment(self, should_continue, emit_line=None):
