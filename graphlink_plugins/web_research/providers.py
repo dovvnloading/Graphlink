@@ -14,6 +14,7 @@ from urllib.parse import urljoin, urlsplit
 import api_provider
 import graphlink_task_config as config
 
+from .crawl_etiquette import CrawlEtiquette, RobotsDisallowedError
 from .domain import (
     CancellationToken,
     FetchedDocument,
@@ -103,14 +104,104 @@ class DuckDuckGoSearchProvider:
         return normalized
 
 
+if REQUESTS_AVAILABLE:
+    from requests.adapters import HTTPAdapter
+    from requests.utils import select_proxy
+
+    class _PinnedHTTPAdapter(HTTPAdapter):
+        """ADR-004 stage 4.5 (audit finding M6): routes the connection to a
+        specific, pre-validated IP instead of letting urllib3 re-resolve the
+        hostname itself - this is what actually closes the validate-then-
+        connect DNS-rebinding TOCTOU FetchPolicy.validate() alone cannot
+        (see that method's own comment). The original hostname is still used
+        for the Host header, TLS SNI, and certificate hostname verification,
+        so this only pins WHERE the TCP connection goes, not WHAT server
+        identity is trusted - a rebinding attacker who gets connected to a
+        different real IP still fails TLS hostname verification the instant
+        that IP's certificate doesn't match the original hostname (verified
+        empirically before this was written: pinning to a different real
+        site's IP raises requests.exceptions.SSLError with a hostname-
+        mismatch CertificateError, exactly like a browser would refuse it).
+
+        Deliberately per-instance, not shared/reused across requests: a new
+        adapter is constructed and mounted for each redirect hop (mirroring
+        FetchPolicy.validate() being called fresh per hop too), since a
+        redirect can move to a different host with a different pinned IP."""
+
+        def __init__(self, pinned_ip: str, *args, **kwargs):
+            self._pinned_ip = pinned_ip
+            super().__init__(*args, **kwargs)
+
+        def get_connection_with_tls_context(self, request, verify, proxies=None, cert=None):
+            if select_proxy(request.url, proxies):
+                # trust_env=False on the session already keeps this fetcher
+                # off ambient proxy config; an explicit proxy override isn't
+                # a scenario this research fetcher needs to support, and
+                # correctly pinning a connection THROUGH a proxy is a
+                # different, more involved mechanism than a direct pin.
+                raise URLPolicyError("Proxied source fetches are not supported by policy.")
+            original_host = urlsplit(request.url).hostname
+            host_params, pool_kwargs = self.build_connection_pool_key_attributes(request, verify, cert)
+            pool_kwargs["assert_hostname"] = original_host
+            pool_kwargs["server_hostname"] = original_host
+            host_params["host"] = self._pinned_ip
+            return self.poolmanager.connection_from_host(**host_params, pool_kwargs=pool_kwargs)
+
+        def send(self, request, **kwargs):
+            # http.client auto-generates the Host header from the
+            # CONNECTION's own host (the pinned IP, per get_connection_
+            # with_tls_context above) unless an explicit Host header is
+            # already present on the request - inject the real one so
+            # virtual-hosted/SNI-routed sites and CDNs still resolve to the
+            # intended site rather than whatever the IP's default vhost is.
+            original = urlsplit(request.url)
+            request.headers["Host"] = (
+                original.hostname if not original.port or original.port in (80, 443)
+                else f"{original.hostname}:{original.port}"
+            )
+            return super().send(request, **kwargs)
+else:
+    _PinnedHTTPAdapter = None
+
+
 class RequestsDocumentFetcher:
     """Bounded, credential-free HTTP fetcher with redirect/IP enforcement."""
 
     USER_AGENT = "Graphlink-WebResearch/1.0 (+local-first research client)"
     ALLOWED_CONTENT_TYPES = {"text/html", "text/plain", "application/json"}
+    ROBOTS_TXT_MAX_BYTES = 64 * 1024
+    ROBOTS_TXT_TIMEOUT_SECONDS = 5.0
+    # How finely the polite-delay wait below is chopped up so it stays
+    # interruptible - see _wait_politely's own docstring.
+    POLITE_WAIT_STEP_SECONDS = 0.5
 
-    def __init__(self, policy: FetchPolicy | None = None):
+    def __init__(self, policy: FetchPolicy | None = None, etiquette: CrawlEtiquette | None = None):
         self.policy = policy or FetchPolicy()
+        self.etiquette = etiquette or CrawlEtiquette(user_agent=self.USER_AGENT)
+
+    def _wait_politely(self, owed: float, *, token: CancellationToken, started: float, result: SearchResult) -> None:
+        """Sleeps out CrawlEtiquette.gate()'s returned delay in small,
+        interruptible increments - adversarial-review fix: gate() used to
+        call time.sleep() internally, which is uninterruptible and ran
+        outside this fetch's own CancellationToken checks and
+        total_timeout_seconds budget. A malicious/misconfigured Crawl-delay
+        (or even just an ordinary polite default) could hang the worker
+        thread this runs on (see backend/agents.py's
+        asyncio.to_thread(service.run, ...)) for however long the delay
+        was, with the user's Stop button and the app's own fetch timeout
+        both powerless to cut it short. Chopping the wait into small steps
+        and re-checking cancellation/budget between each one closes both
+        gaps at once, and never sleeps past whichever bound is tighter."""
+        deadline = time.monotonic() + owed
+        while True:
+            token.raise_if_cancelled()
+            remaining_budget = self.policy.total_timeout_seconds - (time.monotonic() - started)
+            if remaining_budget <= 0:
+                raise ResearchFailure("Source fetch exceeded the total time limit.", code="fetch_timeout", source_id=result.source_id)
+            remaining_wait = deadline - time.monotonic()
+            if remaining_wait <= 0:
+                return
+            time.sleep(max(0.0, min(self.POLITE_WAIT_STEP_SECONDS, remaining_wait, remaining_budget)))
 
     def fetch(self, result: SearchResult, *, limits: ResearchLimits, token: CancellationToken) -> FetchedPayload:
         if not REQUESTS_AVAILABLE:
@@ -132,10 +223,18 @@ class RequestsDocumentFetcher:
                     if time.monotonic() - started > self.policy.total_timeout_seconds:
                         raise ResearchFailure("Source fetch exceeded the total time limit.", code="fetch_timeout", source_id=result.source_id)
                     try:
-                        current_url = self.policy.validate(current_url)
+                        validated = self.policy.validate(current_url)
                     except URLPolicyError as exc:
                         raise ResearchFailure(str(exc), code="url_blocked_by_policy", retryable=False, source_id=result.source_id) from exc
+                    current_url = validated.canonical_url
 
+                    try:
+                        owed = self.etiquette.gate(current_url, lambda robots_url: self._fetch_robots_bytes(robots_url, session))
+                    except RobotsDisallowedError as exc:
+                        raise ResearchFailure(str(exc), code="robots_disallowed", retryable=False, source_id=result.source_id) from exc
+                    self._wait_politely(owed, token=token, started=started, result=result)
+
+                    session.mount(f"{urlsplit(current_url).scheme}://", _PinnedHTTPAdapter(validated.pinned_ip))
                     try:
                         response = session.get(
                             current_url,
@@ -143,8 +242,12 @@ class RequestsDocumentFetcher:
                             allow_redirects=False,
                             stream=True,
                         )
+                    except URLPolicyError as exc:
+                        raise ResearchFailure(str(exc), code="url_blocked_by_policy", retryable=False, source_id=result.source_id) from exc
                     except requests.RequestException as exc:
                         raise ResearchFailure("The source could not be fetched.", code="fetch_network_error", source_id=result.source_id) from exc
+                    else:
+                        self.etiquette.record_fetch(current_url)
 
                     try:
                         if response.is_redirect or response.is_permanent_redirect:
@@ -190,6 +293,19 @@ class RequestsDocumentFetcher:
                                 truncated = True
                                 break
                             body.extend(chunk)
+                        # Adversarial-review fix: the per-chunk check above
+                        # never runs at all for a response that streams
+                        # ZERO chunks (an empty body - e.g. Content-Length:
+                        # 0) - `for chunk in response.iter_content(...)`
+                        # simply never enters its loop body, so a fetch that
+                        # already blew through total_timeout_seconds (e.g.
+                        # while waiting out this hop's own polite delay
+                        # above) returned a fully "successful" FetchedPayload
+                        # with no error at all. One more check here,
+                        # unconditional on how many chunks were seen, closes
+                        # that silent bypass.
+                        if time.monotonic() - started > self.policy.total_timeout_seconds:
+                            raise ResearchFailure("Source fetch exceeded the total time limit.", code="fetch_timeout", source_id=result.source_id)
                         return FetchedPayload(
                             source_id=result.source_id,
                             requested_url=result.url,
@@ -207,6 +323,48 @@ class RequestsDocumentFetcher:
         except Exception as exc:
             raise ResearchFailure("The source could not be processed.", code="fetch_failed", source_id=result.source_id) from exc
         raise ResearchFailure("The source returned too many redirects.", code="redirect_limit", source_id=result.source_id)
+
+    def _fetch_robots_bytes(self, robots_url: str, session) -> "tuple[int, bytes] | None":
+        """Fetches robots.txt through the SAME SSRF-safe, IP-pinned
+        mechanism the main content fetch uses - see _PinnedHTTPAdapter's
+        own docstring for why urllib.robotparser.RobotFileParser.read()'s
+        internal urlopen() call is deliberately never used anywhere in this
+        module. Bounded and unconditional: never itself gated by
+        CrawlEtiquette (that would be circular), never follows redirects
+        (a robots.txt that redirects is treated the same as one that 404s -
+        no explicit rules found, CrawlEtiquette's own fail-open/no-rules
+        handling applies either way). Returns None on anything that
+        prevents a completed response (blocked by policy, network error,
+        timeout) - a completed response, whatever its status code, always
+        returns (status_code, body)."""
+        try:
+            validated = self.policy.validate(robots_url)
+        except URLPolicyError:
+            return None
+        try:
+            session.mount(f"{urlsplit(validated.canonical_url).scheme}://", _PinnedHTTPAdapter(validated.pinned_ip))
+            response = session.get(
+                validated.canonical_url,
+                timeout=(self.policy.connect_timeout_seconds, self.ROBOTS_TXT_TIMEOUT_SECONDS),
+                allow_redirects=False,
+                stream=True,
+            )
+        except requests.RequestException:
+            return None
+        try:
+            body = bytearray()
+            for chunk in response.iter_content(chunk_size=8 * 1024):
+                if not chunk:
+                    continue
+                remaining = self.ROBOTS_TXT_MAX_BYTES - len(body)
+                if remaining <= 0:
+                    break
+                body.extend(chunk[:remaining])
+            return response.status_code, bytes(body)
+        except requests.RequestException:
+            return None
+        finally:
+            response.close()
 
 
 class BeautifulSoupContentExtractor:
