@@ -42,9 +42,15 @@ class _FakeGuard:
     guard correctly?), distinct from the slow, real-mechanism tests below
     (does the guard itself actually enforce anything?)."""
 
-    def __init__(self):
+    def __init__(self, popen_kwargs=None):
         self.assigned_pids = []
         self.closed = False
+        self.popen_kwargs_calls = 0
+        self._popen_kwargs = popen_kwargs or {}
+
+    def popen_kwargs(self):
+        self.popen_kwargs_calls += 1
+        return dict(self._popen_kwargs)
 
     def assign(self, pid):
         self.assigned_pids.append(pid)
@@ -143,12 +149,19 @@ class TestJobObjectMechanism:
         guard.assign(proc.pid)  # pid may already be reused/invalid - must not raise
         guard.close()
 
-    def test_create_execution_guard_returns_the_null_guard_on_non_windows(self, monkeypatch):
-        monkeypatch.setattr(guard_module.sys, "platform", "linux")
+    def test_the_windows_guard_contributes_no_popen_kwargs(self):
+        # The Windows tier applies its cap to an ALREADY-running process via
+        # assign(), so it must not perturb the Popen call at all - if this
+        # ever returned something, both execution surfaces would silently
+        # start passing an unexpected kwarg into their subprocess spawn.
+        # (The platform-dispatch counterpart of this - that a POSIX host
+        # gets the rlimit/process-group kwargs instead - is asserted in
+        # test_execution_guard_posix.py, which only runs there.)
         guard = create_execution_guard()
-        assert type(guard) is ExecutionResourceGuard
-        guard.assign(12345)  # no-op, must not raise
-        guard.close()  # no-op, must not raise
+        try:
+            assert guard.popen_kwargs() == {}
+        finally:
+            guard.close()
 
 
 class TestNullGuardNeverRaises:
