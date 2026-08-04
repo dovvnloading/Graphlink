@@ -119,6 +119,129 @@ class TestChatsDbPermissionsAreRestricted:
         assert get_all_chats(db_path) == []
 
 
+class TestChatsDbUsesWalModeForChmoddableSidecars:
+    """ADR-004 stage 4.4 follow-up (adversarial-review finding): the default
+    rollback-journal mode materializes a `<db>-journal` sidecar ONLY
+    transiently, mid-transaction (SQLite creates and deletes it around each
+    write), so it was never reachable by a Python-level chmod call - the
+    one gap in this module's own POSIX-permission hardening. WAL mode's
+    `<db>-wal`/`<db>-shm` sidecars are different: once a database is
+    genuinely in WAL mode, connecting to it AGAIN (even for a pure read,
+    before any write) immediately re-attaches them - which is when
+    _connect()'s chmod loop, positioned right after the PRAGMA, catches
+    them (empirically verified - see the probes this test class's
+    behavior is modeled on). They still get cleaned up when the sole
+    connection closes (this module opens-does-work-closes a fresh
+    connection per call, never holding one open), so this is "chmod them
+    every time they're freshly attached," not "they now live forever" -
+    but since that happens on every connection from the second one
+    onward, it closes the exposure for the entire steady-state lifetime
+    of a chats.db, unlike the rollback-journal's zero coverage.
+
+    One narrow, accepted residual gap remains and is pinned explicitly
+    below: the VERY FIRST connection that ever switches a given chats.db
+    into WAL mode needs an actual write before the sidecars exist at all
+    (the PRAGMA alone doesn't create them yet) - by which point
+    _connect()'s chmod loop has already run and found nothing. This is a
+    one-time-ever, single-connection window per database, not a
+    persistent or repeatable exposure - the same shape of accepted
+    residual risk this codebase already documents elsewhere for other
+    narrow, structurally-unavoidable creation-moment races."""
+
+    def test_journal_mode_is_actually_wal(self, db_path):
+        conn = chat_library_module._connect(db_path)
+        try:
+            mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+        finally:
+            conn.close()
+
+        assert mode == "wal"
+
+    def test_the_very_first_ever_wal_connection_has_a_narrow_bootstrap_gap(self, db_path, monkeypatch):
+        # Pinned, not just tolerated: documents the one accepted residual
+        # window from this class's own docstring. A brand-new chats.db has
+        # never been WAL before, so establishing WAL mode on this very
+        # first connection needs a real write before the sidecars exist -
+        # _connect()'s chmod loop runs before that write happens (it's
+        # issued by the CALLER, after _connect() returns), so it can't
+        # catch them yet. If this test starts failing, the gap has closed
+        # for real and this whole comment (and the class docstring) should
+        # be updated, not just re-asserted.
+        calls = []
+        monkeypatch.setattr(os, "chmod", lambda path, mode: calls.append((path, mode)))
+
+        get_all_chats(db_path)  # brand-new db_path - the very first WAL connection ever
+
+        wal_path = db_path.with_name(db_path.name + "-wal")
+        shm_path = db_path.with_name(db_path.name + "-shm")
+        assert (wal_path, 0o600) not in calls
+        assert (shm_path, 0o600) not in calls
+
+    def test_chmod_is_invoked_on_the_sidecars_from_the_second_connection_onward(self, db_path, monkeypatch):
+        get_all_chats(db_path)  # bootstrap: establishes WAL mode for this db_path
+
+        calls = []
+        monkeypatch.setattr(os, "chmod", lambda path, mode: calls.append((path, mode)))
+        get_all_chats(db_path)  # this db is now genuinely WAL - sidecars re-attach immediately
+
+        wal_path = db_path.with_name(db_path.name + "-wal")
+        shm_path = db_path.with_name(db_path.name + "-shm")
+        assert (wal_path, 0o600) in calls
+        assert (shm_path, 0o600) in calls
+
+    def test_posix_permission_bits_on_the_sidecars_are_actually_0600(self, db_path):
+        if sys.platform == "win32":
+            pytest.skip("chmod is a no-op on Windows - see class docstring")
+
+        get_all_chats(db_path)  # bootstrap: establishes WAL mode for this db_path
+
+        # A live connection (not get_all_chats, which closes immediately)
+        # so the sidecars still exist when we inspect their real bits -
+        # this module's connect-per-call pattern deletes them the instant
+        # the sole connection closes.
+        conn = chat_library_module._connect(db_path)
+        try:
+            wal_path = db_path.with_name(db_path.name + "-wal")
+            shm_path = db_path.with_name(db_path.name + "-shm")
+            assert stat.S_IMODE(wal_path.stat().st_mode) == 0o600
+            assert stat.S_IMODE(shm_path.stat().st_mode) == 0o600
+        finally:
+            conn.close()
+
+    def test_self_heals_stale_sidecars_left_behind_by_a_crash(self, db_path):
+        if sys.platform == "win32":
+            pytest.skip("chmod is a no-op on Windows - see class docstring")
+
+        get_all_chats(db_path)  # bootstrap: establishes WAL mode, then cleanly closes
+        wal_path = db_path.with_name(db_path.name + "-wal")
+        shm_path = db_path.with_name(db_path.name + "-shm")
+        # A real crash (kill -9 / power loss) mid-write leaves these behind
+        # instead of letting SQLite's normal close-time checkpoint clean
+        # them up - simulated here directly, since forcing an actual
+        # process-level crash isn't something a test can safely do.
+        wal_path.write_bytes(b"")
+        shm_path.write_bytes(b"")
+        os.chmod(wal_path, 0o644)
+        os.chmod(shm_path, 0o644)
+
+        conn = chat_library_module._connect(db_path)
+        try:
+            assert stat.S_IMODE(wal_path.stat().st_mode) == 0o600
+            assert stat.S_IMODE(shm_path.stat().st_mode) == 0o600
+        finally:
+            conn.close()
+
+    def test_a_chmod_failure_on_a_sidecar_does_not_crash_the_connection(self, db_path, monkeypatch):
+        get_all_chats(db_path)  # bootstrap so the sidecars are reachable this time
+
+        def _boom(path, mode):
+            raise OSError("permission denied")
+
+        monkeypatch.setattr(os, "chmod", _boom)
+
+        assert get_all_chats(db_path) == []
+
+
 def test_get_all_chats_reads_real_rows(db_path):
     first_id = _insert_chat(db_path, "First")
     second_id = _insert_chat(db_path, "Second")

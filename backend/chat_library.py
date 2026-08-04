@@ -119,24 +119,62 @@ def _connect(db_path: Path) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path, timeout=30)
     conn.execute("PRAGMA foreign_keys = ON")
-    # ADR-004 stage 4.4: chats.db holds real conversation content, POSIX
-    # 0600 like session.dat (graphlink_settings_store.py's own
-    # SettingsManager). sqlite3.connect() creates the file itself with no
-    # mode parameter exposed anywhere in the stdlib API, so there is no
-    # earlier hook than right here, after connect() returns, to fix it up
-    # - and since EVERY read/write helper in this file goes through this
-    # one shared function (get_all_chats, rename_chat, delete_chat,
-    # load_chat_row, load_notes_rows, load_pins_rows,
-    # save_chat_atomically_row), doing it here rather than at each of
-    # those call sites both closes the gap for new files and self-heals a
-    # pre-stage-4.4 chats.db on its very next connection - unconditional,
-    # not "only if just created". No-op on Windows (see SettingsManager's
-    # own __init__ comment for why POSIX permission bits don't apply
-    # there).
-    try:
-        os.chmod(db_path, 0o600)
-    except OSError:
-        logger.warning("could not chmod %s to 0600 - continuing with existing permissions", db_path)
+    # ADR-004 stage 4.4 follow-up (adversarial-review finding): WAL mode,
+    # not SQLite's default rollback-journal. journal_mode is a database-
+    # level setting persisted in the file header, not a per-connection
+    # default - this PRAGMA only needs to actually FLIP the mode once ever
+    # (every later connection, including from a pre-existing chats.db,
+    # inherits it automatically; re-issuing it when already WAL is a cheap
+    # no-op). The rollback journal materializes a `<db>-journal` sidecar
+    # ONLY transiently, mid-transaction (SQLite creates and deletes it
+    # around each write with no Python-level hook to chmod it before it's
+    # gone), which meant it was the one piece of ADR-004 stage 4.4's own
+    # permission hardening that couldn't be closed.
+    #
+    # WAL's `<db>-wal`/`<db>-shm` sidecars behave differently, verified
+    # empirically (this module opens-does-work-closes a fresh connection
+    # per call, never holding one open, so the exact lifecycle mattered):
+    # once a database is GENUINELY already in WAL mode, connecting to it
+    # again - even for a pure read, before any write - immediately
+    # re-attaches both sidecars, which is exactly when the chmod loop
+    # below (positioned right after this PRAGMA) catches them. They still
+    # get removed when the sole connection closes, same as the rollback-
+    # journal case, but the WINDOW during which they exist now starts
+    # right when the loop below runs rather than only after a caller's own
+    # later write - so this closes the gap for the entire steady-state
+    # lifetime of a chats.db, not just some of it. One narrow, accepted
+    # exception remains: the VERY FIRST connection that ever switches a
+    # given chats.db into WAL mode needs an actual write before the
+    # sidecars exist at all, by which point this loop has already run and
+    # found nothing - a one-time-ever, single-connection window per
+    # database (pinned explicitly by
+    # TestChatsDbUsesWalModeForChmoddableSidecars's own bootstrap-gap test
+    # in backend/tests/test_chat_library.py), not a persistent exposure.
+    #
+    # This also happens to be a piece of ADR-009 stage 9.1's own planned
+    # "sqlite hygiene: WAL mode" bullet, done ahead of that stage's larger
+    # bundle (user_version/migration runner/FK indexes/one-time DDL) since
+    # it's purely additive and doesn't block any of that later work.
+    conn.execute("PRAGMA journal_mode = WAL")
+    # chats.db holds real conversation content, POSIX 0600 like
+    # session.dat (graphlink_settings_store.py's own SettingsManager).
+    # sqlite3.connect()/the PRAGMA above create these files with no mode
+    # parameter exposed anywhere in the stdlib API, so there is no earlier
+    # hook than right here to fix them up - and since EVERY read/write
+    # helper in this file goes through this one shared function
+    # (get_all_chats, rename_chat, delete_chat, load_chat_row,
+    # load_notes_rows, load_pins_rows, save_chat_atomically_row), doing it
+    # here rather than at each of those call sites both closes the gap for
+    # new files and self-heals a pre-existing chats.db (and its sidecars)
+    # on their very next connection - unconditional, not "only if just
+    # created". No-op on Windows (see SettingsManager's own __init__
+    # comment for why POSIX permission bits don't apply there).
+    for path in (db_path, db_path.with_name(db_path.name + "-wal"), db_path.with_name(db_path.name + "-shm")):
+        if path.exists():
+            try:
+                os.chmod(path, 0o600)
+            except OSError:
+                logger.warning("could not chmod %s to 0600 - continuing with existing permissions", path)
     return conn
 
 
