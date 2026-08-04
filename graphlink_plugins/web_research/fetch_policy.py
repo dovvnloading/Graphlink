@@ -31,6 +31,18 @@ def canonicalize_url(url: str) -> str:
     return urlunsplit((scheme, netloc, path, parsed.query, ""))
 
 
+@dataclass(frozen=True)
+class ValidatedTarget:
+    """FetchPolicy.validate()'s result: the canonical URL (for the Host
+    header, TLS SNI, and cert hostname verification) plus the ONE public IP
+    address the caller must actually connect the socket to. Keeping both
+    together, rather than the URL alone, is what closes the DNS-rebinding
+    TOCTOU - see validate()'s own comment."""
+
+    canonical_url: str
+    pinned_ip: str
+
+
 def _is_public_address(address: str) -> bool:
     try:
         parsed = ipaddress.ip_address(address)
@@ -81,7 +93,7 @@ class FetchPolicy:
             raise URLPolicyError(f"Source host did not resolve: {parsed.hostname}")
         return addresses
 
-    def validate(self, url: str) -> str:
+    def validate(self, url: str) -> ValidatedTarget:
         canonical = canonicalize_url(url)
         if not canonical:
             raise URLPolicyError("Source URL is malformed or contains credentials.")
@@ -96,7 +108,16 @@ class FetchPolicy:
             parsed.port
         except ValueError as exc:
             raise URLPolicyError("Source URL has an invalid port.") from exc
-        for address in self._resolve_addresses(parsed):
+        addresses = self._resolve_addresses(parsed)
+        for address in addresses:
             if not _is_public_address(address):
                 raise URLPolicyError("Source resolves to a non-public network address.")
-        return canonical
+        # ADR-004 stage 4.5 (audit finding M6): callers used to discard the
+        # validated address(es) entirely and let the HTTP client re-resolve
+        # the hostname to actually connect - a validate-then-connect TOCTOU
+        # a DNS-rebinding attacker can exploit (return a public IP here,
+        # then a private/loopback one for the real connection moments
+        # later). Returning the FIRST validated address alongside the
+        # canonical URL lets the caller pin its actual socket connection to
+        # this exact, already-checked IP instead of resolving again.
+        return ValidatedTarget(canonical_url=canonical, pinned_ip=addresses[0])
