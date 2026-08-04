@@ -18,6 +18,53 @@ are session-local, so two windows on different sessions never see each
 other's state. The bus is transport-agnostic: connections are anything with
 an async send_json(dict) - real WebSockets in app.py, plain recorders in
 tests.
+
+ADR-004 stage 4.3: two additions closing audit finding C6 (unbounded
+memory/task growth - any local caller could previously mint a permanent,
+never-evicted SessionBus for any `?session=<anything>` string).
+
+1. Session issuance can be restricted: EventBus.session() only creates a
+   new session for an id in __init__'s own allowed_session_ids, when one
+   was supplied - anything else raises UnknownSessionError, UNLESS a
+   session by that id already exists (a real reconnect always works
+   regardless of the restriction). Unrestricted (the default, None) is
+   unchanged from before this stage - EventBus is a genuinely reusable,
+   domain-agnostic multi-session primitive (see its own tests), and the
+   restriction is an APPLICATION policy, not a property of the class
+   itself. backend/app.py's create_app is the one real caller that
+   restricts to just DEFAULT_SESSION_ID ("default", the one every real
+   window uses - confirmed by grep, web_ui never requests any other id) -
+   this app has no multi-window feature and no mechanism that issues
+   additional ids today, so in practice this means the shipped app's own
+   "default" is the only session that will ever exist there - a
+   deliberately narrow, YAGNI-respecting reading of "must be one the
+   backend issued... or the default window session" rather than building a
+   speculative issuance API nothing calls.
+
+2. Idle eviction: a session with zero connections for
+   session_idle_ttl_seconds gets torn down by the injected
+   evict_idle_session callback (see EventBus.__init__'s own docstring for
+   why teardown is injected rather than implemented here - this module is
+   deliberately domain-agnostic, per the note above). This is genuinely
+   useful even with issuance now locked to "default" only: it closes the
+   OTHER standing gap ADR-004 names, "the autosave task never cancelled"
+   (backend/autosave.py's own docstring used to document this as a
+   deliberately-accepted characteristic of a single-window desktop app -
+   see that module's own updated docstring) - without a TTL, a session
+   that goes idle (window closed without a clean shutdown, or a future
+   multi-window disconnect) keeps a live 30s-interval background task
+   forever, each tick holding the whole SceneDocument alive via closure
+   regardless of whether anything can ever reach it again.
+
+   The TTL is deliberately generous (minutes, not seconds): the frontend's
+   own WsTransport reconnects with backoff after a transient network blip,
+   and naive eviction on the FIRST disconnect would tear down (and lose
+   any not-yet-autosaved edits in) a session that was about to reconnect a
+   moment later. sweep_idle_sessions() is exposed as a public, directly
+   callable method (not just the free-running background loop) for the
+   exact reason backend/autosave.py's own bus.autosave_guarded_tick is:
+   tests need to exercise the real decision logic deterministically,
+   without waiting on or mocking wall-clock sleeps.
 """
 
 from __future__ import annotations
@@ -25,12 +72,33 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+import time
 from typing import Any, Awaitable, Callable, Protocol
 
 logger = logging.getLogger(__name__)
 
 StateBuilder = Callable[[], dict[str, Any]]
 IntentHandler = Callable[..., Any | Awaitable[Any]]
+
+# The one session id every real window uses (confirmed by grep:
+# web_ui/src/app/App.tsx's only production call to defaultWsUrl() passes no
+# argument, so it always resolves to this). See the module docstring's
+# ADR-004 stage 4.3 section for why this is the ONLY id EventBus.session()
+# will ever create.
+DEFAULT_SESSION_ID = "default"
+
+# Generous on purpose - see the module docstring's own reasoning: must
+# comfortably outlast a transient WS reconnect gap (network blip, laptop
+# sleep), or eviction would tear down a session the frontend was about to
+# reconnect to anyway.
+DEFAULT_SESSION_IDLE_TTL_SECONDS = 300.0
+DEFAULT_SWEEP_INTERVAL_SECONDS = 60.0
+
+
+class UnknownSessionError(KeyError):
+    """A caller asked for a session id EventBus never issued and isn't
+    DEFAULT_SESSION_ID - ADR-004 stage 4.3's "unknown ids are rejected, not
+    auto-created"."""
 
 
 class Connection(Protocol):
@@ -72,6 +140,15 @@ class SessionBus:
         self._topics: dict[str, _Topic] = {}
         self._intents: dict[tuple[str, str], IntentHandler] = {}
         self._connections: set[Connection] = set()
+        # ADR-004 stage 4.3: monotonic timestamp of when this bus last had
+        # zero connections, or None while at least one is attached. Stamped
+        # at construction time (not left None until a first attach/detach
+        # cycle) so a session that is only ever reached via an HTTP route
+        # that never attaches a connection at all (backend/assets.py's two
+        # routes call EventBus.session() but never .attach()) still starts
+        # its idle clock immediately, rather than being permanently exempt
+        # from eviction by never having transitioned FROM connected.
+        self.idle_since: float | None = time.monotonic()
 
     # -- registration ------------------------------------------------------
 
@@ -110,9 +187,12 @@ class SessionBus:
 
     def attach(self, conn: Connection) -> None:
         self._connections.add(conn)
+        self.idle_since = None
 
     def detach(self, conn: Connection) -> None:
         self._connections.discard(conn)
+        if not self._connections and self.idle_since is None:
+            self.idle_since = time.monotonic()
 
     @property
     def connection_count(self) -> int:
@@ -209,13 +289,125 @@ class EventBus:
     the app's registrar so every session exposes the same topic/intent
     surface over its own state."""
 
-    def __init__(self, configure_session: Callable[[SessionBus], None] | None = None):
+    def __init__(
+        self,
+        configure_session: Callable[[SessionBus], None] | None = None,
+        *,
+        session_idle_ttl_seconds: float = DEFAULT_SESSION_IDLE_TTL_SECONDS,
+        sweep_interval_seconds: float = DEFAULT_SWEEP_INTERVAL_SECONDS,
+        evict_idle_session: Callable[[SessionBus], bool] | None = None,
+        allowed_session_ids: frozenset[str] | None = None,
+    ):
         self._sessions: dict[str, SessionBus] = {}
         self._configure_session = configure_session
+        self._session_idle_ttl_seconds = session_idle_ttl_seconds
+        self._sweep_interval_seconds = sweep_interval_seconds
+        # ADR-004 stage 4.3: None (the default) is the pre-stage-4.3
+        # behavior - EventBus is a genuinely reusable, domain-agnostic
+        # multi-session primitive (see the class docstring), and plenty of
+        # its own tests (backend/tests/test_event_bus.py) construct several
+        # distinct session ids directly to verify the isolation mechanism
+        # itself, independent of any one application's policy about which
+        # ids are legitimate. A real value restricts session() to only ever
+        # CREATE ids in this set (an already-existing id can still be
+        # reconnected to regardless) - backend/app.py's create_app is the
+        # one real caller that supplies one, since the shipped app has
+        # exactly one legitimate session id (DEFAULT_SESSION_ID) and this
+        # is what closes audit finding C6's "any ?session=<anything> mints
+        # a permanent SessionBus" half.
+        self._allowed_session_ids = allowed_session_ids
+        # ADR-004 stage 4.3: injected, not implemented here, because tearing
+        # a session down for real (cancel the autosave task, cancel any
+        # in-flight agent run) needs SessionContext/AgentDispatcher
+        # knowledge this module deliberately doesn't have (see the module
+        # docstring). backend/app.py's create_app supplies the real
+        # implementation. Must return True if eviction should proceed
+        # (after performing its own teardown) or False to skip this
+        # session for this sweep (e.g. it found a real in-flight run a
+        # monotonic-time TTL alone can't safely second-guess).
+        self._evict_idle_session = evict_idle_session
+        self._eviction_task: asyncio.Task | None = None
 
-    def session(self, session_id: str = "default") -> SessionBus:
+    def _ensure_eviction_loop_started(self) -> None:
+        """Starts the free-running sweep loop, lazily and idempotently, on
+        the first call made from within a running event loop.
+
+        Not started in __init__: EventBus is very often constructed before
+        any event loop is running (create_app() itself always runs
+        synchronously, before uvicorn.Server.run() starts one - see
+        graphlink_desktop.py's own _start_backend) - matches
+        backend/autosave.py's register_autosave's own precedent for the
+        identical constraint, including the try/except RuntimeError
+        fallback: a bare create_app() in a test that never actually drives
+        a request through a running loop simply never starts this, and
+        sweep_idle_sessions() staying independently callable is what makes
+        that non-fatal for testing the real logic."""
+        if self._eviction_task is not None:
+            return
+        loop_coro = self._eviction_loop()
+        try:
+            self._eviction_task = asyncio.create_task(loop_coro)
+        except RuntimeError:
+            logger.warning(
+                "session eviction: no running event loop yet - the background "
+                "sweep is disabled for this process (expected in most test "
+                "contexts; the real ws_endpoint/asset-route call sites always "
+                "have one)"
+            )
+            loop_coro.close()
+
+    async def _eviction_loop(self) -> None:
+        while True:
+            await asyncio.sleep(self._sweep_interval_seconds)
+            try:
+                self.sweep_idle_sessions()
+            except Exception:
+                # Same "one bad tick must never end the loop forever"
+                # reasoning as backend/autosave.py's own _loop().
+                logger.exception("session eviction sweep failed")
+
+    def sweep_idle_sessions(self) -> list[str]:
+        """Evict every session idle (zero connections) for at least
+        session_idle_ttl_seconds AND not vetoed by evict_idle_session.
+        Directly callable - no sleep involved - so tests can exercise the
+        real decision logic deterministically; see the module docstring's
+        own note on why, and backend/autosave.py's bus.autosave_guarded_tick
+        for the established precedent this mirrors.
+
+        Returns the evicted session ids, sorted."""
+        if self._evict_idle_session is None:
+            return []
+        now = time.monotonic()
+        evicted: list[str] = []
+        for session_id, bus in list(self._sessions.items()):
+            if bus.idle_since is None:
+                continue  # at least one live connection
+            if now - bus.idle_since < self._session_idle_ttl_seconds:
+                continue  # idle, but not for long enough yet
+            if not self._evict_idle_session(bus):
+                # The callback found a reason not to (e.g. a real in-flight
+                # run) - reconsidered next sweep, not retried immediately.
+                continue
+            del self._sessions[session_id]
+            evicted.append(session_id)
+            logger.info(
+                "evicted idle session %r after %.0fs with no connection",
+                session_id, now - bus.idle_since,
+            )
+        return sorted(evicted)
+
+    def session(self, session_id: str = DEFAULT_SESSION_ID) -> SessionBus:
+        self._ensure_eviction_loop_started()
         bus = self._sessions.get(session_id)
         if bus is None:
+            if self._allowed_session_ids is not None and session_id not in self._allowed_session_ids:
+                # ADR-004 stage 4.3: "unknown ids are rejected, not
+                # auto-created" - only when this EventBus was constructed
+                # with a real allowed_session_ids restriction (see
+                # __init__'s own docstring); unrestricted (the default)
+                # creates any id on first use, exactly as before this
+                # stage.
+                raise UnknownSessionError(session_id)
             bus = SessionBus(session_id)
             if self._configure_session is not None:
                 self._configure_session(bus)

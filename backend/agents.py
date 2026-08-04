@@ -587,6 +587,17 @@ class AgentDispatcher:
         backend/run_lifecycle.py's own docstring."""
         self._runs.cancel_all()
 
+    def has_in_flight_runs(self) -> bool:
+        """ADR-004 stage 4.3: the veto backend/app.py's session-eviction
+        callback checks before tearing an idle session down. A monotonic-
+        time TTL alone is not a substitute for actually knowing whether
+        cooperative cancellation (cancel_all() above) has genuinely
+        finished - this is a direct, cheap check of the same registry
+        cancel_all() itself walks (self._runs, one claimed RunHandle per
+        in-flight request across every kind), not a second bookkeeping
+        mechanism that could drift from it."""
+        return bool(self._runs.values())
+
     def cancel_web_research(self, request_id: str) -> bool:
         """kind="web_research": ADR-002 stage 2.4e - the first surface to
         actually exercise RunHandle.on_cancel (added in stage 2.4b), since
