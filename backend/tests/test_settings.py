@@ -10,6 +10,9 @@ from graphlink_settings_store import SettingsManager
 import api_provider
 import graphlink_task_config as config
 import backend.settings as settings_module
+import backend.api.intents_settings_api_provider as intents_settings_api_provider_module
+import backend.api.intents_settings_llama_cpp as intents_settings_llama_cpp_module
+import backend.api.intents_settings_ollama as intents_settings_ollama_module
 from backend import native_dialogs
 from backend.events import SessionBus
 from backend.notifications import NotificationState
@@ -654,12 +657,20 @@ def test_save_api_configuration_reads_other_providers_keys_atomically_with_its_o
     # passed against the still-racy ordering it was meant to catch (a
     # second-pass audit caught that). The write has to land AFTER the read
     # the buggy version performed and BEFORE the persist, which is exactly
-    # the window _apply() opens: patching _apply to run the concurrent
-    # commit first reproduces "another connection committed while this
-    # save was between its read and its write".
+    # the window run_locked() opens: patching run_locked to run the
+    # concurrent commit first reproduces "another connection committed
+    # while this save was between its read and its write".
+    #
+    # ADR-002 stage 2.7: save_api_configuration now lives in
+    # backend/api/intents_settings_api_provider.py, which holds its own
+    # `from backend.api._settings_shared import run_locked` name binding -
+    # patching backend.settings.run_locked (or backend.api._settings_shared
+    # .run_locked) would not reach it, since a `from x import y` binds a
+    # separate local name in the importing module. The patch target must
+    # be the module that actually calls it.
     monkeypatch.setattr(api_provider, "initialize_api", lambda *a, **k: None)
 
-    real_apply = settings_module._apply
+    real_apply = intents_settings_api_provider_module.run_locked
     injected = {"done": False}
 
     def _apply_with_a_concurrent_commit_in_the_window(mutation, *args):
@@ -671,7 +682,9 @@ def test_save_api_configuration_reads_other_providers_keys_atomically_with_its_o
             manager.set_api_settings(config.API_PROVIDER_ANTHROPIC, "", "", "sk-concurrent-ant", "")
         return real_apply(mutation, *args)
 
-    monkeypatch.setattr(settings_module, "_apply", _apply_with_a_concurrent_commit_in_the_window)
+    monkeypatch.setattr(
+        intents_settings_api_provider_module, "run_locked", _apply_with_a_concurrent_commit_in_the_window
+    )
     bus = SessionBus("settings-save-race-regression-test")
     register_settings(bus, manager)
 
@@ -903,7 +916,12 @@ def test_set_ollama_model_assignment_reads_and_writes_atomically_across_concurre
     # silently reverted by this call's stale copy of the dict.
     _isolate_ollama_task_config(monkeypatch)
 
-    real_apply = settings_module._apply
+    # ADR-002 stage 2.7: set_ollama_model_assignment now lives in
+    # backend/api/intents_settings_ollama.py, holding its own
+    # `from backend.api._settings_shared import run_locked` binding - see
+    # the api-provider atomicity test above for why the patch target has
+    # to be that module, not backend.settings.
+    real_apply = intents_settings_ollama_module.run_locked
     injected = {"done": False}
 
     def _apply_with_a_concurrent_assignment_in_the_window(mutation, *args):
@@ -914,7 +932,9 @@ def test_set_ollama_model_assignment_reads_and_writes_atomically_across_concurre
             manager.set_ollama_model_assignments(assignments)
         return real_apply(mutation, *args)
 
-    monkeypatch.setattr(settings_module, "_apply", _apply_with_a_concurrent_assignment_in_the_window)
+    monkeypatch.setattr(
+        intents_settings_ollama_module, "run_locked", _apply_with_a_concurrent_assignment_in_the_window
+    )
     bus = SessionBus("settings-ollama-assignment-race-test")
     register_settings(bus, manager)
 
@@ -1319,7 +1339,12 @@ def test_set_llama_cpp_runtime_fields_read_and_write_atomically_across_concurren
     # update), so a stale pre-await read of the "current" values would
     # silently revert a concurrent change to a DIFFERENT runtime field
     # landing in the window between this call's read and its write.
-    real_apply = settings_module._apply
+    # ADR-002 stage 2.7: _set_llama_cpp_runtime_field now lives in
+    # backend/api/intents_settings_llama_cpp.py, holding its own
+    # `from backend.api._settings_shared import run_locked` binding - see
+    # the api-provider atomicity test above for why the patch target has
+    # to be that module, not backend.settings.
+    real_apply = intents_settings_llama_cpp_module.run_locked
     injected = {"done": False}
 
     def _apply_with_a_concurrent_runtime_change_in_the_window(mutation, *args):
@@ -1328,7 +1353,9 @@ def test_set_llama_cpp_runtime_fields_read_and_write_atomically_across_concurren
             manager.set_llama_cpp_runtime(n_ctx=4096, n_gpu_layers=0, n_threads=99, chat_format="")
         return real_apply(mutation, *args)
 
-    monkeypatch.setattr(settings_module, "_apply", _apply_with_a_concurrent_runtime_change_in_the_window)
+    monkeypatch.setattr(
+        intents_settings_llama_cpp_module, "run_locked", _apply_with_a_concurrent_runtime_change_in_the_window
+    )
     bus = SessionBus("settings-llama-cpp-runtime-race-test")
     register_settings(bus, manager)
 

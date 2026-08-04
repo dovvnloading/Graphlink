@@ -42,13 +42,13 @@ from backend.events import SessionBus
 from backend.notifications import NotificationState
 from backend.attachments import AttachmentError, StagedAttachment, stage_file
 from backend.settings import (
-    _apply,
     apply_anthropic_reasoning_level,
     apply_gemini_reasoning_level,
     apply_llama_cpp_reasoning_level,
     apply_ollama_chat_model,
     apply_ollama_reasoning_level,
     apply_openai_reasoning_level,
+    run_locked,
 )
 from backend.token_counter import TokenCounterState
 from graphlink_settings_store import SettingsManager
@@ -463,7 +463,7 @@ def register_composer(
         if api_provider.is_api_mode():
             models = dict(settings_manager.get_api_models() or {})
             models[task_config.TASK_CHAT] = chosen
-            _apply(settings_manager.set_api_models, models)
+            run_locked(settings_manager.set_api_models, models)
         elif api_provider.is_local_ollama_mode():
             # Shared with the Settings > Ollama page - one implementation,
             # so the two surfaces cannot disagree about what is assigned.

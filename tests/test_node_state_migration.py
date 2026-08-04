@@ -180,12 +180,14 @@ _KNOWN_NON_NODE_FIELD_ACCESS_SHAPES = {
     # non-SceneNode ".model" access exists anywhere in SCAN_DIRS), which
     # collides with two wholly unrelated types: a ResearchSource's own
     # .provider (backend/canvas.py's _research_result_wire, iterating
-    # result.sources) and a ModelDescriptor's own .provider
-    # (backend/settings.py, iterating a get_available_model_descriptors()
-    # list) - neither is ever a SceneNode.
+    # result.sources) and a ModelDescriptor's own .provider (ADR-002 stage
+    # 2.7 relocated this from backend/settings.py to
+    # backend/api/intents_settings_api_provider.py's load_api_models,
+    # iterating a get_available_model_descriptors() list) - neither is
+    # ever a SceneNode.
     "provider": (
         {"root": "s", "file": "canvas.py"},
-        {"root": "descriptor", "file": "settings.py"},
+        {"root": "descriptor", "file": "intents_settings_api_provider.py"},
     ),
 }
 
