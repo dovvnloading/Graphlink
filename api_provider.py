@@ -2577,7 +2577,21 @@ def initialize_api(provider: str, api_key: str, base_url: str = None):
         base_url = None
 
     elif provider == config.API_PROVIDER_GEMINI:
-        if not (api_key or _first_env_api_key(_GEMINI_API_KEY_ENV_VARS)):
+        # Bake the env-resolved key into `api_key` the same way the OpenAI/
+        # Anthropic branches above do - it's what ends up in the
+        # module-global API_KEY below, which _snapshot_provider_state()
+        # freezes into api_key for the whole request. Previously this
+        # branch only did a presence CHECK (`if not (api_key or
+        # _first_env_api_key(...))`) without ever reassigning `api_key`,
+        # so an env-only Gemini key left API_KEY - and every request
+        # snapshot's api_key field - as the original empty string. That
+        # defeated the snapshot-consistency guarantee _get_gemini_api_key's
+        # snapshot_key parameter exists for (see its own comment): the
+        # snapshot's api_key OR-branch never fired, silently falling
+        # through to a LIVE re-read of API_KEY and then os.environ at
+        # actual-call time instead of the value frozen at request entry.
+        api_key = api_key or _first_env_api_key(_GEMINI_API_KEY_ENV_VARS)
+        if not api_key:
             raise RuntimeError("Gemini API key not configured. Open Settings and save your Gemini API key.")
         client = {"provider": config.API_PROVIDER_GEMINI}
     else:
