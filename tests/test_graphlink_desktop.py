@@ -170,6 +170,8 @@ def desktop_harness(tmp_path, monkeypatch):
         webview_start_calls=[],
         webview_start_side_effect=None,
         wait_for_health_result=True,
+        start_backend_auth_tokens=[],
+        wait_for_health_auth_tokens=[],
     )
 
     spa_index = tmp_path / "web_ui" / "dist" / "app" / "index.html"
@@ -193,10 +195,16 @@ def desktop_harness(tmp_path, monkeypatch):
     fake_server = _FakeServer()
     fake_thread = _FakeThread(alive=True)
 
-    def fake_start_backend(port, previous_run_crashed=False):
+    def fake_start_backend(port, previous_run_crashed=False, auth_token=None):
+        # ADR-004 stage 4.1: recorded, not ignored - the token main() mints
+        # is exactly what test_main_always_starts_the_backend_with_a_
+        # capability_token below asserts on, so "shipped with auth
+        # accidentally disabled" is a test failure rather than silent.
+        state.start_backend_auth_tokens.append(auth_token)
         return fake_server, fake_thread
 
-    def fake_wait_for_health(base_url, timeout, thread=None):
+    def fake_wait_for_health(base_url, timeout, thread=None, auth_token=None):
+        state.wait_for_health_auth_tokens.append(auth_token)
         return state.wait_for_health_result
 
     def fake_shutdown_backend(server, thread):
@@ -257,7 +265,12 @@ def test_main_uses_the_pinned_port_when_env_var_is_a_valid_integer(desktop_harne
 
     assert result == 0
     (_args, kwargs) = desktop_harness.webview_create_window_calls[0]
-    assert kwargs["url"] == "http://127.0.0.1:54321"
+    # Asserts the ORIGIN only. This used to compare the whole URL string,
+    # but ADR-004 stage 4.1 appends a "/#token=<token>" fragment - and this
+    # test is about the port env var, not the token (which has its own
+    # dedicated test below). Splitting on "#" keeps it testing its own
+    # concern instead of re-asserting an unrelated one.
+    assert kwargs["url"].split("#", 1)[0].rstrip("/") == "http://127.0.0.1:54321"
 
 
 def test_main_clears_the_crash_sentinel_even_when_webview_start_raises(desktop_harness):
@@ -301,3 +314,60 @@ def test_main_shuts_down_the_backend_when_the_health_check_times_out(desktop_har
     assert desktop_harness.shutdown_calls == [(desktop_harness.fake_server, desktop_harness.fake_thread)]
     assert desktop_harness.mark_clean_exit_calls == 1
     assert desktop_harness.webview_create_window_calls == [], "must never reach the window if never healthy"
+
+
+# -- ADR-004 stage 4.1: capability-token security invariants --------------
+#
+# These are the tests that make "the shipped app runs with auth enabled" a
+# checked property rather than a convention. create_app(auth_token=None)
+# deliberately DISABLES auth so the ~1200-test suite needs no token
+# plumbing to exercise unrelated behavior (see backend/auth.py's
+# resolve_configured_token) - which means the only thing standing between
+# that convenience and shipping an unauthenticated app is this file
+# asserting the real launch path always supplies a real token.
+
+
+def test_main_always_starts_the_backend_with_a_capability_token(desktop_harness):
+    result = graphlink_desktop.main()
+
+    assert result == 0
+    assert len(desktop_harness.start_backend_auth_tokens) == 1
+    token = desktop_harness.start_backend_auth_tokens[0]
+    assert token, "the shipped launch path must never start the backend with auth disabled"
+    # secrets.token_urlsafe(32) is ~43 URL-safe characters; asserting a real
+    # length floor (not just truthiness) catches a future refactor that
+    # replaces the mint with something trivially guessable like "dev" or "".
+    assert len(token) >= 32
+
+
+def test_main_mints_a_different_token_on_every_launch(desktop_harness):
+    graphlink_desktop.main()
+    graphlink_desktop.main()
+
+    first, second = desktop_harness.start_backend_auth_tokens
+    assert first != second, "a per-launch capability must not be stable across launches"
+
+
+def test_main_authenticates_its_own_health_poll_with_the_same_token(desktop_harness):
+    # /api/health is gated like every other /api route, so the startup poll
+    # is itself an authenticated caller - if these two ever diverge, the app
+    # deadlocks at boot ("backend did not become healthy") rather than
+    # failing loudly, which is exactly the kind of bug worth pinning.
+    graphlink_desktop.main()
+
+    assert desktop_harness.start_backend_auth_tokens == desktop_harness.wait_for_health_auth_tokens
+
+
+def test_main_passes_the_token_to_the_window_as_a_url_fragment(desktop_harness):
+    graphlink_desktop.main()
+
+    (_args, kwargs) = desktop_harness.webview_create_window_calls[0]
+    token = desktop_harness.start_backend_auth_tokens[0]
+    url = kwargs["url"]
+    # A FRAGMENT specifically, not a query string: fragments are never sent
+    # to the server, so the token cannot land in an access log or a Referer
+    # header. Asserting the "#" placement (not just "token is in the url")
+    # is the whole point - a query-string regression would still contain
+    # the substring while losing the property.
+    assert f"#token={token}" in url
+    assert url.split("#", 1)[0].endswith("/"), "the fragment must not corrupt the page path"

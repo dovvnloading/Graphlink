@@ -16,6 +16,13 @@ becomes graphlink_app.py.
 Environment:
   GRAPHLINK_BACKEND_PORT  pin the backend port (default: OS-assigned free port)
   GRAPHLINK_DEBUG_WEBVIEW set to 1 to enable the webview's devtools
+
+ADR-004 stage 4.1: this entry point also mints the per-launch capability
+token that gates /api/* and /ws (see backend/auth.py). It is passed to
+create_app() and handed to the window as a URL fragment; nothing is
+persisted. A developer running the SPA from a vite dev server instead of
+this shell sets GRAPHLINK_DEV_AUTH_TOKEN (and GRAPHLINK_DEV_WS_ORIGIN) -
+neither is ever set by this file.
 """
 
 from __future__ import annotations
@@ -43,33 +50,50 @@ def _free_port() -> int:
         return probe.getsockname()[1]
 
 
-def _wait_for_health(base_url: str, timeout: float, thread: threading.Thread | None = None) -> bool:
+def _wait_for_health(
+    base_url: str,
+    timeout: float,
+    thread: threading.Thread | None = None,
+    auth_token: str | None = None,
+) -> bool:
     """thread, when supplied, is checked for liveness on every poll
     iteration BEFORE attempting a request - a dead backend thread (e.g.
     create_app()/server.run() raised immediately) is a distinct, terminal
     failure, not "still connecting": without this check, a thread that died
     in the first millisecond still made the caller wait out the full
-    timeout before reporting a misleading "did not become healthy"."""
+    timeout before reporting a misleading "did not become healthy".
+
+    auth_token (ADR-004 stage 4.1) is required because /api/health is gated
+    like every other /api route - this poll is the one legitimate caller,
+    and it has the token because main() minted it just above."""
     deadline = time.monotonic() + timeout
+    headers = {"Authorization": f"Bearer {auth_token}"} if auth_token else {}
     while time.monotonic() < deadline:
         if thread is not None and not thread.is_alive():
             return False
         try:
-            with urllib.request.urlopen(f"{base_url}/api/health", timeout=1.0) as response:
+            request = urllib.request.Request(f"{base_url}/api/health", headers=headers)
+            with urllib.request.urlopen(request, timeout=1.0) as response:
                 if response.status == 200:
                     return True
         except OSError:
+            # HTTPError (a 401 from a token mismatch) is a subclass of
+            # OSError, so a broken token shows up here as "never became
+            # healthy" rather than as a crash - the same terminal outcome,
+            # logged by the caller.
             time.sleep(0.1)
     return False
 
 
-def _start_backend(port: int, previous_run_crashed: bool = False) -> tuple[uvicorn.Server, threading.Thread]:
+def _start_backend(
+    port: int, previous_run_crashed: bool = False, auth_token: str | None = None
+) -> tuple[uvicorn.Server, threading.Thread]:
     import uvicorn
 
     from backend.app import create_app
 
     config = uvicorn.Config(
-        create_app(previous_run_crashed=previous_run_crashed),
+        create_app(previous_run_crashed=previous_run_crashed, auth_token=auth_token),
         host="127.0.0.1",
         port=port,
         log_level="warning",
@@ -102,6 +126,7 @@ def main() -> int:
     # basicConfig call - see backend/crash_recovery.py's own docstring for
     # why these two calls (and the sentinel check/mark_running below) live
     # here, in the real entry point, rather than inside create_app().
+    from backend.auth import mint_token
     from backend.crash_recovery import (
         configure_logging,
         install_exception_handlers,
@@ -136,8 +161,18 @@ def main() -> int:
         port = _free_port()
     base_url = f"http://127.0.0.1:{port}"
 
-    server, backend_thread = _start_backend(port, previous_run_crashed=crashed)
-    if not _wait_for_health(base_url, STARTUP_TIMEOUT_SECONDS, thread=backend_thread):
+    # ADR-004 stage 4.1: one fresh capability token per launch, never
+    # persisted - see backend/auth.py's docstring for the threat it closes
+    # (audit C5: any local process can drive all 131 intents, including the
+    # approve-code-execution gate itself).
+    auth_token = mint_token()
+
+    server, backend_thread = _start_backend(
+        port, previous_run_crashed=crashed, auth_token=auth_token
+    )
+    if not _wait_for_health(
+        base_url, STARTUP_TIMEOUT_SECONDS, thread=backend_thread, auth_token=auth_token
+    ):
         logger.error("backend did not become healthy at %s within %.0fs", base_url, STARTUP_TIMEOUT_SECONDS)
         _shutdown_backend(server, backend_thread)
         mark_clean_exit()
@@ -146,9 +181,17 @@ def main() -> int:
 
     import webview  # pywebview - the native (non-Qt, non-browser) window
 
+    # The token reaches the SPA as a URL FRAGMENT, which the browser never
+    # sends to the server - so it cannot land in an access log or a Referer
+    # header the way a query string could, and this window has no address bar
+    # to display it. web_ui/src/lib/auth/token.ts reads it once at module
+    # load. Never logged here either: `base_url` (without the fragment) is
+    # what goes to the log line above, deliberately.
+    window_url = f"{base_url}/#token={auth_token}"
+
     webview.create_window(
         "Graphlink",
-        url=base_url,
+        url=window_url,
         width=1440,
         height=900,
         min_size=(960, 600),

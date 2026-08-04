@@ -1,5 +1,6 @@
 import { Handle, Position, useStore, type Node, type NodeProps } from "@xyflow/react";
 import { useState } from "react";
+import { withAuthToken } from "../../lib/auth/token";
 import { LOD_ZOOM_THRESHOLD } from "./canvasConstants";
 import { NodeMenu } from "./NodeMenu";
 
@@ -63,7 +64,11 @@ interface MenuPosition {
  * below and both menu actions (Copy Image, Export Image) all call this, so
  * they can never disagree with each other about the endpoint shape. */
 function assetUrl(imageAssetId: string): string {
-  return `/api/assets/${imageAssetId}`;
+  // ADR-004 stage 4.1: carries the capability token as a query param, since
+  // the <img> render below is loaded by the browser's own image loader and
+  // cannot be given an Authorization header. A no-op when no token is
+  // present (vitest, vite-dev).
+  return withAuthToken(`/api/assets/${imageAssetId}`);
 }
 
 /** A reasonable download filename for Export Image: the prompt, slugified,

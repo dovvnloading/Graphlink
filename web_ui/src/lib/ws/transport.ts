@@ -20,6 +20,8 @@
  * the UI without any component doing anything.
  */
 
+import { withAuthToken } from "../auth/token";
+
 export type ConnectionStatus = "connecting" | "open" | "closed";
 
 export type StateListener = (payload: Record<string, unknown>) => void;
@@ -46,7 +48,14 @@ export interface WsTransportOptions {
 
 export function defaultWsUrl(sessionId = "default"): string {
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return `${proto}//${window.location.host}/ws?session=${encodeURIComponent(sessionId)}`;
+  // ADR-004 stage 4.1: the capability token rides in the query string
+  // rather than a header - the browser WebSocket constructor takes a URL and
+  // nothing else, so a header is not an option on this handshake. The
+  // backend accepts either form (backend/auth.py's extract_presented_token).
+  // A no-op when there is no token (vitest, and the vite-dev workflow).
+  return withAuthToken(
+    `${proto}//${window.location.host}/ws?session=${encodeURIComponent(sessionId)}`,
+  );
 }
 
 export class WsTransport {
