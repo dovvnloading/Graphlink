@@ -135,6 +135,63 @@ class TestEnvApiKeyConfigured:
         assert "sk-should-never-leak" not in repr(result)
 
 
+class TestGeminiEnvKeyIsBakedIntoTheModuleGlobal:
+    """Regression for an adversarial-review finding (spun off from ADR-004
+    stage 4.4): the OpenAI and Anthropic branches of initialize_api() both
+    reassign `api_key = api_key or _first_env_api_key(...)` before it gets
+    stored into the module-global API_KEY. The Gemini branch used to only
+    do a presence CHECK without ever reassigning `api_key`, so an env-only
+    Gemini key left API_KEY - and every request snapshot's frozen api_key
+    field (_snapshot_provider_state) - as the original empty string,
+    defeating the snapshot-consistency guarantee _get_gemini_api_key's own
+    snapshot_key parameter exists for."""
+
+    def test_env_only_gemini_key_is_baked_into_the_module_global_api_key(self, monkeypatch):
+        _reset_api_provider_state(monkeypatch)
+        monkeypatch.delenv("GRAPHLINK_GEMINI_API_KEY", raising=False)
+        monkeypatch.delenv("GRAPHITE_GEMINI_API_KEY", raising=False)
+        monkeypatch.setenv("GEMINI_API_KEY", "from-gemini-env")
+
+        api_provider.initialize_api(config.API_PROVIDER_GEMINI, "", None)
+
+        assert api_provider.API_KEY == "from-gemini-env"
+
+    def test_env_only_gemini_key_survives_after_the_env_var_is_later_removed(self, monkeypatch):
+        # Mirrors the OpenAI/Anthropic behavior this asymmetry broke for
+        # Gemini specifically: once initialize_api() has run, later removing
+        # the env var (rotation/cleanup mid-session) must not un-configure a
+        # request already using the value captured at init time - the whole
+        # point of _snapshot_provider_state's frozen-at-request-entry design.
+        _reset_api_provider_state(monkeypatch)
+        monkeypatch.delenv("GRAPHLINK_GEMINI_API_KEY", raising=False)
+        monkeypatch.delenv("GRAPHITE_GEMINI_API_KEY", raising=False)
+        monkeypatch.setenv("GEMINI_API_KEY", "from-gemini-env")
+        api_provider.initialize_api(config.API_PROVIDER_GEMINI, "", None)
+
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        snapshot = api_provider._snapshot_provider_state()
+
+        assert api_provider._get_gemini_api_key(snapshot.api_key) == "from-gemini-env"
+
+    def test_anthropic_already_had_this_correctly_for_comparison(self, monkeypatch):
+        # Same scenario as the two tests above, run against Anthropic - this
+        # already passed before the Gemini fix (the OpenAI/Anthropic
+        # branches never had the bug), kept here as a living comparison
+        # point so a future regression in either provider is caught by the
+        # same shape of test.
+        _reset_api_provider_state(monkeypatch)
+        monkeypatch.delenv("GRAPHLINK_ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.delenv("GRAPHITE_ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "from-anthropic-env")
+        api_provider.initialize_api(config.API_PROVIDER_ANTHROPIC, "", None)
+        assert api_provider.API_KEY == "from-anthropic-env"
+
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        snapshot = api_provider._snapshot_provider_state()
+
+        assert api_provider._get_anthropic_api_key(snapshot.api_key) == "from-anthropic-env"
+
+
 class TestLegacyGraphiteEnvVarStillWorks:
     """The app was renamed from Graphite to Graphlink; GRAPHITE_*_API_KEY env vars set
     before the rename must keep working so existing power-user shell configs don't
