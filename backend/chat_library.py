@@ -513,6 +513,65 @@ def _new_save_state() -> dict[str, Any]:
     return {"digest": None, "chat_id": None}
 
 
+def make_serialize_mutating_intent(
+    bus: SessionBus,
+    mutation_in_progress: dict[str, Any],
+    notifications: NotificationState | None,
+):
+    """Factory for the reentrancy-guard decorator register_chat_library's
+    own loadChat/saveChat/newChat intents are registered through - see
+    register_chat_library's own docstring (right below its call site) for
+    the full OWNERSHIP audit-fix story this implements. Lifted out to a
+    top-level factory - matching _new_mutation_guard/_new_save_state/
+    _busy_message's own "one definition ... so it can never drift apart"
+    precedent already established in this file - purely to keep
+    register_chat_library itself under ADR-002's 300-line registration-
+    function cap (stage 2.7). Captures nothing register_chat_library's own
+    callers couldn't already reach via bus.chat_mutation_guard, which is
+    the SAME dict passed in here as mutation_in_progress."""
+
+    def _claim_guard(owner: str) -> None:
+        mutation_in_progress["active"] = True
+        mutation_in_progress["owner"] = owner
+        mutation_in_progress["released"].clear()
+
+    def _release_guard() -> None:
+        mutation_in_progress["active"] = False
+        mutation_in_progress["owner"] = None
+        mutation_in_progress["released"].set()
+
+    def _serialize_mutating_intent(handler):
+        async def wrapped(*args, **kwargs):
+            if mutation_in_progress["active"] and mutation_in_progress["owner"] == AUTOSAVE_OWNER:
+                # Yield to the user: wait the tick out rather than discarding
+                # their click. On timeout we fall through to the same
+                # drop-and-warn below, so a stuck tick degrades to exactly the
+                # pre-fix behavior instead of hanging.
+                with contextlib.suppress(asyncio.TimeoutError):
+                    await asyncio.wait_for(
+                        mutation_in_progress["released"].wait(),
+                        timeout=AUTOSAVE_YIELD_TIMEOUT_SECONDS,
+                    )
+
+            if mutation_in_progress["active"]:
+                # Re-checked, not assumed: several intents can be released
+                # from the wait above at once, and only the first may claim.
+                if notifications is not None:
+                    notifications.show(_busy_message(mutation_in_progress["owner"]), "warning")
+                    await bus.publish("notification")
+                return
+
+            _claim_guard(USER_OWNER)
+            try:
+                await handler(*args, **kwargs)
+            finally:
+                _release_guard()
+
+        return wrapped
+
+    return _serialize_mutating_intent
+
+
 def chat_library_payload(db_path: Path) -> dict[str, Any]:
     try:
         rows = get_all_chats(db_path)
@@ -572,17 +631,6 @@ def register_chat_library(
     # is strictly better - the Save just works.
     # `released` is set on every release and cleared on every claim.
     _mutation_in_progress = _new_mutation_guard()
-
-    def _claim_guard(owner: str) -> None:
-        _mutation_in_progress["active"] = True
-        _mutation_in_progress["owner"] = owner
-        _mutation_in_progress["released"].clear()
-
-    def _release_guard() -> None:
-        _mutation_in_progress["active"] = False
-        _mutation_in_progress["owner"] = None
-        _mutation_in_progress["released"].set()
-
     bus.chat_mutation_guard = _mutation_in_progress
 
     # R6.6 + audit fix: see _new_save_state's own docstring for what this
@@ -601,34 +649,7 @@ def register_chat_library(
         _last_saved["digest"] = _content_digest(chat_data, notes_data, pins_data)
         _last_saved["chat_id"] = int(chat_id) if chat_id is not None else None
 
-    def _serialize_mutating_intent(handler):
-        async def wrapped(*args, **kwargs):
-            if _mutation_in_progress["active"] and _mutation_in_progress["owner"] == AUTOSAVE_OWNER:
-                # Yield to the user: wait the tick out rather than discarding
-                # their click. On timeout we fall through to the same
-                # drop-and-warn below, so a stuck tick degrades to exactly the
-                # pre-fix behavior instead of hanging.
-                with contextlib.suppress(asyncio.TimeoutError):
-                    await asyncio.wait_for(
-                        _mutation_in_progress["released"].wait(),
-                        timeout=AUTOSAVE_YIELD_TIMEOUT_SECONDS,
-                    )
-
-            if _mutation_in_progress["active"]:
-                # Re-checked, not assumed: several intents can be released
-                # from the wait above at once, and only the first may claim.
-                if notifications is not None:
-                    notifications.show(_busy_message(_mutation_in_progress["owner"]), "warning")
-                    await bus.publish("notification")
-                return
-
-            _claim_guard(USER_OWNER)
-            try:
-                await handler(*args, **kwargs)
-            finally:
-                _release_guard()
-
-        return wrapped
+    _serialize_mutating_intent = make_serialize_mutating_intent(bus, _mutation_in_progress, notifications)
 
     # Writes run in worker threads (asyncio.to_thread) so a slow disk/WAL
     # commit never stalls the event loop. No Python-side lock is needed:
