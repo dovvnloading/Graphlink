@@ -42,8 +42,12 @@ def _client(previous_run_crashed: bool) -> TestClient:
 
 
 def test_a_crashed_previous_run_surfaces_the_notice_on_first_subscribe():
+    # ADR-004 stage 4.3: session id is "default" - each test here gets its
+    # own fresh, isolated _client()/EventBus, so there is no cross-test
+    # collision to avoid by using a distinct id, and "default" is the only
+    # id the real (restrict_sessions=True by default) policy ever issues.
     client = _client(previous_run_crashed=True)
-    with client.websocket_connect("/ws?session=test-crash") as ws:
+    with client.websocket_connect("/ws?session=default") as ws:
         ws.send_json({"kind": "subscribe", "topics": ["notification"]})
         message = ws.receive_json()
 
@@ -56,7 +60,7 @@ def test_a_crashed_previous_run_surfaces_the_notice_on_first_subscribe():
 
 def test_a_clean_previous_run_shows_no_notice():
     client = _client(previous_run_crashed=False)
-    with client.websocket_connect("/ws?session=test-no-crash") as ws:
+    with client.websocket_connect("/ws?session=default") as ws:
         ws.send_json({"kind": "subscribe", "topics": ["notification"]})
         message = ws.receive_json()
 
@@ -65,7 +69,7 @@ def test_a_clean_previous_run_shows_no_notice():
 
 def test_the_notice_can_still_be_dismissed_like_any_other_notification():
     client = _client(previous_run_crashed=True)
-    with client.websocket_connect("/ws?session=test-crash-dismiss") as ws:
+    with client.websocket_connect("/ws?session=default") as ws:
         ws.send_json({"kind": "subscribe", "topics": ["notification"]})
         ws.receive_json()  # the initial crash-notice snapshot
 
@@ -93,14 +97,19 @@ def test_a_session_setup_bug_is_logged_via_this_apps_own_logger_and_closed_clean
 
     monkeypatch.setattr(app_module, "register_about", _boom)
 
+    # ADR-004 stage 4.3: "default" - a non-default id here would now be
+    # rejected by the separate UnknownSessionError branch before ever
+    # reaching _configure_session, so _boom would never fire and this
+    # test would stop exercising the setup-failure path it exists to
+    # cover.
     client = _client(previous_run_crashed=False)
     with caplog.at_level(logging.ERROR, logger="backend.app"):
         with pytest.raises(WebSocketDisconnect) as exc_info:
-            with client.websocket_connect("/ws?session=test-broken-session"):
+            with client.websocket_connect("/ws?session=default"):
                 pass
         assert exc_info.value.code == 1011
 
     assert any(
-        "session setup failed" in record.message and "test-broken-session" in record.message
+        "session setup failed" in record.message and "default" in record.message
         for record in caplog.records
     )

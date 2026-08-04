@@ -15,7 +15,7 @@ from backend.app import create_app
 from backend.session_context import get_session_context
 
 
-def make_client(tmp_path: Path | None = None) -> TestClient:
+def make_client(tmp_path: Path | None = None, *, restrict_sessions: bool = True) -> TestClient:
     # Same isolation convention as test_app_ws.py's make_client: a fresh temp
     # dir per client so tests never touch the developer's real
     # ~/.graphlink/session.dat or ~/.graphlink/chats.db.
@@ -27,6 +27,12 @@ def make_client(tmp_path: Path | None = None) -> TestClient:
             spa_dir=spa,
             settings_state_file=state_path / "session.dat",
             chat_db_path=state_path / "chats.db",
+            # ADR-004 stage 4.3: see test_app_ws.py's own make_client for
+            # why this passthrough exists - a few tests below deliberately
+            # exercise cross-session scoping at this route with a
+            # non-default session id, otherwise unreachable in the real
+            # (restrict_sessions=True by default) shipped policy.
+            restrict_sessions=restrict_sessions,
         ),
         # ADR-004 stage 4.2: see test_app_ws.py's own make_client for why
         # BOTH kwargs are required (base_url for HTTP, headers= because
@@ -78,7 +84,7 @@ def test_get_asset_for_unknown_id_returns_404_json():
 
 
 def test_get_asset_scopes_by_session_query_param():
-    client = make_client()
+    client = make_client(restrict_sessions=False)
     bus = client.app.state.bus
     document_a = get_session_context(bus.session("session-a")).canvas_document
     parent = document_a.add_node(0, 0, "parent")
@@ -102,7 +108,7 @@ def test_asset_ids_do_not_collide_across_sessions_with_identical_creation_order(
     # rare fluke, the deterministic median case. That let a request missing
     # or mis-supplying its session query param be silently served a
     # different session's real image instead of a 404.
-    client = make_client()
+    client = make_client(restrict_sessions=False)
     bus = client.app.state.bus
 
     document_a = get_session_context(bus.session("session-a")).canvas_document
@@ -184,7 +190,7 @@ def test_export_chart_for_a_non_chart_node_returns_404_json():
 
 
 def test_export_chart_scopes_by_session_query_param():
-    client = make_client()
+    client = make_client(restrict_sessions=False)
     bus = client.app.state.bus
     document_a = get_session_context(bus.session("session-a")).canvas_document
     parent_a = document_a.add_node(0, 0, "parent")

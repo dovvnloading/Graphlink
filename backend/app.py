@@ -50,10 +50,22 @@ from backend.canvas import register_canvas
 from backend.chat_library import register_chat_library
 from backend.composer import register_composer
 from backend.crash_recovery import maybe_show_crash_notice
-from backend.events import EventBus, SessionBus, UnknownIntentError, UnknownTopicError
+from backend.events import (
+    DEFAULT_SESSION_ID,
+    EventBus,
+    SessionBus,
+    UnknownIntentError,
+    UnknownSessionError,
+    UnknownTopicError,
+)
 from backend.notifications import register_notifications
 from backend.plugins import register_plugins
-from backend.session_context import SessionContext, attach_session_context, get_session_context
+from backend.session_context import (
+    SessionContext,
+    SessionNotConfiguredError,
+    attach_session_context,
+    get_session_context,
+)
 from backend.settings import register_settings
 from backend.token_counter import register_token_counter
 
@@ -227,12 +239,47 @@ def _configure_session(
     register_chat_library(bus, chat_db_path, canvas_document, notifications_state)
 
 
+def _evict_idle_session(bus: SessionBus) -> bool:
+    """ADR-004 stage 4.3: EventBus.sweep_idle_sessions' injected teardown -
+    see that method's own docstring for why this lives here rather than in
+    backend/events.py (SessionContext/AgentDispatcher knowledge belongs to
+    this module, not the domain-agnostic event bus).
+
+    Returns False (veto the eviction, try again next sweep) if a real
+    in-flight run is still active - a monotonic-time TTL is not a
+    substitute for actually knowing cancellation has finished. Otherwise
+    performs the same disconnect-time teardown ws_endpoint's own finally
+    block already does on a normal last-connection-drops path (cancel_all
+    + cancel_all_pending_approvals), plus the one thing that path never
+    had to do because it never applied to an ABANDONED session before this
+    stage: cancel the autosave task, so its closure stops holding the
+    whole SceneDocument alive via a strong reference nothing can ever
+    reach again once this session is gone from EventBus._sessions.
+    """
+    try:
+        context = get_session_context(bus)
+    except SessionNotConfiguredError:
+        # A bus that never finished _configure_session (a genuine failure
+        # during setup) has no dispatcher/document to tear down - safe to
+        # evict outright rather than getting stuck vetoing forever.
+        return True
+    if context.agent_dispatcher.has_in_flight_runs():
+        return False
+    context.agent_dispatcher.cancel_all()
+    context.agent_dispatcher.cancel_all_pending_approvals()
+    autosave_task = getattr(bus, "autosave_task", None)
+    if autosave_task is not None and not autosave_task.done():
+        autosave_task.cancel()
+    return True
+
+
 def create_app(
     spa_dir: Path | None = None,
     settings_state_file: Path | None = None,
     chat_db_path: Path | None = None,
     previous_run_crashed: bool = False,
     auth_token: str | None = None,
+    restrict_sessions: bool = True,
 ) -> FastAPI:
     app = FastAPI(title="Graphlink backend", version=BACKEND_VERSION)
     # ADR-004 stage 4.1: the per-launch capability token gating /api/* and
@@ -259,7 +306,19 @@ def create_app(
     bus = EventBus(
         configure_session=lambda session_bus: _configure_session(
             session_bus, settings_manager, chat_db_path, previous_run_crashed
-        )
+        ),
+        # ADR-004 stage 4.3: see _evict_idle_session's own docstring.
+        evict_idle_session=_evict_idle_session,
+        # restrict_sessions defaults to True (the real, shipped policy);
+        # False is a test-only escape hatch for the handful of tests that
+        # deliberately exercise EventBus's own generic cross-session
+        # isolation THROUGH the real /ws or /api/assets surface, a scenario
+        # that is otherwise unreachable in the shipped app once this
+        # restriction is on (only DEFAULT_SESSION_ID is ever issuable) -
+        # see EventBus's own module docstring for the full ADR-004 stage
+        # 4.3 reasoning on why the restriction lives at this layer, not
+        # unconditionally inside EventBus itself.
+        allowed_session_ids=frozenset({DEFAULT_SESSION_ID}) if restrict_sessions else None,
     )
     app.state.bus = bus
 
@@ -412,9 +471,21 @@ def create_app(
                 # vector either.
                 await websocket.close(code=1008)
                 return
-        session_id = websocket.query_params.get("session", "default")
+        session_id = websocket.query_params.get("session", DEFAULT_SESSION_ID)
         try:
             session = bus.session(session_id)
+        except UnknownSessionError:
+            # ADR-004 stage 4.3: "unknown ids are rejected, not auto-
+            # created" - a distinct branch from the generic except below,
+            # since this is a CLIENT policy violation (an id we never
+            # issued), not a server-side bug. Matches the origin/token
+            # rejection branches above: warning-level log, 1008 (policy
+            # violation), closed before accept() so no session is ever
+            # created for it and the C6 growth vector this stage closes
+            # can never be reached this way either.
+            logger.warning("rejected WS handshake: unknown session_id=%r", session_id)
+            await websocket.close(code=1008)
+            return
         except Exception:
             # R6.7 adversarial-review finding: a bug in one of
             # _configure_session's register_X calls used to be swallowed
@@ -434,6 +505,35 @@ def create_app(
             logger.exception("session setup failed for session_id=%r", session_id)
             await websocket.close(code=1011)
             return
+        # ADR-004 stage 4.3 adversarial-review finding: pin the session
+        # against eviction HERE, in the same synchronous stretch as the
+        # bus.session() lookup above (no await between them) - not just at
+        # session.attach() below. Between this point and attach(), the only
+        # await is websocket.accept(); the free-running eviction sweep runs
+        # as an independent asyncio task and can interleave during that
+        # gap. A session eligible for eviction (idle >= TTL) is exactly the
+        # state a genuine reconnect after a network blip or laptop sleep is
+        # already in by design (see backend/events.py's own TTL reasoning),
+        # so this is not a rare theoretical case - confirmed empirically:
+        # an unforced concurrent-scheduling stress test found the sweep
+        # winning this race in 8/500 trials. Without this line, a session
+        # evicted in that window is torn down (autosave cancelled, removed
+        # from EventBus._sessions) while session.attach() below still
+        # succeeds anyway (attach() has no way to know its bus was just
+        # orphaned) - the client ends up live-attached to a SessionBus
+        # nothing else can ever reach again, split-brained against a fresh
+        # empty one any other route (e.g. GET /api/assets/{id}) would get
+        # for the same session id.
+        #
+        # Known, accepted residual: if websocket.accept() itself raises
+        # (pathological - every upstream check has already passed by this
+        # point), this session's idle_since stays None forever, since
+        # nothing calls .detach() on a session that never reached attach().
+        # That session simply becomes permanently ineligible for eviction
+        # rather than corrupting shared state - a narrow, self-contained
+        # downgrade back to pre-stage-4.3 behavior for that one session,
+        # not the split-brain this fix closes for the common case.
+        session.idle_since = None
         await websocket.accept()
         session.attach(websocket)
         try:

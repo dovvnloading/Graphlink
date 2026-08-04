@@ -49,17 +49,30 @@ interval rather than racing it (there will be another tick along in
 `interval_seconds`, so skipping one is free; racing a manual operation is
 not).
 
-TASK LIFETIME: deliberately never explicitly cancelled. Every SessionBus
-this backend ever creates lives for the remaining lifetime of the process
-once created - EventBus never removes an entry from its own `_sessions`
-dict, even once every WS connection to it detaches (see backend/events.py) -
-so there is no "session ended" event anywhere in this codebase to hook a
-cancellation to in the first place; this task's own lifetime already
-matches every other piece of a session's state (SceneDocument, ComposerDocument,
-etc.), none of which get torn down early either. This is a pre-existing,
-accepted characteristic of a single-user desktop-shell backend (pywebview),
-not a new leak introduced here - a multi-tenant web server would need real
-session eviction, this does not.
+TASK LIFETIME (updated, ADR-004 stage 4.3): this task now DOES get
+explicitly cancelled - by backend/app.py's own _evict_idle_session, the
+teardown callback EventBus.sweep_idle_sessions() (backend/events.py) calls
+for any session idle (zero connections) for its TTL with no in-flight
+agent run. Before stage 4.3, this section documented the opposite as a
+deliberately-accepted characteristic ("every SessionBus lives for the
+remaining lifetime of the process... a multi-tenant web server would need
+real session eviction, this does not") - that was true when written (no
+"session ended" event existed anywhere to hook a cancellation to), but it
+was also the OTHER half of audit finding C6 alongside unbounded session
+creation: an idle session's task keeps ticking forever, its closure
+holding the whole SceneDocument alive via a strong reference nothing can
+ever reach again. Eviction closes both halves together. Preserved here as
+a record of the prior reasoning, not silently deleted - see this session's
+own "no room for error, document mistakes rather than quietly editing"
+discipline.
+
+This task's own eventual cancellation (via task.cancel(), a cooperative
+request the same as everywhere else in this codebase) is safe here
+specifically because _guarded_tick's own try/finally already always
+leaves mutation_guard in a clean state on any exit path, cancellation
+included (asyncio.CancelledError propagates through a `finally`, same as
+any other exception) - there is no partial-claim state a cancelled tick
+could strand the guard in.
 """
 
 from __future__ import annotations

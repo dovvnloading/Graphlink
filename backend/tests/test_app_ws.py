@@ -20,7 +20,7 @@ import api_provider
 import graphlink_task_config as config
 
 
-def make_client(tmp_path: Path | None = None) -> TestClient:
+def make_client(tmp_path: Path | None = None, *, restrict_sessions: bool = True) -> TestClient:
     # Point spa_dir at a guaranteed-missing directory: R0 tests exercise the
     # API surface, not the static build (the acceptance drive covers that).
     spa = tmp_path if tmp_path is not None else Path("__no_such_dir__")
@@ -38,6 +38,13 @@ def make_client(tmp_path: Path | None = None) -> TestClient:
             spa_dir=spa,
             settings_state_file=state_path / "session.dat",
             chat_db_path=state_path / "chats.db",
+            # ADR-004 stage 4.3: True (the default) matches the real
+            # shipped policy - only "default" is ever issuable. A caller
+            # here can pass False for the rare test that deliberately
+            # exercises EventBus's own generic cross-session isolation
+            # THROUGH the real /ws surface (a scenario otherwise
+            # unreachable once this restriction is on).
+            restrict_sessions=restrict_sessions,
         ),
         # ADR-004 stage 4.2: TrustedHostMiddleware now rejects any Host
         # other than 127.0.0.1 - TestClient's own default ("testserver")
@@ -67,15 +74,17 @@ def test_health_reports_ok_and_version():
 
 
 def test_subscribe_delivers_system_snapshot_with_envelope():
+    # ADR-004 stage 4.3: "default" - the only session id the real
+    # (restrict_sessions=True by default) policy ever issues.
     client = make_client()
-    with client.websocket_connect("/ws?session=test-a") as ws:
+    with client.websocket_connect("/ws?session=default") as ws:
         ws.send_json({"kind": "subscribe", "topics": ["system"]})
         message = ws.receive_json()
         assert message["kind"] == "state"
         assert message["topic"] == "system"
         payload = message["payload"]
         assert payload["app"] == "graphlink"
-        assert payload["sessionId"] == "test-a"
+        assert payload["sessionId"] == "default"
         assert payload["schemaVersion"] == 1
         assert payload["revision"] >= 1
 
@@ -143,7 +152,12 @@ def test_unknown_message_kind_returns_error():
 
 
 def test_sessions_do_not_share_connections():
-    client = make_client()
+    # ADR-004 stage 4.3: tests EventBus's own generic cross-session
+    # isolation mechanism, a scenario the real shipped app's restrictive
+    # policy makes unreachable (only "default" is ever issuable there) -
+    # restrict_sessions=False opts this one client out, matching
+    # EventBus's own pre-stage-4.3 default behavior.
+    client = make_client(restrict_sessions=False)
     with client.websocket_connect("/ws?session=a") as ws_a:
         with client.websocket_connect("/ws?session=b") as ws_b:
             ws_a.send_json({"kind": "subscribe", "topics": ["system"]})
@@ -180,7 +194,9 @@ def test_disconnect_cancels_any_in_flight_chat_request(monkeypatch):
     monkeypatch.setitem(config.OLLAMA_MODELS, config.TASK_CHAT, "test-model")
     monkeypatch.setattr(api_provider, "chat", fake_chat)
 
-    with client.websocket_connect("/ws?session=cancel-test") as ws:
+    # ADR-004 stage 4.3: "default" - the only session id the real
+    # (restrict_sessions=True by default) policy ever issues.
+    with client.websocket_connect("/ws?session=default") as ws:
         ws.send_json({"kind": "subscribe", "topics": ["scene"]})
         ws.receive_json()  # initial scene snapshot
         ws.send_json({"kind": "intent", "topic": "scene", "intent": "sendMessage", "args": ["hello"]})
@@ -191,7 +207,7 @@ def test_disconnect_cancels_any_in_flight_chat_request(monkeypatch):
             time.sleep(0.01)
         assert call_started.is_set(), "fake_chat never started - dispatch did not fire"
 
-        session = client.app.state.bus.session("cancel-test")
+        session = client.app.state.bus.session("default")
         in_flight = list(chat_slots(get_session_context(session).agent_dispatcher).values())
         assert len(in_flight) == 1
         cancel_event = in_flight[0]["cancel_event"]
@@ -224,7 +240,9 @@ def test_disconnect_auto_denies_any_pending_pycoder_approval(monkeypatch):
     )
 
     client = make_client()
-    with client.websocket_connect("/ws?session=pycoder-disconnect-test") as ws:
+    # ADR-004 stage 4.3: "default" - the only session id the real
+    # (restrict_sessions=True by default) policy ever issues.
+    with client.websocket_connect("/ws?session=default") as ws:
         ws.send_json({"kind": "subscribe", "topics": ["scene"]})
         ws.receive_json()  # initial scene snapshot
 
@@ -256,7 +274,7 @@ def test_disconnect_auto_denies_any_pending_pycoder_approval(monkeypatch):
         ws.receive_json()  # (1) busy-claim publish
         ws.receive_json()  # (2) awaiting-approval publish
 
-        session = client.app.state.bus.session("pycoder-disconnect-test")
+        session = client.app.state.bus.session("default")
         agent_dispatcher = get_session_context(session).agent_dispatcher
         assert pycoder_slots(agent_dispatcher), "runPyCoder never created a request entry"
         entry = next(iter(pycoder_slots(agent_dispatcher).values()))

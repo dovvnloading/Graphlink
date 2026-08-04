@@ -33,7 +33,7 @@ import re
 from fastapi import FastAPI, Response
 from fastapi.responses import JSONResponse
 
-from backend.events import EventBus
+from backend.events import EventBus, UnknownSessionError
 from backend.session_context import get_session_context
 from graphlink_chart_rendering import render_chart_png
 
@@ -65,7 +65,17 @@ def register_assets(app: FastAPI, bus: EventBus) -> None:
 
     @app.get("/api/assets/{asset_id}")
     async def get_asset(asset_id: str, session: str = "default") -> Response:
-        document = get_session_context(bus.session(session)).canvas_document
+        try:
+            document = get_session_context(bus.session(session)).canvas_document
+        except UnknownSessionError:
+            # ADR-004 stage 4.3: same observable shape a bogus session
+            # already produced before this stage (bus.session() used to
+            # silently CREATE a fresh, empty document for any string - see
+            # backend/events.py's own docstring - which would have looked
+            # up asset_id in that empty document and hit this exact
+            # "unknown asset" 404 anyway). Preserves the external response
+            # contract; only the internal resource leak this closes.
+            return JSONResponse({"error": "unknown asset"}, status_code=404)
         asset = document.get_image_asset(asset_id)
         if asset is None:
             return JSONResponse({"error": "unknown asset"}, status_code=404)
@@ -74,7 +84,11 @@ def register_assets(app: FastAPI, bus: EventBus) -> None:
 
     @app.get("/api/assets/chart/{node_id}/export")
     async def export_chart(node_id: str, session: str = "default") -> Response:
-        document = get_session_context(bus.session(session)).canvas_document
+        try:
+            document = get_session_context(bus.session(session)).canvas_document
+        except UnknownSessionError:
+            # Same reasoning as get_asset above.
+            return JSONResponse({"error": "unknown chart"}, status_code=404)
         node = document.nodes.get(node_id)
         if node is None or node.kind != "chart":
             return JSONResponse({"error": "unknown chart"}, status_code=404)
