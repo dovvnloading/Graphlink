@@ -351,6 +351,27 @@ class VirtualEnvSandbox:
                 "pip",
                 "install",
                 "--disable-pip-version-check",
+                # ADR-005 stage 5.5: without this, pip resolving a
+                # requirement to a source distribution (no wheel published
+                # for this platform/version, or a private/unindexed
+                # package) invokes that sdist's own PEP 517 build backend -
+                # arbitrary Python, not a data format - to produce a wheel,
+                # *during* what looks like an ordinary dependency install.
+                # Verified empirically with a real hostile sdist (a custom
+                # build backend whose build_wheel() hook has an observable
+                # side effect) before this flag was added: a plain
+                # `pip install -r requirements.txt` against it executes the
+                # backend and its side effect fires; with --only-binary
+                # :all:, pip refuses to consider the sdist at all and fails
+                # with "No matching distribution found" - the backend is
+                # never invoked. Also verified this does not regress the
+                # ordinary case: a package that DOES publish a wheel
+                # installs exactly as before. --no-input is defense in
+                # depth matching ADR-005's own decision text - this
+                # subprocess has no attached TTY to prompt on regardless.
+                "--only-binary",
+                ":all:",
+                "--no-input",
                 "-r",
                 str(self.requirements_file),
             ],
