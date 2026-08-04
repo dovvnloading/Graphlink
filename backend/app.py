@@ -30,6 +30,7 @@ from pathlib import Path
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from graphlink_settings_store import SettingsManager
 
@@ -71,6 +72,17 @@ SPA_DIST_DIR = REPO_ROOT / "web_ui" / "dist" / "app"
 # alone would accept it. Requiring the host part to literally be 127.0.0.1
 # closes that: no attacker-controlled hostname is ever literally this string.
 _LOOPBACK_HOST = "127.0.0.1"
+
+# The dev-workflow opt-in (CONTRIBUTING.md documents it): unset in every
+# real launch (graphlink_desktop.py never sets it). Originally WS-only
+# (its name predates ADR-004 stage 4.2) - now also read by
+# require_loopback_origin below, since web_ui/vite.config.ts's dev proxy
+# forwards BOTH /api and /ws to this backend with the SAME real page
+# Origin (Vite's proxy rewrites the Host header it sends to match this
+# backend's own address, via changeOrigin, but does not touch Origin) - so
+# a developer's fetch() calls need the identical opt-in the WS handshake
+# already required, not a second env var for the same real workflow.
+DEV_WS_ORIGIN_ENV = "GRAPHLINK_DEV_WS_ORIGIN"
 
 
 def _is_allowed_ws_origin(origin: str | None, host_header: str | None, dev_proxy_origin: str | None = None) -> bool:
@@ -282,6 +294,74 @@ def create_app(
                 return JSONResponse({"error": "unauthorized"}, status_code=401)
         return await call_next(request)
 
+    @app.middleware("http")
+    async def require_loopback_origin(request: Request, call_next):
+        """ADR-004 stage 4.2: gate every /api/* request on the SAME
+        Origin-allowlist logic /ws's own handshake already applies -
+        `_is_allowed_ws_origin` is called here VERBATIM, not reimplemented,
+        so the two surfaces can never drift apart on what counts as a
+        trusted origin (see that function's own docstring for the full
+        policy: absent Origin allowed, same-origin allowed, the opt-in dev
+        proxy origin allowed, everything else rejected).
+
+        This is registered AFTER require_capability_token above, which -
+        per FastAPI/Starlette's own middleware stacking (the LAST
+        `@app.middleware("http")` registered ends up OUTERMOST, running
+        first on the way in) - makes this the outer of the two checks: a
+        wrong-origin request never even reaches the token comparison.
+        Verified empirically before relying on it; not stated from memory.
+
+        A DIFFERENT defense from TrustedHostMiddleware below, not a
+        redundant one. DNS rebinding (an attacker's own domain, briefly
+        re-resolved to 127.0.0.1) makes the browser send THAT domain as the
+        Host header - but a plain <img>/asset-style GET typically carries
+        NO Origin header at all, and this function's own "absent Origin"
+        branch deliberately allows that (see _is_allowed_ws_origin's
+        docstring for why) - so an Origin check alone would not catch
+        rebinding. TrustedHostMiddleware is what catches it, by rejecting
+        the attacker's Host outright. This check instead catches the
+        complementary case: a page on some OTHER real origin issuing a
+        direct cross-origin fetch() straight at 127.0.0.1:<port> (no
+        rebinding needed - Host is legitimately 127.0.0.1, since the
+        attacker just knows or guesses the loopback port) - Origin would be
+        that page's own real origin, not this app's, and TrustedHostMiddleware
+        has no opinion on Origin at all. Neither check subsumes the other;
+        both are required to close both shapes of the same threat.
+        """
+        if is_guarded_path(request.url.path):
+            dev_proxy_origin = os.environ.get(DEV_WS_ORIGIN_ENV)
+            if not _is_allowed_ws_origin(
+                request.headers.get("origin"), request.headers.get("host"), dev_proxy_origin
+            ):
+                logger.warning(
+                    "rejected cross-origin request: %s origin=%r",
+                    request.url.path, request.headers.get("origin"),
+                )
+                return JSONResponse({"error": "forbidden"}, status_code=403)
+        return await call_next(request)
+
+    # ADR-004 stage 4.2: closes the DNS-rebinding path to /api/assets/* (the
+    # concrete case audit finding C6 named) by rejecting any request whose
+    # Host header isn't literally 127.0.0.1, regardless of what the TCP
+    # connection's own destination IP was - a rebinding attacker's page
+    # issues its request against ITS OWN domain (now re-resolved to
+    # 127.0.0.1), so the raw socket lands here, but the Host header the
+    # browser sends is still the attacker's domain. This is genuinely a
+    # DIFFERENT check from require_loopback_origin above - see that
+    # function's own docstring for exactly which threat each one closes and
+    # why neither is redundant with the other.
+    #
+    # Registered LAST (after both @app.middleware("http") decorators just
+    # above), which - verified empirically, not assumed - makes it the
+    # OUTERMOST layer of all three: a bad Host is rejected before either
+    # origin or token is ever inspected. Applies globally (Starlette's
+    # TrustedHostMiddleware covers both HTTP and WebSocket scopes, confirmed
+    # by test), not just to /api - the SPA bootstrap gains this protection
+    # too, for free, since (unlike the auth token) the Host header is
+    # present on every request including the very first navigation, so
+    # there is no chicken-and-egg problem gating it.
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=[_LOOPBACK_HOST])
+
     @app.get("/api/health")
     async def health() -> JSONResponse:
         # Gated like every other /api route (ADR-004 §1 says "every /api/*
@@ -306,7 +386,7 @@ def create_app(
         # opt in explicitly by setting this to their vite dev server's real
         # origin (e.g. "http://127.0.0.1:5173"), rather than that origin
         # being trusted unconditionally in the shipped app.
-        dev_proxy_origin = os.environ.get("GRAPHLINK_DEV_WS_ORIGIN")
+        dev_proxy_origin = os.environ.get(DEV_WS_ORIGIN_ENV)
         if not _is_allowed_ws_origin(origin, host_header, dev_proxy_origin):
             logger.warning("rejected WS handshake: origin=%r host=%r", origin, host_header)
             await websocket.close(code=1008)

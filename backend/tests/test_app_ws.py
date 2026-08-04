@@ -38,7 +38,20 @@ def make_client(tmp_path: Path | None = None) -> TestClient:
             spa_dir=spa,
             settings_state_file=state_path / "session.dat",
             chat_db_path=state_path / "chats.db",
-        )
+        ),
+        # ADR-004 stage 4.2: TrustedHostMiddleware now rejects any Host
+        # other than 127.0.0.1 - TestClient's own default ("testserver")
+        # would otherwise 400 every request in this file. Matches the real
+        # deployment topology (graphlink_desktop.py always binds 127.0.0.1),
+        # not a test-only relaxation of the check under test.
+        #
+        # BOTH kwargs are required, not redundant: base_url governs plain
+        # HTTP requests, but Starlette's TestClient.websocket_connect
+        # hardcodes Host: testserver independent of base_url (confirmed via
+        # a raw-ASGI-scope probe, not assumed) - headers= is what actually
+        # reaches the WS upgrade request's own Host header.
+        base_url="http://127.0.0.1",
+        headers={"host": "127.0.0.1"},
     )
     client._state_tmpdir = state_dir  # type: ignore[attr-defined]
     return client

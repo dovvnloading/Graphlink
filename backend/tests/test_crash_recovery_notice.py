@@ -31,7 +31,11 @@ def _client(previous_run_crashed: bool) -> TestClient:
             settings_state_file=state_path / "session.dat",
             chat_db_path=state_path / "chats.db",
             previous_run_crashed=previous_run_crashed,
-        )
+        ),
+        # ADR-004 stage 4.2: see backend/tests/test_app_ws.py's make_client
+        # for why BOTH kwargs are required.
+        base_url="http://127.0.0.1",
+        headers={"host": "127.0.0.1"},
     )
     client._state_tmpdir = state_dir  # type: ignore[attr-defined]
     return client
