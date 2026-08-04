@@ -106,6 +106,7 @@ py-modules = [
     "graphlink_chart_rendering",
     "graphlink_chat_agent",
     "graphlink_desktop",
+    "graphlink_execution_guard",
     "graphlink_grid_view_settings",
     "graphlink_memory",
     "graphlink_model_catalog",
