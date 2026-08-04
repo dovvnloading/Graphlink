@@ -34,12 +34,14 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 import uuid
 from enum import Enum
 from pathlib import Path
 
 import api_provider
 import graphlink_task_config as config
+from graphlink_execution_guard import create_execution_guard
 from graphlink_process_env import safe_subprocess_env
 
 
@@ -87,13 +89,50 @@ class PythonREPL:
         self.process = None
         self.last_run_failed = False
         self._boundary_prefix = ""
+        # ADR-005 stage 5.2: the resource guard for whichever process
+        # `start()` currently owns - see stop()'s own comment for why
+        # closing this, not just process.kill(), is what makes "Stop"
+        # actually kill the whole tree.
+        self.guard = None
+        # Adversarial-review fix: serializes start()/stop() against
+        # concurrent calls on the SAME PythonREPL instance. This is a real,
+        # reproduced scenario, not theoretical - backend/agents.py wraps
+        # execute() in asyncio.wait_for(asyncio.to_thread(...)), and a
+        # timed-out wait_for does NOT stop the underlying worker thread; on
+        # timeout, agents.py's own cleanup calls stop() from a NEW thread
+        # while the ORIGINAL execute() call's thread may still be blocked
+        # reading the (now-killed) process's stdout, whose own EOF-handling
+        # path also calls stop() - two concurrent, unsynchronized stop()
+        # calls on one instance previously crashed with
+        # "AttributeError: 'NoneType' object has no attribute 'kill'" (one
+        # thread nulling self.process between the other's `if self.process`
+        # check and its later self.process.kill() call) and could
+        # double-close the same real OS job handle.
+        self._lock = threading.RLock()
         safe_id = re.sub(r"[^A-Za-z0-9_-]", "_", node_id or "default")
         self.cwd = Path(tempfile.gettempdir()) / "graphlink_pycoder_repls" / safe_id
 
     def start(self):
-        nonce = uuid.uuid4().hex
-        self._boundary_prefix = f"---GRAPHLINK_EXEC_BOUNDARY:{nonce}:"
-        script = f"""
+        with self._lock:
+            # Adversarial-review fix: execute() calls start() again to
+            # restart a dead REPL process (poll() is not None) WITHOUT
+            # going through stop() first - stop() is what normally closes
+            # self.guard, so that restart path used to silently overwrite
+            # self.guard with a fresh one, orphaning the old Job Object
+            # handle for the life of the backend process. Reproduced: 20
+            # forced crash-restarts (killing the process directly,
+            # bypassing stop()) leaked 20 unclosed job handles and grew
+            # this process's real OS handle count by +16. Closing any
+            # pre-existing guard here, mirroring stop()'s own
+            # close-then-null pattern, makes EVERY path that (re)assigns
+            # self.guard symmetric with cleanup, not just the one stop()
+            # already covered.
+            if self.guard:
+                self.guard.close()
+                self.guard = None
+            nonce = uuid.uuid4().hex
+            self._boundary_prefix = f"---GRAPHLINK_EXEC_BOUNDARY:{nonce}:"
+            script = f"""
 import sys, traceback, base64
 env = {{}}
 while True:
@@ -109,30 +148,41 @@ while True:
     status = "ERROR" if failed else "OK"
     print("\\n---GRAPHLINK_EXEC_BOUNDARY:{nonce}:" + status + "---", flush=True)
 """
-        # ADR-002 P0: env= is explicit-allowlist, not inherited - see
-        # graphlink_process_env's own module doc. Without this, the REPL
-        # subprocess would inherit the backend's full os.environ, including
-        # any provider API key configured as an environment variable.
-        kwargs = {'env': safe_subprocess_env()}
-        # Hide the console window on Windows
-        if sys.platform == 'win32':
-            kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
+            # ADR-002 P0: env= is explicit-allowlist, not inherited - see
+            # graphlink_process_env's own module doc. Without this, the REPL
+            # subprocess would inherit the backend's full os.environ,
+            # including any provider API key configured as an environment
+            # variable.
+            kwargs = {'env': safe_subprocess_env()}
+            # Hide the console window on Windows
+            if sys.platform == 'win32':
+                kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
 
-        # ADR-005 stage 5.1: cwd= a scratch dir, never the app's own cwd (see
-        # this class's own docstring). mkdir here, not in __init__, so a REPL
-        # that is constructed but never started never touches the filesystem.
-        self.cwd.mkdir(parents=True, exist_ok=True)
+            # ADR-005 stage 5.1: cwd= a scratch dir, never the app's own cwd
+            # (see this class's own docstring). mkdir here, not in
+            # __init__, so a REPL that is constructed but never started
+            # never touches the filesystem.
+            self.cwd.mkdir(parents=True, exist_ok=True)
 
-        self.process = subprocess.Popen(
-            [sys.executable, '-c', script],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-            cwd=str(self.cwd),
-            **kwargs
-        )
+            self.process = subprocess.Popen(
+                [sys.executable, '-c', script],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                cwd=str(self.cwd),
+                **kwargs
+            )
+            # ADR-005 stage 5.2: assign the freshly-started REPL to a
+            # resource guard immediately - see graphlink_execution_guard's
+            # own docstring for the memory/process-count caps this closes
+            # (audit H2) and why assigning right after Popen() returns,
+            # rather than using CREATE_SUSPENDED, is an accepted tradeoff
+            # (the child hasn't run any of its own code yet, so the window
+            # for it to spawn an unassigned grandchild first is negligible).
+            self.guard = create_execution_guard()
+            self.guard.assign(self.process.pid)
 
     def execute(self, code):
         if not self.process or self.process.poll() is not None:
@@ -171,10 +221,30 @@ while True:
         return "".join(output).strip()
 
     def stop(self):
-        if self.process:
-            self.process.kill()
-            self.process.wait()
-            self.process = None
+        # Adversarial-review fix: serialized against a concurrent stop()
+        # (or start()) on this same instance via self._lock - see
+        # __init__'s own comment for the real, reproduced crash this
+        # closes ("AttributeError: 'NoneType' object has no attribute
+        # 'kill'" from two threads both inside this method at once, one
+        # nulling self.process out from under the other's later use of it).
+        with self._lock:
+            if self.process:
+                # ADR-005 stage 5.2: close the resource guard FIRST - on
+                # Windows this terminates the whole job (the REPL process
+                # AND anything it has itself spawned), closing the
+                # pre-existing gap where process.kill() alone only ever
+                # killed the one directly-tracked process, never its own
+                # children. Still followed by the existing
+                # process.kill()/wait() unconditionally: a safe no-op if
+                # the guard already killed it, and the only thing that
+                # actually stops the direct child on non-Windows in this
+                # stage (the POSIX process-group tier is ADR-005 stage 5.3).
+                if self.guard:
+                    self.guard.close()
+                    self.guard = None
+                self.process.kill()
+                self.process.wait()
+                self.process = None
 
 
 class PyCoderExecutionAgent:
