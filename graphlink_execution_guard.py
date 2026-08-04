@@ -40,11 +40,13 @@ limits is a UI-facing change orthogonal to this module's own correctness,
 also left for a follow-up. Neither is silently dropped - both are named
 here so a future stage does not have to rediscover the gap.
 
-The POSIX tier (process groups + rlimit) is explicitly ADR-005 stage 5.3,
-not this one - on non-Windows platforms, ExecutionResourceGuard.assign()/
-close() are no-ops, matching the pre-existing (unenforced) behavior
-exactly. This is not a regression: no platform loses a protection it had
-before this module existed.
+THE POSIX TIER (ADR-005 stage 5.3) is implemented below too - a dedicated
+process group so close() can kill the whole tree via killpg(), plus
+resource.setrlimit caps for address space, CPU seconds, process count and
+file size. Read the long comment on that block before trusting it: unlike
+the Windows tier, it has NOT been executed on a POSIX host (this project's
+dev machine and its only CI runner are both Windows), so it is
+unverified-in-practice by design and says so rather than implying parity.
 """
 
 from __future__ import annotations
@@ -78,6 +80,17 @@ class ExecutionResourceGuard:
     unenforced behavior is the safe fallback, not a hard failure, matching
     this codebase's established graceful-degradation precedent (DPAPI
     falling back to plaintext off-Windows rather than refusing to save)."""
+
+    def popen_kwargs(self) -> dict:
+        """Extra kwargs to merge into the `subprocess.Popen(...)` call this
+        guard is about to govern. Empty for Windows (a job object is applied
+        to an ALREADY-running process via assign()) and for the no-op base,
+        but load-bearing on POSIX, where `resource.setrlimit` has to run
+        inside the child between fork and exec - there is no way to impose
+        an address-space limit on a process that is already running. Callers
+        must therefore create the guard BEFORE Popen, pass these kwargs into
+        it, and call assign() with the resulting pid afterwards."""
+        return {}
 
     def assign(self, pid: int) -> None:
         pass
@@ -261,6 +274,152 @@ if sys.platform == "win32":
 
         return _WindowsJobObjectGuard(handle)
 
+    # The platform decision is made ONCE, here at import time, and bound to
+    # a single name the public factory calls. Deliberately not re-checked
+    # via `sys.platform` inside create_execution_guard(): the classes below
+    # only EXIST on their own platform, so a runtime re-check could route to
+    # a name that was never defined (a latent NameError, and one that a test
+    # monkeypatching sys.platform would trip over immediately).
+    _create_platform_guard = _create_windows_job_object_guard
+
+
+else:
+    # ADR-005 stage 5.3: the POSIX tier. Two independent mechanisms, both
+    # applied at spawn time rather than after the fact:
+    #
+    #   1. A dedicated PROCESS GROUP (`process_group=0` -> setpgid(0, 0) in
+    #      the child). This is what makes close() able to kill the whole
+    #      tree via killpg() rather than just the one tracked pid - the
+    #      POSIX analogue of the Windows job object's kill-on-close, and the
+    #      same "Stop actually stops everything it spawned" property.
+    #      Deliberately uses subprocess's own `process_group=` kwarg (Python
+    #      3.11+, implemented in C inside the fork-exec helper) rather than
+    #      doing setsid() from preexec_fn: preexec_fn runs arbitrary Python
+    #      between fork and exec, which CPython's own docs call out as
+    #      unsafe in the presence of threads (it can deadlock on a lock held
+    #      by another thread at fork time) - and BOTH call sites here are
+    #      threaded (the sandbox's reader thread, agents.py's
+    #      asyncio.to_thread). Keeping the group setup in C-level code
+    #      removes that hazard for the mechanism that matters most.
+    #
+    #   2. resource.setrlimit caps (address space, CPU seconds, process
+    #      count, file size). These have no subprocess kwarg equivalent, so
+    #      they DO require preexec_fn. The callback is kept deliberately
+    #      tiny and allocation-free for the thread-safety reason above.
+    #
+    # HONESTY NOTE, because this matters for how much to trust this code:
+    # unlike the Windows tier in stage 5.2 - which was proven against real
+    # memory-bomb, fork-bomb and orphan-grandchild processes before it
+    # shipped - this POSIX tier has NOT been executed on a POSIX host. The
+    # development machine and the only CI runner are both windows-latest,
+    # so `create_execution_guard()` never returns this class in either
+    # place and its enforcement tests are skipped there. It is written
+    # against documented stdlib behaviour and unit-tested for the parts
+    # that can be exercised anywhere (which kwargs it contributes, which
+    # rlimits it would set, that close() targets the group not the pid),
+    # but the real caps have not been observed firing. Treat it as
+    # unverified-in-practice until someone runs the POSIX-gated tests in
+    # backend/tests/test_execution_guard_posix.py on a real POSIX box.
+    import os
+    import signal
+
+    try:
+        import resource as _resource
+    except ImportError:  # pragma: no cover - POSIX-only import
+        _resource = None
+
+    # ADR-005 Decision #2 names a CPU cap ("60 s CPU") alongside the memory
+    # cap. RLIMIT_CPU is the POSIX way to express it and costs nothing to
+    # set here - note this is CPU-seconds consumed, not wall-clock, so it
+    # is complementary to (not a replacement for) the existing wall-clock
+    # timeouts in both execution surfaces.
+    DEFAULT_CPU_SECONDS = 60
+
+    # Bounds a single runaway write; well above any legitimate sandbox
+    # output while still stopping a disk-filling loop.
+    DEFAULT_FILE_SIZE_LIMIT_BYTES = 1 * 1024 * 1024 * 1024  # 1 GiB
+
+    class _PosixResourceGuard(ExecutionResourceGuard):
+        def __init__(
+            self,
+            memory_limit_bytes: int,
+            active_process_limit: int,
+            cpu_seconds: int,
+            file_size_limit_bytes: int,
+        ) -> None:
+            self._memory_limit_bytes = memory_limit_bytes
+            self._active_process_limit = active_process_limit
+            self._cpu_seconds = cpu_seconds
+            self._file_size_limit_bytes = file_size_limit_bytes
+            self._pgid = None
+            # Same check-then-null race the Windows guard's own close() has
+            # to defend against (see its comment) - an external stop() can
+            # race the run loop's own cleanup on a different thread.
+            self._lock = threading.Lock()
+
+        def _apply_child_limits(self) -> None:  # pragma: no cover - runs post-fork
+            """Runs in the forked child, before exec. Deliberately minimal:
+            no allocation, no logging, no imports - see the preexec_fn
+            thread-safety note on this module's POSIX block."""
+            if _resource is None:
+                return
+            for limit_name, value in (
+                ("RLIMIT_AS", self._memory_limit_bytes),
+                ("RLIMIT_CPU", self._cpu_seconds),
+                ("RLIMIT_NPROC", self._active_process_limit),
+                ("RLIMIT_FSIZE", self._file_size_limit_bytes),
+            ):
+                if not value:
+                    continue
+                limit = getattr(_resource, limit_name, None)
+                if limit is None:
+                    continue
+                try:
+                    _resource.setrlimit(limit, (value, value))
+                except (ValueError, OSError):
+                    # A limit the kernel refuses (already lower, or not
+                    # supported on this platform - RLIMIT_NPROC is absent on
+                    # some systems) must not abort the run: the same
+                    # fail-open stance the Windows tier takes when job
+                    # creation fails.
+                    pass
+
+        def popen_kwargs(self) -> dict:
+            return {
+                "process_group": 0,
+                "preexec_fn": self._apply_child_limits,
+            }
+
+        def assign(self, pid: int) -> None:
+            # With process_group=0 the child leads its own group, so the
+            # group id IS the child pid - that is what close() kills.
+            with self._lock:
+                self._pgid = pid
+
+        def close(self) -> None:
+            with self._lock:
+                pgid, self._pgid = self._pgid, None
+            if pgid is None:
+                return
+            try:
+                os.killpg(pgid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError, OSError):
+                # Already gone (the normal clean-exit path), or never
+                # actually became a group leader. Nothing to clean up.
+                pass
+
+    # Same single-source-of-truth dispatch the Windows branch uses - see
+    # its comment.
+    def _create_platform_guard(
+        memory_limit_bytes: int, active_process_limit: int
+    ) -> ExecutionResourceGuard:
+        return _PosixResourceGuard(
+            memory_limit_bytes=memory_limit_bytes,
+            active_process_limit=active_process_limit,
+            cpu_seconds=DEFAULT_CPU_SECONDS,
+            file_size_limit_bytes=DEFAULT_FILE_SIZE_LIMIT_BYTES,
+        )
+
 
 def create_execution_guard(
     memory_limit_bytes: int = DEFAULT_MEMORY_LIMIT_BYTES,
@@ -268,10 +427,13 @@ def create_execution_guard(
 ) -> ExecutionResourceGuard:
     """One guard per subprocess-management lifecycle (a Py-Coder REPL's
     single long-lived child; one Code Sandbox subprocess invocation).
-    Call `.assign(process.pid)` immediately after `subprocess.Popen(...)`
-    returns, and `.close()` exactly once when that process is done with -
-    whether it exited on its own or is being forcibly stopped. Safe to call
-    `.close()` on a guard whose process already exited cleanly."""
-    if sys.platform == "win32":
-        return _create_windows_job_object_guard(memory_limit_bytes, active_process_limit)
-    return ExecutionResourceGuard()
+
+    Call order matters, and is the same on every platform:
+      1. `guard = create_execution_guard()`
+      2. `Popen(..., **guard.popen_kwargs())` - POSIX applies its rlimits
+         between fork and exec, so the guard must exist BEFORE the spawn.
+      3. `guard.assign(process.pid)`
+      4. `guard.close()` exactly once when that process is done with -
+         whether it exited on its own or is being forcibly stopped. Safe to
+         call on a guard whose process already exited cleanly."""
+    return _create_platform_guard(memory_limit_bytes, active_process_limit)

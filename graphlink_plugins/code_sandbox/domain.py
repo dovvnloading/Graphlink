@@ -213,6 +213,13 @@ class VirtualEnvSandbox:
     def _run_subprocess(self, args, should_continue, emit_line=None, cwd=None, timeout_seconds=None):
         output_chunks = []
         start_time = time.monotonic()
+        # ADR-005 stage 5.2/5.3: the guard is created BEFORE Popen so its
+        # popen_kwargs() can reach the spawn itself. Empty on Windows (the
+        # job object is applied to an already-running process by assign()
+        # below); on POSIX it carries the process-group request and the
+        # rlimit preexec hook, which must be in place between fork and
+        # exec - see graphlink_execution_guard's own docstring.
+        self.guard = create_execution_guard()
         process = subprocess.Popen(
             args,
             cwd=str(cwd) if cwd else None,
@@ -220,15 +227,14 @@ class VirtualEnvSandbox:
             stderr=subprocess.STDOUT,
             text=True,
             bufsize=1,
+            **self.guard.popen_kwargs(),
             **_subprocess_kwargs(),
         )
         self.current_process = process
-        # ADR-005 stage 5.2: assign the freshly-started child to a resource
-        # guard immediately - see graphlink_execution_guard's own docstring
-        # for the memory/process-count caps this closes (audit H2) and why
-        # assigning right after Popen() returns, rather than using
-        # CREATE_SUSPENDED, is an accepted tradeoff.
-        self.guard = create_execution_guard()
+        # Windows applies its cap here, after the child exists (an accepted
+        # tradeoff over CREATE_SUSPENDED - the child has not run its own
+        # code yet). On POSIX this records the process-group id close()
+        # will kill.
         self.guard.assign(process.pid)
         output_queue = queue.Queue()
         done_signal = object()

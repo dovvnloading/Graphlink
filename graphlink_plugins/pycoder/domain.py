@@ -164,6 +164,15 @@ while True:
             # never touches the filesystem.
             self.cwd.mkdir(parents=True, exist_ok=True)
 
+            # ADR-005 stage 5.2/5.3: the guard is created BEFORE Popen so
+            # its popen_kwargs() can reach the spawn itself. On Windows
+            # that dict is empty (a job object is applied to an already-
+            # running process by assign() below); on POSIX it carries the
+            # process-group request and the rlimit preexec hook, which have
+            # to be in place between fork and exec - see
+            # graphlink_execution_guard's own docstring.
+            self.guard = create_execution_guard()
+
             self.process = subprocess.Popen(
                 [sys.executable, '-c', script],
                 stdin=subprocess.PIPE,
@@ -172,16 +181,14 @@ while True:
                 text=True,
                 bufsize=1,
                 cwd=str(self.cwd),
+                **self.guard.popen_kwargs(),
                 **kwargs
             )
-            # ADR-005 stage 5.2: assign the freshly-started REPL to a
-            # resource guard immediately - see graphlink_execution_guard's
-            # own docstring for the memory/process-count caps this closes
-            # (audit H2) and why assigning right after Popen() returns,
-            # rather than using CREATE_SUSPENDED, is an accepted tradeoff
-            # (the child hasn't run any of its own code yet, so the window
-            # for it to spawn an unassigned grandchild first is negligible).
-            self.guard = create_execution_guard()
+            # Windows applies its cap here, after the child exists. An
+            # accepted tradeoff over CREATE_SUSPENDED: the child hasn't run
+            # any of its own code yet, so the window for it to spawn an
+            # unassigned grandchild first is negligible. On POSIX this
+            # records the process-group id that close() will kill.
             self.guard.assign(self.process.pid)
 
     def execute(self, code):
