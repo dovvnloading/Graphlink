@@ -123,8 +123,12 @@ def test_ws_connect_dev_proxy_origin_rejected_without_env_opt_in():
 
 def test_ws_connect_dev_proxy_origin_succeeds_with_env_opt_in(monkeypatch):
     # Succeeds only once a developer explicitly opts in via
-    # GRAPHLINK_DEV_WS_ORIGIN, and despite the client's own Host being
-    # testserver (proving this branch doesn't depend on same-origin match).
+    # GRAPHLINK_DEV_WS_ORIGIN. make_client()'s Host is 127.0.0.1 (ADR-004
+    # stage 4.2 requires that of every client now, or TrustedHostMiddleware
+    # itself would reject the connection before this branch is ever
+    # reached) - Origin is deliberately still a DIFFERENT port (5173, not
+    # whatever port base_url implies), proving this branch doesn't require
+    # Origin to match Host, only to match the configured dev proxy origin.
     monkeypatch.setenv("GRAPHLINK_DEV_WS_ORIGIN", "http://127.0.0.1:5173")
     client = make_client()
     with client.websocket_connect("/ws", headers={"origin": "http://127.0.0.1:5173"}) as ws:

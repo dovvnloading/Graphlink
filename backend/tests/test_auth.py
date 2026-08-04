@@ -32,7 +32,20 @@ TOKEN = "test-capability-token-abc123"
 
 @pytest.fixture
 def authed_client():
-    return TestClient(create_app(auth_token=TOKEN))
+    # ADR-004 stage 4.2: TrustedHostMiddleware now rejects any Host other
+    # than 127.0.0.1 - TestClient's own default ("testserver") would
+    # otherwise 400 every request in this file before the auth checks under
+    # test even run. Matches the real deployment topology, not a relaxation.
+    #
+    # BOTH kwargs required: base_url governs plain HTTP requests, but
+    # Starlette's TestClient.websocket_connect hardcodes Host: testserver
+    # independent of base_url (confirmed via a raw-ASGI-scope probe) -
+    # headers= is what actually reaches the WS upgrade request's own Host.
+    return TestClient(
+        create_app(auth_token=TOKEN),
+        base_url="http://127.0.0.1",
+        headers={"host": "127.0.0.1"},
+    )
 
 
 # -- the unit layer: token primitives ---------------------------------------
@@ -179,7 +192,11 @@ def test_the_spa_bootstrap_is_not_gated(tmp_path):
     (spa_dir / "index.html").write_text("<html>graphlink</html>", encoding="utf-8")
     (spa_dir / "assets" / "index.js").write_text("console.log(1)", encoding="utf-8")
 
-    client = TestClient(create_app(spa_dir=spa_dir, auth_token=TOKEN))
+    client = TestClient(
+        create_app(spa_dir=spa_dir, auth_token=TOKEN),
+        base_url="http://127.0.0.1",
+        headers={"host": "127.0.0.1"},
+    )
 
     assert client.get("/").status_code == 200
     assert client.get("/assets/index.js").status_code == 200
@@ -243,7 +260,7 @@ def test_an_unauthenticated_ws_handshake_creates_no_session(authed_client):
 
 def test_auth_disabled_when_no_token_is_configured(monkeypatch):
     monkeypatch.delenv(DEV_AUTH_TOKEN_ENV, raising=False)
-    client = TestClient(create_app())
+    client = TestClient(create_app(), base_url="http://127.0.0.1", headers={"host": "127.0.0.1"})
 
     assert client.app.state.auth_token is None
     assert client.get("/api/health").status_code == 200
@@ -256,7 +273,7 @@ def test_the_dev_env_var_supplies_a_token_when_no_explicit_one_is_passed(monkeyp
     # The vite-dev workflow's escape hatch, matching the existing
     # GRAPHLINK_DEV_WS_ORIGIN precedent - unset in every real launch.
     monkeypatch.setenv(DEV_AUTH_TOKEN_ENV, "dev-token")
-    client = TestClient(create_app())
+    client = TestClient(create_app(), base_url="http://127.0.0.1", headers={"host": "127.0.0.1"})
 
     assert client.get("/api/health").status_code == 401
     assert client.get("/api/health?token=dev-token").status_code == 200

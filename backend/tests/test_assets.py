@@ -27,7 +27,13 @@ def make_client(tmp_path: Path | None = None) -> TestClient:
             spa_dir=spa,
             settings_state_file=state_path / "session.dat",
             chat_db_path=state_path / "chats.db",
-        )
+        ),
+        # ADR-004 stage 4.2: see test_app_ws.py's own make_client for why
+        # BOTH kwargs are required (base_url for HTTP, headers= because
+        # TestClient.websocket_connect hardcodes its own Host independent
+        # of base_url).
+        base_url="http://127.0.0.1",
+        headers={"host": "127.0.0.1"},
     )
     client._state_tmpdir = state_dir  # type: ignore[attr-defined]
     return client
