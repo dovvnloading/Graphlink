@@ -1480,25 +1480,64 @@ def _extract_gemini_image_bytes(payload: dict) -> bytes:
     raise RuntimeError("Gemini did not return image data.")
 
 
+# ADR-004 stage 4.4: the canonical env var names per cloud provider - was
+# previously 5 independent inline copies of the same "GRAPHLINK_* or
+# GRAPHITE_* or <bare>" OR-chain (this file's own _get_gemini_api_key/
+# _get_anthropic_api_key and all three branches of initialize_api below),
+# a real drift risk (a future renamed/added var updated in one copy but
+# not the other four). Consolidated to one source each; every call site
+# below now reads through _first_env_api_key. env_api_key_configured (also
+# below) is the NEW piece stage 4.4 adds: a presence-only check ("is an
+# env var supplying this provider's key right now"), used solely so the
+# Settings UI can surface "key provided by environment" (ADR-004 §4) - it
+# never returns or logs the key's actual value.
+_OPENAI_API_KEY_ENV_VARS = ("GRAPHLINK_OPENAI_API_KEY", "GRAPHITE_OPENAI_API_KEY", "OPENAI_API_KEY")
+_ANTHROPIC_API_KEY_ENV_VARS = ("GRAPHLINK_ANTHROPIC_API_KEY", "GRAPHITE_ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY")
+_GEMINI_API_KEY_ENV_VARS = ("GRAPHLINK_GEMINI_API_KEY", "GRAPHITE_GEMINI_API_KEY", "GEMINI_API_KEY")
+
+_PROVIDER_API_KEY_ENV_VARS = {
+    config.API_PROVIDER_OPENAI: _OPENAI_API_KEY_ENV_VARS,
+    config.API_PROVIDER_ANTHROPIC: _ANTHROPIC_API_KEY_ENV_VARS,
+    config.API_PROVIDER_GEMINI: _GEMINI_API_KEY_ENV_VARS,
+}
+
+
+def _first_env_api_key(env_vars: tuple[str, ...]) -> str | None:
+    """The first non-empty value among `env_vars`, checked in priority
+    order (GRAPHLINK_* wins over GRAPHITE_* wins over the SDK's own bare
+    name), or None if none are set. The single implementation every
+    provider's key-resolution OR-chain now delegates to."""
+    for name in env_vars:
+        value = os.environ.get(name)
+        if value:
+            return value
+    return None
+
+
+def env_api_key_configured(provider: str) -> bool:
+    """True if at least one recognized env var for `provider` is currently
+    set in this process's environment - a presence check ONLY, never the
+    key's value. Note this does NOT mean the env var is necessarily the
+    key actually IN USE: a key saved via Settings always wins over the
+    environment (every OR-chain below tries the stored/argument key
+    first) - callers surfacing this to a user should pair it with the
+    stored-key state to show "environment" only when no stored key
+    exists to take precedence (see backend/settings.py's own
+    _api_key_source)."""
+    return _first_env_api_key(_PROVIDER_API_KEY_ENV_VARS.get(provider, ())) is not None
+
+
 def _get_gemini_api_key(snapshot_key: str | None = None) -> str:
     # `snapshot_key` carries the per-request provider snapshot's key (#9) so a mode
     # switch mid-request can't pair this request with a different provider's key.
-    api_key = (
-        snapshot_key or API_KEY
-        or os.environ.get("GRAPHLINK_GEMINI_API_KEY") or os.environ.get("GRAPHITE_GEMINI_API_KEY")
-        or os.environ.get("GEMINI_API_KEY")
-    )
+    api_key = snapshot_key or API_KEY or _first_env_api_key(_GEMINI_API_KEY_ENV_VARS)
     if not api_key:
         raise RuntimeError("Gemini API key not configured. Open Settings and save your Gemini API key.")
     return api_key
 
 
 def _get_anthropic_api_key(snapshot_key: str | None = None) -> str:
-    api_key = (
-        snapshot_key or API_KEY
-        or os.environ.get("GRAPHLINK_ANTHROPIC_API_KEY") or os.environ.get("GRAPHITE_ANTHROPIC_API_KEY")
-        or os.environ.get("ANTHROPIC_API_KEY")
-    )
+    api_key = snapshot_key or API_KEY or _first_env_api_key(_ANTHROPIC_API_KEY_ENV_VARS)
     if not api_key:
         raise RuntimeError("Anthropic API key not configured. Open Settings and save your Anthropic API key.")
     return api_key
@@ -2508,11 +2547,7 @@ def initialize_api(provider: str, api_key: str, base_url: str = None):
         if not base_url:
             base_url = "https://api.openai.com/v1"
 
-        api_key = (
-            api_key
-            or os.environ.get("GRAPHLINK_OPENAI_API_KEY") or os.environ.get("GRAPHITE_OPENAI_API_KEY")
-            or os.environ.get("OPENAI_API_KEY")
-        )
+        api_key = api_key or _first_env_api_key(_OPENAI_API_KEY_ENV_VARS)
         if not api_key:
             if _is_local_base_url(base_url):
                 api_key = "dummy-key-for-local"
@@ -2522,11 +2557,7 @@ def initialize_api(provider: str, api_key: str, base_url: str = None):
         client = OpenAI(api_key=api_key, base_url=base_url)
 
     elif provider == config.API_PROVIDER_ANTHROPIC:
-        api_key = (
-            api_key
-            or os.environ.get("GRAPHLINK_ANTHROPIC_API_KEY") or os.environ.get("GRAPHITE_ANTHROPIC_API_KEY")
-            or os.environ.get("ANTHROPIC_API_KEY")
-        )
+        api_key = api_key or _first_env_api_key(_ANTHROPIC_API_KEY_ENV_VARS)
         if not api_key:
             raise RuntimeError("Anthropic API key not configured. Open Settings and save your Anthropic API key.")
 
@@ -2546,11 +2577,7 @@ def initialize_api(provider: str, api_key: str, base_url: str = None):
         base_url = None
 
     elif provider == config.API_PROVIDER_GEMINI:
-        if not (
-            api_key
-            or os.environ.get("GRAPHLINK_GEMINI_API_KEY") or os.environ.get("GRAPHITE_GEMINI_API_KEY")
-            or os.environ.get("GEMINI_API_KEY")
-        ):
+        if not (api_key or _first_env_api_key(_GEMINI_API_KEY_ENV_VARS)):
             raise RuntimeError("Gemini API key not configured. Open Settings and save your Gemini API key.")
         client = {"provider": config.API_PROVIDER_GEMINI}
     else:

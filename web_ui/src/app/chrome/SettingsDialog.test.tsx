@@ -21,10 +21,12 @@ const snapshot = {
   enableSystemPrompt: true,
   notificationPreferences: { info: true, success: true, warning: true, error: true },
   githubTokenConfigured: false,
+  secretsEncryptedAtRest: true,
   activeApiProvider: "OpenAI-Compatible",
   viewingApiProvider: "OpenAI-Compatible",
   apiBaseUrl: "https://api.openai.com/v1",
   apiKeyConfigured: { openai: false, anthropic: false, gemini: false },
+  apiKeySource: { openai: "none", anthropic: "none", gemini: "none" },
   apiModels: {},
   apiModelCatalog: [],
   apiCatalogStatus: "idle",
@@ -299,6 +301,51 @@ describe("SettingsDialog", () => {
 
     const keyField = screen.getByPlaceholderText("A key is configured - enter a new one to replace it");
     expect(keyField).toHaveValue("");
+  });
+
+  it("shows a persistent unencrypted-secrets warning when DPAPI is unavailable, regardless of section", async () => {
+    const { user, push } = setup();
+    await user.click(screen.getByText("open settings"));
+    act(() => push({ ...snapshot, secretsEncryptedAtRest: false }));
+
+    // getByRole("alert") - not just getByText - pins the adversarial-review
+    // fix that gave this banner role="alert" so screen readers actually
+    // encounter it (the dialog's focus trap otherwise skips straight past
+    // a non-focusable <p> to the rail buttons).
+    expect(screen.getByRole("alert")).toHaveTextContent(/API keys are stored unencrypted on this system/);
+
+    await user.click(screen.getByRole("button", { name: "Integrations" }));
+    expect(screen.getByRole("alert")).toHaveTextContent(/API keys are stored unencrypted on this system/);
+  });
+
+  it("hides the unencrypted-secrets warning when secrets are encrypted at rest", async () => {
+    const { user, push } = setup();
+    await user.click(screen.getByText("open settings"));
+    act(() => push({ ...snapshot, secretsEncryptedAtRest: true }));
+
+    expect(screen.queryByText(/API keys are stored unencrypted on this system/)).toBeNull();
+  });
+
+  it("shows an environment-variable hint next to the API Key field when that provider's key comes from the environment", async () => {
+    const { user, push } = setup();
+    await goToApiEndpoint(user, push, {
+      apiKeySource: { openai: "environment", anthropic: "none", gemini: "none" },
+    });
+
+    expect(
+      screen.getByText("Key provided by an environment variable, not Settings."),
+    ).toBeInTheDocument();
+  });
+
+  it("hides the environment-variable hint when the viewed provider's key is stored or absent", async () => {
+    const { user, push } = setup();
+    await goToApiEndpoint(user, push, {
+      apiKeySource: { openai: "stored", anthropic: "none", gemini: "none" },
+    });
+
+    expect(
+      screen.queryByText("Key provided by an environment variable, not Settings."),
+    ).toBeNull();
   });
 
   it("switching the provider select fires setViewingApiProvider", async () => {

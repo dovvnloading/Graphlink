@@ -88,6 +88,53 @@ class TestOpenAiApiKeyEnvFallback:
         fake_openai_cls.assert_called_once_with(api_key="dummy-key-for-local", base_url="http://localhost:11434/v1")
 
 
+class TestEnvApiKeyConfigured:
+    """ADR-004 stage 4.4: env_api_key_configured() is a NEW public presence-only
+    check (added alongside the _first_env_api_key refactor above) that
+    backend/settings.py's _api_key_source uses to surface "key provided by an
+    environment variable" in the Settings UI - it must never leak the key's
+    value, only whether one is set."""
+
+    def test_true_when_any_recognized_openai_env_var_is_set(self, monkeypatch):
+        monkeypatch.delenv("GRAPHLINK_OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv("GRAPHITE_OPENAI_API_KEY", raising=False)
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-some-value")
+
+        assert api_provider.env_api_key_configured(config.API_PROVIDER_OPENAI) is True
+
+    def test_false_when_no_openai_env_var_is_set(self, monkeypatch):
+        monkeypatch.delenv("GRAPHLINK_OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv("GRAPHITE_OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+        assert api_provider.env_api_key_configured(config.API_PROVIDER_OPENAI) is False
+
+    def test_true_for_anthropic_and_gemini_too(self, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-value")
+        monkeypatch.setenv("GEMINI_API_KEY", "AIza-value")
+
+        assert api_provider.env_api_key_configured(config.API_PROVIDER_ANTHROPIC) is True
+        assert api_provider.env_api_key_configured(config.API_PROVIDER_GEMINI) is True
+
+    def test_an_empty_string_env_var_does_not_count_as_configured(self, monkeypatch):
+        monkeypatch.delenv("GRAPHLINK_OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv("GRAPHITE_OPENAI_API_KEY", raising=False)
+        monkeypatch.setenv("OPENAI_API_KEY", "")
+
+        assert api_provider.env_api_key_configured(config.API_PROVIDER_OPENAI) is False
+
+    def test_unknown_provider_returns_false_rather_than_raising(self):
+        assert api_provider.env_api_key_configured("not-a-real-provider") is False
+
+    def test_never_exposes_the_actual_key_value(self, monkeypatch):
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-should-never-leak")
+
+        result = api_provider.env_api_key_configured(config.API_PROVIDER_OPENAI)
+
+        assert result is True
+        assert "sk-should-never-leak" not in repr(result)
+
+
 class TestLegacyGraphiteEnvVarStillWorks:
     """The app was renamed from Graphite to Graphlink; GRAPHITE_*_API_KEY env vars set
     before the rename must keep working so existing power-user shell configs don't

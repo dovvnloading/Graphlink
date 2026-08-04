@@ -94,10 +94,17 @@ const initialState: AppSettingsState = {
   enableSystemPrompt: true,
   notificationPreferences: {},
   githubTokenConfigured: false,
+  // ADR-004 stage 4.4: optimistic default (true = encrypted) so the
+  // persistent badge below never flashes a false warning before the
+  // first real snapshot arrives - the real backend value replaces this
+  // on the very first "app-settings" publish, same as every other field
+  // here.
+  secretsEncryptedAtRest: true,
   activeApiProvider: API_PROVIDER_OPENAI,
   viewingApiProvider: API_PROVIDER_OPENAI,
   apiBaseUrl: DEFAULT_OPENAI_BASE_URL,
   apiKeyConfigured: { openai: false, anthropic: false, gemini: false },
+  apiKeySource: { openai: "none", anthropic: "none", gemini: "none" },
   apiModels: {},
   apiModelCatalog: [],
   apiCatalogStatus: "idle",
@@ -288,6 +295,12 @@ function ApiProviderPage({
   };
 
   const requiredTasks = API_TASK_FIELDS.filter(({ task }) => !(isAnthropic && task === TASK_IMAGE_GEN));
+  // ADR-004 stage 4.4: the same provider-key derivation apiKeyConfigured's
+  // placeholder below already needed, factored out so apiKeySource's new
+  // "provided by environment" hint reads the identical key - one place
+  // deciding "which of the 3 wire dicts' entries describes the viewed
+  // provider", not two that could silently diverge.
+  const viewingProviderKey = isOpenAi ? "openai" : isAnthropic ? "anthropic" : "gemini";
 
   return (
     <div className="settings-general-page">
@@ -326,15 +339,29 @@ function ApiProviderPage({
           type="password"
           className="settings-select"
           placeholder={
-            (state.apiKeyConfigured as Record<string, boolean>)[
-              isOpenAi ? "openai" : isAnthropic ? "anthropic" : "gemini"
-            ]
+            (state.apiKeyConfigured as Record<string, boolean>)[viewingProviderKey]
               ? "A key is configured - enter a new one to replace it"
               : "Enter your API key..."
           }
           value={draftApiKey}
           onChange={(event) => setDraftApiKey(event.target.value)}
         />
+        {/* ADR-004 stage 4.4: surfaces api_provider.py's own env-var key
+            fallback, previously invisible. apiKeySource[viewingProviderKey]
+            reflects the VIEWED provider (per its own dropdown), which may
+            not be the ACTIVE one - so this is a prediction ("if you saved/
+            activated this provider, its key would come from the
+            environment"), not a claim that the environment is supplying a
+            key to a live request right now. "stored" whenever a saved key
+            already exists (a stored key always wins over the environment -
+            see backend/settings.py's own _api_key_source). Saving a key
+            here will switch this to "stored" on the next snapshot, same as
+            apiKeyConfigured already does. */}
+        {(state.apiKeySource as Record<string, string>)[viewingProviderKey] === "environment" && (
+          <span className="settings-field-hint">
+            Key provided by an environment variable, not Settings.
+          </span>
+        )}
       </label>
 
       {(isOpenAi || isAnthropic) && (
@@ -863,6 +890,25 @@ export function SettingsDialog({ transport }: { transport: WsTransport }) {
 
   return (
     <Dialog name="settings" title="Settings" className="settings-dialog">
+      {/* ADR-004 stage 4.4: persistent (visible regardless of which
+          section tab is active, not a one-time toast) - a DPAPI failure
+          means every API key/GitHub token this dialog saves from now on
+          is written to disk in PLAINTEXT, a fact worth surfacing no
+          matter which page a user happens to be on when it's true. Hidden
+          entirely in the common case (secretsEncryptedAtRest is true).
+          role="alert" (adversarial-review fix) matches every other warning/
+          error banner in this codebase (BridgeErrorState.tsx, the 3
+          node-view banner-error divs) - without it, the dialog's own focus
+          trap moves focus straight to the rail buttons on open (this <p>
+          isn't focusable), so screen-reader users could tab straight past
+          this security-relevant text and never encounter it, and a later
+          flip from encrypted to unencrypted while the dialog is already
+          open would render with no assistive-tech announcement at all. */}
+      {!state.secretsEncryptedAtRest && (
+        <p className="settings-update-status settings-secrets-warning" data-level="warning" role="alert">
+          API keys are stored unencrypted on this system (Windows DPAPI is unavailable or failing here).
+        </p>
+      )}
       <div className="settings-shell">
         <nav className="settings-rail" aria-label="Settings sections">
           {SECTIONS.map((section) => (

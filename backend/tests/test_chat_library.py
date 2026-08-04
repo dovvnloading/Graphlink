@@ -4,7 +4,10 @@ saveChat/newChat)."""
 import asyncio
 import contextlib
 import json
+import os
 import sqlite3
+import stat
+import sys
 import threading
 import time
 
@@ -70,6 +73,50 @@ class Recorder:
 def test_get_all_chats_creates_table_on_a_fresh_db(db_path):
     assert get_all_chats(db_path) == []
     assert db_path.exists()
+
+
+class TestChatsDbPermissionsAreRestricted:
+    """ADR-004 stage 4.4: chats.db holds real conversation content, so
+    _connect() gives it POSIX 0600 on every connection - unconditional (not
+    "only if just created"), since every read/write helper in this module
+    routes through that one shared function. chmod's real effect is
+    POSIX-only (see _connect's own comment on why Windows os.chmod only
+    toggles the read-only attribute, not real per-owner permission bits)."""
+
+    def test_chmod_is_invoked_with_0600_on_the_real_db_file(self, db_path, monkeypatch):
+        calls = []
+        monkeypatch.setattr(os, "chmod", lambda path, mode: calls.append((path, mode)))
+
+        get_all_chats(db_path)
+
+        assert (db_path, 0o600) in calls
+
+    def test_posix_permission_bits_are_actually_0600(self, db_path):
+        if sys.platform == "win32":
+            pytest.skip("chmod is a no-op on Windows - see class docstring")
+
+        get_all_chats(db_path)
+
+        assert stat.S_IMODE(db_path.stat().st_mode) == 0o600
+
+    def test_self_heals_a_pre_existing_db_with_looser_permissions(self, db_path):
+        if sys.platform == "win32":
+            pytest.skip("chmod is a no-op on Windows - see class docstring")
+
+        _insert_chat(db_path, "Pre-existing")
+        os.chmod(db_path, 0o644)
+
+        get_all_chats(db_path)
+
+        assert stat.S_IMODE(db_path.stat().st_mode) == 0o600
+
+    def test_a_chmod_failure_does_not_crash_the_connection(self, db_path, monkeypatch):
+        def _boom(path, mode):
+            raise OSError("permission denied")
+
+        monkeypatch.setattr(os, "chmod", _boom)
+
+        assert get_all_chats(db_path) == []
 
 
 def test_get_all_chats_reads_real_rows(db_path):

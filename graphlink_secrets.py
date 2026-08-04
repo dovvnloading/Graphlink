@@ -99,6 +99,28 @@ def _is_encrypted_blob(value: str) -> bool:
     return _dpapi_call(blob, encrypt=False) is not None
 
 
+def dpapi_available() -> bool:
+    """ADR-004 stage 4.4: True only if DPAPI genuinely round-trips a probe
+    value right now on this system - not merely `sys.platform == "win32"`,
+    which would be wrong the moment the underlying WinAPI call itself
+    fails for some other reason (a locked-down environment, a missing
+    crypto provider, group policy restricting DPAPI, etc.) that
+    `_dpapi_call` already catches and turns into a plain `None`.
+
+    This is the answer to "is protect() about to silently return
+    plaintext instead of encrypting?" - SettingsManager calls this once at
+    construction (see its own docstring) and surfaces it to the Settings
+    UI, closing audit finding H12: before this, a DPAPI failure was
+    observable only as an absence (no `dpapi:`-prefixed value ever
+    appearing on disk), never as a signal a user could actually see.
+    """
+    probe = b"graphlink-dpapi-availability-probe"
+    encrypted = _dpapi_call(probe, encrypt=True)
+    if encrypted is None:
+        return False
+    return _dpapi_call(encrypted, encrypt=False) == probe
+
+
 def protect(value: str) -> str:
     """Encrypt a secret for storage. Empty stays empty; a value that is already a real
     encrypted blob passes through unchanged (idempotent - so the migration pass doesn't

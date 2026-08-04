@@ -187,6 +187,15 @@ def settings_payload(manager: SettingsManager) -> dict[str, Any]:
         "enableSystemPrompt": manager.get_enable_system_prompt(),
         "notificationPreferences": manager.get_notification_preferences(),
         "githubTokenConfigured": bool(manager.get_github_token()),
+        # ADR-004 stage 4.4: closes audit finding H12 - before this, a
+        # DPAPI failure was observable only as an absence (no "dpapi:"
+        # prefix ever appearing in session.dat), never as a signal the
+        # user could see. False means every secret SettingsManager saves
+        # from here on is being written in PLAINTEXT, not encrypted - the
+        # Settings UI renders a persistent badge when this is false. See
+        # graphlink_secrets.dpapi_available's own docstring for exactly
+        # what this does and doesn't mean.
+        "secretsEncryptedAtRest": manager.secrets_encrypted_at_rest(),
     }
 
 
@@ -213,6 +222,20 @@ def _catalog_state_for(state: SettingsSessionState, provider: str) -> dict[str, 
     return state.api_catalog_state.get(provider, _DEFAULT_API_CATALOG_STATE)
 
 
+def _api_key_source(stored: bool, provider: str) -> str:
+    """ADR-004 stage 4.4: the single source of truth for whether a
+    provider's key is "stored", "environment", or "none" - reused by
+    _build_settings_payload for each of the 3 cloud providers below.
+    `stored` is passed in (not recomputed) so this stays a pure function
+    of state the caller already has, matching every other per-provider
+    helper in this module."""
+    if stored:
+        return "stored"
+    if api_provider.env_api_key_configured(provider):
+        return "environment"
+    return "none"
+
+
 def _build_settings_payload(manager: SettingsManager, state: SettingsSessionState) -> dict[str, Any]:
     payload = settings_payload(manager)
     payload["activeSection"] = state.active_section
@@ -220,10 +243,27 @@ def _build_settings_payload(manager: SettingsManager, state: SettingsSessionStat
     payload["activeApiProvider"] = manager.get_api_provider()
     payload["viewingApiProvider"] = viewing_provider
     payload["apiBaseUrl"] = manager.get_api_base_url()
+    openai_key = manager.get_openai_key()
+    anthropic_key = manager.get_anthropic_key()
+    gemini_key = manager.get_gemini_key()
     payload["apiKeyConfigured"] = {
-        "openai": bool(manager.get_openai_key()),
-        "anthropic": bool(manager.get_anthropic_key()),
-        "gemini": bool(manager.get_gemini_key()),
+        "openai": bool(openai_key),
+        "anthropic": bool(anthropic_key),
+        "gemini": bool(gemini_key),
+    }
+    # ADR-004 stage 4.4: "key provided by environment" surfacing - the env
+    # var fallback itself (api_provider.py) stays load-bearing (it's what
+    # the subprocess allowlist story depends on), this only makes it
+    # observable. "stored" whenever apiKeyConfigured is already true for
+    # that provider (a saved key always wins over the environment - see
+    # api_provider.env_api_key_configured's own docstring on why this
+    # checks stored-first, not "env is set" alone, which would be
+    # misleading for a provider that also has a stored key silently
+    # overriding it).
+    payload["apiKeySource"] = {
+        "openai": _api_key_source(bool(openai_key), config.API_PROVIDER_OPENAI),
+        "anthropic": _api_key_source(bool(anthropic_key), config.API_PROVIDER_ANTHROPIC),
+        "gemini": _api_key_source(bool(gemini_key), config.API_PROVIDER_GEMINI),
     }
     payload["apiModels"] = manager.get_api_models(viewing_provider)
     payload["apiModelCatalog"] = _api_model_catalog_for_wire(manager, viewing_provider)

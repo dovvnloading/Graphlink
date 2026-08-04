@@ -23,6 +23,12 @@
       },
       "type": "object"
     },
+    "apiKeySource": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "type": "object"
+    },
     "apiModelCatalog": {
       "items": {
         "additionalProperties": false,
@@ -162,6 +168,9 @@
     "schemaVersion": {
       "type": "integer"
     },
+    "secretsEncryptedAtRest": {
+      "type": "boolean"
+    },
     "showTokenCounter": {
       "type": "boolean"
     },
@@ -177,10 +186,12 @@
     "enableSystemPrompt",
     "notificationPreferences",
     "githubTokenConfigured",
+    "secretsEncryptedAtRest",
     "activeApiProvider",
     "viewingApiProvider",
     "apiBaseUrl",
     "apiKeyConfigured",
+    "apiKeySource",
     "apiModels",
     "apiModelCatalog",
     "apiCatalogStatus",

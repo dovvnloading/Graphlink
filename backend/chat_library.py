@@ -34,11 +34,15 @@ import asyncio
 import contextlib
 import hashlib
 import json
+import logging
+import os
 import re
 import sqlite3
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from backend.canvas import SceneDocument
 from backend.events import SessionBus
@@ -115,6 +119,24 @@ def _connect(db_path: Path) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path, timeout=30)
     conn.execute("PRAGMA foreign_keys = ON")
+    # ADR-004 stage 4.4: chats.db holds real conversation content, POSIX
+    # 0600 like session.dat (graphlink_settings_store.py's own
+    # SettingsManager). sqlite3.connect() creates the file itself with no
+    # mode parameter exposed anywhere in the stdlib API, so there is no
+    # earlier hook than right here, after connect() returns, to fix it up
+    # - and since EVERY read/write helper in this file goes through this
+    # one shared function (get_all_chats, rename_chat, delete_chat,
+    # load_chat_row, load_notes_rows, load_pins_rows,
+    # save_chat_atomically_row), doing it here rather than at each of
+    # those call sites both closes the gap for new files and self-heals a
+    # pre-stage-4.4 chats.db on its very next connection - unconditional,
+    # not "only if just created". No-op on Windows (see SettingsManager's
+    # own __init__ comment for why POSIX permission bits don't apply
+    # there).
+    try:
+        os.chmod(db_path, 0o600)
+    except OSError:
+        logger.warning("could not chmod %s to 0600 - continuing with existing permissions", db_path)
     return conn
 
 

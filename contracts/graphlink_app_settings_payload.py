@@ -39,11 +39,20 @@ class AppSettingsStatePayload:
     enableSystemPrompt: bool
     notificationPreferences: dict[str, bool]
     githubTokenConfigured: bool
+    # ADR-004 stage 4.4: True unless DPAPI is unavailable/failing on this
+    # system, in which case every secret SettingsManager saves is being
+    # written in plaintext - the Settings UI renders a persistent badge
+    # when this is false (closes audit finding H12's silence).
+    secretsEncryptedAtRest: bool
     # R7.4a: API-provider page.
     activeApiProvider: str
     viewingApiProvider: str
     apiBaseUrl: str
     apiKeyConfigured: dict[str, bool]
+    # ADR-004 stage 4.4: "stored" | "environment" | "none" per provider -
+    # surfaces api_provider.py's own env-var key fallback (previously
+    # invisible to the user) without exposing the key's value.
+    apiKeySource: dict[str, str]
     apiModels: dict[str, str]
     apiModelCatalog: list[ApiModelDescriptorPayload]
     apiCatalogStatus: str
