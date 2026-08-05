@@ -49,6 +49,7 @@ from backend.tests.conftest import (
 import api_provider
 import graphlink_task_config as task_config
 from graphlink_navigation_pins import NavigationPinRecord
+from graphlink_scratch_dirs import EXECUTION_SANDBOX_ROOT, safe_scratch_id
 from graphlink_plugins.web_research.domain import ResearchCitation, ResearchResult, ResearchSource
 from backend.token_counter import estimate_tokens, register_token_counter
 
@@ -5064,7 +5065,7 @@ def test_remove_nodes_disposes_the_repl_for_every_deleted_pycoder_node():
         other_node = document.add_gitlink_node(0, 0, parent.id)
         # Populate a REPL for this node id, so there is something real to
         # tear down.
-        repl = dispatcher.get_pycoder_repl(pycoder_node.id)
+        repl = dispatcher.get_pycoder_repl(pycoder_node.id, pycoder_node.state.pycoder_repl_id)
         assert pycoder_node.id in dispatcher._pycoder_repls
 
         await bus.dispatch_intent("scene", "removeNodes", [[pycoder_node.id, other_node.id]])
@@ -5084,7 +5085,7 @@ def test_remove_nodes_does_not_touch_the_repl_dict_when_no_pycoder_node_is_delet
         parent = document.add_node(0, 0, "parent")
         pycoder_node = document.add_pycoder_node(0, 0, parent.id)
         other_node = document.add_gitlink_node(0, 0, parent.id)
-        dispatcher.get_pycoder_repl(pycoder_node.id)
+        dispatcher.get_pycoder_repl(pycoder_node.id, pycoder_node.state.pycoder_repl_id)
 
         await bus.dispatch_intent("scene", "removeNodes", [[other_node.id]])
 
@@ -5093,6 +5094,121 @@ def test_remove_nodes_does_not_touch_the_repl_dict_when_no_pycoder_node_is_delet
         assert pycoder_node.id in dispatcher._pycoder_repls, (
             "a still-live pycoder node's REPL must not be disposed just "
             "because a DIFFERENT node was deleted"
+        )
+
+    asyncio.run(run())
+
+
+def test_remove_nodes_deletes_the_pycoder_scratch_dir_for_every_deleted_pycoder_node():
+    """ADR-005 stage 5.3: node delete must GC the REPL's on-disk cwd, not
+    just the in-memory PythonREPL/subprocess (proven above). The directory
+    is created here directly (not via repl.start(), which would spawn a
+    real subprocess) to simulate files a prior run already left behind -
+    dispose_pycoder_repl's remove_scratch_dir=True path doesn't care how
+    the directory came to exist."""
+    async def run():
+        bus, document, _recorder, dispatcher = make_bus_with_dispatcher()
+        parent = document.add_node(0, 0, "parent")
+        pycoder_node = document.add_pycoder_node(0, 0, parent.id)
+        repl = dispatcher.get_pycoder_repl(pycoder_node.id, pycoder_node.state.pycoder_repl_id)
+        repl.cwd.mkdir(parents=True, exist_ok=True)
+        (repl.cwd / "leftover.txt").write_text("data", encoding="utf-8")
+        assert repl.cwd.is_dir()
+
+        await bus.dispatch_intent("scene", "removeNodes", [[pycoder_node.id]])
+
+        assert not repl.cwd.exists(), "the REPL's scratch dir must not outlive its deleted node"
+
+    asyncio.run(run())
+
+
+def test_remove_nodes_leaves_the_pycoder_scratch_dir_when_a_different_node_is_deleted():
+    async def run():
+        bus, document, _recorder, dispatcher = make_bus_with_dispatcher()
+        parent = document.add_node(0, 0, "parent")
+        pycoder_node = document.add_pycoder_node(0, 0, parent.id)
+        other_node = document.add_gitlink_node(0, 0, parent.id)
+        repl = dispatcher.get_pycoder_repl(pycoder_node.id, pycoder_node.state.pycoder_repl_id)
+        repl.cwd.mkdir(parents=True, exist_ok=True)
+
+        await bus.dispatch_intent("scene", "removeNodes", [[other_node.id]])
+
+        assert repl.cwd.is_dir(), (
+            "a still-live pycoder node's scratch dir must not be removed just "
+            "because a DIFFERENT node was deleted"
+        )
+
+    asyncio.run(run())
+
+
+def test_remove_nodes_deletes_the_pycoder_scratch_dir_even_if_the_repl_was_already_disposed():
+    """ADR-005 stage 5.3 (review-fix): the exact bug an adversarial review
+    caught. dispose_pycoder_repl's remove_scratch_dir=True path used to
+    silently no-op if _pycoder_repls.pop(node_id) returned None (e.g.
+    because an earlier execute() timeout had already popped and disposed
+    it - AgentDispatcher.dispose_pycoder_repl's own execute-timeout caller,
+    exercised by test_agents.py's
+    test_pycoder_manual_mode_execute_timeout_disposes_the_repl_and_calls_on_failure).
+    Fixed by recomputing the scratch path deterministically from repl_id
+    rather than depending on a live tracked REPL object - this test proves
+    the fix by making sure the dict entry is ALREADY gone before delete."""
+    async def run():
+        bus, document, _recorder, dispatcher = make_bus_with_dispatcher()
+        parent = document.add_node(0, 0, "parent")
+        pycoder_node = document.add_pycoder_node(0, 0, parent.id)
+        repl = dispatcher.get_pycoder_repl(pycoder_node.id, pycoder_node.state.pycoder_repl_id)
+        repl.cwd.mkdir(parents=True, exist_ok=True)
+        (repl.cwd / "leftover.txt").write_text("data", encoding="utf-8")
+        # Simulate the prior-timeout scenario: the dict entry is gone, but
+        # the on-disk directory (and its files) are still there.
+        del dispatcher._pycoder_repls[pycoder_node.id]
+        assert pycoder_node.id not in dispatcher._pycoder_repls
+        assert repl.cwd.is_dir()
+
+        await bus.dispatch_intent("scene", "removeNodes", [[pycoder_node.id]])
+
+        assert not repl.cwd.exists(), (
+            "the scratch dir must still be removed even with no live REPL tracked for this node"
+        )
+
+    asyncio.run(run())
+
+
+def test_remove_nodes_deletes_the_code_sandbox_scratch_dir_for_every_deleted_sandbox_node():
+    """ADR-005 stage 5.3's Execution Sandbox twin. Unlike pycoder, there is
+    no live VirtualEnvSandbox/REPL object on the dispatcher for a
+    code_sandbox node (see AgentDispatcher.remove_code_sandbox_scratch_dir's
+    own docstring) - the directory is created directly here to simulate a
+    venv a prior run already built, and the path is recomputed the same
+    deterministic way VirtualEnvSandbox itself would."""
+    async def run():
+        bus, document, _recorder, _dispatcher = make_bus_with_dispatcher()
+        parent = document.add_node(0, 0, "parent")
+        sandbox_node = document.add_code_sandbox_node(0, 0, parent.id)
+        sandbox_dir = EXECUTION_SANDBOX_ROOT / safe_scratch_id(sandbox_node.state.code_sandbox_sandbox_id)
+        (sandbox_dir / "venv").mkdir(parents=True, exist_ok=True)
+
+        await bus.dispatch_intent("scene", "removeNodes", [[sandbox_node.id]])
+
+        assert not sandbox_dir.exists(), "the sandbox's venv dir must not outlive its deleted node"
+
+    asyncio.run(run())
+
+
+def test_remove_nodes_leaves_the_code_sandbox_scratch_dir_when_a_different_node_is_deleted():
+    async def run():
+        bus, document, _recorder, _dispatcher = make_bus_with_dispatcher()
+        parent = document.add_node(0, 0, "parent")
+        sandbox_node = document.add_code_sandbox_node(0, 0, parent.id)
+        other_node = document.add_gitlink_node(0, 0, parent.id)
+        sandbox_dir = EXECUTION_SANDBOX_ROOT / safe_scratch_id(sandbox_node.state.code_sandbox_sandbox_id)
+        sandbox_dir.mkdir(parents=True, exist_ok=True)
+
+        await bus.dispatch_intent("scene", "removeNodes", [[other_node.id]])
+
+        assert sandbox_dir.is_dir(), (
+            "a still-live code_sandbox node's scratch dir must not be removed "
+            "just because a DIFFERENT node was deleted"
         )
 
     asyncio.run(run())

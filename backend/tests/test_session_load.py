@@ -167,6 +167,70 @@ def test_code_sandbox_field_mapping():
     assert node.state.code_sandbox_requirements == "numpy" and node.state.code_sandbox_sandbox_id == "sbx-1"
 
 
+def test_pycoder_repl_id_round_trips_when_present_in_the_payload():
+    # ADR-005 stage 5.3 (review-fix): pycoder_repl_id is the stable
+    # scratch-dir key - a saved payload that already has one must restore
+    # it verbatim, not mint a new one (that would orphan the node's
+    # existing REPL scratch directory on every single load).
+    document = _restore(nodes=[
+        _chat("parent"),
+        {"node_type": "pycoder", "mode": "MANUAL", "prompt": "", "code": "x=1",
+         "output": "1", "analysis": "ok", "pycoder_repl_id": "repl-abc123",
+         "position": {"x": 0, "y": 0}, "parent_node_index": 0},
+    ])
+    node = next(n for n in document.nodes.values() if n.kind == "pycoder")
+    assert node.state.pycoder_repl_id == "repl-abc123"
+
+
+def test_pycoder_repl_id_self_heals_when_missing_from_a_legacy_payload():
+    # A payload predating this field (or otherwise malformed) must NOT
+    # fall back to a blank id - see graphlink_scratch_dirs.
+    # remove_scratch_dir_for_id's own docstring for why a blank id is
+    # actively dangerous, not just untidy: it resolves to a shared
+    # "default" bucket every such node would collide on.
+    document = _restore(nodes=[
+        _chat("parent"),
+        {"node_type": "pycoder", "mode": "MANUAL", "prompt": "", "code": "x=1",
+         "output": "", "analysis": "", "position": {"x": 0, "y": 0}, "parent_node_index": 0},
+    ])
+    node = next(n for n in document.nodes.values() if n.kind == "pycoder")
+    assert node.state.pycoder_repl_id, "a missing pycoder_repl_id must self-heal to a fresh non-blank id"
+
+
+def test_two_legacy_pycoder_payloads_missing_repl_id_do_not_collide():
+    document = _restore(nodes=[
+        _chat("parent"),
+        {"node_type": "pycoder", "mode": "MANUAL", "code": "a", "position": {"x": 0, "y": 0}, "parent_node_index": 0},
+        {"node_type": "pycoder", "mode": "MANUAL", "code": "b", "position": {"x": 0, "y": 0}, "parent_node_index": 0},
+    ])
+    pycoder_nodes = [n for n in document.nodes.values() if n.kind == "pycoder"]
+    assert len(pycoder_nodes) == 2
+    first, second = pycoder_nodes
+    assert first.state.pycoder_repl_id != second.state.pycoder_repl_id
+
+
+def test_code_sandbox_sandbox_id_self_heals_when_missing_from_a_legacy_payload():
+    document = _restore(nodes=[
+        _chat("parent"),
+        {"node_type": "code_sandbox", "prompt": "build x", "requirements": "",
+         "code": "", "output": "", "analysis": "", "position": {"x": 0, "y": 0}, "parent_node_index": 0},
+    ])
+    node = next(n for n in document.nodes.values() if n.kind == "code_sandbox")
+    assert node.state.code_sandbox_sandbox_id, "a missing sandbox_id must self-heal to a fresh non-blank id"
+
+
+def test_two_legacy_code_sandbox_payloads_missing_sandbox_id_do_not_collide():
+    document = _restore(nodes=[
+        _chat("parent"),
+        {"node_type": "code_sandbox", "prompt": "a", "position": {"x": 0, "y": 0}, "parent_node_index": 0},
+        {"node_type": "code_sandbox", "prompt": "b", "position": {"x": 0, "y": 0}, "parent_node_index": 0},
+    ])
+    sandbox_nodes = [n for n in document.nodes.values() if n.kind == "code_sandbox"]
+    assert len(sandbox_nodes) == 2
+    first, second = sandbox_nodes
+    assert first.state.code_sandbox_sandbox_id != second.state.code_sandbox_sandbox_id
+
+
 def test_artifact_node_reuses_instruction_as_content_and_content_as_artifact_content():
     document = _restore(nodes=[
         _chat("parent"),

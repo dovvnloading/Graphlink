@@ -134,11 +134,21 @@ def main() -> int:
         mark_running,
         previous_run_crashed,
     )
+    from graphlink_scratch_dirs import sweep_stale_scratch_dirs_on_launch
 
     configure_logging()
     install_exception_handlers()
     crashed = previous_run_crashed()
     mark_running()
+    # ADR-005 stage 5.3: the age-sweep GC trigger - a crash/abandoned-
+    # session cleanup net for scratch dirs that node-delete/session-evict
+    # never got to (e.g. a hard kill). Best-effort and non-fatal, same
+    # posture as every other call in this boot sequence - see that
+    # function's own docstring in graphlink_scratch_dirs.py.
+    try:
+        sweep_stale_scratch_dirs_on_launch()
+    except Exception:
+        logger.exception("scratch-dir age sweep failed at launch")
 
     spa_index = REPO_ROOT / "web_ui" / "dist" / "app" / "index.html"
     if not spa_index.is_file():

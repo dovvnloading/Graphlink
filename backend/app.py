@@ -267,6 +267,13 @@ def _evict_idle_session(bus: SessionBus) -> bool:
         return False
     context.agent_dispatcher.cancel_all()
     context.agent_dispatcher.cancel_all_pending_approvals()
+    # ADR-005 stage 5.3: without this, any Py-Coder REPL subprocess left
+    # idle (not in-flight - the check above already vetoed eviction if one
+    # were) is orphaned the moment `del self._sessions[session_id]` below
+    # drops the last reference able to ever call stop() on it - see
+    # AgentDispatcher.dispose_all_pycoder_repls' own docstring for why this
+    # does NOT also remove each REPL's scratch directory.
+    context.agent_dispatcher.dispose_all_pycoder_repls()
     autosave_task = getattr(bus, "autosave_task", None)
     if autosave_task is not None and not autosave_task.done():
         autosave_task.cancel()

@@ -180,7 +180,7 @@ class TestPythonReplUsesTheGuard:
     def test_starting_the_repl_assigns_it_to_a_guard(self):
         fake = _FakeGuard()
         with patch("graphlink_plugins.pycoder.domain.create_execution_guard", return_value=fake):
-            repl = PythonREPL(node_id="guard-assign-test")
+            repl = PythonREPL(repl_id="guard-assign-test")
             try:
                 repl.start()
                 assert repl.guard is fake
@@ -191,7 +191,7 @@ class TestPythonReplUsesTheGuard:
     def test_stopping_the_repl_closes_the_guard(self):
         fake = _FakeGuard()
         with patch("graphlink_plugins.pycoder.domain.create_execution_guard", return_value=fake):
-            repl = PythonREPL(node_id="guard-close-test")
+            repl = PythonREPL(repl_id="guard-close-test")
             repl.start()
             repl.stop()
             assert fake.closed is True
@@ -209,7 +209,7 @@ class TestPythonReplUsesTheGuard:
             encoding="utf-8",
         )
 
-        repl = PythonREPL(node_id="guard-real-tree-test")
+        repl = PythonREPL(repl_id="guard-real-tree-test")
         # stdin/stdout/stderr=DEVNULL: a background child spawned from
         # inside the REPL otherwise inherits the REPL's own stdin PIPE
         # handle, which - a pre-existing PythonREPL characteristic,
@@ -372,7 +372,7 @@ class TestPythonReplRestartDoesNotLeakTheOldGuard:
             return fake
 
         with patch("graphlink_plugins.pycoder.domain.create_execution_guard", side_effect=factory):
-            repl = PythonREPL(node_id="restart-leak-test")
+            repl = PythonREPL(repl_id="restart-leak-test")
             repl.execute("1 + 1")
             assert len(guards_created) == 1
             first_guard = guards_created[0]
@@ -410,7 +410,7 @@ class TestPythonReplConcurrentStopIsSafe:
     # test that merely looks like one.
 
     def test_stop_is_serialized_by_the_repls_own_lock(self):
-        repl = PythonREPL(node_id="concurrent-stop-lock-test")
+        repl = PythonREPL(repl_id="concurrent-stop-lock-test")
         repl.execute("1 + 1")
 
         repl._lock.acquire()
@@ -527,3 +527,131 @@ class TestRealDefaultsReachTheWin32Api:
             assert captured["LimitFlags"] & guard_module._JOB_OBJECT_LIMIT_ACTIVE_PROCESS
         finally:
             guard.close()
+
+
+# -- ADR-005 stage 5.3 (review-fix): the 0700/touch-on-use wiring, proven at
+# the REAL call sites -------------------------------------------------------
+#
+# An adversarial review found that reverting graphlink_plugins/pycoder/
+# domain.py's and graphlink_plugins/code_sandbox/domain.py's own
+# prepare_scratch_dir(...) call sites back to a bare .mkdir(...) passed the
+# entire pre-existing test suite with zero failures - the only coverage that
+# existed was of prepare_scratch_dir/touch_scratch_dir_usage in isolation
+# (backend/tests/test_scratch_dirs.py), never of the actual wiring. These
+# tests close that gap: spy-based tests that run everywhere (proving the
+# real call sites actually call the real functions), plus POSIX-only tests
+# that check real mode bits/mtimes after calling the real, unmocked methods.
+
+POSIX_ONLY = pytest.mark.skipif(sys.platform == "win32", reason="0700 has no POSIX meaning on Windows")
+
+
+class TestPycoderScratchDirWiring:
+    def test_starting_the_repl_calls_prepare_scratch_dir_on_its_own_cwd(self):
+        calls = []
+        repl = PythonREPL(repl_id="wiring-prepare-test")
+        # The mock below only records the call - it doesn't actually mkdir,
+        # so the directory Popen(cwd=...) needs must exist beforehand.
+        repl.cwd.mkdir(parents=True, exist_ok=True)
+        try:
+            with patch(
+                "graphlink_plugins.pycoder.domain.prepare_scratch_dir",
+                side_effect=calls.append,
+            ):
+                repl.start()
+            assert calls == [repl.cwd]
+        finally:
+            repl.stop()
+
+    def test_executing_code_calls_touch_scratch_dir_usage_on_its_own_cwd(self):
+        calls = []
+        with patch(
+            "graphlink_plugins.pycoder.domain.touch_scratch_dir_usage",
+            side_effect=calls.append,
+        ):
+            repl = PythonREPL(repl_id="wiring-touch-test")
+            try:
+                repl.execute("1 + 1")
+                assert calls == [repl.cwd]
+            finally:
+                repl.stop()
+
+    @POSIX_ONLY
+    def test_the_real_repl_cwd_is_actually_0700_after_start(self):
+        import stat
+
+        repl = PythonREPL(repl_id="wiring-real-mode-test")
+        try:
+            repl.start()
+            assert stat.S_IMODE(repl.cwd.stat().st_mode) == 0o700
+        finally:
+            repl.stop()
+
+
+class TestCodeSandboxScratchDirWiring:
+    def test_ensure_base_environment_calls_prepare_scratch_dir_on_base_dir(self):
+        calls = []
+        sandbox = VirtualEnvSandbox("wiring-prepare-venv-test")
+        # Fakes an already-built venv so ensure_base_environment returns
+        # right after prepare_scratch_dir, without actually creating one -
+        # matches this file's own established "keep it cheap" precedent
+        # (TestVirtualEnvSandboxUsesTheGuard exercises _run_subprocess
+        # directly rather than a real multi-second venv build).
+        sandbox.python_executable.parent.mkdir(parents=True, exist_ok=True)
+        sandbox.python_executable.write_text("", encoding="utf-8")
+        try:
+            with patch(
+                "graphlink_plugins.code_sandbox.domain.prepare_scratch_dir",
+                side_effect=calls.append,
+            ):
+                sandbox.ensure_base_environment(should_continue=lambda: True)
+            assert calls == [sandbox.base_dir]
+        finally:
+            import shutil
+            shutil.rmtree(sandbox.base_dir, ignore_errors=True)
+
+    def test_execute_code_calls_prepare_scratch_dir_on_base_dir(self):
+        calls = []
+        sandbox = VirtualEnvSandbox("wiring-prepare-execute-test")
+        sandbox._run_subprocess = lambda *a, **k: ("", 0)  # skip the real subprocess entirely
+        # The mock below only records the call - it doesn't actually mkdir,
+        # so script_path.write_text's own parent directory must exist first.
+        sandbox.base_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            with patch(
+                "graphlink_plugins.code_sandbox.domain.prepare_scratch_dir",
+                side_effect=calls.append,
+            ):
+                sandbox.execute_code("print(1)", should_continue=lambda: True)
+            assert calls == [sandbox.base_dir]
+        finally:
+            import shutil
+            shutil.rmtree(sandbox.base_dir, ignore_errors=True)
+
+    def test_run_subprocess_calls_touch_scratch_dir_usage_on_cwd(self, tmp_path):
+        calls = []
+        sandbox = VirtualEnvSandbox("wiring-touch-venv-test")
+        with patch(
+            "graphlink_plugins.code_sandbox.domain.touch_scratch_dir_usage",
+            side_effect=calls.append,
+        ):
+            sandbox._run_subprocess(
+                [sys.executable, "-c", "print('ok')"],
+                should_continue=lambda: True,
+                cwd=tmp_path,
+                timeout_seconds=10,
+            )
+        assert calls == [tmp_path]
+
+    @POSIX_ONLY
+    def test_the_real_base_dir_is_actually_0700_after_ensure_base_environment(self):
+        import stat
+
+        sandbox = VirtualEnvSandbox("wiring-real-mode-venv-test")
+        sandbox.python_executable.parent.mkdir(parents=True, exist_ok=True)
+        sandbox.python_executable.write_text("", encoding="utf-8")
+        try:
+            sandbox.ensure_base_environment(should_continue=lambda: True)
+            assert stat.S_IMODE(sandbox.base_dir.stat().st_mode) == 0o700
+        finally:
+            import shutil
+            shutil.rmtree(sandbox.base_dir, ignore_errors=True)

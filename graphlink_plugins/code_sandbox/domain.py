@@ -41,7 +41,6 @@ import queue
 import re
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 from enum import Enum
@@ -51,6 +50,12 @@ import api_provider
 import graphlink_task_config as config
 from graphlink_execution_guard import create_execution_guard
 from graphlink_process_env import safe_subprocess_env
+from graphlink_scratch_dirs import (
+    EXECUTION_SANDBOX_ROOT,
+    prepare_scratch_dir,
+    safe_scratch_id,
+    touch_scratch_dir_usage,
+)
 
 
 class SandboxStage(Enum):
@@ -167,8 +172,7 @@ Error Output:
 
 class VirtualEnvSandbox:
     def __init__(self, sandbox_id):
-        safe_id = re.sub(r"[^A-Za-z0-9_-]", "_", sandbox_id or "default")
-        self.base_dir = Path(tempfile.gettempdir()) / "graphlink_execution_sandboxes" / safe_id
+        self.base_dir = EXECUTION_SANDBOX_ROOT / safe_scratch_id(sandbox_id)
         self.venv_dir = self.base_dir / "venv"
         self.requirements_file = self.base_dir / "requirements.txt"
         self.requirements_hash_file = self.base_dir / ".requirements.sha256"
@@ -236,6 +240,14 @@ class VirtualEnvSandbox:
         # code yet). On POSIX this records the process-group id close()
         # will kill.
         self.guard.assign(process.pid)
+        # ADR-005 stage 5.3 (review-fix): mark base_dir as actively used -
+        # every real call site (venv creation, pip install, script
+        # execution) routes through here, so this is the one choke point
+        # that needs it. See touch_scratch_dir_usage's own docstring for
+        # why an in-place file rewrite (sync_requirements/execute_code's
+        # normal, repeated-use pattern) never bumps this on its own.
+        if cwd:
+            touch_scratch_dir_usage(Path(cwd))
         output_queue = queue.Queue()
         done_signal = object()
 
@@ -314,7 +326,9 @@ class VirtualEnvSandbox:
             self.current_process = None
 
     def ensure_base_environment(self, should_continue, emit_line=None):
-        self.base_dir.mkdir(parents=True, exist_ok=True)
+        # ADR-005 stage 5.3: chmod 0700 on POSIX - see
+        # graphlink_scratch_dirs.prepare_scratch_dir's own docstring.
+        prepare_scratch_dir(self.base_dir)
         if self.python_executable.exists():
             return
 
@@ -392,7 +406,7 @@ class VirtualEnvSandbox:
         self.requirements_hash_file.write_text(manifest_hash, encoding="utf-8")
 
     def execute_code(self, code, should_continue, emit_line=None):
-        self.base_dir.mkdir(parents=True, exist_ok=True)
+        prepare_scratch_dir(self.base_dir)
         self.script_path.write_text(code, encoding="utf-8")
         if emit_line:
             emit_line(f"[Sandbox] Running {self.script_path.name} in the virtualenv...\n")

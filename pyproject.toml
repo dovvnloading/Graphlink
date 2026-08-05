@@ -114,6 +114,7 @@ py-modules = [
     "graphlink_note_agent",
     "graphlink_process_env",
     "graphlink_prompts",
+    "graphlink_scratch_dirs",
     "graphlink_secrets",
     "graphlink_settings_store",
     "graphlink_task_config",

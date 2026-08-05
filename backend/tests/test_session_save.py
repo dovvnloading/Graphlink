@@ -84,6 +84,76 @@ def test_pycoder_mode_translates_back_to_uppercase_enum_member_name():
     assert payload["mode"] == "MANUAL"
 
 
+def test_pycoder_repl_id_survives_a_real_save_load_round_trip():
+    # ADR-005 stage 5.3 (review-fix): the whole point of pycoder_repl_id -
+    # a scratch-dir key stable ACROSS a reload - is worthless if save/load
+    # doesn't actually preserve it. Uses the real round trip (not a
+    # hand-built payload dict) as the strongest possible signal, matching
+    # this file's own stated testing philosophy.
+    doc = SceneDocument()
+    parent = doc.add_chat_node(0, 0, "p", is_user=False)
+    node = doc.add_pycoder_node(10, 10, parent.id)
+    minted_repl_id = node.state.pycoder_repl_id
+    assert minted_repl_id, "a repl id must be minted at creation time"
+
+    doc2 = _round_trip(doc)
+
+    restored = next(n for n in doc2.nodes.values() if n.kind == "pycoder")
+    assert restored.state.pycoder_repl_id == minted_repl_id
+
+
+def test_two_pycoder_nodes_get_different_repl_ids():
+    doc = SceneDocument()
+    parent = doc.add_chat_node(0, 0, "p", is_user=False)
+    a = doc.add_pycoder_node(10, 10, parent.id)
+    b = doc.add_pycoder_node(20, 20, parent.id)
+    assert a.state.pycoder_repl_id != b.state.pycoder_repl_id
+
+
+def test_reload_after_deleting_an_earlier_node_does_not_swap_pycoder_scratch_dirs():
+    """The exact bug an adversarial review caught before this stage shipped:
+    node.id is reassigned fresh, purely by array position, on every load
+    (register_restored_node) - so deleting a node ahead of a pycoder node
+    in save order used to shift every later node's id on the NEXT load,
+    which (before pycoder_repl_id existed) silently pointed that pycoder
+    node's on-disk scratch dir at whatever directory the id it inherited
+    happened to name - potentially another node's leftover files, or an
+    empty one that orphaned its own.
+
+    Reproduces the concrete scenario from the finding: parent(chat) -> B
+    (pycoder) -> C (pycoder), delete parent's OTHER child positioned ahead
+    of B in save order, then round-trip. B and C's ids shift, but their
+    pycoder_repl_id (and therefore PythonREPL.cwd) must not."""
+    from graphlink_plugins.pycoder.domain import PythonREPL
+
+    doc = SceneDocument()
+    parent = doc.add_chat_node(0, 0, "p", is_user=False)
+    decoy = doc.add_chat_node(10, 10, "decoy", is_user=False)  # ahead of B in save order
+    node_b = doc.add_pycoder_node(20, 20, parent.id)
+    node_c = doc.add_pycoder_node(30, 30, parent.id)
+    node_b.state.pycoder_code = "b's code"
+    node_c.state.pycoder_code = "c's code"
+    repl_id_b = node_b.state.pycoder_repl_id
+    repl_id_c = node_c.state.pycoder_repl_id
+    cwd_b_before = PythonREPL(repl_id=repl_id_b).cwd
+    cwd_c_before = PythonREPL(repl_id=repl_id_c).cwd
+    assert cwd_b_before != cwd_c_before
+
+    doc.remove_nodes([decoy.id])  # shifts every later node's array position
+    doc2 = _round_trip(doc)
+
+    pycoder_nodes = [n for n in doc2.nodes.values() if n.kind == "pycoder"]
+    restored_b = next(n for n in pycoder_nodes if n.state.pycoder_code == "b's code")
+    restored_c = next(n for n in pycoder_nodes if n.state.pycoder_code == "c's code")
+    # The whole point: ids ARE free to have shifted (that volatility is
+    # what caused the bug) - what must NOT have shifted is which on-disk
+    # directory each node's REPL resolves to.
+    assert restored_b.state.pycoder_repl_id == repl_id_b
+    assert restored_c.state.pycoder_repl_id == repl_id_c
+    assert PythonREPL(repl_id=restored_b.state.pycoder_repl_id).cwd == cwd_b_before
+    assert PythonREPL(repl_id=restored_c.state.pycoder_repl_id).cwd == cwd_c_before
+
+
 def test_gitlink_node_packs_repo_state_and_proposal_data():
     doc = SceneDocument()
     parent = doc.add_chat_node(0, 0, "p", is_user=False)

@@ -114,9 +114,33 @@ def register_node_intents(
         # R5.4: a deleted Py-Coder node's REPL subprocess must not outlive
         # it - kind is captured BEFORE document.remove_nodes pops the node,
         # since afterward there is nothing left to read it from.
+        # ADR-005 stage 5.3 (review-fix): pycoder_repl_id is captured
+        # alongside node_id, not derived from it - the on-disk scratch dir
+        # is keyed by the node's STABLE repl id, not its (reload-volatile)
+        # node id, so dispose_pycoder_repl needs both: node_id to find/pop
+        # any live in-memory REPL, repl_id to deterministically locate and
+        # remove the directory even if no live REPL is currently tracked
+        # (e.g. a prior execute timeout already popped it) - see that
+        # method's own docstring.
         pycoder_ids = [
-            node_id for node_id in ids
+            (node_id, document.nodes[node_id].state.pycoder_repl_id)
+            for node_id in ids
             if document.nodes.get(node_id) is not None and document.nodes[node_id].kind == "pycoder"
+        ]
+        # ADR-005 stage 5.3: a deleted Execution Sandbox node's on-disk
+        # venv must not outlive it either - same capture-before-pop timing
+        # as pycoder_ids above. sandbox_id is minted once at node creation
+        # (graph.py's add_code_sandbox_node) or self-healed on session
+        # load if a saved payload was ever missing it (see
+        # session_load.py's _restore_code_sandbox_payload), so it is
+        # always non-blank for a real code_sandbox node reached through
+        # this app's own code paths - remove_code_sandbox_scratch_dir
+        # additionally refuses to act on a blank id anyway, as defense in
+        # depth against a payload this app didn't produce.
+        sandbox_ids = [
+            document.nodes[node_id].state.code_sandbox_sandbox_id
+            for node_id in ids
+            if document.nodes.get(node_id) is not None and document.nodes[node_id].kind == "code_sandbox"
         ]
         # R5.4 post-review FIX 2: a deleted pycoder/code_sandbox node's
         # DISPATCHER-SIDE in-flight request must not outlive it either - captured
@@ -139,8 +163,6 @@ def register_node_intents(
             and document.nodes[node_id].pending_request_id
         ]
         document.remove_nodes(ids)
-        for node_id in pycoder_ids:
-            await agent_dispatcher.dispose_pycoder_repl(node_id)
         for kind, request_id in code_exec_cancels:
             # cancel_pycoder/cancel_code_sandbox resolve any pending
             # approval_future with False (exactly like a manual Cancel/Deny)
@@ -149,10 +171,34 @@ def register_node_intents(
             # it was only ever the synchronous busy-claim placeholder, never
             # a real dispatcher request_id, or the request already finished
             # on its own between the capture above and here).
+            #
+            # Review-fix: done BEFORE the scratch-dir removal below, but be
+            # precise about what that ordering actually buys - it differs
+            # by kind. For code_sandbox, VirtualEnvSandbox._run_subprocess
+            # polls should_continue() roughly every 100ms, so tripping
+            # cancel_event here gives a real, if brief, head start before
+            # remove_code_sandbox_scratch_dir's rmtree runs (removal is
+            # still best-effort regardless - see that method's own
+            # docstring - this only improves the odds). For pycoder,
+            # PythonREPL.execute() blocks on a plain readline() with no
+            # polling hook at all, so cancel_pycoder has NO effect on a
+            # call already in flight - what actually stops that subprocess
+            # is dispose_pycoder_repl's own kill()+wait() a moment later,
+            # which happens regardless of this ordering. Kept first anyway
+            # because it IS the only thing that matters for a run still
+            # parked on the approval gate (resolving approval_future(False)
+            # before it can even start), which is what code_exec_cancels
+            # exists for in the first place.
             if kind == "pycoder":
                 agent_dispatcher.cancel_pycoder(request_id)
             else:
                 agent_dispatcher.cancel_code_sandbox(request_id)
+        for node_id, repl_id in pycoder_ids:
+            # ADR-005 stage 5.3: remove_scratch_dir=True - this IS real node
+            # deletion, unlike the execute-timeout caller of the same method.
+            await agent_dispatcher.dispose_pycoder_repl(node_id, repl_id=repl_id, remove_scratch_dir=True)
+        for sandbox_id in sandbox_ids:
+            await agent_dispatcher.remove_code_sandbox_scratch_dir(sandbox_id)
         await publish_scene()
 
     async def connect_nodes(source, target):

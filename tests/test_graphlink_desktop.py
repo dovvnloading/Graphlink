@@ -36,6 +36,7 @@ import pytest
 
 import graphlink_desktop
 import backend.crash_recovery as crash_recovery_module
+import graphlink_scratch_dirs as scratch_dirs_module
 
 
 class _FakeThread:
@@ -172,6 +173,8 @@ def desktop_harness(tmp_path, monkeypatch):
         wait_for_health_result=True,
         start_backend_auth_tokens=[],
         wait_for_health_auth_tokens=[],
+        sweep_scratch_calls=0,
+        sweep_scratch_side_effect=None,
     )
 
     spa_index = tmp_path / "web_ui" / "dist" / "app" / "index.html"
@@ -191,6 +194,19 @@ def desktop_harness(tmp_path, monkeypatch):
 
     monkeypatch.setattr(crash_recovery_module, "mark_running", fake_mark_running)
     monkeypatch.setattr(crash_recovery_module, "mark_clean_exit", fake_mark_clean_exit)
+
+    def fake_sweep_stale_scratch_dirs_on_launch(*_a, **_k):
+        state.sweep_scratch_calls += 1
+        if state.sweep_scratch_side_effect is not None:
+            raise state.sweep_scratch_side_effect
+
+    # ADR-005 stage 5.3: same real-module-object patching reasoning as
+    # crash_recovery_module above - main() does a fresh `from
+    # graphlink_scratch_dirs import sweep_stale_scratch_dirs_on_launch`
+    # every call, so patching graphlink_desktop's own name would miss it.
+    monkeypatch.setattr(
+        scratch_dirs_module, "sweep_stale_scratch_dirs_on_launch", fake_sweep_stale_scratch_dirs_on_launch
+    )
 
     fake_server = _FakeServer()
     fake_thread = _FakeThread(alive=True)
@@ -314,6 +330,30 @@ def test_main_shuts_down_the_backend_when_the_health_check_times_out(desktop_har
     assert desktop_harness.shutdown_calls == [(desktop_harness.fake_server, desktop_harness.fake_thread)]
     assert desktop_harness.mark_clean_exit_calls == 1
     assert desktop_harness.webview_create_window_calls == [], "must never reach the window if never healthy"
+
+
+# -- ADR-005 stage 5.3: launch-time scratch-dir age sweep -------------------
+
+
+def test_main_sweeps_stale_scratch_dirs_exactly_once_per_launch(desktop_harness):
+    result = graphlink_desktop.main()
+
+    assert result == 0
+    assert desktop_harness.sweep_scratch_calls == 1
+
+
+def test_main_still_boots_when_the_scratch_dir_sweep_raises(desktop_harness):
+    # Regression guard, same shape as the bad-port-env-var fix above: a
+    # best-effort cleanup step must never be the reason the app fails to
+    # launch, or leaves the crash sentinel in a false "still running" state.
+    desktop_harness.sweep_scratch_side_effect = OSError("disk unavailable")
+
+    result = graphlink_desktop.main()
+
+    assert result == 0
+    assert desktop_harness.sweep_scratch_calls == 1
+    assert desktop_harness.mark_clean_exit_calls == 1
+    assert len(desktop_harness.webview_create_window_calls) == 1, "must still reach the window"
 
 
 # -- ADR-004 stage 4.1: capability-token security invariants --------------

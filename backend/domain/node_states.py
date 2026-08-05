@@ -463,7 +463,23 @@ class PycoderState(NodeState):
       pycoder_awaiting_approval itself is cleared, so a
       resolved/denied/superseded approval can never be replayed.
       Internal bookkeeping only - EXCLUDED from scene_payload(), same
-      posture as CodeSandboxState's own sandbox_id."""
+      posture as CodeSandboxState's own sandbox_id.
+    - pycoder_repl_id: ADR-005 stage 5.3 (review-fix) - minted ONCE, at
+      node-creation time (see add_pycoder_node), mirroring
+      CodeSandboxState.code_sandbox_sandbox_id exactly: a stable,
+      internal directory-naming key for PythonREPL's own scratch cwd,
+      independent of this node's own `id`. Needed because SceneNode.id is
+      NOT durable - session_load.py's register_restored_node reassigns a
+      fresh sequential id, purely by array position, on every session
+      load - so keying the on-disk REPL directory by node.id let a reload
+      silently swap which directory a node's REPL resolved to (one node
+      could lose its own accumulated files, or inherit a different node's
+      leftovers) any time a node ahead of it in save order was deleted
+      before the next load. code_sandbox_sandbox_id never had this
+      problem because it was already a separate, stable field; pycoder
+      had no equivalent until this field was added. Internal bookkeeping
+      only - EXCLUDED from scene_payload(), same posture as
+      code_sandbox_sandbox_id."""
 
     pycoder_mode: str = "ai_driven"
     pycoder_prompt: str = ""
@@ -474,6 +490,7 @@ class PycoderState(NodeState):
     pycoder_awaiting_approval: bool = False
     pycoder_approved_fingerprint: str | None = None
     pycoder_error: str = ""
+    pycoder_repl_id: str = ""
 
 
 @dataclass

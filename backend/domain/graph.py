@@ -1059,7 +1059,10 @@ class SceneDocument(BranchOps, GroupOps):
         """The Py-Coder node's creation primitive - same required-parent
         posture as every R5 sibling (Web Research/Artifact/Gitlink): never
         exists unparented. Title is always the fixed literal "Py-Coder"
-        (matches backend/plugins.py's own plugin display name)."""
+        (matches backend/plugins.py's own plugin display name).
+        pycoder_repl_id is minted here, ONCE, exactly like
+        code_sandbox_sandbox_id below - see PycoderState's own docstring
+        for why node.id itself is not durable enough for this."""
         if parent_id not in self.nodes:
             raise SceneError(f"unknown parent node: {parent_id}")
         node_id = f"n{next(self._counter)}"
@@ -1069,7 +1072,7 @@ class SceneDocument(BranchOps, GroupOps):
             y=float(y),
             title="Py-Coder",
             kind="pycoder",
-            state=PycoderState(),
+            state=PycoderState(pycoder_repl_id=uuid.uuid4().hex[:12]),
         )
         self.nodes[node_id] = node
         self.connect(parent_id, node_id)

@@ -94,7 +94,7 @@ MIGRATED_KIND_FIELDS = {
     "pycoder": [
         "pycoder_mode", "pycoder_prompt", "pycoder_code", "pycoder_output", "pycoder_analysis",
         "pycoder_last_run_failed", "pycoder_awaiting_approval", "pycoder_approved_fingerprint",
-        "pycoder_error",
+        "pycoder_error", "pycoder_repl_id",
     ],
     "code_sandbox": [
         "code_sandbox_sandbox_id", "code_sandbox_requirements", "code_sandbox_prompt",
