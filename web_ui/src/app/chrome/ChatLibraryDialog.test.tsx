@@ -57,6 +57,11 @@ function makeTransport() {
     intent: (topic: string, intent: string, args: unknown[]) => {
       intents.push([topic, intent, args]);
     },
+    // ADR-003 stage 3.1: ChatLibraryDialog's own mutating call sites now go
+    // through fireIntent, not the bare intent() above.
+    fireIntent: (topic: string, intent: string, args: unknown[] = []) => {
+      intents.push([topic, intent, args]);
+    },
   } as unknown as WsTransport;
   return {
     transport,

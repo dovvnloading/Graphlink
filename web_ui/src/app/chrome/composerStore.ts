@@ -11,6 +11,11 @@ import type { TokenCounterState } from "../../lib/bridge-core/generated/token-co
 import type { NotificationState } from "../../lib/bridge-core/generated/notification-state";
 import type { WsTransport } from "../../lib/ws/transport";
 
+// ADR-003 stage 3.1 review-fix: a native OS file dialog waits on the user,
+// not the network - long enough that a person genuinely browsing for a file
+// never trips the transport's ordinary request-timeout error path.
+const NATIVE_DIALOG_TIMEOUT_MS = 5 * 60_000;
+
 export const initialComposerState: AppComposerState = {
   schemaVersion: 1,
   minCompatibleSchemaVersion: 1,
@@ -138,36 +143,39 @@ export class ComposerStore {
   // -- intents (backend/composer.py + notifications.py, 1:1) --------------
 
   updateDraft(text: string): void {
-    this.transport.intent("app-composer", "updateDraft", [text]);
+    this.transport.fireIntent("app-composer", "updateDraft", [text]);
   }
 
   selectModel(modelId: string): void {
     // R8a: writes the chat-task model assignment. The backend routes this
     // through the same helper the Settings > Ollama page uses, so the two
     // surfaces cannot report different models.
-    this.transport.intent("app-composer", "selectModel", [modelId]);
+    this.transport.fireIntent("app-composer", "selectModel", [modelId]);
   }
 
   setReasoningLevel(level: string): void {
-    this.transport.intent("app-composer", "setReasoningLevel", [level]);
+    this.transport.fireIntent("app-composer", "setReasoningLevel", [level]);
   }
 
   attachFile(): void {
     // R8a: opens a NATIVE file dialog server-side (backend/native_dialogs.py,
     // same mechanism as Settings > Llama.cpp's GGUF picker) - there is no
     // browser-side file to pass, staging happens entirely on the backend.
-    this.transport.intent("app-composer", "attachFile", []);
+    // ADR-003 stage 3.1 review-fix: the backend handler blocks on the user's
+    // own pace in a native OS dialog, not on the network - the transport's
+    // ordinary 10s default would report an ordinary slow picker as a failure.
+    this.transport.fireIntent("app-composer", "attachFile", [], NATIVE_DIALOG_TIMEOUT_MS);
   }
 
   removeAttachment(attachmentId: string): void {
-    this.transport.intent("app-composer", "removeAttachment", [attachmentId]);
+    this.transport.fireIntent("app-composer", "removeAttachment", [attachmentId]);
   }
 
   cancelChatRequest(requestId: string): void {
-    this.transport.intent("app-composer", "cancelChatRequest", [requestId]);
+    this.transport.fireIntent("app-composer", "cancelChatRequest", [requestId]);
   }
 
   dismissNotification(): void {
-    this.transport.intent("notification", "dismiss", []);
+    this.transport.fireIntent("notification", "dismiss", []);
   }
 }

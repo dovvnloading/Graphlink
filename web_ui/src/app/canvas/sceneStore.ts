@@ -6,6 +6,14 @@
  * Deliberately framework-free (plain listeners, no React import) so the
  * store logic is unit-testable without rendering; React consumes it through
  * useSyncExternalStore in SceneCanvas.
+ *
+ * ADR-003 stage 3.1: every mutating intent call site below goes through
+ * transport.fireIntent() (id-tracked, surfaces a genuine server-side
+ * rejection via the notification banner), not the old fire-and-forget
+ * transport.intent() - see transport.ts's own module doc for the mechanism.
+ * fetchGitlinkRepositories/fetchGitlinkContext are the two pre-existing
+ * exceptions, using transport.request() directly since their callers need
+ * the actual return value, not just a fire-and-track.
  */
 
 import { TOPIC_VALIDATORS } from "../../lib/api-contract/topics";
@@ -14,6 +22,11 @@ import type { GridControlState } from "../../lib/bridge-core/generated/grid-cont
 import type { DragSpeedState } from "../../lib/bridge-core/generated/drag-speed-state";
 import type { FontControlState } from "../../lib/bridge-core/generated/font-control-state";
 import type { StreamListener, WsTransport } from "../../lib/ws/transport";
+
+// ADR-003 stage 3.1 review-fix: matches composerStore's own
+// NATIVE_DIALOG_TIMEOUT_MS - pickGitlinkLocalRoot opens a native OS folder
+// dialog server-side and waits on the user, not the network.
+const NATIVE_DIALOG_TIMEOUT_MS = 5 * 60_000;
 
 export const initialSceneState: SceneState = {
   schemaVersion: 1,
@@ -188,7 +201,7 @@ export class SceneStore {
   // -- intents (backend/canvas.py's registered surface, 1:1) ---------------
 
   addNode(x: number, y: number, title = ""): void {
-    this.transport.intent("scene", "addNode", [x, y, title]);
+    this.transport.fireIntent("scene", "addNode", [x, y, title]);
   }
 
   // R3.1: real chat nodes - createChatNode/deleteChatNode/setChatCollapsed
@@ -197,11 +210,11 @@ export class SceneStore {
   addChatNode(x: number, y: number, content: string, isUser: boolean, parentId?: string): void {
     const args: unknown[] = [x, y, content, isUser];
     if (parentId !== undefined) args.push(parentId);
-    this.transport.intent("scene", "addChatNode", args);
+    this.transport.fireIntent("scene", "addChatNode", args);
   }
 
   deleteChatNode(id: string): void {
-    this.transport.intent("scene", "deleteChatNode", [id]);
+    this.transport.fireIntent("scene", "deleteChatNode", [id]);
   }
 
   // R3.5: real code nodes - deletion has no dedicated intent (code nodes are
@@ -210,11 +223,11 @@ export class SceneStore {
   addCodeNode(x: number, y: number, code: string, language: string, parentId?: string): void {
     const args: unknown[] = [x, y, code, language];
     if (parentId !== undefined) args.push(parentId);
-    this.transport.intent("scene", "addCodeNode", args);
+    this.transport.fireIntent("scene", "addCodeNode", args);
   }
 
   setChatCollapsed(id: string, collapsed: boolean): void {
-    this.transport.intent("scene", "setChatCollapsed", [id, collapsed]);
+    this.transport.fireIntent("scene", "setChatCollapsed", [id, collapsed]);
   }
 
   // R7.5e: legacy's "Collapse All Nodes"/"Expand All Nodes" (graphlink_
@@ -224,11 +237,11 @@ export class SceneStore {
   // scene intent (organizeNodes, ...): the new is_collapsed values arrive
   // through the next scene snapshot, nothing synchronous needed here.
   collapseAllNodes(): void {
-    this.transport.intent("scene", "collapseAllNodes", []);
+    this.transport.fireIntent("scene", "collapseAllNodes", []);
   }
 
   expandAllNodes(): void {
-    this.transport.intent("scene", "expandAllNodes", []);
+    this.transport.fireIntent("scene", "expandAllNodes", []);
   }
 
   // R3.9/R3.10: real document nodes (attachments). Unlike chat/code,
@@ -268,7 +281,7 @@ export class SceneStore {
       byteSize = null,
       previewLabel = "",
     } = options;
-    this.transport.intent("scene", "addDocumentNode", [
+    this.transport.fireIntent("scene", "addDocumentNode", [
       x,
       y,
       title,
@@ -291,7 +304,7 @@ export class SceneStore {
   // ThinkingNodeView's "Dock to Parent Node" and ChatNodeView's per-child
   // "Reveal Docked Items" undock action.
   addThinkingNode(x: number, y: number, thinkingText: string, parentId: string): void {
-    this.transport.intent("scene", "addThinkingNode", [x, y, thinkingText, parentId]);
+    this.transport.fireIntent("scene", "addThinkingNode", [x, y, thinkingText, parentId]);
   }
 
   // R3.17/R3.18: real HTML view nodes. Same posture as addThinkingNode/
@@ -300,7 +313,7 @@ export class SceneStore {
   // agent/plugin layer). The html source string rides the same `content`
   // field every other node kind's text lives in - no new wire field.
   addHtmlNode(x: number, y: number, htmlContent: string, parentId: string): void {
-    this.transport.intent("scene", "addHtmlNode", [x, y, htmlContent, parentId]);
+    this.transport.fireIntent("scene", "addHtmlNode", [x, y, htmlContent, parentId]);
   }
 
   // R3.21/R3.22: real image nodes. Same posture as addThinkingNode/
@@ -319,7 +332,7 @@ export class SceneStore {
     parentId: string,
     mimeType = "image/png",
   ): void {
-    this.transport.intent("scene", "addImageNode", [x, y, imageBytesBase64, prompt, parentId, mimeType]);
+    this.transport.fireIntent("scene", "addImageNode", [x, y, imageBytesBase64, prompt, parentId, mimeType]);
   }
 
   // R3.25/R3.26: real conversation nodes - the only R3 kind shaped like a
@@ -333,7 +346,7 @@ export class SceneStore {
   // rather than inventing a setConversationCollapsed the backend doesn't
   // register.
   addConversationNode(x: number, y: number, parentId: string): void {
-    this.transport.intent("scene", "addConversationNode", [x, y, parentId]);
+    this.transport.fireIntent("scene", "addConversationNode", [x, y, parentId]);
   }
 
   // sendConversationMessage appends a real user message AND triggers the
@@ -342,18 +355,18 @@ export class SceneStore {
   // own sendMessage already flows through - nothing new to wire on the
   // frontend for that half of it.
   sendConversationMessage(id: string, text: string): void {
-    this.transport.intent("scene", "sendConversationMessage", [id, text]);
+    this.transport.fireIntent("scene", "sendConversationMessage", [id, text]);
   }
 
   // No live caller yet this increment (same posture as addThinkingNode when
   // it first landed) - exists so the intent shape is testable now. Will
   // back the real agent reply once R4's agent layer can call it.
   appendConversationAssistantMessage(id: string, text: string): void {
-    this.transport.intent("scene", "appendConversationAssistantMessage", [id, text]);
+    this.transport.fireIntent("scene", "appendConversationAssistantMessage", [id, text]);
   }
 
   deleteConversationMessage(id: string, messageIndex: number): void {
-    this.transport.intent("scene", "deleteConversationMessage", [id, messageIndex]);
+    this.transport.fireIntent("scene", "deleteConversationMessage", [id, messageIndex]);
   }
 
   // R4.3: real per-node Cancel for a conversation node's own in-flight reply.
@@ -363,25 +376,25 @@ export class SceneStore {
   // two topics sharing one action name, so this is named distinctly
   // (cancelConversationRequest) to avoid implying otherwise.
   cancelConversationRequest(requestId: string): void {
-    this.transport.intent("scene", "cancelChatRequest", [requestId]);
+    this.transport.fireIntent("scene", "cancelChatRequest", [requestId]);
   }
 
   setNodeDocked(id: string, docked: boolean): void {
-    this.transport.intent("scene", "setNodeDocked", [id, docked]);
+    this.transport.fireIntent("scene", "setNodeDocked", [id, docked]);
   }
 
   // R4.3c: real Regenerate Response, for both ChatNodeView's own menu and
   // CodeNodeView's menu (which resolves to its parent chat node's id before
   // calling this - see toFlowNodes below; the backend never kind-sniffs).
   regenerateResponse(chatNodeId: string): void {
-    this.transport.intent("scene", "regenerateResponse", [chatNodeId]);
+    this.transport.fireIntent("scene", "regenerateResponse", [chatNodeId]);
   }
 
   // R4.4a: real "Generate Image from Text", for ChatNodeView's own menu -
   // resolves purely from the ChatNode's id (backend reads its own .content
   // as the prompt, mirroring legacy's node.text).
   generateImage(chatNodeId: string): void {
-    this.transport.intent("scene", "generateImage", [chatNodeId]);
+    this.transport.fireIntent("scene", "generateImage", [chatNodeId]);
   }
 
   // R4.4a: real "Regenerate Image", for ImageNodeView's own menu - resolves
@@ -390,7 +403,7 @@ export class SceneStore {
   // backend/canvas.py's resolve_regenerate_image docstring for why this is a
   // deliberate improvement over legacy's parent-.text reuse).
   regenerateImage(imageNodeId: string): void {
-    this.transport.intent("scene", "regenerateImage", [imageNodeId]);
+    this.transport.fireIntent("scene", "regenerateImage", [imageNodeId]);
   }
 
   // R5.1: real Web Research plugin - runWebResearch starts (or restarts) a
@@ -399,11 +412,11 @@ export class SceneStore {
   // requestId-not-nodeId shape cancelConversationRequest above already
   // established for the conversation node's own per-node cancel.
   runWebResearch(nodeId: string, query: string): void {
-    this.transport.intent("scene", "runWebResearch", [nodeId, query]);
+    this.transport.fireIntent("scene", "runWebResearch", [nodeId, query]);
   }
 
   cancelWebResearchRequest(requestId: string): void {
-    this.transport.intent("scene", "cancelWebResearchRequest", [requestId]);
+    this.transport.fireIntent("scene", "cancelWebResearchRequest", [requestId]);
   }
 
   // R5.2: real Artifact/Drafter plugin - sendArtifactMessage appends a real
@@ -413,11 +426,11 @@ export class SceneStore {
   // cancelConversationRequest/cancelWebResearchRequest above already
   // established for their own per-node cancel.
   sendArtifactMessage(nodeId: string, text: string): void {
-    this.transport.intent("scene", "sendArtifactMessage", [nodeId, text]);
+    this.transport.fireIntent("scene", "sendArtifactMessage", [nodeId, text]);
   }
 
   cancelArtifactRequest(requestId: string): void {
-    this.transport.intent("scene", "cancelArtifactRequest", [requestId]);
+    this.transport.fireIntent("scene", "cancelArtifactRequest", [requestId]);
   }
 
   // R5.3: real Gitlink plugin - nine intents backing the three-tab
@@ -425,24 +438,24 @@ export class SceneStore {
   // the full per-tab breakdown). fetchGitlinkRepositories/fetchGitlinkContext
   // are the only two of the nine that need a REPLY (a repo name list / the
   // lazily-fetched context XML body) rather than a fire-and-forget push
-  // through the next scene snapshot - transport.intent() is declared
-  // `: void` (confirmed by reading transport.ts: it is fire-and-forget,
-  // dropped silently pre-connect, no return value at all), so it cannot be
-  // what "returns a Promise" means here. transport.request() is the real
-  // request/response primitive for that (the same one transport.test.ts's
-  // own "system"/"ping" round-trip exercises) - these two ride that instead.
-  // Every other Gitlink method below stays on the ordinary intent() path,
-  // exactly like every other scene intent above.
+  // through the next scene snapshot - transport.fireIntent()/intent() are
+  // both declared `: void` (confirmed by reading transport.ts: neither
+  // returns a value), so neither can be what "returns a Promise" means here.
+  // transport.request() is the real request/response primitive for that (the
+  // same one transport.test.ts's own "system"/"ping" round-trip exercises) -
+  // these two ride that instead. Every other Gitlink method below stays on
+  // the ordinary fireIntent() path (ADR-003 stage 3.1), exactly like every
+  // other scene intent above.
   fetchGitlinkRepositories(nodeId: string): Promise<string[]> {
     return this.transport.request("scene", "fetchGitlinkRepositories", [nodeId]) as Promise<string[]>;
   }
 
   loadGitlinkRepoTree(nodeId: string, repo: string, branch: string): void {
-    this.transport.intent("scene", "loadGitlinkRepoTree", [nodeId, repo, branch]);
+    this.transport.fireIntent("scene", "loadGitlinkRepoTree", [nodeId, repo, branch]);
   }
 
   setGitlinkLocalRoot(nodeId: string, localRoot: string): void {
-    this.transport.intent("scene", "setGitlinkLocalRoot", [nodeId, localRoot]);
+    this.transport.fireIntent("scene", "setGitlinkLocalRoot", [nodeId, localRoot]);
   }
 
   // Opens the real native OS folder picker (backend/native_dialogs.py, the
@@ -451,11 +464,14 @@ export class SceneStore {
   // setGitlinkLocalRoot above - fire-and-forget, the new value arrives back
   // through the next scene snapshot rather than a direct reply.
   pickGitlinkLocalRoot(nodeId: string): void {
-    this.transport.intent("scene", "pickGitlinkLocalRoot", [nodeId]);
+    // ADR-003 stage 3.1 review-fix: opens a native OS folder dialog
+    // server-side and waits on the user, not the network - see
+    // NATIVE_DIALOG_TIMEOUT_MS's own doc.
+    this.transport.fireIntent("scene", "pickGitlinkLocalRoot", [nodeId], NATIVE_DIALOG_TIMEOUT_MS);
   }
 
   importGitlinkSnapshot(nodeId: string, repo: string, branch: string): void {
-    this.transport.intent("scene", "importGitlinkSnapshot", [nodeId, repo, branch]);
+    this.transport.fireIntent("scene", "importGitlinkSnapshot", [nodeId, repo, branch]);
   }
 
   // scopeMode/selectedPaths are never independently mirrored server-side via
@@ -463,7 +479,7 @@ export class SceneStore {
   // only ever travel as parameters of this one call, read from local
   // component state at the moment Build Context is clicked.
   buildGitlinkContext(nodeId: string, scopeMode: string, selectedPaths: string[]): void {
-    this.transport.intent("scene", "buildGitlinkContext", [nodeId, scopeMode, selectedPaths]);
+    this.transport.fireIntent("scene", "buildGitlinkContext", [nodeId, scopeMode, selectedPaths]);
   }
 
   fetchGitlinkContext(nodeId: string): Promise<string> {
@@ -471,14 +487,14 @@ export class SceneStore {
   }
 
   runGitlinkChangeSet(nodeId: string, taskPrompt: string): void {
-    this.transport.intent("scene", "runGitlinkChangeSet", [nodeId, taskPrompt]);
+    this.transport.fireIntent("scene", "runGitlinkChangeSet", [nodeId, taskPrompt]);
   }
 
   // Same requestId-not-nodeId shape cancelConversationRequest/
   // cancelWebResearchRequest/cancelArtifactRequest above already established
   // for their own per-node cancel.
   cancelGitlinkRequest(requestId: string): void {
-    this.transport.intent("scene", "cancelGitlinkRequest", [requestId]);
+    this.transport.fireIntent("scene", "cancelGitlinkRequest", [requestId]);
   }
 
   // fingerprint is passed through verbatim - the caller (GitlinkNodeView's
@@ -486,7 +502,7 @@ export class SceneStore {
   // gitlinkChangeFingerprint, never anything computed client-side; this
   // store method has no opinion on that, it just forwards the argument.
   applyGitlinkChanges(nodeId: string, fingerprint: string): void {
-    this.transport.intent("scene", "applyGitlinkChanges", [nodeId, fingerprint]);
+    this.transport.fireIntent("scene", "applyGitlinkChanges", [nodeId, fingerprint]);
   }
 
   // R5.4: Py-Coder node - setPyCoderMode/runPyCoder/cancelPyCoderRequest
@@ -496,7 +512,7 @@ export class SceneStore {
   // only validator of that value; this store has no opinion on it, same
   // posture as applyGitlinkChanges's fingerprint passthrough above.
   setPyCoderMode(nodeId: string, mode: string): void {
-    this.transport.intent("scene", "setPyCoderMode", [nodeId, mode]);
+    this.transport.fireIntent("scene", "setPyCoderMode", [nodeId, mode]);
   }
 
   // inputText's meaning (a natural-language prompt vs hand-typed code) is
@@ -505,14 +521,14 @@ export class SceneStore {
   // backend/canvas.py's own start_pycoder_run docstring ("stores input_text
   // into the field the CURRENT mode actually reads at dispatch time").
   runPyCoder(nodeId: string, inputText: string): void {
-    this.transport.intent("scene", "runPyCoder", [nodeId, inputText]);
+    this.transport.fireIntent("scene", "runPyCoder", [nodeId, inputText]);
   }
 
   // Same requestId-not-nodeId shape cancelConversationRequest/
   // cancelWebResearchRequest/cancelArtifactRequest/cancelGitlinkRequest above
   // already established for their own per-node cancel.
   cancelPyCoderRequest(requestId: string): void {
-    this.transport.intent("scene", "cancelPyCoderRequest", [requestId]);
+    this.transport.fireIntent("scene", "cancelPyCoderRequest", [requestId]);
   }
 
   // R5.4: Execution Sandbox node - same three-intent shape as Py-Coder above
@@ -524,22 +540,22 @@ export class SceneStore {
   // WS-intent layer - CodeSandboxNodeView is the one that decides whether
   // that's currently sensible to allow (see its own Run-enablement comment).
   setCodeSandboxRequirements(nodeId: string, requirementsText: string): void {
-    this.transport.intent("scene", "setCodeSandboxRequirements", [nodeId, requirementsText]);
+    this.transport.fireIntent("scene", "setCodeSandboxRequirements", [nodeId, requirementsText]);
   }
 
   // ADR-005 stage 5.5: the approval panel's own source-build opt-in
   // checkbox - fires immediately on toggle, same posture as
   // setCodeSandboxRequirements above, not deferred to Approve.
   setCodeSandboxAllowSourceBuilds(nodeId: string, allow: boolean): void {
-    this.transport.intent("scene", "setCodeSandboxAllowSourceBuilds", [nodeId, allow]);
+    this.transport.fireIntent("scene", "setCodeSandboxAllowSourceBuilds", [nodeId, allow]);
   }
 
   runCodeSandbox(nodeId: string, inputText: string): void {
-    this.transport.intent("scene", "runCodeSandbox", [nodeId, inputText]);
+    this.transport.fireIntent("scene", "runCodeSandbox", [nodeId, inputText]);
   }
 
   cancelCodeSandboxRequest(requestId: string): void {
-    this.transport.intent("scene", "cancelCodeSandboxRequest", [requestId]);
+    this.transport.fireIntent("scene", "cancelCodeSandboxRequest", [requestId]);
   }
 
   // R5.4: the shared human-approval gate - ONE request_id namespace across
@@ -554,11 +570,11 @@ export class SceneStore {
   // pendingRequestId the scene snapshot says is in flight for that node,
   // never anything UI-supplied.
   approveCodeExecution(requestId: string): void {
-    this.transport.intent("scene", "approveCodeExecution", [requestId]);
+    this.transport.fireIntent("scene", "approveCodeExecution", [requestId]);
   }
 
   denyCodeExecution(requestId: string): void {
-    this.transport.intent("scene", "denyCodeExecution", [requestId]);
+    this.transport.fireIntent("scene", "denyCodeExecution", [requestId]);
   }
 
   // R5.4: NOT one of the 8 registered WS intents above - a thin passthrough
@@ -596,19 +612,19 @@ export class SceneStore {
   sendMessage(text: string): void {
     const synthesizeNodeIds = this.synthesizeTargetNodeIds;
     if (synthesizeNodeIds !== null) {
-      this.transport.intent("scene", "synthesizeBranches", [synthesizeNodeIds, text]);
+      this.transport.fireIntent("scene", "synthesizeBranches", [synthesizeNodeIds, text]);
       this.setSynthesizeTargetNodeIds(null);
       return;
     }
     const branchFromNodeId = this.replyTargetNodeId;
     const args: unknown[] = [text];
     if (branchFromNodeId !== null) args.push(branchFromNodeId);
-    this.transport.intent("scene", "sendMessage", args);
+    this.transport.fireIntent("scene", "sendMessage", args);
     if (branchFromNodeId !== null) this.setReplyTargetNodeId(null);
   }
 
   moveNode(id: string, x: number, y: number): void {
-    this.transport.intent("scene", "moveNode", [id, x, y]);
+    this.transport.fireIntent("scene", "moveNode", [id, x, y]);
   }
 
   // R6.1 follow-up: a group drag's commit (the group's own node PLUS every
@@ -620,7 +636,7 @@ export class SceneStore {
   // grow a box (rather than staying frozen, the bug the growth logic
   // itself was fixing).
   moveNodes(positions: Array<{ id: string; x: number; y: number }>): void {
-    this.transport.intent(
+    this.transport.fireIntent(
       "scene",
       "moveNodes",
       [positions.map((p) => [p.id, p.x, p.y])],
@@ -628,55 +644,55 @@ export class SceneStore {
   }
 
   removeNodes(ids: string[]): void {
-    if (ids.length > 0) this.transport.intent("scene", "removeNodes", [ids]);
+    if (ids.length > 0) this.transport.fireIntent("scene", "removeNodes", [ids]);
   }
 
   connectNodes(source: string, target: string): void {
-    this.transport.intent("scene", "connectNodes", [source, target]);
+    this.transport.fireIntent("scene", "connectNodes", [source, target]);
   }
 
   removeEdges(ids: string[]): void {
-    if (ids.length > 0) this.transport.intent("scene", "removeEdges", [ids]);
+    if (ids.length > 0) this.transport.fireIntent("scene", "removeEdges", [ids]);
   }
 
   addPin(title: string, x: number, y: number, note = ""): void {
-    this.transport.intent("scene", "addPin", [title, x, y, note]);
+    this.transport.fireIntent("scene", "addPin", [title, x, y, note]);
   }
 
   updatePin(id: string, title: string, note: string): void {
-    this.transport.intent("scene", "updatePin", [id, title, note]);
+    this.transport.fireIntent("scene", "updatePin", [id, title, note]);
   }
 
   removePin(id: string): void {
-    this.transport.intent("scene", "removePin", [id]);
+    this.transport.fireIntent("scene", "removePin", [id]);
   }
 
   setSnapToGrid(enabled: boolean): void {
-    this.transport.intent("scene", "setSnapToGrid", [enabled]);
+    this.transport.fireIntent("scene", "setSnapToGrid", [enabled]);
   }
 
   // R7.5b-1: same bare-bool/"scene"-topic shape as setSnapToGrid above.
   setFadeConnections(enabled: boolean): void {
-    this.transport.intent("scene", "setFadeConnections", [enabled]);
+    this.transport.fireIntent("scene", "setFadeConnections", [enabled]);
   }
 
   // R7.5b-2: same shape again - intent name matches the legacy
   // GridControlBridge's own setOrthogonalConnections Slot name 1:1.
   setOrthogonalConnections(enabled: boolean): void {
-    this.transport.intent("scene", "setOrthogonalConnections", [enabled]);
+    this.transport.fireIntent("scene", "setOrthogonalConnections", [enabled]);
   }
 
   // R7.5b-3: the fourth and final legacy grid-control toggle.
   setSmartGuides(enabled: boolean): void {
-    this.transport.intent("scene", "setSmartGuides", [enabled]);
+    this.transport.fireIntent("scene", "setSmartGuides", [enabled]);
   }
 
   setDragFactor(factor: number): void {
-    this.transport.intent("scene", "setDragFactor", [factor]);
+    this.transport.fireIntent("scene", "setDragFactor", [factor]);
   }
 
   organizeNodes(): void {
-    this.transport.intent("scene", "organizeNodes", []);
+    this.transport.fireIntent("scene", "organizeNodes", []);
   }
 
   // R6.5: session save - targets "app-chat-library", not "scene", since
@@ -688,7 +704,7 @@ export class SceneStore {
   // (see this file's own "grid-control" calls just below for the same
   // precedent: not every method here targets "scene").
   saveChat(): void {
-    this.transport.intent("app-chat-library", "saveChat", []);
+    this.transport.fireIntent("app-chat-library", "saveChat", []);
   }
 
   // R7.5a: command-palette's "New Chat" - same "app-chat-library", not
@@ -696,7 +712,7 @@ export class SceneStore {
   // exists and is wired from the chat-library dialog, this just gives the
   // command palette a second entry point to the same real intent.
   newChat(): void {
-    this.transport.intent("app-chat-library", "newChat", []);
+    this.transport.fireIntent("app-chat-library", "newChat", []);
   }
 
   // -- R6.1: Notes/Frames/Containers ----------------------------------------
@@ -714,19 +730,19 @@ export class SceneStore {
 
   addNote(x: number, y: number, options: { isSystemPrompt?: boolean; isSummaryNote?: boolean } = {}): void {
     const { isSystemPrompt = false, isSummaryNote = false } = options;
-    this.transport.intent("scene", "addNote", [x, y, isSystemPrompt, isSummaryNote]);
+    this.transport.fireIntent("scene", "addNote", [x, y, isSystemPrompt, isSummaryNote]);
   }
 
   setNoteContent(nodeId: string, content: string): void {
-    this.transport.intent("scene", "setNoteContent", [nodeId, content]);
+    this.transport.fireIntent("scene", "setNoteContent", [nodeId, content]);
   }
 
   createFrame(itemIds: string[]): void {
-    this.transport.intent("scene", "createFrame", [itemIds]);
+    this.transport.fireIntent("scene", "createFrame", [itemIds]);
   }
 
   createContainer(itemIds: string[]): void {
-    this.transport.intent("scene", "createContainer", [itemIds]);
+    this.transport.fireIntent("scene", "createContainer", [itemIds]);
   }
 
   // ADR-002 Workstream 1 ("Compare Branches") - same fire-and-forget shape
@@ -735,7 +751,7 @@ export class SceneStore {
   // backend validates/does the work, and the resulting note arrives
   // through the next scene snapshot like any other mutation.
   compareBranches(nodeIds: string[]): void {
-    this.transport.intent("scene", "compareBranches", [nodeIds]);
+    this.transport.fireIntent("scene", "compareBranches", [nodeIds]);
   }
 
   // ADR-002 Workstream 1 ("Branch status and lifecycle") - three plain
@@ -743,22 +759,22 @@ export class SceneStore {
   // below: the backend validates/does the work, and the new value arrives
   // through the next scene snapshot like any other mutation.
   setBranchStatus(nodeId: string, status: string): void {
-    this.transport.intent("scene", "setBranchStatus", [nodeId, status]);
+    this.transport.fireIntent("scene", "setBranchStatus", [nodeId, status]);
   }
 
   setFinalDeliverable(nodeId: string, isFinal: boolean): void {
-    this.transport.intent("scene", "setFinalDeliverable", [nodeId, isFinal]);
+    this.transport.fireIntent("scene", "setFinalDeliverable", [nodeId, isFinal]);
   }
 
   collapseBranch(nodeId: string, collapsed: boolean): void {
-    this.transport.intent("scene", "collapseBranch", [nodeId, collapsed]);
+    this.transport.fireIntent("scene", "collapseBranch", [nodeId, collapsed]);
   }
 
   // Shared setter for frame/container header-note/title text (backend/
   // canvas.py's set_group_label) - reused verbatim for both kinds, same
   // posture as setGroupColor below.
   setGroupLabel(nodeId: string, text: string): void {
-    this.transport.intent("scene", "setGroupLabel", [nodeId, text]);
+    this.transport.fireIntent("scene", "setGroupLabel", [nodeId, text]);
   }
 
   // Shared color setter for note/frame/container kinds. Either argument may
@@ -766,27 +782,27 @@ export class SceneStore {
   // (GroupColorPicker's "Reset to Default" item) passes (null, null) for a
   // full reset, or one real hex + null for a single-half set.
   setGroupColor(nodeId: string, color: string | null, headerColor: string | null): void {
-    this.transport.intent("scene", "setGroupColor", [nodeId, color, headerColor]);
+    this.transport.fireIntent("scene", "setGroupColor", [nodeId, color, headerColor]);
   }
 
   toggleFrameLock(nodeId: string): void {
-    this.transport.intent("scene", "toggleFrameLock", [nodeId]);
+    this.transport.fireIntent("scene", "toggleFrameLock", [nodeId]);
   }
 
   toggleGroupCollapsed(nodeId: string): void {
-    this.transport.intent("scene", "toggleGroupCollapsed", [nodeId]);
+    this.transport.fireIntent("scene", "toggleGroupCollapsed", [nodeId]);
   }
 
   resizeFrame(nodeId: string, width: number, height: number): void {
-    this.transport.intent("scene", "resizeFrame", [nodeId, width, height]);
+    this.transport.fireIntent("scene", "resizeFrame", [nodeId, width, height]);
   }
 
   fitFrameToContent(nodeId: string): void {
-    this.transport.intent("scene", "fitFrameToContent", [nodeId]);
+    this.transport.fireIntent("scene", "fitFrameToContent", [nodeId]);
   }
 
   ungroup(nodeId: string): void {
-    this.transport.intent("scene", "ungroup", [nodeId]);
+    this.transport.fireIntent("scene", "ungroup", [nodeId]);
   }
 
   // -- R6.2: Chart node -----------------------------------------------------
@@ -802,7 +818,7 @@ export class SceneStore {
   // forgets, same as its own onGenerateImage).
 
   generateChart(parentNodeId: string, chartType: string): void {
-    this.transport.intent("scene", "generateChart", [parentNodeId, chartType]);
+    this.transport.fireIntent("scene", "generateChart", [parentNodeId, chartType]);
   }
 
   // R8a: the Key Takeaway / Explainer Note agents, restored from the deleted
@@ -812,19 +828,19 @@ export class SceneStore {
   // generateImage - and the resulting note arrives on the next scene
   // snapshot, so neither needs the new node id back here.
   generateKeyTakeaway(sourceNodeId: string): void {
-    this.transport.intent("scene", "generateKeyTakeaway", [sourceNodeId]);
+    this.transport.fireIntent("scene", "generateKeyTakeaway", [sourceNodeId]);
   }
 
   generateExplainerNote(sourceNodeId: string): void {
-    this.transport.intent("scene", "generateExplainerNote", [sourceNodeId]);
+    this.transport.fireIntent("scene", "generateExplainerNote", [sourceNodeId]);
   }
 
   resizeChart(nodeId: string, width: number, height: number): void {
-    this.transport.intent("scene", "resizeChart", [nodeId, width, height]);
+    this.transport.fireIntent("scene", "resizeChart", [nodeId, width, height]);
   }
 
   toggleChartAspectLock(nodeId: string): void {
-    this.transport.intent("scene", "toggleChartAspectLock", [nodeId]);
+    this.transport.fireIntent("scene", "toggleChartAspectLock", [nodeId]);
   }
 
   // -- R6.3: Scene-level serialization gaps ---------------------------------
@@ -843,45 +859,45 @@ export class SceneStore {
   // through it at all.
 
   setViewState(zoomFactor: number, scrollX: number, scrollY: number): void {
-    this.transport.intent("scene", "setViewState", [zoomFactor, scrollX, scrollY]);
+    this.transport.fireIntent("scene", "setViewState", [zoomFactor, scrollX, scrollY]);
   }
 
   setHtmlSplitterState(nodeId: string, value: number): void {
-    this.transport.intent("scene", "setHtmlSplitterState", [nodeId, value]);
+    this.transport.fireIntent("scene", "setHtmlSplitterState", [nodeId, value]);
   }
 
   setChatScrollValue(nodeId: string, value: number): void {
-    this.transport.intent("scene", "setChatScrollValue", [nodeId, value]);
+    this.transport.fireIntent("scene", "setChatScrollValue", [nodeId, value]);
   }
 
   // Grid intents ride the grid-control topic; font intents ride scene - both
   // keep the legacy bridges' @Slot names 1:1 (backend/canvas.py contract).
   setGridSize(size: number): void {
-    this.transport.intent("grid-control", "setGridSize", [size]);
+    this.transport.fireIntent("grid-control", "setGridSize", [size]);
   }
 
   setGridOpacityPercent(percent: number): void {
-    this.transport.intent("grid-control", "setGridOpacityPercent", [percent]);
+    this.transport.fireIntent("grid-control", "setGridOpacityPercent", [percent]);
   }
 
   setGridStyle(style: string): void {
-    this.transport.intent("grid-control", "setGridStyle", [style]);
+    this.transport.fireIntent("grid-control", "setGridStyle", [style]);
   }
 
   setGridColor(hex: string): void {
-    this.transport.intent("grid-control", "setGridColor", [hex]);
+    this.transport.fireIntent("grid-control", "setGridColor", [hex]);
   }
 
   setFontFamily(family: string): void {
-    this.transport.intent("scene", "setFontFamily", [family]);
+    this.transport.fireIntent("scene", "setFontFamily", [family]);
   }
 
   setFontSize(sizePt: number): void {
-    this.transport.intent("scene", "setFontSize", [sizePt]);
+    this.transport.fireIntent("scene", "setFontSize", [sizePt]);
   }
 
   setFontColor(hex: string): void {
-    this.transport.intent("scene", "setFontColor", [hex]);
+    this.transport.fireIntent("scene", "setFontColor", [hex]);
   }
 
   // Rides the notification topic, not scene - same "this store already
@@ -893,7 +909,7 @@ export class SceneStore {
   // backend/notifications.py's showInfo intent for why this exists instead
   // of a second, parallel client-local notification UI.
   showInfoNotification(message: string): void {
-    this.transport.intent("notification", "showInfo", [message]);
+    this.transport.fireIntent("notification", "showInfo", [message]);
   }
 }
 

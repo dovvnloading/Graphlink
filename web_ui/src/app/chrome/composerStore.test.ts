@@ -26,6 +26,15 @@ function makeFakeTransport() {
     intent: vi.fn((topic: string, intent: string, args: unknown[] = []) => {
       intents.push({ topic, intent, args });
     }),
+    // ADR-003 stage 3.1: ComposerStore's own mutating intent call sites now
+    // go through fireIntent, not the bare intent() above - recorded into the
+    // SAME `intents` array (real WsTransport.fireIntent's own error-recovery
+    // path is exercised by transport.test.ts, not re-tested at every call
+    // site) so this file's existing assertions don't need to distinguish
+    // the two.
+    fireIntent: vi.fn((topic: string, intent: string, args: unknown[] = []) => {
+      intents.push({ topic, intent, args });
+    }),
     subscribeStream,
   } as unknown as WsTransport;
   return { transport, listeners, intents, subscribeStream, streamListeners, streamUnsubFns };

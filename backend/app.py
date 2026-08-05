@@ -633,15 +633,33 @@ async def _handle_message(session: SessionBus, websocket: WebSocket, message: di
         args = message.get("args") or []
         try:
             result = await session.dispatch_intent(topic, intent, args)
-        except (UnknownTopicError, UnknownIntentError) as exc:
-            await websocket.send_json({"kind": "error", "id": msg_id, "error": str(exc)})
+        except UnknownTopicError as exc:
+            # ADR-003 stage 3.1 review-fix: UnknownTopicError/UnknownIntentError
+            # both subclass KeyError, whose __str__ wraps a single-arg message
+            # in repr() (e.g. "'scene'" with literal quotes) - this error text
+            # now reaches end users via fireIntent()'s notification banner, not
+            # just a developer console, so exc.args[0] is used directly instead
+            # of str(exc) to avoid that raw repr artifact leaking through.
+            await websocket.send_json(
+                {"kind": "error", "id": msg_id, "error": f"Unknown topic: {exc.args[0]}."}
+            )
+            return
+        except UnknownIntentError as exc:
+            await websocket.send_json(
+                {"kind": "error", "id": msg_id, "error": f"Unknown intent: {exc.args[0]}."}
+            )
             return
         except Exception:
             # Handler bugs surface as errors to the caller, never as a dropped
-            # socket - and always land in the log.
+            # socket - and always land in the log (full topic/intent/traceback
+            # detail is here, not repeated in the user-facing message below).
             logger.exception("intent %s/%s failed", topic, intent)
             await websocket.send_json(
-                {"kind": "error", "id": msg_id, "error": f"intent failed: {topic}/{intent}"}
+                {
+                    "kind": "error",
+                    "id": msg_id,
+                    "error": "Something went wrong while handling this request.",
+                }
             )
             return
         if msg_id is not None:

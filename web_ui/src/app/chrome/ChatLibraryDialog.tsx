@@ -178,12 +178,12 @@ export function ChatLibraryDialog({ transport }: { transport: WsTransport }) {
   const groups = useMemo(() => groupRows(filtered), [filtered]);
 
   function loadChat(id: number) {
-    transport.intent("app-chat-library", "loadChat", [id]);
+    transport.fireIntent("app-chat-library", "loadChat", [id]);
     overlays.close();
   }
 
   function newChat() {
-    transport.intent("app-chat-library", "newChat", []);
+    transport.fireIntent("app-chat-library", "newChat", []);
     overlays.close();
   }
 
@@ -197,7 +197,7 @@ export function ChatLibraryDialog({ transport }: { transport: WsTransport }) {
   function commitRename() {
     const title = renameDraft.trim();
     if (renamingId === null || !title) return;
-    transport.intent("app-chat-library", "renameChat", [renamingId, title]);
+    transport.fireIntent("app-chat-library", "renameChat", [renamingId, title]);
     setRenamingId(null);
     lastTriggerRef.current?.focus();
   }
@@ -225,7 +225,7 @@ export function ChatLibraryDialog({ transport }: { transport: WsTransport }) {
 
   function confirmDelete() {
     if (confirmingDeleteId === null) return;
-    transport.intent("app-chat-library", "deleteChat", [confirmingDeleteId]);
+    transport.fireIntent("app-chat-library", "deleteChat", [confirmingDeleteId]);
     setConfirmingDeleteId(null);
   }
 

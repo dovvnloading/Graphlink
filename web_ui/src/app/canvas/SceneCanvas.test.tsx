@@ -24,7 +24,10 @@ import type { SceneNodeRow, SceneState } from "../../lib/bridge-core/generated/s
 // export.
 
 function makeStore(): SceneStore {
-  const transport = { subscribe: vi.fn(), intent: vi.fn() } as unknown as WsTransport;
+  // ADR-003 stage 3.1: fireIntent is the transport method SceneStore's own
+  // mutating intent call sites actually use now - see sceneStore.ts's own
+  // module doc.
+  const transport = { subscribe: vi.fn(), intent: vi.fn(), fireIntent: vi.fn() } as unknown as WsTransport;
   return new SceneStore(transport);
 }
 

@@ -273,6 +273,11 @@ export function GitlinkNodeView({ id, data, selected }: NodeProps<GitlinkFlowNod
   // actual fetch RESULT (fetchedContextXml) needs to be React state, since
   // that is the one value this component renders.
   const [fetchedContextXml, setFetchedContextXml] = useState<string | null>(null);
+  // ADR-003 stage 3.1 review-fix: onFetchContext() previously had no .catch()
+  // at all, so a rejection left this tab stuck on "Loading context…" forever
+  // with no visible error and no way to retry - matching listRepos()'s own
+  // repoOptionsError pattern above.
+  const [contextFetchError, setContextFetchError] = useState<string | null>(null);
   // R5.3 post-review FIX 6: keyed on data.gitlinkContextVersion (a monotonic
   // per-node counter, defaulting to 0, bumped by the backend on every
   // successful Build Context call) rather than data.gitlinkContextSummary -
@@ -294,20 +299,31 @@ export function GitlinkNodeView({ id, data, selected }: NodeProps<GitlinkFlowNod
   // happens when a fetch RESOLVES, regardless of resolution order.
   const contextFetchSeqRef = useRef(0);
 
+  function runContextFetch() {
+    setFetchedContextXml(null);
+    setContextFetchError(null);
+    const seq = ++contextFetchSeqRef.current;
+    data
+      .onFetchContext()
+      .then((xml) => {
+        // A newer fetch has since been kicked off - this result is stale,
+        // discard it silently rather than overwriting the newer content.
+        if (contextFetchSeqRef.current !== seq) return;
+        setFetchedContextXml(xml);
+      })
+      .catch(() => {
+        if (contextFetchSeqRef.current !== seq) return;
+        setContextFetchError("Could not load context.");
+      });
+  }
+
   useEffect(() => {
     if (activeTab !== "context") return;
     if (!data.gitlinkContextSummary) return;
     const version = data.gitlinkContextVersion ?? 0;
     if (fetchedForVersionRef.current === version) return;
     fetchedForVersionRef.current = version;
-    setFetchedContextXml(null);
-    const seq = ++contextFetchSeqRef.current;
-    data.onFetchContext().then((xml) => {
-      // A newer fetch has since been kicked off - this result is stale,
-      // discard it silently rather than overwriting the newer content.
-      if (contextFetchSeqRef.current !== seq) return;
-      setFetchedContextXml(xml);
-    });
+    runContextFetch();
     // data.onFetchContext is a fresh closure every render (see SceneCanvas's
     // toFlowNodes) - depending on it would refetch on every unrelated
     // re-render, so it is deliberately omitted; fetchedForVersionRef is the
@@ -545,9 +561,18 @@ export function GitlinkNodeView({ id, data, selected }: NodeProps<GitlinkFlowNod
               {data.gitlinkContextSummary ? (
                 <>
                   <p className="gitlink-node-context-summary">{data.gitlinkContextSummary}</p>
-                  {/* Machine-generated XML, rendered as plain preformatted text -
-                      never run through the markdown pipeline. */}
-                  <pre className="gitlink-node-context-xml">{fetchedContextXml ?? "Loading context…"}</pre>
+                  {contextFetchError ? (
+                    <>
+                      <p className="gitlink-node-banner-error">{contextFetchError}</p>
+                      <button type="button" onClick={runContextFetch}>
+                        Retry
+                      </button>
+                    </>
+                  ) : (
+                    // Machine-generated XML, rendered as plain preformatted
+                    // text - never run through the markdown pipeline.
+                    <pre className="gitlink-node-context-xml">{fetchedContextXml ?? "Loading context…"}</pre>
+                  )}
                 </>
               ) : (
                 <p className="gitlink-node-empty">No context built yet.</p>

@@ -18,11 +18,56 @@
  * Reconnect: exponential-ish backoff, capped; every subscribed topic is
  * re-subscribed automatically on reopen so a backend restart re-hydrates
  * the UI without any component doing anything.
+ *
+ * ADR-003 stage 3.1: fireIntent() is the new default a store's own mutating
+ * intent call sites use in place of the old bare intent() - internally
+ * id-tracked, and a real failure (WsRequestError or WsTimeoutError) is
+ * surfaced via the existing notification banner instead of silently lost.
+ * intent() itself still exists for the rare genuinely-fire-and-forget case
+ * (e.g. surfacing an error THROUGH the notification system itself, which
+ * must not recurse back into fireIntent's own error handling).
+ *
+ * Review-fix (a 4-lens adversarial review of the first version of this
+ * stage): the original design swallowed EVERY non-WsRequestError rejection,
+ * including a client-side timeout - but a timeout with the connection still
+ * "open" the whole time is a real forced failure this stage's own exit
+ * criterion ("error visible in UI for a forced failure") covers, not a
+ * connection-status condition the existing indicator already communicates.
+ * fireIntent() now surfaces everything EXCEPT WsUnavailableError (the three
+ * genuinely connection-level rejection reasons: not connected/closed/
+ * disposed) - inverted from "surface only what I explicitly recognize" to
+ * "swallow only what I explicitly know is already visible elsewhere",
+ * closing the gap a future new rejection reason could otherwise silently
+ * fall into again.
  */
 
 import { withAuthToken } from "../auth/token";
 
 export type ConnectionStatus = "connecting" | "open" | "closed";
+
+/** ADR-003 stage 3.1: raised ONLY when the server actually replied with a
+ * structured {"kind":"error"} frame (unknown topic/intent, or an unhandled
+ * exception inside a handler) - i.e. the connection genuinely round-tripped
+ * and the server itself rejected the request. */
+export class WsRequestError extends Error {}
+
+/** ADR-003 stage 3.1 review-fix: raised when a request() times out waiting
+ * for a reply - distinct from WsRequestError (the server never actually
+ * answered either way) and from WsUnavailableError (the connection was, as
+ * far as this client can tell, genuinely open the whole time - a timeout is
+ * NOT a connection-status condition, so it must not be swallowed the way
+ * WsUnavailableError is). */
+export class WsTimeoutError extends Error {}
+
+/** ADR-003 stage 3.1 review-fix: raised for the three rejection reasons that
+ * genuinely correlate with the connection-status indicator already showing
+ * the user something is wrong (never connected, closed mid-request, or this
+ * transport instance was disposed) - the ONLY rejection reason fireIntent()
+ * swallows silently. Real disconnect UX (queue-while-reconnecting or a
+ * visible "paused" state) is ADR-003 stage 3.6, not this one; until then,
+ * silently dropping THESE specific three matches `intent()`'s own
+ * pre-migration fire-and-forget behavior exactly. */
+export class WsUnavailableError extends Error {}
 
 export type StateListener = (payload: Record<string, unknown>) => void;
 export type StatusListener = (status: ConnectionStatus) => void;
@@ -125,7 +170,7 @@ export class WsTransport {
       if (this.socket !== socket) return;
       this.socket = null;
       this.setStatus("closed");
-      this.failAllPending(new Error("connection closed"));
+      this.failAllPending(new WsUnavailableError("connection closed"));
       if (!this.disposed) this.scheduleReconnect();
     };
   }
@@ -133,7 +178,7 @@ export class WsTransport {
   dispose(): void {
     this.disposed = true;
     if (this.reconnectTimer !== null) clearTimeout(this.reconnectTimer);
-    this.failAllPending(new Error("transport disposed"));
+    this.failAllPending(new WsUnavailableError("transport disposed"));
     this.socket?.close();
     this.socket = null;
   }
@@ -193,21 +238,79 @@ export class WsTransport {
     this.socket.send(JSON.stringify({ kind: "intent", topic, intent, args }));
   }
 
-  /** Intent with a reply (result or error), for request/response flows. */
-  request(topic: string, intent: string, args: unknown[] = []): Promise<unknown> {
+  /** Intent with a reply (result or error), for request/response flows.
+   * `timeoutMs` overrides the transport-wide default for this one call -
+   * see fireIntent()'s own doc for why a genuinely user-paced backend
+   * operation (a native OS file/folder picker, say) needs a much longer
+   * window than the default 10s. */
+  request(topic: string, intent: string, args: unknown[] = [], timeoutMs?: number): Promise<unknown> {
     if (this.status !== "open" || !this.socket) {
-      return Promise.reject(new Error("not connected"));
+      return Promise.reject(new WsUnavailableError("not connected"));
     }
     const id = this.nextId++;
     const socket = this.socket;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(new Error(`request timed out: ${topic}/${intent}`));
-      }, this.requestTimeout);
+        reject(new WsTimeoutError(`request timed out: ${topic}/${intent}`));
+      }, timeoutMs ?? this.requestTimeout);
       this.pending.set(id, { resolve, reject, timer });
       socket.send(JSON.stringify({ kind: "intent", topic, intent, args, id }));
     });
+  }
+
+  /** ADR-003 stage 3.1: the new default for a store's own "fire this
+   * mutating intent" call sites - replaces the old bare `intent()` (which
+   * silently dropped a real server-side rejection with nothing but a
+   * console.error). Internally still id-tracked via request(), so a real
+   * failure (a genuine {"kind":"error"} reply, or a client-side timeout -
+   * anything except the three connection-level WsUnavailableError reasons,
+   * see that class's own doc) is surfaced to the user through the existing
+   * server-authoritative notification banner - reusing that channel rather
+   * than introducing a second, parallel client-local notification UI (see
+   * notifications.py's own module doc for why that split was rejected).
+   *
+   * `timeoutMs` overrides the default 10s window for this one call - pass
+   * a much longer value for an intent whose backend handler genuinely waits
+   * on the USER, not the network (a native OS file/folder picker, say);
+   * otherwise an ordinary slow user pace looks identical to a hung backend
+   * and gets reported as a spurious failure.
+   *
+   * Review-fix: a naive per-message de-dup (skip re-firing the IDENTICAL
+   * topic/intent/message combination within a short window) guards against
+   * a rapid-fire call site (e.g. a text field committing on every keystroke)
+   * flooding the single-slot notification banner with the same message on
+   * every failed attempt while a backend problem persists - see
+   * lastShowError's own doc for what this does and, just as importantly,
+   * does NOT fix (two DIFFERENT concurrent failures can still race each
+   * other for the one visible banner; that deeper limitation is accepted,
+   * documented residual risk, not something a per-message de-dup can close). */
+  fireIntent(topic: string, intent: string, args: unknown[] = [], timeoutMs?: number): void {
+    this.request(topic, intent, args, timeoutMs).catch((err) => {
+      if (err instanceof WsUnavailableError) return;
+      this.showErrorDeduped(String(err.message));
+    });
+  }
+
+  /** ADR-003 stage 3.1 review-fix: the last showError message this transport
+   * fired and when, so an identical message re-failing on every keystroke
+   * of some rapid-fire call site doesn't re-publish the notification banner
+   * on every single attempt. Keyed on the message text alone (not
+   * topic/intent) - two DIFFERENT intents that happen to produce the exact
+   * same backend error text within the window are rare enough, and
+   * indistinguishable enough to the user reading the banner, that treating
+   * them as "the same ongoing problem" is the more honest read anyway. */
+  private lastShowError: { message: string; at: number } | null = null;
+  private static readonly SHOW_ERROR_DEDUPE_MS = 3_000;
+
+  private showErrorDeduped(message: string): void {
+    const now = Date.now();
+    const last = this.lastShowError;
+    if (last && last.message === message && now - last.at < WsTransport.SHOW_ERROR_DEDUPE_MS) {
+      return;
+    }
+    this.lastShowError = { message, at: now };
+    this.intent("notification", "showError", [message]);
   }
 
   // -- internals ---------------------------------------------------------
@@ -236,7 +339,7 @@ export class WsTransport {
         this.pending.delete(id);
         clearTimeout(entry.timer);
         if (kind === "result") entry.resolve(message.value);
-        else entry.reject(new Error(String(message.error)));
+        else entry.reject(new WsRequestError(String(message.error)));
       } else if (kind === "error") {
         console.error("[ws] server error:", message.error);
       }
