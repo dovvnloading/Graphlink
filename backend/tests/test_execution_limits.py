@@ -31,6 +31,19 @@ def test_code_sandbox_text_is_the_pycoder_text_plus_the_dependency_install_note(
     assert "pre-built binary" not in payload["pycoderResourceLimitsText"]
 
 
+def test_dependency_install_note_does_not_overclaim_given_the_stage_5_5_escalation():
+    # ADR-005 stage 5.5 review-fix: an adversarial review found the note
+    # used to say installs "will fail...rather than run its own build code"
+    # with no qualifier - an unconditional claim the SAME approval dialog's
+    # own source-build escalation checkbox directly contradicts (checking
+    # it and approving does let a source distribution's build code run).
+    # The note must describe this as the DEFAULT, not an absolute guarantee.
+    payload = execution_limits_payload()
+    text = payload["codeSandboxResourceLimitsText"]
+    assert "pre-built binary distributions by default" in text
+    assert "unless you explicitly allow" in text
+
+
 def test_windows_text_mentions_memory_and_process_cap_but_no_cpu_limit(monkeypatch):
     from backend import execution_limits as module
 

@@ -983,6 +983,8 @@ export function toFlowNodes(
         data: {
           codeSandboxRequirements: n.codeSandboxRequirements,
           codeSandboxApprovalRequirements: n.codeSandboxApprovalRequirements,
+          codeSandboxApprovalAllowSourceBuilds: n.codeSandboxApprovalAllowSourceBuilds,
+          codeSandboxApprovalIsRepair: n.codeSandboxApprovalIsRepair,
           codeSandboxPrompt: n.codeSandboxPrompt,
           codeSandboxCode: n.codeSandboxCode,
           codeSandboxOutput: n.codeSandboxOutput,
@@ -995,6 +997,8 @@ export function toFlowNodes(
           onDelete: () => store.removeNodes([n.id]),
           onSetRequirements: (requirementsText: string) =>
             store.setCodeSandboxRequirements(n.id, requirementsText),
+          onToggleAllowSourceBuilds: (allow: boolean) =>
+            store.setCodeSandboxAllowSourceBuilds(n.id, allow),
           onRun: (inputText: string) => store.runCodeSandbox(n.id, inputText),
           onCancel: () => {
             if (n.pendingRequestId) store.cancelCodeSandboxRequest(n.pendingRequestId);

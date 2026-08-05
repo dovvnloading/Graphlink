@@ -61,6 +61,8 @@ export interface SceneNodeRow {
   codeSandboxAnalysis: string;
   codeSandboxAwaitingApproval: boolean;
   codeSandboxApprovalRequirements: string;
+  codeSandboxApprovalAllowSourceBuilds: boolean;
+  codeSandboxApprovalIsRepair: boolean;
   codeSandboxError: string;
 }
 
@@ -447,6 +449,16 @@ function checkSceneNodeRow(value: unknown, path: string, errors: string[]): void
     const fieldValue = value["codeSandboxApprovalRequirements"];
     if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.codeSandboxApprovalRequirements: missing required field`);
     else { if (typeof fieldValue !== "string") errors.push(`${path}.codeSandboxApprovalRequirements` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["codeSandboxApprovalAllowSourceBuilds"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.codeSandboxApprovalAllowSourceBuilds: missing required field`);
+    else { if (typeof fieldValue !== "boolean") errors.push(`${path}.codeSandboxApprovalAllowSourceBuilds` + ": expected boolean"); }
+  }
+  {
+    const fieldValue = value["codeSandboxApprovalIsRepair"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.codeSandboxApprovalIsRepair: missing required field`);
+    else { if (typeof fieldValue !== "boolean") errors.push(`${path}.codeSandboxApprovalIsRepair` + ": expected boolean"); }
   }
   {
     const fieldValue = value["codeSandboxError"];

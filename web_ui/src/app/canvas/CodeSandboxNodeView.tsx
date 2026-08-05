@@ -57,6 +57,8 @@ import { NodeMenu } from "./NodeMenu";
 export interface CodeSandboxNodeData extends Record<string, unknown> {
   codeSandboxRequirements: string;
   codeSandboxApprovalRequirements: string;
+  codeSandboxApprovalAllowSourceBuilds: boolean;
+  codeSandboxApprovalIsRepair: boolean;
   codeSandboxPrompt: string;
   codeSandboxCode: string;
   codeSandboxOutput: string;
@@ -66,6 +68,7 @@ export interface CodeSandboxNodeData extends Record<string, unknown> {
   isCollapsed: boolean;
   pendingRequestId: string | null;
   onSetRequirements: (requirementsText: string) => void;
+  onToggleAllowSourceBuilds: (allow: boolean) => void;
   onRun: (inputText: string) => void;
   onCancel: () => void;
   onApprove: () => void;
@@ -339,6 +342,9 @@ export function CodeSandboxNodeView({ id, data, selected }: NodeProps<CodeSandbo
           // code_sandbox_awaiting_approval flips true; see
           // AgentDispatcher.start_code_sandbox_run).
           requirements={data.codeSandboxApprovalRequirements}
+          allowSourceBuilds={data.codeSandboxApprovalAllowSourceBuilds}
+          onToggleAllowSourceBuilds={data.onToggleAllowSourceBuilds}
+          isRepairApproval={data.codeSandboxApprovalIsRepair}
           busy={approvalBusy}
           onApprove={handleApprove}
           onDeny={handleDeny}

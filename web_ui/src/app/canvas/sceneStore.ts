@@ -527,6 +527,13 @@ export class SceneStore {
     this.transport.intent("scene", "setCodeSandboxRequirements", [nodeId, requirementsText]);
   }
 
+  // ADR-005 stage 5.5: the approval panel's own source-build opt-in
+  // checkbox - fires immediately on toggle, same posture as
+  // setCodeSandboxRequirements above, not deferred to Approve.
+  setCodeSandboxAllowSourceBuilds(nodeId: string, allow: boolean): void {
+    this.transport.intent("scene", "setCodeSandboxAllowSourceBuilds", [nodeId, allow]);
+  }
+
   runCodeSandbox(nodeId: string, inputText: string): void {
     this.transport.intent("scene", "runCodeSandbox", [nodeId, inputText]);
   }

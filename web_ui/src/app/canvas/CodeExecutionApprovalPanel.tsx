@@ -128,6 +128,21 @@ import { NodeMarkdown } from "./NodeMarkdown";
  * Rendered only when non-blank (mirrors showRequirements below) - a
  * missing Provider (e.g. this component's own standalone tests) degrades
  * to simply omitting the paragraph, not a blank/incorrect claim.
+ *
+ * Source-build escalation (ADR-005 stage 5.5): code_sandbox's dependency
+ * install defaults to --only-binary :all: (graphlink_plugins/code_sandbox/
+ * domain.py's own sync_requirements) - a genuinely source-only package
+ * fails that install rather than running its own build backend. The
+ * checkbox below is the "explicit, separately-approved escalation" ADR-005's
+ * own Decision §4 calls for: unchecked by default, and reset server-side to
+ * unchecked every time a NEW gate opens (backend/agents.py's
+ * start_code_sandbox_run) so a prior run's opt-in never silently carries
+ * forward. Rendered only alongside showRequirements (there is nothing to
+ * install, and so nothing this checkbox could affect, when the manifest is
+ * blank) and only for kind="code_sandbox" (pycoder never installs anything).
+ * allowSourceBuilds/onToggleAllowSourceBuilds are optional props, not
+ * required ones, purely so this component's own pycoder-kind call site and
+ * existing tests are not forced to pass values that would never be read.
  */
 
 export type CodeExecutionKind = "pycoder" | "code_sandbox";
@@ -199,6 +214,24 @@ export interface CodeExecutionApprovalPanelProps {
    * before the reviewed code itself ever runs. Ignored entirely for
    * kind="pycoder" (no such concept there). Rendered only when non-blank. */
   requirements?: string;
+  /** code_sandbox ONLY (ADR-005 stage 5.5) - the CURRENT value of the
+   * source-build opt-in for this pending approval, reset server-side to
+   * false every time a new gate opens. Ignored for kind="pycoder". */
+  allowSourceBuilds?: boolean;
+  /** code_sandbox ONLY - fires immediately on toggle (not deferred to
+   * Approve), same posture as onSetRequirements elsewhere in this node's
+   * own view. Ignored for kind="pycoder". */
+  onToggleAllowSourceBuilds?: (allow: boolean) => void;
+  /** code_sandbox ONLY (ADR-005 stage 5.5 review-fix) - True while the
+   * CURRENT pending approval is a repair-loop re-gate rather than the
+   * initial gate. VirtualEnvSandbox.sync_requirements only ever runs once
+   * per run, before the repair loop starts (backend/agents.py's own
+   * start_code_sandbox_run), so the source-build checkbox has no
+   * dependency install left to affect on any repair round - rather than
+   * render an interactive control that silently does nothing, this panel
+   * hides it entirely when isRepairApproval is true. Ignored for
+   * kind="pycoder" (no repair-round concept relevant here either way). */
+  isRepairApproval?: boolean;
   /** Disables both buttons while the caller's own click handler is waiting
    * out the brief window between a click and the next scene snapshot
    * reflecting it - prevents a double-fire (e.g. Approve clicked twice
@@ -217,6 +250,9 @@ export function CodeExecutionApprovalPanel({
   code,
   awaitingApproval,
   requirements,
+  allowSourceBuilds,
+  onToggleAllowSourceBuilds,
+  isRepairApproval,
   busy,
   onApprove,
   onDeny,
@@ -281,6 +317,12 @@ export function CodeExecutionApprovalPanel({
   if (!awaitingApproval) return null;
 
   const showRequirements = kind === "code_sandbox" && !!requirements?.trim();
+  // ADR-005 stage 5.5 review-fix: sync_requirements only ever runs once per
+  // run, before the repair loop starts (backend/agents.py) - a repair
+  // round's checkbox would have no dependency install left to affect, so
+  // it is hidden entirely rather than rendered as an inert control a user
+  // could mistake for a live decision. See isRepairApproval's own doc.
+  const showAllowSourceBuildsCheckbox = showRequirements && !isRepairApproval;
   const resourceLimitsText =
     kind === "code_sandbox"
       ? executionLimits.codeSandboxResourceLimitsText
@@ -317,6 +359,18 @@ export function CodeExecutionApprovalPanel({
               <span className="code-exec-approval-requirements-label">Packages to be installed</span>
               <pre className="code-exec-approval-requirements-list">{requirements}</pre>
             </div>
+          )}
+          {showAllowSourceBuildsCheckbox && (
+            <label className="settings-checkbox-row code-exec-approval-source-builds-row">
+              <input
+                type="checkbox"
+                checked={!!allowSourceBuilds}
+                disabled={busy}
+                onChange={(event) => onToggleAllowSourceBuilds?.(event.target.checked)}
+              />
+              Allow building packages from source if no pre-built version is available
+              (this can run arbitrary code during installation)
+            </label>
           )}
           <div
             className="chat-node-content code-exec-approval-code"
