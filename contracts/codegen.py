@@ -400,6 +400,17 @@ GENERATED_ARTIFACTS = [
         "ts_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "app-plugins-state.ts",
     },
     {
+        # ADR-005 stage 5.4 (disclosure half): the execution-limits topic
+        # (backend/execution_limits.py) - the real, platform-computed
+        # resource caps CodeExecutionApprovalPanel.tsx discloses.
+        "dataclass": None,  # resolved lazily in main() to avoid importing
+        "dataclass_import": ("graphlink_execution_limits_payload", "ExecutionLimitsStatePayload"),
+        "title": "ExecutionLimitsState",
+        "source": "contracts/graphlink_execution_limits_payload.py::ExecutionLimitsStatePayload",
+        "schema_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "execution-limits-state.schema.json",
+        "ts_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "execution-limits-state.ts",
+    },
+    {
         # Qt-removal plan R2.5d: the SPA settings topic (backend/settings.py).
         "dataclass": None,  # resolved lazily in main() to avoid importing
         "dataclass_import": ("graphlink_app_settings_payload", "AppSettingsStatePayload"),

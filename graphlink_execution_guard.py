@@ -71,6 +71,26 @@ DEFAULT_MEMORY_LIMIT_BYTES = 2 * 1024 * 1024 * 1024  # 2 GiB
 # (200-generation bomb capped at exactly the limit, not 200+).
 DEFAULT_ACTIVE_PROCESS_LIMIT = 64
 
+# ADR-005 Decision #2 names a CPU cap ("60 s CPU") alongside the memory cap.
+# RLIMIT_CPU is the POSIX way to express it (this is CPU-seconds consumed,
+# not wall-clock, so it is complementary to, not a replacement for, the
+# existing wall-clock timeouts in both execution surfaces) - only
+# _PosixResourceGuard below actually USES this constant, but it is defined
+# here, unconditionally, rather than inside the `if sys.platform ==
+# "win32": ... else:` split below: ADR-005 stage 5.4 (backend/
+# execution_limits.py) needs to read the real cap value for its disclosure
+# text regardless of which platform this process is actually running on -
+# a plain int constant scoped inside the POSIX branch would not exist as a
+# module attribute at all on a real Windows import (confirmed: this module
+# imported normally on Windows never executes that branch), which is every
+# real deployment and the only CI runner today.
+DEFAULT_CPU_SECONDS = 60
+
+# Bounds a single runaway write; well above any legitimate sandbox output
+# while still stopping a disk-filling loop. Unconditional for the same
+# cross-platform-readability reason as DEFAULT_CPU_SECONDS above.
+DEFAULT_FILE_SIZE_LIMIT_BYTES = 1 * 1024 * 1024 * 1024  # 1 GiB
+
 
 class ExecutionResourceGuard:
     """No-op base: what non-Windows platforms get in this stage (the POSIX
@@ -328,16 +348,8 @@ else:
     except ImportError:  # pragma: no cover - POSIX-only import
         _resource = None
 
-    # ADR-005 Decision #2 names a CPU cap ("60 s CPU") alongside the memory
-    # cap. RLIMIT_CPU is the POSIX way to express it and costs nothing to
-    # set here - note this is CPU-seconds consumed, not wall-clock, so it
-    # is complementary to (not a replacement for) the existing wall-clock
-    # timeouts in both execution surfaces.
-    DEFAULT_CPU_SECONDS = 60
-
-    # Bounds a single runaway write; well above any legitimate sandbox
-    # output while still stopping a disk-filling loop.
-    DEFAULT_FILE_SIZE_LIMIT_BYTES = 1 * 1024 * 1024 * 1024  # 1 GiB
+    # DEFAULT_CPU_SECONDS/DEFAULT_FILE_SIZE_LIMIT_BYTES: defined at module
+    # top level now, not here - see their own comments up there for why.
 
     class _PosixResourceGuard(ExecutionResourceGuard):
         def __init__(

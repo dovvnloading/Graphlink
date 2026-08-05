@@ -58,6 +58,7 @@ from backend.events import (
     UnknownSessionError,
     UnknownTopicError,
 )
+from backend.execution_limits import register_execution_limits
 from backend.notifications import register_notifications
 from backend.plugins import register_plugins
 from backend.session_context import (
@@ -222,6 +223,9 @@ def _configure_session(
 
     # R2.5: about, plugins, settings, chat library.
     register_about(bus)
+    # ADR-005 stage 5.4: same zero-live-state shape as register_about above -
+    # see backend/execution_limits.py's own docstring.
+    register_execution_limits(bus)
     # R5.1: register_plugins needs the same session's canvas_document (built
     # just above) so "Web Research" can create a real node - this ordering
     # (canvas_document exists before register_plugins runs) is load-bearing.

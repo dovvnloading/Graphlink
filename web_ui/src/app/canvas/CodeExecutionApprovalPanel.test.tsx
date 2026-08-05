@@ -1,7 +1,54 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import type { WsTransport } from "../../lib/ws/transport";
 import { CodeExecutionApprovalPanel, type CodeExecutionKind } from "./CodeExecutionApprovalPanel";
+import { ExecutionLimitsProvider } from "./ExecutionLimitsContext";
+
+type StateListener = (payload: Record<string, unknown>) => void;
+
+/** A transport whose "execution-limits" snapshot is delivered SYNCHRONOUSLY
+ * on subscribe - unlike sceneStore.test.ts's own makeFakeTransport (which
+ * hands back a `listeners` map for the test to fire manually), this panel's
+ * tests only ever care about "given this text, is it rendered" - there is
+ * no separate update-over-time behavior worth exercising here (that is
+ * ExecutionLimitsContext.test.tsx's own job). */
+function renderPanelWithExecutionLimits(
+  overrides: Partial<Parameters<typeof CodeExecutionApprovalPanel>[0]> = {},
+  limitsPayload: Record<string, unknown> | null = {
+    schemaVersion: 1,
+    minCompatibleSchemaVersion: 1,
+    revision: 1,
+    pycoderResourceLimitsText: "Execution is capped at approximately 2 GB of memory and 64 concurrent processes.",
+    codeSandboxResourceLimitsText:
+      "Execution is capped at approximately 2 GB of memory and 64 concurrent processes. Binary packages only.",
+  },
+) {
+  const onApprove = vi.fn();
+  const onDeny = vi.fn();
+  const props = {
+    nodeId: "n0",
+    kind: "pycoder" as CodeExecutionKind,
+    code: "print('hello')",
+    awaitingApproval: true,
+    busy: false,
+    onApprove,
+    onDeny,
+    ...overrides,
+  };
+  const transport = {
+    subscribe: vi.fn((topic: string, listener: StateListener) => {
+      if (topic === "execution-limits" && limitsPayload) listener(limitsPayload);
+      return () => {};
+    }),
+  } as unknown as WsTransport;
+  const { container } = render(
+    <ExecutionLimitsProvider transport={transport}>
+      <CodeExecutionApprovalPanel {...props} />
+    </ExecutionLimitsProvider>,
+  );
+  return { onApprove, onDeny, container };
+}
 
 // Rendered standalone, with NO <OverlayProvider> ancestor (post-review
 // architecture correction - see this component's own module doc for FIX A/
@@ -22,8 +69,8 @@ function renderPanel(overrides: Partial<Parameters<typeof CodeExecutionApprovalP
     onDeny,
     ...overrides,
   };
-  render(<CodeExecutionApprovalPanel {...props} />);
-  return { onApprove, onDeny };
+  const { container } = render(<CodeExecutionApprovalPanel {...props} />);
+  return { onApprove, onDeny, container };
 }
 
 describe("CodeExecutionApprovalPanel", () => {
@@ -167,6 +214,73 @@ describe("CodeExecutionApprovalPanel", () => {
   it("does not show the other kind's warning sentence", () => {
     renderPanel({ kind: "pycoder" });
     expect(screen.queryByText(/isolates installed packages/)).toBeNull();
+  });
+
+  // -- ADR-005 stage 5.4: backend-computed resource-limits addendum ---------
+
+  it("shows the pycoder-specific resource-limits text from the execution-limits topic", () => {
+    renderPanelWithExecutionLimits({ kind: "pycoder" });
+    expect(
+      screen.getByText("Execution is capped at approximately 2 GB of memory and 64 concurrent processes."),
+    ).toBeInTheDocument();
+  });
+
+  it("shows the code_sandbox-specific resource-limits text, not the pycoder one", () => {
+    renderPanelWithExecutionLimits({ kind: "code_sandbox" });
+    expect(
+      screen.getByText(
+        "Execution is capped at approximately 2 GB of memory and 64 concurrent processes. Binary packages only.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("Execution is capped at approximately 2 GB of memory and 64 concurrent processes."),
+    ).toBeNull();
+  });
+
+  it("renders no resource-limits paragraph when no ExecutionLimitsProvider is present (existing standalone renderPanel helper)", () => {
+    // Every other test in this file uses the plain renderPanel() helper with
+    // no Provider ancestor at all - confirms that degrades gracefully to
+    // "no addendum shown", not a crash or a blank/misleading paragraph.
+    renderPanel({ kind: "pycoder" });
+    expect(screen.queryByText(/Execution is capped/)).toBeNull();
+  });
+
+  it("renders no resource-limits paragraph when the topic's snapshot has blank text", () => {
+    renderPanelWithExecutionLimits(
+      { kind: "pycoder" },
+      {
+        schemaVersion: 1,
+        minCompatibleSchemaVersion: 1,
+        revision: 1,
+        pycoderResourceLimitsText: "",
+        codeSandboxResourceLimitsText: "",
+      },
+    );
+    expect(screen.queryByText(/Execution is capped/)).toBeNull();
+  });
+
+  it("REVIEW-FIX: the resource-limits paragraph carries the muted informational class, not the warning's alarm class", () => {
+    // Adversarial review found that no test scoped an assertion to either
+    // paragraph's actual className, so a mutation swapping
+    // code-exec-approval-warning <-> code-exec-approval-resource-limits
+    // (e.g. from a future refactor consolidating the two, or copy-pasting
+    // WARNING_TEXT's own paragraph as a template) would pass every
+    // text-content-only test in this file undetected - see styles.css's
+    // own comment on why these two colors are deliberately different
+    // (alarming vs. reassuring information).
+    // Queries document.body, not the RTL `container` return value: this
+    // panel renders via createPortal(..., document.body) (see the
+    // component's own module doc), so its DOM nodes live outside the
+    // container render() normally mounts into.
+    renderPanelWithExecutionLimits({ kind: "pycoder" });
+    const resourceLimitsP = document.body.querySelector(".code-exec-approval-resource-limits");
+    const warningP = document.body.querySelector(".code-exec-approval-warning");
+    expect(resourceLimitsP).not.toBeNull();
+    expect(warningP).not.toBeNull();
+    expect(resourceLimitsP).toHaveTextContent(/Execution is capped/);
+    expect(resourceLimitsP!.className).not.toContain("code-exec-approval-warning");
+    expect(warningP!.className).not.toContain("code-exec-approval-resource-limits");
+    expect(warningP).toHaveTextContent(/there is no sandboxing/);
   });
 
   // -- FIX C regression guard: code_sandbox requirements/repair disclosure --

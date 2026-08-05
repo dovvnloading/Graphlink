@@ -9,6 +9,7 @@ import { type AppComposerState, validateAppComposerState } from "../bridge-core/
 import { type AppPluginsState, validateAppPluginsState } from "../bridge-core/generated/app-plugins-state";
 import { type AppSettingsState, validateAppSettingsState } from "../bridge-core/generated/app-settings-state";
 import { type DragSpeedState, validateDragSpeedState } from "../bridge-core/generated/drag-speed-state";
+import { type ExecutionLimitsState, validateExecutionLimitsState } from "../bridge-core/generated/execution-limits-state";
 import { type FontControlState, validateFontControlState } from "../bridge-core/generated/font-control-state";
 import { type GridControlState, validateGridControlState } from "../bridge-core/generated/grid-control-state";
 import { type NotificationState, validateNotificationState } from "../bridge-core/generated/notification-state";
@@ -22,6 +23,7 @@ export const TOPIC_VALIDATORS = {
   "app-plugins": validateAppPluginsState,
   "app-settings": validateAppSettingsState,
   "drag-speed": validateDragSpeedState,
+  "execution-limits": validateExecutionLimitsState,
   "font-control": validateFontControlState,
   "grid-control": validateGridControlState,
   "notification": validateNotificationState,
@@ -38,6 +40,7 @@ export interface TopicStates {
   "app-plugins": AppPluginsState;
   "app-settings": AppSettingsState;
   "drag-speed": DragSpeedState;
+  "execution-limits": ExecutionLimitsState;
   "font-control": FontControlState;
   "grid-control": GridControlState;
   "notification": NotificationState;
