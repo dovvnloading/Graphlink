@@ -1,5 +1,6 @@
 import { Handle, NodeResizer, Position, useStore, type Node, type NodeProps } from "@xyflow/react";
 import { useEffect, useRef, useState } from "react";
+import type { ChartDataRow } from "../../lib/bridge-core/generated/scene-state";
 import { withAuthToken } from "../../lib/auth/token";
 import {
   CHART_MAX_HEIGHT,
@@ -63,7 +64,7 @@ import {
 
 export interface ChartNodeData extends Record<string, unknown> {
   chartType: string;
-  chartData: Record<string, unknown>;
+  chartData: ChartDataRow;
   chartError: string;
   chartAssetId: string;
   chartAssetVersion: number;
@@ -142,7 +143,7 @@ export function ChartNodeView({ id, data, selected }: NodeProps<ChartFlowNode>) 
     [],
   );
 
-  const rawTitle = data.chartData?.title;
+  const rawTitle = data.chartData.title;
   const title = typeof rawTitle === "string" && rawTitle.trim() ? rawTitle : "Chart";
 
   return (

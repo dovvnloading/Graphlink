@@ -56,8 +56,102 @@
           "attachmentKind": {
             "type": "string"
           },
+          "branchStatus": {
+            "type": "string"
+          },
           "byteSize": {
             "type": "integer"
+          },
+          "chartAspectLocked": {
+            "type": "boolean"
+          },
+          "chartAssetId": {
+            "type": "string"
+          },
+          "chartAssetVersion": {
+            "type": "integer"
+          },
+          "chartData": {
+            "additionalProperties": false,
+            "properties": {
+              "bins": {
+                "type": "integer"
+              },
+              "flows": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "source": {
+                      "type": "string"
+                    },
+                    "target": {
+                      "type": "string"
+                    },
+                    "value": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "source",
+                    "target",
+                    "value"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "labels": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "title": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "bar",
+                  "line",
+                  "pie",
+                  "histogram",
+                  "sankey"
+                ],
+                "type": "string"
+              },
+              "values": {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "xAxis": {
+                "type": "string"
+              },
+              "yAxis": {
+                "type": "string"
+              }
+            },
+            "required": [],
+            "type": "object"
+          },
+          "chartError": {
+            "type": "string"
+          },
+          "chartHeight": {
+            "type": "number"
+          },
+          "chartSourceNodeId": {
+            "type": "string"
+          },
+          "chartType": {
+            "type": "string"
+          },
+          "chartWidth": {
+            "type": "number"
+          },
+          "chatScrollValue": {
+            "type": "number"
           },
           "code": {
             "type": "string"
@@ -90,6 +184,9 @@
             "type": "string"
           },
           "codeSandboxRequirements": {
+            "type": "string"
+          },
+          "color": {
             "type": "string"
           },
           "content": {
@@ -181,6 +278,15 @@
           "gitlinkTaskPrompt": {
             "type": "string"
           },
+          "groupHeight": {
+            "type": "number"
+          },
+          "groupWidth": {
+            "type": "number"
+          },
+          "headerColor": {
+            "type": "string"
+          },
           "history": {
             "items": {
               "additionalProperties": false,
@@ -204,11 +310,20 @@
             },
             "type": "array"
           },
+          "htmlSplitterState": {
+            "type": "number"
+          },
           "id": {
             "type": "string"
           },
           "imageAssetId": {
             "type": "string"
+          },
+          "isBranchComparison": {
+            "type": "boolean"
+          },
+          "isBranchSynthesis": {
+            "type": "boolean"
           },
           "isCollapsed": {
             "type": "boolean"
@@ -216,8 +331,26 @@
           "isDocked": {
             "type": "boolean"
           },
+          "isFinalDeliverable": {
+            "type": "boolean"
+          },
+          "isLocked": {
+            "type": "boolean"
+          },
+          "isSummaryNote": {
+            "type": "boolean"
+          },
+          "isSystemPrompt": {
+            "type": "boolean"
+          },
           "isUser": {
             "type": "boolean"
+          },
+          "itemIds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
           },
           "kind": {
             "type": "string"
@@ -228,10 +361,16 @@
           "mimeType": {
             "type": "string"
           },
+          "model": {
+            "type": "string"
+          },
           "pendingRequestId": {
             "type": "string"
           },
           "previewLabel": {
+            "type": "string"
+          },
+          "provider": {
             "type": "string"
           },
           "pycoderAnalysis": {
@@ -403,6 +542,9 @@
           "researchTotal": {
             "type": "integer"
           },
+          "synthesisInstructions": {
+            "type": "string"
+          },
           "title": {
             "type": "string"
           },
@@ -468,7 +610,26 @@
           "codeSandboxApprovalRequirements",
           "codeSandboxApprovalAllowSourceBuilds",
           "codeSandboxApprovalIsRepair",
-          "codeSandboxError"
+          "codeSandboxError",
+          "isBranchSynthesis",
+          "synthesisInstructions",
+          "branchStatus",
+          "isFinalDeliverable",
+          "isSystemPrompt",
+          "isSummaryNote",
+          "isBranchComparison",
+          "itemIds",
+          "isLocked",
+          "chartType",
+          "chartData",
+          "chartError",
+          "chartAssetId",
+          "chartAssetVersion",
+          "chartWidth",
+          "chartHeight",
+          "chartAspectLocked",
+          "chartSourceNodeId",
+          "chatScrollValue"
         ],
         "type": "object"
       },
