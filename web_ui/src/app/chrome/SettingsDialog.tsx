@@ -160,7 +160,7 @@ function GeneralPage({
         <input
           type="checkbox"
           checked={state.showTokenCounter}
-          onChange={(event) => transport.intent("app-settings", "setShowTokenCounter", [event.target.checked])}
+          onChange={(event) => transport.fireIntent("app-settings", "setShowTokenCounter", [event.target.checked])}
         />
         Show Token Counter Overlay
       </label>
@@ -169,7 +169,7 @@ function GeneralPage({
         <input
           type="checkbox"
           checked={state.enableSystemPrompt}
-          onChange={(event) => transport.intent("app-settings", "setEnableSystemPrompt", [event.target.checked])}
+          onChange={(event) => transport.fireIntent("app-settings", "setEnableSystemPrompt", [event.target.checked])}
         />
         Enable Assistant System Prompt
       </label>
@@ -182,7 +182,7 @@ function GeneralPage({
               type="checkbox"
               checked={state.notificationPreferences[type] ?? true}
               onChange={(event) =>
-                transport.intent("app-settings", "setNotificationPreference", [type, event.target.checked])
+                transport.fireIntent("app-settings", "setNotificationPreference", [type, event.target.checked])
               }
             />
             {NOTIFICATION_TYPE_LABELS[type]}
@@ -230,7 +230,7 @@ function IntegrationsPage({
           type="button"
           className="settings-button"
           onClick={() => {
-            transport.intent("app-settings", "clearGithubToken", []);
+            transport.fireIntent("app-settings", "clearGithubToken", []);
             setDraftToken("");
           }}
         >
@@ -241,7 +241,7 @@ function IntegrationsPage({
           className="settings-button settings-button-primary"
           disabled={draftToken.trim().length === 0}
           onClick={() => {
-            transport.intent("app-settings", "setGithubToken", [draftToken]);
+            transport.fireIntent("app-settings", "setGithubToken", [draftToken]);
             setDraftToken("");
           }}
         >
@@ -310,7 +310,7 @@ function ApiProviderPage({
           ariaLabel="API Provider"
           value={viewingProvider}
           options={API_PROVIDERS.map((provider) => ({ id: provider, label: provider }))}
-          onChange={(id) => transport.intent("app-settings", "setViewingApiProvider", [id])}
+          onChange={(id) => transport.fireIntent("app-settings", "setViewingApiProvider", [id])}
         />
       </div>
 
@@ -372,7 +372,7 @@ function ApiProviderPage({
               className="settings-button"
               disabled={state.apiCatalogStatus === "loading"}
               onClick={() =>
-                transport.intent("app-settings", "loadApiModels", [viewingProvider, draftApiKey, draftBaseUrl])
+                transport.fireIntent("app-settings", "loadApiModels", [viewingProvider, draftApiKey, draftBaseUrl])
               }
             >
               {state.apiCatalogStatus === "loading" ? "Loading catalog…" : "Load Available Models"}
@@ -429,7 +429,7 @@ function ApiProviderPage({
               type="button"
               className="settings-button settings-button-primary"
               onClick={() => {
-                transport.intent("app-settings", "resetApiSettings", []);
+                transport.fireIntent("app-settings", "resetApiSettings", []);
                 // Reset must clear the local drafts too, not just the key:
                 // the resync block only fires on a viewingProvider change,
                 // which Reset doesn't cause, so stale draftBaseUrl/
@@ -457,7 +457,7 @@ function ApiProviderPage({
             requiredTasks.some(({ task }) => !(draftModels[task] ?? "").trim())
           }
           onClick={() => {
-            transport.intent("app-settings", "saveApiConfiguration", [
+            transport.fireIntent("app-settings", "saveApiConfiguration", [
               viewingProvider,
               draftBaseUrl,
               draftApiKey,
@@ -514,7 +514,7 @@ function OllamaTaskField({
           onChange={(nextMode) => {
             setUiMode(nextMode);
             if (nextMode !== "explicit") {
-              transport.intent("app-settings", "setOllamaModelAssignment", [task, nextMode]);
+              transport.fireIntent("app-settings", "setOllamaModelAssignment", [task, nextMode]);
             }
           }}
         />
@@ -527,7 +527,7 @@ function OllamaTaskField({
             className="settings-select"
             list={OLLAMA_MODELS_DATALIST_ID}
             value={isSpecial ? "" : value}
-            onChange={(event) => transport.intent("app-settings", "setOllamaModelAssignment", [task, event.target.value])}
+            onChange={(event) => transport.fireIntent("app-settings", "setOllamaModelAssignment", [task, event.target.value])}
           />
         </label>
       )}
@@ -548,7 +548,7 @@ function OllamaPage({ state, transport }: { state: AppSettingsState; transport: 
               type="radio"
               name="ollama-reasoning-level"
               checked={state.ollamaReasoningLevel === option.id}
-              onChange={() => transport.intent("app-settings", "setOllamaReasoningLevel", [option.id])}
+              onChange={() => transport.fireIntent("app-settings", "setOllamaReasoningLevel", [option.id])}
             />
             {option.label}
           </label>
@@ -564,7 +564,7 @@ function OllamaPage({ state, transport }: { state: AppSettingsState; transport: 
           type="button"
           className="settings-button"
           disabled={state.ollamaScanStatus === "running"}
-          onClick={() => transport.intent("app-settings", "scanOllamaSystem", [])}
+          onClick={() => transport.fireIntent("app-settings", "scanOllamaSystem", [])}
         >
           {state.ollamaScanStatus === "running" ? "Scanning..." : "System Scan"}
         </button>
@@ -572,7 +572,7 @@ function OllamaPage({ state, transport }: { state: AppSettingsState; transport: 
           type="button"
           className="settings-button"
           disabled={state.ollamaScanStatus === "running"}
-          onClick={() => transport.intent("app-settings", "pickOllamaScanFolder", [])}
+          onClick={() => transport.fireIntent("app-settings", "pickOllamaScanFolder", [])}
         >
           Scan Folder...
         </button>
@@ -613,7 +613,7 @@ function OllamaPage({ state, transport }: { state: AppSettingsState; transport: 
           type="button"
           className="settings-button settings-button-primary"
           disabled={draftPullModel.trim().length === 0 || state.ollamaPullStatus === "running"}
-          onClick={() => transport.intent("app-settings", "pullOllamaModel", [draftPullModel])}
+          onClick={() => transport.fireIntent("app-settings", "pullOllamaModel", [draftPullModel])}
         >
           {state.ollamaPullStatus === "running" ? "Validating..." : "Validate and Pull Model"}
         </button>
@@ -727,7 +727,7 @@ function LlamaCppPage({ state, transport }: { state: AppSettingsState; transport
               type="radio"
               name="llama-cpp-reasoning-level"
               checked={state.llamaCppReasoningLevel === option.id}
-              onChange={() => transport.intent("app-settings", "setLlamaCppReasoningLevel", [option.id])}
+              onChange={() => transport.fireIntent("app-settings", "setLlamaCppReasoningLevel", [option.id])}
             />
             {option.label}
           </label>
@@ -743,7 +743,7 @@ function LlamaCppPage({ state, transport }: { state: AppSettingsState; transport
           type="button"
           className="settings-button"
           disabled={state.llamaCppScanStatus === "running"}
-          onClick={() => transport.intent("app-settings", "scanLlamaCppSystem", [])}
+          onClick={() => transport.fireIntent("app-settings", "scanLlamaCppSystem", [])}
         >
           {state.llamaCppScanStatus === "running" ? "Scanning..." : "System Scan"}
         </button>
@@ -751,7 +751,7 @@ function LlamaCppPage({ state, transport }: { state: AppSettingsState; transport
           type="button"
           className="settings-button"
           disabled={state.llamaCppScanStatus === "running"}
-          onClick={() => transport.intent("app-settings", "pickLlamaCppScanFolder", [])}
+          onClick={() => transport.fireIntent("app-settings", "pickLlamaCppScanFolder", [])}
         >
           Scan Folder...
         </button>
@@ -774,7 +774,7 @@ function LlamaCppPage({ state, transport }: { state: AppSettingsState; transport
               { id: "", label: "Select a scanned model..." },
               ...state.llamaCppScannedModels.map((path) => ({ id: path, label: basename(path) })),
             ]}
-            onChange={(path) => transport.intent("app-settings", "setLlamaCppChatModelPath", [path])}
+            onChange={(path) => transport.fireIntent("app-settings", "setLlamaCppChatModelPath", [path])}
           />
         </div>
       )}
@@ -785,7 +785,7 @@ function LlamaCppPage({ state, transport }: { state: AppSettingsState; transport
         <button
           type="button"
           className="settings-button"
-          onClick={() => transport.intent("app-settings", "pickLlamaCppChatModelFile", [])}
+          onClick={() => transport.fireIntent("app-settings", "pickLlamaCppChatModelFile", [])}
         >
           Browse...
         </button>
@@ -801,7 +801,7 @@ function LlamaCppPage({ state, transport }: { state: AppSettingsState; transport
               { id: "", label: "Select a scanned model..." },
               ...state.llamaCppScannedModels.map((path) => ({ id: path, label: basename(path) })),
             ]}
-            onChange={(path) => transport.intent("app-settings", "setLlamaCppTitleModelPath", [path])}
+            onChange={(path) => transport.fireIntent("app-settings", "setLlamaCppTitleModelPath", [path])}
           />
         </div>
       )}
@@ -812,7 +812,7 @@ function LlamaCppPage({ state, transport }: { state: AppSettingsState; transport
         <button
           type="button"
           className="settings-button"
-          onClick={() => transport.intent("app-settings", "pickLlamaCppTitleModelFile", [])}
+          onClick={() => transport.fireIntent("app-settings", "pickLlamaCppTitleModelFile", [])}
         >
           Browse...
         </button>
@@ -827,7 +827,7 @@ function LlamaCppPage({ state, transport }: { state: AppSettingsState; transport
           value={draftChatFormat}
           onChange={(event) => {
             setDraftChatFormat(event.target.value);
-            transport.intent("app-settings", "setLlamaCppChatFormat", [event.target.value]);
+            transport.fireIntent("app-settings", "setLlamaCppChatFormat", [event.target.value]);
           }}
         />
       </label>
@@ -838,14 +838,14 @@ function LlamaCppPage({ state, transport }: { state: AppSettingsState; transport
         min={256}
         max={131072}
         step={256}
-        onCommit={(n) => transport.intent("app-settings", "setLlamaCppNCtx", [n])}
+        onCommit={(n) => transport.fireIntent("app-settings", "setLlamaCppNCtx", [n])}
       />
       <LlamaCppNumberField
         label="GPU Layers"
         value={state.llamaCppNGpuLayers}
         min={-1}
         max={9999}
-        onCommit={(n) => transport.intent("app-settings", "setLlamaCppNGpuLayers", [n])}
+        onCommit={(n) => transport.fireIntent("app-settings", "setLlamaCppNGpuLayers", [n])}
       />
       <LlamaCppNumberField
         label="CPU Threads"
@@ -853,7 +853,7 @@ function LlamaCppPage({ state, transport }: { state: AppSettingsState; transport
         min={0}
         max={256}
         placeholder="0 = Auto"
-        onCommit={(n) => transport.intent("app-settings", "setLlamaCppNThreads", [n])}
+        onCommit={(n) => transport.fireIntent("app-settings", "setLlamaCppNThreads", [n])}
       />
 
       {state.llamaCppNotice && (
@@ -866,7 +866,7 @@ function LlamaCppPage({ state, transport }: { state: AppSettingsState; transport
         <button
           type="button"
           className="settings-button settings-button-primary"
-          onClick={() => transport.intent("app-settings", "saveLlamaCppSettings", [])}
+          onClick={() => transport.fireIntent("app-settings", "saveLlamaCppSettings", [])}
         >
           Save Settings
         </button>
@@ -917,7 +917,7 @@ export function SettingsDialog({ transport }: { transport: WsTransport }) {
               type="button"
               className={"settings-rail-button" + (section === activeSection ? " active" : "")}
               aria-current={section === activeSection ? "page" : undefined}
-              onClick={() => transport.intent("app-settings", "setActiveSection", [sectionKey(section)])}
+              onClick={() => transport.fireIntent("app-settings", "setActiveSection", [sectionKey(section)])}
             >
               {section}
             </button>

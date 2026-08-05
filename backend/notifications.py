@@ -69,6 +69,19 @@ def register_notifications(bus: SessionBus, settings_manager: "SettingsManager |
         state.show(str(message), "info")
         await bus.publish("notification")
 
+    async def show_error(message: str):
+        # ADR-003 stage 3.1: the same fixed-severity pattern as show_info
+        # above, for the WsTransport-detected class of failure a WS-level
+        # intent request can fail with (a structured {"kind":"error"} reply -
+        # unknown topic/intent, or an unhandled exception inside a handler).
+        # Deliberately a SECOND narrow, fixed-severity entry point rather
+        # than widening show_info to accept a caller-supplied msg_type - see
+        # that function's own reasoning for why an arbitrary wire-supplied
+        # severity is not trusted here either.
+        state.show(str(message), "error")
+        await bus.publish("notification")
+
     bus.register_intent("notification", "dismiss", dismiss)
     bus.register_intent("notification", "showInfo", show_info)
+    bus.register_intent("notification", "showError", show_error)
     return state

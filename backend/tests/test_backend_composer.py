@@ -399,6 +399,26 @@ def test_notification_show_info_intent_publishes_a_fixed_info_type():
     asyncio.run(run())
 
 
+def test_notification_show_error_intent_publishes_a_fixed_error_type():
+    # ADR-003 stage 3.1: WsTransport.fireIntent()'s own error-recovery path
+    # (web_ui/src/lib/ws/transport.ts) calls this when a request() rejects
+    # with a genuine server-side {"kind":"error"} reply - fixed to msg_type
+    # "error" regardless of what the frontend passes, same posture as
+    # showInfo above (see notifications.py's own comment for why an
+    # arbitrary wire-supplied severity is not trusted for either).
+    async def run():
+        bus, _, _, notifications, recorder = make_bus()
+        await bus.dispatch_intent("notification", "showError", ["unknown intent: scene/bogus"])
+        assert notifications.payload() == {
+            "visible": True,
+            "message": "unknown intent: scene/bogus",
+            "msgType": "error",
+        }
+        assert recorder.topics_seen().count("notification") == 1
+
+    asyncio.run(run())
+
+
 # -- R7.5d follow-up: the composer must DISPLAY the same persisted reasoning
 # level it writes. The first R7.5d pass wired only the write half, leaving the
 # composer's own private reasoning_level as the display source - and since

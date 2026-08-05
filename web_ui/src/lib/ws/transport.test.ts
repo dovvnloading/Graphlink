@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { WsTransport } from "./transport";
+import { WsRequestError, WsTimeoutError, WsTransport, WsUnavailableError } from "./transport";
 
 class FakeSocket {
   static instances: FakeSocket[] = [];
@@ -117,6 +117,211 @@ describe("WsTransport", () => {
     const second = socket.lastSent();
     socket.receive({ kind: "error", id: second.id, error: "unknown intent" });
     await expect(bad).rejects.toThrow("unknown intent");
+  });
+
+  // ADR-003 stage 3.1
+  it("request() rejects with a WsRequestError specifically on a real {kind:error} server reply", async () => {
+    // Distinguishes a genuine server-side rejection from a transport-level
+    // one (not connected/closed/disposed/timeout, all still plain Error) -
+    // fireIntent() below relies on this to decide when to surface a
+    // notification and when to swallow silently.
+    const t = makeTransport();
+    t.connect();
+    const socket = FakeSocket.instances[0];
+    socket.open();
+    const p = t.request("system", "nope", []);
+    const sent = socket.lastSent();
+    socket.receive({ kind: "error", id: sent.id, error: "unknown intent" });
+    await expect(p).rejects.toBeInstanceOf(WsRequestError);
+  });
+
+  it("request() rejects with WsUnavailableError, NOT WsRequestError, when never connected", async () => {
+    const t = makeTransport();
+    await expect(t.request("system", "ping", [])).rejects.toBeInstanceOf(WsUnavailableError);
+  });
+
+  describe("fireIntent()", () => {
+    it("sends the intent id-tracked, like request(), not fire-and-forget like intent()", () => {
+      const t = makeTransport();
+      t.connect();
+      const socket = FakeSocket.instances[0];
+      socket.open();
+      t.fireIntent("scene", "setPyCoderMode", ["n1", "manual"]);
+      const sent = socket.lastSent();
+      expect(sent).toEqual({ kind: "intent", topic: "scene", intent: "setPyCoderMode", args: ["n1", "manual"], id: sent.id });
+      expect(sent.id).toBeDefined();
+    });
+
+    it("on a real server error reply, fires notification/showError with the error message", async () => {
+      const t = makeTransport();
+      t.connect();
+      const socket = FakeSocket.instances[0];
+      socket.open();
+      t.fireIntent("scene", "nope", []);
+      const sent = socket.lastSent();
+      socket.receive({ kind: "error", id: sent.id, error: "unknown intent: scene/nope" });
+      // The rejection is handled asynchronously (a .catch callback) - flush
+      // the microtask queue before asserting the follow-up intent fired.
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(socket.lastSent()).toEqual({
+        kind: "intent",
+        topic: "notification",
+        intent: "showError",
+        args: ["unknown intent: scene/nope"],
+      });
+    });
+
+    it("on success, does NOT fire notification/showError", async () => {
+      const t = makeTransport();
+      t.connect();
+      const socket = FakeSocket.instances[0];
+      socket.open();
+      t.fireIntent("scene", "setPyCoderMode", ["n1", "manual"]);
+      const sent = socket.lastSent();
+      socket.receive({ kind: "result", id: sent.id, value: null });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(socket.sent.map((raw) => JSON.parse(raw))).not.toContainEqual(
+        expect.objectContaining({ intent: "showError" }),
+      );
+    });
+
+    it("swallows a transport-level failure (not connected) silently, matching intent()'s own pre-migration behavior", async () => {
+      // No .connect() at all - request() rejects synchronously with a
+      // WsUnavailableError("not connected"), the ONE class fireIntent's
+      // review-fixed catch still swallows, so it must not attempt a
+      // showError round trip that could not reach the server anyway.
+      const t = makeTransport();
+      expect(() => t.fireIntent("scene", "setPyCoderMode", ["n1", "manual"])).not.toThrow();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(FakeSocket.instances).toHaveLength(0);
+    });
+
+    it("review-fix: surfaces a request timeout even though the connection stays open the whole time", async () => {
+      // The original version of this stage swallowed EVERY non-WsRequestError
+      // rejection, including a timeout - but a timeout with the connection
+      // still "open" the whole time (never closed here) is a real forced
+      // failure this stage's own exit criterion covers, not a
+      // connection-status condition the indicator already communicates. A
+      // WsTimeoutError is deliberately NOT a WsUnavailableError, so it must
+      // now surface via showError rather than being silently dropped.
+      const t = makeTransport({ requestTimeoutMs: 100 });
+      t.connect();
+      const socket = FakeSocket.instances[0];
+      socket.open();
+      t.fireIntent("scene", "setPyCoderMode", ["n1", "manual"]);
+      vi.advanceTimersByTime(150);
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(t.getStatus()).toBe("open");
+      expect(socket.sent.map((raw) => JSON.parse(raw))).toContainEqual({
+        kind: "intent",
+        topic: "notification",
+        intent: "showError",
+        args: ["request timed out: scene/setPyCoderMode"],
+      });
+    });
+
+    it("passes a per-call timeoutMs through to request(), overriding the transport-wide default", async () => {
+      // The transport-wide default here is 100ms; a call site passing its
+      // own much longer override must not time out within that window - the
+      // exact scenario NATIVE_DIALOG_TIMEOUT_MS-style call sites need.
+      const t = makeTransport({ requestTimeoutMs: 100 });
+      t.connect();
+      const socket = FakeSocket.instances[0];
+      socket.open();
+      t.fireIntent("scene", "pickGitlinkLocalRoot", ["n1"], 5_000);
+      vi.advanceTimersByTime(150);
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(socket.sent.map((raw) => JSON.parse(raw))).not.toContainEqual(
+        expect.objectContaining({ intent: "showError" }),
+      );
+    });
+
+    it("review-fix: dedups an identical consecutive showError message within the dedupe window", async () => {
+      // A rapid-fire call site (e.g. a text field committing on every
+      // keystroke) failing with the SAME message repeatedly must not flood
+      // the single-slot notification banner with a fresh showError on every
+      // attempt while the underlying problem persists.
+      const t = makeTransport();
+      t.connect();
+      const socket = FakeSocket.instances[0];
+      socket.open();
+
+      t.fireIntent("app-composer", "updateDraft", ["d1", "hello"]);
+      socket.receive({ kind: "error", id: socket.lastSent().id, error: "boom" });
+      await Promise.resolve();
+      await Promise.resolve();
+
+      t.fireIntent("app-composer", "updateDraft", ["d1", "hello2"]);
+      socket.receive({ kind: "error", id: socket.lastSent().id, error: "boom" });
+      await Promise.resolve();
+      await Promise.resolve();
+
+      const showErrors = socket.sent
+        .map((raw) => JSON.parse(raw))
+        .filter((m) => m.intent === "showError");
+      expect(showErrors).toHaveLength(1);
+    });
+
+    it("review-fix: does NOT dedup a DIFFERENT message that arrives within the same window", async () => {
+      const t = makeTransport();
+      t.connect();
+      const socket = FakeSocket.instances[0];
+      socket.open();
+
+      t.fireIntent("app-composer", "updateDraft", ["d1", "hello"]);
+      socket.receive({ kind: "error", id: socket.lastSent().id, error: "boom one" });
+      await Promise.resolve();
+      await Promise.resolve();
+
+      t.fireIntent("app-composer", "updateDraft", ["d1", "hello2"]);
+      socket.receive({ kind: "error", id: socket.lastSent().id, error: "boom two" });
+      await Promise.resolve();
+      await Promise.resolve();
+
+      const showErrors = socket.sent
+        .map((raw) => JSON.parse(raw))
+        .filter((m) => m.intent === "showError");
+      expect(showErrors).toHaveLength(2);
+    });
+
+    it("review-fix: re-fires the identical message once the dedupe window has passed", async () => {
+      const t = makeTransport();
+      t.connect();
+      const socket = FakeSocket.instances[0];
+      socket.open();
+
+      t.fireIntent("app-composer", "updateDraft", ["d1", "hello"]);
+      socket.receive({ kind: "error", id: socket.lastSent().id, error: "boom" });
+      await Promise.resolve();
+      await Promise.resolve();
+
+      vi.advanceTimersByTime(3_100);
+
+      t.fireIntent("app-composer", "updateDraft", ["d1", "hello2"]);
+      socket.receive({ kind: "error", id: socket.lastSent().id, error: "boom" });
+      await Promise.resolve();
+      await Promise.resolve();
+
+      const showErrors = socket.sent
+        .map((raw) => JSON.parse(raw))
+        .filter((m) => m.intent === "showError");
+      expect(showErrors).toHaveLength(2);
+    });
+  });
+
+  it("request() rejects with a WsTimeoutError specifically when the server never answers in time", async () => {
+    const t = makeTransport({ requestTimeoutMs: 100 });
+    t.connect();
+    FakeSocket.instances[0].open();
+    const p = t.request("system", "ping", []);
+    const assertion = expect(p).rejects.toBeInstanceOf(WsTimeoutError);
+    vi.advanceTimersByTime(150);
+    await assertion;
   });
 
   it("request() times out if the server never answers", async () => {

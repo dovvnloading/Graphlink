@@ -86,7 +86,7 @@ export function PluginPicker({ transport, store }: { transport: WsTransport; sto
                     type="button"
                     className="plugin-picker-row"
                     onClick={() => {
-                      transport.intent("app-plugins", "executePlugin", [
+                      transport.fireIntent("app-plugins", "executePlugin", [
                         plugin.name,
                         store.getSelectedNodeId(),
                       ]);

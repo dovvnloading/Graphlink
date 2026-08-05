@@ -40,6 +40,11 @@ function makeTransport() {
     intent: (topic: string, intent: string, args: unknown[]) => {
       intents.push([topic, intent, args]);
     },
+    // ADR-003 stage 3.1: PluginPicker's own executePlugin call site now goes
+    // through fireIntent, not the bare intent() above.
+    fireIntent: (topic: string, intent: string, args: unknown[] = []) => {
+      intents.push([topic, intent, args]);
+    },
   } as unknown as WsTransport;
   return {
     transport,
@@ -57,7 +62,7 @@ function OpenPluginsButton() {
   );
 }
 
-function setup(store: SceneStore = new SceneStore({ subscribe: vi.fn(), intent: vi.fn() } as unknown as WsTransport)) {
+function setup(store: SceneStore = new SceneStore({ subscribe: vi.fn(), intent: vi.fn(), fireIntent: vi.fn() } as unknown as WsTransport)) {
   const user = userEvent.setup();
   const fake = makeTransport();
   render(
@@ -96,7 +101,7 @@ describe("PluginPicker", () => {
   });
 
   it("selecting a plugin fires executePlugin with the currently-selected node id", async () => {
-    const store = new SceneStore({ subscribe: vi.fn(), intent: vi.fn() } as unknown as WsTransport);
+    const store = new SceneStore({ subscribe: vi.fn(), intent: vi.fn(), fireIntent: vi.fn() } as unknown as WsTransport);
     store.setSelectedNodeId("node-42");
     const { user, intents } = setup(store);
     await user.click(screen.getByText("open plugins"));
@@ -106,7 +111,7 @@ describe("PluginPicker", () => {
   });
 
   it("every plugin's click sends the selected node id, not just Web Research's", async () => {
-    const store = new SceneStore({ subscribe: vi.fn(), intent: vi.fn() } as unknown as WsTransport);
+    const store = new SceneStore({ subscribe: vi.fn(), intent: vi.fn(), fireIntent: vi.fn() } as unknown as WsTransport);
     store.setSelectedNodeId("node-7");
     const { user, intents } = setup(store);
     await user.click(screen.getByText("open plugins"));

@@ -134,14 +134,57 @@ def test_unknown_intent_and_topic_return_error_not_disconnect():
         message = ws.receive_json()
         assert message["kind"] == "error"
         assert message["id"] == 2
+        # ADR-003 stage 3.1 review-fix: UnknownIntentError subclasses KeyError,
+        # whose __str__ wraps a single-arg message in repr() (literal quotes) -
+        # this text now reaches end users via fireIntent()'s notification
+        # banner, so it must be the clean sentence, not that raw repr artifact.
+        assert message["error"] == "Unknown intent: system/nope."
 
         ws.send_json({"kind": "intent", "topic": "nope", "intent": "x", "args": [], "id": 3})
         message = ws.receive_json()
         assert message["kind"] == "error"
+        assert message["error"] == "Unknown topic: nope."
 
         # Socket must still be usable after errors.
         ws.send_json({"kind": "intent", "topic": "system", "intent": "ping", "args": [], "id": 4})
         assert ws.receive_json()["kind"] == "result"
+
+
+def test_showerror_intent_round_trips_through_the_real_app_and_updates_the_notification_snapshot():
+    # ADR-003 stage 3.1 review-fix (finding K): every other showError test
+    # dispatches straight into a bare EventBus (backend/tests/test_backend_
+    # composer.py), bypassing this real app.py handler entirely - this is the
+    # one test that drives the actual WS frame a browser's WsTransport sends
+    # through the real create_app() wiring end to end: a genuine {"kind":
+    # "intent","topic":"notification","intent":"showError",...} frame in,
+    # a proper {"kind":"result"} reply, and a subsequent notification
+    # snapshot reflecting the error - the same round trip fireIntent()'s own
+    # error-surfacing path in transport.ts relies on in production.
+    client = make_client()
+    with client.websocket_connect("/ws") as ws:
+        ws.send_json(
+            {
+                "kind": "intent",
+                "topic": "notification",
+                "intent": "showError",
+                "args": ["Something went wrong."],
+                "id": 5,
+            }
+        )
+        # bus.publish() broadcasts to every ATTACHED connection unconditionally
+        # (backend/events.py's SessionContext.attach/publish - no client-side
+        # "subscribe" message is required), and the handler awaits that
+        # publish before returning - so the resulting state snapshot arrives
+        # on the wire BEFORE the intent's own {"kind":"result"} reply.
+        snapshot = ws.receive_json()
+        assert snapshot["kind"] == "state"
+        assert snapshot["topic"] == "notification"
+        assert snapshot["payload"]["visible"] is True
+        assert snapshot["payload"]["message"] == "Something went wrong."
+        assert snapshot["payload"]["msgType"] == "error"
+
+        message = ws.receive_json()
+        assert message == {"kind": "result", "id": 5, "value": None}
 
 
 def test_unknown_message_kind_returns_error():
