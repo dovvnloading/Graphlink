@@ -80,6 +80,37 @@ export const initialGridState: GridControlState = {
 
 type Listener = () => void;
 
+/** ADR-003 stage 3.4 review-fix: op-BODY shape guards.
+ *
+ * Validating the resulting scene (see applyScenePatch) catches an op that
+ * corrupts a VALUE, but not one that silently does nothing: `new Set(null)`
+ * is an empty set, so `{"op":"removeNodes","ids":null}` removes nothing and
+ * leaves a perfectly valid scene behind - while still advancing the
+ * revision, which is what makes the divergence permanently undetectable.
+ * The two checks are complementary and both are needed. */
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** A node/edge row body: an object carrying at least a string `id`, which is
+ * the field every op is keyed on. Field-level types are deliberately NOT
+ * checked here - they are the job of the scene validator that runs over the
+ * result (see applyScenePatch), and duplicating them would mean
+ * hand-maintaining a second copy of the generated schema.
+ *
+ * A real type predicate rather than a bare boolean, specifically so callers
+ * narrow instead of casting: `op.node as unknown as SceneNodeRow` is the
+ * exact wire-type-widening cast stage 3.3's own CI ratchet
+ * (wireTypeCastGuard.test.ts) exists to forbid, and it correctly caught
+ * this file when the checks were first written that way. */
+function isWireRow<T extends { id: string }>(value: unknown): value is T {
+  return isPlainObject(value) && typeof value.id === "string";
+}
+
+function isIdList(value: unknown): boolean {
+  return Array.isArray(value) && value.every((id) => typeof id === "string");
+}
+
 export class SceneStore {
   private scene: SceneState = initialSceneState;
   private grid: GridControlState = initialGridState;
@@ -124,6 +155,11 @@ export class SceneStore {
   // the same reason selectedNodeId/replyTargetNodeId already live on this
   // store rather than in whichever single component happens to set them.
   private focusAcceptedPaths = false;
+  // ADR-003 stage 3.4 review-fix: true while a scene resync request is
+  // outstanding, so a burst of refused patches asks once rather than once
+  // per patch - see requestSceneResync for the measured failure this
+  // prevents.
+  private sceneResyncPending = false;
 
   constructor(private readonly transport: WsTransport) {}
 
@@ -142,75 +178,141 @@ export class SceneStore {
   /** ADR-003 stage 3.4: apply one `kind:"patch"` frame's ops on top of the
    * current scene, in place of a full snapshot.
    *
-   * Returns false when the patch cannot be safely applied, which happens in
-   * exactly one case: its baseRevision does not match the revision this
-   * client is actually at, meaning a frame was missed and applying this one
-   * would silently produce a scene that never existed on the server. There
-   * is no partial/best-effort application - a gap is unrecoverable locally
-   * by construction (the missing ops are the only thing that could close
-   * it), so the caller re-snapshots instead. That self-healing fallback is
-   * why the protocol needs no divergence debugging: any doubt resolves to
-   * "ask for the truth again".
+   * Returns false when the patch cannot be safely applied - the caller then
+   * re-snapshots. There is no partial/best-effort application: the result is
+   * either committed whole or discarded whole, so the store can never hold a
+   * scene that never existed server-side. Three things cause a refusal:
+   *
+   * 1. baseRevision does not match the revision this client is at - a frame
+   *    was missed, and the missing ops are by construction the only thing
+   *    that could close the gap, so only a fresh snapshot can.
+   * 2. An op kind this client does not understand - a real protocol gap.
+   * 3. The RESULT fails the generated scene validator (review-fix, below).
+   *
+   * REVIEW-FIX - the result is validated before it is committed. Ops used to
+   * be applied straight from bare TypeScript casts with no runtime check,
+   * which was not merely "unvalidated data can enter the store" but
+   * something strictly worse than the pre-3.4 behavior it replaced: a
+   * malformed op that does not happen to throw would ALSO advance
+   * `revision`, so every later patch's baseRevision matched and the gap
+   * detector could never notice. `{"op":"removeNodes","ids":null}` is the
+   * sharp case - `new Set(null)` is an empty set, so it removes nothing,
+   * returns true, and the client shows a node the server deleted with no
+   * mechanism able to detect it, permanently, until a reconnect. A snapshot
+   * carrying the same corruption was always caught loudly by this same
+   * validator and dropped whole. Validating the result restores exactly that
+   * property, and costs what the snapshot path already cost per publish (one
+   * validateSceneState over the scene) - this stage's win is bytes on the
+   * wire, which is untouched by it.
    *
    * Untouched nodes keep their EXACT existing object references (only
-   * changed/added ones are new objects). Nothing in the app benefits from
+   * changed/added ones are new objects), and a meta-only patch leaves the
+   * `nodes` ARRAY itself identical too. Nothing in the app benefits from
    * that today - SceneCanvas.tsx's toFlowNodes still rebuilds every flow
    * node on every scene change, and the SPA has no React.memo anywhere -
    * but it is the property ADR-011 stage 11.1's memoization depends on, and
    * preserving it here costs nothing while retrofitting it later would mean
    * revisiting this code. */
+  /** Log why a patch was rejected and refuse it whole. Always returns false
+   * so an op case can `return this.refusePatch(...)` in one line. */
+  private refusePatch(reason: string, op: unknown): boolean {
+    console.error("[scene] malformed patch op, re-snapshotting:", reason, op);
+    return false;
+  }
+
   private applyScenePatch(patch: ScenePatch): boolean {
     if (patch.baseRevision !== this.scene.revision) return false;
     let nodes = this.scene.nodes;
     let edges = this.scene.edges;
     let meta: Record<string, unknown> = {};
-    for (const op of patch.ops) {
-      switch (op.op) {
-        case "upsertNode": {
-          const node = op.node as SceneNodeRow;
-          const index = nodes.findIndex((n) => n.id === node.id);
-          nodes = index === -1 ? [...nodes, node] : nodes.map((n, i) => (i === index ? node : n));
-          break;
+    try {
+      for (const op of patch.ops) {
+        switch (op.op) {
+          case "upsertNode": {
+            if (!isWireRow<SceneNodeRow>(op.node)) return this.refusePatch("upsertNode.node is not a row", op);
+            const node = op.node;
+            const index = nodes.findIndex((n) => n.id === node.id);
+            nodes = index === -1 ? [...nodes, node] : nodes.map((n, i) => (i === index ? node : n));
+            break;
+          }
+          case "removeNodes": {
+            if (!isIdList(op.ids)) return this.refusePatch("removeNodes.ids is not a string[]", op);
+            const ids = new Set(op.ids as string[]);
+            nodes = nodes.filter((n) => !ids.has(n.id));
+            break;
+          }
+          case "upsertEdge": {
+            if (!isWireRow<SceneEdgeRow>(op.edge)) return this.refusePatch("upsertEdge.edge is not a row", op);
+            const edge = op.edge;
+            const index = edges.findIndex((e) => e.id === edge.id);
+            edges = index === -1 ? [...edges, edge] : edges.map((e, i) => (i === index ? edge : e));
+            break;
+          }
+          case "removeEdges": {
+            if (!isIdList(op.ids)) return this.refusePatch("removeEdges.ids is not a string[]", op);
+            const ids = new Set(op.ids as string[]);
+            edges = edges.filter((e) => !ids.has(e.id));
+            break;
+          }
+          case "setView":
+            if (!isPlainObject(op.view)) return this.refusePatch("setView.view is not an object", op);
+            meta = { ...meta, ...(op.view as Record<string, unknown>) };
+            break;
+          case "setMeta":
+            if (!isPlainObject(op.meta)) return this.refusePatch("setMeta.meta is not an object", op);
+            meta = { ...meta, ...(op.meta as Record<string, unknown>) };
+            break;
+          default:
+            console.error("[scene] unknown patch op, re-snapshotting:", op.op);
+            return false;
         }
-        case "removeNodes": {
-          const ids = new Set(op.ids as string[]);
-          nodes = nodes.filter((n) => !ids.has(n.id));
-          break;
-        }
-        case "upsertEdge": {
-          const edge = op.edge as SceneEdgeRow;
-          const index = edges.findIndex((e) => e.id === edge.id);
-          edges = index === -1 ? [...edges, edge] : edges.map((e, i) => (i === index ? edge : e));
-          break;
-        }
-        case "removeEdges": {
-          const ids = new Set(op.ids as string[]);
-          edges = edges.filter((e) => !ids.has(e.id));
-          break;
-        }
-        case "setView":
-          meta = { ...meta, ...(op.view as Record<string, unknown>) };
-          break;
-        case "setMeta":
-          meta = { ...meta, ...(op.meta as Record<string, unknown>) };
-          break;
-        default:
-          // An op kind this client does not know is a real protocol gap, not
-          // a routine occurrence - refuse the whole patch and re-snapshot
-          // rather than applying the ops around it and silently ending up
-          // with a scene missing whatever that op carried.
-          console.error("[scene] unknown patch op, re-snapshotting:", op.op);
-          return false;
       }
+    } catch (error) {
+      // Review-fix: a malformed op body can THROW rather than merely produce
+      // wrong data (`new Set(7)` is "number 7 is not iterable"; a null
+      // `op.node` dereferences). Without this the exception escaped through
+      // the listener fan-out to socket.onmessage, so the `if
+      // (!applyScenePatch(...))` resync never ran and any sibling listener
+      // was skipped - the exact "refuse whole and self-heal" contract this
+      // method advertises, silently not holding.
+      console.error("[scene] patch op threw, re-snapshotting:", error);
+      return false;
     }
-    this.scene = { ...this.scene, ...meta, nodes, edges, revision: patch.revision };
+    // Review-fix: `nodes`/`edges`/`revision` are listed after `...meta` so a
+    // meta key can never overwrite them, and `pins`/`schemaVersion`/
+    // `minCompatibleSchemaVersion` are restated for the same reason - a
+    // `setMeta` carrying `{"pins": null}` would otherwise blank the pin list
+    // and crash PinOverlay's `scene.pins.filter(...)` on every render. The
+    // backend sends no such key today; this makes the guard structural
+    // rather than one backend field name away from being needed.
+    const candidate: SceneState = {
+      ...this.scene,
+      ...meta,
+      nodes,
+      edges,
+      pins: this.scene.pins,
+      schemaVersion: this.scene.schemaVersion,
+      minCompatibleSchemaVersion: this.scene.minCompatibleSchemaVersion,
+      revision: patch.revision,
+    };
+    const validated = TOPIC_VALIDATORS["scene"](candidate as unknown as Record<string, unknown>);
+    if (!validated.ok) {
+      console.error("[scene] patch produced an invalid scene, re-snapshotting:", validated.errors);
+      return false;
+    }
+    this.scene = candidate;
     this.emit();
     return true;
   }
 
   connect(): void {
     this.unsubscribers.push(
-      this.bind<SceneState>("scene", (v) => (this.scene = v)),
+      this.bind<SceneState>("scene", (v) => {
+        this.scene = v;
+        // ADR-003 stage 3.4 review-fix: the snapshot that closes an
+        // outstanding resync request - see requestSceneResync below.
+        this.sceneResyncPending = false;
+      }),
       this.bind<GridControlState>("grid-control", (v) => (this.grid = v)),
       this.bind<DragSpeedState>("drag-speed", (v) => (this.dragConfig = v)),
       this.bind<FontControlState>("font-control", (v) => (this.fontConfig = v)),
@@ -237,10 +339,26 @@ export class SceneStore {
    *
    * Deliberately fire-and-forget: a resync is this client's own recovery
    * bookkeeping, not a user action, so a transient failure must not raise
-   * an error banner at someone who did nothing wrong - and it is
-   * self-correcting anyway, since the next patch detects the same
-   * still-unclosed gap and asks again. */
+   * an error banner at someone who did nothing wrong.
+   *
+   * REVIEW-FIX (measured against a real backend): at most ONE request is in
+   * flight at a time. Without that guard a single dropped frame during a
+   * burst of mutations was catastrophic rather than self-healing - the
+   * client refuses EVERY subsequent patch until its snapshot arrives, and
+   * each refusal fired another resync, each answered with another FULL
+   * snapshot. Measured: one dropped frame inside a 15-mutation burst
+   * produced 14 resync requests and 14 full snapshots (602 KiB on a small
+   * scene; ~22 MB at the 500-node workload) - dramatically WORSE than the
+   * full-snapshot protocol this stage replaced, turning a momentary blip
+   * into a self-inflicted flood. Suppressing duplicates makes it one
+   * request and one snapshot. The flag is cleared by the scene snapshot
+   * bind in connect() above, i.e. by the very frame that closes the gap, so
+   * a resync that never arrives (connection died) cannot wedge recovery
+   * permanently shut: reconnecting re-subscribes every topic from scratch
+   * and delivers a fresh snapshot through that same bind. */
   private requestSceneResync(): void {
+    if (this.sceneResyncPending) return;
+    this.sceneResyncPending = true;
     this.transport.resubscribe("scene");
   }
 

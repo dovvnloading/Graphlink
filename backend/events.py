@@ -88,6 +88,11 @@ StateBuilder = Callable[[], dict[str, Any]]
 # and backend/domain/graph.py's take_dirty_patch_ops for the one real
 # implementation.
 PatchBuilder = Callable[[], list[dict[str, Any]] | None]
+# ADR-003 stage 3.4 review-fix: a topic's "what did I last publish" source.
+# send_snapshot serves THIS rather than live state, so a subscribing
+# connection lands exactly where every existing one already is - see
+# SessionBus.send_snapshot and SceneDocument.published_scene_payload.
+BaselineBuilder = Callable[[], dict[str, Any] | None]
 IntentHandler = Callable[..., Any | Awaitable[Any]]
 
 # The one session id every real window uses (confirmed by grep:
@@ -181,7 +186,10 @@ class _IntentRegistration:
 
 
 class _Topic:
-    __slots__ = ("name", "builder", "patch_builder", "schema_version", "min_compatible", "revision")
+    __slots__ = (
+        "name", "builder", "patch_builder", "baseline_builder",
+        "schema_version", "min_compatible", "revision",
+    )
 
     def __init__(
         self,
@@ -190,13 +198,33 @@ class _Topic:
         schema_version: int,
         min_compatible: int,
         patch_builder: PatchBuilder | None = None,
+        baseline_builder: BaselineBuilder | None = None,
     ):
         self.name = name
         self.builder = builder
         self.patch_builder = patch_builder
+        self.baseline_builder = baseline_builder
         self.schema_version = schema_version
         self.min_compatible = min_compatible
         self.revision = 0
+
+    def _stamp(self, payload: dict[str, Any]) -> dict[str, Any]:
+        payload["schemaVersion"] = self.schema_version
+        payload["minCompatibleSchemaVersion"] = self.min_compatible
+        payload["revision"] = self.revision
+        return payload
+
+    def baseline_snapshot(self) -> dict[str, Any] | None:
+        """The state as of the last publish, stamped at the current revision -
+        what send_snapshot serves so a new subscriber lands exactly where
+        every existing connection already is. None when the topic has no
+        baseline source, or has not published yet; the caller falls back to
+        the live builder, which is correct in both cases (nothing has been
+        published, so nothing can be behind)."""
+        if self.baseline_builder is None:
+            return None
+        payload = self.baseline_builder()
+        return None if payload is None else self._stamp(dict(payload))
 
     def snapshot(self) -> dict[str, Any]:
         """Build the current full-state payload, stamped at the CURRENT
@@ -215,11 +243,7 @@ class _Topic:
         a phantom gap and forced every other client into a needless
         re-snapshot. Advancing the revision is now the exclusive job of
         bump_revision() below, called only on a real broadcast."""
-        payload = dict(self.builder())
-        payload["schemaVersion"] = self.schema_version
-        payload["minCompatibleSchemaVersion"] = self.min_compatible
-        payload["revision"] = self.revision
-        return payload
+        return self._stamp(dict(self.builder()))
 
     def bump_revision(self) -> int:
         """Advance to the next revision - called ONLY from publish(), i.e.
@@ -258,6 +282,7 @@ class SessionBus:
         schema_version: int = 1,
         min_compatible: int = 1,
         patch_builder: PatchBuilder | None = None,
+        baseline_builder: BaselineBuilder | None = None,
     ) -> None:
         """`patch_builder`, when given, opts this topic into ADR-003 stage
         3.4's delta protocol: publish() asks it for the ops accumulated
@@ -267,9 +292,21 @@ class SessionBus:
         deliberate, permanent answer for the 11 small topics whose whole
         payload is smaller than the bookkeeping a delta would need - only
         the scene topic is large enough to be worth it (see the ADR's own
-        Decision text)."""
+        Decision text).
+
+        `baseline_builder` must accompany `patch_builder` - it supplies the
+        last-published state send_snapshot serves, without which a
+        subscriber can be handed state newer than the revision stamped on it
+        and diverge permanently. Asserted rather than merely documented,
+        because that failure is completely silent."""
         assert name not in self._topics, f"topic {name!r} registered twice"
-        self._topics[name] = _Topic(name, builder, schema_version, min_compatible, patch_builder)
+        assert patch_builder is None or baseline_builder is not None, (
+            f"topic {name!r}: a patch_builder needs a baseline_builder, or "
+            f"send_snapshot serves live state stamped with a stale revision"
+        )
+        self._topics[name] = _Topic(
+            name, builder, schema_version, min_compatible, patch_builder, baseline_builder
+        )
 
     def register_intent(
         self,
@@ -371,15 +408,30 @@ class SessionBus:
             await self._broadcast({
                 "kind": "patch",
                 "topic": topic,
+                # Review-fix: patches carry the version envelope too. Without
+                # it, this module's own stated contract ("a reader must
+                # refuse a payload older than its stated minimum") had no
+                # field to act on for the majority of scene messages - so
+                # bumping the scene topic for a breaking change would leave
+                # an already-snapshotted old client applying new-shaped node
+                # payloads forever with nothing to refuse on.
+                "schemaVersion": t.schema_version,
+                "minCompatibleSchemaVersion": t.min_compatible,
                 "revision": revision,
                 "baseRevision": base_revision,
                 "ops": ops,
             })
-            # The caller's return value must still be real current state,
-            # not the delta - building it here costs one extra builder run
-            # on a path that just avoided sending one, and every existing
-            # caller/test predates the patch protocol entirely.
-            return t.snapshot()
+            # Review-fix: this used to `return t.snapshot()`, rebuilding
+            # every node's wire dict a SECOND time purely to produce a return
+            # value - measured at 2x the pre-3.4 per-publish CPU on the
+            # 500-node workload (7.0 ms diff + 6.4 ms discarded rebuild vs
+            # 6.4 ms before), on the event loop, across ~146 publish sites.
+            # The stage's own commit message claimed CPU was unchanged; it
+            # was not. The baseline the diff just recorded IS the state
+            # every client now holds, so returning it is both free and more
+            # accurate than a fresh live build (which could already include
+            # a later mutation nobody has been sent).
+            return t.baseline_snapshot() or t.snapshot()
         t.bump_revision()
         snapshot = t.snapshot()
         await self._broadcast({"kind": "state", "topic": topic, "payload": snapshot})
@@ -404,13 +456,22 @@ class SessionBus:
         _Topic.snapshot's own docstring): this reaches exactly one
         connection and is invisible to every other, so advancing the shared
         counter here would manufacture a phantom gap in the patch
-        protocol's baseRevision chain for everyone else. The receiving
-        connection is now, correctly, exactly in sync at the current
-        revision."""
+        protocol's baseRevision chain for everyone else.
+
+        REVIEW-FIX: serves the LAST PUBLISHED state, not the live document,
+        whenever the topic can supply one. Those differ whenever the
+        document was mutated since the last publish, and handing a new
+        subscriber state NEWER than the revision stamped on it caused
+        permanent, undetectable divergence - see
+        SceneDocument.published_scene_payload for the full mechanism and a
+        reproduction. Falling back to the live builder is correct for a
+        topic with no baseline (every non-scene topic, all full-snapshot)
+        and for one that has not published yet (nothing can be behind)."""
         t = self._topics.get(topic)
         if t is None:
             raise UnknownTopicError(topic)
-        await conn.send_json({"kind": "state", "topic": topic, "payload": t.snapshot()})
+        payload = t.baseline_snapshot() or t.snapshot()
+        await conn.send_json({"kind": "state", "topic": topic, "payload": payload})
 
     async def publish_stream(
         self,

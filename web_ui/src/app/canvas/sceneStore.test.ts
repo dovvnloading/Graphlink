@@ -450,6 +450,129 @@ describe("SceneStore", () => {
       expect(seen).not.toHaveBeenCalled();
     });
 
+    // Review-fix: ops used to be applied from bare TS casts with no runtime
+    // check. That was strictly WORSE than the snapshot path it replaced: a
+    // malformed op that does not throw still advanced `revision`, so every
+    // later patch's baseRevision matched and the gap detector could never
+    // notice - permanent divergence with nothing able to detect it. The
+    // result is now validated and the whole patch discarded if it fails.
+    it("REFUSES a patch whose removeNodes ids are not an array (silently removed nothing before)", () => {
+      const { store, patchListeners, resubscribes } = connectedStoreAtRevision3();
+      const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+      const before = store.getScene();
+
+      // `new Set(null)` is an EMPTY set - this removed nothing, returned
+      // true, and advanced the revision, so the client kept showing a node
+      // the server had deleted, undetectably, until a reconnect.
+      patchListeners.get("scene")!({
+        revision: 4,
+        baseRevision: 3,
+        ops: [{ op: "removeNodes", ids: null }],
+      });
+
+      expect(store.getScene()).toBe(before);
+      expect(store.getScene().revision).toBe(3);
+      expect(resubscribes).toEqual(["scene"]);
+      consoleError.mockRestore();
+    });
+
+    it("REFUSES a patch whose upsertNode carries a wrong-typed field", () => {
+      // A string `x` reached React Flow's `position: {x, y}` and turned the
+      // canvas transform into NaN. The generated validator has always
+      // rejected this on the snapshot path.
+      const { store, patchListeners, resubscribes } = connectedStoreAtRevision3();
+      const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+      const existing = store.getScene().nodes[0];
+
+      patchListeners.get("scene")!({
+        revision: 4,
+        baseRevision: 3,
+        ops: [{ op: "upsertNode", node: { ...existing, x: "not-a-number" } }],
+      });
+
+      expect(store.getScene().revision).toBe(3);
+      expect(resubscribes).toEqual(["scene"]);
+      consoleError.mockRestore();
+    });
+
+    it("REFUSES a patch whose op body THROWS rather than merely being wrong", () => {
+      // `new Set(7)` is a TypeError. The exception used to escape through the
+      // listener fan-out to socket.onmessage, so the `if (!applyScenePatch)`
+      // resync never ran - the "refuse whole and self-heal" contract silently
+      // did not hold for this input class.
+      const { store, patchListeners, resubscribes } = connectedStoreAtRevision3();
+      const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      expect(() =>
+        patchListeners.get("scene")!({
+          revision: 4,
+          baseRevision: 3,
+          ops: [{ op: "removeNodes", ids: 7 }],
+        }),
+      ).not.toThrow();
+
+      expect(store.getScene().revision).toBe(3);
+      expect(resubscribes).toEqual(["scene"]);
+      consoleError.mockRestore();
+    });
+
+    it("does not let a setMeta op blank structural fields like pins", () => {
+      // The op bodies are spread in blindly, so `nodes`/`edges`/`revision`
+      // were protected only by key order and `pins` not at all - a
+      // `{"pins": null}` would crash PinOverlay's scene.pins.filter() on
+      // every render. No backend key does this today; the guard is
+      // structural rather than one field name away from being needed.
+      const { store, patchListeners } = connectedStoreAtRevision3();
+      const pinsBefore = store.getScene().pins;
+
+      patchListeners.get("scene")!({
+        revision: 4,
+        baseRevision: 3,
+        ops: [{ op: "setMeta", meta: { pins: null, nodes: null, revision: 999, dragFactor: 0.3 } }],
+      });
+
+      expect(store.getScene().pins).toBe(pinsBefore);
+      expect(store.getScene().nodes).toHaveLength(1);
+      expect(store.getScene().revision).toBe(4);
+      expect(store.getScene().dragFactor).toBe(0.3);
+    });
+
+    it("asks for ONE resync per gap, not one per refused patch", () => {
+      // Review-fix, measured against a real backend: without this guard a
+      // single dropped frame during a burst of mutations made things far
+      // WORSE than the full snapshots this stage replaced. The client
+      // refuses every subsequent patch until its snapshot lands, and each
+      // refusal fired another resync answered with another FULL snapshot -
+      // 14 requests and 14 snapshots from one dropped frame in a
+      // 15-mutation burst (~22 MB at the 500-node workload).
+      const { store, patchListeners, resubscribes } = connectedStoreAtRevision3();
+      const patch = patchListeners.get("scene")!;
+
+      // A burst arriving while the client sits at revision 3 with a gap.
+      for (let revision = 10; revision < 20; revision++) {
+        patch({ revision, baseRevision: revision - 1, ops: [] });
+      }
+
+      expect(resubscribes).toEqual(["scene"]);
+      expect(store.getScene().revision).toBe(3);
+    });
+
+    it("re-arms the resync request once the recovering snapshot lands", () => {
+      // The flag must not wedge recovery permanently shut: after the
+      // snapshot closes one gap, a LATER gap must be able to ask again.
+      const { store, patchListeners, listeners, resubscribes } = connectedStoreAtRevision3();
+      const patch = patchListeners.get("scene")!;
+
+      patch({ revision: 9, baseRevision: 8, ops: [] });
+      expect(resubscribes).toEqual(["scene"]);
+
+      listeners.get("scene")!(validScenePayload({ revision: 9 }));
+      expect(store.getScene().revision).toBe(9);
+
+      patch({ revision: 30, baseRevision: 29, ops: [] });
+      expect(resubscribes).toEqual(["scene", "scene"]);
+    });
+
     it("accepts a later snapshot after a refused patch, resyncing the client", () => {
       const { store, patchListeners, listeners } = connectedStoreAtRevision3();
       patchListeners.get("scene")!({ revision: 9, baseRevision: 8, ops: [] });

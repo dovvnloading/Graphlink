@@ -399,6 +399,109 @@ describe("WsTransport", () => {
     consoleError.mockRestore();
   });
 
+  // ADR-003 stage 3.4 review-fix: the patch branch, subscribePatch and
+  // resubscribe shipped with ZERO tests at this level - sceneStore.test.ts
+  // drives a hand-written fake that REIMPLEMENTS this routing rather than
+  // exercising it, so a routing bug here would have been invisible.
+  it("subscribePatch: routes a kind:'patch' frame to that topic's patch listener", () => {
+    const t = makeTransport();
+    t.connect();
+    const socket = FakeSocket.instances[0];
+    socket.open();
+    const seen: unknown[] = [];
+    t.subscribePatch("scene", (patch) => seen.push(patch));
+
+    socket.receive({
+      kind: "patch",
+      topic: "scene",
+      revision: 7,
+      baseRevision: 6,
+      ops: [{ op: "removeNodes", ids: ["n0"] }],
+    });
+
+    expect(seen).toEqual([{ revision: 7, baseRevision: 6, ops: [{ op: "removeNodes", ids: ["n0"] }] }]);
+  });
+
+  it("subscribePatch: a patch frame never reaches the topic's SNAPSHOT listener", () => {
+    // The two registries are parallel and must stay disjoint - a patch
+    // delivered as though it were a snapshot would hit the generated
+    // validator with an envelope it cannot understand.
+    const t = makeTransport();
+    t.connect();
+    const socket = FakeSocket.instances[0];
+    socket.open();
+    const snapshots: unknown[] = [];
+    t.subscribe("scene", (payload) => snapshots.push(payload));
+
+    socket.receive({ kind: "patch", topic: "scene", revision: 2, baseRevision: 1, ops: [] });
+
+    expect(snapshots).toEqual([]);
+  });
+
+  it("subscribePatch: a patch for a topic with no patch listener is dropped silently, not logged", () => {
+    // Routine, not anomalous: every topic except scene is snapshot-only.
+    const t = makeTransport();
+    t.connect();
+    const socket = FakeSocket.instances[0];
+    socket.open();
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    socket.receive({ kind: "patch", topic: "grid-control", revision: 2, baseRevision: 1, ops: [] });
+    expect(consoleError).not.toHaveBeenCalled();
+    consoleError.mockRestore();
+  });
+
+  it("subscribePatch: unsubscribing stops delivery", () => {
+    const t = makeTransport();
+    t.connect();
+    const socket = FakeSocket.instances[0];
+    socket.open();
+    const seen: unknown[] = [];
+    const off = t.subscribePatch("scene", (patch) => seen.push(patch));
+    off();
+    socket.receive({ kind: "patch", topic: "scene", revision: 2, baseRevision: 1, ops: [] });
+    expect(seen).toEqual([]);
+  });
+
+  it("a patch topic is re-subscribed on reconnect even with no snapshot listener", () => {
+    // Review-fix: the reconnect topic list came from stateListeners alone,
+    // so a patch-only consumer was never subscribed server-side at all and
+    // never re-subscribed - it silently received nothing forever.
+    const t = makeTransport();
+    t.connect();
+    FakeSocket.instances[0].open();
+    t.subscribePatch("scene", () => {});
+
+    FakeSocket.instances[0].onclose?.();
+    vi.advanceTimersByTime(10_000);
+    const reconnected = FakeSocket.instances[1];
+    reconnected.open();
+
+    expect(reconnected.lastSent()).toEqual({ kind: "subscribe", topics: ["scene"] });
+  });
+
+  it("resubscribe() re-requests a snapshot for an already-subscribed topic", () => {
+    // subscribe() sends its message only for a topic's FIRST listener, so
+    // this is the only way an already-subscribed topic can ask for fresh
+    // state - the scene store's gap recovery depends on it.
+    const t = makeTransport();
+    t.connect();
+    const socket = FakeSocket.instances[0];
+    socket.open();
+    t.subscribe("scene", () => {});
+
+    t.resubscribe("scene");
+
+    expect(socket.lastSent()).toEqual({ kind: "subscribe", topics: ["scene"] });
+  });
+
+  it("resubscribe() is a no-op while the socket is not open", () => {
+    const t = makeTransport();
+    t.connect();
+    // never opened - lastSent() parses JSON, so assert on the raw list.
+    expect(() => t.resubscribe("scene")).not.toThrow();
+    expect(FakeSocket.instances[0].sent).toEqual([]);
+  });
+
   it("subscribeStream: a stream frame with no matching requestId subscriber is silently dropped", () => {
     const t = makeTransport();
     t.connect();

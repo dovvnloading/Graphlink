@@ -74,10 +74,14 @@ export type StatusListener = (status: ConnectionStatus) => void;
 export type StreamListener = (delta: string, done: boolean, reset: boolean, seq: number) => void;
 
 /** ADR-003 stage 3.4: one node-scoped delta from a `kind:"patch"` frame.
- * Deliberately typed loosely here (`Record<string, unknown>` for the node/
- * edge bodies) - the transport's job is routing, not validating; the store
- * runs the real generated validator on the result of applying these, which
- * is what actually guarantees the shape. */
+ * Deliberately typed loosely (`Record<string, unknown>` for the node/edge
+ * bodies) - the transport's job is routing, not validating. Nothing here
+ * checks the shape, so a consumer MUST validate before trusting it;
+ * SceneStore.applyScenePatch does that by running the generated scene
+ * validator over the RESULT of applying a patch and discarding the whole
+ * patch if it fails. (An earlier version of this comment asserted that
+ * validation as though it were already happening - it was not, which is
+ * exactly how unvalidated ops reached the store.) */
 export type ScenePatchOp = Record<string, unknown> & { op: string };
 
 /** ADR-003 stage 3.4: a patch frame's contents, handed to a patch listener.
@@ -180,7 +184,14 @@ export class WsTransport {
       if (this.socket !== socket) return;
       this.attempts = 0;
       this.setStatus("open");
-      const topics = [...this.stateListeners.keys()];
+      // ADR-003 stage 3.4 review-fix: patch topics are re-subscribed too.
+      // This list used to come from stateListeners alone, so a consumer that
+      // registered ONLY a patch listener - which subscribePatch's own doc
+      // presents as a supported shape - was never subscribed server-side at
+      // all and never re-subscribed on reconnect, silently receiving
+      // nothing. The scene store happens to call both, but that made the
+      // pairing a load-bearing invariant with nothing enforcing it.
+      const topics = [...new Set([...this.stateListeners.keys(), ...this.patchListeners.keys()])];
       if (topics.length > 0) {
         socket.send(JSON.stringify({ kind: "subscribe", topics }));
       }

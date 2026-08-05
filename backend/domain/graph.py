@@ -215,6 +215,44 @@ class SceneDocument(BranchOps, GroupOps):
     def _view_wire(self) -> dict[str, Any]:
         return {"zoomFactor": self.zoom_factor, "scrollX": self.scroll_x, "scrollY": self.scroll_y}
 
+    def published_scene_payload(self) -> dict[str, Any] | None:
+        """The wire state as of the LAST publish - what every already-connected
+        client currently holds - or None before the first publish.
+
+        REVIEW-FIX, closing a real permanent-divergence bug. A subscribing
+        connection used to be served the LIVE document stamped with the
+        last-published revision, which are two different states whenever the
+        document was mutated between publishes (routine: several intent
+        handlers await another topic's publish in between, and agents.py sets
+        then clears pending_request_id around an await). The patch protocol's
+        whole correctness argument rests on "revision R means you hold the
+        state as of publish R" - hand a client something NEWER than R and its
+        baseRevision still chains perfectly forever while the diff, which is
+        computed against the published baseline, never emits the op that
+        would fix the difference.
+
+        Reproduced: publish (baseline={n0}); add n1 WITHOUT publishing; a
+        second window subscribes and receives n0+n1 stamped revision 1;
+        delete n1 and move n0; publish. The diff never saw n1, so it emits
+        only upsertNode(n0) - no removeNodes - and baseRevision 1 matches, so
+        the client applies it happily and shows the deleted node for the rest
+        of the session with nothing able to detect it.
+
+        Serving the published baseline instead makes the subscriber exactly
+        as up to date as everyone else, and the very next patch carries the
+        intervening changes to all of them identically. Whole-node ops are
+        absolute assignments, so there is no ordering hazard in that catch-up.
+        """
+        if self._published_nodes is None or self._published_edges is None:
+            return None
+        return {
+            "nodes": list(self._published_nodes.values()),
+            "edges": list(self._published_edges.values()),
+            "pins": list(self._published_pins or []),
+            **(self._published_meta or {}),
+            **(self._published_view or {}),
+        }
+
     def take_dirty_patch_ops(self) -> list[dict[str, Any]] | None:
         """The scene topic's patch_builder (wired in backend/canvas.py,
         SessionBus's patch-aware sibling to the full-snapshot `builder`
@@ -342,6 +380,20 @@ class SceneDocument(BranchOps, GroupOps):
         self.scroll_y = 0.0
         self.total_session_tokens = 0
         self.current_chat_id = None
+        # ADR-003 stage 3.4 review-fix: drop the patch baseline too. Loading a
+        # chat replaces the entire document, so diffing the new scene against
+        # the OLD one produced a patch no smaller than the snapshot it
+        # replaced - measured at 1,666,170 bytes vs 1,677,403 for a
+        # 500-node-to-500-node reload (500 upsertNode ops plus removeNodes
+        # and removeEdges listing every old id). Correct output, zero
+        # benefit, on the single most bandwidth-heavy operation in the app.
+        # Clearing the baseline makes the next publish a plain full snapshot,
+        # which is both smaller and what a wholesale replacement actually is.
+        self._published_nodes = None
+        self._published_edges = None
+        self._published_pins = None
+        self._published_view = None
+        self._published_meta = None
 
     def add_chat_node(
         self,

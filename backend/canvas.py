@@ -298,7 +298,12 @@ def register_canvas(
     # protocol (a 500-node scene snapshot is ~1.6 MB; every other topic's
     # whole payload is smaller than the bookkeeping a delta would cost) -
     # see SessionBus.register_topic's own docstring.
-    bus.register_topic("scene", document.scene_payload, patch_builder=document.take_dirty_patch_ops)
+    bus.register_topic(
+        "scene",
+        document.scene_payload,
+        patch_builder=document.take_dirty_patch_ops,
+        baseline_builder=document.published_scene_payload,
+    )
     bus.register_topic("grid-control", document.grid_payload)
     # Static preset topics, field-for-field the DragSpeedStatePayload /
     # FontControlStatePayload shapes so the generated validators apply

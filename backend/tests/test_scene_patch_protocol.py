@@ -53,7 +53,12 @@ class Recorder:
 
 def make_scene_bus(document: SceneDocument) -> SessionBus:
     bus = SessionBus("patch-test")
-    bus.register_topic("scene", document.scene_payload, patch_builder=document.take_dirty_patch_ops)
+    bus.register_topic(
+        "scene",
+        document.scene_payload,
+        patch_builder=document.take_dirty_patch_ops,
+        baseline_builder=document.published_scene_payload,
+    )
     return bus
 
 
@@ -317,6 +322,172 @@ def test_a_subscribing_connection_receives_state_at_the_current_revision():
         # revision the next patch will name as its baseRevision.
         assert late.messages[0]["kind"] == "state"
         assert revision_of(late.messages[0]) == 2
+
+    asyncio.run(run())
+
+
+# -- review-fix: subscribers must land on the PUBLISHED baseline --------------
+#
+# The protocol's correctness rests on "revision R means you hold the state as
+# of publish R". send_snapshot used to serve the LIVE document stamped with
+# the last-published revision, and those differ whenever the document is
+# mutated between publishes - which is routine (several intent handlers await
+# another topic's publish in between; agents.py sets then clears
+# pending_request_id around an await). Hand a client something NEWER than R
+# and its baseRevision chains perfectly forever while the diff, computed
+# against the published baseline, never emits the op that would reconcile it.
+
+
+def test_a_late_subscriber_never_keeps_a_node_the_diff_baseline_never_saw():
+    # The "ghost node" case: created after the last publish, delivered to a
+    # new subscriber by the handshake, then deleted. The diff never saw it,
+    # so it emits no removeNodes - and the client would have shown a deleted
+    # node for the rest of the session with nothing able to detect it.
+    async def run():
+        document = SceneDocument()
+        bus = make_scene_bus(document)
+        first = Recorder()
+        bus.attach(first)
+        keep = document.add_node(0, 0, "keep")
+        await bus.publish("scene")
+
+        ghost = document.add_node(50, 0, "ghost")  # mutated, NOT published
+        late = Recorder()
+        bus.attach(late)
+        await bus.send_snapshot("scene", late)
+        late_nodes = {n["id"] for n in late.messages[0]["payload"]["nodes"]}
+        assert ghost.id not in late_nodes, "the handshake must serve the published baseline"
+
+        document.remove_nodes([ghost.id])
+        document.move_node(keep.id, 9, 9)  # unrelated change keeps ops non-empty
+        await bus.publish("scene")
+
+        for op in late.messages[1]["ops"]:
+            if op["op"] == "upsertNode":
+                late_nodes.add(op["node"]["id"])
+            elif op["op"] == "removeNodes":
+                late_nodes -= set(op["ids"])
+        assert late_nodes == set(document.nodes)
+
+    asyncio.run(run())
+
+
+def test_a_value_mutated_and_reverted_between_publishes_never_leaks_to_a_late_subscriber():
+    # The complementary case, and the nastier one: no op is EVER emitted for
+    # a node whose value returns to its published state, so a subscriber
+    # handed the transient value keeps it permanently.
+    async def run():
+        document = SceneDocument()
+        bus = make_scene_bus(document)
+        bus.attach(Recorder())
+        node = document.add_node(0, 0, "n")
+        await bus.publish("scene")
+
+        document.move_node(node.id, 999.0, 999.0)  # transient, unpublished
+        late = Recorder()
+        bus.attach(late)
+        await bus.send_snapshot("scene", late)
+        seen_x = {n["id"]: n for n in late.messages[0]["payload"]["nodes"]}[node.id]["x"]
+        assert seen_x == 0.0, "the handshake must not expose an unpublished value"
+
+        document.move_node(node.id, 0.0, 0.0)  # reverted
+        document.add_node(1, 1, "unrelated")   # keeps ops non-empty
+        await bus.publish("scene")
+
+        for op in late.messages[1]["ops"]:
+            if op["op"] == "upsertNode" and op["node"]["id"] == node.id:
+                seen_x = op["node"]["x"]
+        assert seen_x == document.nodes[node.id].x
+
+    asyncio.run(run())
+
+
+def test_registering_a_patch_builder_without_a_baseline_builder_is_a_programming_error():
+    # The pairing is load-bearing and its failure is completely silent, so
+    # it is asserted rather than merely documented.
+    document = SceneDocument()
+    bus = SessionBus("no-baseline")
+    with pytest.raises(AssertionError):
+        bus.register_topic("scene", document.scene_payload, patch_builder=document.take_dirty_patch_ops)
+
+
+def test_a_patch_publish_builds_every_node_payload_exactly_once():
+    # publish() used to call take_dirty_patch_ops() (which builds every node
+    # wire) and THEN t.snapshot() (which builds them all again) purely for a
+    # return value no production caller reads - 2x the pre-3.4 per-publish
+    # CPU on the event loop, across ~146 publish sites, on the exact hot path
+    # this stage exists to make cheaper.
+    async def run():
+        document = SceneDocument()
+        for index in range(20):
+            document.add_node(index, 0, f"n{index}")
+        bus = make_scene_bus(document)
+        bus.attach(Recorder())
+        await bus.publish("scene")
+
+        built = 0
+        original = SceneDocument._node_wire
+
+        def counting(self, node):
+            nonlocal built
+            built += 1
+            return original(self, node)
+
+        document.move_node(next(iter(document.nodes)), 5, 5)
+        SceneDocument._node_wire = counting
+        try:
+            await bus.publish("scene")
+        finally:
+            SceneDocument._node_wire = original
+
+        assert built == len(document.nodes), (
+            f"expected one wire build per node, got {built} for {len(document.nodes)} nodes"
+        )
+
+    asyncio.run(run())
+
+
+def test_loading_a_chat_resets_the_baseline_so_the_next_publish_is_a_snapshot():
+    # clear_for_load replaces the whole document. Diffing the new scene
+    # against the OLD one produced a patch no smaller than the snapshot it
+    # replaced (500 upsertNode ops plus removeNodes/removeEdges listing every
+    # old id) on the most bandwidth-heavy operation in the app.
+    async def run():
+        document = SceneDocument()
+        bus = make_scene_bus(document)
+        recorder = Recorder()
+        bus.attach(recorder)
+        document.add_node(0, 0, "before")
+        await bus.publish("scene")
+
+        document.clear_for_load()
+        document.add_node(0, 0, "after")
+        await bus.publish("scene")
+
+        assert recorder.messages[-1]["kind"] == "state", "a wholesale replacement must send a snapshot"
+
+    asyncio.run(run())
+
+
+def test_a_patch_frame_carries_the_version_envelope():
+    # The module's own contract is that a reader must be able to refuse a
+    # payload older than its stated minimum. Without these fields on patches,
+    # a future breaking scene-schema bump would leave an already-snapshotted
+    # old client applying new-shaped nodes forever with nothing to refuse on.
+    async def run():
+        document = SceneDocument()
+        node = document.add_node(0, 0, "a")
+        bus = make_scene_bus(document)
+        recorder = Recorder()
+        bus.attach(recorder)
+        await bus.publish("scene")
+        document.move_node(node.id, 1, 1)
+        await bus.publish("scene")
+
+        patch = recorder.messages[1]
+        assert patch["kind"] == "patch"
+        assert patch["schemaVersion"] == 1
+        assert patch["minCompatibleSchemaVersion"] == 1
 
     asyncio.run(run())
 
