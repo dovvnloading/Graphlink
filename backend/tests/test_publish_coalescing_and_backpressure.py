@@ -226,6 +226,139 @@ def test_attach_without_a_running_loop_falls_back_to_unbuffered():
     assert recorder not in bus._buffered
 
 
+class GatedRecorder:
+    """A reader whose sends block until released - lets a test build up a
+    real backlog in the writer queue, then observe exact delivery order."""
+
+    def __init__(self):
+        self.messages: list[dict] = []
+        self.gate = asyncio.Event()
+
+    async def send_json(self, data: dict) -> None:
+        await self.gate.wait()
+        self.messages.append(data)
+
+
+# -- send_snapshot vs the writer queue (code-review fix) ----------------------
+#
+# send_snapshot used to send DIRECTLY on the socket, bypassing the buffered
+# queue. With a backlog present, the snapshot overtook queued older patches,
+# which then arrived after it with baseRevision below the client's new
+# revision - each refused, each refusal triggering another resync. And the
+# naive fix (plain offer()) is worse: a full queue silently drops the resync
+# snapshot, and the client's sceneResyncPending flag is only cleared by a
+# snapshot arriving, so it never asks again - wedged until reconnect.
+
+
+def test_a_snapshot_never_overtakes_nor_is_followed_by_superseded_patches():
+    async def run():
+        document = SceneDocument()
+        bus = make_bus(document)
+        gated = GatedRecorder()
+        bus.attach(gated, buffered=True)
+        node = document.add_node(0, 0, "a")
+
+        await bus.publish("scene")  # writer grabs this, then blocks on the gate
+        await asyncio.sleep(0.01)
+        for index in range(1, 5):   # a real backlog of scene patches
+            document.move_node(node.id, index, index)
+            await bus.publish("scene")
+
+        await bus.send_snapshot("scene", gated)  # must purge + join the queue
+        gated.gate.set()
+        await asyncio.sleep(0.05)
+
+        kinds = [m["kind"] for m in gated.messages]
+        assert kinds[-1] == "state", f"the snapshot must arrive LAST, got {kinds}"
+        assert "patch" not in kinds, (
+            f"superseded patches must be purged, not delivered stale: {kinds}"
+        )
+        # And the snapshot is current: it carries the last-published position.
+        snap = gated.messages[-1]["payload"]
+        assert {n["id"]: n for n in snap["nodes"]}[node.id]["x"] == 4.0
+
+    asyncio.run(run())
+
+
+def test_a_resync_snapshot_is_never_dropped_by_a_full_queue():
+    # The wedge case: sceneResyncPending is only ever cleared client-side by
+    # a snapshot arriving, so dropping the resync snapshot means the client
+    # never asks again - stuck until reconnect.
+    async def run():
+        document = SceneDocument()
+        bus = make_bus(document, send_queue_maxsize=3)
+        gated = GatedRecorder()
+        bus.attach(gated, buffered=True)
+        node = document.add_node(0, 0, "a")
+
+        await bus.publish("scene")
+        await asyncio.sleep(0.01)
+        for index in range(1, 8):  # overflow the tiny queue
+            document.move_node(node.id, index, index)
+            await bus.publish("scene")
+        assert bus._buffered[gated].dropped > 0, "precondition: the queue really overflowed"
+
+        await bus.send_snapshot("scene", gated)
+        gated.gate.set()
+        await asyncio.sleep(0.05)
+
+        assert gated.messages[-1]["kind"] == "state", (
+            "the resync snapshot must be delivered even through a full queue"
+        )
+
+    asyncio.run(run())
+
+
+def test_the_purge_keeps_stream_frames_and_other_topics_untouched():
+    # A snapshot supersedes only ITS OWN topic's state/patch frames. Stream
+    # deltas and other topics' frames are unrelated and must survive, in
+    # their original order.
+    async def run():
+        document = SceneDocument()
+        bus = make_bus(document)
+        state = {"n": 0}
+        bus.register_topic("counter", lambda: {"n": state["n"]})
+        gated = GatedRecorder()
+        bus.attach(gated, buffered=True)
+        node = document.add_node(0, 0, "a")
+
+        await bus.publish("scene")  # in the writer's hands, gate closed
+        await asyncio.sleep(0.01)
+        document.move_node(node.id, 1, 1)
+        await bus.publish("scene")                       # queued: scene patch (superseded)
+        await bus.publish_stream(
+            topic="scene", request_id="r1", seq=0, delta="hi", done=False
+        )                                                # queued: stream (kept)
+        await bus.publish("counter")                     # queued: other topic (kept)
+
+        await bus.send_snapshot("scene", gated)
+        gated.gate.set()
+        await asyncio.sleep(0.05)
+
+        tail = [(m["kind"], m["topic"]) for m in gated.messages[1:]]
+        assert tail == [("stream", "scene"), ("state", "counter"), ("state", "scene")], tail
+
+    asyncio.run(run())
+
+
+def test_send_snapshot_to_an_unbuffered_connection_is_still_synchronous():
+    async def run():
+        document = SceneDocument()
+        bus = make_bus(document)
+        recorder = Recorder()
+        bus.attach(recorder)  # unbuffered
+        document.add_node(0, 0, "a")
+        await bus.publish("scene")
+
+        await bus.send_snapshot("scene", recorder)
+
+        assert recorder.messages[-1]["kind"] == "state", (
+            "unbuffered handshake must complete before send_snapshot returns"
+        )
+
+    asyncio.run(run())
+
+
 # -- coalescing ---------------------------------------------------------------
 
 
