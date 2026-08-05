@@ -47,13 +47,31 @@
  * listener; an incompatible frame is withheld and the topic's rejection is
  * published through onVersionRejection() instead - see that method and
  * lib/ui/BridgeErrorState.tsx, the component this is finally wired to.
+ *
+ * ADR-003 stage 3.6: closes the last "vanishes silently" gap (D5) - an
+ * intent fired while not open used to be dropped with nothing but a
+ * console.error, for every one of the ~130 fireIntent call sites across
+ * the app with no exceptions. fireIntent() now takes a `queueable`
+ * opt-in: an idempotent, last-write-wins intent (a position, a view
+ * setting, a text field - never a create/delete/send/run/approve) is held
+ * in a bounded offline queue and replayed in order on the next reconnect;
+ * everything else surfaces immediately via the notification banner
+ * instead of disappearing. `ConnectionStatus` gained "reconnecting",
+ * distinct from the first-ever "connecting", so the UI can say a session
+ * is paused rather than looking identical to first load.
  */
 
 import { withAuthToken } from "../auth/token";
 import { checkSchemaCompatibility } from "../bridge-core/schemaVersion";
 import type { BridgeRejection } from "../bridge-core/islandState";
 
-export type ConnectionStatus = "connecting" | "open" | "closed";
+/** ADR-003 stage 3.6: "reconnecting" is distinct from "connecting" - the
+ * latter is the very first connection attempt on a fresh transport (nothing
+ * to pause, nothing was ever working), the former is every attempt AFTER a
+ * real connection has been lost (there is a session in progress, and the
+ * app should visibly say so rather than looking identical to first load).
+ * See connect()'s own status-selection logic. */
+export type ConnectionStatus = "connecting" | "open" | "closed" | "reconnecting";
 
 /** ADR-003 stage 3.1: raised ONLY when the server actually replied with a
  * structured {"kind":"error"} frame (unknown topic/intent, or an unhandled
@@ -72,11 +90,16 @@ export class WsTimeoutError extends Error {}
 /** ADR-003 stage 3.1 review-fix: raised for the three rejection reasons that
  * genuinely correlate with the connection-status indicator already showing
  * the user something is wrong (never connected, closed mid-request, or this
- * transport instance was disposed) - the ONLY rejection reason fireIntent()
- * swallows silently. Real disconnect UX (queue-while-reconnecting or a
- * visible "paused" state) is ADR-003 stage 3.6, not this one; until then,
- * silently dropping THESE specific three matches `intent()`'s own
- * pre-migration fire-and-forget behavior exactly. */
+ * transport instance was disposed).
+ *
+ * ADR-003 stage 3.6 update: fireIntent() no longer swallows all three
+ * unconditionally - only the disposed-transport case still does (nothing
+ * left to recover into on real teardown). "Not connected"/"closed
+ * mid-request" are now either queued (a `queueable` call - see that
+ * method's own doc) or counted and surfaced as a summary banner on the
+ * next reconnect (everything else) - "vanishes silently with no
+ * exceptions" was the exact D5 gap this stage exists to close, and this
+ * class's own three reasons were that gap's entire surface. */
 export class WsUnavailableError extends Error {}
 
 /** ADR-003 stage 3.5 review-fix: raised by request() (and so also by
@@ -201,6 +224,26 @@ export class WsTransport {
     { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }
   >();
   private nextId = 1;
+  /** ADR-003 stage 3.6: true once this transport has EVER seen a real
+   * `onopen` - what distinguishes "connecting" (first attempt, nothing to
+   * pause) from "reconnecting" (a session was in progress) in connect()'s
+   * status selection below. */
+  private hasEverConnected = false;
+  /** ADR-003 stage 3.6: intents fired with `queueable: true` while not
+   * open are held here instead of being dropped, and replayed in order on
+   * the next successful `onopen` - see fireIntent()'s own doc for exactly
+   * which intents this applies to (a per-call opt-in, not a topic-wide
+   * default) and flushOfflineQueue() for the replay. Bounded per the ADR's
+   * own "~50" - a queue exists to survive a brief drop during a real user
+   * action, not to become an unbounded backlog of everything fired while
+   * offline. */
+  private readonly offlineQueue: Array<{
+    topic: string;
+    intent: string;
+    args: unknown[];
+    timeoutMs?: number;
+  }> = [];
+  private static readonly OFFLINE_QUEUE_MAX = 50;
 
   constructor(url: string, options: WsTransportOptions = {}) {
     this.url = url;
@@ -218,7 +261,9 @@ export class WsTransport {
   connect(): void {
     if (this.socket) return;
     this.disposed = false;
-    this.setStatus("connecting");
+    // ADR-003 stage 3.6: "reconnecting", not "connecting", once a real
+    // session has existed before - see hasEverConnected's own doc.
+    this.setStatus(this.hasEverConnected ? "reconnecting" : "connecting");
     const socket = this.factory(this.url);
     this.socket = socket;
 
@@ -229,6 +274,7 @@ export class WsTransport {
     socket.onopen = () => {
       if (this.socket !== socket) return;
       this.attempts = 0;
+      this.hasEverConnected = true;
       this.setStatus("open");
       // ADR-003 stage 3.4 review-fix: patch topics are re-subscribed too.
       // This list used to come from stateListeners alone, so a consumer that
@@ -241,6 +287,10 @@ export class WsTransport {
       if (topics.length > 0) {
         socket.send(JSON.stringify({ kind: "subscribe", topics }));
       }
+      // ADR-003 stage 3.6: AFTER re-subscribing, so a replayed intent
+      // (e.g. moveNodes) applies against fresh server state rather than
+      // racing the subscribe message.
+      this.flushOfflineQueue();
     };
     socket.onmessage = (event) => {
       if (this.socket !== socket) return;
@@ -252,7 +302,20 @@ export class WsTransport {
     socket.onclose = () => {
       if (this.socket !== socket) return;
       this.socket = null;
-      this.setStatus("closed");
+      // ADR-003 stage 3.6 review-fix: the paused state has to cover the WHOLE
+      // outage, not just an in-flight connect attempt. This used to publish
+      // "closed" here and leave connect() - which only runs after a 500ms-4s
+      // backoff sleep - as the sole publisher of "reconnecting", so the badge
+      // read the bare word "closed" for essentially all the wall-clock time
+      // that intents were being queued and counted, flickering "reconnecting"
+      // for the few ms of each attempt against a refused port. That left this
+      // stage's own "visible paused state" exit criterion undelivered in
+      // practice. "closed" now means what it says: nothing is coming back.
+      if (this.disposed) {
+        this.setStatus("closed");
+      } else {
+        this.setStatus(this.hasEverConnected ? "reconnecting" : "connecting");
+      }
       this.failAllPending(new WsUnavailableError("connection closed"));
       if (!this.disposed) this.scheduleReconnect();
     };
@@ -474,12 +537,157 @@ export class WsTransport {
    * lastShowError's own doc for what this does and, just as importantly,
    * does NOT fix (two DIFFERENT concurrent failures can still race each
    * other for the one visible banner; that deeper limitation is accepted,
-   * documented residual risk, not something a per-message de-dup can close). */
-  fireIntent(topic: string, intent: string, args: unknown[] = [], timeoutMs?: number): void {
+   * documented residual risk, not something a per-message de-dup can close).
+   *
+   * ADR-003 stage 3.6: `queueable` is the new per-call opt-in that decides
+   * what happens while the transport is NOT open - it does nothing while
+   * open, where this call behaves exactly as before. Pass `true` ONLY for
+   * an intent whose effect is idempotent last-write-wins and has no side
+   * effect beyond updating already-existing data (a position, a view
+   * setting, a text field). Idempotence is a HARD requirement, not a
+   * nicety: the WsUnavailableError branch below re-queues an intent that
+   * was genuinely in flight when the socket died, and in that window the
+   * server may already have applied it with only the reply lost - so a
+   * replay is a SECOND application. That rules out every `toggle*` intent,
+   * whose backend handler flips (`x = not x`) rather than setting a value;
+   * replaying one silently reverts the user's action. See
+   * queueableClassificationGuard.test.ts, the ratchet on exactly that
+   * mistake - see also the classification this stage did across
+   * every real call site in the app (sceneStore.ts/composerStore.ts/
+   * SettingsDialog.tsx/ChatLibraryDialog.tsx) for the actual list and the
+   * reasoning behind each one. The default (`false`) is the SAFE choice:
+   * an intent that creates, deletes, sends, runs, or approves something
+   * must never be silently replayed later against scene state the user
+   * has not seen and may have since changed their mind about - instead it
+   * is COUNTED and surfaced as one summary banner the moment the
+   * connection is next able to actually deliver it (see
+   * droppedWhileOffline's own doc for why "surface it immediately" does
+   * not work here). Previously this was the ONE case fireIntent silently
+   * swallowed with no exceptions - "vanish silently" is the exact D5
+   * finding this stage exists to close. The disposed-transport case is the
+   * only one that still keeps the older silent posture (see below). A
+   * BLOCKED topic is refused rather than queued either way, but HOW that
+   * surfaces depends on the socket: while open, through request()'s own
+   * WsTopicBlockedError banner; while not open - where no banner can be
+   * delivered at all - by being counted into the reconnect summary like any
+   * other loss. */
+  fireIntent(topic: string, intent: string, args: unknown[] = [], timeoutMs?: number, queueable = false): void {
+    // ADR-003 stage 3.6 x stage 3.5 interaction: a blocked topic must NEVER
+    // enter the offline queue. Blocking exists precisely because this client
+    // cannot trust the state these args were computed against, so holding
+    // them would defer exactly that untrusted send to whenever the block
+    // lifts - and would spend the bounded queue's finite slots on intents
+    // certain to be refused anyway, displacing recoverable ones from other
+    // topics.
+    //
+    // Review-fix: it must still be COUNTED, though. An earlier version of
+    // this guard let blocked-and-offline fall through to request(), which
+    // rejects with WsTopicBlockedError - not a WsUnavailableError, so the
+    // catch below routed it to a banner that intent() then silently dropped
+    // for want of an open socket. Not queued, not counted, no banner ever:
+    // the exact D5 "vanishes silently" bug this stage exists to close,
+    // reintroduced in the one combination the guard itself created. Blocked
+    // topics are refused, and being refused is reported like any other loss.
+    if (this.status !== "open") {
+      if (queueable && !this.blockedTopics.has(topic)) {
+        this.enqueueOffline(topic, intent, args, timeoutMs);
+      } else {
+        this.droppedWhileOffline += 1;
+      }
+      return;
+    }
     this.request(topic, intent, args, timeoutMs).catch((err) => {
-      if (err instanceof WsUnavailableError) return;
+      // A disposed transport is real teardown (unmount, or StrictMode's
+      // dev-only dispose-then-remount check) - there is nothing left to
+      // recover into.
+      if (this.disposed) return;
+      if (err instanceof WsUnavailableError) {
+        // Was genuinely in flight (status was "open" when sent) and got cut
+        // off mid-request rather than refused up front - same fate as the
+        // not-open case above either way: recoverable data is queued,
+        // everything else is counted for the next reconnect's summary.
+        if (queueable) this.enqueueOffline(topic, intent, args, timeoutMs);
+        else this.droppedWhileOffline += 1;
+        return;
+      }
       this.showErrorDeduped(String(err.message));
     });
+  }
+
+  /** ADR-003 stage 3.6: how many non-queueable intents were refused while
+   * not open, since the last time this was reported. NOT surfaced
+   * immediately as each one happens: the notification banner itself is
+   * server-authoritative (notifications.py's own module doc - reused
+   * deliberately rather than building a second, client-local notification
+   * UI), which means showErrorDeduped()'s own `intent()` call needs a live
+   * connection to deliver anything at all. Trying to show a "not
+   * connected" banner AT THE MOMENT the connection is unavailable cannot
+   * work - it would just silently no-op through the exact same
+   * not-open check, reproducing the bug this stage exists to fix one
+   * layer down. Reported as a single summary count instead, the moment
+   * the connection is next actually able to deliver it - see onopen. */
+  private droppedWhileOffline = 0;
+
+  /** ADR-003 stage 3.6: holds one queueable intent for replay on the next
+   * successful reconnect - see fireIntent()'s own doc for which intents
+   * this applies to, and flushOfflineQueue() for the replay. Bounded: a
+   * queue that grows without limit while offline is itself a form of
+   * silent-loss risk deferred rather than removed (nothing guarantees the
+   * user will ever see all 500 of them applied at once on reconnect) - so
+   * past OFFLINE_QUEUE_MAX this counts the new intent as dropped (see
+   * droppedWhileOffline) rather than silently evicting an older,
+   * already-accepted one: evicting silently would just move the
+   * "vanishes with no signal" failure from the un-queued case onto the
+   * queued one. */
+  private enqueueOffline(topic: string, intent: string, args: unknown[], timeoutMs?: number): void {
+    if (this.offlineQueue.length >= WsTransport.OFFLINE_QUEUE_MAX) {
+      this.droppedWhileOffline += 1;
+      return;
+    }
+    this.offlineQueue.push({ topic, intent, args, timeoutMs });
+  }
+
+  /** ADR-003 stage 3.6: replays every queued intent, in the order they were
+   * fired, through fireIntent() itself (still `queueable: true` - if the
+   * connection drops again mid-flush, an item just re-queues via the exact
+   * same path rather than needing special-cased retry logic here). Drains
+   * the queue FIRST (rather than iterating it in place) so a re-entrant
+   * enqueue during replay - a queued intent whose OWN failure handling
+   * queues it again - can never see or grow the list this loop is
+   * currently walking.
+   *
+   * Reports droppedWhileOffline (if any) AFTER the replay, as one summary
+   * banner - by this point `status` is genuinely "open" (the caller,
+   * onopen, only calls this after setStatus("open")), which is the
+   * earliest moment showErrorDeduped's own send can actually succeed. */
+  private flushOfflineQueue(): void {
+    if (this.offlineQueue.length > 0) {
+      const queued = this.offlineQueue.splice(0, this.offlineQueue.length);
+      for (const item of queued) {
+        this.fireIntent(item.topic, item.intent, item.args, item.timeoutMs, true);
+      }
+    }
+    if (this.droppedWhileOffline > 0) {
+      const n = this.droppedWhileOffline;
+      this.droppedWhileOffline = 0;
+      // Deliberately NOT showErrorDeduped. That de-dup exists to stop one
+      // rapid-fire call site re-publishing the SAME ongoing failure on every
+      // keystroke; this message is different in kind - it is a COUNT of
+      // distinct losses, and it can only fire once per reconnect, so it is
+      // already inherently rate-limited. Routing it through the de-dup would
+      // mean two outages inside the 3s window that each lost one change
+      // report "1 change..." once and swallow the second - under-reporting
+      // real data loss, which is precisely what this stage exists to stop.
+      this.intent(
+        "notification",
+        "showError",
+        [
+          n === 1
+            ? "1 change could not be sent while disconnected."
+            : `${n} changes could not be sent while disconnected.`,
+        ],
+      );
+    }
   }
 
   /** ADR-003 stage 3.1 review-fix: the last showError message this transport

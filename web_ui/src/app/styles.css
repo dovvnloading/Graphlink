@@ -83,6 +83,14 @@ body,
   color: var(--gl-surface-text-primary);
 }
 
+/* ADR-003 stage 3.6: a real session existed and is currently paused, not
+   the muted/understated styling app-conn's base rule gives "connecting"
+   (first load, nothing was ever working) - warrants standing out the same
+   way .notification-error already does for "something needs attention". */
+.app-conn-reconnecting {
+  color: var(--gl-semantic-status-error, var(--gl-surface-text-primary));
+}
+
 /* ADR-003 stage 3.5: BridgeErrorState.tsx, first live wiring. Fills the
    canvas region it replaces (SceneCanvas.tsx renders this INSTEAD of
    CanvasInner, never alongside it) rather than floating as a small toast -

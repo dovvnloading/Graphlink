@@ -197,7 +197,7 @@ export function ChatLibraryDialog({ transport }: { transport: WsTransport }) {
   function commitRename() {
     const title = renameDraft.trim();
     if (renamingId === null || !title) return;
-    transport.fireIntent("app-chat-library", "renameChat", [renamingId, title]);
+    transport.fireIntent("app-chat-library", "renameChat", [renamingId, title], undefined, true);
     setRenamingId(null);
     lastTriggerRef.current?.focus();
   }

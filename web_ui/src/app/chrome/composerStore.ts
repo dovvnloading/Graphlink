@@ -143,18 +143,22 @@ export class ComposerStore {
   // -- intents (backend/composer.py + notifications.py, 1:1) --------------
 
   updateDraft(text: string): void {
-    this.transport.fireIntent("app-composer", "updateDraft", [text]);
+    // ADR-003 stage 3.6: queueable - the single most textbook idempotent
+    // last-write-wins case in the app; a keystroke autosave lost to a
+    // dropped connection is the exact "vanishes silently" gap this stage
+    // exists to close.
+    this.transport.fireIntent("app-composer", "updateDraft", [text], undefined, true);
   }
 
   selectModel(modelId: string): void {
     // R8a: writes the chat-task model assignment. The backend routes this
     // through the same helper the Settings > Ollama page uses, so the two
     // surfaces cannot report different models.
-    this.transport.fireIntent("app-composer", "selectModel", [modelId]);
+    this.transport.fireIntent("app-composer", "selectModel", [modelId], undefined, true);
   }
 
   setReasoningLevel(level: string): void {
-    this.transport.fireIntent("app-composer", "setReasoningLevel", [level]);
+    this.transport.fireIntent("app-composer", "setReasoningLevel", [level], undefined, true);
   }
 
   attachFile(): void {
