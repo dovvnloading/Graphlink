@@ -30,13 +30,17 @@ from typing import Literal
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from codegen import GENERATED_ARTIFACTS, schema_json_for, typescript_for  # noqa: E402
-from payload_schema import SchemaGenerationError, json_schema_for  # noqa: E402
-
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _CODEGEN = _REPO_ROOT / "contracts" / "codegen.py"
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+# ADR-003 stage 3.2: json_schema_for's source (formerly contracts/payload_schema.py)
+# moved to the repo root as graphlink_wire_schema.py - see that module's own
+# docstring for why.
+sys.path.insert(0, str(_REPO_ROOT))
+
+from codegen import GENERATED_ARTIFACTS, schema_json_for, typescript_for  # noqa: E402
+from graphlink_wire_schema import SchemaGenerationError, json_schema_for  # noqa: E402
 
 
 def _read(path: Path) -> str:

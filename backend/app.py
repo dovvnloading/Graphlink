@@ -53,6 +53,7 @@ from backend.crash_recovery import maybe_show_crash_notice
 from backend.events import (
     DEFAULT_SESSION_ID,
     EventBus,
+    IntentValidationError,
     SessionBus,
     UnknownIntentError,
     UnknownSessionError,
@@ -647,6 +648,20 @@ async def _handle_message(session: SessionBus, websocket: WebSocket, message: di
         except UnknownIntentError as exc:
             await websocket.send_json(
                 {"kind": "error", "id": msg_id, "error": f"Unknown intent: {exc.args[0]}."}
+            )
+            return
+        except IntentValidationError as exc:
+            # ADR-003 stage 3.2: a schema-validated intent's args failed
+            # BEFORE dispatch_intent ever called the handler - exc.errors are
+            # already clean, human-readable strings (validate_payload's own
+            # output, not a raw exception repr), so they're joined directly
+            # rather than routed through the generic catch-all below.
+            await websocket.send_json(
+                {
+                    "kind": "error",
+                    "id": msg_id,
+                    "error": f"Invalid arguments: {'; '.join(exc.errors)}.",
+                }
             )
             return
         except Exception:

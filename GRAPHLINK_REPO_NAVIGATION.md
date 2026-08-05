@@ -301,8 +301,7 @@ This is the practical lookup map for where code actually lives today.
 
 ### `contracts/` (build-time codegen, not runtime application code)
 
-- `codegen.py` - `GENERATED_ARTIFACTS` (11 entries), `--check`/`--write` CLI, the TS/JSON-Schema generation logic.
-- `payload_schema.py` - JSON Schema generation from Python dataclasses.
+- `codegen.py` - `GENERATED_ARTIFACTS` (11 entries), `--check`/`--write` CLI, the TS/JSON-Schema generation logic. Imports `graphlink_wire_schema.py` (repo root, not here - see below) for schema generation.
 - `graphlink_app_*_payload.py` / `graphlink_*_payload.py` - the 11 payload dataclasses (about, chat_library, composer, plugins, settings, drag_speed, font_control, grid_control, notification, scene, token_counter).
 - `tests/test_generated_artifacts.py` - parametrized over all 11 entries plus the `--check`/`--write` CLI drift tests.
 
@@ -324,6 +323,7 @@ This is the practical lookup map for where code actually lives today.
 - `graphlink_memory.py` - branch/history helpers used by `backend/canvas.py::send_message`.
 - `graphlink_chart_agent.py`, `graphlink_chart_data.py`, `graphlink_chart_rendering.py` - the chart-node pipeline (spec extraction/repair, rendering to PNG).
 - `graphlink_artifact_agent.py`, `graphlink_chat_agent.py` - LLM-facing agent logic `backend/agents.py`/`backend/canvas.py` call into.
+- `graphlink_wire_schema.py` - dataclass -> JSON Schema generation + payload validation (ADR-003 stage 3.2). Shared by `contracts/codegen.py` (dev-time TS generation) and `backend/events.py` (runtime intent-arg validation) - lives at the repo root, not inside `contracts/`, specifically so the runtime backend can import it (`contracts/` is excluded from the shipped wheel).
 
 ## Where To Edit When...
 

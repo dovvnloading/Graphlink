@@ -2,11 +2,13 @@
 isolation, broadcast resilience, intent dispatch."""
 
 import asyncio
+from dataclasses import dataclass
 
 import pytest
 
 from backend.events import (
     EventBus,
+    IntentValidationError,
     SessionBus,
     UnknownIntentError,
     UnknownTopicError,
@@ -121,3 +123,114 @@ def test_duplicate_registration_is_a_programming_error():
         bus.register_topic("counter", dict)
     with pytest.raises(AssertionError):
         bus.register_intent("counter", "bump", lambda: None)
+
+
+# -- ADR-003 stage 3.2: args_schema validation --------------------------------
+
+
+@dataclass
+class _GreetArgs:
+    name: str
+    greeting: str | None = None
+
+
+def _make_greet_session():
+    """A session with ONE args_schema-validated intent, plus a call-count
+    side channel so a test can prove the handler was or wasn't actually
+    invoked - the exit criterion is "unreachable without prior validation",
+    not just "eventually errors"."""
+    bus = SessionBus("greet-session")
+    calls = []
+
+    def greet(name, greeting=None):
+        calls.append((name, greeting))
+        return f"{greeting or 'Hello'}, {name}!"
+
+    bus.register_intent("app-test", "greet", greet, args_schema=_GreetArgs)
+    return bus, calls
+
+
+def test_args_schema_none_leaves_dispatch_unvalidated_matching_pre_3_2_behavior():
+    # No args_schema passed - the exact call shape every intent had before
+    # this stage; a wrong-arity call still raises, but as the handler's own
+    # bare TypeError (caught later by app.py's generic handler), never
+    # IntentValidationError - dispatch_intent didn't even look at args.
+    bus, _ = make_session()
+    with pytest.raises(TypeError):
+        asyncio.run(bus.dispatch_intent("counter", "bump", []))
+
+
+def test_args_schema_valid_args_call_the_handler_and_return_its_result():
+    bus, calls = _make_greet_session()
+    result = asyncio.run(bus.dispatch_intent("app-test", "greet", ["Ada"]))
+    assert result == "Hello, Ada!"
+    assert calls == [("Ada", None)]
+
+
+def test_args_schema_optional_field_can_also_be_supplied_explicitly():
+    # Review-fix: this test used to be byte-identical to the one above (both
+    # only ever omitted `greeting`), so its name promised dedicated coverage
+    # of the optional field's two valid shapes but only ever exercised one.
+    # The complementary case - `greeting` supplied explicitly, not omitted -
+    # is what actually makes this a distinct test: `X | None` optional in
+    # validate_payload means "not required if absent", not "must be absent".
+    bus, calls = _make_greet_session()
+    result = asyncio.run(bus.dispatch_intent("app-test", "greet", ["Ada", "Hey"]))
+    assert result == "Hey, Ada!"
+    assert calls == [("Ada", "Hey")]
+
+
+def test_args_schema_rejects_missing_required_field_before_calling_the_handler():
+    bus, calls = _make_greet_session()
+    with pytest.raises(IntentValidationError) as exc_info:
+        asyncio.run(bus.dispatch_intent("app-test", "greet", []))
+    assert calls == [], "the handler must never run when validation fails"
+    assert any("missing required field" in e for e in exc_info.value.errors)
+
+
+def test_args_schema_rejects_too_many_args_before_calling_the_handler():
+    bus, calls = _make_greet_session()
+    with pytest.raises(IntentValidationError) as exc_info:
+        asyncio.run(bus.dispatch_intent("app-test", "greet", ["Ada", "Hi", "extra"]))
+    assert calls == [], "the handler must never run when validation fails"
+    assert "expected at most 2 argument(s), got 3" in exc_info.value.errors[0]
+
+
+def test_args_schema_rejects_wrong_type_before_calling_the_handler():
+    bus, calls = _make_greet_session()
+    with pytest.raises(IntentValidationError) as exc_info:
+        asyncio.run(bus.dispatch_intent("app-test", "greet", [12345]))
+    assert calls == [], "the handler must never run when validation fails"
+    assert any("expected string" in e for e in exc_info.value.errors)
+
+
+def test_args_schema_rejects_null_for_a_required_field():
+    bus, calls = _make_greet_session()
+    with pytest.raises(IntentValidationError):
+        asyncio.run(bus.dispatch_intent("app-test", "greet", [None]))
+    assert calls == []
+
+
+def test_intent_validation_error_str_joins_the_errors_readably():
+    bus, _ = _make_greet_session()
+    with pytest.raises(IntentValidationError) as exc_info:
+        asyncio.run(bus.dispatch_intent("app-test", "greet", []))
+    assert str(exc_info.value) == "; ".join(exc_info.value.errors)
+
+
+def test_args_schema_rejects_a_dict_shaped_args_instead_of_silently_corrupting_the_call():
+    # Review-fix (HIGH): _handle_message (backend/app.py) builds args from
+    # `message.get("args") or []` with no shape check - a client sending a
+    # JSON OBJECT for "args" reached zip(fields, a_dict) unchanged, which
+    # pairs each schema field with the dict's KEY STRINGS, never its values.
+    # Validation could then report zero errors while the caller went on to
+    # do handler(*args) with that SAME dict - which unpacks its keys, not
+    # its values, as positional args. Empirically: dispatch_intent("app-
+    # test", "greet", {"name": "ATTACKER-CONTROLLED-VALUE"}) used to call
+    # greet("name") - the literal field name, not the real or even a
+    # rejected value - silently corrupting the call instead of failing it.
+    bus, calls = _make_greet_session()
+    with pytest.raises(IntentValidationError) as exc_info:
+        asyncio.run(bus.dispatch_intent("app-test", "greet", {"name": "ATTACKER-CONTROLLED-VALUE"}))
+    assert calls == [], "the handler must never run on a malformed (non-list) args shape"
+    assert any("expected a list" in e for e in exc_info.value.errors)

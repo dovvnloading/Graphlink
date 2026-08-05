@@ -17,7 +17,7 @@ from dataclasses import dataclass
 
 @dataclass
 class ApiModelDescriptorPayload:
-    """One entry of apiModelCatalog - payload_schema.py has no bare
+    """One entry of apiModelCatalog - graphlink_wire_schema.py has no bare
     `dict` support by design (a future-drift guard), so this mirrors the
     normalized descriptor shape backend/settings.py's load_api_models
     already builds (model_id/provider/capabilities/ready/available) as a

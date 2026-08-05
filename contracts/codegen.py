@@ -32,7 +32,16 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from payload_schema import json_schema_for
+# ADR-003 stage 3.2: json_schema_for's source (formerly contracts/payload_schema.py)
+# moved to the repo root as graphlink_wire_schema.py, so the runtime backend
+# can import the same validator without depending on contracts/ (deliberately
+# excluded from the shipped wheel - see that module's own docstring). This
+# script still runs as a bare `python contracts/codegen.py`, which only adds
+# contracts/ itself (not the repo root) to sys.path, so the repo root is
+# added explicitly rather than relying on cwd or an editable install.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from graphlink_wire_schema import json_schema_for
 
 __all__ = ["schema_json_for", "typescript_for", "GENERATED_ARTIFACTS"]
 

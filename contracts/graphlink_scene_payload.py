@@ -132,7 +132,7 @@ class ResearchResultRow:
     citations: list[ResearchCitationRow]
     warnings: list[str]
     # DEVIATION from the R5.1 spec text (which said a bare `dict`): the
-    # codegen's schema generator (payload_schema.py) has a closed,
+    # codegen's schema generator (graphlink_wire_schema.py) has a closed,
     # deliberately-narrow supported-type set that does NOT include a bare
     # `dict` or `dict[str, Any]` (there is no catch-all/`Any` case - see that
     # module's own docstring) - only `dict[str, X]` for X itself in the

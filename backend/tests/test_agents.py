@@ -3666,7 +3666,7 @@ def test_gitlink_apply_no_changes_payload_in_intent_signature():
 
     register_canvas(bus, notifications, _FakeDispatcher(), composer_document)
 
-    handler = bus._intents[("scene", "applyGitlinkChanges")]
+    handler = bus._intents[("scene", "applyGitlinkChanges")].handler
     signature = inspect.signature(handler)
     assert list(signature.parameters) == ["node_id", "fingerprint"], (
         "applyGitlinkChanges must take ONLY (node_id, fingerprint) - no changes/pending_changes param"

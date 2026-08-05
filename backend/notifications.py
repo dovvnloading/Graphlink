@@ -21,6 +21,19 @@ MessageType = Literal["info", "success", "warning", "error"]
 
 
 @dataclass
+class ShowMessageArgs:
+    """ADR-003 stage 3.2: args schema for showInfo/showError - both take
+    exactly one required string. dispatch_intent validates a real request's
+    args against this before show_info/show_error ever runs (see
+    backend/events.py's register_intent for the mechanism); a malformed call
+    (missing, wrong-typed, or extra args) is rejected with a structured error
+    instead of silently coercing via show()'s own str(message) - a non-string
+    arg used to become a display string with no complaint."""
+
+    message: str
+
+
+@dataclass
 class NotificationState:
     visible: bool = False
     message: str = ""
@@ -82,6 +95,6 @@ def register_notifications(bus: SessionBus, settings_manager: "SettingsManager |
         await bus.publish("notification")
 
     bus.register_intent("notification", "dismiss", dismiss)
-    bus.register_intent("notification", "showInfo", show_info)
-    bus.register_intent("notification", "showError", show_error)
+    bus.register_intent("notification", "showInfo", show_info, args_schema=ShowMessageArgs)
+    bus.register_intent("notification", "showError", show_error, args_schema=ShowMessageArgs)
     return state
