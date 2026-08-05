@@ -113,3 +113,99 @@ describe("real WsTransport wired to a real store (end-to-end fireIntent -> showE
     );
   });
 });
+
+// ADR-003 stage 3.5 review-fix: a 4-lens adversarial review found this exact
+// class of gap again - every layer's OWN test (transport.test.ts,
+// sceneStore.test.ts, SceneCanvas.test.tsx) mocks the boundary immediately
+// below the code it exercises, so nothing proved the real WsTransport ->
+// real SceneStore wiring (the topic-key match, the field shapes) actually
+// works end to end. sceneStore.test.ts's own makeFakeTransport explicitly
+// bypasses WsTransport.handleMessage/checkSchemaCompatibility entirely -
+// this file's whole reason to exist, per its own header doc above, is
+// closing exactly this gap for fireIntent/showError; it was not extended to
+// cover version rejection when that stage landed.
+describe("real WsTransport wired to a real SceneStore (end-to-end version rejection)", () => {
+  it("an incompatible scene frame reaches SceneStore.getSceneBlockingRejection() through the REAL transport pipeline", () => {
+    const { transport, socket } = connectRealTransport();
+    const store = new SceneStore(transport);
+    store.connect();
+    expect(store.getSceneBlockingRejection()).toBeNull();
+
+    socket.receive({
+      kind: "state",
+      topic: "scene",
+      payload: { schemaVersion: 2, minCompatibleSchemaVersion: 99, nodes: [], edges: [], pins: [] },
+    });
+
+    const rejection = store.getSceneBlockingRejection();
+    expect(rejection).toMatchObject({ kind: "version" });
+    expect(rejection!.reason).toContain("99");
+    // And the incompatible payload never reached `scene` itself.
+    expect(store.getScene().nodes).toEqual([]);
+  });
+
+  it("a subsequent compatible snapshot clears it, through the REAL transport pipeline", () => {
+    const { transport, socket } = connectRealTransport();
+    const store = new SceneStore(transport);
+    store.connect();
+
+    socket.receive({
+      kind: "state",
+      topic: "scene",
+      payload: { schemaVersion: 2, minCompatibleSchemaVersion: 99, nodes: [], edges: [], pins: [] },
+    });
+    expect(store.getSceneBlockingRejection()).not.toBeNull();
+
+    socket.receive({
+      kind: "state",
+      topic: "scene",
+      payload: {
+        schemaVersion: 2,
+        minCompatibleSchemaVersion: 2,
+        revision: 1,
+        nodes: [],
+        edges: [],
+        pins: [],
+        snapToGrid: false,
+        fadeConnectionsEnabled: false,
+        orthogonalRouting: false,
+        smartGuides: false,
+        hasSavedChat: false,
+        dragFactor: 1,
+        fontFamily: "Segoe UI",
+        fontSizePt: 9,
+        fontColor: "#F0F0F0",
+      },
+    });
+    expect(store.getSceneBlockingRejection()).toBeNull();
+  });
+
+  it("a real mutating intent is blocked and surfaced via showError while the scene topic is version-rejected", async () => {
+    const { transport, socket } = connectRealTransport();
+    const store = new SceneStore(transport);
+    store.connect();
+
+    socket.receive({
+      kind: "state",
+      topic: "scene",
+      payload: { schemaVersion: 2, minCompatibleSchemaVersion: 99, nodes: [], edges: [], pins: [] },
+    });
+
+    store.addNode(0, 0, "hello");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // The addNode intent itself never reached the wire...
+    expect(socket.sent.map((raw) => JSON.parse(raw))).not.toContainEqual(
+      expect.objectContaining({ topic: "scene", intent: "addNode" }),
+    );
+    // ...and a visible error was surfaced instead of silent loss - closing
+    // the exact gap the review found: only the canvas viewport was blocked,
+    // while every sibling call site (ViewPopover, Composer, PinOverlay, the
+    // command palette - all of which ultimately call the same store methods
+    // exercised here) kept firing real intents completely unguarded.
+    expect(socket.sent.map((raw) => JSON.parse(raw))).toContainEqual(
+      expect.objectContaining({ topic: "notification", intent: "showError" }),
+    );
+  });
+});

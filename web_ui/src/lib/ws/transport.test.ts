@@ -1,5 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { WsRequestError, WsTimeoutError, WsTransport, WsUnavailableError } from "./transport";
+import { WsRequestError, WsTimeoutError, WsTopicBlockedError, WsTransport, WsUnavailableError } from "./transport";
+import { READER_SCHEMA_VERSION } from "../bridge-core/schemaVersion";
+
+// ADR-003 stage 3.5: every real `kind:"state"`/`kind:"patch"` frame carries
+// a schemaVersion (backend/events.py's _Topic._stamp/`_publish_now` stamp it
+// unconditionally, for every topic, not just scene - see
+// test_event_bus.py's own assertion on a generic test topic). Fixtures below
+// that predate this stage used bare payloads because nothing checked the
+// field yet; they now use the reader's OWN current version rather than a
+// hardcoded number, so a future version bump does not silently make them
+// start failing for a reason unrelated to what each test actually verifies.
 
 class FakeSocket {
   static instances: FakeSocket[] = [];
@@ -63,8 +73,12 @@ describe("WsTransport", () => {
     socket.open();
     expect(socket.lastSent()).toEqual({ kind: "subscribe", topics: ["system"] });
 
-    socket.receive({ kind: "state", topic: "system", payload: { app: "graphlink", revision: 1 } });
-    expect(seen).toEqual([{ app: "graphlink", revision: 1 }]);
+    socket.receive({
+      kind: "state",
+      topic: "system",
+      payload: { schemaVersion: READER_SCHEMA_VERSION, app: "graphlink", revision: 1 },
+    });
+    expect(seen).toEqual([{ schemaVersion: READER_SCHEMA_VERSION, app: "graphlink", revision: 1 }]);
   });
 
   it("subscribing a NEW topic while open sends subscribe immediately", () => {
@@ -85,7 +99,7 @@ describe("WsTransport", () => {
     t.connect();
     const socket = FakeSocket.instances[0];
     socket.open();
-    socket.receive({ kind: "state", topic: "a", payload: { x: 1 } });
+    socket.receive({ kind: "state", topic: "a", payload: { schemaVersion: READER_SCHEMA_VERSION, x: 1 } });
     expect(a).toHaveLength(1);
     expect(b).toHaveLength(0);
   });
@@ -414,6 +428,7 @@ describe("WsTransport", () => {
     socket.receive({
       kind: "patch",
       topic: "scene",
+      schemaVersion: READER_SCHEMA_VERSION,
       revision: 7,
       baseRevision: 6,
       ops: [{ op: "removeNodes", ids: ["n0"] }],
@@ -433,7 +448,14 @@ describe("WsTransport", () => {
     const snapshots: unknown[] = [];
     t.subscribe("scene", (payload) => snapshots.push(payload));
 
-    socket.receive({ kind: "patch", topic: "scene", revision: 2, baseRevision: 1, ops: [] });
+    socket.receive({
+      kind: "patch",
+      topic: "scene",
+      schemaVersion: READER_SCHEMA_VERSION,
+      revision: 2,
+      baseRevision: 1,
+      ops: [],
+    });
 
     expect(snapshots).toEqual([]);
   });
@@ -445,7 +467,14 @@ describe("WsTransport", () => {
     const socket = FakeSocket.instances[0];
     socket.open();
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
-    socket.receive({ kind: "patch", topic: "grid-control", revision: 2, baseRevision: 1, ops: [] });
+    socket.receive({
+      kind: "patch",
+      topic: "grid-control",
+      schemaVersion: READER_SCHEMA_VERSION,
+      revision: 2,
+      baseRevision: 1,
+      ops: [],
+    });
     expect(consoleError).not.toHaveBeenCalled();
     consoleError.mockRestore();
   });
@@ -458,7 +487,14 @@ describe("WsTransport", () => {
     const seen: unknown[] = [];
     const off = t.subscribePatch("scene", (patch) => seen.push(patch));
     off();
-    socket.receive({ kind: "patch", topic: "scene", revision: 2, baseRevision: 1, ops: [] });
+    socket.receive({
+      kind: "patch",
+      topic: "scene",
+      schemaVersion: READER_SCHEMA_VERSION,
+      revision: 2,
+      baseRevision: 1,
+      ops: [],
+    });
     expect(seen).toEqual([]);
   });
 
@@ -564,5 +600,352 @@ describe("WsTransport", () => {
     socket.open();
     socket.close();
     expect(statuses).toEqual(["closed", "connecting", "open", "closed"]);
+  });
+
+  // ADR-003 stage 3.5: version negotiation moved here from the dead
+  // bridge-core/islandState.ts path. A `minCompatibleSchemaVersion` set
+  // absurdly high (rather than hand-computing "one more than the current
+  // reader") is deliberate - it stays correct across any future reader
+  // version bump instead of silently under-testing the boundary again the
+  // way transport.test.ts's own pre-3.5 fixtures under-tested this exact
+  // gap by omitting the field entirely.
+  describe("schema-version negotiation (ADR-003 stage 3.5)", () => {
+    it("withholds an incompatible state frame from the topic's snapshot listener", () => {
+      const t = makeTransport();
+      t.connect();
+      const socket = FakeSocket.instances[0];
+      socket.open();
+      const seen: unknown[] = [];
+      t.subscribe("scene", (p) => seen.push(p));
+
+      socket.receive({
+        kind: "state",
+        topic: "scene",
+        payload: { schemaVersion: 2, minCompatibleSchemaVersion: 99, nodes: [] },
+      });
+
+      expect(seen).toEqual([]);
+    });
+
+    it("withholds an incompatible patch frame from the topic's patch listener", () => {
+      const t = makeTransport();
+      t.connect();
+      const socket = FakeSocket.instances[0];
+      socket.open();
+      const seen: unknown[] = [];
+      t.subscribePatch("scene", (p) => seen.push(p));
+
+      socket.receive({
+        kind: "patch",
+        topic: "scene",
+        schemaVersion: 2,
+        minCompatibleSchemaVersion: 99,
+        revision: 2,
+        baseRevision: 1,
+        ops: [],
+      });
+
+      expect(seen).toEqual([]);
+    });
+
+    it("publishes the rejection through onVersionRejection, with a human-readable reason", () => {
+      const t = makeTransport();
+      t.connect();
+      const socket = FakeSocket.instances[0];
+      socket.open();
+      const seen: (unknown | null)[] = [];
+      t.onVersionRejection("scene", (r) => seen.push(r));
+
+      socket.receive({
+        kind: "state",
+        topic: "scene",
+        payload: { schemaVersion: 2, minCompatibleSchemaVersion: 99, nodes: [] },
+      });
+
+      // First call is the immediate "no rejection yet" delivery on subscribe.
+      expect(seen).toHaveLength(2);
+      expect(seen[0]).toBeNull();
+      expect(seen[1]).toMatchObject({ kind: "version" });
+      expect((seen[1] as { reason: string }).reason).toContain("99");
+    });
+
+    it("onVersionRejection delivers the CURRENT state immediately on subscribe, matching onStatus's contract", () => {
+      const t = makeTransport();
+      t.connect();
+      const socket = FakeSocket.instances[0];
+      socket.open();
+      socket.receive({
+        kind: "state",
+        topic: "scene",
+        payload: { schemaVersion: 2, minCompatibleSchemaVersion: 99, nodes: [] },
+      });
+
+      // Subscribing AFTER the rejection already happened must not require a
+      // second incompatible frame to find out about it.
+      const seen: (unknown | null)[] = [];
+      t.onVersionRejection("scene", (r) => seen.push(r));
+      expect(seen).toHaveLength(1);
+      expect(seen[0]).toMatchObject({ kind: "version" });
+    });
+
+    it("a subsequent compatible frame clears the rejection and resumes normal dispatch", () => {
+      const t = makeTransport();
+      t.connect();
+      const socket = FakeSocket.instances[0];
+      socket.open();
+      const rejections: (unknown | null)[] = [];
+      const snapshots: unknown[] = [];
+      t.onVersionRejection("scene", (r) => rejections.push(r));
+      t.subscribe("scene", (p) => snapshots.push(p));
+
+      socket.receive({
+        kind: "state",
+        topic: "scene",
+        payload: { schemaVersion: 2, minCompatibleSchemaVersion: 99, nodes: [] },
+      });
+      expect(snapshots).toEqual([]);
+
+      socket.receive({
+        kind: "state",
+        topic: "scene",
+        payload: { schemaVersion: 2, minCompatibleSchemaVersion: 2, nodes: [] },
+      });
+
+      expect(rejections.at(-1)).toBeNull();
+      expect(snapshots).toEqual([{ schemaVersion: 2, minCompatibleSchemaVersion: 2, nodes: [] }]);
+    });
+
+    it("does not re-fire the rejection listener for repeated frames with the identical reason", () => {
+      const t = makeTransport();
+      t.connect();
+      const socket = FakeSocket.instances[0];
+      socket.open();
+      const seen: (unknown | null)[] = [];
+      t.onVersionRejection("scene", (r) => seen.push(r));
+
+      const badFrame = {
+        kind: "state" as const,
+        topic: "scene",
+        payload: { schemaVersion: 2, minCompatibleSchemaVersion: 99, nodes: [] },
+      };
+      socket.receive(badFrame);
+      socket.receive(badFrame);
+      socket.receive(badFrame);
+
+      // The immediate null delivery on subscribe, plus exactly ONE rejection.
+      expect(seen).toHaveLength(2);
+    });
+
+    it("rejection on one topic does not affect a different topic's listener", () => {
+      const t = makeTransport();
+      t.connect();
+      const socket = FakeSocket.instances[0];
+      socket.open();
+      const sceneRejections: (unknown | null)[] = [];
+      const gridSeen: unknown[] = [];
+      t.onVersionRejection("scene", (r) => sceneRejections.push(r));
+      t.subscribe("grid-control", (p) => gridSeen.push(p));
+
+      socket.receive({
+        kind: "state",
+        topic: "scene",
+        payload: { schemaVersion: 2, minCompatibleSchemaVersion: 99, nodes: [] },
+      });
+      socket.receive({
+        kind: "state",
+        topic: "grid-control",
+        payload: { schemaVersion: READER_SCHEMA_VERSION, snapToGrid: false },
+      });
+
+      expect(sceneRejections.at(-1)).toMatchObject({ kind: "version" });
+      expect(gridSeen).toEqual([{ schemaVersion: READER_SCHEMA_VERSION, snapToGrid: false }]);
+    });
+
+    // Review-fix (test-coverage gap): the test above only pairs one
+    // REJECTED topic with one COMPATIBLE topic - nothing proved two
+    // DIFFERENT topics could be simultaneously rejected, each keeping its
+    // own distinct reason and clearing independently. The dedup/rejection
+    // state is correctly per-topic by construction (keyed Maps), but
+    // nothing would have caught a future refactor that accidentally
+    // hoisted any of it onto a shared field.
+    it("review-fix: two topics can be simultaneously rejected with independent reasons, and clear independently", () => {
+      const t = makeTransport();
+      t.connect();
+      const socket = FakeSocket.instances[0];
+      socket.open();
+      const sceneRejections: (unknown | null)[] = [];
+      const gridRejections: (unknown | null)[] = [];
+      t.onVersionRejection("scene", (r) => sceneRejections.push(r));
+      t.onVersionRejection("grid-control", (r) => gridRejections.push(r));
+
+      socket.receive({
+        kind: "state",
+        topic: "scene",
+        payload: { schemaVersion: 2, minCompatibleSchemaVersion: 99, nodes: [] },
+      });
+      socket.receive({
+        kind: "state",
+        topic: "grid-control",
+        payload: { schemaVersion: 1, minCompatibleSchemaVersion: 50, snapToGrid: false },
+      });
+
+      expect(sceneRejections.at(-1)).toMatchObject({ kind: "version" });
+      expect(gridRejections.at(-1)).toMatchObject({ kind: "version" });
+      expect((sceneRejections.at(-1) as { reason: string }).reason).toContain("99");
+      expect((gridRejections.at(-1) as { reason: string }).reason).toContain("50");
+      expect(sceneRejections.at(-1)).not.toEqual(gridRejections.at(-1));
+
+      // Re-sending scene's identical bad frame must not re-fire scene NOR
+      // touch grid-control's independent rejection.
+      socket.receive({
+        kind: "state",
+        topic: "scene",
+        payload: { schemaVersion: 2, minCompatibleSchemaVersion: 99, nodes: [] },
+      });
+      expect(sceneRejections).toHaveLength(2); // immediate-null + the one rejection
+      expect(gridRejections).toHaveLength(2);
+
+      // Clearing scene must not clear grid-control.
+      socket.receive({
+        kind: "state",
+        topic: "scene",
+        payload: { schemaVersion: 2, minCompatibleSchemaVersion: 2, nodes: [] },
+      });
+      expect(sceneRejections.at(-1)).toBeNull();
+      expect(gridRejections.at(-1)).toMatchObject({ kind: "version" });
+    });
+  });
+
+  // ADR-003 stage 3.5 review-fix: closes a real gap a 4-lens adversarial
+  // review found - only SceneCanvas checked any form of version-rejection
+  // signal; every OTHER scene-mutating call site (ViewPopover, Composer,
+  // PinOverlay, the command palette - all ~84 of sceneStore.ts's own
+  // fireIntent call sites) fired real intents completely unguarded while
+  // the client had just declared it could not trust the topic's data.
+  // setTopicBlocked is the single choke point that closes all of them at
+  // once, since every one of those call sites already funnels through
+  // request()/intent().
+  describe("setTopicBlocked (ADR-003 stage 3.5 review-fix)", () => {
+    it("request() (and so fireIntent()) rejects with WsTopicBlockedError for a blocked topic", async () => {
+      const t = makeTransport();
+      t.connect();
+      FakeSocket.instances[0].open();
+      t.setTopicBlocked("scene", true);
+
+      await expect(t.request("scene", "addNode", [0, 0, "x"])).rejects.toBeInstanceOf(WsTopicBlockedError);
+    });
+
+    it("fireIntent() surfaces a blocked-topic rejection via showError - NOT swallowed like WsUnavailableError", async () => {
+      const t = makeTransport();
+      t.connect();
+      const socket = FakeSocket.instances[0];
+      socket.open();
+      t.setTopicBlocked("scene", true);
+
+      t.fireIntent("scene", "addNode", [0, 0, "x"]);
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(socket.sent.map((raw) => JSON.parse(raw))).toContainEqual(
+        expect.objectContaining({ topic: "notification", intent: "showError" }),
+      );
+      // And the blocked intent itself was never actually sent.
+      expect(socket.sent.map((raw) => JSON.parse(raw))).not.toContainEqual(
+        expect.objectContaining({ topic: "scene", intent: "addNode" }),
+      );
+    });
+
+    it("intent() silently no-ops for a blocked topic, same posture as not-connected", () => {
+      const t = makeTransport();
+      t.connect();
+      const socket = FakeSocket.instances[0];
+      socket.open();
+      t.setTopicBlocked("scene", true);
+
+      t.intent("scene", "setSnapToGrid", [true]);
+      expect(socket.sent).toHaveLength(0);
+    });
+
+    it("unblocking resumes normal send behavior", async () => {
+      const t = makeTransport();
+      t.connect();
+      const socket = FakeSocket.instances[0];
+      socket.open();
+      t.setTopicBlocked("scene", true);
+      t.setTopicBlocked("scene", false);
+
+      const p = t.request("scene", "addNode", [0, 0, "x"]);
+      const sent = socket.lastSent();
+      expect(sent).toMatchObject({ topic: "scene", intent: "addNode" });
+      socket.receive({ kind: "result", id: sent.id, value: null });
+      await expect(p).resolves.toBeNull();
+    });
+
+    it("blocking one topic does not affect a different topic's request()/intent()", () => {
+      const t = makeTransport();
+      t.connect();
+      const socket = FakeSocket.instances[0];
+      socket.open();
+      t.setTopicBlocked("scene", true);
+
+      t.intent("notification", "showInfo", ["still works"]);
+      expect(socket.lastSent()).toEqual({
+        kind: "intent",
+        topic: "notification",
+        intent: "showInfo",
+        args: ["still works"],
+      });
+    });
+  });
+
+  // Review-fix (LOW, defensive): versionRejections had no cleanup path when
+  // a topic's listeners all unsubscribe, unlike every sibling registry in
+  // this file. Not a live bug (the app's one real subscriber never
+  // unsubscribes), but a genuine asymmetry - a short-lived subscriber that
+  // unsubscribed from a rejected topic and later resubscribed would
+  // otherwise see the transport immediately replay the stale prior
+  // rejection instead of starting clean.
+  it("review-fix: forgets a topic's cached rejection once every listener of every kind has unsubscribed", () => {
+    const t = makeTransport();
+    t.connect();
+    const socket = FakeSocket.instances[0];
+    socket.open();
+
+    const off = t.onVersionRejection("scene", () => {});
+    socket.receive({
+      kind: "state",
+      topic: "scene",
+      payload: { schemaVersion: 2, minCompatibleSchemaVersion: 99, nodes: [] },
+    });
+    off();
+
+    // A brand-new subscriber must see a clean "no rejection yet" state, not
+    // the stale one left behind by the unsubscribed listener above.
+    const seen: (unknown | null)[] = [];
+    t.onVersionRejection("scene", (r) => seen.push(r));
+    expect(seen).toEqual([null]);
+  });
+
+  it("review-fix: does NOT forget the cached rejection while a state/patch listener is still attached", () => {
+    // The cleanup must be keyed off ALL three per-topic registries, not
+    // versionRejectionListeners alone - a topic can have a live snapshot
+    // listener with no rejection listener attached.
+    const t = makeTransport();
+    t.connect();
+    const socket = FakeSocket.instances[0];
+    socket.open();
+
+    t.subscribe("scene", () => {}); // stays attached
+    const offRejection = t.onVersionRejection("scene", () => {});
+    socket.receive({
+      kind: "state",
+      topic: "scene",
+      payload: { schemaVersion: 2, minCompatibleSchemaVersion: 99, nodes: [] },
+    });
+    offRejection();
+
+    const seen: (unknown | null)[] = [];
+    t.onVersionRejection("scene", (r) => seen.push(r));
+    expect(seen).toEqual([{ kind: "version", reason: expect.any(String), details: [] }]);
   });
 });

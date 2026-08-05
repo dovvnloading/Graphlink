@@ -22,6 +22,7 @@ import type { GridControlState } from "../../lib/bridge-core/generated/grid-cont
 import type { DragSpeedState } from "../../lib/bridge-core/generated/drag-speed-state";
 import type { FontControlState } from "../../lib/bridge-core/generated/font-control-state";
 import type { ScenePatch, StreamListener, WsTransport } from "../../lib/ws/transport";
+import type { BridgeRejection } from "../../lib/bridge-core/islandState";
 
 // ADR-003 stage 3.1 review-fix: matches composerStore's own
 // NATIVE_DIALOG_TIMEOUT_MS - pickGitlinkLocalRoot opens a native OS folder
@@ -160,6 +161,25 @@ export class SceneStore {
   // per patch - see requestSceneResync for the measured failure this
   // prevents.
   private sceneResyncPending = false;
+  // ADR-003 stage 3.5: non-null while the transport has withheld the scene
+  // topic's LAST WIRE FRAME for failing schema-version negotiation - see
+  // WsTransport.onVersionRejection. `scene` above simply stops being
+  // updated while this is non-null (see connect() below), so it is correct
+  // but stale by definition the moment this becomes non-null.
+  //
+  // Review-fix: this alone is NOT the store's full "safe to act on scene
+  // data" signal - see sceneVersionRecovering below and
+  // getSceneBlockingRejection, which is what SceneCanvas.tsx actually
+  // gates on. A 4-lens adversarial review additionally found that ONLY
+  // SceneCanvas checked any form of this signal: every sibling chrome
+  // surface (ViewPopover, Composer, PinOverlay, the command palette) read
+  // `scene` directly and fired real mutating intents completely
+  // unguarded. That gap is closed at the transport layer instead
+  // (WsTransport.setTopicBlocked, kept in sync by updateSceneBlockedState
+  // below) precisely because "never read `scene` without checking this
+  // first" is not enforceable per-reader - a transport-level send-side
+  // gate is.
+  private sceneVersionRejection: BridgeRejection | null = null;
 
   constructor(private readonly transport: WsTransport) {}
 
@@ -301,6 +321,12 @@ export class SceneStore {
       return false;
     }
     this.scene = candidate;
+    // Review-fix: a successfully-applied patch is proof this client is
+    // caught up, same as a fresh snapshot landing - see
+    // sceneVersionRecovering's own doc for the recovery-edge race this
+    // closes.
+    this.sceneVersionRecovering = false;
+    this.updateSceneBlockedState();
     this.emit();
     return true;
   }
@@ -312,6 +338,9 @@ export class SceneStore {
         // ADR-003 stage 3.4 review-fix: the snapshot that closes an
         // outstanding resync request - see requestSceneResync below.
         this.sceneResyncPending = false;
+        // Review-fix: a full snapshot is also proof of being caught up.
+        this.sceneVersionRecovering = false;
+        this.updateSceneBlockedState();
       }),
       this.bind<GridControlState>("grid-control", (v) => (this.grid = v)),
       this.bind<DragSpeedState>("drag-speed", (v) => (this.dragConfig = v)),
@@ -322,7 +351,75 @@ export class SceneStore {
       this.transport.subscribePatch("scene", (patch) => {
         if (!this.applyScenePatch(patch)) this.requestSceneResync();
       }),
+      // ADR-003 stage 3.5: fires immediately with the current (usually null)
+      // state on subscribe, then again on every change - see
+      // onVersionRejection's own doc for why that matters for a component
+      // mounting after the first frame already arrived.
+      //
+      // Review-fix (2 findings from a 4-lens adversarial review, fixed
+      // together since they share the same root cause):
+      //
+      // HIGH: sceneResyncPending is cleared only by the scene bind above,
+      // which a version-rejected frame never reaches (checkVersionAndMaybeReject
+      // withholds it before dispatch) - so a resync whose own answer gets
+      // version-rejected wedges gap-recovery shut for the rest of the
+      // connection: requestSceneResync's `if (this.sceneResyncPending)
+      // return` guard silently no-ops for every LATER, unrelated gap too,
+      // with no timeout or fallback except a full transport reconnect.
+      // Fixed by clearing it here the moment a rejection fires: the
+      // resync's answer (if one was in flight) is never coming through the
+      // normal channel, so there is nothing left to wait for.
+      //
+      // MEDIUM: clearing sceneVersionRejection the instant a COMPATIBLE
+      // frame arrives is correct for a snapshot (SceneCanvas can safely
+      // unblock immediately - the bind above just replaced `scene`
+      // wholesale) but wrong for a patch: WsTransport clears the rejection
+      // synchronously in handleMessage BEFORE dispatching the patch to
+      // this store's own patchListener, so SceneCanvas can unblock and
+      // mount CanvasInner against the OLD, frozen-during-the-outage
+      // `scene` object for one tick, before applyScenePatch (a few lines
+      // below) even runs to discover the patch doesn't apply (its
+      // baseRevision reflects everything that happened server-side during
+      // the outage) and request a resync - transiently reproducing the
+      // exact "stale canvas" failure mode this whole stage exists to
+      // prevent, on the recovery edge instead of the entry edge. Fixed by
+      // sceneVersionRecovering: set true here whenever a rejection fires,
+      // cleared only once a frame is actually confirmed applied (the scene
+      // bind above, or applyScenePatch's own success path) - SceneCanvas
+      // gates on getSceneBlockingRejection(), which stays non-null across
+      // that whole window, not on the raw wire-level rejection alone.
+      this.transport.onVersionRejection("scene", (rejection) => {
+        this.sceneVersionRejection = rejection;
+        if (rejection !== null) {
+          this.sceneVersionRecovering = true;
+          this.sceneResyncPending = false;
+        }
+        this.updateSceneBlockedState();
+        this.emit();
+      }),
     );
+  }
+
+  /** ADR-003 stage 3.5 review-fix: true from the moment a rejection fires
+   * until a frame is CONFIRMED applied (not merely until the wire-level
+   * check passes) - see onVersionRejection's own doc above for the
+   * recovery-edge race this closes. */
+  private sceneVersionRecovering = false;
+
+  private isSceneBlocked(): boolean {
+    return this.sceneVersionRejection !== null || this.sceneVersionRecovering;
+  }
+
+  /** ADR-003 stage 3.5 review-fix: keeps the transport's topic-block gate
+   * (WsTransport.setTopicBlocked) in sync with this store's own combined
+   * blocked signal, so every scene-mutating call site - not just the
+   * canvas viewport - refuses to send while this client cannot currently
+   * trust the scene topic's data. A 4-lens adversarial review found this
+   * gap: only SceneCanvas checked getSceneVersionRejection; ViewPopover,
+   * Composer, PinOverlay, and the command palette all kept firing real
+   * scene-topic intents completely unguarded. */
+  private updateSceneBlockedState(): void {
+    this.transport.setTopicBlocked("scene", this.isSceneBlocked());
   }
 
   /** ADR-003 stage 3.4: recover from a detected patch gap by asking for a
@@ -373,6 +470,33 @@ export class SceneStore {
   };
 
   getScene = (): SceneState => this.scene;
+  /** Raw wire-level signal: was the LAST frame received for the scene topic
+   * incompatible? Kept for direct inspection/tests; SceneCanvas.tsx itself
+   * gates on getSceneBlockingRejection below, not this. */
+  getSceneVersionRejection = (): BridgeRejection | null => this.sceneVersionRejection;
+  // ADR-003 stage 3.5 review-fix: a single stable instance, not allocated
+  // fresh inside the getter below - useSyncExternalStore compares
+  // successive getSnapshot() results with Object.is, so a fresh object
+  // literal on every call reads as "changed" on every render and drives
+  // React into "Maximum update depth exceeded" (caught by this stage's own
+  // SceneCanvas.test.tsx recovery test, not by inspection).
+  private static readonly RECOVERING_REJECTION: BridgeRejection = {
+    kind: "version",
+    reason: "Recovering the canvas after a version mismatch…",
+    details: [],
+  };
+
+  /** ADR-003 stage 3.5 review-fix: what SceneCanvas.tsx actually renders
+   * BridgeErrorState from. Combines the raw wire-level rejection with the
+   * brief post-recovery window (sceneVersionRecovering) where a compatible
+   * frame has arrived but scene data has not yet been confirmed caught up
+   * - see connect()'s onVersionRejection callback for the race this
+   * closes. */
+  getSceneBlockingRejection = (): BridgeRejection | null => {
+    if (this.sceneVersionRejection) return this.sceneVersionRejection;
+    if (this.sceneVersionRecovering) return SceneStore.RECOVERING_REJECTION;
+    return null;
+  };
   getGrid = (): GridControlState => this.grid;
   getDragConfig = (): DragSpeedState => this.dragConfig;
   getFontConfig = (): FontControlState => this.fontConfig;

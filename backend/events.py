@@ -5,11 +5,17 @@ Wire semantics are inherited from the IslandBridge/QWebChannel layer this
 replaces, because they were already the right shape and the frontend's
 generated validators depend on them:
 
-- Server -> client: full-state snapshots only, never diffs. Every snapshot
-  carries schemaVersion / minCompatibleSchemaVersion / revision, stamped
-  here exactly as IslandBridge.publish() stamped them (a reader may accept a
-  NEWER payload than it understands - additive-only guarantee - but must
-  refuse one older than its stated minimum).
+- Server -> client: versioned state. Most topics send full-state snapshots
+  only (`kind: "state"`); the scene topic additionally emits `kind: "patch"`
+  node-scoped deltas when a smaller delta is available (ADR-003 stage 3.4),
+  with `baseRevision` letting a client detect a gap and fall back to a fresh
+  snapshot. Every message - snapshot or patch - carries schemaVersion /
+  minCompatibleSchemaVersion / revision, stamped here exactly as
+  IslandBridge.publish() stamped them (a reader may accept a NEWER payload
+  than it understands - additive-only guarantee - but must refuse one
+  older than its stated minimum; ADR-003 stage 3.5 is what actually wires a
+  client-side reader to enforce that refusal instead of leaving the fields
+  decorative).
 - Client -> server: named intents ("setGridSize", "ready", ...) addressed to
   a topic, with positional JSON args - the successor of @Slot methods.
 

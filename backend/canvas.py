@@ -303,6 +303,16 @@ def register_canvas(
         document.scene_payload,
         patch_builder=document.take_dirty_patch_ops,
         baseline_builder=document.published_scene_payload,
+        # ADR-003 stage 3.5: the patch protocol (stage 3.4) is a real breaking
+        # change for a reader that predates it - kind:"patch" previously hit
+        # the transport's unknown-kind fallback and was silently dropped, so
+        # a stale (not-yet-rebuilt) frontend bundle would keep subscribing
+        # successfully and then simply never update again. schema_version=2
+        # marks that; min_compatible=2 is what actually enforces it - it
+        # tells a v1 reader it is too old, rather than leaving the version
+        # number purely decorative (see WsTransport.onVersionRejection).
+        schema_version=2,
+        min_compatible=2,
     )
     bus.register_topic("grid-control", document.grid_payload)
     # Static preset topics, field-for-field the DragSpeedStatePayload /

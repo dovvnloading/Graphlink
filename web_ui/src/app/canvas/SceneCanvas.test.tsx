@@ -1,3 +1,5 @@
+import { ReactFlowProvider } from "@xyflow/react";
+import { act, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import {
   applyGroupDragDelta,
@@ -8,6 +10,7 @@ import {
   handleSelectionChange,
   isOrthogonalEligible,
   makeDebouncedViewportReport,
+  SceneCanvas,
   toFlowEdges,
   toFlowNodes,
   withPreservedSelection,
@@ -16,6 +19,7 @@ import {
 import type { ConversationMessage } from "./ConversationNodeView";
 import { SceneStore, initialSceneState } from "./sceneStore";
 import type { WsTransport } from "../../lib/ws/transport";
+import type { BridgeRejection } from "../../lib/bridge-core/islandState";
 import type { SceneNodeRow, SceneState } from "../../lib/bridge-core/generated/scene-state";
 
 // toFlowNodes is exported standalone specifically so this doesn't need a
@@ -2590,5 +2594,135 @@ describe("toFlowNodes (R8a Hide Other Branches wiring)", () => {
       data.onToggleBranchFocus();
     }
     expect(calls).toEqual(["A", "B", "X", "Y", "Z", "W"]);
+  });
+});
+
+// ADR-003 stage 3.5: the exported <SceneCanvas> wrapper - not <CanvasInner> -
+// is where the version-rejection gate lives (see SceneCanvas.tsx's own
+// comment on it), so this is the first test in this file to actually
+// render a component rather than exercise a pure exported function. Kept
+// to exactly that one behavior (rejected -> the error, not rejected -> the
+// error is absent) rather than also re-proving CanvasInner's own rendering,
+// which the rest of this file already covers indirectly through
+// toFlowNodes/toFlowEdges.
+describe("SceneCanvas version-rejection gate (ADR-003 stage 3.5)", () => {
+  type VersionRejectionListener = (rejection: BridgeRejection | null) => void;
+
+  type StateListener = (payload: Record<string, unknown>) => void;
+
+  function makeStoreWithVersionControl() {
+    const versionRejectionListeners = new Map<string, VersionRejectionListener>();
+    const stateListeners = new Map<string, StateListener>();
+    const transport = {
+      subscribe: vi.fn((topic: string, listener: StateListener) => {
+        stateListeners.set(topic, listener);
+        return () => stateListeners.delete(topic);
+      }),
+      intent: vi.fn(),
+      fireIntent: vi.fn(),
+      subscribePatch: vi.fn(),
+      onVersionRejection: vi.fn((topic: string, listener: VersionRejectionListener) => {
+        versionRejectionListeners.set(topic, listener);
+        listener(null);
+        return () => versionRejectionListeners.delete(topic);
+      }),
+      // ADR-003 stage 3.5 review-fix: connect() calls this unconditionally.
+      setTopicBlocked: vi.fn(),
+    } as unknown as WsTransport;
+    const store = new SceneStore(transport);
+    store.connect();
+    return { store, versionRejectionListeners, stateListeners };
+  }
+
+  it("renders BridgeErrorState, with the server's own reason, instead of the canvas when the scene topic is rejected", () => {
+    const { store, versionRejectionListeners } = makeStoreWithVersionControl();
+    versionRejectionListeners.get("scene")!({
+      kind: "version",
+      reason: "The desktop app requires an interface of at least schema version 2.",
+      details: [],
+    });
+
+    render(
+      <ReactFlowProvider>
+        <SceneCanvas store={store} onOpenDocumentView={() => {}} />
+      </ReactFlowProvider>,
+    );
+
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent("Canvas unavailable");
+    expect(alert).toHaveTextContent("The desktop app requires an interface of at least schema version 2.");
+    // The version-specific hint, not the generic bug one - see
+    // BridgeErrorState.tsx's own kind-branch.
+    expect(alert).toHaveTextContent("Rebuilding the app's interface assets usually resolves this.");
+  });
+
+  it("renders no alert when the scene topic has not been rejected", () => {
+    const { store } = makeStoreWithVersionControl();
+
+    render(
+      <ReactFlowProvider>
+        <SceneCanvas store={store} onOpenDocumentView={() => {}} />
+      </ReactFlowProvider>,
+    );
+
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("a real recovering snapshot clears the error and the canvas takes over", () => {
+    // Review-fix: recovery is proven with a REAL scene snapshot landing
+    // (the store's own bind("scene", ...) callback, which is what actually
+    // confirms the client is caught up), not by firing the raw
+    // version-rejection callback alone. The wire-level rejection clearing
+    // by itself is deliberately NOT enough to unblock the canvas any more
+    // - see the next test for exactly why.
+    const { store, versionRejectionListeners, stateListeners } = makeStoreWithVersionControl();
+    versionRejectionListeners.get("scene")!({ kind: "version", reason: "too old", details: [] });
+
+    render(
+      <ReactFlowProvider>
+        <SceneCanvas store={store} onOpenDocumentView={() => {}} />
+      </ReactFlowProvider>,
+    );
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+
+    // The store's emit() fires synchronously from a plain callback, outside
+    // any React event handler - act() is what makes React flush the
+    // resulting re-render before the assertion below reads the DOM.
+    act(() => {
+      versionRejectionListeners.get("scene")!(null);
+      stateListeners.get("scene")!(baseScene() as unknown as Record<string, unknown>);
+    });
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("review-fix: the blocking error stays up through the recovery window - clearing the wire-level rejection ALONE does not unblock the canvas", () => {
+    // This is the exact race a 4-lens adversarial review found: WsTransport
+    // clears the version rejection the instant a COMPATIBLE frame arrives,
+    // synchronously and BEFORE dispatching that frame to any listener - so
+    // if the canvas gated on the raw rejection signal alone, it would
+    // briefly mount against whatever stale `scene` data the store was
+    // still holding from before the outage, for the one tick between the
+    // rejection clearing and the store actually catching up. Proven here
+    // by clearing ONLY the rejection (never delivering a snapshot/patch
+    // that would let the store confirm it's caught up) and asserting the
+    // error is still shown, not silently swapped for a stale canvas.
+    const { store, versionRejectionListeners } = makeStoreWithVersionControl();
+    versionRejectionListeners.get("scene")!({ kind: "version", reason: "too old", details: [] });
+
+    render(
+      <ReactFlowProvider>
+        <SceneCanvas store={store} onOpenDocumentView={() => {}} />
+      </ReactFlowProvider>,
+    );
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+
+    act(() => {
+      versionRejectionListeners.get("scene")!(null);
+    });
+
+    // Still blocked - recovering, not yet confirmed caught up. If this
+    // were null, CanvasInner would have just mounted against stale data.
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    expect(store.getSceneBlockingRejection()).not.toBeNull();
   });
 });

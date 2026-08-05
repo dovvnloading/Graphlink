@@ -118,6 +118,29 @@ def test_subscribe_delivers_system_snapshot_with_envelope():
         assert payload["revision"] == 0
 
 
+def test_scene_subscribe_snapshot_is_pinned_at_schema_version_2():
+    # ADR-003 stage 3.5: canvas.py's real register_topic("scene", ...) call -
+    # not some test harness's own bus wiring (test_scene_patch_protocol.py's
+    # make_scene_bus deliberately stays at the default 1/1, since it tests
+    # the patch-protocol MACHINERY generically, decoupled from what any one
+    # topic sets it to) - is what the frontend's WsTransport actually talks
+    # to. This is what would have silently drifted back to schemaVersion 1
+    # with no test noticing, defeating stage 3.5's whole point: the patch
+    # protocol (kind:"patch") is a real breaking change for a reader that
+    # predates it, and min_compatible=2 is what lets WsTransport.
+    # onVersionRejection ever actually fire for a stale frontend build - see
+    # backend/canvas.py's own comment on the registration.
+    client = make_client()
+    with client.websocket_connect("/ws?session=default") as ws:
+        ws.send_json({"kind": "subscribe", "topics": ["scene"]})
+        message = ws.receive_json()
+        assert message["kind"] == "state"
+        assert message["topic"] == "scene"
+        payload = message["payload"]
+        assert payload["schemaVersion"] == 2
+        assert payload["minCompatibleSchemaVersion"] == 2
+
+
 def test_subscribe_without_topics_sends_every_registered_topic():
     client = make_client()
     with client.websocket_connect("/ws") as ws:

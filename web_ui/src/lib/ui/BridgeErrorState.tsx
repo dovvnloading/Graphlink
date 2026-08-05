@@ -19,6 +19,18 @@ import type { BridgeRejection } from "../bridge-core/islandState";
  * remain deferred: none of them yet have two independent real
  * implementations to generalize a correct shape from.
  *
+ * Historical note (a 4-lens adversarial review of ADR-003 stage 3.5 found
+ * this paragraph had gone stale and asked for it to be corrected rather
+ * than left implying current-day precedent that isn't there to check): the
+ * 4 islands above existed in the pre-consolidation islands architecture
+ * (deleted in commit 5b0b764, itself superseded two days later by the
+ * chrome-consolidation rewrite in 5434b40, which did not carry this
+ * wiring forward). None of today's Composer.tsx/TokenCounter.tsx/
+ * NotificationBanner.tsx/CommandPalette.tsx render this component. The
+ * scene topic (SceneCanvas.tsx, ADR-003 stage 3.5) is this component's
+ * first REAL live usage - the reference to copy from if wiring one of
+ * those 4 (or a future 5th) island up to this for real.
+ *
  * className is intentionally still owned by the calling island, not baked
  * in here - each island's own background/border/width for its error surface
  * legitimately differs (token-counter is a fixed-width HUD panel; the
