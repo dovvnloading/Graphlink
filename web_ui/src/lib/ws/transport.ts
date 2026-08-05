@@ -73,6 +73,25 @@ export type StateListener = (payload: Record<string, unknown>) => void;
 export type StatusListener = (status: ConnectionStatus) => void;
 export type StreamListener = (delta: string, done: boolean, reset: boolean, seq: number) => void;
 
+/** ADR-003 stage 3.4: one node-scoped delta from a `kind:"patch"` frame.
+ * Deliberately typed loosely here (`Record<string, unknown>` for the node/
+ * edge bodies) - the transport's job is routing, not validating; the store
+ * runs the real generated validator on the result of applying these, which
+ * is what actually guarantees the shape. */
+export type ScenePatchOp = Record<string, unknown> & { op: string };
+
+/** ADR-003 stage 3.4: a patch frame's contents, handed to a patch listener.
+ * `baseRevision` is the revision the server believes this client is at; a
+ * client whose own revision differs has missed a frame and must re-snapshot
+ * rather than apply this out of order. */
+export interface ScenePatch {
+  revision: number;
+  baseRevision: number;
+  ops: ScenePatchOp[];
+}
+
+export type PatchListener = (patch: ScenePatch) => void;
+
 interface WsLike {
   send(data: string): void;
   close(): void;
@@ -120,6 +139,13 @@ export class WsTransport {
   /** Keyed by requestId - stream deltas are addressed to a specific in-flight
    * request, not a topic. See handleMessage()'s "stream" branch. */
   private readonly streamListeners = new Map<string, Set<StreamListener>>();
+  /** ADR-003 stage 3.4: keyed by topic, like stateListeners, but a separate
+   * Map rather than a widened StateListener signature - mirroring how
+   * streamListeners is already its own parallel registry. A topic can have
+   * both (the scene topic does): its snapshot listener still receives every
+   * `kind:"state"` frame unchanged, and only patch frames route here, so a
+   * consumer that never opts into patches keeps working untouched. */
+  private readonly patchListeners = new Map<string, Set<PatchListener>>();
   private readonly pending = new Map<
     number,
     { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }
@@ -203,6 +229,38 @@ export class WsTransport {
     return () => {
       set.delete(listener);
       if (set.size === 0) this.stateListeners.delete(topic);
+    };
+  }
+
+  /** ADR-003 stage 3.4: re-request a topic's current full snapshot.
+   *
+   * `subscribe()` above sends its subscribe message only for a topic's FIRST
+   * listener (the isNewTopic guard), so an already-subscribed topic has no
+   * way to ask for fresh state through it - this is that missing half, used
+   * by the scene store to self-heal after a detected patch gap. Silently
+   * no-ops while the socket is not open, matching intent()'s own
+   * pre-connect behavior: reconnecting re-subscribes every topic from
+   * scratch anyway, which resolves the gap by itself. */
+  resubscribe(topic: string): void {
+    if (this.status !== "open" || !this.socket) return;
+    this.socket.send(JSON.stringify({ kind: "subscribe", topics: [topic] }));
+  }
+
+  /** ADR-003 stage 3.4: listen for a topic's `kind:"patch"` deltas. Sends no
+   * subscribe message of its own - patches arrive on the SAME server-side
+   * topic subscription `subscribe()` already established, so a consumer that
+   * wants both calls both (the scene store does: snapshots are still the
+   * reconnect/resync answer, patches are the steady-state path). */
+  subscribePatch(topic: string, listener: PatchListener): () => void {
+    let set = this.patchListeners.get(topic);
+    if (!set) {
+      set = new Set();
+      this.patchListeners.set(topic, set);
+    }
+    set.add(listener);
+    return () => {
+      set.delete(listener);
+      if (set.size === 0) this.patchListeners.delete(topic);
     };
   }
 
@@ -329,6 +387,24 @@ export class WsTransport {
       if (listeners) {
         const payload = message.payload as Record<string, unknown>;
         for (const listener of [...listeners]) listener(payload);
+      }
+      return;
+    }
+    if (kind === "patch") {
+      // ADR-003 stage 3.4. A patch frame for a topic with no patch
+      // subscriber is dropped SILENTLY rather than logged: the server sends
+      // patches to every connection on the topic, and a consumer opting
+      // into snapshots only (every topic except scene today) is a supported
+      // configuration, not an anomaly - same posture as the stream branch
+      // below, and deliberately unlike the unknown-kind fallback at the end.
+      const listeners = this.patchListeners.get(message.topic as string);
+      if (listeners) {
+        const patch: ScenePatch = {
+          revision: message.revision as number,
+          baseRevision: message.baseRevision as number,
+          ops: (message.ops as ScenePatchOp[]) ?? [],
+        };
+        for (const listener of [...listeners]) listener(patch);
       }
       return;
     }

@@ -17,11 +17,11 @@
  */
 
 import { TOPIC_VALIDATORS } from "../../lib/api-contract/topics";
-import type { SceneState } from "../../lib/bridge-core/generated/scene-state";
+import type { SceneEdgeRow, SceneNodeRow, SceneState } from "../../lib/bridge-core/generated/scene-state";
 import type { GridControlState } from "../../lib/bridge-core/generated/grid-control-state";
 import type { DragSpeedState } from "../../lib/bridge-core/generated/drag-speed-state";
 import type { FontControlState } from "../../lib/bridge-core/generated/font-control-state";
-import type { StreamListener, WsTransport } from "../../lib/ws/transport";
+import type { ScenePatch, StreamListener, WsTransport } from "../../lib/ws/transport";
 
 // ADR-003 stage 3.1 review-fix: matches composerStore's own
 // NATIVE_DIALOG_TIMEOUT_MS - pickGitlinkLocalRoot opens a native OS folder
@@ -139,13 +139,109 @@ export class SceneStore {
     });
   }
 
+  /** ADR-003 stage 3.4: apply one `kind:"patch"` frame's ops on top of the
+   * current scene, in place of a full snapshot.
+   *
+   * Returns false when the patch cannot be safely applied, which happens in
+   * exactly one case: its baseRevision does not match the revision this
+   * client is actually at, meaning a frame was missed and applying this one
+   * would silently produce a scene that never existed on the server. There
+   * is no partial/best-effort application - a gap is unrecoverable locally
+   * by construction (the missing ops are the only thing that could close
+   * it), so the caller re-snapshots instead. That self-healing fallback is
+   * why the protocol needs no divergence debugging: any doubt resolves to
+   * "ask for the truth again".
+   *
+   * Untouched nodes keep their EXACT existing object references (only
+   * changed/added ones are new objects). Nothing in the app benefits from
+   * that today - SceneCanvas.tsx's toFlowNodes still rebuilds every flow
+   * node on every scene change, and the SPA has no React.memo anywhere -
+   * but it is the property ADR-011 stage 11.1's memoization depends on, and
+   * preserving it here costs nothing while retrofitting it later would mean
+   * revisiting this code. */
+  private applyScenePatch(patch: ScenePatch): boolean {
+    if (patch.baseRevision !== this.scene.revision) return false;
+    let nodes = this.scene.nodes;
+    let edges = this.scene.edges;
+    let meta: Record<string, unknown> = {};
+    for (const op of patch.ops) {
+      switch (op.op) {
+        case "upsertNode": {
+          const node = op.node as SceneNodeRow;
+          const index = nodes.findIndex((n) => n.id === node.id);
+          nodes = index === -1 ? [...nodes, node] : nodes.map((n, i) => (i === index ? node : n));
+          break;
+        }
+        case "removeNodes": {
+          const ids = new Set(op.ids as string[]);
+          nodes = nodes.filter((n) => !ids.has(n.id));
+          break;
+        }
+        case "upsertEdge": {
+          const edge = op.edge as SceneEdgeRow;
+          const index = edges.findIndex((e) => e.id === edge.id);
+          edges = index === -1 ? [...edges, edge] : edges.map((e, i) => (i === index ? edge : e));
+          break;
+        }
+        case "removeEdges": {
+          const ids = new Set(op.ids as string[]);
+          edges = edges.filter((e) => !ids.has(e.id));
+          break;
+        }
+        case "setView":
+          meta = { ...meta, ...(op.view as Record<string, unknown>) };
+          break;
+        case "setMeta":
+          meta = { ...meta, ...(op.meta as Record<string, unknown>) };
+          break;
+        default:
+          // An op kind this client does not know is a real protocol gap, not
+          // a routine occurrence - refuse the whole patch and re-snapshot
+          // rather than applying the ops around it and silently ending up
+          // with a scene missing whatever that op carried.
+          console.error("[scene] unknown patch op, re-snapshotting:", op.op);
+          return false;
+      }
+    }
+    this.scene = { ...this.scene, ...meta, nodes, edges, revision: patch.revision };
+    this.emit();
+    return true;
+  }
+
   connect(): void {
     this.unsubscribers.push(
       this.bind<SceneState>("scene", (v) => (this.scene = v)),
       this.bind<GridControlState>("grid-control", (v) => (this.grid = v)),
       this.bind<DragSpeedState>("drag-speed", (v) => (this.dragConfig = v)),
       this.bind<FontControlState>("font-control", (v) => (this.fontConfig = v)),
+      // ADR-003 stage 3.4: patches ride the SAME server-side subscription
+      // the snapshot bind above established, so this adds a listener, not a
+      // second subscribe. Snapshots remain the reconnect/resync answer.
+      this.transport.subscribePatch("scene", (patch) => {
+        if (!this.applyScenePatch(patch)) this.requestSceneResync();
+      }),
     );
+  }
+
+  /** ADR-003 stage 3.4: recover from a detected patch gap by asking for a
+   * fresh full snapshot.
+   *
+   * Re-uses the EXISTING `subscribe` message rather than adding a resync
+   * intent: its server-side handler (app.py's _handle_message) already does
+   * exactly and only what a resync needs - send this topic's current
+   * snapshot to THIS connection, without advancing the shared revision or
+   * disturbing any other connection. A new intent would have had to
+   * re-derive that from scratch, and intents cannot address the requesting
+   * connection anyway (dispatch_intent has no connection handle), so it
+   * would have had to broadcast to everyone instead.
+   *
+   * Deliberately fire-and-forget: a resync is this client's own recovery
+   * bookkeeping, not a user action, so a transient failure must not raise
+   * an error banner at someone who did nothing wrong - and it is
+   * self-correcting anyway, since the next patch detects the same
+   * still-unclosed gap and asks again. */
+  private requestSceneResync(): void {
+    this.transport.resubscribe("scene");
   }
 
   dispose(): void {

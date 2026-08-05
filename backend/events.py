@@ -81,6 +81,13 @@ from graphlink_wire_schema import validate_payload
 logger = logging.getLogger(__name__)
 
 StateBuilder = Callable[[], dict[str, Any]]
+# ADR-003 stage 3.4: a topic's optional delta source. Returns the ops
+# accumulated since its own last call, or None meaning "no dirty state
+# recorded - send a full snapshot instead". See SessionBus.publish()'s own
+# docstring for why None must never be conflated with an empty ops list,
+# and backend/domain/graph.py's take_dirty_patch_ops for the one real
+# implementation.
+PatchBuilder = Callable[[], list[dict[str, Any]] | None]
 IntentHandler = Callable[..., Any | Awaitable[Any]]
 
 # The one session id every real window uses (confirmed by grep:
@@ -174,22 +181,53 @@ class _IntentRegistration:
 
 
 class _Topic:
-    __slots__ = ("name", "builder", "schema_version", "min_compatible", "revision")
+    __slots__ = ("name", "builder", "patch_builder", "schema_version", "min_compatible", "revision")
 
-    def __init__(self, name: str, builder: StateBuilder, schema_version: int, min_compatible: int):
+    def __init__(
+        self,
+        name: str,
+        builder: StateBuilder,
+        schema_version: int,
+        min_compatible: int,
+        patch_builder: PatchBuilder | None = None,
+    ):
         self.name = name
         self.builder = builder
+        self.patch_builder = patch_builder
         self.schema_version = schema_version
         self.min_compatible = min_compatible
         self.revision = 0
 
     def snapshot(self) -> dict[str, Any]:
-        self.revision += 1
+        """Build the current full-state payload, stamped at the CURRENT
+        revision - it does NOT advance it.
+
+        ADR-003 stage 3.4 fixed a real bug here: this method used to do
+        `self.revision += 1` itself, and it is called from BOTH publish()
+        (a real broadcast every attached connection sees) AND
+        send_snapshot() (one connection's private subscribe handshake,
+        never broadcast). So a second window merely subscribing silently
+        advanced the number every OTHER connection was tracking, with no
+        corresponding message ever sent to them. Harmless while `revision`
+        was a decorative envelope field nobody compared; actively wrong now
+        that it is the baseRevision the patch protocol uses to decide "did
+        I miss a message?" - an unrelated subscribe would have manufactured
+        a phantom gap and forced every other client into a needless
+        re-snapshot. Advancing the revision is now the exclusive job of
+        bump_revision() below, called only on a real broadcast."""
         payload = dict(self.builder())
         payload["schemaVersion"] = self.schema_version
         payload["minCompatibleSchemaVersion"] = self.min_compatible
         payload["revision"] = self.revision
         return payload
+
+    def bump_revision(self) -> int:
+        """Advance to the next revision - called ONLY from publish(), i.e.
+        exactly once per real broadcast, so `revision` means "how many
+        state-changing messages every connection has been sent" rather than
+        the pre-3.4 "how many times the builder happened to run"."""
+        self.revision += 1
+        return self.revision
 
 
 class SessionBus:
@@ -219,9 +257,19 @@ class SessionBus:
         *,
         schema_version: int = 1,
         min_compatible: int = 1,
+        patch_builder: PatchBuilder | None = None,
     ) -> None:
+        """`patch_builder`, when given, opts this topic into ADR-003 stage
+        3.4's delta protocol: publish() asks it for the ops accumulated
+        since the last publish and, when it returns a non-empty list, sends
+        a `kind: "patch"` message instead of a full snapshot. Omitting it
+        (the default) keeps the topic full-snapshot-only, which is the
+        deliberate, permanent answer for the 11 small topics whose whole
+        payload is smaller than the bookkeeping a delta would need - only
+        the scene topic is large enough to be worth it (see the ADR's own
+        Decision text)."""
         assert name not in self._topics, f"topic {name!r} registered twice"
-        self._topics[name] = _Topic(name, builder, schema_version, min_compatible)
+        self._topics[name] = _Topic(name, builder, schema_version, min_compatible, patch_builder)
 
     def register_intent(
         self,
@@ -295,27 +343,70 @@ class SessionBus:
     # -- state flow --------------------------------------------------------
 
     async def publish(self, topic: str) -> dict[str, Any]:
-        """Build a fresh snapshot for `topic` and broadcast it to every
-        attached connection. Returns the snapshot (tests + send-current-state
-        on subscribe both want it)."""
+        """Broadcast `topic`'s current state to every attached connection -
+        as an ADR-003 stage 3.4 `kind: "patch"` delta when the topic has a
+        patch_builder that reports real changes, else as the full
+        `kind: "state"` snapshot. Returns the snapshot either way (tests +
+        callers that want the resulting state both rely on this, and it is
+        cheap: the scene builder runs regardless for the fallback decision
+        only when no patch was available).
+
+        The patch/snapshot decision is deliberately fail-safe in one
+        direction: ANY doubt sends the full snapshot. A patch_builder that
+        returns None ("nothing marked dirty") means the mutation ran
+        through a mutator that does not participate in dirty-tracking yet,
+        which is indistinguishable here from "genuinely nothing changed" -
+        and the full snapshot is correct for both. An EMPTY ops list is
+        treated identically rather than being sent as a real patch: a patch
+        carrying no ops tells the client "your baseRevision is now stale"
+        while giving it nothing to apply, which is strictly worse than
+        either sending real state or staying silent."""
         t = self._topics.get(topic)
         if t is None:
             raise UnknownTopicError(topic)
+        ops = t.patch_builder() if t.patch_builder is not None else None
+        if ops:
+            base_revision = t.revision
+            revision = t.bump_revision()
+            await self._broadcast({
+                "kind": "patch",
+                "topic": topic,
+                "revision": revision,
+                "baseRevision": base_revision,
+                "ops": ops,
+            })
+            # The caller's return value must still be real current state,
+            # not the delta - building it here costs one extra builder run
+            # on a path that just avoided sending one, and every existing
+            # caller/test predates the patch protocol entirely.
+            return t.snapshot()
+        t.bump_revision()
         snapshot = t.snapshot()
-        message = {"kind": "state", "topic": topic, "payload": snapshot}
-        # Snapshot the set: a failed send detaches the connection mid-loop.
+        await self._broadcast({"kind": "state", "topic": topic, "payload": snapshot})
+        return snapshot
+
+    async def _broadcast(self, message: dict[str, Any]) -> None:
+        """Send one message to every attached connection, detaching any that
+        fails. Snapshot the set first: a failed send detaches mid-loop, and a
+        dead socket must never poison the broadcast for the rest."""
         for conn in list(self._connections):
             try:
                 await conn.send_json(message)
             except Exception:
-                # A dead socket must never poison the broadcast for the rest.
                 logger.warning("dropping dead connection on session %s", self.session_id)
                 self.detach(conn)
-        return snapshot
 
     async def send_snapshot(self, topic: str, conn: Connection) -> None:
         """Send the current state of one topic to one connection (the
-        subscribe handshake - the successor of loadFinished -> publish())."""
+        subscribe handshake - the successor of loadFinished -> publish()).
+
+        Deliberately does NOT advance the topic's revision (see
+        _Topic.snapshot's own docstring): this reaches exactly one
+        connection and is invisible to every other, so advancing the shared
+        counter here would manufacture a phantom gap in the patch
+        protocol's baseRevision chain for everyone else. The receiving
+        connection is now, correctly, exactly in sync at the current
+        revision."""
         t = self._topics.get(topic)
         if t is None:
             raise UnknownTopicError(topic)
@@ -352,14 +443,7 @@ class SessionBus:
             "done": done,
             "reset": reset,
         }
-        # Snapshot the set: a failed send detaches the connection mid-loop -
-        # same defensive shape as publish() above.
-        for conn in list(self._connections):
-            try:
-                await conn.send_json(message)
-            except Exception:
-                logger.warning("dropping dead connection on session %s", self.session_id)
-                self.detach(conn)
+        await self._broadcast(message)
 
     def topic_names(self) -> list[str]:
         return sorted(self._topics)
