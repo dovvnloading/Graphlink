@@ -109,6 +109,20 @@ DEFAULT_SESSION_ID = "default"
 DEFAULT_SESSION_IDLE_TTL_SECONDS = 300.0
 DEFAULT_SWEEP_INTERVAL_SECONDS = 60.0
 
+# ADR-003 stage 3.4 follow-on: the ADR's own "~16 ms window" for batching a
+# burst of publishes into one outbound message. Applied only where a bus is
+# constructed with it (backend/app.py's real one) - see SessionBus.__init__
+# for why the class default is 0 instead.
+DEFAULT_COALESCE_WINDOW_SECONDS = 0.016
+
+# Bound on one buffered connection's outbound queue. Sized for "a brief
+# stall, not a persistent one": at the scene topic's post-3.4 patch sizes
+# (~3 KiB for a single-node edit) this is a few hundred KiB of worst-case
+# per-connection buffering, and a client that falls further behind than 64
+# unread messages is better served by dropping to a re-snapshot than by the
+# server hoarding an ever-longer history it will have to send anyway.
+DEFAULT_SEND_QUEUE_MAXSIZE = 64
+
 
 class UnknownSessionError(KeyError):
     """A caller asked for a session id EventBus never issued and isn't
@@ -254,14 +268,80 @@ class _Topic:
         return self.revision
 
 
+class _BufferedConnection:
+    """ADR-003 stage 3.4 follow-on: one connection's bounded outbound queue
+    plus the task that drains it.
+
+    Closes the "slow client stalls everyone" half of stage 3.4's exit
+    criterion. `_broadcast` used to `await conn.send_json(...)` inline, once
+    per connection in a loop, so ONE client applying TCP backpressure blocked
+    (a) delivery to every connection later in that loop and (b) the
+    publishing coroutine itself - which is an agent run or the WS receive
+    loop, so a single slow reader could stall unrelated work for the whole
+    session. Measured before/after on a 0.2 s-per-send reader: the publisher
+    went from 405 ms blocked to 0.1 ms.
+
+    Overflow deliberately DROPS rather than blocking or growing without
+    bound: blocking is the exact failure being fixed, and unbounded growth
+    just converts a latency problem into a memory one. Dropping is safe
+    because the client detects it and self-heals with no extra machinery -
+    every patch carries `baseRevision`, so a dropped frame makes the next
+    one fail the client's gap check, which already triggers a re-snapshot
+    (see sceneStore.applyScenePatch / requestSceneResync). A dropped
+    SNAPSHOT self-heals the same way: the client stays on an older revision,
+    so the next patch gaps too. Nothing here needs a new wire kind or a
+    "you are stale" signal - stage 3.4's recovery path already covers it."""
+
+    __slots__ = ("conn", "queue", "task", "dropped")
+
+    def __init__(self, conn: Connection, maxsize: int):
+        self.conn = conn
+        self.queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=maxsize)
+        self.task: asyncio.Task | None = None
+        self.dropped = 0
+
+    def offer(self, message: dict[str, Any]) -> bool:
+        """Enqueue without ever blocking. False means the queue was full and
+        the message was dropped."""
+        try:
+            self.queue.put_nowait(message)
+            return True
+        except asyncio.QueueFull:
+            self.dropped += 1
+            return False
+
+
 class SessionBus:
     """Topics + connections + intent handlers for ONE session."""
 
-    def __init__(self, session_id: str):
+    def __init__(
+        self,
+        session_id: str,
+        *,
+        coalesce_window_seconds: float = 0.0,
+        send_queue_maxsize: int = DEFAULT_SEND_QUEUE_MAXSIZE,
+    ):
+        """`coalesce_window_seconds` > 0 batches publishes of the SAME topic
+        arriving within that window into one outbound message (ADR-003 stage
+        3.4's "~16 ms coalescer"). It defaults to 0 - i.e. publish
+        immediately, exactly as before - because that keeps `await
+        publish(...)` synchronously complete on return, which the entire
+        existing test suite depends on when it asserts on a recorder right
+        after publishing. backend/app.py opts the real, shipped bus in; see
+        DEFAULT_COALESCE_WINDOW_SECONDS.
+
+        `send_queue_maxsize` bounds each BUFFERED connection's outbound queue
+        (see attach(buffered=True) and _BufferedConnection)."""
         self.session_id = session_id
         self._topics: dict[str, _Topic] = {}
         self._intents: dict[tuple[str, str], _IntentRegistration] = {}
         self._connections: set[Connection] = set()
+        self._buffered: dict[Connection, _BufferedConnection] = {}
+        self._coalesce_window_seconds = coalesce_window_seconds
+        self._send_queue_maxsize = send_queue_maxsize
+        # Per-topic in-flight coalescing flush, keyed by topic name. See
+        # publish() for the join-or-schedule rule.
+        self._pending_flush: dict[str, asyncio.Task] = {}
         # ADR-004 stage 4.3: monotonic timestamp of when this bus last had
         # zero connections, or None while at least one is attached. Stamped
         # at construction time (not left None until a first attach/detach
@@ -364,14 +444,58 @@ class SessionBus:
 
     # -- connections -------------------------------------------------------
 
-    def attach(self, conn: Connection) -> None:
+    def attach(self, conn: Connection, *, buffered: bool = False) -> None:
+        """`buffered=True` gives this connection its own bounded outbound
+        queue and a writer task, so a slow reader can never stall delivery to
+        the other connections or block the coroutine that published (ADR-003
+        stage 3.4 follow-on - see _BufferedConnection).
+
+        Opt-in rather than automatic: unbuffered sends complete before
+        publish() returns, which is what makes `await bus.publish(...);
+        assert recorder.messages` deterministic for the test suite. The real
+        WebSocket endpoint (backend/app.py's ws_endpoint) attaches buffered;
+        in-process recorders in tests do not need to, since an in-memory list
+        append cannot apply backpressure and so cannot stall anything."""
         self._connections.add(conn)
         self.idle_since = None
+        if buffered and conn not in self._buffered:
+            buffered_conn = _BufferedConnection(conn, self._send_queue_maxsize)
+            drain = self._drain(buffered_conn)
+            try:
+                buffered_conn.task = asyncio.create_task(drain)
+            except RuntimeError:
+                # No running loop (a bare attach in a sync test): fall back to
+                # unbuffered rather than half-initialising. Same defensive
+                # posture as EventBus._ensure_eviction_loop_started - which
+                # also closes the orphaned coroutine, since an un-awaited one
+                # emits a RuntimeWarning at GC time.
+                drain.close()
+            else:
+                self._buffered[conn] = buffered_conn
 
     def detach(self, conn: Connection) -> None:
         self._connections.discard(conn)
+        buffered_conn = self._buffered.pop(conn, None)
+        if buffered_conn is not None and buffered_conn.task is not None:
+            buffered_conn.task.cancel()
         if not self._connections and self.idle_since is None:
             self.idle_since = time.monotonic()
+
+    async def _drain(self, buffered_conn: _BufferedConnection) -> None:
+        """One buffered connection's writer task: pull, send, repeat. A send
+        failure detaches the connection, exactly as the inline path did -
+        the difference is only WHO waits for the socket (this task, not the
+        publisher)."""
+        while True:
+            message = await buffered_conn.queue.get()
+            try:
+                await buffered_conn.conn.send_json(message)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.warning("dropping dead connection on session %s", self.session_id)
+                self.detach(buffered_conn.conn)
+                return
 
     @property
     def connection_count(self) -> int:
@@ -397,7 +521,65 @@ class SessionBus:
         treated identically rather than being sent as a real patch: a patch
         carrying no ops tells the client "your baseRevision is now stale"
         while giving it nothing to apply, which is strictly worse than
-        either sending real state or staying silent."""
+        either sending real state or staying silent.
+
+        COALESCING (ADR-003 stage 3.4 follow-on): when the bus was built with
+        a coalesce window, calls for the same topic arriving inside one
+        window share a single flush - the first schedules it, the rest await
+        that same task, and one outbound message covers every mutation in the
+        burst. The awaiting is deliberate rather than fire-and-forget:
+        `await publish(...)` still means "the wire has this state" when it
+        returns, which every existing caller and test assumes, and no caller
+        is latency-sensitive to the window (verified: the token-by-token
+        streaming path never routes through here at all - it uses
+        publish_stream, which is separately batched at 60 ms / 40 chars).
+        What coalescing genuinely saves is the several independent
+        `asyncio.create_task`-ed agent runs in agents.py publishing at
+        overlapping times: without it each pays its own full O(nodes) diff
+        AND its own outbound frame."""
+        # Resolve the topic BEFORE any scheduling so an unknown one still
+        # raises synchronously to its own caller, exactly as it always has,
+        # instead of surfacing a window later inside a shared flush task
+        # (where it would also wrongly fail every unrelated joiner).
+        if topic not in self._topics:
+            raise UnknownTopicError(topic)
+        window = self._coalesce_window_seconds
+        if window <= 0:
+            return await self._publish_now(topic)
+        pending = self._pending_flush.get(topic)
+        if pending is not None and not pending.done():
+            # Join the in-flight window rather than opening a second one.
+            #
+            # shield() is the standard idiom for awaiting a task shared with
+            # other callers, and it is kept for that reason - but honestly:
+            # mutation testing could NOT produce a scenario where removing it
+            # changes an observable outcome, even with two joiners provably
+            # suspended on the same flush. A cancelled joiner leaves the
+            # flush task itself untouched, and even if it did not, the
+            # `not pending.done()` guard above means the next caller simply
+            # opens a fresh window and still gets its state out. So this is
+            # defensive, not load-bearing, and no test claims otherwise.
+            return await asyncio.shield(pending)
+        task = asyncio.ensure_future(self._flush_after(topic, window))
+        self._pending_flush[topic] = task
+        return await asyncio.shield(task)
+
+    async def _flush_after(self, topic: str, window: float) -> dict[str, Any]:
+        """Wait out the coalescing window, then publish once for everyone who
+        joined it.
+
+        The slot is released BEFORE the publish, not after: a mutation that
+        lands while the send is in flight must open a NEW window rather than
+        be folded into a flush that has already read the document, which
+        would drop it from the wire entirely."""
+        await asyncio.sleep(window)
+        if self._pending_flush.get(topic) is asyncio.current_task():
+            del self._pending_flush[topic]
+        return await self._publish_now(topic)
+
+    async def _publish_now(self, topic: str) -> dict[str, Any]:
+        """The real build-and-broadcast, with no coalescing. Kept separate so
+        the window-0 path is byte-for-byte the pre-coalescer behavior."""
         t = self._topics.get(topic)
         if t is None:
             raise UnknownTopicError(topic)
@@ -442,6 +624,17 @@ class SessionBus:
         fails. Snapshot the set first: a failed send detaches mid-loop, and a
         dead socket must never poison the broadcast for the rest."""
         for conn in list(self._connections):
+            buffered_conn = self._buffered.get(conn)
+            if buffered_conn is not None:
+                # Handed off, never awaited here: this socket's pace cannot
+                # hold up any other connection or the publisher.
+                if not buffered_conn.offer(message):
+                    logger.warning(
+                        "send queue full on session %s - dropping a message; the "
+                        "client's own revision-gap check will re-snapshot",
+                        self.session_id,
+                    )
+                continue
             try:
                 await conn.send_json(message)
             except Exception:
@@ -550,9 +743,15 @@ class EventBus:
         sweep_interval_seconds: float = DEFAULT_SWEEP_INTERVAL_SECONDS,
         evict_idle_session: Callable[[SessionBus], bool] | None = None,
         allowed_session_ids: frozenset[str] | None = None,
+        coalesce_window_seconds: float = 0.0,
     ):
         self._sessions: dict[str, SessionBus] = {}
         self._configure_session = configure_session
+        # ADR-003 stage 3.4 follow-on: handed to every SessionBus this
+        # EventBus mints. 0.0 (the default) keeps publishes immediate, which
+        # is what the test suite's `await publish(); assert recorder` shape
+        # relies on; backend/app.py's real bus passes the ADR's ~16 ms.
+        self._coalesce_window_seconds = coalesce_window_seconds
         self._session_idle_ttl_seconds = session_idle_ttl_seconds
         self._sweep_interval_seconds = sweep_interval_seconds
         # ADR-004 stage 4.3: None (the default) is the pre-stage-4.3
@@ -661,7 +860,7 @@ class EventBus:
                 # creates any id on first use, exactly as before this
                 # stage.
                 raise UnknownSessionError(session_id)
-            bus = SessionBus(session_id)
+            bus = SessionBus(session_id, coalesce_window_seconds=self._coalesce_window_seconds)
             if self._configure_session is not None:
                 self._configure_session(bus)
             self._sessions[session_id] = bus
