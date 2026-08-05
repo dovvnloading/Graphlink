@@ -2060,7 +2060,14 @@ class Recorder:
         self.messages.append(data)
 
     def topics_seen(self):
-        return [m["topic"] for m in self.messages if m["kind"] == "state"]
+        # ADR-003 stage 3.4: "state" AND "patch" both mean "this topic
+        # published its new state to the client" - the scene topic now
+        # sends whichever is smaller (see SessionBus.publish). Every
+        # existing caller of this helper is asserting that a publish
+        # HAPPENED, not that it took the full-snapshot form specifically,
+        # so counting only "state" here would silently under-report a real
+        # publish rather than test anything meaningful about it.
+        return [m["topic"] for m in self.messages if m["kind"] in ("state", "patch")]
 
 
 class _FakeSettingsManager:

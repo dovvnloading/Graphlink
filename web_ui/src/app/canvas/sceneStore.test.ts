@@ -1,11 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import { SceneStore, initialSceneState, scaleDragPosition } from "./sceneStore";
-import type { WsTransport } from "../../lib/ws/transport";
+import type { ScenePatch, WsTransport } from "../../lib/ws/transport";
 
 type StateListener = (payload: Record<string, unknown>) => void;
+type PatchListener = (patch: ScenePatch) => void;
 
 function makeFakeTransport() {
   const listeners = new Map<string, StateListener>();
+  const patchListeners = new Map<string, PatchListener>();
+  const resubscribes: string[] = [];
   const intents: Array<{ topic: string; intent: string; args: unknown[] }> = [];
   const requests: Array<{ topic: string; intent: string; args: unknown[] }> = [];
   // A queue rather than mockResolvedValueOnce: the latter REPLACES the
@@ -36,8 +39,28 @@ function makeFakeTransport() {
       intents.push({ topic, intent, args });
     }),
     request: requestImpl,
+    // ADR-003 stage 3.4: the scene topic's delta channel. Kept in its own
+    // map (mirroring the real WsTransport's own parallel registry) so a
+    // test can drive patches and snapshots independently, which is exactly
+    // what the baseRevision-gap cases below need.
+    subscribePatch: vi.fn((topic: string, listener: PatchListener) => {
+      patchListeners.set(topic, listener);
+      return () => patchListeners.delete(topic);
+    }),
+    resubscribe: vi.fn((topic: string) => {
+      resubscribes.push(topic);
+    }),
   } as unknown as WsTransport;
-  return { transport, listeners, intents, requests, requestImpl, requestResults };
+  return {
+    transport,
+    listeners,
+    patchListeners,
+    resubscribes,
+    intents,
+    requests,
+    requestImpl,
+    requestResults,
+  };
 }
 
 function validScenePayload(overrides: Record<string, unknown> = {}) {
@@ -255,6 +278,316 @@ describe("SceneStore", () => {
     expect(store.getScene()).toEqual(initialSceneState);
     expect(consoleError).toHaveBeenCalled();
     consoleError.mockRestore();
+  });
+
+  // ADR-003 stage 3.4: the scene patch protocol. The store now receives
+  // `kind:"patch"` deltas (upsertNode/removeNodes/upsertEdge/removeEdges/
+  // setView/setMeta) applied ON TOP of the current scene, instead of a full
+  // snapshot on every backend mutation - see SceneStore.applyScenePatch.
+  describe("scene patch application (ADR-003 stage 3.4)", () => {
+    function connectedStoreAtRevision3() {
+      const fake = makeFakeTransport();
+      const store = new SceneStore(fake.transport);
+      store.connect();
+      // validScenePayload() is revision 3 - every patch below must therefore
+      // arrive with baseRevision 3 to be accepted.
+      fake.listeners.get("scene")!(validScenePayload());
+      return { ...fake, store };
+    }
+
+    it("applies an upsertNode op onto the existing scene without replacing it wholesale", () => {
+      const { store, patchListeners } = connectedStoreAtRevision3();
+      const existing = store.getScene().nodes[0];
+
+      patchListeners.get("scene")!({
+        revision: 4,
+        baseRevision: 3,
+        ops: [{ op: "upsertNode", node: { ...existing, title: "renamed" } }],
+      });
+
+      expect(store.getScene().nodes).toHaveLength(1);
+      expect(store.getScene().nodes[0].title).toBe("renamed");
+      expect(store.getScene().revision).toBe(4);
+    });
+
+    it("adds a node it has never seen, and removes one via removeNodes", () => {
+      const { store, patchListeners } = connectedStoreAtRevision3();
+      const existing = store.getScene().nodes[0];
+
+      patchListeners.get("scene")!({
+        revision: 4,
+        baseRevision: 3,
+        ops: [{ op: "upsertNode", node: { ...existing, id: "n1", title: "second" } }],
+      });
+      expect(store.getScene().nodes.map((n) => n.id)).toEqual(["n0", "n1"]);
+
+      patchListeners.get("scene")!({
+        revision: 5,
+        baseRevision: 4,
+        ops: [{ op: "removeNodes", ids: ["n0"] }],
+      });
+      expect(store.getScene().nodes.map((n) => n.id)).toEqual(["n1"]);
+    });
+
+    it("preserves the object identity of nodes the patch did not touch", () => {
+      // The property ADR-011 stage 11.1's React.memo work depends on: a
+      // patch that changes one node must not mint new objects for the rest.
+      // Nothing in the app exploits this yet (toFlowNodes still rebuilds
+      // everything, and there is no React.memo anywhere), so without this
+      // test the property could silently regress before 11.1 arrives to
+      // depend on it.
+      const { store, patchListeners } = connectedStoreAtRevision3();
+      const first = store.getScene().nodes[0];
+      patchListeners.get("scene")!({
+        revision: 4,
+        baseRevision: 3,
+        ops: [{ op: "upsertNode", node: { ...first, id: "n1", title: "second" } }],
+      });
+      const untouched = store.getScene().nodes[0];
+
+      patchListeners.get("scene")!({
+        revision: 5,
+        baseRevision: 4,
+        ops: [{ op: "upsertNode", node: { ...untouched, id: "n1", title: "changed again" } }],
+      });
+
+      expect(store.getScene().nodes[0]).toBe(untouched);
+    });
+
+    it("applies setView and setMeta ops onto the scene's own fields", () => {
+      const { store, patchListeners } = connectedStoreAtRevision3();
+
+      patchListeners.get("scene")!({
+        revision: 4,
+        baseRevision: 3,
+        ops: [
+          { op: "setView", view: { zoomFactor: 2, scrollX: 10, scrollY: 20 } },
+          { op: "setMeta", meta: { dragFactor: 0.25, fontFamily: "Consolas" } },
+        ],
+      });
+
+      const scene = store.getScene() as unknown as Record<string, unknown>;
+      expect(scene.zoomFactor).toBe(2);
+      expect(scene.scrollX).toBe(10);
+      expect(store.getScene().dragFactor).toBe(0.25);
+      expect(store.getScene().fontFamily).toBe("Consolas");
+    });
+
+    it("upserts and removes edges", () => {
+      const { store, patchListeners } = connectedStoreAtRevision3();
+
+      patchListeners.get("scene")!({
+        revision: 4,
+        baseRevision: 3,
+        ops: [{ op: "upsertEdge", edge: { id: "e1", source: "n0", target: "n0" } }],
+      });
+      expect(store.getScene().edges.map((e) => e.id)).toEqual(["e1"]);
+
+      patchListeners.get("scene")!({
+        revision: 5,
+        baseRevision: 4,
+        ops: [{ op: "removeEdges", ids: ["e1"] }],
+      });
+      expect(store.getScene().edges).toEqual([]);
+    });
+
+    it("REFUSES a patch whose baseRevision does not match, and asks for a fresh snapshot", () => {
+      // The self-healing half of the protocol: a gap means a frame was
+      // missed, and the missing ops are the only thing that could close it,
+      // so applying this one would produce a scene that never existed
+      // server-side. Re-snapshot instead of guessing.
+      const { store, patchListeners, resubscribes } = connectedStoreAtRevision3();
+      const before = store.getScene();
+
+      patchListeners.get("scene")!({
+        revision: 9,
+        baseRevision: 8, // client is at 3 - a real gap
+        ops: [{ op: "removeNodes", ids: ["n0"] }],
+      });
+
+      expect(store.getScene()).toBe(before);
+      expect(resubscribes).toEqual(["scene"]);
+    });
+
+    it("REFUSES a patch carrying an unknown op kind rather than applying the ops around it", () => {
+      const { store, patchListeners, resubscribes } = connectedStoreAtRevision3();
+      const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+      const before = store.getScene();
+
+      patchListeners.get("scene")!({
+        revision: 4,
+        baseRevision: 3,
+        ops: [{ op: "reticulateSplines", whatever: true }],
+      });
+
+      expect(store.getScene()).toBe(before);
+      expect(resubscribes).toEqual(["scene"]);
+      expect(consoleError).toHaveBeenCalled();
+      consoleError.mockRestore();
+    });
+
+    it("notifies subscribers exactly once per applied patch", () => {
+      const { store, patchListeners } = connectedStoreAtRevision3();
+      const seen = vi.fn();
+      store.subscribe(seen);
+
+      patchListeners.get("scene")!({
+        revision: 4,
+        baseRevision: 3,
+        ops: [{ op: "setMeta", meta: { dragFactor: 0.75 } }],
+      });
+
+      expect(seen).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not notify subscribers when a patch is refused", () => {
+      const { store, patchListeners } = connectedStoreAtRevision3();
+      const seen = vi.fn();
+      store.subscribe(seen);
+
+      patchListeners.get("scene")!({ revision: 9, baseRevision: 8, ops: [] });
+
+      expect(seen).not.toHaveBeenCalled();
+    });
+
+    // Review-fix: ops used to be applied from bare TS casts with no runtime
+    // check. That was strictly WORSE than the snapshot path it replaced: a
+    // malformed op that does not throw still advanced `revision`, so every
+    // later patch's baseRevision matched and the gap detector could never
+    // notice - permanent divergence with nothing able to detect it. The
+    // result is now validated and the whole patch discarded if it fails.
+    it("REFUSES a patch whose removeNodes ids are not an array (silently removed nothing before)", () => {
+      const { store, patchListeners, resubscribes } = connectedStoreAtRevision3();
+      const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+      const before = store.getScene();
+
+      // `new Set(null)` is an EMPTY set - this removed nothing, returned
+      // true, and advanced the revision, so the client kept showing a node
+      // the server had deleted, undetectably, until a reconnect.
+      patchListeners.get("scene")!({
+        revision: 4,
+        baseRevision: 3,
+        ops: [{ op: "removeNodes", ids: null }],
+      });
+
+      expect(store.getScene()).toBe(before);
+      expect(store.getScene().revision).toBe(3);
+      expect(resubscribes).toEqual(["scene"]);
+      consoleError.mockRestore();
+    });
+
+    it("REFUSES a patch whose upsertNode carries a wrong-typed field", () => {
+      // A string `x` reached React Flow's `position: {x, y}` and turned the
+      // canvas transform into NaN. The generated validator has always
+      // rejected this on the snapshot path.
+      const { store, patchListeners, resubscribes } = connectedStoreAtRevision3();
+      const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+      const existing = store.getScene().nodes[0];
+
+      patchListeners.get("scene")!({
+        revision: 4,
+        baseRevision: 3,
+        ops: [{ op: "upsertNode", node: { ...existing, x: "not-a-number" } }],
+      });
+
+      expect(store.getScene().revision).toBe(3);
+      expect(resubscribes).toEqual(["scene"]);
+      consoleError.mockRestore();
+    });
+
+    it("REFUSES a patch whose op body THROWS rather than merely being wrong", () => {
+      // `new Set(7)` is a TypeError. The exception used to escape through the
+      // listener fan-out to socket.onmessage, so the `if (!applyScenePatch)`
+      // resync never ran - the "refuse whole and self-heal" contract silently
+      // did not hold for this input class.
+      const { store, patchListeners, resubscribes } = connectedStoreAtRevision3();
+      const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      expect(() =>
+        patchListeners.get("scene")!({
+          revision: 4,
+          baseRevision: 3,
+          ops: [{ op: "removeNodes", ids: 7 }],
+        }),
+      ).not.toThrow();
+
+      expect(store.getScene().revision).toBe(3);
+      expect(resubscribes).toEqual(["scene"]);
+      consoleError.mockRestore();
+    });
+
+    it("does not let a setMeta op blank structural fields like pins", () => {
+      // The op bodies are spread in blindly, so `nodes`/`edges`/`revision`
+      // were protected only by key order and `pins` not at all - a
+      // `{"pins": null}` would crash PinOverlay's scene.pins.filter() on
+      // every render. No backend key does this today; the guard is
+      // structural rather than one field name away from being needed.
+      const { store, patchListeners } = connectedStoreAtRevision3();
+      const pinsBefore = store.getScene().pins;
+
+      patchListeners.get("scene")!({
+        revision: 4,
+        baseRevision: 3,
+        ops: [{ op: "setMeta", meta: { pins: null, nodes: null, revision: 999, dragFactor: 0.3 } }],
+      });
+
+      expect(store.getScene().pins).toBe(pinsBefore);
+      expect(store.getScene().nodes).toHaveLength(1);
+      expect(store.getScene().revision).toBe(4);
+      expect(store.getScene().dragFactor).toBe(0.3);
+    });
+
+    it("asks for ONE resync per gap, not one per refused patch", () => {
+      // Review-fix, measured against a real backend: without this guard a
+      // single dropped frame during a burst of mutations made things far
+      // WORSE than the full snapshots this stage replaced. The client
+      // refuses every subsequent patch until its snapshot lands, and each
+      // refusal fired another resync answered with another FULL snapshot -
+      // 14 requests and 14 snapshots from one dropped frame in a
+      // 15-mutation burst (~22 MB at the 500-node workload).
+      const { store, patchListeners, resubscribes } = connectedStoreAtRevision3();
+      const patch = patchListeners.get("scene")!;
+
+      // A burst arriving while the client sits at revision 3 with a gap.
+      for (let revision = 10; revision < 20; revision++) {
+        patch({ revision, baseRevision: revision - 1, ops: [] });
+      }
+
+      expect(resubscribes).toEqual(["scene"]);
+      expect(store.getScene().revision).toBe(3);
+    });
+
+    it("re-arms the resync request once the recovering snapshot lands", () => {
+      // The flag must not wedge recovery permanently shut: after the
+      // snapshot closes one gap, a LATER gap must be able to ask again.
+      const { store, patchListeners, listeners, resubscribes } = connectedStoreAtRevision3();
+      const patch = patchListeners.get("scene")!;
+
+      patch({ revision: 9, baseRevision: 8, ops: [] });
+      expect(resubscribes).toEqual(["scene"]);
+
+      listeners.get("scene")!(validScenePayload({ revision: 9 }));
+      expect(store.getScene().revision).toBe(9);
+
+      patch({ revision: 30, baseRevision: 29, ops: [] });
+      expect(resubscribes).toEqual(["scene", "scene"]);
+    });
+
+    it("accepts a later snapshot after a refused patch, resyncing the client", () => {
+      const { store, patchListeners, listeners } = connectedStoreAtRevision3();
+      patchListeners.get("scene")!({ revision: 9, baseRevision: 8, ops: [] });
+
+      listeners.get("scene")!(validScenePayload({ revision: 9 }));
+
+      expect(store.getScene().revision).toBe(9);
+      // ...and a patch built on THAT revision now applies cleanly.
+      patchListeners.get("scene")!({
+        revision: 10,
+        baseRevision: 9,
+        ops: [{ op: "setMeta", meta: { dragFactor: 0.5 } }],
+      });
+      expect(store.getScene().dragFactor).toBe(0.5);
+    });
   });
 
   it("routes grid snapshots through the grid validator", () => {

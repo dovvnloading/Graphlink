@@ -201,6 +201,134 @@ class SceneDocument(BranchOps, GroupOps):
     # current chat - a predicate the frontend cannot evaluate without it.
     current_chat_id: int | None = None
     _counter: itertools.count = field(default_factory=itertools.count, repr=False)
+    # ADR-003 stage 3.4: the last wire state actually published, kept so
+    # take_dirty_patch_ops below can diff against it. None until the first
+    # publish (there is nothing to diff a first snapshot against).
+    _published_nodes: dict[str, dict[str, Any]] | None = field(default=None, repr=False, compare=False)
+    _published_edges: dict[str, dict[str, Any]] | None = field(default=None, repr=False, compare=False)
+    _published_pins: list[dict[str, Any]] | None = field(default=None, repr=False, compare=False)
+    _published_view: dict[str, Any] | None = field(default=None, repr=False, compare=False)
+    _published_meta: dict[str, Any] | None = field(default=None, repr=False, compare=False)
+
+    # -- ADR-003 stage 3.4: the scene topic's patch protocol ---------------
+
+    def _view_wire(self) -> dict[str, Any]:
+        return {"zoomFactor": self.zoom_factor, "scrollX": self.scroll_x, "scrollY": self.scroll_y}
+
+    def published_scene_payload(self) -> dict[str, Any] | None:
+        """The wire state as of the LAST publish - what every already-connected
+        client currently holds - or None before the first publish.
+
+        REVIEW-FIX, closing a real permanent-divergence bug. A subscribing
+        connection used to be served the LIVE document stamped with the
+        last-published revision, which are two different states whenever the
+        document was mutated between publishes (routine: several intent
+        handlers await another topic's publish in between, and agents.py sets
+        then clears pending_request_id around an await). The patch protocol's
+        whole correctness argument rests on "revision R means you hold the
+        state as of publish R" - hand a client something NEWER than R and its
+        baseRevision still chains perfectly forever while the diff, which is
+        computed against the published baseline, never emits the op that
+        would fix the difference.
+
+        Reproduced: publish (baseline={n0}); add n1 WITHOUT publishing; a
+        second window subscribes and receives n0+n1 stamped revision 1;
+        delete n1 and move n0; publish. The diff never saw n1, so it emits
+        only upsertNode(n0) - no removeNodes - and baseRevision 1 matches, so
+        the client applies it happily and shows the deleted node for the rest
+        of the session with nothing able to detect it.
+
+        Serving the published baseline instead makes the subscriber exactly
+        as up to date as everyone else, and the very next patch carries the
+        intervening changes to all of them identically. Whole-node ops are
+        absolute assignments, so there is no ordering hazard in that catch-up.
+        """
+        if self._published_nodes is None or self._published_edges is None:
+            return None
+        return {
+            "nodes": list(self._published_nodes.values()),
+            "edges": list(self._published_edges.values()),
+            "pins": list(self._published_pins or []),
+            **(self._published_meta or {}),
+            **(self._published_view or {}),
+        }
+
+    def take_dirty_patch_ops(self) -> list[dict[str, Any]] | None:
+        """The scene topic's patch_builder (wired in backend/canvas.py,
+        SessionBus's patch-aware sibling to the full-snapshot `builder`
+        callable - see events.py's own _Topic docstring). Returns the ops
+        that carry this document from its last-published wire state to its
+        current one, or None meaning "send a full snapshot instead".
+
+        MECHANISM NOTE - this deliberately diverges from the mechanism
+        ADR-003's own Decision text sketches ("server bookkeeping to a
+        dirty-id set" fed by the mutation sites). That was implemented
+        first and abandoned for a real, empirically-reproduced
+        silent-data-loss bug, not a taste preference. A dirty-id set is
+        only safe if EVERY mutator marks; with ~60 mutators across this
+        file, groups.py and branches.py reached from ~146 publish sites,
+        any partial rollout breaks catastrophically rather than gracefully:
+        an UNinstrumented mutation that publishes while some EARLIER
+        instrumented mutation's marks are still pending emits a patch
+        describing only the stale earlier change, and the real one never
+        reaches the client at all. Reproduced against a real intent
+        (setCodeSandboxAllowSourceBuilds, uninstrumented, publishing after
+        an instrumented connect() during node setup): the patch carried
+        only the setup edge and the actual flag change vanished.
+        "Instrument everything, perfectly, forever" is not a property a
+        test can enforce, so the whole-node DIFF below is used instead - it
+        is correct by construction for every mutator, present and future,
+        instrumented or not, and needs no discipline at any mutation site.
+        The granularity the ADR actually specifies is unchanged: whole-node
+        ops, never field-level diffing, no CRDT.
+
+        The cost this trades away is real but small in context: building
+        every node's wire dict on each publish. That is exactly what the
+        pre-3.4 full-snapshot path ALREADY did on every publish, so it adds
+        no work relative to today - it only changes what gets SENT, which
+        is where this stage's own exit criterion (bytes on the wire) lives.
+
+        None (send a full snapshot) is returned for the first publish, and
+        whenever the pins list changed - pins have no op in the ADR's own
+        op set, so a pin mutation is honestly outside what a patch can
+        express and falls back rather than being silently dropped."""
+        nodes = {node_id: self._node_wire(n) for node_id, n in self.nodes.items()}
+        edges = {edge_id: self._edge_wire(e) for edge_id, e in self.edges.items()}
+        pins = self._pins_wire()
+        view = self._view_wire()
+        meta = self._meta_wire()
+        previous_nodes = self._published_nodes
+        previous_edges = self._published_edges
+        previous_view = self._published_view
+        previous_meta = self._published_meta
+        pins_changed = pins != self._published_pins
+        # Record BEFORE any early return: whichever branch the caller takes
+        # (patch or snapshot), what it sends reflects exactly this state.
+        self._published_nodes = nodes
+        self._published_edges = edges
+        self._published_pins = pins
+        self._published_view = view
+        self._published_meta = meta
+        if previous_nodes is None or previous_edges is None or pins_changed:
+            return None
+        ops: list[dict[str, Any]] = []
+        for node_id, wire in nodes.items():
+            if previous_nodes.get(node_id) != wire:
+                ops.append({"op": "upsertNode", "node": wire})
+        removed_node_ids = sorted(set(previous_nodes) - set(nodes))
+        if removed_node_ids:
+            ops.append({"op": "removeNodes", "ids": removed_node_ids})
+        for edge_id, wire in edges.items():
+            if previous_edges.get(edge_id) != wire:
+                ops.append({"op": "upsertEdge", "edge": wire})
+        removed_edge_ids = sorted(set(previous_edges) - set(edges))
+        if removed_edge_ids:
+            ops.append({"op": "removeEdges", "ids": removed_edge_ids})
+        if view != previous_view:
+            ops.append({"op": "setView", "view": view})
+        if meta != previous_meta:
+            ops.append({"op": "setMeta", "meta": meta})
+        return ops
 
     # -- nodes -------------------------------------------------------------
 
@@ -252,6 +380,20 @@ class SceneDocument(BranchOps, GroupOps):
         self.scroll_y = 0.0
         self.total_session_tokens = 0
         self.current_chat_id = None
+        # ADR-003 stage 3.4 review-fix: drop the patch baseline too. Loading a
+        # chat replaces the entire document, so diffing the new scene against
+        # the OLD one produced a patch no smaller than the snapshot it
+        # replaced - measured at 1,666,170 bytes vs 1,677,403 for a
+        # 500-node-to-500-node reload (500 upsertNode ops plus removeNodes
+        # and removeEdges listing every old id). Correct output, zero
+        # benefit, on the single most bandwidth-heavy operation in the app.
+        # Clearing the baseline makes the next publish a plain full snapshot,
+        # which is both smaller and what a wholesale replacement actually is.
+        self._published_nodes = None
+        self._published_edges = None
+        self._published_pins = None
+        self._published_view = None
+        self._published_meta = None
 
     def add_chat_node(
         self,
@@ -1746,222 +1888,232 @@ class SceneDocument(BranchOps, GroupOps):
 
     # -- snapshots ---------------------------------------------------------
 
-    def scene_payload(self) -> dict[str, Any]:
+    def _node_wire(self, n: SceneNode) -> dict[str, Any]:
+        """The per-node wire shape - ADR-003 stage 3.4 factored this out of
+        scene_payload() verbatim (byte-identical output) so both the full
+        snapshot AND take_dirty_patch_ops's upsertNode ops build a node's
+        payload from exactly ONE place, rather than a second copy drifting
+        out of sync with this one field by field."""
         return {
-            "nodes": [
-                {
-                    "id": n.id,
-                    "x": n.x,
-                    "y": n.y,
-                    "title": n.title,
-                    "kind": n.kind,
-                    "content": n.content,
-                    "isUser": n.state.is_user if isinstance(n.state, ChatState) else False,
-                    "isCollapsed": n.is_collapsed,
-                    "code": n.state.code if isinstance(n.state, CodeState) else "",
-                    "language": n.state.language if isinstance(n.state, CodeState) else "",
-                    "attachmentKind": n.state.attachment_kind if isinstance(n.state, DocumentState) else "",
-                    "filePath": n.state.file_path if isinstance(n.state, DocumentState) else "",
-                    "mimeType": n.state.mime_type if isinstance(n.state, DocumentState) else "",
-                    "durationSeconds": n.state.duration_seconds if isinstance(n.state, DocumentState) else None,
-                    "byteSize": n.state.byte_size if isinstance(n.state, DocumentState) else None,
-                    "previewLabel": n.state.preview_label if isinstance(n.state, DocumentState) else "",
-                    "isDocked": n.is_docked,
-                    "imageAssetId": n.state.image_asset_id if isinstance(n.state, ImageState) else "",
-                    "history": [
-                        {"role": m["role"], "content": m["content"]} for m in n.history
-                    ],
-                    "pendingRequestId": n.pending_request_id,
-                    # ADR-002 Workstream 1 ("Synthesize Branches") - see
-                    # ChatState's own comment, backend/domain/node_states.py.
-                    "provider": n.state.provider if isinstance(n.state, ChatState) else None,
-                    "model": n.state.model if isinstance(n.state, ChatState) else None,
-                    "isBranchSynthesis": n.state.is_branch_synthesis if isinstance(n.state, ChatState) else False,
-                    "synthesisInstructions": (
-                        n.state.synthesis_instructions if isinstance(n.state, ChatState) else ""
-                    ),
-                    # ADR-002 Workstream 1 ("Branch status and lifecycle") -
-                    # see ChatState's own comment/SceneDocument.
-                    # final_deliverable_node_id's own comment. "active" (not
-                    # "") is the correct non-chat fallback - it is
-                    # branch_status's own real pre-migration default, not an
-                    # empty placeholder.
-                    "branchStatus": n.state.branch_status if isinstance(n.state, ChatState) else "active",
-                    "isFinalDeliverable": n.id == self.final_deliverable_node_id,
-                    "researchStage": n.state.research_stage if isinstance(n.state, WebResearchState) else "",
-                    "researchCompleted": n.state.research_completed if isinstance(n.state, WebResearchState) else 0,
-                    "researchTotal": n.state.research_total if isinstance(n.state, WebResearchState) else 0,
-                    "researchActiveSourceId": (
-                        n.state.research_active_source_id if isinstance(n.state, WebResearchState) else None
-                    ),
-                    "researchError": n.state.research_error if isinstance(n.state, WebResearchState) else "",
-                    "researchResult": n.state.research_result if isinstance(n.state, WebResearchState) else None,
-                    "artifactContent": n.state.artifact_content if isinstance(n.state, ArtifactState) else "",
-                    "gitlinkRepo": n.state.gitlink_repo if isinstance(n.state, GitlinkState) else "",
-                    "gitlinkBranch": n.state.gitlink_branch if isinstance(n.state, GitlinkState) else "",
-                    "gitlinkScopeMode": (
-                        n.state.gitlink_scope_mode if isinstance(n.state, GitlinkState) else "selected"
-                    ),
-                    "gitlinkLocalRoot": n.state.gitlink_local_root if isinstance(n.state, GitlinkState) else "",
-                    "gitlinkRepoFilePaths": (
-                        list(n.state.gitlink_repo_file_paths) if isinstance(n.state, GitlinkState) else []
-                    ),
-                    "gitlinkSelectedPaths": (
-                        list(n.state.gitlink_selected_paths) if isinstance(n.state, GitlinkState) else []
-                    ),
-                    "gitlinkTaskPrompt": n.state.gitlink_task_prompt if isinstance(n.state, GitlinkState) else "",
-                    # gitlinkContextXml is DELIBERATELY OMITTED - see
-                    # GitlinkState's own comment. Served on demand via the
-                    # fetchGitlinkContext intent instead.
-                    "gitlinkContextStats": (
-                        dict(n.state.gitlink_context_stats) if isinstance(n.state, GitlinkState) else {}
-                    ),
-                    "gitlinkContextSummary": (
-                        n.state.gitlink_context_summary if isinstance(n.state, GitlinkState) else ""
-                    ),
-                    # R5.3 post-review FIX 6: UNLIKE gitlinkContextXml (and
-                    # unlike gitlink_change_local_root, never on the wire at
-                    # all), this genuinely needs to be here - see
-                    # GitlinkState's own comment for why gitlinkContextSummary
-                    # alone cannot be trusted as a lazy-fetch-once cache key.
-                    "gitlinkContextVersion": (
-                        n.state.gitlink_context_version if isinstance(n.state, GitlinkState) else 0
-                    ),
-                    "gitlinkProposalMarkdown": (
-                        n.state.gitlink_proposal_markdown if isinstance(n.state, GitlinkState) else ""
-                    ),
-                    "gitlinkPendingChanges": (
-                        [dict(c) for c in n.state.gitlink_pending_changes] if isinstance(n.state, GitlinkState) else []
-                    ),
-                    "gitlinkPreviewText": n.state.gitlink_preview_text if isinstance(n.state, GitlinkState) else "",
-                    "gitlinkChangeFingerprint": (
-                        n.state.gitlink_change_fingerprint if isinstance(n.state, GitlinkState) else None
-                    ),
-                    "gitlinkChangeState": (
-                        n.state.gitlink_change_state if isinstance(n.state, GitlinkState) else "draft"
-                    ),
-                    "gitlinkError": n.state.gitlink_error if isinstance(n.state, GitlinkState) else "",
-                    "pycoderMode": n.state.pycoder_mode if isinstance(n.state, PycoderState) else "ai_driven",
-                    "pycoderPrompt": n.state.pycoder_prompt if isinstance(n.state, PycoderState) else "",
-                    "pycoderCode": n.state.pycoder_code if isinstance(n.state, PycoderState) else "",
-                    "pycoderOutput": n.state.pycoder_output if isinstance(n.state, PycoderState) else "",
-                    "pycoderAnalysis": n.state.pycoder_analysis if isinstance(n.state, PycoderState) else "",
-                    "pycoderLastRunFailed": (
-                        n.state.pycoder_last_run_failed if isinstance(n.state, PycoderState) else False
-                    ),
-                    "pycoderAwaitingApproval": (
-                        n.state.pycoder_awaiting_approval if isinstance(n.state, PycoderState) else False
-                    ),
-                    "pycoderError": n.state.pycoder_error if isinstance(n.state, PycoderState) else "",
-                    # codeSandboxSandboxId is DELIBERATELY OMITTED - see
-                    # CodeSandboxState's own comment (pure internal
-                    # directory-naming key, mirrors gitlink_imported_root's
-                    # own "server-side bookkeeping only" precedent).
-                    "codeSandboxRequirements": (
-                        n.state.code_sandbox_requirements if isinstance(n.state, CodeSandboxState) else ""
-                    ),
-                    "codeSandboxPrompt": (
-                        n.state.code_sandbox_prompt if isinstance(n.state, CodeSandboxState) else ""
-                    ),
-                    "codeSandboxCode": n.state.code_sandbox_code if isinstance(n.state, CodeSandboxState) else "",
-                    "codeSandboxOutput": (
-                        n.state.code_sandbox_output if isinstance(n.state, CodeSandboxState) else ""
-                    ),
-                    "codeSandboxAnalysis": (
-                        n.state.code_sandbox_analysis if isinstance(n.state, CodeSandboxState) else ""
-                    ),
-                    "codeSandboxAwaitingApproval": (
-                        n.state.code_sandbox_awaiting_approval if isinstance(n.state, CodeSandboxState) else False
-                    ),
-                    # R5.4 CODESANDBOX FIX: the frozen-at-approval-time
-                    # snapshot, deliberately distinct from
-                    # codeSandboxRequirements above (that one is the user's
-                    # still-live, still-editable draft for the NEXT run) -
-                    # see CodeSandboxState's own comment.
-                    "codeSandboxApprovalRequirements": (
-                        n.state.code_sandbox_approval_requirements if isinstance(n.state, CodeSandboxState) else ""
-                    ),
-                    # ADR-005 stage 5.5: the user's live source-build opt-in
-                    # for the CURRENT pending approval - see CodeSandboxState.
-                    # code_sandbox_approval_allow_source_builds's own comment.
-                    "codeSandboxApprovalAllowSourceBuilds": (
-                        n.state.code_sandbox_approval_allow_source_builds
-                        if isinstance(n.state, CodeSandboxState)
-                        else False
-                    ),
-                    # ADR-005 stage 5.5 review-fix: True only during a
-                    # repair-loop re-gate - see CodeSandboxState.
-                    # code_sandbox_approval_is_repair's own comment.
-                    "codeSandboxApprovalIsRepair": (
-                        n.state.code_sandbox_approval_is_repair
-                        if isinstance(n.state, CodeSandboxState)
-                        else False
-                    ),
-                    "codeSandboxError": n.state.code_sandbox_error if isinstance(n.state, CodeSandboxState) else "",
-                    # R6.1: Notes/Frames/Containers. groupManualWidth/Height
-                    # are DELIBERATELY OMITTED, same "server-side bookkeeping
-                    # only" posture as codeSandboxSandboxId/gitlinkImportedRoot
-                    # above - see those fields' own comments on
-                    # CodeSandboxState/GitlinkState.
-                    "color": n.color,
-                    "headerColor": n.header_color,
-                    "isSystemPrompt": n.state.is_system_prompt if isinstance(n.state, NoteState) else False,
-                    "isSummaryNote": n.state.is_summary_note if isinstance(n.state, NoteState) else False,
-                    # ADR-002 Workstream 1 ("Compare Branches") - see
-                    # NoteState's own comment, backend/domain/node_states.py.
-                    "isBranchComparison": n.state.is_branch_comparison if isinstance(n.state, NoteState) else False,
-                    "itemIds": list(n.item_ids),
-                    "isLocked": n.state.is_locked if isinstance(n.state, FrameState) else True,
-                    "groupWidth": n.state.group_width if isinstance(n.state, (FrameState, ContainerState)) else None,
-                    "groupHeight": (
-                        n.state.group_height if isinstance(n.state, (FrameState, ContainerState)) else None
-                    ),
-                    # R6.2: Chart node.
-                    "chartType": n.state.chart_type if isinstance(n.state, ChartState) else "",
-                    "chartData": dict(n.state.chart_data) if isinstance(n.state, ChartState) else {},
-                    "chartError": n.state.chart_error if isinstance(n.state, ChartState) else "",
-                    "chartAssetId": n.state.chart_asset_id if isinstance(n.state, ChartState) else "",
-                    "chartAssetVersion": n.state.chart_asset_version if isinstance(n.state, ChartState) else 0,
-                    "chartWidth": n.state.chart_width if isinstance(n.state, ChartState) else 680.0,
-                    "chartHeight": n.state.chart_height if isinstance(n.state, ChartState) else 500.0,
-                    "chartAspectLocked": n.state.chart_aspect_locked if isinstance(n.state, ChartState) else True,
-                    "chartSourceNodeId": n.state.chart_source_node_id if isinstance(n.state, ChartState) else "",
-                    # R6.3: HTML splitter + chat scroll gaps.
-                    "htmlSplitterState": n.state.html_splitter_state if isinstance(n.state, HtmlState) else None,
-                    "chatScrollValue": n.state.chat_scroll_value if isinstance(n.state, ChatState) else 0.0,
-                    # R6.3: null (not []) when content_parts is None - "no
-                    # multimodal content" must stay distinguishable from
-                    # "multimodal content that happens to be empty". Any
-                    # part carrying raw bytes under "data" gets that key
-                    # base64-encoded for the wire via content_codec's own
-                    # encode_image_bytes - the WIRE shape this produces
-                    # matches content_codec.process_content_for_serialization's
-                    # own output shape exactly, while n.content_parts itself
-                    # (in memory) keeps holding real bytes, per the field's
-                    # own contract.
-                    "contentParts": _content_parts_wire(n.state.content_parts if isinstance(n.state, ChatState) else None),
-                }
-                for n in self.nodes.values()
+            "id": n.id,
+            "x": n.x,
+            "y": n.y,
+            "title": n.title,
+            "kind": n.kind,
+            "content": n.content,
+            "isUser": n.state.is_user if isinstance(n.state, ChatState) else False,
+            "isCollapsed": n.is_collapsed,
+            "code": n.state.code if isinstance(n.state, CodeState) else "",
+            "language": n.state.language if isinstance(n.state, CodeState) else "",
+            "attachmentKind": n.state.attachment_kind if isinstance(n.state, DocumentState) else "",
+            "filePath": n.state.file_path if isinstance(n.state, DocumentState) else "",
+            "mimeType": n.state.mime_type if isinstance(n.state, DocumentState) else "",
+            "durationSeconds": n.state.duration_seconds if isinstance(n.state, DocumentState) else None,
+            "byteSize": n.state.byte_size if isinstance(n.state, DocumentState) else None,
+            "previewLabel": n.state.preview_label if isinstance(n.state, DocumentState) else "",
+            "isDocked": n.is_docked,
+            "imageAssetId": n.state.image_asset_id if isinstance(n.state, ImageState) else "",
+            "history": [
+                {"role": m["role"], "content": m["content"]} for m in n.history
             ],
-            "edges": [
-                {"id": e.id, "source": e.source, "target": e.target}
-                for e in self.edges.values()
-            ],
-            "pins": [
-                {
-                    "id": p.pin_id,
-                    "title": p.title,
-                    "note": p.note,
-                    "x": p.position[0],
-                    "y": p.position[1],
-                    # R6.3: NavigationPinRecord already carries these three -
-                    # they just weren't exposed on the wire until now.
-                    "anchorItemId": p.anchor_item_id,
-                    "sortOrder": p.sort_order,
-                    "createdAt": p.created_at,
-                }
-                for p in self.pins.records
-            ],
+            "pendingRequestId": n.pending_request_id,
+            # ADR-002 Workstream 1 ("Synthesize Branches") - see
+            # ChatState's own comment, backend/domain/node_states.py.
+            "provider": n.state.provider if isinstance(n.state, ChatState) else None,
+            "model": n.state.model if isinstance(n.state, ChatState) else None,
+            "isBranchSynthesis": n.state.is_branch_synthesis if isinstance(n.state, ChatState) else False,
+            "synthesisInstructions": (
+                n.state.synthesis_instructions if isinstance(n.state, ChatState) else ""
+            ),
+            # ADR-002 Workstream 1 ("Branch status and lifecycle") -
+            # see ChatState's own comment/SceneDocument.
+            # final_deliverable_node_id's own comment. "active" (not
+            # "") is the correct non-chat fallback - it is
+            # branch_status's own real pre-migration default, not an
+            # empty placeholder.
+            "branchStatus": n.state.branch_status if isinstance(n.state, ChatState) else "active",
+            "isFinalDeliverable": n.id == self.final_deliverable_node_id,
+            "researchStage": n.state.research_stage if isinstance(n.state, WebResearchState) else "",
+            "researchCompleted": n.state.research_completed if isinstance(n.state, WebResearchState) else 0,
+            "researchTotal": n.state.research_total if isinstance(n.state, WebResearchState) else 0,
+            "researchActiveSourceId": (
+                n.state.research_active_source_id if isinstance(n.state, WebResearchState) else None
+            ),
+            "researchError": n.state.research_error if isinstance(n.state, WebResearchState) else "",
+            "researchResult": n.state.research_result if isinstance(n.state, WebResearchState) else None,
+            "artifactContent": n.state.artifact_content if isinstance(n.state, ArtifactState) else "",
+            "gitlinkRepo": n.state.gitlink_repo if isinstance(n.state, GitlinkState) else "",
+            "gitlinkBranch": n.state.gitlink_branch if isinstance(n.state, GitlinkState) else "",
+            "gitlinkScopeMode": (
+                n.state.gitlink_scope_mode if isinstance(n.state, GitlinkState) else "selected"
+            ),
+            "gitlinkLocalRoot": n.state.gitlink_local_root if isinstance(n.state, GitlinkState) else "",
+            "gitlinkRepoFilePaths": (
+                list(n.state.gitlink_repo_file_paths) if isinstance(n.state, GitlinkState) else []
+            ),
+            "gitlinkSelectedPaths": (
+                list(n.state.gitlink_selected_paths) if isinstance(n.state, GitlinkState) else []
+            ),
+            "gitlinkTaskPrompt": n.state.gitlink_task_prompt if isinstance(n.state, GitlinkState) else "",
+            # gitlinkContextXml is DELIBERATELY OMITTED - see
+            # GitlinkState's own comment. Served on demand via the
+            # fetchGitlinkContext intent instead.
+            "gitlinkContextStats": (
+                dict(n.state.gitlink_context_stats) if isinstance(n.state, GitlinkState) else {}
+            ),
+            "gitlinkContextSummary": (
+                n.state.gitlink_context_summary if isinstance(n.state, GitlinkState) else ""
+            ),
+            # R5.3 post-review FIX 6: UNLIKE gitlinkContextXml (and
+            # unlike gitlink_change_local_root, never on the wire at
+            # all), this genuinely needs to be here - see
+            # GitlinkState's own comment for why gitlinkContextSummary
+            # alone cannot be trusted as a lazy-fetch-once cache key.
+            "gitlinkContextVersion": (
+                n.state.gitlink_context_version if isinstance(n.state, GitlinkState) else 0
+            ),
+            "gitlinkProposalMarkdown": (
+                n.state.gitlink_proposal_markdown if isinstance(n.state, GitlinkState) else ""
+            ),
+            "gitlinkPendingChanges": (
+                [dict(c) for c in n.state.gitlink_pending_changes] if isinstance(n.state, GitlinkState) else []
+            ),
+            "gitlinkPreviewText": n.state.gitlink_preview_text if isinstance(n.state, GitlinkState) else "",
+            "gitlinkChangeFingerprint": (
+                n.state.gitlink_change_fingerprint if isinstance(n.state, GitlinkState) else None
+            ),
+            "gitlinkChangeState": (
+                n.state.gitlink_change_state if isinstance(n.state, GitlinkState) else "draft"
+            ),
+            "gitlinkError": n.state.gitlink_error if isinstance(n.state, GitlinkState) else "",
+            "pycoderMode": n.state.pycoder_mode if isinstance(n.state, PycoderState) else "ai_driven",
+            "pycoderPrompt": n.state.pycoder_prompt if isinstance(n.state, PycoderState) else "",
+            "pycoderCode": n.state.pycoder_code if isinstance(n.state, PycoderState) else "",
+            "pycoderOutput": n.state.pycoder_output if isinstance(n.state, PycoderState) else "",
+            "pycoderAnalysis": n.state.pycoder_analysis if isinstance(n.state, PycoderState) else "",
+            "pycoderLastRunFailed": (
+                n.state.pycoder_last_run_failed if isinstance(n.state, PycoderState) else False
+            ),
+            "pycoderAwaitingApproval": (
+                n.state.pycoder_awaiting_approval if isinstance(n.state, PycoderState) else False
+            ),
+            "pycoderError": n.state.pycoder_error if isinstance(n.state, PycoderState) else "",
+            # codeSandboxSandboxId is DELIBERATELY OMITTED - see
+            # CodeSandboxState's own comment (pure internal
+            # directory-naming key, mirrors gitlink_imported_root's
+            # own "server-side bookkeeping only" precedent).
+            "codeSandboxRequirements": (
+                n.state.code_sandbox_requirements if isinstance(n.state, CodeSandboxState) else ""
+            ),
+            "codeSandboxPrompt": (
+                n.state.code_sandbox_prompt if isinstance(n.state, CodeSandboxState) else ""
+            ),
+            "codeSandboxCode": n.state.code_sandbox_code if isinstance(n.state, CodeSandboxState) else "",
+            "codeSandboxOutput": (
+                n.state.code_sandbox_output if isinstance(n.state, CodeSandboxState) else ""
+            ),
+            "codeSandboxAnalysis": (
+                n.state.code_sandbox_analysis if isinstance(n.state, CodeSandboxState) else ""
+            ),
+            "codeSandboxAwaitingApproval": (
+                n.state.code_sandbox_awaiting_approval if isinstance(n.state, CodeSandboxState) else False
+            ),
+            # R5.4 CODESANDBOX FIX: the frozen-at-approval-time
+            # snapshot, deliberately distinct from
+            # codeSandboxRequirements above (that one is the user's
+            # still-live, still-editable draft for the NEXT run) -
+            # see CodeSandboxState's own comment.
+            "codeSandboxApprovalRequirements": (
+                n.state.code_sandbox_approval_requirements if isinstance(n.state, CodeSandboxState) else ""
+            ),
+            # ADR-005 stage 5.5: the user's live source-build opt-in
+            # for the CURRENT pending approval - see CodeSandboxState.
+            # code_sandbox_approval_allow_source_builds's own comment.
+            "codeSandboxApprovalAllowSourceBuilds": (
+                n.state.code_sandbox_approval_allow_source_builds
+                if isinstance(n.state, CodeSandboxState)
+                else False
+            ),
+            # ADR-005 stage 5.5 review-fix: True only during a
+            # repair-loop re-gate - see CodeSandboxState.
+            # code_sandbox_approval_is_repair's own comment.
+            "codeSandboxApprovalIsRepair": (
+                n.state.code_sandbox_approval_is_repair
+                if isinstance(n.state, CodeSandboxState)
+                else False
+            ),
+            "codeSandboxError": n.state.code_sandbox_error if isinstance(n.state, CodeSandboxState) else "",
+            # R6.1: Notes/Frames/Containers. groupManualWidth/Height
+            # are DELIBERATELY OMITTED, same "server-side bookkeeping
+            # only" posture as codeSandboxSandboxId/gitlinkImportedRoot
+            # above - see those fields' own comments on
+            # CodeSandboxState/GitlinkState.
+            "color": n.color,
+            "headerColor": n.header_color,
+            "isSystemPrompt": n.state.is_system_prompt if isinstance(n.state, NoteState) else False,
+            "isSummaryNote": n.state.is_summary_note if isinstance(n.state, NoteState) else False,
+            # ADR-002 Workstream 1 ("Compare Branches") - see
+            # NoteState's own comment, backend/domain/node_states.py.
+            "isBranchComparison": n.state.is_branch_comparison if isinstance(n.state, NoteState) else False,
+            "itemIds": list(n.item_ids),
+            "isLocked": n.state.is_locked if isinstance(n.state, FrameState) else True,
+            "groupWidth": n.state.group_width if isinstance(n.state, (FrameState, ContainerState)) else None,
+            "groupHeight": (
+                n.state.group_height if isinstance(n.state, (FrameState, ContainerState)) else None
+            ),
+            # R6.2: Chart node.
+            "chartType": n.state.chart_type if isinstance(n.state, ChartState) else "",
+            "chartData": dict(n.state.chart_data) if isinstance(n.state, ChartState) else {},
+            "chartError": n.state.chart_error if isinstance(n.state, ChartState) else "",
+            "chartAssetId": n.state.chart_asset_id if isinstance(n.state, ChartState) else "",
+            "chartAssetVersion": n.state.chart_asset_version if isinstance(n.state, ChartState) else 0,
+            "chartWidth": n.state.chart_width if isinstance(n.state, ChartState) else 680.0,
+            "chartHeight": n.state.chart_height if isinstance(n.state, ChartState) else 500.0,
+            "chartAspectLocked": n.state.chart_aspect_locked if isinstance(n.state, ChartState) else True,
+            "chartSourceNodeId": n.state.chart_source_node_id if isinstance(n.state, ChartState) else "",
+            # R6.3: HTML splitter + chat scroll gaps.
+            "htmlSplitterState": n.state.html_splitter_state if isinstance(n.state, HtmlState) else None,
+            "chatScrollValue": n.state.chat_scroll_value if isinstance(n.state, ChatState) else 0.0,
+            # R6.3: null (not []) when content_parts is None - "no
+            # multimodal content" must stay distinguishable from
+            # "multimodal content that happens to be empty". Any
+            # part carrying raw bytes under "data" gets that key
+            # base64-encoded for the wire via content_codec's own
+            # encode_image_bytes - the WIRE shape this produces
+            # matches content_codec.process_content_for_serialization's
+            # own output shape exactly, while n.content_parts itself
+            # (in memory) keeps holding real bytes, per the field's
+            # own contract.
+            "contentParts": _content_parts_wire(n.state.content_parts if isinstance(n.state, ChatState) else None),
+        }
+
+    def _edge_wire(self, e: SceneEdge) -> dict[str, Any]:
+        return {"id": e.id, "source": e.source, "target": e.target}
+
+    def _pins_wire(self) -> list[dict[str, Any]]:
+        return [
+            {
+                "id": p.pin_id,
+                "title": p.title,
+                "note": p.note,
+                "x": p.position[0],
+                "y": p.position[1],
+                # R6.3: NavigationPinRecord already carries these three -
+                # they just weren't exposed on the wire until now.
+                "anchorItemId": p.anchor_item_id,
+                "sortOrder": p.sort_order,
+                "createdAt": p.created_at,
+            }
+            for p in self.pins.records
+        ]
+
+    def _meta_wire(self) -> dict[str, Any]:
+        """The document-level "meta" fields (everything on the wire that
+        isn't a node/edge/pin/view-position) - ADR-003 stage 3.4's setMeta
+        patch op carries this SAME whole blob (not a partial diff), matching
+        the "whole item, not field-level" granularity every other op already
+        uses (see the ADR's own Decision text)."""
+        return {
             "snapToGrid": self.snap_to_grid,
             "fadeConnectionsEnabled": self.fade_connections_enabled,
             "orthogonalRouting": self.orthogonal_routing,
@@ -1974,12 +2126,18 @@ class SceneDocument(BranchOps, GroupOps):
             "fontFamily": self.font_family,
             "fontSizePt": self.font_size_pt,
             "fontColor": self.font_color,
-            # R6.3: canvas view state + the real, live-growing session token
-            # count - see these fields' own comments on SceneDocument.
-            "zoomFactor": self.zoom_factor,
-            "scrollX": self.scroll_x,
-            "scrollY": self.scroll_y,
             "totalSessionTokens": self.total_session_tokens,
+        }
+
+    def scene_payload(self) -> dict[str, Any]:
+        return {
+            "nodes": [self._node_wire(n) for n in self.nodes.values()],
+            "edges": [self._edge_wire(e) for e in self.edges.values()],
+            "pins": self._pins_wire(),
+            **self._meta_wire(),
+            # R6.3: canvas view state - see these fields' own comments on
+            # SceneDocument.
+            **self._view_wire(),
         }
 
     def grid_payload(self) -> dict[str, Any]:

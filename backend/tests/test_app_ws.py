@@ -64,6 +64,25 @@ def make_client(tmp_path: Path | None = None, *, restrict_sessions: bool = True)
     return client
 
 
+def scene_nodes_from(message: dict, previous: list[dict] | None = None) -> list[dict]:
+    """ADR-003 stage 3.4: read a scene publish's node rows off EITHER wire
+    shape - the full `kind:"state"` snapshot or a `kind:"patch"` delta, which
+    the scene topic now sends whenever it is the smaller of the two. A patch
+    carries only the nodes that CHANGED, so `previous` supplies the rest;
+    omit it when the caller only cares about the changed ones (the usual case
+    for a test asserting "the intent I just fired produced this node")."""
+    if message["kind"] == "state":
+        return message["payload"]["nodes"]
+    by_id = {n["id"]: n for n in (previous or [])}
+    for op in message["ops"]:
+        if op["op"] == "upsertNode":
+            by_id[op["node"]["id"]] = op["node"]
+        elif op["op"] == "removeNodes":
+            for node_id in op["ids"]:
+                by_id.pop(node_id, None)
+    return list(by_id.values())
+
+
 def test_health_reports_ok_and_version():
     client = make_client()
     response = client.get("/api/health")
@@ -86,7 +105,17 @@ def test_subscribe_delivers_system_snapshot_with_envelope():
         assert payload["app"] == "graphlink"
         assert payload["sessionId"] == "default"
         assert payload["schemaVersion"] == 1
-        assert payload["revision"] >= 1
+        # ADR-003 stage 3.4: this used to assert >= 1, which only held
+        # because _Topic.snapshot() itself bumped the revision - so merely
+        # SUBSCRIBING advanced the counter, even though a subscribe reaches
+        # exactly one connection and is invisible to every other. That is a
+        # real bug once `revision` becomes the baseRevision the patch
+        # protocol compares against (an unrelated second window subscribing
+        # would manufacture a phantom gap and force everyone else to
+        # re-snapshot), so bumping now happens only on a real broadcast.
+        # A freshly-subscribed session that has published nothing is
+        # therefore correctly at 0.
+        assert payload["revision"] == 0
 
 
 def test_subscribe_without_topics_sends_every_registered_topic():
@@ -497,14 +526,14 @@ def test_disconnect_auto_denies_any_pending_pycoder_approval(monkeypatch):
         # and the new node's id is read back from that broadcast's own
         # payload rather than from a "result" envelope.
         ws.send_json({"kind": "intent", "topic": "scene", "intent": "addNode", "args": [0, 0, "root"]})
-        scene_after_add = ws.receive_json()["payload"]
-        parent_id = scene_after_add["nodes"][0]["id"]
+        nodes_after_add = scene_nodes_from(ws.receive_json())
+        parent_id = nodes_after_add[0]["id"]
 
         ws.send_json(
             {"kind": "intent", "topic": "app-plugins", "intent": "executePlugin", "args": ["Py-Coder", parent_id]}
         )
-        scene_after_plugin = ws.receive_json()["payload"]
-        node_id = next(n["id"] for n in scene_after_plugin["nodes"] if n["kind"] == "pycoder")
+        nodes_after_plugin = scene_nodes_from(ws.receive_json(), nodes_after_add)
+        node_id = next(n["id"] for n in nodes_after_plugin if n["kind"] == "pycoder")
 
         ws.send_json(
             {"kind": "intent", "topic": "scene", "intent": "runPyCoder", "args": [node_id, "add 1"]}

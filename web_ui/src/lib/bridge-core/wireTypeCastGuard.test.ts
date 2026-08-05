@@ -64,7 +64,25 @@ function generatedWireTypeNames(): string[] {
   return [...names];
 }
 
-function findWireTypeWideningCasts(source: string, wireTypeNames: string[]): string[] {
+/** ADR-003 stage 3.4 review-fix: strip comments before scanning.
+ *
+ * This is a text scanner, so it could not tell a real cast from one QUOTED
+ * IN A COMMENT - and it fired on exactly that: a doc comment explaining why
+ * `op.node as unknown as SceneNodeRow` is forbidden was itself reported as a
+ * violation. That made the anti-pattern undocumentable in the codebase it
+ * governs, which is the wrong incentive: the clearest way to stop someone
+ * reintroducing a pattern is to name it precisely at the site that avoids
+ * it. Deliberately simple regex stripping, consistent with this file's
+ * already-documented "regex, not a TS parser" posture - it can be confused
+ * by a comment-like sequence inside a string literal, which would only ever
+ * cause a MISSED detection in code no part of this repo writes, never a
+ * false alarm. */
+function stripComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+}
+
+function findWireTypeWideningCasts(rawSource: string, wireTypeNames: string[]): string[] {
+  const source = stripComments(rawSource);
   const found: string[] = [];
   for (const name of wireTypeNames) {
     // A type intersection widening the generated type, EITHER operand
@@ -155,6 +173,24 @@ describe("the scanner itself catches a real regression", () => {
   it("does NOT flag plain, unwidened use of the generated type", () => {
     const source = "function f(n: SceneNodeRow) { return n.title; }";
     expect(findWireTypeWideningCasts(source, wireTypeNames)).toEqual([]);
+  });
+
+  it("does NOT flag the anti-pattern QUOTED IN A COMMENT explaining why it is forbidden", () => {
+    // Review-fix: this scanner fired on a doc comment that named the exact
+    // cast it forbids, making the pattern undocumentable in the codebase it
+    // governs - precisely backwards, since naming it at the site that
+    // avoids it is the clearest way to stop someone reintroducing it.
+    const lineComment = "// never write `op.node as unknown as SceneNodeRow` here\nconst x = 1;";
+    const blockComment = "/* forbidden: type Wide = SceneNodeRow & { extra: string } */\nconst y = 2;";
+    expect(findWireTypeWideningCasts(lineComment, wireTypeNames)).toEqual([]);
+    expect(findWireTypeWideningCasts(blockComment, wireTypeNames)).toEqual([]);
+  });
+
+  it("STILL flags a real cast that merely sits next to a comment", () => {
+    // The complementary half - stripping comments must not create a blind
+    // spot for code on the same line or the next one.
+    const source = "// a note about types\nconst n = raw as unknown as SceneNodeRow;";
+    expect(findWireTypeWideningCasts(source, wireTypeNames)).toEqual(["as unknown as SceneNodeRow"]);
   });
 });
 
