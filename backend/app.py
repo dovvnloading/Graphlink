@@ -51,6 +51,7 @@ from backend.chat_library import register_chat_library
 from backend.composer import register_composer
 from backend.crash_recovery import maybe_show_crash_notice
 from backend.events import (
+    DEFAULT_COALESCE_WINDOW_SECONDS,
     DEFAULT_SESSION_ID,
     EventBus,
     IntentValidationError,
@@ -331,6 +332,12 @@ def create_app(
         # 4.3 reasoning on why the restriction lives at this layer, not
         # unconditionally inside EventBus itself.
         allowed_session_ids=frozenset({DEFAULT_SESSION_ID}) if restrict_sessions else None,
+        # ADR-003 stage 3.4 follow-on: the real, shipped bus coalesces a
+        # burst of same-topic publishes into one outbound message. Opted in
+        # HERE rather than defaulted on inside SessionBus so unit tests keep
+        # publishes synchronously complete on return - see SessionBus's own
+        # __init__ docstring.
+        coalesce_window_seconds=DEFAULT_COALESCE_WINDOW_SECONDS,
     )
     app.state.bus = bus
 
@@ -547,7 +554,11 @@ def create_app(
         # not the split-brain this fix closes for the common case.
         session.idle_since = None
         await websocket.accept()
-        session.attach(websocket)
+        # ADR-003 stage 3.4 follow-on: buffered, so this socket's own pace
+        # can never stall delivery to another window or block whichever
+        # coroutine published (an agent run, or this very receive loop).
+        # See SessionBus.attach / _BufferedConnection.
+        session.attach(websocket, buffered=True)
         try:
             while True:
                 message = await websocket.receive_json()
