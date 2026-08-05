@@ -310,6 +310,55 @@ class _BufferedConnection:
             self.dropped += 1
             return False
 
+    def offer_superseding(self, message: dict[str, Any], topic: str) -> None:
+        """Enqueue a full snapshot, first PURGING every queued state/patch
+        frame for the same topic - and, unlike offer(), guaranteed to succeed.
+
+        CODE-REVIEW FIX. send_snapshot used to send directly on the socket,
+        bypassing this queue, which caused two real problems for a buffered
+        connection once a backlog existed: (1) the snapshot OVERTOOK queued
+        older patches, which then arrived after it with baseRevision below
+        the client's new revision - each refused, each refusal triggering yet
+        another resync; (2) the obvious fix, routing it through offer(),
+        creates a WORSE bug - a full queue silently drops the resync snapshot,
+        and the client's sceneResyncPending flag is only ever cleared by a
+        snapshot arriving, so it never asks again: wedged until reconnect.
+
+        Purging is correct because a snapshot strictly supersedes every
+        queued frame of its own topic: the snapshot carries the topic's
+        current revision R, every queued state/patch was enqueued at some
+        revision <= R, and a patch published AFTER this call lands behind the
+        snapshot with baseRevision R - chaining perfectly. Stream frames and
+        other topics' frames are NOT superseded and are kept, order
+        preserved. Everything here is synchronous (no awaits), so the
+        purge-and-requeue cannot interleave with the writer task's get() in a
+        way that reorders the kept frames.
+
+        The final drop-oldest loop covers the pathological remainder (a queue
+        still full of stream/other-topic frames): the snapshot's delivery
+        guarantee outranks a stale stream delta's."""
+        kept: list[dict[str, Any]] = []
+        while True:
+            try:
+                queued = self.queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            if queued.get("topic") == topic and queued.get("kind") in ("state", "patch"):
+                continue  # strictly older state for this topic - superseded
+            kept.append(queued)
+        for item in kept:
+            self.queue.put_nowait(item)  # capacity is guaranteed: only removals so far
+        while True:
+            try:
+                self.queue.put_nowait(message)
+                return
+            except asyncio.QueueFull:
+                try:
+                    self.queue.get_nowait()
+                    self.dropped += 1
+                except asyncio.QueueEmpty:  # pragma: no cover - unreachable
+                    return
+
 
 class SessionBus:
     """Topics + connections + intent handlers for ONE session."""
@@ -664,7 +713,21 @@ class SessionBus:
         if t is None:
             raise UnknownTopicError(topic)
         payload = t.baseline_snapshot() or t.snapshot()
-        await conn.send_json({"kind": "state", "topic": topic, "payload": payload})
+        message = {"kind": "state", "topic": topic, "payload": payload}
+        # CODE-REVIEW FIX: a BUFFERED connection's snapshot must go through
+        # its queue, not directly onto the socket - a direct send OVERTAKES
+        # any queued older frames, which then arrive after it with
+        # baseRevision below the client's new revision, each refused, each
+        # refusal triggering yet another resync. offer_superseding (not plain
+        # offer) both purges those now-obsolete frames and guarantees the
+        # snapshot is never itself dropped by a full queue - a dropped resync
+        # snapshot would leave the client's sceneResyncPending flag set
+        # forever with nothing left to clear it. See _BufferedConnection.
+        buffered_conn = self._buffered.get(conn)
+        if buffered_conn is not None:
+            buffered_conn.offer_superseding(message, topic)
+            return
+        await conn.send_json(message)
 
     async def publish_stream(
         self,
