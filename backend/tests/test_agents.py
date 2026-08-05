@@ -47,6 +47,7 @@ import api_provider
 import graphlink_task_config as config
 from graphlink_settings_store import SettingsManager
 from graphlink_plugins.web_research.domain import RequestCancelled, ResearchFailure
+from graphlink_scratch_dirs import EXECUTION_SANDBOX_ROOT
 
 
 class _FakeSettingsManager:
@@ -3801,6 +3802,7 @@ def _make_pycoder_node(**overrides):
         pycoder_awaiting_approval=False,
         pycoder_approved_fingerprint=None,
         pycoder_error="",
+        pycoder_repl_id="fake-repl-id",
     )
     node_overrides = {"pending_request_id": None}
     for key, value in overrides.items():
@@ -3907,7 +3909,7 @@ class _FakeRepl:
 def test_pycoder_manual_mode_blank_code_calls_on_failure_without_creating_a_repl(monkeypatch):
     repl_created = []
     monkeypatch.setattr(
-        AgentDispatcher, "get_pycoder_repl", lambda self, node_id: repl_created.append(node_id) or _FakeRepl()
+        AgentDispatcher, "get_pycoder_repl", lambda self, node_id, repl_id=None: repl_created.append(node_id) or _FakeRepl()
     )
 
     async def run():
@@ -3933,7 +3935,7 @@ def test_pycoder_manual_mode_blank_code_calls_on_failure_without_creating_a_repl
 
 def test_pycoder_manual_mode_success_executes_once_and_analyzes(monkeypatch):
     fake_repl = _FakeRepl(script=[("42", False)])
-    monkeypatch.setattr(AgentDispatcher, "get_pycoder_repl", lambda self, node_id: fake_repl)
+    monkeypatch.setattr(AgentDispatcher, "get_pycoder_repl", lambda self, node_id, repl_id=None: fake_repl)
     monkeypatch.setattr(
         agents_module.PyCoderAnalysisAgent, "get_response",
         lambda self, original_prompt, code, code_output: f"analysis of {code_output}",
@@ -3962,7 +3964,7 @@ def test_pycoder_manual_mode_success_executes_once_and_analyzes(monkeypatch):
 
 def test_pycoder_manual_mode_reports_last_run_failed_from_the_repl(monkeypatch):
     fake_repl = _FakeRepl(script=[("Traceback...", True)])
-    monkeypatch.setattr(AgentDispatcher, "get_pycoder_repl", lambda self, node_id: fake_repl)
+    monkeypatch.setattr(AgentDispatcher, "get_pycoder_repl", lambda self, node_id, repl_id=None: fake_repl)
     monkeypatch.setattr(
         agents_module.PyCoderAnalysisAgent, "get_response",
         lambda self, original_prompt, code, code_output: "explains the error",
@@ -4225,7 +4227,7 @@ def test_pycoder_ai_driven_approved_executes_successfully(monkeypatch):
         lambda self, history, prompt: "[TOOL:PYTHON]\nprint(2)\n[/TOOL]",
     )
     fake_repl = _FakeRepl(script=[("2", False)])
-    monkeypatch.setattr(AgentDispatcher, "get_pycoder_repl", lambda self, node_id: fake_repl)
+    monkeypatch.setattr(AgentDispatcher, "get_pycoder_repl", lambda self, node_id, repl_id=None: fake_repl)
     monkeypatch.setattr(
         agents_module.PyCoderAnalysisAgent, "get_response",
         lambda self, original_prompt, code, code_output: "the answer is 2",
@@ -4269,7 +4271,7 @@ def test_pycoder_ai_driven_repair_loop_exhausts_retries_calls_on_success_with_la
         lambda self, original_prompt, code, code_output: "explains the persistent failure",
     )
     fake_repl = _FakeRepl(script=[("err", True)])  # every execute() call fails
-    monkeypatch.setattr(AgentDispatcher, "get_pycoder_repl", lambda self, node_id: fake_repl)
+    monkeypatch.setattr(AgentDispatcher, "get_pycoder_repl", lambda self, node_id, repl_id=None: fake_repl)
 
     # ADR-002 P0 regression guard: every repaired variant must open its own
     # fresh gate - a local SimpleNamespace subclass (NOT a patch on the
@@ -4336,7 +4338,7 @@ def test_pycoder_ai_driven_repair_gate_denied_stops_immediately_without_further_
         lambda self, code, error, is_final_attempt: "still broken",
     )
     fake_repl = _FakeRepl(script=[("err", True)])  # every execute() call fails
-    monkeypatch.setattr(AgentDispatcher, "get_pycoder_repl", lambda self, node_id: fake_repl)
+    monkeypatch.setattr(AgentDispatcher, "get_pycoder_repl", lambda self, node_id, repl_id=None: fake_repl)
 
     async def run():
         bus, notifications, dispatcher = _make_code_exec_env()
@@ -4404,7 +4406,7 @@ def test_pycoder_ai_driven_repair_gate_discloses_the_repaired_code_not_the_origi
         lambda self, code, error, is_final_attempt: "print('repaired')",
     )
     fake_repl = _FakeRepl(script=[("err", True)])  # every execute() call fails
-    monkeypatch.setattr(AgentDispatcher, "get_pycoder_repl", lambda self, node_id: fake_repl)
+    monkeypatch.setattr(AgentDispatcher, "get_pycoder_repl", lambda self, node_id, repl_id=None: fake_repl)
 
     async def run():
         bus, notifications, dispatcher = _make_code_exec_env()
@@ -4453,7 +4455,7 @@ def test_pycoder_execution_blocked_when_approved_fingerprint_does_not_match(monk
         lambda self, history, prompt: "[TOOL:PYTHON]\nprint(1)\n[/TOOL]",
     )
     fake_repl = _FakeRepl(script=[("1", False)])
-    monkeypatch.setattr(AgentDispatcher, "get_pycoder_repl", lambda self, node_id: fake_repl)
+    monkeypatch.setattr(AgentDispatcher, "get_pycoder_repl", lambda self, node_id, repl_id=None: fake_repl)
 
     async def run():
         bus, notifications, dispatcher = _make_code_exec_env()
@@ -5103,7 +5105,7 @@ def test_cancel_all_trips_a_pycoder_run_that_is_mid_execution_past_the_approval_
             release.wait(5)
             return "output"
 
-    monkeypatch.setattr(AgentDispatcher, "get_pycoder_repl", lambda self, node_id: _BlockingRepl())
+    monkeypatch.setattr(AgentDispatcher, "get_pycoder_repl", lambda self, node_id, repl_id=None: _BlockingRepl())
 
     async def run():
         bus, notifications, dispatcher = _make_code_exec_env()
@@ -5217,10 +5219,26 @@ def test_cancel_all_pending_approvals_auto_denies_every_undone_future_in_both_di
 
 def test_get_pycoder_repl_returns_the_same_instance_for_the_same_node_id():
     dispatcher = AgentDispatcher(_FakeSettingsManager())
-    first = dispatcher.get_pycoder_repl("n1")
-    second = dispatcher.get_pycoder_repl("n1")
+    first = dispatcher.get_pycoder_repl("n1", "repl-1")
+    second = dispatcher.get_pycoder_repl("n1", "repl-1")
     assert first is second
-    assert dispatcher.get_pycoder_repl("n2") is not first
+    assert dispatcher.get_pycoder_repl("n2", "repl-2") is not first
+
+
+def test_get_pycoder_repl_is_keyed_by_node_id_not_repl_id():
+    # ADR-005 stage 5.3 (review-fix): the in-memory dict lookup is
+    # node_id-keyed (session-scoped, safe to reuse - see get_pycoder_repl's
+    # own docstring); repl_id only affects the constructed PythonREPL's
+    # on-disk cwd, not which dict entry is returned. A lookup on the same
+    # node_id must reuse the SAME live REPL even if a caller (incorrectly,
+    # or via some future bug) passed a different repl_id the second time -
+    # the repl_id argument on that second call must simply be ignored, not
+    # cause a second REPL to be created.
+    dispatcher = AgentDispatcher(_FakeSettingsManager())
+    first = dispatcher.get_pycoder_repl("n1", "repl-1")
+    second = dispatcher.get_pycoder_repl("n1", "some-other-repl-id")
+    assert first is second
+    assert first.cwd.name == "repl-1"
 
 
 def test_dispose_pycoder_repl_tolerates_a_missing_node_id_silently():
@@ -5248,6 +5266,81 @@ def test_dispose_pycoder_repl_stops_and_removes_the_repl():
 
         assert fake_repl.stopped is True
         assert "n1" not in dispatcher._pycoder_repls
+
+    asyncio.run(run())
+
+
+def test_dispose_all_pycoder_repls_stops_every_tracked_repl_and_clears_the_dict():
+    class _StoppableRepl:
+        def __init__(self):
+            self.stopped = False
+
+        def stop(self):
+            self.stopped = True
+
+    dispatcher = AgentDispatcher(_FakeSettingsManager())
+    repl_a = _StoppableRepl()
+    repl_b = _StoppableRepl()
+    dispatcher._pycoder_repls["n1"] = repl_a
+    dispatcher._pycoder_repls["n2"] = repl_b
+
+    dispatcher.dispose_all_pycoder_repls()
+
+    assert dispatcher._pycoder_repls == {}
+    # stop() runs on a background thread (see the method's own docstring
+    # for why) - give it a moment to actually land before asserting.
+    for _ in range(50):
+        if repl_a.stopped and repl_b.stopped:
+            break
+        time.sleep(0.02)
+    assert repl_a.stopped is True
+    assert repl_b.stopped is True
+
+
+def test_dispose_all_pycoder_repls_does_not_block_the_caller_on_a_slow_stop():
+    # ADR-005 stage 5.3 (review-fix): its one real caller
+    # (_evict_idle_session) runs on the live asyncio event loop - a
+    # blocking inline repl.stop() would stall every other connected
+    # client's WS/HTTP handling for however long the OS takes to kill and
+    # reap the process. Proven here with a repl.stop() that would take
+    # noticeably longer than "instant" if called inline.
+    class _SlowRepl:
+        def __init__(self):
+            self.stopped = threading.Event()
+
+        def stop(self):
+            time.sleep(0.5)
+            self.stopped.set()
+
+    dispatcher = AgentDispatcher(_FakeSettingsManager())
+    slow_repl = _SlowRepl()
+    dispatcher._pycoder_repls["n1"] = slow_repl
+
+    start = time.monotonic()
+    dispatcher.dispose_all_pycoder_repls()
+    elapsed = time.monotonic() - start
+
+    assert elapsed < 0.2, "must return almost immediately, not block on the slow stop()"
+    assert slow_repl.stopped.wait(timeout=2.0), "the background thread must still actually call stop()"
+
+
+def test_remove_code_sandbox_scratch_dir_refuses_a_blank_sandbox_id():
+    # ADR-005 stage 5.3 (review-fix): a blank sandbox_id resolves to the
+    # shared "default" bucket - rmtree-ing it because one blank-id node
+    # was deleted would take a DIFFERENT still-live blank-id node's
+    # directory down with it. See graphlink_scratch_dirs.
+    # remove_scratch_dir_for_id's own docstring.
+    async def run():
+        dispatcher = AgentDispatcher(_FakeSettingsManager())
+        shared_default = EXECUTION_SANDBOX_ROOT / "default"
+        shared_default.mkdir(parents=True, exist_ok=True)
+        (shared_default / "someone_elses_venv_marker.txt").write_text("data", encoding="utf-8")
+        try:
+            await dispatcher.remove_code_sandbox_scratch_dir("")
+            assert shared_default.exists(), "a blank sandbox_id must never remove the shared bucket"
+        finally:
+            import shutil
+            shutil.rmtree(shared_default, ignore_errors=True)
 
     asyncio.run(run())
 

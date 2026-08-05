@@ -320,6 +320,10 @@ def _serialize_pycoder_node(node: SceneNode) -> dict[str, Any]:
         "code": node.state.pycoder_code,
         "output": node.state.pycoder_output,
         "analysis": node.state.pycoder_analysis,
+        # ADR-005 stage 5.3 (review-fix): round-trips the stable REPL
+        # scratch-dir key - see PycoderState.pycoder_repl_id's own
+        # docstring for why node.id alone cannot be used for this.
+        "pycoder_repl_id": node.state.pycoder_repl_id,
         "conversation_history": _serialize_history(node.history),
         "is_collapsed": bool(node.is_collapsed),
     }

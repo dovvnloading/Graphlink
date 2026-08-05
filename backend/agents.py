@@ -98,6 +98,8 @@ from graphlink_plugins.code_sandbox.domain import (
     _extract_python_block,
     _normalize_requirements,
 )
+from graphlink_scratch_dirs import EXECUTION_SANDBOX_ROOT, PYCODER_REPL_ROOT
+from graphlink_scratch_dirs import remove_scratch_dir_for_id
 from graphlink_plugins.web_research.domain import (
     CancellationToken,
     ProgressEvent,
@@ -377,29 +379,121 @@ class AgentDispatcher:
         # SceneNode state, not a live object.
         self._pycoder_repls: dict[str, PythonREPL] = {}
 
-    def get_pycoder_repl(self, node_id: str) -> PythonREPL:
+    def get_pycoder_repl(self, node_id: str, repl_id: str) -> PythonREPL:
         """Lazy-create-or-reuse - mirrors PyCoderReplManager.get_repl's own
-        shape, just keyed by node_id instead of node identity."""
+        shape, keyed by node_id (transient, session-scoped: this dict and
+        node_id are both rebuilt from scratch together on every session
+        reload, so reusing node_id here is safe even though it is not
+        durable across reloads - see PythonREPL.cwd's own docstring for
+        why the ON-DISK directory needs a different, stable identity
+        instead). repl_id is node.state.pycoder_repl_id, minted once at
+        node creation (ADR-005 stage 5.3 review-fix) - passed through to
+        PythonREPL so its scratch cwd survives a reload even though this
+        node's own id would not."""
         repl = self._pycoder_repls.get(node_id)
         if repl is None:
-            repl = PythonREPL(node_id=node_id)
+            repl = PythonREPL(repl_id=repl_id)
             self._pycoder_repls[node_id] = repl
         return repl
 
-    async def dispose_pycoder_repl(self, node_id: str) -> None:
+    async def dispose_pycoder_repl(
+        self, node_id: str, *, repl_id: str | None = None, remove_scratch_dir: bool = False
+    ) -> None:
         """Explicit teardown of one node's REPL subprocess. Tolerates a
         missing node_id silently (pop with a default) - called from exactly
-        two places: backend/canvas.py's remove_nodes WS-intent wrapper (for
-        every deleted pycoder node), and start_pycoder_run's own
-        execute-timeout guard below (a hung REPL must not be left alive).
-        NOT called on disconnect/session-end - the REPL persists across
-        disconnects exactly like every other piece of node state in
+        two places: backend/api/intents_nodes.py's remove_nodes WS-intent
+        wrapper (for every deleted pycoder node), and start_pycoder_run's
+        own execute-timeout guard below (a hung REPL must not be left
+        alive). NOT called on disconnect/session-end - the REPL persists
+        across disconnects exactly like every other piece of node state in
         SceneDocument already does; only explicit node deletion (or process
         shutdown) ends it. stop() does a blocking kill()+wait(), so it runs
-        inside asyncio.to_thread rather than directly on the event loop."""
+        inside asyncio.to_thread rather than directly on the event loop.
+
+        ADR-005 stage 5.3: remove_scratch_dir=True additionally deletes the
+        REPL's scratch directory from disk - correct ONLY for the real
+        node-deletion caller, where the node is gone for good. The
+        execute-timeout guard passes the default False: a timeout means
+        this one run misbehaved, not that the node's accumulated scratch
+        files should be thrown away.
+
+        Review-fix: removal is keyed off the passed-in repl_id (recomputed
+        via remove_scratch_dir_for_id), NOT off whatever `repl` this pop
+        happened to find - the two are NOT reliably the same thing. A REPL
+        already popped by an earlier execute timeout (this method's OTHER
+        caller, which never repopulates the dict - only a fresh
+        get_pycoder_repl call does, i.e. running Py-Coder again) leaves
+        node_id absent from _pycoder_repls; a subsequent real delete used
+        to make this pop return None and silently skip the directory
+        removal entirely; with a deterministic recompute the removal still
+        happens even though there is no live object left to ask. Callers
+        that pass remove_scratch_dir=True must also pass repl_id (the
+        node's stable pycoder_repl_id, not its node_id)."""
         repl = self._pycoder_repls.pop(node_id, None)
         if repl is not None:
             await asyncio.to_thread(repl.stop)
+        if remove_scratch_dir and repl_id:
+            await asyncio.to_thread(remove_scratch_dir_for_id, PYCODER_REPL_ROOT, repl_id)
+
+    def dispose_all_pycoder_repls(self) -> None:
+        """Bulk, non-blocking teardown for every currently-tracked REPL
+        subprocess - called from backend/app.py's _evict_idle_session right
+        before the SessionBus itself is dropped from EventBus._sessions.
+        Its one caller (_evict_idle_session, via EventBus's own
+        synchronous sweep_idle_sessions/_eviction_loop chain) runs on the
+        live asyncio event loop, so - review-fix - each repl.stop() (a
+        documented-blocking kill()+wait(), possibly a Windows Job-Object
+        guard.close() too) is fired on its own daemon thread rather than
+        called inline: this method's async sibling dispose_pycoder_repl
+        explicitly offloads the identical call via asyncio.to_thread for
+        exactly this reason, and calling it directly here would stall
+        every other connected client's WS/HTTP handling for however long
+        the OS takes to kill+reap each process. Not awaited/joined - unlike
+        the delete path, nothing here needs the stop to have completed
+        before returning (this method deliberately never removes any
+        directory afterward, see below), so there is nothing to wait for.
+        PythonREPL.stop()'s own RLock already makes firing these
+        concurrently (with each other, and with any other in-flight
+        start()/stop() on the same instance) safe (the stage 5.2
+        concurrent-stop() fix covers exactly that race).
+
+        Deliberately does NOT remove each REPL's scratch directory, unlike
+        the node-delete path above: eviction means "no one is currently
+        connected", not "this node's work should be discarded" - the
+        directory is exactly the kind of state a REPL restart already
+        preserves across process restarts by design (see PythonREPL's own
+        cwd docstring), and a reconnecting user may expect their files
+        still there. What eviction genuinely leaks if left alone is the
+        subprocess itself: once this SessionBus is gone from
+        EventBus._sessions, nothing else holds a reference that could ever
+        call stop() on it again."""
+        for node_id in list(self._pycoder_repls.keys()):
+            repl = self._pycoder_repls.pop(node_id, None)
+            if repl is not None:
+                threading.Thread(target=repl.stop, daemon=True).start()
+
+    async def remove_code_sandbox_scratch_dir(self, sandbox_id: str) -> None:
+        """ADR-005 stage 5.3: node-delete counterpart of
+        dispose_pycoder_repl's remove_scratch_dir=True, for Execution
+        Sandbox. Unlike Py-Coder's REPL, VirtualEnvSandbox is never cached
+        on this dispatcher (see this class's own __init__ docstring) - the
+        only state that survives a run is the plain sandbox_id string on
+        the node itself - so there is no live object to ask for its
+        base_dir; the path is recomputed the same deterministic way
+        VirtualEnvSandbox.__init__ builds it (remove_scratch_dir_for_id
+        also refuses to act on a blank sandbox_id, rather than rmtree-ing
+        the shared "default" bucket a blank id resolves to - see that
+        function's own docstring). A venv tree can be large, so the
+        removal runs in a thread, same reasoning as dispose_pycoder_repl's
+        own stop()/rmtree calls.
+
+        Best-effort: an in-flight run for this node may still be exiting
+        when a delete races it (cancelled moments earlier by remove_nodes'
+        own code_exec_cancels loop), in which case removal can fail (e.g. a
+        file still open on Windows) and is simply logged - the age sweep in
+        graphlink_scratch_dirs.py is the backstop for anything left behind
+        here."""
+        await asyncio.to_thread(remove_scratch_dir_for_id, EXECUTION_SANDBOX_ROOT, sandbox_id)
 
     def cancel_pycoder(self, request_id: str) -> bool:
         """Cooperative cancel, same honestly-documented limitation as every
@@ -1829,7 +1923,7 @@ class AgentDispatcher:
                         await bus.publish("scene")
                         return
 
-                    repl = self.get_pycoder_repl(node_id)
+                    repl = self.get_pycoder_repl(node_id, node.state.pycoder_repl_id)
                     try:
                         output = await asyncio.wait_for(
                             asyncio.to_thread(repl.execute, manual_code),
@@ -1905,7 +1999,7 @@ class AgentDispatcher:
                     await bus.publish("scene")
                     return
 
-                repl = self.get_pycoder_repl(node_id)
+                repl = self.get_pycoder_repl(node_id, node.state.pycoder_repl_id)
                 retry_count = 0
                 max_retries = 4
                 last_error = None

@@ -33,16 +33,20 @@ import json
 import re
 import subprocess
 import sys
-import tempfile
 import threading
 import uuid
 from enum import Enum
-from pathlib import Path
 
 import api_provider
 import graphlink_task_config as config
 from graphlink_execution_guard import create_execution_guard
 from graphlink_process_env import safe_subprocess_env
+from graphlink_scratch_dirs import (
+    PYCODER_REPL_ROOT,
+    prepare_scratch_dir,
+    safe_scratch_id,
+    touch_scratch_dir_usage,
+)
 
 
 class PyCoderStage(Enum):
@@ -84,8 +88,21 @@ class PythonREPL:
     by executed code. Mirrors VirtualEnvSandbox's own base_dir pattern in
     graphlink_plugins/code_sandbox/domain.py exactly (same safe-id
     sanitization, same tempdir root convention, sibling directory name).
+
+    ADR-005 stage 5.3 (review-fix): that scratch directory is keyed by
+    repl_id, NOT by this node's own id - node.id is reassigned fresh,
+    purely by array position, every time a session is (re)loaded
+    (backend/domain/graph.py's register_restored_node), so keying by it
+    let a reload silently swap which on-disk directory a node's REPL
+    resolved to (one node losing its own accumulated files, or inheriting
+    a different node's leftovers, any time an earlier node in save order
+    was deleted before the next load). repl_id is
+    node.state.pycoder_repl_id - minted once at node creation and
+    round-tripped through session save/load independent of node.id
+    churn, mirroring CodeSandboxState.code_sandbox_sandbox_id exactly
+    (see PycoderState's own docstring for the full mechanism).
     """
-    def __init__(self, node_id=None):
+    def __init__(self, repl_id=None):
         self.process = None
         self.last_run_failed = False
         self._boundary_prefix = ""
@@ -109,8 +126,7 @@ class PythonREPL:
         # check and its later self.process.kill() call) and could
         # double-close the same real OS job handle.
         self._lock = threading.RLock()
-        safe_id = re.sub(r"[^A-Za-z0-9_-]", "_", node_id or "default")
-        self.cwd = Path(tempfile.gettempdir()) / "graphlink_pycoder_repls" / safe_id
+        self.cwd = PYCODER_REPL_ROOT / safe_scratch_id(repl_id)
 
     def start(self):
         with self._lock:
@@ -159,10 +175,12 @@ while True:
                 kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
 
             # ADR-005 stage 5.1: cwd= a scratch dir, never the app's own cwd
-            # (see this class's own docstring). mkdir here, not in
+            # (see this class's own docstring). Created here, not in
             # __init__, so a REPL that is constructed but never started
-            # never touches the filesystem.
-            self.cwd.mkdir(parents=True, exist_ok=True)
+            # never touches the filesystem. ADR-005 stage 5.3: chmod 0700
+            # on POSIX - see graphlink_scratch_dirs.prepare_scratch_dir's
+            # own docstring for why.
+            prepare_scratch_dir(self.cwd)
 
             # ADR-005 stage 5.2/5.3: the guard is created BEFORE Popen so
             # its popen_kwargs() can reach the spawn itself. On Windows
@@ -194,6 +212,12 @@ while True:
     def execute(self, code):
         if not self.process or self.process.poll() is not None:
             self.start()
+
+        # ADR-005 stage 5.3 (review-fix): mark this cwd as actively used -
+        # see touch_scratch_dir_usage's own docstring for why the age
+        # sweep would otherwise treat a REPL run daily for months exactly
+        # like one abandoned the day after creation.
+        touch_scratch_dir_usage(self.cwd)
 
         encoded_code = base64.b64encode(code.encode('utf-8')).decode('utf-8')
         try:

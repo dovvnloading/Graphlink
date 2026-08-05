@@ -446,3 +446,45 @@ def test_evict_idle_session_returns_true_for_a_never_configured_bus():
     # veto forever.
     bus = SessionBus("s1")
     assert _evict_idle_session(bus) is True
+
+
+def test_evict_idle_session_disposes_every_live_pycoder_repl():
+    """ADR-005 stage 5.3: without this, a REPL subprocess left idle (not
+    in-flight - has_in_flight_runs() already vetoed eviction above if one
+    were) is orphaned the instant EventBus.sweep_idle_sessions drops this
+    SessionBus - nothing else would ever hold a reference able to call
+    stop() on it again. get_pycoder_repl without ever calling start()
+    mirrors test_canvas.py's own dispose_pycoder_repl tests - there is no
+    real subprocess to tear down, only the dict entry, which is exactly
+    what this asserts."""
+    bus = SessionBus("s1")
+    context, _tmp = _real_session_context()
+    attach_session_context(bus, context)
+    context.agent_dispatcher.get_pycoder_repl("node-1", "repl-1")
+    assert "node-1" in context.agent_dispatcher._pycoder_repls
+
+    result = _evict_idle_session(bus)
+
+    assert result is True
+    assert context.agent_dispatcher._pycoder_repls == {}, (
+        "every live REPL must be torn down before the session itself is evicted"
+    )
+
+
+def test_evict_idle_session_does_not_remove_the_repls_scratch_dir():
+    """See AgentDispatcher.dispose_all_pycoder_repls' own docstring:
+    eviction means "no one is currently connected", not "discard this
+    node's work" - unlike explicit node deletion (test_canvas.py's own
+    scratch-dir GC tests), the directory must survive a mere idle eviction
+    so a reconnecting user finds their files still there."""
+    bus = SessionBus("s1")
+    context, _tmp = _real_session_context()
+    attach_session_context(bus, context)
+    repl = context.agent_dispatcher.get_pycoder_repl("node-1", "repl-1")
+    repl.cwd.mkdir(parents=True, exist_ok=True)
+    (repl.cwd / "leftover.txt").write_text("data", encoding="utf-8")
+
+    result = _evict_idle_session(bus)
+
+    assert result is True
+    assert repl.cwd.is_dir(), "eviction must not delete the REPL's scratch directory"
