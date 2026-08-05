@@ -549,8 +549,16 @@ class SessionBus:
         pending = self._pending_flush.get(topic)
         if pending is not None and not pending.done():
             # Join the in-flight window rather than opening a second one.
-            # Shielded so one joiner being cancelled cannot cancel the flush
-            # out from under the others.
+            #
+            # shield() is the standard idiom for awaiting a task shared with
+            # other callers, and it is kept for that reason - but honestly:
+            # mutation testing could NOT produce a scenario where removing it
+            # changes an observable outcome, even with two joiners provably
+            # suspended on the same flush. A cancelled joiner leaves the
+            # flush task itself untouched, and even if it did not, the
+            # `not pending.done()` guard above means the next caller simply
+            # opens a fresh window and still gets its state out. So this is
+            # defensive, not load-bearing, and no test claims otherwise.
             return await asyncio.shield(pending)
         task = asyncio.ensure_future(self._flush_after(topic, window))
         self._pending_flush[topic] = task

@@ -302,36 +302,46 @@ def test_publishes_in_separate_windows_are_not_merged():
     asyncio.run(run())
 
 
-def test_a_mutation_landing_during_a_flush_is_not_swallowed():
-    # The slot is released BEFORE the send precisely so a mutation arriving
-    # while a flush is in flight opens a NEW window rather than being folded
-    # into a flush that already read the document - which would drop it from
-    # the wire entirely.
+def test_a_mutation_landing_while_a_flush_is_mid_SEND_is_not_swallowed():
+    # The discriminating case for WHERE the slot is released. The flush is
+    # made genuinely slow (a 0.1 s reader) so a second mutation lands while
+    # the first flush is still sending:
+    #   slot released BEFORE the send (correct) -> the slot is already free,
+    #     so the second publish opens a fresh window and its mutation ships.
+    #   slot released AFTER the send  (wrong)   -> the slot is still held, so
+    #     the second publish JOINS a flush that already read the document,
+    #     and its mutation never reaches the wire at all.
+    # An earlier version of this test slept past the whole flush, so both
+    # orderings passed it - it proved nothing.
     async def run():
         document = SceneDocument()
         bus = make_bus(document, coalesce_window_seconds=0.01)
-        recorder = Recorder()
-        bus.attach(recorder)
+        slow = SlowRecorder(delay=0.1)
+        bus.attach(slow)  # unbuffered: the flush itself waits on the send
         node = document.add_node(0, 0, "a")
         await bus.publish("scene")
 
-        document.move_node(node.id, 5, 5)
+        document.move_node(node.id, 5.0, 5.0)
         first = asyncio.ensure_future(bus.publish("scene"))
-        await asyncio.sleep(0.012)  # let the first window fire
-        document.move_node(node.id, 7, 7)
-        await bus.publish("scene")
-        await first
+        await asyncio.sleep(0.05)  # window fired; the send is still in flight
+        document.move_node(node.id, 7.0, 7.0)
+        second = asyncio.ensure_future(bus.publish("scene"))
+        await asyncio.gather(first, second)
+        await asyncio.sleep(0.3)
 
-        final = document.nodes[node.id]
+        final_x = document.nodes[node.id].x
         seen_x = None
-        for frame in recorder.messages:
+        for frame in slow.messages:
             if frame["kind"] == "patch":
                 for op in frame["ops"]:
                     if op["op"] == "upsertNode" and op["node"]["id"] == node.id:
                         seen_x = op["node"]["x"]
             else:
                 seen_x = {n["id"]: n for n in frame["payload"]["nodes"]}[node.id]["x"]
-        assert seen_x == final.x, "the post-flush mutation must still reach the wire"
+        assert seen_x == final_x, (
+            f"the mid-send mutation never reached the wire (last seen x={seen_x}, "
+            f"document has {final_x}) - the flush slot is being released too late"
+        )
 
     asyncio.run(run())
 
@@ -366,7 +376,14 @@ def test_an_unknown_topic_still_raises_synchronously_to_its_own_caller():
     asyncio.run(run())
 
 
-def test_one_joiner_being_cancelled_does_not_cancel_the_shared_flush():
+def test_one_joiner_being_cancelled_still_leaves_the_others_with_their_state():
+    # NOTE the name: this pins the OUTCOME (a cancelled caller does not take
+    # its co-joiners down with it), not the mechanism. The shield in
+    # publish() is the conventional way to get this, but mutation testing
+    # showed removing it changes nothing observable - the `not
+    # pending.done()` guard makes the next caller open a fresh window
+    # instead. Asserting the outcome keeps this test honest about what it
+    # actually proves; see publish()'s own comment.
     async def run():
         document = SceneDocument()
         bus = make_bus(document, coalesce_window_seconds=0.02)
