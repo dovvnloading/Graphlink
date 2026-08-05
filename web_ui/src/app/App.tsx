@@ -4,6 +4,7 @@ import { TOPIC_VALIDATORS } from "../lib/api-contract/topics";
 import type { AppSettingsState } from "../lib/bridge-core/generated/app-settings-state";
 import { isTextEditable } from "../lib/bridge-core/textFocus";
 import { ConnectionStatus, WsTransport, defaultWsUrl } from "../lib/ws/transport";
+import { connectionBadgeLabel } from "./connectionBadge";
 import { ExecutionLimitsProvider } from "./canvas/ExecutionLimitsContext";
 import { SceneCanvas, measuredNodeSize } from "./canvas/SceneCanvas";
 import { SceneStore } from "./canvas/sceneStore";
@@ -281,7 +282,7 @@ function App() {
             <span className="app-title">Graphlink</span>
             <AppBar store={sceneStore} />
             <span className={`app-conn app-conn-${status}`} title={`backend ${system.backendVersion ?? ""}`}>
-              {status === "open" ? "connected" : status}
+              {connectionBadgeLabel(status)}
             </span>
           </header>
 

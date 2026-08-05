@@ -565,7 +565,7 @@ export class SceneStore {
   }
 
   setChatCollapsed(id: string, collapsed: boolean): void {
-    this.transport.fireIntent("scene", "setChatCollapsed", [id, collapsed]);
+    this.transport.fireIntent("scene", "setChatCollapsed", [id, collapsed], undefined, true);
   }
 
   // R7.5e: legacy's "Collapse All Nodes"/"Expand All Nodes" (graphlink_
@@ -575,11 +575,11 @@ export class SceneStore {
   // scene intent (organizeNodes, ...): the new is_collapsed values arrive
   // through the next scene snapshot, nothing synchronous needed here.
   collapseAllNodes(): void {
-    this.transport.fireIntent("scene", "collapseAllNodes", []);
+    this.transport.fireIntent("scene", "collapseAllNodes", [], undefined, true);
   }
 
   expandAllNodes(): void {
-    this.transport.fireIntent("scene", "expandAllNodes", []);
+    this.transport.fireIntent("scene", "expandAllNodes", [], undefined, true);
   }
 
   // R3.9/R3.10: real document nodes (attachments). Unlike chat/code,
@@ -718,7 +718,7 @@ export class SceneStore {
   }
 
   setNodeDocked(id: string, docked: boolean): void {
-    this.transport.fireIntent("scene", "setNodeDocked", [id, docked]);
+    this.transport.fireIntent("scene", "setNodeDocked", [id, docked], undefined, true);
   }
 
   // R4.3c: real Regenerate Response, for both ChatNodeView's own menu and
@@ -793,7 +793,7 @@ export class SceneStore {
   }
 
   setGitlinkLocalRoot(nodeId: string, localRoot: string): void {
-    this.transport.fireIntent("scene", "setGitlinkLocalRoot", [nodeId, localRoot]);
+    this.transport.fireIntent("scene", "setGitlinkLocalRoot", [nodeId, localRoot], undefined, true);
   }
 
   // Opens the real native OS folder picker (backend/native_dialogs.py, the
@@ -850,7 +850,7 @@ export class SceneStore {
   // only validator of that value; this store has no opinion on it, same
   // posture as applyGitlinkChanges's fingerprint passthrough above.
   setPyCoderMode(nodeId: string, mode: string): void {
-    this.transport.fireIntent("scene", "setPyCoderMode", [nodeId, mode]);
+    this.transport.fireIntent("scene", "setPyCoderMode", [nodeId, mode], undefined, true);
   }
 
   // inputText's meaning (a natural-language prompt vs hand-typed code) is
@@ -878,7 +878,7 @@ export class SceneStore {
   // WS-intent layer - CodeSandboxNodeView is the one that decides whether
   // that's currently sensible to allow (see its own Run-enablement comment).
   setCodeSandboxRequirements(nodeId: string, requirementsText: string): void {
-    this.transport.fireIntent("scene", "setCodeSandboxRequirements", [nodeId, requirementsText]);
+    this.transport.fireIntent("scene", "setCodeSandboxRequirements", [nodeId, requirementsText], undefined, true);
   }
 
   // ADR-005 stage 5.5: the approval panel's own source-build opt-in
@@ -962,7 +962,7 @@ export class SceneStore {
   }
 
   moveNode(id: string, x: number, y: number): void {
-    this.transport.fireIntent("scene", "moveNode", [id, x, y]);
+    this.transport.fireIntent("scene", "moveNode", [id, x, y], undefined, true);
   }
 
   // R6.1 follow-up: a group drag's commit (the group's own node PLUS every
@@ -974,10 +974,15 @@ export class SceneStore {
   // grow a box (rather than staying frozen, the bug the growth logic
   // itself was fixing).
   moveNodes(positions: Array<{ id: string; x: number; y: number }>): void {
+    // ADR-003 stage 3.6: queueable - a position commit is idempotent
+    // last-write-wins, the ADR's own literal "move" example, and the
+    // exit-criterion scenario (kill the server mid-drag) this stage names.
     this.transport.fireIntent(
       "scene",
       "moveNodes",
       [positions.map((p) => [p.id, p.x, p.y])],
+      undefined,
+      true,
     );
   }
 
@@ -998,7 +1003,7 @@ export class SceneStore {
   }
 
   updatePin(id: string, title: string, note: string): void {
-    this.transport.fireIntent("scene", "updatePin", [id, title, note]);
+    this.transport.fireIntent("scene", "updatePin", [id, title, note], undefined, true);
   }
 
   removePin(id: string): void {
@@ -1006,27 +1011,27 @@ export class SceneStore {
   }
 
   setSnapToGrid(enabled: boolean): void {
-    this.transport.fireIntent("scene", "setSnapToGrid", [enabled]);
+    this.transport.fireIntent("scene", "setSnapToGrid", [enabled], undefined, true);
   }
 
   // R7.5b-1: same bare-bool/"scene"-topic shape as setSnapToGrid above.
   setFadeConnections(enabled: boolean): void {
-    this.transport.fireIntent("scene", "setFadeConnections", [enabled]);
+    this.transport.fireIntent("scene", "setFadeConnections", [enabled], undefined, true);
   }
 
   // R7.5b-2: same shape again - intent name matches the legacy
   // GridControlBridge's own setOrthogonalConnections Slot name 1:1.
   setOrthogonalConnections(enabled: boolean): void {
-    this.transport.fireIntent("scene", "setOrthogonalConnections", [enabled]);
+    this.transport.fireIntent("scene", "setOrthogonalConnections", [enabled], undefined, true);
   }
 
   // R7.5b-3: the fourth and final legacy grid-control toggle.
   setSmartGuides(enabled: boolean): void {
-    this.transport.fireIntent("scene", "setSmartGuides", [enabled]);
+    this.transport.fireIntent("scene", "setSmartGuides", [enabled], undefined, true);
   }
 
   setDragFactor(factor: number): void {
-    this.transport.fireIntent("scene", "setDragFactor", [factor]);
+    this.transport.fireIntent("scene", "setDragFactor", [factor], undefined, true);
   }
 
   organizeNodes(): void {
@@ -1072,7 +1077,7 @@ export class SceneStore {
   }
 
   setNoteContent(nodeId: string, content: string): void {
-    this.transport.fireIntent("scene", "setNoteContent", [nodeId, content]);
+    this.transport.fireIntent("scene", "setNoteContent", [nodeId, content], undefined, true);
   }
 
   createFrame(itemIds: string[]): void {
@@ -1097,22 +1102,22 @@ export class SceneStore {
   // below: the backend validates/does the work, and the new value arrives
   // through the next scene snapshot like any other mutation.
   setBranchStatus(nodeId: string, status: string): void {
-    this.transport.fireIntent("scene", "setBranchStatus", [nodeId, status]);
+    this.transport.fireIntent("scene", "setBranchStatus", [nodeId, status], undefined, true);
   }
 
   setFinalDeliverable(nodeId: string, isFinal: boolean): void {
-    this.transport.fireIntent("scene", "setFinalDeliverable", [nodeId, isFinal]);
+    this.transport.fireIntent("scene", "setFinalDeliverable", [nodeId, isFinal], undefined, true);
   }
 
   collapseBranch(nodeId: string, collapsed: boolean): void {
-    this.transport.fireIntent("scene", "collapseBranch", [nodeId, collapsed]);
+    this.transport.fireIntent("scene", "collapseBranch", [nodeId, collapsed], undefined, true);
   }
 
   // Shared setter for frame/container header-note/title text (backend/
   // canvas.py's set_group_label) - reused verbatim for both kinds, same
   // posture as setGroupColor below.
   setGroupLabel(nodeId: string, text: string): void {
-    this.transport.fireIntent("scene", "setGroupLabel", [nodeId, text]);
+    this.transport.fireIntent("scene", "setGroupLabel", [nodeId, text], undefined, true);
   }
 
   // Shared color setter for note/frame/container kinds. Either argument may
@@ -1120,9 +1125,17 @@ export class SceneStore {
   // (GroupColorPicker's "Reset to Default" item) passes (null, null) for a
   // full reset, or one real hex + null for a single-half set.
   setGroupColor(nodeId: string, color: string | null, headerColor: string | null): void {
-    this.transport.fireIntent("scene", "setGroupColor", [nodeId, color, headerColor]);
+    this.transport.fireIntent("scene", "setGroupColor", [nodeId, color, headerColor], undefined, true);
   }
 
+  // ADR-003 stage 3.6: deliberately NOT queueable, unlike the set*/resize*
+  // neighbours here. The backend handler flips (`is_locked = not is_locked`,
+  // groups.py) rather than setting an explicit value, so it is not
+  // idempotent - and fireIntent re-queues an intent that was genuinely in
+  // flight when the socket died, a case where the server may well have
+  // APPLIED it already and only the reply was lost. Replaying then toggles a
+  // SECOND time and silently reverts the user's action. Same reasoning for
+  // toggleGroupCollapsed and toggleChartAspectLock.
   toggleFrameLock(nodeId: string): void {
     this.transport.fireIntent("scene", "toggleFrameLock", [nodeId]);
   }
@@ -1132,11 +1145,11 @@ export class SceneStore {
   }
 
   resizeFrame(nodeId: string, width: number, height: number): void {
-    this.transport.fireIntent("scene", "resizeFrame", [nodeId, width, height]);
+    this.transport.fireIntent("scene", "resizeFrame", [nodeId, width, height], undefined, true);
   }
 
   fitFrameToContent(nodeId: string): void {
-    this.transport.fireIntent("scene", "fitFrameToContent", [nodeId]);
+    this.transport.fireIntent("scene", "fitFrameToContent", [nodeId], undefined, true);
   }
 
   ungroup(nodeId: string): void {
@@ -1174,9 +1187,10 @@ export class SceneStore {
   }
 
   resizeChart(nodeId: string, width: number, height: number): void {
-    this.transport.fireIntent("scene", "resizeChart", [nodeId, width, height]);
+    this.transport.fireIntent("scene", "resizeChart", [nodeId, width, height], undefined, true);
   }
 
+  // Not queueable - flips rather than sets; see toggleFrameLock's own comment.
   toggleChartAspectLock(nodeId: string): void {
     this.transport.fireIntent("scene", "toggleChartAspectLock", [nodeId]);
   }
@@ -1197,45 +1211,45 @@ export class SceneStore {
   // through it at all.
 
   setViewState(zoomFactor: number, scrollX: number, scrollY: number): void {
-    this.transport.fireIntent("scene", "setViewState", [zoomFactor, scrollX, scrollY]);
+    this.transport.fireIntent("scene", "setViewState", [zoomFactor, scrollX, scrollY], undefined, true);
   }
 
   setHtmlSplitterState(nodeId: string, value: number): void {
-    this.transport.fireIntent("scene", "setHtmlSplitterState", [nodeId, value]);
+    this.transport.fireIntent("scene", "setHtmlSplitterState", [nodeId, value], undefined, true);
   }
 
   setChatScrollValue(nodeId: string, value: number): void {
-    this.transport.fireIntent("scene", "setChatScrollValue", [nodeId, value]);
+    this.transport.fireIntent("scene", "setChatScrollValue", [nodeId, value], undefined, true);
   }
 
   // Grid intents ride the grid-control topic; font intents ride scene - both
   // keep the legacy bridges' @Slot names 1:1 (backend/canvas.py contract).
   setGridSize(size: number): void {
-    this.transport.fireIntent("grid-control", "setGridSize", [size]);
+    this.transport.fireIntent("grid-control", "setGridSize", [size], undefined, true);
   }
 
   setGridOpacityPercent(percent: number): void {
-    this.transport.fireIntent("grid-control", "setGridOpacityPercent", [percent]);
+    this.transport.fireIntent("grid-control", "setGridOpacityPercent", [percent], undefined, true);
   }
 
   setGridStyle(style: string): void {
-    this.transport.fireIntent("grid-control", "setGridStyle", [style]);
+    this.transport.fireIntent("grid-control", "setGridStyle", [style], undefined, true);
   }
 
   setGridColor(hex: string): void {
-    this.transport.fireIntent("grid-control", "setGridColor", [hex]);
+    this.transport.fireIntent("grid-control", "setGridColor", [hex], undefined, true);
   }
 
   setFontFamily(family: string): void {
-    this.transport.fireIntent("scene", "setFontFamily", [family]);
+    this.transport.fireIntent("scene", "setFontFamily", [family], undefined, true);
   }
 
   setFontSize(sizePt: number): void {
-    this.transport.fireIntent("scene", "setFontSize", [sizePt]);
+    this.transport.fireIntent("scene", "setFontSize", [sizePt], undefined, true);
   }
 
   setFontColor(hex: string): void {
-    this.transport.fireIntent("scene", "setFontColor", [hex]);
+    this.transport.fireIntent("scene", "setFontColor", [hex], undefined, true);
   }
 
   // Rides the notification topic, not scene - same "this store already

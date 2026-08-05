@@ -355,7 +355,11 @@ describe("WsTransport", () => {
     const first = FakeSocket.instances[0];
     first.open();
     first.close();
-    expect(t.getStatus()).toBe("closed");
+    // ADR-003 stage 3.6 review-fix: this asserted "closed" until a reconnect
+    // was scheduled AND entered. A drop that will be retried is now reported
+    // as "reconnecting" from the moment it happens, so the badge can hold the
+    // paused state across the backoff wait instead of flickering.
+    expect(t.getStatus()).toBe("reconnecting");
 
     vi.advanceTimersByTime(50);
     expect(FakeSocket.instances).toHaveLength(2);
@@ -599,7 +603,12 @@ describe("WsTransport", () => {
     const socket = FakeSocket.instances[0];
     socket.open();
     socket.close();
-    expect(statuses).toEqual(["closed", "connecting", "open", "closed"]);
+    // ADR-003 stage 3.6 review-fix: the final "closed" became "reconnecting".
+    // A drop that WILL be retried is not the same state as a transport that
+    // has given up, and conflating them is what left the badge showing the
+    // bare word "closed" for the whole backoff wait. "closed" is now reserved
+    // for a disposed transport - nothing is coming back.
+    expect(statuses).toEqual(["closed", "connecting", "open", "reconnecting"]);
   });
 
   // ADR-003 stage 3.5: version negotiation moved here from the dead
@@ -947,5 +956,352 @@ describe("WsTransport", () => {
     const seen: (unknown | null)[] = [];
     t.onVersionRejection("scene", (r) => seen.push(r));
     expect(seen).toEqual([{ kind: "version", reason: expect.any(String), details: [] }]);
+  });
+});
+
+// ADR-003 stage 3.6: closes the last "vanishes silently" gap (D5). Every
+// fireIntent call site across the app used to be dropped with nothing but
+// a console.error the instant the socket wasn't open, no exceptions. A
+// `queueable: true` intent is now held and replayed in order on the next
+// reconnect; everything else is counted and surfaced as one summary banner
+// once the connection is actually able to deliver it again (see
+// droppedWhileOffline's own doc in transport.ts for why "surface it
+// immediately" cannot work - the notification banner is itself
+// server-authoritative and needs the very connection that just failed).
+describe("offline intent queue (ADR-003 stage 3.6)", () => {
+  it("a queueable intent fired before the socket ever opens is held, not dropped", () => {
+    const t = makeTransport();
+    t.connect();
+    const socket = FakeSocket.instances[0];
+
+    t.fireIntent("scene", "moveNodes", [[{ id: "n1", x: 1, y: 2 }]], undefined, true);
+    expect(socket.sent).toHaveLength(0);
+
+    socket.open();
+    expect(socket.sent.map((raw) => JSON.parse(raw))).toContainEqual(
+      expect.objectContaining({ topic: "scene", intent: "moveNodes" }),
+    );
+  });
+
+  it("queued intents replay in the order they were fired", () => {
+    const t = makeTransport();
+    t.connect();
+    const socket = FakeSocket.instances[0];
+
+    t.fireIntent("scene", "moveNodes", ["first"], undefined, true);
+    t.fireIntent("app-composer", "updateDraft", ["second"], undefined, true);
+    t.fireIntent("scene", "setViewState", ["third"], undefined, true);
+
+    socket.open();
+    const sent = socket.sent.map((raw) => JSON.parse(raw));
+    expect(sent.map((m) => m.args[0])).toEqual(["first", "second", "third"]);
+  });
+
+  it("replay happens AFTER the resubscribe message, not before", () => {
+    const t = makeTransport();
+    t.subscribe("scene", () => {});
+    t.connect();
+    const socket = FakeSocket.instances[0];
+    t.fireIntent("scene", "moveNodes", [[]], undefined, true);
+
+    socket.open();
+    const sent = socket.sent.map((raw) => JSON.parse(raw));
+    expect(sent[0]).toEqual({ kind: "subscribe", topics: ["scene"] });
+    expect(sent[1]).toMatchObject({ topic: "scene", intent: "moveNodes" });
+  });
+
+  it("a non-queueable intent fired while not open is dropped and reported as one summary banner on reconnect", async () => {
+    const t = makeTransport();
+    t.connect();
+    const socket = FakeSocket.instances[0];
+
+    t.fireIntent("scene", "sendMessage", ["hello"]); // queueable defaults to false
+    expect(socket.sent).toHaveLength(0);
+
+    socket.open();
+    // The dropped-message intent itself was never queued for replay...
+    expect(socket.sent.map((raw) => JSON.parse(raw))).not.toContainEqual(
+      expect.objectContaining({ intent: "sendMessage" }),
+    );
+    // ...and a visible summary was sent instead, now that the connection
+    // that can actually deliver it exists again.
+    expect(socket.sent.map((raw) => JSON.parse(raw))).toContainEqual({
+      kind: "intent",
+      topic: "notification",
+      intent: "showError",
+      args: ["1 change could not be sent while disconnected."],
+    });
+  });
+
+  it("multiple dropped non-queueable intents are reported as one combined count, not one banner each", () => {
+    const t = makeTransport();
+    t.connect();
+    const socket = FakeSocket.instances[0];
+
+    t.fireIntent("scene", "sendMessage", ["a"]);
+    t.fireIntent("scene", "removeNodes", [["n1"]]);
+    t.fireIntent("scene", "approveCodeExecution", ["r1"]);
+
+    socket.open();
+    const showErrors = socket.sent.map((raw) => JSON.parse(raw)).filter((m) => m.intent === "showError");
+    expect(showErrors).toEqual([
+      { kind: "intent", topic: "notification", intent: "showError", args: ["3 changes could not be sent while disconnected."] },
+    ]);
+  });
+
+  it("a queueable intent that was genuinely in flight and gets cut off by a disconnect is replayed, not lost", async () => {
+    const t = makeTransport();
+    t.connect();
+    const socket = FakeSocket.instances[0];
+    socket.open();
+
+    t.fireIntent("scene", "moveNodes", [[{ id: "n1", x: 5, y: 5 }]], undefined, true);
+    expect(socket.sent).toHaveLength(1); // sent normally while open
+
+    // The connection dies before any reply arrives.
+    socket.onclose?.();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // No error was shown for this one - it's recoverable, not lost.
+    expect(socket.sent.map((raw) => JSON.parse(raw))).not.toContainEqual(
+      expect.objectContaining({ intent: "showError" }),
+    );
+
+    vi.advanceTimersByTime(10_000);
+    const reconnected = FakeSocket.instances[1];
+    reconnected.open();
+
+    expect(reconnected.sent.map((raw) => JSON.parse(raw))).toContainEqual(
+      expect.objectContaining({ topic: "scene", intent: "moveNodes" }),
+    );
+  });
+
+  it("a non-queueable intent that was in flight and gets cut off is counted, not silently lost", async () => {
+    const t = makeTransport();
+    t.connect();
+    const socket = FakeSocket.instances[0];
+    socket.open();
+
+    t.fireIntent("scene", "sendMessage", ["hello"]); // queueable defaults to false
+    socket.onclose?.();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    vi.advanceTimersByTime(10_000);
+    const reconnected = FakeSocket.instances[1];
+    reconnected.open();
+
+    expect(reconnected.sent.map((raw) => JSON.parse(raw))).toContainEqual({
+      kind: "intent",
+      topic: "notification",
+      intent: "showError",
+      args: ["1 change could not be sent while disconnected."],
+    });
+  });
+
+  it("the queue is bounded at 50 - the 51st queueable intent is counted as dropped, not queued", () => {
+    const t = makeTransport();
+    t.connect();
+    const socket = FakeSocket.instances[0];
+
+    for (let i = 0; i < 51; i++) {
+      t.fireIntent("scene", "moveNodes", [[{ id: `n${i}`, x: i, y: i }]], undefined, true);
+    }
+
+    socket.open();
+    const sent = socket.sent.map((raw) => JSON.parse(raw));
+    const replayed = sent.filter((m) => m.intent === "moveNodes");
+    expect(replayed).toHaveLength(50);
+    expect(sent).toContainEqual({
+      kind: "intent",
+      topic: "notification",
+      intent: "showError",
+      args: ["1 change could not be sent while disconnected."],
+    });
+  });
+
+  it("status is 'reconnecting', not 'connecting', on every attempt after a real connection was lost", () => {
+    const t = makeTransport();
+    const statuses: string[] = [];
+    t.onStatus((s) => statuses.push(s));
+    t.connect();
+    FakeSocket.instances[0].open(); // first-ever open: "connecting" was correct
+    FakeSocket.instances[0].onclose?.();
+
+    vi.advanceTimersByTime(10_000); // the scheduled retry's connect() fires
+
+    // Review-fix: no "closed" between "open" and "reconnecting". onclose now
+    // publishes the paused state directly - see the next test for why.
+    expect(statuses).toEqual(["closed", "connecting", "open", "reconnecting"]);
+  });
+
+  // The paused state has to cover the whole outage. Publishing "closed" on
+  // disconnect and only entering "reconnecting" when the retry timer fires
+  // meant the badge showed the bare word "closed" for the entire backoff
+  // sleep - which is where all the wall-clock time goes - and flickered
+  // "reconnecting" for the few ms of each attempt against a refused port.
+  // Intents are being queued and counted that entire time, so this is the
+  // half of the exit criterion the user actually sees.
+  it("holds 'reconnecting' for the whole backoff wait, never reverting to 'closed'", () => {
+    const t = makeTransport();
+    const statuses: string[] = [];
+    t.connect();
+    FakeSocket.instances[0].open();
+    t.onStatus((s) => statuses.push(s));
+
+    FakeSocket.instances[0].onclose?.();
+    expect(t.getStatus()).toBe("reconnecting"); // immediately, not after the sleep
+
+    // Right through the backoff sleep and a second FAILED attempt, the user
+    // never sees "closed" again.
+    vi.advanceTimersByTime(400);
+    expect(t.getStatus()).toBe("reconnecting");
+    vi.advanceTimersByTime(200); // retry fires
+    FakeSocket.instances[1].onclose?.();
+    vi.advanceTimersByTime(2_000);
+
+    expect(statuses).not.toContain("closed");
+    expect(t.getStatus()).toBe("reconnecting");
+  });
+
+  // The counterpart to the guard above: a blocked topic is never QUEUED, but
+  // it must still be COUNTED. Letting it fall through to request() produced a
+  // WsTopicBlockedError whose banner intent() then dropped for want of an
+  // open socket - not queued, not counted, no banner ever, which is the exact
+  // D5 bug this stage closes, reintroduced in the one combination the
+  // blocked-topic guard itself created.
+  it("counts a blocked topic's intent dropped while offline instead of losing it silently", () => {
+    const t = makeTransport();
+    t.connect();
+    const socket = FakeSocket.instances[0];
+    socket.open();
+    t.setTopicBlocked("scene", true);
+    socket.onclose?.();
+
+    t.fireIntent("scene", "sendMessage", ["hello"]);
+    t.fireIntent("scene", "moveNodes", [[{ id: "n1", x: 1, y: 2 }]], undefined, true);
+
+    vi.advanceTimersByTime(500);
+    const reconnected = FakeSocket.instances[1];
+    reconnected.open();
+
+    const sent = reconnected.sent.map((raw) => JSON.parse(raw));
+    // Neither was replayed - the topic is still blocked, still untrusted...
+    expect(sent).not.toContainEqual(expect.objectContaining({ intent: "sendMessage" }));
+    expect(sent).not.toContainEqual(expect.objectContaining({ intent: "moveNodes" }));
+    // ...but the user is told both were lost, rather than nothing at all.
+    expect(sent).toContainEqual({
+      kind: "intent",
+      topic: "notification",
+      intent: "showError",
+      args: ["2 changes could not be sent while disconnected."],
+    });
+  });
+
+  it("a genuine server-side rejection on replay still surfaces normally, not silently re-queued", async () => {
+    const t = makeTransport();
+    t.connect();
+    const socket = FakeSocket.instances[0];
+    t.fireIntent("scene", "moveNodes", [[]], undefined, true);
+
+    socket.open();
+    const sent = socket.lastSent();
+    socket.receive({ kind: "error", id: sent.id, error: "unknown node" });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(socket.sent.map((raw) => JSON.parse(raw))).toContainEqual({
+      kind: "intent",
+      topic: "notification",
+      intent: "showError",
+      args: ["unknown node"],
+    });
+  });
+
+  // Stage 3.6 x stage 3.5: setTopicBlocked exists because this client cannot
+  // trust the state a blocked topic's args were computed against. Queueing
+  // such an intent would defer exactly that untrusted send to whenever the
+  // block lifts, and would spend the bounded queue's finite slots on intents
+  // certain to be refused - displacing recoverable ones from other topics.
+  // NB: asserting only "the blocked intent never reaches the wire" would be a
+  // FALSE-CONFIDENCE test - request()'s own blockedTopics check already stops
+  // it at replay time, so it passes with or without the guard above (verified
+  // by mutation). The behaviour that genuinely distinguishes them is what
+  // happens when the block LIFTS before the socket returns.
+  it("an intent refused while its topic was blocked is not resurrected once the block lifts", () => {
+    const t = makeTransport();
+    t.connect();
+    const socket = FakeSocket.instances[0];
+    t.setTopicBlocked("scene", true);
+
+    t.fireIntent("scene", "moveNodes", [[{ id: "n1", x: 1, y: 2 }]], undefined, true);
+    // A queueable intent on an UNBLOCKED topic still queues normally, so this
+    // also asserts the check is topic-scoped rather than a blanket bypass.
+    t.fireIntent("app-composer", "updateDraft", ["kept"], undefined, true);
+
+    // The version-rejection episode ends before the connection returns. Were
+    // the scene intent sitting in the queue, it would now be replayed for
+    // real - against state this client was explicitly told not to trust.
+    t.setTopicBlocked("scene", false);
+    socket.open();
+
+    const sent = socket.sent.map((raw) => JSON.parse(raw));
+    expect(sent).not.toContainEqual(expect.objectContaining({ intent: "moveNodes" }));
+    expect(sent).toContainEqual(expect.objectContaining({ intent: "updateDraft", args: ["kept"] }));
+  });
+
+  it("a blocked topic's refused intent does not consume an offline-queue slot", () => {
+    const t = makeTransport();
+    t.connect();
+    const socket = FakeSocket.instances[0];
+    t.setTopicBlocked("scene", true);
+
+    // 50 blocked-topic intents would fill the whole queue if they were being
+    // enqueued; none of them should be.
+    for (let i = 0; i < 50; i++) {
+      t.fireIntent("scene", "moveNodes", [[{ id: `n${i}`, x: i, y: i }]], undefined, true);
+    }
+    t.fireIntent("app-composer", "updateDraft", ["still room"], undefined, true);
+
+    socket.open();
+    const sent = socket.sent.map((raw) => JSON.parse(raw));
+    expect(sent).toContainEqual(expect.objectContaining({ intent: "updateDraft", args: ["still room"] }));
+  });
+
+  // The summary must NOT go through showErrorDeduped. That de-dup suppresses
+  // an identical message inside a 3s window - and the reconnect backoff's
+  // first retry is 500ms, so two quick outages that each lose one change
+  // produce the identical string well inside the window. Swallowing the
+  // second would under-report real data loss: the user is told one change was
+  // lost when two were. Under-reporting loss is the exact failure this whole
+  // stage exists to remove, so it cannot be reintroduced via the de-dup.
+  it("reports a second outage's losses even though the count message is identical", () => {
+    const t = makeTransport();
+    t.connect();
+    const first = FakeSocket.instances[0];
+    first.open();
+
+    first.onclose?.();
+    t.fireIntent("scene", "sendMessage", ["a"]);
+    vi.advanceTimersByTime(500);
+    const second = FakeSocket.instances[1];
+    second.open();
+    expect(
+      second.sent.map((raw) => JSON.parse(raw)).filter((m) => m.intent === "showError"),
+    ).toEqual([
+      { kind: "intent", topic: "notification", intent: "showError", args: ["1 change could not be sent while disconnected."] },
+    ]);
+
+    second.onclose?.();
+    t.fireIntent("scene", "sendMessage", ["b"]);
+    vi.advanceTimersByTime(500);
+    const third = FakeSocket.instances[2];
+    third.open();
+    expect(
+      third.sent.map((raw) => JSON.parse(raw)).filter((m) => m.intent === "showError"),
+    ).toEqual([
+      { kind: "intent", topic: "notification", intent: "showError", args: ["1 change could not be sent while disconnected."] },
+    ]);
   });
 });

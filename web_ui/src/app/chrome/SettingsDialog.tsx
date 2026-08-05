@@ -160,7 +160,7 @@ function GeneralPage({
         <input
           type="checkbox"
           checked={state.showTokenCounter}
-          onChange={(event) => transport.fireIntent("app-settings", "setShowTokenCounter", [event.target.checked])}
+          onChange={(event) => transport.fireIntent("app-settings", "setShowTokenCounter", [event.target.checked], undefined, true)}
         />
         Show Token Counter Overlay
       </label>
@@ -169,7 +169,7 @@ function GeneralPage({
         <input
           type="checkbox"
           checked={state.enableSystemPrompt}
-          onChange={(event) => transport.fireIntent("app-settings", "setEnableSystemPrompt", [event.target.checked])}
+          onChange={(event) => transport.fireIntent("app-settings", "setEnableSystemPrompt", [event.target.checked], undefined, true)}
         />
         Enable Assistant System Prompt
       </label>
@@ -182,7 +182,7 @@ function GeneralPage({
               type="checkbox"
               checked={state.notificationPreferences[type] ?? true}
               onChange={(event) =>
-                transport.fireIntent("app-settings", "setNotificationPreference", [type, event.target.checked])
+                transport.fireIntent("app-settings", "setNotificationPreference", [type, event.target.checked], undefined, true)
               }
             />
             {NOTIFICATION_TYPE_LABELS[type]}
@@ -310,7 +310,7 @@ function ApiProviderPage({
           ariaLabel="API Provider"
           value={viewingProvider}
           options={API_PROVIDERS.map((provider) => ({ id: provider, label: provider }))}
-          onChange={(id) => transport.fireIntent("app-settings", "setViewingApiProvider", [id])}
+          onChange={(id) => transport.fireIntent("app-settings", "setViewingApiProvider", [id], undefined, true)}
         />
       </div>
 
@@ -514,7 +514,7 @@ function OllamaTaskField({
           onChange={(nextMode) => {
             setUiMode(nextMode);
             if (nextMode !== "explicit") {
-              transport.fireIntent("app-settings", "setOllamaModelAssignment", [task, nextMode]);
+              transport.fireIntent("app-settings", "setOllamaModelAssignment", [task, nextMode], undefined, true);
             }
           }}
         />
@@ -527,7 +527,7 @@ function OllamaTaskField({
             className="settings-select"
             list={OLLAMA_MODELS_DATALIST_ID}
             value={isSpecial ? "" : value}
-            onChange={(event) => transport.fireIntent("app-settings", "setOllamaModelAssignment", [task, event.target.value])}
+            onChange={(event) => transport.fireIntent("app-settings", "setOllamaModelAssignment", [task, event.target.value], undefined, true)}
           />
         </label>
       )}
@@ -548,7 +548,7 @@ function OllamaPage({ state, transport }: { state: AppSettingsState; transport: 
               type="radio"
               name="ollama-reasoning-level"
               checked={state.ollamaReasoningLevel === option.id}
-              onChange={() => transport.fireIntent("app-settings", "setOllamaReasoningLevel", [option.id])}
+              onChange={() => transport.fireIntent("app-settings", "setOllamaReasoningLevel", [option.id], undefined, true)}
             />
             {option.label}
           </label>
@@ -727,7 +727,7 @@ function LlamaCppPage({ state, transport }: { state: AppSettingsState; transport
               type="radio"
               name="llama-cpp-reasoning-level"
               checked={state.llamaCppReasoningLevel === option.id}
-              onChange={() => transport.fireIntent("app-settings", "setLlamaCppReasoningLevel", [option.id])}
+              onChange={() => transport.fireIntent("app-settings", "setLlamaCppReasoningLevel", [option.id], undefined, true)}
             />
             {option.label}
           </label>
@@ -774,7 +774,7 @@ function LlamaCppPage({ state, transport }: { state: AppSettingsState; transport
               { id: "", label: "Select a scanned model..." },
               ...state.llamaCppScannedModels.map((path) => ({ id: path, label: basename(path) })),
             ]}
-            onChange={(path) => transport.fireIntent("app-settings", "setLlamaCppChatModelPath", [path])}
+            onChange={(path) => transport.fireIntent("app-settings", "setLlamaCppChatModelPath", [path], undefined, true)}
           />
         </div>
       )}
@@ -801,7 +801,7 @@ function LlamaCppPage({ state, transport }: { state: AppSettingsState; transport
               { id: "", label: "Select a scanned model..." },
               ...state.llamaCppScannedModels.map((path) => ({ id: path, label: basename(path) })),
             ]}
-            onChange={(path) => transport.fireIntent("app-settings", "setLlamaCppTitleModelPath", [path])}
+            onChange={(path) => transport.fireIntent("app-settings", "setLlamaCppTitleModelPath", [path], undefined, true)}
           />
         </div>
       )}
@@ -827,7 +827,7 @@ function LlamaCppPage({ state, transport }: { state: AppSettingsState; transport
           value={draftChatFormat}
           onChange={(event) => {
             setDraftChatFormat(event.target.value);
-            transport.fireIntent("app-settings", "setLlamaCppChatFormat", [event.target.value]);
+            transport.fireIntent("app-settings", "setLlamaCppChatFormat", [event.target.value], undefined, true);
           }}
         />
       </label>
@@ -838,14 +838,14 @@ function LlamaCppPage({ state, transport }: { state: AppSettingsState; transport
         min={256}
         max={131072}
         step={256}
-        onCommit={(n) => transport.fireIntent("app-settings", "setLlamaCppNCtx", [n])}
+        onCommit={(n) => transport.fireIntent("app-settings", "setLlamaCppNCtx", [n], undefined, true)}
       />
       <LlamaCppNumberField
         label="GPU Layers"
         value={state.llamaCppNGpuLayers}
         min={-1}
         max={9999}
-        onCommit={(n) => transport.fireIntent("app-settings", "setLlamaCppNGpuLayers", [n])}
+        onCommit={(n) => transport.fireIntent("app-settings", "setLlamaCppNGpuLayers", [n], undefined, true)}
       />
       <LlamaCppNumberField
         label="CPU Threads"
@@ -853,7 +853,7 @@ function LlamaCppPage({ state, transport }: { state: AppSettingsState; transport
         min={0}
         max={256}
         placeholder="0 = Auto"
-        onCommit={(n) => transport.fireIntent("app-settings", "setLlamaCppNThreads", [n])}
+        onCommit={(n) => transport.fireIntent("app-settings", "setLlamaCppNThreads", [n], undefined, true)}
       />
 
       {state.llamaCppNotice && (
@@ -917,7 +917,7 @@ export function SettingsDialog({ transport }: { transport: WsTransport }) {
               type="button"
               className={"settings-rail-button" + (section === activeSection ? " active" : "")}
               aria-current={section === activeSection ? "page" : undefined}
-              onClick={() => transport.fireIntent("app-settings", "setActiveSection", [sectionKey(section)])}
+              onClick={() => transport.fireIntent("app-settings", "setActiveSection", [sectionKey(section)], undefined, true)}
             >
               {section}
             </button>
