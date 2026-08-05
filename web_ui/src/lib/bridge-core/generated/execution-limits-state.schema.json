@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "codeSandboxResourceLimitsText": {
+      "type": "string"
+    },
+    "minCompatibleSchemaVersion": {
+      "type": "integer"
+    },
+    "pycoderResourceLimitsText": {
+      "type": "string"
+    },
+    "revision": {
+      "type": "integer"
+    },
+    "schemaVersion": {
+      "type": "integer"
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "revision",
+    "pycoderResourceLimitsText",
+    "codeSandboxResourceLimitsText"
+  ],
+  "title": "ExecutionLimitsState",
+  "type": "object"
+}

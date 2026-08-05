@@ -4,6 +4,7 @@ import { TOPIC_VALIDATORS } from "../lib/api-contract/topics";
 import type { AppSettingsState } from "../lib/bridge-core/generated/app-settings-state";
 import { isTextEditable } from "../lib/bridge-core/textFocus";
 import { ConnectionStatus, WsTransport, defaultWsUrl } from "../lib/ws/transport";
+import { ExecutionLimitsProvider } from "./canvas/ExecutionLimitsContext";
 import { SceneCanvas, measuredNodeSize } from "./canvas/SceneCanvas";
 import { SceneStore } from "./canvas/sceneStore";
 import { resolveTreeNavigationTarget, type TreeNavigationDirection } from "./canvas/treeNavigation";
@@ -293,7 +294,9 @@ function App() {
                 onClose={onCloseDocumentView}
               />
               <div className="app-canvas-content">
-                <SceneCanvas store={sceneStore} onOpenDocumentView={onOpenDocumentView} />
+                <ExecutionLimitsProvider transport={transport}>
+                  <SceneCanvas store={sceneStore} onOpenDocumentView={onOpenDocumentView} />
+                </ExecutionLimitsProvider>
                 <div className="app-search-layer">
                   <SearchOverlay store={sceneStore} />
                 </div>

@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { useFocusEscapeBackstop } from "../overlays/overlays";
+import { useExecutionLimits } from "./ExecutionLimitsContext";
 import { NodeMarkdown } from "./NodeMarkdown";
 
 /**
@@ -110,6 +111,23 @@ import { NodeMarkdown } from "./NodeMarkdown";
  * straight through, since that field already reflects the exact manifest
  * run_code_sandbox reads synchronously at the moment Run is dispatched (no
  * new backend wiring was needed for this).
+ *
+ * Resource-limits disclosure (ADR-005 stage 5.4): WARNING_TEXT below states
+ * "there is no sandboxing" / "isolates installed packages, not the
+ * operating system" - both still true, and left untouched (do not fold the
+ * new sentence into that Record; the two are backed by different
+ * mechanisms and the legacy phrase's own regression test in
+ * CodeExecutionApprovalPanel.test.tsx checks that string in isolation).
+ * What WARNING_TEXT does NOT say is that ADR-005 stages 5.2/5.3 actually
+ * added real resource caps, and stage 5.5 restricted dependency installs -
+ * a second paragraph below renders that, sourced from useExecutionLimits()
+ * (ExecutionLimitsContext.tsx), never hardcoded here: the caps are
+ * platform-conditional (see backend/execution_limits.py's own docstring),
+ * so a string baked into this file would silently lie the moment the
+ * platform this ships on differs from the one it was written against.
+ * Rendered only when non-blank (mirrors showRequirements below) - a
+ * missing Provider (e.g. this component's own standalone tests) degrades
+ * to simply omitting the paragraph, not a blank/incorrect claim.
  */
 
 export type CodeExecutionKind = "pycoder" | "code_sandbox";
@@ -205,6 +223,7 @@ export function CodeExecutionApprovalPanel({
 }: CodeExecutionApprovalPanelProps) {
   const panelRef = useRef<HTMLDivElement | null>(null);
   const denyButtonRef = useRef<HTMLButtonElement | null>(null);
+  const executionLimits = useExecutionLimits();
 
   // Focus the Deny button the instant the panel appears - the safe default a
   // stray Enter/Space keypress lands on. There is no dismiss path here (see
@@ -262,6 +281,10 @@ export function CodeExecutionApprovalPanel({
   if (!awaitingApproval) return null;
 
   const showRequirements = kind === "code_sandbox" && !!requirements?.trim();
+  const resourceLimitsText =
+    kind === "code_sandbox"
+      ? executionLimits.codeSandboxResourceLimitsText
+      : executionLimits.pycoderResourceLimitsText;
 
   return (
     // Deliberately NO onClick/onPointerDown handler on this scrim - clicking
@@ -286,6 +309,9 @@ export function CodeExecutionApprovalPanel({
         </header>
         <div className="overlay-dialog-body">
           <p className="code-exec-approval-warning">{WARNING_TEXT[kind]}</p>
+          {!!resourceLimitsText && (
+            <p className="code-exec-approval-resource-limits">{resourceLimitsText}</p>
+          )}
           {showRequirements && (
             <div className="code-exec-approval-requirements">
               <span className="code-exec-approval-requirements-label">Packages to be installed</span>

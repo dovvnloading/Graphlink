@@ -5196,6 +5196,16 @@ mark.document-view-search-match-current {
   color: var(--gl-semantic-status-error, currentColor);
 }
 
+/* ADR-005 stage 5.4: the backend-computed resource-cap addendum - muted
+   rather than the warning's own error color, since this is reassuring
+   ("here is what limits the blast radius"), not alarming, information. */
+.code-exec-approval-resource-limits {
+  margin: 0 0 10px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--gl-surface-text-muted);
+}
+
 /* R5.4 post-review FIX C: the pending pip-install manifest, shown for
    code_sandbox only, positioned BEFORE the code display so it is seen prior
    to clicking Approve (never buried below the fold). Reuses the same

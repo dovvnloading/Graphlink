@@ -94,8 +94,9 @@ def test_subscribe_without_topics_sends_every_registered_topic():
     with client.websocket_connect("/ws") as ws:
         ws.send_json({"kind": "subscribe"})
         # R2 surface: canvas + View-popover + composer/counter/notification +
-        # R2.5 about/plugins/settings/chat-library topics, sorted.
-        topics = [ws.receive_json()["topic"] for _ in range(12)]
+        # R2.5 about/plugins/settings/chat-library topics + ADR-005 stage 5.4's
+        # execution-limits topic, sorted.
+        topics = [ws.receive_json()["topic"] for _ in range(13)]
         assert topics == [
             "app-about",
             "app-chat-library",
@@ -103,6 +104,7 @@ def test_subscribe_without_topics_sends_every_registered_topic():
             "app-plugins",
             "app-settings",
             "drag-speed",
+            "execution-limits",
             "font-control",
             "grid-control",
             "notification",
