@@ -27,11 +27,22 @@ silently doing nothing or fabricating node creation.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 from backend.canvas import MESSAGE_VERTICAL_SPACING, SceneDocument
 from backend.events import SessionBus
 from backend.notifications import NotificationState
+
+
+@dataclass
+class ExecutePluginArgs:
+    """ADR-003 stage 3.2: args schema for executePlugin - mirrors
+    execute_plugin's own signature below exactly (dataclass field order is
+    the positional mapping dispatch_intent validates against)."""
+
+    plugin_name: str
+    parent_node_id: str | None = None
 
 _CATEGORY_META = [
     {
@@ -312,4 +323,4 @@ def register_plugins(
         await bus.publish("notification")
         return None
 
-    bus.register_intent("app-plugins", "executePlugin", execute_plugin)
+    bus.register_intent("app-plugins", "executePlugin", execute_plugin, args_schema=ExecutePluginArgs)

@@ -1,6 +1,19 @@
 """Generic dataclass -> JSON Schema generation and payload validation for
 island bridge wire contracts.
 
+ADR-003 stage 3.2: this module used to live at contracts/payload_schema.py,
+reachable only by contracts/codegen.py (a dev-time-only script; pyproject.toml
+deliberately excludes contracts/ from the shipped wheel - it is build-time
+codegen for the frontend contract, not runtime application code). Stage 3.2
+needs the SAME dataclass-driven validate_payload() to check intent args
+in-process, at runtime, inside the shipped backend (backend/events.py's
+dispatch_intent) - a real dependency the wheel must actually ship. Rather than
+duplicate ~150 lines of validation logic into two copies that could drift,
+this module moved to the repo root and joined pyproject.toml's py-modules
+list, exactly like api_provider.py/graphlink_task_config.py already do:
+one canonical implementation, importable both by contracts/codegen.py
+(dev-time, TS codegen) and by backend/ (runtime, intent-arg validation).
+
 WHY HAND-ROLLED RATHER THAN pydantic/dataclasses-json: the payload shapes this
 has to describe are deliberately narrow - strings, ints, bools, string-literal
 enums, lists, nested objects, and one string->string map. That is a small,
@@ -109,7 +122,7 @@ def _schema_for_annotation(annotation: Any, *, path: str) -> dict[str, Any]:
         return json_schema_for(inner, _path=path)
 
     raise SchemaGenerationError(
-        f"{path}: unsupported type {inner!r}. Extend payload_schema.py "
+        f"{path}: unsupported type {inner!r}. Extend graphlink_wire_schema.py "
         "deliberately rather than working around this - an unsupported type here "
         "means the generated schema would not describe the real payload."
     )
@@ -217,9 +230,26 @@ def _validate_value(value: Any, annotation: Any, *, path: str) -> list[str]:
 
     if origin is Literal:
         allowed = list(get_args(inner))
-        return [] if value in allowed else [f"{path}: {value!r} is not one of {allowed!r}"]
+        # Review-fix: every OTHER branch here reports type(value).__name__
+        # only, never the value itself - matching that minimal-disclosure
+        # convention (rather than echoing the raw submitted value back,
+        # which the primitive-type branches above deliberately don't do).
+        return [] if value in allowed else [f"{path}: not one of {allowed!r}, got {type(value).__name__}"]
 
     if origin is list:
+        # ADR-003 stage 3.2 review-fix, accepted risk (not fixed here): cost
+        # is O(len(value)) with no length cap, and the two intent-arg
+        # schemas this stage actually ships (backend/notifications.py's
+        # ShowMessageArgs, backend/plugins.py's ExecutePluginArgs) are both
+        # flat single strings, so this branch is unreachable via any
+        # currently-registered intent - dormant, not exploitable, today.
+        # The scene topic (deliberately migrated LAST, per this ADR's own
+        # stage table) has real list-arg intents already (e.g. moveNodes'
+        # `positions`) - whoever writes ITS args_schema should weigh a
+        # length cap deliberately against real usage (a user multi-selecting
+        # many nodes is a legitimate large list, not just an attack shape)
+        # rather than guessing a number now with no real schema to size it
+        # against.
         if not isinstance(value, list):
             return [f"{path}: expected array, got {type(value).__name__}"]
         (item_type,) = get_args(inner)
@@ -229,6 +259,7 @@ def _validate_value(value: Any, annotation: Any, *, path: str) -> list[str]:
         return errors
 
     if origin is dict:
+        # Same accepted-risk note as the list branch just above.
         if not isinstance(value, dict):
             return [f"{path}: expected object, got {type(value).__name__}"]
         _, value_type = get_args(inner)

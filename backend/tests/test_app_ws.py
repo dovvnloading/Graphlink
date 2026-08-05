@@ -150,6 +150,205 @@ def test_unknown_intent_and_topic_return_error_not_disconnect():
         assert ws.receive_json()["kind"] == "result"
 
 
+def test_showinfo_rejects_missing_message_before_running_the_handler():
+    # ADR-003 stage 3.2: notification/showInfo is one of the 3 intents
+    # migrated to args_schema validation in this stage - a malformed call
+    # must be rejected BEFORE show_info() runs, not become a bare
+    # TypeError caught by the generic handler below it.
+    client = make_client()
+    with client.websocket_connect("/ws") as ws:
+        ws.send_json({"kind": "intent", "topic": "notification", "intent": "showInfo", "args": [], "id": 6})
+        message = ws.receive_json()
+        assert message["kind"] == "error"
+        # Review-fix: validate_payload's own error text carries a JSON-
+        # Schema-style "$." path prefix - meaningful internally, but this
+        # exact string reaches the end-user notification banner verbatim
+        # (fireIntent's showError path from ADR-003 stage 3.1), so
+        # _validate_intent_args strips it before app.py ever sends it.
+        assert message["error"] == "Invalid arguments: message: missing required field."
+
+        # The rejected call must not have touched notification state - the
+        # NEXT subscribe should show visible=False, not a banner from a
+        # handler that ran anyway despite the missing arg.
+        ws.send_json({"kind": "subscribe", "topics": ["notification"]})
+        snapshot = ws.receive_json()
+        assert snapshot["payload"]["visible"] is False
+
+
+def test_showinfo_rejects_wrong_typed_message_before_running_the_handler():
+    client = make_client()
+    with client.websocket_connect("/ws") as ws:
+        ws.send_json(
+            {"kind": "intent", "topic": "notification", "intent": "showInfo", "args": [12345], "id": 7}
+        )
+        message = ws.receive_json()
+        assert message["kind"] == "error"
+        assert message["error"] == "Invalid arguments: message: expected string, got int."
+
+
+def test_showinfo_rejects_a_dict_shaped_args_frame_instead_of_silently_corrupting_the_call():
+    # Review-fix (HIGH): the real wire-level version of the attack the
+    # adversarial review demonstrated - a client sends a genuine WS frame
+    # with "args" as a JSON OBJECT rather than an array. Before the fix,
+    # _handle_message's `args = message.get("args") or []` (backend/app.py)
+    # passed this dict straight through, zip(fields, a_dict) paired the
+    # schema's "message" field with the dict's own KEY STRING (never its
+    # value), validation reported zero errors, and show_info(*args) then
+    # unpacked the dict's KEYS as positional args - silently displaying the
+    # literal field name "message" in the notification banner instead of
+    # either the real value or a clean rejection.
+    client = make_client()
+    with client.websocket_connect("/ws") as ws:
+        ws.send_json(
+            {
+                "kind": "intent",
+                "topic": "notification",
+                "intent": "showInfo",
+                "args": {"message": "ATTACKER-CONTROLLED-VALUE"},
+                "id": 9,
+            }
+        )
+        message = ws.receive_json()
+        assert message["kind"] == "error"
+        assert message["error"] == "Invalid arguments: expected a list of arguments, got dict."
+
+        # The rejected call must not have touched notification state at all
+        # - not with the attacker's value, and not with the leaked field name.
+        ws.send_json({"kind": "subscribe", "topics": ["notification"]})
+        snapshot = ws.receive_json()
+        assert snapshot["payload"]["visible"] is False
+
+
+def test_executeplugin_rejects_wrong_arity_before_running_the_handler():
+    client = make_client()
+    with client.websocket_connect("/ws") as ws:
+        ws.send_json(
+            {
+                "kind": "intent",
+                "topic": "app-plugins",
+                "intent": "executePlugin",
+                "args": ["System Prompt", "node-1", "unexpected-extra"],
+                "id": 8,
+            }
+        )
+        message = ws.receive_json()
+        assert message["kind"] == "error"
+        assert message["error"] == "Invalid arguments: expected at most 2 argument(s), got 3."
+
+
+def test_junk_args_never_crash_or_disconnect_any_registered_intent():
+    """ADR-003 stage 3.2 exit criterion, the fuzz half: 'junk args ->
+    structured errors, no tracebacks' - checked empirically against the
+    FULL registered intent surface (133 pairs as of this stage, all 8
+    topics), not just the 3 intents this stage migrated to args_schema.
+    Even an unmigrated handler's own bare TypeError from bad arity is
+    already caught by _handle_message's generic except Exception
+    (backend/app.py) and turned into a clean {"kind":"error"} reply - this
+    proves that property holds for real, rather than being inferred from
+    reading the code.
+
+    The (topic, intent) list is discovered LIVE from the real app
+    (client.app.state.bus, populated by _configure_session - the same
+    function create_app() wires into every real session) rather than a
+    hand-maintained list here, so a future new intent is covered
+    automatically with no risk of this test silently going stale.
+
+    junk_args is deliberately longer (20 elements) than any real handler's
+    param count (addDocumentNode, the largest, takes 10) - this guarantees
+    Python's own arity check rejects EVERY call with a TypeError before the
+    REAL underlying handler's own body runs, regardless of the handler's own
+    parameter types. That is what makes it safe to fire at literally every
+    intent, including native-OS-dialog openers (pickGitlinkLocalRoot,
+    attachFile, the Llama.cpp/Ollama file/folder pickers) and network/
+    subprocess-backed ones: none of THEIR bodies ever execute, so there is
+    no risk of this test popping a real dialog or making a real network
+    call.
+
+    Review-fix: "the real underlying handler" above is a deliberate
+    qualifier, not loose phrasing - app-chat-library's loadChat/saveChat/
+    newChat are registered via chat_library.py's _serialize_mutating_intent,
+    whose own `wrapped(*args, **kwargs)` IS fully variadic (claims/releases
+    a cross-intent mutation guard before calling the real load_chat/
+    save_chat/new_chat). Python's arity check can't reject a call at THAT
+    outer boundary, so `wrapped`'s own body genuinely runs - claiming, then
+    releasing the guard in a `finally` - before the real handler's own
+    TypeError fires one level in. This is not unsafe (the guard is always
+    released again, and this test's single connection sends everything
+    sequentially, so no other call ever observes it mid-claim), but it does
+    mean "no handler body ever executes" is not literally true for these 3
+    intents specifically - only true of the real, wrapped handler.
+
+    The one exception with no wrapper at all is system/ping, a deliberately
+    variadic echo intent (register_intent's own docstring covers why it has
+    no args_schema) - it accepts and echoes back all 20 values, which is a
+    "result" reply, not a crash, and is asserted for accordingly below.
+    """
+    client = make_client()
+    with client.websocket_connect("/ws") as ws:
+        # Force this session to exist and be fully configured before
+        # introspecting its registered intents.
+        ws.send_json({"kind": "subscribe", "topics": ["system"]})
+        ws.receive_json()
+
+        session_bus = client.app.state.bus.session()
+        all_intents = sorted(session_bus._intents.keys())
+        # Sanity guard: if this collapses to a handful of entries, the
+        # introspection path itself broke silently (e.g. an empty/wrong
+        # session) - the test would then "pass" while covering nothing.
+        assert len(all_intents) >= 100, (
+            f"expected the full ~133-intent app surface, only found {len(all_intents)} - "
+            "the live intent discovery may be broken"
+        )
+
+        junk_args = [{"__fuzz__": True}, 12345, None, "??", [1, 2, 3]] * 4  # 20 elements
+        next_id = 1000
+        for topic, intent in all_intents:
+            next_id += 1
+            ws.send_json(
+                {"kind": "intent", "topic": topic, "intent": intent, "args": junk_args, "id": next_id}
+            )
+            message = ws.receive_json()
+            assert message["kind"] in ("error", "result"), (
+                f"{topic}/{intent}: got {message['kind']!r} for junk args - expected error or result, "
+                "never a disconnect or an unrecognized reply kind"
+            )
+            assert message["id"] == next_id, f"{topic}/{intent}: reply id mismatch - socket desynced"
+
+        # The connection must still be fully usable after 130+ consecutive
+        # malformed calls - proves no cumulative state corruption in the
+        # dispatch loop itself, not just per-call resilience.
+        ws.send_json({"kind": "intent", "topic": "system", "intent": "ping", "args": [], "id": 99999})
+        assert ws.receive_json()["kind"] == "result"
+
+
+def test_args_schema_is_scoped_to_exactly_the_3_intents_this_stage_migrated():
+    # ADR-003 stage 3.2 review-fix: the fuzz sweep above proves every intent
+    # replies safely, but it only checks message["kind"], not the error TEXT
+    # - a schema-validation rejection and an unmigrated handler's own generic
+    # TypeError rejection both come back as plain {"kind":"error"}, so that
+    # sweep alone could not catch a FUTURE mutation that accidentally added
+    # (or removed) an args_schema on the wrong intent. This test asserts the
+    # real registry's args_schema is not None set directly against the exact
+    # 3 intents this stage's own PR description claims to have migrated -
+    # silent scope drift on this security/correctness-adjacent mechanism
+    # would fail here even though it wouldn't fail the fuzz sweep.
+    client = make_client()
+    with client.websocket_connect("/ws") as ws:
+        ws.send_json({"kind": "subscribe", "topics": ["system"]})
+        ws.receive_json()
+
+        session_bus = client.app.state.bus.session()
+        validated = {
+            key for key, registration in session_bus._intents.items()
+            if registration.args_schema is not None
+        }
+        assert validated == {
+            ("notification", "showInfo"),
+            ("notification", "showError"),
+            ("app-plugins", "executePlugin"),
+        }
+
+
 def test_showerror_intent_round_trips_through_the_real_app_and_updates_the_notification_snapshot():
     # ADR-003 stage 3.1 review-fix (finding K): every other showError test
     # dispatches straight into a bare EventBus (backend/tests/test_backend_

@@ -120,6 +120,7 @@ py-modules = [
     "graphlink_task_config",
     "graphlink_token_estimator",
     "graphlink_version",
+    "graphlink_wire_schema",
 ]
 
 [tool.setuptools.packages.find]

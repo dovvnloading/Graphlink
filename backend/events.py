@@ -70,10 +70,13 @@ never-evicted SessionBus for any `?session=<anything>` string).
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import inspect
 import logging
 import time
 from typing import Any, Awaitable, Callable, Protocol
+
+from graphlink_wire_schema import validate_payload
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +116,63 @@ class UnknownIntentError(KeyError):
     """A client sent an intent name the topic does not expose."""
 
 
+class IntentValidationError(Exception):
+    """ADR-003 stage 3.2: an intent's args failed schema validation - raised
+    BEFORE the handler runs (dispatch_intent, below), so a malformed request
+    can never reach - and partially mutate state through - a handler body.
+    See register_intent's own docstring for how a handler opts into this."""
+
+    def __init__(self, errors: list[str]):
+        self.errors = errors
+        super().__init__("; ".join(errors))
+
+
+def _validate_intent_args(args_schema: type, args: Any) -> list[str]:
+    """Adapt validate_payload (dict-shaped, for wire STATE payloads) to the
+    positional-list shape intent args actually arrive in - args_schema's
+    dataclass field order defines the positional mapping. zip() alone would
+    silently drop any args beyond the field count, so the arity ceiling is
+    checked explicitly first; a too-few-args shortfall is left to
+    validate_payload's own existing "missing required field" check (a
+    dataclass field with a default - typically `X | None = None` - is
+    correctly optional there already, with no new logic needed).
+
+    Review-fix: `args` is typed `list[Any]` by dispatch_intent's own
+    signature, but that is a Python-side type hint, not a runtime guarantee -
+    _handle_message (backend/app.py) builds it straight from
+    `message.get("args") or []` with no shape check, so a client sending a
+    JSON OBJECT for "args" reached here unchanged. zip(fields, a_dict) pairs
+    each field with the dict's KEY strings (never its values), so validation
+    could report zero errors while payload held only field-name echoes - and
+    the caller then did `handler(*args)` with that same dict, which unpacks
+    its KEYS as positional args, silently calling the handler with the wrong
+    values entirely rather than the rejection this whole mechanism exists to
+    guarantee. Rejecting outright here closes that gap for every schema at
+    once, not just this one call site.
+
+    Review-fix: validate_payload's per-field errors carry a JSON-Schema-style
+    "$." path prefix (e.g. "$.message: missing required field") - meaningful
+    for a wire-payload schema, but the ADR-003 stage 3.1 review already
+    established that this exact error text reaches the end-user notification
+    banner verbatim (see backend/app.py's IntentValidationError handler), so
+    that implementation-detail prefix is stripped before it ever gets there."""
+    if not isinstance(args, list):
+        return [f"expected a list of arguments, got {type(args).__name__}"]
+    fields = dataclasses.fields(args_schema)
+    if len(args) > len(fields):
+        return [f"expected at most {len(fields)} argument(s), got {len(args)}"]
+    payload = {field.name: value for field, value in zip(fields, args)}
+    return [error.removeprefix("$.") for error in validate_payload(payload, args_schema)]
+
+
+class _IntentRegistration:
+    __slots__ = ("handler", "args_schema")
+
+    def __init__(self, handler: IntentHandler, args_schema: type | None):
+        self.handler = handler
+        self.args_schema = args_schema
+
+
 class _Topic:
     __slots__ = ("name", "builder", "schema_version", "min_compatible", "revision")
 
@@ -138,7 +198,7 @@ class SessionBus:
     def __init__(self, session_id: str):
         self.session_id = session_id
         self._topics: dict[str, _Topic] = {}
-        self._intents: dict[tuple[str, str], IntentHandler] = {}
+        self._intents: dict[tuple[str, str], _IntentRegistration] = {}
         self._connections: set[Connection] = set()
         # ADR-004 stage 4.3: monotonic timestamp of when this bus last had
         # zero connections, or None while at least one is attached. Stamped
@@ -163,10 +223,44 @@ class SessionBus:
         assert name not in self._topics, f"topic {name!r} registered twice"
         self._topics[name] = _Topic(name, builder, schema_version, min_compatible)
 
-    def register_intent(self, topic: str, intent: str, handler: IntentHandler) -> None:
+    def register_intent(
+        self,
+        topic: str,
+        intent: str,
+        handler: IntentHandler,
+        *,
+        args_schema: type | None = None,
+    ) -> None:
+        """`args_schema`, when given, is a dataclass whose FIELD ORDER defines
+        the expected positional args - dispatch_intent validates a real
+        request's args against it before calling `handler` (ADR-003 stage
+        3.2), turning a malformed request into an IntentValidationError
+        instead of `handler(*args)`'s own bare TypeError from inside the
+        handler body (potentially after it has already partially mutated
+        state).
+
+        `None` (the default) covers TWO genuinely different cases - review-
+        fix: an earlier version of this docstring folded both into one
+        "deliberate, legitimate opt-out" claim, which is only true of the
+        first:
+          1. Permanently unschemaable: a variadic handler (`ping(*args)`, an
+             echo passthrough with no fixed arity) or a genuinely zero-arg
+             one (`dismiss()`) has no static shape a fixed-field dataclass
+             could ever describe - `None` here is the final state, not a gap.
+          2. Not yet migrated: the ~130 intents this stage's own "topic-by-
+             topic, scene last" rollout (see doc/adr/ADR-003-wire-protocol-
+             v2.md) hasn't reached yet keep today's pre-3.2 behavior (a bad
+             call still gets caught by app.py's generic exception handler,
+             just without a schema's specific error text or the
+             pre-execution guarantee) - `None` here is temporary, expected to
+             become a real schema in a later increment.
+        """
         key = (topic, intent)
         assert key not in self._intents, f"intent {topic}/{intent} registered twice"
-        self._intents[key] = handler
+        assert args_schema is None or dataclasses.is_dataclass(args_schema), (
+            f"args_schema for {topic}/{intent} must be a dataclass type, got {args_schema!r}"
+        )
+        self._intents[key] = _IntentRegistration(handler, args_schema)
 
     def has_topic(self, name: str) -> bool:
         """True when `name` has a registered builder on this bus.
@@ -273,12 +367,26 @@ class SessionBus:
     async def dispatch_intent(self, topic: str, intent: str, args: list[Any]) -> Any:
         """Run a registered intent handler. Sync and async handlers are both
         supported; sync handlers run in a thread so a slow one cannot stall
-        the event loop (QThread's replacement in miniature)."""
-        handler = self._intents.get((topic, intent))
-        if handler is None:
+        the event loop (QThread's replacement in miniature).
+
+        ADR-003 stage 3.2: when the handler was registered with an
+        args_schema, `args` is validated against it BEFORE the handler is
+        ever called - raises IntentValidationError on a mismatch, so a
+        malformed request cannot reach (and partially mutate state through)
+        the handler body. A registration with no schema (args_schema=None,
+        the default) skips this - see register_intent's own docstring for
+        why that is a legitimate, not merely deferred, choice for some
+        intents."""
+        registration = self._intents.get((topic, intent))
+        if registration is None:
             if topic not in self._topics and not any(t == topic for t, _ in self._intents):
                 raise UnknownTopicError(topic)
             raise UnknownIntentError(f"{topic}/{intent}")
+        if registration.args_schema is not None:
+            errors = _validate_intent_args(registration.args_schema, args)
+            if errors:
+                raise IntentValidationError(errors)
+        handler = registration.handler
         if inspect.iscoroutinefunction(handler):
             return await handler(*args)
         return await asyncio.to_thread(handler, *args)
