@@ -101,6 +101,78 @@ def _build_hostile_sdist(tmp_path, marker_path):
     return sdist_path
 
 
+def _write_benign_source_backend(pkg_dir):
+    """ADR-005 stage 5.5 review-fix: unlike _write_hostile_backend, this
+    PEP 517 backend's build_wheel() hook actually SUCCEEDS - constructing a
+    real, importable wheel via stdlib zipfile from inside the hook itself
+    - so the escalation's own POSITIVE case (a genuine source-only package
+    installs cleanly when allowed) has real coverage, not just the
+    negative/security-proof direction (a hostile hook's side effect fires)
+    TestAllowSourceBuildsEscalation already covers."""
+    (pkg_dir / "pyproject.toml").write_text(
+        textwrap.dedent(
+            """\
+            [build-system]
+            requires = []
+            build-backend = "benign_source_backend"
+            backend-path = ["."]
+
+            [project]
+            name = "benign-source-pkg"
+            version = "0.0.1"
+            """
+        ),
+        encoding="utf-8",
+    )
+    (pkg_dir / "benign_source_backend.py").write_text(
+        textwrap.dedent(
+            """\
+            import pathlib
+            import zipfile
+
+
+            def get_requires_for_build_wheel(config_settings=None):
+                return []
+
+
+            def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+                wheel_name = "benign_source_pkg-0.0.1-py3-none-any.whl"
+                wheel_path = pathlib.Path(wheel_directory) / wheel_name
+                with zipfile.ZipFile(wheel_path, "w") as zf:
+                    zf.writestr("benign_source_pkg.py", "VALUE = 2\\n")
+                    zf.writestr(
+                        "benign_source_pkg-0.0.1.dist-info/METADATA",
+                        "Metadata-Version: 2.1\\nName: benign-source-pkg\\nVersion: 0.0.1\\n",
+                    )
+                    zf.writestr(
+                        "benign_source_pkg-0.0.1.dist-info/WHEEL",
+                        "Wheel-Version: 1.0\\nGenerator: test\\nRoot-Is-Purelib: true\\nTag: py3-none-any\\n",
+                    )
+                    zf.writestr("benign_source_pkg-0.0.1.dist-info/RECORD", "")
+                return wheel_name
+            """
+        ),
+        encoding="utf-8",
+    )
+
+
+def _build_benign_source_sdist(tmp_path):
+    """A real, pip-installable, genuinely source-only sdist (no wheel ever
+    published) whose build backend actually succeeds - the positive-path
+    twin of _build_hostile_sdist above."""
+    pkg_dir = tmp_path / "benign_source_pkg_src"
+    pkg_dir.mkdir()
+    _write_benign_source_backend(pkg_dir)
+
+    dist_dir = tmp_path / "benign_source_dist"
+    dist_dir.mkdir()
+    sdist_path = dist_dir / "benign_source_pkg-0.0.1.tar.gz"
+    with tarfile.open(sdist_path, "w:gz") as tar:
+        for filename in ("pyproject.toml", "benign_source_backend.py"):
+            tar.add(pkg_dir / filename, arcname=f"benign_source_pkg-0.0.1/{filename}")
+    return sdist_path
+
+
 def _build_benign_wheel(tmp_path):
     """A trivial, real wheel (built directly with stdlib zipfile - a wheel
     is just a zip with a specific layout) so the "does a real wheel still
@@ -258,3 +330,114 @@ class TestPipCommandIncludesTheFlags:
         assert "--only-binary" in args
         assert args[args.index("--only-binary") + 1] == ":all:"
         assert "--no-input" in args
+
+    def test_sync_requirements_omits_only_binary_when_allow_source_builds_is_true(self, tmp_path, monkeypatch):
+        # ADR-005 stage 5.5's source-build escalation - the opt-in must
+        # remove the restriction, not merely relax it, and --no-input must
+        # still be present regardless (defense in depth, unrelated to the
+        # source-build setting - see sync_requirements's own comment).
+        sandbox = VirtualEnvSandbox("flag-check-escalation-test")
+        sandbox.base_dir = tmp_path
+        sandbox.requirements_file = tmp_path / "requirements.txt"
+        sandbox.requirements_hash_file = tmp_path / ".requirements.sha256"
+        sandbox.venv_dir = tmp_path / "venv"
+
+        captured_args = {}
+
+        def fake_run_subprocess(args, **kwargs):
+            captured_args["args"] = args
+            return "", 0
+
+        monkeypatch.setattr(sandbox, "_run_subprocess", fake_run_subprocess)
+
+        sandbox.sync_requirements("some-package==1.0", should_continue=lambda: True, allow_source_builds=True)
+
+        args = captured_args["args"]
+        assert "--only-binary" not in args
+        assert "--no-input" in args
+
+
+class TestAllowSourceBuildsEscalation:
+    def test_allow_source_builds_true_lets_the_hostile_sdist_backend_execute(self, tmp_path):
+        # The mirror image of TestOnlyBinaryBlocksAHostileSdist above, using
+        # the identical hostile sdist fixture: proves the escalation
+        # genuinely removes the restriction (the backend's side effect now
+        # fires), not merely that the flag is accepted without error. The
+        # hostile backend's build_wheel() still deliberately raises after
+        # writing the marker (see _write_hostile_backend), so the overall
+        # install still fails either way - what changes is whether the
+        # backend ever RAN, which the marker file proves directly.
+        marker = tmp_path / "marker.txt"
+        sdist_path = _build_hostile_sdist(tmp_path, marker)
+        find_links_dir = tmp_path / "find_links"
+        find_links_dir.mkdir()
+        (find_links_dir / sdist_path.name).write_bytes(sdist_path.read_bytes())
+
+        sandbox = _make_sandbox_with_real_venv(tmp_path, "hostile-sdist-escalation-test")
+
+        with pytest.raises(RuntimeError, match="Dependency installation failed"):
+            sandbox.sync_requirements(
+                f"hostile-pkg==0.0.1\n--no-index\n--find-links {find_links_dir.as_posix()}",
+                should_continue=lambda: True,
+                allow_source_builds=True,
+            )
+
+        assert marker.exists(), (
+            "allow_source_builds=True should have let pip attempt the sdist build - "
+            "the hostile backend's build_wheel() hook never executed"
+        )
+
+
+class TestAllowSourceBuildsInstallsARealSourceOnlyPackage:
+    def test_allow_source_builds_true_successfully_installs_a_genuine_source_only_package(self, tmp_path):
+        # ADR-005 stage 5.5 test-coverage-gap fix: the escalation test above
+        # only proves the negative/security direction (a hostile backend's
+        # hook executes when allowed) - it says nothing about whether a
+        # LEGITIMATE source-only install actually succeeds under the same
+        # flag. A regression in the pip invocation itself, env stripping
+        # (safe_subprocess_env), or stage 5.3's scratch-dir permissions
+        # could silently break every real source build even with the
+        # escalation correctly enabled, and nothing else in this suite
+        # would notice.
+        sdist_path = _build_benign_source_sdist(tmp_path)
+        find_links_dir = tmp_path / "find_links"
+        find_links_dir.mkdir()
+        (find_links_dir / sdist_path.name).write_bytes(sdist_path.read_bytes())
+
+        sandbox = _make_sandbox_with_real_venv(tmp_path, "benign-source-install-test")
+
+        sandbox.sync_requirements(
+            f"benign-source-pkg==0.0.1\n--no-index\n--find-links {find_links_dir.as_posix()}",
+            should_continue=lambda: True,
+            allow_source_builds=True,
+        )
+
+        python_exe = (
+            sandbox.venv_dir / "Scripts" / "python.exe"
+            if sys.platform == "win32"
+            else sandbox.venv_dir / "bin" / "python"
+        )
+        check = subprocess.run(
+            [str(python_exe), "-c", "import benign_source_pkg; print(benign_source_pkg.VALUE)"],
+            capture_output=True, text=True, timeout=30,
+        )
+        assert check.returncode == 0, check.stderr
+        assert check.stdout.strip() == "2"
+
+    def test_the_same_source_only_package_fails_without_the_escalation(self, tmp_path):
+        # Negative control, proving the fixture is genuinely source-only
+        # (no wheel ever published) and the positive test above is
+        # exercising the real --only-binary bypass, not some other reason
+        # the install happened to succeed.
+        sdist_path = _build_benign_source_sdist(tmp_path)
+        find_links_dir = tmp_path / "find_links"
+        find_links_dir.mkdir()
+        (find_links_dir / sdist_path.name).write_bytes(sdist_path.read_bytes())
+
+        sandbox = _make_sandbox_with_real_venv(tmp_path, "benign-source-install-control-test")
+
+        with pytest.raises(RuntimeError, match="Dependency installation failed"):
+            sandbox.sync_requirements(
+                f"benign-source-pkg==0.0.1\n--no-index\n--find-links {find_links_dir.as_posix()}",
+                should_continue=lambda: True,
+            )

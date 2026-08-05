@@ -4706,6 +4706,28 @@ def test_set_code_sandbox_requirements_unknown_node_raises_scene_error():
         SceneDocument().set_code_sandbox_requirements("ghost", "numpy")
 
 
+def test_set_code_sandbox_allow_source_builds_sets_the_field():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_code_sandbox_node(0, 0, parent.id)
+    assert node.state.code_sandbox_approval_allow_source_builds is False
+    returned = doc.set_code_sandbox_allow_source_builds(node.id, True)
+    assert returned is node
+    assert node.state.code_sandbox_approval_allow_source_builds is True
+
+
+def test_set_code_sandbox_allow_source_builds_unknown_node_raises_scene_error():
+    with pytest.raises(SceneError):
+        SceneDocument().set_code_sandbox_allow_source_builds("ghost", True)
+
+
+def test_set_code_sandbox_allow_source_builds_wrong_kind_raises_scene_error():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    with pytest.raises(SceneError):
+        doc.set_code_sandbox_allow_source_builds(parent.id, True)
+
+
 def test_start_code_sandbox_run_stores_prompt_and_clears_error_without_touching_code():
     doc = SceneDocument()
     parent = doc.add_node(0, 0, "parent")
@@ -4804,6 +4826,8 @@ def test_scene_payload_code_sandbox_fields_default_correctly_and_excludes_sandbo
     assert row["codeSandboxAnalysis"] == ""
     assert row["codeSandboxAwaitingApproval"] is False
     assert row["codeSandboxApprovalRequirements"] == ""
+    assert row["codeSandboxApprovalAllowSourceBuilds"] is False
+    assert row["codeSandboxApprovalIsRepair"] is False
     assert row["codeSandboxError"] == ""
 
 
@@ -4819,6 +4843,43 @@ def test_set_pycoder_mode_intent_publishes_scene():
         await bus.dispatch_intent("scene", "setPyCoderMode", [node.id, "manual"])
 
         assert document.nodes[node.id].state.pycoder_mode == "manual"
+
+    asyncio.run(run())
+
+
+def test_set_code_sandbox_allow_source_builds_intent_publishes_scene():
+    async def run():
+        bus, document, recorder, _dispatcher = make_bus_with_dispatcher()
+        parent = document.add_node(0, 0, "parent")
+        node = document.add_code_sandbox_node(0, 0, parent.id)
+
+        await bus.dispatch_intent("scene", "setCodeSandboxAllowSourceBuilds", [node.id, True])
+
+        assert document.nodes[node.id].state.code_sandbox_approval_allow_source_builds is True
+
+    asyncio.run(run())
+
+
+def test_set_code_sandbox_allow_source_builds_intent_reaches_the_real_outgoing_scene_payload():
+    # ADR-005 stage 5.5 test-coverage-gap fix: the test above only checks
+    # SceneDocument's own internal state after the intent - it never
+    # inspects the actual outgoing WS payload, so a typo/wrong isinstance
+    # branch/wrong key name in scene_payload()'s own serializer (a
+    # genuinely separate piece of code from the setter) could diverge
+    # silently. This dispatches the real intent and reads the real
+    # recorder.messages payload, mirroring this file's own composer_
+    # publishes[-1]["payload"] pattern elsewhere.
+    async def run():
+        bus, document, recorder, _dispatcher = make_bus_with_dispatcher()
+        parent = document.add_node(0, 0, "parent")
+        node = document.add_code_sandbox_node(0, 0, parent.id)
+
+        await bus.dispatch_intent("scene", "setCodeSandboxAllowSourceBuilds", [node.id, True])
+
+        scene_publishes = [m for m in recorder.messages if m.get("topic") == "scene"]
+        assert scene_publishes, "the intent must republish scene"
+        row = {n["id"]: n for n in scene_publishes[-1]["payload"]["nodes"]}[node.id]
+        assert row["codeSandboxApprovalAllowSourceBuilds"] is True
 
     asyncio.run(run())
 
@@ -5471,7 +5532,7 @@ def test_code_sandbox_installs_the_frozen_manifest_not_a_live_edit_made_during_g
         def ensure_base_environment(self, should_continue, emit_line=None):
             pass
 
-        def sync_requirements(self, manifest, should_continue, emit_line=None):
+        def sync_requirements(self, manifest, should_continue, emit_line=None, allow_source_builds=False):
             self.sync_requirements_calls.append(manifest)
 
         def execute_code(self, code, should_continue, emit_line=None):
@@ -5588,7 +5649,7 @@ def test_code_sandbox_repair_gate_rediscloses_the_frozen_manifest_not_a_live_edi
         def ensure_base_environment(self, should_continue, emit_line=None):
             pass
 
-        def sync_requirements(self, manifest, should_continue, emit_line=None):
+        def sync_requirements(self, manifest, should_continue, emit_line=None, allow_source_builds=False):
             self.sync_requirements_calls.append(manifest)
 
         def execute_code(self, code, should_continue, emit_line=None):

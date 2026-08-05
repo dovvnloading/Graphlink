@@ -85,6 +85,8 @@ function validScenePayload(overrides: Record<string, unknown> = {}) {
         pycoderError: "",
         codeSandboxRequirements: "",
         codeSandboxApprovalRequirements: "",
+        codeSandboxApprovalAllowSourceBuilds: false,
+        codeSandboxApprovalIsRepair: false,
         codeSandboxPrompt: "",
         codeSandboxCode: "",
         codeSandboxOutput: "",
@@ -521,6 +523,22 @@ describe("SceneStore", () => {
         topic: "scene",
         intent: "setCodeSandboxRequirements",
         args: ["n1", "numpy\npandas==2.2.0"],
+      },
+    ]);
+  });
+
+  it("setCodeSandboxAllowSourceBuilds sends the scene-topic setCodeSandboxAllowSourceBuilds intent with [nodeId, allow]", () => {
+    // ADR-005 stage 5.5 test-coverage-gap fix: the sibling requirements
+    // field above already had this parity test; the source-build checkbox
+    // did not, so a wrong intent name/argument order would ship silently.
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.setCodeSandboxAllowSourceBuilds("n1", true);
+    expect(intents).toEqual([
+      {
+        topic: "scene",
+        intent: "setCodeSandboxAllowSourceBuilds",
+        args: ["n1", true],
       },
     ]);
   });

@@ -5240,6 +5240,23 @@ mark.document-view-search-match-current {
   border-radius: 6px;
 }
 
+/* ADR-005 stage 5.5: the source-build escalation checkbox - reuses
+   .settings-checkbox-row's own layout/hover treatment (SettingsDialog.tsx)
+   for visual consistency with every other checkbox in the app, scaled down
+   to this dialog's own smaller 11px type and given margin-bottom to match
+   .code-exec-approval-requirements's own spacing rhythm above it. */
+.code-exec-approval-source-builds-row {
+  margin: 0 0 12px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--gl-surface-text-primary);
+}
+
+.code-exec-approval-source-builds-row:has(input:disabled) {
+  opacity: 0.45;
+  cursor: default;
+}
+
 .code-exec-approval-code {
   max-height: 320px;
   overflow: auto;

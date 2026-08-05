@@ -551,12 +551,27 @@ class AgentDispatcher:
         a duplicate/stale approve-or-deny message (e.g. a double-click, or a
         message that arrives after cancel_pycoder/cancel_code_sandbox/
         cancel_all_pending_approvals already resolved this same future)
-        would otherwise raise asyncio.InvalidStateError."""
+        would otherwise raise asyncio.InvalidStateError.
+
+        ADR-005 stage 5.5 review-fix: when `handle.approval_snapshot_fn` is
+        set (code_sandbox only - see RunHandle's own doc), snapshot it into
+        `handle.approval_snapshot` HERE, in this same uninterruptible
+        synchronous stretch as `future.set_result()`, never after. This
+        method has no `await` anywhere in its own call chain, so nothing else
+        can run between the read and the resolve - closing a real race an
+        adversarial review found: `future.set_result()` only SCHEDULES the
+        awaiting `_run()` task's resumption rather than running it inline, so
+        a second WS connection's setCodeSandboxAllowSourceBuilds could
+        otherwise land in that gap and silently change what an already-
+        decided approval installs. Only snapshotted on an actual approval -
+        a denied run never consumes it, so there is nothing to protect."""
         handle = self._runs.get(request_id)
         if handle is None or handle.approval_future is None:
             return False
         future = handle.approval_future
         if not future.done():
+            if approved and handle.approval_snapshot_fn is not None:
+                handle.approval_snapshot = handle.approval_snapshot_fn()
             future.set_result(approved)
         return True
 
@@ -2215,8 +2230,16 @@ class AgentDispatcher:
 
         cancel_event = threading.Event()
         approval_future: asyncio.Future = asyncio.get_running_loop().create_future()
+        # ADR-005 stage 5.5 review-fix: see RunHandle.approval_snapshot_fn's
+        # own doc for the race this closes - _resolve_approval calls this
+        # synchronously, atomically with future.set_result(), instead of
+        # this coroutine re-reading node.state after resuming.
         handle = self._runs.claim(
-            "code_sandbox", node_id=node_id, cancel_event=cancel_event, approval_future=approval_future
+            "code_sandbox",
+            node_id=node_id,
+            cancel_event=cancel_event,
+            approval_future=approval_future,
+            approval_snapshot_fn=lambda: node.state.code_sandbox_approval_allow_source_builds,
         )
         request_id = handle.request_id
         node.pending_request_id = request_id
@@ -2286,6 +2309,18 @@ class AgentDispatcher:
                 # -- human-approval gate --------------------------------------
                 node.state.code_sandbox_code = current_code
                 node.state.code_sandbox_awaiting_approval = True
+                # ADR-005 stage 5.5: reset the source-build opt-in to its
+                # safe default every time a gate opens - a stale True from a
+                # previous run's approval must never silently carry forward
+                # into one the user has not actually reviewed. See
+                # CodeSandboxState.code_sandbox_approval_allow_source_builds's
+                # own comment.
+                node.state.code_sandbox_approval_allow_source_builds = False
+                # ADR-005 stage 5.5 review-fix: this is the INITIAL gate, not
+                # a repair re-gate - see the repair re-gate's own identical
+                # write, further down this function, for what this flag is
+                # for.
+                node.state.code_sandbox_approval_is_repair = False
                 # R5.4 CODESANDBOX FIX (closing the requirements-disclosure
                 # staleness race): freeze the DISCLOSED manifest into its own
                 # snapshot field at the exact same moment the approval gate
@@ -2309,6 +2344,22 @@ class AgentDispatcher:
                 )
                 await bus.publish("scene")
                 approved = await approval_future
+                # ADR-005 stage 5.5 review-fix: read the ALREADY-SNAPSHOTTED
+                # value off the handle, never node.state here. An earlier
+                # version of this line re-read node.state.code_sandbox_
+                # approval_allow_source_builds right after the await, which
+                # looked safe (no await in between) but wasn't: this
+                # coroutine only resumes once the event loop gets around to
+                # it after _resolve_approval's future.set_result() call
+                # (backend/agents.py) merely SCHEDULES that resumption - a
+                # second WS connection's setCodeSandboxAllowSourceBuilds
+                # could fully land in that scheduling gap. handle.
+                # approval_snapshot was instead captured by _resolve_approval
+                # itself, atomically with future.set_result(), in a
+                # synchronous stretch nothing else can interleave with - see
+                # RunHandle.approval_snapshot_fn's own doc (backend/
+                # run_lifecycle.py) for the full race this closes.
+                allow_source_builds = bool(handle.approval_snapshot)
                 node.state.code_sandbox_awaiting_approval = False
                 # Cleared here too, immediately once the approval resolves -
                 # mirrors code_sandbox_awaiting_approval's own clear on this
@@ -2316,6 +2367,7 @@ class AgentDispatcher:
                 # fail_code_sandbox_run clear it again downstream, redundant
                 # but harmless, for every other path that lands there).
                 node.state.code_sandbox_approval_requirements = ""
+                node.state.code_sandbox_approval_allow_source_builds = False
 
                 if not approved:
                     on_failure("Sandbox run cancelled: execution was not approved.")
@@ -2328,7 +2380,11 @@ class AgentDispatcher:
                         sandbox.ensure_base_environment, _should_continue, _thread_emit_line
                     )
                     await asyncio.to_thread(
-                        sandbox.sync_requirements, manifest, _should_continue, _thread_emit_line
+                        sandbox.sync_requirements,
+                        manifest,
+                        _should_continue,
+                        _thread_emit_line,
+                        allow_source_builds,
                     )
                 except InterruptedError:
                     notifications_state.show("Sandbox execution cancelled.", "info")
@@ -2388,6 +2444,34 @@ class AgentDispatcher:
                         node.state.code_sandbox_approved_fingerprint = _fingerprint_changes(
                             {"code": current_code, "manifest": manifest}
                         )
+                        # ADR-005 stage 5.5 review-fix: an earlier version of
+                        # this re-gate left code_sandbox_approval_allow_
+                        # source_builds untouched here, reasoning it was
+                        # "still False from the initial gate's own clear
+                        # above" - that assumption was never actually
+                        # enforced: setCodeSandboxAllowSourceBuilds is
+                        # ungated and could set it True during the execute/
+                        # repair window (nothing here was awaiting_approval,
+                        # so nothing rejected the intent), leaving the repair
+                        # panel's checkbox rendered CHECKED without the user
+                        # having touched it this round - a real, adversarial-
+                        # review-confirmed contradiction of this field's own
+                        # documented "reset on every gate-open" invariant.
+                        # Reset explicitly here, matching the initial gate's
+                        # own reset, even though sync_requirements is never
+                        # called again on a repair round (so this has no
+                        # install-level effect) - the value must still be
+                        # honest about being reset, not just impotent.
+                        node.state.code_sandbox_approval_allow_source_builds = False
+                        # ADR-005 stage 5.5 review-fix: distinguishes "this
+                        # panel's checkbox reflects a decision that can still
+                        # affect an install" (initial gate) from "the install
+                        # already happened, checking this now does nothing"
+                        # (any repair gate) - CodeExecutionApprovalPanel.tsx
+                        # uses this to hide the otherwise-genuinely-inert
+                        # checkbox on repair rounds rather than let a user
+                        # take an action that silently has no effect.
+                        node.state.code_sandbox_approval_is_repair = True
                         node.state.code_sandbox_awaiting_approval = True
                         await bus.publish("scene")
                         repair_approved = await repair_future

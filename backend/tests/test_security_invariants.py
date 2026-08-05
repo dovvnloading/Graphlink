@@ -51,7 +51,7 @@ def _make_client(**create_app_kwargs) -> TestClient:
 # Every /api/* request and the /ws handshake must present the per-launch
 # capability token. Closes audit finding C5 (backend/auth.py's docstring):
 # without this, any other local process - not just a browser page - can
-# drive all 131 intents, including approveCodeExecution.
+# drive all registered intents, including approveCodeExecution.
 
 
 class TestAuthIsRequired:

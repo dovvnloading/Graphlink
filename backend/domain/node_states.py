@@ -547,6 +547,51 @@ class CodeSandboxState(NodeState):
       code_sandbox_code, "manifest": code_sandbox_approval_requirements}
       instead - see that field's own reasoning above. Internal
       bookkeeping only, EXCLUDED from scene_payload().
+    - code_sandbox_approval_allow_source_builds: ADR-005 stage 5.5's
+      "source-build escalation" - the user's live opt-in, made WHILE this
+      specific approval is pending, to let this one run's dependency
+      install build a source-only package instead of the
+      --only-binary :all: default (VirtualEnvSandbox.sync_requirements,
+      graphlink_plugins/code_sandbox/domain.py). Deliberately NOT part of
+      code_sandbox_approved_fingerprint above: that fingerprint pins
+      CONTENT identity (the code/manifest actually being approved must
+      not silently change before it runs); this field is a permission
+      granted alongside approving that content, decided by the user
+      during the same approval window rather than frozen at gate-open.
+      Reset to False every time a gate opens (both the initial gate AND
+      each repair-loop re-gate in AgentDispatcher.start_code_sandbox_run,
+      backend/agents.py - a review-fix: an earlier version of this stage
+      only reset it at the initial gate, leaving a stale True able to
+      render a repair round's checkbox as checked despite no user action
+      that round) so a source-build opt-in never silently carries over to
+      code the user has not yet seen.
+
+      ADR-005 stage 5.5 review-fix (real race found by a 4-lens
+      adversarial review): AgentDispatcher does NOT read this field again
+      after the approval future resolves. `future.set_result()`
+      (AgentDispatcher._resolve_approval) only SCHEDULES the waiting
+      coroutine's resumption rather than running it inline, so a second
+      WS connection's setCodeSandboxAllowSourceBuilds could land in that
+      scheduling gap and change what an already-decided approval installs.
+      Instead, _resolve_approval snapshots this field into
+      RunHandle.approval_snapshot (backend/run_lifecycle.py) SYNCHRONOUSLY,
+      in the same uninterruptible stretch as future.set_result() itself -
+      see that field's own doc for the full mechanism - and
+      start_code_sandbox_run reads the handle's snapshot, never this field
+      directly, once approval resolves.
+
+      Cleared back to False alongside code_sandbox_approval_requirements
+      at every point that field is cleared.
+    - code_sandbox_approval_is_repair: ADR-005 stage 5.5 review-fix -
+      distinguishes the INITIAL approval gate (False) from any repair-loop
+      re-gate (True). VirtualEnvSandbox.sync_requirements is only ever
+      called once per run, before the repair loop starts, so the source-
+      build checkbox has no dependency install left to affect on any
+      repair round - CodeExecutionApprovalPanel.tsx uses this field to
+      hide that otherwise-genuinely-inert control on repair rounds, rather
+      than let a user take an action that silently does nothing. Reset at
+      every gate-open (False at the initial gate, True at each repair
+      re-gate) alongside the other gate-open fields.
     - code_sandbox_error: the current run's error banner text, cleared
       on the next attempt."""
 
@@ -559,6 +604,8 @@ class CodeSandboxState(NodeState):
     code_sandbox_awaiting_approval: bool = False
     code_sandbox_approval_requirements: str = ""
     code_sandbox_approved_fingerprint: str | None = None
+    code_sandbox_approval_allow_source_builds: bool = False
+    code_sandbox_approval_is_repair: bool = False
     code_sandbox_error: str = ""
 
 

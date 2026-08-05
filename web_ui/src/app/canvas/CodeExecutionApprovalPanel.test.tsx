@@ -314,6 +314,66 @@ describe("CodeExecutionApprovalPanel", () => {
     expect(screen.queryByText("Packages to be installed")).toBeNull();
   });
 
+  // -- ADR-005 stage 5.5: source-build escalation checkbox --------------------
+
+  it("renders the source-build checkbox for code_sandbox alongside a non-blank Packages block", () => {
+    renderPanel({ kind: "code_sandbox", requirements: "numpy" });
+    expect(
+      screen.getByRole("checkbox", { name: /Allow building packages from source/ }),
+    ).toBeInTheDocument();
+  });
+
+  it("does not render the source-build checkbox for code_sandbox when requirements is blank or omitted", () => {
+    renderPanel({ kind: "code_sandbox", requirements: "" });
+    expect(screen.queryByRole("checkbox")).toBeNull();
+    renderPanel({ kind: "code_sandbox", requirements: undefined });
+    expect(screen.queryByRole("checkbox")).toBeNull();
+  });
+
+  it("never renders the source-build checkbox for pycoder, even if requirements were somehow supplied", () => {
+    renderPanel({
+      kind: "pycoder",
+      ...({ requirements: "numpy" } as Partial<Parameters<typeof CodeExecutionApprovalPanel>[0]>),
+    });
+    expect(screen.queryByRole("checkbox")).toBeNull();
+  });
+
+  it("the checkbox reflects the current allowSourceBuilds prop value", () => {
+    renderPanel({ kind: "code_sandbox", requirements: "numpy", allowSourceBuilds: true });
+    expect(screen.getByRole("checkbox")).toBeChecked();
+  });
+
+  it("defaults to unchecked when allowSourceBuilds is omitted", () => {
+    renderPanel({ kind: "code_sandbox", requirements: "numpy" });
+    expect(screen.getByRole("checkbox")).not.toBeChecked();
+  });
+
+  it("toggling the checkbox calls onToggleAllowSourceBuilds with the new value, immediately - not deferred to Approve", async () => {
+    const user = userEvent.setup();
+    const onToggleAllowSourceBuilds = vi.fn();
+    renderPanel({
+      kind: "code_sandbox",
+      requirements: "numpy",
+      allowSourceBuilds: false,
+      onToggleAllowSourceBuilds,
+    });
+    await user.click(screen.getByRole("checkbox"));
+    expect(onToggleAllowSourceBuilds).toHaveBeenCalledExactlyOnceWith(true);
+  });
+
+  it("the checkbox is disabled while busy, matching Approve/Deny", () => {
+    renderPanel({ kind: "code_sandbox", requirements: "numpy", busy: true });
+    expect(screen.getByRole("checkbox")).toBeDisabled();
+  });
+
+  it("clicking the checkbox does not call onApprove or onDeny", async () => {
+    const user = userEvent.setup();
+    const { onApprove, onDeny } = renderPanel({ kind: "code_sandbox", requirements: "numpy" });
+    await user.click(screen.getByRole("checkbox"));
+    expect(onApprove).not.toHaveBeenCalled();
+    expect(onDeny).not.toHaveBeenCalled();
+  });
+
   // -- code rendering + security ---------------------------------------------
 
   it("renders the pending code verbatim through the markdown pipeline as a syntax-highlighted fenced block", () => {

@@ -65,6 +65,12 @@
           "codeSandboxAnalysis": {
             "type": "string"
           },
+          "codeSandboxApprovalAllowSourceBuilds": {
+            "type": "boolean"
+          },
+          "codeSandboxApprovalIsRepair": {
+            "type": "boolean"
+          },
           "codeSandboxApprovalRequirements": {
             "type": "string"
           },
@@ -460,6 +466,8 @@
           "codeSandboxAnalysis",
           "codeSandboxAwaitingApproval",
           "codeSandboxApprovalRequirements",
+          "codeSandboxApprovalAllowSourceBuilds",
+          "codeSandboxApprovalIsRepair",
           "codeSandboxError"
         ],
         "type": "object"

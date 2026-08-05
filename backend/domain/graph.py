@@ -1197,6 +1197,23 @@ class SceneDocument(BranchOps, GroupOps):
         node.state.code_sandbox_requirements = str(requirements_text)
         return node
 
+    def set_code_sandbox_allow_source_builds(self, node_id: str, allow: bool) -> SceneNode:
+        """ADR-005 stage 5.5: the approval panel's own source-build opt-in
+        checkbox, fired on every toggle (same "ungated, fires immediately"
+        posture as set_code_sandbox_requirements above). Setting this outside
+        an open approval gate is harmless, not just permitted - agents.py
+        resets the field to False at the top of every gate-open, so a value
+        set here while no gate is open never reaches an actual run; the
+        approval panel is the only surface that ever renders this control,
+        and it only renders while awaiting_approval is true."""
+        node = self.nodes.get(node_id)
+        if node is None:
+            raise SceneError(f"unknown node: {node_id}")
+        if node.kind != "code_sandbox":
+            raise SceneError(f"node is not a code_sandbox node: {node_id}")
+        node.state.code_sandbox_approval_allow_source_builds = bool(allow)
+        return node
+
     def start_code_sandbox_run(self, node_id: str, input_text: str) -> SceneNode:
         """Begin one Run: stores input_text into code_sandbox_prompt (there is
         no mode-dependent field split here, unlike Py-Coder - see this
@@ -1234,6 +1251,8 @@ class SceneDocument(BranchOps, GroupOps):
         node.state.code_sandbox_awaiting_approval = False
         node.state.code_sandbox_approval_requirements = ""
         node.state.code_sandbox_approved_fingerprint = None
+        node.state.code_sandbox_approval_allow_source_builds = False
+        node.state.code_sandbox_approval_is_repair = False
         node.state.code_sandbox_error = ""
         return node
 
@@ -1248,6 +1267,8 @@ class SceneDocument(BranchOps, GroupOps):
         node.state.code_sandbox_awaiting_approval = False
         node.state.code_sandbox_approval_requirements = ""
         node.state.code_sandbox_approved_fingerprint = None
+        node.state.code_sandbox_approval_allow_source_builds = False
+        node.state.code_sandbox_approval_is_repair = False
         node.state.code_sandbox_error = str(message)
         return node
 
@@ -1859,6 +1880,22 @@ class SceneDocument(BranchOps, GroupOps):
                     # see CodeSandboxState's own comment.
                     "codeSandboxApprovalRequirements": (
                         n.state.code_sandbox_approval_requirements if isinstance(n.state, CodeSandboxState) else ""
+                    ),
+                    # ADR-005 stage 5.5: the user's live source-build opt-in
+                    # for the CURRENT pending approval - see CodeSandboxState.
+                    # code_sandbox_approval_allow_source_builds's own comment.
+                    "codeSandboxApprovalAllowSourceBuilds": (
+                        n.state.code_sandbox_approval_allow_source_builds
+                        if isinstance(n.state, CodeSandboxState)
+                        else False
+                    ),
+                    # ADR-005 stage 5.5 review-fix: True only during a
+                    # repair-loop re-gate - see CodeSandboxState.
+                    # code_sandbox_approval_is_repair's own comment.
+                    "codeSandboxApprovalIsRepair": (
+                        n.state.code_sandbox_approval_is_repair
+                        if isinstance(n.state, CodeSandboxState)
+                        else False
                     ),
                     "codeSandboxError": n.state.code_sandbox_error if isinstance(n.state, CodeSandboxState) else "",
                     # R6.1: Notes/Frames/Containers. groupManualWidth/Height

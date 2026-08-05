@@ -271,7 +271,9 @@ _EXPECTED_SCENE_NODE_WIRE_KEYS = sorted([
     "artifactContent", "attachmentKind", "branchStatus", "byteSize",
     "chartAspectLocked", "chartAssetId", "chartAssetVersion", "chartData",
     "chartError", "chartHeight", "chartSourceNodeId", "chartType", "chartWidth",
-    "chatScrollValue", "code", "codeSandboxAnalysis", "codeSandboxApprovalRequirements",
+    "chatScrollValue", "code", "codeSandboxAnalysis",
+    "codeSandboxApprovalAllowSourceBuilds", "codeSandboxApprovalIsRepair",
+    "codeSandboxApprovalRequirements",
     "codeSandboxAwaitingApproval", "codeSandboxCode", "codeSandboxError",
     "codeSandboxOutput", "codeSandboxPrompt", "codeSandboxRequirements", "color",
     "content", "contentParts", "durationSeconds", "filePath", "gitlinkBranch",
@@ -424,6 +426,8 @@ _EXPECTED_NON_OWNING_KIND_WIRE_DEFAULTS = {
     "codeSandboxAnalysis": "",
     "codeSandboxAwaitingApproval": False,
     "codeSandboxApprovalRequirements": "",
+    "codeSandboxApprovalAllowSourceBuilds": False,
+    "codeSandboxApprovalIsRepair": False,
     "codeSandboxError": "",
 }
 

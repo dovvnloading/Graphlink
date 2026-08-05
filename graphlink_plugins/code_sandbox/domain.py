@@ -344,7 +344,7 @@ class VirtualEnvSandbox:
         if return_code != 0:
             raise RuntimeError(f"Failed to create sandbox environment.\n{output.strip()}")
 
-    def sync_requirements(self, requirements_manifest, should_continue, emit_line=None):
+    def sync_requirements(self, requirements_manifest, should_continue, emit_line=None, allow_source_builds=False):
         normalized = _normalize_requirements(requirements_manifest)
         manifest_hash = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
         previous_hash = self.requirements_hash_file.read_text(encoding="utf-8").strip() if self.requirements_hash_file.exists() else ""
@@ -352,6 +352,19 @@ class VirtualEnvSandbox:
         self.requirements_file.write_text(normalized + ("\n" if normalized else ""), encoding="utf-8")
 
         if manifest_hash == previous_hash:
+            # ADR-005 stage 5.5 review-fix: this pre-existing cache
+            # short-circuit is keyed ONLY on the manifest text - it runs
+            # BEFORE allow_source_builds is ever consulted below, and pip is
+            # not invoked at all on a hit. This means the escalation
+            # checkbox's real guarantee is "governs the first install of
+            # this exact manifest text", not literally "governs every run" -
+            # a later run with an unchecked box can silently reuse an
+            # environment an earlier, explicitly-approved source build
+            # produced. This is NOT a new install-time risk on the cache-hit
+            # path itself (no pip invocation means no build backend can
+            # execute here either way) - it is a disclosure-accuracy point
+            # an adversarial review flagged: the checkbox does not mean
+            # "source builds are re-verified on every run of this node."
             if emit_line:
                 emit_line("[Sandbox] Requirements unchanged. Reusing cached environment.\n")
             return
@@ -364,37 +377,49 @@ class VirtualEnvSandbox:
 
         if emit_line:
             emit_line("[Sandbox] Installing sandbox dependencies...\n")
+        pip_args = [
+            str(self.python_executable),
+            "-m",
+            "pip",
+            "install",
+            "--disable-pip-version-check",
+        ]
+        if not allow_source_builds:
+            # ADR-005 stage 5.5: without this, pip resolving a requirement to
+            # a source distribution (no wheel published for this
+            # platform/version, or a private/unindexed package) invokes that
+            # sdist's own PEP 517 build backend - arbitrary Python, not a
+            # data format - to produce a wheel, *during* what looks like an
+            # ordinary dependency install. Verified empirically with a real
+            # hostile sdist (a custom build backend whose build_wheel() hook
+            # has an observable side effect) before this flag was added: a
+            # plain `pip install -r requirements.txt` against it executes the
+            # backend and its side effect fires; with --only-binary :all:,
+            # pip refuses to consider the sdist at all and fails with "No
+            # matching distribution found" - the backend is never invoked.
+            # Also verified this does not regress the ordinary case: a
+            # package that DOES publish a wheel installs exactly as before.
+            #
+            # allow_source_builds=True is ADR-005 stage 5.5's "source-build
+            # escalation" - an explicit, UI-approved opt-in
+            # (CodeExecutionApprovalPanel.tsx's checkbox, threaded through
+            # AgentDispatcher.start_code_sandbox_run) for a genuinely
+            # source-only package, in effect for the FIRST install of a
+            # given manifest text (see the cache short-circuit above this
+            # method's own comment for why a later run with an identical,
+            # already-cached manifest never reaches this branch at all,
+            # regardless of this run's own checkbox value). Nothing here
+            # re-verifies that the caller actually got a real approval for
+            # this - that gate lives one layer up, the same trust boundary
+            # every other call site of this
+            # method already relies on for `requirements_manifest` itself.
+            pip_args += ["--only-binary", ":all:"]
+        # --no-input stays unconditional either way - defense in depth
+        # matching ADR-005's own decision text, this subprocess has no
+        # attached TTY to prompt on regardless of the source-build setting.
+        pip_args += ["--no-input", "-r", str(self.requirements_file)]
         output, return_code = self._run_subprocess(
-            [
-                str(self.python_executable),
-                "-m",
-                "pip",
-                "install",
-                "--disable-pip-version-check",
-                # ADR-005 stage 5.5: without this, pip resolving a
-                # requirement to a source distribution (no wheel published
-                # for this platform/version, or a private/unindexed
-                # package) invokes that sdist's own PEP 517 build backend -
-                # arbitrary Python, not a data format - to produce a wheel,
-                # *during* what looks like an ordinary dependency install.
-                # Verified empirically with a real hostile sdist (a custom
-                # build backend whose build_wheel() hook has an observable
-                # side effect) before this flag was added: a plain
-                # `pip install -r requirements.txt` against it executes the
-                # backend and its side effect fires; with --only-binary
-                # :all:, pip refuses to consider the sdist at all and fails
-                # with "No matching distribution found" - the backend is
-                # never invoked. Also verified this does not regress the
-                # ordinary case: a package that DOES publish a wheel
-                # installs exactly as before. --no-input is defense in
-                # depth matching ADR-005's own decision text - this
-                # subprocess has no attached TTY to prompt on regardless.
-                "--only-binary",
-                ":all:",
-                "--no-input",
-                "-r",
-                str(self.requirements_file),
-            ],
+            pip_args,
             should_continue=should_continue,
             emit_line=emit_line,
             cwd=self.base_dir,

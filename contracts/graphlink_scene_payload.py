@@ -292,6 +292,17 @@ class SceneNodeRow:
     # comment on CodeSandboxState.code_sandbox_approval_requirements for the
     # full race this closes.
     codeSandboxApprovalRequirements: str = ""
+    # ADR-005 stage 5.5: the user's live source-build opt-in for the CURRENT
+    # pending approval, reset to False every time a new gate opens - see
+    # backend/domain/node_states.py's own comment on CodeSandboxState.
+    # code_sandbox_approval_allow_source_builds for the full race this
+    # closes.
+    codeSandboxApprovalAllowSourceBuilds: bool = False
+    # ADR-005 stage 5.5 review-fix: True only while the CURRENT pending
+    # approval is a repair-loop re-gate, not the initial gate - see
+    # backend/domain/node_states.py's own comment on CodeSandboxState.
+    # code_sandbox_approval_is_repair for why the frontend needs this.
+    codeSandboxApprovalIsRepair: bool = False
     codeSandboxError: str = ""
 
 

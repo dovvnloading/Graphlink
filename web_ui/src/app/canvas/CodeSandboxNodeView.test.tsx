@@ -29,6 +29,8 @@ function baseData(overrides: Partial<CodeSandboxFlowNode["data"]> = {}): CodeSan
   return {
     codeSandboxRequirements: "",
     codeSandboxApprovalRequirements: "",
+    codeSandboxApprovalAllowSourceBuilds: false,
+    codeSandboxApprovalIsRepair: false,
     codeSandboxPrompt: "",
     codeSandboxCode: "",
     codeSandboxOutput: "",
@@ -38,6 +40,7 @@ function baseData(overrides: Partial<CodeSandboxFlowNode["data"]> = {}): CodeSan
     isCollapsed: false,
     pendingRequestId: null,
     onSetRequirements: vi.fn(),
+    onToggleAllowSourceBuilds: vi.fn(),
     onRun: vi.fn(),
     onCancel: vi.fn(),
     onApprove: vi.fn(),
@@ -373,6 +376,43 @@ describe("CodeSandboxNodeView", () => {
     expect(packagesList).not.toBeNull();
     expect(packagesList!.textContent).toBe("numpy");
     expect(packagesList!.textContent).not.toContain("requests");
+  });
+
+  // ADR-005 stage 5.5 test-coverage-gap fix: the sibling requirements tests
+  // above prove codeSandboxApprovalRequirements reaches the real DOM at the
+  // NodeView-integration level (not just CodeExecutionApprovalPanel.test.tsx's
+  // own panel-unit level) - the source-build checkbox's own wiring
+  // (codeSandboxApprovalAllowSourceBuilds -> allowSourceBuilds,
+  // onToggleAllowSourceBuilds -> the real checkbox's onChange) had no
+  // equivalent test, so a broken prop pass-through in this exact file
+  // would have shipped with nothing failing.
+  it("the approval panel's source-build checkbox reflects codeSandboxApprovalAllowSourceBuilds and toggling it calls onToggleAllowSourceBuilds", async () => {
+    const user = userEvent.setup();
+    const data = renderCodeSandboxNode({
+      codeSandboxAwaitingApproval: true,
+      codeSandboxCode: "print(1)",
+      codeSandboxApprovalRequirements: "numpy",
+      codeSandboxApprovalAllowSourceBuilds: true,
+    });
+    const checkbox = document.querySelector('input[type="checkbox"]') as HTMLInputElement;
+    expect(checkbox).not.toBeNull();
+    expect(checkbox.checked).toBe(true);
+
+    await user.click(checkbox);
+    expect(data.onToggleAllowSourceBuilds).toHaveBeenCalledExactlyOnceWith(false);
+  });
+
+  it("hides the source-build checkbox at the real NodeView level when codeSandboxApprovalIsRepair is true", () => {
+    renderCodeSandboxNode({
+      codeSandboxAwaitingApproval: true,
+      codeSandboxCode: "print(1)",
+      codeSandboxApprovalRequirements: "numpy",
+      codeSandboxApprovalIsRepair: true,
+    });
+    expect(document.querySelector('input[type="checkbox"]')).toBeNull();
+    // The requirements block itself must still render on a repair round -
+    // only the (now-inert) checkbox is hidden.
+    expect(screen.getByText("Packages to be installed")).toBeInTheDocument();
   });
 
   it("FIX C: the approval panel also discloses that repaired code needs its own approval", () => {

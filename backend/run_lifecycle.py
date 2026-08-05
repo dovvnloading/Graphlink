@@ -115,7 +115,33 @@ class RunHandle:
     pre-migration cancel_all_pending_approvals). Mutated in place after
     claim() on both kinds (a fresh Future replaces the old one on every
     repair-loop iteration) - callers must always read
-    handle.approval_future fresh, never cache a reference to it."""
+    handle.approval_future fresh, never cache a reference to it.
+
+    `approval_snapshot_fn`/`approval_snapshot` (ADR-005 stage 5.5): closes a
+    real race a 4-lens adversarial review found in the source-build
+    escalation checkbox. That checkbox's value lives in mutable node state
+    (CodeSandboxState.code_sandbox_approval_allow_source_builds), set by its
+    OWN ungated WS intent (setCodeSandboxAllowSourceBuilds) - unlike the
+    code/manifest being approved, which start_code_sandbox_run freezes into
+    a local variable BEFORE `await approval_future` even begins, this value
+    is only known once the user's own Approve click is decided, so it can't
+    be pre-frozen the same way. Naively re-reading node.state AFTER
+    `await approval_future` resolves is NOT safe: `future.set_result()` runs
+    on the resolving connection's own WS-message-handling coroutine and only
+    SCHEDULES (via call_soon) the awaiting `_run()` task's resumption - it
+    does not resume it inline - so a second WS connection on the same
+    session can dispatch setCodeSandboxAllowSourceBuilds and have it fully
+    processed by the event loop in that scheduling gap, silently changing
+    what an already-decided approval installs. `_resolve_approval` (backend/
+    agents.py) has no `await` anywhere in its own call chain, so it - and
+    only it - can read the live checkbox value and call
+    `approval_snapshot_fn()` into `approval_snapshot` in the SAME
+    uninterruptible synchronous stretch as `future.set_result()`: no other
+    coroutine can observe or mutate anything in between. `start_code_sandbox_
+    run` passes `approval_snapshot_fn` at claim() time; callers that resolve
+    an approval read `handle.approval_snapshot` afterward instead of
+    re-reading live state. `None` for every other kind (nothing else has a
+    live-mutable field that needs capturing exactly at approval time)."""
 
     kind: str
     request_id: str
@@ -123,6 +149,8 @@ class RunHandle:
     cancel_event: threading.Event | None = None
     on_cancel: Callable[[], None] | None = None
     approval_future: asyncio.Future | None = None
+    approval_snapshot_fn: Callable[[], Any] | None = None
+    approval_snapshot: Any = None
     task: asyncio.Task | None = None
 
 
@@ -144,6 +172,7 @@ class RunRegistry:
         cancel_event: threading.Event | None = None,
         on_cancel: Callable[[], None] | None = None,
         approval_future: asyncio.Future | None = None,
+        approval_snapshot_fn: Callable[[], Any] | None = None,
     ) -> RunHandle:
         """Synchronous by design - see this module's own docstring for
         why callers must call this in the same synchronous stretch as
@@ -155,6 +184,7 @@ class RunRegistry:
             cancel_event=cancel_event,
             on_cancel=on_cancel,
             approval_future=approval_future,
+            approval_snapshot_fn=approval_snapshot_fn,
         )
         self._handles[handle.request_id] = handle
         return handle

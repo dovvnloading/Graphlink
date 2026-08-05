@@ -29,10 +29,20 @@ import graphlink_execution_guard as guard
 from backend.events import SessionBus
 
 _DEPENDENCY_INSTALL_NOTE = (
-    " Package installs are restricted to pre-built binary distributions - a "
-    "package that only ships source code will fail to install rather than "
-    "run its own build code during setup."
+    " Package installs are restricted to pre-built binary distributions by "
+    "default - a package that only ships source code will fail to install "
+    "rather than run its own build code during setup, unless you "
+    "explicitly allow that for a specific run in the approval dialog."
 )
+# ADR-005 stage 5.5 review-fix: the sentence above used to be unconditional
+# ("restricted to pre-built binary distributions", full stop) - an
+# adversarial review caught that this stage's own source-build escalation
+# checkbox (CodeExecutionApprovalPanel.tsx) renders in the SAME dialog,
+# directly beneath this text, and lets a user do the exact thing this
+# sentence claimed could not happen. The "by default"/"unless you
+# explicitly allow" wording closes that in-dialog contradiction without
+# weakening the substance of the disclosure - the default behavior is
+# still accurately described as restrictive.
 
 
 def _format_bytes(n: int) -> str:

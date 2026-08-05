@@ -31,6 +31,10 @@ def register_code_sandbox_intents(
         document.set_code_sandbox_requirements(node_id, requirements_text)
         await publish_scene()
 
+    async def set_code_sandbox_allow_source_builds(node_id, allow):
+        document.set_code_sandbox_allow_source_builds(node_id, allow)
+        await publish_scene()
+
     async def run_code_sandbox(node_id, input_text):
         # Same busy-claim-placeholder pattern as run_pycoder (backend/api/
         # intents_pycoder.py, and run_gitlink_change_set before it,
@@ -76,5 +80,8 @@ def register_code_sandbox_intents(
         agent_dispatcher.cancel_code_sandbox(request_id)
 
     bus.register_intent("scene", "setCodeSandboxRequirements", set_code_sandbox_requirements)
+    bus.register_intent(
+        "scene", "setCodeSandboxAllowSourceBuilds", set_code_sandbox_allow_source_builds
+    )
     bus.register_intent("scene", "runCodeSandbox", run_code_sandbox)
     bus.register_intent("scene", "cancelCodeSandboxRequest", cancel_code_sandbox_request)

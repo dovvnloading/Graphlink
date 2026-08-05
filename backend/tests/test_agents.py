@@ -3833,6 +3833,7 @@ def _make_code_sandbox_node(**overrides):
         code_sandbox_awaiting_approval=False,
         code_sandbox_approval_requirements="",
         code_sandbox_approved_fingerprint=None,
+        code_sandbox_approval_allow_source_builds=False,
         code_sandbox_error="",
     )
     node_overrides = {"pending_request_id": None}
@@ -4670,7 +4671,7 @@ def test_code_sandbox_approved_full_success_flow_runs_venv_and_analyzes(monkeypa
         def ensure_base_environment(self, should_continue, emit_line=None):
             self.prep_calls.append("ensure_base_environment")
 
-        def sync_requirements(self, manifest, should_continue, emit_line=None):
+        def sync_requirements(self, manifest, should_continue, emit_line=None, allow_source_builds=False):
             self.prep_calls.append(("sync_requirements", manifest))
 
         def execute_code(self, code, should_continue, emit_line=None):
@@ -4705,6 +4706,457 @@ def test_code_sandbox_approved_full_success_flow_runs_venv_and_analyzes(monkeypa
     asyncio.run(run())
 
 
+def _make_recording_sandbox_class():
+    """ADR-005 stage 5.5: a _FakeSandbox twin that records exactly what
+    allow_source_builds value sync_requirements was called with, for the
+    source-build escalation tests below."""
+
+    class _RecordingSandbox:
+        def __init__(self, sandbox_id):
+            self.sandbox_id = sandbox_id
+            self.sync_requirements_calls = []
+            self.on_ensure_base_environment = None
+
+        def ensure_base_environment(self, should_continue, emit_line=None):
+            if self.on_ensure_base_environment is not None:
+                self.on_ensure_base_environment()
+
+        def sync_requirements(self, manifest, should_continue, emit_line=None, allow_source_builds=False):
+            self.sync_requirements_calls.append(allow_source_builds)
+
+        def execute_code(self, code, should_continue, emit_line=None):
+            return "ran", 0
+
+    return _RecordingSandbox
+
+
+def test_code_sandbox_source_builds_defaults_to_false_when_never_toggled(monkeypatch):
+    monkeypatch.setattr(
+        agents_module.SandboxGenerationAgent, "get_response",
+        lambda self, history, prompt, manifest: "[TOOL:PYTHON]\nprint('ok')\n[/TOOL]",
+    )
+    monkeypatch.setattr(
+        agents_module.PyCoderAnalysisAgent, "get_response",
+        lambda self, original_prompt, code, code_output: "ok",
+    )
+    sandbox_holder = {}
+    recording_class = _make_recording_sandbox_class()
+
+    def _make_sandbox(sandbox_id):
+        sandbox = recording_class(sandbox_id)
+        sandbox_holder["sandbox"] = sandbox
+        return sandbox
+
+    monkeypatch.setattr(agents_module, "VirtualEnvSandbox", _make_sandbox)
+
+    async def run():
+        bus, notifications, dispatcher = _make_code_exec_env()
+        node = _make_code_sandbox_node()
+
+        await dispatcher.start_code_sandbox_run(
+            bus=bus, notifications_state=notifications, node=node, node_id="n1",
+            sandbox_id="sandbox-42", prompt="print ok", existing_code="",
+            requirements_manifest="numpy", conversation_history=[],
+            on_success=lambda *a: None, on_failure=lambda m: None,
+        )
+        request_id, entry = next(iter(code_sandbox_slots(dispatcher).items()))
+        dispatcher.approve_code_execution(request_id)
+        await entry["task"]
+
+        assert sandbox_holder["sandbox"].sync_requirements_calls == [False]
+
+    asyncio.run(run())
+
+
+def test_code_sandbox_source_builds_true_is_threaded_through_to_sync_requirements_when_approved(monkeypatch):
+    # ADR-005 stage 5.5: the checkbox is set WHILE the panel is open, i.e.
+    # any time before Approve is clicked - simulated here by setting the
+    # state field directly before calling approve_code_execution, exactly
+    # like a real setCodeSandboxAllowSourceBuilds intent arriving during
+    # that window would.
+    monkeypatch.setattr(
+        agents_module.SandboxGenerationAgent, "get_response",
+        lambda self, history, prompt, manifest: "[TOOL:PYTHON]\nprint('ok')\n[/TOOL]",
+    )
+    monkeypatch.setattr(
+        agents_module.PyCoderAnalysisAgent, "get_response",
+        lambda self, original_prompt, code, code_output: "ok",
+    )
+    sandbox_holder = {}
+    recording_class = _make_recording_sandbox_class()
+
+    def _make_sandbox(sandbox_id):
+        sandbox = recording_class(sandbox_id)
+        sandbox_holder["sandbox"] = sandbox
+        return sandbox
+
+    monkeypatch.setattr(agents_module, "VirtualEnvSandbox", _make_sandbox)
+
+    async def run():
+        bus, notifications, dispatcher = _make_code_exec_env()
+        node = _make_code_sandbox_node()
+
+        await dispatcher.start_code_sandbox_run(
+            bus=bus, notifications_state=notifications, node=node, node_id="n1",
+            sandbox_id="sandbox-42", prompt="print ok", existing_code="",
+            requirements_manifest="some-source-only-pkg", conversation_history=[],
+            on_success=lambda *a: None, on_failure=lambda m: None,
+        )
+        request_id, entry = next(iter(code_sandbox_slots(dispatcher).items()))
+        # Wait for the gate to actually be open before toggling - agents.py
+        # resets the field to False the instant the gate opens (see the
+        # reset test above), so setting it before that reset has run would
+        # just get clobbered, same as a real checkbox click before the
+        # panel has even rendered could never happen.
+        for _ in range(200):
+            if node.state.code_sandbox_awaiting_approval:
+                break
+            await asyncio.sleep(0.005)
+        assert node.state.code_sandbox_awaiting_approval is True
+        node.state.code_sandbox_approval_allow_source_builds = True
+        dispatcher.approve_code_execution(request_id)
+        await entry["task"]
+
+        assert sandbox_holder["sandbox"].sync_requirements_calls == [True]
+
+    asyncio.run(run())
+
+
+def test_code_sandbox_source_builds_flag_is_reset_the_instant_a_new_gate_opens(monkeypatch):
+    # A stale True left over from some earlier interaction must never
+    # silently carry into a run the user has not actually reviewed yet.
+    monkeypatch.setattr(
+        agents_module.SandboxGenerationAgent, "get_response",
+        lambda self, history, prompt, manifest: "[TOOL:PYTHON]\nprint('ok')\n[/TOOL]",
+    )
+
+    async def run():
+        bus, notifications, dispatcher = _make_code_exec_env()
+        node = _make_code_sandbox_node(code_sandbox_approval_allow_source_builds=True)
+
+        # start_code_sandbox_run itself returns quickly (it creates and
+        # attaches _run() as a background task rather than awaiting it) -
+        # same pattern every other test in this module relies on.
+        await dispatcher.start_code_sandbox_run(
+            bus=bus, notifications_state=notifications, node=node, node_id="n1",
+            sandbox_id="sandbox-42", prompt="print ok", existing_code="",
+            requirements_manifest="numpy", conversation_history=[],
+            on_success=lambda *a: None, on_failure=lambda m: None,
+        )
+        request_id, entry = next(iter(code_sandbox_slots(dispatcher).items()))
+        # Yield until the gate has actually opened (awaiting_approval flips
+        # True) before asserting the reset - the background task needs a
+        # tick to run past the generation-agent await.
+        for _ in range(200):
+            if node.state.code_sandbox_awaiting_approval:
+                break
+            await asyncio.sleep(0.005)
+        assert node.state.code_sandbox_awaiting_approval is True
+        assert node.state.code_sandbox_approval_allow_source_builds is False
+
+        dispatcher.deny_code_execution(request_id)
+        await entry["task"]
+
+    asyncio.run(run())
+
+
+def test_code_sandbox_source_builds_checked_then_denied_does_not_leak_into_the_next_run(monkeypatch):
+    # ADR-005 stage 5.5 test-coverage-gap fix: the reset test above only
+    # proves the GATE-OPEN reset (agents.py's own unconditional reset at
+    # the top of every gate) - it never exercises the POST-APPROVAL-RESOLVE
+    # clear (the line right after `approved = await approval_future`,
+    # which runs whether approved is True or False) via a real check-then-
+    # deny sequence. A future refactor that moved that clear inside an
+    # `if approved:` branch would not be caught by the gate-open-reset test
+    # alone, since that reset happens to independently cover the same
+    # user-visible symptom on the NEXT run - this test exercises the
+    # actual deny path directly.
+    monkeypatch.setattr(
+        agents_module.SandboxGenerationAgent, "get_response",
+        lambda self, history, prompt, manifest: "[TOOL:PYTHON]\nprint('ok')\n[/TOOL]",
+    )
+
+    async def run():
+        bus, notifications, dispatcher = _make_code_exec_env()
+        node = _make_code_sandbox_node()
+
+        await dispatcher.start_code_sandbox_run(
+            bus=bus, notifications_state=notifications, node=node, node_id="n1",
+            sandbox_id="sandbox-42", prompt="print ok", existing_code="",
+            requirements_manifest="numpy", conversation_history=[],
+            on_success=lambda *a: None, on_failure=lambda m: None,
+        )
+        request_id, entry = next(iter(code_sandbox_slots(dispatcher).items()))
+        for _ in range(200):
+            if node.state.code_sandbox_awaiting_approval:
+                break
+            await asyncio.sleep(0.005)
+        assert node.state.code_sandbox_awaiting_approval is True
+
+        # User checks the box, then denies (changes their mind).
+        node.state.code_sandbox_approval_allow_source_builds = True
+        dispatcher.deny_code_execution(request_id)
+        await entry["task"]
+
+        assert node.state.code_sandbox_approval_allow_source_builds is False, (
+            "denying a checked approval must clear the field - a checked-"
+            "then-denied run must never leave a stale True for whatever "
+            "runs on this node next"
+        )
+
+    asyncio.run(run())
+
+
+def test_code_sandbox_source_builds_toggle_after_approval_resolves_does_not_affect_the_in_flight_run(monkeypatch):
+    # ADR-005 stage 5.5 race-safety proof: agents.py captures allow_source_
+    # builds into a local variable the instant the approval future
+    # resolves, BEFORE the ensure_base_environment/sync_requirements awaits
+    # that follow - a setCodeSandboxAllowSourceBuilds intent arriving in
+    # that window (simulated here via ensure_base_environment's own hook,
+    # the one await between approval and the read this test targets) must
+    # not change what an already-decided run does.
+    monkeypatch.setattr(
+        agents_module.SandboxGenerationAgent, "get_response",
+        lambda self, history, prompt, manifest: "[TOOL:PYTHON]\nprint('ok')\n[/TOOL]",
+    )
+    monkeypatch.setattr(
+        agents_module.PyCoderAnalysisAgent, "get_response",
+        lambda self, original_prompt, code, code_output: "ok",
+    )
+    sandbox_holder = {}
+    recording_class = _make_recording_sandbox_class()
+    node_holder = {}
+
+    def _make_sandbox(sandbox_id):
+        sandbox = recording_class(sandbox_id)
+        sandbox.on_ensure_base_environment = (
+            lambda: setattr(node_holder["node"].state, "code_sandbox_approval_allow_source_builds", True)
+        )
+        sandbox_holder["sandbox"] = sandbox
+        return sandbox
+
+    monkeypatch.setattr(agents_module, "VirtualEnvSandbox", _make_sandbox)
+
+    async def run():
+        bus, notifications, dispatcher = _make_code_exec_env()
+        node = _make_code_sandbox_node()
+        node_holder["node"] = node
+
+        await dispatcher.start_code_sandbox_run(
+            bus=bus, notifications_state=notifications, node=node, node_id="n1",
+            sandbox_id="sandbox-42", prompt="print ok", existing_code="",
+            requirements_manifest="numpy", conversation_history=[],
+            on_success=lambda *a: None, on_failure=lambda m: None,
+        )
+        request_id, entry = next(iter(code_sandbox_slots(dispatcher).items()))
+        # Approved with the checkbox still unchecked (default False).
+        dispatcher.approve_code_execution(request_id)
+        await entry["task"]
+
+        # The late toggle (fired from inside ensure_base_environment, after
+        # approval resolved) must NOT have reached sync_requirements.
+        assert sandbox_holder["sandbox"].sync_requirements_calls == [False]
+        # The state field itself did change (proving the toggle really
+        # fired) - what's under test is that the ALREADY-RUNNING call used
+        # the frozen local, not this now-True live value.
+        assert node.state.code_sandbox_approval_allow_source_builds is True
+
+    asyncio.run(run())
+
+
+def test_code_sandbox_source_builds_snapshotted_atomically_at_approve_time_not_at_task_resume_time(monkeypatch):
+    # ADR-005 stage 5.5 review-fix: a 4-lens adversarial review found that
+    # capturing allow_source_builds AFTER `await approval_future` resolves
+    # (the previous version of this mechanism) is not actually race-free -
+    # future.set_result() only SCHEDULES the _run() task's resumption
+    # rather than running it inline, so a second WS connection could fully
+    # process a setCodeSandboxAllowSourceBuilds intent in that scheduling
+    # gap. The fix: _resolve_approval snapshots the field into
+    # RunHandle.approval_snapshot SYNCHRONOUSLY, in the same
+    # uninterruptible stretch as future.set_result() itself - see that
+    # field's own doc (backend/run_lifecycle.py).
+    #
+    # This test proves the fix precisely: it mutates the field back to a
+    # DIFFERENT value immediately after calling approve_code_execution,
+    # still on the same synchronous stretch of test code (no `await` in
+    # between) - i.e. strictly BEFORE the _run() task could possibly get a
+    # turn on the event loop to resume and read anything. If the
+    # implementation still re-read node.state after resuming (the old,
+    # race-prone behavior), it would see this post-approve mutation and
+    # install with the WRONG value; reading the snapshotted value instead
+    # proves the capture genuinely happened at approve-time.
+    monkeypatch.setattr(
+        agents_module.SandboxGenerationAgent, "get_response",
+        lambda self, history, prompt, manifest: "[TOOL:PYTHON]\nprint('ok')\n[/TOOL]",
+    )
+    monkeypatch.setattr(
+        agents_module.PyCoderAnalysisAgent, "get_response",
+        lambda self, original_prompt, code, code_output: "ok",
+    )
+    sandbox_holder = {}
+    recording_class = _make_recording_sandbox_class()
+
+    def _make_sandbox(sandbox_id):
+        sandbox = recording_class(sandbox_id)
+        sandbox_holder["sandbox"] = sandbox
+        return sandbox
+
+    monkeypatch.setattr(agents_module, "VirtualEnvSandbox", _make_sandbox)
+
+    async def run():
+        bus, notifications, dispatcher = _make_code_exec_env()
+        node = _make_code_sandbox_node()
+
+        await dispatcher.start_code_sandbox_run(
+            bus=bus, notifications_state=notifications, node=node, node_id="n1",
+            sandbox_id="sandbox-42", prompt="print ok", existing_code="",
+            requirements_manifest="some-source-only-pkg", conversation_history=[],
+            on_success=lambda *a: None, on_failure=lambda m: None,
+        )
+        request_id, entry = next(iter(code_sandbox_slots(dispatcher).items()))
+        for _ in range(200):
+            if node.state.code_sandbox_awaiting_approval:
+                break
+            await asyncio.sleep(0.005)
+        assert node.state.code_sandbox_awaiting_approval is True
+
+        # The checkbox is checked when Approve fires...
+        node.state.code_sandbox_approval_allow_source_builds = True
+        dispatcher.approve_code_execution(request_id)
+        # ...then immediately, synchronously, "unchecked" again - simulating
+        # a competing setCodeSandboxAllowSourceBuilds(False) landing in the
+        # scheduling gap before _run() has resumed. No `await` happens
+        # between the approve call and this line.
+        node.state.code_sandbox_approval_allow_source_builds = False
+
+        await entry["task"]
+
+        assert sandbox_holder["sandbox"].sync_requirements_calls == [True], (
+            "sync_requirements must install with the value snapshotted "
+            "AT APPROVE TIME (True), not whatever node.state held once the "
+            "_run() task actually got a turn to resume"
+        )
+
+    asyncio.run(run())
+
+
+def test_code_sandbox_repair_gate_resets_allow_source_builds_and_marks_is_repair(monkeypatch):
+    # ADR-005 stage 5.5 review-fix: an earlier version of the repair-loop
+    # re-gate left code_sandbox_approval_allow_source_builds untouched,
+    # reasoning it was "still False from the initial gate's own clear" -
+    # that assumption was never enforced (setCodeSandboxAllowSourceBuilds
+    # is ungated and could set it True during the execute/repair window,
+    # which is never awaiting_approval), so a repair round's checkbox could
+    # render CHECKED without the user having touched it that round. The fix
+    # resets it explicitly on every repair re-gate too, and adds
+    # code_sandbox_approval_is_repair so the frontend can hide the
+    # (functionally inert on repair rounds) checkbox entirely.
+    #
+    # Uses a threading.Event-blocked repair-agent call (mirroring test_
+    # canvas.py's own _blocking_get_response race tests) rather than
+    # wall-clock polling for the intermediate state - every mocked agent
+    # call here resolves fast enough that a plain asyncio.sleep(0.005) poll
+    # loop cannot reliably land inside the narrow execute/repair window
+    # before the repair gate has already reopened, as this test's own
+    # first draft (proven by watching it race past the intermediate state
+    # in both directions) discovered empirically.
+    monkeypatch.setattr(
+        agents_module.SandboxGenerationAgent, "get_response",
+        lambda self, history, prompt, manifest: "[TOOL:PYTHON]\nbroken\n[/TOOL]",
+    )
+    monkeypatch.setattr(
+        agents_module.PyCoderAnalysisAgent, "get_response",
+        lambda self, original_prompt, code, code_output: "explains the failure",
+    )
+
+    entered_repair = threading.Event()
+    release_repair = threading.Event()
+
+    def _blocking_repair(self, code, error, manifest, original_prompt=None):
+        entered_repair.set()
+        release_repair.wait(timeout=5)
+        return "still broken"
+
+    monkeypatch.setattr(agents_module.SandboxRepairAgent, "get_response", _blocking_repair)
+
+    node_holder = {}
+
+    class _FailingSandbox:
+        def __init__(self, sandbox_id):
+            self.sandbox_id = sandbox_id
+
+        def ensure_base_environment(self, should_continue, emit_line=None):
+            pass
+
+        def sync_requirements(self, manifest, should_continue, emit_line=None, allow_source_builds=False):
+            # sync_requirements only ever runs ONCE, before the repair loop
+            # starts - simulates a setCodeSandboxAllowSourceBuilds(True)
+            # intent landing during the execute/repair window, which is
+            # never awaiting_approval so nothing rejects it (ungated,
+            # matching the sibling setCodeSandboxRequirements intent's own
+            # posture).
+            node_holder["node"].state.code_sandbox_approval_allow_source_builds = True
+
+        def execute_code(self, code, should_continue, emit_line=None):
+            return "Traceback (most recent call last):\nboom", 1
+
+    monkeypatch.setattr(agents_module, "VirtualEnvSandbox", _FailingSandbox)
+
+    async def run():
+        bus, notifications, dispatcher = _make_code_exec_env()
+        node = _make_code_sandbox_node()
+        node_holder["node"] = node
+
+        await dispatcher.start_code_sandbox_run(
+            bus=bus, notifications_state=notifications, node=node, node_id="n1",
+            sandbox_id="sandbox-42", prompt="do something impossible", existing_code="",
+            requirements_manifest="", conversation_history=[],
+            on_success=lambda *a: None, on_failure=lambda m: None,
+        )
+        request_id, entry = next(iter(code_sandbox_slots(dispatcher).items()))
+
+        # Initial gate: verify is_repair is False, then approve.
+        for _ in range(200):
+            if node.state.code_sandbox_awaiting_approval:
+                break
+            await asyncio.sleep(0.005)
+        assert node.state.code_sandbox_awaiting_approval is True
+        assert node.state.code_sandbox_approval_is_repair is False
+        dispatcher.approve_code_execution(request_id)
+
+        # Wait until the repair agent is genuinely blocked mid-call - proves
+        # sync_requirements already ran (the stray True landed) and
+        # execute_code already failed, but the repair gate has not yet
+        # reopened.
+        for _ in range(200):
+            if entered_repair.is_set():
+                break
+            await asyncio.sleep(0.005)
+        assert entered_repair.is_set(), "the repair agent call never actually started"
+        assert node.state.code_sandbox_approval_allow_source_builds is True, (
+            "sanity check: the stray toggle landed during the execute/repair window"
+        )
+        assert node.state.code_sandbox_awaiting_approval is False
+
+        release_repair.set()
+
+        for _ in range(200):
+            if node.state.code_sandbox_awaiting_approval or entry["task"].done():
+                break
+            await asyncio.sleep(0.005)
+        assert node.state.code_sandbox_awaiting_approval is True, "must be parked on the repair gate"
+        assert node.state.code_sandbox_approval_is_repair is True
+        assert node.state.code_sandbox_approval_allow_source_builds is False, (
+            "the repair re-gate must reset the stray True, not render the "
+            "repair panel's checkbox as checked without user action this round"
+        )
+
+        dispatcher.deny_code_execution(request_id)
+        await entry["task"]
+
+    asyncio.run(run())
+
+
 def test_code_sandbox_repair_loop_requires_a_fresh_approval_for_each_repaired_attempt(monkeypatch):
     """ADR-002 P0: the code_sandbox twin of the pycoder repair-gate test
     above - same confirmed gap, same fix, same shape."""
@@ -4730,7 +5182,7 @@ def test_code_sandbox_repair_loop_requires_a_fresh_approval_for_each_repaired_at
         def ensure_base_environment(self, should_continue, emit_line=None):
             pass
 
-        def sync_requirements(self, manifest, should_continue, emit_line=None):
+        def sync_requirements(self, manifest, should_continue, emit_line=None, allow_source_builds=False):
             pass
 
         def execute_code(self, code, should_continue, emit_line=None):
@@ -4801,7 +5253,7 @@ def test_code_sandbox_repair_gate_denied_stops_immediately_without_further_repai
         def ensure_base_environment(self, should_continue, emit_line=None):
             pass
 
-        def sync_requirements(self, manifest, should_continue, emit_line=None):
+        def sync_requirements(self, manifest, should_continue, emit_line=None, allow_source_builds=False):
             pass
 
         def execute_code(self, code, should_continue, emit_line=None):
@@ -4873,7 +5325,7 @@ def test_code_sandbox_execution_blocked_when_approved_fingerprint_does_not_match
         def ensure_base_environment(self, should_continue, emit_line=None):
             pass
 
-        def sync_requirements(self, manifest, should_continue, emit_line=None):
+        def sync_requirements(self, manifest, should_continue, emit_line=None, allow_source_builds=False):
             pass
 
         def execute_code(self, code, should_continue, emit_line=None):
@@ -4943,7 +5395,7 @@ def test_code_sandbox_run_streams_live_output_lines_in_order_with_a_final_done_f
             if emit_line:
                 emit_line("[Sandbox] Creating virtual environment...\n")
 
-        def sync_requirements(self, manifest, should_continue, emit_line=None):
+        def sync_requirements(self, manifest, should_continue, emit_line=None, allow_source_builds=False):
             if emit_line:
                 emit_line("[Sandbox] No extra dependencies requested.\n")
 

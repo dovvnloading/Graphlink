@@ -83,6 +83,8 @@ function baseNode(overrides: Partial<SceneNodeRow> = {}): SceneNodeRow {
     pycoderError: "",
     codeSandboxRequirements: "",
     codeSandboxApprovalRequirements: "",
+    codeSandboxApprovalAllowSourceBuilds: false,
+    codeSandboxApprovalIsRepair: false,
     codeSandboxPrompt: "",
     codeSandboxCode: "",
     codeSandboxOutput: "",
@@ -993,6 +995,37 @@ describe("toFlowNodes (R5.4 code_sandbox node)", () => {
     expect(setReqSpy).toHaveBeenCalledWith("cs-1", "numpy==1.24");
     data.onRun("plot a sine wave");
     expect(runSpy).toHaveBeenCalledWith("cs-1", "plot a sine wave");
+  });
+
+  it("onToggleAllowSourceBuilds resolves to this node's id, not a different one in a multi-node scene", () => {
+    // ADR-005 stage 5.5 test-coverage-gap fix: this closure is built inside
+    // toFlowNodes's per-node loop - the exact shape of bug that would ship
+    // silently without this test is accidentally capturing the wrong
+    // node's id. Two code_sandbox nodes proves the right one is threaded,
+    // not just "some" id.
+    const scene = baseScene({
+      nodes: [
+        baseNode({ id: "cs-1", kind: "code_sandbox" }),
+        baseNode({ id: "cs-2", kind: "code_sandbox" }),
+      ],
+      edges: [],
+    });
+    const store = makeStore();
+    const toggleSpy = vi.spyOn(store, "setCodeSandboxAllowSourceBuilds");
+
+    const flowNodes = toFlowNodes(scene, store);
+    const cs1Data = flowNodes.find((n) => n.id === "cs-1")!.data as unknown as {
+      onToggleAllowSourceBuilds: (allow: boolean) => void;
+    };
+    const cs2Data = flowNodes.find((n) => n.id === "cs-2")!.data as unknown as {
+      onToggleAllowSourceBuilds: (allow: boolean) => void;
+    };
+
+    cs1Data.onToggleAllowSourceBuilds(true);
+    expect(toggleSpy).toHaveBeenCalledExactlyOnceWith("cs-1", true);
+    cs2Data.onToggleAllowSourceBuilds(false);
+    expect(toggleSpy).toHaveBeenCalledWith("cs-2", false);
+    expect(toggleSpy).toHaveBeenCalledTimes(2);
   });
 
   it("onCancel fires cancelCodeSandboxRequest with pendingRequestId when set, and is a no-op otherwise", () => {
