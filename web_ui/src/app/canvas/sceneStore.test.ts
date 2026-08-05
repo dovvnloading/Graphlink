@@ -102,6 +102,26 @@ function validScenePayload(overrides: Record<string, unknown> = {}) {
         codeSandboxAnalysis: "",
         codeSandboxAwaitingApproval: false,
         codeSandboxError: "",
+        // ADR-003 stage 3.3 (C9)
+        isBranchSynthesis: false,
+        synthesisInstructions: "",
+        branchStatus: "active",
+        isFinalDeliverable: false,
+        isSystemPrompt: false,
+        isSummaryNote: false,
+        isBranchComparison: false,
+        itemIds: [],
+        isLocked: true,
+        chartType: "",
+        chartData: {},
+        chartError: "",
+        chartAssetId: "",
+        chartAssetVersion: 0,
+        chartWidth: 680.0,
+        chartHeight: 500.0,
+        chartAspectLocked: true,
+        chartSourceNodeId: "",
+        chatScrollValue: 0.0,
       },
     ],
     edges: [],
@@ -131,6 +151,98 @@ describe("SceneStore", () => {
     expect(seen).toHaveBeenCalledTimes(1);
     expect(store.getScene().nodes[0].title).toBe("A");
     expect(store.getScene().dragFactor).toBe(0.5);
+  });
+
+  // ADR-003 stage 3.3 (C9) review-fix: every other test that touches
+  // chartData only ever exercises the ALL-FIELDS-absent default ({}) the
+  // base validScenePayload() node uses - the runtime validator's
+  // checkChartDataRow/checkChartFlowRow (bridge-core/generated/scene-
+  // state.ts) had never been proven against a real POPULATED chart payload,
+  // including the one field shape (sankey's nested `flows` list of
+  // ChartFlowRow objects) no other test anywhere touches at all.
+  it("accepts a real populated sankey chart node's chartData (flows) within a scene snapshot", () => {
+    const { transport, listeners } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.connect();
+    const seen = vi.fn();
+    store.subscribe(seen);
+
+    const base = validScenePayload().nodes[0] as Record<string, unknown>;
+    const chartNode = {
+      ...base,
+      id: "chart-1",
+      kind: "chart",
+      chartType: "sankey",
+      chartData: {
+        type: "sankey",
+        title: "Flow",
+        flows: [
+          { source: "A", target: "B", value: 10 },
+          { source: "B", target: "C", value: 4.5 },
+        ],
+      },
+      chartAssetId: "asset-chart-1",
+      chartAssetVersion: 1,
+    };
+
+    listeners.get("scene")!(validScenePayload({ nodes: [chartNode] }));
+    expect(seen).toHaveBeenCalledTimes(1);
+    expect(store.getScene().nodes[0].chartData).toEqual(chartNode.chartData);
+  });
+
+  it("accepts a real populated bar chart node's chartData (labels/values) within a scene snapshot", () => {
+    const { transport, listeners } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.connect();
+    const seen = vi.fn();
+    store.subscribe(seen);
+
+    const base = validScenePayload().nodes[0] as Record<string, unknown>;
+    const chartNode = {
+      ...base,
+      id: "chart-1",
+      kind: "chart",
+      chartType: "bar",
+      chartData: {
+        type: "bar",
+        title: "Revenue",
+        labels: ["Q1", "Q2"],
+        values: [10, 20],
+        xAxis: "Quarter",
+        yAxis: "Revenue",
+      },
+      chartAssetId: "asset-chart-1",
+      chartAssetVersion: 1,
+    };
+
+    listeners.get("scene")!(validScenePayload({ nodes: [chartNode] }));
+    expect(seen).toHaveBeenCalledTimes(1);
+    expect(store.getScene().nodes[0].chartData).toEqual(chartNode.chartData);
+  });
+
+  it("REJECTS a scene snapshot whose sankey flow has a wrong-typed nested field", () => {
+    const { transport, listeners } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.connect();
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const base = validScenePayload().nodes[0] as Record<string, unknown>;
+    const chartNode = {
+      ...base,
+      id: "chart-1",
+      kind: "chart",
+      chartType: "sankey",
+      chartData: {
+        type: "sankey",
+        title: "Flow",
+        flows: [{ source: "A", target: "B", value: "not-a-number" }],
+      },
+    };
+
+    listeners.get("scene")!(validScenePayload({ nodes: [chartNode] }));
+    expect(store.getScene()).toEqual(initialSceneState);
+    expect(consoleError).toHaveBeenCalled();
+    consoleError.mockRestore();
   });
 
   it("REJECTS a malformed snapshot and keeps the previous state", () => {

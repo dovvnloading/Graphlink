@@ -18,7 +18,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import type { SceneNodeRow, SceneState } from "../../lib/bridge-core/generated/scene-state";
+import type { SceneState } from "../../lib/bridge-core/generated/scene-state";
 import type { StreamListener } from "../../lib/ws/transport";
 import { ArtifactNodeView, type ArtifactFlowNode } from "./ArtifactNodeView";
 import { ChartNodeView, type ChartFlowNode } from "./ChartNodeView";
@@ -44,99 +44,6 @@ import {
 } from "./canvasConstants";
 import { SceneStore, scaleDragPosition } from "./sceneStore";
 import { computeSmartGuideSnap, type GuideLine, type Rect } from "./smartGuides";
-
-// R6.1: Notes/Frames/Containers - the generated SceneNodeRow type (codegen
-// source: backend/canvas.py's scene_payload()) has not been regenerated yet
-// to include these fields (see backend/canvas.py's own R6.1 section for the
-// exact contract this documents - color/headerColor/isSystemPrompt/
-// isSummaryNote/itemIds/isLocked/groupWidth/groupHeight). This local type
-// carries the contract precisely so toFlowNodes below reads real,
-// type-checked field names instead of scattering `as any` - once codegen
-// runs, SceneNodeRow will carry these natively and this cast (and this
-// comment) can be deleted.
-interface SceneNodeGroupFields {
-  color: string | null;
-  headerColor: string | null;
-  isSystemPrompt: boolean;
-  isSummaryNote: boolean;
-  // ADR-002 Workstream 1 ("Compare Branches") - note kind only, same
-  // "generated type doesn't carry this yet" situation as every other
-  // field on this interface. itemIds (already here, for frame/container
-  // membership) doubles as the source branch node ids for a comparison
-  // note - see backend/canvas.py's SceneNode.item_ids comment.
-  isBranchComparison: boolean;
-  itemIds: string[];
-  isLocked: boolean;
-  groupWidth: number | null;
-  groupHeight: number | null;
-}
-type SceneNodeRowWithGroups = SceneNodeRow & SceneNodeGroupFields;
-
-// R6.2: Chart node. Same situation as SceneNodeGroupFields above - the
-// generated SceneNodeRow type hasn't been regenerated yet to carry
-// chartType/chartData/chartError/chartAssetId/chartAssetVersion/chartWidth/
-// chartHeight/chartAspectLocked/chartSourceNodeId (backend/canvas.py's
-// scene_payload() contract for this increment). chartData is left as
-// Record<string, unknown> rather than a fully-typed union - it is already
-// canonicalized server-side (graphlink_chart_data.py's
-// canonicalize_chart_data), and this view only ever reads its own
-// well-known "title" key defensively (see ChartNodeView.tsx).
-interface SceneNodeChartFields {
-  chartType: string;
-  chartData: Record<string, unknown>;
-  chartError: string;
-  chartAssetId: string;
-  chartAssetVersion: number;
-  chartWidth: number;
-  chartHeight: number;
-  chartAspectLocked: boolean;
-  chartSourceNodeId: string;
-}
-type SceneNodeRowWithChart = SceneNodeRow & SceneNodeChartFields;
-
-// R6.3: Scene-level serialization gaps. Same situation as
-// SceneNodeGroupFields/SceneNodeChartFields above - the generated
-// SceneNodeRow type hasn't been regenerated yet to carry
-// htmlSplitterState/chatScrollValue (backend/canvas.py's scene_payload()
-// contract for this increment). contentParts is deliberately absent here -
-// nothing in this increment's frontend scope reads it (see this increment's
-// own report for why: it's a backend-only round-trip capability for OLD
-// multimodal sessions R6.4 may load, not a new frontend feature).
-interface SceneNodeR63Fields {
-  htmlSplitterState: number | null;
-  chatScrollValue: number;
-}
-type SceneNodeRowWithR63 = SceneNodeRow & SceneNodeR63Fields;
-
-// ADR-002 Workstream 1 ("Synthesize Branches"). Same situation as
-// SceneNodeGroupFields/SceneNodeChartFields/SceneNodeR63Fields above - the
-// generated SceneNodeRow type hasn't been regenerated yet to carry
-// provider/model/isBranchSynthesis/synthesisInstructions (backend/canvas.py's
-// scene_payload() contract for this increment). itemIds is declared again
-// here (already present on SceneNodeGroupFields, for the UNRELATED note-kind
-// Compare Branches reuse) rather than shared between the two interfaces -
-// this one is intersected with SceneNodeRow independently, in the chat-kind
-// branch below, so there is no actual overlap at runtime; see
-// SceneNode.item_ids's own comment on backend/canvas.py for the two,
-// deliberately distinct uses of that one generic field.
-interface SceneNodeSynthesisFields {
-  provider: string | null;
-  model: string | null;
-  isBranchSynthesis: boolean;
-  synthesisInstructions: string;
-  itemIds: string[];
-}
-type SceneNodeRowWithSynthesis = SceneNodeRow & SceneNodeSynthesisFields;
-
-// ADR-002 Workstream 1 ("Branch status and lifecycle"). Same situation as
-// SceneNodeSynthesisFields above - the generated SceneNodeRow type hasn't
-// been regenerated yet to carry branchStatus/isFinalDeliverable
-// (backend/canvas.py's scene_payload() contract for this increment).
-interface SceneNodeBranchLifecycleFields {
-  branchStatus: string;
-  isFinalDeliverable: boolean;
-}
-type SceneNodeRowWithBranchLifecycle = SceneNodeRow & SceneNodeBranchLifecycleFields;
 
 /**
  * The React Flow canvas (Qt-removal plan R1) - the QGraphicsScene/ChatView
@@ -412,10 +319,7 @@ export function computeDimmedNodeIds(scene: SceneState, originId: string | null)
  * ancestor being one) is.
  */
 export function computeNonAcceptedNodeIds(scene: SceneState): Set<string> {
-  // branchStatus isn't on the generated SceneNodeRow type yet (see
-  // SceneNodeBranchLifecycleFields' own comment) - cast once here, rather
-  // than at every read site below.
-  const nodesById = new Map(scene.nodes.map((n) => [n.id, n as SceneNodeRowWithBranchLifecycle]));
+  const nodesById = new Map(scene.nodes.map((n) => [n.id, n]));
   const parentOf = new Map<string, string>();
   const childrenOf = new Map<string, string[]>();
   for (const e of scene.edges) {
@@ -525,9 +429,6 @@ export function toFlowNodes(
         const target = nodesById.get(e.target);
         if (target?.isDocked) dockedChildren.push({ id: target.id, label: target.title });
       }
-      const chatR63 = n as SceneNodeRowWithR63;
-      const chatSynthesis = n as SceneNodeRowWithSynthesis;
-      const chatLifecycle = n as SceneNodeRowWithBranchLifecycle;
       flowNodes.push({
         id: n.id,
         type: "chat" as const,
@@ -582,30 +483,26 @@ export function toFlowNodes(
           // state on SceneCanvas itself, not on the store).
           onBranchFromHere: () => store.setReplyTargetNodeId(n.id),
           // ADR-002 Workstream 1 ("Synthesize Branches"): provenance carried
-          // by the result node - see SceneNodeSynthesisFields' own comment.
-          // provider/model are None/absent for every ordinary chat node
-          // (the vast majority), rendered as no badge at all - see
-          // ChatNodeView.tsx's own guard.
-          provider: chatSynthesis.provider,
-          model: chatSynthesis.model,
-          isBranchSynthesis: chatSynthesis.isBranchSynthesis,
-          synthesisInstructions: chatSynthesis.synthesisInstructions,
-          synthesisSourceNodeIds: chatSynthesis.itemIds,
-          // ADR-002 Workstream 1 ("Branch status and lifecycle") - see
-          // SceneNodeBranchLifecycleFields' own comment. Fire-and-forget,
-          // same posture as onBranchFromHere/onGenerateKeyTakeaway above -
-          // the new value arrives through the next scene snapshot.
-          branchStatus: chatLifecycle.branchStatus,
-          isFinalDeliverable: chatLifecycle.isFinalDeliverable,
+          // by the result node. provider/model are None/absent for every
+          // ordinary chat node (the vast majority), rendered as no badge at
+          // all - see ChatNodeView.tsx's own guard.
+          provider: n.provider ?? null,
+          model: n.model ?? null,
+          isBranchSynthesis: n.isBranchSynthesis,
+          synthesisInstructions: n.synthesisInstructions,
+          synthesisSourceNodeIds: n.itemIds,
+          // ADR-002 Workstream 1 ("Branch status and lifecycle"). Fire-and-
+          // forget, same posture as onBranchFromHere/onGenerateKeyTakeaway
+          // above - the new value arrives through the next scene snapshot.
+          branchStatus: n.branchStatus,
+          isFinalDeliverable: n.isFinalDeliverable,
           onSetBranchStatus: (status: string) => store.setBranchStatus(n.id, status),
           onSetFinalDeliverable: (isFinal: boolean) => store.setFinalDeliverable(n.id, isFinal),
           onCollapseBranch: (collapsed: boolean) => store.collapseBranch(n.id, collapsed),
           // R6.3: the node's own scroll position within its content area -
           // read on mount by ChatNodeView (restore) and reported (debounced)
-          // via the new setChatScrollValue intent on every scroll. Defaults
-          // to 0 the same way every other numeric ?? fallback in this file
-          // does, ahead of codegen regenerating SceneNodeRow to carry it.
-          chatScrollValue: chatR63.chatScrollValue ?? 0,
+          // via the setChatScrollValue intent on every scroll.
+          chatScrollValue: n.chatScrollValue,
           onScrollChange: (value: number) => store.setChatScrollValue(n.id, value),
         },
       });
@@ -710,7 +607,6 @@ export function toFlowNodes(
       // entry exists on this node's own header, and ChatNodeView's own
       // dockedChildren/undock badge is kind-agnostic already, so undocking
       // it is still possible from the parent chat node's side).
-      const htmlR63 = n as SceneNodeRowWithR63;
       flowNodes.push({
         id: n.id,
         type: "html" as const,
@@ -723,10 +619,10 @@ export function toFlowNodes(
           // R6.3: the Source/Preview split position - read on mount by
           // HtmlNodeView (restore; null means "no saved value, use the
           // component's own 50/50 default") and reported (debounced) via the
-          // new setHtmlSplitterState intent once a drag settles. See
+          // setHtmlSplitterState intent once a drag settles. See
           // canvasConstants.ts's own HTML_SPLIT_* doc for why this exists
           // now despite being scoped OUT back in R3.17/R3.18.
-          htmlSplitterState: htmlR63.htmlSplitterState ?? null,
+          htmlSplitterState: n.htmlSplitterState ?? null,
           onSplitterChange: (value: number) => store.setHtmlSplitterState(n.id, value),
         },
       });
@@ -1028,22 +924,21 @@ export function toFlowNodes(
       // above) - a note never offers a dock-into-parent action of its own;
       // the generic `if (n.isDocked) continue` guard above still covers it
       // correctly if it were ever docked via a direct WS call.
-      const note = n as SceneNodeRowWithGroups;
       flowNodes.push({
         id: n.id,
         type: "note" as const,
         position: { x: n.x, y: n.y },
         data: {
           content: n.content,
-          color: note.color,
-          headerColor: note.headerColor,
-          isSystemPrompt: note.isSystemPrompt,
-          isSummaryNote: note.isSummaryNote,
+          color: n.color ?? null,
+          headerColor: n.headerColor ?? null,
+          isSystemPrompt: n.isSystemPrompt,
+          isSummaryNote: n.isSummaryNote,
           // ADR-002 Workstream 1: itemIds doubles as the source branch ids
-          // for a Compare Branches result note - see SceneNodeGroupFields'
-          // own comment.
-          isBranchComparison: note.isBranchComparison,
-          compareSourceNodeIds: note.itemIds,
+          // for a Compare Branches result note - see SceneNode.item_ids's
+          // own comment on backend/domain/model.py.
+          isBranchComparison: n.isBranchComparison,
+          compareSourceNodeIds: n.itemIds,
           onSetContent: (content: string) => store.setNoteContent(n.id, content),
           onSetColor: (color: string | null, headerColor: string | null) =>
             store.setGroupColor(n.id, color, headerColor),
@@ -1079,23 +974,22 @@ export function toFlowNodes(
       // which gate the MEMBER-cascade on lock state, not draggability
       // itself; backend/canvas.py's move_node pins a manual position
       // anchor so the drag actually sticks instead of snapping back).
-      const group = n as SceneNodeRowWithGroups;
       flowNodes.push({
         id: n.id,
         type: n.kind as "frame" | "container",
         position: { x: n.x, y: n.y },
-        width: group.groupWidth ?? GROUP_FALLBACK_WIDTH,
-        height: group.groupHeight ?? GROUP_FALLBACK_HEIGHT,
+        width: n.groupWidth ?? GROUP_FALLBACK_WIDTH,
+        height: n.groupHeight ?? GROUP_FALLBACK_HEIGHT,
         zIndex: n.kind === "container" ? -2 : -1,
         draggable: true,
         data: {
           groupKind: n.kind,
           label: n.content,
-          color: group.color,
-          headerColor: group.headerColor,
+          color: n.color ?? null,
+          headerColor: n.headerColor ?? null,
           isCollapsed: n.isCollapsed,
-          isLocked: group.isLocked,
-          itemIds: group.itemIds,
+          isLocked: n.isLocked,
+          itemIds: n.itemIds,
           // R6.1 follow-up: a simplified equivalent of legacy's collapsed-
           // container hover "ghost frame" preview - just member kinds, not
           // a rendered miniature of actual content. Looked up from the
@@ -1103,7 +997,7 @@ export function toFlowNodes(
           // already builds once per call; a stale/dangling item_ids entry
           // (a member deleted out from under a group) is silently skipped,
           // matching _bbox_of_members' own posture on the backend.
-          memberKinds: group.itemIds.map((id) => nodesById.get(id)?.kind).filter((kind): kind is string => !!kind),
+          memberKinds: n.itemIds.map((id) => nodesById.get(id)?.kind).filter((kind): kind is string => !!kind),
           onSetLabel: (text: string) => store.setGroupLabel(n.id, text),
           onToggleCollapsed: () => store.toggleGroupCollapsed(n.id),
           onToggleLock: () => store.toggleFrameLock(n.id),
@@ -1130,23 +1024,22 @@ export function toFlowNodes(
       // exposes them like every other chart field), so they're ALSO
       // duplicated into `data` below rather than living only on the flow
       // node object.
-      const chart = n as SceneNodeRowWithChart;
       flowNodes.push({
         id: n.id,
         type: "chart" as const,
         position: { x: n.x, y: n.y },
-        width: chart.chartWidth,
-        height: chart.chartHeight,
+        width: n.chartWidth,
+        height: n.chartHeight,
         data: {
-          chartType: chart.chartType,
-          chartData: chart.chartData,
-          chartError: chart.chartError,
-          chartAssetId: chart.chartAssetId,
-          chartAssetVersion: chart.chartAssetVersion,
-          chartWidth: chart.chartWidth,
-          chartHeight: chart.chartHeight,
-          chartAspectLocked: chart.chartAspectLocked,
-          chartSourceNodeId: chart.chartSourceNodeId,
+          chartType: n.chartType,
+          chartData: n.chartData,
+          chartError: n.chartError,
+          chartAssetId: n.chartAssetId,
+          chartAssetVersion: n.chartAssetVersion,
+          chartWidth: n.chartWidth,
+          chartHeight: n.chartHeight,
+          chartAspectLocked: n.chartAspectLocked,
+          chartSourceNodeId: n.chartSourceNodeId,
           onToggleAspectLock: () => store.toggleChartAspectLock(n.id),
           onResize: (width: number, height: number) => store.resizeChart(n.id, width, height),
         },

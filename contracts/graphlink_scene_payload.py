@@ -83,6 +83,68 @@ UNLIKE `gitlinkContextXml`/the backend-only `gitlink_change_local_root`,
 this one DOES belong on the wire: the frontend's Context-tabs lazy-fetch
 guard needs it to detect a new Build Context result even when
 `gitlinkContextSummary` happens to repeat.
+
+ADR-003 stage 3.3 (C9) adds 26 fields backend/domain/graph.py's
+scene_payload() was ALREADY emitting on the real wire - unlike every
+field above, these were never declared here at all. The frontend read
+them through 8 unsafe `n as SceneNodeRow & LocalInterface` casts in
+SceneCanvas.tsx instead (TypeScript would not otherwise let it access a
+field the generated type didn't have), which is exactly what ADR-002's
+audit finding C9 ("~26 wire fields bypass the contract behind 8 `as`
+casts") names. This stage closes the gap the OTHER direction: rather
+than stop emitting these fields (they are real, shipped, load-bearing
+UI state - branch lifecycle badges, synthesis provenance, note/frame/
+container styling and sizing, real chart nodes, the R6.3 splitter/
+scroll-position round-trip), it declares them here so codegen emits a
+real type and a real runtime validator for them, and the unsafe casts
+can be deleted outright rather than merely narrowed.
+
+`chartType`/`chartData`/`chartError`/`chartAssetId`/`chartAssetVersion`/
+`chartWidth`/`chartHeight`/`chartAspectLocked`/`chartSourceNodeId` are
+the R6.2 chart node's real persisted shape - populated for kind=="chart"
+rows, defaulted for every other kind, same additive rule as every field
+above. `chartData` is the one genuinely hard case: graphlink_chart_data.
+py's canonicalize_chart_data() returns one of THREE different shapes
+depending on chart type (bar/line/pie: labels+values+xAxis+yAxis;
+histogram: values+bins+xAxis+yAxis; sankey: flows only) - a real
+discriminated union the schema generator's closed type set has no direct
+way to express (no tagged-union support). ChartDataRow below resolves
+this the same way SceneNodeRow ITSELF already resolves the analogous
+problem one level up (one node kind's fields, present; every other
+kind's fields, absent-and-defaulted): every field across all three chart
+shapes is declared, all of them optional, so a real chart's dict
+(always a subset of these) and a non-chart node's `{}` (all absent) both
+validate cleanly - not a new pattern, the same one this whole file
+already uses at the top level, applied one level deeper.
+
+`color`/`headerColor`/`isSystemPrompt`/`isSummaryNote`/`isBranchComparison`/
+`itemIds`/`isLocked`/`groupWidth`/`groupHeight` are the R6.1 Notes/Frames/
+Containers fields - `color`/`headerColor`/`itemIds` are genuinely generic
+(every node kind carries SceneNode.color/header_color/item_ids as core
+fields, populated whenever the frontend/backend chooses to use them for
+that kind - not gated behind an isinstance(state, ...) check the way the
+kind-specific fields below are), the rest populated for kind in
+("note", "frame", "container") and defaulted for every other kind.
+`groupManualWidth`/`groupManualHeight` are DELIBERATELY NOT among these -
+same "server-side bookkeeping only" posture as `gitlinkImportedRoot`/
+`codeSandboxSandboxId` above.
+
+`provider`/`model`/`isBranchSynthesis`/`synthesisInstructions`/
+`branchStatus`/`isFinalDeliverable` are ADR-002 Workstream 1's branch-
+lifecycle and Synthesize-Branches fields - populated for kind=="chat"
+rows (branchStatus/isFinalDeliverable read for every kind, since a
+non-chat node can still be marked the branch's final deliverable), same
+additive rule.
+
+`htmlSplitterState`/`chatScrollValue` are the R6.3 UI-position round-trip
+fields (Source/Preview splitter position, chat scroll position) -
+populated for kind=="html"/kind=="chat" respectively, defaulted for
+every other kind. `contentParts` is DELIBERATELY NOT one of these 26:
+it is a real wire field (backend/domain/graph.py's _content_parts_wire)
+but SceneCanvas.tsx never reads it today (a backend-only multimodal
+round-trip capability, not a rendered feature) - C9 is specifically
+about fields an unsafe CAST reaches for, and no cast reaches for this
+one, so adding it here would not serve this stage's own exit criterion.
 """
 
 from __future__ import annotations
@@ -161,6 +223,42 @@ class GitlinkPendingChangeRow:
     # default value, so this must be Optional for a delete-only item to
     # validate.
     content: str | None = None
+
+
+@dataclass
+class ChartFlowRow:
+    """One Sankey flow - the shape canonicalize_chart_data() (graphlink_
+    chart_data.py) always builds every item of its "flows" list from, for
+    chart_type=="sankey" specifically."""
+
+    source: str
+    target: str
+    value: float
+
+
+@dataclass
+class ChartDataRow:
+    """ADR-003 stage 3.3: canonicalize_chart_data() returns one of three
+    disjoint shapes depending on chart type - see SceneNodeRow's own module
+    docstring for why every field here is optional rather than this being
+    three separate row types. `type`/`title` are set on every real chart's
+    dict (never independently absent from each other in practice), but the
+    schema generator has no dependent-required-fields concept, so both stay
+    individually optional like every other field here - the same tolerance
+    the file's existing `gitlinkChangeFingerprint`-style fields already
+    accept."""
+
+    type: Literal["bar", "line", "pie", "histogram", "sankey"] | None = None
+    title: str | None = None
+    # bar/line/pie
+    labels: list[str] | None = None
+    values: list[float] | None = None
+    xAxis: str | None = None
+    yAxis: str | None = None
+    # histogram (values above is reused; xAxis/yAxis above too)
+    bins: int | None = None
+    # sankey
+    flows: list[ChartFlowRow] | None = None
 
 
 @dataclass
@@ -304,6 +402,47 @@ class SceneNodeRow:
     # code_sandbox_approval_is_repair for why the frontend needs this.
     codeSandboxApprovalIsRepair: bool = False
     codeSandboxError: str = ""
+    # ADR-003 stage 3.3 (C9): ADR-002 Workstream 1's branch-lifecycle +
+    # Synthesize-Branches fields - see this file's own module docstring.
+    provider: str | None = None
+    model: str | None = None
+    isBranchSynthesis: bool = False
+    synthesisInstructions: str = ""
+    branchStatus: str = "active"
+    isFinalDeliverable: bool = False
+    # R6.1: Notes/Frames/Containers - color/headerColor/itemIds are generic
+    # (SceneNode core fields, any kind), the rest populated for kind in
+    # ("note", "frame", "container") and defaulted for every other kind.
+    # groupManualWidth/groupManualHeight are DELIBERATELY NOT among these -
+    # same "server-side bookkeeping only" posture as gitlinkImportedRoot/
+    # codeSandboxSandboxId above.
+    color: str | None = None
+    headerColor: str | None = None
+    isSystemPrompt: bool = False
+    isSummaryNote: bool = False
+    isBranchComparison: bool = False
+    itemIds: list[str] = field(default_factory=list)
+    isLocked: bool = True
+    groupWidth: float | None = None
+    groupHeight: float | None = None
+    # R6.2: the chart node's real persisted shape - populated for
+    # kind=="chart" rows, defaulted for every other kind. See this file's
+    # own module docstring for why chartData is a ChartDataRow rather than
+    # a scalar or a bare dict.
+    chartType: str = ""
+    chartData: ChartDataRow = field(default_factory=ChartDataRow)
+    chartError: str = ""
+    chartAssetId: str = ""
+    chartAssetVersion: int = 0
+    chartWidth: float = 680.0
+    chartHeight: float = 500.0
+    chartAspectLocked: bool = True
+    chartSourceNodeId: str = ""
+    # R6.3: the Source/Preview splitter position (html) and chat scroll
+    # position (chat) round-trip fields - populated for kind=="html"/
+    # kind=="chat" respectively, defaulted for every other kind.
+    htmlSplitterState: float | None = None
+    chatScrollValue: float = 0.0
 
 
 @dataclass

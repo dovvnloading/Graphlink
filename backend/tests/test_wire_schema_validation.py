@@ -23,7 +23,10 @@ top-level tests/ directory.
 
 from __future__ import annotations
 
+import dataclasses
+import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal
 
 from graphlink_wire_schema import validate_payload
@@ -206,3 +209,69 @@ def test_top_level_payload_that_is_not_a_dict_at_all_is_rejected():
     assert validate_payload(["not", "a", "dict"], _Person) == [
         "$: expected object, got list"
     ]
+
+
+# ADR-003 stage 3.3 (C9) review-fix: the design review for ChartDataRow (see
+# contracts/graphlink_scene_payload.py's own module docstring) reasoned that
+# flattening canonicalize_chart_data()'s three disjoint chart-type shapes
+# into one all-optional dataclass validates correctly, but that reasoning was
+# never actually exercised against a REAL SceneNodeRow/ChartDataRow/
+# ChartFlowRow instance - every prior test in this file uses the synthetic
+# _Person fixture. This closes that gap for the two shapes that differ most
+# (bar's flat labels/values vs sankey's nested flows list, the field
+# validate_payload's recursive list[dataclass] branch had never touched
+# through this real production dataclass at all), against the SAME
+# production SceneNodeRow the real backend emits from graph.py's
+# scene_payload().
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "contracts"))
+
+from graphlink_scene_payload import ChartDataRow, ChartFlowRow, SceneNodeRow  # noqa: E402
+
+
+def _chart_node_payload(**overrides) -> dict:
+    overrides.setdefault("kind", "chart")
+    row = SceneNodeRow(id="chart-1", x=0.0, y=0.0, title="Chart", **overrides)
+    return dataclasses.asdict(row)
+
+
+def test_a_real_bar_chart_scene_node_row_validates_with_no_errors():
+    payload = _chart_node_payload(
+        chartType="bar",
+        chartData=ChartDataRow(
+            type="bar", title="Revenue", labels=["Q1", "Q2"], values=[10.0, 20.0], xAxis="Quarter", yAxis="Revenue"
+        ),
+    )
+    assert validate_payload(payload, SceneNodeRow) == []
+
+
+def test_a_real_sankey_chart_scene_node_row_with_populated_flows_validates_with_no_errors():
+    payload = _chart_node_payload(
+        chartType="sankey",
+        chartData=ChartDataRow(
+            type="sankey",
+            title="Flow",
+            flows=[
+                ChartFlowRow(source="A", target="B", value=10.0),
+                ChartFlowRow(source="B", target="C", value=4.5),
+            ],
+        ),
+    )
+    assert validate_payload(payload, SceneNodeRow) == []
+
+
+def test_a_sankey_flow_with_a_wrong_typed_field_is_reported_at_its_own_indexed_nested_path():
+    payload = _chart_node_payload(
+        chartType="sankey",
+        chartData=ChartDataRow(type="sankey", title="Flow", flows=[ChartFlowRow(source="A", target="B", value=10.0)]),
+    )
+    payload["chartData"]["flows"][0]["value"] = "not-a-number"
+    errors = validate_payload(payload, SceneNodeRow)
+    assert errors == ["$.chartData.flows[0].value: expected number, got str"]
+
+
+def test_a_non_chart_node_s_all_optional_default_chart_data_row_still_validates_with_no_errors():
+    # The non-chart-node majority path: chartData is ALWAYS present on the
+    # wire (never omitted - see SceneNodeRow's own field comment) but every
+    # one of its fields is None for a node that was never a chart.
+    payload = _chart_node_payload(kind="chat", chartType="")
+    assert validate_payload(payload, SceneNodeRow) == []

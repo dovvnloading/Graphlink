@@ -94,6 +94,33 @@ function baseNode(overrides: Partial<SceneNodeRow> = {}): SceneNodeRow {
     codeSandboxAnalysis: "",
     codeSandboxAwaitingApproval: false,
     codeSandboxError: "",
+    // ADR-003 stage 3.3 (C9)
+    provider: null,
+    model: null,
+    isBranchSynthesis: false,
+    synthesisInstructions: "",
+    branchStatus: "active",
+    isFinalDeliverable: false,
+    color: null,
+    headerColor: null,
+    isSystemPrompt: false,
+    isSummaryNote: false,
+    isBranchComparison: false,
+    itemIds: [],
+    isLocked: true,
+    groupWidth: null,
+    groupHeight: null,
+    chartType: "",
+    chartData: {},
+    chartError: "",
+    chartAssetId: "",
+    chartAssetVersion: 0,
+    chartWidth: 680.0,
+    chartHeight: 500.0,
+    chartAspectLocked: true,
+    chartSourceNodeId: "",
+    htmlSplitterState: null,
+    chatScrollValue: 0.0,
     ...overrides,
   };
 }
@@ -1136,39 +1163,16 @@ describe("handleSelectionChange (R5.1 onSelectionChange wiring)", () => {
   });
 });
 
-// R6.1: Notes/Frames/Containers. The generated SceneNodeRow type hasn't been
-// regenerated yet to carry color/headerColor/isSystemPrompt/isSummaryNote/
-// itemIds/isLocked/groupWidth/groupHeight (see SceneCanvas.tsx's own
-// SceneNodeGroupFields comment) - this local helper builds a baseNode() with
-// those extra fields layered on, the test-file equivalent of that same cast.
-interface GroupTestFields {
-  color: string | null;
-  headerColor: string | null;
-  isSystemPrompt: boolean;
-  isSummaryNote: boolean;
-  // ADR-002 Workstream 1 ("Compare Branches") - same "generated type
-  // doesn't carry this yet" situation as every other field here.
-  isBranchComparison: boolean;
-  itemIds: string[];
-  isLocked: boolean;
-  groupWidth: number | null;
-  groupHeight: number | null;
-}
-
-function groupNode(overrides: Partial<SceneNodeRow & GroupTestFields> = {}): SceneNodeRow & GroupTestFields {
+// R6.1: Notes/Frames/Containers. ADR-003 stage 3.3 (C9) put color/
+// headerColor/isSystemPrompt/isSummaryNote/itemIds/isLocked/groupWidth/
+// groupHeight directly on the generated SceneNodeRow type (baseNode()
+// already sets all of them) - this helper only exists now for its
+// convenient per-kind defaults, not to work around a missing field.
+function groupNode(overrides: Partial<SceneNodeRow> = {}): SceneNodeRow {
   return {
     ...baseNode(),
-    color: null,
-    headerColor: null,
-    isSystemPrompt: false,
-    isSummaryNote: false,
-    isBranchComparison: false,
-    itemIds: [],
-    isLocked: true,
-    groupWidth: null,
-    groupHeight: null,
     ...overrides,
-  } as SceneNodeRow & GroupTestFields;
+  };
 }
 
 describe("toFlowNodes (R6.1 note node)", () => {
@@ -1222,6 +1226,25 @@ describe("toFlowNodes (R6.1 note node)", () => {
       isBranchComparison: true,
       compareSourceNodeIds: ["chat-1", "chat-2"],
     });
+  });
+
+  // ADR-003 stage 3.3 (C9) review-fix: groupNode()/baseNode() always supply
+  // a real `null` for color/headerColor, so no test above would fail if
+  // SceneCanvas.tsx's `n.color ?? null`/`n.headerColor ?? null`
+  // normalization were deleted - this proves it does something for a note
+  // whose wire payload genuinely omits the field (`undefined`).
+  it("normalizes an absent (undefined) color/headerColor to null, not undefined", () => {
+    const scene = baseScene({
+      nodes: [groupNode({ id: "note-1", kind: "note", color: undefined, headerColor: undefined })],
+      edges: [],
+    });
+    const store = makeStore();
+
+    const flowNodes = toFlowNodes(scene, store);
+    const noteFlowNode = flowNodes.find((n) => n.id === "note-1");
+    const data = noteFlowNode!.data as { color: string | null; headerColor: string | null };
+    expect(data.color).toBeNull();
+    expect(data.headerColor).toBeNull();
   });
 
   it("onSetContent/onSetColor/onDelete call the right store intents with this node's id", () => {
@@ -1401,26 +1424,33 @@ describe("toFlowNodes (R6.1 frame/container nodes)", () => {
     data.onUngroup();
     expect(spies.ungroup).toHaveBeenCalledWith("frame-1");
   });
+
+  // ADR-003 stage 3.3 (C9) review-fix: same "always-null-anyway" fixture
+  // gap as the note-node block above - this proves SceneCanvas.tsx's
+  // `n.color ?? null`/`n.headerColor ?? null` normalization in the frame/
+  // container branch actually converts an absent (undefined) wire value to
+  // null rather than leaking undefined through to GroupNodeData.
+  it("normalizes an absent (undefined) color/headerColor to null, not undefined", () => {
+    const scene = baseScene({
+      nodes: [groupNode({ id: "frame-1", kind: "frame", color: undefined, headerColor: undefined })],
+      edges: [],
+    });
+    const store = makeStore();
+
+    const flowNodes = toFlowNodes(scene, store);
+    const frameFlowNode = flowNodes.find((n) => n.id === "frame-1");
+    const data = frameFlowNode!.data as { color: string | null; headerColor: string | null };
+    expect(data.color).toBeNull();
+    expect(data.headerColor).toBeNull();
+  });
 });
 
-// R6.2: Chart node. The generated SceneNodeRow type hasn't been regenerated
-// yet to carry chartType/chartData/chartError/chartAssetId/
-// chartAssetVersion/chartWidth/chartHeight/chartAspectLocked/
-// chartSourceNodeId (see SceneCanvas.tsx's own SceneNodeChartFields
-// comment) - same situation GroupTestFields above solves for R6.1.
-interface ChartTestFields {
-  chartType: string;
-  chartData: Record<string, unknown>;
-  chartError: string;
-  chartAssetId: string;
-  chartAssetVersion: number;
-  chartWidth: number;
-  chartHeight: number;
-  chartAspectLocked: boolean;
-  chartSourceNodeId: string;
-}
-
-function chartNode(overrides: Partial<SceneNodeRow & ChartTestFields> = {}): SceneNodeRow & ChartTestFields {
+// R6.2: Chart node. ADR-003 stage 3.3 (C9) put chartType/chartData/
+// chartError/chartAssetId/chartAssetVersion/chartWidth/chartHeight/
+// chartAspectLocked/chartSourceNodeId directly on the generated
+// SceneNodeRow type - this helper only exists now for its convenient
+// chart-kind defaults, not to work around missing fields.
+function chartNode(overrides: Partial<SceneNodeRow> = {}): SceneNodeRow {
   return {
     ...baseNode(),
     kind: "chart",
@@ -1434,7 +1464,7 @@ function chartNode(overrides: Partial<SceneNodeRow & ChartTestFields> = {}): Sce
     chartAspectLocked: true,
     chartSourceNodeId: "chat-1",
     ...overrides,
-  } as SceneNodeRow & ChartTestFields;
+  };
 }
 
 describe("toFlowNodes (R6.2 chart node)", () => {
@@ -1505,22 +1535,17 @@ describe("toFlowNodes (R6.2 chart node)", () => {
   });
 });
 
-// R6.3: Scene-level serialization gaps. Same situation as ChartTestFields
-// above - htmlSplitterState/chatScrollValue aren't in the generated
-// SceneNodeRow type yet (see SceneCanvas.tsx's own SceneNodeR63Fields
-// comment).
-interface R63TestFields {
-  htmlSplitterState: number | null;
-  chatScrollValue: number;
-}
-
-function withR63Fields(node: SceneNodeRow, overrides: Partial<R63TestFields> = {}): SceneNodeRow & R63TestFields {
+// R6.3: Scene-level serialization gaps. ADR-003 stage 3.3 (C9) put
+// htmlSplitterState/chatScrollValue directly on the generated SceneNodeRow
+// type - this helper only exists now to apply overrides on top of a
+// baseNode(), not to work around missing fields.
+function withR63Fields(node: SceneNodeRow, overrides: Partial<Pick<SceneNodeRow, "htmlSplitterState" | "chatScrollValue">> = {}): SceneNodeRow {
   return {
     ...node,
     htmlSplitterState: null,
     chatScrollValue: 0,
     ...overrides,
-  } as SceneNodeRow & R63TestFields;
+  };
 }
 
 describe("toFlowNodes (R6.3 chat node scroll value)", () => {
@@ -1536,7 +1561,7 @@ describe("toFlowNodes (R6.3 chat node scroll value)", () => {
     expect((chatFlowNode!.data as { chatScrollValue: number }).chatScrollValue).toBe(240);
   });
 
-  it("defaults chatScrollValue to 0 when the field is absent (ahead of codegen regenerating SceneNodeRow)", () => {
+  it("defaults chatScrollValue to 0 for an ordinary chat node", () => {
     const scene = baseScene({ nodes: [baseNode({ id: "chat-1", kind: "chat", content: "Hi" })], edges: [] });
     const store = makeStore();
 
@@ -1557,25 +1582,15 @@ describe("toFlowNodes (R6.3 chat node scroll value)", () => {
   });
 });
 
-// ADR-002 Workstream 1 ("Synthesize Branches"). Same situation as
-// R63TestFields above - provider/model/isBranchSynthesis/
-// synthesisInstructions aren't in the generated SceneNodeRow type yet (see
-// SceneCanvas.tsx's own SceneNodeSynthesisFields comment). itemIds is
-// already declared elsewhere in this file via GroupTestFields (an
-// UNRELATED note-kind reuse) - re-declared here rather than shared since
-// this helper intersects it independently, for the chat-kind reuse.
-interface SynthesisTestFields {
-  provider: string | null;
-  model: string | null;
-  isBranchSynthesis: boolean;
-  synthesisInstructions: string;
-  itemIds: string[];
-}
-
+// ADR-002 Workstream 1 ("Synthesize Branches"). ADR-003 stage 3.3 (C9) put
+// provider/model/isBranchSynthesis/synthesisInstructions/itemIds directly
+// on the generated SceneNodeRow type - this helper only exists now to
+// apply overrides on top of a baseNode(), not to work around missing
+// fields.
 function withSynthesisFields(
   node: SceneNodeRow,
-  overrides: Partial<SynthesisTestFields> = {},
-): SceneNodeRow & SynthesisTestFields {
+  overrides: Partial<Pick<SceneNodeRow, "provider" | "model" | "isBranchSynthesis" | "synthesisInstructions" | "itemIds">> = {},
+): SceneNodeRow {
   return {
     ...node,
     provider: null,
@@ -1584,7 +1599,7 @@ function withSynthesisFields(
     synthesisInstructions: "",
     itemIds: [],
     ...overrides,
-  } as SceneNodeRow & SynthesisTestFields;
+  };
 }
 
 describe("toFlowNodes (ADR-002 Workstream 1 - Synthesize Branches provenance)", () => {
@@ -1614,7 +1629,16 @@ describe("toFlowNodes (ADR-002 Workstream 1 - Synthesize Branches provenance)", 
     });
   });
 
-  it("defaults to no provenance for an ordinary chat node (the vast majority - field absent, ahead of codegen regenerating SceneNodeRow)", () => {
+  it("defaults to no provenance for an ordinary chat node (the vast majority)", () => {
+    // ADR-003 stage 3.3 review-fix: this used to assert `undefined` for
+    // every one of these fields - an artifact of the test fixture never
+    // having included them at all (pre-C9, provider/model/etc. genuinely
+    // weren't on the generated SceneNodeRow type), not a reflection of the
+    // real backend, which has ALWAYS sent these fields for every node
+    // (scene_payload() defaults them to null/""/false/[] for a non-
+    // synthesis chat node, never omits the key). Now that baseNode()
+    // matches that real shape, the correct expectation is those same real
+    // defaults, not `undefined`.
     const scene = baseScene({
       nodes: [baseNode({ id: "chat-1", kind: "chat", content: "Hello" })],
       edges: [],
@@ -1624,34 +1648,52 @@ describe("toFlowNodes (ADR-002 Workstream 1 - Synthesize Branches provenance)", 
     const flowNodes = toFlowNodes(scene, store);
     const chatFlowNode = flowNodes.find((n) => n.id === "chat-1");
     expect(chatFlowNode!.data).toMatchObject({
-      provider: undefined,
-      model: undefined,
-      isBranchSynthesis: undefined,
-      synthesisInstructions: undefined,
-      synthesisSourceNodeIds: undefined,
+      provider: null,
+      model: null,
+      isBranchSynthesis: false,
+      synthesisInstructions: "",
+      synthesisSourceNodeIds: [],
     });
+  });
+
+  // ADR-003 stage 3.3 (C9) review-fix: baseNode() always supplies a real
+  // `null` (never `undefined`) for provider/model, so every test above
+  // would pass identically even if SceneCanvas.tsx's `n.provider ?? null`/
+  // `n.model ?? null` normalization were deleted outright - `null ?? null`
+  // and plain `null` produce the same value. This proves the normalization
+  // itself does something: an OPTIONAL wire field genuinely omitted by a
+  // legacy/partial payload (`undefined`, not `null`) must still surface as
+  // `null` in the flow node's data, never leak `undefined` through to
+  // ChatNodeData's required-but-nullable `provider`/`model` props.
+  it("normalizes an absent (undefined) provider/model to null, not undefined", () => {
+    const scene = baseScene({
+      nodes: [baseNode({ id: "chat-1", kind: "chat", content: "Hello", provider: undefined, model: undefined })],
+      edges: [],
+    });
+    const store = makeStore();
+
+    const flowNodes = toFlowNodes(scene, store);
+    const chatFlowNode = flowNodes.find((n) => n.id === "chat-1");
+    const data = chatFlowNode!.data as { provider: string | null; model: string | null };
+    expect(data.provider).toBeNull();
+    expect(data.model).toBeNull();
   });
 });
 
-// ADR-002 Workstream 1 ("Branch status and lifecycle"). Same situation as
-// SynthesisTestFields above - branchStatus/isFinalDeliverable aren't in the
-// generated SceneNodeRow type yet (see SceneCanvas.tsx's own
-// SceneNodeBranchLifecycleFields comment).
-interface BranchLifecycleTestFields {
-  branchStatus: string;
-  isFinalDeliverable: boolean;
-}
-
+// ADR-002 Workstream 1 ("Branch status and lifecycle"). ADR-003 stage 3.3
+// (C9) put branchStatus/isFinalDeliverable directly on the generated
+// SceneNodeRow type - this helper only exists now to apply overrides on
+// top of a baseNode(), not to work around missing fields.
 function withBranchLifecycleFields(
   node: SceneNodeRow,
-  overrides: Partial<BranchLifecycleTestFields> = {},
-): SceneNodeRow & BranchLifecycleTestFields {
+  overrides: Partial<Pick<SceneNodeRow, "branchStatus" | "isFinalDeliverable">> = {},
+): SceneNodeRow {
   return {
     ...node,
     branchStatus: "active",
     isFinalDeliverable: false,
     ...overrides,
-  } as SceneNodeRow & BranchLifecycleTestFields;
+  };
 }
 
 describe("toFlowNodes (ADR-002 Workstream 1 - Branch status and lifecycle)", () => {
@@ -1716,7 +1758,7 @@ describe("toFlowNodes (ADR-002 Workstream 1 - Branch status and lifecycle)", () 
 });
 
 describe("computeNonAcceptedNodeIds (ADR-002 Workstream 1 - Focus Accepted Paths)", () => {
-  function lifecycleNode(overrides: Partial<SceneNodeRow & BranchLifecycleTestFields> = {}) {
+  function lifecycleNode(overrides: Partial<SceneNodeRow> = {}) {
     return withBranchLifecycleFields(baseNode(overrides), overrides);
   }
 
@@ -1842,7 +1884,7 @@ describe("toFlowNodes (R6.3 html node splitter state)", () => {
     expect((htmlFlowNode!.data as { htmlSplitterState: number | null }).htmlSplitterState).toBe(0.35);
   });
 
-  it("defaults htmlSplitterState to null when the field is absent (ahead of codegen regenerating SceneNodeRow)", () => {
+  it("defaults htmlSplitterState to null for an ordinary html node", () => {
     const scene = baseScene({ nodes: [baseNode({ id: "html-1", kind: "html", content: "<p>hi</p>" })], edges: [] });
     const store = makeStore();
 
@@ -1860,6 +1902,24 @@ describe("toFlowNodes (R6.3 html node splitter state)", () => {
     const data = flowNodes.find((n) => n.id === "html-1")!.data as { onSplitterChange: (value: number) => void };
     data.onSplitterChange(0.6);
     expect(spy).toHaveBeenCalledWith("html-1", 0.6);
+  });
+
+  // ADR-003 stage 3.3 (C9) review-fix: the "defaults ... to null" test above
+  // never actually exercises SceneCanvas.tsx's `n.htmlSplitterState ??
+  // null` normalization - baseNode()'s own default is already `null`, so
+  // that assertion would pass identically with the normalization deleted.
+  // This proves it explicitly for a wire payload that omits the field
+  // (`undefined`) rather than sending an explicit `null`.
+  it("normalizes an absent (undefined) htmlSplitterState to null, not undefined", () => {
+    const scene = baseScene({
+      nodes: [baseNode({ id: "html-1", kind: "html", content: "<p>hi</p>", htmlSplitterState: undefined })],
+      edges: [],
+    });
+    const store = makeStore();
+
+    const flowNodes = toFlowNodes(scene, store);
+    const htmlFlowNode = flowNodes.find((n) => n.id === "html-1");
+    expect((htmlFlowNode!.data as { htmlSplitterState: number | null }).htmlSplitterState).toBeNull();
   });
 });
 
