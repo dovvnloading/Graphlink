@@ -20,6 +20,7 @@ import "@xyflow/react/dist/style.css";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { SceneState } from "../../lib/bridge-core/generated/scene-state";
 import type { StreamListener } from "../../lib/ws/transport";
+import { BridgeErrorState } from "../../lib/ui/BridgeErrorState";
 import { ArtifactNodeView, type ArtifactFlowNode } from "./ArtifactNodeView";
 import { ChartNodeView, type ChartFlowNode } from "./ChartNodeView";
 import { ChatNodeView, type ChatFlowNode } from "./ChatNodeView";
@@ -1758,5 +1759,26 @@ export function SceneCanvas({
   store: SceneStore;
   onOpenDocumentView: (markdown: string, sourceLabel: string) => void;
 }) {
+  // ADR-003 stage 3.5: renders BridgeErrorState INSTEAD of the canvas - not
+  // alongside it - the moment the scene topic's schema version is rejected.
+  // CanvasInner is not mounted at all in that case: its hooks (toFlowNodes,
+  // the drag/selection state, React Flow itself) all assume `scene` is
+  // current, and per BridgeErrorState's own doc, a rejected payload makes
+  // whatever the store is still holding stale by definition the instant this
+  // fires (WsTransport withholds the frame; the store simply stops updating
+  // - see SceneStore.getSceneVersionRejection's own comment).
+  // Review-fix: getSceneBlockingRejection, not getSceneVersionRejection -
+  // the latter clears the instant a compatible frame arrives at the wire
+  // level, which for a patch (the normal steady-state path) is BEFORE this
+  // store has confirmed the patch actually applies. Gating on the raw
+  // signal let CanvasInner flash the stale pre-outage scene for one tick
+  // during recovery - see sceneStore.ts's own comment on
+  // sceneVersionRecovering for the full mechanism.
+  const versionRejection = useSyncExternalStore(store.subscribe, store.getSceneBlockingRejection);
+  if (versionRejection) {
+    return (
+      <BridgeErrorState title="Canvas unavailable" rejection={versionRejection} className="scene-bridge-error" />
+    );
+  }
   return <CanvasInner store={store} onOpenDocumentView={onOpenDocumentView} />;
 }

@@ -1,13 +1,21 @@
 import { describe, expect, it, vi } from "vitest";
 import { SceneStore, initialSceneState, scaleDragPosition } from "./sceneStore";
 import type { ScenePatch, WsTransport } from "../../lib/ws/transport";
+import type { BridgeRejection } from "../../lib/bridge-core/islandState";
 
 type StateListener = (payload: Record<string, unknown>) => void;
 type PatchListener = (patch: ScenePatch) => void;
+type VersionRejectionListener = (rejection: BridgeRejection | null) => void;
 
 function makeFakeTransport() {
   const listeners = new Map<string, StateListener>();
   const patchListeners = new Map<string, PatchListener>();
+  // ADR-003 stage 3.5: mirrors the real WsTransport's own map - kept
+  // separate so a test can fire a rejection independently of the
+  // state/patch listeners above, exactly like patchListeners already does
+  // relative to listeners.
+  const versionRejectionListeners = new Map<string, VersionRejectionListener>();
+  const blockedTopics = new Set<string>();
   const resubscribes: string[] = [];
   const intents: Array<{ topic: string; intent: string; args: unknown[] }> = [];
   const requests: Array<{ topic: string; intent: string; args: unknown[] }> = [];
@@ -50,11 +58,28 @@ function makeFakeTransport() {
     resubscribe: vi.fn((topic: string) => {
       resubscribes.push(topic);
     }),
+    // ADR-003 stage 3.5: matches the real transport's contract - fires
+    // immediately with the current (here, always-starts-null) state on
+    // subscribe, same as subscribe()'s own StateListener does not but
+    // onStatus already does; see WsTransport.onVersionRejection's own doc.
+    onVersionRejection: vi.fn((topic: string, listener: VersionRejectionListener) => {
+      versionRejectionListeners.set(topic, listener);
+      listener(null);
+      return () => versionRejectionListeners.delete(topic);
+    }),
+    // ADR-003 stage 3.5 review-fix: connect() calls this unconditionally
+    // (updateSceneBlockedState) - recorded so a test can assert on it.
+    setTopicBlocked: vi.fn((topic: string, blocked: boolean) => {
+      if (blocked) blockedTopics.add(topic);
+      else blockedTopics.delete(topic);
+    }),
   } as unknown as WsTransport;
   return {
     transport,
     listeners,
     patchListeners,
+    versionRejectionListeners,
+    blockedTopics,
     resubscribes,
     intents,
     requests,
@@ -65,8 +90,15 @@ function makeFakeTransport() {
 
 function validScenePayload(overrides: Record<string, unknown> = {}) {
   return {
-    schemaVersion: 1,
-    minCompatibleSchemaVersion: 1,
+    // ADR-003 stage 3.5: matches the real backend registration
+    // (backend/canvas.py's register_topic("scene", ..., schema_version=2,
+    // min_compatible=2)) - this file's fake transport bypasses
+    // WsTransport.handleMessage entirely (see makeFakeTransport above), so
+    // nothing here actually enforces version compatibility, but keeping the
+    // fixture honest matters for anyone reading it as "what scene actually
+    // looks like on the wire".
+    schemaVersion: 2,
+    minCompatibleSchemaVersion: 2,
     revision: 3,
     nodes: [
       {
@@ -569,6 +601,32 @@ describe("SceneStore", () => {
       listeners.get("scene")!(validScenePayload({ revision: 9 }));
       expect(store.getScene().revision).toBe(9);
 
+      patch({ revision: 30, baseRevision: 29, ops: [] });
+      expect(resubscribes).toEqual(["scene", "scene"]);
+    });
+
+    // ADR-003 stage 3.5 review-fix (HIGH): a 4-lens adversarial review found
+    // that a resync whose OWN answer fails schema-version negotiation wedges
+    // gap-recovery shut permanently, since sceneResyncPending was only ever
+    // cleared by the scene bind() callback above - which a version-rejected
+    // frame never reaches (WsTransport withholds it before dispatch). Fixed
+    // by also clearing the flag the moment a rejection fires: any resync
+    // answer in flight is never coming through the normal channel anyway.
+    it("review-fix: a resync whose answer gets version-rejected does not wedge LATER gap recovery shut", () => {
+      const { patchListeners, versionRejectionListeners, resubscribes } = connectedStoreAtRevision3();
+      const patch = patchListeners.get("scene")!;
+
+      patch({ revision: 9, baseRevision: 8, ops: [] });
+      expect(resubscribes).toEqual(["scene"]);
+
+      // The resync's own answering snapshot is withheld for failing
+      // version negotiation - never delivered to the scene bind callback,
+      // simulating exactly what WsTransport.handleMessage does.
+      versionRejectionListeners.get("scene")!({ kind: "version", reason: "too old", details: [] });
+
+      // A second, unrelated gap arrives later. Without the fix,
+      // sceneResyncPending is still true from the first gap and this
+      // silently no-ops - resubscribes would stay ["scene"].
       patch({ revision: 30, baseRevision: 29, ops: [] });
       expect(resubscribes).toEqual(["scene", "scene"]);
     });
@@ -1438,6 +1496,62 @@ describe("SceneStore", () => {
     expect(listeners.size).toBe(4);
     store.dispose();
     expect(listeners.size).toBe(0);
+  });
+
+  // ADR-003 stage 3.5: the store's own responsibility is narrower than the
+  // transport's - it does not run checkSchemaCompatibility itself (that's
+  // transport.test.ts's job, and this file's fake transport bypasses it
+  // entirely - see makeFakeTransport's own comment). What belongs here is
+  // proving the store correctly WIRES to transport.onVersionRejection and
+  // exposes what it receives to React via getSceneVersionRejection.
+  describe("scene version rejection (ADR-003 stage 3.5)", () => {
+    it("starts with no rejection", () => {
+      const { transport } = makeFakeTransport();
+      const store = new SceneStore(transport);
+      store.connect();
+      expect(store.getSceneVersionRejection()).toBeNull();
+    });
+
+    it("subscribes to the transport's onVersionRejection for the scene topic specifically", () => {
+      const { transport, versionRejectionListeners } = makeFakeTransport();
+      const store = new SceneStore(transport);
+      store.connect();
+      expect(versionRejectionListeners.has("scene")).toBe(true);
+    });
+
+    it("reflects a rejection fired by the transport and notifies subscribers", () => {
+      const { transport, versionRejectionListeners } = makeFakeTransport();
+      const store = new SceneStore(transport);
+      const emits: number[] = [];
+      store.connect();
+      store.subscribe(() => emits.push(1));
+
+      const rejection = { kind: "version" as const, reason: "too old", details: [] };
+      versionRejectionListeners.get("scene")!(rejection);
+
+      expect(store.getSceneVersionRejection()).toEqual(rejection);
+      expect(emits).toHaveLength(1);
+    });
+
+    it("clears the rejection when the transport later reports null", () => {
+      const { transport, versionRejectionListeners } = makeFakeTransport();
+      const store = new SceneStore(transport);
+      store.connect();
+      versionRejectionListeners.get("scene")!({ kind: "version", reason: "too old", details: [] });
+      expect(store.getSceneVersionRejection()).not.toBeNull();
+
+      versionRejectionListeners.get("scene")!(null);
+      expect(store.getSceneVersionRejection()).toBeNull();
+    });
+
+    it("dispose() unsubscribes the version-rejection listener too", () => {
+      const { transport, versionRejectionListeners } = makeFakeTransport();
+      const store = new SceneStore(transport);
+      store.connect();
+      expect(versionRejectionListeners.has("scene")).toBe(true);
+      store.dispose();
+      expect(versionRejectionListeners.has("scene")).toBe(false);
+    });
   });
 });
 

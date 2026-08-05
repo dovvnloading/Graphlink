@@ -83,6 +83,53 @@ body,
   color: var(--gl-surface-text-primary);
 }
 
+/* ADR-003 stage 3.5: BridgeErrorState.tsx, first live wiring. Fills the
+   canvas region it replaces (SceneCanvas.tsx renders this INSTEAD of
+   CanvasInner, never alongside it) rather than floating as a small toast -
+   a version-skew rejection means every canvas control behind it would be
+   acting on state the desktop app no longer agrees with, so the whole
+   surface reads as unavailable, not just annotated. Palette matches
+   .notification-banner/.notification-error, the app's one other "something
+   is wrong" precedent, rather than inventing a second one. */
+.scene-bridge-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  height: 100%;
+  padding: 32px;
+  text-align: center;
+  background-color: var(--gl-surface-window);
+  border-top: 2px solid var(--gl-semantic-status-error, var(--gl-surface-border));
+}
+
+.bridge-error-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--gl-surface-text-bright);
+}
+
+.bridge-error-reason {
+  max-width: 480px;
+  font-size: 13px;
+  color: var(--gl-surface-text-primary);
+}
+
+.bridge-error-details {
+  max-width: 480px;
+  margin: 0;
+  padding-left: 20px;
+  font-size: 12px;
+  color: var(--gl-surface-text-secondary);
+  text-align: left;
+}
+
+.bridge-error-hint {
+  font-size: 12px;
+  color: var(--gl-surface-text-muted);
+}
+
 .app-canvas-region {
   position: relative;
   flex: 1;

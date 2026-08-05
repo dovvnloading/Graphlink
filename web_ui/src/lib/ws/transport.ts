@@ -39,9 +39,19 @@
  * "swallow only what I explicitly know is already visible elsewhere",
  * closing the gap a future new rejection reason could otherwise silently
  * fall into again.
+ *
+ * ADR-003 stage 3.5: schema-version negotiation moved here from the dead
+ * bridge-core/islandState.ts path (built, unit-tested, never wired to
+ * anything live). Every `state`/`patch` frame is checked with the shared
+ * checkSchemaCompatibility() algorithm before being dispatched to any
+ * listener; an incompatible frame is withheld and the topic's rejection is
+ * published through onVersionRejection() instead - see that method and
+ * lib/ui/BridgeErrorState.tsx, the component this is finally wired to.
  */
 
 import { withAuthToken } from "../auth/token";
+import { checkSchemaCompatibility } from "../bridge-core/schemaVersion";
+import type { BridgeRejection } from "../bridge-core/islandState";
 
 export type ConnectionStatus = "connecting" | "open" | "closed";
 
@@ -69,6 +79,23 @@ export class WsTimeoutError extends Error {}
  * pre-migration fire-and-forget behavior exactly. */
 export class WsUnavailableError extends Error {}
 
+/** ADR-003 stage 3.5 review-fix: raised by request() (and so also by
+ * fireIntent(), which wraps it) for a topic currently marked blocked via
+ * setTopicBlocked() - today, exclusively the "scene" topic while its
+ * incoming data has failed schema-version negotiation (see
+ * onVersionRejection). Deliberately NOT a WsUnavailableError: the
+ * connection is genuinely open, and fireIntent's catch surfaces everything
+ * except WsUnavailableError by default specifically so a new rejection
+ * reason is visible unless someone explicitly opts it into the swallowed
+ * set - this is the case where that visibility matters most, since sending
+ * a mutating intent against data the client has just declared it cannot
+ * currently trust is exactly the scenario a 4-lens adversarial review of
+ * this stage found completely unguarded outside the canvas viewport
+ * itself (ViewPopover, Composer, PinOverlay, and the command palette all
+ * kept firing real scene-topic intents while BridgeErrorState blocked only
+ * the canvas). */
+export class WsTopicBlockedError extends Error {}
+
 export type StateListener = (payload: Record<string, unknown>) => void;
 export type StatusListener = (status: ConnectionStatus) => void;
 export type StreamListener = (delta: string, done: boolean, reset: boolean, seq: number) => void;
@@ -95,6 +122,13 @@ export interface ScenePatch {
 }
 
 export type PatchListener = (patch: ScenePatch) => void;
+
+/** ADR-003 stage 3.5: `rejection` is non-null while the last `kind:"state"`
+ * or `kind:"patch"` frame for this topic failed schema-version negotiation,
+ * and null once a compatible frame has been seen (including the very first
+ * one, or none yet). Mirrors StatusListener's own "always fires immediately
+ * with the current value on subscribe" contract - see onVersionRejection. */
+export type VersionRejectionListener = (rejection: BridgeRejection | null) => void;
 
 interface WsLike {
   send(data: string): void;
@@ -150,6 +184,18 @@ export class WsTransport {
    * `kind:"state"` frame unchanged, and only patch frames route here, so a
    * consumer that never opts into patches keeps working untouched. */
   private readonly patchListeners = new Map<string, Set<PatchListener>>();
+  /** ADR-003 stage 3.5: keyed by topic, like stateListeners/patchListeners.
+   * A topic absent from this map has never seen an incompatible frame -
+   * getVersionRejection()/onVersionRejection() treat that the same as an
+   * explicit null (compatible). */
+  private readonly versionRejections = new Map<string, BridgeRejection | null>();
+  private readonly versionRejectionListeners = new Map<string, Set<VersionRejectionListener>>();
+  /** ADR-003 stage 3.5 review-fix: topics for which intent()/request() (and
+   * so fireIntent(), which wraps request()) currently refuse to send - see
+   * setTopicBlocked()'s own doc. Generic per-topic gate, not scene-specific
+   * logic baked into the transport: any caller can block/unblock any topic
+   * for any reason. */
+  private readonly blockedTopics = new Set<string>();
   private readonly pending = new Map<
     number,
     { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }
@@ -240,6 +286,7 @@ export class WsTransport {
     return () => {
       set.delete(listener);
       if (set.size === 0) this.stateListeners.delete(topic);
+      this.maybeForgetTopic(topic);
     };
   }
 
@@ -272,6 +319,7 @@ export class WsTransport {
     return () => {
       set.delete(listener);
       if (set.size === 0) this.patchListeners.delete(topic);
+      this.maybeForgetTopic(topic);
     };
   }
 
@@ -299,10 +347,76 @@ export class WsTransport {
     return () => this.statusListeners.delete(listener);
   }
 
+  /** ADR-003 stage 3.5: listen for a topic's schema-version compatibility.
+   * Fires immediately with the topic's CURRENT rejection state (null if none
+   * yet), then again on every change - same "deliver current state on
+   * subscribe" contract as onStatus above, so a component mounting after the
+   * first frame already arrived does not have to wait for a second one to
+   * find out it was incompatible. See handleMessage()'s state/patch branches
+   * for where this is actually decided. */
+  onVersionRejection(topic: string, listener: VersionRejectionListener): () => void {
+    let set = this.versionRejectionListeners.get(topic);
+    if (!set) {
+      set = new Set();
+      this.versionRejectionListeners.set(topic, set);
+    }
+    set.add(listener);
+    listener(this.versionRejections.get(topic) ?? null);
+    return () => {
+      set.delete(listener);
+      if (set.size === 0) this.versionRejectionListeners.delete(topic);
+      this.maybeForgetTopic(topic);
+    };
+  }
+
+  /** ADR-003 stage 3.5 review-fix: drops `versionRejections`' cached entry
+   * for `topic` once nothing is listening to it via ANY of the three
+   * per-topic registries - state, patch, or rejection. Keyed off all three
+   * (not just versionRejectionListeners alone) deliberately: a topic can
+   * still have live state/patch listeners with no rejection listener
+   * attached, and forgetting the cache in that case would make the NEXT
+   * onVersionRejection subscriber see a false "compatible" reading instead
+   * of the topic's real last-known status until another frame arrives.
+   * Without this, a short-lived subscriber that unsubscribes from a
+   * rejected topic and later re-subscribes would see the transport replay
+   * the stale prior rejection immediately, rather than starting clean the
+   * way a never-before-seen topic does - harmless today (the app's one
+   * real subscriber, SceneStore, never unsubscribes for its own lifetime)
+   * but an asymmetry with this file's own established per-topic cleanup
+   * convention every other registry already follows. */
+  private maybeForgetTopic(topic: string): void {
+    if (this.stateListeners.has(topic)) return;
+    if (this.patchListeners.has(topic)) return;
+    if (this.versionRejectionListeners.has(topic)) return;
+    this.versionRejections.delete(topic);
+  }
+
+  /** ADR-003 stage 3.5 review-fix: blocks intent()/request() (and so
+   * fireIntent()) for `topic`, so a mutating call site cannot send against
+   * data this client currently cannot trust - e.g. the scene topic during
+   * a version-rejection episode (see onVersionRejection). Closes a real
+   * gap a 4-lens adversarial review found: only the canvas viewport was
+   * gated on scene version-rejection, while every sibling chrome surface
+   * (Composer, ViewPopover, PinOverlay, the command palette) kept firing
+   * real scene-topic intents completely unguarded, directly contradicting
+   * BridgeErrorState's own stated rationale for existing at all.
+   *
+   * A single choke point here - not 84 individual call-site edits in
+   * sceneStore.ts - because every one of those call sites already funnels
+   * through intent()/request(); gating here covers all of them, present
+   * and future, without touching any of them. */
+  setTopicBlocked(topic: string, blocked: boolean): void {
+    if (blocked) this.blockedTopics.add(topic);
+    else this.blockedTopics.delete(topic);
+  }
+
   /** Fire-and-forget intent (the @Slot successor). Silently dropped when the
    * socket is not open - matching the old bridge's pre-connect no-op call()
-   * semantics that every island already codes against. */
+   * semantics that every island already codes against. Also silently
+   * dropped for a blocked topic (see setTopicBlocked), same posture: this
+   * method's whole contract is "no reply, nothing to surface." */
   intent(topic: string, intent: string, args: unknown[] = []): void {
+    if (this.blockedTopics.has(topic)) return;
     if (this.status !== "open" || !this.socket) return;
     this.socket.send(JSON.stringify({ kind: "intent", topic, intent, args }));
   }
@@ -313,6 +427,13 @@ export class WsTransport {
    * operation (a native OS file/folder picker, say) needs a much longer
    * window than the default 10s. */
   request(topic: string, intent: string, args: unknown[] = [], timeoutMs?: number): Promise<unknown> {
+    if (this.blockedTopics.has(topic)) {
+      return Promise.reject(
+        new WsTopicBlockedError(
+          "Can't send changes - the desktop app and this interface currently disagree about the data format.",
+        ),
+      );
+    }
     if (this.status !== "open" || !this.socket) {
       return Promise.reject(new WsUnavailableError("not connected"));
     }
@@ -394,9 +515,19 @@ export class WsTransport {
     }
     const kind = message.kind;
     if (kind === "state") {
-      const listeners = this.stateListeners.get(message.topic as string);
+      const topic = message.topic as string;
+      const payload = message.payload as Record<string, unknown>;
+      // ADR-003 stage 3.5: the version envelope lives INSIDE payload for a
+      // state frame (see _Topic._stamp on the backend) - checked and, on
+      // rejection, dispatched to NOTHING below. A rejected payload is stale
+      // by definition (BridgeErrorState.tsx's own doc), so silently handing
+      // it to a listener would be strictly worse than the pre-3.5 behavior
+      // this stage exists to replace: at least the old frozen-UI failure
+      // mode didn't also risk running shape validation against fields a
+      // breaking version change may have renamed or removed.
+      if (!this.checkVersionAndMaybeReject(topic, payload)) return;
+      const listeners = this.stateListeners.get(topic);
       if (listeners) {
-        const payload = message.payload as Record<string, unknown>;
         for (const listener of [...listeners]) listener(payload);
       }
       return;
@@ -408,7 +539,13 @@ export class WsTransport {
       // into snapshots only (every topic except scene today) is a supported
       // configuration, not an anomaly - same posture as the stream branch
       // below, and deliberately unlike the unknown-kind fallback at the end.
-      const listeners = this.patchListeners.get(message.topic as string);
+      const topic = message.topic as string;
+      // ADR-003 stage 3.5: unlike a state frame, the version envelope is at
+      // the TOP LEVEL of a patch frame, a sibling of ops/revision (see
+      // _publish_now's broadcast dict on the backend) - `message` itself is
+      // what gets checked, not a sub-object.
+      if (!this.checkVersionAndMaybeReject(topic, message)) return;
+      const listeners = this.patchListeners.get(topic);
       if (listeners) {
         const patch: ScenePatch = {
           revision: message.revision as number,
@@ -453,6 +590,36 @@ export class WsTransport {
     if (this.status === status) return;
     this.status = status;
     for (const listener of [...this.statusListeners]) listener(status);
+  }
+
+  /** ADR-003 stage 3.5: runs the shared checkSchemaCompatibility() algorithm
+   * (bridge-core/schemaVersion.ts - the same one BridgeErrorState's now-live
+   * caller uses) against an incoming frame, updates the topic's rejection
+   * state, and returns whether the caller should proceed to dispatch. `on`
+   * is either the state frame's `payload` or the patch frame's `message`
+   * itself - see the two call sites for which. */
+  private checkVersionAndMaybeReject(topic: string, on: unknown): boolean {
+    const verdict = checkSchemaCompatibility(on);
+    if (!verdict.compatible) {
+      this.setVersionRejection(topic, { kind: "version", reason: verdict.reason, details: [] });
+      return false;
+    }
+    this.setVersionRejection(topic, null);
+    return true;
+  }
+
+  private setVersionRejection(topic: string, rejection: BridgeRejection | null): void {
+    const current = this.versionRejections.get(topic) ?? null;
+    // Dedup by reason text, not reference: two independently-constructed
+    // rejections for the same ongoing skew must not re-fire listeners on
+    // every single subsequent frame while it persists.
+    if (current === rejection) return;
+    if (current !== null && rejection !== null && current.reason === rejection.reason) return;
+    this.versionRejections.set(topic, rejection);
+    const listeners = this.versionRejectionListeners.get(topic);
+    if (listeners) {
+      for (const listener of [...listeners]) listener(rejection);
+    }
   }
 
   private scheduleReconnect(): void {

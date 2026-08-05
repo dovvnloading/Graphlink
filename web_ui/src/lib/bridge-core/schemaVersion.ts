@@ -27,8 +27,15 @@
  * validator, which is exactly what "additive fields allowed" means.
  */
 
-/** The payload version this build of the island reads. */
-export const READER_SCHEMA_VERSION = 1;
+/** The payload version this build of the island reads.
+ *
+ * ADR-003 stage 3.5: bumped to 2 alongside the backend's `scene` topic
+ * (backend/canvas.py's `register_topic("scene", ..., schema_version=2,
+ * min_compatible=2)`) - this build understands the stage 3.4 patch
+ * protocol (`kind:"patch"` frames), which an older reader does not. Every
+ * other topic stays at server-side schema_version=1 and is unaffected: a
+ * sender's version floor of 1 is satisfied by any reader version >= 1. */
+export const READER_SCHEMA_VERSION = 2;
 
 /** The oldest payload version this build can still read correctly. */
 export const READER_MIN_COMPATIBLE_SCHEMA_VERSION = 1;
