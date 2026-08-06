@@ -66,6 +66,17 @@ def register_chart_intents(
         result_holder: dict[str, str] = {}
 
         async def _on_success(result):
+            if parent_node_id not in document.nodes:
+                # 6.2 review fix: parent deleted mid-generation - silent
+                # no-op, the same liveness posture every other agent-produced
+                # surface already takes (_generate_note_from_node,
+                # compare_branches, synthesize_branches, _dispatch_image).
+                # Newly reachable from a SINGLE connection now that the
+                # generation no longer blocks the WS read loop: the user can
+                # freely delete the parent while the chart generates, and
+                # add_chart_node would raise SceneError into a spurious
+                # "Chart generation failed" toast.
+                return
             try:
                 chart_data = canonicalize_chart_data(result, normalized_chart_type)
                 chart_error = ""

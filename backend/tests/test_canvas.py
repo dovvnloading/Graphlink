@@ -40,6 +40,7 @@ from backend.notifications import NotificationState
 from backend.tests.conftest import (
     chat_slots,
     code_sandbox_slots,
+    drain_runs,
     gitlink_run_slots,
     image_slots,
     pycoder_slots,
@@ -7227,14 +7228,20 @@ def test_generate_key_takeaway_creates_a_tinted_note_beside_the_source_node(monk
     )
 
     async def run():
-        bus, document, recorder, _ = make_bus_with_dispatcher()
+        bus, document, recorder, dispatcher = make_bus_with_dispatcher()
         chat = document.add_chat_node(100, 200, "a long assistant answer", False)
         scene_publishes_before = recorder.topics_seen().count("scene")
+        ids_before = set(document.nodes)
 
-        note_id = await bus.dispatch_intent("scene", "generateKeyTakeaway", [chat.id])
+        # ADR-006 stage 6.2 fire-and-forget: the intent returns before the
+        # generation runs (and no longer returns the note id) - drain the
+        # scheduled task, then find the note as the one new node.
+        await bus.dispatch_intent("scene", "generateKeyTakeaway", [chat.id])
+        await drain_runs(dispatcher, "note")
 
-        assert note_id is not None
-        note = document.nodes[note_id]
+        new_ids = set(document.nodes) - ids_before
+        assert len(new_ids) == 1, "exactly one note must have been created"
+        note = document.nodes[new_ids.pop()]
         assert note.kind == "note"
         assert note.content == "Key Takeaway\n\nMain Points:\n• it works"
         # Offset to the RIGHT of the source, clearing the chat node's width.
@@ -7252,13 +7259,27 @@ def test_generate_explainer_note_staggers_below_a_takeaway_from_the_same_node(mo
     monkeypatch.setattr(agents_module.ExplainerAgent, "get_response", lambda self, text: "EXPLAINER")
 
     async def run():
-        bus, document, _, _ = make_bus_with_dispatcher()
+        bus, document, _, dispatcher = make_bus_with_dispatcher()
         chat = document.add_chat_node(0, 0, "source text", False)
 
-        takeaway_id = await bus.dispatch_intent("scene", "generateKeyTakeaway", [chat.id])
-        explainer_id = await bus.dispatch_intent("scene", "generateExplainerNote", [chat.id])
+        # ADR-006 stage 6.2 fire-and-forget: each intent returns before its
+        # generation runs (and no longer returns the note id) - drain after
+        # EACH dispatch (both share the "note" slot, so the second would be
+        # bounced as busy without the first drain) and diff the node set to
+        # find each created note.
+        ids_before = set(document.nodes)
+        await bus.dispatch_intent("scene", "generateKeyTakeaway", [chat.id])
+        await drain_runs(dispatcher, "note")
+        takeaway_ids = set(document.nodes) - ids_before
+        assert len(takeaway_ids) == 1
 
-        takeaway, explainer = document.nodes[takeaway_id], document.nodes[explainer_id]
+        ids_before = set(document.nodes)
+        await bus.dispatch_intent("scene", "generateExplainerNote", [chat.id])
+        await drain_runs(dispatcher, "note")
+        explainer_ids = set(document.nodes) - ids_before
+        assert len(explainer_ids) == 1
+
+        takeaway, explainer = document.nodes[takeaway_ids.pop()], document.nodes[explainer_ids.pop()]
         assert takeaway.content == "TAKEAWAY"
         assert explainer.content == "EXPLAINER"
         assert takeaway.x == explainer.x
@@ -7324,11 +7345,14 @@ def test_generate_key_takeaway_sends_the_nodes_own_text_not_the_branch_history(m
     )
 
     async def run():
-        bus, document, _, _ = make_bus_with_dispatcher()
+        bus, document, _, dispatcher = make_bus_with_dispatcher()
         parent = document.add_chat_node(0, 0, "the parent question", True)
         child = document.add_chat_node(0, 160, "the child answer", False, parent_id=parent.id)
 
         await bus.dispatch_intent("scene", "generateKeyTakeaway", [child.id])
+        # ADR-006 stage 6.2 fire-and-forget: drain the scheduled generation
+        # so the agent has actually been called before asserting.
+        await drain_runs(dispatcher, "note")
 
         assert seen == ["the child answer"]
         assert "the parent question" not in seen[0]
@@ -7396,16 +7420,22 @@ def test_compare_branches_creates_a_note_linked_to_all_sources(monkeypatch):
     )
 
     async def run():
-        bus, document, recorder, _ = make_bus_with_dispatcher()
+        bus, document, recorder, dispatcher = make_bus_with_dispatcher()
         root = document.add_chat_node(0, 0, "root question", True)
         first = document.add_chat_node(0, 160, "first answer", False, parent_id=root.id)
         second = document.add_chat_node(460, 160, "second answer", False, parent_id=root.id)
         scene_publishes_before = recorder.topics_seen().count("scene")
+        ids_before = set(document.nodes)
 
-        note_id = await bus.dispatch_intent("scene", "compareBranches", [[first.id, second.id]])
+        # ADR-006 stage 6.2 fire-and-forget: the intent returns before the
+        # generation runs (and no longer returns the note id) - drain the
+        # scheduled task, then find the note as the one new node.
+        await bus.dispatch_intent("scene", "compareBranches", [[first.id, second.id]])
+        await drain_runs(dispatcher, "branch_comparison")
 
-        assert note_id is not None
-        note = document.nodes[note_id]
+        new_ids = set(document.nodes) - ids_before
+        assert len(new_ids) == 1, "exactly one note must have been created"
+        note = document.nodes[new_ids.pop()]
         assert note.kind == "note"
         assert note.content == "Branch Comparison\n\nAgreements:\n• both agree"
         assert note.state.is_branch_comparison is True
@@ -7433,12 +7463,15 @@ def test_compare_branches_sends_each_branchs_own_full_history_not_just_its_own_c
     )
 
     async def run():
-        bus, document, _, _ = make_bus_with_dispatcher()
+        bus, document, _, dispatcher = make_bus_with_dispatcher()
         root = document.add_chat_node(0, 0, "shared root question", True)
         first = document.add_chat_node(0, 160, "first branch reply", False, parent_id=root.id)
         second = document.add_chat_node(460, 160, "second branch reply", False, parent_id=root.id)
 
         await bus.dispatch_intent("scene", "compareBranches", [[first.id, second.id]])
+        # ADR-006 stage 6.2 fire-and-forget: drain the scheduled generation
+        # so the agent has actually been called before asserting.
+        await drain_runs(dispatcher, "branch_comparison")
 
         assert len(seen) == 1
         formatted = seen[0]
@@ -7533,18 +7566,24 @@ def test_synthesize_branches_creates_a_chat_node_continuing_from_the_first_sourc
     )
 
     async def run():
-        bus, document, recorder, _ = make_bus_with_dispatcher()
+        bus, document, recorder, dispatcher = make_bus_with_dispatcher()
         root = document.add_chat_node(0, 0, "root question", True)
         first = document.add_chat_node(0, 160, "first answer", False, parent_id=root.id)
         second = document.add_chat_node(460, 160, "second answer", False, parent_id=root.id)
         scene_publishes_before = recorder.topics_seen().count("scene")
+        ids_before = set(document.nodes)
 
-        node_id = await bus.dispatch_intent(
+        # ADR-006 stage 6.2 fire-and-forget: the intent returns before the
+        # generation runs (and no longer returns the node id) - drain the
+        # scheduled task, then find the result as the one new node.
+        await bus.dispatch_intent(
             "scene", "synthesizeBranches", [[first.id, second.id], "merge the best of both"],
         )
+        await drain_runs(dispatcher, "branch_synthesis")
 
-        assert node_id is not None
-        node = document.nodes[node_id]
+        new_ids = set(document.nodes) - ids_before
+        assert len(new_ids) == 1, "exactly one chat node must have been created"
+        node = document.nodes[new_ids.pop()]
         assert node.kind == "chat"
         assert node.state.is_user is False
         assert node.content == "Combined answer drawing on both branches."
@@ -7572,16 +7611,20 @@ def test_synthesize_branches_stamps_provider_and_model_from_the_composer_route(m
     )
 
     async def run():
-        bus, document, _, _ = make_bus_with_dispatcher()
+        bus, document, _, dispatcher = make_bus_with_dispatcher()
         root = document.add_chat_node(0, 0, "root question", True)
         first = document.add_chat_node(0, 160, "first answer", False, parent_id=root.id)
         second = document.add_chat_node(460, 160, "second answer", False, parent_id=root.id)
 
-        node_id = await bus.dispatch_intent(
+        # ADR-006 stage 6.2 fire-and-forget: the intent no longer returns
+        # the node id - drain the scheduled task, then read the result via
+        # last_chat_node_id (set by the synthesis's own on_success).
+        await bus.dispatch_intent(
             "scene", "synthesizeBranches", [[first.id, second.id], "merge them"],
         )
+        await drain_runs(dispatcher, "branch_synthesis")
 
-        node = document.nodes[node_id]
+        node = document.nodes[document.last_chat_node_id]
         # ComposerDocument() in make_bus_with_dispatcher has no route_reader
         # wired - route()'s own honest "no settings manager wired" fallback
         # (see backend/composer.py) reports Ollama (Local) with an empty
@@ -7600,7 +7643,7 @@ def test_synthesize_branches_sends_each_branchs_own_full_history_and_the_instruc
     )
 
     async def run():
-        bus, document, _, _ = make_bus_with_dispatcher()
+        bus, document, _, dispatcher = make_bus_with_dispatcher()
         root = document.add_chat_node(0, 0, "shared root question", True)
         first = document.add_chat_node(0, 160, "first branch reply", False, parent_id=root.id)
         second = document.add_chat_node(460, 160, "second branch reply", False, parent_id=root.id)
@@ -7608,6 +7651,9 @@ def test_synthesize_branches_sends_each_branchs_own_full_history_and_the_instruc
         await bus.dispatch_intent(
             "scene", "synthesizeBranches", [[first.id, second.id], "pick the simpler one"],
         )
+        # ADR-006 stage 6.2 fire-and-forget: drain the scheduled generation
+        # so the agent has actually been called before asserting.
+        await drain_runs(dispatcher, "branch_synthesis")
 
         assert len(seen) == 1
         formatted, instructions = seen[0]

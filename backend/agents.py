@@ -516,22 +516,24 @@ class AgentDispatcher:
         handle = self._runs.get(request_id)
         if handle is None or handle.kind != "pycoder":
             return False
-        handle.cancel_event.set()
+        # ADR-006 stage 6.2: the approval future is resolved BEFORE routing
+        # through RunRegistry.cancel(), because cancel() now pops the handle
+        # (release-on-cancel) and the future lives on it. cancel() then sets
+        # the cancel_event and frees the slot immediately.
         future = handle.approval_future
         if future is not None and not future.done():
             future.set_result(False)
-        return True
+        return self._runs.cancel(request_id, kind="pycoder")
 
     def cancel_code_sandbox(self, request_id: str) -> bool:
         """Mirrors cancel_pycoder exactly (same shape, same reasoning)."""
         handle = self._runs.get(request_id)
         if handle is None or handle.kind != "code_sandbox":
             return False
-        handle.cancel_event.set()
         future = handle.approval_future
         if future is not None and not future.done():
             future.set_result(False)
-        return True
+        return self._runs.cancel(request_id, kind="code_sandbox")
 
     def _resolve_approval(self, request_id: str, approved: bool) -> bool:
         """The shared approve/deny primitive backing approve_code_execution/
@@ -704,8 +706,14 @@ class AgentDispatcher:
         finished - this is a direct, cheap check of the same registry
         cancel_all() itself walks (self._runs, one claimed RunHandle per
         in-flight request across every kind), not a second bookkeeping
-        mechanism that could drift from it."""
-        return bool(self._runs.values())
+        mechanism that could drift from it.
+
+        ADR-006 stage 6.2: release-on-cancel empties the claimed-handle map
+        the instant cancel_all() fires, but the cancelled workers' tasks are
+        still unwinding against this session's objects - has_any_live_work()
+        counts those orphaned tasks too, so eviction still waits for the
+        real work to actually end, exactly as it did before."""
+        return self._runs.has_any_live_work()
 
     def cancel_web_research(self, request_id: str) -> bool:
         """kind="web_research": ADR-002 stage 2.4e - the first surface to
@@ -772,6 +780,18 @@ class AgentDispatcher:
         every other caller (including start_conversation_reply) omits them,
         which simply falls back to persona()'s existing resolution, byte-
         identical to this method's pre-R6.1 behavior."""
+        async def _finalize() -> None:
+            # ADR-006 stage 6.2: the user-visible end transition, run by
+            # RunRegistry.cancel() the moment a cancel lands (slot freed +
+            # composer back to idle immediately), OR by _run's own finally on
+            # a normal completion - never both (release() returning True is
+            # the arbiter; see RunHandle.finalize). Defined up here, above the
+            # busy check, so the check-to-claim stretch below stays free of
+            # statements containing awaits - test_dispatch_claim_ordering's
+            # AST gate scans that stretch recursively.
+            on_end()
+            await bus.publish(state_topic)
+
         if self._runs.is_busy("chat"):
             # Single-request-per-session guard: never start a second
             # concurrent request while one is already in flight.
@@ -794,7 +814,9 @@ class AgentDispatcher:
         # above and this claim - see backend/run_lifecycle.py's own
         # docstring for why that ordering is load-bearing, not incidental.
         cancel_event = threading.Event()
-        handle = self._runs.claim("chat", node_id=node_id, cancel_event=cancel_event)
+        handle = self._runs.claim(
+            "chat", node_id=node_id, cancel_event=cancel_event, finalize=_finalize
+        )
         request_id = handle.request_id
 
         async def _run():
@@ -943,12 +965,17 @@ class AgentDispatcher:
                 notifications_state.show(f"AI response failed: {exc}", "error")
                 await bus.publish("notification")
             finally:
-                # Unconditional on every exit path (success, timeout, cancel,
-                # other error) so the caller's state always returns to a
-                # usable idle state.
-                self._runs.release(request_id)
-                on_end()
-                await bus.publish(state_topic)
+                # ADR-006 stage 6.2: gated on release() actually popping the
+                # handle. On a normal completion it does, and the end
+                # transition runs here as before. After a CANCEL, release()
+                # returns False (cancel already popped the handle and ran
+                # _finalize itself) - re-running on_end here would be at best
+                # redundant and at worst would clobber a NEWER run's
+                # "generating" state, since the slot was freed the moment the
+                # cancel landed and a new claim may already be active.
+                if self._runs.release(request_id):
+                    on_end()
+                    await bus.publish(state_topic)
 
         # NOT awaited here - start_chat_reply/start_conversation_reply return
         # immediately after scheduling the task. This is load-bearing: the WS
@@ -1059,12 +1086,14 @@ class AgentDispatcher:
         comment in __init__ for why this must stay independent rather than
         reusing the existing single-slot guard.
 
-        No cancel_event/on_cancel is passed to claim() - api_provider.
-        generate_image has no cancellation_event parameter at all and its
-        body has no checkpoint to insert one at (it is one blocking network
-        POST), and legacy itself has zero real cancel affordance for image
-        generation either (ImageGenerationWorkerThread.stop() exists but is
-        never called from any UI path). The WATCHDOG_TIMEOUT_SECONDS
+        ADR-006 stage 6.2: claim() now passes a cancel_event -
+        api_provider.generate_image still has no cancellation_event
+        parameter and no mid-call checkpoint (it is one blocking network
+        POST), so the event's effect is post-return suppression plus
+        immediate slot release on cancel/disconnect; it cannot shorten the
+        POST itself. (Legacy had zero cancel affordance here at all -
+        ImageGenerationWorkerThread.stop() existed but was never called
+        from any UI path.) The WATCHDOG_TIMEOUT_SECONDS
         ceiling IS still applied here even though legacy has none for image
         generation - a deliberate, explicitly-flagged improvement (leaving
         this as the only dispatch surface with no ceiling against a hung
@@ -1092,7 +1121,14 @@ class AgentDispatcher:
         # Claimed SYNCHRONOUSLY, with no `await` between the is_busy() check
         # above and this claim - same load-bearing ordering _dispatch's own
         # claim relies on, see backend/run_lifecycle.py's own docstring.
-        handle = self._runs.claim("image")
+        # ADR-006 stage 6.2: image gains a cancel_event. generate_image
+        # still has no mid-call checkpoint (one blocking POST - the
+        # docstring above remains true), so cancellation is post-return
+        # suppression, the same shape artifact already uses: cancel frees
+        # the slot immediately (RunRegistry.cancel), and when the POST
+        # eventually returns, the result is discarded instead of applied.
+        cancel_event = threading.Event()
+        handle = self._runs.claim("image", cancel_event=cancel_event)
         request_id = handle.request_id
 
         async def _run():
@@ -1101,6 +1137,8 @@ class AgentDispatcher:
                     asyncio.to_thread(api_provider.generate_image, prompt),
                     timeout=WATCHDOG_TIMEOUT_SECONDS,
                 )
+                if cancel_event.is_set():
+                    return
                 if inspect.iscoroutinefunction(on_reply):
                     await on_reply(image_bytes)
                 else:
@@ -1110,6 +1148,8 @@ class AgentDispatcher:
                 # already publishes "scene" after mutating the document, so a
                 # second unconditional publish here would be redundant.
             except asyncio.TimeoutError:
+                if cancel_event.is_set():
+                    return  # cancelled runs end quietly, not with a timeout toast
                 notifications_state.show(
                     "Image generation stopped responding before the request "
                     "completed. Please try again.",
@@ -1248,6 +1288,16 @@ class AgentDispatcher:
                     ),
                     timeout=WEB_RESEARCH_WATCHDOG_TIMEOUT_SECONDS,
                 )
+                if self._runs.get(request_id) is None:
+                    # 6.2 review fix: a cancel popped this handle while the
+                    # blocking call was finishing - the same discriminator
+                    # _guarded_progress already uses for progress events, now
+                    # applied to the TERMINAL callbacks too. Without it, a
+                    # cancelled run's late result (or its RequestCancelled
+                    # below) writes stale stage/result state onto a node a
+                    # replacement run may already own, since release-on-cancel
+                    # freed the "web_research" slot the instant cancel landed.
+                    return
                 await _invoke(on_success, result)
                 await bus.publish("scene")
             except asyncio.TimeoutError:
@@ -1256,29 +1306,37 @@ class AgentDispatcher:
                     "Web research stopped responding before the request completed. "
                     "Please try again."
                 )
-                await _invoke(on_failure, ResearchFailure(message, code="watchdog_timeout"))
+                if self._runs.get(request_id) is not None:
+                    await _invoke(on_failure, ResearchFailure(message, code="watchdog_timeout"))
                 notifications_state.show(message, "error")
                 await bus.publish("notification")
                 await bus.publish("scene")
             except RequestCancelled as exc:
-                await _invoke(on_failure, exc)
+                if self._runs.get(request_id) is not None:
+                    await _invoke(on_failure, exc)
                 notifications_state.show("Web research cancelled.", "info")
                 await bus.publish("notification")
                 await bus.publish("scene")
             except ResearchFailure as exc:
-                await _invoke(on_failure, exc)
+                if self._runs.get(request_id) is not None:
+                    await _invoke(on_failure, exc)
                 notifications_state.show(f"Web research failed: {exc}", "error")
                 await bus.publish("notification")
                 await bus.publish("scene")
             except Exception as exc:
                 logger.exception("web research dispatch failed")
-                await _invoke(on_failure, exc)
+                if self._runs.get(request_id) is not None:
+                    await _invoke(on_failure, exc)
                 notifications_state.show(f"Web research failed: {exc}", "error")
                 await bus.publish("notification")
                 await bus.publish("scene")
             finally:
                 self._runs.release(request_id)
-                node.pending_request_id = None
+                # 6.2 review fix: same stale-task guard as artifact/gitlink -
+                # a cancelled run's late unwind must not wipe a replacement
+                # run's in-flight marker on this same node.
+                if node.pending_request_id == request_id:
+                    node.pending_request_id = None
                 await bus.publish("scene")
 
         self._runs.attach_task(handle, asyncio.create_task(_run()))
@@ -1368,12 +1426,26 @@ class AgentDispatcher:
                 )
                 await bus.publish("notification")
             except Exception as exc:
+                if cancel_event.is_set():
+                    # 6.2 review fix: a cancelled run whose provider call then
+                    # errors ends quietly - the user already asked for it to
+                    # stop; an "Artifact generation failed" toast would be
+                    # noise about work they abandoned.
+                    return
                 logger.exception("artifact dispatch failed")
                 notifications_state.show(f"Artifact generation failed: {exc}", "error")
                 await bus.publish("notification")
             finally:
                 self._runs.release(request_id)
-                node.pending_request_id = None
+                # 6.2 review fix (reproduced live): only clear if this task's
+                # OWN request_id is still the one recorded - the same
+                # stale-task guard every gitlink/pycoder/sandbox finally has.
+                # Release-on-cancel frees the "artifact" slot the instant a
+                # cancel lands, so a NEW artifact run can claim and stamp
+                # this same node before this old worker unwinds; the old
+                # unconditional clear wiped the new run's in-flight marker.
+                if node.pending_request_id == request_id:
+                    node.pending_request_id = None
                 await bus.publish("scene")
 
         self._runs.attach_task(handle, asyncio.create_task(_run()))
@@ -1718,7 +1790,15 @@ class AgentDispatcher:
             await bus.publish("notification")
             return
 
-        handle = self._runs.claim("gitlink_apply", node_id=node_id)
+        # ADR-006 stage 6.2: gitlink_apply gains a cancel_event, checked at
+        # the worker's ENTRY only (below, before any file is written) - once
+        # writing begins the apply deliberately runs to completion, because
+        # stopping between file writes would leave the working tree in a
+        # half-applied state the UI has no way to represent. So cancel (and
+        # session-disconnect cancel_all) covers the queued-but-not-started
+        # window and frees the slot immediately; a mid-write apply finishes.
+        cancel_event = threading.Event()
+        handle = self._runs.claim("gitlink_apply", node_id=node_id, cancel_event=cancel_event)
         request_id = handle.request_id
         node.pending_request_id = request_id
 
@@ -1799,6 +1879,12 @@ class AgentDispatcher:
 
         async def _run():
             try:
+                if cancel_event.is_set():
+                    # Cancelled before any file was written (see the claim's
+                    # own comment) - report it on the node rather than leaving
+                    # "applying" stuck.
+                    on_failure("Apply cancelled before any files were written.")
+                    return
                 written_files = await asyncio.wait_for(
                     asyncio.to_thread(_call_gitlink_apply, local_root_path, changes_snapshot),
                     timeout=GITLINK_APPLY_TIMEOUT_SECONDS,

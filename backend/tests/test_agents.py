@@ -36,6 +36,7 @@ from backend.tests.conftest import (
     busy_count,
     chat_slots,
     code_sandbox_slots,
+    drain_runs,
     gitlink_apply_slots,
     gitlink_run_slots,
     image_slots,
@@ -2499,10 +2500,16 @@ def test_cancel_artifact_drops_the_result_and_never_calls_on_reply_even_on_a_lat
         await asyncio.to_thread(started.wait, 5)
 
         request_id = next(iter(artifact_slots(dispatcher).keys()))
+        # ADR-006 stage 6.2 fire-and-forget: cancel now pops the handle
+        # immediately (release-on-cancel), so grab the still-running worker
+        # task BEFORE cancelling - it is unreachable via the slots after.
+        entry = next(iter(artifact_slots(dispatcher).values()))
         assert dispatcher.cancel_artifact(request_id) is True
+        # Release-on-cancel: the slot is freed the moment cancel returns,
+        # not when the worker thread eventually observes the event.
+        assert artifact_slots(dispatcher) == {}
 
         release.set()
-        entry = next(iter(artifact_slots(dispatcher).values()))
         await entry["task"]
 
         assert replies == [], "on_reply must never be called once the request is cancelled"
@@ -5844,11 +5851,6 @@ def test_start_chart_generation_calls_on_success_with_the_parsed_result_then_cle
         successes = []
         failures = []
 
-        # Directly awaited (NOT scheduled via asyncio.create_task) - see
-        # start_chart_generation's own docstring for why: unlike every other
-        # independent slot, there is no background task to wait on
-        # separately, the whole thing (including on_success) has already
-        # completed by the time this await returns.
         await dispatcher.start_chart_generation(
             bus=bus,
             notifications_state=notifications,
@@ -5858,6 +5860,10 @@ def test_start_chart_generation_calls_on_success_with_the_parsed_result_then_cle
             on_success=lambda result: successes.append(result),
             on_failure=lambda message: failures.append(message),
         )
+        # ADR-006 stage 6.2 fire-and-forget: the awaited call above only
+        # claims the slot and schedules the generation - drain the scheduled
+        # task so on_success and the release have landed before asserting.
+        await drain_runs(dispatcher, "chart")
 
         assert successes == [{"type": "bar", "title": "T", "labels": ["A", "B"], "values": [1, 2]}]
         assert failures == []
@@ -5882,23 +5888,23 @@ def test_start_chart_generation_second_call_while_in_flight_is_rejected(monkeypa
         bus, notifications, dispatcher = _make_chart_env()
         successes = []
 
-        # Unlike the fire-and-forget slots' own equivalent test,
-        # start_chart_generation is directly awaited by ITS caller (see its
-        # own docstring) - so testing the busy guard requires the TEST
-        # itself to schedule the first call as a background task, mirroring
-        # what backend/canvas.py's generateChart WS wrapper's own caller
-        # (the WS read loop) effectively does across two overlapping
-        # connections to the same session.
-        first_call_task = asyncio.create_task(
-            dispatcher.start_chart_generation(
-                bus=bus,
-                notifications_state=notifications,
-                node_id="n1",
-                chart_type="bar",
-                source_text="text one",
-                on_success=lambda result: successes.append(result),
-                on_failure=lambda message: None,
-            )
+        # ADR-006 stage 6.2 fire-and-forget: start_chart_generation now
+        # claims the slot synchronously and schedules the generation itself,
+        # returning before it runs - the first call stays in flight on its
+        # own, no wrapper task needed to race a second call against it.
+        await dispatcher.start_chart_generation(
+            bus=bus,
+            notifications_state=notifications,
+            node_id="n1",
+            chart_type="bar",
+            source_text="text one",
+            on_success=lambda result: successes.append(result),
+            on_failure=lambda message: None,
+        )
+        # Grab the scheduled worker task now, while the slot still holds it,
+        # so it can be drained at the end.
+        first_call_task = next(
+            handle.task for handle in dispatcher._runs.values() if handle.kind == "chart"
         )
         await asyncio.to_thread(started.wait, 5)
 
@@ -5951,6 +5957,9 @@ def test_start_chart_generation_top_level_error_key_calls_on_failure_and_shows_n
             on_success=lambda result: successes.append(result),
             on_failure=lambda message: failures.append(message),
         )
+        # ADR-006 stage 6.2 fire-and-forget: drain the scheduled task so the
+        # failure path has run before asserting.
+        await drain_runs(dispatcher, "chart")
 
         assert successes == [], "on_success must never be called on a top-level error-key response"
         assert failures == ["Could not find sufficient data to generate a bar chart."]
@@ -5987,6 +5996,9 @@ def test_start_chart_generation_timeout_fires_the_exact_message_and_clears_the_s
             on_success=lambda result: successes.append(result),
             on_failure=lambda message: failures.append(message),
         )
+        # ADR-006 stage 6.2 fire-and-forget: drain the scheduled task so the
+        # timeout path has run before asserting.
+        await drain_runs(dispatcher, "chart")
 
         assert successes == []
         assert len(failures) == 1 and "stopped responding" in failures[0]
@@ -6036,17 +6048,13 @@ def test_chart_request_and_chat_request_run_concurrently_both_busy(monkeypatch):
             conversation_history=[{"role": "user", "content": "hi"}],
             on_reply=chat_replies.append,
         )
-        # start_chart_generation is directly awaited by ITS caller (unlike
-        # chat's fire-and-forget shape) - the test itself schedules it as a
-        # background task to race it against the still-in-flight chat
-        # request, mirroring test_start_chart_generation_second_call_
-        # while_in_flight_is_rejected's own approach above.
-        chart_task = asyncio.create_task(
-            dispatcher.start_chart_generation(
-                bus=bus, notifications_state=notifications, node_id="n1",
-                chart_type="bar", source_text="text", on_success=chart_successes.append,
-                on_failure=lambda message: None,
-            )
+        # ADR-006 stage 6.2 fire-and-forget: start_chart_generation now
+        # schedules its own background task and returns immediately, the
+        # same shape as chat - no wrapper task needed to race the two.
+        await dispatcher.start_chart_generation(
+            bus=bus, notifications_state=notifications, node_id="n1",
+            chart_type="bar", source_text="text", on_success=chart_successes.append,
+            on_failure=lambda message: None,
         )
 
         await asyncio.to_thread(chat_started.wait, 5)
@@ -6062,7 +6070,9 @@ def test_chart_request_and_chat_request_run_concurrently_both_busy(monkeypatch):
         chat_entry = next(iter(chat_slots(dispatcher).values()))
         await chat_entry["task"]
         chart_release.set()
-        await chart_task
+        # ADR-006 stage 6.2 fire-and-forget: drain chart's scheduled task
+        # before asserting its side effects.
+        await drain_runs(dispatcher, "chart")
 
         assert chat_replies == ["chat reply"]
         assert chart_successes == [{"type": "bar", "title": "T", "labels": ["A"], "values": [1]}]
@@ -6101,6 +6111,9 @@ def test_start_note_generation_takeaway_calls_on_success_then_clears_the_slot(mo
             note_kind="takeaway", source_text="the source node's text",
             on_success=successes.append, on_failure=failures.append,
         )
+        # ADR-006 stage 6.2 fire-and-forget: drain the scheduled task so
+        # on_success and the release have landed before asserting.
+        await drain_runs(dispatcher, "note")
         assert successes == ["Key Takeaway\n\nMain Points:\n• from the source node's text"]
         assert failures == []
         assert busy_count(dispatcher, "note") == 0
@@ -6123,6 +6136,8 @@ def test_start_note_generation_explainer_uses_the_explainer_agent(monkeypatch):
             note_kind="explainer", source_text="x",
             on_success=got.append, on_failure=lambda m: None,
         )
+        # ADR-006 stage 6.2 fire-and-forget: drain before asserting.
+        await drain_runs(dispatcher, "note")
         assert got == ["EXPLAINER"]
 
     asyncio.run(run())
@@ -6162,6 +6177,9 @@ def test_start_note_generation_empty_response_fails_instead_of_creating_a_blank_
             note_kind="takeaway", source_text="x",
             on_success=successes.append, on_failure=failures.append,
         )
+        # ADR-006 stage 6.2 fire-and-forget: drain so the validate-failure
+        # path has run before asserting.
+        await drain_runs(dispatcher, "note")
         assert successes == [], "an empty agent response must not become a note"
         assert len(failures) == 1
         assert notifications.msg_type == "error"
@@ -6184,6 +6202,9 @@ def test_start_note_generation_agent_exception_surfaces_and_clears_the_slot(monk
             note_kind="takeaway", source_text="x",
             on_success=successes.append, on_failure=failures.append,
         )
+        # ADR-006 stage 6.2 fire-and-forget: drain so the exception path has
+        # run before asserting.
+        await drain_runs(dispatcher, "note")
         assert successes == []
         assert "model exploded" in failures[0]
         assert notifications.msg_type == "error"
@@ -6228,15 +6249,13 @@ def test_note_request_and_chat_request_run_concurrently_both_busy(monkeypatch):
             conversation_history=[{"role": "user", "content": "hi"}],
             on_reply=chat_replies.append,
         )
-        # start_note_generation is directly awaited by ITS caller (same
-        # shape as chart) - schedule it as a background task to race it
-        # against the still-in-flight chat request.
-        note_task = asyncio.create_task(
-            dispatcher.start_note_generation(
-                bus=bus, notifications_state=notifications, node_id="n1",
-                note_kind="takeaway", source_text="x", on_success=note_successes.append,
-                on_failure=lambda message: None,
-            )
+        # ADR-006 stage 6.2 fire-and-forget: start_note_generation now
+        # schedules its own background task and returns immediately, the
+        # same shape as chat - no wrapper task needed to race the two.
+        await dispatcher.start_note_generation(
+            bus=bus, notifications_state=notifications, node_id="n1",
+            note_kind="takeaway", source_text="x", on_success=note_successes.append,
+            on_failure=lambda message: None,
         )
 
         await asyncio.to_thread(chat_started.wait, 5)
@@ -6252,7 +6271,9 @@ def test_note_request_and_chat_request_run_concurrently_both_busy(monkeypatch):
         chat_entry = next(iter(chat_slots(dispatcher).values()))
         await chat_entry["task"]
         note_release.set()
-        await note_task
+        # ADR-006 stage 6.2 fire-and-forget: drain note's scheduled task
+        # before asserting its side effects.
+        await drain_runs(dispatcher, "note")
 
         assert chat_replies == ["chat reply"]
         assert note_successes == ["Key Takeaway\n\nMain Points:\n• done"]
@@ -6282,6 +6303,9 @@ def test_start_branch_comparison_calls_on_success_then_clears_the_slot(monkeypat
             source_text="=== Branch 1 ===\n...",
             on_success=successes.append, on_failure=failures.append,
         )
+        # ADR-006 stage 6.2 fire-and-forget: drain the scheduled task so
+        # on_success and the release have landed before asserting.
+        await drain_runs(dispatcher, "branch_comparison")
         assert successes == ["Branch Comparison\n\nAgreements:\n• from === Branch 1 ===\n..."]
         assert failures == []
         assert busy_count(dispatcher, "branch_comparison") == 0
@@ -6325,6 +6349,9 @@ def test_start_branch_comparison_does_not_share_a_busy_slot_with_note_generation
             bus=bus, notifications_state=notifications, source_text="x",
             on_success=successes.append, on_failure=lambda m: None,
         )
+        # ADR-006 stage 6.2 fire-and-forget: drain before asserting (the
+        # seeded "note" claim has no task, so only the comparison drains).
+        await drain_runs(dispatcher, "branch_comparison")
         assert successes == ["Branch Comparison"], "an in-flight note generation must not block this"
 
     asyncio.run(run())
@@ -6340,6 +6367,9 @@ def test_start_branch_comparison_empty_response_fails_instead_of_creating_a_blan
             bus=bus, notifications_state=notifications, source_text="x",
             on_success=successes.append, on_failure=failures.append,
         )
+        # ADR-006 stage 6.2 fire-and-forget: drain so the validate-failure
+        # path has run before asserting.
+        await drain_runs(dispatcher, "branch_comparison")
         assert successes == [], "an empty agent response must not become a note"
         assert len(failures) == 1
         assert notifications.msg_type == "error"
@@ -6361,6 +6391,9 @@ def test_start_branch_comparison_agent_exception_surfaces_and_clears_the_slot(mo
             bus=bus, notifications_state=notifications, source_text="x",
             on_success=successes.append, on_failure=failures.append,
         )
+        # ADR-006 stage 6.2 fire-and-forget: drain so the exception path has
+        # run before asserting.
+        await drain_runs(dispatcher, "branch_comparison")
         assert successes == []
         assert "model exploded" in failures[0]
         assert notifications.msg_type == "error"
@@ -6391,6 +6424,9 @@ def test_start_branch_synthesis_calls_on_success_then_clears_the_slot(monkeypatc
             source_text="=== Branch 1 ===\n...", instructions="merge them",
             on_success=successes.append, on_failure=failures.append,
         )
+        # ADR-006 stage 6.2 fire-and-forget: drain the scheduled task so
+        # on_success and the release have landed before asserting.
+        await drain_runs(dispatcher, "branch_synthesis")
         assert successes == ["Combined from === Branch 1 ===\n... per 'merge them'"]
         assert failures == []
         assert busy_count(dispatcher, "branch_synthesis") == 0
@@ -6437,6 +6473,10 @@ def test_start_branch_synthesis_does_not_share_a_busy_slot_with_branch_compariso
             bus=bus, notifications_state=notifications, source_text="x", instructions="y",
             on_success=successes.append, on_failure=lambda m: None,
         )
+        # ADR-006 stage 6.2 fire-and-forget: drain before asserting (the
+        # seeded "branch_comparison" claim has no task, so only the
+        # synthesis drains).
+        await drain_runs(dispatcher, "branch_synthesis")
         assert successes == ["Combined answer."], "an in-flight branch comparison must not block this"
 
     asyncio.run(run())
@@ -6452,6 +6492,9 @@ def test_start_branch_synthesis_empty_response_fails_instead_of_creating_a_blank
             bus=bus, notifications_state=notifications, source_text="x", instructions="y",
             on_success=successes.append, on_failure=failures.append,
         )
+        # ADR-006 stage 6.2 fire-and-forget: drain so the validate-failure
+        # path has run before asserting.
+        await drain_runs(dispatcher, "branch_synthesis")
         assert successes == [], "an empty agent response must not become a node"
         assert len(failures) == 1
         assert notifications.msg_type == "error"
@@ -6473,6 +6516,9 @@ def test_start_branch_synthesis_agent_exception_surfaces_and_clears_the_slot(mon
             bus=bus, notifications_state=notifications, source_text="x", instructions="y",
             on_success=successes.append, on_failure=failures.append,
         )
+        # ADR-006 stage 6.2 fire-and-forget: drain so the exception path has
+        # run before asserting.
+        await drain_runs(dispatcher, "branch_synthesis")
         assert successes == []
         assert "model exploded" in failures[0]
         assert notifications.msg_type == "error"
@@ -6518,14 +6564,12 @@ def test_branch_comparison_request_and_chat_request_run_concurrently_both_busy(m
             conversation_history=[{"role": "user", "content": "hi"}],
             on_reply=chat_replies.append,
         )
-        # start_branch_comparison is directly awaited by ITS caller (same
-        # shape as chart/note) - schedule it as a background task to race
-        # it against the still-in-flight chat request.
-        comparison_task = asyncio.create_task(
-            dispatcher.start_branch_comparison(
-                bus=bus, notifications_state=notifications, source_text="x",
-                on_success=comparison_successes.append, on_failure=lambda message: None,
-            )
+        # ADR-006 stage 6.2 fire-and-forget: start_branch_comparison now
+        # schedules its own background task and returns immediately, the
+        # same shape as chat - no wrapper task needed to race the two.
+        await dispatcher.start_branch_comparison(
+            bus=bus, notifications_state=notifications, source_text="x",
+            on_success=comparison_successes.append, on_failure=lambda message: None,
         )
 
         await asyncio.to_thread(chat_started.wait, 5)
@@ -6541,7 +6585,9 @@ def test_branch_comparison_request_and_chat_request_run_concurrently_both_busy(m
         chat_entry = next(iter(chat_slots(dispatcher).values()))
         await chat_entry["task"]
         comparison_release.set()
-        await comparison_task
+        # ADR-006 stage 6.2 fire-and-forget: drain the comparison's
+        # scheduled task before asserting its side effects.
+        await drain_runs(dispatcher, "branch_comparison")
 
         assert chat_replies == ["chat reply"]
         assert comparison_successes == ["Branch Comparison\n\nAgreements:\n• done"]
@@ -6583,11 +6629,12 @@ def test_branch_synthesis_request_and_chat_request_run_concurrently_both_busy(mo
             conversation_history=[{"role": "user", "content": "hi"}],
             on_reply=chat_replies.append,
         )
-        synthesis_task = asyncio.create_task(
-            dispatcher.start_branch_synthesis(
-                bus=bus, notifications_state=notifications, source_text="x", instructions="y",
-                on_success=synthesis_successes.append, on_failure=lambda message: None,
-            )
+        # ADR-006 stage 6.2 fire-and-forget: start_branch_synthesis now
+        # schedules its own background task and returns immediately, the
+        # same shape as chat - no wrapper task needed to race the two.
+        await dispatcher.start_branch_synthesis(
+            bus=bus, notifications_state=notifications, source_text="x", instructions="y",
+            on_success=synthesis_successes.append, on_failure=lambda message: None,
         )
 
         await asyncio.to_thread(chat_started.wait, 5)
@@ -6601,9 +6648,245 @@ def test_branch_synthesis_request_and_chat_request_run_concurrently_both_busy(mo
         chat_entry = next(iter(chat_slots(dispatcher).values()))
         await chat_entry["task"]
         synthesis_release.set()
-        await synthesis_task
+        # ADR-006 stage 6.2 fire-and-forget: drain the synthesis's scheduled
+        # task before asserting its side effects.
+        await drain_runs(dispatcher, "branch_synthesis")
 
         assert chat_replies == ["chat reply"]
         assert synthesis_successes == ["Combined answer."]
+
+    asyncio.run(run())
+
+
+# -- ADR-006 stage 6.2 review fixes: release-on-cancel at the dispatcher level -
+
+
+def test_cancelled_runs_late_teardown_never_clobbers_a_new_runs_claimed_slot(monkeypatch):
+    """ADR-006 stage 6.2 review fix (NEW-RUN-CLOBBER): release-on-cancel
+    frees the chat slot the instant a cancel lands, so a NEW chat run can
+    claim it while the cancelled worker is still unwinding. That stale
+    worker's late finally must neither pop the new run's handle nor re-run
+    run 1's end transition (cancel() already ran it via finalize) - the
+    gated `if release(): on_end()` tail is exactly what this pins, through
+    _dispatch's own on_begin/on_end callbacks."""
+    started1, release1 = threading.Event(), threading.Event()
+    started2, release2 = threading.Event(), threading.Event()
+    calls = []
+
+    def sequential_blocking_chat(task, messages, **kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            started1.set()
+            release1.wait(5)
+            # Run 1 was cancelled mid-flight - the real driver observes the
+            # cancel event and raises, same shape as the mid-flight-cancel
+            # test above.
+            raise api_provider.RequestCancelledError("Request cancelled.")
+        started2.set()
+        release2.wait(5)
+        return {"message": {"content": "second reply"}}
+
+    _configure_fake_ollama(monkeypatch, sequential_blocking_chat)
+
+    async def run():
+        bus, notifications, composer_document, dispatcher = _make_dispatch_env()
+        begins1, ends1 = [], []
+        begins2, ends2 = [], []
+
+        await dispatcher._dispatch(
+            bus=bus,
+            notifications_state=notifications,
+            conversation_history=[{"role": "user", "content": "first"}],
+            on_reply=lambda text: None,
+            on_begin=begins1.append,
+            on_end=lambda: ends1.append(1),
+            state_topic="app-composer",
+        )
+        await asyncio.to_thread(started1.wait, 5)
+        request_id1, entry1 = next(iter(chat_slots(dispatcher).items()))
+
+        # Cancel run 1 - release-on-cancel: the slot frees IMMEDIATELY,
+        # while the worker is still held open.
+        assert dispatcher.cancel(request_id1) is True
+        assert chat_slots(dispatcher) == {}
+
+        # cancel() schedules run 1's finalize (its on_end + publish) - it
+        # must land exactly once, promptly, without waiting for the worker.
+        deadline = asyncio.get_running_loop().time() + 2
+        while len(ends1) < 1 and asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(0.01)
+        assert ends1 == [1], "cancel must run run 1's end transition exactly once"
+
+        # Run 2 claims the freed slot while run 1's worker is STILL running.
+        await dispatcher._dispatch(
+            bus=bus,
+            notifications_state=notifications,
+            conversation_history=[{"role": "user", "content": "second"}],
+            on_reply=lambda text: None,
+            on_begin=begins2.append,
+            on_end=lambda: ends2.append(1),
+            state_topic="app-composer",
+        )
+        await asyncio.to_thread(started2.wait, 5)
+        request_id2 = next(iter(chat_slots(dispatcher).keys()))
+        assert request_id2 != request_id1
+
+        # NOW let run 1's stale worker unwind fully...
+        release1.set()
+        await entry1["task"]
+
+        # ...and run 2's claim must be completely undisturbed by it.
+        assert len(chat_slots(dispatcher)) == 1, "run 1's late teardown must not free run 2's slot"
+        assert next(iter(chat_slots(dispatcher).keys())) == request_id2, (
+            "run 2's handle must still be the claimed one after run 1's stale finally"
+        )
+        assert ends1 == [1], "run 1's end transition must NOT fire a second time from the stale finally"
+        assert ends2 == [], "run 2 is still in flight - its end transition must not have fired"
+        assert begins1 == [request_id1] and begins2 == [request_id2]
+
+        release2.set()
+        entry2 = next(iter(chat_slots(dispatcher).values()))
+        await entry2["task"]
+        assert chat_slots(dispatcher) == {}
+        assert ends2 == [1]
+
+    asyncio.run(run())
+
+
+def test_cancel_all_now_cancels_a_chart_generation_and_frees_its_slot_immediately(monkeypatch):
+    """ADR-006 stage 6.2 review fix: runtime proof that a formerly-
+    uncancellable kind (chart - pre-6.2 cancel_all silently skipped it)
+    really cancels now: the slot frees the instant cancel_all() fires, the
+    late result is suppressed (on_success never called), and no error
+    notification is shown for work the user abandoned."""
+    started = threading.Event()
+    release = threading.Event()
+
+    def blocking_get_response(self, text, chart_type):
+        started.set()
+        release.wait(5)
+        return '{"type": "bar", "title": "T", "labels": ["A"], "values": [1]}'
+
+    monkeypatch.setattr(agents_module.ChartDataAgent, "get_response", blocking_get_response)
+
+    async def run():
+        bus, notifications, dispatcher = _make_chart_env()
+        successes = []
+        failures = []
+
+        await dispatcher.start_chart_generation(
+            bus=bus,
+            notifications_state=notifications,
+            node_id="n1",
+            chart_type="bar",
+            source_text="text",
+            on_success=lambda result: successes.append(result),
+            on_failure=lambda message: failures.append(message),
+        )
+        # Grab the scheduled worker task now - after cancel_all it is only
+        # reachable as an orphan, no longer via the slots.
+        worker_task = next(
+            handle.task for handle in dispatcher._runs.values() if handle.kind == "chart"
+        )
+        await asyncio.to_thread(started.wait, 5)
+        assert busy_count(dispatcher, "chart") == 1
+
+        dispatcher.cancel_all()
+
+        # Release-on-cancel: the slot is free the moment cancel_all returns,
+        # while the worker is still held open...
+        assert busy_count(dispatcher, "chart") == 0
+        assert not release.is_set()
+        # ...but the unwinding worker still counts as live work (eviction veto).
+        assert dispatcher.has_in_flight_runs() is True
+
+        release.set()
+        await worker_task
+        deadline = asyncio.get_running_loop().time() + 2
+        while dispatcher.has_in_flight_runs() and asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(0.01)
+        assert dispatcher.has_in_flight_runs() is False
+
+        assert successes == [], "a cancelled chart's late result must be suppressed"
+        assert failures == []
+        assert notifications.visible is False, (
+            "no error notification for work the user already abandoned"
+        )
+
+    asyncio.run(run())
+
+
+def test_stale_artifact_teardown_never_clears_a_newer_runs_pending_request_id(monkeypatch):
+    """ADR-006 stage 6.2 review fix (pins start_artifact_reply's finally):
+    release-on-cancel frees the artifact slot instantly, so a NEW artifact
+    run can claim and stamp the SAME node before the cancelled worker
+    unwinds. The old unconditional `node.pending_request_id = None` in the
+    stale worker's finally wiped the new run's in-flight marker - the fix
+    only clears it when it still equals the stale run's own request_id."""
+    started1, release1 = threading.Event(), threading.Event()
+    started2, release2 = threading.Event(), threading.Event()
+    calls = []
+
+    def sequential_blocking_get_response(self, current_artifact, history):
+        calls.append(1)
+        if len(calls) == 1:
+            started1.set()
+            release1.wait(5)
+            return "first document", "first message"
+        started2.set()
+        release2.wait(5)
+        return "second document", "second message"
+
+    monkeypatch.setattr(
+        agents_module.ArtifactAgent, "get_response", sequential_blocking_get_response
+    )
+
+    async def run():
+        bus, notifications, dispatcher = _make_artifact_env()
+        node = _make_node()
+        replies = []
+
+        await dispatcher.start_artifact_reply(
+            bus=bus,
+            notifications_state=notifications,
+            node=node,
+            current_artifact="doc",
+            history=[],
+            on_reply=lambda new_content, ai_message: replies.append((new_content, ai_message)),
+        )
+        await asyncio.to_thread(started1.wait, 5)
+        request_id1, entry1 = next(iter(artifact_slots(dispatcher).items()))
+        assert node.pending_request_id == request_id1
+
+        assert dispatcher.cancel_artifact(request_id1) is True
+        assert artifact_slots(dispatcher) == {}, "release-on-cancel frees the slot immediately"
+
+        # Run 2 on the SAME node, while run 1's worker is still held open.
+        await dispatcher.start_artifact_reply(
+            bus=bus,
+            notifications_state=notifications,
+            node=node,
+            current_artifact="doc",
+            history=[],
+            on_reply=lambda new_content, ai_message: replies.append((new_content, ai_message)),
+        )
+        await asyncio.to_thread(started2.wait, 5)
+        request_id2, entry2 = next(iter(artifact_slots(dispatcher).items()))
+        assert node.pending_request_id == request_id2
+
+        # Run 1's stale worker unwinds fully - its finally must NOT clear
+        # run 2's in-flight marker.
+        release1.set()
+        await entry1["task"]
+        assert node.pending_request_id == request_id2, (
+            "the stale run's teardown wiped the newer run's pending_request_id"
+        )
+        assert replies == [], "the cancelled run's result must have been dropped"
+
+        release2.set()
+        await entry2["task"]
+        assert replies == [("second document", "second message")]
+        assert node.pending_request_id is None
+        assert artifact_slots(dispatcher) == {}
 
     asyncio.run(run())
