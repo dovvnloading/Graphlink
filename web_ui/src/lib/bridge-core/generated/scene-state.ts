@@ -184,6 +184,10 @@ export interface SceneState {
   fontFamily: string;
   fontSizePt: number;
   fontColor: string;
+  canUndo: boolean;
+  canRedo: boolean;
+  undoLabel: string;
+  redoLabel: string;
   minCompatibleSchemaVersion?: number | null;
 }
 
@@ -992,6 +996,26 @@ function checkSceneState(value: unknown, path: string, errors: string[]): void {
     const fieldValue = value["fontColor"];
     if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.fontColor: missing required field`);
     else { if (typeof fieldValue !== "string") errors.push(`${path}.fontColor` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["canUndo"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.canUndo: missing required field`);
+    else { if (typeof fieldValue !== "boolean") errors.push(`${path}.canUndo` + ": expected boolean"); }
+  }
+  {
+    const fieldValue = value["canRedo"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.canRedo: missing required field`);
+    else { if (typeof fieldValue !== "boolean") errors.push(`${path}.canRedo` + ": expected boolean"); }
+  }
+  {
+    const fieldValue = value["undoLabel"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.undoLabel: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.undoLabel` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["redoLabel"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.redoLabel: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.redoLabel` + ": expected string"); }
   }
   {
     const fieldValue = value["minCompatibleSchemaVersion"];

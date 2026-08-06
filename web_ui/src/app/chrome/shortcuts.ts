@@ -30,7 +30,9 @@ export type ShortcutId =
   | "navigate-up"
   | "navigate-down"
   | "navigate-left"
-  | "navigate-right";
+  | "navigate-right"
+  | "undo"
+  | "redo";
 
 /**
  * The shortcuts legacy SUPPRESSES while a text input has focus - ported
@@ -63,6 +65,14 @@ const GATED_WHILE_TYPING = new Set<ShortcutId>([
   "navigate-down",
   "navigate-left",
   "navigate-right",
+  // ADR-010 stage 10.2: undo/redo are GATED, deliberately unlike Save's
+  // exemption above. Ctrl+Z inside a text field must stay the browser's own
+  // native text undo - shadowing it with canvas-structural undo would be a
+  // regression for anyone mid-sentence, and the ADR names that boundary
+  // explicitly ("text edits inside a node keep native browser undo; canvas-
+  // structural undo is the command stack").
+  "undo",
+  "redo",
 ]);
 
 export function isGatedWhileTyping(id: ShortcutId): boolean {
@@ -128,6 +138,15 @@ export function resolveShortcut(event: ShortcutKeyEvent): ShortcutId | null {
     // is already save-chat's key.
     case "m":
       return event.shiftKey ? "synthesize-branches" : null;
+    // ADR-010 stage 10.2: Ctrl+Z / Ctrl+Shift+Z, plus Ctrl+Y as the second
+    // redo binding Windows users reach for. Both redo spellings are wired
+    // because the app runs on Windows, where Ctrl+Y is the platform norm
+    // and Ctrl+Shift+Z is the cross-platform one - supporting only one
+    // would feel broken to half the muscle memory in the room.
+    case "z":
+      return event.shiftKey ? "redo" : "undo";
+    case "y":
+      return event.shiftKey ? null : "redo";
     default:
       return null;
   }

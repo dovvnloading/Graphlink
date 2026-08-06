@@ -490,4 +490,14 @@ class SceneStatePayload:
     fontFamily: str
     fontSizePt: int
     fontColor: str
+    # ADR-010 stage 10.2: the undo/redo affordance's state. The LABELS are on
+    # the wire, not just the booleans, because the button reads "Undo Delete"
+    # and only the backend knows what is actually on top of the stack. Empty
+    # string (not null) when there is nothing to undo/redo, so the frontend
+    # never has to null-check before rendering - canUndo/canRedo is the
+    # single source of truth for enablement.
+    canUndo: bool = False
+    canRedo: bool = False
+    undoLabel: str = ""
+    redoLabel: str = ""
     minCompatibleSchemaVersion: int | None = None

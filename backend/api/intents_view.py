@@ -56,7 +56,14 @@ def register_view_intents(bus: SessionBus, document: SceneDocument) -> None:
     bus.register_intent("scene", "setViewState", set_view_state)
 
     async def organize_nodes():
-        document.organize()
+        # ADR-010 stage 10.3: auto-layout repositions potentially EVERY node
+        # in the scene. One Ctrl+Z has to put the whole layout back - which
+        # it does here because every node is named, so a single command
+        # captures all of their before/after positions at once.
+        document.record_command(
+            "organizeNodes", "user", document.organize,
+            node_ids=list(document.nodes.keys()),
+        )
         await publish_scene()
 
     async def set_font_family(family):

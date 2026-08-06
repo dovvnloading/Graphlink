@@ -2,6 +2,12 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
+    "canRedo": {
+      "type": "boolean"
+    },
+    "canUndo": {
+      "type": "boolean"
+    },
     "dragFactor": {
       "type": "number"
     },
@@ -669,6 +675,9 @@
       },
       "type": "array"
     },
+    "redoLabel": {
+      "type": "string"
+    },
     "revision": {
       "type": "integer"
     },
@@ -680,6 +689,9 @@
     },
     "snapToGrid": {
       "type": "boolean"
+    },
+    "undoLabel": {
+      "type": "string"
     }
   },
   "required": [
@@ -696,7 +708,11 @@
     "dragFactor",
     "fontFamily",
     "fontSizePt",
-    "fontColor"
+    "fontColor",
+    "canUndo",
+    "canRedo",
+    "undoLabel",
+    "redoLabel"
   ],
   "title": "SceneState",
   "type": "object"

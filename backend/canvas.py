@@ -264,6 +264,7 @@ from backend.api.intents_nodes import register_node_intents  # noqa: E402
 from backend.api.intents_pins import register_pins_intents  # noqa: E402
 from backend.api.intents_pycoder import register_pycoder_intents  # noqa: E402
 from backend.api.intents_view import register_view_intents  # noqa: E402
+from backend.api.intents_undo import register_undo_intents  # noqa: E402
 from backend.api.intents_web_research import register_web_research_intents  # noqa: E402
 
 
@@ -361,6 +362,9 @@ def register_canvas(
     register_groups_intents(bus, document)
     register_pins_intents(bus, document)
     register_view_intents(bus, document)
+    # ADR-010 stage 10.2: undo/redo rides the scene topic (see that
+    # module's own doc for why it is not its own topic).
+    register_undo_intents(bus, document, notifications)
     register_grid_intents(bus, document)
 
     return document

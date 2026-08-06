@@ -1,4 +1,5 @@
 import { useReactFlow } from "@xyflow/react";
+import { useSyncExternalStore } from "react";
 import { exportCanvasAsPng } from "../canvas/exportCanvasPng";
 import type { SceneStore } from "../canvas/sceneStore";
 import { Popover, useOverlays } from "../overlays/overlays";
@@ -77,6 +78,10 @@ import { Popover, useOverlays } from "../overlays/overlays";
 
 export function AppBar({ store }: { store: SceneStore }) {
   const overlays = useOverlays();
+  // ADR-010 stage 10.2: the backend owns the undo stack, so enablement AND
+  // the action name both come off the scene payload - the frontend never
+  // guesses what the next undo would do.
+  const scene = useSyncExternalStore(store.subscribe, store.getScene);
   const { zoomIn, zoomOut, setViewport, fitView, getViewport, getNodes } = useReactFlow();
 
   const chip = (surface: string) =>
@@ -124,6 +129,28 @@ export function AppBar({ store }: { store: SceneStore }) {
       </button>
       <button type="button" className="appbar-btn appbar-tier" data-tier="2" onClick={() => store.organizeNodes()}>
         Organize
+      </button>
+
+      <span className="appbar-separator appbar-tier" data-tier="1" />
+      <button
+        type="button"
+        className="appbar-btn appbar-tier"
+        data-tier="1"
+        disabled={!scene.canUndo}
+        title={scene.canUndo ? `Undo ${scene.undoLabel} (Ctrl+Z)` : "Nothing to undo"}
+        onClick={() => store.undo()}
+      >
+        Undo
+      </button>
+      <button
+        type="button"
+        className="appbar-btn appbar-tier"
+        data-tier="1"
+        disabled={!scene.canRedo}
+        title={scene.canRedo ? `Redo ${scene.redoLabel} (Ctrl+Shift+Z)` : "Nothing to redo"}
+        onClick={() => store.redo()}
+      >
+        Redo
       </button>
 
       <span className="appbar-separator appbar-tier" data-tier="3" />

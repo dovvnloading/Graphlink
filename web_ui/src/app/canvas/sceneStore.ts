@@ -45,6 +45,13 @@ export const initialSceneState: SceneState = {
   fontFamily: "Segoe UI",
   fontSizePt: 9,
   fontColor: "#F0F0F0",
+  // ADR-010 stage 10.2: nothing is undoable before the first real scene
+  // frame arrives - a fresh client has no history of its own, and the
+  // backend's is what counts.
+  canUndo: false,
+  canRedo: false,
+  undoLabel: "",
+  redoLabel: "",
 };
 
 export const initialDragSpeedState: DragSpeedState = {
@@ -1032,6 +1039,24 @@ export class SceneStore {
 
   setDragFactor(factor: number): void {
     this.transport.fireIntent("scene", "setDragFactor", [factor], undefined, true);
+  }
+
+  // ADR-010 stage 10.2: undo/redo. NOT queueable (the 5th fireIntent arg) -
+  // replaying an undo minutes later against a scene the user has since
+  // changed would reverse whatever happens to be on the stack THEN, not what
+  // they asked to undo. A refused/dropped undo is safe; a mis-replayed one
+  // is exactly the silent data damage this whole feature exists to prevent.
+  undo(): void {
+    this.transport.fireIntent("scene", "undo", []);
+  }
+
+  redo(): void {
+    this.transport.fireIntent("scene", "redo", []);
+  }
+
+  /** ADR-010 stage 10.5: reverse an entire agent build in one action. */
+  undoRun(runId: string): void {
+    this.transport.fireIntent("scene", "undoRun", [runId]);
   }
 
   organizeNodes(): void {

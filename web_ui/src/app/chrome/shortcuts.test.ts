@@ -118,3 +118,25 @@ describe("isGatedWhileTyping", () => {
     expect(all.filter(isGatedWhileTyping)).toHaveLength(11);
   });
 });
+
+// ADR-010 stage 10.2: undo/redo bindings.
+describe("undo/redo shortcuts (ADR-010 stage 10.2)", () => {
+  it("maps Ctrl+Z to undo and Ctrl+Shift+Z to redo", () => {
+    expect(resolveShortcut(key("z"))).toBe("undo");
+    expect(resolveShortcut(key("z", { shift: true }))).toBe("redo");
+  });
+
+  it("also maps Ctrl+Y to redo, the Windows convention", () => {
+    // The app runs on Windows, where Ctrl+Y is the platform norm, while
+    // Ctrl+Shift+Z is the cross-platform one. Supporting only one would
+    // feel broken to half the muscle memory in the room.
+    expect(resolveShortcut(key("y"))).toBe("redo");
+  });
+
+  it("gates both while typing so native text undo is never shadowed", () => {
+    // Deliberately unlike Save's exemption: Ctrl+Z inside a text field must
+    // stay the browser's own undo. The ADR names that boundary explicitly.
+    expect(isGatedWhileTyping("undo")).toBe(true);
+    expect(isGatedWhileTyping("redo")).toBe(true);
+  });
+});

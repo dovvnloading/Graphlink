@@ -49,19 +49,33 @@ exception (frame/container nodes are always defensively watched, since
 their item_ids/bounds are exactly the state other operations mutate as a
 side effect) and why that exception is still bounded, not O(document size).
 
-## What this module does NOT do (yet)
+## The stack (stages 10.2-10.5)
 
-No undo/redo STACK exists here - that is stage 10.2, a separate ADR-010
-stage with its own exit criterion. This module produces Command objects
-whose apply()/invert() are proven correct in isolation; nothing here
-decides when to call them or how many to retain. Composite commands
-(stage 10.3), live-run refusal (10.4), and provenance-scoped "undo last
-build" (10.5) are equally out of scope here.
+Beyond producing Commands, this module owns the undo/redo stack itself:
+
+- **undo()/redo()** move commands between `command_log` (the undo stack) and
+  `redo_stack`. Performing any NEW command clears the redo branch, the
+  standard behavior everywhere - undo three things, do something else, and
+  "redo" must not reapply the discarded three onto a now-divergent document.
+- **composite()** (10.3) groups several separate record_command calls into
+  one undoable action, for multi-step operations like auto-layout. A single
+  record_command already handles multiple nodes on its own; this is for the
+  different case of several distinct calls that should read as one action.
+- **_guard_live_runs** (10.4) refuses an undo that would touch a node with an
+  in-flight agent run - restoring a pre-run snapshot underneath a writing
+  agent would leave state neither party asked for. Cancel first, then undo.
+- **undo_run()** (10.5) reverses a whole agent run's commands as one action,
+  keyed on `Command.run_id`.
+
+Undo history is session-scoped and in-memory, bounded at 100, and cleared on
+session load - it is an interaction convenience, deliberately distinct from
+ADR-009's on-disk backups, which are the actual durability control.
 """
 
 from __future__ import annotations
 
 import copy
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Callable, Iterable, TypeVar
 
@@ -103,6 +117,25 @@ class Command:
     edge_after: dict[str, "SceneEdge | None"] = field(default_factory=dict)
     asset_before: dict[str, "tuple[bytes, str] | None"] = field(default_factory=dict)
     asset_after: dict[str, "tuple[bytes, str] | None"] = field(default_factory=dict)
+    # ADR-010 stage 10.5: the agent run this command belongs to, or None for
+    # a direct user action. Set for every mutation an agent run produces, so
+    # "undo this build" can revert a whole run's worth of commands as a unit
+    # rather than making the user press Ctrl+Z once per node the agent made.
+    run_id: str | None = None
+
+    @property
+    def label(self) -> str:
+        """The human-readable action name the undo affordance shows ("Undo
+        Delete", "Redo Move"). Derived from command_type rather than stored
+        separately so it can never drift from what the command actually is."""
+        return _COMMAND_LABELS.get(self.command_type, _humanize(self.command_type))
+
+    @property
+    def touched_node_ids(self) -> set[str]:
+        """Every node id this command would create, delete or modify in
+        either direction - what stage 10.4's live-run refusal checks against
+        (you cannot undo across a node that is mid-generation)."""
+        return set(self.node_before) | set(self.node_after)
 
     @property
     def is_noop(self) -> bool:
@@ -143,6 +176,124 @@ def _restore(live: dict, snapshot: dict) -> None:
             live.pop(key, None)
         else:
             live[key] = copy.deepcopy(value)
+
+
+# The user-facing action names. Deliberately phrased as what the USER did
+# ("Delete", "Move") rather than the intent name ("removeNodes"), since this
+# text lands directly in "Undo Delete" on a button and in its tooltip.
+_COMMAND_LABELS = {
+    "addNode": "Add Node",
+    "addChatNode": "Add Chat Node",
+    "addCodeNode": "Add Code Node",
+    "addDocumentNode": "Add Document",
+    "addThinkingNode": "Add Thinking Node",
+    "addHtmlNode": "Add HTML Node",
+    "addImageNode": "Add Image",
+    "addConversationNode": "Add Conversation",
+    "addNote": "Add Note",
+    "removeNodes": "Delete",
+    "deleteChatNode": "Delete Message",
+    "deleteConversationMessage": "Delete Message",
+    "moveNode": "Move",
+    "moveNodes": "Move",
+    "organizeNodes": "Organize Nodes",
+    "connectNodes": "Connect",
+    "removeEdges": "Disconnect",
+    "createFrame": "Create Frame",
+    "createContainer": "Create Container",
+    "ungroup": "Ungroup",
+    "sendMessage": "Send Message",
+    "chatReply": "Assistant Reply",
+    "regenerateResponse": "Regenerate",
+    "generateChart": "Generate Chart",
+    "generateNote": "Generate Note",
+    "compareBranches": "Compare Branches",
+    "synthesizeBranches": "Synthesize Branches",
+    "generateImageReply": "Generate Image",
+    "setNoteContent": "Edit Note",
+    "setGroupLabel": "Rename Group",
+    "setGroupColor": "Recolor",
+    "toggleFrameLock": "Lock Frame",
+    "toggleGroupCollapsed": "Collapse Group",
+    "resizeFrame": "Resize Frame",
+    "fitFrameToContent": "Fit Frame",
+    "resizeChart": "Resize Chart",
+    "toggleChartAspectLock": "Chart Aspect Lock",
+    "setChatCollapsed": "Collapse",
+    "collapseAllNodes": "Collapse All",
+    "expandAllNodes": "Expand All",
+    "setNodeDocked": "Dock",
+    "collapseBranch": "Collapse Branch",
+    "setBranchStatus": "Set Status",
+    "setFinalDeliverable": "Mark Final",
+    "addPin": "Add Pin",
+    "removePin": "Remove Pin",
+    "updatePin": "Edit Pin",
+    "movePin": "Move Pin",
+}
+
+
+def _humanize(command_type: str) -> str:
+    """Fallback label for a command_type with no explicit entry above -
+    "setSomeThing" -> "Set Some Thing". Keeps a newly added command from
+    ever showing a raw camelCase identifier in the UI, even if whoever
+    added it forgot the label table."""
+    out = []
+    for index, char in enumerate(command_type):
+        if char.isupper() and index > 0:
+            out.append(" ")
+        out.append(char.upper() if index == 0 else char)
+    return "".join(out)
+
+
+class UndoRefusedError(Exception):
+    """ADR-010 stage 10.4: raised when an undo/redo is refused rather than
+    failed - carries a message meant to be shown to the user verbatim."""
+
+
+def _merge_commands(command_type, provenance, commands):
+    """ADR-010 stage 10.3: folds a composite's buffered commands into one.
+
+    Merge order matters and is asymmetric: for the BEFORE state the FIRST
+    write wins (the earliest snapshot is the true "before the whole group"),
+    while for the AFTER state the LAST write wins (the final value is what
+    the group ended up producing). Getting this backwards would make undo
+    restore an intermediate state rather than the state before the action.
+    """
+    real = [c for c in commands if not c.is_noop]
+    if not real:
+        return None
+    if len(real) == 1:
+        return real[0]
+
+    merged = Command(
+        command_type=command_type,
+        provenance=provenance,
+        run_id=next((c.run_id for c in real if c.run_id), None),
+    )
+    for command in real:
+        for field_name in ("node_before", "edge_before", "asset_before"):
+            target = getattr(merged, field_name)
+            for key, value in getattr(command, field_name).items():
+                target.setdefault(key, value)  # first write wins
+        for field_name in ("node_after", "edge_after", "asset_after"):
+            getattr(merged, field_name).update(getattr(command, field_name))  # last wins
+
+    # An id created and then deleted inside the same group (or restored to
+    # exactly what it was) nets out to no change at all - dropping those
+    # keeps the merged command's own is_noop honest and avoids a pointless
+    # dict entry that would restore a value to itself.
+    for before_name, after_name in (
+        ("node_before", "node_after"),
+        ("edge_before", "edge_after"),
+        ("asset_before", "asset_after"),
+    ):
+        before, after = getattr(merged, before_name), getattr(merged, after_name)
+        for key in set(before) & set(after):
+            if before[key] == after[key]:
+                del before[key]
+                del after[key]
+    return merged
 
 
 class CommandOps:
@@ -304,5 +455,124 @@ class CommandOps:
         # the bounded log's slots and make Ctrl+Z appear to "do nothing
         # once" before reaching the operation the user actually meant.
         if not command.is_noop:
-            self.command_log.append(command)
+            self._push_command(command)
         return result, command
+
+    # -- ADR-010 stage 10.2/10.3/10.4/10.5: the undo/redo stack -------------
+
+    def _push_command(self, command: "Command") -> None:
+        """Adds a newly performed command to the undo stack.
+
+        Doing anything new after undoing discards the redo branch - the
+        standard, universally expected behavior (undo three things, type
+        something, and "redo" must not reapply the discarded three on top of
+        a now-divergent document). While an open composite is being built
+        (see composite()), commands accumulate there instead and only reach
+        the stack when the group closes."""
+        if self._composite_depth > 0:
+            self._composite_buffer.append(command)
+            return
+        self.redo_stack.clear()
+        self.command_log.append(command)
+
+    @contextmanager
+    def composite(self, command_type: str, provenance: str = "user"):
+        """ADR-010 stage 10.3: groups every command recorded inside the block
+        into ONE undoable action.
+
+        Needed for multi-step actions whose individual mutations are separate
+        record_command calls - the canonical case being auto-layout
+        (organizeNodes moves every node in the scene) and a multi-select
+        delete. One Ctrl+Z must reverse the whole logical action, not peel it
+        apart one node at a time.
+
+        Note that a SINGLE record_command call already covers multiple nodes
+        fine - its before/after diff is naturally n-ary. This exists for the
+        different case of several SEPARATE record_command calls that should
+        read as one action. Re-entrant: nesting composites flattens into the
+        outermost one, so a helper that opens its own composite does not
+        fragment its caller's."""
+        self._composite_depth += 1
+        outermost = self._composite_depth == 1
+        try:
+            yield
+        finally:
+            self._composite_depth -= 1
+            if outermost:
+                buffered = list(self._composite_buffer)
+                self._composite_buffer.clear()
+                merged = _merge_commands(command_type, provenance, buffered)
+                # is_noop is re-checked AFTER merging, not just on the inputs:
+                # a group whose steps cancel out (create a node then delete it
+                # inside the same composite) has real non-noop members but
+                # nets to nothing, and pushing that would put a do-nothing
+                # entry on the stack that eats one Ctrl+Z silently.
+                if merged is not None and not merged.is_noop:
+                    self.redo_stack.clear()
+                    self.command_log.append(merged)
+
+    def can_undo(self) -> bool:
+        return len(self.command_log) > 0
+
+    def can_redo(self) -> bool:
+        return len(self.redo_stack) > 0
+
+    def undo_label(self) -> str:
+        return self.command_log[-1].label if self.command_log else ""
+
+    def redo_label(self) -> str:
+        return self.redo_stack[-1].label if self.redo_stack else ""
+
+    def _guard_live_runs(self, command: "Command") -> None:
+        """ADR-010 stage 10.4: refuse to undo/redo across a node with a live
+        run. A node mid-generation has an in-flight agent writing to it;
+        restoring a snapshot from before that run started would race the
+        write and leave the node in a state neither the user nor the agent
+        asked for. The ADR's own guardrail - cancel first, then undo."""
+        for node_id in command.touched_node_ids:
+            node = self.nodes.get(node_id)
+            if node is not None and node.pending_request_id:
+                raise UndoRefusedError(
+                    f"Can't undo while \"{node.title}\" is still generating - "
+                    "cancel it first."
+                )
+
+    def undo(self) -> "Command":
+        """Reverses the most recent command and moves it onto the redo stack.
+        Raises UndoRefusedError if there is nothing to undo, or if the
+        command touches a node with a live run."""
+        if not self.command_log:
+            raise UndoRefusedError("Nothing to undo.")
+        command = self.command_log[-1]
+        self._guard_live_runs(command)
+        command.invert(self)
+        self.command_log.pop()
+        self.redo_stack.append(command)
+        return command
+
+    def redo(self) -> "Command":
+        """Re-applies the most recently undone command."""
+        if not self.redo_stack:
+            raise UndoRefusedError("Nothing to redo.")
+        command = self.redo_stack[-1]
+        self._guard_live_runs(command)
+        command.apply(self)
+        self.redo_stack.pop()
+        self.command_log.append(command)
+        return command
+
+    def undo_run(self, run_id: str) -> int:
+        """ADR-010 stage 10.5: reverses every command belonging to one agent
+        run, newest first, as a single user-facing action ("undo this
+        build"). Returns how many commands were reversed.
+
+        Only reverses commands at the TOP of the stack that belong to the
+        run: if the user has since made their own edits on top, those are
+        not silently discarded to reach the agent's work underneath -
+        undoing a build has to mean undoing the build, not everything after
+        it too. Stops at the first command that is not part of the run."""
+        reversed_count = 0
+        while self.command_log and self.command_log[-1].run_id == run_id:
+            self.undo()
+            reversed_count += 1
+        return reversed_count
