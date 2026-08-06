@@ -41,4 +41,13 @@ export default tseslint.config(
       globals: globals.node,
     },
   },
+  {
+    // ADR-019 stage 19.2: build-tooling scripts (check-bundle-size.mjs) run
+    // under Node, not the browser - same globals carve-out the test files
+    // above already get.
+    files: ["scripts/**/*.mjs"],
+    languageOptions: {
+      globals: globals.node,
+    },
+  },
 );
