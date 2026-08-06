@@ -175,6 +175,11 @@ describe("real WsTransport wired to a real SceneStore (end-to-end version reject
         fontFamily: "Segoe UI",
         fontSizePt: 9,
         fontColor: "#F0F0F0",
+        // ADR-010 stage 10.2: stamped on every real scene frame.
+        canUndo: false,
+        canRedo: false,
+        undoLabel: "",
+        redoLabel: "",
       },
     });
     expect(store.getSceneBlockingRejection()).toBeNull();

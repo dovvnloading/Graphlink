@@ -442,3 +442,203 @@ def test_loading_a_session_clears_undo_history(wired):
     # Inverting a command from the PREVIOUS chat would resurrect one of its
     # nodes into this one - the history must not survive the boundary.
     assert len(document.command_log) == 0
+
+
+# -- layer 4: the undo/redo stack (ADR-010 stages 10.2-10.5) ----------------
+
+
+def test_undo_then_redo_round_trips_a_delete(wired):
+    bus, document = wired
+    node_id = _dispatch(bus, "addNode", 0, 0, "keep me")
+    _dispatch(bus, "removeNodes", [node_id])
+    assert node_id not in document.nodes
+
+    _dispatch(bus, "undo")
+    assert node_id in document.nodes
+
+    _dispatch(bus, "redo")
+    assert node_id not in document.nodes
+
+
+def test_multiple_undos_walk_back_through_history_in_order(wired):
+    bus, document = wired
+    a = _dispatch(bus, "addNode", 0, 0, "a")
+    b = _dispatch(bus, "addNode", 1, 1, "b")
+    c = _dispatch(bus, "addNode", 2, 2, "c")
+
+    _dispatch(bus, "undo")
+    assert c not in document.nodes and b in document.nodes
+    _dispatch(bus, "undo")
+    assert b not in document.nodes and a in document.nodes
+    _dispatch(bus, "undo")
+    assert a not in document.nodes
+
+
+def test_doing_something_new_after_undo_discards_the_redo_branch(wired):
+    bus, document = wired
+    first = _dispatch(bus, "addNode", 0, 0, "first")
+    _dispatch(bus, "undo")
+    assert first not in document.nodes
+
+    # A new action after an undo makes the undone one unreachable - redoing
+    # it would reapply a change onto a document that has since diverged.
+    second = _dispatch(bus, "addNode", 5, 5, "second")
+    _dispatch(bus, "redo")
+    assert first not in document.nodes
+    assert second in document.nodes
+
+
+def test_undo_reports_the_action_name_so_the_button_can_say_what_it_undoes(wired):
+    bus, document = wired
+    node_id = _dispatch(bus, "addNode", 0, 0, "x")
+    assert document.undo_label() == "Add Node"
+
+    _dispatch(bus, "removeNodes", [node_id])
+    assert document.undo_label() == "Delete"
+    assert document.can_undo() is True
+    assert document.can_redo() is False
+
+    _dispatch(bus, "undo")
+    assert document.redo_label() == "Delete"
+
+
+def test_scene_payload_carries_undo_state_for_the_toolbar(wired):
+    bus, document = wired
+    payload = document.scene_payload()
+    assert payload["canUndo"] is False
+    assert payload["canRedo"] is False
+    assert payload["undoLabel"] == ""
+
+    _dispatch(bus, "addNode", 0, 0, "x")
+    payload = document.scene_payload()
+    assert payload["canUndo"] is True
+    assert payload["undoLabel"] == "Add Node"
+
+
+def test_undo_with_empty_history_is_refused_not_crashed(wired):
+    bus, document = wired
+    # No exception reaches the intent layer - a refusal is a normal outcome.
+    assert _dispatch(bus, "undo") is None
+    assert _dispatch(bus, "redo") is None
+
+
+def test_undo_is_refused_while_a_node_is_still_generating(wired):
+    bus, document = wired
+    node_id = _dispatch(bus, "addNode", 0, 0, "busy")
+    _dispatch(bus, "moveNode", node_id, 50, 50)
+
+    # A live run is writing to this node; restoring a pre-run snapshot
+    # underneath it would leave state neither the user nor the agent asked
+    # for. ADR-010's own guardrail: cancel first, then undo.
+    document.nodes[node_id].pending_request_id = "req-live"
+    assert _dispatch(bus, "undo") is None
+    assert document.nodes[node_id].x == 50  # unchanged - the undo was refused
+
+    document.nodes[node_id].pending_request_id = None
+    _dispatch(bus, "undo")
+    assert document.nodes[node_id].x == 0
+
+
+def test_organize_is_one_undo_not_one_per_node(wired):
+    bus, document = wired
+    a = _dispatch(bus, "addNode", 0, 0, "a")
+    b = _dispatch(bus, "addNode", 500, 500, "b")
+    before = {a: (document.nodes[a].x, document.nodes[a].y),
+              b: (document.nodes[b].x, document.nodes[b].y)}
+
+    _dispatch(bus, "organizeNodes")
+    _dispatch(bus, "undo")
+
+    # One Ctrl+Z restores the whole layout, not one node at a time.
+    for node_id, (x, y) in before.items():
+        assert (document.nodes[node_id].x, document.nodes[node_id].y) == (x, y)
+
+
+def test_composite_groups_separate_commands_into_one_undo(document):
+    a = document.add_note(0, 0)
+    b = document.add_note(100, 0)
+
+    with document.composite("multiMove", "user"):
+        document.record_command("moveNode", "user",
+                                lambda: document.move_node(a.id, 10, 10), node_ids=[a.id])
+        document.record_command("moveNode", "user",
+                                lambda: document.move_node(b.id, 110, 10), node_ids=[b.id])
+
+    assert len(document.command_log) == 1
+    document.undo()
+    assert (document.nodes[a.id].x, document.nodes[a.id].y) == (0, 0)
+    assert (document.nodes[b.id].x, document.nodes[b.id].y) == (100, 0)
+
+
+def test_composite_merge_keeps_the_earliest_before_and_latest_after(document):
+    node = document.add_note(0, 0)
+
+    with document.composite("repeatedMove", "user"):
+        document.record_command("moveNode", "user",
+                                lambda: document.move_node(node.id, 10, 10), node_ids=[node.id])
+        document.record_command("moveNode", "user",
+                                lambda: document.move_node(node.id, 99, 99), node_ids=[node.id])
+
+    command = document.command_log[-1]
+    # Undo must go back to the state before the WHOLE group (0, 0), not to
+    # the intermediate (10, 10) the first step left behind.
+    command.invert(document)
+    assert (document.nodes[node.id].x, document.nodes[node.id].y) == (0, 0)
+    command.apply(document)
+    assert (document.nodes[node.id].x, document.nodes[node.id].y) == (99, 99)
+
+
+def test_a_composite_that_nets_out_to_nothing_is_not_logged(document):
+    with document.composite("createThenDelete", "user"):
+        created, _ = document.record_command(
+            "addNote", "user", lambda: document.add_note(0, 0),
+        )
+        document.record_command(
+            "removeNodes", "user", lambda: document.remove_nodes([created.id]),
+            node_ids=[created.id],
+        )
+    # Created and deleted inside the same group - nothing survives, so there
+    # is nothing to undo and the stack must not gain a do-nothing entry.
+    assert len(document.command_log) == 0
+
+
+def test_undo_run_reverses_a_whole_agent_build_in_one_action(document):
+    """ADR-010 stage 10.5."""
+    for index in range(3):
+        _node, command = document.record_command(
+            "addNote", "agent", lambda i=index: document.add_note(i * 10, 0),
+        )
+        command.run_id = "run-1"
+
+    assert len(document.command_log) == 3
+    reversed_count = document.undo_run("run-1")
+    assert reversed_count == 3
+    assert len(document.nodes) == 0
+
+
+def test_undo_run_stops_at_the_users_own_later_edits(document):
+    _node, command = document.record_command(
+        "addNote", "agent", lambda: document.add_note(0, 0),
+    )
+    command.run_id = "run-1"
+    user_node, _ = document.record_command(
+        "addNote", "user", lambda: document.add_note(500, 500),
+    )
+
+    # The user's own work sits on top of the agent's. Undoing "the build"
+    # must not silently discard it to reach the agent's commands underneath.
+    assert document.undo_run("run-1") == 0
+    assert user_node.id in document.nodes
+
+
+def test_session_load_clears_both_stacks(wired):
+    bus, document = wired
+    node_id = _dispatch(bus, "addNode", 0, 0, "old session")
+    _dispatch(bus, "undo")
+    assert len(document.redo_stack) == 1
+
+    document.clear_for_load()
+    # Redoing here would resurrect a node from the PREVIOUS chat into this
+    # one - both directions have to be cleared, not just the undo side.
+    assert len(document.command_log) == 0
+    assert len(document.redo_stack) == 0

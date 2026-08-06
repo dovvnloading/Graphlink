@@ -190,6 +190,12 @@ function validScenePayload(overrides: Record<string, unknown> = {}) {
     fontFamily: "Segoe UI",
     fontSizePt: 9,
     fontColor: "#F0F0F0",
+    // ADR-010 stage 10.2: the backend stamps these on every scene frame, so
+    // a fixture without them is not a shape the wire ever actually produces.
+    canUndo: false,
+    canRedo: false,
+    undoLabel: "",
+    redoLabel: "",
     ...overrides,
   };
 }

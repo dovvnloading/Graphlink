@@ -125,6 +125,14 @@ function GlobalShortcuts({ store }: { store: SceneStore }) {
           return overlays.toggle("palette", "dialog");
         case "toggle-search":
           return overlays.toggle("search", "popover");
+        // ADR-010 stage 10.2: the backend owns the stack, so these are a
+        // straight forward - the frontend never decides WHAT gets undone.
+        // A refusal (nothing to undo, or a node still generating) comes
+        // back as a notification, not a silent no-op.
+        case "undo":
+          return store.undo();
+        case "redo":
+          return store.redo();
         case "navigate-up":
           return navigate("up");
         case "navigate-down":

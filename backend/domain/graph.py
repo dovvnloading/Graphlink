@@ -210,12 +210,20 @@ class SceneDocument(BranchOps, GroupOps, CommandOps):
     # to undo something from 100 operations ago is the intended limit, not a
     # data loss (the scene itself is untouched).
     #
-    # This is a LOG, deliberately not yet an undo STACK - there is no cursor
-    # and no redo pointer, because deciding WHEN to invert is ADR-010 stage
-    # 10.2's job, with its own exit criterion. 10.1 only has to prove the
-    # commands are correctly invertible, which is what backend/tests/
-    # test_commands.py does. Stage 10.2 adds the cursor on top of this.
+    # This IS the undo stack (newest last). ADR-010 stage 10.2 added
+    # undo()/redo() on top of it - see backend/domain/commands.py's CommandOps
+    # for the cursor semantics, live-run refusal and composite grouping.
     command_log: deque = field(default_factory=lambda: deque(maxlen=100), repr=False)
+    # Commands that have been undone and can be re-applied. Cleared the
+    # moment any NEW command is performed (the standard redo-branch discard).
+    # Unbounded is fine: it can never exceed command_log's own 100, since
+    # every entry here came out of there.
+    redo_stack: list = field(default_factory=list, repr=False)
+    # ADR-010 stage 10.3: composite() bookkeeping. While depth > 0, recorded
+    # commands buffer here instead of hitting the stack, and merge into one
+    # command when the outermost composite closes.
+    _composite_depth: int = field(default=0, repr=False)
+    _composite_buffer: list = field(default_factory=list, repr=False)
     _counter: itertools.count = field(default_factory=itertools.count, repr=False)
     # ADR-003 stage 3.4: the last wire state actually published, kept so
     # take_dirty_patch_ops below can diff against it. None until the first
@@ -403,6 +411,13 @@ class SceneDocument(BranchOps, GroupOps, CommandOps):
         # to a session deliberately ("session-scoped and in-memory ... not
         # persisted"); this is the boundary that enforces it.
         self.command_log.clear()
+        self.redo_stack.clear()
+        # A load landing mid-composite would otherwise leave the buffer
+        # holding commands against the OLD document, which the next composite
+        # close would merge into a command referencing nodes that no longer
+        # exist.
+        self._composite_buffer.clear()
+        self._composite_depth = 0
         # ADR-003 stage 3.4 review-fix: drop the patch baseline too. Loading a
         # chat replaces the entire document, so diffing the new scene against
         # the OLD one produced a patch no smaller than the snapshot it
@@ -2150,6 +2165,19 @@ class SceneDocument(BranchOps, GroupOps, CommandOps):
             "fontSizePt": self.font_size_pt,
             "fontColor": self.font_color,
             "totalSessionTokens": self.total_session_tokens,
+            # ADR-010 stage 10.2: the undo/redo affordance's own state. Rides
+            # the scene meta blob rather than a separate topic because it
+            # changes on exactly the events the scene does - every mutation,
+            # every undo/redo, every load - so a separate topic would need a
+            # publish bolted onto all ~80 mutating intents to stay in sync,
+            # and would go stale the first time one was missed.
+            # The LABELS travel, not just the booleans: the button says
+            # "Undo Delete", and only the backend knows what the top of the
+            # stack actually is.
+            "canUndo": self.can_undo(),
+            "canRedo": self.can_redo(),
+            "undoLabel": self.undo_label(),
+            "redoLabel": self.redo_label(),
         }
 
     def scene_payload(self) -> dict[str, Any]:
