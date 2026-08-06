@@ -57,13 +57,14 @@ cancel_event (threading.Event, the majority shape) or RunHandle.
 on_cancel (a generic callable, for kinds like web_research whose own
 cancellation primitive is not a threading.Event) - which callers other
 than the run itself trip and the run's own code observes at its next
-checkpoint. cancel_all() below preserves this exactly: it walks every
-claimed handle and fires whichever of the two mechanisms is present,
-silently no-oping on kinds (like chart/note/branch_comparison/branch_
-synthesis) that have neither - the same honestly-documented "this kind
-cannot be cancelled" limitation those already had before their own
-migration, just visible in one place now instead of being invisible to
-cancel_all() entirely.
+checkpoint. cancel_all() below fires whichever of the two mechanisms is present on
+each claimed handle. As of ADR-006 stage 6.2 every kind carries one (the
+formerly-uncancellable chart/note/branch_comparison/branch_synthesis now
+get a cancel_event from run_single_shot itself; image and gitlink_apply
+from their own dispatch surfaces), cancel releases the slot IMMEDIATELY
+instead of waiting for the worker thread to observe it (see
+RunRegistry.cancel/release), and run_single_shot schedules its work off
+the WS read loop instead of being awaited on it.
 """
 
 from __future__ import annotations
@@ -152,6 +153,20 @@ class RunHandle:
     approval_snapshot_fn: Callable[[], Any] | None = None
     approval_snapshot: Any = None
     task: asyncio.Task | None = None
+    # ADR-006 stage 6.2: the surface's user-visible end transition (its
+    # on_end() + state-topic publish), as an async zero-arg closure. On a
+    # NORMAL completion the surface's own `finally` runs it - gated on
+    # release() returning True. On CANCEL, RunRegistry.cancel() pops the
+    # handle immediately (freeing the slot) and schedules THIS instead, so
+    # the UI returns to idle the moment the user cancels rather than when
+    # the worker thread eventually dies - and the worker's late `finally`
+    # sees release() -> False and skips the transition, which is what stops
+    # a stale run's teardown from clobbering a NEWER run's "generating"
+    # state (the slot is free, so a new claim may already exist).
+    finalize: Callable[[], Any] | None = None
+    # Captured at claim() time so cancel() can schedule `finalize` from any
+    # thread (cancelChatRequest's sync handler runs via asyncio.to_thread).
+    loop: asyncio.AbstractEventLoop | None = None
 
 
 class RunRegistry:
@@ -160,6 +175,14 @@ class RunRegistry:
 
     def __init__(self) -> None:
         self._handles: dict[str, RunHandle] = {}
+        # ADR-006 stage 6.2: tasks whose handle was popped by cancel() while
+        # the task still runs. Held ONLY as an anti-GC reference (the event
+        # loop keeps just a weak ref to scheduled tasks - the same reason
+        # RunHandle.task exists) and to keep has-in-flight semantics honest:
+        # a cancelled-but-still-unwinding worker is still real work against
+        # this session's objects, so session eviction must keep waiting for
+        # it (see values_or_orphans / backend/agents.py has_in_flight_runs).
+        self._orphaned_tasks: set[asyncio.Task] = set()
 
     def is_busy(self, kind: str) -> bool:
         return any(handle.kind == kind for handle in self._handles.values())
@@ -173,10 +196,18 @@ class RunRegistry:
         on_cancel: Callable[[], None] | None = None,
         approval_future: asyncio.Future | None = None,
         approval_snapshot_fn: Callable[[], Any] | None = None,
+        finalize: Callable[[], Any] | None = None,
     ) -> RunHandle:
         """Synchronous by design - see this module's own docstring for
         why callers must call this in the same synchronous stretch as
         their own is_busy() pre-check."""
+        try:
+            loop: asyncio.AbstractEventLoop | None = asyncio.get_running_loop()
+        except RuntimeError:
+            # Direct registry use outside a loop (unit tests) - cancel()
+            # then simply cannot schedule finalize, which such tests never
+            # pass anyway.
+            loop = None
         handle = RunHandle(
             kind=kind,
             request_id=uuid.uuid4().hex,
@@ -185,6 +216,8 @@ class RunRegistry:
             on_cancel=on_cancel,
             approval_future=approval_future,
             approval_snapshot_fn=approval_snapshot_fn,
+            finalize=finalize,
+            loop=loop,
         )
         self._handles[handle.request_id] = handle
         return handle
@@ -192,8 +225,39 @@ class RunRegistry:
     def attach_task(self, handle: RunHandle, task: asyncio.Task) -> None:
         handle.task = task
 
-    def release(self, request_id: str) -> None:
-        self._handles.pop(request_id, None)
+    def _pop(self, request_id: str) -> RunHandle | None:
+        handle = self._handles.pop(request_id, None)
+        if handle is not None and handle.task is not None and not handle.task.done():
+            self._orphaned_tasks.add(handle.task)
+            handle.task.add_done_callback(self._orphaned_tasks.discard)
+        if handle is not None:
+            # A popped handle is unreachable to cancel_all_pending_approvals
+            # (it walks _handles), so an unresolved approval future MUST be
+            # auto-denied here or the run's parked `await approval_future`
+            # waits forever - the disconnect path calls cancel_all() BEFORE
+            # cancel_all_pending_approvals() (backend/app.py), and before
+            # release-on-cancel that ordering was harmless because cancel
+            # never popped. Denial (False), never approval: popping means the
+            # run was cancelled or torn down, and cancel-means-deny is the
+            # semantic cancel_pycoder/cancel_code_sandbox already had.
+            future = handle.approval_future
+            if future is not None and not future.done():
+                future.set_result(False)
+        return handle
+
+    def release(self, request_id: str) -> bool:
+        """Returns True if this call actually popped the handle - False when
+        cancel() already released it. ADR-006 stage 6.2: every surface's
+        `finally` gates its on_end/state-publish tail on this bool, so a
+        cancelled run's late teardown never re-runs the end transition that
+        cancel() already performed (and never clobbers a newer run's state -
+        see RunHandle.finalize)."""
+        return self._pop(request_id) is not None
+
+    def _schedule_finalize(self, handle: RunHandle) -> None:
+        if handle.finalize is None or handle.loop is None or handle.loop.is_closed():
+            return
+        asyncio.run_coroutine_threadsafe(handle.finalize(), handle.loop)
 
     def get(self, request_id: str) -> RunHandle | None:
         return self._handles.get(request_id)
@@ -222,18 +286,47 @@ class RunRegistry:
         if handle.on_cancel is not None:
             handle.on_cancel()
             fired = True
+        if fired:
+            # ADR-006 stage 6.2: cancel frees the slot IMMEDIATELY. Before
+            # this, release() lived only in the run's `finally`, downstream
+            # of an uninterruptible asyncio.to_thread - so is_busy stayed
+            # True (and the UI stayed "generating") for however long the
+            # worker took to actually observe the cancel, up to the full
+            # watchdog timeout for surfaces that only check post-return.
+            # Popping here + scheduling the handle's finalize makes cancel
+            # latency independent of worker-thread latency; the worker's own
+            # late finally sees release() -> False and skips its tail.
+            self._pop(request_id)
+            self._schedule_finalize(handle)
         return fired
 
     def cancel_all(self) -> None:
-        """See this module's own docstring for why kinds with neither
-        cancel_event nor on_cancel (chart, note, branch_comparison,
-        branch_synthesis) are silently skipped rather than treated as an
-        error."""
-        for handle in self._handles.values():
+        """Fires every handle's cancel mechanism, releasing each fired
+        handle immediately (same semantics as cancel() above). As of
+        ADR-006 stage 6.2 every kind carries a mechanism, so nothing is
+        skipped any more - the pre-6.2 "chart/note/branch_* are silently
+        skipped" limitation is closed."""
+        for handle in list(self._handles.values()):
+            fired = False
             if handle.cancel_event is not None:
                 handle.cancel_event.set()
+                fired = True
             if handle.on_cancel is not None:
                 handle.on_cancel()
+                fired = True
+            if fired:
+                self._pop(handle.request_id)
+                self._schedule_finalize(handle)
+
+    def has_any_live_work(self) -> bool:
+        """Claimed handles OR cancelled-but-still-unwinding orphan tasks -
+        the honest "is anything still running against this session"
+        predicate session eviction consults (ADR-004 stage 4.3 veto).
+        Release-on-cancel empties _handles instantly, but the worker
+        threads those runs hold are still alive until they observe the
+        cancel; evicting the session out from under them would orphan real
+        in-flight work mid-write."""
+        return bool(self._handles) or bool(self._orphaned_tasks)
 
     def cancel_all_pending_approvals(self, kinds: tuple[str, ...]) -> None:
         """Auto-denies every still-undone approval_future among handles
@@ -277,10 +370,11 @@ async def run_single_shot(
     log_exception: Callable[[BaseException], None],
     validate_notify: Callable[[str], str] | None = None,
 ) -> None:
-    """Shared skeleton for a "directly-awaited, single combined
-    create+generate action" dispatch surface - start_chart_generation and
-    start_note_generation today; see this module's own docstring for why
-    chat/conversation cannot share this same function.
+    """Shared skeleton for a "single combined create+generate action"
+    dispatch surface - chart/note/branch-comparison/branch-synthesis.
+    Fire-and-forget as of ADR-006 stage 6.2 (claim synchronously, schedule
+    the generation, return immediately) - see the inline comment at the
+    claim below for why the old directly-awaited shape had to go.
 
     `call`: zero-arg callable, run inside asyncio.to_thread. `validate`:
     inspects a SUCCESSFUL `call` result and returns a human-readable
@@ -302,26 +396,52 @@ async def run_single_shot(
         await bus.publish("notification")
         return
 
-    handle = registry.claim(kind, node_id=node_id)
-    try:
-        result = await asyncio.wait_for(asyncio.to_thread(call), timeout=timeout)
-        message = validate(result)
-        if message is not None:
-            await _invoke(on_failure, message)
-            notify_message = validate_notify(message) if validate_notify else message
-            notifications_state.show(notify_message, "error")
+    # ADR-006 stage 6.2: claimed synchronously (unchanged), but the actual
+    # generation now runs in a SCHEDULED task instead of being awaited here.
+    # These four surfaces used to be the app's worst read-loop blockers: the
+    # WS receive loop (backend/app.py) awaits each intent handler inline, so
+    # a chart/note/comparison/synthesis generation held the ENTIRE socket -
+    # no further frame, including a cancel, was even read - for up to the
+    # 420 s watchdog. The old justification was a return-value contract
+    # ("the caller needs the new node id back in the same round trip"), but
+    # every frontend call site fires these intents fire-and-forget and
+    # discards the result (sceneStore.ts fireIntent sites) - the node
+    # arrives via the scene publish inside on_success, exactly like every
+    # other fire-and-forget surface. So this returns immediately; the
+    # cancel_event (new - these kinds were previously uncancellable and
+    # silently skipped by cancel_all) suppresses the result callbacks when
+    # a cancel or session disconnect lands mid-generation.
+    cancel_event = threading.Event()
+    handle = registry.claim(kind, node_id=node_id, cancel_event=cancel_event)
+
+    async def _task() -> None:
+        try:
+            result = await asyncio.wait_for(asyncio.to_thread(call), timeout=timeout)
+            if cancel_event.is_set():
+                return
+            message = validate(result)
+            if message is not None:
+                await _invoke(on_failure, message)
+                notify_message = validate_notify(message) if validate_notify else message
+                notifications_state.show(notify_message, "error")
+                await bus.publish("notification")
+            else:
+                await _invoke(on_success, result)
+        except asyncio.TimeoutError:
+            if cancel_event.is_set():
+                return
+            await _invoke(on_failure, timeout_message)
+            notifications_state.show(timeout_message, "error")
             await bus.publish("notification")
-        else:
-            await _invoke(on_success, result)
-    except asyncio.TimeoutError:
-        await _invoke(on_failure, timeout_message)
-        notifications_state.show(timeout_message, "error")
-        await bus.publish("notification")
-    except Exception as exc:
-        log_exception(exc)
-        message = f"{exception_prefix}: {exc}"
-        await _invoke(on_failure, message)
-        notifications_state.show(message, "error")
-        await bus.publish("notification")
-    finally:
-        registry.release(handle.request_id)
+        except Exception as exc:
+            if cancel_event.is_set():
+                return
+            log_exception(exc)
+            message = f"{exception_prefix}: {exc}"
+            await _invoke(on_failure, message)
+            notifications_state.show(message, "error")
+            await bus.publish("notification")
+        finally:
+            registry.release(handle.request_id)
+
+    registry.attach_task(handle, asyncio.create_task(_task()))

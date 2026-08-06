@@ -99,6 +99,24 @@ def web_research_slots(dispatcher):
     return _run_slots(dispatcher, "web_research")
 
 
+async def drain_runs(dispatcher, kind=None):
+    """ADR-006 stage 6.2 fire-and-forget test adapter: run_single_shot's
+    surfaces (chart/note/branch_comparison/branch_synthesis) now claim
+    their slot synchronously and SCHEDULE the generation as an asyncio
+    task, returning BEFORE it runs - so a test that awaits start_* must
+    drain the scheduled task(s) before asserting on callbacks/
+    notifications/slot state (and before the test's event loop closes).
+    Filters to one kind when given; a directly-seeded handle with no task
+    (registry.claim() in busy-guard tests) is skipped either way."""
+    tasks = [
+        handle.task
+        for handle in list(dispatcher._runs.values())
+        if handle.task is not None and (kind is None or handle.kind == kind)
+    ]
+    for task in tasks:
+        await task
+
+
 def busy_count(dispatcher, kind):
     """ADR-002 stage 2.3 test adapter: the count-based equivalent of the
     old dict-of-sentinels' len()/truthiness checks for a "directly-
