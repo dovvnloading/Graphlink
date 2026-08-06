@@ -7,8 +7,6 @@ code motion, no behavior change.
 
 from __future__ import annotations
 
-from graphlink_navigation_pins import NavigationPinRecord
-
 from backend.api._shared import make_publish_scene
 from backend.domain.graph import SceneDocument
 from backend.events import SessionBus
@@ -23,9 +21,16 @@ def register_pins_intents(bus: SessionBus, document: SceneDocument) -> None:
     # backend/domain/commands.py), so no node_ids/edge_ids-style scoping
     # parameter is needed here - the wrap is a one-line change per intent.
     async def add_pin(title, x, y, note=""):
+        # Kwargs form, NOT a pre-built NavigationPinRecord: only the
+        # record=None path inside NavigationPinStore.add() auto-assigns the
+        # incrementing sort_order (len(self._records)) - a pre-built record
+        # is appended as-is with the dataclass's sort_order=0 default, which
+        # left every pin after the first at sort_order 0 (the persisted
+        # ordering key chat_library.py loads by). Validation is unchanged:
+        # both paths run NavigationPinRecord.create()'s field validators.
         record, _command = document.record_command(
             "addPin", "user",
-            lambda: document.pins.add(NavigationPinRecord.create(title=title, x=x, y=y, note=note)),
+            lambda: document.pins.add(title=title, x=x, y=y, note=note),
         )
         await publish_scene()
         return record.pin_id

@@ -789,6 +789,30 @@ def test_pins_are_undoable_end_to_end(wired):
     assert document.pins.get(pin_id).position == (0, 0)
 
 
+def test_add_pin_assigns_an_incrementing_sort_order(wired):
+    """Regression: the REAL addPin handler must go through the store's
+    record=None kwargs path, which auto-assigns sort_order=len(records).
+    The handler used to pre-build a NavigationPinRecord (whose dataclass
+    default is sort_order=0) and pass it in, so every pin after the first
+    landed at sort_order 0 - wrong for the persisted ordering key
+    chat_library.py loads pins by (ORDER BY sort_order, id)."""
+    bus, document = wired
+    a = _dispatch(bus, "addPin", "First", 0, 0, "")
+    b = _dispatch(bus, "addPin", "Second", 100, 0, "")
+    c = _dispatch(bus, "addPin", "Third", 200, 0, "")
+
+    by_id = {p.pin_id: p.sort_order for p in document.pins.records}
+    assert [by_id[a], by_id[b], by_id[c]] == [0, 1, 2]
+
+    # And the numbering stays dense across the store's remove-renumber
+    # cascade: after removing the middle pin, a NEW pin continues from the
+    # renumbered length, not from a stale count.
+    _dispatch(bus, "removePin", b)
+    d = _dispatch(bus, "addPin", "Fourth", 300, 0, "")
+    assert [p.sort_order for p in document.pins.records] == [0, 1, 2]
+    assert document.pins.get(d).sort_order == 2
+
+
 def test_conversation_send_and_agent_reply_are_undoable_and_correctly_attributed(wired):
     bus, document = wired
     parent = _dispatch(bus, "addNote", 0, 0, False, False)
