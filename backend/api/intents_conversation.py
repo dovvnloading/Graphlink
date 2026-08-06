@@ -31,7 +31,15 @@ def register_conversation_intents(
         # calling document.append_conversation_assistant_message directly -
         # same established relationship as send_message's own _on_reply
         # calling document.add_chat_node directly.
-        node = document.send_conversation_message(node_id, text)
+        # ADR-010 close-out: appends real message content to node.history -
+        # same shape as the already-wrapped sendMessage. node_ids names the
+        # target node since it survives (the id never leaves self.nodes, so
+        # only the in-place before/after diff catches an appended message).
+        node, _command = document.record_command(
+            "sendConversationMessage", "user",
+            lambda: document.send_conversation_message(node_id, text),
+            node_ids=[node_id],
+        )
         await publish_scene()
 
         def _on_reply(reply_text):
@@ -47,7 +55,14 @@ def register_conversation_intents(
             # child node. A ConversationNode is a self-contained mega-node
             # with a flat plain-text-only history and no child-node concept
             # at all in legacy.
-            document.append_conversation_assistant_message(node_id, reply_text)
+            #
+            # "agent" provenance, not "user" - this reply is model-produced,
+            # same posture as intents_chat.py's own chatReply command.
+            document.record_command(
+                "appendConversationAssistantMessage", "agent",
+                lambda: document.append_conversation_assistant_message(node_id, reply_text),
+                node_ids=[node_id],
+            )
 
         await agent_dispatcher.start_conversation_reply(
             bus=bus,
@@ -61,8 +76,15 @@ def register_conversation_intents(
     async def append_conversation_assistant_message(node_id, text):
         # Unlike send_conversation_message, this represents a real reply
         # landing once ConversationNode gets real agent dispatch, not a
-        # deferral - so no notification fires.
-        node = document.append_conversation_assistant_message(node_id, text)
+        # deferral - so no notification fires. This is the standalone
+        # registered intent (a direct WS call), distinct from _on_reply's
+        # own use of the same document method above - "user" provenance
+        # here since nothing marks this specific entry point as agent-driven.
+        node, _command = document.record_command(
+            "appendConversationAssistantMessage", "user",
+            lambda: document.append_conversation_assistant_message(node_id, text),
+            node_ids=[node_id],
+        )
         await publish_scene()
         return node.id
 
@@ -79,7 +101,10 @@ def register_conversation_intents(
         await publish_scene()
 
     async def set_node_docked(node_id, docked):
-        document.set_node_docked(node_id, docked)
+        document.record_command(
+            "setNodeDocked", "user", lambda: document.set_node_docked(node_id, docked),
+            node_ids=[node_id],
+        )
         await publish_scene()
 
     async def delete_chat_node(node_id):
@@ -103,7 +128,10 @@ def register_conversation_intents(
         await publish_scene()
 
     async def set_chat_collapsed(node_id, collapsed):
-        document.set_chat_collapsed(node_id, collapsed)
+        document.record_command(
+            "setChatCollapsed", "user", lambda: document.set_chat_collapsed(node_id, collapsed),
+            node_ids=[node_id],
+        )
         await publish_scene()
 
     # ADR-002 Workstream 1 ("Branch status and lifecycle"): three plain
@@ -114,23 +142,47 @@ def register_conversation_intents(
     # pre-check pattern used where a delete could realistically race an
     # in-flight agent dispatch - none of these three ever dispatch an agent).
     async def set_branch_status(node_id, status):
-        document.set_branch_status(node_id, status)
+        document.record_command(
+            "setBranchStatus", "user", lambda: document.set_branch_status(node_id, status),
+            node_ids=[node_id],
+        )
         await publish_scene()
 
     async def set_final_deliverable(node_id, is_final):
-        document.set_final_deliverable(node_id, is_final)
+        document.record_command(
+            "setFinalDeliverable", "user",
+            lambda: document.set_final_deliverable(node_id, is_final),
+            node_ids=[node_id],
+        )
         await publish_scene()
 
     async def collapse_branch(node_id, collapsed):
-        document.collapse_branch(node_id, collapsed)
+        document.record_command(
+            "collapseBranch", "user", lambda: document.collapse_branch(node_id, collapsed),
+            node_ids=[node_id],
+        )
         await publish_scene()
 
     async def collapse_all_nodes():
-        document.set_all_conversational_collapsed(True)
+        # A bulk mutation across potentially every chat/conversation/html
+        # node in the scene - same shape as the already-wrapped
+        # organizeNodes, so every node id is named for the same reason:
+        # record_command's diff needs to be told what MIGHT change to
+        # capture an in-place mutation (an id that never enters/leaves
+        # self.nodes on its own gives the id-set diff nothing to see).
+        document.record_command(
+            "collapseAllNodes", "user",
+            lambda: document.set_all_conversational_collapsed(True),
+            node_ids=list(document.nodes.keys()),
+        )
         await publish_scene()
 
     async def expand_all_nodes():
-        document.set_all_conversational_collapsed(False)
+        document.record_command(
+            "expandAllNodes", "user",
+            lambda: document.set_all_conversational_collapsed(False),
+            node_ids=list(document.nodes.keys()),
+        )
         await publish_scene()
 
     async def set_chat_scroll_value(node_id, value):

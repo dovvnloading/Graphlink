@@ -32,7 +32,10 @@ def register_pycoder_intents(
     publish_scene = make_publish_scene(bus)
 
     async def set_pycoder_mode(node_id, mode):
-        document.set_pycoder_mode(node_id, mode)
+        document.record_command(
+            "setPyCoderMode", "user", lambda: document.set_pycoder_mode(node_id, mode),
+            node_ids=[node_id],
+        )
         await publish_scene()
 
     async def run_pycoder(node_id, input_text):

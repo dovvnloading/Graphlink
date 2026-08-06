@@ -39,7 +39,11 @@ def register_artifact_intents(
         # state on this node that an unguarded call could corrupt, so a
         # stale click racing a delete has nothing destructive to protect
         # against.
-        node = document.send_artifact_message(node_id, text)
+        node, _command = document.record_command(
+            "sendArtifactMessage", "user",
+            lambda: document.send_artifact_message(node_id, text),
+            node_ids=[node_id],
+        )
         await publish_scene()
 
         parent_edge = document._branch_parent_edge(node_id)
@@ -47,7 +51,15 @@ def register_artifact_intents(
         full_history = branch_history + node.history
 
         def _on_reply(new_content, ai_message):
-            document.complete_artifact_generation(node_id, new_content, ai_message)
+            # Same content-mutation shape as intents_chat.py's chatReply /
+            # intents_conversation.py's appendConversationAssistantMessage -
+            # "agent" provenance since this is a model-produced reply, not a
+            # direct user action.
+            document.record_command(
+                "completeArtifactGeneration", "agent",
+                lambda: document.complete_artifact_generation(node_id, new_content, ai_message),
+                node_ids=[node_id],
+            )
 
         await agent_dispatcher.start_artifact_reply(
             bus=bus,
