@@ -66,11 +66,18 @@ class ChatRequest:
     per-provider `prepare_messages` responsibility ADR-006 §1 assigns.
     `extra_kwargs` is the passthrough surface today's chat(**kwargs) callers
     rely on (e.g. the chart agent's format hints); it shrinks as stages
-    6.3-6.8 give its remaining uses first-class fields."""
+    6.3-6.8 give its remaining uses first-class fields.
+
+    Deliberately NO reasoning_level field: the level is provider
+    configuration (each provider is constructed with it, from the caller's
+    own settings snapshot), not per-request data - a field here would be a
+    second source of truth that a provider could silently ignore
+    (adversarial-review finding on the first draft, which carried exactly
+    that dead field). Stage 6.5's per-session ProviderRuntime owns where the
+    level ultimately lives."""
 
     task: str
     messages: list
-    reasoning_level: str = "off"
     extra_kwargs: Mapping[str, Any] = field(default_factory=dict)
 
 
@@ -121,5 +128,14 @@ class Provider(Protocol):
         """Yield ProviderEvents for one completion, ending with exactly one
         "done" event carrying the full final text. Raise (never swallow) on
         failure; exception translation to user-facing messages stays with the
-        caller until the stage that moves it in here."""
+        caller until the stage that moves it in here.
+
+        LAZY-GENERATOR CONTRACT (adversarial-review finding, pinned here so
+        stage 6.2 designs against it, not around it): implementations are
+        generator functions, so NOTHING in the body - including entry cancel
+        checks and request prep/validation - runs at call time; it runs on
+        the first next(). Callers must therefore consume the iterator inside
+        whatever try/except owns error translation (both api_provider call
+        sites do), and must never treat a successful stream() CALL as "the
+        request validated"."""
         ...

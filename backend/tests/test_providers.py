@@ -202,6 +202,9 @@ def test_reasoning_without_answer_retries_with_a_reset_event(ollama_chat, no_bac
     types = [e.type for e in events]
     assert types == ["reasoning", "reset", "text", "done"]
     assert events[-1].text.endswith("Real answer.")
+    # Review finding: endswith alone would let attempt 1's discarded output
+    # leak into the final text unnoticed - assert the discard actually held.
+    assert "only thoughts" not in events[-1].text
     assert len(ollama_chat.calls) == 2
 
 
@@ -248,6 +251,91 @@ def test_cancellation_mid_stream_closes_the_live_stream_and_raises(ollama_chat):
     with pytest.raises(api_provider.RequestCancelledError):
         list(stream)
     assert live.close_calls >= 1  # the live HTTP stream was actively closed
+
+
+def test_bool_reasoning_models_get_the_budget_hint_prepended_as_a_system_message(ollama_chat):
+    """Review finding: this invariant was claimed in the module doc but never
+    asserted. qwen3 at a non-off level must get reasoning_budget_hint()'s text
+    prepended as a leading system message; gpt-oss (string-think family) must
+    NOT - it steers via the think kwarg alone."""
+    ollama_chat.streams = [
+        FakeOllamaStream([_part(content="a", done=True)]),
+        FakeOllamaStream([_part(content="b", done=True)]),
+    ]
+
+    list(OllamaProvider(model="qwen3:8b", reasoning_level="high").stream(
+        ChatRequest(task=config.TASK_CHAT, messages=[{"role": "user", "content": "x"}]),
+        CancelToken(),
+    ))
+    sent = ollama_chat.calls[0]["messages"]
+    assert sent[0]["role"] == "system"
+    assert api_provider.reasoning_budget_hint("high") in sent[0]["content"]
+    assert ollama_chat.calls[0]["think"] is True  # bool family
+
+    list(OllamaProvider(model="gpt-oss:20b", reasoning_level="high").stream(
+        ChatRequest(task=config.TASK_CHAT, messages=[{"role": "user", "content": "x"}]),
+        CancelToken(),
+    ))
+    sent = ollama_chat.calls[1]["messages"]
+    assert all(m["role"] != "system" for m in sent)  # no hint for the string family
+
+
+def test_extra_kwargs_pass_through_and_cancellation_event_is_stripped(ollama_chat):
+    """Review finding: the passthrough surface (e.g. the chart agent's format
+    kwarg) and the cancellation_event strip were untested in BOTH paths."""
+    ollama_chat.streams = [FakeOllamaStream([_part(content="a", done=True)])]
+    ollama_chat.responses = [{"message": {"content": "b"}}]
+    provider = OllamaProvider(model="llava:13b")
+    sentinel_event = threading.Event()
+    request = ChatRequest(
+        task=config.TASK_TITLE,
+        messages=[{"role": "user", "content": "x"}],
+        extra_kwargs={"format": "json", "cancellation_event": sentinel_event},
+    )
+
+    list(provider.stream(request, CancelToken()))
+    provider.complete(request, CancelToken())
+
+    for call in ollama_chat.calls:
+        assert call["format"] == "json"
+        assert "cancellation_event" not in call
+
+
+def test_image_bytes_parts_flow_into_ollamas_images_field(ollama_chat):
+    """Review finding: the media-flattening invariant (image/audio parts land
+    in ollama's `images` field via _prepare_ollama_messages) was claimed but
+    never exercised through the provider path."""
+    ollama_chat.streams = [FakeOllamaStream([_part(content="seen", done=True)])]
+    provider = OllamaProvider(model="llava:13b")
+    list(provider.stream(
+        ChatRequest(
+            task=config.TASK_CHAT,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "what is this"},
+                    {"type": "image_bytes", "data": b"\x89PNG-fake"},
+                ],
+            }],
+        ),
+        CancelToken(),
+    ))
+    sent = ollama_chat.calls[0]["messages"]
+    assert sent[-1]["images"] == [b"\x89PNG-fake"]
+    assert sent[-1]["content"] == "what is this"
+
+
+def test_complete_honors_cancellation(ollama_chat):
+    """Review finding: only stream()'s cancellation was tested."""
+    cancel_event = threading.Event()
+    cancel_event.set()
+    provider = OllamaProvider(model="llava:13b")
+    with pytest.raises(api_provider.RequestCancelledError):
+        provider.complete(
+            ChatRequest(task=config.TASK_CHAT, messages=[{"role": "user", "content": "x"}]),
+            CancelToken(cancel_event),
+        )
+    assert ollama_chat.calls == []  # cancelled before any network call
 
 
 def test_think_kwarg_and_hint_apply_only_for_the_chat_task(ollama_chat):
@@ -375,6 +463,70 @@ def test_chat_and_chat_stream_actually_route_through_the_provider_seam(
     _REAL_CHAT(config.TASK_CHAT, [{"role": "user", "content": "x"}])
 
     assert calls == {"stream": 1, "complete": 1}
+
+
+def test_a_fake_provider_can_substitute_for_ollama_at_the_real_chat_stream_seam(
+    monkeypatch, ollama_mode
+):
+    """Review finding (HIGH): the whole design promises the seam is
+    provider-agnostic, but nothing proved a protocol-conforming double can
+    stand in for OllamaProvider under the REAL chat_stream. Here the seam's
+    provider construction is swapped for a FakeProvider factory and the real
+    adapter runs end to end against it - scripted deltas reach on_chunk, the
+    scripted done becomes the return value, no ollama.chat involved at all."""
+    from backend.providers import ollama_provider as op_module
+
+    fake = FakeProvider([
+        ProviderEvent("text", "from "),
+        ProviderEvent("text", "the "),
+        ProviderEvent("text", "fake"),
+    ])
+
+    class FakeFactory:
+        def __init__(self, **_kwargs):
+            self.capabilities = fake.capabilities
+
+        def stream(self, request, cancel):
+            return fake.stream(request, cancel)
+
+    monkeypatch.setattr(op_module, "OllamaProvider", FakeFactory)
+    monkeypatch.setattr(api_provider, "chat_stream", _REAL_CHAT_STREAM)
+
+    chunks: list[tuple[str, bool]] = []
+    response = api_provider.chat_stream(
+        config.TASK_CHAT,
+        [{"role": "user", "content": "hi"}],
+        lambda delta, reset: chunks.append((delta, reset)),
+    )
+
+    assert chunks == [("from ", False), ("the ", False), ("fake", False)]
+    assert response == {"message": {"content": "from the fake", "role": "assistant"}}
+    assert len(fake.requests) == 1
+
+
+def test_api_provider_never_imports_the_providers_package_at_module_level():
+    """Review finding: the circular-import structure is sound ONLY while
+    api_provider keeps its backend.providers imports function-local (the
+    providers package imports api_provider's helpers at ITS module level).
+    Pin the invariant so a future convenience refactor that hoists the import
+    to the top of api_provider.py fails here instead of at app boot."""
+    import ast
+    from pathlib import Path
+
+    source = (Path(api_provider.__file__)).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    offenders = [
+        node.lineno
+        for node in tree.body  # module level only - function-local imports are the sanctioned form
+        if isinstance(node, (ast.Import, ast.ImportFrom))
+        and "backend.providers" in ast.dump(node)
+    ]
+    assert not offenders, (
+        "api_provider.py imports backend.providers at module level (lines "
+        f"{offenders}) - that direction must stay function-local; the providers "
+        "package imports api_provider's helpers at its own module level, so a "
+        "top-level import here is a genuine import cycle."
+    )
 
 
 def test_cancellation_through_the_real_chat_stream_is_the_untranslated_sentinel(
