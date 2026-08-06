@@ -2134,64 +2134,25 @@ def chat(task: str, messages: list, **kwargs) -> dict:
                 if not model:
                     raise ValueError(f"No Ollama model configured for task: {task}")
 
-                _assert_ollama_audio_support(model, messages)
-                ollama_messages = _prepare_ollama_messages(messages)
+                # ADR-006 stage 6.1: the Ollama branch routes through the
+                # Provider seam. OllamaProvider.complete() is a faithful port
+                # of the ~65-line block that used to live inline here (prep,
+                # think kwarg, 3-attempt reasoning retry, <think> composition)
+                # - see backend/providers/ollama_provider.py's module doc for
+                # the preserved-invariant inventory. Imported lazily: the
+                # providers package imports this module's helpers at its own
+                # top level, so a module-level import here would be circular.
+                from backend.providers.base import CancelToken, ChatRequest
+                from backend.providers.ollama_provider import OllamaProvider
 
-                ollama_kwargs = kwargs.copy()
-                if task == config.TASK_CHAT:
-                    think_value = ollama_think_kwarg(model, state.ollama_reasoning_level)
-                    if think_value is not None:
-                        ollama_kwargs["think"] = think_value
-                    if _is_ollama_bool_reasoning_model(model) and state.ollama_reasoning_level != "off":
-                        ollama_messages = _append_system_hint(
-                            ollama_messages, reasoning_budget_hint(state.ollama_reasoning_level)
-                        )
-
-                # Reasoning-capable local models occasionally exhaust their own
-                # "thinking" budget before writing a final answer - often just sampling
-                # variance, not a persistent problem - so retry the identical request a
-                # couple of times before surfacing it to the user (see
-                # ReasoningWithoutAnswerError). A short backoff between attempts gives a
-                # transient/momentary cause (e.g. local resource contention) a chance to
-                # clear instead of immediately re-sending the identical request.
-                max_attempts = 3
-                last_reasoning_error = None
-                full_response_content = None
-                for attempt in range(max_attempts):
-                    if attempt > 0:
-                        _raise_if_cancelled(cancel_event)
-                        time.sleep(_OLLAMA_REASONING_RETRY_BACKOFF_SECONDS)
-                        _raise_if_cancelled(cancel_event)
-
-                    response = ollama.chat(model=model, messages=ollama_messages, **ollama_kwargs)
-                    _raise_if_cancelled(cancel_event)
-
-                    raw_response_content = response["message"].get("content", "")
-                    embedded_reasoning, visible_response_content = split_reasoning_and_content(raw_response_content)
-                    reasoning_parts: list[str] = []
-                    reasoning_seen: set[str] = set()
-                    _append_unique_text_segment(reasoning_parts, response["message"].get("thinking"), reasoning_seen)
-                    _append_unique_text_segment(reasoning_parts, embedded_reasoning, reasoning_seen)
-
-                    try:
-                        full_response_content = _compose_reasoned_response(
-                            visible_response_content,
-                            "\n\n".join(reasoning_parts).strip(),
-                            "Ollama",
-                        )
-                        break
-                    except ReasoningWithoutAnswerError as exc:
-                        last_reasoning_error = exc
-                        continue
-                else:
-                    raise RuntimeError(
-                        f"Ollama returned reasoning but no final answer after {max_attempts} attempts. "
-                        "Retry in Quick mode or choose a different chat format/model."
-                    ) from last_reasoning_error
-
+                provider = OllamaProvider(model=model, reasoning_level=state.ollama_reasoning_level)
+                content = provider.complete(
+                    ChatRequest(task=task, messages=messages, extra_kwargs=kwargs),
+                    CancelToken(cancel_event),
+                )
                 return {
                     "message": {
-                        "content": full_response_content,
+                        "content": content,
                         "role": "assistant",
                     }
                 }
@@ -2448,76 +2409,30 @@ def chat_stream(task: str, messages: list, on_chunk: Callable[[str, bool], None]
         model = config.OLLAMA_MODELS.get(task)
         if not model:
             raise ValueError(f"No Ollama model configured for task: {task}")
-        _assert_ollama_audio_support(model, messages)
-        ollama_messages = _prepare_ollama_messages(messages)
 
-        ollama_kwargs = {k: v for k, v in kwargs.items() if k != "cancellation_event"}
-        if task == config.TASK_CHAT:
-            think_value = ollama_think_kwarg(model, state.ollama_reasoning_level)
-            if think_value is not None:
-                ollama_kwargs["think"] = think_value
-            if _is_ollama_bool_reasoning_model(model) and state.ollama_reasoning_level != "off":
-                ollama_messages = _append_system_hint(
-                    ollama_messages, reasoning_budget_hint(state.ollama_reasoning_level)
-                )
+        # ADR-006 stage 6.1: the streaming Ollama branch routes through the
+        # Provider seam (see chat()'s twin comment). The provider yields typed
+        # events; this adapter maps them onto the on_chunk(delta, reset)
+        # contract EXACTLY as before: "text" deltas forward incrementally,
+        # "reset" becomes on_chunk("", True), "reasoning" deltas are NOT
+        # forwarded (thinking never reached on_chunk here - it only surfaces
+        # in the final <think> block), and "done" carries the composed full
+        # text this function returns.
+        from backend.providers.base import CancelToken, ChatRequest
+        from backend.providers.ollama_provider import OllamaProvider
 
-        # Same 3-attempt reasoning-retry loop as chat() (see ReasoningWithoutAnswerError):
-        # each attempt streams live, and if an attempt is discarded, the caller is told via
-        # one on_chunk("", True) reset event before the next attempt's deltas start
-        # arriving.
-        max_attempts = 3
-        last_reasoning_error = None
+        provider = OllamaProvider(model=model, reasoning_level=state.ollama_reasoning_level)
         full_response_content = None
-        for attempt in range(max_attempts):
-            if attempt > 0:
-                _raise_if_cancelled(cancel_event)
-                time.sleep(_OLLAMA_REASONING_RETRY_BACKOFF_SECONDS)
-                _raise_if_cancelled(cancel_event)
+        for event in provider.stream(
+            ChatRequest(task=task, messages=messages, extra_kwargs=kwargs),
+            CancelToken(cancel_event),
+        ):
+            if event.type == "text":
+                on_chunk(event.text, False)
+            elif event.type == "reset":
                 on_chunk("", True)  # tell the caller: discard the last attempt's partial text
-
-            content_parts: list[str] = []
-            thinking_parts: list[str] = []
-            stream = ollama.chat(model=model, messages=ollama_messages, stream=True, **ollama_kwargs)
-            try:
-                for part in stream:
-                    if cancel_event is not None and cancel_event.is_set():
-                        stream.close()  # unwinds ollama/_client.py's `with self._client.stream(...)`
-                    _raise_if_cancelled(cancel_event)  # raises RequestCancelledError if just closed above
-
-                    delta_content = part["message"].get("content") or ""
-                    if delta_content:
-                        content_parts.append(delta_content)
-                        on_chunk(delta_content, False)
-                    delta_thinking = part["message"].get("thinking") or ""
-                    if delta_thinking:
-                        thinking_parts.append(delta_thinking)  # never forwarded to on_chunk
-                    if part.get("done"):
-                        break
-            finally:
-                stream.close()  # idempotent on an already-exhausted generator
-
-            raw_response_content = "".join(content_parts)
-            embedded_reasoning, visible_response_content = split_reasoning_and_content(raw_response_content)
-            reasoning_parts: list[str] = []
-            reasoning_seen: set[str] = set()
-            _append_unique_text_segment(reasoning_parts, "".join(thinking_parts), reasoning_seen)
-            _append_unique_text_segment(reasoning_parts, embedded_reasoning, reasoning_seen)
-
-            try:
-                full_response_content = _compose_reasoned_response(
-                    visible_response_content,
-                    "\n\n".join(reasoning_parts).strip(),
-                    "Ollama",
-                )
-                break
-            except ReasoningWithoutAnswerError as exc:
-                last_reasoning_error = exc
-                continue
-        else:
-            raise RuntimeError(
-                f"Ollama returned reasoning but no final answer after {max_attempts} attempts. "
-                "Retry in Quick mode or choose a different chat format/model."
-            ) from last_reasoning_error
+            elif event.type == "done":
+                full_response_content = event.text
 
         return {
             "message": {
