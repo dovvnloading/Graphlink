@@ -81,13 +81,23 @@ def register_chart_intents(
                 # fallback chain.
                 chart_data = _placeholder_chart_data(normalized_chart_type)
                 chart_error = f"The generated chart data could not be validated: {exc}"
-            node = document.add_chart_node(
-                parent.x + MESSAGE_VERTICAL_SPACING,
-                parent.y,
-                parent_node_id,
-                normalized_chart_type,
-                chart_data,
-                chart_error=chart_error,
+            # ADR-010 stage 10.1: agent provenance - this node is produced by
+            # a model generation, not a direct user action (stage 10.5's
+            # "undo this build" is what will consume that distinction).
+            # add_chart_node also mints chart asset bytes into image_assets;
+            # record_command captures those alongside the node, so undoing a
+            # generated chart does not strand its PNG.
+            node, _command = document.record_command(
+                "generateChart", "agent",
+                lambda: document.add_chart_node(
+                    parent.x + MESSAGE_VERTICAL_SPACING,
+                    parent.y,
+                    parent_node_id,
+                    normalized_chart_type,
+                    chart_data,
+                    chart_error=chart_error,
+                ),
+                node_ids=[parent_node_id],
             )
             result_holder["node_id"] = node.id
             await bus.publish("scene")

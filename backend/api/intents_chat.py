@@ -46,6 +46,75 @@ from backend.response_parsing import (
 from backend.token_counter import TokenCounterState
 
 
+# ADR-010 stage 10.1: these two live at module level rather than as closures
+# inside register_chat_intents for the reason ADR-002 stage 2.7 established -
+# tests/test_register_function_length.py caps every register* function at 300
+# lines, and wrapping both reply paths in record_command pushed this one over.
+# They take `document` explicitly instead of capturing it, exactly like the
+# intents_*.py split itself did.
+#
+# NOTE: the calls below MUST use the `document.` prefix. Before ADR-002 stage
+# 2.6, a bare `add_code_node(...)`/`add_thinking_node(...)` would have silently
+# resolved to register_canvas's own same-scope async WS-intent wrapper closures
+# of the same name instead of raising NameError - producing an unawaited
+# coroutine that never ran and never errored, so no node would be created and
+# nothing would look wrong until the scene state was actually inspected. At
+# module level here that hazard is structurally gone, but the prefix is kept
+# because correctness should not depend on which failure mode happens to be
+# true today.
+def _build_reply_nodes(document, parent_node, placeholder_text, parsed_parts):
+    """Creates the assistant's reply node plus every thinking/code child the
+    parsed reply calls for, returning the reply node. Wrapped by ONE
+    record_command at each call site, so a single undo reverses the whole
+    reply rather than peeling off one child per Ctrl+Z."""
+    ax, ay = parent_node.x, parent_node.y + MESSAGE_VERTICAL_SPACING
+    ai = document.add_chat_node(ax, ay, placeholder_text, False, parent_id=parent_node.id)
+    for part in parsed_parts:
+        if part["type"] == "thinking":
+            document.add_thinking_node(
+                ax - MESSAGE_VERTICAL_SPACING, ay + MESSAGE_VERTICAL_SPACING,
+                part["content"], parent_id=ai.id,
+            )
+        elif part["type"] == "code":
+            document.add_code_node(
+                ax + MESSAGE_VERTICAL_SPACING, ay + MESSAGE_VERTICAL_SPACING,
+                part["content"], part["language"], parent_id=ai.id,
+            )
+    return ai
+
+
+def _regenerate_in_place(document, node_to_regenerate, reply_text):
+    """Regenerate's teardown/parse/mutate sequence, in the exact legacy step
+    order: tear down the old content children FIRST (unconditionally, even if
+    the new reply parses to nothing), then replace the node's own content,
+    then rebuild children from the new parse."""
+    document.remove_associated_content_children(node_to_regenerate.id)
+
+    parsed_parts = parse_response(reply_text)
+    text_parts = [p["content"] for p in parsed_parts if p["type"] == "text"]
+    text_content = "\n\n".join(text_parts)
+
+    # THE SIMPLE 1-WAY TERNARY - NOT send_message's 3-way priority chain.
+    # PLACEHOLDER_ASSISTANT_REASONING is NEVER touched by this path. Exact
+    # match to legacy line 561:
+    # `text_content if text_content else "[Generated Content]"`.
+    placeholder_text = text_content if text_content else PLACEHOLDER_GENERATED_CONTENT
+    document.update_chat_node_content(node_to_regenerate.id, placeholder_text)
+
+    bx, by = node_to_regenerate.x, node_to_regenerate.y
+    for part in parsed_parts:
+        if part["type"] == "thinking":
+            document.add_thinking_node(
+                bx - MESSAGE_VERTICAL_SPACING, by + MESSAGE_VERTICAL_SPACING,
+                part["content"], parent_id=node_to_regenerate.id,
+            )
+        elif part["type"] == "code":
+            document.add_code_node(
+                bx + MESSAGE_VERTICAL_SPACING, by + MESSAGE_VERTICAL_SPACING,
+                part["content"], part["language"], parent_id=node_to_regenerate.id,
+            )
+
+
 def register_chat_intents(
     bus: SessionBus,
     document: SceneDocument,
@@ -87,7 +156,17 @@ def register_chat_intents(
         media_parts = [item.content_part for item in staged if item.content_part is not None]
         content_parts = [{"type": "text", "text": full_text}, *media_parts] if media_parts else None
 
-        node = document.send_message(full_text, content_parts=content_parts, branch_from_node_id=branch_from_node_id)
+        # ADR-010 stage 10.1: a hidden create - send_message internally calls
+        # add_chat_node and updates last_chat_node_id, so it is a real node
+        # creation despite not being named add*. branch_from_node_id is
+        # watched because the new node connects to it.
+        node, _command = document.record_command(
+            "sendMessage", "user",
+            lambda: document.send_message(
+                full_text, content_parts=content_parts, branch_from_node_id=branch_from_node_id,
+            ),
+            node_ids=[branch_from_node_id] if branch_from_node_id else (),
+        )
         if staged:
             # The staged list is now empty (popped above) - republish so the
             # composer's attachment chips clear the instant Send fires,
@@ -166,34 +245,29 @@ def register_chat_intents(
                     # structural parity rather than optimized away.
                     placeholder_text = PLACEHOLDER_EMPTY_RESPONSE
 
-            ax, ay = node.x, node.y + MESSAGE_VERTICAL_SPACING
-            ai_node = document.add_chat_node(ax, ay, placeholder_text, False, parent_id=node.id)
+            # ADR-010 stage 10.1: reply node + children as ONE command (see
+            # _build_reply_nodes). "agent" provenance, not "user" - stage 10.5
+            # ("undo this build") is what consumes that distinction.
+            ai_node, _command = document.record_command(
+                "chatReply", "agent",
+                lambda: _build_reply_nodes(document, node, placeholder_text, parsed_parts),
+                node_ids=[node.id],
+            )
 
-            # NOTE: these two calls MUST use the `document.` prefix. Before
-            # ADR-002 stage 2.6, a bare `add_code_node(...)`/
-            # `add_thinking_node(...)` here would have silently resolved to
-            # register_canvas's own same-scope async WS-intent wrapper
-            # closures of the same name instead of raising a NameError -
-            # producing an unawaited coroutine that never ran and never
-            # errored, so no node would be created and nothing would look
-            # wrong until the scene state was actually inspected. Those
-            # wrapper closures now live in backend/api/intents_nodes.py, a
-            # different module - a bare call here would raise NameError
+            # NOTE: the calls inside _create_reply_nodes above MUST use the
+            # `document.` prefix. Before ADR-002 stage 2.6, a bare
+            # `add_code_node(...)`/`add_thinking_node(...)` here would have
+            # silently resolved to register_canvas's own same-scope async
+            # WS-intent wrapper closures of the same name instead of raising
+            # a NameError - producing an unawaited coroutine that never ran
+            # and never errored, so no node would be created and nothing
+            # would look wrong until the scene state was actually inspected.
+            # Those wrapper closures now live in backend/api/intents_nodes.py,
+            # a different module - a bare call here would raise NameError
             # immediately instead, a strictly SAFER failure mode than the
             # original silent one. The `document.` prefix requirement is
             # kept regardless, since correctness should not depend on which
             # of the two failure modes happens to be true today.
-            for part in parsed_parts:
-                if part["type"] == "thinking":
-                    document.add_thinking_node(
-                        ax - MESSAGE_VERTICAL_SPACING, ay + MESSAGE_VERTICAL_SPACING,
-                        part["content"], parent_id=ai_node.id,
-                    )
-                elif part["type"] == "code":
-                    document.add_code_node(
-                        ax + MESSAGE_VERTICAL_SPACING, ay + MESSAGE_VERTICAL_SPACING,
-                        part["content"], part["language"], parent_id=ai_node.id,
-                    )
 
             # Always the real chat node's id, never a code/thinking child's -
             # add_code_node/add_thinking_node are documented above (see their
@@ -276,35 +350,28 @@ def register_chat_intents(
             # the new reply has no code/thinking parts at all - this is why
             # document/image children are deleted but never recreated
             # (parse_response structurally only emits thinking/text/code).
-            document.remove_associated_content_children(node_to_regenerate.id)
-
-            parsed_parts = parse_response(reply_text)
-            text_parts = [p["content"] for p in parsed_parts if p["type"] == "text"]
-            text_content = "\n\n".join(text_parts)
-
-            # THE SIMPLE 1-WAY TERNARY - NOT send_message's 3-way priority
-            # chain. PLACEHOLDER_ASSISTANT_REASONING is NEVER touched by this
-            # path. Exact match to legacy line 561:
-            # `text_content if text_content else "[Generated Content]"`.
-            placeholder_text = text_content if text_content else PLACEHOLDER_GENERATED_CONTENT
-            document.update_chat_node_content(node_to_regenerate.id, placeholder_text)
-
-            # NOTE: `document.` prefix is REQUIRED - see send_message's own
-            # identical _on_reply comment earlier in this same file for the
-            # full history of this hazard and why the prefix requirement is
-            # kept regardless of which failure mode a bare call would hit.
-            bx, by = node_to_regenerate.x, node_to_regenerate.y
-            for part in parsed_parts:
-                if part["type"] == "thinking":
-                    document.add_thinking_node(
-                        bx - MESSAGE_VERTICAL_SPACING, by + MESSAGE_VERTICAL_SPACING,
-                        part["content"], parent_id=node_to_regenerate.id,
-                    )
-                elif part["type"] == "code":
-                    document.add_code_node(
-                        bx + MESSAGE_VERTICAL_SPACING, by + MESSAGE_VERTICAL_SPACING,
-                        part["content"], part["language"], parent_id=node_to_regenerate.id,
-                    )
+            # ADR-010 stage 10.1: regenerate is delete-then-recreate, and one
+            # Ctrl+Z has to reverse the WHOLE thing - the torn-down children,
+            # the replaced content, and the newly parsed children - so it is
+            # one command, not three. The pre-existing children have to be
+            # named explicitly: remove_associated_content_children deletes
+            # nodes that are not this command's own target, which
+            # record_command would otherwise refuse to lose silently (by
+            # design - see its AssertionError).
+            #
+            # The teardown/parse/mutate ORDER is unchanged from the legacy
+            # step order documented just above - see _regenerate_in_place at
+            # module level; wrapping it moves no step relative to any other.
+            existing_children = [
+                edge.target
+                for edge in document.edges.values()
+                if edge.source == node_to_regenerate.id
+            ]
+            document.record_command(
+                "regenerateResponse", "agent",
+                lambda: _regenerate_in_place(document, node_to_regenerate, reply_text),
+                node_ids=[node_to_regenerate.id, *existing_children],
+            )
 
             # last_chat_node_id: DELIBERATELY untouched. See §5.
 
