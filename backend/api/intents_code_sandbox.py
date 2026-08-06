@@ -28,7 +28,11 @@ def register_code_sandbox_intents(
     publish_scene = make_publish_scene(bus)
 
     async def set_code_sandbox_requirements(node_id, requirements_text):
-        document.set_code_sandbox_requirements(node_id, requirements_text)
+        document.record_command(
+            "setCodeSandboxRequirements", "user",
+            lambda: document.set_code_sandbox_requirements(node_id, requirements_text),
+            node_ids=[node_id],
+        )
         await publish_scene()
 
     async def set_code_sandbox_allow_source_builds(node_id, allow):

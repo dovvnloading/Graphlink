@@ -123,11 +123,18 @@ def register_chart_intents(
         return result_holder.get("node_id")
 
     async def resize_chart(node_id, width, height):
-        document.resize_chart(node_id, width, height)
+        document.record_command(
+            "resizeChart", "user", lambda: document.resize_chart(node_id, width, height),
+            node_ids=[node_id],
+        )
         await publish_scene()
 
     async def toggle_chart_aspect_lock(node_id):
-        document.toggle_chart_aspect_lock(node_id)
+        document.record_command(
+            "toggleChartAspectLock", "user",
+            lambda: document.toggle_chart_aspect_lock(node_id),
+            node_ids=[node_id],
+        )
         await publish_scene()
 
     # R6.2: a single combined create+generate action, unlike every

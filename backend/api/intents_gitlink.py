@@ -59,7 +59,11 @@ def register_gitlink_intents(
         return node_id
 
     async def set_gitlink_local_root(node_id, local_root):
-        document.set_gitlink_local_root(node_id, local_root)
+        document.record_command(
+            "setGitlinkLocalRoot", "user",
+            lambda: document.set_gitlink_local_root(node_id, local_root),
+            node_ids=[node_id],
+        )
         await publish_scene()
 
     async def pick_gitlink_local_root(node_id):
@@ -82,7 +86,11 @@ def register_gitlink_intents(
             return
         if not folder:
             return
-        document.set_gitlink_local_root(node_id, folder)
+        document.record_command(
+            "setGitlinkLocalRoot", "user",
+            lambda: document.set_gitlink_local_root(node_id, folder),
+            node_ids=[node_id],
+        )
         await publish_scene()
 
     async def import_gitlink_snapshot(node_id, repo, branch):

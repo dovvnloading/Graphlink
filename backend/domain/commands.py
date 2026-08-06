@@ -81,6 +81,7 @@ from typing import TYPE_CHECKING, Callable, Iterable, TypeVar
 
 if TYPE_CHECKING:
     from backend.domain.model import SceneEdge, SceneNode
+    from graphlink_navigation_pins import NavigationPinRecord
 
 T = TypeVar("T")
 
@@ -117,6 +118,20 @@ class Command:
     edge_after: dict[str, "SceneEdge | None"] = field(default_factory=dict)
     asset_before: dict[str, "tuple[bytes, str] | None"] = field(default_factory=dict)
     asset_after: dict[str, "tuple[bytes, str] | None"] = field(default_factory=dict)
+    # ADR-010 close-out: navigation pins live in a SEPARATE store
+    # (SceneDocument.pins, a NavigationPinStore) - not self.nodes/self.edges,
+    # so they need their own snapshot shape, not another dict-by-id like the
+    # fields above. NavigationPinRecord is a FROZEN dataclass and
+    # NavigationPinStore.records already returns an immutable tuple
+    # snapshot, so - unlike nodes/edges, which need copy.deepcopy because
+    # they're mutated in place - a held reference IS already a safe
+    # point-in-time snapshot; no deep copy needed anywhere in this module
+    # for pins. None means "this command never touched the pin store"
+    # (the same "None vs empty" distinction is_noop relies on for the dicts
+    # above); a non-None value - including an empty tuple, e.g. after
+    # deleting the last pin - means "watched, this is what it was."
+    pin_before: "tuple[NavigationPinRecord, ...] | None" = None
+    pin_after: "tuple[NavigationPinRecord, ...] | None" = None
     # ADR-010 stage 10.5: the agent run this command belongs to, or None for
     # a direct user action. Set for every mutation an agent run produces, so
     # "undo this build" can revert a whole run's worth of commands as a unit
@@ -146,7 +161,7 @@ class Command:
         call hits this the same way."""
         return not (
             self.node_before or self.node_after or self.edge_before or self.edge_after
-        )
+        ) and (self.pin_before is None or self.pin_before == self.pin_after)
 
     def invert(self, document: object) -> None:
         """Restores document state to exactly how it was before this
@@ -159,6 +174,12 @@ class Command:
         _restore(document.nodes, self.node_before)
         _restore(document.edges, self.edge_before)
         _restore(document.image_assets, self.asset_before)
+        if self.pin_before is not None:
+            # reset() replaces the WHOLE store, unlike _restore's per-key
+            # dict surgery - correct here because the pin store is always
+            # snapshotted as one unit (see record_command's own doc for why
+            # per-id scoping doesn't apply to pins the way it does nodes).
+            document.pins.reset(list(self.pin_before))
 
     def apply(self, document: object) -> None:
         """The mirror of invert() - restores to the *_after state. Not
@@ -168,6 +189,8 @@ class Command:
         _restore(document.nodes, self.node_after)
         _restore(document.edges, self.edge_after)
         _restore(document.image_assets, self.asset_after)
+        if self.pin_after is not None:
+            document.pins.reset(list(self.pin_after))
 
 
 def _restore(live: dict, snapshot: dict) -> None:
@@ -230,6 +253,18 @@ _COMMAND_LABELS = {
     "removePin": "Remove Pin",
     "updatePin": "Edit Pin",
     "movePin": "Move Pin",
+    # ADR-010 close-out: the 7 List-A intents that had no reserved label
+    # (the 20 above were pre-reserved during stage 10.1's own recon, a
+    # direct code-level signal they were already scoped as List A and only
+    # pending the wrap - these 7 were genuine gaps the close-out recon
+    # found, not pre-flagged).
+    "sendConversationMessage": "Send Message",
+    "appendConversationAssistantMessage": "Assistant Reply",
+    "sendArtifactMessage": "Send Instruction",
+    "completeArtifactGeneration": "Artifact Reply",
+    "setPyCoderMode": "Set Mode",
+    "setCodeSandboxRequirements": "Edit Requirements",
+    "setGitlinkLocalRoot": "Set Local Folder",
 }
 
 
@@ -278,6 +313,14 @@ def _merge_commands(command_type, provenance, commands):
                 target.setdefault(key, value)  # first write wins
         for field_name in ("node_after", "edge_after", "asset_after"):
             getattr(merged, field_name).update(getattr(command, field_name))  # last wins
+        # Pins are a single whole-store value per command, not a dict to
+        # union - "first write wins" for before/"last write wins" for after
+        # means literally the first non-None pin_before seen and the last
+        # non-None pin_after seen, same ordering rule as the dicts above.
+        if command.pin_before is not None and merged.pin_before is None:
+            merged.pin_before = command.pin_before
+        if command.pin_after is not None:
+            merged.pin_after = command.pin_after
 
     # An id created and then deleted inside the same group (or restored to
     # exactly what it was) nets out to no change at all - dropping those
@@ -293,6 +336,14 @@ def _merge_commands(command_type, provenance, commands):
             if before[key] == after[key]:
                 del before[key]
                 del after[key]
+
+    # Same net-zero cleanup for pins: if the store ended up byte-identical
+    # to how it started across the whole group, there is nothing to record -
+    # clearing both back to None keeps is_noop (and therefore whether this
+    # composite gets logged at all) correct.
+    if merged.pin_before is not None and merged.pin_before == merged.pin_after:
+        merged.pin_before = None
+        merged.pin_after = None
     return merged
 
 
@@ -382,12 +433,25 @@ class CommandOps:
         node_ids_before = set(self.nodes.keys())
         edge_ids_before = set(self.edges.keys())
         asset_ids_before = set(self.image_assets.keys())
+        # ADR-010 close-out: pins are ALWAYS defensively watched as one
+        # whole-store unit, unconditionally, the same "always watch, no
+        # opt-in flag needed" posture already used for frame/container nodes
+        # above - not a per-id scope like node_ids/edge_ids, since the store
+        # is small (a handful of waypoints, never hundreds) and cheap to
+        # snapshot whole (NavigationPinStore.records is already an
+        # immutable tuple, no deep copy required). This also means a
+        # mutation NOT wrapped for pins simply never sees a diff here,
+        # rather than needing its own opt-in parameter that could be
+        # forgotten - the same reasoning record_command's own doc gives for
+        # rejecting a `pin_ids` parameter.
+        pin_snapshot_before = self.pins.records
 
         result = mutator()
 
         node_ids_after = set(self.nodes.keys())
         edge_ids_after = set(self.edges.keys())
         asset_ids_after = set(self.image_assets.keys())
+        pin_snapshot_after = self.pins.records
 
         node_before_out: dict[str, "SceneNode | None"] = {}
         node_after_out: dict[str, "SceneNode | None"] = {}
@@ -439,6 +503,9 @@ class CommandOps:
             asset_before_out[aid] = asset_snapshot_before[aid]
             asset_after_out[aid] = None
 
+        pin_before_out = pin_snapshot_before if pin_snapshot_after != pin_snapshot_before else None
+        pin_after_out = pin_snapshot_after if pin_snapshot_after != pin_snapshot_before else None
+
         command = Command(
             command_type=command_type,
             provenance=provenance,
@@ -448,6 +515,8 @@ class CommandOps:
             edge_after=edge_after_out,
             asset_before=asset_before_out,
             asset_after=asset_after_out,
+            pin_before=pin_before_out,
+            pin_after=pin_after_out,
         )
         # A no-op command (an idempotent connect() that created nothing, a
         # setter called with the value it already had) is never logged -

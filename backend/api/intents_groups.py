@@ -34,7 +34,10 @@ def register_groups_intents(bus: SessionBus, document: SceneDocument) -> None:
         return node.id
 
     async def set_note_content(node_id, content):
-        document.set_note_content(node_id, content)
+        document.record_command(
+            "setNoteContent", "user", lambda: document.set_note_content(node_id, content),
+            node_ids=[node_id],
+        )
         await publish_scene()
 
     async def create_frame(item_ids):
@@ -60,27 +63,52 @@ def register_groups_intents(bus: SessionBus, document: SceneDocument) -> None:
         return node.id
 
     async def set_group_label(node_id, text):
-        document.set_group_label(node_id, text)
+        document.record_command(
+            "setGroupLabel", "user", lambda: document.set_group_label(node_id, text),
+            node_ids=[node_id],
+        )
         await publish_scene()
 
     async def set_group_color(node_id, color, header_color):
-        document.set_group_color(node_id, color, header_color)
+        document.record_command(
+            "setGroupColor", "user",
+            lambda: document.set_group_color(node_id, color, header_color),
+            node_ids=[node_id],
+        )
         await publish_scene()
 
+    # toggle_frame_lock/toggle_group_collapsed FLIP a boolean rather than
+    # setting it - record_command's snapshot/restore is safe for this
+    # regardless (it restores the captured object, never re-invokes the
+    # mutator), unlike ADR-003's offline-queue replay mechanism, which is
+    # why those two intents are marked non-queueable on the frontend side
+    # while being perfectly fine to wrap here.
     async def toggle_frame_lock(node_id):
-        document.toggle_frame_lock(node_id)
+        document.record_command(
+            "toggleFrameLock", "user", lambda: document.toggle_frame_lock(node_id),
+            node_ids=[node_id],
+        )
         await publish_scene()
 
     async def toggle_group_collapsed(node_id):
-        document.toggle_group_collapsed(node_id)
+        document.record_command(
+            "toggleGroupCollapsed", "user", lambda: document.toggle_group_collapsed(node_id),
+            node_ids=[node_id],
+        )
         await publish_scene()
 
     async def resize_frame(node_id, width, height):
-        document.resize_frame(node_id, width, height)
+        document.record_command(
+            "resizeFrame", "user", lambda: document.resize_frame(node_id, width, height),
+            node_ids=[node_id],
+        )
         await publish_scene()
 
     async def fit_frame_to_content(node_id):
-        document.fit_frame_to_content(node_id)
+        document.record_command(
+            "fitFrameToContent", "user", lambda: document.fit_frame_to_content(node_id),
+            node_ids=[node_id],
+        )
         await publish_scene()
 
     async def ungroup(node_id):

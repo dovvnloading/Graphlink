@@ -642,3 +642,301 @@ def test_session_load_clears_both_stacks(wired):
     # one - both directions have to be cleared, not just the undo side.
     assert len(document.command_log) == 0
     assert len(document.redo_stack) == 0
+
+
+# -- layer 5: pin snapshot/restore (ADR-010 close-out) ----------------------
+
+
+def test_add_pin_is_invertible(document):
+    from graphlink_navigation_pins import NavigationPinRecord
+
+    _result, command = document.record_command(
+        "addPin", "user",
+        lambda: document.pins.add(NavigationPinRecord.create(title="Start", x=0, y=0)),
+    )
+    assert len(document.pins.records) == 1
+
+    command.invert(document)
+    assert len(document.pins.records) == 0
+
+
+def test_remove_pin_is_invertible_including_the_sort_order_renumber_cascade(document):
+    # .add(title=..., x=..., y=...) via kwargs (not a pre-built record) is
+    # what makes the store auto-assign an incrementing sort_order - needed
+    # here to set up a real ordering to test the renumber cascade against.
+    a = document.pins.add(title="a", x=0, y=0)
+    b = document.pins.add(title="b", x=1, y=1)
+    c = document.pins.add(title="c", x=2, y=2)
+    assert [p.sort_order for p in document.pins.records] == [0, 1, 2]
+
+    _result, command = document.record_command(
+        "removePin", "user", lambda: document.pins.remove(a.pin_id),
+    )
+    # remove() renumbers every pin AFTER the removed one - b and c shift down.
+    assert [p.pin_id for p in document.pins.records] == [b.pin_id, c.pin_id]
+    assert [p.sort_order for p in document.pins.records] == [0, 1]
+
+    command.invert(document)
+    # The whole-store snapshot restore undoes the renumber cascade too, not
+    # just "a exists again" - order and sort_order both come back exact.
+    restored = document.pins.records
+    assert [p.pin_id for p in restored] == [a.pin_id, b.pin_id, c.pin_id]
+    assert [p.sort_order for p in restored] == [0, 1, 2]
+
+
+def test_move_and_update_pin_are_invertible(document):
+    from graphlink_navigation_pins import NavigationPinRecord
+
+    pin = document.pins.add(NavigationPinRecord.create(title="Waypoint", note="", x=0, y=0))
+
+    _result, move_command = document.record_command(
+        "movePin", "user", lambda: document.pins.move(pin.pin_id, 500, 500),
+    )
+    assert document.pins.get(pin.pin_id).position == (500, 500)
+    move_command.invert(document)
+    assert document.pins.get(pin.pin_id).position == (0, 0)
+
+    _result, update_command = document.record_command(
+        "updatePin", "user", lambda: document.pins.update(pin.pin_id, title="Renamed", note="edited"),
+    )
+    assert document.pins.get(pin.pin_id).title == "Renamed"
+    update_command.invert(document)
+    assert document.pins.get(pin.pin_id).title == "Waypoint"
+
+
+def test_a_mutation_that_never_touches_pins_produces_no_pin_diff(document):
+    _result, command = document.record_command(
+        "addNote", "user", lambda: document.add_note(0, 0),
+    )
+    # None, not an empty tuple - "never touched" must stay distinguishable
+    # from "watched and found unchanged" (an empty store IS a valid pin
+    # state, e.g. after the last pin was removed).
+    assert command.pin_before is None
+    assert command.pin_after is None
+    assert command.is_noop is False  # the note creation itself still counts
+
+
+def test_pin_command_survives_a_redo_round_trip(document):
+    from graphlink_navigation_pins import NavigationPinRecord
+
+    _result, command = document.record_command(
+        "addPin", "user",
+        lambda: document.pins.add(NavigationPinRecord.create(title="p", x=0, y=0)),
+    )
+    command.invert(document)
+    assert len(document.pins.records) == 0
+    command.apply(document)
+    assert len(document.pins.records) == 1
+    assert document.pins.records[0].title == "p"
+
+
+def test_pin_mutation_inside_a_composite_merges_correctly(document):
+    from graphlink_navigation_pins import NavigationPinRecord
+
+    pin = document.pins.add(NavigationPinRecord.create(title="p", x=0, y=0))
+
+    with document.composite("multiPinEdit", "user"):
+        document.record_command(
+            "movePin", "user", lambda: document.pins.move(pin.pin_id, 10, 10),
+        )
+        document.record_command(
+            "updatePin", "user", lambda: document.pins.update(pin.pin_id, title="renamed"),
+        )
+
+    assert len(document.command_log) == 1
+    document.command_log[-1].invert(document)
+    restored = document.pins.get(pin.pin_id)
+    assert restored.position == (0, 0)
+    assert restored.title == "p"
+
+
+def test_pin_only_mutations_inside_a_composite_with_node_mutations_all_undo_together(document):
+    from graphlink_navigation_pins import NavigationPinRecord
+
+    node = document.add_note(0, 0)
+    with document.composite("mixedEdit", "user"):
+        document.record_command(
+            "moveNode", "user", lambda: document.move_node(node.id, 50, 50), node_ids=[node.id],
+        )
+        document.record_command(
+            "addPin", "user",
+            lambda: document.pins.add(NavigationPinRecord.create(title="p", x=0, y=0)),
+        )
+
+    assert len(document.command_log) == 1
+    document.command_log[-1].invert(document)
+    assert document.nodes[node.id].x == 0
+    assert len(document.pins.records) == 0
+
+
+# -- layer 6: end-to-end for the ADR-010 close-out wraps ---------------------
+#
+# One test per module wrapped in the close-out, hitting the shape that
+# matters most in that file - not exhaustive per-intent coverage (the
+# classify-or-fail gate is what guarantees every List-A intent calls
+# record_command at all; these prove the WRAPS are actually correct).
+
+
+def test_pins_are_undoable_end_to_end(wired):
+    bus, document = wired
+    pin_id = _dispatch(bus, "addPin", "Waypoint", 0, 0, "")
+    document.command_log.clear()
+
+    _dispatch(bus, "movePin", pin_id, 500, 500)
+    assert document.pins.get(pin_id).position == (500, 500)
+
+    document.command_log[-1].invert(document)
+    assert document.pins.get(pin_id).position == (0, 0)
+
+
+def test_add_pin_assigns_an_incrementing_sort_order(wired):
+    """Regression: the REAL addPin handler must go through the store's
+    record=None kwargs path, which auto-assigns sort_order=len(records).
+    The handler used to pre-build a NavigationPinRecord (whose dataclass
+    default is sort_order=0) and pass it in, so every pin after the first
+    landed at sort_order 0 - wrong for the persisted ordering key
+    chat_library.py loads pins by (ORDER BY sort_order, id)."""
+    bus, document = wired
+    a = _dispatch(bus, "addPin", "First", 0, 0, "")
+    b = _dispatch(bus, "addPin", "Second", 100, 0, "")
+    c = _dispatch(bus, "addPin", "Third", 200, 0, "")
+
+    by_id = {p.pin_id: p.sort_order for p in document.pins.records}
+    assert [by_id[a], by_id[b], by_id[c]] == [0, 1, 2]
+
+    # And the numbering stays dense across the store's remove-renumber
+    # cascade: after removing the middle pin, a NEW pin continues from the
+    # renumbered length, not from a stale count.
+    _dispatch(bus, "removePin", b)
+    d = _dispatch(bus, "addPin", "Fourth", 300, 0, "")
+    assert [p.sort_order for p in document.pins.records] == [0, 1, 2]
+    assert document.pins.get(d).sort_order == 2
+
+
+def test_conversation_send_and_agent_reply_are_undoable_and_correctly_attributed(wired):
+    bus, document = wired
+    parent = _dispatch(bus, "addNote", 0, 0, False, False)
+    node_id = _dispatch(bus, "addConversationNode", 0, 0, parent)
+    document.command_log.clear()
+
+    _dispatch(bus, "sendConversationMessage", node_id, "hello")
+    # history is SceneNode's own generic field (reused across every
+    # multi-turn kind), not something on state - see ArtifactState's own
+    # docstring for why that field lives at the node level.
+    assert len(document.nodes[node_id].history) == 1
+    assert document.command_log[-1].command_type == "sendConversationMessage"
+    assert document.command_log[-1].provenance == "user"
+
+    document.command_log[-1].invert(document)
+    assert len(document.nodes[node_id].history) == 0
+
+
+def test_collapse_all_is_one_undo_across_every_node(wired):
+    bus, document = wired
+    a = _dispatch(bus, "addChatNode", 0, 0, "a", True, None)
+    b = _dispatch(bus, "addChatNode", 100, 0, "b", True, None)
+    document.command_log.clear()
+
+    _dispatch(bus, "collapseAllNodes")
+    assert document.nodes[a].is_collapsed and document.nodes[b].is_collapsed
+    assert len(document.command_log) == 1
+
+    document.command_log[-1].invert(document)
+    assert not document.nodes[a].is_collapsed and not document.nodes[b].is_collapsed
+
+
+def test_toggle_frame_lock_is_undoable_via_snapshot_not_replay(wired):
+    """The flip-semantics concern from ADR-003's offline queue does not
+    apply here - record_command restores a captured snapshot, it never
+    re-invokes toggle_frame_lock, so there is no double-flip risk."""
+    bus, document = wired
+    member = _dispatch(bus, "addChatNode", 0, 0, "m", True, None)
+    frame_id = _dispatch(bus, "createFrame", [member])
+    document.command_log.clear()
+
+    _dispatch(bus, "toggleFrameLock", frame_id)
+    locked_after_toggle = document.nodes[frame_id].state.is_locked
+
+    document.command_log[-1].invert(document)
+    assert document.nodes[frame_id].state.is_locked != locked_after_toggle
+
+
+def test_resize_chart_is_undoable(wired):
+    bus, document = wired
+    parent = _dispatch(bus, "addNote", 0, 0, False, False)
+    # Built directly via the domain method (bypassing generateChart's own
+    # async agent dispatch) - this test is about resizeChart's wrap, not
+    # about exercising chart generation.
+    node, _command = document.record_command(
+        "addChartNode", "user",
+        lambda: document.add_chart_node(0, 0, parent, "bar", {"labels": [], "values": []}),
+    )
+    document.command_log.clear()
+
+    original_width = document.nodes[node.id].state.chart_width
+    _dispatch(bus, "resizeChart", node.id, 900, 700)
+    assert document.nodes[node.id].state.chart_width != original_width
+
+    document.command_log[-1].invert(document)
+    assert document.nodes[node.id].state.chart_width == original_width
+
+
+def test_set_pycoder_mode_is_undoable(wired):
+    bus, document = wired
+    parent = _dispatch(bus, "addNote", 0, 0, False, False)
+    node, _command = document.record_command(
+        "addPycoderNode", "user", lambda: document.add_pycoder_node(0, 0, parent),
+    )
+    document.command_log.clear()
+
+    _dispatch(bus, "setPyCoderMode", node.id, "manual")
+    assert document.nodes[node.id].state.pycoder_mode == "manual"
+
+    document.command_log[-1].invert(document)
+    assert document.nodes[node.id].state.pycoder_mode != "manual"
+
+
+def test_set_code_sandbox_requirements_is_undoable(wired):
+    bus, document = wired
+    parent = _dispatch(bus, "addNote", 0, 0, False, False)
+    node, _command = document.record_command(
+        "addCodeSandboxNode", "user",
+        lambda: document.add_code_sandbox_node(0, 0, parent),
+    )
+    document.command_log.clear()
+
+    _dispatch(bus, "setCodeSandboxRequirements", node.id, "requests==2.0")
+    assert document.nodes[node.id].state.code_sandbox_requirements == "requests==2.0"
+
+    document.command_log[-1].invert(document)
+    assert document.nodes[node.id].state.code_sandbox_requirements != "requests==2.0"
+
+
+def test_send_artifact_message_is_undoable(wired):
+    bus, document = wired
+    parent = _dispatch(bus, "addNote", 0, 0, False, False)
+    node, _command = document.record_command(
+        "addArtifactNode", "user", lambda: document.add_artifact_node(0, 0, parent),
+    )
+    document.command_log.clear()
+
+    _dispatch(bus, "sendArtifactMessage", node.id, "write a haiku")
+    assert len(document.nodes[node.id].history) == 1
+
+    document.command_log[-1].invert(document)
+    assert len(document.nodes[node.id].history) == 0
+
+
+def test_set_gitlink_local_root_is_undoable(wired):
+    bus, document = wired
+    parent = _dispatch(bus, "addNote", 0, 0, False, False)
+    node, _command = document.record_command(
+        "addGitlinkNode", "user", lambda: document.add_gitlink_node(0, 0, parent),
+    )
+    document.command_log.clear()
+
+    _dispatch(bus, "setGitlinkLocalRoot", node.id, "C:/somewhere")
+    assert document.nodes[node.id].state.gitlink_local_root == "C:/somewhere"
+
+    document.command_log[-1].invert(document)
+    assert document.nodes[node.id].state.gitlink_local_root != "C:/somewhere"
