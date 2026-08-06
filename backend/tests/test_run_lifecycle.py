@@ -96,8 +96,10 @@ def test_cancel_returns_false_for_an_unknown_request_id():
 
 
 def test_cancel_returns_false_for_a_handle_with_no_cancel_event():
-    # chart/note's own shape - no cancellation checkpoint of their own,
-    # see backend/run_lifecycle.py's own docstring.
+    # A handle carrying neither mechanism cannot be cancelled. ADR-006
+    # stage 6.2 note: no production kind claims this shape any more (even
+    # chart/note now get a cancel_event from run_single_shot) - this pins
+    # the registry-level contract for a mechanism-less handle itself.
     registry = RunRegistry()
     handle = registry.claim("chart")
     assert registry.cancel(handle.request_id) is False
@@ -106,13 +108,22 @@ def test_cancel_returns_false_for_a_handle_with_no_cancel_event():
 def test_cancel_all_trips_every_cancel_event_and_skips_handles_without_one():
     registry = RunRegistry()
     chat_cancel = threading.Event()
-    registry.claim("chat", cancel_event=chat_cancel)
+    chat_handle = registry.claim("chat", cancel_event=chat_cancel)
     chart_handle = registry.claim("chart")  # no cancel_event
 
     registry.cancel_all()  # must not raise on the cancel_event-less handle
 
     assert chat_cancel.is_set()
-    assert registry.get(chart_handle.request_id) is not None, "cancel_all() must not release anything"
+    # ADR-006 stage 6.2 (release-on-cancel): a fired handle is popped
+    # IMMEDIATELY - the pre-6.2 "cancel_all() must not release anything"
+    # assertion here is now the opposite of the contract for any handle
+    # that carries a mechanism. Only a mechanism-less handle survives.
+    assert registry.get(chat_handle.request_id) is None, (
+        "cancel_all() must release a fired handle immediately (release-on-cancel)"
+    )
+    assert registry.get(chart_handle.request_id) is not None, (
+        "cancel_all() must not release a handle it could not fire"
+    )
 
 
 def test_cancel_all_on_an_empty_registry_is_a_safe_noop():
@@ -202,16 +213,24 @@ def test_cancel_with_mismatched_kind_is_rejected_and_does_not_trip_the_event():
 def test_cancel_all_fires_on_cancel_for_every_handle_that_has_one():
     registry = RunRegistry()
     chat_cancel = threading.Event()
-    registry.claim("chat", cancel_event=chat_cancel)
+    chat_handle = registry.claim("chat", cancel_event=chat_cancel)
     web_fired = []
-    registry.claim("web_research", on_cancel=lambda: web_fired.append(True))
+    web_handle = registry.claim("web_research", on_cancel=lambda: web_fired.append(True))
     chart_handle = registry.claim("chart")  # neither mechanism
 
     registry.cancel_all()
 
     assert chat_cancel.is_set()
     assert web_fired == [True]
-    assert registry.get(chart_handle.request_id) is not None, "cancel_all() must not release anything"
+    # ADR-006 stage 6.2 (release-on-cancel): both fired handles - whichever
+    # mechanism they carry - are popped immediately; the stale "must not
+    # release anything" assertion only ever passed vacuously here because
+    # the surviving handle carried no mechanism at all.
+    assert registry.get(chat_handle.request_id) is None
+    assert registry.get(web_handle.request_id) is None
+    assert registry.get(chart_handle.request_id) is not None, (
+        "cancel_all() must not release a handle it could not fire"
+    )
 
 
 def test_cancel_all_pending_approvals_resolves_only_listed_kinds_with_false():
@@ -270,5 +289,197 @@ def test_approval_future_can_be_replaced_in_place_on_the_same_handle():
         handle.approval_future = second
 
         assert registry.get(handle.request_id).approval_future is second
+
+    asyncio.run(run())
+
+
+# -- ADR-006 stage 6.2: release-on-cancel / finalize / orphan tracking --------
+
+
+def test_cancel_pops_the_handle_immediately_and_clears_is_busy():
+    """ADR-006 stage 6.2 review fix: cancel() now releases the slot the
+    moment it fires (release-on-cancel), instead of leaving release() to
+    the worker's own finally - while a handle with NO mechanism must stay
+    claimed (cancel returns False and pops nothing)."""
+    registry = RunRegistry()
+    cancel_event = threading.Event()
+    handle = registry.claim("chat", cancel_event=cancel_event)
+    assert registry.cancel(handle.request_id) is True
+    assert cancel_event.is_set()
+    assert registry.get(handle.request_id) is None, "cancel must pop the handle immediately"
+    assert registry.is_busy("chat") is False
+
+    bare = registry.claim("chart")  # no mechanism - cannot be cancelled
+    assert registry.cancel(bare.request_id) is False
+    assert registry.get(bare.request_id) is bare, "an unfired handle must not be popped"
+    assert registry.is_busy("chart") is True
+
+
+def test_cancel_auto_denies_an_unresolved_approval_future():
+    """ADR-006 stage 6.2 review fix: a popped handle is unreachable to
+    cancel_all_pending_approvals (it walks _handles), so _pop itself must
+    auto-deny (False) an unresolved approval future or the run's parked
+    `await approval_future` waits forever."""
+    async def run():
+        registry = RunRegistry()
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
+        handle = registry.claim(
+            "pycoder", cancel_event=threading.Event(), approval_future=future
+        )
+        assert registry.cancel(handle.request_id) is True
+        assert future.done() and future.result() is False, "cancel must auto-deny, never approve"
+
+    asyncio.run(run())
+
+
+def test_cancel_never_clobbers_an_already_resolved_approval_future():
+    """ADR-006 stage 6.2 review fix: an approval resolved a moment before
+    the cancel lands must survive untouched - set_result on a done future
+    would raise InvalidStateError."""
+    async def run():
+        registry = RunRegistry()
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
+        future.set_result(True)  # a human approved it just before the cancel
+        handle = registry.claim(
+            "pycoder", cancel_event=threading.Event(), approval_future=future
+        )
+        assert registry.cancel(handle.request_id) is True  # must not raise InvalidStateError
+        assert future.result() is True, "an already-resolved future must never be clobbered"
+
+    asyncio.run(run())
+
+
+def test_finalize_runs_exactly_once_on_cancel_and_the_stale_release_returns_false():
+    """ADR-006 stage 6.2 review fix: on cancel, the handle's finalize (the
+    surface's end transition) is scheduled exactly once by cancel() itself;
+    the worker's late release() then returns False, so the gated tail
+    pattern (`if registry.release(...): on_end()`) skips - never a second
+    end transition."""
+    async def run():
+        registry = RunRegistry()
+        counter = []
+
+        async def finalize():
+            counter.append(1)
+
+        handle = registry.claim(
+            "chat", cancel_event=threading.Event(), finalize=finalize
+        )
+        assert registry.cancel(handle.request_id) is True
+
+        # Drain the finalize coroutine cancel() scheduled onto this loop.
+        deadline = asyncio.get_running_loop().time() + 2
+        while not counter and asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(0.01)
+        assert counter == [1], "finalize must run exactly once on cancel"
+
+        # The worker's own finally now runs release() - it must report False
+        # (cancel already popped), which is exactly what gates the tail skip.
+        assert registry.release(handle.request_id) is False
+
+        # And nothing schedules finalize a second time.
+        await asyncio.sleep(0.05)
+        assert counter == [1]
+
+    asyncio.run(run())
+
+
+def test_finalize_is_not_run_on_a_normal_release():
+    """ADR-006 stage 6.2 review fix: on a NORMAL completion the surface's
+    own finally owns the end transition (gated on release() -> True);
+    the registry must never fire finalize itself then."""
+    async def run():
+        registry = RunRegistry()
+        counter = []
+
+        async def finalize():
+            counter.append(1)
+
+        handle = registry.claim(
+            "chat", cancel_event=threading.Event(), finalize=finalize
+        )
+        assert registry.release(handle.request_id) is True
+        await asyncio.sleep(0.05)  # give any (wrongly) scheduled finalize a chance to run
+        assert counter == [], "finalize must never fire on a normal release"
+
+    asyncio.run(run())
+
+
+def test_cancel_from_a_worker_thread_sets_the_event_inline_and_marshals_the_pop_to_the_loop():
+    """ADR-006 stage 6.2 review fix (thread affinity - pins _finish_cancel):
+    cancelChatRequest's sync handler runs via asyncio.to_thread, so cancel()
+    can arrive on a worker thread. The cancel EVENT must be set inline on
+    that thread (zero added latency for the worker to observe it); the pop +
+    finalize bookkeeping is marshalled onto the handle's loop and lands
+    shortly after, exactly once."""
+    async def run():
+        registry = RunRegistry()
+        cancel_event = threading.Event()
+        counter = []
+
+        async def finalize():
+            counter.append(1)
+
+        handle = registry.claim("chat", cancel_event=cancel_event, finalize=finalize)
+
+        observed = {}
+
+        def worker():
+            observed["returned"] = registry.cancel(handle.request_id)
+            # Checked ON the worker thread, before the loop had any chance
+            # to run the marshalled bookkeeping.
+            observed["event_set_inline"] = cancel_event.is_set()
+
+        thread = threading.Thread(target=worker)
+        thread.start()
+        await asyncio.to_thread(thread.join, 5)
+        assert observed["returned"] is True
+        assert observed["event_set_inline"] is True
+
+        # The pop lands on the loop shortly after (call_soon_threadsafe).
+        deadline = asyncio.get_running_loop().time() + 2
+        while registry.get(handle.request_id) is not None and asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(0.01)
+        assert registry.get(handle.request_id) is None, "the marshalled pop never landed on the loop"
+        assert registry.is_busy("chat") is False
+
+        deadline = asyncio.get_running_loop().time() + 2
+        while not counter and asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(0.01)
+        await asyncio.sleep(0.05)  # settle: prove no second finalize follows
+        assert counter == [1], "finalize must run exactly once for a worker-thread cancel"
+
+    asyncio.run(run())
+
+
+def test_has_any_live_work_counts_a_popped_but_unfinished_orphan_task():
+    """ADR-006 stage 6.2 review fix: release-on-cancel empties _handles
+    instantly, but the cancelled worker is still real in-flight work -
+    has_any_live_work() must stay True until the orphaned task actually
+    completes (session eviction consults exactly this)."""
+    async def run():
+        registry = RunRegistry()
+        gate = asyncio.Event()
+
+        async def held_worker():
+            await gate.wait()
+
+        handle = registry.claim("chat", cancel_event=threading.Event())
+        registry.attach_task(handle, asyncio.create_task(held_worker()))
+        await asyncio.sleep(0)  # let the task start
+
+        assert registry.cancel(handle.request_id) is True
+        assert registry.is_busy("chat") is False, "the slot itself frees immediately"
+        assert registry.has_any_live_work() is True, (
+            "a popped-but-unfinished task is still live work"
+        )
+
+        gate.set()
+        deadline = asyncio.get_running_loop().time() + 2
+        while registry.has_any_live_work() and asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(0.01)
+        assert registry.has_any_live_work() is False
 
     asyncio.run(run())

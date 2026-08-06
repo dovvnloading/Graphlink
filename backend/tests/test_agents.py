@@ -6656,3 +6656,237 @@ def test_branch_synthesis_request_and_chat_request_run_concurrently_both_busy(mo
         assert synthesis_successes == ["Combined answer."]
 
     asyncio.run(run())
+
+
+# -- ADR-006 stage 6.2 review fixes: release-on-cancel at the dispatcher level -
+
+
+def test_cancelled_runs_late_teardown_never_clobbers_a_new_runs_claimed_slot(monkeypatch):
+    """ADR-006 stage 6.2 review fix (NEW-RUN-CLOBBER): release-on-cancel
+    frees the chat slot the instant a cancel lands, so a NEW chat run can
+    claim it while the cancelled worker is still unwinding. That stale
+    worker's late finally must neither pop the new run's handle nor re-run
+    run 1's end transition (cancel() already ran it via finalize) - the
+    gated `if release(): on_end()` tail is exactly what this pins, through
+    _dispatch's own on_begin/on_end callbacks."""
+    started1, release1 = threading.Event(), threading.Event()
+    started2, release2 = threading.Event(), threading.Event()
+    calls = []
+
+    def sequential_blocking_chat(task, messages, **kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            started1.set()
+            release1.wait(5)
+            # Run 1 was cancelled mid-flight - the real driver observes the
+            # cancel event and raises, same shape as the mid-flight-cancel
+            # test above.
+            raise api_provider.RequestCancelledError("Request cancelled.")
+        started2.set()
+        release2.wait(5)
+        return {"message": {"content": "second reply"}}
+
+    _configure_fake_ollama(monkeypatch, sequential_blocking_chat)
+
+    async def run():
+        bus, notifications, composer_document, dispatcher = _make_dispatch_env()
+        begins1, ends1 = [], []
+        begins2, ends2 = [], []
+
+        await dispatcher._dispatch(
+            bus=bus,
+            notifications_state=notifications,
+            conversation_history=[{"role": "user", "content": "first"}],
+            on_reply=lambda text: None,
+            on_begin=begins1.append,
+            on_end=lambda: ends1.append(1),
+            state_topic="app-composer",
+        )
+        await asyncio.to_thread(started1.wait, 5)
+        request_id1, entry1 = next(iter(chat_slots(dispatcher).items()))
+
+        # Cancel run 1 - release-on-cancel: the slot frees IMMEDIATELY,
+        # while the worker is still held open.
+        assert dispatcher.cancel(request_id1) is True
+        assert chat_slots(dispatcher) == {}
+
+        # cancel() schedules run 1's finalize (its on_end + publish) - it
+        # must land exactly once, promptly, without waiting for the worker.
+        deadline = asyncio.get_running_loop().time() + 2
+        while len(ends1) < 1 and asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(0.01)
+        assert ends1 == [1], "cancel must run run 1's end transition exactly once"
+
+        # Run 2 claims the freed slot while run 1's worker is STILL running.
+        await dispatcher._dispatch(
+            bus=bus,
+            notifications_state=notifications,
+            conversation_history=[{"role": "user", "content": "second"}],
+            on_reply=lambda text: None,
+            on_begin=begins2.append,
+            on_end=lambda: ends2.append(1),
+            state_topic="app-composer",
+        )
+        await asyncio.to_thread(started2.wait, 5)
+        request_id2 = next(iter(chat_slots(dispatcher).keys()))
+        assert request_id2 != request_id1
+
+        # NOW let run 1's stale worker unwind fully...
+        release1.set()
+        await entry1["task"]
+
+        # ...and run 2's claim must be completely undisturbed by it.
+        assert len(chat_slots(dispatcher)) == 1, "run 1's late teardown must not free run 2's slot"
+        assert next(iter(chat_slots(dispatcher).keys())) == request_id2, (
+            "run 2's handle must still be the claimed one after run 1's stale finally"
+        )
+        assert ends1 == [1], "run 1's end transition must NOT fire a second time from the stale finally"
+        assert ends2 == [], "run 2 is still in flight - its end transition must not have fired"
+        assert begins1 == [request_id1] and begins2 == [request_id2]
+
+        release2.set()
+        entry2 = next(iter(chat_slots(dispatcher).values()))
+        await entry2["task"]
+        assert chat_slots(dispatcher) == {}
+        assert ends2 == [1]
+
+    asyncio.run(run())
+
+
+def test_cancel_all_now_cancels_a_chart_generation_and_frees_its_slot_immediately(monkeypatch):
+    """ADR-006 stage 6.2 review fix: runtime proof that a formerly-
+    uncancellable kind (chart - pre-6.2 cancel_all silently skipped it)
+    really cancels now: the slot frees the instant cancel_all() fires, the
+    late result is suppressed (on_success never called), and no error
+    notification is shown for work the user abandoned."""
+    started = threading.Event()
+    release = threading.Event()
+
+    def blocking_get_response(self, text, chart_type):
+        started.set()
+        release.wait(5)
+        return '{"type": "bar", "title": "T", "labels": ["A"], "values": [1]}'
+
+    monkeypatch.setattr(agents_module.ChartDataAgent, "get_response", blocking_get_response)
+
+    async def run():
+        bus, notifications, dispatcher = _make_chart_env()
+        successes = []
+        failures = []
+
+        await dispatcher.start_chart_generation(
+            bus=bus,
+            notifications_state=notifications,
+            node_id="n1",
+            chart_type="bar",
+            source_text="text",
+            on_success=lambda result: successes.append(result),
+            on_failure=lambda message: failures.append(message),
+        )
+        # Grab the scheduled worker task now - after cancel_all it is only
+        # reachable as an orphan, no longer via the slots.
+        worker_task = next(
+            handle.task for handle in dispatcher._runs.values() if handle.kind == "chart"
+        )
+        await asyncio.to_thread(started.wait, 5)
+        assert busy_count(dispatcher, "chart") == 1
+
+        dispatcher.cancel_all()
+
+        # Release-on-cancel: the slot is free the moment cancel_all returns,
+        # while the worker is still held open...
+        assert busy_count(dispatcher, "chart") == 0
+        assert not release.is_set()
+        # ...but the unwinding worker still counts as live work (eviction veto).
+        assert dispatcher.has_in_flight_runs() is True
+
+        release.set()
+        await worker_task
+        deadline = asyncio.get_running_loop().time() + 2
+        while dispatcher.has_in_flight_runs() and asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(0.01)
+        assert dispatcher.has_in_flight_runs() is False
+
+        assert successes == [], "a cancelled chart's late result must be suppressed"
+        assert failures == []
+        assert notifications.visible is False, (
+            "no error notification for work the user already abandoned"
+        )
+
+    asyncio.run(run())
+
+
+def test_stale_artifact_teardown_never_clears_a_newer_runs_pending_request_id(monkeypatch):
+    """ADR-006 stage 6.2 review fix (pins start_artifact_reply's finally):
+    release-on-cancel frees the artifact slot instantly, so a NEW artifact
+    run can claim and stamp the SAME node before the cancelled worker
+    unwinds. The old unconditional `node.pending_request_id = None` in the
+    stale worker's finally wiped the new run's in-flight marker - the fix
+    only clears it when it still equals the stale run's own request_id."""
+    started1, release1 = threading.Event(), threading.Event()
+    started2, release2 = threading.Event(), threading.Event()
+    calls = []
+
+    def sequential_blocking_get_response(self, current_artifact, history):
+        calls.append(1)
+        if len(calls) == 1:
+            started1.set()
+            release1.wait(5)
+            return "first document", "first message"
+        started2.set()
+        release2.wait(5)
+        return "second document", "second message"
+
+    monkeypatch.setattr(
+        agents_module.ArtifactAgent, "get_response", sequential_blocking_get_response
+    )
+
+    async def run():
+        bus, notifications, dispatcher = _make_artifact_env()
+        node = _make_node()
+        replies = []
+
+        await dispatcher.start_artifact_reply(
+            bus=bus,
+            notifications_state=notifications,
+            node=node,
+            current_artifact="doc",
+            history=[],
+            on_reply=lambda new_content, ai_message: replies.append((new_content, ai_message)),
+        )
+        await asyncio.to_thread(started1.wait, 5)
+        request_id1, entry1 = next(iter(artifact_slots(dispatcher).items()))
+        assert node.pending_request_id == request_id1
+
+        assert dispatcher.cancel_artifact(request_id1) is True
+        assert artifact_slots(dispatcher) == {}, "release-on-cancel frees the slot immediately"
+
+        # Run 2 on the SAME node, while run 1's worker is still held open.
+        await dispatcher.start_artifact_reply(
+            bus=bus,
+            notifications_state=notifications,
+            node=node,
+            current_artifact="doc",
+            history=[],
+            on_reply=lambda new_content, ai_message: replies.append((new_content, ai_message)),
+        )
+        await asyncio.to_thread(started2.wait, 5)
+        request_id2, entry2 = next(iter(artifact_slots(dispatcher).items()))
+        assert node.pending_request_id == request_id2
+
+        # Run 1's stale worker unwinds fully - its finally must NOT clear
+        # run 2's in-flight marker.
+        release1.set()
+        await entry1["task"]
+        assert node.pending_request_id == request_id2, (
+            "the stale run's teardown wiped the newer run's pending_request_id"
+        )
+        assert replies == [], "the cancelled run's result must have been dropped"
+
+        release2.set()
+        await entry2["task"]
+        assert replies == [("second document", "second message")]
+        assert node.pending_request_id is None
+        assert artifact_slots(dispatcher) == {}
+
+    asyncio.run(run())

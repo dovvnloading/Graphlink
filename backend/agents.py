@@ -1288,6 +1288,16 @@ class AgentDispatcher:
                     ),
                     timeout=WEB_RESEARCH_WATCHDOG_TIMEOUT_SECONDS,
                 )
+                if self._runs.get(request_id) is None:
+                    # 6.2 review fix: a cancel popped this handle while the
+                    # blocking call was finishing - the same discriminator
+                    # _guarded_progress already uses for progress events, now
+                    # applied to the TERMINAL callbacks too. Without it, a
+                    # cancelled run's late result (or its RequestCancelled
+                    # below) writes stale stage/result state onto a node a
+                    # replacement run may already own, since release-on-cancel
+                    # freed the "web_research" slot the instant cancel landed.
+                    return
                 await _invoke(on_success, result)
                 await bus.publish("scene")
             except asyncio.TimeoutError:
@@ -1296,29 +1306,37 @@ class AgentDispatcher:
                     "Web research stopped responding before the request completed. "
                     "Please try again."
                 )
-                await _invoke(on_failure, ResearchFailure(message, code="watchdog_timeout"))
+                if self._runs.get(request_id) is not None:
+                    await _invoke(on_failure, ResearchFailure(message, code="watchdog_timeout"))
                 notifications_state.show(message, "error")
                 await bus.publish("notification")
                 await bus.publish("scene")
             except RequestCancelled as exc:
-                await _invoke(on_failure, exc)
+                if self._runs.get(request_id) is not None:
+                    await _invoke(on_failure, exc)
                 notifications_state.show("Web research cancelled.", "info")
                 await bus.publish("notification")
                 await bus.publish("scene")
             except ResearchFailure as exc:
-                await _invoke(on_failure, exc)
+                if self._runs.get(request_id) is not None:
+                    await _invoke(on_failure, exc)
                 notifications_state.show(f"Web research failed: {exc}", "error")
                 await bus.publish("notification")
                 await bus.publish("scene")
             except Exception as exc:
                 logger.exception("web research dispatch failed")
-                await _invoke(on_failure, exc)
+                if self._runs.get(request_id) is not None:
+                    await _invoke(on_failure, exc)
                 notifications_state.show(f"Web research failed: {exc}", "error")
                 await bus.publish("notification")
                 await bus.publish("scene")
             finally:
                 self._runs.release(request_id)
-                node.pending_request_id = None
+                # 6.2 review fix: same stale-task guard as artifact/gitlink -
+                # a cancelled run's late unwind must not wipe a replacement
+                # run's in-flight marker on this same node.
+                if node.pending_request_id == request_id:
+                    node.pending_request_id = None
                 await bus.publish("scene")
 
         self._runs.attach_task(handle, asyncio.create_task(_run()))
@@ -1408,12 +1426,26 @@ class AgentDispatcher:
                 )
                 await bus.publish("notification")
             except Exception as exc:
+                if cancel_event.is_set():
+                    # 6.2 review fix: a cancelled run whose provider call then
+                    # errors ends quietly - the user already asked for it to
+                    # stop; an "Artifact generation failed" toast would be
+                    # noise about work they abandoned.
+                    return
                 logger.exception("artifact dispatch failed")
                 notifications_state.show(f"Artifact generation failed: {exc}", "error")
                 await bus.publish("notification")
             finally:
                 self._runs.release(request_id)
-                node.pending_request_id = None
+                # 6.2 review fix (reproduced live): only clear if this task's
+                # OWN request_id is still the one recorded - the same
+                # stale-task guard every gitlink/pycoder/sandbox finally has.
+                # Release-on-cancel frees the "artifact" slot the instant a
+                # cancel lands, so a NEW artifact run can claim and stamp
+                # this same node before this old worker unwinds; the old
+                # unconditional clear wiped the new run's in-flight marker.
+                if node.pending_request_id == request_id:
+                    node.pending_request_id = None
                 await bus.publish("scene")
 
         self._runs.attach_task(handle, asyncio.create_task(_run()))

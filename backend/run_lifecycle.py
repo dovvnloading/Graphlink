@@ -296,9 +296,36 @@ class RunRegistry:
             # Popping here + scheduling the handle's finalize makes cancel
             # latency independent of worker-thread latency; the worker's own
             # late finally sees release() -> False and skips its tail.
-            self._pop(request_id)
-            self._schedule_finalize(handle)
+            self._finish_cancel(request_id, handle)
         return fired
+
+    def _finish_cancel(self, request_id: str, handle: RunHandle) -> None:
+        """Pop + finalize, ALWAYS executed on the registry's event loop.
+
+        6.2 review fix (thread affinity): cancelChatRequest's sync handler
+        runs via asyncio.to_thread, so cancel() can arrive on a worker
+        thread - but _pop mutates the handles dict (raced by the loop
+        thread's is_busy/values iteration), calls Task.add_done_callback
+        (not thread-safe on a running task), and may resolve an approval
+        future (loop-affine). The cancel EVENT was already set inline above
+        (threading.Event.set is thread-safe, so the worker observes the
+        cancel with zero added latency); only the bookkeeping is marshalled
+        here, landing microseconds later - still far inside the 2 s budget."""
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+        if handle.loop is not None and running is not handle.loop:
+            if not handle.loop.is_closed():
+                handle.loop.call_soon_threadsafe(self._finish_cancel, request_id, handle)
+            return
+        # Gated on the pop actually succeeding: in the marshalled case the
+        # worker may have completed NORMALLY in the gap before this callback
+        # ran - its finally already popped the handle and ran the end
+        # transition, and running finalize again here would be the exact
+        # double-transition this design exists to prevent.
+        if self._pop(request_id) is not None:
+            self._schedule_finalize(handle)
 
     def cancel_all(self) -> None:
         """Fires every handle's cancel mechanism, releasing each fired
@@ -315,8 +342,7 @@ class RunRegistry:
                 handle.on_cancel()
                 fired = True
             if fired:
-                self._pop(handle.request_id)
-                self._schedule_finalize(handle)
+                self._finish_cancel(handle.request_id, handle)
 
     def has_any_live_work(self) -> bool:
         """Claimed handles OR cancelled-but-still-unwinding orphan tasks -
@@ -411,6 +437,16 @@ async def run_single_shot(
     # cancel_event (new - these kinds were previously uncancellable and
     # silently skipped by cancel_all) suppresses the result callbacks when
     # a cancel or session disconnect lands mid-generation.
+    #
+    # DELIBERATE BEHAVIOR CHANGE, decided rather than drifted into (6.2
+    # adversarial review surfaced it): pre-6.2, a last-connection drop left
+    # these four generations running because cancel_all skipped them, so a
+    # reconnecting client found the finished node. Now a disconnect cancels
+    # them like every OTHER kind (chat has always discarded on disconnect),
+    # trading that accidental resilience for the uniform "disconnect cancels
+    # everything" contract the eviction/cancel machinery is built on. If
+    # blip-survival ever becomes a requirement, it belongs to a
+    # reconnect-grace design for ALL kinds, not a silent carve-out for four.
     cancel_event = threading.Event()
     handle = registry.claim(kind, node_id=node_id, cancel_event=cancel_event)
 
