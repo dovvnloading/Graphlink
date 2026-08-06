@@ -38,7 +38,16 @@ def register_chat_image_intents(
                 # regenerate_response's own liveness check (backend/api/
                 # intents_chat.py, ADR-002 stage 2.6).
                 return
-            document.add_generated_image_reply(parent_chat_node_id, prompt, image_bytes)
+            # ADR-010 stage 10.1: a create despite the name - this mints a
+            # real image node AND its asset bytes into image_assets, both of
+            # which record_command captures (the asset half matters: undoing
+            # a generated image must not strand its PNG in the asset store).
+            # Agent provenance, like every other model-produced node.
+            document.record_command(
+                "generateImageReply", "agent",
+                lambda: document.add_generated_image_reply(parent_chat_node_id, prompt, image_bytes),
+                node_ids=[parent_chat_node_id],
+            )
             await bus.publish("scene")
 
         await agent_dispatcher.start_image_reply(

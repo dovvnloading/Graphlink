@@ -33,6 +33,7 @@ would silently no-op; patch `backend.domain.graph.<name>` instead.
 
 from __future__ import annotations
 
+from collections import deque
 import itertools
 import math
 import uuid
@@ -50,6 +51,7 @@ from graphlink_navigation_pins import NavigationPinStore
 from graphlink_token_estimator import TokenEstimator
 
 from backend.domain.branches import BranchOps
+from backend.domain.commands import CommandOps
 from backend.domain.content_codec import _content_codec
 from backend.domain.groups import GroupOps
 from backend.domain.model import (
@@ -110,7 +112,7 @@ def _estimate_tokens(text: str) -> int:
 
 
 @dataclass
-class SceneDocument(BranchOps, GroupOps):
+class SceneDocument(BranchOps, GroupOps, CommandOps):
     """The canvas document for one session. Plain data + invariants; the
     R6 serializer will read/write exactly this shape."""
 
@@ -200,6 +202,20 @@ class SceneDocument(BranchOps, GroupOps):
     # New Chat confirm skips only when the canvas is empty AND there is no
     # current chat - a predicate the frontend cannot evaluate without it.
     current_chat_id: int | None = None
+    # ADR-010 stage 10.1: every invertible mutation this session has
+    # recorded, oldest first. Bounded per the ADR's own durability boundary
+    # ("session-scoped and in-memory (bounded, e.g. 100 composite commands),
+    # not persisted") - a deque's maxlen drops the oldest silently, which is
+    # the correct behavior for undo history specifically: losing the ability
+    # to undo something from 100 operations ago is the intended limit, not a
+    # data loss (the scene itself is untouched).
+    #
+    # This is a LOG, deliberately not yet an undo STACK - there is no cursor
+    # and no redo pointer, because deciding WHEN to invert is ADR-010 stage
+    # 10.2's job, with its own exit criterion. 10.1 only has to prove the
+    # commands are correctly invertible, which is what backend/tests/
+    # test_commands.py does. Stage 10.2 adds the cursor on top of this.
+    command_log: deque = field(default_factory=lambda: deque(maxlen=100), repr=False)
     _counter: itertools.count = field(default_factory=itertools.count, repr=False)
     # ADR-003 stage 3.4: the last wire state actually published, kept so
     # take_dirty_patch_ops below can diff against it. None until the first
@@ -380,6 +396,13 @@ class SceneDocument(BranchOps, GroupOps):
         self.scroll_y = 0.0
         self.total_session_tokens = 0
         self.current_chat_id = None
+        # ADR-010 stage 10.1: undo history does NOT survive a session load.
+        # Every command in it references node/edge ids from the document
+        # being replaced, so inverting one afterward would resurrect a node
+        # from the PREVIOUS chat into this one. The ADR scopes undo history
+        # to a session deliberately ("session-scoped and in-memory ... not
+        # persisted"); this is the boundary that enforces it.
+        self.command_log.clear()
         # ADR-003 stage 3.4 review-fix: drop the patch baseline too. Loading a
         # chat replaces the entire document, so diffing the new scene against
         # the OLD one produced a patch no smaller than the snapshot it

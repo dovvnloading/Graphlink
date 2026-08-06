@@ -67,7 +67,15 @@ def register_conversation_intents(
         return node.id
 
     async def delete_conversation_message(node_id, message_index):
-        document.delete_conversation_message(node_id, message_index)
+        # A delete at sub-node granularity: one message inside a
+        # ConversationNode's history list, not a SceneNode. node_ids is
+        # required because the node itself survives - the id never leaves
+        # self.nodes, so only the in-place before/after diff catches this.
+        document.record_command(
+            "deleteConversationMessage", "user",
+            lambda: document.delete_conversation_message(node_id, message_index),
+            node_ids=[node_id],
+        )
         await publish_scene()
 
     async def set_node_docked(node_id, docked):
@@ -75,7 +83,23 @@ def register_conversation_intents(
         await publish_scene()
 
     async def delete_chat_node(node_id):
-        document.delete_chat_node(node_id)
+        # The SECOND, structurally different delete path (the first being
+        # remove_nodes): this REPARENTS the deleted node's children onto its
+        # own parent rather than cascade-deleting them, so undoing it has to
+        # restore both the node AND every child's original parent edge. The
+        # children are named explicitly for that reason - they are mutated
+        # (re-parented), not deleted, so the id-set diff alone would miss
+        # them. Their new edges are auto-discovered from the ids named here.
+        children = [
+            edge.target for edge in document.edges.values() if edge.source == node_id
+        ]
+        parents = [
+            edge.source for edge in document.edges.values() if edge.target == node_id
+        ]
+        document.record_command(
+            "deleteChatNode", "user", lambda: document.delete_chat_node(node_id),
+            node_ids=[node_id, *children, *parents],
+        )
         await publish_scene()
 
     async def set_chat_collapsed(node_id, collapsed):

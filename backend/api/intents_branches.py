@@ -71,16 +71,28 @@ def register_branches_intents(
                 # Deleted mid-flight - silent no-op, same posture as
                 # _dispatch_image's own liveness check.
                 return
-            note = document.add_note(source.x + x_offset, source.y + y_offset)
-            document.set_note_content(note.id, text)
-            # Legacy tinted these notes "Mid Gray" with an info-coloured
-            # header. Both values come from the frontend's own palette
-            # (GroupColorPicker's GROUP_MONO_COLORS/GROUP_NAMED_COLORS) since
-            # the backend stores hex and never resolves a colour name. The
-            # legacy note width of 400 is NOT ported: note width is not a
-            # modeled field here (it is CSS-driven), so there is nothing to
-            # set it on.
-            document.set_group_color(note.id, NOTE_AGENT_BODY_COLOR, NOTE_AGENT_HEADER_COLOR)
+            # ADR-010 stage 10.1: the note plus its content and colouring are
+            # ONE command - the three calls together are a single logical
+            # "the agent produced this note", so one undo removes all of it
+            # rather than peeling off the colour, then the text, then the
+            # node. Agent provenance, per stage 10.5's eventual "undo this
+            # build".
+            def _create_agent_note():
+                created = document.add_note(source.x + x_offset, source.y + y_offset)
+                document.set_note_content(created.id, text)
+                # Legacy tinted these notes "Mid Gray" with an info-coloured
+                # header. Both values come from the frontend's own palette
+                # (GroupColorPicker's GROUP_MONO_COLORS/GROUP_NAMED_COLORS)
+                # since the backend stores hex and never resolves a colour
+                # name. The legacy note width of 400 is NOT ported: note
+                # width is not a modeled field here (it is CSS-driven), so
+                # there is nothing to set it on.
+                document.set_group_color(created.id, NOTE_AGENT_BODY_COLOR, NOTE_AGENT_HEADER_COLOR)
+                return created
+
+            note, _command = document.record_command(
+                "generateNote", "agent", _create_agent_note,
+            )
             result_holder["node_id"] = note.id
             await bus.publish("scene")
 
@@ -157,10 +169,18 @@ def register_branches_intents(
                 # A source was deleted mid-flight - same liveness posture as
                 # _generate_note_from_node's own on_success guard.
                 return
-            note = document.add_note(avg_x + NOTE_AGENT_X_OFFSET, max_y)
-            document.set_note_content(note.id, text)
-            document.set_group_color(note.id, NOTE_AGENT_BODY_COLOR, NOTE_AGENT_HEADER_COLOR)
-            document.mark_branch_comparison_note(note.id, ids)
+            # One command for the whole comparison note - see
+            # _generate_note_from_node's own equivalent block above.
+            def _create_comparison_note():
+                created = document.add_note(avg_x + NOTE_AGENT_X_OFFSET, max_y)
+                document.set_note_content(created.id, text)
+                document.set_group_color(created.id, NOTE_AGENT_BODY_COLOR, NOTE_AGENT_HEADER_COLOR)
+                document.mark_branch_comparison_note(created.id, ids)
+                return created
+
+            note, _command = document.record_command(
+                "compareBranches", "agent", _create_comparison_note, node_ids=ids,
+            )
             result_holder["node_id"] = note.id
             await bus.publish("scene")
 
@@ -236,11 +256,24 @@ def register_branches_intents(
                 # A source was deleted mid-flight - same liveness posture as
                 # compare_branches's own on_success guard.
                 return
-            node = document.add_chat_node(
-                avg_x, max_y + MESSAGE_VERTICAL_SPACING, text, False, parent_id=parent.id,
-            )
-            document.mark_branch_synthesis(
-                node.id, ids, clean_instructions, route.get("provider"), route.get("modelLabel"),
+            # The synthesis node plus its synthesis metadata as one command.
+            # last_chat_node_id is deliberately set OUTSIDE it: that is
+            # document-level cursor state, not node state, so it is not
+            # something record_command's node/edge diff captures - restoring
+            # it correctly on undo is part of stage 10.2's stack work, where
+            # the cursor semantics actually live.
+            def _create_synthesis_node():
+                created = document.add_chat_node(
+                    avg_x, max_y + MESSAGE_VERTICAL_SPACING, text, False, parent_id=parent.id,
+                )
+                document.mark_branch_synthesis(
+                    created.id, ids, clean_instructions, route.get("provider"), route.get("modelLabel"),
+                )
+                return created
+
+            node, _command = document.record_command(
+                "synthesizeBranches", "agent", _create_synthesis_node,
+                node_ids=[parent.id, *ids],
             )
             document.last_chat_node_id = node.id
             result_holder["node_id"] = node.id

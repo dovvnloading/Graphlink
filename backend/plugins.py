@@ -151,8 +151,12 @@ def register_plugins(
                 await bus.publish("notification")
                 return None
             parent = canvas_document.nodes[parent_node_id]
-            node = canvas_document.add_web_research_node(
-                parent.x, parent.y + MESSAGE_VERTICAL_SPACING, parent_node_id
+            node, _command = canvas_document.record_command(
+                "pluginWebResearch", "user",
+                lambda: canvas_document.add_web_research_node(
+                    parent.x, parent.y + MESSAGE_VERTICAL_SPACING, parent_node_id
+                ),
+                node_ids=[parent_node_id],
             )
             await bus.publish("scene")
             return node.id
@@ -173,8 +177,12 @@ def register_plugins(
                 await bus.publish("notification")
                 return None
             parent = canvas_document.nodes[parent_node_id]
-            node = canvas_document.add_gitlink_node(
-                parent.x, parent.y + MESSAGE_VERTICAL_SPACING, parent_node_id
+            node, _command = canvas_document.record_command(
+                "pluginGitlink", "user",
+                lambda: canvas_document.add_gitlink_node(
+                    parent.x, parent.y + MESSAGE_VERTICAL_SPACING, parent_node_id
+                ),
+                node_ids=[parent_node_id],
             )
             await bus.publish("scene")
             return node.id
@@ -194,8 +202,12 @@ def register_plugins(
                 await bus.publish("notification")
                 return None
             parent = canvas_document.nodes[parent_node_id]
-            node = canvas_document.add_pycoder_node(
-                parent.x, parent.y + MESSAGE_VERTICAL_SPACING, parent_node_id
+            node, _command = canvas_document.record_command(
+                "pluginPyCoder", "user",
+                lambda: canvas_document.add_pycoder_node(
+                    parent.x, parent.y + MESSAGE_VERTICAL_SPACING, parent_node_id
+                ),
+                node_ids=[parent_node_id],
             )
             await bus.publish("scene")
             return node.id
@@ -211,8 +223,12 @@ def register_plugins(
                 await bus.publish("notification")
                 return None
             parent = canvas_document.nodes[parent_node_id]
-            node = canvas_document.add_code_sandbox_node(
-                parent.x, parent.y + MESSAGE_VERTICAL_SPACING, parent_node_id
+            node, _command = canvas_document.record_command(
+                "pluginCodeSandbox", "user",
+                lambda: canvas_document.add_code_sandbox_node(
+                    parent.x, parent.y + MESSAGE_VERTICAL_SPACING, parent_node_id
+                ),
+                node_ids=[parent_node_id],
             )
             await bus.publish("scene")
             return node.id
@@ -231,8 +247,12 @@ def register_plugins(
                 await bus.publish("notification")
                 return None
             parent = canvas_document.nodes[parent_node_id]
-            node = canvas_document.add_artifact_node(
-                parent.x, parent.y + MESSAGE_VERTICAL_SPACING, parent_node_id
+            node, _command = canvas_document.record_command(
+                "pluginArtifact", "user",
+                lambda: canvas_document.add_artifact_node(
+                    parent.x, parent.y + MESSAGE_VERTICAL_SPACING, parent_node_id
+                ),
+                node_ids=[parent_node_id],
             )
             await bus.publish("scene")
             return node.id
@@ -277,8 +297,18 @@ def register_plugins(
             if existing is not None:
                 await bus.publish("scene")
                 return existing.id
-            note = canvas_document.add_note(root.x, root.y - 150, is_system_prompt=True)
-            canvas_document.connect(note.id, root.id)
+            # The only plugin branch that creates AND connects - both are
+            # captured by one command, so undoing it removes the note and
+            # its edge together rather than leaving a dangling edge.
+            def _create_system_prompt_note():
+                created = canvas_document.add_note(root.x, root.y - 150, is_system_prompt=True)
+                canvas_document.connect(created.id, root.id)
+                return created
+
+            note, _command = canvas_document.record_command(
+                "pluginSystemPrompt", "user", _create_system_prompt_note,
+                node_ids=[root.id],
+            )
             await bus.publish("scene")
             return note.id
 
@@ -296,7 +326,11 @@ def register_plugins(
                 await bus.publish("notification")
                 return None
             parent = canvas_document.nodes[parent_node_id]
-            node = canvas_document.add_conversation_node(parent.x, parent.y + MESSAGE_VERTICAL_SPACING, parent_node_id)
+            node, _command = canvas_document.record_command(
+                "pluginConversationNode", "user",
+                lambda: canvas_document.add_conversation_node(parent.x, parent.y + MESSAGE_VERTICAL_SPACING, parent_node_id),
+                node_ids=[parent_node_id],
+            )
             await bus.publish("scene")
             return node.id
 
@@ -315,7 +349,11 @@ def register_plugins(
                 await bus.publish("notification")
                 return None
             parent = canvas_document.nodes[parent_node_id]
-            node = canvas_document.add_html_node(parent.x, parent.y + MESSAGE_VERTICAL_SPACING, "", parent_node_id)
+            node, _command = canvas_document.record_command(
+                "pluginHtmlRenderer", "user",
+                lambda: canvas_document.add_html_node(parent.x, parent.y + MESSAGE_VERTICAL_SPACING, "", parent_node_id),
+                node_ids=[parent_node_id],
+            )
             await bus.publish("scene")
             return node.id
 

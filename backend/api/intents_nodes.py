@@ -25,18 +25,36 @@ def register_node_intents(
 ) -> None:
     publish_scene = make_publish_scene(bus)
 
+    # ADR-010 stage 10.1: every mutation below is wrapped in
+    # document.record_command(...), which runs the SAME domain call it always
+    # did and additionally captures the Command that inverts it (see
+    # backend/domain/commands.py). `node_ids`/`edge_ids` name what the caller
+    # already knows is being touched, so a mutation that modifies an existing
+    # object IN PLACE (a move) is captured as well as one that creates or
+    # deletes - a create needs no hint, since a brand-new id is caught by the
+    # id-set diff on its own.
     async def add_node(x, y, title=""):
-        node = document.add_node(x, y, title)
+        node, _command = document.record_command(
+            "addNode", "user", lambda: document.add_node(x, y, title),
+        )
         await publish_scene()
         return node.id
 
     async def add_chat_node(x, y, content, is_user, parent_id=None):
-        node = document.add_chat_node(x, y, content, is_user, parent_id)
+        node, _command = document.record_command(
+            "addChatNode", "user",
+            lambda: document.add_chat_node(x, y, content, is_user, parent_id),
+            node_ids=[parent_id] if parent_id else (),
+        )
         await publish_scene()
         return node.id
 
     async def add_code_node(x, y, code, language, parent_id=None):
-        node = document.add_code_node(x, y, code, language, parent_id)
+        node, _command = document.record_command(
+            "addCodeNode", "user",
+            lambda: document.add_code_node(x, y, code, language, parent_id),
+            node_ids=[parent_id] if parent_id else (),
+        )
         await publish_scene()
         return node.id
 
@@ -53,29 +71,41 @@ def register_node_intents(
         byte_size=None,
         preview_label="",
     ):
-        node = document.add_document_node(
-            x,
-            y,
-            title,
-            content,
-            attachment_kind,
-            parent_id,
-            file_path=file_path,
-            mime_type=mime_type,
-            duration_seconds=duration_seconds,
-            byte_size=byte_size,
-            preview_label=preview_label,
+        node, _command = document.record_command(
+            "addDocumentNode", "user",
+            lambda: document.add_document_node(
+                x,
+                y,
+                title,
+                content,
+                attachment_kind,
+                parent_id,
+                file_path=file_path,
+                mime_type=mime_type,
+                duration_seconds=duration_seconds,
+                byte_size=byte_size,
+                preview_label=preview_label,
+            ),
+            node_ids=[parent_id],
         )
         await publish_scene()
         return node.id
 
     async def add_thinking_node(x, y, thinking_text, parent_id):
-        node = document.add_thinking_node(x, y, thinking_text, parent_id)
+        node, _command = document.record_command(
+            "addThinkingNode", "user",
+            lambda: document.add_thinking_node(x, y, thinking_text, parent_id),
+            node_ids=[parent_id],
+        )
         await publish_scene()
         return node.id
 
     async def add_html_node(x, y, html_content, parent_id):
-        node = document.add_html_node(x, y, html_content, parent_id)
+        node, _command = document.record_command(
+            "addHtmlNode", "user",
+            lambda: document.add_html_node(x, y, html_content, parent_id),
+            node_ids=[parent_id],
+        )
         await publish_scene()
         return node.id
 
@@ -89,24 +119,45 @@ def register_node_intents(
         # before it ever reaches SceneDocument (which only ever deals in real
         # bytes, same as the HTTP asset route on the read side).
         image_bytes = base64.b64decode(image_bytes_base64)
-        node = document.add_image_node(x, y, image_bytes, prompt, parent_id, mime_type=mime_type)
+        node, _command = document.record_command(
+            "addImageNode", "user",
+            lambda: document.add_image_node(x, y, image_bytes, prompt, parent_id, mime_type=mime_type),
+            node_ids=[parent_id],
+        )
         await publish_scene()
         return node.id
 
     async def add_conversation_node(x, y, parent_id):
-        node = document.add_conversation_node(x, y, parent_id)
+        node, _command = document.record_command(
+            "addConversationNode", "user",
+            lambda: document.add_conversation_node(x, y, parent_id),
+            node_ids=[parent_id],
+        )
         await publish_scene()
         return node.id
 
     async def move_node(node_id, x, y):
-        document.move_node(node_id, x, y)
+        # node_ids is REQUIRED here, unlike a create: a move mutates an
+        # existing object in place, so its id never enters or leaves
+        # self.nodes and the id-set diff alone would see nothing.
+        document.record_command(
+            "moveNode", "user", lambda: document.move_node(node_id, x, y),
+            node_ids=[node_id],
+        )
         await publish_scene()
 
     async def move_nodes(positions):
         # positions: a JSON array of [node_id, x, y] triples - see
         # SceneDocument.move_nodes's own docstring for why a group drag's
         # commit uses this batched intent instead of N calls to moveNode.
-        document.move_nodes([(p[0], p[1], p[2]) for p in positions])
+        triples = [(p[0], p[1], p[2]) for p in positions]
+        # One command for the whole group drag, not N - a single Ctrl+Z must
+        # put every dragged node back, which is also why this stays one
+        # record_command call rather than a loop.
+        document.record_command(
+            "moveNodes", "user", lambda: document.move_nodes(triples),
+            node_ids=[t[0] for t in triples],
+        )
         await publish_scene()
 
     async def remove_nodes(node_ids):
@@ -162,7 +213,18 @@ def register_node_intents(
             and document.nodes[node_id].kind in ("pycoder", "code_sandbox")
             and document.nodes[node_id].pending_request_id
         ]
-        document.remove_nodes(ids)
+        # ADR-010 stage 10.1: the delete itself is recorded. Only the
+        # DOCUMENT half is invertible - the subprocess teardown and
+        # scratch-dir removal below are deliberately outside the command,
+        # since killing a REPL and rmtree-ing a venv are not reversible by
+        # restoring a dict entry. Undoing a pycoder/code_sandbox delete
+        # therefore restores the node and its state but NOT a live REPL,
+        # which is the honest boundary; stage 10.4's live-run refusal is
+        # where that interaction gets a real policy.
+        document.record_command(
+            "removeNodes", "user", lambda: document.remove_nodes(ids),
+            node_ids=ids,
+        )
         for kind, request_id in code_exec_cancels:
             # cancel_pycoder/cancel_code_sandbox resolve any pending
             # approval_future with False (exactly like a manual Cancel/Deny)
@@ -202,12 +264,26 @@ def register_node_intents(
         await publish_scene()
 
     async def connect_nodes(source, target):
-        edge = document.connect(source, target)
+        # connect() is idempotent - if the edge already exists it returns
+        # that one and creates nothing, which record_command sees as a
+        # genuine no-op and correctly declines to log (inverting it would
+        # otherwise delete a pre-existing edge the user never created).
+        edge, _command = document.record_command(
+            "connectNodes", "user", lambda: document.connect(source, target),
+            node_ids=[source, target],
+        )
         await publish_scene()
         return edge.id
 
     async def remove_edges(edge_ids):
-        document.remove_edges(list(edge_ids))
+        ids = list(edge_ids)
+        # edge_ids is required here for the same reason move needs node_ids:
+        # the edges' endpoint nodes are NOT being deleted, so there is no
+        # node to auto-discover these edges from.
+        document.record_command(
+            "removeEdges", "user", lambda: document.remove_edges(ids),
+            edge_ids=ids,
+        )
         await publish_scene()
 
     bus.register_intent("scene", "addNode", add_node)
