@@ -32,6 +32,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+import api_provider
 from graphlink_settings_store import SettingsManager
 
 from backend import BACKEND_VERSION
@@ -202,7 +203,24 @@ def _configure_session(
     # disconnect handler can reach it and cancel any in-flight request when
     # this session's last connection drops - see AgentDispatcher.cancel_all's
     # own docstring for why that matters.
-    agent_dispatcher = register_agents(bus, composer_document, notifications_state, settings_manager)
+    #
+    # ADR-006 stage 6.5: each session gets its own ProviderRuntime. The
+    # default session keeps the module-backed DEFAULT_RUNTIME - expressed as
+    # None here because that is AgentDispatcher's "default session" contract:
+    # None keeps every provider call routing through api_provider's module-
+    # level functions (which ARE DEFAULT_RUNTIME's state, and which the
+    # existing test suite monkeypatches), byte-identical to pre-6.5. Any
+    # other session starts as a snapshot-copy of the default configuration
+    # and diverges from there.
+    if bus.session_id == DEFAULT_SESSION_ID:
+        provider_runtime = None
+    else:
+        provider_runtime = api_provider.ProviderRuntime.from_snapshot(
+            api_provider.DEFAULT_RUNTIME.snapshot()
+        )
+    agent_dispatcher = register_agents(
+        bus, composer_document, notifications_state, settings_manager, provider_runtime
+    )
 
     # R1 (doc/QT_REMOVAL_PLAN.md): scene document + grid topics.
     # R3.21: the document is reachable via SessionContext so backend/assets.py's

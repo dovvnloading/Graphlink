@@ -379,11 +379,12 @@ describe("SettingsDialog", () => {
     await user.type(screen.getByPlaceholderText("Enter your API key..."), "sk-test");
     expect(saveButton).toBeDisabled(); // still missing every per-task model
 
+    // ADR-006 stage 6.5: Image Generation is deliberately absent from this
+    // list - it is optional for every provider now (see the test below).
     for (const label of [
       "Chat Naming / Session Title",
       "Chat, Explain, Takeaways (main model)",
       "Chart Generation (code-capable model)",
-      "Image Generation",
       "Web Content Validation",
       "Web Content Summarization",
     ]) {
@@ -391,6 +392,32 @@ describe("SettingsDialog", () => {
     }
 
     expect(saveButton).toBeEnabled();
+  });
+
+  it("Image Generation is visible but optional for OpenAI-Compatible (capability-gated at call time)", async () => {
+    // ADR-006 stage 6.5: a text-only OpenAI-compatible endpoint (vLLM,
+    // LM Studio, llama-server) must save cleanly without an image model -
+    // the backend raises an actionable error at image-generation time
+    // instead of blocking Save up front.
+    const { user, push } = setup();
+    await goToApiEndpoint(user, push);
+
+    // Still rendered (unlike Anthropic, which hides it entirely), labeled
+    // optional the same way the Llama.cpp page labels its optional field.
+    expect(screen.getByLabelText("Image Generation (optional)")).toBeInTheDocument();
+
+    await user.type(screen.getByPlaceholderText("Enter your API key..."), "sk-test");
+    for (const label of [
+      "Chat Naming / Session Title",
+      "Chat, Explain, Takeaways (main model)",
+      "Chart Generation (code-capable model)",
+      "Web Content Validation",
+      "Web Content Summarization",
+    ]) {
+      await user.type(screen.getByLabelText(label), "gpt-4o-mini");
+    }
+
+    expect(screen.getByText("Save Configuration")).toBeEnabled();
   });
 
   it("Anthropic does not require an Image Generation model to enable Save", async () => {
@@ -422,7 +449,7 @@ describe("SettingsDialog", () => {
       "Chat Naming / Session Title",
       "Chat, Explain, Takeaways (main model)",
       "Chart Generation (code-capable model)",
-      "Image Generation",
+      "Image Generation (optional)",
       "Web Content Validation",
       "Web Content Summarization",
     ]) {

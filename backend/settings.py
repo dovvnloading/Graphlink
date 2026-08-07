@@ -330,7 +330,9 @@ def register_settings(
 
     bus.register_topic("app-settings", lambda: _build_settings_payload(manager, state))
 
-    register_settings_general_intents(bus, manager, state)
+    # ADR-006 stage 6.5: the general page now takes notifications too - its
+    # new setProviderMode intent surfaces switch failures/success banners.
+    register_settings_general_intents(bus, manager, state, notifications)
     register_settings_api_provider_intents(bus, manager, notifications, state)
     register_settings_ollama_intents(bus, manager, state)
     register_settings_llama_cpp_intents(bus, manager, state)

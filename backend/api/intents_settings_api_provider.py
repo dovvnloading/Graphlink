@@ -25,6 +25,7 @@ import asyncio
 
 import api_provider
 import graphlink_task_config as config
+from graphlink_model_catalog import ModelDescriptor, sort_descriptors
 
 from backend.api._settings_shared import (
     KNOWN_API_PROVIDERS,
@@ -113,38 +114,38 @@ def register_settings_api_provider_intents(
         await bus.publish("app-settings")
 
         try:
-            # Discovery deliberately exercises the same provider-init path
-            # Save uses, so a successful catalog load doubles as a
-            # connection check - matching legacy's ApiModelLoadWorker.
-            await asyncio.to_thread(
-                api_provider.initialize_api,
+            # ADR-006 stage 6.5: a read-only catalog fetch through a
+            # throwaway client (api_provider.list_models_for_config), never
+            # initialize_api - refreshing a Settings dropdown used to
+            # silently repoint the process's LIVE provider (and with
+            # per-session runtimes, would have repointed every session's
+            # default). Still exercises the same client-construction path
+            # Save uses, so a successful load doubles as a connection check,
+            # matching legacy's ApiModelLoadWorker. This also retires the
+            # post-hoc `API_PROVIDER_TYPE != provider` consistency check
+            # that used to live here: the listing no longer touches live
+            # state, so there is no half-swapped-globals race left to
+            # detect - the result is inherently about the (provider, key,
+            # base_url) triple THIS call was given.
+            model_ids = await asyncio.to_thread(
+                api_provider.list_models_for_config,
                 provider,
                 key,
                 base_url if provider == config.API_PROVIDER_OPENAI else None,
             )
-            descriptors = await asyncio.to_thread(api_provider.get_available_model_descriptors)
-            # Post-review fix: api_provider's provider globals are process-
-            # wide (not per-request), and initialize_api/get_available_
-            # model_descriptors are two separate asyncio.to_thread hops with
-            # an await gap between them - a concurrent loadApiModels/
-            # saveApiConfiguration call for a DIFFERENT provider landing in
-            # that gap would repoint the globals before the descriptors read
-            # runs, so descriptors could describe the wrong provider. This
-            # is the same class of race api_provider.py's own
-            # _snapshot_provider_state() exists to prevent for chat()/
-            # generate_image() - get_available_model_descriptors() has no
-            # snapshot-based equivalent, so the narrowest fix available at
-            # this call site is a post-hoc consistency check: if the global
-            # provider type no longer matches what THIS call just
-            # requested, treat the result as aborted rather than silently
-            # persisting/reporting it under the wrong provider's name.
-            if api_provider.API_PROVIDER_TYPE != provider:
-                state.api_catalog_state[provider] = {
-                    "status": "error",
-                    "message": "Catalog refresh aborted - another request changed the active provider. Try again.",
-                }
-                await bus.publish("app-settings")
-                return
+            # Same descriptor shape get_available_model_descriptors builds
+            # for the live provider, keyed to the REQUESTED provider.
+            descriptors = sort_descriptors(
+                ModelDescriptor(
+                    model_id=str(model_id).strip(),
+                    provider=provider,
+                    ready=True,
+                    available=True,
+                    source="endpoint",
+                )
+                for model_id in model_ids
+                if str(model_id).strip()
+            )
             normalized = [
                 {
                     "model_id": descriptor.model_id,
@@ -206,9 +207,13 @@ def register_settings_api_provider_intents(
                 await bus.publish("notification")
             return
 
-        required_tasks = [
-            task for task in API_TASK_KEYS if not (provider == config.API_PROVIDER_ANTHROPIC and task == config.TASK_IMAGE_GEN)
-        ]
+        # ADR-006 stage 6.5 (H6): TASK_IMAGE_GEN is optional for EVERY
+        # provider, not just Anthropic - image generation is capability-gated
+        # at call time (generate_image raises an actionable "No image
+        # generation model configured" error), so a text-only
+        # OpenAI-compatible endpoint (vLLM, LM Studio, llama-server) saves
+        # cleanly. Mirrors ProviderRuntime.is_configured's required set.
+        required_tasks = [task for task in API_TASK_KEYS if task != config.TASK_IMAGE_GEN]
         for task in required_tasks:
             if not str(models_by_task.get(task, "")).strip():
                 if notifications is not None:
@@ -258,6 +263,12 @@ def register_settings_api_provider_intents(
             manager.set_api_models(normalized_models, provider)
             for task, model_id in normalized_models.items():
                 api_provider.set_task_model(task, model_id)
+            # ADR-006 stage 6.5: a successful save just flipped the LIVE
+            # provider to this API endpoint (initialize_api above), but the
+            # persisted mode never followed - a restart silently booted back
+            # into whatever mode was last persisted. Persist the mode the
+            # save actually put the app in.
+            manager.set_current_mode(config.MODE_API_ENDPOINT)
 
         await asyncio.to_thread(run_locked, _persist)
         if notifications is not None:

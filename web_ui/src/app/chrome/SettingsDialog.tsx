@@ -294,7 +294,12 @@ function ApiProviderPage({
     return task === TASK_IMAGE_GEN ? state.geminiStaticImageModels : state.geminiStaticModels;
   };
 
-  const requiredTasks = API_TASK_FIELDS.filter(({ task }) => !(isAnthropic && task === TASK_IMAGE_GEN));
+  // ADR-006 stage 6.5: Image Generation is optional for EVERY provider, not
+  // just Anthropic - image generation is capability-gated at call time on the
+  // backend, so a text-only OpenAI-compatible endpoint saves cleanly. The
+  // field itself stays visible (and labeled optional) for non-Anthropic
+  // providers below; Anthropic keeps hiding it entirely (no image path at all).
+  const requiredTasks = API_TASK_FIELDS.filter(({ task }) => task !== TASK_IMAGE_GEN);
   // ADR-004 stage 4.4: the same provider-key derivation apiKeyConfigured's
   // placeholder below already needed, factored out so apiKeySource's new
   // "provided by environment" hint reads the identical key - one place
@@ -391,7 +396,9 @@ function ApiProviderPage({
         <legend>Model Selection (per task)</legend>
         {API_TASK_FIELDS.filter(({ task }) => !(isAnthropic && task === TASK_IMAGE_GEN)).map(({ task, label }) => (
           <label className="settings-field" key={task}>
-            <span className="settings-field-label">{label}</span>
+            {/* Same "(optional)" suffix convention as the Llama.cpp page's
+                Chat Naming File field. */}
+            <span className="settings-field-label">{task === TASK_IMAGE_GEN ? `${label} (optional)` : label}</span>
             <input
               type="text"
               className="settings-select"

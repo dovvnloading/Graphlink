@@ -209,7 +209,7 @@ def bootstrap_provider_state(settings_manager: SettingsManager) -> None:
 
     mode_text = settings_manager.get_current_mode()
     try:
-        _apply_mode(mode_text, settings_manager)
+        apply_provider_mode(mode_text, settings_manager)
         settings_manager.set_current_mode(mode_text)
     except Exception:
         # Funnels BOTH a real initialize_* failure (e.g. a persisted API key
@@ -227,10 +227,19 @@ def bootstrap_provider_state(settings_manager: SettingsManager) -> None:
         api_provider.initialize_local_provider(config.LOCAL_PROVIDER_OLLAMA)
 
 
-def _apply_mode(mode_text: str, settings_manager: SettingsManager) -> None:
+def apply_provider_mode(mode_text: str, settings_manager: SettingsManager) -> None:
     """Three-way dispatch mirroring the legacy mode-switch handlers. Raises
     ValueError for any mode_text it does not recognize - see
-    bootstrap_provider_state's single fallback branch above."""
+    bootstrap_provider_state's single fallback branch above.
+
+    ADR-006 stage 6.5: public (formerly _apply_mode) so the Settings
+    dialog's setProviderMode intent (backend/api/intents_settings_general.py)
+    can switch the live provider at runtime through the exact same logic
+    bootstrap uses - previously there was no path back to Ollama/Llama.cpp
+    from API mode without a restart. Acts on api_provider's module-level
+    functions, i.e. the DEFAULT session's runtime - correct while the
+    shipped app has exactly one session; per-session settings routing is
+    deferred to 6.5b/ADR-012."""
     if mode_text == config.MODE_OLLAMA_LOCAL:
         api_provider.initialize_local_provider(
             config.LOCAL_PROVIDER_OLLAMA,
@@ -258,12 +267,26 @@ def _apply_mode(mode_text: str, settings_manager: SettingsManager) -> None:
         raise ValueError(f"unrecognized provider mode: {mode_text!r}")
 
 
+# ADR-006 stage 6.5: thin compatibility alias for the pre-6.5 private name -
+# existing tests exercise the ValueError contract through it.
+_apply_mode = apply_provider_mode
+
+
 class AgentDispatcher:
     """One instance per session - never a module-level singleton, since two
     sessions must never share in-flight request state."""
 
-    def __init__(self, settings_manager: SettingsManager):
+    def __init__(self, settings_manager: SettingsManager, provider_runtime=None):
         self._settings_manager = settings_manager
+        # ADR-006 stage 6.5: the session's ProviderRuntime. None means "the
+        # default session": every provider call keeps going through
+        # api_provider's module-level functions exactly as before (which the
+        # entire existing test suite monkeypatches), so default-session
+        # behavior stays byte-identical. A non-None runtime (a non-default
+        # session - see backend/app.py's _configure_session) is threaded
+        # explicitly into the chat drivers and generate_image via their
+        # additive `runtime=` kwarg.
+        self._provider_runtime = provider_runtime
         # ADR-002 stage 2.3: the chat/conversation, chart, and note pilot
         # surfaces below claim into this ONE shared registry instead of
         # three independent dicts - see backend/run_lifecycle.py's own
@@ -380,6 +403,18 @@ class AgentDispatcher:
         # runs is the plain string node.state.code_sandbox_sandbox_id, real
         # SceneNode state, not a live object.
         self._pycoder_repls: dict[str, PythonREPL] = {}
+
+    def _runtime_kwargs(self) -> dict:
+        """ADR-006 stage 6.5: `{"runtime": self._provider_runtime}` for a
+        non-default session, `{}` for the default one. The kwarg is OMITTED
+        (not passed as None) for the default session, deliberately: many
+        tests monkeypatch _call_chat_agent/_call_chat_agent_stream/
+        api_provider.generate_image with fakes of the exact pre-6.5 arity,
+        and the default session's calls must stay byte-identical to pre-6.5
+        anyway - the module-global path IS the default runtime."""
+        if self._provider_runtime is None:
+            return {}
+        return {"runtime": self._provider_runtime}
 
     def get_pycoder_repl(self, node_id: str, repl_id: str) -> PythonREPL:
         """Lazy-create-or-reuse - mirrors PyCoderReplManager.get_repl's own
@@ -815,7 +850,16 @@ class AgentDispatcher:
             await bus.publish("notification")
             return
 
-        if not api_provider.is_configured():
+        # ADR-006 stage 6.5: gate on THIS session's runtime when one was
+        # injected; the default session keeps calling the module-level
+        # api_provider.is_configured() so existing monkeypatches of that
+        # function still intercept the gate.
+        is_configured = (
+            self._provider_runtime.is_configured
+            if self._provider_runtime is not None
+            else api_provider.is_configured
+        )
+        if not is_configured():
             # Fail fast and clean, synchronously, before touching any thread -
             # a never-configured install gets an honest, actionable error.
             notifications_state.show(
@@ -987,6 +1031,9 @@ class AgentDispatcher:
                                 persona_text,
                                 cancel_event,
                                 _thread_on_chunk,
+                                # ADR-006 stage 6.5: non-default sessions only
+                                # - see _runtime_kwargs' own docstring.
+                                **self._runtime_kwargs(),
                             ),
                             timeout=WATCHDOG_TIMEOUT_SECONDS,
                         )
@@ -999,7 +1046,13 @@ class AgentDispatcher:
                         await pump_task
                 else:
                     reply_text = await asyncio.wait_for(
-                        asyncio.to_thread(_call_chat_agent, conversation_history, persona_text, cancel_event),
+                        asyncio.to_thread(
+                            _call_chat_agent,
+                            conversation_history,
+                            persona_text,
+                            cancel_event,
+                            **self._runtime_kwargs(),
+                        ),
                         timeout=WATCHDOG_TIMEOUT_SECONDS,
                     )
                 if inspect.iscoroutinefunction(on_reply):
@@ -1211,7 +1264,13 @@ class AgentDispatcher:
         async def _run():
             try:
                 image_bytes = await asyncio.wait_for(
-                    asyncio.to_thread(api_provider.generate_image, prompt),
+                    asyncio.to_thread(
+                        api_provider.generate_image,
+                        prompt,
+                        # ADR-006 stage 6.5: non-default sessions only - see
+                        # _runtime_kwargs' own docstring.
+                        **self._runtime_kwargs(),
+                    ),
                     timeout=WATCHDOG_TIMEOUT_SECONDS,
                 )
                 if cancel_event.is_set():
@@ -3029,8 +3088,13 @@ def _is_sandbox_error_output(output_text, return_code) -> bool:
     return any(keyword in lowered for keyword in _SANDBOX_ERROR_KEYWORDS)
 
 
-def _call_chat_agent(conversation_history, persona_text, cancel_event) -> str:
-    """Runs inside asyncio.to_thread - a real OS thread, not the event loop."""
+def _call_chat_agent(conversation_history, persona_text, cancel_event, *, runtime=None) -> str:
+    """Runs inside asyncio.to_thread - a real OS thread, not the event loop.
+
+    ADR-006 stage 6.5: `runtime` is an additive keyword-only kwarg, forwarded
+    to ChatAgent.get_response only when non-None - _dispatch's call site only
+    passes it for a non-default session (see AgentDispatcher._runtime_kwargs),
+    so every test fake of the exact pre-6.5 arity keeps working."""
     agent = ChatAgent("Graphlink Assistant", persona_text)
     # KNOWN PRE-EXISTING LEGACY QUIRK, ported as-is (not fixed here - see the
     # final report): ChatAgent.__init__ does
@@ -3052,10 +3116,11 @@ def _call_chat_agent(conversation_history, persona_text, cancel_event) -> str:
         # backwards would silently drop the "You are Graphlink Assistant. "
         # prefix.
         resolved_system_prompt=agent.system_prompt,
+        **({"runtime": runtime} if runtime is not None else {}),
     )
 
 
-def _call_chat_agent_stream(conversation_history, persona_text, cancel_event, on_chunk) -> str:
+def _call_chat_agent_stream(conversation_history, persona_text, cancel_event, on_chunk, *, runtime=None) -> str:
     """Runs inside asyncio.to_thread - a real OS thread, not the event loop.
     Streaming counterpart to _call_chat_agent (R4.4) - same persona/
     current_node/resolved_system_prompt quirks and guarantees as that
@@ -3071,7 +3136,11 @@ def _call_chat_agent_stream(conversation_history, persona_text, cancel_event, on
     `on_chunk` itself is `_dispatch`'s `_thread_on_chunk` closure - a plain
     callable safe to invoke from this worker thread, since it only ever does
     `loop.call_soon_threadsafe(...)` internally rather than touching the
-    event loop directly."""
+    event loop directly.
+
+    ADR-006 stage 6.5: `runtime` follows _call_chat_agent's contract exactly
+    (additive keyword-only, forwarded only when non-None - see its own
+    docstring)."""
     agent = ChatAgent("Graphlink Assistant", persona_text)
     return agent.get_response(
         conversation_history,
@@ -3079,6 +3148,7 @@ def _call_chat_agent_stream(conversation_history, persona_text, cancel_event, on
         cancellation_event=cancel_event,
         resolved_system_prompt=agent.system_prompt,
         on_chunk=on_chunk,
+        **({"runtime": runtime} if runtime is not None else {}),
     )
 
 
@@ -3410,8 +3480,13 @@ def _call_gitlink_apply(local_root, pending_changes):
     return apply_change_set(local_root, pending_changes)
 
 
-def register_agents(bus, composer_document, notifications_state, settings_manager) -> AgentDispatcher:
-    dispatcher = AgentDispatcher(settings_manager)
+def register_agents(
+    bus, composer_document, notifications_state, settings_manager, provider_runtime=None
+) -> AgentDispatcher:
+    # ADR-006 stage 6.5: provider_runtime is None for the default session
+    # (module-global path, byte-identical behavior) - see
+    # AgentDispatcher.__init__'s own comment.
+    dispatcher = AgentDispatcher(settings_manager, provider_runtime=provider_runtime)
     # dispatcher.cancel is synchronous (just sets an Event and returns a
     # bool) - no publish/await needed here; the in-flight _run task's own
     # finally block handles the resulting state transition.
