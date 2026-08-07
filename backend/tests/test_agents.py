@@ -343,7 +343,10 @@ def test_persona_is_the_base_persona_text_when_enabled():
     dispatcher = AgentDispatcher(_FakeSettingsManager(enable_system_prompt=True))
     persona_text = dispatcher.persona()
     assert persona_text
-    assert "Vertex" in persona_text  # BASE_SYSTEM_PROMPT's persona alias
+    # ADR-006 stage 6.7: the "chat-system-core" v2 identity - one identity,
+    # the Graphlink Assistant; the retired "Vertex" alias must never return.
+    assert "Graphlink Assistant" in persona_text
+    assert "Vertex" not in persona_text
 
 
 # -- R6.1: _resolve_branch_system_prompt (System Prompt note override) --------
@@ -441,8 +444,12 @@ def test_send_message_uses_the_branch_attached_system_prompt_note_instead_of_the
     _configure_fake_ollama_provider_only(monkeypatch)
     captured = {}
 
-    def fake_stream(conversation_history, persona_text, cancel_event, on_chunk):
+    def fake_stream(conversation_history, persona_text, cancel_event, on_chunk, *,
+                    persona_is_override=False):
+        # ADR-006 stage 6.7: the override path now passes
+        # persona_is_override=True (raw passthrough) - captured below.
         captured["persona_text"] = persona_text
+        captured["persona_is_override"] = persona_is_override
         on_chunk("a reply", False)
         return "a reply"
 
@@ -472,7 +479,10 @@ def test_send_message_uses_the_branch_attached_system_prompt_note_instead_of_the
         await entry["task"]
 
         assert captured["persona_text"] == "Custom branch persona."
-        assert "Vertex" not in captured["persona_text"]  # the default never got a look-in
+        assert "Graphlink Assistant" not in captured["persona_text"]  # the default never got a look-in
+        # ADR-006 stage 6.7: an override is flagged so it reaches the wire
+        # RAW, never wrapped in "You are Graphlink Assistant. {override}".
+        assert captured["persona_is_override"] is True
 
     asyncio.run(run())
 
@@ -515,7 +525,11 @@ def test_regenerate_response_also_resolves_the_branch_attached_system_prompt_not
 
     # ADR-006 stage 6.4: regenerate now streams, so the STREAMING driver is
     # the one that must see the resolved persona.
-    def fake_stream(conversation_history, persona_text, cancel_event, on_chunk):
+    def fake_stream(conversation_history, persona_text, cancel_event, on_chunk, *,
+                    persona_is_override=False):
+        # ADR-006 stage 6.7: this is an override-path dispatch, so the fake
+        # must accept the persona_is_override kwarg (only override-path
+        # dispatches pass it - default-path fakes keep the pre-6.7 arity).
         captured["persona_text"] = persona_text
         on_chunk("regenerated reply", False)
         return "regenerated reply"
@@ -544,6 +558,67 @@ def test_regenerate_response_also_resolves_the_branch_attached_system_prompt_not
         assert captured["persona_text"] == "Custom branch persona."
 
     asyncio.run(run())
+
+
+# -- ADR-006 stage 6.7: system-prompt wire shape at the api_provider seam -----
+#
+# These drive the REAL _call_chat_agent_stream -> ChatAgent -> ChatWorker
+# path with api_provider.chat_stream monkeypatched, asserting what actually
+# reaches the wire: disabled -> NO system message at all, override -> the
+# EXACT raw note text, default -> the composed "You are ..." core.
+
+
+def _capture_chat_stream_messages(monkeypatch):
+    import api_provider
+
+    captured = {}
+
+    def fake_chat_stream(*, task, messages, on_chunk, cancellation_event=None, **kwargs):
+        captured["messages"] = messages
+        return {"message": {"content": "a reply"}}
+
+    monkeypatch.setattr(api_provider, "chat_stream", fake_chat_stream)
+    return captured
+
+
+def test_disabled_system_prompt_sends_no_system_message_at_all(monkeypatch):
+    captured = _capture_chat_stream_messages(monkeypatch)
+    history = [{"role": "user", "content": "hi"}]
+
+    agents_module._call_chat_agent_stream(history, "", threading.Event(), lambda d, r: None)
+
+    roles = [m["role"] for m in captured["messages"]]
+    assert "system" not in roles  # disable genuinely disables (6.7 fix)
+    assert captured["messages"] == history
+
+
+def test_note_override_reaches_the_wire_raw_and_unwrapped(monkeypatch):
+    captured = _capture_chat_stream_messages(monkeypatch)
+    history = [{"role": "user", "content": "hi"}]
+
+    agents_module._call_chat_agent_stream(
+        history, "Custom branch persona.", threading.Event(), lambda d, r: None,
+        persona_is_override=True,
+    )
+
+    system_messages = [m for m in captured["messages"] if m["role"] == "system"]
+    assert len(system_messages) == 1
+    assert system_messages[0]["content"] == "Custom branch persona."  # EXACT raw text
+
+
+def test_default_persona_reaches_the_wire_as_the_composed_core(monkeypatch):
+    from graphlink_prompts import BASE_SYSTEM_PROMPT
+
+    captured = _capture_chat_stream_messages(monkeypatch)
+    history = [{"role": "user", "content": "hi"}]
+
+    agents_module._call_chat_agent_stream(
+        history, BASE_SYSTEM_PROMPT, threading.Event(), lambda d, r: None
+    )
+
+    system_messages = [m for m in captured["messages"] if m["role"] == "system"]
+    assert len(system_messages) == 1
+    assert system_messages[0]["content"] == f"You are Graphlink Assistant. {BASE_SYSTEM_PROMPT}"
 
 
 # -- 6. bootstrap_provider_state -----------------------------------------------

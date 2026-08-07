@@ -921,6 +921,13 @@ class AgentDispatcher:
                 # now both read this single resolved value instead).
                 override = self._resolve_branch_system_prompt(canvas_document, node_id)
                 persona_text = override if override is not None else self.persona()
+                # ADR-006 stage 6.7: a note override reaches the wire RAW
+                # (never wrapped in "You are Graphlink Assistant. ...") -
+                # flagged to _call_chat_agent(_stream) only when an override
+                # is actually present, so every default-path test fake of
+                # the exact pre-6.7 arity keeps working (same omit-when-
+                # default pattern as _runtime_kwargs).
+                override_kwargs = {"persona_is_override": True} if override is not None else {}
                 # ADR-006 stage 6.4: the loop-side partial-text accumulator.
                 # A dict, not a str, so _pump (a different coroutine) can
                 # mutate it and the except blocks below can read it after the
@@ -1034,6 +1041,7 @@ class AgentDispatcher:
                                 # ADR-006 stage 6.5: non-default sessions only
                                 # - see _runtime_kwargs' own docstring.
                                 **self._runtime_kwargs(),
+                                **override_kwargs,
                             ),
                             timeout=WATCHDOG_TIMEOUT_SECONDS,
                         )
@@ -1052,6 +1060,7 @@ class AgentDispatcher:
                             persona_text,
                             cancel_event,
                             **self._runtime_kwargs(),
+                            **override_kwargs,
                         ),
                         timeout=WATCHDOG_TIMEOUT_SECONDS,
                     )
@@ -3088,44 +3097,49 @@ def _is_sandbox_error_output(output_text, return_code) -> bool:
     return any(keyword in lowered for keyword in _SANDBOX_ERROR_KEYWORDS)
 
 
-def _call_chat_agent(conversation_history, persona_text, cancel_event, *, runtime=None) -> str:
+def _call_chat_agent(conversation_history, persona_text, cancel_event, *, runtime=None,
+                     persona_is_override=False) -> str:
     """Runs inside asyncio.to_thread - a real OS thread, not the event loop.
 
     ADR-006 stage 6.5: `runtime` is an additive keyword-only kwarg, forwarded
     to ChatAgent.get_response only when non-None - _dispatch's call site only
     passes it for a non-default session (see AgentDispatcher._runtime_kwargs),
-    so every test fake of the exact pre-6.5 arity keeps working."""
+    so every test fake of the exact pre-6.5 arity keeps working.
+
+    ADR-006 stage 6.7: `persona_is_override` (additive keyword-only, passed
+    by _dispatch only when True - same omit-when-default pattern as runtime)
+    marks persona_text as a user's branch-attached System Prompt note
+    override. An override reaches the wire RAW, never wrapped in
+    "You are Graphlink Assistant. {override}" - the user wrote the exact
+    system prompt they want. The old "(default persona)" QUIRK this
+    function's comment used to document is also fixed: a blank persona_text
+    (system prompt disabled in Settings) now yields an EMPTY system prompt
+    (no system message at all) - see ChatAgent.__init__."""
     agent = ChatAgent("Graphlink Assistant", persona_text)
-    # KNOWN PRE-EXISTING LEGACY QUIRK, ported as-is (not fixed here - see the
-    # final report): ChatAgent.__init__ does
-    # `self.persona = persona or "(default persona)"`, so when persona_text
-    # is "" (system prompt disabled), self.persona becomes the literal
-    # "(default persona)" and system_prompt ends up
-    # "You are Graphlink Assistant. (default persona)." - not truly
-    # empty/suppressed the way disabling the setting is clearly meant to.
+    resolved = persona_text if persona_is_override else agent.system_prompt
     return agent.get_response(
         conversation_history,
         # current_node=None is never dereferenced: ChatWorker.run only walks
         # current_node when resolved_system_prompt is None, and a real value
-        # (agent.system_prompt, NOT the raw persona_text - see below) is
-        # always supplied here.
+        # is always supplied here ("" when disabled counts: run()'s
+        # use_system_prompt guard suppresses the system message for it).
         current_node=None,
         cancellation_event=cancel_event,
-        # Pass agent.system_prompt (the "You are {name}. {persona}." string
-        # ChatAgent always builds), NOT the raw persona_text - getting this
-        # backwards would silently drop the "You are Graphlink Assistant. "
-        # prefix.
-        resolved_system_prompt=agent.system_prompt,
+        # Default-persona path: agent.system_prompt (the composed
+        # "You are {name}. {persona}" string, or "" when disabled).
+        # Override path: the RAW note text, uncomposed.
+        resolved_system_prompt=resolved,
         **({"runtime": runtime} if runtime is not None else {}),
     )
 
 
-def _call_chat_agent_stream(conversation_history, persona_text, cancel_event, on_chunk, *, runtime=None) -> str:
+def _call_chat_agent_stream(conversation_history, persona_text, cancel_event, on_chunk, *, runtime=None,
+                            persona_is_override=False) -> str:
     """Runs inside asyncio.to_thread - a real OS thread, not the event loop.
     Streaming counterpart to _call_chat_agent (R4.4) - same persona/
-    current_node/resolved_system_prompt quirks and guarantees as that
-    function (see its own docstring for the "(default persona)" note, which
-    applies identically here since both build the ChatAgent the same way).
+    current_node/resolved_system_prompt guarantees as that function (see its
+    own docstring; the 6.7 disable/override fixes apply identically here
+    since both build the ChatAgent the same way).
 
     The only difference is the trailing `on_chunk` argument, forwarded
     straight through to ChatAgent.get_response's additive `on_chunk` kwarg
@@ -3140,13 +3154,16 @@ def _call_chat_agent_stream(conversation_history, persona_text, cancel_event, on
 
     ADR-006 stage 6.5: `runtime` follows _call_chat_agent's contract exactly
     (additive keyword-only, forwarded only when non-None - see its own
-    docstring)."""
+    docstring). ADR-006 stage 6.7: `persona_is_override` follows
+    _call_chat_agent's contract exactly too (raw override passthrough,
+    passed by _dispatch only when True)."""
     agent = ChatAgent("Graphlink Assistant", persona_text)
+    resolved = persona_text if persona_is_override else agent.system_prompt
     return agent.get_response(
         conversation_history,
         current_node=None,
         cancellation_event=cancel_event,
-        resolved_system_prompt=agent.system_prompt,
+        resolved_system_prompt=resolved,
         on_chunk=on_chunk,
         **({"runtime": runtime} if runtime is not None else {}),
     )

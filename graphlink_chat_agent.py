@@ -140,8 +140,17 @@ class ChatAgent:
             persona (str): The detailed system prompt defining the AI's behavior and knowledge.
         """
         self.name = name or "AI Assistant"
-        self.persona = persona or "(default persona)"
-        self.system_prompt = f"You are {self.name}. {self.persona}"
+        # ADR-006 stage 6.7: disable actually disables. The old
+        # `persona or "(default persona)"` fallback meant a blank persona
+        # (system prompt disabled in Settings) still produced a non-empty
+        # system_prompt ("You are ... (default persona)"), defeating
+        # ChatWorker.run's use_system_prompt guard. A blank persona now
+        # yields system_prompt == "" so no system message is sent at all.
+        self.persona = persona or ""
+        if self.persona.strip():
+            self.system_prompt = f"You are {self.name}. {self.persona}"
+        else:
+            self.system_prompt = ""
 
     def get_response(self, conversation_history, current_node, cancellation_event=None, resolved_system_prompt=None,
                       on_chunk=None, *, runtime=None):
