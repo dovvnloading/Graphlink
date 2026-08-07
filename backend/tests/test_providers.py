@@ -1231,3 +1231,70 @@ def test_snapshot_ollama_models_is_a_copy_not_a_live_view(monkeypatch, ollama_mo
     monkeypatch.setitem(config.OLLAMA_MODELS, config.TASK_CHAT, "swapped-mid-request:1b")
 
     assert snapshot.ollama_models[config.TASK_CHAT] == "fake-model:1b"
+
+
+# -- ADR-006 stage 6.5 review fix: llama.cpp preload write-ordering ----------
+
+
+def test_llama_cpp_preload_failure_never_makes_the_new_settings_snapshot_visible(monkeypatch, tmp_path):
+    """A LOW-severity finding from the 6.5 adversarial review: the old
+    write-then-preload-then-rollback-on-failure ordering had a window where
+    a concurrent snapshot() (e.g. a new session's ProviderRuntime.
+    from_snapshot) could observe and permanently copy settings that were
+    about to be rolled back. Preloading BEFORE writing means a failed
+    preload never makes the new settings visible to any snapshot at all -
+    not even transiently."""
+    model_path = tmp_path / "model.gguf"
+    model_path.write_bytes(b"not a real gguf, just needs to exist")
+
+    runtime = api_provider.ProviderRuntime()
+    original_snapshot = runtime.snapshot()
+
+    def failing_preload(task, settings):
+        # Prove the write has NOT happened yet when the preload runs.
+        assert runtime.snapshot() == original_snapshot
+        raise RuntimeError("out of memory")
+
+    monkeypatch.setattr(api_provider, "_get_llama_cpp_client", failing_preload)
+
+    with pytest.raises(RuntimeError, match="out of memory"):
+        runtime.initialize_local_provider(
+            config.LOCAL_PROVIDER_LLAMACPP,
+            {"chat_model_path": str(model_path)},
+            preload_model=True,
+        )
+
+    # Nothing changed - not even transiently, and there was no rollback to
+    # perform because there was nothing to roll back.
+    assert runtime.snapshot() == original_snapshot
+
+
+def test_llama_cpp_preload_success_writes_settings_after_the_preload_completes(monkeypatch, tmp_path):
+    model_path = tmp_path / "model.gguf"
+    model_path.write_bytes(b"not a real gguf, just needs to exist")
+
+    runtime = api_provider.ProviderRuntime()
+    order = []
+
+    def recording_preload(task, settings):
+        order.append("preload")
+        return object()
+
+    monkeypatch.setattr(api_provider, "_get_llama_cpp_client", recording_preload)
+    original_write = api_provider.ProviderRuntime._write
+
+    def recording_write(self, **updates):
+        order.append("write")
+        return original_write(self, **updates)
+
+    monkeypatch.setattr(api_provider.ProviderRuntime, "_write", recording_write)
+
+    result = runtime.initialize_local_provider(
+        config.LOCAL_PROVIDER_LLAMACPP,
+        {"chat_model_path": str(model_path)},
+        preload_model=True,
+    )
+
+    assert order == ["preload", "write"]
+    assert result["preloaded"] is True
+    assert runtime.snapshot().llama_cpp_settings["chat_model_path"] == str(model_path)

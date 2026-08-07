@@ -252,7 +252,21 @@ class ProviderRuntime:
             if normalized_settings.get("title_model_path"):
                 _validate_llama_cpp_model_path(normalized_settings["title_model_path"], config.TASK_TITLE)
 
-            previous = self._write(
+            # ADR-006 stage 6.5 review fix (LOW): preload BEFORE writing state,
+            # not write-then-rollback-on-failure. The (potentially slow,
+            # multi-GB) preload deliberately happens outside the state lock
+            # so it never blocks other requests' snapshots - but a snapshot
+            # taken in that window used to see the NEW, not-yet-validated
+            # settings, which from_snapshot() can now copy into a per-session
+            # runtime that never gets corrected if the preload then fails and
+            # this runtime rolls back. Preloading first means a write only
+            # ever commits a value already known-good, so there is nothing to
+            # roll back and nothing transient for a concurrent snapshot to
+            # capture.
+            if preload_model:
+                _get_llama_cpp_client(config.TASK_CHAT, normalized_settings)
+
+            self._write(
                 use_api_mode=False,
                 local_provider_type=provider,
                 api_provider_type=None,
@@ -261,15 +275,6 @@ class ProviderRuntime:
                 api_base_url=None,
                 llama_cpp_settings=normalized_settings,
             )
-            try:
-                # The (potentially slow, multi-GB) model preload deliberately
-                # happens OUTSIDE the state lock so it never blocks other
-                # requests' snapshots.
-                if preload_model:
-                    _get_llama_cpp_client(config.TASK_CHAT, normalized_settings)
-            except Exception:
-                self._write(**previous)
-                raise
 
             return {
                 "provider": provider,
