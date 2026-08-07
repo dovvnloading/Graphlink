@@ -692,7 +692,10 @@ def test_anthropic_sdk_path_and_rest_fallback_both_route_through_the_provider(mo
     )
     assert content == "sdk answer"
     assert captured["model"] == "claude-opus-5"
-    assert captured["system"] == "be brief"
+    # ADR-006 stage 6.7: system goes out as a cache_control block list.
+    assert captured["system"] == [
+        {"type": "text", "text": "be brief", "cache_control": {"type": "ephemeral"}}
+    ]
 
     # Dict-sentinel client (SDK not installed): falls back to the REST helper.
     rest_calls = {}
@@ -712,6 +715,54 @@ def test_anthropic_sdk_path_and_rest_fallback_both_route_through_the_provider(mo
     assert content == "rest answer"
     assert rest_calls["url"].endswith("/v1/messages")
     assert rest_calls["body"]["model"] == "claude-opus-5"
+
+
+def test_anthropic_system_prompt_carries_cache_control_on_the_rest_transport(monkeypatch):
+    # ADR-006 stage 6.7 exit criterion (request shape): when a system prompt
+    # is present, BOTH transports send it as a content-block list carrying
+    # cache_control - the SDK-side assertions live in the two tests above
+    # (blocking and streaming); this one pins the REST fallback on both the
+    # blocking and streaming paths, plus the no-system-prompt case.
+    from backend.providers import AnthropicProvider, CancelToken as CT, ChatRequest as CR
+
+    expected_system = [
+        {"type": "text", "text": "be brief", "cache_control": {"type": "ephemeral"}}
+    ]
+    messages_with_system = [
+        {"role": "system", "content": "be brief"},
+        {"role": "user", "content": "hi"},
+    ]
+
+    # Blocking REST path.
+    rest_calls = {}
+
+    def fake_post(url, body, **kwargs):
+        rest_calls["body"] = body
+        return {"content": [{"type": "text", "text": "rest answer"}]}
+
+    monkeypatch.setattr("backend.providers.anthropic_provider._anthropic_post_json", fake_post)
+    provider = AnthropicProvider(
+        client={"provider": "anthropic", "transport": "rest"}, api_key="k", model="claude-opus-5"
+    )
+    provider.complete(CR(task=config.TASK_CHAT, messages=messages_with_system), CT())
+    assert rest_calls["body"]["system"] == expected_system
+
+    # Streaming REST path.
+    sse_calls = {}
+
+    def fake_stream_sse(url, body, timeout=180, cancel_event=None, api_key=None):
+        sse_calls["body"] = body
+        yield from _anthropic_raw_events(with_thinking=False)
+
+    monkeypatch.setattr(
+        "backend.providers.anthropic_provider._anthropic_stream_sse", fake_stream_sse
+    )
+    list(provider.stream(CR(task=config.TASK_CHAT, messages=messages_with_system), CT()))
+    assert sse_calls["body"]["system"] == expected_system
+
+    # No system message: the key is absent entirely, exactly as before.
+    provider.complete(CR(task=config.TASK_CHAT, messages=[{"role": "user", "content": "hi"}]), CT())
+    assert "system" not in rest_calls["body"]
 
 
 def test_gemini_deletes_uploaded_files_even_when_the_generation_call_fails(monkeypatch):
@@ -1163,7 +1214,10 @@ def test_anthropic_sdk_stream_yields_deltas_and_composes_done_like_the_blocking_
     # Identical composition to _extract_anthropic_text's blocking contract.
     assert events[-1].text == "<think>pondering...</think>\nAnswer."
     assert captured["model"] == "claude-opus-5"
-    assert captured["system"] == "be brief"
+    # ADR-006 stage 6.7: system goes out as a cache_control block list.
+    assert captured["system"] == [
+        {"type": "text", "text": "be brief", "cache_control": {"type": "ephemeral"}}
+    ]
     assert live.close_calls >= 1
 
 

@@ -45,6 +45,22 @@ from backend.providers.base import (
 _ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages"
 
 
+def _system_blocks_with_cache_control(system_prompt: str) -> list[dict]:
+    """ADR-006 stage 6.7: send the system prompt as a content-block list
+    with cache_control instead of a bare string, so Anthropic caches the
+    (stable, per-conversation-identical) system prompt across turns.
+    Both transports pass this through unchanged: `system` is a declared
+    param on the SDK's messages.create (survives _filter_kwargs_for_
+    callable), and the REST fallback serializes request kwargs wholesale."""
+    return [
+        {
+            "type": "text",
+            "text": system_prompt,
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
+
+
 class AnthropicProvider:
     def __init__(self, *, client, api_key: str, model: str, reasoning_level: str = "off"):
         self.client = client
@@ -72,7 +88,7 @@ class AnthropicProvider:
             **_prepare_anthropic_kwargs(request.task, kwargs, self.model_id, reasoning_level),
         }
         if system_prompt:
-            request_kwargs["system"] = system_prompt
+            request_kwargs["system"] = _system_blocks_with_cache_control(system_prompt)
 
         create_callable = getattr(getattr(self.client, "messages", None), "create", None)
         if callable(create_callable):
@@ -107,7 +123,7 @@ class AnthropicProvider:
             **_prepare_anthropic_kwargs(request.task, kwargs, self.model_id, reasoning_level),
         }
         if system_prompt:
-            request_kwargs["system"] = system_prompt
+            request_kwargs["system"] = _system_blocks_with_cache_control(system_prompt)
 
         create_callable = getattr(getattr(self.client, "messages", None), "create", None)
         if callable(create_callable):
