@@ -6893,3 +6893,96 @@ def test_stale_artifact_teardown_never_clears_a_newer_runs_pending_request_id(mo
         assert artifact_slots(dispatcher) == {}
 
     asyncio.run(run())
+
+
+# -- ADR-006 stage 6.5: per-session ProviderRuntime reaches the dispatcher ----
+
+
+def test_dispatcher_gates_and_routes_through_its_injected_provider_runtime(monkeypatch):
+    # The app-level half of the 6.5 exit criterion, at AgentDispatcher
+    # granularity: a dispatcher built with its own ProviderRuntime (a) gates
+    # is_configured() on THAT runtime, not the module globals, and (b) hands
+    # the runtime to the chat driver. The module globals are deliberately
+    # UNCONFIGURED here (empty chat model), so a dispatcher still consulting
+    # them would refuse to dispatch at all - passing this test requires the
+    # injected runtime to be the one consulted end to end.
+    monkeypatch.setattr(api_provider, "USE_API_MODE", False)
+    monkeypatch.setattr(api_provider, "LOCAL_PROVIDER_TYPE", config.LOCAL_PROVIDER_OLLAMA)
+    monkeypatch.setitem(config.OLLAMA_MODELS, config.TASK_CHAT, "")
+    assert api_provider.is_configured() is False  # the default path would refuse
+
+    runtime = api_provider.ProviderRuntime()
+    runtime.set_ollama_models({config.TASK_CHAT: "session-two-model:7b"})
+    assert runtime.is_configured() is True
+
+    seen_runtimes = []
+
+    def fake_stream(conversation_history, persona_text, cancel_event, on_chunk, runtime=None):
+        seen_runtimes.append(runtime)
+        return "per-session reply"
+
+    monkeypatch.setattr(agents_module, "_call_chat_agent_stream", fake_stream)
+
+    async def run():
+        bus = SessionBus("agents-runtime-test")
+        notifications = NotificationState()
+        bus.register_topic("notification", notifications.payload)
+        composer_document = ComposerDocument()
+        bus.register_topic("app-composer", composer_document.payload)
+        bus.register_topic("scene", lambda: {})
+        dispatcher = AgentDispatcher(_FakeSettingsManager(), provider_runtime=runtime)
+        replies = []
+        await dispatcher.start_chat_reply(
+            bus=bus,
+            notifications_state=notifications,
+            composer_document=composer_document,
+            conversation_history=[{"role": "user", "content": "hi"}],
+            on_reply=replies.append,
+        )
+        entry = next(iter(chat_slots(dispatcher).values()))
+        await entry["task"]
+
+        assert replies == ["per-session reply"]
+        assert seen_runtimes == [runtime]
+
+    asyncio.run(run())
+
+
+def test_default_dispatcher_still_calls_the_drivers_with_the_exact_pre_65_arity(monkeypatch):
+    # Compat pin: a dispatcher WITHOUT an injected runtime (the default
+    # session, and every existing test in this file) must keep calling
+    # _call_chat_agent_stream with the exact pre-6.5 positional arity - no
+    # runtime kwarg at all - so every fake of that arity keeps working.
+    def strict_pre_65_fake(conversation_history, persona_text, cancel_event, on_chunk):
+        return "default reply"
+
+    monkeypatch.setattr(agents_module, "_call_chat_agent_stream", strict_pre_65_fake)
+    _configure_fake_ollama(monkeypatch, lambda task, messages, **kwargs: {"message": {"content": "unused"}})
+
+    async def run():
+        bus, notifications, composer_document, dispatcher = _make_dispatch_env()
+        replies = []
+        await dispatcher.start_chat_reply(
+            bus=bus,
+            notifications_state=notifications,
+            composer_document=composer_document,
+            conversation_history=[{"role": "user", "content": "hi"}],
+            on_reply=replies.append,
+        )
+        entry = next(iter(chat_slots(dispatcher).values()))
+        await entry["task"]
+
+        assert replies == ["default reply"]
+
+    asyncio.run(run())
+
+
+def test_register_agents_forwards_the_provider_runtime_to_the_dispatcher():
+    bus = SessionBus("agents-register-runtime-test")
+    runtime = api_provider.ProviderRuntime()
+
+    dispatcher = agents_module.register_agents(
+        bus, ComposerDocument(), NotificationState(), _FakeSettingsManager(), provider_runtime=runtime
+    )
+
+    assert dispatcher._provider_runtime is runtime

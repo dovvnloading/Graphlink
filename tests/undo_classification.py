@@ -219,6 +219,8 @@ CLASSIFICATION: tuple[Classified, ...] = (
     Classified("app-settings", "setNotificationPreference", "B", "preference: notification-type toggle"),
     Classified("app-settings", "setGithubToken", "B", "preference: write-only credential field, not document content"),
     Classified("app-settings", "clearGithubToken", "B", "preference: write-only credential field, not document content"),
+    # ADR-006 stage 6.5:
+    Classified("app-settings", "setProviderMode", "B", "preference: which provider mode is live/persisted"),
 
     # -- backend/api/intents_settings_api_provider.py (app-settings) --------
     Classified("app-settings", "setViewingApiProvider", "B", "preference: which provider sub-page is viewed"),

@@ -221,19 +221,11 @@ def test_set_viewing_api_provider_intent_updates_only_local_ui_state(manager):
 
 
 def test_load_api_models_success_persists_catalog_and_publishes_status(manager, monkeypatch):
-    from graphlink_model_catalog import ModelDescriptor
-
-    monkeypatch.setattr(api_provider, "initialize_api", lambda *a, **k: None)
-    # initialize_api is mocked to a no-op, so it never sets the real
-    # api_provider.API_PROVIDER_TYPE global the way load_api_models' own
-    # post-review stale-provider guard checks against - set it directly to
-    # simulate what the real call would have done.
-    monkeypatch.setattr(api_provider, "API_PROVIDER_TYPE", config.API_PROVIDER_OPENAI)
-    monkeypatch.setattr(
-        api_provider,
-        "get_available_model_descriptors",
-        lambda: [ModelDescriptor(model_id="gpt-4o", provider=config.API_PROVIDER_OPENAI, capabilities=frozenset({"text"}))],
-    )
+    # ADR-006 stage 6.5: loadApiModels routes through the state-free
+    # list_models_for_config (a throwaway client), never initialize_api -
+    # the old mock-API_PROVIDER_TYPE dance for the post-hoc stale-provider
+    # guard is gone with the guard itself.
+    monkeypatch.setattr(api_provider, "list_models_for_config", lambda *a, **k: ["gpt-4o"])
     bus = SessionBus("settings-load-models-test")
     register_settings(bus, manager)
     recorder = Recorder()
@@ -254,7 +246,7 @@ def test_load_api_models_failure_sets_error_status_and_does_not_persist(manager,
     def _boom(*a, **k):
         raise RuntimeError("connection refused")
 
-    monkeypatch.setattr(api_provider, "initialize_api", _boom)
+    monkeypatch.setattr(api_provider, "list_models_for_config", _boom)
     bus = SessionBus("settings-load-models-error-test")
     register_settings(bus, manager)
     recorder = Recorder()
@@ -272,7 +264,7 @@ def test_load_api_models_failure_sets_error_status_and_does_not_persist(manager,
 
 def test_load_api_models_rejects_gemini_since_it_has_no_live_catalog(manager, monkeypatch):
     calls = []
-    monkeypatch.setattr(api_provider, "initialize_api", lambda *a, **k: calls.append(a))
+    monkeypatch.setattr(api_provider, "list_models_for_config", lambda *a, **k: calls.append(a))
     bus = SessionBus("settings-load-models-gemini-test")
     register_settings(bus, manager)
     recorder = Recorder()
@@ -344,6 +336,31 @@ def test_save_api_configuration_anthropic_does_not_require_image_gen_task(manage
     assert manager.get_anthropic_key() == "sk-ant-test"
 
 
+def test_save_api_configuration_accepts_a_text_only_endpoint_without_an_image_model(manager, monkeypatch):
+    # ADR-006 stage 6.5 (H6): TASK_IMAGE_GEN is optional for EVERY provider
+    # now, not just Anthropic - a text-only OpenAI-compatible endpoint
+    # (vLLM, LM Studio, llama-server) has no image model to offer, and
+    # image generation is capability-gated at call time instead
+    # (generate_image's own "No image generation model configured" error).
+    monkeypatch.setattr(api_provider, "initialize_api", lambda *a, **k: None)
+    notifications = NotificationState()
+    bus = SessionBus("settings-save-text-only-endpoint-test")
+    bus.register_topic("notification", notifications.payload)
+    register_settings(bus, manager, notifications)
+
+    models = _six_task_models()
+    del models[config.TASK_IMAGE_GEN]
+    asyncio.run(
+        bus.dispatch_intent(
+            "app-settings", "saveApiConfiguration", [config.API_PROVIDER_OPENAI, "https://x/v1", "sk-test", models]
+        )
+    )
+
+    assert manager.get_api_provider() == config.API_PROVIDER_OPENAI
+    assert manager.get_openai_key() == "sk-test"
+    assert notifications.msg_type == "success"
+
+
 def test_save_api_configuration_does_not_persist_when_provider_init_fails(manager):
     def _boom(*a, **k):
         raise RuntimeError("bad endpoint")
@@ -397,6 +414,10 @@ def test_save_api_configuration_persists_on_success_and_routes_task_models(manag
     assert manager.get_api_models(config.API_PROVIDER_OPENAI) == models
     assert routed == models
     assert notifications.msg_type == "success"
+    # ADR-006 stage 6.5: a successful save flips the LIVE provider to this
+    # API endpoint, so the persisted mode must follow - previously a restart
+    # silently booted back into whatever mode was last persisted.
+    assert manager.get_current_mode() == config.MODE_API_ENDPOINT
 
 
 def test_save_api_configuration_redacts_the_key_from_a_provider_error_message(manager):
@@ -440,7 +461,7 @@ def test_load_api_models_redacts_the_key_from_a_provider_error_message(manager, 
     def _boom(*a, **k):
         raise RuntimeError(f"connection refused for key {secret}")
 
-    monkeypatch.setattr(api_provider, "initialize_api", _boom)
+    monkeypatch.setattr(api_provider, "list_models_for_config", _boom)
     bus = SessionBus("settings-load-redaction-test")
     register_settings(bus, manager)
     recorder = Recorder()
@@ -462,9 +483,11 @@ def test_load_api_models_falls_back_to_the_saved_key_when_the_field_is_blank(man
     # with "API key not configured" while the same payload reports
     # apiKeyConfigured=true. Legacy avoided this by pre-filling the field.
     seen = []
-    monkeypatch.setattr(api_provider, "initialize_api", lambda provider, key, base_url=None: seen.append(key))
-    monkeypatch.setattr(api_provider, "API_PROVIDER_TYPE", config.API_PROVIDER_OPENAI)
-    monkeypatch.setattr(api_provider, "get_available_model_descriptors", lambda: [])
+    monkeypatch.setattr(
+        api_provider,
+        "list_models_for_config",
+        lambda provider, key, base_url=None: seen.append(key) or [],
+    )
     manager.set_api_settings(config.API_PROVIDER_OPENAI, "https://x/v1", "sk-saved-openai", "", "")
     bus = SessionBus("settings-load-key-fallback-test")
     register_settings(bus, manager)
@@ -476,7 +499,7 @@ def test_load_api_models_falls_back_to_the_saved_key_when_the_field_is_blank(man
 
 def test_load_api_models_reports_a_clean_error_when_no_key_is_available_anywhere(manager, monkeypatch):
     called = []
-    monkeypatch.setattr(api_provider, "initialize_api", lambda *a, **k: called.append(a))
+    monkeypatch.setattr(api_provider, "list_models_for_config", lambda *a, **k: called.append(a))
     bus = SessionBus("settings-load-no-key-test")
     register_settings(bus, manager)
     recorder = Recorder()
@@ -494,7 +517,7 @@ def test_load_api_models_requires_a_base_url_for_the_openai_compatible_provider(
     # Without this an empty Base URL falls through to api_provider's own
     # api.openai.com default, sending a self-hosted-proxy key to OpenAI.
     called = []
-    monkeypatch.setattr(api_provider, "initialize_api", lambda *a, **k: called.append(a))
+    monkeypatch.setattr(api_provider, "list_models_for_config", lambda *a, **k: called.append(a))
     bus = SessionBus("settings-load-no-base-url-test")
     register_settings(bus, manager)
     recorder = Recorder()
@@ -533,7 +556,9 @@ def test_load_api_models_survives_non_string_wire_arguments(manager, monkeypatch
     # handler: a non-str key hit str.replace inside the except block (where
     # its own try cannot catch it), and an unhashable provider was used
     # directly as a dict key.
-    monkeypatch.setattr(api_provider, "initialize_api", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("nope")))
+    monkeypatch.setattr(
+        api_provider, "list_models_for_config", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("nope"))
+    )
     bus = SessionBus("settings-load-wire-types-test")
     register_settings(bus, manager)
 
@@ -568,15 +593,7 @@ def test_load_api_models_does_not_grow_catalog_state_for_unknown_providers(manag
 
 
 def test_reset_api_settings_also_clears_the_catalog_and_snaps_the_viewed_provider_back(manager, monkeypatch):
-    from graphlink_model_catalog import ModelDescriptor
-
-    monkeypatch.setattr(api_provider, "initialize_api", lambda *a, **k: None)
-    monkeypatch.setattr(api_provider, "API_PROVIDER_TYPE", config.API_PROVIDER_ANTHROPIC)
-    monkeypatch.setattr(
-        api_provider,
-        "get_available_model_descriptors",
-        lambda: [ModelDescriptor(model_id="claude-sonnet", provider=config.API_PROVIDER_ANTHROPIC)],
-    )
+    monkeypatch.setattr(api_provider, "list_models_for_config", lambda *a, **k: ["claude-sonnet"])
     bus = SessionBus("settings-reset-clears-catalog-test")
     register_settings(bus, manager)
     recorder = Recorder()
@@ -703,42 +720,44 @@ def test_save_api_configuration_reads_other_providers_keys_atomically_with_its_o
     assert manager.get_anthropic_key() == "sk-concurrent-ant"
 
 
-def test_load_api_models_aborts_when_another_request_repointed_the_provider_globals(manager, monkeypatch):
-    # Regression test for the F2 stale-provider guard, which shipped with
-    # no coverage of its own (a second-pass audit found that deleting the
-    # guard left the whole suite green). api_provider's provider state is
-    # process-global and initialize_api/get_available_model_descriptors are
-    # two separate to_thread hops - a concurrent call for a different
-    # provider landing between them makes the descriptors describe someone
-    # else's provider. The guard must refuse to persist that under this
-    # call's provider name.
-    from graphlink_model_catalog import ModelDescriptor
-
-    monkeypatch.setattr(api_provider, "initialize_api", lambda *a, **k: None)
-    monkeypatch.setattr(api_provider, "API_PROVIDER_TYPE", config.API_PROVIDER_OPENAI)
-
-    def _descriptors_after_someone_else_switched_provider():
-        # Simulates another connection's initialize_api completing in the
-        # await gap and repointing the process-global provider state.
-        monkeypatch.setattr(api_provider, "API_PROVIDER_TYPE", config.API_PROVIDER_ANTHROPIC)
-        return [ModelDescriptor(model_id="claude-sonnet", provider=config.API_PROVIDER_ANTHROPIC)]
-
-    monkeypatch.setattr(api_provider, "get_available_model_descriptors", _descriptors_after_someone_else_switched_provider)
-    bus = SessionBus("settings-stale-provider-guard-test")
+def test_load_api_models_never_mutates_the_live_provider_state(manager, monkeypatch):
+    # ADR-006 stage 6.5 regression pin, replacing the retired F2
+    # stale-provider-guard test: loadApiModels used to call initialize_api
+    # just to refresh a Settings dropdown, silently repointing the
+    # process's LIVE provider (that repointing race is what the F2 post-hoc
+    # guard existed to detect). It now routes through
+    # list_models_for_config's throwaway client, so a catalog refresh must
+    # leave USE_API_MODE/API_PROVIDER_TYPE/API_CLIENT exactly as they were.
+    fake_client = object()
+    monkeypatch.setattr(
+        api_provider, "_build_api_client", lambda provider, key, base_url=None: (fake_client, key, base_url)
+    )
+    monkeypatch.setattr(api_provider, "_list_models", lambda provider, client, key=None: ["gpt-4o"])
+    before = (
+        api_provider.USE_API_MODE,
+        api_provider.API_PROVIDER_TYPE,
+        api_provider.API_CLIENT,
+        api_provider.API_KEY,
+        api_provider.API_BASE_URL,
+    )
+    bus = SessionBus("settings-load-no-live-mutation-test")
     register_settings(bus, manager)
-    recorder = Recorder()
-    bus.attach(recorder)
 
     asyncio.run(
         bus.dispatch_intent("app-settings", "loadApiModels", [config.API_PROVIDER_OPENAI, "sk-test", "https://x/v1"])
     )
 
-    payload = recorder.messages[-1]["payload"]
-    assert payload["apiCatalogStatus"] == "error"
-    assert "another request" in payload["apiCatalogMessage"]
-    # The decisive assertion: Anthropic's models must NOT have been filed
-    # under OpenAI-Compatible.
-    assert manager.get_api_model_catalog(config.API_PROVIDER_OPENAI) == []
+    # The catalog DID refresh (the real list_models_for_config ran, through
+    # the fake client)...
+    assert manager.get_api_model_catalog(config.API_PROVIDER_OPENAI)[0]["model_id"] == "gpt-4o"
+    # ...and the live provider globals are untouched, byte for byte.
+    assert (
+        api_provider.USE_API_MODE,
+        api_provider.API_PROVIDER_TYPE,
+        api_provider.API_CLIENT,
+        api_provider.API_KEY,
+        api_provider.API_BASE_URL,
+    ) == before
 
 
 def test_catalog_state_is_isolated_per_provider(manager, monkeypatch):
@@ -758,7 +777,7 @@ def test_catalog_state_is_isolated_per_provider(manager, monkeypatch):
     recorder = Recorder()
     bus.attach(recorder)
 
-    monkeypatch.setattr(api_provider, "initialize_api", _boom)
+    monkeypatch.setattr(api_provider, "list_models_for_config", _boom)
     asyncio.run(
         bus.dispatch_intent("app-settings", "loadApiModels", [config.API_PROVIDER_OPENAI, "sk-test", "https://x/v1"])
     )
@@ -1811,3 +1830,70 @@ def test_save_llama_cpp_settings_aborts_without_persisting_when_the_live_reapply
 
     assert "Invalid Llama.cpp configuration" in recorder.messages[-1]["payload"]["llamaCppNotice"]
     assert manager.get_llama_cpp_chat_model_path() == ""  # NOT persisted - the whole save aborted
+
+
+# -- ADR-006 stage 6.5: setProviderMode - the first runtime path back to
+# -- Ollama/Llama.cpp from API mode without a restart. Routes through
+# -- backend.agents.apply_provider_mode (the same three-way dispatch
+# -- bootstrap_provider_state uses) and persists manager.set_current_mode.
+
+
+def test_set_provider_mode_switches_to_ollama_and_persists_the_mode(manager, monkeypatch):
+    applied = []
+    monkeypatch.setattr(
+        api_provider, "initialize_local_provider", lambda provider, settings=None, **k: applied.append((provider, settings))
+    )
+    manager.set_current_mode(config.MODE_API_ENDPOINT)  # simulate a running API session
+    notifications = NotificationState()
+    bus = SessionBus("settings-set-provider-mode-test")
+    bus.register_topic("notification", notifications.payload)
+    register_settings(bus, manager, notifications)
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "setProviderMode", [config.MODE_OLLAMA_LOCAL]))
+
+    # The live switch ran through apply_provider_mode's Ollama branch...
+    assert applied == [(config.LOCAL_PROVIDER_OLLAMA, {"reasoning_level": manager.get_ollama_reasoning_level()})]
+    # ...the choice survives a restart...
+    assert manager.get_current_mode() == config.MODE_OLLAMA_LOCAL
+    # ...and the session heard about both the banner and the settings state.
+    assert notifications.msg_type == "success"
+    assert config.MODE_OLLAMA_LOCAL in notifications.message
+    assert recorder.messages[-1]["topic"] == "app-settings"
+
+
+def test_set_provider_mode_rejects_an_unknown_mode_without_touching_state(manager, monkeypatch):
+    applied = []
+    monkeypatch.setattr(api_provider, "initialize_local_provider", lambda *a, **k: applied.append(a))
+    monkeypatch.setattr(api_provider, "initialize_api", lambda *a, **k: applied.append(a))
+    notifications = NotificationState()
+    bus = SessionBus("settings-set-provider-mode-unknown-test")
+    bus.register_topic("notification", notifications.payload)
+    register_settings(bus, manager, notifications)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "setProviderMode", ["Some Nonsense Mode"]))
+
+    assert applied == []  # no live switch was even attempted
+    assert manager.get_current_mode() == config.MODE_OLLAMA_LOCAL  # the persisted default is untouched
+    assert notifications.msg_type == "warning"
+    assert "Some Nonsense Mode" in notifications.message
+
+
+def test_set_provider_mode_failure_does_not_persist_the_mode(manager, monkeypatch):
+    # A failed live switch must not change what the next restart boots into.
+    def _boom(*a, **k):
+        raise RuntimeError("ollama daemon unreachable")
+
+    monkeypatch.setattr(api_provider, "initialize_local_provider", _boom)
+    manager.set_current_mode(config.MODE_API_ENDPOINT)
+    notifications = NotificationState()
+    bus = SessionBus("settings-set-provider-mode-failure-test")
+    bus.register_topic("notification", notifications.payload)
+    register_settings(bus, manager, notifications)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "setProviderMode", [config.MODE_OLLAMA_LOCAL]))
+
+    assert manager.get_current_mode() == config.MODE_API_ENDPOINT  # unchanged
+    assert notifications.msg_type == "error"
+    assert "ollama daemon unreachable" in notifications.message

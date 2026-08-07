@@ -1120,3 +1120,181 @@ def test_gemini_thinking_config_gates_on_the_chat_task_at_the_provider(monkeypat
     assert thinking_calls == [("gemini-2.5-pro", "high")]  # only the chat task consults it
     assert bodies[0]["generationConfig"]["thinkingConfig"] == {"thinkingBudget": 128}
     assert "generationConfig" not in bodies[1]  # no stray config key for non-chat tasks
+
+
+# -- ADR-006 stage 6.5: per-session ProviderRuntime ---------------------------
+# -- The stage exit criterion: two runtimes hold two different provider
+# -- configurations CONCURRENTLY - a chat routed with runtime=r2 constructs
+# -- its provider from r2's snapshot while a default-path call keeps using
+# -- the module globals, and neither leaks into the other.
+
+
+def _recording_ollama_provider(monkeypatch):
+    """Install a recording subclass over backend.providers.ollama_provider.
+    OllamaProvider (the class chat() lazily imports) - same construction-
+    fidelity pattern as test_chat_routes_every_api_provider_through_its_
+    provider_class above. Returns the list of (model, reasoning_level)
+    pairs each completed request was constructed with."""
+    import backend.providers.ollama_provider as ollama_provider_module
+
+    constructed = []
+
+    class Recording(ollama_provider_module.OllamaProvider):
+        def complete(self, request, cancel):
+            constructed.append((self.model_id, self.reasoning_level))
+            return f"answer from {self.model_id}"
+
+    monkeypatch.setattr(ollama_provider_module, "OllamaProvider", Recording)
+    return constructed
+
+
+def test_two_runtimes_hold_different_providers_concurrently(monkeypatch, ollama_mode):
+    """THE 6.5 EXIT CRITERION (api_provider level): the same chat() function,
+    called with and without runtime=, serves two different provider
+    configurations side by side without either bleeding into the other."""
+    monkeypatch.setattr(api_provider, "chat", _REAL_CHAT)
+    constructed = _recording_ollama_provider(monkeypatch)
+
+    # Session two: starts as a copy of the default configuration
+    # (from_snapshot - exactly how backend/app.py seeds a non-default
+    # session), then diverges through its own public mutators.
+    r2 = api_provider.ProviderRuntime.from_snapshot(api_provider.DEFAULT_RUNTIME.snapshot())
+    r2.set_ollama_models({config.TASK_CHAT: "session-two-model:7b"})
+    r2.set_ollama_reasoning_level("high")
+
+    messages = [{"role": "user", "content": "hi"}]
+    default_response = api_provider.chat(config.TASK_CHAT, messages)
+    r2_response = api_provider.chat(config.TASK_CHAT, messages, runtime=r2)
+    default_again = api_provider.chat(config.TASK_CHAT, messages)
+
+    # Each call constructed its provider from ITS runtime's snapshot.
+    assert constructed == [
+        ("fake-model:1b", "off"),  # default session - the module globals
+        ("session-two-model:7b", "high"),  # session two - r2's own state
+        ("fake-model:1b", "off"),  # default again: r2 never leaked back
+    ]
+    assert default_response["message"]["content"] == "answer from fake-model:1b"
+    assert r2_response["message"]["content"] == "answer from session-two-model:7b"
+    assert default_again == default_response
+
+    # And r2's divergence never touched the default session's authoritative
+    # state - the module globals and the shared Ollama table.
+    assert config.OLLAMA_MODELS[config.TASK_CHAT] == "fake-model:1b"
+    assert api_provider.OLLAMA_REASONING_LEVEL == "off"
+
+
+def test_from_snapshot_seeds_a_faithful_independent_copy(monkeypatch, ollama_mode):
+    r2 = api_provider.ProviderRuntime.from_snapshot(api_provider.DEFAULT_RUNTIME.snapshot())
+
+    assert r2.snapshot() == api_provider.DEFAULT_RUNTIME.snapshot()
+
+    # Independence in BOTH directions: mutating the copy leaves the default
+    # untouched, and mutating the default leaves the copy untouched.
+    r2.set_ollama_models({config.TASK_CHAT: "diverged:1b"})
+    assert config.OLLAMA_MODELS[config.TASK_CHAT] == "fake-model:1b"
+    monkeypatch.setitem(config.OLLAMA_MODELS, config.TASK_CHAT, "default-moved:1b")
+    assert r2.snapshot().ollama_models[config.TASK_CHAT] == "diverged:1b"
+
+
+def test_is_configured_accepts_a_text_only_api_endpoint_without_an_image_model(monkeypatch):
+    """H6: TASK_IMAGE_GEN is optional for EVERY API provider - a text-only
+    OpenAI-compatible endpoint (vLLM, LM Studio, llama-server) counts as
+    configured; image generation raises its own actionable error at call
+    time instead."""
+    monkeypatch.setattr(api_provider, "USE_API_MODE", True)
+    monkeypatch.setattr(api_provider, "API_PROVIDER_TYPE", config.API_PROVIDER_OPENAI)
+    monkeypatch.setattr(api_provider, "API_CLIENT", object())
+    monkeypatch.setattr(
+        api_provider,
+        "API_MODELS",
+        {
+            config.TASK_TITLE: "m",
+            config.TASK_CHAT: "m",
+            config.TASK_CHART: "m",
+            config.TASK_IMAGE_GEN: None,  # deliberately absent
+            config.TASK_WEB_VALIDATE: "m",
+            config.TASK_WEB_SUMMARIZE: "m",
+        },
+    )
+
+    assert api_provider.is_configured() is True
+
+
+def test_snapshot_ollama_models_is_a_copy_not_a_live_view(monkeypatch, ollama_mode):
+    """H6 pin: the snapshot's Ollama model table is copied UNDER the provider
+    lock at snapshot time - mutating config.OLLAMA_MODELS afterward (the
+    mid-request model-assignment race H6 closed) cannot change what an
+    in-flight request already captured."""
+    snapshot = api_provider._snapshot_provider_state()
+    assert snapshot.ollama_models[config.TASK_CHAT] == "fake-model:1b"
+
+    monkeypatch.setitem(config.OLLAMA_MODELS, config.TASK_CHAT, "swapped-mid-request:1b")
+
+    assert snapshot.ollama_models[config.TASK_CHAT] == "fake-model:1b"
+
+
+# -- ADR-006 stage 6.5 review fix: llama.cpp preload write-ordering ----------
+
+
+def test_llama_cpp_preload_failure_never_makes_the_new_settings_snapshot_visible(monkeypatch, tmp_path):
+    """A LOW-severity finding from the 6.5 adversarial review: the old
+    write-then-preload-then-rollback-on-failure ordering had a window where
+    a concurrent snapshot() (e.g. a new session's ProviderRuntime.
+    from_snapshot) could observe and permanently copy settings that were
+    about to be rolled back. Preloading BEFORE writing means a failed
+    preload never makes the new settings visible to any snapshot at all -
+    not even transiently."""
+    model_path = tmp_path / "model.gguf"
+    model_path.write_bytes(b"not a real gguf, just needs to exist")
+
+    runtime = api_provider.ProviderRuntime()
+    original_snapshot = runtime.snapshot()
+
+    def failing_preload(task, settings):
+        # Prove the write has NOT happened yet when the preload runs.
+        assert runtime.snapshot() == original_snapshot
+        raise RuntimeError("out of memory")
+
+    monkeypatch.setattr(api_provider, "_get_llama_cpp_client", failing_preload)
+
+    with pytest.raises(RuntimeError, match="out of memory"):
+        runtime.initialize_local_provider(
+            config.LOCAL_PROVIDER_LLAMACPP,
+            {"chat_model_path": str(model_path)},
+            preload_model=True,
+        )
+
+    # Nothing changed - not even transiently, and there was no rollback to
+    # perform because there was nothing to roll back.
+    assert runtime.snapshot() == original_snapshot
+
+
+def test_llama_cpp_preload_success_writes_settings_after_the_preload_completes(monkeypatch, tmp_path):
+    model_path = tmp_path / "model.gguf"
+    model_path.write_bytes(b"not a real gguf, just needs to exist")
+
+    runtime = api_provider.ProviderRuntime()
+    order = []
+
+    def recording_preload(task, settings):
+        order.append("preload")
+        return object()
+
+    monkeypatch.setattr(api_provider, "_get_llama_cpp_client", recording_preload)
+    original_write = api_provider.ProviderRuntime._write
+
+    def recording_write(self, **updates):
+        order.append("write")
+        return original_write(self, **updates)
+
+    monkeypatch.setattr(api_provider.ProviderRuntime, "_write", recording_write)
+
+    result = runtime.initialize_local_provider(
+        config.LOCAL_PROVIDER_LLAMACPP,
+        {"chat_model_path": str(model_path)},
+        preload_model=True,
+    )
+
+    assert order == ["preload", "write"]
+    assert result["preloaded"] is True
+    assert runtime.snapshot().llama_cpp_settings["chat_model_path"] == str(model_path)

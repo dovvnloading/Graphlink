@@ -51,7 +51,7 @@ class ChatWorker:
         self.MAX_TOKENS = 8000
 
     def run(self, conversation_history, current_node, cancellation_event=None, resolved_system_prompt=None,
-            on_chunk=None):
+            on_chunk=None, *, runtime=None):
         """
         Executes the chat logic for a single turn.
 
@@ -69,6 +69,10 @@ class ChatWorker:
                 invoking on_chunk(delta, reset) as incremental text arrives. Additive and
                 default-None: every existing call site (this legacy Qt path included) that
                 omits it gets byte-identical behavior via the unchanged chat() call below.
+            runtime (api_provider.ProviderRuntime, optional): ADR-006 stage 6.5 per-session
+                provider runtime. Forwarded to api_provider.chat/chat_stream only when
+                non-None - None (every pre-6.5 caller, and every default-session call)
+                keeps the call byte-identical, routing through the module globals.
 
         Returns:
             str: The AI-generated response text.
@@ -95,18 +99,25 @@ class ChatWorker:
 
             messages.extend(trimmed_history)
 
+            # ADR-006 stage 6.5: the runtime kwarg is only passed when a
+            # per-session runtime was actually supplied, so default-session
+            # calls (runtime=None) stay byte-identical for every existing
+            # api_provider.chat/chat_stream monkeypatch.
+            runtime_kwargs = {"runtime": runtime} if runtime is not None else {}
             if on_chunk is not None:
                 response = api_provider.chat_stream(
                     task=config.TASK_CHAT,
                     messages=messages,
                     on_chunk=on_chunk,
                     cancellation_event=cancellation_event,
+                    **runtime_kwargs,
                 )
             else:
                 response = api_provider.chat(
                     task=config.TASK_CHAT,
                     messages=messages,
                     cancellation_event=cancellation_event,
+                    **runtime_kwargs,
                 )
             ai_message = response['message']['content']
             return ai_message
@@ -133,7 +144,7 @@ class ChatAgent:
         self.system_prompt = f"You are {self.name}. {self.persona}"
 
     def get_response(self, conversation_history, current_node, cancellation_event=None, resolved_system_prompt=None,
-                      on_chunk=None):
+                      on_chunk=None, *, runtime=None):
         """
         Gets an AI response for a given conversation history.
 
@@ -145,6 +156,9 @@ class ChatAgent:
                 scene itself (#20).
             on_chunk (callable, optional): Qt-removal R4.4 token streaming; passed straight
                 through to ChatWorker.run (see its docstring). Additive, default-None.
+            runtime (api_provider.ProviderRuntime, optional): ADR-006 stage 6.5 per-session
+                provider runtime; passed straight through to ChatWorker.run (see its
+                docstring). Additive, keyword-only, default-None.
 
         Returns:
             str: The AI-generated response text.
@@ -158,5 +172,6 @@ class ChatAgent:
             cancellation_event=cancellation_event,
             resolved_system_prompt=resolved_system_prompt,
             on_chunk=on_chunk,
+            runtime=runtime,
         )
         return ai_response

@@ -230,12 +230,13 @@ def _collect_real_registrations() -> dict[tuple[str, str], _FileIntents]:
 
 def test_the_scan_finds_the_real_population_of_registered_intents():
     # Guards the guard: a broken predicate here would make every check below
-    # vacuously pass. 136 is the exact count locked by ADR-010's close-out
-    # recon (scene=89, app-settings=27, app-composer=6, app-chat-library=5,
-    # grid-control=4, notification=3, app-plugins=1, system=1).
+    # vacuously pass. 137 is the exact count locked by ADR-010's close-out
+    # recon (scene=89, app-settings=28, app-composer=6, app-chat-library=5,
+    # grid-control=4, notification=3, app-plugins=1, system=1) - app-settings
+    # went 27 -> 28 when ADR-006 stage 6.5 added setProviderMode.
     real = _collect_real_registrations()
-    assert len(real) == 136, (
-        f"expected exactly 136 real registered intents, found {len(real)} - "
+    assert len(real) == 137, (
+        f"expected exactly 137 real registered intents, found {len(real)} - "
         "either the scan broke, or the app's registered-intent surface "
         "genuinely changed and tests/undo_classification.py's own count "
         "comment (and this assertion) need a deliberate update alongside it"

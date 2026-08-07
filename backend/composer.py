@@ -368,7 +368,9 @@ def register_composer(
                     "canChange": False,
                 }
 
-            task_config.sync_ollama_task_models(settings_manager)
+            # ADR-006 stage 6.5 (H6): locked writer wrapper - see
+            # api_provider.sync_ollama_models.
+            api_provider.sync_ollama_models(settings_manager)
             model_id = task_config.OLLAMA_MODELS.get(task_config.TASK_CHAT, "") or ""
             scanned = settings_manager.get_ollama_scanned_models() or []
             return {

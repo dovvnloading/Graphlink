@@ -64,7 +64,7 @@ _LLAMA_CPP_CLIENT_CACHE = {}
 _LLAMA_CPP_CLIENT_LOCK = threading.RLock()
 
 # Guards the provider globals above. Mutators (initialize_api,
-# initialize_local_provider, set_mode, set_task_model) write under this lock;
+# initialize_local_provider, set_task_model) write under this lock;
 # chat()/generate_image() take one consistent snapshot under it at request entry and
 # route the whole request through that snapshot. Previously a mode switch during an
 # in-flight request could interleave with the request's many separate global reads,
@@ -87,6 +87,14 @@ class _ProviderSnapshot(NamedTuple):
     anthropic_reasoning_level: str
     gemini_reasoning_level: str
     openai_reasoning_level: str
+    # ADR-006 stage 6.5 (H6): the Ollama per-task model table, copied UNDER
+    # the provider lock at snapshot time. chat()/chat_stream() previously
+    # read config.OLLAMA_MODELS live AFTER taking their snapshot - a
+    # concurrent model-assignment change (or even an app-composer republish,
+    # which used to sync the table on the read path) could swap the model
+    # between the snapshot and the provider construction. Trailing field
+    # with a default so existing positional constructions stay valid.
+    ollama_models: dict = {}
 
 
 def _snapshot_provider_state() -> _ProviderSnapshot:
@@ -104,7 +112,281 @@ def _snapshot_provider_state() -> _ProviderSnapshot:
             anthropic_reasoning_level=ANTHROPIC_REASONING_LEVEL,
             gemini_reasoning_level=GEMINI_REASONING_LEVEL,
             openai_reasoning_level=OPENAI_REASONING_LEVEL,
+            ollama_models=dict(config.OLLAMA_MODELS),
         )
+
+
+def sync_ollama_models(settings_manager=None):
+    """ADR-006 stage 6.5 (H6): the ONLY sanctioned writer entry point for
+    config.OLLAMA_MODELS/CURRENT_MODEL - takes the provider lock so the
+    table can never change between a request snapshot's copy of it and the
+    rest of that snapshot. config.sync_ollama_task_models itself stays in
+    graphlink_task_config (it owns the persistence semantics); this wrapper
+    owns the locking, which that module cannot (it would be a circular
+    import)."""
+    with _PROVIDER_STATE_LOCK:
+        return config.sync_ollama_task_models(settings_manager)
+
+
+def set_current_ollama_model(model: str) -> None:
+    """Locked twin of config.set_current_model - see sync_ollama_models."""
+    with _PROVIDER_STATE_LOCK:
+        config.set_current_model(model)
+
+
+class ProviderRuntime:
+    """ADR-006 stage 6.5: one session's complete provider configuration.
+
+    Instances constructed directly hold their OWN state - two sessions can
+    hold different providers/models/reasoning levels concurrently. The
+    module-level DEFAULT_RUNTIME below is the one exception: it PROXIES the
+    legacy module globals, which stay authoritative (and monkeypatchable -
+    the entire existing test suite patches them) for the default session.
+    Every mutator and every snapshot goes through _read_all/_write, which is
+    the only thing the module-backed subclass overrides.
+
+    A request captures `snapshot()` once at entry and routes the whole
+    request through it - the same mid-request-swap immunity the module
+    globals' _ProviderSnapshot always provided, now including the Ollama
+    model table (H6)."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._state = {
+            "use_api_mode": False,
+            "api_provider_type": None,
+            "api_client": None,
+            "api_key": None,
+            "api_base_url": None,
+            "local_provider_type": config.LOCAL_PROVIDER_OLLAMA,
+            "api_models": dict.fromkeys(API_MODELS),
+            "llama_cpp_settings": _normalize_llama_cpp_settings(),
+            "ollama_reasoning_level": "high",
+            "anthropic_reasoning_level": "off",
+            "gemini_reasoning_level": "off",
+            "openai_reasoning_level": "off",
+            "ollama_models": {},
+        }
+
+    @classmethod
+    def from_snapshot(cls, snapshot: "_ProviderSnapshot") -> "ProviderRuntime":
+        """Seed a fresh per-session runtime from an existing configuration -
+        how a non-default session starts out matching the default one before
+        diverging."""
+        runtime = cls()
+        runtime._write(**snapshot._asdict())
+        return runtime
+
+    # -- state access (the ONLY methods the module-backed subclass overrides)
+
+    def _read_all(self) -> dict:
+        with self._lock:
+            state = dict(self._state)
+            state["api_models"] = dict(state["api_models"])
+            state["llama_cpp_settings"] = dict(state["llama_cpp_settings"])
+            state["ollama_models"] = dict(state["ollama_models"])
+            return state
+
+    def _write(self, **updates) -> dict:
+        """Apply updates under the lock; returns the PREVIOUS values of the
+        updated keys (initialize_local_provider's llama.cpp rollback needs
+        the capture and the write to be one atomic step)."""
+        with self._lock:
+            previous = {key: self._state[key] for key in updates}
+            self._state.update(updates)
+            return previous
+
+    def set_task_model(self, task: str, api_model: str) -> None:
+        with self._lock:
+            if task in self._state["api_models"]:
+                self._state["api_models"][task] = api_model
+
+    def set_ollama_models(self, models: dict) -> None:
+        """Per-session twin of sync_ollama_models: replaces this runtime's
+        own Ollama task table (a plain dict write - per-session runtimes do
+        not share config.OLLAMA_MODELS)."""
+        self._write(ollama_models=dict(models))
+
+    # -- the shared configuration logic ---------------------------------------
+
+    def snapshot(self) -> _ProviderSnapshot:
+        return _ProviderSnapshot(**self._read_all())
+
+    def initialize_api(self, provider: str, api_key: str, base_url: str = None):
+        client, api_key, base_url = _build_api_client(provider, api_key, base_url)
+        self._write(
+            use_api_mode=True,
+            api_provider_type=provider,
+            api_client=client,
+            api_key=api_key,
+            api_base_url=base_url,
+        )
+        return client
+
+    def initialize_local_provider(
+        self, provider: str, settings: dict | None = None, *, preload_model: bool = False
+    ):
+        if provider == config.LOCAL_PROVIDER_OLLAMA:
+            normalized_settings = _normalize_llama_cpp_settings()
+            updates = dict(
+                use_api_mode=False,
+                local_provider_type=provider,
+                api_provider_type=None,
+                api_client=None,
+                api_key=None,
+                api_base_url=None,
+                llama_cpp_settings=normalized_settings,
+            )
+            requested_reasoning = (settings or {}).get("reasoning_level")
+            if requested_reasoning:
+                updates["ollama_reasoning_level"] = normalize_reasoning_level(requested_reasoning)
+            self._write(**updates)
+            return {"provider": provider}
+
+        if provider == config.LOCAL_PROVIDER_LLAMACPP:
+            normalized_settings = _normalize_llama_cpp_settings(settings)
+            _validate_llama_cpp_model_path(
+                normalized_settings.get("chat_model_path"),
+                config.TASK_CHAT,
+            )
+            if normalized_settings.get("title_model_path"):
+                _validate_llama_cpp_model_path(normalized_settings["title_model_path"], config.TASK_TITLE)
+
+            # ADR-006 stage 6.5 review fix (LOW): preload BEFORE writing state,
+            # not write-then-rollback-on-failure. The (potentially slow,
+            # multi-GB) preload deliberately happens outside the state lock
+            # so it never blocks other requests' snapshots - but a snapshot
+            # taken in that window used to see the NEW, not-yet-validated
+            # settings, which from_snapshot() can now copy into a per-session
+            # runtime that never gets corrected if the preload then fails and
+            # this runtime rolls back. Preloading first means a write only
+            # ever commits a value already known-good, so there is nothing to
+            # roll back and nothing transient for a concurrent snapshot to
+            # capture.
+            if preload_model:
+                _get_llama_cpp_client(config.TASK_CHAT, normalized_settings)
+
+            self._write(
+                use_api_mode=False,
+                local_provider_type=provider,
+                api_provider_type=None,
+                api_client=None,
+                api_key=None,
+                api_base_url=None,
+                llama_cpp_settings=normalized_settings,
+            )
+
+            return {
+                "provider": provider,
+                "model_path": _get_llama_cpp_model_path(config.TASK_CHAT, normalized_settings),
+                "preloaded": bool(preload_model),
+            }
+
+        raise ValueError(f"Unknown local provider: {provider}")
+
+    def set_ollama_reasoning_level(self, level: str) -> None:
+        self._write(ollama_reasoning_level=normalize_reasoning_level(level))
+
+    def set_anthropic_reasoning_level(self, level: str) -> None:
+        self._write(anthropic_reasoning_level=normalize_reasoning_level(level))
+
+    def set_gemini_reasoning_level(self, level: str) -> None:
+        self._write(gemini_reasoning_level=normalize_reasoning_level(level))
+
+    def set_openai_reasoning_level(self, level: str) -> None:
+        self._write(openai_reasoning_level=normalize_reasoning_level(level))
+
+    def is_api_mode(self) -> bool:
+        return self.snapshot().use_api_mode
+
+    def is_local_ollama_mode(self) -> bool:
+        state = self.snapshot()
+        return not state.use_api_mode and state.local_provider_type == config.LOCAL_PROVIDER_OLLAMA
+
+    def is_local_llama_cpp_mode(self) -> bool:
+        state = self.snapshot()
+        return not state.use_api_mode and state.local_provider_type == config.LOCAL_PROVIDER_LLAMACPP
+
+    def is_configured(self) -> bool:
+        state = self.snapshot()
+        if state.use_api_mode:
+            # ADR-006 stage 6.5 (H6): TASK_IMAGE_GEN is deliberately ABSENT
+            # for EVERY provider, not just Anthropic - image generation is
+            # capability-gated at call time (generate_image's own explicit
+            # no-model/no-images-API errors), so a text-only OpenAI-compatible
+            # endpoint (vLLM, LM Studio, llama-server) counts as configured.
+            required_tasks = (
+                config.TASK_TITLE,
+                config.TASK_CHAT,
+                config.TASK_CHART,
+                config.TASK_WEB_VALIDATE,
+                config.TASK_WEB_SUMMARIZE,
+            )
+            return state.api_client is not None and all(
+                state.api_models.get(task_key) for task_key in required_tasks
+            )
+        if state.local_provider_type == config.LOCAL_PROVIDER_OLLAMA:
+            return bool(state.ollama_models.get(config.TASK_CHAT))
+        if state.local_provider_type == config.LOCAL_PROVIDER_LLAMACPP:
+            return bool(_get_llama_cpp_model_path(config.TASK_CHAT, state.llama_cpp_settings))
+        return False
+
+
+class _ModuleBackedProviderRuntime(ProviderRuntime):
+    """The default session's runtime: state lives in the module globals
+    above (guarded by _PROVIDER_STATE_LOCK), which stay authoritative and
+    monkeypatchable - `patch.object(api_provider, "USE_API_MODE", ...)`
+    keeps working exactly as before. Only the two state-access primitives
+    differ; every piece of configuration LOGIC is inherited."""
+
+    _GLOBAL_NAMES = {
+        "use_api_mode": "USE_API_MODE",
+        "api_provider_type": "API_PROVIDER_TYPE",
+        "api_client": "API_CLIENT",
+        "api_key": "API_KEY",
+        "api_base_url": "API_BASE_URL",
+        "local_provider_type": "LOCAL_PROVIDER_TYPE",
+        "llama_cpp_settings": "LLAMA_CPP_SETTINGS",
+        "ollama_reasoning_level": "OLLAMA_REASONING_LEVEL",
+        "anthropic_reasoning_level": "ANTHROPIC_REASONING_LEVEL",
+        "gemini_reasoning_level": "GEMINI_REASONING_LEVEL",
+        "openai_reasoning_level": "OPENAI_REASONING_LEVEL",
+    }
+
+    def __init__(self):
+        # Deliberately NO super().__init__() - the module IS the state.
+        pass
+
+    def _read_all(self) -> dict:
+        return _snapshot_provider_state()._asdict()
+
+    def _write(self, **updates) -> dict:
+        module_globals = globals()
+        with _PROVIDER_STATE_LOCK:
+            previous = {}
+            for key, value in updates.items():
+                if key == "api_models":
+                    previous[key] = dict(API_MODELS)
+                    API_MODELS.clear()
+                    API_MODELS.update(value)
+                elif key == "ollama_models":
+                    previous[key] = dict(config.OLLAMA_MODELS)
+                    config.OLLAMA_MODELS.clear()
+                    config.OLLAMA_MODELS.update(value)
+                else:
+                    previous[key] = module_globals[self._GLOBAL_NAMES[key]]
+                    module_globals[self._GLOBAL_NAMES[key]] = value
+            return previous
+
+    def set_task_model(self, task: str, api_model: str) -> None:
+        with _PROVIDER_STATE_LOCK:
+            if task in API_MODELS:
+                API_MODELS[task] = api_model
+
+
+# The default session's runtime - the one every module-level function below
+# delegates to, and the one backend/app.py hands to the default session.
+DEFAULT_RUNTIME = _ModuleBackedProviderRuntime()
 
 GEMINI_MODELS_STATIC = sorted([
     "gemini-3.1-pro-preview",
@@ -1602,11 +1884,13 @@ def _anthropic_headers(api_key: str, extra_headers: dict | None = None) -> dict:
     return headers
 
 
-def _anthropic_get_json(endpoint: str, timeout: int = 30, cancel_event=None) -> dict:
+def _anthropic_get_json(endpoint: str, timeout: int = 30, cancel_event=None, api_key=None) -> dict:
     _raise_if_cancelled(cancel_event)
     request = urllib.request.Request(
         endpoint,
-        headers=_anthropic_headers(_get_anthropic_api_key()),
+        # api_key (6.5): an explicit key wins - list_models_for_config lists
+        # a catalog for a config being EDITED, not the live provider's.
+        headers=_anthropic_headers(_get_anthropic_api_key(api_key)),
         method="GET",
     )
 
@@ -2048,14 +2332,15 @@ def _calculate_gemini_timeout(messages: list) -> int:
     return min(1800, max(300, 180 + max_audio_duration // 2))
 
 
-def generate_image(prompt: str, size: str = "1024x1024") -> bytes:
+def generate_image(prompt: str, size: str = "1024x1024", *, runtime=None) -> bytes:
     if not prompt or not prompt.strip():
         raise ValueError("Image prompt cannot be empty.")
 
     # One consistent view of the provider state for the whole request (#9) - a mode
     # switch mid-generation can no longer pair this request's provider branch with a
-    # different provider's client/key/model.
-    state = _snapshot_provider_state()
+    # different provider's client/key/model. 6.5: an explicit per-session
+    # runtime wins over the default session's module globals.
+    state = runtime.snapshot() if runtime is not None else _snapshot_provider_state()
 
     if not state.use_api_mode:
         raise RuntimeError("Image generation is only available in API Endpoint mode.")
@@ -2118,19 +2403,26 @@ def generate_image(prompt: str, size: str = "1024x1024") -> bytes:
 
 def chat(task: str, messages: list, **kwargs) -> dict:
     cancel_event = kwargs.pop("cancellation_event", None)
+    # ADR-006 stage 6.5: an explicit per-session ProviderRuntime, popped
+    # BEFORE the remaining kwargs flow into the provider call. None (every
+    # pre-6.5 caller) means the default session's module-backed runtime.
+    runtime = kwargs.pop("runtime", None)
 
     # One consistent view of the provider state for the whole request (#9). Worker
     # threads call chat() while the UI thread can re-run initialize_* at any time;
     # without the snapshot, the request's many separate global reads could interleave
     # with a swap and execute against a half-swapped provider (new provider type with
     # the old client/key, mixed llama.cpp settings, wrong error-message branch, ...).
-    state = _snapshot_provider_state()
+    state = runtime.snapshot() if runtime is not None else _snapshot_provider_state()
 
     try:
         _raise_if_cancelled(cancel_event)
         if not state.use_api_mode:
             if state.local_provider_type == config.LOCAL_PROVIDER_OLLAMA:
-                model = config.OLLAMA_MODELS.get(task)
+                # ADR-006 stage 6.5 (H6): read from the SNAPSHOT's copy of
+                # the model table, not config.OLLAMA_MODELS live - see
+                # _ProviderSnapshot.ollama_models.
+                model = state.ollama_models.get(task)
                 if not model:
                     raise ValueError(f"No Ollama model configured for task: {task}")
 
@@ -2348,18 +2640,22 @@ def chat_stream(task: str, messages: list, on_chunk: Callable[[str, bool], None]
     `cancellation_event`).
     """
     cancel_event = kwargs.get("cancellation_event")
-    state = _snapshot_provider_state()
+    # ADR-006 stage 6.5: same per-session runtime resolution as chat().
+    runtime = kwargs.pop("runtime", None)
+    state = runtime.snapshot() if runtime is not None else _snapshot_provider_state()
 
     # Silent fallback: every provider/local-type this increment doesn't cover
     # degenerates to one blocking chat() call + one synthetic chunk.
     if state.use_api_mode or state.local_provider_type != config.LOCAL_PROVIDER_OLLAMA:
-        response = chat(task, messages, **kwargs)
+        response = chat(task, messages, runtime=runtime, **kwargs)
         on_chunk(response["message"].get("content", ""), False)
         return response
 
     try:
         _raise_if_cancelled(cancel_event)
-        model = config.OLLAMA_MODELS.get(task)
+        # ADR-006 stage 6.5 (H6): snapshot copy, not a live table read -
+        # see chat()'s twin comment.
+        model = state.ollama_models.get(task)
         if not model:
             raise ValueError(f"No Ollama model configured for task: {task}")
 
@@ -2401,9 +2697,12 @@ def chat_stream(task: str, messages: list, on_chunk: Callable[[str, bool], None]
         _translate_chat_exception(exc, state, messages)
 
 
-def initialize_api(provider: str, api_key: str, base_url: str = None):
-    global USE_API_MODE, API_PROVIDER_TYPE, API_CLIENT, API_KEY, API_BASE_URL
-
+def _build_api_client(provider: str, api_key: str, base_url: str = None):
+    """The client-construction half of initialize_api, with NO state
+    mutation - ADR-006 stage 6.5 splits it out so ProviderRuntime instances
+    and the throwaway catalog listing (list_models_for_config) can build a
+    client without repointing anything. Returns (client, resolved_key,
+    resolved_base_url)."""
     if provider == config.API_PROVIDER_OPENAI:
         try:
             from openai import OpenAI
@@ -2465,13 +2764,15 @@ def initialize_api(provider: str, api_key: str, base_url: str = None):
     else:
         raise ValueError(f"Unknown API provider: {provider}")
 
-    with _PROVIDER_STATE_LOCK:
-        USE_API_MODE = True
-        API_PROVIDER_TYPE = provider
-        API_CLIENT = client
-        API_KEY = api_key
-        API_BASE_URL = base_url
-    return client
+    return client, api_key, base_url
+
+
+def initialize_api(provider: str, api_key: str, base_url: str = None):
+    """Configure the DEFAULT session's runtime (the module globals) for an
+    API endpoint - ADR-006 stage 6.5: the logic lives on ProviderRuntime,
+    shared with per-session instances; this delegate keeps every existing
+    caller and test working unchanged."""
+    return DEFAULT_RUNTIME.initialize_api(provider, api_key, base_url)
 
 
 def initialize_local_provider(
@@ -2480,74 +2781,29 @@ def initialize_local_provider(
     *,
     preload_model: bool = False,
 ):
-    global USE_API_MODE, LOCAL_PROVIDER_TYPE, API_PROVIDER_TYPE, API_CLIENT, API_KEY, API_BASE_URL, LLAMA_CPP_SETTINGS, OLLAMA_REASONING_LEVEL
+    """Local-provider twin of initialize_api - same 6.5 delegation."""
+    return DEFAULT_RUNTIME.initialize_local_provider(
+        provider, settings, preload_model=preload_model
+    )
 
-    if provider == config.LOCAL_PROVIDER_OLLAMA:
-        normalized_settings = _normalize_llama_cpp_settings()
-        with _PROVIDER_STATE_LOCK:
-            requested_reasoning = (settings or {}).get("reasoning_level")
-            OLLAMA_REASONING_LEVEL = normalize_reasoning_level(requested_reasoning) if requested_reasoning else OLLAMA_REASONING_LEVEL
-            USE_API_MODE = False
-            LOCAL_PROVIDER_TYPE = provider
-            API_PROVIDER_TYPE = None
-            API_CLIENT = None
-            API_KEY = None
-            API_BASE_URL = None
-            LLAMA_CPP_SETTINGS = normalized_settings
-        return {"provider": provider}
 
-    if provider == config.LOCAL_PROVIDER_LLAMACPP:
-        normalized_settings = _normalize_llama_cpp_settings(settings)
-        _validate_llama_cpp_model_path(
-            normalized_settings.get("chat_model_path"),
-            config.TASK_CHAT,
+def _list_models(provider_type, client, api_key=None):
+    if provider_type == config.API_PROVIDER_OPENAI:
+        models = client.models.list()
+        return sorted([model.id for model in models.data])
+    if provider_type == config.API_PROVIDER_ANTHROPIC:
+        payload = _anthropic_get_json(ANTHROPIC_MODELS_URL, api_key=api_key)
+        return sorted(
+            {
+                str(model_info.get("id", "")).strip()
+                for model_info in payload.get("data", [])
+                if str(model_info.get("id", "")).strip()
+            },
+            key=str.lower,
         )
-        if normalized_settings.get("title_model_path"):
-            _validate_llama_cpp_model_path(normalized_settings["title_model_path"], config.TASK_TITLE)
-
-        with _PROVIDER_STATE_LOCK:
-            previous_state = (
-                USE_API_MODE,
-                LOCAL_PROVIDER_TYPE,
-                API_PROVIDER_TYPE,
-                API_CLIENT,
-                API_KEY,
-                API_BASE_URL,
-                LLAMA_CPP_SETTINGS,
-            )
-            USE_API_MODE = False
-            LOCAL_PROVIDER_TYPE = provider
-            API_PROVIDER_TYPE = None
-            API_CLIENT = None
-            API_KEY = None
-            API_BASE_URL = None
-            LLAMA_CPP_SETTINGS = normalized_settings
-
-        try:
-            # The (potentially slow, multi-GB) model preload deliberately happens
-            # OUTSIDE the state lock so it never blocks other requests' snapshots.
-            if preload_model:
-                _get_llama_cpp_client(config.TASK_CHAT, normalized_settings)
-        except Exception:
-            with _PROVIDER_STATE_LOCK:
-                (
-                    USE_API_MODE,
-                    LOCAL_PROVIDER_TYPE,
-                    API_PROVIDER_TYPE,
-                    API_CLIENT,
-                    API_KEY,
-                    API_BASE_URL,
-                    LLAMA_CPP_SETTINGS,
-                ) = previous_state
-            raise
-
-        return {
-            "provider": provider,
-            "model_path": _get_llama_cpp_model_path(config.TASK_CHAT, normalized_settings),
-            "preloaded": bool(preload_model),
-        }
-
-    raise ValueError(f"Unknown local provider: {provider}")
+    if provider_type == config.API_PROVIDER_GEMINI:
+        return GEMINI_MODELS_STATIC
+    return []
 
 
 def get_available_models():
@@ -2555,22 +2811,20 @@ def get_available_models():
         raise RuntimeError("API client not initialized")
 
     try:
-        if API_PROVIDER_TYPE == config.API_PROVIDER_OPENAI:
-            models = API_CLIENT.models.list()
-            return sorted([model.id for model in models.data])
-        if API_PROVIDER_TYPE == config.API_PROVIDER_ANTHROPIC:
-            payload = _anthropic_get_json(ANTHROPIC_MODELS_URL)
-            return sorted(
-                {
-                    str(model_info.get("id", "")).strip()
-                    for model_info in payload.get("data", [])
-                    if str(model_info.get("id", "")).strip()
-                },
-                key=str.lower,
-            )
-        if API_PROVIDER_TYPE == config.API_PROVIDER_GEMINI:
-            return GEMINI_MODELS_STATIC
-        return []
+        return _list_models(API_PROVIDER_TYPE, API_CLIENT, API_KEY)
+    except Exception as exc:
+        raise RuntimeError(f"Failed to fetch models from endpoint: {exc}") from exc
+
+
+def list_models_for_config(provider: str, api_key: str, base_url: str = None):
+    """ADR-006 stage 6.5: catalog listing WITHOUT touching live provider
+    state. loadApiModels used to call initialize_api just to refresh a
+    Settings dropdown - a read-only catalog fetch silently repointed the
+    process's live provider (and with per-session runtimes, would have
+    repointed every session's default). Builds a throwaway client instead."""
+    client, resolved_key, _base_url = _build_api_client(provider, api_key, base_url)
+    try:
+        return _list_models(provider, client, resolved_key)
     except Exception as exc:
         raise RuntimeError(f"Failed to fetch models from endpoint: {exc}") from exc
 
@@ -2591,45 +2845,31 @@ def get_available_model_descriptors() -> list[ModelDescriptor]:
     )
 
 
-def set_mode(use_api: bool):
-    global USE_API_MODE
-    with _PROVIDER_STATE_LOCK:
-        USE_API_MODE = use_api
+# ADR-006 stage 6.5: set_mode/get_mode/get_task_models were dead code with
+# zero callers repo-wide and are deleted; the reasoning-level and task-model
+# setters below delegate to the default session's runtime (see
+# ProviderRuntime), keeping every existing caller and test unchanged.
 
 
 def set_ollama_reasoning_level(level: str):
     """Update the request snapshot source used by reasoning-capable Ollama models."""
-    global OLLAMA_REASONING_LEVEL
-    with _PROVIDER_STATE_LOCK:
-        OLLAMA_REASONING_LEVEL = normalize_reasoning_level(level)
+    DEFAULT_RUNTIME.set_ollama_reasoning_level(level)
 
 
 def set_anthropic_reasoning_level(level: str):
-    global ANTHROPIC_REASONING_LEVEL
-    with _PROVIDER_STATE_LOCK:
-        ANTHROPIC_REASONING_LEVEL = normalize_reasoning_level(level)
+    DEFAULT_RUNTIME.set_anthropic_reasoning_level(level)
 
 
 def set_gemini_reasoning_level(level: str):
-    global GEMINI_REASONING_LEVEL
-    with _PROVIDER_STATE_LOCK:
-        GEMINI_REASONING_LEVEL = normalize_reasoning_level(level)
+    DEFAULT_RUNTIME.set_gemini_reasoning_level(level)
 
 
 def set_openai_reasoning_level(level: str):
-    global OPENAI_REASONING_LEVEL
-    with _PROVIDER_STATE_LOCK:
-        OPENAI_REASONING_LEVEL = normalize_reasoning_level(level)
+    DEFAULT_RUNTIME.set_openai_reasoning_level(level)
 
 
 def set_task_model(task: str, api_model: str):
-    with _PROVIDER_STATE_LOCK:
-        if task in API_MODELS:
-            API_MODELS[task] = api_model
-
-
-def get_task_models() -> dict:
-    return API_MODELS.copy()
+    DEFAULT_RUNTIME.set_task_model(task, api_model)
 
 
 def is_api_mode() -> bool:
@@ -2694,19 +2934,10 @@ def get_mode() -> str:
 
 
 def is_configured() -> bool:
-    if USE_API_MODE:
-        if API_PROVIDER_TYPE == config.API_PROVIDER_ANTHROPIC:
-            required_tasks = (
-                config.TASK_TITLE,
-                config.TASK_CHAT,
-                config.TASK_CHART,
-                config.TASK_WEB_VALIDATE,
-                config.TASK_WEB_SUMMARIZE,
-            )
-            return API_CLIENT is not None and all(API_MODELS.get(task_key) for task_key in required_tasks)
-        return API_CLIENT is not None and all(API_MODELS.values())
-    if LOCAL_PROVIDER_TYPE == config.LOCAL_PROVIDER_OLLAMA:
-        return bool(config.OLLAMA_MODELS.get(config.TASK_CHAT))
-    if LOCAL_PROVIDER_TYPE == config.LOCAL_PROVIDER_LLAMACPP:
-        return bool(_get_llama_cpp_model_path(config.TASK_CHAT))
-    return False
+    """ADR-006 stage 6.5: delegates to the default runtime, whose logic now
+    treats TASK_IMAGE_GEN as optional for EVERY API provider (previously
+    only Anthropic) - a text-only OpenAI-compatible endpoint (vLLM, LM
+    Studio, llama-server) is fully configured without an image model; image
+    generation is capability-gated at call time instead (H6). See
+    ProviderRuntime.is_configured."""
+    return DEFAULT_RUNTIME.is_configured()
