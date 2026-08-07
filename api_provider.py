@@ -356,9 +356,7 @@ class ProviderRuntime:
                     n_ctx = 0
                 return n_ctx if n_ctx > 0 else _DEFAULT_CONTEXT_WINDOW
             if state.local_provider_type == config.LOCAL_PROVIDER_OLLAMA:
-                model = state.ollama_models.get(task)
-                window = _get_ollama_context_window(model)
-                return window if window else _DEFAULT_CONTEXT_WINDOW
+                return _ollama_effective_context_window(state.ollama_models.get(task))
             return _DEFAULT_CONTEXT_WINDOW
         return known_context_window(state.api_models.get(task))
 
@@ -467,6 +465,24 @@ _KNOWN_CONTEXT_WINDOWS = (
     ("o4", 128_000),
 )
 _DEFAULT_CONTEXT_WINDOW = 8_192
+# ADR-006 stage 6.8 review fix (HIGH): what we ask the Ollama daemon to
+# SERVE (options.num_ctx) when the Modelfile has no explicit num_ctx. The
+# trained max from model_info is NOT a safe default to request - a 131k
+# num_ctx on llama3.1 allocates a KV cache that OOMs typical consumer GPUs,
+# and the daemon's own default (~4k) silently truncates prompts front-first
+# instead. 8192 is the KV-cache-safe middle ground; users who want more set
+# num_ctx in their Modelfile and we honor it exactly.
+_OLLAMA_SERVED_CONTEXT_CAP = 8_192
+
+
+def _ollama_effective_context_window(model: str | None) -> int:
+    """The single source of truth for Ollama-mode context: the served
+    window from show() (see _get_ollama_context_window) or the conservative
+    default. Used by BOTH the budget side (ProviderRuntime.context_window)
+    and the request side (OllamaProvider's options.num_ctx) so the two can
+    never disagree."""
+    window = _get_ollama_context_window(model)
+    return window if window else _DEFAULT_CONTEXT_WINDOW
 
 
 def known_context_window(model_id: str | None) -> int:
@@ -1063,11 +1079,23 @@ def _get_ollama_capabilities(model_name: str | None) -> set[str] | None:
 
 
 def _get_ollama_context_window(model_name: str | None) -> int | None:
-    """ADR-006 stage 6.6: the model's context window from `ollama.show()`'s
-    model_info ("<arch>.context_length"), cached like the capability cache
-    above (including negative results). Returns None when the server, the
-    model, or the metadata is unavailable - callers fall back to
-    _DEFAULT_CONTEXT_WINDOW."""
+    """ADR-006 stage 6.6/6.8 review fix: the context window Ollama will
+    actually SERVE for this model, cached like the capability cache above
+    (including negative results). Returns None when the server, the model,
+    or the metadata is unavailable - callers fall back to
+    _DEFAULT_CONTEXT_WINDOW.
+
+    Resolution order (see _extract_context_window_from_show):
+    1. An explicit `num_ctx` in the Modelfile parameters - the daemon
+       serves exactly that.
+    2. Otherwise the TRAINED max ("<arch>.context_length") capped at
+       _OLLAMA_SERVED_CONTEXT_CAP - the trained max is NOT what the daemon
+       serves by default (it serves its own small default and truncates
+       prompts front-first), and requesting the full trained max as num_ctx
+       would balloon the KV cache (131k for llama3.1 can OOM a typical GPU).
+       The request path passes this same value back as options.num_ctx
+       (OllamaProvider), so the budget and the served context are the SAME
+       number."""
     normalized_model = (model_name or "").strip()
     if not normalized_model:
         return None
@@ -1096,8 +1124,14 @@ def _get_ollama_context_window(model_name: str | None) -> int | None:
 
 
 def _extract_context_window_from_show(show_response) -> int | None:
-    """Pull "<arch>.context_length" out of a show() response's model_info
-    (dict on the REST wire, `modelinfo` attribute on the SDK object)."""
+    """The SERVED window from a show() response - explicit Modelfile num_ctx
+    when present, else the trained "<arch>.context_length" capped at
+    _OLLAMA_SERVED_CONTEXT_CAP (see _get_ollama_context_window's docstring
+    for the rationale)."""
+    explicit_num_ctx = _extract_modelfile_num_ctx(show_response)
+    if explicit_num_ctx:
+        return explicit_num_ctx
+
     model_info = _extract_response_field(show_response, "model_info")
     if model_info is None:
         model_info = _extract_response_field(show_response, "modelinfo")
@@ -1119,7 +1153,25 @@ def _extract_context_window_from_show(show_response) -> int | None:
         except (TypeError, ValueError):
             continue
         if value > 0:
-            return value
+            return min(value, _OLLAMA_SERVED_CONTEXT_CAP)
+    return None
+
+
+def _extract_modelfile_num_ctx(show_response) -> int | None:
+    """An explicit `num_ctx` from show()'s Modelfile `parameters` blob (a
+    newline-separated "name value" string on both the REST wire and the SDK
+    object). None when absent or unparseable."""
+    parameters = _extract_response_field(show_response, "parameters")
+    if not isinstance(parameters, str):
+        return None
+    for line in parameters.splitlines():
+        parts = line.strip().split()
+        if len(parts) >= 2 and parts[0] == "num_ctx":
+            try:
+                value = int(parts[1])
+            except (TypeError, ValueError):
+                return None
+            return value if value > 0 else None
     return None
 
 
@@ -2698,7 +2750,11 @@ def chat(task: str, messages: list, **kwargs) -> dict:
                 from backend.providers.base import CancelToken, ChatRequest
                 from backend.providers.ollama_provider import OllamaProvider
 
-                provider = OllamaProvider(model=model, reasoning_level=state.ollama_reasoning_level)
+                provider = OllamaProvider(
+                    model=model, reasoning_level=state.ollama_reasoning_level,
+                    # 6.8 review fix: serve exactly what we budget.
+                    context_window=_ollama_effective_context_window(model),
+                )
                 # ADR-006 stage 6.8: Ollama is a network server, so its
                 # blocking call rides the transient-transport retry too.
                 content = _complete_with_transport_retry(
@@ -3018,7 +3074,11 @@ def chat_stream(task: str, messages: list, on_chunk: Callable[[str, bool], None]
                     raise ValueError(f"No Ollama model configured for task: {task}")
                 from backend.providers.ollama_provider import OllamaProvider
 
-                provider = OllamaProvider(model=model, reasoning_level=state.ollama_reasoning_level)
+                provider = OllamaProvider(
+                    model=model, reasoning_level=state.ollama_reasoning_level,
+                    # 6.8 review fix: serve exactly what we budget.
+                    context_window=_ollama_effective_context_window(model),
+                )
             elif state.local_provider_type == config.LOCAL_PROVIDER_LLAMACPP:
                 from backend.providers.llama_cpp_provider import LlamaCppProvider
 

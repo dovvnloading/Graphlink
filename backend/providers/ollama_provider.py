@@ -78,9 +78,16 @@ class OllamaProvider:
     snapshot, so a mid-request settings change can't half-apply here any more
     than it could in the branch this ports."""
 
-    def __init__(self, *, model: str, reasoning_level: str = "off"):
+    def __init__(self, *, model: str, reasoning_level: str = "off", context_window: int | None = None):
         self.model_id = model
         self.reasoning_level = reasoning_level
+        # ADR-006 stage 6.8 review fix (HIGH): the context window to ask the
+        # daemon to SERVE (options.num_ctx) - the SAME number the caller
+        # budgets trim_history with (api_provider._ollama_effective_context_
+        # window), so the daemon can never silently truncate front-first
+        # below our budget. None (older direct constructions) omits the
+        # option entirely, preserving pre-fix request shapes.
+        self.context_window = context_window
         # ADR-006 stage 6.8: usage from the last complete() call (see the
         # comment there); None until a blocking call reports counts.
         self.last_usage: dict | None = None
@@ -107,6 +114,12 @@ class OllamaProvider:
         _assert_ollama_audio_support(self.model_id, request.messages)
         messages = _prepare_ollama_messages(request.messages)
         kwargs = {k: v for k, v in request.extra_kwargs.items() if k != "cancellation_event"}
+        if self.context_window:
+            # Served context == budgeted context (see __init__). A caller's
+            # own explicit options.num_ctx passthrough still wins.
+            options = dict(kwargs.get("options") or {})
+            options.setdefault("num_ctx", self.context_window)
+            kwargs["options"] = options
         if request.task == config.TASK_CHAT:
             think_value = ollama_think_kwarg(self.model_id, self.reasoning_level)
             if think_value is not None:

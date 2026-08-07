@@ -48,6 +48,19 @@ def trim_history(history, token_estimator, max_tokens=8000, system_prompt_estima
     if trimmed_history and trimmed_history[0].get("role") == "assistant":
         trimmed_history.pop(0)
 
+    # ADR-006 stage 6.8 review fix (keep-newest guarantee): the newest
+    # message is ALWAYS kept, even when it alone exceeds the budget - the
+    # provider seeing an over-budget final question beats the model never
+    # seeing the question at all (and beats it being replaced by a short
+    # summary of itself). Applied AFTER the leading-assistant pop so a
+    # single oversized newest message survives regardless of role.
+    if not trimmed_history and normalized_history:
+        newest = normalized_history[-1]
+        trimmed_history = [newest]
+        current_tokens += token_estimator.count_tokens(
+            json.dumps(newest, cls=_TokenBytesEncoder)
+        )
+
     context_tokens = max(0, current_tokens - system_prompt_estimate - reserve_tokens)
     return trimmed_history, context_tokens
 

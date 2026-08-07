@@ -22,11 +22,23 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+import pytest
+
 import api_provider
 import graphlink_task_config as config
-from graphlink_chat_agent import ChatWorker
+from graphlink_chat_agent import ChatWorker, clear_summary_cache
 from graphlink_memory import trim_history
 from graphlink_token_estimator import TokenEstimator
+
+
+@pytest.fixture(autouse=True)
+def _fresh_summary_cache():
+    # 6.8 review fix: the dropped-turn summary cache is module-global and
+    # keyed by exact message content - identical fixture histories across
+    # tests would otherwise cross-pollinate hits.
+    clear_summary_cache()
+    yield
+    clear_summary_cache()
 
 
 # -- ProviderRuntime.context_window -------------------------------------------
@@ -55,7 +67,11 @@ def test_api_mode_context_window_uses_the_documented_family_table():
         assert runtime.context_window(config.TASK_CHAT) == expected, model
 
 
-def test_ollama_mode_context_window_comes_from_show_model_info(monkeypatch):
+def test_ollama_mode_trained_max_is_capped_to_the_served_cap(monkeypatch):
+    # 6.8 review fix (HIGH): the trained max ("<arch>.context_length") is
+    # NOT what the daemon serves - without an explicit Modelfile num_ctx we
+    # budget (and request, via options.num_ctx) the KV-cache-safe cap, not
+    # the trained 32k/131k.
     api_provider.invalidate_ollama_capability_cache()
 
     def fake_show(model):
@@ -70,8 +86,74 @@ def test_ollama_mode_context_window_comes_from_show_model_info(monkeypatch):
     monkeypatch.setattr(api_provider, "ollama", types.SimpleNamespace(show=fake_show))
     runtime = api_provider.ProviderRuntime()
     runtime.set_ollama_models({config.TASK_CHAT: "windowed-model:7b"})
-    assert runtime.context_window(config.TASK_CHAT) == 32_768
+    assert runtime.context_window(config.TASK_CHAT) == api_provider._OLLAMA_SERVED_CONTEXT_CAP
     api_provider.invalidate_ollama_capability_cache()
+
+
+def test_ollama_mode_explicit_modelfile_num_ctx_wins_over_the_cap(monkeypatch):
+    api_provider.invalidate_ollama_capability_cache()
+
+    def fake_show(model):
+        return {
+            "parameters": "stop \"<|end|>\"\nnum_ctx 16384\ntemperature 0.7",
+            "model_info": {
+                "general.architecture": "llama",
+                "llama.context_length": 131_072,
+            },
+        }
+
+    monkeypatch.setattr(api_provider, "ollama", types.SimpleNamespace(show=fake_show))
+    runtime = api_provider.ProviderRuntime()
+    runtime.set_ollama_models({config.TASK_CHAT: "modelfile-ctx-model:7b"})
+    assert runtime.context_window(config.TASK_CHAT) == 16_384
+    api_provider.invalidate_ollama_capability_cache()
+
+
+def test_ollama_mode_small_trained_max_passes_through_uncapped(monkeypatch):
+    api_provider.invalidate_ollama_capability_cache()
+
+    def fake_show(model):
+        return {"model_info": {"general.architecture": "llama", "llama.context_length": 4096}}
+
+    monkeypatch.setattr(api_provider, "ollama", types.SimpleNamespace(show=fake_show))
+    runtime = api_provider.ProviderRuntime()
+    runtime.set_ollama_models({config.TASK_CHAT: "small-ctx-model:3b"})
+    assert runtime.context_window(config.TASK_CHAT) == 4096
+    api_provider.invalidate_ollama_capability_cache()
+
+
+def test_ollama_request_asks_the_daemon_to_serve_the_budgeted_window(monkeypatch):
+    # 6.8 review fix (HIGH), request side: the budgeted window is passed as
+    # options.num_ctx so the daemon can never silently truncate below it.
+    from backend.providers.base import CancelToken, ChatRequest
+    from backend.providers.ollama_provider import OllamaProvider
+
+    captured = {}
+
+    def fake_chat(*, model, messages, stream=False, **kwargs):
+        captured.update(kwargs)
+        if stream:
+            return iter([{"message": {"content": "ok"}, "done": True}])
+        return {"message": {"content": "ok"}}
+
+    import backend.providers.ollama_provider as op_module
+    monkeypatch.setattr(op_module, "ollama", types.SimpleNamespace(chat=fake_chat))
+
+    provider = OllamaProvider(model="llava:13b", context_window=8192)
+    provider.complete(
+        ChatRequest(task=config.TASK_CHAT, messages=[{"role": "user", "content": "hi"}]),
+        CancelToken(),
+    )
+    assert captured["options"] == {"num_ctx": 8192}
+
+    # None (older direct constructions) omits the option entirely.
+    captured.clear()
+    provider = OllamaProvider(model="llava:13b")
+    provider.complete(
+        ChatRequest(task=config.TASK_CHAT, messages=[{"role": "user", "content": "hi"}]),
+        CancelToken(),
+    )
+    assert "options" not in captured
 
 
 def test_ollama_mode_context_window_falls_back_when_show_is_unavailable(monkeypatch):
@@ -248,3 +330,85 @@ def test_window_lookup_failure_falls_back_to_the_legacy_budget(monkeypatch):
     reply = worker.run(_history(3), None, resolved_system_prompt="", runtime=runtime)
     assert reply == "main reply"
     assert len(captured["messages"]) == 3
+
+
+# -- 6.8 review fixes: summary cache + keep-newest guarantee -------------------
+
+
+def test_repeat_drops_reuse_the_cached_summary_and_signal_only_once(monkeypatch):
+    # Review fix (toast spam): the SAME dropped prefix on a later turn is a
+    # cache hit - no second summarizer call, no second on_context_trimmed.
+    captured = {}
+    signals = []
+    monkeypatch.setattr(api_provider, "chat", _fake_chat_capturing(captured))
+    history = _history(40, chars=2000)
+    small_runtime = types.SimpleNamespace(context_window=lambda task: 2_000)
+    worker = ChatWorker("")
+
+    for _ in range(2):
+        worker.run(
+            history, None, resolved_system_prompt="", runtime=small_runtime,
+            on_context_trimmed=lambda dropped, summarized: signals.append((dropped, summarized)),
+        )
+
+    assert len(captured["summarize_calls"]) == 1  # second run was a cache hit
+    assert len(signals) == 1  # the toast fires once, not per message forever
+    # The cached summary is still INJECTED on the hit - only the model call
+    # and the signal are skipped.
+    assert captured["messages"][0]["content"].startswith("[Summary of earlier conversation]\n")
+
+
+def test_grown_drop_summarizes_incrementally_from_the_cached_prefix(monkeypatch):
+    # Review fix (bounded incremental work): when the dropped tuple grows,
+    # the new summarizer input is (cached prefix summary + remainder), not
+    # everything from scratch.
+    captured = {}
+    monkeypatch.setattr(api_provider, "chat", _fake_chat_capturing(captured))
+    small_runtime = types.SimpleNamespace(context_window=lambda task: 2_000)
+    worker = ChatWorker("")
+
+    history = _history(40, chars=2000)
+    worker.run(history, None, resolved_system_prompt="", runtime=small_runtime)
+    assert len(captured["summarize_calls"]) == 1
+
+    # Two MORE turns arrive; the drop grows past the cached prefix.
+    grown = history + [
+        {"role": "user", "content": "newer question " + "y" * 2000},
+        {"role": "assistant", "content": "newer answer " + "z" * 2000},
+    ]
+    worker.run(grown, None, resolved_system_prompt="", runtime=small_runtime)
+    assert len(captured["summarize_calls"]) == 2
+    incremental_input = captured["summarize_calls"][1][1]["content"]
+    # The second summarizer call starts from the cached prefix summary...
+    assert "[Summary of earlier conversation]" in incremental_input
+    assert "a compact summary" in incremental_input
+    # ...and does NOT re-feed the full original prefix from scratch.
+    assert "m0 " not in incremental_input
+
+
+def test_trim_history_always_keeps_an_oversized_newest_message():
+    # Review fix: the provider seeing an over-budget final question beats
+    # the model never seeing the question.
+    history = _history(1, chars=50_000)
+    trimmed, tokens = trim_history(history, TokenEstimator(), max_tokens=500)
+    assert trimmed == history
+    assert tokens > 500  # honestly over budget, still kept
+
+
+def test_oversized_newest_message_is_kept_and_excluded_from_the_summarizer(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(api_provider, "chat", _fake_chat_capturing(captured))
+    history = _history(5, chars=800) + [
+        {"role": "user", "content": "THE ACTUAL QUESTION " + "q" * 40_000}
+    ]
+    tiny_runtime = types.SimpleNamespace(context_window=lambda task: 2_000)
+    worker = ChatWorker("")
+    worker.run(history, None, resolved_system_prompt="", runtime=tiny_runtime)
+
+    # The newest message reached the wire in full...
+    assert captured["messages"][-1]["content"].startswith("THE ACTUAL QUESTION")
+    # ...and the summarizer input covered only the OLDER dropped turns,
+    # never the question itself.
+    assert len(captured["summarize_calls"]) == 1
+    summarizer_input = captured["summarize_calls"][0][1]["content"]
+    assert "THE ACTUAL QUESTION" not in summarizer_input

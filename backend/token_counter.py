@@ -109,6 +109,17 @@ class TokenCounterState:
     def set_context_text(self, text: str) -> None:
         self.context_tokens = estimate_tokens(text)
 
+    def reset_real_usage(self) -> None:
+        """ADR-006 stage 6.8 review fix (stale real usage): called at
+        request START (send/regenerate, alongside set_context_text) so a
+        request that never reports usage - a provider without usage
+        support, a killed stream, a cancel - can't leave the PREVIOUS
+        request's exact numbers on display. Estimates take over unless
+        fresh usage lands for THIS request."""
+        self.prompt_tokens = None
+        self.completion_tokens = None
+        self.usage_is_real = False
+
     def set_real_usage(self, prompt_tokens, completion_tokens, *, provider: str = "", model: str = "") -> None:
         """Record provider-reported counts for the reply that just
         completed. provider/model feed the cost estimate; omitted values

@@ -27,12 +27,45 @@ independent reimplementation against SceneDocument, not this function.
 """
 
 import json
+from collections import OrderedDict
 
 import graphlink_task_config as config
 import api_provider
 from graphlink_prompts import CONTEXT_SUMMARY_SYSTEM_PROMPT
 from graphlink_token_estimator import TokenEstimator
 from graphlink_memory import clone_history, history_to_transcript, trim_history
+
+
+# ADR-006 stage 6.8 review fix (summary re-run + toast spam): dropped-turn
+# summaries are cached (LRU, small and bounded) keyed by the exact dropped
+# (role, content) tuple. Every turn after the first drop re-drops a superset
+# of the same prefix, so without this cache the summarizer re-ran - and the
+# "turns were summarized" toast re-fired - on EVERY message forever. On a
+# miss with a cached PREFIX of the dropped tuple, only (that prefix's
+# summary + the remainder) is summarized - bounded incremental work per
+# turn instead of everything from scratch.
+_SUMMARY_CACHE_MAX_ENTRIES = 32
+_SUMMARY_CACHE: "OrderedDict[tuple, str]" = OrderedDict()
+
+
+def _summary_cache_key(messages) -> tuple:
+    return tuple((str(m.get("role")), str(m.get("content"))) for m in messages)
+
+
+def _longest_cached_prefix(key: tuple) -> tuple:
+    """(prefix_length, summary) of the longest cached STRICT prefix of
+    `key`, or (0, None) when nothing cached applies."""
+    best_len, best_summary = 0, None
+    for cached_key, cached_summary in _SUMMARY_CACHE.items():
+        n = len(cached_key)
+        if 0 < n < len(key) and n > best_len and key[:n] == cached_key:
+            best_len, best_summary = n, cached_summary
+    return best_len, best_summary
+
+
+def clear_summary_cache() -> None:
+    """Test hook / model-switch hygiene: drop every cached summary."""
+    _SUMMARY_CACHE.clear()
 
 
 class ChatWorker:
@@ -145,24 +178,23 @@ class ChatWorker:
                 # slot would fight the persona and Anthropic's single system
                 # string). ANY summarization failure degrades to today's
                 # silent-drop behavior - the main request must never fail
-                # because the summarizer died.
-                summarized = False
+                # because the summarizer died. 6.8 review fix: summaries are
+                # cached (see _SUMMARY_CACHE), and on_context_trimmed fires
+                # ONLY on a cache miss - new content actually summarized -
+                # so the toast doesn't repeat on every subsequent message.
+                summary, cache_miss, summarized = None, False, False
+                dropped_messages = normalized_history[:dropped]
                 if cancellation_event is None or not cancellation_event.is_set():
-                    try:
-                        summary = self._summarize_dropped_turns(
-                            normalized_history[: len(normalized_history) - len(trimmed_history)],
-                            cancellation_event,
-                            runtime_kwargs,
-                        )
-                        if summary:
-                            trimmed_history.insert(0, {
-                                "role": "user",
-                                "content": "[Summary of earlier conversation]\n" + summary,
-                            })
-                            summarized = True
-                    except Exception:
-                        pass
-                if on_context_trimmed is not None:
+                    summary, cache_miss = self._summary_for_dropped_turns(
+                        dropped_messages, cancellation_event, runtime_kwargs
+                    )
+                if summary:
+                    trimmed_history.insert(0, {
+                        "role": "user",
+                        "content": "[Summary of earlier conversation]\n" + summary,
+                    })
+                    summarized = True
+                if cache_miss and on_context_trimmed is not None:
                     try:
                         on_context_trimmed(dropped, summarized)
                     except Exception:
@@ -200,6 +232,40 @@ class ChatWorker:
         except Exception as e:
             print(f"  [LOG-CHATWORKER] API call failed: {e}")
             raise e
+
+    def _summary_for_dropped_turns(self, dropped_messages, cancellation_event, runtime_kwargs):
+        """Cache-aware wrapper around _summarize_dropped_turns (6.8 review
+        fix - see _SUMMARY_CACHE's comment). Returns (summary_or_None,
+        cache_miss): a hit returns the cached text without any model call;
+        a miss summarizes (incrementally, when a cached prefix exists),
+        caches the result, and degrades to (None, True) on any failure."""
+        key = _summary_cache_key(dropped_messages)
+        cached = _SUMMARY_CACHE.get(key)
+        if cached is not None:
+            _SUMMARY_CACHE.move_to_end(key)
+            return cached, False
+
+        prefix_len, prefix_summary = _longest_cached_prefix(key)
+        to_summarize = dropped_messages
+        if prefix_summary is not None:
+            to_summarize = [
+                {
+                    "role": "user",
+                    "content": "[Summary of earlier conversation]\n" + prefix_summary,
+                },
+                *dropped_messages[prefix_len:],
+            ]
+        try:
+            summary = self._summarize_dropped_turns(
+                to_summarize, cancellation_event, runtime_kwargs
+            )
+        except Exception:
+            return None, True  # miss + failure -> silent drop, toast still honest
+        if summary:
+            _SUMMARY_CACHE[key] = summary
+            while len(_SUMMARY_CACHE) > _SUMMARY_CACHE_MAX_ENTRIES:
+                _SUMMARY_CACHE.popitem(last=False)
+        return (summary or None), True
 
     def _summarize_dropped_turns(self, dropped_messages, cancellation_event, runtime_kwargs):
         """ADR-006 stage 6.6: one blocking summarization call over the turns

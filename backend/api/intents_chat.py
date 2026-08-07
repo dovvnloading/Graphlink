@@ -101,6 +101,13 @@ def _regenerate_in_place(document, node_to_regenerate, reply_text):
     placeholder_text = text_content if text_content else PLACEHOLDER_GENERATED_CONTENT
     document.update_chat_node_content(node_to_regenerate.id, placeholder_text)
 
+    # ADR-006 stage 6.8 review fix: the old reply's token stamps describe
+    # content that no longer exists - reset to None ("not reported"); fresh
+    # usage for the NEW reply, when the provider reports it, overwrites via
+    # _make_on_usage (which _dispatch invokes after this commit).
+    node_to_regenerate.state.prompt_tokens = None
+    node_to_regenerate.state.completion_tokens = None
+
     bx, by = node_to_regenerate.x, node_to_regenerate.y
     for part in parsed_parts:
         if part["type"] == "thinking":
@@ -351,6 +358,9 @@ def register_chat_intents(
             document.chat_branch_history(context_parent_edge.source) if context_parent_edge else []
         )
         token_counter.set_context_text(_history_token_text(context_history))
+        # 6.8 review fix: a new request starts on estimates - see
+        # TokenCounterState.reset_real_usage.
+        token_counter.reset_real_usage()
         await publish_token_counter()
 
         # ADR-006 stage 6.8: set by _on_reply once the reply node exists, so
@@ -504,6 +514,8 @@ def register_chat_intents(
         # against, so it's usable directly as contextTokens with no
         # adjustment.
         token_counter.set_context_text(_history_token_text(history))
+        # 6.8 review fix: same request-start reset as send_message above.
+        token_counter.reset_real_usage()
         await publish_token_counter()
 
         _on_reply = _make_regenerate_on_reply(
