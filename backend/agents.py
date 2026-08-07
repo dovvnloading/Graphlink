@@ -789,6 +789,7 @@ class AgentDispatcher:
         canvas_document=None,
         node_id: str | None = None,
         on_partial=None,
+        on_usage=None,
     ) -> None:
         """The shared real-dispatch pipeline behind both start_chat_reply
         (Composer, state_topic="app-composer") and start_conversation_reply
@@ -951,6 +952,22 @@ class AgentDispatcher:
                         await bus.publish("notification")
 
                     asyncio.run_coroutine_threadsafe(_notify(), dispatch_loop)
+
+                # ADR-006 stage 6.8: real-usage capture. The worker writes
+                # the provider's normalized usage dict into this holder
+                # BEFORE its to_thread future resolves (ChatWorker.run calls
+                # on_usage before returning), so the read in the success
+                # path below is ordered-after the write by the future's own
+                # happens-before edge - no marshaling needed for a single
+                # pre-join write. Passed to the drivers omit-when-None (only
+                # when the caller actually supplied on_usage), preserving
+                # the strict-arity compat pin for every other dispatch.
+                usage_holder = {"usage": None}
+
+                def _thread_on_usage(usage_dict) -> None:
+                    usage_holder["usage"] = usage_dict
+
+                usage_kwargs = {"on_usage": _thread_on_usage} if on_usage is not None else {}
                 # ADR-006 stage 6.4: the loop-side partial-text accumulator.
                 # A dict, not a str, so _pump (a different coroutine) can
                 # mutate it and the except blocks below can read it after the
@@ -1065,6 +1082,7 @@ class AgentDispatcher:
                                 # - see _runtime_kwargs' own docstring.
                                 **self._runtime_kwargs(),
                                 **override_kwargs,
+                                **usage_kwargs,
                                 on_context_trimmed=_thread_on_context_trimmed,
                             ),
                             timeout=WATCHDOG_TIMEOUT_SECONDS,
@@ -1085,6 +1103,7 @@ class AgentDispatcher:
                             cancel_event,
                             **self._runtime_kwargs(),
                             **override_kwargs,
+                            **usage_kwargs,
                             on_context_trimmed=_thread_on_context_trimmed,
                         ),
                         timeout=WATCHDOG_TIMEOUT_SECONDS,
@@ -1093,6 +1112,14 @@ class AgentDispatcher:
                     await on_reply(reply_text)
                 else:
                     on_reply(reply_text)
+                # ADR-006 stage 6.8: hand real usage to the caller AFTER
+                # on_reply (same success-path ordering as on_reply itself) -
+                # only on success, only when the provider reported counts.
+                if on_usage is not None and usage_holder["usage"]:
+                    if inspect.iscoroutinefunction(on_usage):
+                        await on_usage(usage_holder["usage"])
+                    else:
+                        on_usage(usage_holder["usage"])
                 await bus.publish("scene")
             except asyncio.TimeoutError:
                 cancel_event.set()
@@ -1159,6 +1186,7 @@ class AgentDispatcher:
         canvas_document=None,
         node_id: str | None = None,
         on_partial=None,
+        on_usage=None,
         on_begin=None,
         on_end=None,
         state_topic: str | None = None,
@@ -1193,6 +1221,9 @@ class AgentDispatcher:
             canvas_document=canvas_document,
             node_id=node_id,
             on_partial=on_partial,
+            # ADR-006 stage 6.8: caller-supplied real-usage callback (see
+            # _dispatch) - intents_chat wires it to the token counter.
+            on_usage=on_usage,
         )
 
     async def start_conversation_reply(
@@ -3123,7 +3154,7 @@ def _is_sandbox_error_output(output_text, return_code) -> bool:
 
 
 def _call_chat_agent(conversation_history, persona_text, cancel_event, *, runtime=None,
-                     persona_is_override=False, on_context_trimmed=None) -> str:
+                     persona_is_override=False, on_context_trimmed=None, on_usage=None) -> str:
     """Runs inside asyncio.to_thread - a real OS thread, not the event loop.
 
     ADR-006 stage 6.5: `runtime` is an additive keyword-only kwarg, forwarded
@@ -3157,11 +3188,13 @@ def _call_chat_agent(conversation_history, persona_text, cancel_event, *, runtim
         **({"runtime": runtime} if runtime is not None else {}),
         # ADR-006 stage 6.6: trim/summarize signal - forwarded omit-when-None.
         **({"on_context_trimmed": on_context_trimmed} if on_context_trimmed is not None else {}),
+        # ADR-006 stage 6.8: real-usage signal - forwarded omit-when-None.
+        **({"on_usage": on_usage} if on_usage is not None else {}),
     )
 
 
 def _call_chat_agent_stream(conversation_history, persona_text, cancel_event, on_chunk, *, runtime=None,
-                            persona_is_override=False, on_context_trimmed=None) -> str:
+                            persona_is_override=False, on_context_trimmed=None, on_usage=None) -> str:
     """Runs inside asyncio.to_thread - a real OS thread, not the event loop.
     Streaming counterpart to _call_chat_agent (R4.4) - same persona/
     current_node/resolved_system_prompt guarantees as that function (see its
@@ -3195,6 +3228,8 @@ def _call_chat_agent_stream(conversation_history, persona_text, cancel_event, on
         **({"runtime": runtime} if runtime is not None else {}),
         # ADR-006 stage 6.6: trim/summarize signal - forwarded omit-when-None.
         **({"on_context_trimmed": on_context_trimmed} if on_context_trimmed is not None else {}),
+        # ADR-006 stage 6.8: real-usage signal - forwarded omit-when-None.
+        **({"on_usage": on_usage} if on_usage is not None else {}),
     )
 
 

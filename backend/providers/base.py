@@ -33,7 +33,12 @@ import threading
 from dataclasses import dataclass, field
 from typing import Any, Iterator, Literal, Mapping, Protocol, runtime_checkable
 
-EVENT_TYPES = ("text", "reasoning", "reset", "done")
+# ADR-006 stage 6.8: "usage" joins the union the module docstring reserved
+# for it. Convention: providers do NOT emit a separate "usage" event - they
+# attach normalized usage to the terminal "done" event (done.usage), which
+# keeps the chat_stream consuming loop simple. The type stays in this union
+# so the vocabulary matches the ADR's event union.
+EVENT_TYPES = ("text", "reasoning", "reset", "done", "usage")
 
 
 @dataclass(frozen=True)
@@ -96,11 +101,37 @@ class ProviderEvent:
                    retry discarded the prior attempt's partial output).
     - "done":      terminal; `text` carries the COMPLETE final content (for
                    Ollama that is the composed "<think>...</think>\\n{answer}"
-                   shape downstream response parsing depends on).
+                   shape downstream response parsing depends on). ADR-006
+                   stage 6.8: `usage`, when the provider reported it, rides
+                   the done event as {"prompt_tokens": int | None,
+                   "completion_tokens": int | None} - normalized keys, never
+                   a separate event.
+    - "usage":     reserved in the union for protocol completeness; today no
+                   provider emits it standalone (usage rides "done" - see
+                   EVENT_TYPES' own comment).
     """
 
-    type: Literal["text", "reasoning", "reset", "done"]
+    type: Literal["text", "reasoning", "reset", "done", "usage"]
     text: str = ""
+    usage: dict | None = None
+
+
+def normalize_usage(prompt_tokens, completion_tokens) -> dict | None:
+    """ADR-006 stage 6.8: the ONE normalized usage shape every provider
+    attaches to its done event - {"prompt_tokens": int | None,
+    "completion_tokens": int | None}, or None when the provider reported
+    nothing at all. Tolerates non-int server values (returns None fields)."""
+    def _as_int(value):
+        try:
+            return int(value) if value is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    prompt = _as_int(prompt_tokens)
+    completion = _as_int(completion_tokens)
+    if prompt is None and completion is None:
+        return None
+    return {"prompt_tokens": prompt, "completion_tokens": completion}
 
 
 class CancelToken:

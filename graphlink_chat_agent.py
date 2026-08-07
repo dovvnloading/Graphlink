@@ -55,7 +55,7 @@ class ChatWorker:
         self.MAX_TOKENS = 8000
 
     def run(self, conversation_history, current_node, cancellation_event=None, resolved_system_prompt=None,
-            on_chunk=None, *, runtime=None, on_context_trimmed=None):
+            on_chunk=None, *, runtime=None, on_context_trimmed=None, on_usage=None):
         """
         Executes the chat logic for a single turn.
 
@@ -82,6 +82,11 @@ class ChatWorker:
                 trim_history had to drop older turns to fit the model's context
                 window - after the optional summarization attempt, before the main
                 request. Never called when nothing was dropped.
+            on_usage (callable, optional): ADR-006 stage 6.8. Called (from THIS
+                worker thread) with the provider's normalized usage dict
+                ({"prompt_tokens": int | None, "completion_tokens": int | None})
+                when the response carried real counts. Never called when the
+                provider reported nothing.
 
         Returns:
             str: The AI-generated response text.
@@ -179,6 +184,17 @@ class ChatWorker:
                     cancellation_event=cancellation_event,
                     **runtime_kwargs,
                 )
+            # ADR-006 stage 6.8: surface the provider's real usage counts
+            # when present (chat_stream always includes the key; blocking
+            # chat() only for the local branches - .get keeps both shapes,
+            # and every test fake that returns a bare {"message": ...}).
+            if on_usage is not None:
+                usage = response.get("usage") if isinstance(response, dict) else None
+                if usage:
+                    try:
+                        on_usage(usage)
+                    except Exception:
+                        pass  # accounting must never fail the reply
             ai_message = response['message']['content']
             return ai_message
         except Exception as e:
@@ -235,7 +251,7 @@ class ChatAgent:
             self.system_prompt = ""
 
     def get_response(self, conversation_history, current_node, cancellation_event=None, resolved_system_prompt=None,
-                      on_chunk=None, *, runtime=None, on_context_trimmed=None):
+                      on_chunk=None, *, runtime=None, on_context_trimmed=None, on_usage=None):
         """
         Gets an AI response for a given conversation history.
 
@@ -268,5 +284,6 @@ class ChatAgent:
             on_chunk=on_chunk,
             runtime=runtime,
             on_context_trimmed=on_context_trimmed,
+            on_usage=on_usage,
         )
         return ai_response

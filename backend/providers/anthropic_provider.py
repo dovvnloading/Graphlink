@@ -40,6 +40,7 @@ from backend.providers.base import (
     ChatRequest,
     ProviderCapabilities,
     ProviderEvent,
+    normalize_usage,
 )
 
 _ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages"
@@ -67,6 +68,7 @@ class AnthropicProvider:
         self.api_key = api_key
         self.model_id = model
         self.reasoning_level = reasoning_level
+        self.last_usage: dict | None = None  # ADR-006 stage 6.8 - see complete()
         self.capabilities = ProviderCapabilities(
             streaming=True,  # 6.5b: real streaming on both the SDK and REST transports
             reasoning=anthropic_supports_reasoning(model),
@@ -103,6 +105,16 @@ class AnthropicProvider:
                 api_key=self.api_key,
             )
         _raise_if_cancelled(cancel.event)
+        # ADR-006 stage 6.8: blocking usage captured on a side attribute
+        # (complete() returns a bare str by protocol); api_provider.chat()
+        # deliberately does not surface API-mode blocking usage today (the
+        # chat UI streams everywhere since 6.5b).
+        response_usage = _extract_response_field(response, "usage", None)
+        if response_usage is not None:
+            self.last_usage = normalize_usage(
+                _extract_response_field(response_usage, "input_tokens", None),
+                _extract_response_field(response_usage, "output_tokens", None),
+            )
         return _extract_anthropic_text(response)
 
     def stream(self, request: ChatRequest, cancel: CancelToken) -> Iterator[ProviderEvent]:
@@ -146,6 +158,13 @@ class AnthropicProvider:
         answer_parts: list[str] = []
         thinking_parts: list[str] = []
         saw_message_stop = False
+        # ADR-006 stage 6.8: input tokens arrive on message_start
+        # (message.usage.input_tokens), output tokens on message_delta
+        # (usage.output_tokens, cumulative - last one wins). Read through
+        # _extract_response_field like every other event field, so both the
+        # SDK's typed objects and the REST dicts work.
+        prompt_tokens = None
+        completion_tokens = None
         try:
             for event in event_stream:
                 if cancel.is_set():
@@ -181,6 +200,15 @@ class AnthropicProvider:
                         if thinking:
                             thinking_parts.append(thinking)
                             yield ProviderEvent("reasoning", thinking)
+                elif event_type == "message_start":
+                    message = _extract_response_field(event, "message", {})
+                    start_usage = _extract_response_field(message, "usage", None)
+                    if start_usage is not None:
+                        prompt_tokens = _extract_response_field(start_usage, "input_tokens", None)
+                elif event_type == "message_delta":
+                    delta_usage = _extract_response_field(event, "usage", None)
+                    if delta_usage is not None:
+                        completion_tokens = _extract_response_field(delta_usage, "output_tokens", None)
                 elif event_type == "message_stop":
                     saw_message_stop = True
                     break
@@ -208,4 +236,5 @@ class AnthropicProvider:
                 "".join(thinking_parts).strip(),
                 "Anthropic Claude",
             ),
+            usage=normalize_usage(prompt_tokens, completion_tokens),
         )

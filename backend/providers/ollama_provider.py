@@ -66,6 +66,7 @@ from backend.providers.base import (
     ChatRequest,
     ProviderCapabilities,
     ProviderEvent,
+    normalize_usage,
 )
 
 _MAX_REASONING_ATTEMPTS = 3
@@ -80,6 +81,9 @@ class OllamaProvider:
     def __init__(self, *, model: str, reasoning_level: str = "off"):
         self.model_id = model
         self.reasoning_level = reasoning_level
+        # ADR-006 stage 6.8: usage from the last complete() call (see the
+        # comment there); None until a blocking call reports counts.
+        self.last_usage: dict | None = None
         # Derived WITHOUT a network round-trip: reasoning support here means
         # "this family takes a think kwarg" (a pure string-family check, the
         # same one the request path applies). vision/audio are True because
@@ -151,6 +155,7 @@ class OllamaProvider:
 
             content_parts: list[str] = []
             thinking_parts: list[str] = []
+            usage = None
             stream = ollama.chat(model=self.model_id, messages=messages, stream=True, **kwargs)
             try:
                 for part in stream:
@@ -167,6 +172,11 @@ class OllamaProvider:
                         thinking_parts.append(delta_thinking)
                         yield ProviderEvent("reasoning", delta_thinking)
                     if part.get("done"):
+                        # ADR-006 stage 6.8: the terminal chunk carries
+                        # Ollama's real token counts.
+                        usage = normalize_usage(
+                            part.get("prompt_eval_count"), part.get("eval_count")
+                        )
                         break
             finally:
                 stream.close()  # idempotent on an already-exhausted generator
@@ -176,7 +186,7 @@ class OllamaProvider:
             except ReasoningWithoutAnswerError as exc:
                 last_reasoning_error = exc
                 continue
-            yield ProviderEvent("done", final)
+            yield ProviderEvent("done", final, usage=usage)
             return
         raise self._exhausted_retries_error() from last_reasoning_error
 
@@ -195,6 +205,12 @@ class OllamaProvider:
 
             response = ollama.chat(model=self.model_id, messages=messages, **kwargs)
             _raise_if_cancelled(cancel.event)
+            # ADR-006 stage 6.8: complete() returns a bare str by protocol, so
+            # the usage from the raw response rides a side attribute the
+            # blocking chat() branch reads right after this call returns.
+            self.last_usage = normalize_usage(
+                response.get("prompt_eval_count"), response.get("eval_count")
+            )
 
             try:
                 return self._compose(

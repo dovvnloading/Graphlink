@@ -406,7 +406,7 @@ def test_the_real_chat_stream_streams_multiple_incremental_deltas_through_the_se
     )
 
     assert chunks == [("one ", False), ("two ", False), ("three", False)]
-    assert response == {"message": {"content": "one two three", "role": "assistant"}}
+    assert response == {"message": {"content": "one two three", "role": "assistant"}, "usage": None}
 
 
 def test_the_real_chat_stream_forwards_the_retry_reset_to_on_chunk(
@@ -435,7 +435,7 @@ def test_the_real_chat_stream_forwards_the_retry_reset_to_on_chunk(
 def test_the_real_chat_via_the_seam_matches_the_legacy_return_shape(ollama_mode, ollama_chat):
     ollama_chat.responses = [{"message": {"content": "Plain answer."}}]
     response = _REAL_CHAT(config.TASK_CHAT, [{"role": "user", "content": "hi"}])
-    assert response == {"message": {"content": "Plain answer.", "role": "assistant"}}
+    assert response == {"message": {"content": "Plain answer.", "role": "assistant"}, "usage": None}
 
 
 def test_chat_and_chat_stream_actually_route_through_the_provider_seam(
@@ -506,7 +506,7 @@ def test_a_fake_provider_can_substitute_for_ollama_at_the_real_chat_stream_seam(
     )
 
     assert chunks == [("from ", False), ("the ", False), ("fake", False)]
-    assert response == {"message": {"content": "from the fake", "role": "assistant"}}
+    assert response == {"message": {"content": "from the fake", "role": "assistant"}, "usage": None}
     assert len(fake.requests) == 1
 
 
@@ -837,6 +837,9 @@ def test_chat_routes_every_api_provider_through_its_provider_class(monkeypatch):
     ]:
         monkeypatch.setattr(api_provider, "API_PROVIDER_TYPE", provider_type)
         response = _REAL_CHAT(config.TASK_CHAT, [{"role": "user", "content": "hi"}])
+        # ADR-006 stage 6.8 scope note: the API-mode BLOCKING branches
+        # deliberately do not surface usage (the chat UI streams everywhere
+        # since 6.5b) - no "usage" key here, unlike the local branches.
         assert response == {"message": {"content": f"{label} answer", "role": "assistant"}}
     assert calls == ["OpenAIProvider", "AnthropicProvider", "GeminiProvider"]
 
@@ -979,7 +982,7 @@ def test_chat_routes_the_llama_cpp_local_branch_through_its_provider_class(monke
 
     response = _REAL_CHAT(config.TASK_CHAT, [{"role": "user", "content": "hi"}])
 
-    assert response == {"message": {"content": "LlamaCppProvider answer", "role": "assistant"}}
+    assert response == {"message": {"content": "LlamaCppProvider answer", "role": "assistant"}, "usage": None}
     assert seen["complete"] == 1
     assert seen["init"] == {"settings": settings}  # the snapshot's dict copy, values intact
 
@@ -1140,7 +1143,7 @@ def test_openai_stream_yields_incremental_deltas_reasoning_and_a_done_matching_c
     assert events[-1].text == "Hello world"
     assert stream.close_calls >= 1  # the finally closed the exhausted stream
     # Same request prep as complete(): reasoning kwargs applied for TASK_CHAT.
-    chat_keys = set(captured) - {"model", "messages", "stream"}
+    chat_keys = set(captured) - {"model", "messages", "stream", "stream_options"}
     assert chat_keys == set(api_provider.openai_reasoning_kwargs("gpt-5", "high"))
 
 
@@ -1757,7 +1760,8 @@ def test_chat_stream_streams_real_deltas_through_each_api_provider_branch(
 
     assert chunks == [("one ", False), ("two ", False), ("three", False)]  # reasoning never forwarded
     assert response == {
-        "message": {"content": "<think>never forwarded</think>\none two three", "role": "assistant"}
+        "message": {"content": "<think>never forwarded</think>\none two three", "role": "assistant"},
+        "usage": None,
     }
     seen.pop("task")
     if class_name in ("OpenAIProvider", "AnthropicProvider"):
@@ -2146,3 +2150,162 @@ def test_llama_cpp_preload_success_writes_settings_after_the_preload_completes(m
     assert order == ["preload", "write"]
     assert result["preloaded"] is True
     assert runtime.snapshot().llama_cpp_settings["chat_model_path"] == str(model_path)
+
+
+# -- ADR-006 stage 6.8: real usage rides the done event ------------------------
+#
+# Convention (backend/providers/base.py): providers never emit a standalone
+# "usage" event - normalized {"prompt_tokens", "completion_tokens"} counts
+# attach to the terminal "done" event, and chat_stream surfaces them in its
+# return dict's additive "usage" key.
+
+
+def test_ollama_stream_done_event_carries_normalized_usage(ollama_chat):
+    done_part = _part(content="Answer.", done=True)
+    done_part["prompt_eval_count"] = 12
+    done_part["eval_count"] = 34
+    ollama_chat.streams = [FakeOllamaStream([done_part])]
+    provider = OllamaProvider(model="llava:13b")
+    events = list(provider.stream(
+        ChatRequest(task=config.TASK_CHAT, messages=[{"role": "user", "content": "hi"}]),
+        CancelToken(),
+    ))
+    assert events[-1].type == "done"
+    assert events[-1].usage == {"prompt_tokens": 12, "completion_tokens": 34}
+
+
+def test_ollama_blocking_chat_surfaces_usage_in_the_return_dict(ollama_mode, ollama_chat):
+    ollama_chat.responses = [{
+        "message": {"content": "Plain answer."},
+        "prompt_eval_count": 7,
+        "eval_count": 9,
+    }]
+    response = _REAL_CHAT(config.TASK_CHAT, [{"role": "user", "content": "hi"}])
+    assert response["usage"] == {"prompt_tokens": 7, "completion_tokens": 9}
+
+
+def test_openai_stream_requests_include_usage_and_captures_the_usage_chunk():
+    import types
+
+    usage_chunk = types.SimpleNamespace(
+        choices=[],
+        usage=types.SimpleNamespace(prompt_tokens=100, completion_tokens=25),
+    )
+    stream = FakeSDKStream([_openai_chunk(content="Hi"), usage_chunk])
+    client, stream, captured = _fake_openai_streaming_client(stream)
+    from backend.providers import OpenAIProvider
+
+    provider = OpenAIProvider(client=client, model="gpt-4o")
+    events = list(provider.stream(
+        ChatRequest(task=config.TASK_CHAT, messages=[{"role": "user", "content": "hi"}]),
+        CancelToken(),
+    ))
+    assert captured["stream_options"] == {"include_usage": True}
+    assert events[-1].type == "done"
+    assert events[-1].usage == {"prompt_tokens": 100, "completion_tokens": 25}
+
+
+def test_openai_stream_retries_once_without_stream_options_when_the_server_rejects_it():
+    import types
+
+    calls = []
+    stream = FakeSDKStream([_openai_chunk(content="Hi")])
+
+    def create(**kwargs):
+        calls.append(kwargs)
+        if "stream_options" in kwargs:
+            raise TypeError("create() got an unexpected keyword argument 'stream_options'")
+        return stream
+
+    client = types.SimpleNamespace(
+        chat=types.SimpleNamespace(completions=types.SimpleNamespace(create=create))
+    )
+    from backend.providers import OpenAIProvider
+
+    provider = OpenAIProvider(client=client, model="gpt-4o")
+    events = list(provider.stream(
+        ChatRequest(task=config.TASK_CHAT, messages=[{"role": "user", "content": "hi"}]),
+        CancelToken(),
+    ))
+    assert len(calls) == 2
+    assert "stream_options" not in calls[1]  # degraded retry, no usage
+    assert events[-1].type == "done"
+    assert events[-1].usage is None
+
+
+def test_anthropic_stream_captures_input_and_output_tokens_from_the_event_flow():
+    import types
+
+    from backend.providers import AnthropicProvider
+
+    events_in = [
+        {"type": "message_start", "message": {"role": "assistant", "usage": {"input_tokens": 55}}},
+        {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "Answer."}},
+        {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 21}},
+        {"type": "message_stop"},
+    ]
+    live = FakeSDKStream(events_in)
+    sdk_client = types.SimpleNamespace(
+        messages=types.SimpleNamespace(create=lambda **kwargs: live)
+    )
+    provider = AnthropicProvider(client=sdk_client, api_key="k", model="claude-opus-5")
+    events = list(provider.stream(
+        ChatRequest(task=config.TASK_CHAT, messages=[{"role": "user", "content": "hi"}]),
+        CancelToken(),
+    ))
+    assert events[-1].type == "done"
+    assert events[-1].usage == {"prompt_tokens": 55, "completion_tokens": 21}
+
+
+def test_gemini_stream_captures_usage_metadata_from_the_trailing_frame(monkeypatch):
+    from backend.providers import GeminiProvider
+
+    def fake_stream_sse(url, body, timeout=120, cancel_event=None, api_key=None):
+        yield _gemini_sse_payload({"text": "Answer."})
+        yield {
+            "candidates": [{"content": {"parts": []}}],
+            "usageMetadata": {"promptTokenCount": 40, "candidatesTokenCount": 8},
+        }
+
+    monkeypatch.setattr(
+        "backend.providers.gemini_provider._prepare_gemini_contents",
+        lambda messages, cancel_event=None, api_key=None: (None, [{"parts": [{"text": "hi"}]}], []),
+    )
+    monkeypatch.setattr("backend.providers.gemini_provider._gemini_stream_sse", fake_stream_sse)
+    provider = GeminiProvider(api_key="k", model="gemini-2.5-pro")
+    events = list(provider.stream(
+        ChatRequest(task=config.TASK_CHAT, messages=[{"role": "user", "content": "hi"}]),
+        CancelToken(),
+    ))
+    assert events[-1].type == "done"
+    assert events[-1].usage == {"prompt_tokens": 40, "completion_tokens": 8}
+
+
+def test_llama_cpp_stream_usage_stays_none_by_design(monkeypatch):
+    # llama.cpp stream chunks don't reliably carry usage - the done event's
+    # usage is deliberately None (the counter falls back to its estimator).
+    from backend.providers import LlamaCppProvider
+
+    chunks = FakeSDKStream([
+        {"choices": [{"delta": {"content": "Answer."}}]},
+    ])
+    import types
+
+    fake_client = types.SimpleNamespace(
+        create_chat_completion=lambda messages, stream=False, **kwargs: chunks
+    )
+    monkeypatch.setattr(
+        "backend.providers.llama_cpp_provider._get_llama_cpp_client",
+        lambda task, settings: fake_client,
+    )
+    monkeypatch.setattr(
+        "backend.providers.llama_cpp_provider._assert_llama_cpp_message_support",
+        lambda messages: None,
+    )
+    provider = LlamaCppProvider(settings={"chat_model_path": "m.gguf"})
+    events = list(provider.stream(
+        ChatRequest(task=config.TASK_CHAT, messages=[{"role": "user", "content": "hi"}]),
+        CancelToken(),
+    ))
+    assert events[-1].type == "done"
+    assert events[-1].usage is None

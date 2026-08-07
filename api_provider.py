@@ -2673,7 +2673,14 @@ def chat(task: str, messages: list, **kwargs) -> dict:
                     "message": {
                         "content": content,
                         "role": "assistant",
-                    }
+                    },
+                    # ADR-006 stage 6.8: real token counts from the blocking
+                    # response (see OllamaProvider.complete). SCOPE: only the
+                    # local blocking branches surface usage - the API-mode
+                    # blocking branches deliberately do not, because the chat
+                    # UI streams everywhere since 6.5b and blocking API calls
+                    # are non-chat agent tasks the counter doesn't display.
+                    "usage": getattr(provider, "last_usage", None),
                 }
 
             if state.local_provider_type == config.LOCAL_PROVIDER_LLAMACPP:
@@ -2693,7 +2700,10 @@ def chat(task: str, messages: list, **kwargs) -> dict:
                     "message": {
                         "content": content,
                         "role": "assistant",
-                    }
+                    },
+                    # ADR-006 stage 6.8: same local-blocking usage surface as
+                    # the Ollama branch above (see its scope comment).
+                    "usage": getattr(provider, "last_usage", None),
                 }
 
             raise RuntimeError(f"Unsupported local provider: {state.local_provider_type}")
@@ -2943,6 +2953,7 @@ def chat_stream(task: str, messages: list, on_chunk: Callable[[str, bool], None]
         # a provider composes one), and "done" carries the full final text
         # this function returns.
         full_response_content = None
+        usage = None
         for event in provider.stream(
             ChatRequest(task=task, messages=messages, extra_kwargs=kwargs),
             CancelToken(cancel_event),
@@ -2953,12 +2964,18 @@ def chat_stream(task: str, messages: list, on_chunk: Callable[[str, bool], None]
                 on_chunk("", True)  # tell the caller: discard the last attempt's partial text
             elif event.type == "done":
                 full_response_content = event.text
+                # ADR-006 stage 6.8: providers attach normalized usage to
+                # their done event when the server reported real counts.
+                usage = getattr(event, "usage", None)
 
         return {
             "message": {
                 "content": full_response_content,
                 "role": "assistant",
-            }
+            },
+            # ADR-006 stage 6.8: {"prompt_tokens": ..., "completion_tokens":
+            # ...} or None - additive key, every consumer reads ["message"].
+            "usage": usage,
         }
     except Exception as exc:
         # Same translation chat() gets - a real connection-refused/timeout/

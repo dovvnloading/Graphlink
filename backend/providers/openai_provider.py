@@ -42,6 +42,7 @@ from backend.providers.base import (
     ChatRequest,
     ProviderCapabilities,
     ProviderEvent,
+    normalize_usage,
 )
 
 # OpenAI's input_audio accepts exactly these container formats today. mpga is
@@ -132,6 +133,7 @@ class OpenAIProvider:
         self.client = client
         self.model_id = model
         self.reasoning_level = reasoning_level
+        self.last_usage: dict | None = None  # ADR-006 stage 6.8 - see complete()
         self.capabilities = ProviderCapabilities(
             streaming=True,  # 6.5b: real SSE via chat.completions.create(stream=True)
             reasoning=openai_supports_reasoning(model),
@@ -158,6 +160,15 @@ class OpenAIProvider:
             **kwargs,
         )
         _raise_if_cancelled(cancel.event)
+        # ADR-006 stage 6.8: response.usage is in hand here - captured on a
+        # side attribute (complete() returns a bare str by protocol). Note
+        # api_provider.chat() deliberately does not surface API-mode blocking
+        # usage today (the chat UI streams everywhere since 6.5b).
+        response_usage = getattr(response, "usage", None)
+        self.last_usage = normalize_usage(
+            getattr(response_usage, "prompt_tokens", None),
+            getattr(response_usage, "completion_tokens", None),
+        )
         return response.choices[0].message.content
 
     def stream(self, request: ChatRequest, cancel: CancelToken) -> Iterator[ProviderEvent]:
@@ -173,17 +184,44 @@ class OpenAIProvider:
             kwargs.update(openai_reasoning_kwargs(self.model_id, self.reasoning_level))
 
         content_parts: list[str] = []
-        stream = self.client.chat.completions.create(
-            model=self.model_id,
-            messages=prepare_openai_messages(request.messages),
-            stream=True,
-            **kwargs,
-        )
+        prepared_messages = prepare_openai_messages(request.messages)
+        # ADR-006 stage 6.8: ask for the final usage chunk. Some
+        # OpenAI-compatible servers (older vLLM/LM Studio builds) reject
+        # stream_options outright (TypeError from a narrower fake/wrapper, or
+        # a BadRequest naming the param) - retry ONCE without it and degrade
+        # to no usage rather than failing the request.
+        try:
+            stream = self.client.chat.completions.create(
+                model=self.model_id,
+                messages=prepared_messages,
+                stream=True,
+                stream_options={"include_usage": True},
+                **kwargs,
+            )
+        except Exception as exc:
+            if "stream_options" not in str(exc) and not isinstance(exc, TypeError):
+                raise
+            stream = self.client.chat.completions.create(
+                model=self.model_id,
+                messages=prepared_messages,
+                stream=True,
+                **kwargs,
+            )
+        usage = None
         try:
             for chunk in stream:
                 if cancel.is_set():
                     stream.close()  # closes the SDK Stream's underlying HTTP response
                 _raise_if_cancelled(cancel.event)  # raises if just closed above
+
+                # ADR-006 stage 6.8: with include_usage, the final chunk (or
+                # a usage-only empty-choices chunk) carries real counts.
+                chunk_usage = getattr(chunk, "usage", None)
+                if chunk_usage is not None:
+                    usage = normalize_usage(
+                        getattr(chunk_usage, "prompt_tokens", None),
+                        getattr(chunk_usage, "completion_tokens", None),
+                    ) or usage
 
                 # Some OpenAI-compatible servers send usage-only/keep-alive
                 # chunks with an empty choices list - skip, don't IndexError.
@@ -214,4 +252,4 @@ class OpenAIProvider:
         # Deliberate parity with complete(), which returns message.content
         # untouched (no <think> composition anywhere on the OpenAI path
         # today): the final text is the raw concatenated content deltas.
-        yield ProviderEvent("done", "".join(content_parts))
+        yield ProviderEvent("done", "".join(content_parts), usage=usage)
