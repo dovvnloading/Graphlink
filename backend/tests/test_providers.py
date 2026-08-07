@@ -558,7 +558,8 @@ def _fake_openai_client(response_text="ok"):
 def test_the_capability_matrix_is_pinned_per_provider():
     """The 6.3 exit criterion's matrix, as data: what each provider+model
     pair can actually do. A capability flipping here must be a deliberate
-    stage (6.4 flips streaming), never a drive-by."""
+    stage (6.5b flipped streaming True for the four non-Ollama providers),
+    never a drive-by."""
     from backend.providers import (
         AnthropicProvider,
         GeminiProvider,
@@ -576,7 +577,7 @@ def test_the_capability_matrix_is_pinned_per_provider():
     expected = {
         #            streaming, reasoning, vision, audio, image_gen
         "ollama":    (True,  True,  True,  True,  False),  # media rides the images field; audio model-gated at request time
-        "openai":    (False, True,  True,  True,  False),  # C4: vision+audio real; image_gen probed from the client (None here)
+        "openai":    (True,  True,  True,  True,  False),  # C4: vision+audio real; image_gen probed from the client (None here)
         "anthropic": (False, True,  True,  False, False),
         "gemini":    (False, True,  True,  True,  True),
         "llama_cpp": (False, False, False, False, False),
@@ -977,10 +978,11 @@ def test_connection_refused_in_api_mode_surfaces_the_friendly_endpoint_message(o
     assert "Details: connection refused by endpoint" in message  # raw cause kept, as detail only
 
 
-def test_all_four_new_providers_satisfy_the_protocol_and_stream_exactly_one_done():
-    """6.3 review fix: protocol conformance was only pinned for FakeProvider
-    and Ollama; the transitional stream()-wraps-complete() shape (chat_stream's
-    documented one-full-chunk fallback) was never asserted for the new four."""
+def test_all_four_new_providers_satisfy_the_protocol():
+    """6.3: protocol conformance for the non-Ollama four. (The transitional
+    stream()-wraps-complete() single-"done" assertion that used to live here
+    died with 6.5b - real per-provider streaming is pinned in the dedicated
+    6.5b section below.)"""
     from backend.providers import (
         AnthropicProvider,
         GeminiProvider,
@@ -993,13 +995,122 @@ def test_all_four_new_providers_satisfy_the_protocol_and_stream_exactly_one_done
     assert isinstance(GeminiProvider(api_key="k", model="gemini-2.5-pro"), Provider)
     assert isinstance(LlamaCppProvider(settings={"chat_model_path": "m.gguf"}), Provider)
 
-    client, _ = _fake_openai_client("full text")
-    provider = OpenAIProvider(client=client, model="gpt-5")
+
+# -- ADR-006 stage 6.5b: real streaming for the non-Ollama four ---------------
+# -- Only the SDK/transport layer is faked in each of these; the provider's
+# -- own stream() machinery (prep, event mapping, cancellation, composition)
+# -- runs for real. The bar per provider: multiple incremental text deltas,
+# -- reasoning events where the wire carries them, a final "done" whose text
+# -- matches what complete() composes for the same data, and mid-stream
+# -- cancellation that closes the live stream and raises the untranslated
+# -- RequestCancelledError sentinel.
+
+
+class FakeSDKStream:
+    """Iterable-with-close() stand-in for openai's Stream / anthropic's raw
+    event Stream / a llama.cpp chunk generator - anything the providers
+    iterate and must close."""
+
+    def __init__(self, items, cancel_event=None, cancel_after=None):
+        self._items = list(items)
+        self._index = 0
+        self.close_calls = 0
+        self._cancel_event = cancel_event
+        self._cancel_after = cancel_after
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self._index >= len(self._items):
+            raise StopIteration
+        item = self._items[self._index]
+        self._index += 1
+        if self._cancel_event is not None and self._index == self._cancel_after:
+            self._cancel_event.set()  # cancel lands after this item is delivered
+        return item
+
+    def close(self):
+        self.close_calls += 1
+
+
+def _openai_chunk(content=None, reasoning_content=None, choices_empty=False):
+    import types
+
+    if choices_empty:
+        return types.SimpleNamespace(choices=[])  # usage-only chunk shape
+    delta_fields = {"content": content}
+    if reasoning_content is not None:
+        delta_fields["reasoning_content"] = reasoning_content
+    return types.SimpleNamespace(
+        choices=[types.SimpleNamespace(delta=types.SimpleNamespace(**delta_fields), finish_reason=None)]
+    )
+
+
+def _fake_openai_streaming_client(chunks_or_stream):
+    import types
+
+    captured = {}
+    stream = (
+        chunks_or_stream
+        if isinstance(chunks_or_stream, FakeSDKStream)
+        else FakeSDKStream(chunks_or_stream)
+    )
+
+    def create(**kwargs):
+        captured.update(kwargs)
+        assert kwargs.get("stream") is True
+        return stream
+
+    client = types.SimpleNamespace(
+        chat=types.SimpleNamespace(completions=types.SimpleNamespace(create=create))
+    )
+    return client, stream, captured
+
+
+def test_openai_stream_yields_incremental_deltas_reasoning_and_a_done_matching_complete():
+    from backend.providers import CancelToken as CT, ChatRequest as CR, OpenAIProvider
+
+    client, stream, captured = _fake_openai_streaming_client([
+        _openai_chunk(content="Hel"),
+        _openai_chunk(choices_empty=True),        # usage-only chunk must be skipped
+        _openai_chunk(reasoning_content="hmm "),  # compatible-server thinking delta
+        _openai_chunk(content="lo "),
+        _openai_chunk(content="world"),
+    ])
+    provider = OpenAIProvider(client=client, model="gpt-5", reasoning_level="high")
     events = list(provider.stream(
-        ChatRequest(task=config.TASK_TITLE, messages=[{"role": "user", "content": "hi"}]),
-        CancelToken(),
+        CR(task=config.TASK_CHAT, messages=[{"role": "user", "content": "hi"}]), CT()
     ))
-    assert events == [ProviderEvent("done", "full text")]  # exactly one terminal event
+
+    assert [e.type for e in events] == ["text", "reasoning", "text", "text", "done"]
+    # Parity with complete(): raw concatenated content, no <think> composition
+    # (the OpenAI blocking path returns message.content untouched).
+    assert events[-1].text == "Hello world"
+    assert stream.close_calls >= 1  # the finally closed the exhausted stream
+    # Same request prep as complete(): reasoning kwargs applied for TASK_CHAT.
+    chat_keys = set(captured) - {"model", "messages", "stream"}
+    assert chat_keys == set(api_provider.openai_reasoning_kwargs("gpt-5", "high"))
+
+
+def test_openai_stream_cancellation_mid_stream_closes_the_live_stream_and_raises():
+    from backend.providers import CancelToken as CT, ChatRequest as CR, OpenAIProvider
+
+    cancel_event = threading.Event()
+    live = FakeSDKStream(
+        [_openai_chunk(content="par"), _openai_chunk(content="tial")],
+        cancel_event=cancel_event,
+        cancel_after=1,
+    )
+    client, _, _ = _fake_openai_streaming_client(live)
+    provider = OpenAIProvider(client=client, model="gpt-5")
+
+    with pytest.raises(api_provider.RequestCancelledError):
+        list(provider.stream(
+            CR(task=config.TASK_CHAT, messages=[{"role": "user", "content": "hi"}]),
+            CT(cancel_event),
+        ))
+    assert live.close_calls >= 1  # the live HTTP stream was actively closed
 
 
 def test_chat_constructs_each_api_provider_from_the_snapshot_credentials(monkeypatch):
