@@ -1215,6 +1215,95 @@ def test_anthropic_stream_cancellation_mid_stream_closes_the_live_stream_and_rai
     assert live.close_calls >= 1
 
 
+def _consume_expecting(provider_stream, exc_type, match):
+    """Drain a provider stream expecting it to raise; return the events that
+    made it out first, so callers can assert no \"done\" was emitted."""
+    events = []
+    with pytest.raises(exc_type, match=match):
+        for event in provider_stream:
+            events.append(event)
+    return events
+
+
+def _sdk_client_returning(live):
+    import types
+
+    return types.SimpleNamespace(messages=types.SimpleNamespace(create=lambda **kwargs: live))
+
+
+_ANTHROPIC_ERROR_EVENT = {
+    "type": "error",
+    "error": {"type": "overloaded_error", "message": "Overloaded"},
+}
+
+
+def test_anthropic_mid_stream_error_event_raises_on_both_transports(monkeypatch):
+    """6.5b review (HIGH): the streaming API can send an error event on a 200
+    stream and close - it must raise with the API's type+message (the
+    _anthropic_post_json posture), never compose the partial text as done."""
+    from backend.providers import AnthropicProvider, CancelToken as CT, ChatRequest as CR
+
+    request = CR(task=config.TASK_CHAT, messages=[{"role": "user", "content": "hi"}])
+    wire = _anthropic_raw_events(with_thinking=False)[:4] + [_ANTHROPIC_ERROR_EVENT]
+
+    # SDK transport: the fake stream yields the error-shaped event itself.
+    provider = AnthropicProvider(
+        client=_sdk_client_returning(FakeSDKStream(wire)), api_key="k", model="claude-opus-5"
+    )
+    events = _consume_expecting(
+        provider.stream(request, CT()), RuntimeError, "overloaded_error: Overloaded"
+    )
+    assert events and all(e.type != "done" for e in events)  # deltas out, no done
+
+    # REST transport: the SSE reader yields the same wire-shaped dict.
+    def fake_stream_sse(url, body, timeout=180, cancel_event=None, api_key=None):
+        yield from wire
+
+    monkeypatch.setattr(
+        "backend.providers.anthropic_provider._anthropic_stream_sse", fake_stream_sse
+    )
+    provider = AnthropicProvider(
+        client={"provider": "anthropic", "transport": "rest"}, api_key="k", model="claude-opus-5"
+    )
+    events = _consume_expecting(
+        provider.stream(request, CT()), RuntimeError, "overloaded_error: Overloaded"
+    )
+    assert events and all(e.type != "done" for e in events)
+
+
+def test_anthropic_stream_ending_without_message_stop_raises_on_both_transports(monkeypatch):
+    """6.5b review: a successful Anthropic stream always ends with
+    message_stop - an iterator that just stops (proxy truncation, silent
+    close) delivered a fragment, and composing it would present a truncated
+    answer as complete."""
+    from backend.providers import AnthropicProvider, CancelToken as CT, ChatRequest as CR
+
+    request = CR(task=config.TASK_CHAT, messages=[{"role": "user", "content": "hi"}])
+    truncated = _anthropic_raw_events(with_thinking=False)[:-1]  # everything but message_stop
+
+    provider = AnthropicProvider(
+        client=_sdk_client_returning(FakeSDKStream(truncated)), api_key="k", model="claude-opus-5"
+    )
+    events = _consume_expecting(
+        provider.stream(request, CT()), RuntimeError, "ended unexpectedly before completion"
+    )
+    assert events and all(e.type != "done" for e in events)
+
+    def fake_stream_sse(url, body, timeout=180, cancel_event=None, api_key=None):
+        yield from truncated
+
+    monkeypatch.setattr(
+        "backend.providers.anthropic_provider._anthropic_stream_sse", fake_stream_sse
+    )
+    provider = AnthropicProvider(
+        client={"provider": "anthropic", "transport": "rest"}, api_key="k", model="claude-opus-5"
+    )
+    events = _consume_expecting(
+        provider.stream(request, CT()), RuntimeError, "ended unexpectedly before completion"
+    )
+    assert events and all(e.type != "done" for e in events)
+
+
 def test_anthropic_sse_reader_parses_data_lines_and_always_closes(monkeypatch):
     """The urllib-level unit for _anthropic_stream_sse itself: `event:` naming
     lines and blank separators are skipped, each data: line parses to its
@@ -1361,6 +1450,35 @@ def test_gemini_stream_surfaces_the_safety_block_as_the_exact_blocking_path_erro
         ))
 
 
+def test_gemini_mid_stream_error_frame_raises_with_the_apis_message(monkeypatch):
+    """6.5b review (MEDIUM): an error frame ({\"error\": {\"code\": ...,
+    \"message\": ...}}) matches neither promptFeedback nor candidates - it
+    must raise with the parsed message (same extraction _gemini_post_json
+    applies to that payload shape), never let partial text return as done."""
+    from backend.providers import CancelToken as CT, ChatRequest as CR, GeminiProvider
+
+    def fake_stream_sse(url, body, timeout=120, cancel_event=None, api_key=None):
+        yield _gemini_sse_payload({"text": "par"})
+        yield {"error": {"code": 503, "message": "The model is overloaded.", "status": "UNAVAILABLE"}}
+        yield _gemini_sse_payload({"text": "tial"})  # never reached
+
+    monkeypatch.setattr(
+        "backend.providers.gemini_provider._prepare_gemini_contents",
+        lambda messages, cancel_event=None, api_key=None: (None, [{"parts": [{"text": "hi"}]}], []),
+    )
+    monkeypatch.setattr("backend.providers.gemini_provider._gemini_stream_sse", fake_stream_sse)
+
+    provider = GeminiProvider(api_key="k", model="gemini-2.5-pro")
+    events = _consume_expecting(
+        provider.stream(
+            CR(task=config.TASK_CHAT, messages=[{"role": "user", "content": "hi"}]), CT()
+        ),
+        RuntimeError,
+        "The model is overloaded",
+    )
+    assert [e.type for e in events] == ["text"]  # the pre-error delta got out; no done followed
+
+
 def _llama_chunk(content=None, reasoning_key=None, reasoning=None, finish=None):
     delta = {}
     if content is not None:
@@ -1370,26 +1488,20 @@ def _llama_chunk(content=None, reasoning_key=None, reasoning=None, finish=None):
     return {"choices": [{"delta": delta, "finish_reason": finish}]}
 
 
-def _llama_streaming_setup(monkeypatch, chunks, declare_stream_param=False):
+def _llama_streaming_setup(monkeypatch, chunks):
     """Fake ONLY the client/prep seams; the provider's own stream() runs for
-    real. The fake create_chat_completion deliberately does NOT declare a
-    `stream` parameter (unless asked to) - proving stream=True is passed
-    explicitly, outside _filter_kwargs_for_callable, which would DROP it
-    against this signature and silently degrade to a blocking call."""
+    real. The fake create_chat_completion has a strict no-**kwargs signature
+    (what _filter_kwargs_for_callable filters passthrough kwargs against);
+    the drop-trap test below has its own signature-narrowed fake."""
     from backend.providers import llama_cpp_provider as lp
 
     live = FakeSDKStream(chunks) if not isinstance(chunks, FakeSDKStream) else chunks
     captured = {}
 
     class FakeLlamaClient:
-        if declare_stream_param:
-            def create_chat_completion(self, messages=None, stream=False, temperature=None):
-                captured.update(messages=messages, stream=stream, temperature=temperature)
-                return live
-        else:
-            def create_chat_completion(self, messages=None, temperature=None, **kwargs):
-                captured.update(messages=messages, temperature=temperature, **kwargs)
-                return live
+        def create_chat_completion(self, messages=None, stream=False, temperature=None):
+            captured.update(messages=messages, stream=stream, temperature=temperature)
+            return live
 
     monkeypatch.setattr(lp, "_prepare_llama_cpp_messages", lambda messages, task, s: messages)
     monkeypatch.setattr(lp, "_get_llama_cpp_client", lambda task, s: FakeLlamaClient())
@@ -1405,7 +1517,7 @@ def test_llama_cpp_stream_yields_deltas_reasoning_and_a_done_matching_completes_
         {"choices": []},  # defensive: empty-choices chunk must be skipped
         _llama_chunk(content="Ans"),
         _llama_chunk(content="wer.", finish="stop"),
-    ], declare_stream_param=True)
+    ])
 
     provider = LlamaCppProvider(settings={"chat_model_path": "m.gguf"})
     events = list(provider.stream(
@@ -1427,26 +1539,62 @@ def test_llama_cpp_stream_yields_deltas_reasoning_and_a_done_matching_completes_
 
 
 def test_llama_cpp_stream_true_survives_the_kwargs_filter_and_beats_a_passthrough_stream(monkeypatch):
-    """THE 6.5b trap test, both halves. (a) The strict-signature fake above
-    has NO **kwargs, so anything routed through _filter_kwargs_for_callable
-    that its signature doesn't declare is silently dropped - stream=True must
-    arrive because the provider passes it OUTSIDE the filtered dict. (b) A
-    passthrough extra_kwarg trying to force stream=False must lose to ours."""
-    from backend.providers import CancelToken as CT, ChatRequest as CR, LlamaCppProvider
+    """THE 6.5b drop-trap test (reworked per adversarial review - the first
+    version's fake DECLARED `stream`, so filter-routing would have passed it
+    anyway and the test couldn't fail on the wrong implementation). Genuine
+    discriminator: the fake's INSPECTABLE signature (a narrowed
+    __signature__, which inspect.signature honors and therefore what
+    _filter_kwargs_for_callable sees) declares neither `stream` nor
+    **kwargs - filter-routing WOULD drop stream=True (asserted directly
+    below), and the fake then returns a NON-generator blocking dict, so the
+    wrong path fails loudly on both the captured flag and the events. The
+    explicit out-of-band pass is what makes it arrive. Bonus half: a
+    passthrough extra_kwarg trying to force stream=False loses to ours."""
+    import inspect
 
-    _, captured = _llama_streaming_setup(
-        monkeypatch, [_llama_chunk(content="ok", finish="stop")], declare_stream_param=True
+    from backend.providers import CancelToken as CT, ChatRequest as CR, LlamaCppProvider
+    from backend.providers import llama_cpp_provider as lp
+
+    captured = {}
+    live = FakeSDKStream([_llama_chunk(content="ok", finish="stop")])
+
+    def create_chat_completion(messages=None, temperature=None, **kwargs):
+        captured.update(messages=messages, temperature=temperature, **kwargs)
+        if not kwargs.get("stream"):
+            return {"choices": [{"message": {"content": "BLOCKING RESPONSE"}}]}
+        return live
+
+    create_chat_completion.__signature__ = inspect.Signature([
+        inspect.Parameter("messages", inspect.Parameter.POSITIONAL_OR_KEYWORD, default=None),
+        inspect.Parameter("temperature", inspect.Parameter.POSITIONAL_OR_KEYWORD, default=None),
+    ])
+
+    class FakeLlamaClient:
+        pass
+
+    client = FakeLlamaClient()
+    client.create_chat_completion = create_chat_completion
+    monkeypatch.setattr(lp, "_prepare_llama_cpp_messages", lambda messages, task, s: messages)
+    monkeypatch.setattr(lp, "_get_llama_cpp_client", lambda task, s: client)
+    monkeypatch.setattr(lp, "_prepare_llama_cpp_kwargs", lambda kwargs, s: dict(kwargs))
+
+    # The discriminator's premise, asserted directly: routed through the
+    # filter, stream would never reach the callable.
+    assert "stream" not in api_provider._filter_kwargs_for_callable(
+        create_chat_completion, {"stream": True, "temperature": 0.5}
     )
+
     provider = LlamaCppProvider(settings={"chat_model_path": "m.gguf"})
     events = list(provider.stream(
         CR(
             task=config.TASK_CHAT,
             messages=[{"role": "user", "content": "hi"}],
-            extra_kwargs={"stream": False},  # (b): cannot turn real streaming back off
+            extra_kwargs={"stream": False, "temperature": 0.5},
         ),
         CT(),
     ))
-    assert captured["stream"] is True
+    assert captured["stream"] is True  # explicit pass survived where the filter would drop it
+    assert captured["temperature"] == 0.5  # declared passthrough kwargs still flow
     assert events[-1] == ProviderEvent("done", "ok")
 
 
@@ -1459,7 +1607,7 @@ def test_llama_cpp_stream_cancellation_closes_the_generator_and_raises(monkeypat
         cancel_event=cancel_event,
         cancel_after=1,
     )
-    _llama_streaming_setup(monkeypatch, live, declare_stream_param=True)
+    _llama_streaming_setup(monkeypatch, live)
 
     provider = LlamaCppProvider(settings={"chat_model_path": "m.gguf"})
     with pytest.raises(api_provider.RequestCancelledError):

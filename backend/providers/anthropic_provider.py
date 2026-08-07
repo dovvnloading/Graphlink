@@ -129,6 +129,7 @@ class AnthropicProvider:
 
         answer_parts: list[str] = []
         thinking_parts: list[str] = []
+        saw_message_stop = False
         try:
             for event in event_stream:
                 if cancel.is_set():
@@ -136,6 +137,21 @@ class AnthropicProvider:
                 _raise_if_cancelled(cancel.event)  # raises if just closed above
 
                 event_type = str(_extract_response_field(event, "type", "")).strip().lower()
+                if event_type == "error":
+                    # 6.5b review (HIGH): the streaming API can send an error
+                    # event on a 200 stream (overloaded_error, ...) and then
+                    # close - dropping it would compose a truncated answer as
+                    # if complete. Raise with the API's own type+message, the
+                    # same posture _anthropic_post_json takes for error
+                    # payloads, so translation treats both paths identically.
+                    error_info = _extract_response_field(event, "error", {})
+                    error_type = str(_extract_response_field(error_info, "type", "") or "").strip()
+                    error_message = str(
+                        _extract_response_field(error_info, "message", "") or ""
+                    ).strip() or "Anthropic returned an error mid-stream."
+                    raise RuntimeError(
+                        f"{error_type}: {error_message}" if error_type else error_message
+                    )
                 if event_type == "content_block_delta":
                     delta = _extract_response_field(event, "delta", {})
                     delta_type = str(_extract_response_field(delta, "type", "")).strip().lower()
@@ -150,9 +166,20 @@ class AnthropicProvider:
                             thinking_parts.append(thinking)
                             yield ProviderEvent("reasoning", thinking)
                 elif event_type == "message_stop":
+                    saw_message_stop = True
                     break
         finally:
             event_stream.close()  # idempotent on an already-closed/exhausted stream
+
+        # 6.5b review: a successful Anthropic stream ALWAYS ends with
+        # message_stop, on both transports. An iterator that just stops
+        # without one (proxy truncation, silent connection close) delivered
+        # a fragment - composing it would present a truncated answer as
+        # complete.
+        if not saw_message_stop:
+            raise RuntimeError(
+                "Anthropic stream ended unexpectedly before completion. Please try again."
+            )
 
         # The same composition contract as _extract_anthropic_text gives the
         # blocking path: answer + thinking through _compose_reasoned_response,

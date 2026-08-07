@@ -113,6 +113,19 @@ class GeminiProvider:
                         sse.close()  # tears down the live urllib response
                     _raise_if_cancelled(cancel.event)  # raises if just closed above
 
+                    # 6.5b review (MEDIUM): a mid-stream error frame
+                    # ({"error": {"code": ..., "message": ...}}) matches
+                    # neither promptFeedback nor candidates - skipping it
+                    # would return the partial text as a complete response.
+                    # Raise with the same message extraction _gemini_post_json
+                    # applies to that exact payload shape.
+                    error_info = payload.get("error")
+                    if error_info:
+                        message = (
+                            error_info.get("message") if isinstance(error_info, dict) else None
+                        )
+                        raise RuntimeError(message or str(error_info))
+
                     # Same safety-filter contract as _extract_gemini_text.
                     prompt_feedback = payload.get("promptFeedback", {}) or {}
                     block_reason = (
