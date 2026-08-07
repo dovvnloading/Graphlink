@@ -195,6 +195,9 @@
           "color": {
             "type": "string"
           },
+          "completionTokens": {
+            "type": "integer"
+          },
           "content": {
             "type": "string"
           },
@@ -379,6 +382,9 @@
           },
           "previewLabel": {
             "type": "string"
+          },
+          "promptTokens": {
+            "type": "integer"
           },
           "provider": {
             "type": "string"

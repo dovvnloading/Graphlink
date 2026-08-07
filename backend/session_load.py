@@ -380,6 +380,10 @@ def _restore_chat_payload(payload: dict[str, Any]) -> SceneNode:
             # ADR-006 stage 6.4: absent in every pre-6.4 save -> False,
             # matching the dataclass default.
             response_incomplete=bool(payload.get("response_incomplete", False)),
+            # ADR-006 stage 6.8: absent in every pre-6.8 save -> None,
+            # matching the dataclass default ("not reported").
+            prompt_tokens=payload.get("prompt_tokens"),
+            completion_tokens=payload.get("completion_tokens"),
         ),
     )
 

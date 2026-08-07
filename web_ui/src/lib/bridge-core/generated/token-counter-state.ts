@@ -9,6 +9,10 @@ export interface TokenCounterState {
   outputTokens: number;
   contextTokens: number;
   totalTokens: number;
+  promptTokens?: number | null;
+  completionTokens?: number | null;
+  usageIsReal: boolean;
+  estimatedCostUsd?: number | null;
   minCompatibleSchemaVersion?: number | null;
 }
 
@@ -58,6 +62,23 @@ function checkTokenCounterState(value: unknown, path: string, errors: string[]):
     const fieldValue = value["totalTokens"];
     if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.totalTokens: missing required field`);
     else { if (typeof fieldValue !== "number") errors.push(`${path}.totalTokens` + ": expected number"); }
+  }
+  {
+    const fieldValue = value["promptTokens"];
+    if (fieldValue !== undefined && fieldValue !== null) { if (typeof fieldValue !== "number") errors.push(`${path}.promptTokens` + ": expected number"); }
+  }
+  {
+    const fieldValue = value["completionTokens"];
+    if (fieldValue !== undefined && fieldValue !== null) { if (typeof fieldValue !== "number") errors.push(`${path}.completionTokens` + ": expected number"); }
+  }
+  {
+    const fieldValue = value["usageIsReal"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.usageIsReal: missing required field`);
+    else { if (typeof fieldValue !== "boolean") errors.push(`${path}.usageIsReal` + ": expected boolean"); }
+  }
+  {
+    const fieldValue = value["estimatedCostUsd"];
+    if (fieldValue !== undefined && fieldValue !== null) { if (typeof fieldValue !== "number") errors.push(`${path}.estimatedCostUsd` + ": expected number"); }
   }
   {
     const fieldValue = value["minCompatibleSchemaVersion"];

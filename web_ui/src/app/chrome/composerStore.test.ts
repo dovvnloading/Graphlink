@@ -107,6 +107,11 @@ describe("ComposerStore", () => {
       outputTokens: 0,
       contextTokens: 0,
       totalTokens: 4,
+      // ADR-006 stage 6.8: real-usage keys (required by the validator).
+      promptTokens: null,
+      completionTokens: null,
+      usageIsReal: false,
+      estimatedCostUsd: null,
     });
     listeners.get("notification")!({
       schemaVersion: 1,

@@ -653,6 +653,13 @@ class AgentDispatcher:
         self._runs with other cancel_event-bearing kinds."""
         return self._runs.cancel(request_id, kind="gitlink_run")
 
+    def active_provider_model(self) -> tuple[str, str]:
+        """ADR-006 stage 6.8: the (provider, model) pair a chat dispatch
+        would use right now, from THIS session's runtime (default session ->
+        module-backed DEFAULT_RUNTIME). intents_chat stamps it onto reply
+        nodes and hands it to the token counter for cost estimation."""
+        return api_provider.describe_active_model(config.TASK_CHAT, self._provider_runtime)
+
     def persona(self) -> str:
         """Mirror legacy graphlink_window.py's `_get_current_system_prompt`:
         fully suppressed (empty string) when the user has disabled the

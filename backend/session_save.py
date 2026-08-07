@@ -211,6 +211,10 @@ def _serialize_chat_node(node: SceneNode) -> dict[str, Any]:
         # ADR-006 stage 6.4: interrupted-reply marker survives save/load so
         # the retry affordance is still offered after a session reload.
         "response_incomplete": bool(node.state.response_incomplete),
+        # ADR-006 stage 6.8: provider-reported usage stamped on the reply -
+        # survives save/load like every other provenance field above.
+        "prompt_tokens": node.state.prompt_tokens,
+        "completion_tokens": node.state.completion_tokens,
     }
 
 

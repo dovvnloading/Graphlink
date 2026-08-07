@@ -53,6 +53,12 @@ export const initialTokenCounterState: TokenCounterState = {
   outputTokens: 0,
   contextTokens: 0,
   totalTokens: 0,
+  // ADR-006 stage 6.8: provider-reported real usage (null/false until a
+  // reply's provider reports counts - see backend/token_counter.py).
+  promptTokens: null,
+  completionTokens: null,
+  usageIsReal: false,
+  estimatedCostUsd: null,
 };
 
 export const initialNotificationState: NotificationState = {

@@ -2985,6 +2985,21 @@ def chat_stream(task: str, messages: list, on_chunk: Callable[[str, bool], None]
         _translate_chat_exception(exc, state, messages)
 
 
+def describe_active_model(task: str, runtime: "ProviderRuntime | None" = None) -> tuple[str, str]:
+    """ADR-006 stage 6.8: (provider, model) for `task` under the given
+    runtime's current snapshot (default session when runtime is None) - the
+    provenance pair intents_chat stamps onto reply nodes and hands the token
+    counter for cost estimation. Local providers report "ollama" /
+    "llama.cpp"; API mode reports the configured provider type string."""
+    state = (runtime if runtime is not None else DEFAULT_RUNTIME).snapshot()
+    if state.use_api_mode:
+        return (state.api_provider_type or "", state.api_models.get(task) or "")
+    if state.local_provider_type == config.LOCAL_PROVIDER_LLAMACPP:
+        model_path = _get_llama_cpp_model_path(task, state.llama_cpp_settings) or ""
+        return ("llama.cpp", Path(model_path).name if model_path else "")
+    return ("ollama", state.ollama_models.get(task) or "")
+
+
 def _build_api_client(provider: str, api_key: str, base_url: str = None):
     """The client-construction half of initialize_api, with NO state
     mutation - ADR-006 stage 6.5 splits it out so ProviderRuntime instances

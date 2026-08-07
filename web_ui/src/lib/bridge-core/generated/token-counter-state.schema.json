@@ -2,8 +2,14 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
+    "completionTokens": {
+      "type": "integer"
+    },
     "contextTokens": {
       "type": "integer"
+    },
+    "estimatedCostUsd": {
+      "type": "number"
     },
     "inputTokens": {
       "type": "integer"
@@ -14,6 +20,9 @@
     "outputTokens": {
       "type": "integer"
     },
+    "promptTokens": {
+      "type": "integer"
+    },
     "revision": {
       "type": "integer"
     },
@@ -22,6 +31,9 @@
     },
     "totalTokens": {
       "type": "integer"
+    },
+    "usageIsReal": {
+      "type": "boolean"
     }
   },
   "required": [
@@ -30,7 +42,8 @@
     "inputTokens",
     "outputTokens",
     "contextTokens",
-    "totalTokens"
+    "totalTokens",
+    "usageIsReal"
   ],
   "title": "TokenCounterState",
   "type": "object"

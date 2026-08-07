@@ -416,6 +416,11 @@ class SceneNodeRow:
     # ADR-006 stage 6.4 (H5): chat-kind partial reply preserved after a dead
     # stream; the frontend offers Regenerate as the retry affordance.
     responseIncomplete: bool = False
+    # ADR-006 stage 6.8: provider-reported token counts stamped on chat
+    # replies (null for user messages, non-chat kinds, pre-6.8 nodes, and
+    # providers that report nothing).
+    promptTokens: int | None = None
+    completionTokens: int | None = None
     isFinalDeliverable: bool = False
     # R6.1: Notes/Frames/Containers - color/headerColor/itemIds are generic
     # (SceneNode core fields, any kind), the rest populated for kind in

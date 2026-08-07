@@ -659,6 +659,62 @@ def test_context_trim_signal_surfaces_a_notification(monkeypatch):
     asyncio.run(run())
 
 
+# -- ADR-006 stage 6.8: real usage -> token counter + reply-node stamping -----
+
+
+def test_real_usage_flows_to_the_token_counter_and_reply_node(monkeypatch):
+    from backend.token_counter import TokenCounterState
+
+    _configure_fake_ollama_provider_only(monkeypatch)
+
+    def fake_stream(conversation_history, persona_text, cancel_event, on_chunk, *,
+                    on_usage=None, **kwargs):
+        on_chunk("a real reply", False)
+        if on_usage is not None:
+            on_usage({"prompt_tokens": 111, "completion_tokens": 22})
+        return "a real reply"
+
+    monkeypatch.setattr(agents_module, "_call_chat_agent_stream", fake_stream)
+
+    async def run():
+        bus = SessionBus("agents-usage-flow-test")
+        notifications = NotificationState()
+        bus.register_topic("notification", notifications.payload)
+        composer_document = ComposerDocument()
+        bus.register_topic("app-composer", composer_document.payload)
+        token_counter = TokenCounterState()
+        bus.register_topic("token-counter", token_counter.payload)
+        dispatcher = AgentDispatcher(_FakeSettingsManager(enable_system_prompt=True))
+        document = register_canvas(
+            bus, notifications, dispatcher, composer_document, token_counter
+        )
+
+        await bus.dispatch_intent("scene", "sendMessage", ["hello"])
+        entry = next(iter(chat_slots(dispatcher).values()))
+        await entry["task"]
+
+        payload = token_counter.payload()
+        assert payload["usageIsReal"] is True
+        assert payload["promptTokens"] == 111
+        assert payload["completionTokens"] == 22
+        assert payload["totalTokens"] == 133  # exact, replaces the estimate sum
+
+        reply_nodes = [
+            n for n in document.nodes.values()
+            if n.kind == "chat" and not n.state.is_user
+        ]
+        assert len(reply_nodes) == 1
+        reply = reply_nodes[0]
+        # Per-node stamping: real counts plus provider/model provenance
+        # (ordinary replies now carry it, not just branch synthesis).
+        assert reply.state.prompt_tokens == 111
+        assert reply.state.completion_tokens == 22
+        assert reply.state.provider == "ollama"
+        assert reply.state.model  # the fake-configured chat model id
+
+    asyncio.run(run())
+
+
 # -- 6. bootstrap_provider_state -----------------------------------------------
 
 
