@@ -2,6 +2,7 @@ import base64
 import inspect
 import json
 import os
+import random
 import re
 import threading
 import time
@@ -480,6 +481,16 @@ def known_context_window(model_id: str | None) -> int:
 
 _KNOWN_OLLAMA_AUDIO_MODEL_FAMILIES = {"gemma4"}
 _OLLAMA_REASONING_RETRY_BACKOFF_SECONDS = 1.0
+# ADR-006 stage 6.8: transient-transport retry, DISTINCT from Ollama's own
+# reasoning-content retry above (they must never nest wrongly: the transport
+# wrapper wraps the WHOLE provider stream/complete call, Ollama's reasoning
+# retries included - a ReasoningWithoutAnswerError never escapes the
+# provider, and its exhausted-retries RuntimeError is not transport-shaped,
+# so the wrapper never re-runs a content retry).
+_TRANSPORT_RETRY_MAX_ATTEMPTS = 2  # retries, so at most 3 total tries
+_TRANSPORT_RETRY_BASE_BACKOFF_SECONDS = 1.0
+_TRANSPORT_RETRY_MAX_SLEEP_SECONDS = 30.0
+_TRANSPORT_RETRY_STATUS_CODES = (429, 500, 502, 503, 504)
 _THINK_TAG_PATTERN = re.compile(r"<(think|thinking)>\s*(.*?)\s*</\1>", re.DOTALL | re.IGNORECASE)
 _THINK_CLOSING_ONLY_PATTERN = re.compile(r"</(think|thinking)>", re.IGNORECASE)
 _FALLBACK_REASONING_PATTERN = re.compile(
@@ -2033,6 +2044,25 @@ def _anthropic_get_json(endpoint: str, timeout: int = 30, cancel_event=None, api
         raise ConnectionError(f"Failed to reach Anthropic API: {exc.reason}") from exc
 
 
+def _attach_http_error_metadata(error: Exception, exc) -> Exception:
+    """ADR-006 stage 6.8: the REST helpers used to raise a bare RuntimeError
+    that destroyed the HTTPError's status/headers - the transport-retry
+    predicate needs both. Attaches `status_code` (int) and `retry_after`
+    (float seconds parsed from the Retry-After header, or None) onto the
+    error about to be raised."""
+    error.status_code = getattr(exc, "code", None)
+    retry_after = None
+    try:
+        headers = getattr(exc, "headers", None)
+        header_value = headers.get("Retry-After") if headers is not None else None
+        if header_value is not None:
+            retry_after = float(str(header_value).strip())
+    except (TypeError, ValueError):
+        retry_after = None
+    error.retry_after = retry_after
+    return error
+
+
 def _anthropic_post_json(endpoint: str, body: dict, timeout: int = 180, cancel_event=None, api_key: str | None = None) -> dict:
     _raise_if_cancelled(cancel_event)
     request = urllib.request.Request(
@@ -2058,7 +2088,8 @@ def _anthropic_post_json(endpoint: str, body: dict, timeout: int = 180, cancel_e
             )
         except json.JSONDecodeError:
             message = error_payload
-        raise RuntimeError(message) from exc
+        # ADR-006 stage 6.8: status/Retry-After survive for the retry layer.
+        raise _attach_http_error_metadata(RuntimeError(message), exc) from exc
     except urllib.error.URLError as exc:
         raise ConnectionError(f"Failed to reach Anthropic API: {exc.reason}") from exc
 
@@ -2093,7 +2124,8 @@ def _anthropic_stream_sse(endpoint: str, body: dict, timeout: int = 180, cancel_
             )
         except json.JSONDecodeError:
             message = error_payload
-        raise RuntimeError(message) from exc
+        # ADR-006 stage 6.8: status/Retry-After survive for the retry layer.
+        raise _attach_http_error_metadata(RuntimeError(message), exc) from exc
     except urllib.error.URLError as exc:
         raise ConnectionError(f"Failed to reach Anthropic API: {exc.reason}") from exc
 
@@ -2293,7 +2325,8 @@ def _gemini_post_json(endpoint: str, body: dict, timeout: int = 120, cancel_even
             message = parsed.get("error", {}).get("message") or error_payload
         except json.JSONDecodeError:
             message = error_payload
-        raise RuntimeError(message) from exc
+        # ADR-006 stage 6.8: status/Retry-After survive for the retry layer.
+        raise _attach_http_error_metadata(RuntimeError(message), exc) from exc
 
 
 def _gemini_stream_sse(endpoint: str, body: dict, timeout: int = 120, cancel_event=None, api_key: str | None = None):
@@ -2322,7 +2355,8 @@ def _gemini_stream_sse(endpoint: str, body: dict, timeout: int = 120, cancel_eve
             message = parsed.get("error", {}).get("message") or error_payload
         except json.JSONDecodeError:
             message = error_payload
-        raise RuntimeError(message) from exc
+        # ADR-006 stage 6.8: status/Retry-After survive for the retry layer.
+        raise _attach_http_error_metadata(RuntimeError(message), exc) from exc
 
     try:
         for raw_line in response:
@@ -2665,9 +2699,13 @@ def chat(task: str, messages: list, **kwargs) -> dict:
                 from backend.providers.ollama_provider import OllamaProvider
 
                 provider = OllamaProvider(model=model, reasoning_level=state.ollama_reasoning_level)
-                content = provider.complete(
+                # ADR-006 stage 6.8: Ollama is a network server, so its
+                # blocking call rides the transient-transport retry too.
+                content = _complete_with_transport_retry(
+                    provider,
                     ChatRequest(task=task, messages=messages, extra_kwargs=kwargs),
                     CancelToken(cancel_event),
+                    cancel_event,
                 )
                 return {
                     "message": {
@@ -2737,7 +2775,9 @@ def chat(task: str, messages: list, **kwargs) -> dict:
                 client=state.api_client, model=api_model,
                 reasoning_level=state.openai_reasoning_level,
             )
-            content = provider.complete(chat_request, token)
+            # ADR-006 stage 6.8: transient-transport retry (429/5xx/
+            # connection failures; never cancellations).
+            content = _complete_with_transport_retry(provider, chat_request, token, cancel_event)
             return {"message": {"content": content, "role": "assistant"}}
 
         if state.api_provider_type == config.API_PROVIDER_ANTHROPIC:
@@ -2747,7 +2787,9 @@ def chat(task: str, messages: list, **kwargs) -> dict:
                 client=state.api_client, api_key=state.api_key, model=api_model,
                 reasoning_level=state.anthropic_reasoning_level,
             )
-            content = provider.complete(chat_request, token)
+            # ADR-006 stage 6.8: transient-transport retry (429/5xx/
+            # connection failures; never cancellations).
+            content = _complete_with_transport_retry(provider, chat_request, token, cancel_event)
             return {"message": {"content": content, "role": "assistant"}}
 
         if state.api_provider_type == config.API_PROVIDER_GEMINI:
@@ -2757,13 +2799,84 @@ def chat(task: str, messages: list, **kwargs) -> dict:
                 api_key=state.api_key, model=api_model,
                 reasoning_level=state.gemini_reasoning_level,
             )
-            content = provider.complete(chat_request, token)
+            # ADR-006 stage 6.8: transient-transport retry (429/5xx/
+            # connection failures; never cancellations).
+            content = _complete_with_transport_retry(provider, chat_request, token, cancel_event)
             return {"message": {"content": content, "role": "assistant"}}
 
         raise RuntimeError(f"Unsupported API provider: {state.api_provider_type}")
 
     except Exception as exc:
         _translate_chat_exception(exc, state, messages)
+
+
+def _is_connection_shaped_error(exc: Exception) -> bool:
+    """The same connection-failure string checks _translate_chat_exception
+    applies (extracted for the transport-retry predicate, ADR-006 stage
+    6.8), plus the ConnectionError type the REST helpers raise directly."""
+    if isinstance(exc, ConnectionError):
+        return True
+    error_str = str(exc).lower()
+    return (
+        "connection refused" in error_str
+        or "connecterror" in error_str
+        or "connection error" in error_str
+        or "all connection attempts failed" in error_str
+    )
+
+
+def _is_transient_transport_error(exc: Exception) -> bool:
+    """ADR-006 stage 6.8: what the transport-retry layer may retry. NEVER a
+    cancellation (the user said stop), NEVER ReasoningWithoutAnswerError
+    (that is Ollama's own CONTENT retry, fully handled inside the provider -
+    the two retry mechanisms must stay distinct). Retryable: an HTTP status
+    in _TRANSPORT_RETRY_STATUS_CODES (from the SDKs' native status_code
+    attribute or the one _attach_http_error_metadata preserves on the REST
+    path), or a connection-shaped transport failure."""
+    if isinstance(exc, (RequestCancelledError, ReasoningWithoutAnswerError)):
+        return False
+    if getattr(exc, "status_code", None) in _TRANSPORT_RETRY_STATUS_CODES:
+        return True
+    return _is_connection_shaped_error(exc)
+
+
+def _transport_retry_wait(exc: Exception, attempt: int, cancel_event) -> None:
+    """One backoff sleep between transport retries: exponential base with
+    ±50% jitter, raised to a server-provided Retry-After when larger, capped
+    at _TRANSPORT_RETRY_MAX_SLEEP_SECONDS. Cancellation is honored on BOTH
+    sides of the sleep, and (when a cancel event exists) DURING it -
+    Event.wait wakes promptly instead of sleeping out the full backoff."""
+    _raise_if_cancelled(cancel_event)
+    delay = _TRANSPORT_RETRY_BASE_BACKOFF_SECONDS * (2 ** attempt)
+    delay *= random.uniform(0.5, 1.5)
+    retry_after = getattr(exc, "retry_after", None)
+    if retry_after:
+        try:
+            delay = max(delay, float(retry_after))
+        except (TypeError, ValueError):
+            pass
+    delay = min(delay, _TRANSPORT_RETRY_MAX_SLEEP_SECONDS)
+    if cancel_event is not None:
+        cancel_event.wait(delay)
+    else:
+        time.sleep(delay)
+    _raise_if_cancelled(cancel_event)
+
+
+def _complete_with_transport_retry(provider, chat_request, token, cancel_event):
+    """ADR-006 stage 6.8: wrap ONE provider's whole blocking complete() call
+    (its own internal content retries included) in the transient-transport
+    retry loop. Used by chat()'s network-backed branches - llama.cpp is
+    excluded at the call sites (in-process inference has no transport)."""
+    attempt = 0
+    while True:
+        try:
+            return provider.complete(chat_request, token)
+        except Exception as exc:
+            if attempt >= _TRANSPORT_RETRY_MAX_ATTEMPTS or not _is_transient_transport_error(exc):
+                raise
+            _transport_retry_wait(exc, attempt, cancel_event)
+            attempt += 1
 
 
 def _translate_chat_exception(exc: Exception, state, messages: list) -> None:
@@ -2952,21 +3065,47 @@ def chat_stream(task: str, messages: list, on_chunk: Callable[[str, bool], None]
         # reaches on_chunk; it only surfaces in the final <think> block where
         # a provider composes one), and "done" carries the full final text
         # this function returns.
-        full_response_content = None
-        usage = None
-        for event in provider.stream(
-            ChatRequest(task=task, messages=messages, extra_kwargs=kwargs),
-            CancelToken(cancel_event),
-        ):
-            if event.type == "text":
-                on_chunk(event.text, False)
-            elif event.type == "reset":
-                on_chunk("", True)  # tell the caller: discard the last attempt's partial text
-            elif event.type == "done":
-                full_response_content = event.text
-                # ADR-006 stage 6.8: providers attach normalized usage to
-                # their done event when the server reported real counts.
-                usage = getattr(event, "usage", None)
+        # ADR-006 stage 6.8: transient-transport retry around construct+
+        # consume, legal ONLY while nothing has been forwarded to on_chunk
+        # yet - once the first text delta is delivered, an error propagates
+        # to translation exactly as before (silently replaying a half-
+        # delivered stream would corrupt the caller's accumulated text).
+        # llama.cpp is excluded: in-process inference has no transport.
+        transport_retry_allowed = (
+            state.use_api_mode
+            or state.local_provider_type == config.LOCAL_PROVIDER_OLLAMA
+        )
+        attempt = 0
+        while True:
+            full_response_content = None
+            usage = None
+            delivered_any = False
+            try:
+                for event in provider.stream(
+                    ChatRequest(task=task, messages=messages, extra_kwargs=kwargs),
+                    CancelToken(cancel_event),
+                ):
+                    if event.type == "text":
+                        delivered_any = True
+                        on_chunk(event.text, False)
+                    elif event.type == "reset":
+                        on_chunk("", True)  # tell the caller: discard the last attempt's partial text
+                    elif event.type == "done":
+                        full_response_content = event.text
+                        # ADR-006 stage 6.8: providers attach normalized usage
+                        # to their done event when the server reported counts.
+                        usage = getattr(event, "usage", None)
+                break
+            except Exception as retry_exc:
+                if (
+                    not transport_retry_allowed
+                    or delivered_any
+                    or attempt >= _TRANSPORT_RETRY_MAX_ATTEMPTS
+                    or not _is_transient_transport_error(retry_exc)
+                ):
+                    raise
+                _transport_retry_wait(retry_exc, attempt, cancel_event)
+                attempt += 1
 
         return {
             "message": {
@@ -3024,7 +3163,16 @@ def _build_api_client(provider: str, api_key: str, base_url: str = None):
             else:
                 raise RuntimeError("OpenAI-compatible API key not configured. Open Settings and save your API key.")
 
-        client = OpenAI(api_key=api_key, base_url=base_url)
+        # ADR-006 stage 6.8: max_retries=0 - api_provider owns transport
+        # retries now (with Retry-After handling and cancel-aware backoff);
+        # leaving the SDK's default 2 would multiply attempts (3 SDK tries
+        # per each of our 3 tries).
+        try:
+            client = OpenAI(api_key=api_key, base_url=base_url, max_retries=0)
+        except TypeError as exc:
+            if "max_retries" not in str(exc):
+                raise
+            client = OpenAI(api_key=api_key, base_url=base_url)
 
     elif provider == config.API_PROVIDER_ANTHROPIC:
         api_key = api_key or _first_env_api_key(_ANTHROPIC_API_KEY_ENV_VARS)
@@ -3035,9 +3183,13 @@ def _build_api_client(provider: str, api_key: str, base_url: str = None):
         try:
             from anthropic import Anthropic
             try:
-                client = Anthropic(api_key=api_key)
+                # ADR-006 stage 6.8: max_retries=0 for the same
+                # no-multiplied-retries reason as the OpenAI client above.
+                client = Anthropic(api_key=api_key, max_retries=0)
             except TypeError as exc:
-                if "unexpected keyword argument 'proxies'" not in str(exc):
+                if "max_retries" in str(exc):
+                    client = Anthropic(api_key=api_key)
+                elif "unexpected keyword argument 'proxies'" not in str(exc):
                     raise
         except ImportError:
             client = None

@@ -2309,3 +2309,210 @@ def test_llama_cpp_stream_usage_stays_none_by_design(monkeypatch):
     ))
     assert events[-1].type == "done"
     assert events[-1].usage is None
+
+
+# -- ADR-006 stage 6.8: transient-transport retry ------------------------------
+#
+# Distinct from Ollama's own reasoning-content retry: the transport layer
+# wraps the WHOLE provider stream/complete call, retries only 429/5xx/
+# connection-shaped failures, honors Retry-After, and never retries after
+# the first delta reached on_chunk (or a cancellation, ever).
+
+
+def _transient_error(message="transient boom", status_code=None, retry_after=None):
+    error = RuntimeError(message)
+    if status_code is not None:
+        error.status_code = status_code
+    if retry_after is not None:
+        error.retry_after = retry_after
+    return error
+
+
+def _install_flaky_ollama_factory(monkeypatch, failures, events=None, fail_after_first_delta=False):
+    """Swap chat_stream's OllamaProvider for a factory whose stream raises
+    the scripted failures (one per attempt) before finally succeeding."""
+    from backend.providers import ollama_provider as op_module
+
+    remaining = list(failures)
+    calls = {"streams": 0}
+
+    class FlakyFactory:
+        def __init__(self, **_kwargs):
+            from backend.providers.base import ProviderCapabilities
+
+            self.capabilities = ProviderCapabilities(streaming=True)
+
+        def stream(self, request, cancel):
+            calls["streams"] += 1
+            if fail_after_first_delta:
+                yield ProviderEvent("text", "partial ")
+                raise remaining.pop(0)
+            if remaining:
+                raise remaining.pop(0)
+                yield  # pragma: no cover - keeps this a generator
+            for event in events or [ProviderEvent("text", "ok"), ProviderEvent("done", "ok")]:
+                yield event
+
+    monkeypatch.setattr(op_module, "OllamaProvider", FlakyFactory)
+    monkeypatch.setattr(api_provider, "chat_stream", _REAL_CHAT_STREAM)
+    return calls
+
+
+def _capture_transport_sleeps(monkeypatch):
+    sleeps = []
+    monkeypatch.setattr(api_provider.time, "sleep", lambda seconds: sleeps.append(seconds))
+    return sleeps
+
+
+def test_429_with_retry_after_sleeps_exactly_that_long_then_succeeds(monkeypatch, ollama_mode):
+    # THE stage exit criterion: Retry-After wins over the (smaller) jittered
+    # backoff, exactly one sleep, then the retried stream succeeds.
+    sleeps = _capture_transport_sleeps(monkeypatch)
+    calls = _install_flaky_ollama_factory(
+        monkeypatch, [_transient_error(status_code=429, retry_after=5.0)]
+    )
+
+    chunks = []
+    response = api_provider.chat_stream(
+        config.TASK_CHAT, [{"role": "user", "content": "hi"}],
+        lambda delta, reset: chunks.append(delta),
+    )
+
+    assert response["message"]["content"] == "ok"
+    assert chunks == ["ok"]
+    assert sleeps == [5.0]
+    assert calls["streams"] == 2
+
+
+def test_500_is_retried_with_jittered_backoff(monkeypatch, ollama_mode):
+    sleeps = _capture_transport_sleeps(monkeypatch)
+    _install_flaky_ollama_factory(monkeypatch, [_transient_error(status_code=500)])
+
+    response = api_provider.chat_stream(
+        config.TASK_CHAT, [{"role": "user", "content": "hi"}], lambda d, r: None
+    )
+
+    assert response["message"]["content"] == "ok"
+    assert len(sleeps) == 1
+    assert 0.5 <= sleeps[0] <= 1.5  # base 1.0s with +/-50% jitter
+
+
+def test_transport_errors_after_the_first_delta_are_never_retried(monkeypatch, ollama_mode):
+    sleeps = _capture_transport_sleeps(monkeypatch)
+    calls = _install_flaky_ollama_factory(
+        monkeypatch, [_transient_error("server exploded", status_code=429)],
+        fail_after_first_delta=True,
+    )
+
+    with pytest.raises(RuntimeError, match="server exploded"):
+        api_provider.chat_stream(
+            config.TASK_CHAT, [{"role": "user", "content": "hi"}], lambda d, r: None
+        )
+    assert sleeps == []
+    assert calls["streams"] == 1
+
+
+def test_request_cancelled_error_is_never_retried(monkeypatch, ollama_mode):
+    sleeps = _capture_transport_sleeps(monkeypatch)
+    calls = _install_flaky_ollama_factory(
+        monkeypatch, [api_provider.RequestCancelledError("cancelled")]
+    )
+
+    with pytest.raises(api_provider.RequestCancelledError):
+        api_provider.chat_stream(
+            config.TASK_CHAT, [{"role": "user", "content": "hi"}], lambda d, r: None
+        )
+    assert sleeps == []
+    assert calls["streams"] == 1
+
+
+def test_non_transient_errors_are_never_retried(monkeypatch, ollama_mode):
+    sleeps = _capture_transport_sleeps(monkeypatch)
+    calls = _install_flaky_ollama_factory(monkeypatch, [_transient_error("a schema error")])
+
+    with pytest.raises(RuntimeError, match="a schema error"):
+        api_provider.chat_stream(
+            config.TASK_CHAT, [{"role": "user", "content": "hi"}], lambda d, r: None
+        )
+    assert sleeps == []
+    assert calls["streams"] == 1
+
+
+def test_retries_are_capped_at_the_max_attempt_count(monkeypatch, ollama_mode):
+    sleeps = _capture_transport_sleeps(monkeypatch)
+    calls = _install_flaky_ollama_factory(
+        monkeypatch,
+        [_transient_error(status_code=503) for _ in range(5)],  # more than the cap
+    )
+
+    with pytest.raises(RuntimeError):
+        api_provider.chat_stream(
+            config.TASK_CHAT, [{"role": "user", "content": "hi"}], lambda d, r: None
+        )
+    assert len(sleeps) == api_provider._TRANSPORT_RETRY_MAX_ATTEMPTS  # 2 retries, 3 tries
+    assert calls["streams"] == 1 + api_provider._TRANSPORT_RETRY_MAX_ATTEMPTS
+
+
+def test_cancel_during_backoff_aborts_promptly(monkeypatch, ollama_mode):
+    import time as time_module
+
+    _install_flaky_ollama_factory(
+        monkeypatch, [_transient_error(status_code=429, retry_after=10.0)]
+    )
+    cancel_event = threading.Event()
+    timer = threading.Timer(0.05, cancel_event.set)
+    timer.start()
+    started = time_module.monotonic()
+    try:
+        with pytest.raises(api_provider.RequestCancelledError):
+            api_provider.chat_stream(
+                config.TASK_CHAT, [{"role": "user", "content": "hi"}], lambda d, r: None,
+                cancellation_event=cancel_event,
+            )
+    finally:
+        timer.cancel()
+    # A 10s Retry-After must NOT be slept out - Event.wait wakes on cancel.
+    assert time_module.monotonic() - started < 2.0
+
+
+def test_blocking_complete_rides_the_same_transport_retry(monkeypatch):
+    sleeps = _capture_transport_sleeps(monkeypatch)
+
+    class FlakyBlocking:
+        def __init__(self):
+            self.calls = 0
+
+        def complete(self, request, token):
+            self.calls += 1
+            if self.calls == 1:
+                raise _transient_error(status_code=502)
+            return "recovered"
+
+    provider = FlakyBlocking()
+    result = api_provider._complete_with_transport_retry(provider, None, None, None)
+    assert result == "recovered"
+    assert provider.calls == 2
+    assert len(sleeps) == 1
+
+
+def test_rest_http_errors_preserve_status_and_retry_after(monkeypatch):
+    import email.message
+    import io
+    import urllib.error
+
+    headers = email.message.Message()
+    headers["Retry-After"] = "7"
+    http_error = urllib.error.HTTPError(
+        "https://api.anthropic.com/v1/messages", 429, "Too Many Requests",
+        headers, io.BytesIO(b'{"error": {"message": "rate limited"}}'),
+    )
+
+    def raising_urlopen(request, timeout=None):
+        raise http_error
+
+    monkeypatch.setattr(api_provider.urllib.request, "urlopen", raising_urlopen)
+    with pytest.raises(RuntimeError, match="rate limited") as excinfo:
+        api_provider._anthropic_post_json("https://api.anthropic.com/v1/messages", {}, api_key="k")
+    assert excinfo.value.status_code == 429
+    assert excinfo.value.retry_after == 7.0
+    assert api_provider._is_transient_transport_error(excinfo.value) is True
