@@ -46,11 +46,15 @@ import api_provider
 # -- dispatcher level: _dispatch's on_partial contract ------------------------
 
 
-def test_cancel_mid_stream_commits_the_accumulated_partial_exactly_once(monkeypatch):
-    """ADR-006 stage 6.4 (H5): a cancel no longer destroys the text that
-    already streamed - on_partial receives it exactly once, while on_reply
-    (the COMPLETE-reply hand-off) still never fires, preserving the R4.2
-    "cancel discards the full reply" precedent for that callback."""
+def test_cancel_mid_stream_discards_the_partial_and_never_calls_on_partial(monkeypatch):
+    """ADR-006 stage 6.4 review fix: a CANCEL discards the partial - the user
+    said "stop, keep what I had", and committing would replace a regenerated
+    node's complete original answer with a truncated partial (and, worse, a
+    cancelled run's slot frees immediately while its worker can unwind
+    arbitrarily late, so a late commit could clobber a replacement run).
+    R4.2's cancel-discards-everything semantics stay pinned for BOTH
+    callbacks; H5's partial preservation is for streams that DIE
+    (error/timeout), covered by the tests below."""
     started = threading.Event()
 
     def fake_chat_stream(task, messages, on_chunk, cancellation_event=None, **kwargs):
@@ -82,7 +86,7 @@ def test_cancel_mid_stream_commits_the_accumulated_partial_exactly_once(monkeypa
 
         await entry["task"]
 
-        assert partials == ["Hello"], "on_partial fires exactly once, with everything that streamed"
+        assert partials == [], "cancel discards the partial - see the docstring"
         assert replies == [], "on_reply still never fires for a cancelled request"
         assert chat_slots(dispatcher) == {}
 
@@ -90,10 +94,11 @@ def test_cancel_mid_stream_commits_the_accumulated_partial_exactly_once(monkeypa
 
 
 def test_error_mid_stream_commits_the_accumulated_partial_exactly_once(monkeypatch):
-    """Same contract as the cancel path, via the generic-Exception except
-    branch - the third of _dispatch's three failure paths (timeout is
-    identical plumbing, one shared _commit_partial closure serves all
-    three)."""
+    """ADR-006 stage 6.4 (H5): a stream that DIES commits its accumulated
+    text via on_partial exactly once - the generic-Exception branch. The
+    timeout branch has its own separate test below (review fix: it is a
+    physically separate _commit_partial call site; "identical plumbing"
+    left it deletable without a failure)."""
 
     def fake_chat_stream(task, messages, on_chunk, **kwargs):
         on_chunk("partial text", False)
@@ -452,3 +457,123 @@ def test_history_wire_rows_default_incomplete_false_for_normal_messages():
         {"role": "user", "content": "hi", "incomplete": False},
         {"role": "assistant", "content": "a full reply", "incomplete": False},
     ]
+
+
+# -- 6.4 review-fix coverage --------------------------------------------------
+
+
+def test_timeout_mid_stream_commits_the_accumulated_partial(monkeypatch):
+    """The TIMEOUT branch's _commit_partial is a physically separate call in
+    a separate except block (agents.py) - this pins it independently so
+    deleting that one call fails a test (6.4 adversarial review: the
+    cancel/error tests alone left it deletable)."""
+    monkeypatch.setattr(agents_module, "WATCHDOG_TIMEOUT_SECONDS", 0.3)
+
+    def stalling_stream(task, messages, on_chunk, cancellation_event=None, **kwargs):
+        on_chunk("timed-out partial", False)
+        # Outlive the shrunk watchdog; exit promptly once cancel lands so the
+        # worker thread doesn't linger past the test.
+        cancellation_event.wait(5)
+        raise api_provider.RequestCancelledError("Request cancelled.")
+
+    _configure_fake_chat_stream(monkeypatch, stalling_stream)
+
+    async def run():
+        bus, notifications, composer_document, dispatcher = _make_dispatch_env()
+        replies, partials = [], []
+
+        await dispatcher.start_chat_reply(
+            bus=bus,
+            notifications_state=notifications,
+            composer_document=composer_document,
+            conversation_history=[{"role": "user", "content": "hi"}],
+            on_reply=replies.append,
+            on_partial=partials.append,
+        )
+        entry = next(iter(chat_slots(dispatcher).values()))
+        await entry["task"]
+
+        assert partials == ["timed-out partial"]
+        assert replies == []
+
+    asyncio.run(run())
+
+
+def test_stale_run_with_popped_handle_never_commits_its_partial(monkeypatch):
+    """6.4 review fix (HIGH): cancel pops the handle immediately, but the
+    cancelled worker can unwind arbitrarily late - and it may unwind via the
+    GENERIC exception branch, not RequestCancelledError. By then a
+    replacement run may own the node, so _commit_partial is gated on this
+    run still being registered (the same staleness gate 6.2 put on
+    web_research's terminal callbacks). Here the worker raises RuntimeError
+    AFTER the cancel popped its handle: no partial may land."""
+    started = threading.Event()
+
+    def late_dying_stream(task, messages, on_chunk, cancellation_event=None, **kwargs):
+        on_chunk("stale text", False)
+        started.set()
+        cancellation_event.wait(5)
+        raise RuntimeError("late failure after cancel already released the slot")
+
+    _configure_fake_chat_stream(monkeypatch, late_dying_stream)
+
+    async def run():
+        bus, notifications, composer_document, dispatcher = _make_dispatch_env()
+        replies, partials = [], []
+
+        await dispatcher.start_chat_reply(
+            bus=bus,
+            notifications_state=notifications,
+            composer_document=composer_document,
+            conversation_history=[{"role": "user", "content": "hi"}],
+            on_reply=replies.append,
+            on_partial=partials.append,
+        )
+        request_id, entry = next(iter(chat_slots(dispatcher).items()))
+
+        await asyncio.to_thread(started.wait, 5)
+        assert dispatcher.cancel(request_id) is True  # handle popped NOW
+
+        await entry["task"]  # generic-Exception unwind, handle already gone
+
+        assert partials == [], "a popped handle means this run's outputs no longer land"
+        assert replies == []
+
+    asyncio.run(run())
+
+
+def test_cancelled_regenerate_keeps_the_original_response_intact(monkeypatch):
+    """6.4 review fix (intent level): cancelling a regenerate must keep the
+    node's COMPLETE original answer - content untouched, children intact, no
+    incomplete flag. The user aborted the retry; telling them to redo it
+    while destroying what they had would invert the point of cancel."""
+    _configure_fake_ollama_provider_only(monkeypatch)
+    started = threading.Event()
+
+    def cancellable_stream(conversation_history, persona_text, cancel_event, on_chunk):
+        on_chunk("half a regen", False)
+        started.set()
+        cancel_event.wait(5)
+        raise api_provider.RequestCancelledError("Request cancelled.")
+
+    monkeypatch.setattr(agents_module, "_call_chat_agent_stream", cancellable_stream)
+
+    async def run():
+        bus, notifications, composer_document, dispatcher, document = _make_canvas_env(
+            "regenerate-cancel-keeps-original-test"
+        )
+        root = document.add_chat_node(0, 0, "root message", True)
+        assistant_reply = document.add_chat_node(0, 100, "old reply", False, parent_id=root.id)
+        code_child = document.add_code_node(0, 200, "print('old')", "python", assistant_reply.id)
+
+        await bus.dispatch_intent("scene", "regenerateResponse", [assistant_reply.id])
+        request_id, entry = next(iter(chat_slots(dispatcher).items()))
+        await asyncio.to_thread(started.wait, 5)
+        assert dispatcher.cancel(request_id) is True
+        await entry["task"]
+
+        assert assistant_reply.content == "old reply", "cancel keeps what the user had"
+        assert assistant_reply.state.response_incomplete is False
+        assert code_child.id in document.nodes, "original children survive a cancel"
+
+    asyncio.run(run())

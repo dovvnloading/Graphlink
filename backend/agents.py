@@ -836,11 +836,25 @@ class AgentDispatcher:
         async def _run():
             async def _commit_partial() -> None:
                 # ADR-006 stage 6.4 (H5): commit whatever streamed before the
-                # failure/cancel/timeout instead of destroying it. Guarded on
-                # a caller actually opting in AND on there being real text -
-                # a stream that died before its first delta has nothing worth
+                # failure/timeout instead of destroying it. Guarded on a
+                # caller actually opting in AND on there being real text - a
+                # stream that died before its first delta has nothing worth
                 # preserving, and the pre-6.4 discard behavior stays exact
-                # for it.
+                # for it. NOT called on cancel (see the cancel except block).
+                #
+                # 6.4 review fix (HIGH): also gated on this run still being
+                # REGISTERED - the same staleness gate 6.2 put on
+                # web_research's terminal callbacks. cancel/cancel_all pop
+                # the handle immediately while the worker can take
+                # arbitrarily long to observe cancel_event (a stalled
+                # provider read); by the time it unwinds here, a replacement
+                # run may already be streaming into the same node, and a
+                # stale commit would clobber its state (or a post-cancel
+                # undo's restored state). A popped handle means some
+                # authority already decided this run's outputs no longer
+                # land - partials included.
+                if self._runs.get(request_id) is None:
+                    return
                 if on_partial is None or not accumulated["text"].strip():
                     return
                 if inspect.iscoroutinefunction(on_partial):
@@ -1003,7 +1017,15 @@ class AgentDispatcher:
             except api_provider.RequestCancelledError:
                 notifications_state.show("Request cancelled.", "info")
                 await bus.publish("notification")
-                await _commit_partial()
+                # DELIBERATELY no _commit_partial (6.4 review fix): cancel is
+                # the user saying "stop - keep what I had", not a failure.
+                # Committing here would replace a regenerated node's COMPLETE
+                # original answer with a truncated partial and tell the user
+                # to redo the very thing they just aborted; discarding keeps
+                # R4.2's pinned cancel-discards-everything semantics. H5's
+                # partial preservation is for streams that DIE (error/
+                # timeout), where the text would otherwise be lost against
+                # the user's will.
             except Exception as exc:
                 logging.getLogger(__name__).exception("chat dispatch failed")
                 notifications_state.show(f"AI response failed: {exc}", "error")

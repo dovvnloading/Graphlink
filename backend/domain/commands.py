@@ -198,7 +198,20 @@ def _restore(live: dict, snapshot: dict) -> None:
         if value is None:
             live.pop(key, None)
         else:
-            live[key] = copy.deepcopy(value)
+            restored = copy.deepcopy(value)
+            # ADR-006 stage 6.4 review fix (HIGH): pending_request_id is a
+            # VOLATILE in-flight marker, not document state - snapshots taken
+            # while a reply command was being recorded (on_end runs in
+            # _dispatch's finally, AFTER on_reply) captured the live request
+            # id, and restoring it would resurrect a phantom "generating"
+            # state: the frontend keys live-stream rendering on it (blank
+            # node, frames never arrive) and _guard_live_runs would then
+            # refuse further undo/redo for a run that no longer exists.
+            # Always None is correct here: _guard_live_runs has already
+            # refused the undo/redo if a REAL run is live on this node.
+            if hasattr(restored, "pending_request_id"):
+                restored.pending_request_id = None
+            live[key] = restored
 
 
 # The user-facing action names. Deliberately phrased as what the USER did
