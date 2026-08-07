@@ -2723,14 +2723,15 @@ def _translate_chat_exception(exc: Exception, state, messages: list) -> None:
 def chat_stream(task: str, messages: list, on_chunk: Callable[[str, bool], None], **kwargs) -> dict:
     """Streaming sibling of chat() (Qt-removal R4.4: true token streaming).
 
-    Only the Ollama local provider streams real incremental chunks. Every other
-    provider/task combination (API mode, Llama.cpp local) silently falls back to one
-    ordinary blocking chat() call plus exactly one synthetic full-text chunk - an
-    intentional, explicit R4.4 scope decision, not a gap (see the design spec).
+    ADR-006 stage 6.5b: EVERY provider streams real incremental chunks now -
+    the old non-Ollama fallback (one blocking chat() call plus exactly one
+    synthetic full-text chunk) is gone; each branch below constructs the same
+    provider class chat() does, from the same snapshot credentials, and
+    consumes its stream().
 
     `on_chunk(delta, reset)` is called zero or more times with `reset=False` and
-    incremental DELTAS (never cumulative text - Ollama's streamed `message.content`
-    fragments must be concatenated, not replaced). It is called once with `("", True)`
+    incremental DELTAS (never cumulative text - streamed content fragments
+    must be concatenated, not replaced). It is called once with `("", True)`
     immediately before a reasoning-retry attempt discards the prior attempt's partial
     text.
 
@@ -2743,33 +2744,76 @@ def chat_stream(task: str, messages: list, on_chunk: Callable[[str, bool], None]
     runtime = kwargs.pop("runtime", None)
     state = runtime.snapshot() if runtime is not None else _snapshot_provider_state()
 
-    # Silent fallback: every provider/local-type this increment doesn't cover
-    # degenerates to one blocking chat() call + one synthetic chunk.
-    if state.use_api_mode or state.local_provider_type != config.LOCAL_PROVIDER_OLLAMA:
-        response = chat(task, messages, runtime=runtime, **kwargs)
-        on_chunk(response["message"].get("content", ""), False)
-        return response
-
     try:
         _raise_if_cancelled(cancel_event)
-        # ADR-006 stage 6.5 (H6): snapshot copy, not a live table read -
-        # see chat()'s twin comment.
-        model = state.ollama_models.get(task)
-        if not model:
-            raise ValueError(f"No Ollama model configured for task: {task}")
-
-        # ADR-006 stage 6.1: the streaming Ollama branch routes through the
-        # Provider seam (see chat()'s twin comment). The provider yields typed
-        # events; this adapter maps them onto the on_chunk(delta, reset)
-        # contract EXACTLY as before: "text" deltas forward incrementally,
-        # "reset" becomes on_chunk("", True), "reasoning" deltas are NOT
-        # forwarded (thinking never reached on_chunk here - it only surfaces
-        # in the final <think> block), and "done" carries the composed full
-        # text this function returns.
+        # Provider construction mirrors chat()'s branches exactly: same lazy
+        # imports (the top-level direction would be a genuine import cycle -
+        # see the pinning test), same snapshot-credential kwargs. The
+        # LAZY-GENERATOR CONTRACT (backend/providers/base.py) makes the
+        # placement load-bearing: NOTHING in a provider's stream() body runs
+        # until the first next(), so both construction and the whole
+        # consuming loop below must sit inside this try for
+        # _translate_chat_exception to see request-prep and mid-stream
+        # failures alike. (The old short-circuit got translation for free by
+        # recursing into chat(); real streaming owns its own.)
         from backend.providers.base import CancelToken, ChatRequest
-        from backend.providers.ollama_provider import OllamaProvider
 
-        provider = OllamaProvider(model=model, reasoning_level=state.ollama_reasoning_level)
+        if not state.use_api_mode:
+            if state.local_provider_type == config.LOCAL_PROVIDER_OLLAMA:
+                # ADR-006 stage 6.5 (H6): snapshot copy, not a live table
+                # read - see chat()'s twin comment.
+                model = state.ollama_models.get(task)
+                if not model:
+                    raise ValueError(f"No Ollama model configured for task: {task}")
+                from backend.providers.ollama_provider import OllamaProvider
+
+                provider = OllamaProvider(model=model, reasoning_level=state.ollama_reasoning_level)
+            elif state.local_provider_type == config.LOCAL_PROVIDER_LLAMACPP:
+                from backend.providers.llama_cpp_provider import LlamaCppProvider
+
+                provider = LlamaCppProvider(settings=state.llama_cpp_settings)
+            else:
+                raise RuntimeError(f"Unsupported local provider: {state.local_provider_type}")
+        else:
+            if not state.api_client:
+                raise RuntimeError("API client not initialized. Configure API settings first.")
+            api_model = state.api_models.get(task)
+            if not api_model:
+                raise RuntimeError(
+                    f"No API model configured for task '{task}'.\n"
+                    "Please configure models in API Settings."
+                )
+            if state.api_provider_type == config.API_PROVIDER_OPENAI:
+                from backend.providers.openai_provider import OpenAIProvider
+
+                provider = OpenAIProvider(
+                    client=state.api_client, model=api_model,
+                    reasoning_level=state.openai_reasoning_level,
+                )
+            elif state.api_provider_type == config.API_PROVIDER_ANTHROPIC:
+                from backend.providers.anthropic_provider import AnthropicProvider
+
+                provider = AnthropicProvider(
+                    client=state.api_client, api_key=state.api_key, model=api_model,
+                    reasoning_level=state.anthropic_reasoning_level,
+                )
+            elif state.api_provider_type == config.API_PROVIDER_GEMINI:
+                from backend.providers.gemini_provider import GeminiProvider
+
+                provider = GeminiProvider(
+                    api_key=state.api_key, model=api_model,
+                    reasoning_level=state.gemini_reasoning_level,
+                )
+            else:
+                raise RuntimeError(f"Unsupported API provider: {state.api_provider_type}")
+
+        # The provider yields typed events; this adapter maps them onto the
+        # on_chunk(delta, reset) contract: "text" deltas forward
+        # incrementally, "reset" becomes on_chunk("", True), "reasoning"
+        # deltas are NOT forwarded (a documented invariant - thinking never
+        # reaches on_chunk; it only surfaces in the final <think> block where
+        # a provider composes one), and "done" carries the full final text
+        # this function returns.
         full_response_content = None
         for event in provider.stream(
             ChatRequest(task=task, messages=messages, extra_kwargs=kwargs),
@@ -2789,10 +2833,10 @@ def chat_stream(task: str, messages: list, on_chunk: Callable[[str, bool], None]
             }
         }
     except Exception as exc:
-        # Same translation chat()'s Ollama branch gets - a real connection-
-        # refused/timeout/quota failure here must show the same friendly,
-        # actionable message as the non-streaming path, not raw exception
-        # text (this is now the ONLY code path Composer send uses).
+        # Same translation chat() gets - a real connection-refused/timeout/
+        # quota failure here must show the same friendly, actionable message
+        # as the blocking path, not raw exception text (this is the ONLY
+        # code path Composer send uses).
         _translate_chat_exception(exc, state, messages)
 
 

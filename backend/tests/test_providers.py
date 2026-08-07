@@ -1472,6 +1472,182 @@ def test_llama_cpp_stream_cancellation_closes_the_generator_and_raises(monkeypat
     assert live.close_calls >= 1
 
 
+# -- 6.5b: the chat_stream seam - real dispatch replaces the fallback ---------
+# -- The old non-Ollama short-circuit (one blocking chat() call + one
+# -- synthetic full-text chunk) is gone: chat_stream now constructs every
+# -- provider exactly as chat() does and consumes its stream(), with the
+# -- consuming loop inside chat_stream's own _translate_chat_exception try
+# -- (the lazy-generator contract means the old path's free-via-recursion
+# -- translation no longer exists).
+
+
+def _install_scripted_provider(monkeypatch, module_name, class_name, events):
+    """Swap a provider class (at the module chat_stream lazily imports from)
+    for a protocol-shaped double that records its __init__ kwargs and yields
+    scripted events - the FakeFactory pattern from the 6.1 seam tests."""
+    module = __import__(module_name, fromlist=[class_name])
+    seen = {}
+
+    class Scripted:
+        def __init__(self, **kwargs):
+            seen.update(kwargs)
+
+        def stream(self, request, cancel):
+            seen["task"] = request.task
+            return iter(events)
+
+    monkeypatch.setattr(module, class_name, Scripted)
+    return seen
+
+
+_SCRIPTED_STREAM_EVENTS = [
+    ProviderEvent("text", "one "),
+    ProviderEvent("reasoning", "never forwarded"),
+    ProviderEvent("text", "two "),
+    ProviderEvent("text", "three"),
+    ProviderEvent("done", "<think>never forwarded</think>\none two three"),
+]
+
+
+@pytest.mark.parametrize("provider_type, module_name, class_name, expected_init", [
+    (
+        config.API_PROVIDER_OPENAI,
+        "backend.providers.openai_provider", "OpenAIProvider",
+        {"model": "some-model", "reasoning_level": "high"},
+    ),
+    (
+        config.API_PROVIDER_ANTHROPIC,
+        "backend.providers.anthropic_provider", "AnthropicProvider",
+        {"api_key": "secret-key", "model": "some-model", "reasoning_level": "medium"},
+    ),
+    (
+        config.API_PROVIDER_GEMINI,
+        "backend.providers.gemini_provider", "GeminiProvider",
+        {"api_key": "secret-key", "model": "some-model", "reasoning_level": "low"},
+    ),
+])
+def test_chat_stream_streams_real_deltas_through_each_api_provider_branch(
+    monkeypatch, provider_type, module_name, class_name, expected_init
+):
+    """THE 6.5b EXIT CRITERION at the seam, per API provider: chat_stream's
+    real machinery constructs the provider from the snapshot credentials
+    (chat()'s exact kwargs) and forwards its incremental deltas through
+    on_chunk - multiple chunks, reasoning dropped, done as the return."""
+    monkeypatch.setattr(api_provider, "chat_stream", _REAL_CHAT_STREAM)
+    seen = _install_scripted_provider(monkeypatch, module_name, class_name, _SCRIPTED_STREAM_EVENTS)
+
+    client = _fake_openai_client()[0]
+    monkeypatch.setattr(api_provider, "USE_API_MODE", True)
+    monkeypatch.setattr(api_provider, "API_PROVIDER_TYPE", provider_type)
+    monkeypatch.setattr(api_provider, "API_KEY", "secret-key")
+    monkeypatch.setattr(api_provider, "API_CLIENT", client)
+    monkeypatch.setattr(api_provider, "OPENAI_REASONING_LEVEL", "high")
+    monkeypatch.setattr(api_provider, "ANTHROPIC_REASONING_LEVEL", "medium")
+    monkeypatch.setattr(api_provider, "GEMINI_REASONING_LEVEL", "low")
+    monkeypatch.setitem(api_provider.API_MODELS, config.TASK_CHAT, "some-model")
+
+    chunks: list[tuple[str, bool]] = []
+    response = api_provider.chat_stream(
+        config.TASK_CHAT,
+        [{"role": "user", "content": "count"}],
+        lambda delta, reset: chunks.append((delta, reset)),
+    )
+
+    assert chunks == [("one ", False), ("two ", False), ("three", False)]  # reasoning never forwarded
+    assert response == {
+        "message": {"content": "<think>never forwarded</think>\none two three", "role": "assistant"}
+    }
+    seen.pop("task")
+    if class_name in ("OpenAIProvider", "AnthropicProvider"):
+        expected_init = {**expected_init, "client": client}
+    assert seen == expected_init  # constructed from the snapshot, chat()'s exact kwargs
+
+
+def test_chat_stream_streams_real_deltas_through_the_llama_cpp_local_branch(monkeypatch):
+    """llama.cpp local mode sat in the same fallback short-circuit until
+    6.5b - it must now stream through LlamaCppProvider.stream()."""
+    monkeypatch.setattr(api_provider, "chat_stream", _REAL_CHAT_STREAM)
+    seen = _install_scripted_provider(
+        monkeypatch, "backend.providers.llama_cpp_provider", "LlamaCppProvider",
+        _SCRIPTED_STREAM_EVENTS,
+    )
+    monkeypatch.setattr(api_provider, "USE_API_MODE", False)
+    monkeypatch.setattr(api_provider, "LOCAL_PROVIDER_TYPE", config.LOCAL_PROVIDER_LLAMACPP)
+    settings = {"chat_model_path": "m.gguf", "reasoning_level": "off"}
+    monkeypatch.setattr(api_provider, "LLAMA_CPP_SETTINGS", settings)
+
+    chunks: list[tuple[str, bool]] = []
+    response = api_provider.chat_stream(
+        config.TASK_CHAT,
+        [{"role": "user", "content": "count"}],
+        lambda delta, reset: chunks.append((delta, reset)),
+    )
+
+    assert chunks == [("one ", False), ("two ", False), ("three", False)]
+    assert response["message"]["content"].endswith("one two three")
+    assert seen["settings"] == settings
+
+
+def test_chat_stream_translates_a_mid_stream_connection_error_to_the_friendly_message(
+    monkeypatch, openai_api_mode
+):
+    """The lazy-generator contract's teeth: the old short-circuit got error
+    translation for free by recursing into chat(); real streaming must own
+    it. A connection failure surfacing MID-stream (after deltas already
+    reached on_chunk) must still come out as _translate_chat_exception's
+    actionable Base-URL message, not raw exception text."""
+    monkeypatch.setattr(api_provider, "chat_stream", _REAL_CHAT_STREAM)
+
+    class DyingStream(FakeSDKStream):
+        def __next__(self):
+            if self._index >= 1:
+                raise Exception("connection refused by endpoint")
+            return super().__next__()
+
+    live = DyingStream([_openai_chunk(content="par")])
+    client, _, _ = _fake_openai_streaming_client(live)
+    openai_api_mode(client)
+
+    chunks: list[tuple[str, bool]] = []
+    with pytest.raises(ConnectionError) as excinfo:
+        api_provider.chat_stream(
+            config.TASK_CHAT,
+            [{"role": "user", "content": "hi"}],
+            lambda delta, reset: chunks.append((delta, reset)),
+        )
+
+    assert chunks == [("par", False)]  # the failure was genuinely mid-stream
+    message = str(excinfo.value)
+    assert message.startswith(
+        "Failed to connect to the API endpoint. "
+        "Please verify your Base URL in settings and your network connection."
+    )
+    assert "Details: connection refused by endpoint" in message
+
+
+def test_chat_stream_cancellation_in_api_mode_escapes_untranslated(monkeypatch, openai_api_mode):
+    """The RequestCancelledError sentinel contract, now on the API-mode
+    streaming path: backend/agents.py catches exactly this type."""
+    monkeypatch.setattr(api_provider, "chat_stream", _REAL_CHAT_STREAM)
+    cancel_event = threading.Event()
+    live = FakeSDKStream(
+        [_openai_chunk(content="par"), _openai_chunk(content="tial")],
+        cancel_event=cancel_event,
+        cancel_after=1,
+    )
+    client, _, _ = _fake_openai_streaming_client(live)
+    openai_api_mode(client)
+
+    with pytest.raises(api_provider.RequestCancelledError):
+        api_provider.chat_stream(
+            config.TASK_CHAT,
+            [{"role": "user", "content": "hi"}],
+            lambda delta, reset: None,
+            cancellation_event=cancel_event,
+        )
+    assert live.close_calls >= 1  # closed on the way out
+
+
 def test_chat_constructs_each_api_provider_from_the_snapshot_credentials(monkeypatch):
     """6.3 review fix: the routing test proves the classes are INVOKED but not
     that they're constructed correctly - a branch passing the wrong key/client/
