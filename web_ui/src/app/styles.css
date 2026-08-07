@@ -509,7 +509,12 @@ body,
   border-radius: 8px;
 }
 
-.chat-node-incomplete-retry {
+/* .chat-node-stop-btn (ADR-006 stage 6.4 review fix): the per-node Stop
+   for an in-flight streamed regenerate shares the retry button's own small
+   bordered shape - two affordances for the same request lifecycle, one
+   visual vocabulary. */
+.chat-node-incomplete-retry,
+.chat-node-stop-btn {
   padding: 2px 8px;
   font-size: 11px;
   font-family: inherit;
@@ -521,8 +526,17 @@ body,
   white-space: nowrap;
 }
 
-.chat-node-incomplete-retry:hover {
+.chat-node-incomplete-retry:hover,
+.chat-node-stop-btn:hover {
   background-color: var(--gl-neutral-button-hover);
+}
+
+/* Right-aligned under the streaming content, matching the banner's own
+   0/10px horizontal alignment with .scene-node-body's padding. */
+.chat-node-streaming-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin: 0 10px 8px;
 }
 
 /* Node redesign, stage 2 ("typography and heading hierarchy"): headings
@@ -4308,10 +4322,13 @@ mark.document-view-search-match-current {
   white-space: nowrap;
 }
 
-/* ADR-006 stage 6.4: the live streaming bubble's pre-first-delta
-   placeholder - same muted posture as the live terminal's own "Waiting for
-   output…" line in CodeSandboxNodeView. */
-.conversation-node-streaming-placeholder {
+/* ADR-006 stage 6.4: the pre-first-delta placeholder - same muted posture
+   as the live terminal's own "Waiting for output…" line in
+   CodeSandboxNodeView. Shared by the conversation node's streaming bubble
+   and (review fix) the chat node's own regenerate-streaming window, which
+   otherwise rendered an empty markdown body as a blank card. */
+.conversation-node-streaming-placeholder,
+.chat-node-streaming-placeholder {
   font-size: 11px;
   font-style: italic;
   color: var(--gl-surface-text-muted);

@@ -135,6 +135,13 @@ export interface ChatNodeData extends Record<string, unknown> {
   // "interrupted" banner below the content.
   responseIncomplete: boolean;
   subscribeStream: (requestId: string, listener: StreamListener) => () => void;
+  // ADR-006 stage 6.4 review fix: per-node cancel for an in-flight streamed
+  // regenerate - the Composer's own Stop button can't reach this request (it
+  // only ever tracks the session-level send), so the node carries its own,
+  // the same per-node-cancel posture ConversationNodeView's onCancel already
+  // established. Fires the SAME generic cancelChatRequest intent that
+  // cancel path uses - no new intent (see SceneCanvas's chat branch).
+  onCancelRegenerate: () => void;
 }
 
 export type ChatFlowNode = Node<ChatNodeData, "chat">;
@@ -824,8 +831,15 @@ export function ChatNodeView({ id, data, selected }: NodeProps<ChatFlowNode>) {
                 streamed deltas instead of the persisted content; once it
                 completes (pendingRequestId back to null), falls back to the
                 static, already-persisted content field - same render swap as
-                CodeSandboxNodeView's live terminal. */}
-            <NodeMarkdown content={data.pendingRequestId ? streamedContent : data.content} />
+                CodeSandboxNodeView's live terminal. Review fix: before the
+                first delta lands, an empty markdown body rendered as a blank
+                card - the placeholder covers that window, same posture as
+                ConversationNodeView's own streaming bubble. */}
+            {data.pendingRequestId && !streamedContent ? (
+              <span className="chat-node-streaming-placeholder">Waiting for response…</span>
+            ) : (
+              <NodeMarkdown content={data.pendingRequestId ? streamedContent : data.content} />
+            )}
           </div>
           {contentOverflows && !contentExpanded && (
             <div className="chat-node-content-fade" aria-hidden="true" />
@@ -839,6 +853,23 @@ export function ChatNodeView({ id, data, selected }: NodeProps<ChatFlowNode>) {
               {contentExpanded ? "Show less" : "Show more"}
             </button>
           )}
+        </div>
+      )}
+      {/* ADR-006 stage 6.4 review fix: per-node Stop for an in-flight
+          streamed regenerate - see onCancelRegenerate's own comment on
+          ChatNodeData. Rendered only while this node's own request is
+          genuinely in flight, the same conditional-render pattern
+          ConversationNodeView's Cancel button already uses. */}
+      {!collapsed && data.pendingRequestId && (
+        <div className="chat-node-streaming-actions">
+          <button
+            type="button"
+            className="chat-node-stop-btn nodrag"
+            onClick={data.onCancelRegenerate}
+            title="Cancel regenerate"
+          >
+            Stop
+          </button>
         </div>
       )}
       {/* ADR-006 stage 6.4 (partial-output preservation): shown when the

@@ -518,6 +518,15 @@ export function toFlowNodes(
           responseIncomplete: n.responseIncomplete,
           subscribeStream: (requestId: string, listener: StreamListener) =>
             store.subscribeStream(requestId, listener),
+          // ADR-006 stage 6.4 review fix: per-node Stop for an in-flight
+          // streamed regenerate. Reuses cancelConversationRequest - which
+          // fires the generic cancelChatRequest intent by requestId, not
+          // anything conversation-specific (see that store method's own
+          // naming comment) - rather than adding a new intent. Same
+          // null-guard pattern as the conversation branch's own onCancel.
+          onCancelRegenerate: () => {
+            if (n.pendingRequestId) store.cancelConversationRequest(n.pendingRequestId);
+          },
         },
       });
       continue;

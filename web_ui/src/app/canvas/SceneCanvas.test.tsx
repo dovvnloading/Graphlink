@@ -1187,6 +1187,32 @@ describe("toFlowNodes (ADR-006 stage 6.4 universal streaming)", () => {
     expect(result).toBe(unsubscribe);
   });
 
+  it("the chat branch's onCancelRegenerate fires the same cancel path the conversation node uses, guarded on a non-null request id", () => {
+    const scene = baseScene({
+      nodes: [
+        baseNode({ id: "chat-pending", kind: "chat", pendingRequestId: "req-11" }),
+        baseNode({ id: "chat-idle", kind: "chat", pendingRequestId: null }),
+      ],
+      edges: [],
+    });
+    const store = makeStore();
+    const cancelSpy = vi.spyOn(store, "cancelConversationRequest");
+
+    const flowNodes = toFlowNodes(scene, store);
+    const pendingData = flowNodes.find((n) => n.id === "chat-pending")!.data as {
+      onCancelRegenerate: () => void;
+    };
+    const idleData = flowNodes.find((n) => n.id === "chat-idle")!.data as {
+      onCancelRegenerate: () => void;
+    };
+
+    pendingData.onCancelRegenerate();
+    expect(cancelSpy).toHaveBeenCalledWith("req-11");
+
+    idleData.onCancelRegenerate();
+    expect(cancelSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("the conversation branch injects the same subscribeStream passthrough", () => {
     const scene = baseScene({
       nodes: [baseNode({ id: "conv-1", kind: "conversation", pendingRequestId: "req-10" })],
