@@ -558,7 +558,8 @@ def _fake_openai_client(response_text="ok"):
 def test_the_capability_matrix_is_pinned_per_provider():
     """The 6.3 exit criterion's matrix, as data: what each provider+model
     pair can actually do. A capability flipping here must be a deliberate
-    stage (6.4 flips streaming), never a drive-by."""
+    stage (6.5b flipped streaming True for the four non-Ollama providers),
+    never a drive-by."""
     from backend.providers import (
         AnthropicProvider,
         GeminiProvider,
@@ -576,10 +577,10 @@ def test_the_capability_matrix_is_pinned_per_provider():
     expected = {
         #            streaming, reasoning, vision, audio, image_gen
         "ollama":    (True,  True,  True,  True,  False),  # media rides the images field; audio model-gated at request time
-        "openai":    (False, True,  True,  True,  False),  # C4: vision+audio real; image_gen probed from the client (None here)
-        "anthropic": (False, True,  True,  False, False),
-        "gemini":    (False, True,  True,  True,  True),
-        "llama_cpp": (False, False, False, False, False),
+        "openai":    (True,  True,  True,  True,  False),  # C4: vision+audio real; image_gen probed from the client (None here)
+        "anthropic": (True,  True,  True,  False, False),
+        "gemini":    (True,  True,  True,  True,  True),
+        "llama_cpp": (True,  False, False, False, False),
     }
     actual = {
         name: (c.streaming, c.reasoning, c.vision, c.audio, c.image_generation)
@@ -977,10 +978,11 @@ def test_connection_refused_in_api_mode_surfaces_the_friendly_endpoint_message(o
     assert "Details: connection refused by endpoint" in message  # raw cause kept, as detail only
 
 
-def test_all_four_new_providers_satisfy_the_protocol_and_stream_exactly_one_done():
-    """6.3 review fix: protocol conformance was only pinned for FakeProvider
-    and Ollama; the transitional stream()-wraps-complete() shape (chat_stream's
-    documented one-full-chunk fallback) was never asserted for the new four."""
+def test_all_four_new_providers_satisfy_the_protocol():
+    """6.3: protocol conformance for the non-Ollama four. (The transitional
+    stream()-wraps-complete() single-"done" assertion that used to live here
+    died with 6.5b - real per-provider streaming is pinned in the dedicated
+    6.5b section below.)"""
     from backend.providers import (
         AnthropicProvider,
         GeminiProvider,
@@ -993,13 +995,805 @@ def test_all_four_new_providers_satisfy_the_protocol_and_stream_exactly_one_done
     assert isinstance(GeminiProvider(api_key="k", model="gemini-2.5-pro"), Provider)
     assert isinstance(LlamaCppProvider(settings={"chat_model_path": "m.gguf"}), Provider)
 
-    client, _ = _fake_openai_client("full text")
-    provider = OpenAIProvider(client=client, model="gpt-5")
+
+# -- ADR-006 stage 6.5b: real streaming for the non-Ollama four ---------------
+# -- Only the SDK/transport layer is faked in each of these; the provider's
+# -- own stream() machinery (prep, event mapping, cancellation, composition)
+# -- runs for real. The bar per provider: multiple incremental text deltas,
+# -- reasoning events where the wire carries them, a final "done" whose text
+# -- matches what complete() composes for the same data, and mid-stream
+# -- cancellation that closes the live stream and raises the untranslated
+# -- RequestCancelledError sentinel.
+
+
+class FakeSDKStream:
+    """Iterable-with-close() stand-in for openai's Stream / anthropic's raw
+    event Stream / a llama.cpp chunk generator - anything the providers
+    iterate and must close."""
+
+    def __init__(self, items, cancel_event=None, cancel_after=None):
+        self._items = list(items)
+        self._index = 0
+        self.close_calls = 0
+        self._cancel_event = cancel_event
+        self._cancel_after = cancel_after
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self._index >= len(self._items):
+            raise StopIteration
+        item = self._items[self._index]
+        self._index += 1
+        if self._cancel_event is not None and self._index == self._cancel_after:
+            self._cancel_event.set()  # cancel lands after this item is delivered
+        return item
+
+    def close(self):
+        self.close_calls += 1
+
+
+def _openai_chunk(content=None, reasoning_content=None, choices_empty=False):
+    import types
+
+    if choices_empty:
+        return types.SimpleNamespace(choices=[])  # usage-only chunk shape
+    delta_fields = {"content": content}
+    if reasoning_content is not None:
+        delta_fields["reasoning_content"] = reasoning_content
+    return types.SimpleNamespace(
+        choices=[types.SimpleNamespace(delta=types.SimpleNamespace(**delta_fields), finish_reason=None)]
+    )
+
+
+def _fake_openai_streaming_client(chunks_or_stream):
+    import types
+
+    captured = {}
+    stream = (
+        chunks_or_stream
+        if isinstance(chunks_or_stream, FakeSDKStream)
+        else FakeSDKStream(chunks_or_stream)
+    )
+
+    def create(**kwargs):
+        captured.update(kwargs)
+        assert kwargs.get("stream") is True
+        return stream
+
+    client = types.SimpleNamespace(
+        chat=types.SimpleNamespace(completions=types.SimpleNamespace(create=create))
+    )
+    return client, stream, captured
+
+
+def test_openai_stream_yields_incremental_deltas_reasoning_and_a_done_matching_complete():
+    from backend.providers import CancelToken as CT, ChatRequest as CR, OpenAIProvider
+
+    client, stream, captured = _fake_openai_streaming_client([
+        _openai_chunk(content="Hel"),
+        _openai_chunk(choices_empty=True),        # usage-only chunk must be skipped
+        _openai_chunk(reasoning_content="hmm "),  # compatible-server thinking delta
+        _openai_chunk(content="lo "),
+        _openai_chunk(content="world"),
+    ])
+    provider = OpenAIProvider(client=client, model="gpt-5", reasoning_level="high")
     events = list(provider.stream(
-        ChatRequest(task=config.TASK_TITLE, messages=[{"role": "user", "content": "hi"}]),
-        CancelToken(),
+        CR(task=config.TASK_CHAT, messages=[{"role": "user", "content": "hi"}]), CT()
     ))
-    assert events == [ProviderEvent("done", "full text")]  # exactly one terminal event
+
+    assert [e.type for e in events] == ["text", "reasoning", "text", "text", "done"]
+    # Parity with complete(): raw concatenated content, no <think> composition
+    # (the OpenAI blocking path returns message.content untouched).
+    assert events[-1].text == "Hello world"
+    assert stream.close_calls >= 1  # the finally closed the exhausted stream
+    # Same request prep as complete(): reasoning kwargs applied for TASK_CHAT.
+    chat_keys = set(captured) - {"model", "messages", "stream"}
+    assert chat_keys == set(api_provider.openai_reasoning_kwargs("gpt-5", "high"))
+
+
+def test_openai_stream_cancellation_mid_stream_closes_the_live_stream_and_raises():
+    from backend.providers import CancelToken as CT, ChatRequest as CR, OpenAIProvider
+
+    cancel_event = threading.Event()
+    live = FakeSDKStream(
+        [_openai_chunk(content="par"), _openai_chunk(content="tial")],
+        cancel_event=cancel_event,
+        cancel_after=1,
+    )
+    client, _, _ = _fake_openai_streaming_client(live)
+    provider = OpenAIProvider(client=client, model="gpt-5")
+
+    with pytest.raises(api_provider.RequestCancelledError):
+        list(provider.stream(
+            CR(task=config.TASK_CHAT, messages=[{"role": "user", "content": "hi"}]),
+            CT(cancel_event),
+        ))
+    assert live.close_calls >= 1  # the live HTTP stream was actively closed
+
+
+def _anthropic_raw_events(with_thinking=True):
+    """The raw wire shape shared by messages.create(stream=True) and the REST
+    SSE - dicts here, exactly what the REST path yields; the provider reads
+    both through _extract_response_field."""
+    events = [
+        {"type": "message_start", "message": {"role": "assistant"}},
+        {"type": "content_block_start", "index": 0},
+    ]
+    if with_thinking:
+        events += [
+            {"type": "content_block_delta", "delta": {"type": "thinking_delta", "thinking": "pondering"}},
+            {"type": "content_block_delta", "delta": {"type": "thinking_delta", "thinking": "..."}},
+        ]
+    events += [
+        {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "Ans"}},
+        {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "wer."}},
+        {"type": "content_block_stop", "index": 0},
+        {"type": "message_delta", "delta": {"stop_reason": "end_turn"}},
+        {"type": "message_stop"},
+    ]
+    return events
+
+
+def test_anthropic_sdk_stream_yields_deltas_and_composes_done_like_the_blocking_path():
+    import types
+
+    from backend.providers import AnthropicProvider, CancelToken as CT, ChatRequest as CR
+
+    captured = {}
+    live = FakeSDKStream(_anthropic_raw_events())
+
+    def create(**kwargs):
+        captured.update(kwargs)
+        assert kwargs.get("stream") is True  # passed explicitly, outside the filter
+        return live
+
+    sdk_client = types.SimpleNamespace(messages=types.SimpleNamespace(create=create))
+    provider = AnthropicProvider(client=sdk_client, api_key="k", model="claude-opus-5")
+    events = list(provider.stream(
+        CR(task=config.TASK_CHAT, messages=[
+            {"role": "system", "content": "be brief"},
+            {"role": "user", "content": "hi"},
+        ]),
+        CT(),
+    ))
+
+    assert [e.type for e in events] == ["reasoning", "reasoning", "text", "text", "done"]
+    # Identical composition to _extract_anthropic_text's blocking contract.
+    assert events[-1].text == "<think>pondering...</think>\nAnswer."
+    assert captured["model"] == "claude-opus-5"
+    assert captured["system"] == "be brief"
+    assert live.close_calls >= 1
+
+
+def test_anthropic_rest_fallback_streams_through_the_new_sse_reader(monkeypatch):
+    from backend.providers import AnthropicProvider, CancelToken as CT, ChatRequest as CR
+
+    sse_calls = {}
+
+    def fake_stream_sse(url, body, timeout=180, cancel_event=None, api_key=None):
+        sse_calls.update(url=url, body=body, api_key=api_key)
+        yield from _anthropic_raw_events(with_thinking=False)
+
+    monkeypatch.setattr(
+        "backend.providers.anthropic_provider._anthropic_stream_sse", fake_stream_sse
+    )
+    provider = AnthropicProvider(
+        client={"provider": "anthropic", "transport": "rest"}, api_key="k", model="claude-opus-5"
+    )
+    events = list(provider.stream(
+        CR(task=config.TASK_CHAT, messages=[{"role": "user", "content": "hi"}]), CT()
+    ))
+
+    assert [e.type for e in events] == ["text", "text", "done"]
+    assert events[-1].text == "Answer."
+    assert sse_calls["url"].endswith("/v1/messages")
+    assert sse_calls["body"]["model"] == "claude-opus-5"
+    assert sse_calls["api_key"] == "k"
+
+
+def test_anthropic_stream_cancellation_mid_stream_closes_the_live_stream_and_raises():
+    import types
+
+    from backend.providers import AnthropicProvider, CancelToken as CT, ChatRequest as CR
+
+    cancel_event = threading.Event()
+    live = FakeSDKStream(_anthropic_raw_events(), cancel_event=cancel_event, cancel_after=3)
+
+    def create(**kwargs):
+        return live
+
+    sdk_client = types.SimpleNamespace(messages=types.SimpleNamespace(create=create))
+    provider = AnthropicProvider(client=sdk_client, api_key="k", model="claude-opus-5")
+
+    with pytest.raises(api_provider.RequestCancelledError):
+        list(provider.stream(
+            CR(task=config.TASK_CHAT, messages=[{"role": "user", "content": "hi"}]),
+            CT(cancel_event),
+        ))
+    assert live.close_calls >= 1
+
+
+def _consume_expecting(provider_stream, exc_type, match):
+    """Drain a provider stream expecting it to raise; return the events that
+    made it out first, so callers can assert no \"done\" was emitted."""
+    events = []
+    with pytest.raises(exc_type, match=match):
+        for event in provider_stream:
+            events.append(event)
+    return events
+
+
+def _sdk_client_returning(live):
+    import types
+
+    return types.SimpleNamespace(messages=types.SimpleNamespace(create=lambda **kwargs: live))
+
+
+_ANTHROPIC_ERROR_EVENT = {
+    "type": "error",
+    "error": {"type": "overloaded_error", "message": "Overloaded"},
+}
+
+
+def test_anthropic_mid_stream_error_event_raises_on_both_transports(monkeypatch):
+    """6.5b review (HIGH): the streaming API can send an error event on a 200
+    stream and close - it must raise with the API's type+message (the
+    _anthropic_post_json posture), never compose the partial text as done."""
+    from backend.providers import AnthropicProvider, CancelToken as CT, ChatRequest as CR
+
+    request = CR(task=config.TASK_CHAT, messages=[{"role": "user", "content": "hi"}])
+    wire = _anthropic_raw_events(with_thinking=False)[:4] + [_ANTHROPIC_ERROR_EVENT]
+
+    # SDK transport: the fake stream yields the error-shaped event itself.
+    provider = AnthropicProvider(
+        client=_sdk_client_returning(FakeSDKStream(wire)), api_key="k", model="claude-opus-5"
+    )
+    events = _consume_expecting(
+        provider.stream(request, CT()), RuntimeError, "overloaded_error: Overloaded"
+    )
+    assert events and all(e.type != "done" for e in events)  # deltas out, no done
+
+    # REST transport: the SSE reader yields the same wire-shaped dict.
+    def fake_stream_sse(url, body, timeout=180, cancel_event=None, api_key=None):
+        yield from wire
+
+    monkeypatch.setattr(
+        "backend.providers.anthropic_provider._anthropic_stream_sse", fake_stream_sse
+    )
+    provider = AnthropicProvider(
+        client={"provider": "anthropic", "transport": "rest"}, api_key="k", model="claude-opus-5"
+    )
+    events = _consume_expecting(
+        provider.stream(request, CT()), RuntimeError, "overloaded_error: Overloaded"
+    )
+    assert events and all(e.type != "done" for e in events)
+
+
+def test_anthropic_stream_ending_without_message_stop_raises_on_both_transports(monkeypatch):
+    """6.5b review: a successful Anthropic stream always ends with
+    message_stop - an iterator that just stops (proxy truncation, silent
+    close) delivered a fragment, and composing it would present a truncated
+    answer as complete."""
+    from backend.providers import AnthropicProvider, CancelToken as CT, ChatRequest as CR
+
+    request = CR(task=config.TASK_CHAT, messages=[{"role": "user", "content": "hi"}])
+    truncated = _anthropic_raw_events(with_thinking=False)[:-1]  # everything but message_stop
+
+    provider = AnthropicProvider(
+        client=_sdk_client_returning(FakeSDKStream(truncated)), api_key="k", model="claude-opus-5"
+    )
+    events = _consume_expecting(
+        provider.stream(request, CT()), RuntimeError, "ended unexpectedly before completion"
+    )
+    assert events and all(e.type != "done" for e in events)
+
+    def fake_stream_sse(url, body, timeout=180, cancel_event=None, api_key=None):
+        yield from truncated
+
+    monkeypatch.setattr(
+        "backend.providers.anthropic_provider._anthropic_stream_sse", fake_stream_sse
+    )
+    provider = AnthropicProvider(
+        client={"provider": "anthropic", "transport": "rest"}, api_key="k", model="claude-opus-5"
+    )
+    events = _consume_expecting(
+        provider.stream(request, CT()), RuntimeError, "ended unexpectedly before completion"
+    )
+    assert events and all(e.type != "done" for e in events)
+
+
+def test_anthropic_sse_reader_parses_data_lines_and_always_closes(monkeypatch):
+    """The urllib-level unit for _anthropic_stream_sse itself: `event:` naming
+    lines and blank separators are skipped, each data: line parses to its
+    event dict, the request body carries \"stream\": true, and the response is
+    closed even when the consumer abandons the generator mid-stream."""
+    import io
+    import json as json_module
+
+    class FakeHTTPResponse:
+        def __init__(self, lines):
+            self._lines = lines
+            self.closed = False
+
+        def __iter__(self):
+            return iter(self._lines)
+
+        def close(self):
+            self.closed = True
+
+    wire = [
+        b"event: content_block_delta\n",
+        b"data: " + json_module.dumps(
+            {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "hi"}}
+        ).encode() + b"\n",
+        b"\n",
+        b"data: " + json_module.dumps({"type": "message_stop"}).encode() + b"\n",
+    ]
+    response = FakeHTTPResponse(wire)
+    captured = {}
+
+    def fake_urlopen(request, timeout=None):
+        captured["body"] = json_module.loads(request.data.decode("utf-8"))
+        captured["timeout"] = timeout
+        return response
+
+    monkeypatch.setattr(api_provider.urllib.request, "urlopen", fake_urlopen)
+
+    events = list(api_provider._anthropic_stream_sse(
+        "https://api.anthropic.com/v1/messages", {"model": "m"}, api_key="k"
+    ))
+    assert [e["type"] for e in events] == ["content_block_delta", "message_stop"]
+    assert captured["body"]["stream"] is True
+    assert response.closed is True
+
+    # Abandonment: close() on a mid-flight generator still closes the response.
+    response2 = FakeHTTPResponse(wire)
+    monkeypatch.setattr(
+        api_provider.urllib.request, "urlopen", lambda request, timeout=None: response2
+    )
+    gen = api_provider._anthropic_stream_sse(
+        "https://api.anthropic.com/v1/messages", {"model": "m"}, api_key="k"
+    )
+    next(gen)
+    gen.close()
+    assert response2.closed is True
+
+
+def _gemini_sse_payload(*parts):
+    return {"candidates": [{"content": {"parts": list(parts)}}]}
+
+
+def test_gemini_stream_maps_thought_parts_to_reasoning_and_keeps_concatenation_parity(monkeypatch):
+    from backend.providers import CancelToken as CT, ChatRequest as CR, GeminiProvider
+
+    sse_calls = {}
+
+    def fake_stream_sse(url, body, timeout=120, cancel_event=None, api_key=None):
+        sse_calls.update(url=url, body=body, timeout=timeout)
+        yield _gemini_sse_payload({"text": "pondering... ", "thought": True})
+        yield _gemini_sse_payload({"text": "Ans"})
+        yield _gemini_sse_payload({"text": "wer."})
+
+    monkeypatch.setattr(
+        "backend.providers.gemini_provider._prepare_gemini_contents",
+        lambda messages, cancel_event=None, api_key=None: (None, [{"parts": [{"text": "hi"}]}], []),
+    )
+    monkeypatch.setattr("backend.providers.gemini_provider._gemini_stream_sse", fake_stream_sse)
+
+    provider = GeminiProvider(api_key="k", model="gemini-2.5-pro")
+    events = list(provider.stream(
+        CR(task=config.TASK_CHAT, messages=[{"role": "user", "content": "hi"}]), CT()
+    ))
+
+    assert [e.type for e in events] == ["reasoning", "text", "text", "done"]
+    # Parity with complete(): _extract_gemini_text concatenates EVERY text
+    # part, thought parts included - no <think> composition for Gemini yet.
+    assert events[-1].text == "pondering... Answer."
+    assert ":streamGenerateContent?alt=sse" in sse_calls["url"]
+    assert sse_calls["body"]["contents"] == [{"parts": [{"text": "hi"}]}]
+
+
+def test_gemini_stream_cancellation_still_deletes_uploaded_files(monkeypatch):
+    from backend.providers import CancelToken as CT, ChatRequest as CR, GeminiProvider
+
+    cancel_event = threading.Event()
+    deleted = []
+    sse_closed = {"count": 0}
+
+    def fake_stream_sse(url, body, timeout=120, cancel_event=None, api_key=None):
+        try:
+            yield _gemini_sse_payload({"text": "par"})
+            cancel_event_outer.set()
+            yield _gemini_sse_payload({"text": "tial"})
+        finally:
+            sse_closed["count"] += 1
+
+    cancel_event_outer = cancel_event
+    monkeypatch.setattr(
+        "backend.providers.gemini_provider._prepare_gemini_contents",
+        lambda messages, cancel_event=None, api_key=None: (None, [{"parts": [{"text": "hi"}]}], ["files/abc"]),
+    )
+    monkeypatch.setattr("backend.providers.gemini_provider._gemini_stream_sse", fake_stream_sse)
+    monkeypatch.setattr(
+        "backend.providers.gemini_provider._gemini_delete_file",
+        lambda name, api_key=None: deleted.append(name),
+    )
+
+    provider = GeminiProvider(api_key="k", model="gemini-2.5-pro")
+    with pytest.raises(api_provider.RequestCancelledError):
+        list(provider.stream(
+            CR(task=config.TASK_CHAT, messages=[{"role": "user", "content": "hi"}]),
+            CT(cancel_event),
+        ))
+    assert deleted == ["files/abc"]  # the load-bearing cleanup ran on the cancel path
+    assert sse_closed["count"] >= 1  # and the live SSE generator was closed
+
+
+def test_gemini_stream_surfaces_the_safety_block_as_the_exact_blocking_path_error(monkeypatch):
+    from backend.providers import CancelToken as CT, ChatRequest as CR, GeminiProvider
+
+    def fake_stream_sse(url, body, timeout=120, cancel_event=None, api_key=None):
+        yield {"promptFeedback": {"blockReason": "SAFETY"}, "candidates": []}
+
+    monkeypatch.setattr(
+        "backend.providers.gemini_provider._prepare_gemini_contents",
+        lambda messages, cancel_event=None, api_key=None: (None, [{"parts": [{"text": "hi"}]}], []),
+    )
+    monkeypatch.setattr("backend.providers.gemini_provider._gemini_stream_sse", fake_stream_sse)
+
+    provider = GeminiProvider(api_key="k", model="gemini-2.5-pro")
+    with pytest.raises(RuntimeError, match=r"Safety Filters \(SAFETY\)"):
+        list(provider.stream(
+            CR(task=config.TASK_CHAT, messages=[{"role": "user", "content": "hi"}]), CT()
+        ))
+
+
+def test_gemini_mid_stream_error_frame_raises_with_the_apis_message(monkeypatch):
+    """6.5b review (MEDIUM): an error frame ({\"error\": {\"code\": ...,
+    \"message\": ...}}) matches neither promptFeedback nor candidates - it
+    must raise with the parsed message (same extraction _gemini_post_json
+    applies to that payload shape), never let partial text return as done."""
+    from backend.providers import CancelToken as CT, ChatRequest as CR, GeminiProvider
+
+    def fake_stream_sse(url, body, timeout=120, cancel_event=None, api_key=None):
+        yield _gemini_sse_payload({"text": "par"})
+        yield {"error": {"code": 503, "message": "The model is overloaded.", "status": "UNAVAILABLE"}}
+        yield _gemini_sse_payload({"text": "tial"})  # never reached
+
+    monkeypatch.setattr(
+        "backend.providers.gemini_provider._prepare_gemini_contents",
+        lambda messages, cancel_event=None, api_key=None: (None, [{"parts": [{"text": "hi"}]}], []),
+    )
+    monkeypatch.setattr("backend.providers.gemini_provider._gemini_stream_sse", fake_stream_sse)
+
+    provider = GeminiProvider(api_key="k", model="gemini-2.5-pro")
+    events = _consume_expecting(
+        provider.stream(
+            CR(task=config.TASK_CHAT, messages=[{"role": "user", "content": "hi"}]), CT()
+        ),
+        RuntimeError,
+        "The model is overloaded",
+    )
+    assert [e.type for e in events] == ["text"]  # the pre-error delta got out; no done followed
+
+
+def _llama_chunk(content=None, reasoning_key=None, reasoning=None, finish=None):
+    delta = {}
+    if content is not None:
+        delta["content"] = content
+    if reasoning_key is not None:
+        delta[reasoning_key] = reasoning
+    return {"choices": [{"delta": delta, "finish_reason": finish}]}
+
+
+def _llama_streaming_setup(monkeypatch, chunks):
+    """Fake ONLY the client/prep seams; the provider's own stream() runs for
+    real. The fake create_chat_completion has a strict no-**kwargs signature
+    (what _filter_kwargs_for_callable filters passthrough kwargs against);
+    the drop-trap test below has its own signature-narrowed fake."""
+    from backend.providers import llama_cpp_provider as lp
+
+    live = FakeSDKStream(chunks) if not isinstance(chunks, FakeSDKStream) else chunks
+    captured = {}
+
+    class FakeLlamaClient:
+        def create_chat_completion(self, messages=None, stream=False, temperature=None):
+            captured.update(messages=messages, stream=stream, temperature=temperature)
+            return live
+
+    monkeypatch.setattr(lp, "_prepare_llama_cpp_messages", lambda messages, task, s: messages)
+    monkeypatch.setattr(lp, "_get_llama_cpp_client", lambda task, s: FakeLlamaClient())
+    monkeypatch.setattr(lp, "_prepare_llama_cpp_kwargs", lambda kwargs, s: dict(kwargs))
+    return live, captured
+
+
+def test_llama_cpp_stream_yields_deltas_reasoning_and_a_done_matching_completes_composition(monkeypatch):
+    from backend.providers import CancelToken as CT, ChatRequest as CR, LlamaCppProvider
+
+    live, captured = _llama_streaming_setup(monkeypatch, [
+        _llama_chunk(reasoning_key="reasoning_content", reasoning="pondering..."),
+        {"choices": []},  # defensive: empty-choices chunk must be skipped
+        _llama_chunk(content="Ans"),
+        _llama_chunk(content="wer.", finish="stop"),
+    ])
+
+    provider = LlamaCppProvider(settings={"chat_model_path": "m.gguf"})
+    events = list(provider.stream(
+        CR(
+            task=config.TASK_CHAT,
+            messages=[{"role": "user", "content": "hi"}],
+            extra_kwargs={"temperature": 0.5, "cancellation_event": threading.Event()},
+        ),
+        CT(),
+    ))
+
+    assert [e.type for e in events] == ["reasoning", "text", "text", "done"]
+    # Composed through _extract_llama_cpp_text, exactly as complete() would
+    # for the same content+reasoning - the shared-extraction parity contract.
+    assert events[-1].text == "<think>pondering...</think>\nAnswer."
+    assert captured["stream"] is True
+    assert captured["temperature"] == 0.5  # passthrough kwargs survived the filter
+    assert live.close_calls >= 1  # the generator over the shared client was closed
+
+
+def test_llama_cpp_stream_true_survives_the_kwargs_filter_and_beats_a_passthrough_stream(monkeypatch):
+    """THE 6.5b drop-trap test (reworked per adversarial review - the first
+    version's fake DECLARED `stream`, so filter-routing would have passed it
+    anyway and the test couldn't fail on the wrong implementation). Genuine
+    discriminator: the fake's INSPECTABLE signature (a narrowed
+    __signature__, which inspect.signature honors and therefore what
+    _filter_kwargs_for_callable sees) declares neither `stream` nor
+    **kwargs - filter-routing WOULD drop stream=True (asserted directly
+    below), and the fake then returns a NON-generator blocking dict, so the
+    wrong path fails loudly on both the captured flag and the events. The
+    explicit out-of-band pass is what makes it arrive. Bonus half: a
+    passthrough extra_kwarg trying to force stream=False loses to ours."""
+    import inspect
+
+    from backend.providers import CancelToken as CT, ChatRequest as CR, LlamaCppProvider
+    from backend.providers import llama_cpp_provider as lp
+
+    captured = {}
+    live = FakeSDKStream([_llama_chunk(content="ok", finish="stop")])
+
+    def create_chat_completion(messages=None, temperature=None, **kwargs):
+        captured.update(messages=messages, temperature=temperature, **kwargs)
+        if not kwargs.get("stream"):
+            return {"choices": [{"message": {"content": "BLOCKING RESPONSE"}}]}
+        return live
+
+    create_chat_completion.__signature__ = inspect.Signature([
+        inspect.Parameter("messages", inspect.Parameter.POSITIONAL_OR_KEYWORD, default=None),
+        inspect.Parameter("temperature", inspect.Parameter.POSITIONAL_OR_KEYWORD, default=None),
+    ])
+
+    class FakeLlamaClient:
+        pass
+
+    client = FakeLlamaClient()
+    client.create_chat_completion = create_chat_completion
+    monkeypatch.setattr(lp, "_prepare_llama_cpp_messages", lambda messages, task, s: messages)
+    monkeypatch.setattr(lp, "_get_llama_cpp_client", lambda task, s: client)
+    monkeypatch.setattr(lp, "_prepare_llama_cpp_kwargs", lambda kwargs, s: dict(kwargs))
+
+    # The discriminator's premise, asserted directly: routed through the
+    # filter, stream would never reach the callable.
+    assert "stream" not in api_provider._filter_kwargs_for_callable(
+        create_chat_completion, {"stream": True, "temperature": 0.5}
+    )
+
+    provider = LlamaCppProvider(settings={"chat_model_path": "m.gguf"})
+    events = list(provider.stream(
+        CR(
+            task=config.TASK_CHAT,
+            messages=[{"role": "user", "content": "hi"}],
+            extra_kwargs={"stream": False, "temperature": 0.5},
+        ),
+        CT(),
+    ))
+    assert captured["stream"] is True  # explicit pass survived where the filter would drop it
+    assert captured["temperature"] == 0.5  # declared passthrough kwargs still flow
+    assert events[-1] == ProviderEvent("done", "ok")
+
+
+def test_llama_cpp_stream_cancellation_closes_the_generator_and_raises(monkeypatch):
+    from backend.providers import CancelToken as CT, ChatRequest as CR, LlamaCppProvider
+
+    cancel_event = threading.Event()
+    live = FakeSDKStream(
+        [_llama_chunk(content="par"), _llama_chunk(content="tial", finish="stop")],
+        cancel_event=cancel_event,
+        cancel_after=1,
+    )
+    _llama_streaming_setup(monkeypatch, live)
+
+    provider = LlamaCppProvider(settings={"chat_model_path": "m.gguf"})
+    with pytest.raises(api_provider.RequestCancelledError):
+        list(provider.stream(
+            CR(task=config.TASK_CHAT, messages=[{"role": "user", "content": "hi"}]),
+            CT(cancel_event),
+        ))
+    # Cooperative-only, but the shared cached client's generator must never
+    # be left partially consumed.
+    assert live.close_calls >= 1
+
+
+# -- 6.5b: the chat_stream seam - real dispatch replaces the fallback ---------
+# -- The old non-Ollama short-circuit (one blocking chat() call + one
+# -- synthetic full-text chunk) is gone: chat_stream now constructs every
+# -- provider exactly as chat() does and consumes its stream(), with the
+# -- consuming loop inside chat_stream's own _translate_chat_exception try
+# -- (the lazy-generator contract means the old path's free-via-recursion
+# -- translation no longer exists).
+
+
+def _install_scripted_provider(monkeypatch, module_name, class_name, events):
+    """Swap a provider class (at the module chat_stream lazily imports from)
+    for a protocol-shaped double that records its __init__ kwargs and yields
+    scripted events - the FakeFactory pattern from the 6.1 seam tests."""
+    module = __import__(module_name, fromlist=[class_name])
+    seen = {}
+
+    class Scripted:
+        def __init__(self, **kwargs):
+            seen.update(kwargs)
+
+        def stream(self, request, cancel):
+            seen["task"] = request.task
+            return iter(events)
+
+    monkeypatch.setattr(module, class_name, Scripted)
+    return seen
+
+
+_SCRIPTED_STREAM_EVENTS = [
+    ProviderEvent("text", "one "),
+    ProviderEvent("reasoning", "never forwarded"),
+    ProviderEvent("text", "two "),
+    ProviderEvent("text", "three"),
+    ProviderEvent("done", "<think>never forwarded</think>\none two three"),
+]
+
+
+@pytest.mark.parametrize("provider_type, module_name, class_name, expected_init", [
+    (
+        config.API_PROVIDER_OPENAI,
+        "backend.providers.openai_provider", "OpenAIProvider",
+        {"model": "some-model", "reasoning_level": "high"},
+    ),
+    (
+        config.API_PROVIDER_ANTHROPIC,
+        "backend.providers.anthropic_provider", "AnthropicProvider",
+        {"api_key": "secret-key", "model": "some-model", "reasoning_level": "medium"},
+    ),
+    (
+        config.API_PROVIDER_GEMINI,
+        "backend.providers.gemini_provider", "GeminiProvider",
+        {"api_key": "secret-key", "model": "some-model", "reasoning_level": "low"},
+    ),
+])
+def test_chat_stream_streams_real_deltas_through_each_api_provider_branch(
+    monkeypatch, provider_type, module_name, class_name, expected_init
+):
+    """THE 6.5b EXIT CRITERION at the seam, per API provider: chat_stream's
+    real machinery constructs the provider from the snapshot credentials
+    (chat()'s exact kwargs) and forwards its incremental deltas through
+    on_chunk - multiple chunks, reasoning dropped, done as the return."""
+    monkeypatch.setattr(api_provider, "chat_stream", _REAL_CHAT_STREAM)
+    seen = _install_scripted_provider(monkeypatch, module_name, class_name, _SCRIPTED_STREAM_EVENTS)
+
+    client = _fake_openai_client()[0]
+    monkeypatch.setattr(api_provider, "USE_API_MODE", True)
+    monkeypatch.setattr(api_provider, "API_PROVIDER_TYPE", provider_type)
+    monkeypatch.setattr(api_provider, "API_KEY", "secret-key")
+    monkeypatch.setattr(api_provider, "API_CLIENT", client)
+    monkeypatch.setattr(api_provider, "OPENAI_REASONING_LEVEL", "high")
+    monkeypatch.setattr(api_provider, "ANTHROPIC_REASONING_LEVEL", "medium")
+    monkeypatch.setattr(api_provider, "GEMINI_REASONING_LEVEL", "low")
+    monkeypatch.setitem(api_provider.API_MODELS, config.TASK_CHAT, "some-model")
+
+    chunks: list[tuple[str, bool]] = []
+    response = api_provider.chat_stream(
+        config.TASK_CHAT,
+        [{"role": "user", "content": "count"}],
+        lambda delta, reset: chunks.append((delta, reset)),
+    )
+
+    assert chunks == [("one ", False), ("two ", False), ("three", False)]  # reasoning never forwarded
+    assert response == {
+        "message": {"content": "<think>never forwarded</think>\none two three", "role": "assistant"}
+    }
+    seen.pop("task")
+    if class_name in ("OpenAIProvider", "AnthropicProvider"):
+        expected_init = {**expected_init, "client": client}
+    assert seen == expected_init  # constructed from the snapshot, chat()'s exact kwargs
+
+
+def test_chat_stream_streams_real_deltas_through_the_llama_cpp_local_branch(monkeypatch):
+    """llama.cpp local mode sat in the same fallback short-circuit until
+    6.5b - it must now stream through LlamaCppProvider.stream()."""
+    monkeypatch.setattr(api_provider, "chat_stream", _REAL_CHAT_STREAM)
+    seen = _install_scripted_provider(
+        monkeypatch, "backend.providers.llama_cpp_provider", "LlamaCppProvider",
+        _SCRIPTED_STREAM_EVENTS,
+    )
+    monkeypatch.setattr(api_provider, "USE_API_MODE", False)
+    monkeypatch.setattr(api_provider, "LOCAL_PROVIDER_TYPE", config.LOCAL_PROVIDER_LLAMACPP)
+    settings = {"chat_model_path": "m.gguf", "reasoning_level": "off"}
+    monkeypatch.setattr(api_provider, "LLAMA_CPP_SETTINGS", settings)
+
+    chunks: list[tuple[str, bool]] = []
+    response = api_provider.chat_stream(
+        config.TASK_CHAT,
+        [{"role": "user", "content": "count"}],
+        lambda delta, reset: chunks.append((delta, reset)),
+    )
+
+    assert chunks == [("one ", False), ("two ", False), ("three", False)]
+    assert response["message"]["content"].endswith("one two three")
+    assert seen["settings"] == settings
+
+
+def test_chat_stream_translates_a_mid_stream_connection_error_to_the_friendly_message(
+    monkeypatch, openai_api_mode
+):
+    """The lazy-generator contract's teeth: the old short-circuit got error
+    translation for free by recursing into chat(); real streaming must own
+    it. A connection failure surfacing MID-stream (after deltas already
+    reached on_chunk) must still come out as _translate_chat_exception's
+    actionable Base-URL message, not raw exception text."""
+    monkeypatch.setattr(api_provider, "chat_stream", _REAL_CHAT_STREAM)
+
+    class DyingStream(FakeSDKStream):
+        def __next__(self):
+            if self._index >= 1:
+                raise Exception("connection refused by endpoint")
+            return super().__next__()
+
+    live = DyingStream([_openai_chunk(content="par")])
+    client, _, _ = _fake_openai_streaming_client(live)
+    openai_api_mode(client)
+
+    chunks: list[tuple[str, bool]] = []
+    with pytest.raises(ConnectionError) as excinfo:
+        api_provider.chat_stream(
+            config.TASK_CHAT,
+            [{"role": "user", "content": "hi"}],
+            lambda delta, reset: chunks.append((delta, reset)),
+        )
+
+    assert chunks == [("par", False)]  # the failure was genuinely mid-stream
+    message = str(excinfo.value)
+    assert message.startswith(
+        "Failed to connect to the API endpoint. "
+        "Please verify your Base URL in settings and your network connection."
+    )
+    assert "Details: connection refused by endpoint" in message
+
+
+def test_chat_stream_cancellation_in_api_mode_escapes_untranslated(monkeypatch, openai_api_mode):
+    """The RequestCancelledError sentinel contract, now on the API-mode
+    streaming path: backend/agents.py catches exactly this type."""
+    monkeypatch.setattr(api_provider, "chat_stream", _REAL_CHAT_STREAM)
+    cancel_event = threading.Event()
+    live = FakeSDKStream(
+        [_openai_chunk(content="par"), _openai_chunk(content="tial")],
+        cancel_event=cancel_event,
+        cancel_after=1,
+    )
+    client, _, _ = _fake_openai_streaming_client(live)
+    openai_api_mode(client)
+
+    with pytest.raises(api_provider.RequestCancelledError):
+        api_provider.chat_stream(
+            config.TASK_CHAT,
+            [{"role": "user", "content": "hi"}],
+            lambda delta, reset: None,
+            cancellation_event=cancel_event,
+        )
+    assert live.close_calls >= 1  # closed on the way out
 
 
 def test_chat_constructs_each_api_provider_from_the_snapshot_credentials(monkeypatch):

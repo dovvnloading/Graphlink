@@ -21,13 +21,14 @@ def _chat_stream_delegates_to_patched_chat(monkeypatch):
     fresh module-attribute read, not a captured reference), so it transparently
     picks up whatever fake_chat a given test has patched into api_provider.chat
     for the duration of its own `with patch.object(...)` block, and forwards it
-    through on_chunk as a single synthetic chunk - the exact shape
-    chat_stream's own documented non-Ollama fallback already uses. This tests
-    send_message's downstream logic (node creation, parsing, cancellation),
-    which is unaffected by whether the reply arrived in one chunk or many -
-    real incremental chunking is covered separately by
-    graphlink_app/tests/test_api_provider_chat_stream.py and this suite's own
-    dedicated streaming tests in test_agents.py."""
+    through on_chunk as a single synthetic chunk (the shape the real
+    function's non-Ollama fallback used before ADR-006 stage 6.5b made every
+    provider stream for real - still a valid double, since on_chunk's
+    contract is delta-agnostic). This tests send_message's downstream logic
+    (node creation, parsing, cancellation), which is unaffected by whether
+    the reply arrived in one chunk or many - real incremental chunking is
+    covered separately by backend/tests/test_providers.py's chat_stream
+    tests and this suite's own dedicated streaming tests in test_agents.py."""
 
     def _generic_chat_stream(task, messages, on_chunk, **kwargs):
         response = api_provider.chat(task, messages, **kwargs)

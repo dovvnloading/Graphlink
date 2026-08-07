@@ -88,16 +88,17 @@ def _configure_fake_ollama(monkeypatch, chat_fn, *, model="test-model"):
     # built around mocking api_provider.chat alone - most of which predate
     # R4.4 - would otherwise fall through to chat_stream's REAL Ollama
     # branch (since these fixtures also set LOCAL_PROVIDER_TYPE to Ollama)
-    # and attempt a genuine network call. This fake mirrors
-    # api_provider.chat_stream's own documented non-streaming-provider
-    # fallback shape exactly (one blocking call plus one synthetic
-    # full-text on_chunk), just delegating the blocking call to chat_fn
-    # instead of the real chat() - so chat_fn's return value/exception/
-    # cancellation behavior is preserved unchanged for both the streaming
-    # and non-streaming dispatch paths. Tests that care about the streaming
-    # semantics THEMSELVES (batching, reset events, ...) monkeypatch
-    # api_provider.chat_stream directly instead - see the "R4.4: true token
-    # streaming" section below.
+    # and attempt a genuine network call. This fake delivers the reply as
+    # one blocking call plus one synthetic full-text on_chunk - the shape
+    # the real chat_stream's non-Ollama fallback used before ADR-006 stage
+    # 6.5b made every provider stream for real; it remains a valid TEST
+    # double because on_chunk's contract is delta-agnostic - just
+    # delegating the blocking call to chat_fn instead of the real chat(),
+    # so chat_fn's return value/exception/cancellation behavior is
+    # preserved unchanged for both dispatch paths. Tests that care about
+    # the streaming semantics THEMSELVES (batching, reset events, ...)
+    # monkeypatch api_provider.chat_stream directly instead - see the
+    # "R4.4: true token streaming" section below.
     #
     # Calls api_provider.chat (the module attribute, looked up fresh on
     # every invocation) rather than closing over chat_fn directly - this
