@@ -185,8 +185,10 @@ async def apply_ollama_chat_model(manager: SettingsManager, model_id: str) -> No
         assignments = manager.get_ollama_model_assignments()
         assignments[config.TASK_CHAT] = assignment
         manager.set_ollama_model_assignments(assignments)
-        config.sync_ollama_task_models(manager)
-        config.set_current_model(chosen)
+        # ADR-006 stage 6.5 (H6): locked writer wrappers - see
+        # api_provider.sync_ollama_models.
+        api_provider.sync_ollama_models(manager)
+        api_provider.set_current_ollama_model(chosen)
 
     await asyncio.to_thread(run_locked, _persist)
 

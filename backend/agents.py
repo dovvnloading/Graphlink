@@ -203,7 +203,9 @@ def bootstrap_provider_state(settings_manager: SettingsManager) -> None:
     # Unconditional and first, regardless of active mode: resolves Auto/
     # inherited Ollama task-model assignments against the cached scan, same
     # as legacy does at startup.
-    config.sync_ollama_task_models(settings_manager)
+    # ADR-006 stage 6.5 (H6): the locked writer wrapper, so the table
+    # can't change mid-snapshot - see api_provider.sync_ollama_models.
+    api_provider.sync_ollama_models(settings_manager)
 
     mode_text = settings_manager.get_current_mode()
     try:

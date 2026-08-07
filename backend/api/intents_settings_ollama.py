@@ -104,9 +104,11 @@ def register_settings_ollama_intents(
             assignments = manager.get_ollama_model_assignments()
             assignments[task] = assignment
             manager.set_ollama_model_assignments(assignments)
-            config.sync_ollama_task_models(manager)
+            # ADR-006 stage 6.5 (H6): locked writer wrappers - see
+            # api_provider.sync_ollama_models.
+            api_provider.sync_ollama_models(manager)
             if task == config.TASK_CHAT and assignment["mode"] == "explicit":
-                config.set_current_model(assignment["model_id"])
+                api_provider.set_current_ollama_model(assignment["model_id"])
 
         await asyncio.to_thread(run_locked, _persist)
         await bus.publish("app-settings")
@@ -141,7 +143,7 @@ def register_settings_ollama_intents(
                 results.get("scan_path", ""),
                 results.get("locations", []),
             )
-            config.sync_ollama_task_models(manager)
+            api_provider.sync_ollama_models(manager)
 
         try:
             # Adversarial-review finding: set_ollama_model_scan_cache does a
@@ -235,7 +237,7 @@ def register_settings_ollama_intents(
 
         def _persist() -> None:
             api_provider.invalidate_ollama_capability_cache(model_name)
-            config.set_current_model(model_name)
+            api_provider.set_current_ollama_model(model_name)
 
         try:
             # Belt-and-suspenders for the same reentrancy-gate hazard fixed
