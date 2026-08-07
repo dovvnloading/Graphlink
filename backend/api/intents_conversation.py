@@ -64,12 +64,32 @@ def register_conversation_intents(
                 node_ids=[node_id],
             )
 
+        def _on_partial(partial_text):
+            # ADR-006 stage 6.4 (H5): the stream died mid-reply - preserve
+            # the accumulated text as a real assistant message flagged
+            # incomplete instead of losing it. Liveness guard: if the node
+            # was deleted while the reply was in flight, the append would
+            # raise SceneError out of _dispatch's cleanup path; skipping is
+            # the same posture as the terminal callbacks in agents.py.
+            # "agent" provenance, same as _on_reply - the partial IS model
+            # output. The user retries via the conversation's own send box.
+            if document.nodes.get(node_id) is None:
+                return
+            document.record_command(
+                "appendConversationAssistantMessage", "agent",
+                lambda: document.append_conversation_assistant_message(
+                    node_id, partial_text, incomplete=True
+                ),
+                node_ids=[node_id],
+            )
+
         await agent_dispatcher.start_conversation_reply(
             bus=bus,
             notifications_state=notifications,
             node=node,
             conversation_history=node.history,
             on_reply=_on_reply,
+            on_partial=_on_partial,
         )
         return node.id
 

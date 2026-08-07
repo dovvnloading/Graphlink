@@ -69,6 +69,7 @@ export interface SceneNodeRow {
   isBranchSynthesis: boolean;
   synthesisInstructions: string;
   branchStatus: string;
+  responseIncomplete: boolean;
   isFinalDeliverable: boolean;
   color?: string | null;
   headerColor?: string | null;
@@ -95,6 +96,7 @@ export interface SceneNodeRow {
 export interface ConversationMessageRow {
   role: "user" | "assistant";
   content: string;
+  incomplete: boolean;
 }
 
 export interface ResearchResultRow {
@@ -536,6 +538,11 @@ function checkSceneNodeRow(value: unknown, path: string, errors: string[]): void
     else { if (typeof fieldValue !== "string") errors.push(`${path}.branchStatus` + ": expected string"); }
   }
   {
+    const fieldValue = value["responseIncomplete"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.responseIncomplete: missing required field`);
+    else { if (typeof fieldValue !== "boolean") errors.push(`${path}.responseIncomplete` + ": expected boolean"); }
+  }
+  {
     const fieldValue = value["isFinalDeliverable"];
     if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.isFinalDeliverable: missing required field`);
     else { if (typeof fieldValue !== "boolean") errors.push(`${path}.isFinalDeliverable` + ": expected boolean"); }
@@ -649,6 +656,11 @@ function checkConversationMessageRow(value: unknown, path: string, errors: strin
     const fieldValue = value["content"];
     if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.content: missing required field`);
     else { if (typeof fieldValue !== "string") errors.push(`${path}.content` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["incomplete"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.incomplete: missing required field`);
+    else { if (typeof fieldValue !== "boolean") errors.push(`${path}.incomplete` + ": expected boolean"); }
   }
 }
 

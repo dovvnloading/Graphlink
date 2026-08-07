@@ -300,6 +300,9 @@
                 "content": {
                   "type": "string"
                 },
+                "incomplete": {
+                  "type": "boolean"
+                },
                 "role": {
                   "enum": [
                     "user",
@@ -310,7 +313,8 @@
               },
               "required": [
                 "role",
-                "content"
+                "content",
+                "incomplete"
               ],
               "type": "object"
             },
@@ -548,6 +552,9 @@
           "researchTotal": {
             "type": "integer"
           },
+          "responseIncomplete": {
+            "type": "boolean"
+          },
           "synthesisInstructions": {
             "type": "string"
           },
@@ -620,6 +627,7 @@
           "isBranchSynthesis",
           "synthesisInstructions",
           "branchStatus",
+          "responseIncomplete",
           "isFinalDeliverable",
           "isSystemPrompt",
           "isSummaryNote",

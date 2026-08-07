@@ -377,6 +377,9 @@ def _restore_chat_payload(payload: dict[str, Any]) -> SceneNode:
                 if payload.get("branch_status") in SceneDocument.BRANCH_STATUS_VALUES
                 else "active"
             ),
+            # ADR-006 stage 6.4: absent in every pre-6.4 save -> False,
+            # matching the dataclass default.
+            response_incomplete=bool(payload.get("response_incomplete", False)),
         ),
     )
 

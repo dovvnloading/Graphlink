@@ -512,11 +512,14 @@ def test_regenerate_response_also_resolves_the_branch_attached_system_prompt_not
     _configure_fake_ollama_provider_only(monkeypatch)
     captured = {}
 
-    def fake_chat(conversation_history, persona_text, cancel_event):
+    # ADR-006 stage 6.4: regenerate now streams, so the STREAMING driver is
+    # the one that must see the resolved persona.
+    def fake_stream(conversation_history, persona_text, cancel_event, on_chunk):
         captured["persona_text"] = persona_text
+        on_chunk("regenerated reply", False)
         return "regenerated reply"
 
-    monkeypatch.setattr(agents_module, "_call_chat_agent", fake_chat)
+    monkeypatch.setattr(agents_module, "_call_chat_agent_stream", fake_stream)
 
     async def run():
         bus = SessionBus("agents-regenerate-system-prompt-test")

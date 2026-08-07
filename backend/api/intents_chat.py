@@ -277,6 +277,32 @@ def register_chat_intents(
             # chat node.
             document.last_chat_node_id = ai_node.id
 
+        async def _on_partial(partial_text):
+            # ADR-006 stage 6.4 (H5): the stream died mid-reply - land the
+            # accumulated text as a real assistant node flagged incomplete
+            # instead of losing it. NOT parsed into thinking/code children
+            # (a truncated reply can end inside an unterminated fence); the
+            # user retries via the node's own Regenerate action, which is
+            # why last_chat_node_id/parent wiring must match the complete
+            # path exactly. Token accounting mirrors _on_reply's preamble -
+            # the partial consumed real output tokens either way.
+            if node.id not in document.nodes:
+                return
+            document.add_session_tokens(partial_text)
+            token_counter.set_output_text(partial_text)
+            await publish_token_counter()
+
+            def _commit():
+                ax, ay = node.x, node.y + MESSAGE_VERTICAL_SPACING
+                ai = document.add_chat_node(ax, ay, partial_text, False, parent_id=node.id)
+                ai.state.response_incomplete = True
+                return ai
+
+            ai_node, _command = document.record_command(
+                "chatReply", "agent", _commit, node_ids=[node.id],
+            )
+            document.last_chat_node_id = ai_node.id
+
         await agent_dispatcher.start_chat_reply(
             bus=bus,
             notifications_state=notifications,
@@ -289,6 +315,7 @@ def register_chat_intents(
             # user ChatNode "about to be sent", the walk starts from here.
             canvas_document=document,
             node_id=node.id,
+            on_partial=_on_partial,
         )
         return node.id
 
@@ -375,19 +402,55 @@ def register_chat_intents(
 
             # last_chat_node_id: DELIBERATELY untouched. See §5.
 
+        def _on_partial(partial_text):
+            # ADR-006 stage 6.4 (H5): the stream died mid-regenerate -
+            # preserve the accumulated text instead of silently keeping the
+            # old content with the new text lost. The old content children
+            # are torn down (they annotated content that no longer exists)
+            # but the partial is NOT parsed into new children - a truncated
+            # reply can end inside an unterminated code fence, and the
+            # incomplete flag tells the user to Regenerate anyway. Same
+            # liveness posture as _on_reply's own deleted-mid-flight check.
+            if node_to_regenerate.id not in document.nodes:
+                return
+            existing_children = [
+                edge.target
+                for edge in document.edges.values()
+                if edge.source == node_to_regenerate.id
+            ]
+
+            def _commit():
+                document.remove_associated_content_children(node_to_regenerate.id)
+                document.update_chat_node_content(
+                    node_to_regenerate.id, partial_text, incomplete=True
+                )
+
+            document.record_command(
+                "regenerateResponse", "agent", _commit,
+                node_ids=[node_to_regenerate.id, *existing_children],
+            )
+
         await agent_dispatcher.start_chat_reply(
             bus=bus,
             notifications_state=notifications,
             composer_document=composer_document,
             conversation_history=history,
             on_reply=_on_reply,
-            # R4.4: deliberately NOT streamed - see the design spec's own
-            # deferral list. Regenerate replaces an EXISTING node's content
-            # rather than creating a new one, and streaming it would light
-            # up the Composer dock's live preview for a click on some other
-            # node in the canvas, with no way for the frontend to tell that
-            # apart from an actual Composer send.
-            stream=False,
+            # ADR-006 stage 6.4: streams, closing R4.4's deferral. The old
+            # objection (stream frames would light up the Composer dock's
+            # live preview for a click on some other node) is dissolved by
+            # identity, not suppression: on_begin/on_end/state_topic are
+            # overridden below so the frames' request_id lives on the TARGET
+            # NODE's own pending_request_id (published on "scene"), the same
+            # node-scoped subscription contract CodeSandboxNodeView already
+            # renders by - the Composer never sees this request_id at all.
+            stream=True,
+            on_begin=lambda request_id: setattr(
+                node_to_regenerate, "pending_request_id", request_id
+            ),
+            on_end=lambda: setattr(node_to_regenerate, "pending_request_id", None),
+            state_topic="scene",
+            on_partial=_on_partial,
             # R6.1: same branch-system-prompt-override resolution as
             # send_message above - parent_id (not node_to_regenerate.id) so
             # the walk starts from the SAME node chat_branch_history just
