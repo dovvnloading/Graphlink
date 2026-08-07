@@ -115,6 +115,115 @@ def _regenerate_in_place(document, node_to_regenerate, reply_text):
             )
 
 
+def _land_partial_reply_node(document, parent_node, partial_text):
+    """ADR-006 stage 6.4 (H5): a Composer send's stream died mid-reply - land
+    the accumulated text as a real assistant node flagged incomplete instead
+    of losing it. NOT parsed into thinking/code children (a truncated reply
+    can end inside an unterminated fence); the user retries via the node's
+    own Regenerate action, which is why last_chat_node_id/parent wiring must
+    match the complete path (_build_reply_nodes) exactly. Module-level for
+    the same 300-line-cap reason as its two siblings above."""
+    def _commit():
+        ax, ay = parent_node.x, parent_node.y + MESSAGE_VERTICAL_SPACING
+        ai = document.add_chat_node(ax, ay, partial_text, False, parent_id=parent_node.id)
+        ai.state.response_incomplete = True
+        return ai
+
+    ai_node, _command = document.record_command(
+        "chatReply", "agent", _commit, node_ids=[parent_node.id],
+    )
+    document.last_chat_node_id = ai_node.id
+
+
+def _make_regenerate_on_reply(
+    document, bus, notifications, token_counter, publish_token_counter, node_to_regenerate
+):
+    """regenerate_response's completion callback, built at module level for
+    the same 300-line-cap reason as its siblings above (ADR-006 stage 6.4's
+    streaming/partial additions pushed register_chat_intents over). Body
+    moved VERBATIM from the former inline closure - no step reordered."""
+
+    async def _on_reply(reply_text):
+        # R8a: outputTokens reflects what the model actually returned,
+        # ahead of every early-return below - a regenerate that comes
+        # back empty, or lands after the node was deleted mid-flight,
+        # still consumed real output tokens.
+        token_counter.set_output_text(reply_text)
+        await publish_token_counter()
+        # (1) Empty/whitespace reply: keep ORIGINAL content, notify, stop.
+        # Checked FIRST - exact legacy order (window_actions.py:544-546),
+        # even before the liveness check below (see its own comment).
+        if not reply_text or not reply_text.strip():
+            notifications.show(
+                "The model returned an empty response. The original response has been kept.",
+                "warning",
+            )
+            await bus.publish("notification")
+            return
+
+        # (2) Deleted mid-flight: silent no-op, matches
+        # window_actions.py:548 (`if not old_node or not old_node.scene():
+        # return` - no notification_banner call there either).
+        if node_to_regenerate.id not in document.nodes:
+            return
+
+        # (3) Teardown BEFORE parse/mutate - exact legacy step order.
+        # Runs unconditionally on any non-empty, still-alive reply, even if
+        # the new reply has no code/thinking parts at all - this is why
+        # document/image children are deleted but never recreated
+        # (parse_response structurally only emits thinking/text/code).
+        # ADR-010 stage 10.1: regenerate is delete-then-recreate, and one
+        # Ctrl+Z has to reverse the WHOLE thing - the torn-down children,
+        # the replaced content, and the newly parsed children - so it is
+        # one command, not three. The pre-existing children have to be
+        # named explicitly: remove_associated_content_children deletes
+        # nodes that are not this command's own target, which
+        # record_command would otherwise refuse to lose silently (by
+        # design - see its AssertionError).
+        #
+        # The teardown/parse/mutate ORDER is unchanged from the legacy
+        # step order documented just above - see _regenerate_in_place at
+        # module level; wrapping it moves no step relative to any other.
+        existing_children = [
+            edge.target
+            for edge in document.edges.values()
+            if edge.source == node_to_regenerate.id
+        ]
+        document.record_command(
+            "regenerateResponse", "agent",
+            lambda: _regenerate_in_place(document, node_to_regenerate, reply_text),
+            node_ids=[node_to_regenerate.id, *existing_children],
+        )
+
+        # last_chat_node_id: DELIBERATELY untouched. See §5.
+
+    return _on_reply
+
+
+def _land_partial_regenerate(document, node_to_regenerate, partial_text):
+    """ADR-006 stage 6.4 (H5): a regenerate's stream died - preserve the
+    accumulated text instead of silently keeping the old content with the
+    new text lost. The old content children are torn down (they annotated
+    content that no longer exists) but the partial is NOT parsed into new
+    children; the incomplete flag tells the user to Regenerate anyway."""
+    existing_children = [
+        edge.target
+        for edge in document.edges.values()
+        if edge.source == node_to_regenerate.id
+    ]
+
+    def _commit():
+        document.remove_associated_content_children(node_to_regenerate.id)
+        document.update_chat_node_content(
+            node_to_regenerate.id, partial_text, incomplete=True
+        )
+
+    document.record_command(
+        "regenerateResponse", "agent", _commit,
+        node_ids=[node_to_regenerate.id, *existing_children],
+    )
+
+
 def register_chat_intents(
     bus: SessionBus,
     document: SceneDocument,
@@ -277,6 +386,16 @@ def register_chat_intents(
             # chat node.
             document.last_chat_node_id = ai_node.id
 
+        async def _on_partial(partial_text):
+            # See _land_partial_reply_node; token accounting mirrors
+            # _on_reply's preamble (the partial consumed real tokens).
+            if node.id not in document.nodes:
+                return
+            document.add_session_tokens(partial_text)
+            token_counter.set_output_text(partial_text)
+            await publish_token_counter()
+            _land_partial_reply_node(document, node, partial_text)
+
         await agent_dispatcher.start_chat_reply(
             bus=bus,
             notifications_state=notifications,
@@ -289,6 +408,7 @@ def register_chat_intents(
             # user ChatNode "about to be sent", the walk starts from here.
             canvas_document=document,
             node_id=node.id,
+            on_partial=_on_partial,
         )
         return node.id
 
@@ -321,59 +441,16 @@ def register_chat_intents(
         token_counter.set_context_text(_history_token_text(history))
         await publish_token_counter()
 
-        async def _on_reply(reply_text):
-            # R8a: outputTokens reflects what the model actually returned,
-            # ahead of every early-return below - a regenerate that comes
-            # back empty, or lands after the node was deleted mid-flight,
-            # still consumed real output tokens.
-            token_counter.set_output_text(reply_text)
-            await publish_token_counter()
-            # (1) Empty/whitespace reply: keep ORIGINAL content, notify, stop.
-            # Checked FIRST - exact legacy order (window_actions.py:544-546),
-            # even before the liveness check below (see its own comment).
-            if not reply_text or not reply_text.strip():
-                notifications.show(
-                    "The model returned an empty response. The original response has been kept.",
-                    "warning",
-                )
-                await bus.publish("notification")
-                return
+        _on_reply = _make_regenerate_on_reply(
+            document, bus, notifications, token_counter, publish_token_counter,
+            node_to_regenerate,
+        )
 
-            # (2) Deleted mid-flight: silent no-op, matches
-            # window_actions.py:548 (`if not old_node or not old_node.scene():
-            # return` - no notification_banner call there either).
+        def _on_partial(partial_text):
+            # See _land_partial_regenerate; same liveness check as _on_reply.
             if node_to_regenerate.id not in document.nodes:
                 return
-
-            # (3) Teardown BEFORE parse/mutate - exact legacy step order.
-            # Runs unconditionally on any non-empty, still-alive reply, even if
-            # the new reply has no code/thinking parts at all - this is why
-            # document/image children are deleted but never recreated
-            # (parse_response structurally only emits thinking/text/code).
-            # ADR-010 stage 10.1: regenerate is delete-then-recreate, and one
-            # Ctrl+Z has to reverse the WHOLE thing - the torn-down children,
-            # the replaced content, and the newly parsed children - so it is
-            # one command, not three. The pre-existing children have to be
-            # named explicitly: remove_associated_content_children deletes
-            # nodes that are not this command's own target, which
-            # record_command would otherwise refuse to lose silently (by
-            # design - see its AssertionError).
-            #
-            # The teardown/parse/mutate ORDER is unchanged from the legacy
-            # step order documented just above - see _regenerate_in_place at
-            # module level; wrapping it moves no step relative to any other.
-            existing_children = [
-                edge.target
-                for edge in document.edges.values()
-                if edge.source == node_to_regenerate.id
-            ]
-            document.record_command(
-                "regenerateResponse", "agent",
-                lambda: _regenerate_in_place(document, node_to_regenerate, reply_text),
-                node_ids=[node_to_regenerate.id, *existing_children],
-            )
-
-            # last_chat_node_id: DELIBERATELY untouched. See §5.
+            _land_partial_regenerate(document, node_to_regenerate, partial_text)
 
         await agent_dispatcher.start_chat_reply(
             bus=bus,
@@ -381,13 +458,18 @@ def register_chat_intents(
             composer_document=composer_document,
             conversation_history=history,
             on_reply=_on_reply,
-            # R4.4: deliberately NOT streamed - see the design spec's own
-            # deferral list. Regenerate replaces an EXISTING node's content
-            # rather than creating a new one, and streaming it would light
-            # up the Composer dock's live preview for a click on some other
-            # node in the canvas, with no way for the frontend to tell that
-            # apart from an actual Composer send.
-            stream=False,
+            # ADR-006 stage 6.4: streams, closing R4.4's deferral. The old
+            # Composer-preview objection is dissolved by IDENTITY, not
+            # suppression - the overrides below key the frames to the target
+            # node's own pending_request_id on "scene" (CodeSandboxNodeView's
+            # subscription contract), so the Composer never sees this request.
+            stream=True,
+            on_begin=lambda request_id: setattr(
+                node_to_regenerate, "pending_request_id", request_id
+            ),
+            on_end=lambda: setattr(node_to_regenerate, "pending_request_id", None),
+            state_topic="scene",
+            on_partial=_on_partial,
             # R6.1: same branch-system-prompt-override resolution as
             # send_message above - parent_id (not node_to_regenerate.id) so
             # the walk starts from the SAME node chat_branch_history just

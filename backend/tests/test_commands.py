@@ -940,3 +940,38 @@ def test_set_gitlink_local_root_is_undoable(wired):
 
     document.command_log[-1].invert(document)
     assert document.nodes[node.id].state.gitlink_local_root != "C:/somewhere"
+
+
+def test_undo_never_resurrects_a_snapshotted_pending_request_id():
+    """ADR-006 stage 6.4 review fix (HIGH): reply commands are recorded while
+    the node's pending_request_id is still set (on_end runs in _dispatch's
+    finally, AFTER on_reply), so the deepcopied before/after snapshots
+    capture the live request id. Restoring it on undo/redo would resurrect a
+    phantom "generating" state - the frontend keys live-stream rendering on
+    that marker (blank node, frames never arrive) and _guard_live_runs would
+    then refuse further undo for a run that no longer exists. _restore
+    always writes the marker back as None; _guard_live_runs has already
+    refused the operation if a REAL run is live on the node."""
+    document = SceneDocument()
+    node = document.add_chat_node(0, 0, "original", False)
+    node.pending_request_id = "req-live-during-recording"
+
+    document.record_command(
+        "regenerateResponse", "agent",
+        lambda: document.update_chat_node_content(node.id, "regenerated"),
+        node_ids=[node.id],
+    )
+    node.pending_request_id = None  # on_end ran after the command recorded
+
+    command = document.command_log[-1]
+    command.invert(document)
+    assert document.nodes[node.id].content == "original"
+    assert document.nodes[node.id].pending_request_id is None, (
+        "undo must not resurrect the snapshotted in-flight marker"
+    )
+
+    command.apply(document)
+    assert document.nodes[node.id].content == "regenerated"
+    assert document.nodes[node.id].pending_request_id is None, (
+        "redo must not resurrect it either"
+    )

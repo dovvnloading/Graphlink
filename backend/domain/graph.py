@@ -786,16 +786,26 @@ class SceneDocument(BranchOps, GroupOps, CommandOps):
         node.history.append({"role": "user", "content": str(text)})
         return node
 
-    def append_conversation_assistant_message(self, node_id: str, text: str) -> SceneNode:
+    def append_conversation_assistant_message(
+        self, node_id: str, text: str, incomplete: bool = False
+    ) -> SceneNode:
         """Append a real assistant message to a conversation node's history -
         mirrors graphlink_conversation_node.py's add_ai_message, minus the
-        view-layer bubble creation. No live caller yet in this increment -
-        this exists for R4 to call once real agent dispatch lands, same
-        posture as every prior kind's method built ahead of its trigger."""
+        view-layer bubble creation.
+
+        ADR-006 stage 6.4: `incomplete=True` marks a PARTIAL reply whose
+        stream died mid-generation (H5 - the accumulated text is preserved
+        instead of lost). The key is only written when set - completed
+        messages keep their exact two-key {role, content} shape, so every
+        existing history consumer (session round-trip, agent context
+        assembly) sees byte-identical data for the normal path."""
         node = self.nodes.get(node_id)
         if node is None:
             raise SceneError(f"unknown node: {node_id}")
-        node.history.append({"role": "assistant", "content": str(text)})
+        message: dict[str, Any] = {"role": "assistant", "content": str(text)}
+        if incomplete:
+            message["incomplete"] = True
+        node.history.append(message)
         return node
 
     def delete_conversation_message(self, node_id: str, message_index: int) -> None:
@@ -1653,7 +1663,9 @@ class SceneDocument(BranchOps, GroupOps, CommandOps):
             raise SceneError(f"node is not a chart node: {node_id}")
         node.state.chart_aspect_locked = not node.state.chart_aspect_locked
 
-    def update_chat_node_content(self, node_id: str, content: str) -> SceneNode:
+    def update_chat_node_content(
+        self, node_id: str, content: str, incomplete: bool = False
+    ) -> SceneNode:
         """The regenerate primitive: mutate an EXISTING chat node's content in
         place - the first in-place mutation of a content-bearing field in this
         file (move_node/set_chat_collapsed/set_node_docked all mutate a
@@ -1662,11 +1674,18 @@ class SceneDocument(BranchOps, GroupOps, CommandOps):
         sets content ONLY. Does not touch title (legacy's update_content never
         recomputes any title-like state either, and every other in-place mutator
         here already leaves title untouched post-creation - consistent, not a
-        new carve-out). Does not touch is_user/is_collapsed/kind."""
+        new carve-out). Does not touch is_user/is_collapsed/kind.
+
+        ADR-006 stage 6.4: `incomplete` marks a PARTIAL reply committed after
+        its stream died (see ChatState.response_incomplete). A normal full
+        regenerate passes the default False, which doubles as the CLEAR for a
+        previously interrupted node - retry succeeds, banner goes away."""
         node = self.nodes.get(node_id)
         if node is None:
             raise SceneError(f"unknown node: {node_id}")
         node.content = str(content)
+        if isinstance(node.state, ChatState):
+            node.state.response_incomplete = bool(incomplete)
         return node
 
     def add_generated_image_reply(
@@ -1952,7 +1971,17 @@ class SceneDocument(BranchOps, GroupOps, CommandOps):
             "isDocked": n.is_docked,
             "imageAssetId": n.state.image_asset_id if isinstance(n.state, ImageState) else "",
             "history": [
-                {"role": m["role"], "content": m["content"]} for m in n.history
+                # ADR-006 stage 6.4: the projection stays a strict allow-list
+                # (never spread the raw dict - legacy entries can carry
+                # arbitrary keys), widened by exactly one optional marker:
+                # "incomplete" flags a partial assistant reply whose stream
+                # died (see append_conversation_assistant_message).
+                {
+                    "role": m["role"],
+                    "content": m["content"],
+                    "incomplete": bool(m.get("incomplete", False)),
+                }
+                for m in n.history
             ],
             "pendingRequestId": n.pending_request_id,
             # ADR-002 Workstream 1 ("Synthesize Branches") - see
@@ -1970,6 +1999,11 @@ class SceneDocument(BranchOps, GroupOps, CommandOps):
             # branch_status's own real pre-migration default, not an
             # empty placeholder.
             "branchStatus": n.state.branch_status if isinstance(n.state, ChatState) else "active",
+            # ADR-006 stage 6.4 (H5): partial reply preserved after a dead
+            # stream - see ChatState.response_incomplete's own comment.
+            "responseIncomplete": (
+                n.state.response_incomplete if isinstance(n.state, ChatState) else False
+            ),
             "isFinalDeliverable": n.id == self.final_deliverable_node_id,
             "researchStage": n.state.research_stage if isinstance(n.state, WebResearchState) else "",
             "researchCompleted": n.state.research_completed if isinstance(n.state, WebResearchState) else 0,

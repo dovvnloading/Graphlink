@@ -898,9 +898,11 @@ def test_scene_payload_includes_history_defaulted_for_other_kinds():
     rows = {n["id"]: n for n in doc.scene_payload()["nodes"]}
     assert rows["n0"]["history"] == []
     assert rows[parent.id]["history"] == []
+    # ADR-006 stage 6.4: every history row carries the "incomplete" marker,
+    # False for normally-completed messages (see _node_wire's projection).
     assert rows[node.id]["history"] == [
-        {"role": "user", "content": "hi"},
-        {"role": "assistant", "content": "hello!"},
+        {"role": "user", "content": "hi", "incomplete": False},
+        {"role": "assistant", "content": "hello!", "incomplete": False},
     ]
     # R4.3: pendingRequestId defaults to None for every kind - including a
     # conversation node with no in-flight dispatch (it is only ever set by
@@ -1442,14 +1444,13 @@ def test_regenerate_response_sets_output_and_context_tokens_and_publishes_token_
     asyncio.run(run())
 
 
-def test_regenerate_response_does_not_stream_unlike_an_ordinary_send():
-    # R4.4 regression: start_chat_reply's stream=True default is for
-    # send_message's Composer-send surface only. regenerate_response passes
-    # stream=False explicitly (see canvas.py's own call site) - an
-    # adversarial reviewer found the first R4.4 cut hardcoded stream=True
-    # unconditionally, silently activating the Composer dock's live preview
-    # for a Regenerate click on some unrelated node in the canvas, with no
-    # way for the frontend to distinguish that from a real Send in flight.
+def test_regenerate_response_streams_with_node_scoped_identity():
+    # ADR-006 stage 6.4 flips R4.4's deferral: regenerate now streams. The
+    # original objection (frames would light up the Composer dock's live
+    # preview for a Regenerate click on some unrelated node) is dissolved by
+    # identity, not suppression - the frames' request_id lives on the target
+    # node's own pending_request_id, never on ComposerDocument, so the
+    # Composer state must stay request-free for the whole regenerate.
     async def run():
         bus, document, recorder, dispatcher = make_bus_with_dispatcher()
 
@@ -1479,8 +1480,19 @@ def test_regenerate_response_does_not_stream_unlike_an_ordinary_send():
             await entry["task"]
 
         stream_frames = [m for m in recorder.messages if m.get("kind") == "stream"]
-        assert stream_frames == [], "regenerate_response must never emit stream frames"
+        assert stream_frames, "regenerate_response streams as of stage 6.4"
+        assert stream_frames[-1]["done"] is True
+        # The Composer never sees this request: no app-composer state
+        # published during the regenerate may carry an in-flight request.
+        composer_states = [
+            m for m in recorder.messages
+            if m.get("kind") == "state" and m.get("topic") == "app-composer"
+        ]
+        assert all(m["data"].get("request") is None for m in composer_states)
         assert document.nodes[assistant_node.id].content == "regenerated reply"
+        # A successful regenerate is a COMPLETE reply - never flagged.
+        assert document.nodes[assistant_node.id].state.response_incomplete is False
+        assert document.nodes[assistant_node.id].pending_request_id is None
 
     asyncio.run(run())
 

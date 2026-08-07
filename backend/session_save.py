@@ -208,6 +208,9 @@ def _serialize_chat_node(node: SceneNode) -> dict[str, Any]:
         "synthesis_instructions": node.state.synthesis_instructions,
         "item_ids": list(node.item_ids),
         "branch_status": node.state.branch_status,
+        # ADR-006 stage 6.4: interrupted-reply marker survives save/load so
+        # the retry affordance is still offered after a session reload.
+        "response_incomplete": bool(node.state.response_incomplete),
     }
 
 

@@ -489,6 +489,56 @@ body,
   background-color: var(--gl-neutral-button-hover);
 }
 
+/* ADR-006 stage 6.4 (partial-output preservation): the "interrupted"
+   banner shown when the node's persisted content is a partial response the
+   backend committed after a killed stream (responseIncomplete on the wire
+   row). Warning posture (not error) - the partial text itself is intact
+   and readable above; same bordered-pill shape as
+   .code-sandbox-node-banner-error. Margins match .scene-node-body's own
+   8px/10px padding so the banner aligns with the content above it. */
+.chat-node-incomplete-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0 10px 8px;
+  padding: 6px 10px;
+  font-size: 11px;
+  color: var(--gl-semantic-status-warning, currentColor);
+  border: 1px solid var(--gl-semantic-status-warning, currentColor);
+  border-radius: 8px;
+}
+
+/* .chat-node-stop-btn (ADR-006 stage 6.4 review fix): the per-node Stop
+   for an in-flight streamed regenerate shares the retry button's own small
+   bordered shape - two affordances for the same request lifecycle, one
+   visual vocabulary. */
+.chat-node-incomplete-retry,
+.chat-node-stop-btn {
+  padding: 2px 8px;
+  font-size: 11px;
+  font-family: inherit;
+  color: var(--gl-surface-text-primary);
+  background-color: transparent;
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.chat-node-incomplete-retry:hover,
+.chat-node-stop-btn:hover {
+  background-color: var(--gl-neutral-button-hover);
+}
+
+/* Right-aligned under the streaming content, matching the banner's own
+   0/10px horizontal alignment with .scene-node-body's padding. */
+.chat-node-streaming-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin: 0 10px 8px;
+}
+
 /* Node redesign, stage 2 ("typography and heading hierarchy"): headings
    were fixed px values (15/14/13/12) set independently of this element's
    own font-size, which itself is driven by the user-configurable
@@ -4255,6 +4305,32 @@ mark.document-view-search-match-current {
    header has far less vertical room than a full node's title bar. */
 .conversation-node-bubble-role {
   font-size: 0.85em;
+  color: var(--gl-surface-text-muted);
+}
+
+/* ADR-006 stage 6.4 (partial-output preservation): marks a history message
+   whose text was committed from a killed stream (incomplete on the wire
+   row) - same small pill scale as .chat-node-model-badge, warning-colored
+   like .chat-node-incomplete-banner. */
+.conversation-node-incomplete-badge {
+  font-size: 10px;
+  line-height: 1;
+  padding: 2px 5px;
+  color: var(--gl-semantic-status-warning, currentColor);
+  border: 1px solid var(--gl-semantic-status-warning, currentColor);
+  border-radius: 6px;
+  white-space: nowrap;
+}
+
+/* ADR-006 stage 6.4: the pre-first-delta placeholder - same muted posture
+   as the live terminal's own "Waiting for output…" line in
+   CodeSandboxNodeView. Shared by the conversation node's streaming bubble
+   and (review fix) the chat node's own regenerate-streaming window, which
+   otherwise rendered an empty markdown body as a blank card. */
+.conversation-node-streaming-placeholder,
+.chat-node-streaming-placeholder {
+  font-size: 11px;
+  font-style: italic;
   color: var(--gl-surface-text-muted);
 }
 

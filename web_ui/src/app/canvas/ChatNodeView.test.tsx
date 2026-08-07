@@ -1,5 +1,5 @@
 import { ReactFlowProvider, type NodeProps } from "@xyflow/react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -46,6 +46,7 @@ function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}, selected:
   const onSetBranchStatus = vi.fn();
   const onSetFinalDeliverable = vi.fn();
   const onCollapseBranch = vi.fn();
+  const onCancelRegenerate = vi.fn();
   function buildProps(dataOverrides: Partial<ChatFlowNode["data"]>) {
     return {
       id: "n0",
@@ -74,6 +75,11 @@ function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}, selected:
         onSetBranchStatus,
         onSetFinalDeliverable,
         onCollapseBranch,
+        // ADR-006 stage 6.4
+        pendingRequestId: null,
+        responseIncomplete: false,
+        subscribeStream: vi.fn().mockReturnValue(vi.fn()),
+        onCancelRegenerate,
         ...dataOverrides,
       },
     } as unknown as NodeProps<ChatFlowNode>;
@@ -99,8 +105,8 @@ function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}, selected:
     onToggleCollapse, onDelete, onUndockChild, onRegenerate, onGenerateImage,
     onGenerateChart, onGenerateKeyTakeaway, onGenerateExplainerNote,
     onOpenDocumentView, onScrollChange, onToggleBranchFocus, onBranchFromHere,
-    onSetBranchStatus, onSetFinalDeliverable, onCollapseBranch, container,
-    rerenderWithData,
+    onSetBranchStatus, onSetFinalDeliverable, onCollapseBranch, onCancelRegenerate,
+    container, rerenderWithData,
   };
 }
 
@@ -813,5 +819,112 @@ describe("makeDebouncedScrollReport", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// ADR-006 stage 6.4: same listener-capturing mock shape as
+// CodeSandboxNodeView.test.tsx's own makeSubscribeStreamMock.
+type StreamListener = (delta: string, done: boolean, reset: boolean, seq: number) => void;
+
+function makeSubscribeStreamMock() {
+  const listeners = new Map<string, StreamListener>();
+  const unsubscribe = vi.fn();
+  const subscribeStream = vi.fn((requestId: string, listener: StreamListener) => {
+    listeners.set(requestId, listener);
+    return unsubscribe;
+  });
+  return { subscribeStream, listeners, unsubscribe };
+}
+
+describe("ChatNodeView live regenerate streaming (ADR-006 stage 6.4)", () => {
+  it("subscribes for pendingRequestId and renders accumulated deltas instead of the persisted content", () => {
+    const { subscribeStream, listeners } = makeSubscribeStreamMock();
+    renderChatNode({ content: "old persisted answer", pendingRequestId: "req-1", subscribeStream });
+    expect(subscribeStream).toHaveBeenCalledWith("req-1", expect.any(Function));
+    expect(screen.queryByText("old persisted answer")).toBeNull();
+
+    const listener = listeners.get("req-1")!;
+    act(() => listener("Hello ", false, false, 1));
+    act(() => listener("World", false, false, 2));
+    expect(screen.getByText("Hello World")).toBeInTheDocument();
+  });
+
+  it("a reset frame clears prior accumulated output before appending", () => {
+    const { subscribeStream, listeners } = makeSubscribeStreamMock();
+    renderChatNode({ pendingRequestId: "req-1", subscribeStream });
+    const listener = listeners.get("req-1")!;
+
+    act(() => listener("stale first attempt", false, false, 1));
+    act(() => listener("fresh start", false, true, 2));
+    expect(screen.queryByText(/stale first attempt/)).toBeNull();
+    expect(screen.getByText("fresh start")).toBeInTheDocument();
+  });
+
+  it("falls back to the persisted content with no subscription at all when no regenerate is in flight", () => {
+    const { subscribeStream } = makeSubscribeStreamMock();
+    renderChatNode({ content: "persisted answer", pendingRequestId: null, subscribeStream });
+    expect(subscribeStream).not.toHaveBeenCalled();
+    expect(screen.getByText("persisted answer")).toBeInTheDocument();
+  });
+
+  it("unsubscribes the prior stream when pendingRequestId changes to a new request", () => {
+    const { subscribeStream, unsubscribe } = makeSubscribeStreamMock();
+    const { rerenderWithData } = renderChatNode({ pendingRequestId: "req-1", subscribeStream });
+    rerenderWithData({ pendingRequestId: "req-2", subscribeStream });
+    expect(unsubscribe).toHaveBeenCalled();
+    expect(subscribeStream).toHaveBeenCalledWith("req-2", expect.any(Function));
+  });
+
+  it("shows a waiting placeholder (not a blank body) before the first delta arrives", () => {
+    const { subscribeStream, listeners } = makeSubscribeStreamMock();
+    renderChatNode({ content: "old persisted answer", pendingRequestId: "req-1", subscribeStream });
+    expect(screen.getByText("Waiting for response…")).toBeInTheDocument();
+    expect(screen.queryByText("old persisted answer")).toBeNull();
+
+    // The placeholder yields to real content the moment the first delta lands.
+    act(() => listeners.get("req-1")!("first token", false, false, 1));
+    expect(screen.queryByText("Waiting for response…")).toBeNull();
+    expect(screen.getByText("first token")).toBeInTheDocument();
+  });
+
+  it("renders a Stop button only while a regenerate is in flight, firing onCancelRegenerate", async () => {
+    const user = userEvent.setup();
+    const { onCancelRegenerate } = renderChatNode({
+      pendingRequestId: "req-1",
+      subscribeStream: vi.fn().mockReturnValue(vi.fn()),
+    });
+    await user.click(screen.getByRole("button", { name: "Stop" }));
+    expect(onCancelRegenerate).toHaveBeenCalledOnce();
+  });
+
+  it("renders no Stop button when no regenerate is in flight", () => {
+    renderChatNode({ pendingRequestId: null });
+    expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
+  });
+});
+
+describe("ChatNodeView interrupted banner (ADR-006 stage 6.4)", () => {
+  it("renders the banner when responseIncomplete is true, with an inline Regenerate firing the existing intent callback", async () => {
+    const user = userEvent.setup();
+    const { onRegenerate } = renderChatNode({ isUser: false, responseIncomplete: true });
+    expect(screen.getByText("Response interrupted — use Regenerate to retry.")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Regenerate" }));
+    expect(onRegenerate).toHaveBeenCalledOnce();
+  });
+
+  it("does not render the banner when responseIncomplete is false", () => {
+    renderChatNode({ responseIncomplete: false });
+    expect(screen.queryByText(/Response interrupted/)).toBeNull();
+  });
+
+  it("suppresses the banner while a new regenerate is already in flight (the live stream IS the retry)", () => {
+    renderChatNode({
+      isUser: false,
+      responseIncomplete: true,
+      pendingRequestId: "req-1",
+      subscribeStream: vi.fn().mockReturnValue(vi.fn()),
+    });
+    expect(screen.queryByText(/Response interrupted/)).toBeNull();
   });
 });

@@ -1,5 +1,6 @@
 import { Handle, Position, useStore, type Node, type NodeProps } from "@xyflow/react";
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
+import type { StreamListener } from "../../lib/ws/transport";
 import { LOD_ZOOM_THRESHOLD } from "./canvasConstants";
 import { NodeMarkdown } from "./NodeMarkdown";
 import { NodeMenu } from "./NodeMenu";
@@ -43,6 +44,11 @@ import { NodeMenu } from "./NodeMenu";
 export interface ConversationMessage {
   role: "user" | "assistant";
   content: string;
+  // ADR-006 stage 6.4 (partial-output preservation): true when this
+  // message's text was committed from a killed stream (cancel/error/
+  // timeout) - the accumulated partial reply, marked with a small
+  // "Interrupted" badge in the bubble header.
+  incomplete: boolean;
 }
 
 export interface ConversationNodeData extends Record<string, unknown> {
@@ -55,6 +61,12 @@ export interface ConversationNodeData extends Record<string, unknown> {
   onDeleteMessage: (index: number) => void;
   onCancel: () => void;
   onOpenDocumentView: () => void;
+  // ADR-006 stage 6.4 (universal streaming): while pendingRequestId above is
+  // set, the view keys a live stream subscription off it and renders the
+  // accumulating assistant reply as its own bubble after the persisted
+  // history - same pendingRequestId/subscribeStream pairing
+  // CodeSandboxNodeView's live terminal already established.
+  subscribeStream: (requestId: string, listener: StreamListener) => () => void;
 }
 
 export type ConversationFlowNode = Node<ConversationNodeData, "conversation">;
@@ -303,6 +315,17 @@ function ConversationBubble({
             {message.role === "user" ? "U" : "A"}
           </span>
           <span className="conversation-node-bubble-role">{message.role === "user" ? "You" : "Assistant"}</span>
+          {/* ADR-006 stage 6.4 (partial-output preservation): marks a
+              message whose text was committed from a killed stream - see
+              ConversationMessage.incomplete's own comment above. */}
+          {message.incomplete && (
+            <span
+              className="conversation-node-incomplete-badge"
+              title="Response interrupted before completion"
+            >
+              Interrupted
+            </span>
+          )}
         </span>
         <span className="chat-node-quick-actions">
           <button
@@ -353,6 +376,31 @@ export function ConversationNodeView({ data, selected }: NodeProps<ConversationF
   const [menuPosition, setMenuPosition] = useState<MenuPosition | null>(null);
   const [draft, setDraft] = useState("");
 
+  // ADR-006 stage 6.4: live reply streaming - the exact subscription/reset
+  // pattern CodeSandboxNodeView's live terminal established (derived-state
+  // reset during render so a new request never shows the previous reply's
+  // stale content, effect below left to do only transport synchronization;
+  // see that file's own comments for the full rationale).
+  const [streamedReply, setStreamedReply] = useState("");
+  const [subscribedRequestId, setSubscribedRequestId] = useState(data.pendingRequestId);
+  if (data.pendingRequestId !== subscribedRequestId) {
+    setSubscribedRequestId(data.pendingRequestId);
+    setStreamedReply("");
+  }
+
+  useEffect(() => {
+    const requestId = data.pendingRequestId;
+    if (!requestId) return;
+    const unsubscribe = data.subscribeStream(requestId, (delta, _done, reset) => {
+      setStreamedReply((current) => (reset ? delta : current + delta));
+    });
+    return () => unsubscribe();
+    // data.subscribeStream is a fresh closure every render (see SceneCanvas's
+    // toFlowNodes) - depending on it would resubscribe on every unrelated
+    // re-render; data.pendingRequestId itself is the real re-subscribe key.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data.pendingRequestId]);
+
   function send() {
     const text = draft.trim();
     if (!text) return;
@@ -394,6 +442,32 @@ export function ConversationNodeView({ data, selected }: NodeProps<ConversationF
                 onDeleteMessage={data.onDeleteMessage}
               />
             ))}
+            {/* ADR-006 stage 6.4: the in-flight assistant reply, rendered as
+                its own live bubble after the persisted history while this
+                node's pendingRequestId is set. Deliberately NOT a
+                ConversationBubble - it has no history index yet (no
+                copy/delete/menu can target it); the committed message
+                arrives through the next scene snapshot the moment the
+                stream ends. */}
+            {data.pendingRequestId && (
+              <div className="conversation-node-bubble assistant conversation-node-bubble-streaming">
+                <div className="conversation-node-bubble-header">
+                  <span className="conversation-node-bubble-role-group">
+                    <span className="chat-node-avatar" aria-hidden="true">
+                      A
+                    </span>
+                    <span className="conversation-node-bubble-role">Assistant</span>
+                  </span>
+                </div>
+                <div className="chat-node-content conversation-node-bubble-content">
+                  {streamedReply ? (
+                    <NodeMarkdown content={streamedReply} />
+                  ) : (
+                    <span className="conversation-node-streaming-placeholder">Waiting for response…</span>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
           <div className="conversation-node-input-row">
             <textarea

@@ -157,6 +157,10 @@ from typing import Literal
 class ConversationMessageRow:
     role: Literal["user", "assistant"]
     content: str
+    # ADR-006 stage 6.4 (H5): True marks a PARTIAL assistant reply whose
+    # stream died mid-generation - the accumulated text is preserved and
+    # rendered with an interrupted marker instead of being lost.
+    incomplete: bool = False
 
 
 @dataclass
@@ -409,6 +413,9 @@ class SceneNodeRow:
     isBranchSynthesis: bool = False
     synthesisInstructions: str = ""
     branchStatus: str = "active"
+    # ADR-006 stage 6.4 (H5): chat-kind partial reply preserved after a dead
+    # stream; the frontend offers Regenerate as the retry affordance.
+    responseIncomplete: bool = False
     isFinalDeliverable: bool = False
     # R6.1: Notes/Frames/Containers - color/headerColor/itemIds are generic
     # (SceneNode core fields, any kind), the rest populated for kind in

@@ -540,3 +540,45 @@ def test_round_trip_preserves_compare_branches_full_shape():
     assert note2.state.is_branch_comparison is True
     assert set(note2.item_ids) == {first2.id, second2.id}
     assert note2.content == "Branch Comparison\n\nAgreements:\n• both agree"
+
+
+def test_round_trip_preserves_chat_response_incomplete_marker():
+    # ADR-006 stage 6.4 (H5): the interrupted-reply marker must survive
+    # save/load - the whole point of preserving the partial is offering the
+    # retry affordance again after a session reload, which is worthless if
+    # the flag silently resets to False on the way back in. The untouched
+    # sibling node pins the load path's absent-key -> False default (every
+    # pre-6.4 save lacks the key) in the same round trip.
+    doc = SceneDocument()
+    doc.add_chat_node(0, 0, "a complete reply", is_user=False)
+    partial = doc.add_chat_node(0, 160, "half a reply", is_user=False)
+    partial.state.response_incomplete = True
+
+    doc2 = _round_trip(doc)
+    complete2 = next(n for n in doc2.nodes.values() if n.content == "a complete reply")
+    partial2 = next(n for n in doc2.nodes.values() if n.content == "half a reply")
+
+    assert partial2.state.response_incomplete is True
+    assert complete2.state.response_incomplete is False
+
+
+def test_round_trip_preserves_conversation_history_incomplete_marker():
+    # ADR-006 stage 6.4 (H5): a conversation node's partial assistant
+    # message carries its "incomplete" key through save/load untouched -
+    # both _serialize_history and _restore_history copy the whole message
+    # dict, so the marker rides along; the normal messages must round-trip
+    # in their exact two-key {role, content} shape (the key is only ever
+    # WRITTEN when True - see append_conversation_assistant_message).
+    doc = SceneDocument()
+    parent = doc.add_chat_node(0, 0, "p", is_user=False)
+    conv = doc.add_conversation_node(10, 10, parent.id)
+    doc.append_conversation_user_message(conv.id, "hello")
+    doc.append_conversation_assistant_message(conv.id, "half a reply", incomplete=True)
+
+    doc2 = _round_trip(doc)
+    conv2 = next(n for n in doc2.nodes.values() if n.kind == "conversation")
+
+    assert conv2.history == [
+        {"role": "user", "content": "hello"},
+        {"role": "assistant", "content": "half a reply", "incomplete": True},
+    ]

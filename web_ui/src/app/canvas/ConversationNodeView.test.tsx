@@ -1,5 +1,5 @@
 import { ReactFlowProvider, useStoreApi, type NodeProps } from "@xyflow/react";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useEffect, useState } from "react";
 import { describe, expect, it, vi } from "vitest";
@@ -19,8 +19,8 @@ function renderConversationNode(overrides: Partial<ConversationFlowNode["data"]>
     selected: false,
     data: {
       history: [
-        { role: "user" as const, content: "Hello **world**" },
-        { role: "assistant" as const, content: "Hi there" },
+        { role: "user" as const, content: "Hello **world**", incomplete: false },
+        { role: "assistant" as const, content: "Hi there", incomplete: false },
       ],
       isCollapsed: false,
       pendingRequestId: null,
@@ -30,6 +30,8 @@ function renderConversationNode(overrides: Partial<ConversationFlowNode["data"]>
       onDeleteMessage,
       onCancel,
       onOpenDocumentView,
+      // ADR-006 stage 6.4
+      subscribeStream: vi.fn().mockReturnValue(vi.fn()),
       ...overrides,
     },
   } as unknown as NodeProps<ConversationFlowNode>;
@@ -68,7 +70,7 @@ function renderConversationNodeAtZoom(zoom: number, overrides: Partial<Conversat
     id: "n0",
     selected: false,
     data: {
-      history: [{ role: "user" as const, content: "Hello" }],
+      history: [{ role: "user" as const, content: "Hello", incomplete: false }],
       isCollapsed: false,
       pendingRequestId: null,
       onToggleCollapse,
@@ -77,6 +79,8 @@ function renderConversationNodeAtZoom(zoom: number, overrides: Partial<Conversat
       onDeleteMessage,
       onCancel,
       onOpenDocumentView,
+      // ADR-006 stage 6.4
+      subscribeStream: vi.fn().mockReturnValue(vi.fn()),
       ...overrides,
     },
   } as unknown as NodeProps<ConversationFlowNode>;
@@ -263,8 +267,8 @@ describe("ConversationNodeView", () => {
 
       function Harness() {
         const [history, setHistory] = useState([
-          { role: "user" as const, content: "Hello **world**" },
-          { role: "assistant" as const, content: "Hi there" },
+          { role: "user" as const, content: "Hello **world**", incomplete: false },
+          { role: "assistant" as const, content: "Hi there", incomplete: false },
         ]);
         return (
           <ReactFlowProvider>
@@ -303,7 +307,7 @@ describe("ConversationNodeView", () => {
   });
 
   it("a single assistant-only message still renders the avatar chip, 'Assistant' role label, and quick actions", () => {
-    renderConversationNode({ history: [{ role: "assistant", content: "Solo reply" }] });
+    renderConversationNode({ history: [{ role: "assistant", content: "Solo reply", incomplete: false }] });
     const bubble = screen.getByText("Solo reply").closest(".conversation-node-bubble") as HTMLElement;
     expect(bubble.querySelector(".chat-node-avatar")).toHaveTextContent("A");
     expect(within(bubble).getByText("Assistant")).toBeInTheDocument();
@@ -483,5 +487,76 @@ describe("ConversationNodeView", () => {
     expect(screen.getByRole("menu")).toBeInTheDocument();
     await user.click(document.body);
     expect(screen.queryByRole("menu")).toBeNull();
+  });
+});
+
+// ADR-006 stage 6.4: same listener-capturing mock shape as
+// CodeSandboxNodeView.test.tsx's own makeSubscribeStreamMock.
+type StreamListener = (delta: string, done: boolean, reset: boolean, seq: number) => void;
+
+function makeSubscribeStreamMock() {
+  const listeners = new Map<string, StreamListener>();
+  const unsubscribe = vi.fn();
+  const subscribeStream = vi.fn((requestId: string, listener: StreamListener) => {
+    listeners.set(requestId, listener);
+    return unsubscribe;
+  });
+  return { subscribeStream, listeners, unsubscribe };
+}
+
+describe("ConversationNodeView live reply streaming (ADR-006 stage 6.4)", () => {
+  it("renders a live assistant bubble accumulating deltas after the persisted messages while a reply is in flight", () => {
+    const { subscribeStream, listeners } = makeSubscribeStreamMock();
+    renderConversationNode({ pendingRequestId: "req-1", subscribeStream });
+    expect(subscribeStream).toHaveBeenCalledWith("req-1", expect.any(Function));
+    // Pre-first-delta placeholder, inside its own streaming bubble.
+    expect(screen.getByText("Waiting for response…")).toBeInTheDocument();
+
+    const listener = listeners.get("req-1")!;
+    act(() => listener("Hello ", false, false, 1));
+    act(() => listener("World", false, false, 2));
+    const streamingBubble = screen
+      .getByText("Hello World")
+      .closest(".conversation-node-bubble") as HTMLElement;
+    expect(streamingBubble).toHaveClass("conversation-node-bubble-streaming", "assistant");
+    // Persisted messages still render before it.
+    expect(screen.getByText("Hi there")).toBeInTheDocument();
+  });
+
+  it("a reset frame clears prior accumulated text before appending", () => {
+    const { subscribeStream, listeners } = makeSubscribeStreamMock();
+    renderConversationNode({ pendingRequestId: "req-1", subscribeStream });
+    const listener = listeners.get("req-1")!;
+
+    act(() => listener("stale first attempt", false, false, 1));
+    act(() => listener("fresh start", false, true, 2));
+    expect(screen.queryByText(/stale first attempt/)).toBeNull();
+    expect(screen.getByText("fresh start")).toBeInTheDocument();
+  });
+
+  it("renders no streaming bubble and never subscribes when no reply is in flight", () => {
+    const { subscribeStream } = makeSubscribeStreamMock();
+    renderConversationNode({ pendingRequestId: null, subscribeStream });
+    expect(subscribeStream).not.toHaveBeenCalled();
+    expect(document.querySelector(".conversation-node-bubble-streaming")).toBeNull();
+  });
+});
+
+describe("ConversationNodeView interrupted message marker (ADR-006 stage 6.4)", () => {
+  it("renders the Interrupted badge on a history message with incomplete: true", () => {
+    renderConversationNode({
+      history: [
+        { role: "user", content: "Hello", incomplete: false },
+        { role: "assistant", content: "partial reply", incomplete: true },
+      ],
+    });
+    const bubble = screen.getByText("partial reply").closest(".conversation-node-bubble") as HTMLElement;
+    const badge = within(bubble).getByText("Interrupted");
+    expect(badge).toHaveClass("conversation-node-incomplete-badge");
+  });
+
+  it("renders no Interrupted badge on complete messages", () => {
+    renderConversationNode();
+    expect(screen.queryByText("Interrupted")).toBeNull();
   });
 });

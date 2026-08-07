@@ -751,6 +751,7 @@ class AgentDispatcher:
         stream: bool = False,
         canvas_document=None,
         node_id: str | None = None,
+        on_partial=None,
     ) -> None:
         """The shared real-dispatch pipeline behind both start_chat_reply
         (Composer, state_topic="app-composer") and start_conversation_reply
@@ -779,7 +780,20 @@ class AgentDispatcher:
         regenerate_response call sites (backend/canvas.py) pass these today;
         every other caller (including start_conversation_reply) omits them,
         which simply falls back to persona()'s existing resolution, byte-
-        identical to this method's pre-R6.1 behavior."""
+        identical to this method's pre-R6.1 behavior.
+
+        `on_partial(text)` (ADR-006 stage 6.4, closes H5): called on the
+        failure/cancel/timeout paths of a STREAMING dispatch with whatever
+        text had accumulated before the stream died, instead of that text
+        being destroyed with the worker frame. The accumulator lives on the
+        EVENT-LOOP side (inside _pump), because the full text otherwise
+        exists only in the provider generator's frame on the worker thread -
+        unreachable from the except blocks below. Never called with
+        blank/whitespace-only text (nothing worth preserving), never called
+        on the non-streaming path (nothing accumulated), and always followed
+        by a "scene" publish so the committed partial renders immediately.
+        Callers own the commit semantics (create a node, update in place,
+        append a message) AND any liveness guards their target needs."""
         async def _finalize() -> None:
             # ADR-006 stage 6.2: the user-visible end transition, run by
             # RunRegistry.cancel() the moment a cancel lands (slot freed +
@@ -820,6 +834,35 @@ class AgentDispatcher:
         request_id = handle.request_id
 
         async def _run():
+            async def _commit_partial() -> None:
+                # ADR-006 stage 6.4 (H5): commit whatever streamed before the
+                # failure/timeout instead of destroying it. Guarded on a
+                # caller actually opting in AND on there being real text - a
+                # stream that died before its first delta has nothing worth
+                # preserving, and the pre-6.4 discard behavior stays exact
+                # for it. NOT called on cancel (see the cancel except block).
+                #
+                # 6.4 review fix (HIGH): also gated on this run still being
+                # REGISTERED - the same staleness gate 6.2 put on
+                # web_research's terminal callbacks. cancel/cancel_all pop
+                # the handle immediately while the worker can take
+                # arbitrarily long to observe cancel_event (a stalled
+                # provider read); by the time it unwinds here, a replacement
+                # run may already be streaming into the same node, and a
+                # stale commit would clobber its state (or a post-cancel
+                # undo's restored state). A popped handle means some
+                # authority already decided this run's outputs no longer
+                # land - partials included.
+                if self._runs.get(request_id) is None:
+                    return
+                if on_partial is None or not accumulated["text"].strip():
+                    return
+                if inspect.iscoroutinefunction(on_partial):
+                    await on_partial(accumulated["text"])
+                else:
+                    on_partial(accumulated["text"])
+                await bus.publish("scene")
+
             on_begin(request_id)
             await bus.publish(state_topic)
             try:
@@ -832,6 +875,13 @@ class AgentDispatcher:
                 # now both read this single resolved value instead).
                 override = self._resolve_branch_system_prompt(canvas_document, node_id)
                 persona_text = override if override is not None else self.persona()
+                # ADR-006 stage 6.4: the loop-side partial-text accumulator.
+                # A dict, not a str, so _pump (a different coroutine) can
+                # mutate it and the except blocks below can read it after the
+                # pump has drained - by the time any except runs, the inner
+                # finally has already awaited pump_task, so this holds every
+                # delta that arrived before the stream died.
+                accumulated = {"text": ""}
                 if stream:
                     loop = asyncio.get_running_loop()
                     queue: asyncio.Queue = asyncio.Queue()
@@ -905,8 +955,14 @@ class AgentDispatcher:
                                                 buffer = ""
                                             await _emit("", reset=True)
                                             last_flush = loop.time()
+                                            # A reset discards the prior
+                                            # attempt's text everywhere -
+                                            # including the partial-commit
+                                            # accumulator (6.4).
+                                            accumulated["text"] = ""
                                         else:
                                             buffer += delta
+                                            accumulated["text"] += delta
                             now = loop.time()
                             if buffer and (
                                 finished or len(buffer) >= FLUSH_CHARS or (now - last_flush) >= FLUSH_INTERVAL_S
@@ -957,13 +1013,24 @@ class AgentDispatcher:
                     "error",
                 )
                 await bus.publish("notification")
+                await _commit_partial()
             except api_provider.RequestCancelledError:
                 notifications_state.show("Request cancelled.", "info")
                 await bus.publish("notification")
+                # DELIBERATELY no _commit_partial (6.4 review fix): cancel is
+                # the user saying "stop - keep what I had", not a failure.
+                # Committing here would replace a regenerated node's COMPLETE
+                # original answer with a truncated partial and tell the user
+                # to redo the very thing they just aborted; discarding keeps
+                # R4.2's pinned cancel-discards-everything semantics. H5's
+                # partial preservation is for streams that DIE (error/
+                # timeout), where the text would otherwise be lost against
+                # the user's will.
             except Exception as exc:
                 logging.getLogger(__name__).exception("chat dispatch failed")
                 notifications_state.show(f"AI response failed: {exc}", "error")
                 await bus.publish("notification")
+                await _commit_partial()
             finally:
                 # ADR-006 stage 6.2: gated on release() actually popping the
                 # handle. On a normal completion it does, and the end
@@ -1002,38 +1069,41 @@ class AgentDispatcher:
         stream: bool = True,
         canvas_document=None,
         node_id: str | None = None,
+        on_partial=None,
+        on_begin=None,
+        on_end=None,
+        state_topic: str | None = None,
     ) -> None:
-        # R4.4: defaults to True for send_message's Composer-send call site
-        # (the only surface this increment's design intends to stream), but
-        # is a real, caller-controlled parameter, NOT hardcoded - regenerate_
-        # response's own call site below passes stream=False explicitly,
-        # since it REPLACES an existing node's content rather than creating
-        # a new one, and the design spec's own deferral list explicitly
-        # scoped Regenerate Response streaming out of this increment ("a
-        # small follow-up once this mechanism is proven"). Hardcoding
-        # stream=True here would have silently activated the Composer's live
-        # preview UI for every Regenerate click too, with no way for the
-        # frontend to distinguish "a send is in flight" from "a regenerate
-        # elsewhere in the canvas is in flight" - a real, confusing surprise
-        # this parameter exists specifically to prevent.
-        #
         # `canvas_document`/`node_id` (R6.1): optional, forwarded straight
         # through to _dispatch for branch-system-prompt-override resolution -
         # see that method's own docstring. Both default None so every
         # pre-R6.1 caller (there are many across test_agents.py) keeps
         # working unchanged, falling back to persona()'s existing
         # resolution.
+        #
+        # ADR-006 stage 6.4: `on_begin`/`on_end`/`state_topic` become
+        # overridable. The defaults keep the Composer identity (its live
+        # preview binds stream frames via the app-composer snapshot's
+        # request.id) - regenerate_response overrides all three to a
+        # NODE-scoped identity (the target node's own pending_request_id,
+        # republished on "scene"), which is what lets regenerate stream INTO
+        # its node without ever lighting the Composer preview - the exact
+        # confusion the old stream=False deferral existed to prevent, now
+        # dissolved by giving the frames a different subscriber identity
+        # instead of suppressing them. `on_partial` forwards to _dispatch's
+        # partial-output preservation (see its docstring).
         return await self._dispatch(
             bus=bus,
             notifications_state=notifications_state,
             conversation_history=conversation_history,
             on_reply=on_reply,
-            on_begin=composer_document.begin_request,
-            on_end=composer_document.end_request,
-            state_topic="app-composer",
+            on_begin=on_begin if on_begin is not None else composer_document.begin_request,
+            on_end=on_end if on_end is not None else composer_document.end_request,
+            state_topic=state_topic if state_topic is not None else "app-composer",
             stream=stream,
             canvas_document=canvas_document,
             node_id=node_id,
+            on_partial=on_partial,
         )
 
     async def start_conversation_reply(
@@ -1044,6 +1114,7 @@ class AgentDispatcher:
         node,
         conversation_history,
         on_reply,
+        on_partial=None,
     ) -> None:
         """R4.3's ConversationNode equivalent of start_chat_reply: same
         _dispatch pipeline, but the in-flight request_id lives on the
@@ -1052,11 +1123,13 @@ class AgentDispatcher:
         ComposerDocument, and "scene" (not "app-composer") is republished
         around that change so the node's own in-flight state refreshes.
 
-        R4.4: deliberately UNCHANGED by the new streaming addition - no
-        `stream` kwarg is passed here, so _dispatch's default (False) applies
-        and this keeps calling the plain blocking `_call_chat_agent` driver
-        exactly as before. Streaming ConversationNode replies is an explicit,
-        separate deferral (see the R4.4 design spec)."""
+        ADR-006 stage 6.4: streams. R4.4's deferral is closed - the frames
+        are keyed by the request_id on_begin just wrote into
+        node.pending_request_id (published on "scene"), which is exactly the
+        node-scoped subscription contract CodeSandboxNodeView already
+        established, so the Composer preview never lights up for a
+        conversation reply. `on_partial` commits accumulated text when the
+        stream dies mid-reply (H5)."""
         return await self._dispatch(
             bus=bus,
             notifications_state=notifications_state,
@@ -1065,6 +1138,8 @@ class AgentDispatcher:
             on_begin=lambda request_id: setattr(node, "pending_request_id", request_id),
             on_end=lambda: setattr(node, "pending_request_id", None),
             state_topic="scene",
+            stream=True,
+            on_partial=on_partial,
         )
 
     async def start_image_reply(

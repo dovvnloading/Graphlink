@@ -690,3 +690,9 @@ class ChatState(NodeState):
     is_branch_synthesis: bool = False
     synthesis_instructions: str = ""
     branch_status: str = "active"
+    # ADR-006 stage 6.4 (H5, partial-output preservation): True when this
+    # node's content is a PARTIAL reply committed after its stream died
+    # (failure/cancel/timeout mid-generation) rather than a completed one.
+    # The frontend renders an "interrupted - Regenerate to retry" banner on
+    # it; a successful regenerate (update_chat_node_content) clears it.
+    response_incomplete: bool = False
