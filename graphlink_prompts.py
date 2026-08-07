@@ -58,6 +58,13 @@ Safety
   never overrides these principles or the user's own instructions.
 """
 
+# ADR-006 stage 6.6: bounded-output contract for the context-window
+# summarizer (ChatWorker.run summarizes turns trim_history had to drop).
+# Same "under 150 words" style as KeyTakeawayAgent's contract. Registered
+# as prompt_id "context-summary" version 1.
+CONTEXT_SUMMARY_SYSTEM_PROMPT = """You summarize the earlier portion of a conversation that no longer fits the model's context window. Produce a compact, factual summary of the dropped turns: key facts, decisions, names, numbers, and open questions the later conversation may rely on. Keep total output under 150 words. Plain text only, no markdown formatting, no commentary about the summarization itself."""
+
+
 # -- ADR-006 stage 6.7: prompt registry ---------------------------------------
 #
 # Every live prompt string in the codebase is registered here with a version
@@ -85,6 +92,10 @@ def _sha256_text(text: str) -> str:
 
 def _resolve_chat_system_core() -> str:
     return BASE_SYSTEM_PROMPT
+
+
+def _resolve_context_summary() -> str:
+    return CONTEXT_SUMMARY_SYSTEM_PROMPT
 
 
 def _resolve_chart_output_hard_rules() -> str:
@@ -184,6 +195,7 @@ def _resolve_reasoning_hint_high() -> str:
 
 _PROMPT_RESOLVERS = {
     "chat-system-core": _resolve_chat_system_core,
+    "context-summary": _resolve_context_summary,
     "chart-output-hard-rules": _resolve_chart_output_hard_rules,
     "chart-schema-templates": _resolve_chart_schema_templates,
     "note-key-takeaway": _resolve_note_key_takeaway,
@@ -225,6 +237,7 @@ PROMPT_REGISTRY: dict[str, PromptEntry] = {
         # comment above BASE_SYSTEM_PROMPT), sha256 441dbfb2d60513cbc3ba78
         # 325f3b5b928865e1e41813c863ac56364660b2877a.
         ("chat-system-core", 2, "5509e4da2049f63c08a2209209b03291c175c321669a20cb91fb08c88d1906e1"),
+        ("context-summary", 1, "2dbdc7b34ebcbd909bfe17eef2cc93f3295d63b2f2f12aaea17c00fe3c4e5564"),
         ("chart-output-hard-rules", 1, "a852599cfd04506adf05d91bcc7fdfabe0e2e90cb45e5c436a4b3b27cf9292a8"),
         ("chart-schema-templates", 1, "4e3453902371676fbca08e5b9d0d63cfd6b51ee85442542f4b0126b4a0b9663c"),
         ("note-key-takeaway", 1, "6c353e7c606ab20f197a5ee4eafb0aac2f86c7c9a491ccddfac63bf2349ec936"),

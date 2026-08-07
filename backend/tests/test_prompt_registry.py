@@ -23,6 +23,7 @@ import graphlink_prompts
 EXPECTED_PROMPT_IDS = frozenset(
     {
         "chat-system-core",
+        "context-summary",
         "chart-output-hard-rules",
         "chart-schema-templates",
         "note-key-takeaway",

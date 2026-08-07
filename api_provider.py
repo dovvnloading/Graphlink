@@ -331,6 +331,36 @@ class ProviderRuntime:
             return bool(_get_llama_cpp_model_path(config.TASK_CHAT, state.llama_cpp_settings))
         return False
 
+    def context_window(self, task: str) -> int:
+        """ADR-006 stage 6.6: the active chat model's context window in
+        tokens, for `task`'s configured model under THIS runtime's current
+        snapshot. Three sources, in honesty order:
+
+        - llama.cpp mode: the configured n_ctx - exact truth, it IS the
+          allocated context.
+        - Ollama mode: "<arch>.context_length" from a cached ollama.show()
+          lookup (_get_ollama_context_window); falls back to the
+          conservative default when the server/metadata is unavailable.
+        - API mode: the documented per-family table (_KNOWN_CONTEXT_WINDOWS,
+          matched by model-id prefix - same name-heuristic posture as
+          anthropic_supports_reasoning); unknown ids get the conservative
+          default, preserving pre-6.6 behavior for unrecognized endpoints.
+        """
+        state = self.snapshot()
+        if not state.use_api_mode:
+            if state.local_provider_type == config.LOCAL_PROVIDER_LLAMACPP:
+                try:
+                    n_ctx = int(state.llama_cpp_settings.get("n_ctx") or 0)
+                except (TypeError, ValueError):
+                    n_ctx = 0
+                return n_ctx if n_ctx > 0 else _DEFAULT_CONTEXT_WINDOW
+            if state.local_provider_type == config.LOCAL_PROVIDER_OLLAMA:
+                model = state.ollama_models.get(task)
+                window = _get_ollama_context_window(model)
+                return window if window else _DEFAULT_CONTEXT_WINDOW
+            return _DEFAULT_CONTEXT_WINDOW
+        return known_context_window(state.api_models.get(task))
+
 
 class _ModuleBackedProviderRuntime(ProviderRuntime):
     """The default session's runtime: state lives in the module globals
@@ -413,6 +443,41 @@ ANTHROPIC_DEFAULT_MAX_TOKENS = {
     config.TASK_WEB_SUMMARIZE: 4096,
 }
 _OLLAMA_CAPABILITY_CACHE = {}
+# ADR-006 stage 6.6: context windows extracted from the same `ollama.show()`
+# call the capability cache uses, cached under the same key discipline and
+# invalidated by the same invalidate_ollama_capability_cache() entry point.
+_OLLAMA_CONTEXT_WINDOW_CACHE = {}
+
+# ADR-006 stage 6.6: API-mode context windows, matched by model-id prefix.
+# Same posture as anthropic_supports_reasoning below: a documented
+# name-based heuristic, not an API lookup - providers expose no context-
+# window endpoint. First matching prefix wins (ordered, longest-first where
+# prefixes overlap). Unknown models (including unrecognized OpenAI-
+# compatible endpoints) fall back to _DEFAULT_CONTEXT_WINDOW, preserving
+# the pre-6.6 8k budget for anything we cannot vouch for.
+_KNOWN_CONTEXT_WINDOWS = (
+    ("claude-", 200_000),      # claude-3/3.5/4+ families all document 200k
+    ("gemini-", 1_048_576),    # gemini-2.0-flash / 2.5-pro/flash / 3* all 1M
+    ("gpt-4.1", 1_047_576),    # gpt-4.1 family documents ~1M
+    ("gpt-4o", 128_000),
+    ("gpt-5", 128_000),        # conservative floor for the family
+    ("o1", 128_000),
+    ("o3", 128_000),
+    ("o4", 128_000),
+)
+_DEFAULT_CONTEXT_WINDOW = 8_192
+
+
+def known_context_window(model_id: str | None) -> int:
+    """Best-known context window for an API-mode model id (see the table
+    above). Falls back to the conservative default for unknown ids."""
+    normalized = str(model_id or "").strip().lower()
+    for prefix, window in _KNOWN_CONTEXT_WINDOWS:
+        if normalized.startswith(prefix):
+            return window
+    return _DEFAULT_CONTEXT_WINDOW
+
+
 _KNOWN_OLLAMA_AUDIO_MODEL_FAMILIES = {"gemma4"}
 _OLLAMA_REASONING_RETRY_BACKOFF_SECONDS = 1.0
 _THINK_TAG_PATTERN = re.compile(r"<(think|thinking)>\s*(.*?)\s*</\1>", re.DOTALL | re.IGNORECASE)
@@ -986,6 +1051,67 @@ def _get_ollama_capabilities(model_name: str | None) -> set[str] | None:
     return capabilities
 
 
+def _get_ollama_context_window(model_name: str | None) -> int | None:
+    """ADR-006 stage 6.6: the model's context window from `ollama.show()`'s
+    model_info ("<arch>.context_length"), cached like the capability cache
+    above (including negative results). Returns None when the server, the
+    model, or the metadata is unavailable - callers fall back to
+    _DEFAULT_CONTEXT_WINDOW."""
+    normalized_model = (model_name or "").strip()
+    if not normalized_model:
+        return None
+
+    cache_key = normalized_model.lower()
+    if cache_key in _OLLAMA_CONTEXT_WINDOW_CACHE:
+        return _OLLAMA_CONTEXT_WINDOW_CACHE[cache_key]
+
+    show_fn = getattr(ollama, "show", None)
+    if not callable(show_fn):
+        _OLLAMA_CONTEXT_WINDOW_CACHE[cache_key] = None
+        return None
+
+    try:
+        try:
+            show_response = show_fn(normalized_model)
+        except TypeError:
+            show_response = show_fn(model=normalized_model)
+    except Exception:
+        _OLLAMA_CONTEXT_WINDOW_CACHE[cache_key] = None
+        return None
+
+    window = _extract_context_window_from_show(show_response)
+    _OLLAMA_CONTEXT_WINDOW_CACHE[cache_key] = window
+    return window
+
+
+def _extract_context_window_from_show(show_response) -> int | None:
+    """Pull "<arch>.context_length" out of a show() response's model_info
+    (dict on the REST wire, `modelinfo` attribute on the SDK object)."""
+    model_info = _extract_response_field(show_response, "model_info")
+    if model_info is None:
+        model_info = _extract_response_field(show_response, "modelinfo")
+    if not isinstance(model_info, dict):
+        return None
+
+    architecture = str(model_info.get("general.architecture") or "").strip()
+    candidates = []
+    if architecture:
+        candidates.append(f"{architecture}.context_length")
+    # Fallback: any "<arch>.context_length" key (architecture field absent
+    # or mismatched in some manifests).
+    candidates.extend(
+        key for key in model_info if str(key).endswith(".context_length")
+    )
+    for key in candidates:
+        try:
+            value = int(model_info.get(key))
+        except (TypeError, ValueError):
+            continue
+        if value > 0:
+            return value
+    return None
+
+
 def invalidate_ollama_capability_cache(model_name: str | None = None):
     """Drop cached `ollama.show()` capability info so it gets re-fetched next use.
 
@@ -999,8 +1125,10 @@ def invalidate_ollama_capability_cache(model_name: str | None = None):
     """
     if model_name is None:
         _OLLAMA_CAPABILITY_CACHE.clear()
+        _OLLAMA_CONTEXT_WINDOW_CACHE.clear()
         return
     _OLLAMA_CAPABILITY_CACHE.pop(model_name.strip().lower(), None)
+    _OLLAMA_CONTEXT_WINDOW_CACHE.pop(model_name.strip().lower(), None)
 
 
 def _is_known_ollama_audio_model(model_name: str | None) -> bool:

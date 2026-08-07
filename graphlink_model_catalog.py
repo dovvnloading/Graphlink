@@ -127,6 +127,26 @@ def _as_int(value) -> int | None:
         return None
 
 
+def _context_length_from_ollama(model, details) -> int | None:
+    """ADR-006 stage 6.6: best-effort context length for an Ollama model.
+
+    ``list()`` entries carry it (rarely) in details; ``show()`` responses
+    carry it in model_info as "<arch>.context_length". Best-effort only -
+    the request path budgets via ProviderRuntime.context_window(), not the
+    catalog; this just stops the descriptor field being permanently dead."""
+    direct = _as_int(_field(details, "context_length"))
+    if direct:
+        return direct
+    model_info = _field(model, "model_info") or _field(model, "modelinfo")
+    if isinstance(model_info, Mapping):
+        for key, value in model_info.items():
+            if str(key).endswith(".context_length"):
+                parsed = _as_int(value)
+                if parsed:
+                    return parsed
+    return None
+
+
 def ollama_descriptor(model, *, provider: str = "Ollama") -> ModelDescriptor:
     """Normalize an Ollama ``list()``/``show()`` result into a descriptor."""
 
@@ -167,7 +187,7 @@ def ollama_descriptor(model, *, provider: str = "Ollama") -> ModelDescriptor:
         capabilities=frozenset(capabilities),
         source="installed",
         size_bytes=_as_int(_field(model, "size")),
-        context_length=_as_int(_field(details, "context_length")),
+        context_length=_context_length_from_ollama(model, details),
         quantization=str(_field(details, "quantization_level", "") or ""),
         details=dict(details) if isinstance(details, Mapping) else {},
     )

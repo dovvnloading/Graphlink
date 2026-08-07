@@ -445,9 +445,10 @@ def test_send_message_uses_the_branch_attached_system_prompt_note_instead_of_the
     captured = {}
 
     def fake_stream(conversation_history, persona_text, cancel_event, on_chunk, *,
-                    persona_is_override=False):
+                    persona_is_override=False, **kwargs):
         # ADR-006 stage 6.7: the override path now passes
         # persona_is_override=True (raw passthrough) - captured below.
+        # **kwargs absorbs 6.6's always-passed on_context_trimmed.
         captured["persona_text"] = persona_text
         captured["persona_is_override"] = persona_is_override
         on_chunk("a reply", False)
@@ -491,7 +492,7 @@ def test_send_message_falls_back_to_the_default_persona_when_no_note_is_attached
     _configure_fake_ollama_provider_only(monkeypatch)
     captured = {}
 
-    def fake_stream(conversation_history, persona_text, cancel_event, on_chunk):
+    def fake_stream(conversation_history, persona_text, cancel_event, on_chunk, **kwargs):
         captured["persona_text"] = persona_text
         on_chunk("a reply", False)
         return "a reply"
@@ -526,10 +527,11 @@ def test_regenerate_response_also_resolves_the_branch_attached_system_prompt_not
     # ADR-006 stage 6.4: regenerate now streams, so the STREAMING driver is
     # the one that must see the resolved persona.
     def fake_stream(conversation_history, persona_text, cancel_event, on_chunk, *,
-                    persona_is_override=False):
+                    persona_is_override=False, **kwargs):
         # ADR-006 stage 6.7: this is an override-path dispatch, so the fake
         # must accept the persona_is_override kwarg (only override-path
         # dispatches pass it - default-path fakes keep the pre-6.7 arity).
+        # **kwargs absorbs 6.6's always-passed on_context_trimmed.
         captured["persona_text"] = persona_text
         on_chunk("regenerated reply", False)
         return "regenerated reply"
@@ -619,6 +621,42 @@ def test_default_persona_reaches_the_wire_as_the_composed_core(monkeypatch):
     system_messages = [m for m in captured["messages"] if m["role"] == "system"]
     assert len(system_messages) == 1
     assert system_messages[0]["content"] == f"You are Graphlink Assistant. {BASE_SYSTEM_PROMPT}"
+
+
+# -- ADR-006 stage 6.6: context-trim notification -----------------------------
+
+
+def test_context_trim_signal_surfaces_a_notification(monkeypatch):
+    # The dispatcher hands the chat driver a marshaling on_context_trimmed
+    # closure; when the worker reports dropped turns, an info notification
+    # must surface loop-side.
+    _configure_fake_ollama_provider_only(monkeypatch)
+
+    def fake_stream(conversation_history, persona_text, cancel_event, on_chunk, *,
+                    on_context_trimmed, **kwargs):
+        on_context_trimmed(7, True)  # as ChatWorker would, from the worker thread
+        on_chunk("a reply", False)
+        return "a reply"
+
+    monkeypatch.setattr(agents_module, "_call_chat_agent_stream", fake_stream)
+
+    async def run():
+        bus = SessionBus("agents-context-trim-test")
+        notifications = NotificationState()
+        bus.register_topic("notification", notifications.payload)
+        composer_document = ComposerDocument()
+        bus.register_topic("app-composer", composer_document.payload)
+        dispatcher = AgentDispatcher(_FakeSettingsManager(enable_system_prompt=True))
+        register_canvas(bus, notifications, dispatcher, composer_document)
+
+        await bus.dispatch_intent("scene", "sendMessage", ["a long conversation"])
+        entry = next(iter(chat_slots(dispatcher).values()))
+        await entry["task"]
+
+        payload = notifications.payload()
+        assert "summarized" in str(payload).lower()
+
+    asyncio.run(run())
 
 
 # -- 6. bootstrap_provider_state -----------------------------------------------
@@ -6993,7 +7031,7 @@ def test_dispatcher_gates_and_routes_through_its_injected_provider_runtime(monke
 
     seen_runtimes = []
 
-    def fake_stream(conversation_history, persona_text, cancel_event, on_chunk, runtime=None):
+    def fake_stream(conversation_history, persona_text, cancel_event, on_chunk, runtime=None, **kwargs):
         seen_runtimes.append(runtime)
         return "per-session reply"
 
@@ -7028,8 +7066,14 @@ def test_default_dispatcher_still_calls_the_drivers_with_the_exact_pre_65_arity(
     # Compat pin: a dispatcher WITHOUT an injected runtime (the default
     # session, and every existing test in this file) must keep calling
     # _call_chat_agent_stream with the exact pre-6.5 positional arity - no
-    # runtime kwarg at all - so every fake of that arity keeps working.
-    def strict_pre_65_fake(conversation_history, persona_text, cancel_event, on_chunk):
+    # runtime kwarg, and (6.7) no persona_is_override kwarg on the default-
+    # persona path. ADR-006 stage 6.6 widened the contract by exactly ONE
+    # always-passed keyword: on_context_trimmed (the trim/summarize
+    # notification closure) - pinned here as keyword-only so no further
+    # kwargs creep in unnoticed.
+    def strict_pre_65_fake(conversation_history, persona_text, cancel_event, on_chunk, *,
+                           on_context_trimmed):
+        assert callable(on_context_trimmed)
         return "default reply"
 
     monkeypatch.setattr(agents_module, "_call_chat_agent_stream", strict_pre_65_fake)

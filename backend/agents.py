@@ -928,6 +928,29 @@ class AgentDispatcher:
                 # the exact pre-6.7 arity keeps working (same omit-when-
                 # default pattern as _runtime_kwargs).
                 override_kwargs = {"persona_is_override": True} if override is not None else {}
+
+                # ADR-006 stage 6.6: trim/summarize notification. ChatWorker
+                # invokes this on the WORKER thread when older turns had to
+                # be dropped to fit the model's context window - marshal to
+                # the loop (run_coroutine_threadsafe, the coroutine sibling
+                # of _thread_on_chunk's call_soon_threadsafe pattern) and
+                # surface it as an info notification.
+                dispatch_loop = asyncio.get_running_loop()
+
+                def _thread_on_context_trimmed(dropped_count: int, summarized: bool) -> None:
+                    message = (
+                        "Older conversation turns were summarized to fit the "
+                        "model's context window."
+                        if summarized
+                        else "Older conversation turns were dropped to fit the "
+                        "model's context window."
+                    )
+
+                    async def _notify() -> None:
+                        notifications_state.show(message, "info")
+                        await bus.publish("notification")
+
+                    asyncio.run_coroutine_threadsafe(_notify(), dispatch_loop)
                 # ADR-006 stage 6.4: the loop-side partial-text accumulator.
                 # A dict, not a str, so _pump (a different coroutine) can
                 # mutate it and the except blocks below can read it after the
@@ -1042,6 +1065,7 @@ class AgentDispatcher:
                                 # - see _runtime_kwargs' own docstring.
                                 **self._runtime_kwargs(),
                                 **override_kwargs,
+                                on_context_trimmed=_thread_on_context_trimmed,
                             ),
                             timeout=WATCHDOG_TIMEOUT_SECONDS,
                         )
@@ -1061,6 +1085,7 @@ class AgentDispatcher:
                             cancel_event,
                             **self._runtime_kwargs(),
                             **override_kwargs,
+                            on_context_trimmed=_thread_on_context_trimmed,
                         ),
                         timeout=WATCHDOG_TIMEOUT_SECONDS,
                     )
@@ -3098,7 +3123,7 @@ def _is_sandbox_error_output(output_text, return_code) -> bool:
 
 
 def _call_chat_agent(conversation_history, persona_text, cancel_event, *, runtime=None,
-                     persona_is_override=False) -> str:
+                     persona_is_override=False, on_context_trimmed=None) -> str:
     """Runs inside asyncio.to_thread - a real OS thread, not the event loop.
 
     ADR-006 stage 6.5: `runtime` is an additive keyword-only kwarg, forwarded
@@ -3130,11 +3155,13 @@ def _call_chat_agent(conversation_history, persona_text, cancel_event, *, runtim
         # Override path: the RAW note text, uncomposed.
         resolved_system_prompt=resolved,
         **({"runtime": runtime} if runtime is not None else {}),
+        # ADR-006 stage 6.6: trim/summarize signal - forwarded omit-when-None.
+        **({"on_context_trimmed": on_context_trimmed} if on_context_trimmed is not None else {}),
     )
 
 
 def _call_chat_agent_stream(conversation_history, persona_text, cancel_event, on_chunk, *, runtime=None,
-                            persona_is_override=False) -> str:
+                            persona_is_override=False, on_context_trimmed=None) -> str:
     """Runs inside asyncio.to_thread - a real OS thread, not the event loop.
     Streaming counterpart to _call_chat_agent (R4.4) - same persona/
     current_node/resolved_system_prompt guarantees as that function (see its
@@ -3166,6 +3193,8 @@ def _call_chat_agent_stream(conversation_history, persona_text, cancel_event, on
         resolved_system_prompt=resolved,
         on_chunk=on_chunk,
         **({"runtime": runtime} if runtime is not None else {}),
+        # ADR-006 stage 6.6: trim/summarize signal - forwarded omit-when-None.
+        **({"on_context_trimmed": on_context_trimmed} if on_context_trimmed is not None else {}),
     )
 
 
