@@ -70,6 +70,8 @@ export interface SceneNodeRow {
   synthesisInstructions: string;
   branchStatus: string;
   responseIncomplete: boolean;
+  promptTokens?: number | null;
+  completionTokens?: number | null;
   isFinalDeliverable: boolean;
   color?: string | null;
   headerColor?: string | null;
@@ -541,6 +543,14 @@ function checkSceneNodeRow(value: unknown, path: string, errors: string[]): void
     const fieldValue = value["responseIncomplete"];
     if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.responseIncomplete: missing required field`);
     else { if (typeof fieldValue !== "boolean") errors.push(`${path}.responseIncomplete` + ": expected boolean"); }
+  }
+  {
+    const fieldValue = value["promptTokens"];
+    if (fieldValue !== undefined && fieldValue !== null) { if (typeof fieldValue !== "number") errors.push(`${path}.promptTokens` + ": expected number"); }
+  }
+  {
+    const fieldValue = value["completionTokens"];
+    if (fieldValue !== undefined && fieldValue !== null) { if (typeof fieldValue !== "number") errors.push(`${path}.completionTokens` + ": expected number"); }
   }
   {
     const fieldValue = value["isFinalDeliverable"];

@@ -32,7 +32,7 @@ at all.
 test_scene_payload_key_set_is_unchanged_by_the_migration is the wire-
 compat tripwire this whole stage's backend-only constraint depends on:
 scene_payload() is one flat dict literal (backend/domain/graph.py) that
-emits the SAME 87 keys for every node regardless of kind - a golden,
+emits the SAME 89 keys for every node regardless of kind - a golden,
 hardcoded snapshot of that sorted key list, captured pre-migration. As
 long as this test keeps passing, no migration PR has silently added,
 renamed, or dropped a wire key while moving where a field lives in
@@ -263,8 +263,9 @@ def test_scene_node_core_field_count():
 
 
 # Captured from SceneDocument.scene_payload()'s real output pre-migration
-# (a single chat node, ADR-002 stage 2.5 PR1/image baseline) - sorted, 87
-# keys. scene_payload emits this SAME key set for every node regardless of
+# (a single chat node, ADR-002 stage 2.5 PR1/image baseline) - sorted, 89
+# keys (87 pre-6.8 + promptTokens/completionTokens, ADR-006 stage 6.8).
+# scene_payload emits this SAME key set for every node regardless of
 # kind (one flat dict literal, no per-kind branching), so one representative
 # node is sufficient; the point is the KEY SET, not per-kind values.
 _EXPECTED_SCENE_NODE_WIRE_KEYS = sorted([
@@ -290,6 +291,7 @@ _EXPECTED_SCENE_NODE_WIRE_KEYS = sorted([
     "pycoderAwaitingApproval", "pycoderCode", "pycoderError",
     "pycoderLastRunFailed", "pycoderMode", "pycoderOutput", "pycoderPrompt",
     "researchActiveSourceId", "researchCompleted", "researchError",
+    "completionTokens", "promptTokens",
     "researchResult", "researchStage", "researchTotal", "responseIncomplete",
     "synthesisInstructions", "title", "x", "y",
 ])
@@ -432,6 +434,10 @@ _EXPECTED_NON_OWNING_KIND_WIRE_DEFAULTS = {
     # ADR-006 stage 6.4: interrupted-reply marker; non-chat kinds fall back
     # to False, same as the ChatState dataclass default.
     "responseIncomplete": False,
+    # ADR-006 stage 6.8: provider-reported usage; non-chat kinds fall back
+    # to None, same as the ChatState dataclass defaults.
+    "promptTokens": None,
+    "completionTokens": None,
 }
 
 

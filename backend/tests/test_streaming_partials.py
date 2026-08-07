@@ -255,7 +255,7 @@ def test_regenerate_streams_with_node_scoped_identity_never_the_composer(monkeyp
     started = threading.Event()
     release = threading.Event()
 
-    def fake_stream(conversation_history, persona_text, cancel_event, on_chunk):
+    def fake_stream(conversation_history, persona_text, cancel_event, on_chunk, **kwargs):
         on_chunk("regenerated ", False)
         started.set()
         release.wait(5)
@@ -312,7 +312,7 @@ def test_regenerate_killed_mid_stream_preserves_partial_and_is_retryable(monkeyp
     default incomplete=False doubles as the clear."""
     _configure_fake_ollama_provider_only(monkeypatch)
 
-    def dying_stream(conversation_history, persona_text, cancel_event, on_chunk):
+    def dying_stream(conversation_history, persona_text, cancel_event, on_chunk, **kwargs):
         on_chunk("half a regen", False)
         raise RuntimeError("boom")
 
@@ -337,7 +337,7 @@ def test_regenerate_killed_mid_stream_preserves_partial_and_is_retryable(monkeyp
         )
 
         # Retryable: a SECOND, successful regenerate clears the marker.
-        def full_stream(conversation_history, persona_text, cancel_event, on_chunk):
+        def full_stream(conversation_history, persona_text, cancel_event, on_chunk, **kwargs):
             on_chunk("a full regenerated reply", False)
             return "a full regenerated reply"
 
@@ -361,7 +361,7 @@ def test_send_conversation_message_killed_mid_stream_appends_incomplete_history(
     history allow-list surfaces it as "incomplete": True on the wire."""
     _configure_fake_ollama_provider_only(monkeypatch)
 
-    def dying_stream(conversation_history, persona_text, cancel_event, on_chunk):
+    def dying_stream(conversation_history, persona_text, cancel_event, on_chunk, **kwargs):
         on_chunk("half a convo reply", False)
         raise RuntimeError("boom")
 
@@ -399,7 +399,7 @@ def test_send_message_killed_mid_stream_creates_an_incomplete_ai_node(monkeypatc
     message so the branch wiring matches the complete path."""
     _configure_fake_ollama_provider_only(monkeypatch)
 
-    def dying_stream(conversation_history, persona_text, cancel_event, on_chunk):
+    def dying_stream(conversation_history, persona_text, cancel_event, on_chunk, **kwargs):
         on_chunk("half a reply", False)
         raise RuntimeError("boom")
 
@@ -550,7 +550,7 @@ def test_cancelled_regenerate_keeps_the_original_response_intact(monkeypatch):
     _configure_fake_ollama_provider_only(monkeypatch)
     started = threading.Event()
 
-    def cancellable_stream(conversation_history, persona_text, cancel_event, on_chunk):
+    def cancellable_stream(conversation_history, persona_text, cancel_event, on_chunk, **kwargs):
         on_chunk("half a regen", False)
         started.set()
         cancel_event.wait(5)

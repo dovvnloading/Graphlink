@@ -35,10 +35,13 @@ name: CI
 # project's pinned Python 3.12 - regenerating it from a different interpreter
 # risks a lock that resolves differently than what 3.12 actually needs.
 
+# Actions-minutes economy (2026-08-07, ~90% of the month's quota burned by
+# 189 runs in one week): the push->main trigger is REMOVED - every merge is a
+# squash whose tree is byte-identical to the PR head that CI just validated,
+# so the post-merge run was a pure duplicate. The PR run is the gate.
+# Re-evaluate next cycle if non-squash merges ever appear.
 on:
   pull_request:
-    branches: [main]
-  push:
     branches: [main]
 
 # ADR-015 stage 15.2: least-privilege token (this workflow only ever reads
@@ -80,7 +83,12 @@ jobs:
 
   build-check:
     name: Build check (wheel builds, installs, and imports cleanly)
-    runs-on: windows-latest
+    # ubuntu, not windows (2026-08-07 minutes economy): Windows runners bill
+    # at 2x. Nothing here is Windows-bound - the wheel is pure-Python and
+    # graphlink_execution_guard's WinDLL load is behind `sys.platform ==
+    # "win32"`, so `import backend.agents` is clean on Linux. Only
+    # python-tests genuinely needs Windows (DPAPI, Job Objects, ACLs).
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -105,22 +113,19 @@ jobs:
         run: python -m twine check dist/*.whl
 
       - name: Install wheel + real runtime deps into a clean venv, import backend.agents
-        shell: pwsh
+        shell: bash
         run: |
           python -m venv wheel_test_venv
-          wheel_test_venv\Scripts\pip.exe install --quiet -r requirements.txt
-          $wheel = Get-ChildItem dist\*.whl | Select-Object -First 1
-          wheel_test_venv\Scripts\pip.exe install --quiet --no-deps $wheel.FullName
-          Push-Location $env:TEMP
-          try {
-            & "$env:GITHUB_WORKSPACE\wheel_test_venv\Scripts\python.exe" -c "import backend.agents, graphlink_note_agent, graphlink_process_env; print('OK: backend.agents and all py-modules import cleanly from the installed wheel')"
-          } finally {
-            Pop-Location
-          }
+          wheel_test_venv/bin/pip install --quiet -r requirements.txt
+          wheel=$(ls dist/*.whl | head -1)
+          wheel_test_venv/bin/pip install --quiet --no-deps "$wheel"
+          cd /tmp
+          "$GITHUB_WORKSPACE/wheel_test_venv/bin/python" -c "import backend.agents, graphlink_note_agent, graphlink_process_env; print('OK: backend.agents and all py-modules import cleanly from the installed wheel')"
 
   frontend-checks:
     name: Frontend checks (npm run check)
-    runs-on: windows-latest
+    # ubuntu, not windows - same 2x-billing economy note as build-check.
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

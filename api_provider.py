@@ -2,6 +2,7 @@ import base64
 import inspect
 import json
 import os
+import random
 import re
 import threading
 import time
@@ -331,6 +332,34 @@ class ProviderRuntime:
             return bool(_get_llama_cpp_model_path(config.TASK_CHAT, state.llama_cpp_settings))
         return False
 
+    def context_window(self, task: str) -> int:
+        """ADR-006 stage 6.6: the active chat model's context window in
+        tokens, for `task`'s configured model under THIS runtime's current
+        snapshot. Three sources, in honesty order:
+
+        - llama.cpp mode: the configured n_ctx - exact truth, it IS the
+          allocated context.
+        - Ollama mode: "<arch>.context_length" from a cached ollama.show()
+          lookup (_get_ollama_context_window); falls back to the
+          conservative default when the server/metadata is unavailable.
+        - API mode: the documented per-family table (_KNOWN_CONTEXT_WINDOWS,
+          matched by model-id prefix - same name-heuristic posture as
+          anthropic_supports_reasoning); unknown ids get the conservative
+          default, preserving pre-6.6 behavior for unrecognized endpoints.
+        """
+        state = self.snapshot()
+        if not state.use_api_mode:
+            if state.local_provider_type == config.LOCAL_PROVIDER_LLAMACPP:
+                try:
+                    n_ctx = int(state.llama_cpp_settings.get("n_ctx") or 0)
+                except (TypeError, ValueError):
+                    n_ctx = 0
+                return n_ctx if n_ctx > 0 else _DEFAULT_CONTEXT_WINDOW
+            if state.local_provider_type == config.LOCAL_PROVIDER_OLLAMA:
+                return _ollama_effective_context_window(state.ollama_models.get(task))
+            return _DEFAULT_CONTEXT_WINDOW
+        return known_context_window(state.api_models.get(task))
+
 
 class _ModuleBackedProviderRuntime(ProviderRuntime):
     """The default session's runtime: state lives in the module globals
@@ -413,8 +442,71 @@ ANTHROPIC_DEFAULT_MAX_TOKENS = {
     config.TASK_WEB_SUMMARIZE: 4096,
 }
 _OLLAMA_CAPABILITY_CACHE = {}
+# ADR-006 stage 6.6: context windows extracted from the same `ollama.show()`
+# call the capability cache uses, cached under the same key discipline and
+# invalidated by the same invalidate_ollama_capability_cache() entry point.
+_OLLAMA_CONTEXT_WINDOW_CACHE = {}
+
+# ADR-006 stage 6.6: API-mode context windows, matched by model-id prefix.
+# Same posture as anthropic_supports_reasoning below: a documented
+# name-based heuristic, not an API lookup - providers expose no context-
+# window endpoint. First matching prefix wins (ordered, longest-first where
+# prefixes overlap). Unknown models (including unrecognized OpenAI-
+# compatible endpoints) fall back to _DEFAULT_CONTEXT_WINDOW, preserving
+# the pre-6.6 8k budget for anything we cannot vouch for.
+_KNOWN_CONTEXT_WINDOWS = (
+    ("claude-", 200_000),      # claude-3/3.5/4+ families all document 200k
+    ("gemini-", 1_048_576),    # gemini-2.0-flash / 2.5-pro/flash / 3* all 1M
+    ("gpt-4.1", 1_047_576),    # gpt-4.1 family documents ~1M
+    ("gpt-4o", 128_000),
+    ("gpt-5", 128_000),        # conservative floor for the family
+    ("o1", 128_000),
+    ("o3", 128_000),
+    ("o4", 128_000),
+)
+_DEFAULT_CONTEXT_WINDOW = 8_192
+# ADR-006 stage 6.8 review fix (HIGH): what we ask the Ollama daemon to
+# SERVE (options.num_ctx) when the Modelfile has no explicit num_ctx. The
+# trained max from model_info is NOT a safe default to request - a 131k
+# num_ctx on llama3.1 allocates a KV cache that OOMs typical consumer GPUs,
+# and the daemon's own default (~4k) silently truncates prompts front-first
+# instead. 8192 is the KV-cache-safe middle ground; users who want more set
+# num_ctx in their Modelfile and we honor it exactly.
+_OLLAMA_SERVED_CONTEXT_CAP = 8_192
+
+
+def _ollama_effective_context_window(model: str | None) -> int:
+    """The single source of truth for Ollama-mode context: the served
+    window from show() (see _get_ollama_context_window) or the conservative
+    default. Used by BOTH the budget side (ProviderRuntime.context_window)
+    and the request side (OllamaProvider's options.num_ctx) so the two can
+    never disagree."""
+    window = _get_ollama_context_window(model)
+    return window if window else _DEFAULT_CONTEXT_WINDOW
+
+
+def known_context_window(model_id: str | None) -> int:
+    """Best-known context window for an API-mode model id (see the table
+    above). Falls back to the conservative default for unknown ids."""
+    normalized = str(model_id or "").strip().lower()
+    for prefix, window in _KNOWN_CONTEXT_WINDOWS:
+        if normalized.startswith(prefix):
+            return window
+    return _DEFAULT_CONTEXT_WINDOW
+
+
 _KNOWN_OLLAMA_AUDIO_MODEL_FAMILIES = {"gemma4"}
 _OLLAMA_REASONING_RETRY_BACKOFF_SECONDS = 1.0
+# ADR-006 stage 6.8: transient-transport retry, DISTINCT from Ollama's own
+# reasoning-content retry above (they must never nest wrongly: the transport
+# wrapper wraps the WHOLE provider stream/complete call, Ollama's reasoning
+# retries included - a ReasoningWithoutAnswerError never escapes the
+# provider, and its exhausted-retries RuntimeError is not transport-shaped,
+# so the wrapper never re-runs a content retry).
+_TRANSPORT_RETRY_MAX_ATTEMPTS = 2  # retries, so at most 3 total tries
+_TRANSPORT_RETRY_BASE_BACKOFF_SECONDS = 1.0
+_TRANSPORT_RETRY_MAX_SLEEP_SECONDS = 30.0
+_TRANSPORT_RETRY_STATUS_CODES = (429, 500, 502, 503, 504)
 _THINK_TAG_PATTERN = re.compile(r"<(think|thinking)>\s*(.*?)\s*</\1>", re.DOTALL | re.IGNORECASE)
 _THINK_CLOSING_ONLY_PATTERN = re.compile(r"</(think|thinking)>", re.IGNORECASE)
 _FALLBACK_REASONING_PATTERN = re.compile(
@@ -986,6 +1078,103 @@ def _get_ollama_capabilities(model_name: str | None) -> set[str] | None:
     return capabilities
 
 
+def _get_ollama_context_window(model_name: str | None) -> int | None:
+    """ADR-006 stage 6.6/6.8 review fix: the context window Ollama will
+    actually SERVE for this model, cached like the capability cache above
+    (including negative results). Returns None when the server, the model,
+    or the metadata is unavailable - callers fall back to
+    _DEFAULT_CONTEXT_WINDOW.
+
+    Resolution order (see _extract_context_window_from_show):
+    1. An explicit `num_ctx` in the Modelfile parameters - the daemon
+       serves exactly that.
+    2. Otherwise the TRAINED max ("<arch>.context_length") capped at
+       _OLLAMA_SERVED_CONTEXT_CAP - the trained max is NOT what the daemon
+       serves by default (it serves its own small default and truncates
+       prompts front-first), and requesting the full trained max as num_ctx
+       would balloon the KV cache (131k for llama3.1 can OOM a typical GPU).
+       The request path passes this same value back as options.num_ctx
+       (OllamaProvider), so the budget and the served context are the SAME
+       number."""
+    normalized_model = (model_name or "").strip()
+    if not normalized_model:
+        return None
+
+    cache_key = normalized_model.lower()
+    if cache_key in _OLLAMA_CONTEXT_WINDOW_CACHE:
+        return _OLLAMA_CONTEXT_WINDOW_CACHE[cache_key]
+
+    show_fn = getattr(ollama, "show", None)
+    if not callable(show_fn):
+        _OLLAMA_CONTEXT_WINDOW_CACHE[cache_key] = None
+        return None
+
+    try:
+        try:
+            show_response = show_fn(normalized_model)
+        except TypeError:
+            show_response = show_fn(model=normalized_model)
+    except Exception:
+        _OLLAMA_CONTEXT_WINDOW_CACHE[cache_key] = None
+        return None
+
+    window = _extract_context_window_from_show(show_response)
+    _OLLAMA_CONTEXT_WINDOW_CACHE[cache_key] = window
+    return window
+
+
+def _extract_context_window_from_show(show_response) -> int | None:
+    """The SERVED window from a show() response - explicit Modelfile num_ctx
+    when present, else the trained "<arch>.context_length" capped at
+    _OLLAMA_SERVED_CONTEXT_CAP (see _get_ollama_context_window's docstring
+    for the rationale)."""
+    explicit_num_ctx = _extract_modelfile_num_ctx(show_response)
+    if explicit_num_ctx:
+        return explicit_num_ctx
+
+    model_info = _extract_response_field(show_response, "model_info")
+    if model_info is None:
+        model_info = _extract_response_field(show_response, "modelinfo")
+    if not isinstance(model_info, dict):
+        return None
+
+    architecture = str(model_info.get("general.architecture") or "").strip()
+    candidates = []
+    if architecture:
+        candidates.append(f"{architecture}.context_length")
+    # Fallback: any "<arch>.context_length" key (architecture field absent
+    # or mismatched in some manifests).
+    candidates.extend(
+        key for key in model_info if str(key).endswith(".context_length")
+    )
+    for key in candidates:
+        try:
+            value = int(model_info.get(key))
+        except (TypeError, ValueError):
+            continue
+        if value > 0:
+            return min(value, _OLLAMA_SERVED_CONTEXT_CAP)
+    return None
+
+
+def _extract_modelfile_num_ctx(show_response) -> int | None:
+    """An explicit `num_ctx` from show()'s Modelfile `parameters` blob (a
+    newline-separated "name value" string on both the REST wire and the SDK
+    object). None when absent or unparseable."""
+    parameters = _extract_response_field(show_response, "parameters")
+    if not isinstance(parameters, str):
+        return None
+    for line in parameters.splitlines():
+        parts = line.strip().split()
+        if len(parts) >= 2 and parts[0] == "num_ctx":
+            try:
+                value = int(parts[1])
+            except (TypeError, ValueError):
+                return None
+            return value if value > 0 else None
+    return None
+
+
 def invalidate_ollama_capability_cache(model_name: str | None = None):
     """Drop cached `ollama.show()` capability info so it gets re-fetched next use.
 
@@ -999,8 +1188,10 @@ def invalidate_ollama_capability_cache(model_name: str | None = None):
     """
     if model_name is None:
         _OLLAMA_CAPABILITY_CACHE.clear()
+        _OLLAMA_CONTEXT_WINDOW_CACHE.clear()
         return
     _OLLAMA_CAPABILITY_CACHE.pop(model_name.strip().lower(), None)
+    _OLLAMA_CONTEXT_WINDOW_CACHE.pop(model_name.strip().lower(), None)
 
 
 def _is_known_ollama_audio_model(model_name: str | None) -> bool:
@@ -1905,6 +2096,25 @@ def _anthropic_get_json(endpoint: str, timeout: int = 30, cancel_event=None, api
         raise ConnectionError(f"Failed to reach Anthropic API: {exc.reason}") from exc
 
 
+def _attach_http_error_metadata(error: Exception, exc) -> Exception:
+    """ADR-006 stage 6.8: the REST helpers used to raise a bare RuntimeError
+    that destroyed the HTTPError's status/headers - the transport-retry
+    predicate needs both. Attaches `status_code` (int) and `retry_after`
+    (float seconds parsed from the Retry-After header, or None) onto the
+    error about to be raised."""
+    error.status_code = getattr(exc, "code", None)
+    retry_after = None
+    try:
+        headers = getattr(exc, "headers", None)
+        header_value = headers.get("Retry-After") if headers is not None else None
+        if header_value is not None:
+            retry_after = float(str(header_value).strip())
+    except (TypeError, ValueError):
+        retry_after = None
+    error.retry_after = retry_after
+    return error
+
+
 def _anthropic_post_json(endpoint: str, body: dict, timeout: int = 180, cancel_event=None, api_key: str | None = None) -> dict:
     _raise_if_cancelled(cancel_event)
     request = urllib.request.Request(
@@ -1930,7 +2140,8 @@ def _anthropic_post_json(endpoint: str, body: dict, timeout: int = 180, cancel_e
             )
         except json.JSONDecodeError:
             message = error_payload
-        raise RuntimeError(message) from exc
+        # ADR-006 stage 6.8: status/Retry-After survive for the retry layer.
+        raise _attach_http_error_metadata(RuntimeError(message), exc) from exc
     except urllib.error.URLError as exc:
         raise ConnectionError(f"Failed to reach Anthropic API: {exc.reason}") from exc
 
@@ -1965,7 +2176,8 @@ def _anthropic_stream_sse(endpoint: str, body: dict, timeout: int = 180, cancel_
             )
         except json.JSONDecodeError:
             message = error_payload
-        raise RuntimeError(message) from exc
+        # ADR-006 stage 6.8: status/Retry-After survive for the retry layer.
+        raise _attach_http_error_metadata(RuntimeError(message), exc) from exc
     except urllib.error.URLError as exc:
         raise ConnectionError(f"Failed to reach Anthropic API: {exc.reason}") from exc
 
@@ -2165,7 +2377,8 @@ def _gemini_post_json(endpoint: str, body: dict, timeout: int = 120, cancel_even
             message = parsed.get("error", {}).get("message") or error_payload
         except json.JSONDecodeError:
             message = error_payload
-        raise RuntimeError(message) from exc
+        # ADR-006 stage 6.8: status/Retry-After survive for the retry layer.
+        raise _attach_http_error_metadata(RuntimeError(message), exc) from exc
 
 
 def _gemini_stream_sse(endpoint: str, body: dict, timeout: int = 120, cancel_event=None, api_key: str | None = None):
@@ -2194,7 +2407,8 @@ def _gemini_stream_sse(endpoint: str, body: dict, timeout: int = 120, cancel_eve
             message = parsed.get("error", {}).get("message") or error_payload
         except json.JSONDecodeError:
             message = error_payload
-        raise RuntimeError(message) from exc
+        # ADR-006 stage 6.8: status/Retry-After survive for the retry layer.
+        raise _attach_http_error_metadata(RuntimeError(message), exc) from exc
 
     try:
         for raw_line in response:
@@ -2536,16 +2750,31 @@ def chat(task: str, messages: list, **kwargs) -> dict:
                 from backend.providers.base import CancelToken, ChatRequest
                 from backend.providers.ollama_provider import OllamaProvider
 
-                provider = OllamaProvider(model=model, reasoning_level=state.ollama_reasoning_level)
-                content = provider.complete(
+                provider = OllamaProvider(
+                    model=model, reasoning_level=state.ollama_reasoning_level,
+                    # 6.8 review fix: serve exactly what we budget.
+                    context_window=_ollama_effective_context_window(model),
+                )
+                # ADR-006 stage 6.8: Ollama is a network server, so its
+                # blocking call rides the transient-transport retry too.
+                content = _complete_with_transport_retry(
+                    provider,
                     ChatRequest(task=task, messages=messages, extra_kwargs=kwargs),
                     CancelToken(cancel_event),
+                    cancel_event,
                 )
                 return {
                     "message": {
                         "content": content,
                         "role": "assistant",
-                    }
+                    },
+                    # ADR-006 stage 6.8: real token counts from the blocking
+                    # response (see OllamaProvider.complete). SCOPE: only the
+                    # local blocking branches surface usage - the API-mode
+                    # blocking branches deliberately do not, because the chat
+                    # UI streams everywhere since 6.5b and blocking API calls
+                    # are non-chat agent tasks the counter doesn't display.
+                    "usage": getattr(provider, "last_usage", None),
                 }
 
             if state.local_provider_type == config.LOCAL_PROVIDER_LLAMACPP:
@@ -2565,7 +2794,10 @@ def chat(task: str, messages: list, **kwargs) -> dict:
                     "message": {
                         "content": content,
                         "role": "assistant",
-                    }
+                    },
+                    # ADR-006 stage 6.8: same local-blocking usage surface as
+                    # the Ollama branch above (see its scope comment).
+                    "usage": getattr(provider, "last_usage", None),
                 }
 
             raise RuntimeError(f"Unsupported local provider: {state.local_provider_type}")
@@ -2599,7 +2831,9 @@ def chat(task: str, messages: list, **kwargs) -> dict:
                 client=state.api_client, model=api_model,
                 reasoning_level=state.openai_reasoning_level,
             )
-            content = provider.complete(chat_request, token)
+            # ADR-006 stage 6.8: transient-transport retry (429/5xx/
+            # connection failures; never cancellations).
+            content = _complete_with_transport_retry(provider, chat_request, token, cancel_event)
             return {"message": {"content": content, "role": "assistant"}}
 
         if state.api_provider_type == config.API_PROVIDER_ANTHROPIC:
@@ -2609,7 +2843,9 @@ def chat(task: str, messages: list, **kwargs) -> dict:
                 client=state.api_client, api_key=state.api_key, model=api_model,
                 reasoning_level=state.anthropic_reasoning_level,
             )
-            content = provider.complete(chat_request, token)
+            # ADR-006 stage 6.8: transient-transport retry (429/5xx/
+            # connection failures; never cancellations).
+            content = _complete_with_transport_retry(provider, chat_request, token, cancel_event)
             return {"message": {"content": content, "role": "assistant"}}
 
         if state.api_provider_type == config.API_PROVIDER_GEMINI:
@@ -2619,13 +2855,84 @@ def chat(task: str, messages: list, **kwargs) -> dict:
                 api_key=state.api_key, model=api_model,
                 reasoning_level=state.gemini_reasoning_level,
             )
-            content = provider.complete(chat_request, token)
+            # ADR-006 stage 6.8: transient-transport retry (429/5xx/
+            # connection failures; never cancellations).
+            content = _complete_with_transport_retry(provider, chat_request, token, cancel_event)
             return {"message": {"content": content, "role": "assistant"}}
 
         raise RuntimeError(f"Unsupported API provider: {state.api_provider_type}")
 
     except Exception as exc:
         _translate_chat_exception(exc, state, messages)
+
+
+def _is_connection_shaped_error(exc: Exception) -> bool:
+    """The same connection-failure string checks _translate_chat_exception
+    applies (extracted for the transport-retry predicate, ADR-006 stage
+    6.8), plus the ConnectionError type the REST helpers raise directly."""
+    if isinstance(exc, ConnectionError):
+        return True
+    error_str = str(exc).lower()
+    return (
+        "connection refused" in error_str
+        or "connecterror" in error_str
+        or "connection error" in error_str
+        or "all connection attempts failed" in error_str
+    )
+
+
+def _is_transient_transport_error(exc: Exception) -> bool:
+    """ADR-006 stage 6.8: what the transport-retry layer may retry. NEVER a
+    cancellation (the user said stop), NEVER ReasoningWithoutAnswerError
+    (that is Ollama's own CONTENT retry, fully handled inside the provider -
+    the two retry mechanisms must stay distinct). Retryable: an HTTP status
+    in _TRANSPORT_RETRY_STATUS_CODES (from the SDKs' native status_code
+    attribute or the one _attach_http_error_metadata preserves on the REST
+    path), or a connection-shaped transport failure."""
+    if isinstance(exc, (RequestCancelledError, ReasoningWithoutAnswerError)):
+        return False
+    if getattr(exc, "status_code", None) in _TRANSPORT_RETRY_STATUS_CODES:
+        return True
+    return _is_connection_shaped_error(exc)
+
+
+def _transport_retry_wait(exc: Exception, attempt: int, cancel_event) -> None:
+    """One backoff sleep between transport retries: exponential base with
+    ±50% jitter, raised to a server-provided Retry-After when larger, capped
+    at _TRANSPORT_RETRY_MAX_SLEEP_SECONDS. Cancellation is honored on BOTH
+    sides of the sleep, and (when a cancel event exists) DURING it -
+    Event.wait wakes promptly instead of sleeping out the full backoff."""
+    _raise_if_cancelled(cancel_event)
+    delay = _TRANSPORT_RETRY_BASE_BACKOFF_SECONDS * (2 ** attempt)
+    delay *= random.uniform(0.5, 1.5)
+    retry_after = getattr(exc, "retry_after", None)
+    if retry_after:
+        try:
+            delay = max(delay, float(retry_after))
+        except (TypeError, ValueError):
+            pass
+    delay = min(delay, _TRANSPORT_RETRY_MAX_SLEEP_SECONDS)
+    if cancel_event is not None:
+        cancel_event.wait(delay)
+    else:
+        time.sleep(delay)
+    _raise_if_cancelled(cancel_event)
+
+
+def _complete_with_transport_retry(provider, chat_request, token, cancel_event):
+    """ADR-006 stage 6.8: wrap ONE provider's whole blocking complete() call
+    (its own internal content retries included) in the transient-transport
+    retry loop. Used by chat()'s network-backed branches - llama.cpp is
+    excluded at the call sites (in-process inference has no transport)."""
+    attempt = 0
+    while True:
+        try:
+            return provider.complete(chat_request, token)
+        except Exception as exc:
+            if attempt >= _TRANSPORT_RETRY_MAX_ATTEMPTS or not _is_transient_transport_error(exc):
+                raise
+            _transport_retry_wait(exc, attempt, cancel_event)
+            attempt += 1
 
 
 def _translate_chat_exception(exc: Exception, state, messages: list) -> None:
@@ -2767,7 +3074,11 @@ def chat_stream(task: str, messages: list, on_chunk: Callable[[str, bool], None]
                     raise ValueError(f"No Ollama model configured for task: {task}")
                 from backend.providers.ollama_provider import OllamaProvider
 
-                provider = OllamaProvider(model=model, reasoning_level=state.ollama_reasoning_level)
+                provider = OllamaProvider(
+                    model=model, reasoning_level=state.ollama_reasoning_level,
+                    # 6.8 review fix: serve exactly what we budget.
+                    context_window=_ollama_effective_context_window(model),
+                )
             elif state.local_provider_type == config.LOCAL_PROVIDER_LLAMACPP:
                 from backend.providers.llama_cpp_provider import LlamaCppProvider
 
@@ -2814,23 +3125,56 @@ def chat_stream(task: str, messages: list, on_chunk: Callable[[str, bool], None]
         # reaches on_chunk; it only surfaces in the final <think> block where
         # a provider composes one), and "done" carries the full final text
         # this function returns.
-        full_response_content = None
-        for event in provider.stream(
-            ChatRequest(task=task, messages=messages, extra_kwargs=kwargs),
-            CancelToken(cancel_event),
-        ):
-            if event.type == "text":
-                on_chunk(event.text, False)
-            elif event.type == "reset":
-                on_chunk("", True)  # tell the caller: discard the last attempt's partial text
-            elif event.type == "done":
-                full_response_content = event.text
+        # ADR-006 stage 6.8: transient-transport retry around construct+
+        # consume, legal ONLY while nothing has been forwarded to on_chunk
+        # yet - once the first text delta is delivered, an error propagates
+        # to translation exactly as before (silently replaying a half-
+        # delivered stream would corrupt the caller's accumulated text).
+        # llama.cpp is excluded: in-process inference has no transport.
+        transport_retry_allowed = (
+            state.use_api_mode
+            or state.local_provider_type == config.LOCAL_PROVIDER_OLLAMA
+        )
+        attempt = 0
+        while True:
+            full_response_content = None
+            usage = None
+            delivered_any = False
+            try:
+                for event in provider.stream(
+                    ChatRequest(task=task, messages=messages, extra_kwargs=kwargs),
+                    CancelToken(cancel_event),
+                ):
+                    if event.type == "text":
+                        delivered_any = True
+                        on_chunk(event.text, False)
+                    elif event.type == "reset":
+                        on_chunk("", True)  # tell the caller: discard the last attempt's partial text
+                    elif event.type == "done":
+                        full_response_content = event.text
+                        # ADR-006 stage 6.8: providers attach normalized usage
+                        # to their done event when the server reported counts.
+                        usage = getattr(event, "usage", None)
+                break
+            except Exception as retry_exc:
+                if (
+                    not transport_retry_allowed
+                    or delivered_any
+                    or attempt >= _TRANSPORT_RETRY_MAX_ATTEMPTS
+                    or not _is_transient_transport_error(retry_exc)
+                ):
+                    raise
+                _transport_retry_wait(retry_exc, attempt, cancel_event)
+                attempt += 1
 
         return {
             "message": {
                 "content": full_response_content,
                 "role": "assistant",
-            }
+            },
+            # ADR-006 stage 6.8: {"prompt_tokens": ..., "completion_tokens":
+            # ...} or None - additive key, every consumer reads ["message"].
+            "usage": usage,
         }
     except Exception as exc:
         # Same translation chat() gets - a real connection-refused/timeout/
@@ -2838,6 +3182,21 @@ def chat_stream(task: str, messages: list, on_chunk: Callable[[str, bool], None]
         # as the blocking path, not raw exception text (this is the ONLY
         # code path Composer send uses).
         _translate_chat_exception(exc, state, messages)
+
+
+def describe_active_model(task: str, runtime: "ProviderRuntime | None" = None) -> tuple[str, str]:
+    """ADR-006 stage 6.8: (provider, model) for `task` under the given
+    runtime's current snapshot (default session when runtime is None) - the
+    provenance pair intents_chat stamps onto reply nodes and hands the token
+    counter for cost estimation. Local providers report "ollama" /
+    "llama.cpp"; API mode reports the configured provider type string."""
+    state = (runtime if runtime is not None else DEFAULT_RUNTIME).snapshot()
+    if state.use_api_mode:
+        return (state.api_provider_type or "", state.api_models.get(task) or "")
+    if state.local_provider_type == config.LOCAL_PROVIDER_LLAMACPP:
+        model_path = _get_llama_cpp_model_path(task, state.llama_cpp_settings) or ""
+        return ("llama.cpp", Path(model_path).name if model_path else "")
+    return ("ollama", state.ollama_models.get(task) or "")
 
 
 def _build_api_client(provider: str, api_key: str, base_url: str = None):
@@ -2864,7 +3223,16 @@ def _build_api_client(provider: str, api_key: str, base_url: str = None):
             else:
                 raise RuntimeError("OpenAI-compatible API key not configured. Open Settings and save your API key.")
 
-        client = OpenAI(api_key=api_key, base_url=base_url)
+        # ADR-006 stage 6.8: max_retries=0 - api_provider owns transport
+        # retries now (with Retry-After handling and cancel-aware backoff);
+        # leaving the SDK's default 2 would multiply attempts (3 SDK tries
+        # per each of our 3 tries).
+        try:
+            client = OpenAI(api_key=api_key, base_url=base_url, max_retries=0)
+        except TypeError as exc:
+            if "max_retries" not in str(exc):
+                raise
+            client = OpenAI(api_key=api_key, base_url=base_url)
 
     elif provider == config.API_PROVIDER_ANTHROPIC:
         api_key = api_key or _first_env_api_key(_ANTHROPIC_API_KEY_ENV_VARS)
@@ -2875,9 +3243,13 @@ def _build_api_client(provider: str, api_key: str, base_url: str = None):
         try:
             from anthropic import Anthropic
             try:
-                client = Anthropic(api_key=api_key)
+                # ADR-006 stage 6.8: max_retries=0 for the same
+                # no-multiplied-retries reason as the OpenAI client above.
+                client = Anthropic(api_key=api_key, max_retries=0)
             except TypeError as exc:
-                if "unexpected keyword argument 'proxies'" not in str(exc):
+                if "max_retries" in str(exc):
+                    client = Anthropic(api_key=api_key)
+                elif "unexpected keyword argument 'proxies'" not in str(exc):
                     raise
         except ImportError:
             client = None

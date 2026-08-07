@@ -406,7 +406,7 @@ def test_the_real_chat_stream_streams_multiple_incremental_deltas_through_the_se
     )
 
     assert chunks == [("one ", False), ("two ", False), ("three", False)]
-    assert response == {"message": {"content": "one two three", "role": "assistant"}}
+    assert response == {"message": {"content": "one two three", "role": "assistant"}, "usage": None}
 
 
 def test_the_real_chat_stream_forwards_the_retry_reset_to_on_chunk(
@@ -435,7 +435,7 @@ def test_the_real_chat_stream_forwards_the_retry_reset_to_on_chunk(
 def test_the_real_chat_via_the_seam_matches_the_legacy_return_shape(ollama_mode, ollama_chat):
     ollama_chat.responses = [{"message": {"content": "Plain answer."}}]
     response = _REAL_CHAT(config.TASK_CHAT, [{"role": "user", "content": "hi"}])
-    assert response == {"message": {"content": "Plain answer.", "role": "assistant"}}
+    assert response == {"message": {"content": "Plain answer.", "role": "assistant"}, "usage": None}
 
 
 def test_chat_and_chat_stream_actually_route_through_the_provider_seam(
@@ -506,7 +506,7 @@ def test_a_fake_provider_can_substitute_for_ollama_at_the_real_chat_stream_seam(
     )
 
     assert chunks == [("from ", False), ("the ", False), ("fake", False)]
-    assert response == {"message": {"content": "from the fake", "role": "assistant"}}
+    assert response == {"message": {"content": "from the fake", "role": "assistant"}, "usage": None}
     assert len(fake.requests) == 1
 
 
@@ -692,7 +692,10 @@ def test_anthropic_sdk_path_and_rest_fallback_both_route_through_the_provider(mo
     )
     assert content == "sdk answer"
     assert captured["model"] == "claude-opus-5"
-    assert captured["system"] == "be brief"
+    # ADR-006 stage 6.7: system goes out as a cache_control block list.
+    assert captured["system"] == [
+        {"type": "text", "text": "be brief", "cache_control": {"type": "ephemeral"}}
+    ]
 
     # Dict-sentinel client (SDK not installed): falls back to the REST helper.
     rest_calls = {}
@@ -712,6 +715,54 @@ def test_anthropic_sdk_path_and_rest_fallback_both_route_through_the_provider(mo
     assert content == "rest answer"
     assert rest_calls["url"].endswith("/v1/messages")
     assert rest_calls["body"]["model"] == "claude-opus-5"
+
+
+def test_anthropic_system_prompt_carries_cache_control_on_the_rest_transport(monkeypatch):
+    # ADR-006 stage 6.7 exit criterion (request shape): when a system prompt
+    # is present, BOTH transports send it as a content-block list carrying
+    # cache_control - the SDK-side assertions live in the two tests above
+    # (blocking and streaming); this one pins the REST fallback on both the
+    # blocking and streaming paths, plus the no-system-prompt case.
+    from backend.providers import AnthropicProvider, CancelToken as CT, ChatRequest as CR
+
+    expected_system = [
+        {"type": "text", "text": "be brief", "cache_control": {"type": "ephemeral"}}
+    ]
+    messages_with_system = [
+        {"role": "system", "content": "be brief"},
+        {"role": "user", "content": "hi"},
+    ]
+
+    # Blocking REST path.
+    rest_calls = {}
+
+    def fake_post(url, body, **kwargs):
+        rest_calls["body"] = body
+        return {"content": [{"type": "text", "text": "rest answer"}]}
+
+    monkeypatch.setattr("backend.providers.anthropic_provider._anthropic_post_json", fake_post)
+    provider = AnthropicProvider(
+        client={"provider": "anthropic", "transport": "rest"}, api_key="k", model="claude-opus-5"
+    )
+    provider.complete(CR(task=config.TASK_CHAT, messages=messages_with_system), CT())
+    assert rest_calls["body"]["system"] == expected_system
+
+    # Streaming REST path.
+    sse_calls = {}
+
+    def fake_stream_sse(url, body, timeout=180, cancel_event=None, api_key=None):
+        sse_calls["body"] = body
+        yield from _anthropic_raw_events(with_thinking=False)
+
+    monkeypatch.setattr(
+        "backend.providers.anthropic_provider._anthropic_stream_sse", fake_stream_sse
+    )
+    list(provider.stream(CR(task=config.TASK_CHAT, messages=messages_with_system), CT()))
+    assert sse_calls["body"]["system"] == expected_system
+
+    # No system message: the key is absent entirely, exactly as before.
+    provider.complete(CR(task=config.TASK_CHAT, messages=[{"role": "user", "content": "hi"}]), CT())
+    assert "system" not in rest_calls["body"]
 
 
 def test_gemini_deletes_uploaded_files_even_when_the_generation_call_fails(monkeypatch):
@@ -786,6 +837,9 @@ def test_chat_routes_every_api_provider_through_its_provider_class(monkeypatch):
     ]:
         monkeypatch.setattr(api_provider, "API_PROVIDER_TYPE", provider_type)
         response = _REAL_CHAT(config.TASK_CHAT, [{"role": "user", "content": "hi"}])
+        # ADR-006 stage 6.8 scope note: the API-mode BLOCKING branches
+        # deliberately do not surface usage (the chat UI streams everywhere
+        # since 6.5b) - no "usage" key here, unlike the local branches.
         assert response == {"message": {"content": f"{label} answer", "role": "assistant"}}
     assert calls == ["OpenAIProvider", "AnthropicProvider", "GeminiProvider"]
 
@@ -928,7 +982,7 @@ def test_chat_routes_the_llama_cpp_local_branch_through_its_provider_class(monke
 
     response = _REAL_CHAT(config.TASK_CHAT, [{"role": "user", "content": "hi"}])
 
-    assert response == {"message": {"content": "LlamaCppProvider answer", "role": "assistant"}}
+    assert response == {"message": {"content": "LlamaCppProvider answer", "role": "assistant"}, "usage": None}
     assert seen["complete"] == 1
     assert seen["init"] == {"settings": settings}  # the snapshot's dict copy, values intact
 
@@ -1089,7 +1143,7 @@ def test_openai_stream_yields_incremental_deltas_reasoning_and_a_done_matching_c
     assert events[-1].text == "Hello world"
     assert stream.close_calls >= 1  # the finally closed the exhausted stream
     # Same request prep as complete(): reasoning kwargs applied for TASK_CHAT.
-    chat_keys = set(captured) - {"model", "messages", "stream"}
+    chat_keys = set(captured) - {"model", "messages", "stream", "stream_options"}
     assert chat_keys == set(api_provider.openai_reasoning_kwargs("gpt-5", "high"))
 
 
@@ -1163,7 +1217,10 @@ def test_anthropic_sdk_stream_yields_deltas_and_composes_done_like_the_blocking_
     # Identical composition to _extract_anthropic_text's blocking contract.
     assert events[-1].text == "<think>pondering...</think>\nAnswer."
     assert captured["model"] == "claude-opus-5"
-    assert captured["system"] == "be brief"
+    # ADR-006 stage 6.7: system goes out as a cache_control block list.
+    assert captured["system"] == [
+        {"type": "text", "text": "be brief", "cache_control": {"type": "ephemeral"}}
+    ]
     assert live.close_calls >= 1
 
 
@@ -1703,7 +1760,8 @@ def test_chat_stream_streams_real_deltas_through_each_api_provider_branch(
 
     assert chunks == [("one ", False), ("two ", False), ("three", False)]  # reasoning never forwarded
     assert response == {
-        "message": {"content": "<think>never forwarded</think>\none two three", "role": "assistant"}
+        "message": {"content": "<think>never forwarded</think>\none two three", "role": "assistant"},
+        "usage": None,
     }
     seen.pop("task")
     if class_name in ("OpenAIProvider", "AnthropicProvider"):
@@ -2092,3 +2150,369 @@ def test_llama_cpp_preload_success_writes_settings_after_the_preload_completes(m
     assert order == ["preload", "write"]
     assert result["preloaded"] is True
     assert runtime.snapshot().llama_cpp_settings["chat_model_path"] == str(model_path)
+
+
+# -- ADR-006 stage 6.8: real usage rides the done event ------------------------
+#
+# Convention (backend/providers/base.py): providers never emit a standalone
+# "usage" event - normalized {"prompt_tokens", "completion_tokens"} counts
+# attach to the terminal "done" event, and chat_stream surfaces them in its
+# return dict's additive "usage" key.
+
+
+def test_ollama_stream_done_event_carries_normalized_usage(ollama_chat):
+    done_part = _part(content="Answer.", done=True)
+    done_part["prompt_eval_count"] = 12
+    done_part["eval_count"] = 34
+    ollama_chat.streams = [FakeOllamaStream([done_part])]
+    provider = OllamaProvider(model="llava:13b")
+    events = list(provider.stream(
+        ChatRequest(task=config.TASK_CHAT, messages=[{"role": "user", "content": "hi"}]),
+        CancelToken(),
+    ))
+    assert events[-1].type == "done"
+    assert events[-1].usage == {"prompt_tokens": 12, "completion_tokens": 34}
+
+
+def test_ollama_blocking_chat_surfaces_usage_in_the_return_dict(ollama_mode, ollama_chat):
+    ollama_chat.responses = [{
+        "message": {"content": "Plain answer."},
+        "prompt_eval_count": 7,
+        "eval_count": 9,
+    }]
+    response = _REAL_CHAT(config.TASK_CHAT, [{"role": "user", "content": "hi"}])
+    assert response["usage"] == {"prompt_tokens": 7, "completion_tokens": 9}
+
+
+def test_openai_stream_requests_include_usage_and_captures_the_usage_chunk():
+    import types
+
+    usage_chunk = types.SimpleNamespace(
+        choices=[],
+        usage=types.SimpleNamespace(prompt_tokens=100, completion_tokens=25),
+    )
+    stream = FakeSDKStream([_openai_chunk(content="Hi"), usage_chunk])
+    client, stream, captured = _fake_openai_streaming_client(stream)
+    from backend.providers import OpenAIProvider
+
+    provider = OpenAIProvider(client=client, model="gpt-4o")
+    events = list(provider.stream(
+        ChatRequest(task=config.TASK_CHAT, messages=[{"role": "user", "content": "hi"}]),
+        CancelToken(),
+    ))
+    assert captured["stream_options"] == {"include_usage": True}
+    assert events[-1].type == "done"
+    assert events[-1].usage == {"prompt_tokens": 100, "completion_tokens": 25}
+
+
+def test_openai_stream_retries_once_without_stream_options_when_the_server_rejects_it():
+    import types
+
+    calls = []
+    stream = FakeSDKStream([_openai_chunk(content="Hi")])
+
+    def create(**kwargs):
+        calls.append(kwargs)
+        if "stream_options" in kwargs:
+            raise TypeError("create() got an unexpected keyword argument 'stream_options'")
+        return stream
+
+    client = types.SimpleNamespace(
+        chat=types.SimpleNamespace(completions=types.SimpleNamespace(create=create))
+    )
+    from backend.providers import OpenAIProvider
+
+    provider = OpenAIProvider(client=client, model="gpt-4o")
+    events = list(provider.stream(
+        ChatRequest(task=config.TASK_CHAT, messages=[{"role": "user", "content": "hi"}]),
+        CancelToken(),
+    ))
+    assert len(calls) == 2
+    assert "stream_options" not in calls[1]  # degraded retry, no usage
+    assert events[-1].type == "done"
+    assert events[-1].usage is None
+
+
+def test_anthropic_stream_captures_input_and_output_tokens_from_the_event_flow():
+    import types
+
+    from backend.providers import AnthropicProvider
+
+    events_in = [
+        {"type": "message_start", "message": {"role": "assistant", "usage": {"input_tokens": 55}}},
+        {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "Answer."}},
+        {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 21}},
+        {"type": "message_stop"},
+    ]
+    live = FakeSDKStream(events_in)
+    sdk_client = types.SimpleNamespace(
+        messages=types.SimpleNamespace(create=lambda **kwargs: live)
+    )
+    provider = AnthropicProvider(client=sdk_client, api_key="k", model="claude-opus-5")
+    events = list(provider.stream(
+        ChatRequest(task=config.TASK_CHAT, messages=[{"role": "user", "content": "hi"}]),
+        CancelToken(),
+    ))
+    assert events[-1].type == "done"
+    assert events[-1].usage == {"prompt_tokens": 55, "completion_tokens": 21}
+
+
+def test_gemini_stream_captures_usage_metadata_from_the_trailing_frame(monkeypatch):
+    from backend.providers import GeminiProvider
+
+    def fake_stream_sse(url, body, timeout=120, cancel_event=None, api_key=None):
+        yield _gemini_sse_payload({"text": "Answer."})
+        yield {
+            "candidates": [{"content": {"parts": []}}],
+            "usageMetadata": {"promptTokenCount": 40, "candidatesTokenCount": 8},
+        }
+
+    monkeypatch.setattr(
+        "backend.providers.gemini_provider._prepare_gemini_contents",
+        lambda messages, cancel_event=None, api_key=None: (None, [{"parts": [{"text": "hi"}]}], []),
+    )
+    monkeypatch.setattr("backend.providers.gemini_provider._gemini_stream_sse", fake_stream_sse)
+    provider = GeminiProvider(api_key="k", model="gemini-2.5-pro")
+    events = list(provider.stream(
+        ChatRequest(task=config.TASK_CHAT, messages=[{"role": "user", "content": "hi"}]),
+        CancelToken(),
+    ))
+    assert events[-1].type == "done"
+    assert events[-1].usage == {"prompt_tokens": 40, "completion_tokens": 8}
+
+
+def test_llama_cpp_stream_usage_stays_none_by_design(monkeypatch):
+    # llama.cpp stream chunks don't reliably carry usage - the done event's
+    # usage is deliberately None (the counter falls back to its estimator).
+    from backend.providers import LlamaCppProvider
+
+    chunks = FakeSDKStream([
+        {"choices": [{"delta": {"content": "Answer."}}]},
+    ])
+    import types
+
+    fake_client = types.SimpleNamespace(
+        create_chat_completion=lambda messages, stream=False, **kwargs: chunks
+    )
+    monkeypatch.setattr(
+        "backend.providers.llama_cpp_provider._get_llama_cpp_client",
+        lambda task, settings: fake_client,
+    )
+    monkeypatch.setattr(
+        "backend.providers.llama_cpp_provider._assert_llama_cpp_message_support",
+        lambda messages: None,
+    )
+    provider = LlamaCppProvider(settings={"chat_model_path": "m.gguf"})
+    events = list(provider.stream(
+        ChatRequest(task=config.TASK_CHAT, messages=[{"role": "user", "content": "hi"}]),
+        CancelToken(),
+    ))
+    assert events[-1].type == "done"
+    assert events[-1].usage is None
+
+
+# -- ADR-006 stage 6.8: transient-transport retry ------------------------------
+#
+# Distinct from Ollama's own reasoning-content retry: the transport layer
+# wraps the WHOLE provider stream/complete call, retries only 429/5xx/
+# connection-shaped failures, honors Retry-After, and never retries after
+# the first delta reached on_chunk (or a cancellation, ever).
+
+
+def _transient_error(message="transient boom", status_code=None, retry_after=None):
+    error = RuntimeError(message)
+    if status_code is not None:
+        error.status_code = status_code
+    if retry_after is not None:
+        error.retry_after = retry_after
+    return error
+
+
+def _install_flaky_ollama_factory(monkeypatch, failures, events=None, fail_after_first_delta=False):
+    """Swap chat_stream's OllamaProvider for a factory whose stream raises
+    the scripted failures (one per attempt) before finally succeeding."""
+    from backend.providers import ollama_provider as op_module
+
+    remaining = list(failures)
+    calls = {"streams": 0}
+
+    class FlakyFactory:
+        def __init__(self, **_kwargs):
+            from backend.providers.base import ProviderCapabilities
+
+            self.capabilities = ProviderCapabilities(streaming=True)
+
+        def stream(self, request, cancel):
+            calls["streams"] += 1
+            if fail_after_first_delta:
+                yield ProviderEvent("text", "partial ")
+                raise remaining.pop(0)
+            if remaining:
+                raise remaining.pop(0)
+                yield  # pragma: no cover - keeps this a generator
+            for event in events or [ProviderEvent("text", "ok"), ProviderEvent("done", "ok")]:
+                yield event
+
+    monkeypatch.setattr(op_module, "OllamaProvider", FlakyFactory)
+    monkeypatch.setattr(api_provider, "chat_stream", _REAL_CHAT_STREAM)
+    return calls
+
+
+def _capture_transport_sleeps(monkeypatch):
+    sleeps = []
+    monkeypatch.setattr(api_provider.time, "sleep", lambda seconds: sleeps.append(seconds))
+    return sleeps
+
+
+def test_429_with_retry_after_sleeps_exactly_that_long_then_succeeds(monkeypatch, ollama_mode):
+    # THE stage exit criterion: Retry-After wins over the (smaller) jittered
+    # backoff, exactly one sleep, then the retried stream succeeds.
+    sleeps = _capture_transport_sleeps(monkeypatch)
+    calls = _install_flaky_ollama_factory(
+        monkeypatch, [_transient_error(status_code=429, retry_after=5.0)]
+    )
+
+    chunks = []
+    response = api_provider.chat_stream(
+        config.TASK_CHAT, [{"role": "user", "content": "hi"}],
+        lambda delta, reset: chunks.append(delta),
+    )
+
+    assert response["message"]["content"] == "ok"
+    assert chunks == ["ok"]
+    assert sleeps == [5.0]
+    assert calls["streams"] == 2
+
+
+def test_500_is_retried_with_jittered_backoff(monkeypatch, ollama_mode):
+    sleeps = _capture_transport_sleeps(monkeypatch)
+    _install_flaky_ollama_factory(monkeypatch, [_transient_error(status_code=500)])
+
+    response = api_provider.chat_stream(
+        config.TASK_CHAT, [{"role": "user", "content": "hi"}], lambda d, r: None
+    )
+
+    assert response["message"]["content"] == "ok"
+    assert len(sleeps) == 1
+    assert 0.5 <= sleeps[0] <= 1.5  # base 1.0s with +/-50% jitter
+
+
+def test_transport_errors_after_the_first_delta_are_never_retried(monkeypatch, ollama_mode):
+    sleeps = _capture_transport_sleeps(monkeypatch)
+    calls = _install_flaky_ollama_factory(
+        monkeypatch, [_transient_error("server exploded", status_code=429)],
+        fail_after_first_delta=True,
+    )
+
+    with pytest.raises(RuntimeError, match="server exploded"):
+        api_provider.chat_stream(
+            config.TASK_CHAT, [{"role": "user", "content": "hi"}], lambda d, r: None
+        )
+    assert sleeps == []
+    assert calls["streams"] == 1
+
+
+def test_request_cancelled_error_is_never_retried(monkeypatch, ollama_mode):
+    sleeps = _capture_transport_sleeps(monkeypatch)
+    calls = _install_flaky_ollama_factory(
+        monkeypatch, [api_provider.RequestCancelledError("cancelled")]
+    )
+
+    with pytest.raises(api_provider.RequestCancelledError):
+        api_provider.chat_stream(
+            config.TASK_CHAT, [{"role": "user", "content": "hi"}], lambda d, r: None
+        )
+    assert sleeps == []
+    assert calls["streams"] == 1
+
+
+def test_non_transient_errors_are_never_retried(monkeypatch, ollama_mode):
+    sleeps = _capture_transport_sleeps(monkeypatch)
+    calls = _install_flaky_ollama_factory(monkeypatch, [_transient_error("a schema error")])
+
+    with pytest.raises(RuntimeError, match="a schema error"):
+        api_provider.chat_stream(
+            config.TASK_CHAT, [{"role": "user", "content": "hi"}], lambda d, r: None
+        )
+    assert sleeps == []
+    assert calls["streams"] == 1
+
+
+def test_retries_are_capped_at_the_max_attempt_count(monkeypatch, ollama_mode):
+    sleeps = _capture_transport_sleeps(monkeypatch)
+    calls = _install_flaky_ollama_factory(
+        monkeypatch,
+        [_transient_error(status_code=503) for _ in range(5)],  # more than the cap
+    )
+
+    with pytest.raises(RuntimeError):
+        api_provider.chat_stream(
+            config.TASK_CHAT, [{"role": "user", "content": "hi"}], lambda d, r: None
+        )
+    assert len(sleeps) == api_provider._TRANSPORT_RETRY_MAX_ATTEMPTS  # 2 retries, 3 tries
+    assert calls["streams"] == 1 + api_provider._TRANSPORT_RETRY_MAX_ATTEMPTS
+
+
+def test_cancel_during_backoff_aborts_promptly(monkeypatch, ollama_mode):
+    import time as time_module
+
+    _install_flaky_ollama_factory(
+        monkeypatch, [_transient_error(status_code=429, retry_after=10.0)]
+    )
+    cancel_event = threading.Event()
+    timer = threading.Timer(0.05, cancel_event.set)
+    timer.start()
+    started = time_module.monotonic()
+    try:
+        with pytest.raises(api_provider.RequestCancelledError):
+            api_provider.chat_stream(
+                config.TASK_CHAT, [{"role": "user", "content": "hi"}], lambda d, r: None,
+                cancellation_event=cancel_event,
+            )
+    finally:
+        timer.cancel()
+    # A 10s Retry-After must NOT be slept out - Event.wait wakes on cancel.
+    assert time_module.monotonic() - started < 2.0
+
+
+def test_blocking_complete_rides_the_same_transport_retry(monkeypatch):
+    sleeps = _capture_transport_sleeps(monkeypatch)
+
+    class FlakyBlocking:
+        def __init__(self):
+            self.calls = 0
+
+        def complete(self, request, token):
+            self.calls += 1
+            if self.calls == 1:
+                raise _transient_error(status_code=502)
+            return "recovered"
+
+    provider = FlakyBlocking()
+    result = api_provider._complete_with_transport_retry(provider, None, None, None)
+    assert result == "recovered"
+    assert provider.calls == 2
+    assert len(sleeps) == 1
+
+
+def test_rest_http_errors_preserve_status_and_retry_after(monkeypatch):
+    import email.message
+    import io
+    import urllib.error
+
+    headers = email.message.Message()
+    headers["Retry-After"] = "7"
+    http_error = urllib.error.HTTPError(
+        "https://api.anthropic.com/v1/messages", 429, "Too Many Requests",
+        headers, io.BytesIO(b'{"error": {"message": "rate limited"}}'),
+    )
+
+    def raising_urlopen(request, timeout=None):
+        raise http_error
+
+    monkeypatch.setattr(api_provider.urllib.request, "urlopen", raising_urlopen)
+    with pytest.raises(RuntimeError, match="rate limited") as excinfo:
+        api_provider._anthropic_post_json("https://api.anthropic.com/v1/messages", {}, api_key="k")
+    assert excinfo.value.status_code == 429
+    assert excinfo.value.retry_after == 7.0
+    assert api_provider._is_transient_transport_error(excinfo.value) is True

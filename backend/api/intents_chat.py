@@ -101,6 +101,13 @@ def _regenerate_in_place(document, node_to_regenerate, reply_text):
     placeholder_text = text_content if text_content else PLACEHOLDER_GENERATED_CONTENT
     document.update_chat_node_content(node_to_regenerate.id, placeholder_text)
 
+    # ADR-006 stage 6.8 review fix: the old reply's token stamps describe
+    # content that no longer exists - reset to None ("not reported"); fresh
+    # usage for the NEW reply, when the provider reports it, overwrites via
+    # _make_on_usage (which _dispatch invokes after this commit).
+    node_to_regenerate.state.prompt_tokens = None
+    node_to_regenerate.state.completion_tokens = None
+
     bx, by = node_to_regenerate.x, node_to_regenerate.y
     for part in parsed_parts:
         if part["type"] == "thinking":
@@ -135,13 +142,59 @@ def _land_partial_reply_node(document, parent_node, partial_text):
     document.last_chat_node_id = ai_node.id
 
 
+def _stamp_reply_provenance(node, agent_dispatcher) -> None:
+    """ADR-006 stage 6.8: stamp provider/model on an ordinary chat reply
+    node (previously only branch-synthesis recorded them) - resolved from
+    the dispatcher's active runtime snapshot. Best-effort: provenance must
+    never fail the reply."""
+    try:
+        provider, model = agent_dispatcher.active_provider_model()
+    except Exception:
+        return
+    node.state.provider = provider or None
+    node.state.model = model or None
+
+
+def _make_on_usage(
+    document, agent_dispatcher, token_counter, publish_token_counter, publish_scene, node_ref
+):
+    """ADR-006 stage 6.8: the shared real-usage completion callback for both
+    reply flows (module-level for the same 300-line-cap reason as its
+    siblings). `node_ref` is a callable returning the id of the node the
+    counts belong to (send: the reply node created by _on_reply; regenerate:
+    the regenerated node). Records the counter's real usage (with
+    provider/model for cost estimation) and stamps the counts on the node.
+    Partials and cancels never reach here - no usage exists for dead
+    streams, so they keep the estimator."""
+
+    async def _on_usage(usage):
+        provider, model = agent_dispatcher.active_provider_model()
+        token_counter.set_real_usage(
+            usage.get("prompt_tokens"), usage.get("completion_tokens"),
+            provider=provider, model=model,
+        )
+        await publish_token_counter()
+        node_id = node_ref()
+        if node_id and node_id in document.nodes:
+            target = document.nodes[node_id]
+            target.state.prompt_tokens = usage.get("prompt_tokens")
+            target.state.completion_tokens = usage.get("completion_tokens")
+            await publish_scene()
+
+    return _on_usage
+
+
 def _make_regenerate_on_reply(
-    document, bus, notifications, token_counter, publish_token_counter, node_to_regenerate
+    document, bus, notifications, token_counter, publish_token_counter, node_to_regenerate,
+    agent_dispatcher=None,
 ):
     """regenerate_response's completion callback, built at module level for
     the same 300-line-cap reason as its siblings above (ADR-006 stage 6.4's
     streaming/partial additions pushed register_chat_intents over). Body
-    moved VERBATIM from the former inline closure - no step reordered."""
+    moved VERBATIM from the former inline closure - no step reordered.
+    ADR-006 stage 6.8: `agent_dispatcher` (additive, default-None for older
+    direct callers) enables provider/model provenance stamping on the
+    regenerated node."""
 
     async def _on_reply(reply_text):
         # R8a: outputTokens reflects what the model actually returned,
@@ -194,6 +247,9 @@ def _make_regenerate_on_reply(
             lambda: _regenerate_in_place(document, node_to_regenerate, reply_text),
             node_ids=[node_to_regenerate.id, *existing_children],
         )
+        # ADR-006 stage 6.8: provenance for the regenerated content.
+        if agent_dispatcher is not None:
+            _stamp_reply_provenance(node_to_regenerate, agent_dispatcher)
 
         # last_chat_node_id: DELIBERATELY untouched. See §5.
 
@@ -302,7 +358,15 @@ def register_chat_intents(
             document.chat_branch_history(context_parent_edge.source) if context_parent_edge else []
         )
         token_counter.set_context_text(_history_token_text(context_history))
+        # 6.8 review fix: a new request starts on estimates - see
+        # TokenCounterState.reset_real_usage.
+        token_counter.reset_real_usage()
         await publish_token_counter()
+
+        # ADR-006 stage 6.8: set by _on_reply once the reply node exists, so
+        # _on_usage (which _dispatch invokes AFTER on_reply on success) can
+        # stamp the real counts onto that node.
+        reply_ref = {"node_id": None}
 
         async def _on_reply(reply_text):
             # R6.3: the assistant's reply has completed (regardless of
@@ -362,6 +426,11 @@ def register_chat_intents(
                 lambda: _build_reply_nodes(document, node, placeholder_text, parsed_parts),
                 node_ids=[node.id],
             )
+            # ADR-006 stage 6.8: stamp provider/model provenance on the
+            # reply (previously only branch-synthesis nodes carried it),
+            # and remember the node for _on_usage's per-node token stamp.
+            _stamp_reply_provenance(ai_node, agent_dispatcher)
+            reply_ref["node_id"] = ai_node.id
 
             # NOTE: the calls inside _create_reply_nodes above MUST use the
             # `document.` prefix. Before ADR-002 stage 2.6, a bare
@@ -396,12 +465,18 @@ def register_chat_intents(
             await publish_token_counter()
             _land_partial_reply_node(document, node, partial_text)
 
+        _on_usage = _make_on_usage(
+            document, agent_dispatcher, token_counter, publish_token_counter,
+            publish_scene, lambda: reply_ref["node_id"],
+        )
+
         await agent_dispatcher.start_chat_reply(
             bus=bus,
             notifications_state=notifications,
             composer_document=composer_document,
             conversation_history=history,
             on_reply=_on_reply,
+            on_usage=_on_usage,
             # R6.1: lets AgentDispatcher resolve a branch-attached System
             # Prompt note override (see backend/agents.py's
             # _resolve_branch_system_prompt) - node.id is the just-created
@@ -439,11 +514,13 @@ def register_chat_intents(
         # against, so it's usable directly as contextTokens with no
         # adjustment.
         token_counter.set_context_text(_history_token_text(history))
+        # 6.8 review fix: same request-start reset as send_message above.
+        token_counter.reset_real_usage()
         await publish_token_counter()
 
         _on_reply = _make_regenerate_on_reply(
             document, bus, notifications, token_counter, publish_token_counter,
-            node_to_regenerate,
+            node_to_regenerate, agent_dispatcher,
         )
 
         def _on_partial(partial_text):
@@ -452,12 +529,18 @@ def register_chat_intents(
                 return
             _land_partial_regenerate(document, node_to_regenerate, partial_text)
 
+        _on_usage = _make_on_usage(
+            document, agent_dispatcher, token_counter, publish_token_counter,
+            publish_scene, lambda: node_to_regenerate.id,
+        )
+
         await agent_dispatcher.start_chat_reply(
             bus=bus,
             notifications_state=notifications,
             composer_document=composer_document,
             conversation_history=history,
             on_reply=_on_reply,
+            on_usage=_on_usage,
             # ADR-006 stage 6.4: streams, closing R4.4's deferral. The old
             # Composer-preview objection is dissolved by IDENTITY, not
             # suppression - the overrides below key the frames to the target

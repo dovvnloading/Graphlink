@@ -108,8 +108,13 @@ function findColorLiteralsInInlineStyles(source: string): string[] {
 // (the same greyscale link token .chat-node-content a already uses)
 // instead of an undefined token whose hex fallback was the only
 // saturated color in the app's otherwise entirely greyscale palette.
+// Keyed with FORWARD slashes and looked up through a normalized path:
+// globSync returns backslash-separated paths on Windows and slash-separated
+// on Linux, and CI's frontend job runs on ubuntu (2026-08-07 Actions-minutes
+// economy) while dev boxes are Windows - a separator-literal key silently
+// empties the allowlist on whichever OS it wasn't written on.
 const PINNED_APP_CSS_LITERALS: Record<string, string[]> = {
-  "app\\styles.css": [
+  "app/styles.css": [
     "rgba(0, 0, 0, 0.45)",
     "rgba(0, 0, 0, 0.45)",
     "rgba(0, 0, 0, 0.43)",
@@ -150,7 +155,7 @@ describe("no raw color literals in app CSS", () => {
     const css = readFileSync(join(REPO_SRC, relPath), "utf-8");
     const literals = findColorLiteralsInCssDeclarationValues(css);
 
-    expect(literals).toEqual(PINNED_APP_CSS_LITERALS[relPath] ?? []);
+    expect(literals).toEqual(PINNED_APP_CSS_LITERALS[relPath.replaceAll("\\", "/")] ?? []);
   });
 });
 

@@ -339,7 +339,47 @@ def test_token_counter_payload_totals_all_three():
     state = TokenCounterState(input_tokens=5, output_tokens=2, context_tokens=1)
     payload = state.payload()
     assert payload["totalTokens"] == 8
-    assert set(payload) == {"inputTokens", "outputTokens", "contextTokens", "totalTokens"}
+    # ADR-006 stage 6.8: the four estimate keys plus the real-usage keys
+    # (null/False until a provider reports counts).
+    assert set(payload) == {
+        "inputTokens", "outputTokens", "contextTokens", "totalTokens",
+        "promptTokens", "completionTokens", "usageIsReal", "estimatedCostUsd",
+    }
+    assert payload["promptTokens"] is None
+    assert payload["usageIsReal"] is False
+    assert payload["estimatedCostUsd"] is None
+
+
+def test_token_counter_real_usage_switches_total_and_estimates_cost():
+    # ADR-006 stage 6.8: real usage REPLACES the estimate total (prompt
+    # already includes context+input - alternatives, not additive).
+    state = TokenCounterState(input_tokens=5, output_tokens=2, context_tokens=1)
+    state.set_real_usage(1_000_000, 1_000_000, provider="Anthropic Claude", model="claude-sonnet-4-5")
+    payload = state.payload()
+    assert payload["usageIsReal"] is True
+    assert payload["promptTokens"] == 1_000_000
+    assert payload["completionTokens"] == 1_000_000
+    assert payload["totalTokens"] == 2_000_000  # not 2_000_008
+    assert payload["estimatedCostUsd"] == 18.0  # 3.0 in + 15.0 out per MTok
+
+
+def test_token_counter_new_draft_typing_resets_real_usage():
+    state = TokenCounterState()
+    state.set_real_usage(10, 20, provider="ollama", model="llama3:8b")
+    assert state.payload()["usageIsReal"] is True
+    assert state.payload()["estimatedCostUsd"] == 0.0  # local models cost nothing
+    state.set_input_text("a new draft")
+    payload = state.payload()
+    assert payload["usageIsReal"] is False
+    assert payload["estimatedCostUsd"] is None
+
+
+def test_token_counter_unknown_cloud_model_has_no_cost_guess():
+    from backend.token_counter import estimate_cost_usd
+
+    assert estimate_cost_usd("OpenAI-Compatible", "totally-unknown", 100, 100) is None
+    assert estimate_cost_usd("ollama", "anything", 100, 100) == 0.0
+    assert estimate_cost_usd("Anthropic Claude", "claude-opus-5", None, None) is None
 
 
 def test_set_output_text_estimates_the_same_way_as_set_input_text():

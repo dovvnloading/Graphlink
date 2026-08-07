@@ -27,6 +27,16 @@ class TokenCounterStatePayload:
     outputTokens: int
     contextTokens: int
     totalTokens: int
+    # ADR-006 stage 6.8: provider-reported real usage. promptTokens/
+    # completionTokens are null until a reply's provider reports counts;
+    # usageIsReal marks whether totalTokens is exact (prompt+completion)
+    # or the estimator's input+output+context sum - alternatives, never
+    # additive (prompt already covers context+input). estimatedCostUsd is
+    # null for unknown models, 0.0 for local providers.
+    promptTokens: int | None = None
+    completionTokens: int | None = None
+    usageIsReal: bool = False
+    estimatedCostUsd: float | None = None
     # See ComposerStatePayload's identical field for the full negotiation
     # rationale; optional for the same reason (models a sender predating this
     # field, not today's - IslandBridge.publish() always emits it).

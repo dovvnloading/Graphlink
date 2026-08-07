@@ -35,6 +35,7 @@ from backend.providers.base import (
     ChatRequest,
     ProviderCapabilities,
     ProviderEvent,
+    normalize_usage,
 )
 
 
@@ -45,6 +46,7 @@ class LlamaCppProvider:
         # caller's snapshot, same immutability contract as every provider
         # in this package.
         self.settings = settings
+        self.last_usage: dict | None = None  # ADR-006 stage 6.8 - see complete()
         self.capabilities = ProviderCapabilities(
             streaming=True,  # 6.5b: real local token streaming via create_chat_completion(stream=True)
             reasoning=llama_cpp_supports_reasoning(str(settings.get("chat_model_path", ""))),
@@ -64,6 +66,14 @@ class LlamaCppProvider:
         )
         response = client.create_chat_completion(messages=llama_messages, **llama_kwargs)
         _raise_if_cancelled(cancel.event)
+        # ADR-006 stage 6.8: llama.cpp's blocking response carries an
+        # OpenAI-shaped usage dict; captured on a side attribute for
+        # api_provider.chat()'s llama.cpp branch to surface.
+        response_usage = _extract_response_field(response, "usage", None) or {}
+        self.last_usage = normalize_usage(
+            _extract_response_field(response_usage, "prompt_tokens", None),
+            _extract_response_field(response_usage, "completion_tokens", None),
+        )
         return _extract_llama_cpp_text(response)
 
     def stream(self, request: ChatRequest, cancel: CancelToken) -> Iterator[ProviderEvent]:
@@ -125,6 +135,10 @@ class LlamaCppProvider:
         # a synthetic blocking-shaped response through _extract_llama_cpp_text
         # gives identical <think> composition, reasoning-without-answer
         # detection, and empty-response error as complete() for the same data.
+        # ADR-006 stage 6.8: llama.cpp stream chunks do not reliably carry
+        # usage (llama-cpp-python emits no usage on delta chunks) - the done
+        # event's usage stays None deliberately; the token counter falls back
+        # to its estimator for this provider's streamed replies.
         yield ProviderEvent("done", _extract_llama_cpp_text({
             "choices": [{"message": {
                 "content": "".join(content_parts),

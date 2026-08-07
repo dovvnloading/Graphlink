@@ -696,3 +696,12 @@ class ChatState(NodeState):
     # The frontend renders an "interrupted - Regenerate to retry" banner on
     # it; a successful regenerate (update_chat_node_content) clears it.
     response_incomplete: bool = False
+    # ADR-006 stage 6.8: the provider-reported token counts for the reply
+    # this node holds (normalized in backend/providers/base.py's
+    # normalize_usage). None means "not reported" - every node created
+    # before this field existed, every user message, and every provider
+    # path that reports no usage (llama.cpp streams). Rides the same
+    # provenance posture as provider/model above, which ordinary chat
+    # replies also stamp as of 6.8.
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None

@@ -2004,6 +2004,13 @@ class SceneDocument(BranchOps, GroupOps, CommandOps):
             "responseIncomplete": (
                 n.state.response_incomplete if isinstance(n.state, ChatState) else False
             ),
+            # ADR-006 stage 6.8: provider-reported usage stamped on chat
+            # replies - see ChatState's own comment. Nullable, like
+            # provider/model above.
+            "promptTokens": n.state.prompt_tokens if isinstance(n.state, ChatState) else None,
+            "completionTokens": (
+                n.state.completion_tokens if isinstance(n.state, ChatState) else None
+            ),
             "isFinalDeliverable": n.id == self.final_deliverable_node_id,
             "researchStage": n.state.research_stage if isinstance(n.state, WebResearchState) else "",
             "researchCompleted": n.state.research_completed if isinstance(n.state, WebResearchState) else 0,

@@ -653,6 +653,13 @@ class AgentDispatcher:
         self._runs with other cancel_event-bearing kinds."""
         return self._runs.cancel(request_id, kind="gitlink_run")
 
+    def active_provider_model(self) -> tuple[str, str]:
+        """ADR-006 stage 6.8: the (provider, model) pair a chat dispatch
+        would use right now, from THIS session's runtime (default session ->
+        module-backed DEFAULT_RUNTIME). intents_chat stamps it onto reply
+        nodes and hands it to the token counter for cost estimation."""
+        return api_provider.describe_active_model(config.TASK_CHAT, self._provider_runtime)
+
     def persona(self) -> str:
         """Mirror legacy graphlink_window.py's `_get_current_system_prompt`:
         fully suppressed (empty string) when the user has disabled the
@@ -789,6 +796,7 @@ class AgentDispatcher:
         canvas_document=None,
         node_id: str | None = None,
         on_partial=None,
+        on_usage=None,
     ) -> None:
         """The shared real-dispatch pipeline behind both start_chat_reply
         (Composer, state_topic="app-composer") and start_conversation_reply
@@ -921,6 +929,52 @@ class AgentDispatcher:
                 # now both read this single resolved value instead).
                 override = self._resolve_branch_system_prompt(canvas_document, node_id)
                 persona_text = override if override is not None else self.persona()
+                # ADR-006 stage 6.7: a note override reaches the wire RAW
+                # (never wrapped in "You are Graphlink Assistant. ...") -
+                # flagged to _call_chat_agent(_stream) only when an override
+                # is actually present, so every default-path test fake of
+                # the exact pre-6.7 arity keeps working (same omit-when-
+                # default pattern as _runtime_kwargs).
+                override_kwargs = {"persona_is_override": True} if override is not None else {}
+
+                # ADR-006 stage 6.6: trim/summarize notification. ChatWorker
+                # invokes this on the WORKER thread when older turns had to
+                # be dropped to fit the model's context window - marshal to
+                # the loop (run_coroutine_threadsafe, the coroutine sibling
+                # of _thread_on_chunk's call_soon_threadsafe pattern) and
+                # surface it as an info notification.
+                dispatch_loop = asyncio.get_running_loop()
+
+                def _thread_on_context_trimmed(dropped_count: int, summarized: bool) -> None:
+                    message = (
+                        "Older conversation turns were summarized to fit the "
+                        "model's context window."
+                        if summarized
+                        else "Older conversation turns were dropped to fit the "
+                        "model's context window."
+                    )
+
+                    async def _notify() -> None:
+                        notifications_state.show(message, "info")
+                        await bus.publish("notification")
+
+                    asyncio.run_coroutine_threadsafe(_notify(), dispatch_loop)
+
+                # ADR-006 stage 6.8: real-usage capture. The worker writes
+                # the provider's normalized usage dict into this holder
+                # BEFORE its to_thread future resolves (ChatWorker.run calls
+                # on_usage before returning), so the read in the success
+                # path below is ordered-after the write by the future's own
+                # happens-before edge - no marshaling needed for a single
+                # pre-join write. Passed to the drivers omit-when-None (only
+                # when the caller actually supplied on_usage), preserving
+                # the strict-arity compat pin for every other dispatch.
+                usage_holder = {"usage": None}
+
+                def _thread_on_usage(usage_dict) -> None:
+                    usage_holder["usage"] = usage_dict
+
+                usage_kwargs = {"on_usage": _thread_on_usage} if on_usage is not None else {}
                 # ADR-006 stage 6.4: the loop-side partial-text accumulator.
                 # A dict, not a str, so _pump (a different coroutine) can
                 # mutate it and the except blocks below can read it after the
@@ -1034,6 +1088,9 @@ class AgentDispatcher:
                                 # ADR-006 stage 6.5: non-default sessions only
                                 # - see _runtime_kwargs' own docstring.
                                 **self._runtime_kwargs(),
+                                **override_kwargs,
+                                **usage_kwargs,
+                                on_context_trimmed=_thread_on_context_trimmed,
                             ),
                             timeout=WATCHDOG_TIMEOUT_SECONDS,
                         )
@@ -1052,6 +1109,9 @@ class AgentDispatcher:
                             persona_text,
                             cancel_event,
                             **self._runtime_kwargs(),
+                            **override_kwargs,
+                            **usage_kwargs,
+                            on_context_trimmed=_thread_on_context_trimmed,
                         ),
                         timeout=WATCHDOG_TIMEOUT_SECONDS,
                     )
@@ -1059,6 +1119,14 @@ class AgentDispatcher:
                     await on_reply(reply_text)
                 else:
                     on_reply(reply_text)
+                # ADR-006 stage 6.8: hand real usage to the caller AFTER
+                # on_reply (same success-path ordering as on_reply itself) -
+                # only on success, only when the provider reported counts.
+                if on_usage is not None and usage_holder["usage"]:
+                    if inspect.iscoroutinefunction(on_usage):
+                        await on_usage(usage_holder["usage"])
+                    else:
+                        on_usage(usage_holder["usage"])
                 await bus.publish("scene")
             except asyncio.TimeoutError:
                 cancel_event.set()
@@ -1125,6 +1193,7 @@ class AgentDispatcher:
         canvas_document=None,
         node_id: str | None = None,
         on_partial=None,
+        on_usage=None,
         on_begin=None,
         on_end=None,
         state_topic: str | None = None,
@@ -1159,6 +1228,9 @@ class AgentDispatcher:
             canvas_document=canvas_document,
             node_id=node_id,
             on_partial=on_partial,
+            # ADR-006 stage 6.8: caller-supplied real-usage callback (see
+            # _dispatch) - intents_chat wires it to the token counter.
+            on_usage=on_usage,
         )
 
     async def start_conversation_reply(
@@ -3088,44 +3160,53 @@ def _is_sandbox_error_output(output_text, return_code) -> bool:
     return any(keyword in lowered for keyword in _SANDBOX_ERROR_KEYWORDS)
 
 
-def _call_chat_agent(conversation_history, persona_text, cancel_event, *, runtime=None) -> str:
+def _call_chat_agent(conversation_history, persona_text, cancel_event, *, runtime=None,
+                     persona_is_override=False, on_context_trimmed=None, on_usage=None) -> str:
     """Runs inside asyncio.to_thread - a real OS thread, not the event loop.
 
     ADR-006 stage 6.5: `runtime` is an additive keyword-only kwarg, forwarded
     to ChatAgent.get_response only when non-None - _dispatch's call site only
     passes it for a non-default session (see AgentDispatcher._runtime_kwargs),
-    so every test fake of the exact pre-6.5 arity keeps working."""
+    so every test fake of the exact pre-6.5 arity keeps working.
+
+    ADR-006 stage 6.7: `persona_is_override` (additive keyword-only, passed
+    by _dispatch only when True - same omit-when-default pattern as runtime)
+    marks persona_text as a user's branch-attached System Prompt note
+    override. An override reaches the wire RAW, never wrapped in
+    "You are Graphlink Assistant. {override}" - the user wrote the exact
+    system prompt they want. The old "(default persona)" QUIRK this
+    function's comment used to document is also fixed: a blank persona_text
+    (system prompt disabled in Settings) now yields an EMPTY system prompt
+    (no system message at all) - see ChatAgent.__init__."""
     agent = ChatAgent("Graphlink Assistant", persona_text)
-    # KNOWN PRE-EXISTING LEGACY QUIRK, ported as-is (not fixed here - see the
-    # final report): ChatAgent.__init__ does
-    # `self.persona = persona or "(default persona)"`, so when persona_text
-    # is "" (system prompt disabled), self.persona becomes the literal
-    # "(default persona)" and system_prompt ends up
-    # "You are Graphlink Assistant. (default persona)." - not truly
-    # empty/suppressed the way disabling the setting is clearly meant to.
+    resolved = persona_text if persona_is_override else agent.system_prompt
     return agent.get_response(
         conversation_history,
         # current_node=None is never dereferenced: ChatWorker.run only walks
         # current_node when resolved_system_prompt is None, and a real value
-        # (agent.system_prompt, NOT the raw persona_text - see below) is
-        # always supplied here.
+        # is always supplied here ("" when disabled counts: run()'s
+        # use_system_prompt guard suppresses the system message for it).
         current_node=None,
         cancellation_event=cancel_event,
-        # Pass agent.system_prompt (the "You are {name}. {persona}." string
-        # ChatAgent always builds), NOT the raw persona_text - getting this
-        # backwards would silently drop the "You are Graphlink Assistant. "
-        # prefix.
-        resolved_system_prompt=agent.system_prompt,
+        # Default-persona path: agent.system_prompt (the composed
+        # "You are {name}. {persona}" string, or "" when disabled).
+        # Override path: the RAW note text, uncomposed.
+        resolved_system_prompt=resolved,
         **({"runtime": runtime} if runtime is not None else {}),
+        # ADR-006 stage 6.6: trim/summarize signal - forwarded omit-when-None.
+        **({"on_context_trimmed": on_context_trimmed} if on_context_trimmed is not None else {}),
+        # ADR-006 stage 6.8: real-usage signal - forwarded omit-when-None.
+        **({"on_usage": on_usage} if on_usage is not None else {}),
     )
 
 
-def _call_chat_agent_stream(conversation_history, persona_text, cancel_event, on_chunk, *, runtime=None) -> str:
+def _call_chat_agent_stream(conversation_history, persona_text, cancel_event, on_chunk, *, runtime=None,
+                            persona_is_override=False, on_context_trimmed=None, on_usage=None) -> str:
     """Runs inside asyncio.to_thread - a real OS thread, not the event loop.
     Streaming counterpart to _call_chat_agent (R4.4) - same persona/
-    current_node/resolved_system_prompt quirks and guarantees as that
-    function (see its own docstring for the "(default persona)" note, which
-    applies identically here since both build the ChatAgent the same way).
+    current_node/resolved_system_prompt guarantees as that function (see its
+    own docstring; the 6.7 disable/override fixes apply identically here
+    since both build the ChatAgent the same way).
 
     The only difference is the trailing `on_chunk` argument, forwarded
     straight through to ChatAgent.get_response's additive `on_chunk` kwarg
@@ -3140,15 +3221,22 @@ def _call_chat_agent_stream(conversation_history, persona_text, cancel_event, on
 
     ADR-006 stage 6.5: `runtime` follows _call_chat_agent's contract exactly
     (additive keyword-only, forwarded only when non-None - see its own
-    docstring)."""
+    docstring). ADR-006 stage 6.7: `persona_is_override` follows
+    _call_chat_agent's contract exactly too (raw override passthrough,
+    passed by _dispatch only when True)."""
     agent = ChatAgent("Graphlink Assistant", persona_text)
+    resolved = persona_text if persona_is_override else agent.system_prompt
     return agent.get_response(
         conversation_history,
         current_node=None,
         cancellation_event=cancel_event,
-        resolved_system_prompt=agent.system_prompt,
+        resolved_system_prompt=resolved,
         on_chunk=on_chunk,
         **({"runtime": runtime} if runtime is not None else {}),
+        # ADR-006 stage 6.6: trim/summarize signal - forwarded omit-when-None.
+        **({"on_context_trimmed": on_context_trimmed} if on_context_trimmed is not None else {}),
+        # ADR-006 stage 6.8: real-usage signal - forwarded omit-when-None.
+        **({"on_usage": on_usage} if on_usage is not None else {}),
     )
 
 

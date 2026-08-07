@@ -35,7 +35,20 @@ from backend.providers.base import (
     ChatRequest,
     ProviderCapabilities,
     ProviderEvent,
+    normalize_usage,
 )
+
+
+def _usage_from_metadata(usage_metadata) -> dict | None:
+    """ADR-006 stage 6.8: usageMetadata's promptTokenCount/
+    candidatesTokenCount, normalized. Present on the blocking payload and on
+    the trailing SSE frame(s) - last non-empty wins on the stream."""
+    if not isinstance(usage_metadata, dict):
+        return None
+    return normalize_usage(
+        usage_metadata.get("promptTokenCount"),
+        usage_metadata.get("candidatesTokenCount"),
+    )
 
 
 class GeminiProvider:
@@ -43,6 +56,7 @@ class GeminiProvider:
         self.api_key = api_key
         self.model_id = model
         self.reasoning_level = reasoning_level
+        self.last_usage: dict | None = None  # ADR-006 stage 6.8 - see complete()
         self.capabilities = ProviderCapabilities(
             streaming=True,  # 6.5b: real SSE via :streamGenerateContent?alt=sse
             reasoning=gemini_supports_reasoning(model),
@@ -85,6 +99,10 @@ class GeminiProvider:
             for file_name in uploaded_files:
                 _gemini_delete_file(file_name, api_key=self.api_key)
 
+        # ADR-006 stage 6.8: blocking usage captured on a side attribute
+        # (complete() returns a bare str by protocol); api_provider.chat()
+        # deliberately does not surface API-mode blocking usage today.
+        self.last_usage = _usage_from_metadata(payload.get("usageMetadata"))
         return _extract_gemini_text(payload)
 
     def stream(self, request: ChatRequest, cancel: CancelToken) -> Iterator[ProviderEvent]:
@@ -100,6 +118,7 @@ class GeminiProvider:
         try:
             request_body = self._request_body(request, system_prompt, gemini_contents)
             text_parts: list[str] = []
+            usage = None
             sse = _gemini_stream_sse(
                 f"{GEMINI_BASE_URL}/v1beta/models/{self.model_id}:streamGenerateContent?alt=sse",
                 request_body,
@@ -119,6 +138,10 @@ class GeminiProvider:
                     # would return the partial text as a complete response.
                     # Raise with the same message extraction _gemini_post_json
                     # applies to that exact payload shape.
+                    # ADR-006 stage 6.8: usageMetadata rides the trailing
+                    # frame(s); keep the last non-empty one.
+                    usage = _usage_from_metadata(payload.get("usageMetadata")) or usage
+
                     error_info = payload.get("error")
                     if error_info:
                         message = (
@@ -165,4 +188,4 @@ class GeminiProvider:
             for file_name in uploaded_files:
                 _gemini_delete_file(file_name, api_key=self.api_key)
 
-        yield ProviderEvent("done", final)
+        yield ProviderEvent("done", final, usage=usage)

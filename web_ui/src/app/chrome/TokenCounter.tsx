@@ -17,6 +17,10 @@ import type { ComposerStore } from "./composerStore";
 export function TokenCounter({ store }: { store: ComposerStore }) {
   const counter = useSyncExternalStore(store.subscribe, store.getTokenCounter);
   const [hovered, setHovered] = useState(false);
+  // ADR-006 stage 6.8: when the provider reported real counts, the total is
+  // exact (prompt+completion); otherwise it is the estimator's sum. ADR-016
+  // requires the two to be labeled apart, never conflated.
+  const usageLabel = counter.usageIsReal ? "exact" : "estimated";
 
   return (
     <div
@@ -48,10 +52,30 @@ export function TokenCounter({ store }: { store: ComposerStore }) {
             <span className="token-counter-label">Context</span>
             <span className="token-counter-value">{counter.contextTokens}</span>
           </span>
+          {counter.promptTokens != null && (
+            <span className="token-counter-row">
+              <span className="token-counter-label">Prompt (exact)</span>
+              <span className="token-counter-value">{counter.promptTokens}</span>
+            </span>
+          )}
+          {counter.completionTokens != null && (
+            <span className="token-counter-row">
+              <span className="token-counter-label">Completion (exact)</span>
+              <span className="token-counter-value">{counter.completionTokens}</span>
+            </span>
+          )}
           <span className="token-counter-row token-counter-total">
-            <span className="token-counter-label">Total</span>
+            <span className="token-counter-label">Total ({usageLabel})</span>
             <span className="token-counter-value">{counter.totalTokens}</span>
           </span>
+          {counter.estimatedCostUsd != null && (
+            <span className="token-counter-row">
+              <span className="token-counter-label">Est. cost</span>
+              <span className="token-counter-value">
+                {`$${counter.estimatedCostUsd.toFixed(4)}`}
+              </span>
+            </span>
+          )}
         </div>
       )}
     </div>
