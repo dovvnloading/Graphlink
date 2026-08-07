@@ -8,6 +8,7 @@ the other four providers still live in api_provider's if/elif surface until
 stages 6.3+ port them one by one.
 """
 
+from backend.providers.anthropic_provider import AnthropicProvider
 from backend.providers.base import (
     CancelToken,
     ChatRequest,
@@ -16,13 +17,20 @@ from backend.providers.base import (
     ProviderEvent,
 )
 from backend.providers.fake import FakeProvider
+from backend.providers.gemini_provider import GeminiProvider
+from backend.providers.llama_cpp_provider import LlamaCppProvider
 from backend.providers.ollama_provider import OllamaProvider
+from backend.providers.openai_provider import OpenAIProvider
 
 __all__ = [
+    "AnthropicProvider",
     "CancelToken",
     "ChatRequest",
     "FakeProvider",
+    "GeminiProvider",
+    "LlamaCppProvider",
     "OllamaProvider",
+    "OpenAIProvider",
     "Provider",
     "ProviderCapabilities",
     "ProviderEvent",

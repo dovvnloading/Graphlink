@@ -10,12 +10,18 @@ Layer map:
    reasoning retry with its "reset" event, cancellation closing the live
    stream, think-kwarg/system-hint gating on TASK_CHAT, and the
    empty-vs-reasoning-only error distinction.
-4. The stage's EXIT CRITERION - api_provider.chat_stream's REAL machinery
+4. The 6.1 EXIT CRITERION - api_provider.chat_stream's REAL machinery
    (not the suite-wide conftest stub, which this file explicitly restores
    the real function over) streams multiple incremental deltas end to end
    through the provider seam, with only the network call faked. Before this
    stage, that path was untestable without a live Ollama server - the seam
    is what makes it testable, which is the point of the stage.
+5. Stage 6.3 - the four remaining providers (OpenAI/Anthropic/Gemini/
+   llama.cpp): the pinned per-provider capability matrix (that stage's exit
+   criterion as data), the C4 multimodal conversion (image_bytes ->
+   image_url data URI, audio_file -> input_audio), per-provider port
+   fidelity against faked SDK clients/HTTP helpers, and seam-wiring proof
+   that chat()'s API branches construct and invoke the provider classes.
 """
 
 from __future__ import annotations
@@ -529,6 +535,260 @@ def test_api_provider_never_imports_the_providers_package_at_module_level():
     )
 
 
+# -- stage 6.3: the four remaining providers ---------------------------------
+
+
+def _fake_openai_client(response_text="ok"):
+    import types
+
+    captured = {}
+
+    def create(**kwargs):
+        captured.update(kwargs)
+        return types.SimpleNamespace(
+            choices=[types.SimpleNamespace(message=types.SimpleNamespace(content=response_text))]
+        )
+
+    client = types.SimpleNamespace(
+        chat=types.SimpleNamespace(completions=types.SimpleNamespace(create=create))
+    )
+    return client, captured
+
+
+def test_the_capability_matrix_is_pinned_per_provider():
+    """The 6.3 exit criterion's matrix, as data: what each provider+model
+    pair can actually do. A capability flipping here must be a deliberate
+    stage (6.4 flips streaming), never a drive-by."""
+    from backend.providers import (
+        AnthropicProvider,
+        GeminiProvider,
+        LlamaCppProvider,
+        OpenAIProvider,
+    )
+
+    matrix = {
+        "ollama": OllamaProvider(model="qwen3:8b").capabilities,
+        "openai": OpenAIProvider(client=None, model="gpt-5").capabilities,
+        "anthropic": AnthropicProvider(client=None, api_key="k", model="claude-opus-5").capabilities,
+        "gemini": GeminiProvider(api_key="k", model="gemini-2.5-pro").capabilities,
+        "llama_cpp": LlamaCppProvider(settings={"chat_model_path": "m.gguf"}).capabilities,
+    }
+    expected = {
+        #            streaming, reasoning, vision, audio, image_gen
+        "ollama":    (True,  True,  True,  True,  False),  # media rides the images field; audio model-gated at request time
+        "openai":    (False, True,  True,  True,  False),  # C4: vision+audio real; image_gen probed from the client (None here)
+        "anthropic": (False, True,  True,  False, False),
+        "gemini":    (False, True,  True,  True,  True),
+        "llama_cpp": (False, False, False, False, False),
+    }
+    actual = {
+        name: (c.streaming, c.reasoning, c.vision, c.audio, c.image_generation)
+        for name, c in matrix.items()
+    }
+    assert actual == expected
+
+    # OpenAI's image_generation is client-derived, not asserted: an endpoint
+    # actually exposing images.generate reports True.
+    from backend.providers import OpenAIProvider as _OP
+
+    client_with_images, _ = _fake_openai_client()
+    import types as _types
+
+    client_with_images.images = _types.SimpleNamespace(generate=lambda **kw: None)
+    assert _OP(client=client_with_images, model="gpt-5").capabilities.image_generation is True
+
+
+def test_openai_c4_image_bytes_become_a_data_uri_image_url_part():
+    from backend.providers.openai_provider import prepare_openai_messages
+
+    png = b"\x89PNG\r\n\x1a\nfake"
+    jpg = b"\xff\xd8\xfffake"
+    prepared = prepare_openai_messages([{
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "what are these"},
+            {"type": "image_bytes", "data": png},
+            {"type": "image_bytes", "data": jpg},
+        ],
+    }])
+    parts = prepared[0]["content"]
+    assert parts[0] == {"type": "text", "text": "what are these"}
+    assert parts[1]["type"] == "image_url"
+    assert parts[1]["image_url"]["url"].startswith("data:image/png;base64,")
+    assert parts[2]["image_url"]["url"].startswith("data:image/jpeg;base64,")
+
+
+def test_openai_c4_audio_file_becomes_input_audio_and_odd_containers_error(monkeypatch, tmp_path):
+    from backend.providers import openai_provider as op
+
+    monkeypatch.setattr(op, "_read_attachment_bytes", lambda path, kind: b"fake-mp3-bytes")
+    prepared = op.prepare_openai_messages([{
+        "role": "user",
+        "content": [{"type": "audio_file", "path": str(tmp_path / "clip.mp3")}],
+    }])
+    part = prepared[0]["content"][0]
+    assert part["type"] == "input_audio"
+    assert part["input_audio"]["format"] == "mp3"
+    import base64
+    assert base64.b64decode(part["input_audio"]["data"]) == b"fake-mp3-bytes"
+
+    with pytest.raises(RuntimeError, match="WAV and MP3"):
+        op.prepare_openai_messages([{
+            "role": "user",
+            "content": [{"type": "audio_file", "path": str(tmp_path / "clip.m4a")}],
+        }])
+
+
+def test_openai_plain_string_messages_pass_through_byte_identical():
+    from backend.providers.openai_provider import prepare_openai_messages
+
+    messages = [{"role": "user", "content": "just text"}]
+    assert prepare_openai_messages(messages)[0] is messages[0]
+
+
+def test_openai_complete_sends_model_prepared_messages_and_gates_reasoning_on_task():
+    from backend.providers import CancelToken as CT, ChatRequest as CR, OpenAIProvider
+
+    client, captured = _fake_openai_client("answer")
+    provider = OpenAIProvider(client=client, model="gpt-5", reasoning_level="high")
+
+    content = provider.complete(
+        CR(task=config.TASK_CHAT, messages=[{"role": "user", "content": "hi"}]), CT()
+    )
+    assert content == "answer"
+    assert captured["model"] == "gpt-5"
+    assert captured["messages"] == [{"role": "user", "content": "hi"}]
+    chat_keys = set(captured) - {"model", "messages"}
+    assert chat_keys == set(api_provider.openai_reasoning_kwargs("gpt-5", "high"))
+
+    captured.clear()
+    provider.complete(
+        CR(task=config.TASK_TITLE, messages=[{"role": "user", "content": "hi"}]), CT()
+    )
+    assert set(captured) == {"model", "messages"}  # non-chat tasks never reason
+
+
+def test_anthropic_sdk_path_and_rest_fallback_both_route_through_the_provider(monkeypatch):
+    import types
+
+    from backend.providers import AnthropicProvider, CancelToken as CT, ChatRequest as CR
+
+    # SDK-shaped client: messages.create is callable.
+    captured = {}
+
+    def create(**kwargs):
+        captured.update(kwargs)
+        return {"content": [{"type": "text", "text": "sdk answer"}]}
+
+    sdk_client = types.SimpleNamespace(messages=types.SimpleNamespace(create=create))
+    provider = AnthropicProvider(client=sdk_client, api_key="k", model="claude-opus-5")
+    content = provider.complete(
+        CR(task=config.TASK_CHAT, messages=[
+            {"role": "system", "content": "be brief"},
+            {"role": "user", "content": "hi"},
+        ]),
+        CT(),
+    )
+    assert content == "sdk answer"
+    assert captured["model"] == "claude-opus-5"
+    assert captured["system"] == "be brief"
+
+    # Dict-sentinel client (SDK not installed): falls back to the REST helper.
+    rest_calls = {}
+
+    def fake_post(url, body, **kwargs):
+        rest_calls["url"] = url
+        rest_calls["body"] = body
+        return {"content": [{"type": "text", "text": "rest answer"}]}
+
+    monkeypatch.setattr("backend.providers.anthropic_provider._anthropic_post_json", fake_post)
+    provider = AnthropicProvider(
+        client={"provider": "anthropic", "transport": "rest"}, api_key="k", model="claude-opus-5"
+    )
+    content = provider.complete(
+        CR(task=config.TASK_CHAT, messages=[{"role": "user", "content": "hi"}]), CT()
+    )
+    assert content == "rest answer"
+    assert rest_calls["url"].endswith("/v1/messages")
+    assert rest_calls["body"]["model"] == "claude-opus-5"
+
+
+def test_gemini_deletes_uploaded_files_even_when_the_generation_call_fails(monkeypatch):
+    from backend.providers import CancelToken as CT, ChatRequest as CR, GeminiProvider
+
+    deleted = []
+    monkeypatch.setattr(
+        "backend.providers.gemini_provider._prepare_gemini_contents",
+        lambda messages, cancel_event=None, api_key=None: (None, [{"parts": [{"text": "hi"}]}], ["files/abc"]),
+    )
+    monkeypatch.setattr(
+        "backend.providers.gemini_provider._gemini_delete_file",
+        lambda name, api_key=None: deleted.append(name),
+    )
+
+    def failing_post(url, body, **kwargs):
+        raise RuntimeError("503 from Gemini")
+
+    monkeypatch.setattr("backend.providers.gemini_provider._gemini_post_json", failing_post)
+    provider = GeminiProvider(api_key="k", model="gemini-2.5-pro")
+    with pytest.raises(RuntimeError, match="503"):
+        provider.complete(CR(task=config.TASK_CHAT, messages=[{"role": "user", "content": "hi"}]), CT())
+    assert deleted == ["files/abc"]  # the load-bearing finally survived the port
+
+
+def test_llama_cpp_rejects_media_up_front_with_the_actionable_message():
+    from backend.providers import CancelToken as CT, ChatRequest as CR, LlamaCppProvider
+
+    provider = LlamaCppProvider(settings={"chat_model_path": "m.gguf"})
+    with pytest.raises(RuntimeError, match="Use Ollama or Gemini"):
+        provider.complete(
+            CR(task=config.TASK_CHAT, messages=[{
+                "role": "user",
+                "content": [{"type": "image_bytes", "data": b"\x89PNG"}],
+            }]),
+            CT(),
+        )
+
+
+def test_chat_routes_every_api_provider_through_its_provider_class(monkeypatch):
+    """Seam-wiring for the three API-mode branches - the same not-just-
+    behavior-parity proof the Ollama port got."""
+    import types
+
+    calls = []
+    for module_name, class_name in [
+        ("backend.providers.openai_provider", "OpenAIProvider"),
+        ("backend.providers.anthropic_provider", "AnthropicProvider"),
+        ("backend.providers.gemini_provider", "GeminiProvider"),
+    ]:
+        module = __import__(module_name, fromlist=[class_name])
+        real = getattr(module, class_name)
+
+        def make_counting(real_cls, label):
+            class Counting(real_cls):
+                def complete(self, request, cancel):
+                    calls.append(label)
+                    return f"{label} answer"
+            return Counting
+
+        monkeypatch.setattr(module, class_name, make_counting(real, class_name))
+
+    monkeypatch.setattr(api_provider, "USE_API_MODE", True)
+    monkeypatch.setattr(api_provider, "API_KEY", "k")
+    monkeypatch.setattr(api_provider, "API_CLIENT", _fake_openai_client()[0])
+    monkeypatch.setitem(api_provider.API_MODELS, config.TASK_CHAT, "some-model")
+
+    for provider_type, label in [
+        (config.API_PROVIDER_OPENAI, "OpenAIProvider"),
+        (config.API_PROVIDER_ANTHROPIC, "AnthropicProvider"),
+        (config.API_PROVIDER_GEMINI, "GeminiProvider"),
+    ]:
+        monkeypatch.setattr(api_provider, "API_PROVIDER_TYPE", provider_type)
+        response = _REAL_CHAT(config.TASK_CHAT, [{"role": "user", "content": "hi"}])
+        assert response == {"message": {"content": f"{label} answer", "role": "assistant"}}
+    assert calls == ["OpenAIProvider", "AnthropicProvider", "GeminiProvider"]
+
+
 def test_cancellation_through_the_real_chat_stream_is_the_untranslated_sentinel(
     monkeypatch, ollama_mode, ollama_chat
 ):
@@ -546,3 +806,317 @@ def test_cancellation_through_the_real_chat_stream_is_the_untranslated_sentinel(
             lambda delta, reset: None,
             cancellation_event=cancel_event,
         )
+
+
+@pytest.fixture
+def openai_api_mode(monkeypatch):
+    """6.3 review fix: API-mode state pointing at the OpenAI branch, client
+    installable per-test. Mirrors the ollama_mode fixture pattern."""
+    monkeypatch.setattr(api_provider, "USE_API_MODE", True)
+    monkeypatch.setattr(api_provider, "API_PROVIDER_TYPE", config.API_PROVIDER_OPENAI)
+    monkeypatch.setattr(api_provider, "API_KEY", "k")
+    monkeypatch.setitem(api_provider.API_MODELS, config.TASK_CHAT, "some-model")
+
+    def install_client(client):
+        monkeypatch.setattr(api_provider, "API_CLIENT", client)
+
+    return install_client
+
+
+def test_openai_complete_routes_multimodal_messages_through_the_c4_conversion():
+    """6.3 review fix: the pure-function tests above prove prepare_openai_messages
+    works; nothing proved complete() actually CALLS it. A port that passed
+    request.messages raw to the SDK (the exact pre-C4 bug) would have passed
+    every prior test - here the fake client's captured messages must contain
+    the converted image_url data-URI part."""
+    import base64
+
+    from backend.providers import CancelToken as CT, ChatRequest as CR, OpenAIProvider
+
+    client, captured = _fake_openai_client("seen")
+    provider = OpenAIProvider(client=client, model="gpt-5")
+    png = b"\x89PNG\r\n\x1a\nfake"
+
+    content = provider.complete(
+        CR(task=config.TASK_CHAT, messages=[{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "what is this"},
+                {"type": "image_bytes", "data": png},
+            ],
+        }]),
+        CT(),
+    )
+
+    assert content == "seen"
+    sent_parts = captured["messages"][0]["content"]
+    assert sent_parts[0] == {"type": "text", "text": "what is this"}
+    assert sent_parts[1]["type"] == "image_url"
+    expected_uri = "data:image/png;base64," + base64.b64encode(png).decode("ascii")
+    assert sent_parts[1]["image_url"]["url"] == expected_uri
+
+
+def test_llama_cpp_complete_happy_path_wires_prep_client_kwargs_and_extraction(monkeypatch):
+    """6.3 review fix: the llama.cpp port only had its media-rejection guard
+    tested - the happy path (prep -> cached-client lookup -> kwargs filter ->
+    create_chat_completion -> text extraction) never ran. All api_provider
+    helpers are faked at the provider module's namespace, so this pins the
+    provider's ORCHESTRATION of them, not their internals."""
+    from backend.providers import CancelToken as CT, ChatRequest as CR, LlamaCppProvider
+    from backend.providers import llama_cpp_provider as lp
+
+    prepared_marker = [{"role": "user", "content": "prepared"}]
+    captured = {}
+
+    class FakeLlamaClient:
+        def create_chat_completion(self, messages=None, **kwargs):
+            captured["messages"] = messages
+            captured["kwargs"] = kwargs
+            return {"choices": [{"message": {"content": "llama answer"}}]}
+
+    fake_client = FakeLlamaClient()
+    settings = {"chat_model_path": "m.gguf"}
+    monkeypatch.setattr(lp, "_prepare_llama_cpp_messages", lambda messages, task, s: prepared_marker)
+    monkeypatch.setattr(lp, "_get_llama_cpp_client", lambda task, s: fake_client)
+    monkeypatch.setattr(lp, "_prepare_llama_cpp_kwargs", lambda kwargs, s: dict(kwargs))
+    monkeypatch.setattr(lp, "_filter_kwargs_for_callable", lambda fn, kwargs: dict(kwargs))
+    monkeypatch.setattr(
+        lp, "_extract_llama_cpp_text",
+        lambda response: response["choices"][0]["message"]["content"],
+    )
+
+    provider = LlamaCppProvider(settings=settings)
+    content = provider.complete(
+        CR(
+            task=config.TASK_CHAT,
+            messages=[{"role": "user", "content": "hi"}],
+            extra_kwargs={"temperature": 0.5, "cancellation_event": threading.Event()},
+        ),
+        CT(),
+    )
+
+    assert content == "llama answer"
+    assert captured["messages"] is prepared_marker  # prepared, not raw, messages reached the client
+    assert captured["kwargs"] == {"temperature": 0.5}  # cancellation_event stripped
+
+
+def test_chat_routes_the_llama_cpp_local_branch_through_its_provider_class(monkeypatch):
+    """6.3 review fix: the seam-wiring proof covered the three API branches
+    but not the fourth ported branch - chat()'s llama.cpp local path. Same
+    counting-subclass pattern; also pins that the provider is constructed
+    from the request snapshot's settings dict."""
+    from backend.providers import llama_cpp_provider as lp
+
+    seen = {"complete": 0}
+    real = lp.LlamaCppProvider
+
+    class Counting(real):
+        def __init__(self, **kwargs):
+            seen["init"] = dict(kwargs)
+            super().__init__(**kwargs)
+
+        def complete(self, request, cancel):
+            seen["complete"] += 1
+            return "LlamaCppProvider answer"
+
+    monkeypatch.setattr(lp, "LlamaCppProvider", Counting)
+    monkeypatch.setattr(api_provider, "USE_API_MODE", False)
+    monkeypatch.setattr(api_provider, "LOCAL_PROVIDER_TYPE", config.LOCAL_PROVIDER_LLAMACPP)
+    settings = {"chat_model_path": "m.gguf", "reasoning_level": "off"}
+    monkeypatch.setattr(api_provider, "LLAMA_CPP_SETTINGS", settings)
+
+    response = _REAL_CHAT(config.TASK_CHAT, [{"role": "user", "content": "hi"}])
+
+    assert response == {"message": {"content": "LlamaCppProvider answer", "role": "assistant"}}
+    assert seen["complete"] == 1
+    assert seen["init"] == {"settings": settings}  # the snapshot's dict copy, values intact
+
+
+def test_a_preset_cancellation_event_escapes_chat_untranslated_in_api_mode(openai_api_mode):
+    """6.3 review fix: the cancellation sentinel was only proven through the
+    Ollama streaming path. chat() checks the event BEFORE dispatching to any
+    API branch, and _translate_chat_exception must re-raise the sentinel
+    untouched - so the fake client must never be reached."""
+    client, captured = _fake_openai_client()
+    openai_api_mode(client)
+    cancel_event = threading.Event()
+    cancel_event.set()  # cancelled before dispatch
+
+    with pytest.raises(api_provider.RequestCancelledError):
+        _REAL_CHAT(
+            config.TASK_CHAT,
+            [{"role": "user", "content": "hi"}],
+            cancellation_event=cancel_event,
+        )
+    assert captured == {}  # the provider/client was never invoked
+
+
+def test_connection_refused_in_api_mode_surfaces_the_friendly_endpoint_message(openai_api_mode):
+    """6.3 review fix: error translation was untested through the ported API
+    branches. A raw connection-refused from the OpenAI-compatible client must
+    surface as _translate_chat_exception's actionable Base-URL message (with
+    the raw detail appended), not as the raw exception text."""
+    import types
+
+    def refusing_create(**kwargs):
+        raise Exception("connection refused by endpoint")
+
+    client = types.SimpleNamespace(
+        chat=types.SimpleNamespace(completions=types.SimpleNamespace(create=refusing_create))
+    )
+    openai_api_mode(client)
+
+    with pytest.raises(ConnectionError) as excinfo:
+        _REAL_CHAT(config.TASK_CHAT, [{"role": "user", "content": "hi"}])
+
+    message = str(excinfo.value)
+    assert message.startswith(
+        "Failed to connect to the API endpoint. "
+        "Please verify your Base URL in settings and your network connection."
+    )
+    assert "Details: connection refused by endpoint" in message  # raw cause kept, as detail only
+
+
+def test_all_four_new_providers_satisfy_the_protocol_and_stream_exactly_one_done():
+    """6.3 review fix: protocol conformance was only pinned for FakeProvider
+    and Ollama; the transitional stream()-wraps-complete() shape (chat_stream's
+    documented one-full-chunk fallback) was never asserted for the new four."""
+    from backend.providers import (
+        AnthropicProvider,
+        GeminiProvider,
+        LlamaCppProvider,
+        OpenAIProvider,
+    )
+
+    assert isinstance(OpenAIProvider(client=None, model="gpt-5"), Provider)
+    assert isinstance(AnthropicProvider(client=None, api_key="k", model="claude-opus-5"), Provider)
+    assert isinstance(GeminiProvider(api_key="k", model="gemini-2.5-pro"), Provider)
+    assert isinstance(LlamaCppProvider(settings={"chat_model_path": "m.gguf"}), Provider)
+
+    client, _ = _fake_openai_client("full text")
+    provider = OpenAIProvider(client=client, model="gpt-5")
+    events = list(provider.stream(
+        ChatRequest(task=config.TASK_TITLE, messages=[{"role": "user", "content": "hi"}]),
+        CancelToken(),
+    ))
+    assert events == [ProviderEvent("done", "full text")]  # exactly one terminal event
+
+
+def test_chat_constructs_each_api_provider_from_the_snapshot_credentials(monkeypatch):
+    """6.3 review fix: the routing test proves the classes are INVOKED but not
+    that they're constructed correctly - a branch passing the wrong key/client/
+    level would still pass it. Recording subclasses pin the exact __init__
+    kwargs each branch draws from the request snapshot."""
+    init_kwargs = {}
+
+    for module_name, class_name in [
+        ("backend.providers.openai_provider", "OpenAIProvider"),
+        ("backend.providers.anthropic_provider", "AnthropicProvider"),
+        ("backend.providers.gemini_provider", "GeminiProvider"),
+    ]:
+        module = __import__(module_name, fromlist=[class_name])
+        real = getattr(module, class_name)
+
+        def make_recording(real_cls, label):
+            class Recording(real_cls):
+                def __init__(self, **kwargs):
+                    init_kwargs[label] = dict(kwargs)
+                    super().__init__(**kwargs)
+
+                def complete(self, request, cancel):
+                    return f"{label} answer"
+            return Recording
+
+        monkeypatch.setattr(module, class_name, make_recording(real, class_name))
+
+    client = _fake_openai_client()[0]
+    monkeypatch.setattr(api_provider, "USE_API_MODE", True)
+    monkeypatch.setattr(api_provider, "API_KEY", "secret-key")
+    monkeypatch.setattr(api_provider, "API_CLIENT", client)
+    monkeypatch.setattr(api_provider, "OPENAI_REASONING_LEVEL", "high")
+    monkeypatch.setattr(api_provider, "ANTHROPIC_REASONING_LEVEL", "medium")
+    monkeypatch.setattr(api_provider, "GEMINI_REASONING_LEVEL", "low")
+    monkeypatch.setitem(api_provider.API_MODELS, config.TASK_CHAT, "some-model")
+
+    for provider_type in [
+        config.API_PROVIDER_OPENAI,
+        config.API_PROVIDER_ANTHROPIC,
+        config.API_PROVIDER_GEMINI,
+    ]:
+        monkeypatch.setattr(api_provider, "API_PROVIDER_TYPE", provider_type)
+        _REAL_CHAT(config.TASK_CHAT, [{"role": "user", "content": "hi"}])
+
+    assert init_kwargs["OpenAIProvider"] == {
+        "client": client, "model": "some-model", "reasoning_level": "high",
+    }
+    assert init_kwargs["AnthropicProvider"] == {
+        "client": client, "api_key": "secret-key", "model": "some-model",
+        "reasoning_level": "medium",
+    }
+    assert init_kwargs["GeminiProvider"] == {
+        "api_key": "secret-key", "model": "some-model", "reasoning_level": "low",
+    }
+
+
+def test_anthropic_reasoning_level_gates_on_the_chat_task_at_the_provider(monkeypatch):
+    """6.3 review fix: the OpenAI port's task gating is pinned above; the
+    Anthropic port's equivalent (reasoning_level forwarded to
+    _prepare_anthropic_kwargs only for TASK_CHAT, "off" otherwise) was not."""
+    import types
+
+    from backend.providers import AnthropicProvider, CancelToken as CT, ChatRequest as CR
+
+    recorded = []
+
+    def recording_prepare(task, kwargs, model_id="", reasoning_level="off"):
+        recorded.append((task, reasoning_level))
+        return {"max_tokens": 64}
+
+    monkeypatch.setattr(
+        "backend.providers.anthropic_provider._prepare_anthropic_kwargs", recording_prepare
+    )
+
+    def create(**kwargs):
+        return {"content": [{"type": "text", "text": "a"}]}
+
+    sdk_client = types.SimpleNamespace(messages=types.SimpleNamespace(create=create))
+    provider = AnthropicProvider(
+        client=sdk_client, api_key="k", model="claude-opus-5", reasoning_level="high"
+    )
+
+    provider.complete(CR(task=config.TASK_CHAT, messages=[{"role": "user", "content": "hi"}]), CT())
+    provider.complete(CR(task=config.TASK_TITLE, messages=[{"role": "user", "content": "hi"}]), CT())
+
+    assert recorded == [(config.TASK_CHAT, "high"), (config.TASK_TITLE, "off")]
+
+
+def test_gemini_thinking_config_gates_on_the_chat_task_at_the_provider(monkeypatch):
+    """6.3 review fix: same gating pin for the Gemini port - thinkingConfig
+    lands in the request body's generationConfig only for TASK_CHAT, and
+    gemini_thinking_config is never even consulted for other tasks."""
+    from backend.providers import CancelToken as CT, ChatRequest as CR, GeminiProvider
+
+    bodies = []
+    thinking_calls = []
+    monkeypatch.setattr(
+        "backend.providers.gemini_provider._prepare_gemini_contents",
+        lambda messages, cancel_event=None, api_key=None: (None, [{"parts": [{"text": "hi"}]}], []),
+    )
+    monkeypatch.setattr(
+        "backend.providers.gemini_provider.gemini_thinking_config",
+        lambda model_id, level: (thinking_calls.append((model_id, level)) or {"thinkingBudget": 128}),
+    )
+
+    def fake_post(url, body, **kwargs):
+        bodies.append(body)
+        return {"candidates": [{"content": {"parts": [{"text": "ok"}]}}]}
+
+    monkeypatch.setattr("backend.providers.gemini_provider._gemini_post_json", fake_post)
+
+    provider = GeminiProvider(api_key="k", model="gemini-2.5-pro", reasoning_level="high")
+    provider.complete(CR(task=config.TASK_CHAT, messages=[{"role": "user", "content": "hi"}]), CT())
+    provider.complete(CR(task=config.TASK_TITLE, messages=[{"role": "user", "content": "hi"}]), CT())
+
+    assert thinking_calls == [("gemini-2.5-pro", "high")]  # only the chat task consults it
+    assert bodies[0]["generationConfig"]["thinkingConfig"] == {"thinkingBudget": 128}
+    assert "generationConfig" not in bodies[1]  # no stray config key for non-chat tasks
