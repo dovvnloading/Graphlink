@@ -2158,18 +2158,21 @@ def chat(task: str, messages: list, **kwargs) -> dict:
                 }
 
             if state.local_provider_type == config.LOCAL_PROVIDER_LLAMACPP:
-                _assert_llama_cpp_message_support(messages)
-                llama_messages = _prepare_llama_cpp_messages(messages, task, state.llama_cpp_settings)
-                client = _get_llama_cpp_client(task, state.llama_cpp_settings)
-                llama_kwargs = _filter_kwargs_for_callable(
-                    client.create_chat_completion,
-                    _prepare_llama_cpp_kwargs(kwargs, state.llama_cpp_settings),
+                # ADR-006 stage 6.3: routed through the Provider seam, same
+                # lazy-import pattern as the Ollama branch above - see
+                # backend/providers/llama_cpp_provider.py for the preserved
+                # invariants (media rejection, frozen settings, cached client).
+                from backend.providers.base import CancelToken, ChatRequest
+                from backend.providers.llama_cpp_provider import LlamaCppProvider
+
+                provider = LlamaCppProvider(settings=state.llama_cpp_settings)
+                content = provider.complete(
+                    ChatRequest(task=task, messages=messages, extra_kwargs=kwargs),
+                    CancelToken(cancel_event),
                 )
-                response = client.create_chat_completion(messages=llama_messages, **llama_kwargs)
-                _raise_if_cancelled(cancel_event)
                 return {
                     "message": {
-                        "content": _extract_llama_cpp_text(response),
+                        "content": content,
                         "role": "assistant",
                     }
                 }
@@ -2187,96 +2190,46 @@ def chat(task: str, messages: list, **kwargs) -> dict:
                 "Please configure models in API Settings."
             )
 
+        # ADR-006 stage 6.3: the three API-mode branches route through the
+        # Provider seam. Each provider is constructed from THIS request's
+        # snapshot (client/key/model/reasoning level), preserving the
+        # mid-request-swap immunity the snapshot exists for. OpenAI's port
+        # additionally closes C4: image/audio content parts are converted to
+        # the OpenAI content-part format instead of being passed through raw.
+        from backend.providers.base import CancelToken, ChatRequest
+
+        chat_request = ChatRequest(task=task, messages=messages, extra_kwargs=kwargs)
+        token = CancelToken(cancel_event)
+
         if state.api_provider_type == config.API_PROVIDER_OPENAI:
-            openai_kwargs = dict(kwargs)
-            if task == config.TASK_CHAT:
-                openai_kwargs.update(openai_reasoning_kwargs(api_model, state.openai_reasoning_level))
-            response = state.api_client.chat.completions.create(
-                model=api_model,
-                messages=messages,
-                **openai_kwargs,
+            from backend.providers.openai_provider import OpenAIProvider
+
+            provider = OpenAIProvider(
+                client=state.api_client, model=api_model,
+                reasoning_level=state.openai_reasoning_level,
             )
-            _raise_if_cancelled(cancel_event)
-            return {
-                "message": {
-                    "content": response.choices[0].message.content,
-                    "role": "assistant",
-                }
-            }
+            content = provider.complete(chat_request, token)
+            return {"message": {"content": content, "role": "assistant"}}
 
         if state.api_provider_type == config.API_PROVIDER_ANTHROPIC:
-            system_prompt, anthropic_messages = _prepare_anthropic_messages(
-                messages,
-                cancel_event=cancel_event,
-            )
-            reasoning_level = state.anthropic_reasoning_level if task == config.TASK_CHAT else "off"
-            request_kwargs = {
-                "model": api_model,
-                "messages": anthropic_messages,
-                **_prepare_anthropic_kwargs(task, kwargs, api_model, reasoning_level),
-            }
-            if system_prompt:
-                request_kwargs["system"] = system_prompt
+            from backend.providers.anthropic_provider import AnthropicProvider
 
-            create_callable = getattr(getattr(state.api_client, "messages", None), "create", None)
-            if callable(create_callable):
-                filtered_kwargs = _filter_kwargs_for_callable(create_callable, request_kwargs)
-                response = create_callable(**filtered_kwargs)
-            else:
-                response = _anthropic_post_json(
-                    "https://api.anthropic.com/v1/messages",
-                    request_kwargs,
-                    timeout=180,
-                    cancel_event=cancel_event,
-                    api_key=state.api_key,
-                )
-            _raise_if_cancelled(cancel_event)
-            return {
-                "message": {
-                    "content": _extract_anthropic_text(response),
-                    "role": "assistant",
-                }
-            }
+            provider = AnthropicProvider(
+                client=state.api_client, api_key=state.api_key, model=api_model,
+                reasoning_level=state.anthropic_reasoning_level,
+            )
+            content = provider.complete(chat_request, token)
+            return {"message": {"content": content, "role": "assistant"}}
 
         if state.api_provider_type == config.API_PROVIDER_GEMINI:
-            system_prompt, gemini_contents, uploaded_files = _prepare_gemini_contents(
-                messages,
-                cancel_event=cancel_event,
-                api_key=state.api_key,
+            from backend.providers.gemini_provider import GeminiProvider
+
+            provider = GeminiProvider(
+                api_key=state.api_key, model=api_model,
+                reasoning_level=state.gemini_reasoning_level,
             )
-            generation_config = dict(kwargs) if kwargs else {}
-            if task == config.TASK_CHAT:
-                thinking_config = gemini_thinking_config(api_model, state.gemini_reasoning_level)
-                if thinking_config is not None:
-                    generation_config["thinkingConfig"] = thinking_config
-            request_body = {
-                "contents": gemini_contents,
-            }
-            if system_prompt:
-                request_body["system_instruction"] = {
-                    "parts": [{"text": str(system_prompt)}],
-                }
-            if generation_config:
-                request_body["generationConfig"] = generation_config
-
-            try:
-                payload = _gemini_post_json(
-                    f"{GEMINI_BASE_URL}/v1beta/models/{api_model}:generateContent",
-                    request_body,
-                    timeout=_calculate_gemini_timeout(messages),
-                    cancel_event=cancel_event,
-                    api_key=state.api_key,
-                )
-            finally:
-                for file_name in uploaded_files:
-                    _gemini_delete_file(file_name, api_key=state.api_key)
-
-            return {
-                "message": {
-                    "content": _extract_gemini_text(payload),
-                    "role": "assistant",
-                }
-            }
+            content = provider.complete(chat_request, token)
+            return {"message": {"content": content, "role": "assistant"}}
 
         raise RuntimeError(f"Unsupported API provider: {state.api_provider_type}")
 
