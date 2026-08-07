@@ -44,7 +44,8 @@ class AnthropicProvider:
             streaming=False,
             reasoning=anthropic_supports_reasoning(model),
             vision=True,   # _prepare_anthropic_messages converts image parts
-            audio=False,   # Anthropic has no audio input; parts would be rejected upstream
+            audio=False,   # Anthropic has no audio input API; False is what
+                           # keeps a future capability consumer from offering it
             image_generation=False,  # generate_image's branch raises the explicit "not yet" error
         )
 

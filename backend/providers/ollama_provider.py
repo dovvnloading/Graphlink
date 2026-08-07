@@ -82,13 +82,19 @@ class OllamaProvider:
         self.reasoning_level = reasoning_level
         # Derived WITHOUT a network round-trip: reasoning support here means
         # "this family takes a think kwarg" (a pure string-family check, the
-        # same one the request path applies). The richer probed capabilities
-        # (vision/audio via ollama.show) stay behind api_provider's cached
-        # audio gate for now - eagerly probing at construction would add a
-        # network call to every request that today has none.
+        # same one the request path applies). vision/audio are True because
+        # the REQUEST PATH genuinely sends both (_prepare_ollama_messages
+        # flattens image and audio bytes into ollama's images field) - the
+        # per-MODEL audio gate (_assert_ollama_audio_support's probed
+        # capability cache) still enforces at request time, exactly as
+        # before; a False here would wrongly tell a future consumer to
+        # disable attachments for vision-capable Ollama models (6.3
+        # adversarial review finding on the first draft's under-claim).
         self.capabilities = ProviderCapabilities(
             streaming=True,
             reasoning=ollama_think_kwarg(model, "high") is not None,
+            vision=True,
+            audio=True,
         )
 
     # -- shared request prep --------------------------------------------------

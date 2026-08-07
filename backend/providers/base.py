@@ -39,8 +39,10 @@ EVENT_TYPES = ("text", "reasoning", "reset", "done")
 @dataclass(frozen=True)
 class ProviderCapabilities:
     """What a provider (with its configured model) can actually do - the
-    single source of truth orchestration and UI consult instead of
-    provider-type string checks (ADR-006 §1). Complements - does not replace -
+    single source of truth orchestration and UI WILL consult instead of
+    provider-type string checks (ADR-006 §1; nothing consumes these yet -
+    the first consumers arrive with 6.4's streaming gate and the runtime
+    switcher/attachment gating in 6.5/ADR-012). Complements - does not replace -
     graphlink_model_catalog.ModelDescriptor: the descriptor describes a MODEL
     in a catalog; this describes the live provider+model pair a request will
     actually hit."""

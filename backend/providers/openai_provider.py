@@ -43,8 +43,15 @@ from backend.providers.base import (
     ProviderEvent,
 )
 
-# OpenAI's input_audio accepts exactly these container formats today.
-_OPENAI_AUDIO_FORMATS = {"wav": "wav", "mp3": "mp3", "mpga": "mp3", "mpeg": "mp3"}
+# OpenAI's input_audio accepts exactly these container formats today. mpga is
+# MPEG-1 audio (mp3-family bytes); .mpeg is deliberately ABSENT - it
+# conventionally names an MPEG program/video stream, and the attachment
+# classifier stages it as audio (mutagen reads the audio track's duration
+# from the container), so mapping it to "mp3" would ship program-stream
+# bytes labeled mp3 and reintroduce the provider-side 400 this conversion
+# exists to eliminate (6.3 adversarial review, proven with a real ffmpeg
+# .mpeg fixture). It routes to the actionable error below instead.
+_OPENAI_AUDIO_FORMATS = {"wav": "wav", "mp3": "mp3", "mpga": "mp3"}
 
 
 def _sniff_image_mime(data: bytes) -> str:
@@ -72,11 +79,19 @@ def prepare_openai_messages(messages: list) -> list:
             continue
         parts = []
         for part in content:
+            if not isinstance(part, dict):
+                # Same defensive posture as _prepare_ollama_messages' own
+                # str(part) fallback - a non-dict part (legacy/hand-edited
+                # session data) becomes text instead of an AttributeError.
+                parts.append({"type": "text", "text": str(part)})
+                continue
             part_type = part.get("type")
             if part_type == "text":
                 parts.append({"type": "text", "text": str(part.get("text", ""))})
             elif part_type == "image_bytes":
                 data = part.get("data") or b""
+                if not data:
+                    continue  # an empty data URI is malformed; drop the corrupt part
                 encoded = base64.b64encode(data).decode("ascii")
                 parts.append({
                     "type": "image_url",
@@ -86,8 +101,12 @@ def prepare_openai_messages(messages: list) -> list:
                 path = str(part.get("path", ""))
                 audio_format = _OPENAI_AUDIO_FORMATS.get(Path(path).suffix.lstrip(".").lower())
                 if audio_format is None:
+                    # Worded to NOT contain the "audio input" fragment
+                    # _translate_chat_exception's audio-enrichment branch
+                    # matches on - this message is already complete and
+                    # actionable; the generic suffix would contradict it.
                     raise RuntimeError(
-                        "OpenAI-compatible audio input supports WAV and MP3 files.\n\n"
+                        "OpenAI-compatible endpoints accept WAV and MP3 audio files.\n\n"
                         f"'{Path(path).name}' is a different container - convert it, or use "
                         "Ollama or Gemini for this attachment."
                     )
@@ -117,7 +136,15 @@ class OpenAIProvider:
             reasoning=openai_supports_reasoning(model),
             vision=True,   # C4: image_url parts now real
             audio=True,    # C4: input_audio parts now real (wav/mp3)
-            image_generation=True,  # endpoint-dependent; the images API branch guards at call time
+            # Derived from the CLIENT, not asserted: "OpenAI-compatible"
+            # covers llama-server/LM Studio/proxies with no images API at
+            # all. Probing the client keeps the capability honest instead of
+            # promising an affordance that would error at call time (6.3
+            # adversarial review - generate_image's own hasattr guard is a
+            # separate mechanism this flag was wrongly claiming to mirror).
+            image_generation=callable(
+                getattr(getattr(client, "images", None), "generate", None)
+            ),
         )
 
     def complete(self, request: ChatRequest, cancel: CancelToken) -> str:
