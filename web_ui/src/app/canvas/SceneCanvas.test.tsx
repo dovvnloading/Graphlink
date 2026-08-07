@@ -104,6 +104,8 @@ function baseNode(overrides: Partial<SceneNodeRow> = {}): SceneNodeRow {
     isBranchSynthesis: false,
     synthesisInstructions: "",
     branchStatus: "active",
+    // ADR-006 stage 6.4
+    responseIncomplete: false,
     isFinalDeliverable: false,
     color: null,
     headerColor: null,
@@ -247,8 +249,8 @@ describe("toFlowNodes (R4.4a Generate/Regenerate Image wiring)", () => {
 describe("conversationHistoryToDocumentMarkdown (R8a Open Document View transcript formatter)", () => {
   it("formats two messages with 1-based numbered headings, joined by a blank line", () => {
     const history: ConversationMessage[] = [
-      { role: "user", content: "hi" },
-      { role: "assistant", content: "hello there" },
+      { role: "user", content: "hi", incomplete: false },
+      { role: "assistant", content: "hello there", incomplete: false },
     ];
     expect(conversationHistoryToDocumentMarkdown(history)).toBe(
       "## Conversation Transcript\n\n### 1. User\n\nhi\n\n### 2. Assistant\n\nhello there",
@@ -257,9 +259,9 @@ describe("conversationHistoryToDocumentMarkdown (R8a Open Document View transcri
 
   it("skips a blank message but its number still counts (legacy enumerate-before-filter behavior)", () => {
     const history: ConversationMessage[] = [
-      { role: "user", content: "first" },
-      { role: "assistant", content: "   " },
-      { role: "user", content: "third" },
+      { role: "user", content: "first", incomplete: false },
+      { role: "assistant", content: "   ", incomplete: false },
+      { role: "user", content: "third", incomplete: false },
     ];
     const result = conversationHistoryToDocumentMarkdown(history);
     expect(result).toBe("## Conversation Transcript\n\n### 1. User\n\nfirst\n\n### 3. User\n\nthird");
@@ -272,8 +274,8 @@ describe("conversationHistoryToDocumentMarkdown (R8a Open Document View transcri
 
   it("returns an empty string when every message is blank", () => {
     const history: ConversationMessage[] = [
-      { role: "user", content: "" },
-      { role: "assistant", content: "   " },
+      { role: "user", content: "", incomplete: false },
+      { role: "assistant", content: "   ", incomplete: false },
     ];
     expect(conversationHistoryToDocumentMarkdown(history)).toBe("");
   });
@@ -348,8 +350,8 @@ describe("toFlowNodes (R8a Open Document View wiring)", () => {
 
   it("a conversation node's onOpenDocumentView invokes the callback with the properly formatted transcript", () => {
     const history: ConversationMessage[] = [
-      { role: "user", content: "hi" },
-      { role: "assistant", content: "hello there" },
+      { role: "user", content: "hi", incomplete: false },
+      { role: "assistant", content: "hello there", incomplete: false },
     ];
     const scene = baseScene({
       nodes: [baseNode({ id: "conv-1", kind: "conversation", history })],
@@ -551,8 +553,8 @@ describe("toFlowNodes (R5.1 web_research node)", () => {
 describe("toFlowNodes (R5.2 artifact node)", () => {
   it("maps an artifact scene node's artifactContent/history/isCollapsed onto the flow node's data", () => {
     const history = [
-      { role: "user" as const, content: "Draft a project proposal" },
-      { role: "assistant" as const, content: "# Proposal\n\nHere is a draft." },
+      { role: "user" as const, content: "Draft a project proposal", incomplete: false },
+      { role: "assistant" as const, content: "# Proposal\n\nHere is a draft.", incomplete: false },
     ];
     const scene = baseScene({
       nodes: [
@@ -1148,6 +1150,63 @@ describe("toFlowNodes (R5.4 code_sandbox node)", () => {
 
     (csFlowNode!.data as { onDelete: () => void }).onDelete();
     expect(removeSpy).toHaveBeenCalledWith(["cs-1"]);
+  });
+});
+
+describe("toFlowNodes (ADR-006 stage 6.4 universal streaming)", () => {
+  it("the chat branch maps pendingRequestId/responseIncomplete and injects the same subscribeStream passthrough as code_sandbox", () => {
+    const scene = baseScene({
+      nodes: [
+        baseNode({
+          id: "chat-1",
+          kind: "chat",
+          content: "partial answer",
+          pendingRequestId: "req-9",
+          responseIncomplete: true,
+        }),
+      ],
+      edges: [],
+    });
+    const store = makeStore();
+    const unsubscribe = vi.fn();
+    const subscribeSpy = vi.spyOn(store, "subscribeStream").mockReturnValue(unsubscribe);
+
+    const flowNodes = toFlowNodes(scene, store);
+    const chatFlowNode = flowNodes.find((n) => n.id === "chat-1");
+    expect(chatFlowNode!.data).toMatchObject({
+      pendingRequestId: "req-9",
+      responseIncomplete: true,
+    });
+
+    const data = chatFlowNode!.data as unknown as {
+      subscribeStream: (requestId: string, listener: (...args: unknown[]) => void) => () => void;
+    };
+    const listener = vi.fn();
+    const result = data.subscribeStream("req-9", listener);
+    expect(subscribeSpy).toHaveBeenCalledWith("req-9", listener);
+    expect(result).toBe(unsubscribe);
+  });
+
+  it("the conversation branch injects the same subscribeStream passthrough", () => {
+    const scene = baseScene({
+      nodes: [baseNode({ id: "conv-1", kind: "conversation", pendingRequestId: "req-10" })],
+      edges: [],
+    });
+    const store = makeStore();
+    const unsubscribe = vi.fn();
+    const subscribeSpy = vi.spyOn(store, "subscribeStream").mockReturnValue(unsubscribe);
+
+    const flowNodes = toFlowNodes(scene, store);
+    const convFlowNode = flowNodes.find((n) => n.id === "conv-1");
+    expect(convFlowNode!.data).toMatchObject({ pendingRequestId: "req-10" });
+
+    const data = convFlowNode!.data as unknown as {
+      subscribeStream: (requestId: string, listener: (...args: unknown[]) => void) => () => void;
+    };
+    const listener = vi.fn();
+    const result = data.subscribeStream("req-10", listener);
+    expect(subscribeSpy).toHaveBeenCalledWith("req-10", listener);
+    expect(result).toBe(unsubscribe);
   });
 });
 

@@ -505,6 +505,19 @@ export function toFlowNodes(
           // via the setChatScrollValue intent on every scroll.
           chatScrollValue: n.chatScrollValue,
           onScrollChange: (value: number) => store.setChatScrollValue(n.id, value),
+          // ADR-006 stage 6.4 (universal streaming): a Regenerate for this
+          // node now streams - the in-flight request id arrives on the
+          // node's OWN row (published on the scene topic, never via the
+          // composer), and ChatNodeView keys its live subscription off it.
+          // subscribeStream is the same generic transport passthrough the
+          // code_sandbox branch below already injects.
+          pendingRequestId: n.pendingRequestId ?? null,
+          // ADR-006 stage 6.4 (partial-output preservation): true when the
+          // content field is a partial response the backend committed after
+          // a killed stream - ChatNodeView renders its "interrupted" banner.
+          responseIncomplete: n.responseIncomplete,
+          subscribeStream: (requestId: string, listener: StreamListener) =>
+            store.subscribeStream(requestId, listener),
         },
       });
       continue;
@@ -694,6 +707,12 @@ export function toFlowNodes(
             if (markdown) onOpenDocumentView(markdown, "Conversation transcript");
             else store.showInfoNotification(NO_DOCUMENT_VIEW_CONTENT_MESSAGE);
           },
+          // ADR-006 stage 6.4 (universal streaming): a reply for this node
+          // now streams - ConversationNodeView keys a live assistant bubble
+          // off the pendingRequestId already mapped above. Same generic
+          // transport passthrough the code_sandbox branch below injects.
+          subscribeStream: (requestId: string, listener: StreamListener) =>
+            store.subscribeStream(requestId, listener),
         },
       });
       continue;

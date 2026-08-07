@@ -1,5 +1,6 @@
 import { Handle, Position, useStore, type Node, type NodeProps } from "@xyflow/react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import type { StreamListener } from "../../lib/ws/transport";
 import { CHAT_SCROLL_REPORT_DEBOUNCE_MS, LOD_ZOOM_THRESHOLD } from "./canvasConstants";
 import { downloadTextFile } from "./downloadTextFile";
 import { GROUP_MONO_COLORS, GROUP_NAMED_COLORS } from "./GroupColorPicker";
@@ -121,6 +122,19 @@ export interface ChatNodeData extends Record<string, unknown> {
   onSetBranchStatus: (status: string) => void;
   onSetFinalDeliverable: (isFinal: boolean) => void;
   onCollapseBranch: (collapsed: boolean) => void;
+  // ADR-006 stage 6.4 (universal streaming): non-null while a Regenerate
+  // for THIS node is in flight - the backend publishes the request id on
+  // the node's own row (never via the composer, which only ever carries the
+  // session-level send), and the content area below keys a live stream
+  // subscription off it, the exact pendingRequestId/subscribeStream pairing
+  // CodeSandboxNodeView's live terminal already established.
+  pendingRequestId: string | null;
+  // ADR-006 stage 6.4 (partial-output preservation): true when the last
+  // response was cut short (cancel/error/timeout) and `content` above is
+  // the accumulated partial text the backend committed - renders the
+  // "interrupted" banner below the content.
+  responseIncomplete: boolean;
+  subscribeStream: (requestId: string, listener: StreamListener) => () => void;
 }
 
 export type ChatFlowNode = Node<ChatNodeData, "chat">;
@@ -606,6 +620,32 @@ export function ChatNodeView({ id, data, selected }: NodeProps<ChatFlowNode>) {
   const [contentExpanded, setContentExpanded] = useState(false);
   const [contentOverflows, setContentOverflows] = useState(false);
 
+  // ADR-006 stage 6.4: live Regenerate streaming - the exact
+  // subscription/reset pattern CodeSandboxNodeView's live terminal
+  // established (derived-state reset during render so a new request never
+  // shows the previous run's stale content, effect below left to do only
+  // transport synchronization; see that file's own comments for the full
+  // rationale).
+  const [streamedContent, setStreamedContent] = useState("");
+  const [subscribedRequestId, setSubscribedRequestId] = useState(data.pendingRequestId);
+  if (data.pendingRequestId !== subscribedRequestId) {
+    setSubscribedRequestId(data.pendingRequestId);
+    setStreamedContent("");
+  }
+
+  useEffect(() => {
+    const requestId = data.pendingRequestId;
+    if (!requestId) return;
+    const unsubscribe = data.subscribeStream(requestId, (delta, _done, reset) => {
+      setStreamedContent((current) => (reset ? delta : current + delta));
+    });
+    return () => unsubscribe();
+    // data.subscribeStream is a fresh closure every render (see SceneCanvas's
+    // toFlowNodes) - depending on it would resubscribe on every unrelated
+    // re-render; data.pendingRequestId itself is the real re-subscribe key.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data.pendingRequestId]);
+
   useEffect(() => {
     const contentEl = contentRef.current;
     if (!contentEl) return undefined;
@@ -780,7 +820,12 @@ export function ChatNodeView({ id, data, selected }: NodeProps<ChatFlowNode>) {
             ref={contentRef}
             onScroll={onScroll}
           >
-            <NodeMarkdown content={data.content} />
+            {/* ADR-006 stage 6.4: while a Regenerate is in flight, shows live
+                streamed deltas instead of the persisted content; once it
+                completes (pendingRequestId back to null), falls back to the
+                static, already-persisted content field - same render swap as
+                CodeSandboxNodeView's live terminal. */}
+            <NodeMarkdown content={data.pendingRequestId ? streamedContent : data.content} />
           </div>
           {contentOverflows && !contentExpanded && (
             <div className="chat-node-content-fade" aria-hidden="true" />
@@ -792,6 +837,27 @@ export function ChatNodeView({ id, data, selected }: NodeProps<ChatFlowNode>) {
               onClick={() => setContentExpanded((expanded) => !expanded)}
             >
               {contentExpanded ? "Show less" : "Show more"}
+            </button>
+          )}
+        </div>
+      )}
+      {/* ADR-006 stage 6.4 (partial-output preservation): shown when the
+          persisted content above is a partial response the backend committed
+          after a killed stream. Suppressed while a NEW regenerate is already
+          in flight - the live stream above is the retry in progress. The
+          inline Regenerate button fires the SAME regenerateResponse intent
+          the card menu's own "Regenerate Response" item uses (no new
+          intent), gated on !isUser exactly like that menu item. */}
+      {!collapsed && data.responseIncomplete && !data.pendingRequestId && (
+        <div className="chat-node-incomplete-banner" role="status">
+          <span>Response interrupted — use Regenerate to retry.</span>
+          {!data.isUser && (
+            <button
+              type="button"
+              className="chat-node-incomplete-retry nodrag"
+              onClick={data.onRegenerate}
+            >
+              Regenerate
             </button>
           )}
         </div>
