@@ -578,7 +578,7 @@ def test_the_capability_matrix_is_pinned_per_provider():
         #            streaming, reasoning, vision, audio, image_gen
         "ollama":    (True,  True,  True,  True,  False),  # media rides the images field; audio model-gated at request time
         "openai":    (True,  True,  True,  True,  False),  # C4: vision+audio real; image_gen probed from the client (None here)
-        "anthropic": (False, True,  True,  False, False),
+        "anthropic": (True,  True,  True,  False, False),
         "gemini":    (False, True,  True,  True,  True),
         "llama_cpp": (False, False, False, False, False),
     }
@@ -1111,6 +1111,165 @@ def test_openai_stream_cancellation_mid_stream_closes_the_live_stream_and_raises
             CT(cancel_event),
         ))
     assert live.close_calls >= 1  # the live HTTP stream was actively closed
+
+
+def _anthropic_raw_events(with_thinking=True):
+    """The raw wire shape shared by messages.create(stream=True) and the REST
+    SSE - dicts here, exactly what the REST path yields; the provider reads
+    both through _extract_response_field."""
+    events = [
+        {"type": "message_start", "message": {"role": "assistant"}},
+        {"type": "content_block_start", "index": 0},
+    ]
+    if with_thinking:
+        events += [
+            {"type": "content_block_delta", "delta": {"type": "thinking_delta", "thinking": "pondering"}},
+            {"type": "content_block_delta", "delta": {"type": "thinking_delta", "thinking": "..."}},
+        ]
+    events += [
+        {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "Ans"}},
+        {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "wer."}},
+        {"type": "content_block_stop", "index": 0},
+        {"type": "message_delta", "delta": {"stop_reason": "end_turn"}},
+        {"type": "message_stop"},
+    ]
+    return events
+
+
+def test_anthropic_sdk_stream_yields_deltas_and_composes_done_like_the_blocking_path():
+    import types
+
+    from backend.providers import AnthropicProvider, CancelToken as CT, ChatRequest as CR
+
+    captured = {}
+    live = FakeSDKStream(_anthropic_raw_events())
+
+    def create(**kwargs):
+        captured.update(kwargs)
+        assert kwargs.get("stream") is True  # passed explicitly, outside the filter
+        return live
+
+    sdk_client = types.SimpleNamespace(messages=types.SimpleNamespace(create=create))
+    provider = AnthropicProvider(client=sdk_client, api_key="k", model="claude-opus-5")
+    events = list(provider.stream(
+        CR(task=config.TASK_CHAT, messages=[
+            {"role": "system", "content": "be brief"},
+            {"role": "user", "content": "hi"},
+        ]),
+        CT(),
+    ))
+
+    assert [e.type for e in events] == ["reasoning", "reasoning", "text", "text", "done"]
+    # Identical composition to _extract_anthropic_text's blocking contract.
+    assert events[-1].text == "<think>pondering...</think>\nAnswer."
+    assert captured["model"] == "claude-opus-5"
+    assert captured["system"] == "be brief"
+    assert live.close_calls >= 1
+
+
+def test_anthropic_rest_fallback_streams_through_the_new_sse_reader(monkeypatch):
+    from backend.providers import AnthropicProvider, CancelToken as CT, ChatRequest as CR
+
+    sse_calls = {}
+
+    def fake_stream_sse(url, body, timeout=180, cancel_event=None, api_key=None):
+        sse_calls.update(url=url, body=body, api_key=api_key)
+        yield from _anthropic_raw_events(with_thinking=False)
+
+    monkeypatch.setattr(
+        "backend.providers.anthropic_provider._anthropic_stream_sse", fake_stream_sse
+    )
+    provider = AnthropicProvider(
+        client={"provider": "anthropic", "transport": "rest"}, api_key="k", model="claude-opus-5"
+    )
+    events = list(provider.stream(
+        CR(task=config.TASK_CHAT, messages=[{"role": "user", "content": "hi"}]), CT()
+    ))
+
+    assert [e.type for e in events] == ["text", "text", "done"]
+    assert events[-1].text == "Answer."
+    assert sse_calls["url"].endswith("/v1/messages")
+    assert sse_calls["body"]["model"] == "claude-opus-5"
+    assert sse_calls["api_key"] == "k"
+
+
+def test_anthropic_stream_cancellation_mid_stream_closes_the_live_stream_and_raises():
+    import types
+
+    from backend.providers import AnthropicProvider, CancelToken as CT, ChatRequest as CR
+
+    cancel_event = threading.Event()
+    live = FakeSDKStream(_anthropic_raw_events(), cancel_event=cancel_event, cancel_after=3)
+
+    def create(**kwargs):
+        return live
+
+    sdk_client = types.SimpleNamespace(messages=types.SimpleNamespace(create=create))
+    provider = AnthropicProvider(client=sdk_client, api_key="k", model="claude-opus-5")
+
+    with pytest.raises(api_provider.RequestCancelledError):
+        list(provider.stream(
+            CR(task=config.TASK_CHAT, messages=[{"role": "user", "content": "hi"}]),
+            CT(cancel_event),
+        ))
+    assert live.close_calls >= 1
+
+
+def test_anthropic_sse_reader_parses_data_lines_and_always_closes(monkeypatch):
+    """The urllib-level unit for _anthropic_stream_sse itself: `event:` naming
+    lines and blank separators are skipped, each data: line parses to its
+    event dict, the request body carries \"stream\": true, and the response is
+    closed even when the consumer abandons the generator mid-stream."""
+    import io
+    import json as json_module
+
+    class FakeHTTPResponse:
+        def __init__(self, lines):
+            self._lines = lines
+            self.closed = False
+
+        def __iter__(self):
+            return iter(self._lines)
+
+        def close(self):
+            self.closed = True
+
+    wire = [
+        b"event: content_block_delta\n",
+        b"data: " + json_module.dumps(
+            {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "hi"}}
+        ).encode() + b"\n",
+        b"\n",
+        b"data: " + json_module.dumps({"type": "message_stop"}).encode() + b"\n",
+    ]
+    response = FakeHTTPResponse(wire)
+    captured = {}
+
+    def fake_urlopen(request, timeout=None):
+        captured["body"] = json_module.loads(request.data.decode("utf-8"))
+        captured["timeout"] = timeout
+        return response
+
+    monkeypatch.setattr(api_provider.urllib.request, "urlopen", fake_urlopen)
+
+    events = list(api_provider._anthropic_stream_sse(
+        "https://api.anthropic.com/v1/messages", {"model": "m"}, api_key="k"
+    ))
+    assert [e["type"] for e in events] == ["content_block_delta", "message_stop"]
+    assert captured["body"]["stream"] is True
+    assert response.closed is True
+
+    # Abandonment: close() on a mid-flight generator still closes the response.
+    response2 = FakeHTTPResponse(wire)
+    monkeypatch.setattr(
+        api_provider.urllib.request, "urlopen", lambda request, timeout=None: response2
+    )
+    gen = api_provider._anthropic_stream_sse(
+        "https://api.anthropic.com/v1/messages", {"model": "m"}, api_key="k"
+    )
+    next(gen)
+    gen.close()
+    assert response2.closed is True
 
 
 def test_chat_constructs_each_api_provider_from_the_snapshot_credentials(monkeypatch):

@@ -1935,6 +1935,60 @@ def _anthropic_post_json(endpoint: str, body: dict, timeout: int = 180, cancel_e
         raise ConnectionError(f"Failed to reach Anthropic API: {exc.reason}") from exc
 
 
+def _anthropic_stream_sse(endpoint: str, body: dict, timeout: int = 180, cancel_event=None, api_key: str | None = None):
+    """Streaming sibling of _anthropic_post_json (ADR-006 stage 6.5b): POSTs
+    the same request with "stream": true and yields each SSE `data:` line's
+    parsed JSON event dict. The raw REST wire shape is identical to the SDK's
+    raw event stream from messages.create(stream=True), so AnthropicProvider
+    consumes both transports through one translation loop. urllib's
+    HTTPResponse is line-iterable; the finally's close() tears the live
+    connection down whether the stream ends, errors, is cancelled, or the
+    consumer close()es this generator mid-flight."""
+    _raise_if_cancelled(cancel_event)
+    request = urllib.request.Request(
+        endpoint,
+        data=json.dumps({**body, "stream": True}).encode("utf-8"),
+        headers=_anthropic_headers(_get_anthropic_api_key(api_key)),
+        method="POST",
+    )
+
+    try:
+        response = urllib.request.urlopen(request, timeout=timeout)
+    except urllib.error.HTTPError as exc:
+        error_payload = exc.read().decode("utf-8", errors="replace")
+        try:
+            parsed = json.loads(error_payload)
+            message = (
+                parsed.get("error", {}).get("message")
+                or parsed.get("message")
+                or error_payload
+            )
+        except json.JSONDecodeError:
+            message = error_payload
+        raise RuntimeError(message) from exc
+    except urllib.error.URLError as exc:
+        raise ConnectionError(f"Failed to reach Anthropic API: {exc.reason}") from exc
+
+    try:
+        for raw_line in response:
+            _raise_if_cancelled(cancel_event)
+            line = raw_line.decode("utf-8", errors="replace").strip()
+            # SSE frames: `event: <name>` naming lines are redundant (every
+            # data payload repeats its own "type") and blank lines are frame
+            # separators - only `data:` lines carry events.
+            if not line.startswith("data:"):
+                continue
+            payload = line[len("data:"):].strip()
+            if not payload or payload == "[DONE]":
+                continue
+            try:
+                yield json.loads(payload)
+            except json.JSONDecodeError:
+                continue  # a torn/partial frame; the message_stop event is what ends the stream
+    finally:
+        response.close()
+
+
 def _anthropic_content_block_from_part(part: dict) -> dict | None:
     part_type = part.get("type")
 
