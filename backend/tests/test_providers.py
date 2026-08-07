@@ -580,7 +580,7 @@ def test_the_capability_matrix_is_pinned_per_provider():
         "openai":    (True,  True,  True,  True,  False),  # C4: vision+audio real; image_gen probed from the client (None here)
         "anthropic": (True,  True,  True,  False, False),
         "gemini":    (True,  True,  True,  True,  True),
-        "llama_cpp": (False, False, False, False, False),
+        "llama_cpp": (True,  False, False, False, False),
     }
     actual = {
         name: (c.streaming, c.reasoning, c.vision, c.audio, c.image_generation)
@@ -1359,6 +1359,117 @@ def test_gemini_stream_surfaces_the_safety_block_as_the_exact_blocking_path_erro
         list(provider.stream(
             CR(task=config.TASK_CHAT, messages=[{"role": "user", "content": "hi"}]), CT()
         ))
+
+
+def _llama_chunk(content=None, reasoning_key=None, reasoning=None, finish=None):
+    delta = {}
+    if content is not None:
+        delta["content"] = content
+    if reasoning_key is not None:
+        delta[reasoning_key] = reasoning
+    return {"choices": [{"delta": delta, "finish_reason": finish}]}
+
+
+def _llama_streaming_setup(monkeypatch, chunks, declare_stream_param=False):
+    """Fake ONLY the client/prep seams; the provider's own stream() runs for
+    real. The fake create_chat_completion deliberately does NOT declare a
+    `stream` parameter (unless asked to) - proving stream=True is passed
+    explicitly, outside _filter_kwargs_for_callable, which would DROP it
+    against this signature and silently degrade to a blocking call."""
+    from backend.providers import llama_cpp_provider as lp
+
+    live = FakeSDKStream(chunks) if not isinstance(chunks, FakeSDKStream) else chunks
+    captured = {}
+
+    class FakeLlamaClient:
+        if declare_stream_param:
+            def create_chat_completion(self, messages=None, stream=False, temperature=None):
+                captured.update(messages=messages, stream=stream, temperature=temperature)
+                return live
+        else:
+            def create_chat_completion(self, messages=None, temperature=None, **kwargs):
+                captured.update(messages=messages, temperature=temperature, **kwargs)
+                return live
+
+    monkeypatch.setattr(lp, "_prepare_llama_cpp_messages", lambda messages, task, s: messages)
+    monkeypatch.setattr(lp, "_get_llama_cpp_client", lambda task, s: FakeLlamaClient())
+    monkeypatch.setattr(lp, "_prepare_llama_cpp_kwargs", lambda kwargs, s: dict(kwargs))
+    return live, captured
+
+
+def test_llama_cpp_stream_yields_deltas_reasoning_and_a_done_matching_completes_composition(monkeypatch):
+    from backend.providers import CancelToken as CT, ChatRequest as CR, LlamaCppProvider
+
+    live, captured = _llama_streaming_setup(monkeypatch, [
+        _llama_chunk(reasoning_key="reasoning_content", reasoning="pondering..."),
+        {"choices": []},  # defensive: empty-choices chunk must be skipped
+        _llama_chunk(content="Ans"),
+        _llama_chunk(content="wer.", finish="stop"),
+    ], declare_stream_param=True)
+
+    provider = LlamaCppProvider(settings={"chat_model_path": "m.gguf"})
+    events = list(provider.stream(
+        CR(
+            task=config.TASK_CHAT,
+            messages=[{"role": "user", "content": "hi"}],
+            extra_kwargs={"temperature": 0.5, "cancellation_event": threading.Event()},
+        ),
+        CT(),
+    ))
+
+    assert [e.type for e in events] == ["reasoning", "text", "text", "done"]
+    # Composed through _extract_llama_cpp_text, exactly as complete() would
+    # for the same content+reasoning - the shared-extraction parity contract.
+    assert events[-1].text == "<think>pondering...</think>\nAnswer."
+    assert captured["stream"] is True
+    assert captured["temperature"] == 0.5  # passthrough kwargs survived the filter
+    assert live.close_calls >= 1  # the generator over the shared client was closed
+
+
+def test_llama_cpp_stream_true_survives_the_kwargs_filter_and_beats_a_passthrough_stream(monkeypatch):
+    """THE 6.5b trap test, both halves. (a) The strict-signature fake above
+    has NO **kwargs, so anything routed through _filter_kwargs_for_callable
+    that its signature doesn't declare is silently dropped - stream=True must
+    arrive because the provider passes it OUTSIDE the filtered dict. (b) A
+    passthrough extra_kwarg trying to force stream=False must lose to ours."""
+    from backend.providers import CancelToken as CT, ChatRequest as CR, LlamaCppProvider
+
+    _, captured = _llama_streaming_setup(
+        monkeypatch, [_llama_chunk(content="ok", finish="stop")], declare_stream_param=True
+    )
+    provider = LlamaCppProvider(settings={"chat_model_path": "m.gguf"})
+    events = list(provider.stream(
+        CR(
+            task=config.TASK_CHAT,
+            messages=[{"role": "user", "content": "hi"}],
+            extra_kwargs={"stream": False},  # (b): cannot turn real streaming back off
+        ),
+        CT(),
+    ))
+    assert captured["stream"] is True
+    assert events[-1] == ProviderEvent("done", "ok")
+
+
+def test_llama_cpp_stream_cancellation_closes_the_generator_and_raises(monkeypatch):
+    from backend.providers import CancelToken as CT, ChatRequest as CR, LlamaCppProvider
+
+    cancel_event = threading.Event()
+    live = FakeSDKStream(
+        [_llama_chunk(content="par"), _llama_chunk(content="tial", finish="stop")],
+        cancel_event=cancel_event,
+        cancel_after=1,
+    )
+    _llama_streaming_setup(monkeypatch, live, declare_stream_param=True)
+
+    provider = LlamaCppProvider(settings={"chat_model_path": "m.gguf"})
+    with pytest.raises(api_provider.RequestCancelledError):
+        list(provider.stream(
+            CR(task=config.TASK_CHAT, messages=[{"role": "user", "content": "hi"}]),
+            CT(cancel_event),
+        ))
+    # Cooperative-only, but the shared cached client's generator must never
+    # be left partially consumed.
+    assert live.close_calls >= 1
 
 
 def test_chat_constructs_each_api_provider_from_the_snapshot_credentials(monkeypatch):
