@@ -579,7 +579,7 @@ def test_the_capability_matrix_is_pinned_per_provider():
         "ollama":    (True,  True,  True,  True,  False),  # media rides the images field; audio model-gated at request time
         "openai":    (True,  True,  True,  True,  False),  # C4: vision+audio real; image_gen probed from the client (None here)
         "anthropic": (True,  True,  True,  False, False),
-        "gemini":    (False, True,  True,  True,  True),
+        "gemini":    (True,  True,  True,  True,  True),
         "llama_cpp": (False, False, False, False, False),
     }
     actual = {
@@ -1270,6 +1270,95 @@ def test_anthropic_sse_reader_parses_data_lines_and_always_closes(monkeypatch):
     next(gen)
     gen.close()
     assert response2.closed is True
+
+
+def _gemini_sse_payload(*parts):
+    return {"candidates": [{"content": {"parts": list(parts)}}]}
+
+
+def test_gemini_stream_maps_thought_parts_to_reasoning_and_keeps_concatenation_parity(monkeypatch):
+    from backend.providers import CancelToken as CT, ChatRequest as CR, GeminiProvider
+
+    sse_calls = {}
+
+    def fake_stream_sse(url, body, timeout=120, cancel_event=None, api_key=None):
+        sse_calls.update(url=url, body=body, timeout=timeout)
+        yield _gemini_sse_payload({"text": "pondering... ", "thought": True})
+        yield _gemini_sse_payload({"text": "Ans"})
+        yield _gemini_sse_payload({"text": "wer."})
+
+    monkeypatch.setattr(
+        "backend.providers.gemini_provider._prepare_gemini_contents",
+        lambda messages, cancel_event=None, api_key=None: (None, [{"parts": [{"text": "hi"}]}], []),
+    )
+    monkeypatch.setattr("backend.providers.gemini_provider._gemini_stream_sse", fake_stream_sse)
+
+    provider = GeminiProvider(api_key="k", model="gemini-2.5-pro")
+    events = list(provider.stream(
+        CR(task=config.TASK_CHAT, messages=[{"role": "user", "content": "hi"}]), CT()
+    ))
+
+    assert [e.type for e in events] == ["reasoning", "text", "text", "done"]
+    # Parity with complete(): _extract_gemini_text concatenates EVERY text
+    # part, thought parts included - no <think> composition for Gemini yet.
+    assert events[-1].text == "pondering... Answer."
+    assert ":streamGenerateContent?alt=sse" in sse_calls["url"]
+    assert sse_calls["body"]["contents"] == [{"parts": [{"text": "hi"}]}]
+
+
+def test_gemini_stream_cancellation_still_deletes_uploaded_files(monkeypatch):
+    from backend.providers import CancelToken as CT, ChatRequest as CR, GeminiProvider
+
+    cancel_event = threading.Event()
+    deleted = []
+    sse_closed = {"count": 0}
+
+    def fake_stream_sse(url, body, timeout=120, cancel_event=None, api_key=None):
+        try:
+            yield _gemini_sse_payload({"text": "par"})
+            cancel_event_outer.set()
+            yield _gemini_sse_payload({"text": "tial"})
+        finally:
+            sse_closed["count"] += 1
+
+    cancel_event_outer = cancel_event
+    monkeypatch.setattr(
+        "backend.providers.gemini_provider._prepare_gemini_contents",
+        lambda messages, cancel_event=None, api_key=None: (None, [{"parts": [{"text": "hi"}]}], ["files/abc"]),
+    )
+    monkeypatch.setattr("backend.providers.gemini_provider._gemini_stream_sse", fake_stream_sse)
+    monkeypatch.setattr(
+        "backend.providers.gemini_provider._gemini_delete_file",
+        lambda name, api_key=None: deleted.append(name),
+    )
+
+    provider = GeminiProvider(api_key="k", model="gemini-2.5-pro")
+    with pytest.raises(api_provider.RequestCancelledError):
+        list(provider.stream(
+            CR(task=config.TASK_CHAT, messages=[{"role": "user", "content": "hi"}]),
+            CT(cancel_event),
+        ))
+    assert deleted == ["files/abc"]  # the load-bearing cleanup ran on the cancel path
+    assert sse_closed["count"] >= 1  # and the live SSE generator was closed
+
+
+def test_gemini_stream_surfaces_the_safety_block_as_the_exact_blocking_path_error(monkeypatch):
+    from backend.providers import CancelToken as CT, ChatRequest as CR, GeminiProvider
+
+    def fake_stream_sse(url, body, timeout=120, cancel_event=None, api_key=None):
+        yield {"promptFeedback": {"blockReason": "SAFETY"}, "candidates": []}
+
+    monkeypatch.setattr(
+        "backend.providers.gemini_provider._prepare_gemini_contents",
+        lambda messages, cancel_event=None, api_key=None: (None, [{"parts": [{"text": "hi"}]}], []),
+    )
+    monkeypatch.setattr("backend.providers.gemini_provider._gemini_stream_sse", fake_stream_sse)
+
+    provider = GeminiProvider(api_key="k", model="gemini-2.5-pro")
+    with pytest.raises(RuntimeError, match=r"Safety Filters \(SAFETY\)"):
+        list(provider.stream(
+            CR(task=config.TASK_CHAT, messages=[{"role": "user", "content": "hi"}]), CT()
+        ))
 
 
 def test_chat_constructs_each_api_provider_from_the_snapshot_credentials(monkeypatch):

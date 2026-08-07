@@ -2168,6 +2168,51 @@ def _gemini_post_json(endpoint: str, body: dict, timeout: int = 120, cancel_even
         raise RuntimeError(message) from exc
 
 
+def _gemini_stream_sse(endpoint: str, body: dict, timeout: int = 120, cancel_event=None, api_key: str | None = None):
+    """Streaming sibling of _gemini_post_json (ADR-006 stage 6.5b): POSTs to
+    :streamGenerateContent?alt=sse and yields each SSE `data:` line's parsed
+    JSON - every line is a full GenerateContentResponse payload with its own
+    candidates[0].content.parts[], the same shape _gemini_post_json returns
+    whole. urllib's HTTPResponse is line-iterable; the finally's close()
+    tears the live connection down on end, error, cancel, or consumer
+    close() alike."""
+    _raise_if_cancelled(cancel_event)
+    api_key = _get_gemini_api_key(api_key)
+    request = urllib.request.Request(
+        endpoint,
+        data=json.dumps(body).encode("utf-8"),
+        headers=_gemini_headers(api_key),
+        method="POST",
+    )
+
+    try:
+        response = urllib.request.urlopen(request, timeout=timeout)
+    except urllib.error.HTTPError as exc:
+        error_payload = exc.read().decode("utf-8", errors="replace")
+        try:
+            parsed = json.loads(error_payload)
+            message = parsed.get("error", {}).get("message") or error_payload
+        except json.JSONDecodeError:
+            message = error_payload
+        raise RuntimeError(message) from exc
+
+    try:
+        for raw_line in response:
+            _raise_if_cancelled(cancel_event)
+            line = raw_line.decode("utf-8", errors="replace").strip()
+            if not line.startswith("data:"):
+                continue  # blank frame separators; Gemini's alt=sse sends no event: lines
+            payload = line[len("data:"):].strip()
+            if not payload or payload == "[DONE]":
+                continue
+            try:
+                yield json.loads(payload)
+            except json.JSONDecodeError:
+                continue  # a torn/partial frame - the stream simply ends when the server closes it
+    finally:
+        response.close()
+
+
 def _gemini_upload_file(
     file_path: str,
     mime_type: str,
