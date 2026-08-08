@@ -112,6 +112,12 @@ class OllamaProvider:
             vision=True,
             audio=True,
             tools=ollama_supports_tools(model),
+            # ADR-007 stage 7.3: unlike tools (a genuine per-model probe),
+            # Ollama's `format` accepting a raw JSON Schema dict is a
+            # request-shape feature of the client/server protocol itself,
+            # not a per-model chat-template capability - True
+            # unconditionally, matching vision/audio's own reasoning above.
+            structured_output=True,
         )
 
     # -- shared request prep --------------------------------------------------

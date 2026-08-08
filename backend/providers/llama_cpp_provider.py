@@ -53,6 +53,14 @@ class LlamaCppProvider:
             vision=False,  # _assert_llama_cpp_message_support rejects media up front
             audio=False,
             image_generation=False,
+            # ADR-007 stage 7.3: create_chat_completion's response_format=
+            # {"type":"json_object","schema":...} compiles a GBNF grammar
+            # server-side (verified against the installed llama_cpp
+            # package's own ChatCompletionRequestResponseFormat shape) -
+            # unlike tools (deliberately out of ADR-007 stage 7.1's scope
+            # for this provider), structured output needs no per-model
+            # capability probe.
+            structured_output=True,
         )
 
     def complete(self, request: ChatRequest, cancel: CancelToken) -> str:

@@ -189,6 +189,11 @@ class OpenAIProvider:
             # unconditionally (base.py's own ProviderCapabilities.tools
             # comment) - no capability call needed.
             tools=True,
+            # ADR-007 stage 7.3: native response_format:{"type":"json_schema"}
+            # structured outputs - see backend/structured_output.py's own
+            # _native_kwargs_for_active_provider comment for the verified
+            # SDK shape.
+            structured_output=True,
         )
 
     # ADR-007 stage 7.1: deliberately NOT given tool-call support, matching

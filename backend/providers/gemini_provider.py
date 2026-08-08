@@ -73,6 +73,10 @@ class GeminiProvider:
             # is documentation-only, not SDK-source-verified (ToolSpec's own
             # docstring flags the same caveat for input_schema).
             tools=True,
+            # ADR-007 stage 7.3: native response_mime_type/response_schema
+            # structured outputs - see backend/structured_output.py's own
+            # _native_kwargs_for_active_provider comment.
+            structured_output=True,
         )
 
     def _request_body(self, request: ChatRequest, system_prompt, gemini_contents) -> dict:
