@@ -1,5 +1,5 @@
 import { NodeResizer, type Node, type NodeProps } from "@xyflow/react";
-import { useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { memo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { GroupColorPicker } from "./GroupColorPicker";
 import { GROUP_RESIZE_MIN_HEIGHT, GROUP_RESIZE_MIN_WIDTH } from "./canvasConstants";
 
@@ -103,7 +103,7 @@ const RESIZE_LINE_STYLE: CSSProperties = {
   borderColor: "transparent",
 };
 
-export function GroupNodeView({ id, data, selected }: NodeProps<GroupFlowNode>) {
+function GroupNodeViewImpl({ id, data, selected }: NodeProps<GroupFlowNode>) {
   const isFrame = data.groupKind === "frame";
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(data.label);
@@ -348,3 +348,62 @@ function GroupIcon({ name }: { name: GroupIconName }) {
     </svg>
   );
 }
+
+/** `memberKinds` is the one array field this view actually reads (the ghost
+ * preview's item-count/breakdown) - toFlowNodes may mint a fresh array on
+ * every snapshot even when the member set is unchanged, so a plain `===`
+ * here would be "too tight" for every collapsed container with members. Same
+ * shape-aware pattern NoteNodeView's own stringArraysEqual/WebResearchNodeView's
+ * own use for their own string-array fields. */
+function stringArraysEqual(a: readonly string[], b: readonly string[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
+/** ADR-011 stage 11.1: every prop this view actually reads, compared.
+ * `itemIds` is intentionally OMITTED: this file never reads it at all (the
+ * member-drag cascade it documents in the module doc above is SceneCanvas.tsx's
+ * own onNodesChange logic, not anything this component's render touches), so
+ * comparing it would only cause spurious re-renders, never fix a missed one -
+ * same reasoning WebResearchNodeView's own comparator applies to
+ * researchActiveSourceId. `memberKinds` gets the shape-aware array compare
+ * above instead of `===`; everything else is a primitive/nullable-primitive
+ * or a stable callback reference. */
+function groupNodeDataAreEqual(prev: GroupNodeData, next: GroupNodeData): boolean {
+  return (
+    prev.groupKind === next.groupKind &&
+    prev.label === next.label &&
+    prev.color === next.color &&
+    prev.headerColor === next.headerColor &&
+    prev.isCollapsed === next.isCollapsed &&
+    prev.isLocked === next.isLocked &&
+    stringArraysEqual(prev.memberKinds, next.memberKinds) &&
+    prev.onSetLabel === next.onSetLabel &&
+    prev.onToggleCollapsed === next.onToggleCollapsed &&
+    prev.onToggleLock === next.onToggleLock &&
+    prev.onSetColor === next.onSetColor &&
+    prev.onResize === next.onResize &&
+    prev.onFitToContent === next.onFitToContent &&
+    prev.onUngroup === next.onUngroup
+  );
+}
+
+/** `id` is read here (forwarded to `<NodeResizer nodeId={id} .../>`), unlike
+ * some sibling views - so it's compared alongside `selected` and every `data`
+ * field above. */
+function groupNodePropsAreEqual(
+  prev: Readonly<NodeProps<GroupFlowNode>>,
+  next: Readonly<NodeProps<GroupFlowNode>>,
+): boolean {
+  return (
+    prev.id === next.id &&
+    prev.selected === next.selected &&
+    groupNodeDataAreEqual(prev.data, next.data)
+  );
+}
+
+export const GroupNodeView = memo(GroupNodeViewImpl, groupNodePropsAreEqual);

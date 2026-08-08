@@ -1,8 +1,9 @@
-import { Handle, Position, useStore, type Node, type NodeProps } from "@xyflow/react";
-import { useState } from "react";
-import { LOD_ZOOM_THRESHOLD } from "./canvasConstants";
+import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
+import { memo, useState } from "react";
+import type { MenuPosition } from "./menuPosition";
 import { NodeMarkdown } from "./NodeMarkdown";
 import { NodeMenu } from "./NodeMenu";
+import { useLodVisibility } from "./useLodVisibility";
 
 /**
  * The web-research node (Qt-removal plan R5.1) - the Web Research plugin's
@@ -88,11 +89,6 @@ export interface WebResearchNodeData extends Record<string, unknown> {
 
 export type WebResearchFlowNode = Node<WebResearchNodeData, "web_research">;
 
-interface MenuPosition {
-  x: number;
-  y: number;
-}
-
 /** Same outside-click/Escape dismiss pattern every sibling node menu uses
  * (ChatNodeMenu/ThinkingNodeMenu/DocumentNodeMenu/ConversationNodeMenu). */
 // -- card-level menu -------------------------------------------------------
@@ -176,9 +172,8 @@ function WebResearchSourceChip({ source }: { source: WebResearchSourceRow }) {
 
 // -- view ----------------------------------------------------------------
 
-export function WebResearchNodeView({ data, selected }: NodeProps<WebResearchFlowNode>) {
-  const zoom = useStore((s) => s.transform[2]);
-  const lodCollapsed = zoom < LOD_ZOOM_THRESHOLD;
+function WebResearchNodeViewImpl({ data, selected }: NodeProps<WebResearchFlowNode>) {
+  const lodCollapsed = useLodVisibility();
   const collapsed = data.isCollapsed || lodCollapsed;
   const [menuPosition, setMenuPosition] = useState<MenuPosition | null>(null);
   // Initialized once from persisted content and never re-synced on a later
@@ -342,3 +337,87 @@ export function WebResearchNodeView({ data, selected }: NodeProps<WebResearchFlo
     </div>
   );
 }
+
+/** ADR-011 stage 11.1: every prop this view actually reads, compared. Most
+ * `data` fields are primitives (`===` is correct); `researchResult` is the
+ * one nested object field, so it gets a shape-aware compare below instead of
+ * `===` (toFlowNodes may mint a fresh object each snapshot even when its
+ * content is unchanged - a plain reference compare there would be "too
+ * tight" and defeat memoization for every research node with a result).
+ * `researchActiveSourceId` is intentionally OMITTED - see this file's module
+ * doc: this view never reads that field at all (only the progress-line
+ * math over researchCompleted/researchTotal), so comparing it would only
+ * cause spurious re-renders, never fix a missed one. */
+function stringArraysEqual(a: readonly string[], b: readonly string[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
+/** Only the fields WebResearchSourceChip actually renders (status, plus the
+ * title/finalUrl/url/sourceId fallback chain) are compared - the rest of
+ * WebResearchSourceRow (snippet, rank, provider, errorCode, truncated, ...)
+ * never reaches the DOM from this file. */
+function researchSourcesEqual(
+  a: readonly WebResearchSourceRow[],
+  b: readonly WebResearchSourceRow[],
+): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i];
+    const y = b[i];
+    if (
+      x.sourceId !== y.sourceId ||
+      x.status !== y.status ||
+      x.title !== y.title ||
+      x.finalUrl !== y.finalUrl ||
+      x.url !== y.url
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function researchResultsEqual(
+  a: WebResearchResultRow | null,
+  b: WebResearchResultRow | null,
+): boolean {
+  if (a === b) return true;
+  if (a === null || b === null) return false;
+  return (
+    a.answerMarkdown === b.answerMarkdown &&
+    stringArraysEqual(a.warnings, b.warnings) &&
+    researchSourcesEqual(a.sources, b.sources)
+  );
+}
+
+function webResearchNodeDataAreEqual(prev: WebResearchNodeData, next: WebResearchNodeData): boolean {
+  return (
+    prev.query === next.query &&
+    prev.isCollapsed === next.isCollapsed &&
+    prev.pendingRequestId === next.pendingRequestId &&
+    prev.researchStage === next.researchStage &&
+    prev.researchCompleted === next.researchCompleted &&
+    prev.researchTotal === next.researchTotal &&
+    prev.researchError === next.researchError &&
+    researchResultsEqual(prev.researchResult, next.researchResult) &&
+    prev.onToggleCollapse === next.onToggleCollapse &&
+    prev.onDelete === next.onDelete &&
+    prev.onRun === next.onRun &&
+    prev.onCancel === next.onCancel
+  );
+}
+
+function webResearchNodePropsAreEqual(
+  prev: Readonly<NodeProps<WebResearchFlowNode>>,
+  next: Readonly<NodeProps<WebResearchFlowNode>>,
+): boolean {
+  return prev.selected === next.selected && webResearchNodeDataAreEqual(prev.data, next.data);
+}
+
+export const WebResearchNodeView = memo(WebResearchNodeViewImpl, webResearchNodePropsAreEqual);

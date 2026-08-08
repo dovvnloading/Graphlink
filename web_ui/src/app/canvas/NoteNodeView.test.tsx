@@ -1,8 +1,32 @@
 import { ReactFlowProvider, type NodeProps } from "@xyflow/react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GROUP_NAMED_COLORS } from "./GroupColorPicker";
+
+// ADR-011 stage 11.1: NoteNodeView has no LOD hook to spy on (see its own
+// module doc - it never auto-collapses), so instead this wraps NodeMarkdown
+// - the one child that's UNCONDITIONALLY rendered whenever the note isn't in
+// edit mode (the default/only state these memo tests exercise) - via real
+// JSX composition (not a raw function call, so NodeMarkdown's own hooks
+// attach to their own fiber correctly). Every ACTUAL render of
+// NoteNodeViewImpl creates this element; a React.memo bailout skips the
+// function body entirely, so this never fires on a bailed re-render. See
+// ImageNodeView.test.tsx for the general technique's full rationale.
+const nodeMarkdownRenders = { count: 0 };
+
+vi.mock("./NodeMarkdown", async (importOriginal) => {
+  const original = await importOriginal<typeof import("./NodeMarkdown")>();
+  const OriginalNodeMarkdown = original.NodeMarkdown;
+  return {
+    ...original,
+    NodeMarkdown: (props: Parameters<typeof OriginalNodeMarkdown>[0]) => {
+      nodeMarkdownRenders.count += 1;
+      return <OriginalNodeMarkdown {...props} />;
+    },
+  };
+});
+
 import { NoteNodeView, type NoteFlowNode } from "./NoteNodeView";
 
 // Rendered directly (not through a real <ReactFlow nodes=.../> mount) - see
@@ -193,5 +217,109 @@ describe("NoteNodeView", () => {
     expect(screen.getByRole("menu", { name: "Color" })).toBeInTheDocument();
     await user.click(document.body);
     expect(screen.queryByRole("menu", { name: "Color" })).toBeNull();
+  });
+});
+
+// ADR-011 stage 11.1: React.memo comparator correctness. `nodeMarkdownRenders`
+// (see the mock above) fires exactly once per ACTUAL render of this view -
+// never on a bailed-out one - so it's the oracle for both directions: it
+// must stay flat across an irrelevant/equivalent prop change (too-tight
+// would fail this) and must increment on a change to a prop the view
+// actually reads (too-loose would fail this). `compareSourceNodeIds` is the
+// one array field, so it gets extra coverage beyond the usual
+// primitive-field pair.
+describe("NoteNodeView React.memo comparator (ADR-011 stage 11.1)", () => {
+  beforeEach(() => {
+    nodeMarkdownRenders.count = 0;
+  });
+
+  function noteProps(overrides: Partial<NoteFlowNode["data"]> = {}) {
+    const data = {
+      content: "Hello world",
+      color: null,
+      headerColor: null,
+      isSystemPrompt: false,
+      isSummaryNote: false,
+      isBranchComparison: false,
+      compareSourceNodeIds: [] as string[],
+      onSetContent: vi.fn(),
+      onSetColor: vi.fn(),
+      onDelete: vi.fn(),
+      ...overrides,
+    };
+    return { id: "n0", selected: false, data } as unknown as NodeProps<NoteFlowNode>;
+  }
+
+  it("skips re-rendering when a fresh `data` object carries identical field values", () => {
+    const props = noteProps({ compareSourceNodeIds: ["a", "b"] });
+    const { rerender } = render(
+      <ReactFlowProvider>
+        <NoteNodeView {...props} />
+      </ReactFlowProvider>,
+    );
+    expect(nodeMarkdownRenders.count).toBe(1);
+
+    // A brand-new `data` object AND a brand-new `compareSourceNodeIds`
+    // array, but every value is identical - a plain `===` on either would
+    // wrongly re-render here.
+    const sameValuesNewObject = { ...props.data, compareSourceNodeIds: [...props.data.compareSourceNodeIds] };
+    rerender(
+      <ReactFlowProvider>
+        <NoteNodeView {...{ ...props, data: sameValuesNewObject }} />
+      </ReactFlowProvider>,
+    );
+    expect(nodeMarkdownRenders.count).toBe(1);
+  });
+
+  it("re-renders when `content` (a field the view reads) changes", () => {
+    const props = noteProps({ content: "first draft" });
+    const { rerender } = render(
+      <ReactFlowProvider>
+        <NoteNodeView {...props} />
+      </ReactFlowProvider>,
+    );
+    expect(nodeMarkdownRenders.count).toBe(1);
+
+    rerender(
+      <ReactFlowProvider>
+        <NoteNodeView {...{ ...props, data: { ...props.data, content: "revised draft" } }} />
+      </ReactFlowProvider>,
+    );
+    expect(nodeMarkdownRenders.count).toBe(2);
+    expect(screen.getByText("revised draft")).toBeInTheDocument();
+  });
+
+  it("re-renders when `compareSourceNodeIds` gains/loses an id, even as a same-length-then-different array", () => {
+    const props = noteProps({ isBranchComparison: true, compareSourceNodeIds: ["a", "b"] });
+    const { rerender } = render(
+      <ReactFlowProvider>
+        <NoteNodeView {...props} />
+      </ReactFlowProvider>,
+    );
+    expect(nodeMarkdownRenders.count).toBe(1);
+
+    rerender(
+      <ReactFlowProvider>
+        <NoteNodeView {...{ ...props, data: { ...props.data, compareSourceNodeIds: ["a", "c"] } }} />
+      </ReactFlowProvider>,
+    );
+    expect(nodeMarkdownRenders.count).toBe(2);
+  });
+
+  it("skips re-rendering when only `id` or `selected`-irrelevant NodeProps fields change - this view never reads `id`", () => {
+    const props = noteProps();
+    const { rerender } = render(
+      <ReactFlowProvider>
+        <NoteNodeView {...props} />
+      </ReactFlowProvider>,
+    );
+    expect(nodeMarkdownRenders.count).toBe(1);
+
+    rerender(
+      <ReactFlowProvider>
+        <NoteNodeView {...{ ...props, id: "some-other-id", dragging: true }} />
+      </ReactFlowProvider>,
+    );
+    expect(nodeMarkdownRenders.count).toBe(1);
   });
 });

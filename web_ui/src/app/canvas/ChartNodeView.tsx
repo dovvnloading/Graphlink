@@ -1,5 +1,5 @@
-import { Handle, NodeResizer, Position, useStore, type Node, type NodeProps } from "@xyflow/react";
-import { useEffect, useRef, useState } from "react";
+import { Handle, NodeResizer, Position, type Node, type NodeProps } from "@xyflow/react";
+import { memo, useEffect, useRef, useState } from "react";
 import type { ChartDataRow } from "../../lib/bridge-core/generated/scene-state";
 import { withAuthToken } from "../../lib/auth/token";
 import {
@@ -8,8 +8,8 @@ import {
   CHART_MIN_HEIGHT,
   CHART_MIN_WIDTH,
   CHART_RESIZE_DEBOUNCE_MS,
-  LOD_ZOOM_THRESHOLD,
 } from "./canvasConstants";
+import { useLodVisibility } from "./useLodVisibility";
 
 /**
  * The chart node (Qt-removal plan R6.2) - graphlink_canvas_chart_item.py's
@@ -130,9 +130,44 @@ export function makeDebouncedChartResize(
   };
 }
 
-export function ChartNodeView({ id, data, selected }: NodeProps<ChartFlowNode>) {
-  const zoom = useStore((s) => s.transform[2]);
-  const collapsed = zoom < LOD_ZOOM_THRESHOLD;
+function chartTitlesEqual(a: ChartDataRow, b: ChartDataRow): boolean {
+  if (a === b) return true;
+  return (a.title ?? null) === (b.title ?? null);
+}
+
+/** ADR-011 stage 11.1: React.memo comparator - id (read into the resizer's
+ * nodeId and chartExportUrl), selected, and only the ChartNodeData fields
+ * this component actually reads. chartWidth/chartHeight/chartSourceNodeId
+ * ride on the wire (see this file's own module doc) but this component never
+ * reads them directly - the node's own width/height comes through the flow
+ * node object itself, not `data` - so they're deliberately excluded rather
+ * than compared for no reason. chartData is object-shaped but only its
+ * `.title` is ever read here, so the compare is scoped to that field instead
+ * of the whole object reference: a plain `===` would make this comparator
+ * too tight, forcing a re-render whenever an upstream rebuild mints a fresh,
+ * value-identical chartData object. */
+export function chartNodePropsAreEqual(prev: NodeProps<ChartFlowNode>, next: NodeProps<ChartFlowNode>): boolean {
+  if (prev.id !== next.id || prev.selected !== next.selected) return false;
+  const a = prev.data;
+  const b = next.data;
+  return (
+    a.chartType === b.chartType &&
+    a.chartError === b.chartError &&
+    a.chartAssetId === b.chartAssetId &&
+    a.chartAssetVersion === b.chartAssetVersion &&
+    a.chartAspectLocked === b.chartAspectLocked &&
+    a.onToggleAspectLock === b.onToggleAspectLock &&
+    a.onResize === b.onResize &&
+    chartTitlesEqual(a.chartData, b.chartData)
+  );
+}
+
+export const ChartNodeView = memo(function ChartNodeView({
+  id,
+  data,
+  selected,
+}: NodeProps<ChartFlowNode>) {
+  const collapsed = useLodVisibility();
   const [imageFailed, setImageFailed] = useState(false);
   const resizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -208,4 +243,4 @@ export function ChartNodeView({ id, data, selected }: NodeProps<ChartFlowNode>) 
       <Handle type="source" position={Position.Bottom} className="scene-node-handle" />
     </div>
   );
-}
+}, chartNodePropsAreEqual);

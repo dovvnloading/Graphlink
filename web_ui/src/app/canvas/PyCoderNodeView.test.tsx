@@ -2,7 +2,26 @@ import { ReactFlowProvider, useStoreApi, type NodeProps } from "@xyflow/react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useEffect } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+// ADR-011 stage 11.1: wraps the real useLodVisibility so every ACTUAL render
+// of this view is countable - a React.memo bailout skips the function body
+// (and every hook inside it) entirely, so this never fires on a bailed
+// re-render. See ImageNodeView.test.tsx for the same technique's full
+// rationale.
+const lodVisibilityCalls = { count: 0 };
+
+vi.mock("./useLodVisibility", async (importOriginal) => {
+  const original = await importOriginal<typeof import("./useLodVisibility")>();
+  return {
+    ...original,
+    useLodVisibility: (...args: Parameters<typeof original.useLodVisibility>) => {
+      lodVisibilityCalls.count += 1;
+      return original.useLodVisibility(...args);
+    },
+  };
+});
+
 import { PyCoderNodeView, type PyCoderFlowNode } from "./PyCoderNodeView";
 
 // Rendered directly (not through a real <ReactFlow nodes=.../> mount) - see
@@ -337,5 +356,96 @@ describe("PyCoderNodeView", () => {
     expect(screen.getByRole("menu")).toBeInTheDocument();
     await user.click(document.body);
     expect(screen.queryByRole("menu")).toBeNull();
+  });
+});
+
+// ADR-011 stage 11.1: React.memo comparator correctness. `lodVisibilityCalls`
+// fires exactly once per ACTUAL render - never on a bailed-out one - so it's
+// the oracle for both directions (see ImageNodeView.test.tsx for the full
+// rationale of this technique).
+describe("PyCoderNodeView React.memo comparator (ADR-011 stage 11.1)", () => {
+  beforeEach(() => {
+    lodVisibilityCalls.count = 0;
+  });
+
+  function pyCoderProps(id = "pc-1", overrides: Partial<PyCoderFlowNode["data"]> = {}) {
+    const data = baseData(overrides);
+    return { id, selected: false, data } as unknown as NodeProps<PyCoderFlowNode>;
+  }
+
+  it("skips re-rendering when a fresh `data` object carries identical field values", () => {
+    const props = pyCoderProps();
+    const { rerender } = render(
+      <ReactFlowProvider>
+        <PyCoderNodeView {...props} />
+      </ReactFlowProvider>,
+    );
+    expect(lodVisibilityCalls.count).toBe(1);
+
+    // A brand-new object, same primitives and same callback references -
+    // exactly what toFlowNodes may mint on an unrelated snapshot. A naive
+    // reference compare would wrongly re-render here.
+    const sameValuesNewObject = { ...props.data };
+    rerender(
+      <ReactFlowProvider>
+        <PyCoderNodeView {...{ ...props, data: sameValuesNewObject }} />
+      </ReactFlowProvider>,
+    );
+    expect(lodVisibilityCalls.count).toBe(1);
+  });
+
+  it("re-renders when `pycoderOutput` (a field the view reads) changes", () => {
+    const props = pyCoderProps("pc-1", { pycoderOutput: "" });
+    const { rerender } = render(
+      <ReactFlowProvider>
+        <PyCoderNodeView {...props} />
+      </ReactFlowProvider>,
+    );
+    expect(lodVisibilityCalls.count).toBe(1);
+
+    rerender(
+      <ReactFlowProvider>
+        <PyCoderNodeView {...{ ...props, data: { ...props.data, pycoderOutput: "42" } }} />
+      </ReactFlowProvider>,
+    );
+    expect(lodVisibilityCalls.count).toBe(2);
+    expect(screen.getByText("42")).toBeInTheDocument();
+  });
+
+  it("re-renders when `id` changes, even with identical `data`", () => {
+    // PyCoderNodeView (unlike some sibling node views) actually reads `id`
+    // - it's forwarded to CodeExecutionApprovalPanel's nodeId prop - so the
+    // comparator must compare it too, not just `data`.
+    const props = pyCoderProps("pc-1");
+    const { rerender } = render(
+      <ReactFlowProvider>
+        <PyCoderNodeView {...props} />
+      </ReactFlowProvider>,
+    );
+    expect(lodVisibilityCalls.count).toBe(1);
+
+    rerender(
+      <ReactFlowProvider>
+        <PyCoderNodeView {...{ ...props, id: "pc-2" }} />
+      </ReactFlowProvider>,
+    );
+    expect(lodVisibilityCalls.count).toBe(2);
+  });
+
+  it("skips re-rendering when only an untracked NodeProps field (e.g. `dragging`) changes", () => {
+    const props = pyCoderProps();
+    const { rerender } = render(
+      <ReactFlowProvider>
+        <PyCoderNodeView {...props} />
+      </ReactFlowProvider>,
+    );
+    expect(lodVisibilityCalls.count).toBe(1);
+
+    rerender(
+      <ReactFlowProvider>
+        <PyCoderNodeView {...{ ...props, dragging: true }} />
+      </ReactFlowProvider>,
+    );
+    expect(lodVisibilityCalls.count).toBe(1);
   });
 });

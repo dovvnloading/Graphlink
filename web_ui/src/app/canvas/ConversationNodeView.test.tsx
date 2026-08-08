@@ -2,7 +2,27 @@ import { ReactFlowProvider, useStoreApi, type NodeProps } from "@xyflow/react";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useEffect, useState } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+// ADR-011 stage 11.1: wraps the real useLodVisibility so every ACTUAL
+// invocation (mount or re-render) is countable - a React.memo bailout skips
+// calling ConversationNodeView's function body entirely, so this hook
+// (called unconditionally on every real render) never fires during a bailed
+// re-render. Same "mock-wrap-and-delegate" technique ImageNodeView.test.tsx
+// established.
+const lodVisibilityCalls = { count: 0 };
+
+vi.mock("./useLodVisibility", async (importOriginal) => {
+  const original = await importOriginal<typeof import("./useLodVisibility")>();
+  return {
+    ...original,
+    useLodVisibility: (...args: Parameters<typeof original.useLodVisibility>) => {
+      lodVisibilityCalls.count += 1;
+      return original.useLodVisibility(...args);
+    },
+  };
+});
+
 import { ConversationNodeView, type ConversationFlowNode } from "./ConversationNodeView";
 
 // Rendered directly (not through a real <ReactFlow nodes=.../> mount) - see
@@ -136,7 +156,11 @@ describe("ConversationNodeView", () => {
     const user = userEvent.setup();
     const { onDeleteMessage } = renderConversationNode();
 
-    const writeText = vi.fn();
+    // ADR-011 stage 11.1: the menu's Copy Message now chains a .catch() onto
+    // the clipboard write (D11), so the mock must resolve like a real
+    // Promise-returning clipboard API - a bare vi.fn() (no resolved value)
+    // would make that .catch() call throw synchronously on `undefined`.
+    const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
 
     const userBubble = screen.getByText("world").closest(".conversation-node-bubble") as HTMLElement;
@@ -163,7 +187,9 @@ describe("ConversationNodeView", () => {
   it("clicking Copy Message on the second bubble copies its own exact content", async () => {
     const user = userEvent.setup();
     renderConversationNode();
-    const writeText = vi.fn();
+    // See the .mockResolvedValue comment above - the added .catch() needs a
+    // real thenable, not a bare vi.fn().
+    const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
 
     const assistantBubble = screen.getByText("Hi there").closest(".conversation-node-bubble") as HTMLElement;
@@ -558,5 +584,135 @@ describe("ConversationNodeView interrupted message marker (ADR-006 stage 6.4)", 
   it("renders no Interrupted badge on complete messages", () => {
     renderConversationNode();
     expect(screen.queryByText("Interrupted")).toBeNull();
+  });
+});
+
+// ADR-011 stage 11.1: React.memo comparator correctness. `lodVisibilityCalls`
+// (see the mock above) fires exactly once per ACTUAL render of this view -
+// never on a bailed-out one - so it's the oracle for both directions: it must
+// stay flat across an irrelevant/equivalent prop change (too-tight would fail
+// this) and must increment on a change to a prop the view actually reads
+// (too-loose would fail this).
+describe("ConversationNodeView React.memo comparator (ADR-011 stage 11.1)", () => {
+  beforeEach(() => {
+    lodVisibilityCalls.count = 0;
+  });
+
+  function baseConversationProps(overrides: Partial<ConversationFlowNode["data"]> = {}) {
+    const data = {
+      history: [{ role: "user" as const, content: "Hello", incomplete: false }],
+      isCollapsed: false,
+      pendingRequestId: null,
+      onToggleCollapse: vi.fn(),
+      onDelete: vi.fn(),
+      onSend: vi.fn(),
+      onDeleteMessage: vi.fn(),
+      onCancel: vi.fn(),
+      onOpenDocumentView: vi.fn(),
+      subscribeStream: vi.fn().mockReturnValue(vi.fn()),
+      ...overrides,
+    };
+    return { id: "n0", selected: false, data } as unknown as NodeProps<ConversationFlowNode>;
+  }
+
+  it("skips re-rendering when a fresh `data` object carries identical field values", () => {
+    const props = baseConversationProps();
+    const { rerender } = render(
+      <ReactFlowProvider>
+        <ConversationNodeView {...props} />
+      </ReactFlowProvider>,
+    );
+    expect(lodVisibilityCalls.count).toBe(1);
+
+    // A brand-new object, same primitives, same `history` array reference and
+    // same callback references - exactly what toFlowNodes may mint on an
+    // unrelated snapshot. A naive `data === nextData` reference compare (or
+    // React.memo's default shallow-props compare) would wrongly re-render here.
+    const sameValuesNewObject = { ...props.data };
+    rerender(
+      <ReactFlowProvider>
+        <ConversationNodeView {...{ ...props, data: sameValuesNewObject }} />
+      </ReactFlowProvider>,
+    );
+    expect(lodVisibilityCalls.count).toBe(1);
+  });
+
+  it("skips re-rendering when `history` is a brand-new array of byte-identical message objects", () => {
+    // Proves the comparator does shape-aware element compare on `history`,
+    // not a naive `===` (which would always miss here since this is a fresh
+    // array instance) and not a naive "always unequal for arrays" shortcut
+    // either (which would defeat memoization for every conversation node).
+    const props = baseConversationProps({
+      history: [{ role: "user", content: "Hello", incomplete: false }],
+    });
+    const { rerender } = render(
+      <ReactFlowProvider>
+        <ConversationNodeView {...props} />
+      </ReactFlowProvider>,
+    );
+    expect(lodVisibilityCalls.count).toBe(1);
+
+    const freshHistory = [{ role: "user" as const, content: "Hello", incomplete: false }];
+    rerender(
+      <ReactFlowProvider>
+        <ConversationNodeView {...{ ...props, data: { ...props.data, history: freshHistory } }} />
+      </ReactFlowProvider>,
+    );
+    expect(lodVisibilityCalls.count).toBe(1);
+  });
+
+  it("re-renders when `history` content actually changes", () => {
+    const props = baseConversationProps({
+      history: [{ role: "user", content: "Hello", incomplete: false }],
+    });
+    const { rerender } = render(
+      <ReactFlowProvider>
+        <ConversationNodeView {...props} />
+      </ReactFlowProvider>,
+    );
+    expect(lodVisibilityCalls.count).toBe(1);
+
+    const changedHistory = [{ role: "user" as const, content: "Hello there", incomplete: false }];
+    rerender(
+      <ReactFlowProvider>
+        <ConversationNodeView {...{ ...props, data: { ...props.data, history: changedHistory } }} />
+      </ReactFlowProvider>,
+    );
+    expect(lodVisibilityCalls.count).toBe(2);
+    expect(screen.getByText("Hello there")).toBeInTheDocument();
+  });
+
+  it("re-renders when a callback prop is rebound to a new closure (e.g. onDelete)", () => {
+    const props = baseConversationProps();
+    const { rerender } = render(
+      <ReactFlowProvider>
+        <ConversationNodeView {...props} />
+      </ReactFlowProvider>,
+    );
+    expect(lodVisibilityCalls.count).toBe(1);
+
+    rerender(
+      <ReactFlowProvider>
+        <ConversationNodeView {...{ ...props, data: { ...props.data, onDelete: vi.fn() } }} />
+      </ReactFlowProvider>,
+    );
+    expect(lodVisibilityCalls.count).toBe(2);
+  });
+
+  it("re-renders when `selected` changes", () => {
+    const props = baseConversationProps();
+    const { rerender } = render(
+      <ReactFlowProvider>
+        <ConversationNodeView {...props} />
+      </ReactFlowProvider>,
+    );
+    expect(lodVisibilityCalls.count).toBe(1);
+
+    rerender(
+      <ReactFlowProvider>
+        <ConversationNodeView {...{ ...props, selected: true }} />
+      </ReactFlowProvider>,
+    );
+    expect(lodVisibilityCalls.count).toBe(2);
   });
 });

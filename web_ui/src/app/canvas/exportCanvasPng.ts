@@ -120,13 +120,31 @@ function nextPaint(): Promise<void> {
 export async function exportCanvasAsPng(
   rf: Pick<ReactFlowInstance, "getNodes" | "getViewport" | "setViewport">,
   backgroundColorVar: string,
+  // ADR-011 stage 11.2 (virtualization audit): defaults to a no-op so every
+  // existing caller/test that predates onlyRenderVisibleElements keeps
+  // working unchanged - SceneCanvas.tsx's real <ReactFlow> is the only
+  // consumer that needs this to do anything (it reads the flag back via
+  // SceneStore.getExportInProgress). See that field's own doc in
+  // sceneStore.ts/SceneCanvas.tsx for the full reasoning: the export
+  // computes a viewport that fits every node into a FIXED 1920x1080 frame,
+  // which the LIVE on-screen canvas container can be smaller than -
+  // onlyRenderVisibleElements filters against the container's REAL client
+  // size, so a node that fits inside the export frame can still fall
+  // outside the live container's actual bounds and never mount, silently
+  // missing from the captured DOM regardless of the viewport math below
+  // being correct. Suspending virtualization for the capture's duration is
+  // the only fix that doesn't depend on the live container happening to
+  // already be at least 1920x1080.
+  setExportInProgress: (value: boolean) => void = () => {},
 ): Promise<void> {
   const nodes = rf.getNodes();
   if (nodes.length === 0) {
     // An empty canvas has nothing worth exporting - silent no-op rather
     // than producing a blank image, mirroring this codebase's own
     // established "nothing to do yet" guards (autosave's empty-canvas
-    // skip, saveChat's own "nothing was added" guard).
+    // skip, saveChat's own "nothing was added" guard). Deliberately before
+    // setExportInProgress(true) below - nothing to suspend virtualization
+    // for either.
     return;
   }
 
@@ -139,6 +157,7 @@ export async function exportCanvasAsPng(
   const viewport = getViewportForBounds(bounds, IMAGE_WIDTH, IMAGE_HEIGHT, MIN_ZOOM, MAX_ZOOM, PADDING);
 
   const userViewport = rf.getViewport();
+  setExportInProgress(true);
   try {
     await rf.setViewport(viewport);
     await nextPaint();
@@ -167,5 +186,6 @@ export async function exportCanvasAsPng(
     console.error("[export-png] Export failed:", error);
   } finally {
     await rf.setViewport(userViewport);
+    setExportInProgress(false);
   }
 }

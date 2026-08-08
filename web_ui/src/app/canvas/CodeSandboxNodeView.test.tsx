@@ -3,7 +3,7 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useEffect } from "react";
 import { describe, expect, it, vi } from "vitest";
-import { CodeSandboxNodeView, type CodeSandboxFlowNode } from "./CodeSandboxNodeView";
+import { CodeSandboxNodeView, codeSandboxNodePropsAreEqual, type CodeSandboxFlowNode } from "./CodeSandboxNodeView";
 
 // Rendered directly (not through a real <ReactFlow nodes=.../> mount) - see
 // ArtifactNodeView.test.tsx for why a bare ReactFlowProvider is enough here
@@ -519,5 +519,108 @@ describe("CodeSandboxNodeView", () => {
     expect(screen.getByRole("menu")).toBeInTheDocument();
     await user.click(document.body);
     expect(screen.queryByRole("menu")).toBeNull();
+  });
+});
+
+// ADR-011 stage 11.1: the React.memo comparator. Direct unit tests of the
+// exported pure function (the same function reference wired into
+// `memo(CodeSandboxNodeView, codeSandboxNodePropsAreEqual)`) plus one
+// real-render integration test proving the wiring itself is correct.
+describe("CodeSandboxNodeView React.memo comparator (ADR-011 stage 11.1)", () => {
+  function props(overrides: Partial<CodeSandboxFlowNode["data"]> = {}, propOverrides: Record<string, unknown> = {}) {
+    return {
+      id: "cs-1",
+      selected: false,
+      data: baseData(overrides),
+      ...propOverrides,
+    } as unknown as NodeProps<CodeSandboxFlowNode>;
+  }
+
+  it("treats identical props as equal", () => {
+    const p = props();
+    expect(codeSandboxNodePropsAreEqual(p, { ...p })).toBe(true);
+  });
+
+  it("is unaffected by codeSandboxRequirements/codeSandboxPrompt (read only as a useState initializer, never again on re-render) or unread NodeProps fields (dragging, zIndex)", () => {
+    const a = props(
+      { codeSandboxRequirements: "numpy", codeSandboxPrompt: "draft prompt" },
+      { dragging: false, zIndex: 0 },
+    );
+    const b = {
+      ...a,
+      data: { ...a.data, codeSandboxRequirements: "pandas==2.2.0", codeSandboxPrompt: "a completely different draft" },
+      dragging: true,
+      zIndex: 9,
+    };
+    expect(codeSandboxNodePropsAreEqual(a, b)).toBe(true);
+  });
+
+  it("returns false when id changes", () => {
+    const a = props({}, { id: "cs-1" });
+    const b = { ...a, id: "cs-2" };
+    expect(codeSandboxNodePropsAreEqual(a, b)).toBe(false);
+  });
+
+  it("returns false when selected changes", () => {
+    const a = props({}, { selected: false });
+    const b = { ...a, selected: true };
+    expect(codeSandboxNodePropsAreEqual(a, b)).toBe(false);
+  });
+
+  it.each([
+    ["codeSandboxApprovalRequirements", { codeSandboxApprovalRequirements: "numpy" }],
+    ["codeSandboxApprovalAllowSourceBuilds", { codeSandboxApprovalAllowSourceBuilds: true }],
+    ["codeSandboxApprovalIsRepair", { codeSandboxApprovalIsRepair: true }],
+    ["codeSandboxCode", { codeSandboxCode: "print(1)" }],
+    ["codeSandboxOutput", { codeSandboxOutput: "1" }],
+    ["codeSandboxAnalysis", { codeSandboxAnalysis: "analysis" }],
+    ["codeSandboxAwaitingApproval", { codeSandboxAwaitingApproval: true }],
+    ["codeSandboxError", { codeSandboxError: "boom" }],
+    ["isCollapsed", { isCollapsed: true }],
+    ["pendingRequestId", { pendingRequestId: "req-1" }],
+    ["onSetRequirements", { onSetRequirements: vi.fn() }],
+    ["onToggleAllowSourceBuilds", { onToggleAllowSourceBuilds: vi.fn() }],
+    ["onRun", { onRun: vi.fn() }],
+    ["onCancel", { onCancel: vi.fn() }],
+    ["onApprove", { onApprove: vi.fn() }],
+    ["onDeny", { onDeny: vi.fn() }],
+    ["onToggleCollapse", { onToggleCollapse: vi.fn() }],
+    ["onDelete", { onDelete: vi.fn() }],
+    ["subscribeStream", { subscribeStream: vi.fn() }],
+  ] as const)("returns false when data.%s changes and nothing else does", (_name, override) => {
+    const a = props();
+    const b = { ...a, data: { ...a.data, ...override } };
+    expect(codeSandboxNodePropsAreEqual(a, b)).toBe(false);
+  });
+
+  it("real render: skipped when only an unread field changes, and actually happens when codeSandboxError changes", () => {
+    const p = props({ codeSandboxError: "" }, { selected: false });
+    const { container, rerender } = render(
+      <ReactFlowProvider>
+        <CodeSandboxNodeView {...p} />
+      </ReactFlowProvider>,
+    );
+    const root = container.querySelector(".scene-node") as HTMLElement;
+    expect(root).not.toBeNull();
+
+    root.className = "CORRUPTED";
+
+    // codeSandboxPrompt is read only as this component's own useState
+    // initializer, never again afterward - the comparator must say
+    // "equal", so no re-render should occur.
+    rerender(
+      <ReactFlowProvider>
+        <CodeSandboxNodeView {...p} data={{ ...p.data, codeSandboxPrompt: "brand new draft" }} />
+      </ReactFlowProvider>,
+    );
+    expect(root.className).toBe("CORRUPTED");
+
+    rerender(
+      <ReactFlowProvider>
+        <CodeSandboxNodeView {...p} selected />
+      </ReactFlowProvider>,
+    );
+    expect(root.className).not.toBe("CORRUPTED");
+    expect(root.className).toContain("selected");
   });
 });

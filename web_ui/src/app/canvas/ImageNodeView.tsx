@@ -1,8 +1,9 @@
-import { Handle, Position, useStore, type Node, type NodeProps } from "@xyflow/react";
-import { useState } from "react";
+import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
+import { memo, useState } from "react";
 import { withAuthToken } from "../../lib/auth/token";
-import { LOD_ZOOM_THRESHOLD } from "./canvasConstants";
+import type { MenuPosition } from "./menuPosition";
 import { NodeMenu } from "./NodeMenu";
+import { useLodVisibility } from "./useLodVisibility";
 
 /**
  * The image node (Qt-removal plan R3.21/R3.22) - graphlink_node_image.py's
@@ -54,11 +55,6 @@ export interface ImageNodeData extends Record<string, unknown> {
 }
 
 export type ImageFlowNode = Node<ImageNodeData, "image">;
-
-interface MenuPosition {
-  x: number;
-  y: number;
-}
 
 /** The one place this file turns an asset id into a URL - the <img> render
  * below and both menu actions (Copy Image, Export Image) all call this, so
@@ -207,9 +203,8 @@ function ImageNodeMenu({
   );
 }
 
-export function ImageNodeView({ id, data, selected }: NodeProps<ImageFlowNode>) {
-  const zoom = useStore((s) => s.transform[2]);
-  const collapsed = zoom < LOD_ZOOM_THRESHOLD;
+function ImageNodeViewImpl({ id, data, selected }: NodeProps<ImageFlowNode>) {
+  const collapsed = useLodVisibility();
   const [menuPosition, setMenuPosition] = useState<MenuPosition | null>(null);
   const [imageFailed, setImageFailed] = useState(false);
 
@@ -258,3 +253,29 @@ export function ImageNodeView({ id, data, selected }: NodeProps<ImageFlowNode>) 
     </div>
   );
 }
+
+/** ADR-011 stage 11.1: every prop this view actually reads, compared - `id`
+ * and `selected` directly, then every field of `data` (all primitives or
+ * stable callback references here, so `===` is correct for each - no nested
+ * object/array fields on ImageNodeData that would need a deeper compare). Too
+ * loose here (e.g. skipping a field) would mean an edit to that field
+ * silently fails to re-render this node; too tight (e.g. comparing `data` by
+ * reference) would defeat memoization entirely, since toFlowNodes mints a
+ * fresh `data` object on every snapshot. */
+function imageNodePropsAreEqual(
+  prev: Readonly<NodeProps<ImageFlowNode>>,
+  next: Readonly<NodeProps<ImageFlowNode>>,
+): boolean {
+  return (
+    prev.id === next.id &&
+    prev.selected === next.selected &&
+    prev.data.imageAssetId === next.data.imageAssetId &&
+    prev.data.prompt === next.data.prompt &&
+    prev.data.onDelete === next.data.onDelete &&
+    prev.data.onRegenerate === next.data.onRegenerate &&
+    prev.data.isBranchFocusActive === next.data.isBranchFocusActive &&
+    prev.data.onToggleBranchFocus === next.data.onToggleBranchFocus
+  );
+}
+
+export const ImageNodeView = memo(ImageNodeViewImpl, imageNodePropsAreEqual);

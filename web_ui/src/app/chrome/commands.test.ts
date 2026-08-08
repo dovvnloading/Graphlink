@@ -262,7 +262,12 @@ describe("buildCommands", () => {
     commands.find((c) => c.id === "export-canvas-png")!.run();
 
     expect(exportCanvasAsPngMock).toHaveBeenCalledOnce();
-    expect(exportCanvasAsPngMock).toHaveBeenCalledWith(rf, "--gl-surface-window");
+    // ADR-011 stage 11.2: a 3rd arg now threads store.setExportInProgress
+    // through so exportCanvasAsPng can suspend onlyRenderVisibleElements for
+    // the capture's duration - see that module's own doc. Asserted as
+    // "any function" rather than a specific reference since it's a fresh
+    // arrow closure over `store` on every run(), not a stable callback.
+    expect(exportCanvasAsPngMock).toHaveBeenCalledWith(rf, "--gl-surface-window", expect.any(Function));
   });
 });
 

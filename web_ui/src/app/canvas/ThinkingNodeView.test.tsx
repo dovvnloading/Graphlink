@@ -1,7 +1,26 @@
 import { ReactFlowProvider, type NodeProps } from "@xyflow/react";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+// ADR-011 stage 11.1: wraps the real useLodVisibility so every ACTUAL render
+// of this view is countable - a React.memo bailout skips the function body
+// (and every hook inside it) entirely, so this never fires on a bailed
+// re-render. See ImageNodeView.test.tsx for the same technique's full
+// rationale.
+const lodVisibilityCalls = { count: 0 };
+
+vi.mock("./useLodVisibility", async (importOriginal) => {
+  const original = await importOriginal<typeof import("./useLodVisibility")>();
+  return {
+    ...original,
+    useLodVisibility: (...args: Parameters<typeof original.useLodVisibility>) => {
+      lodVisibilityCalls.count += 1;
+      return original.useLodVisibility(...args);
+    },
+  };
+});
+
 import { ThinkingNodeView, type ThinkingFlowNode } from "./ThinkingNodeView";
 
 // Rendered directly (not through a real <ReactFlow nodes=.../> mount) - see
@@ -41,7 +60,10 @@ describe("ThinkingNodeView", () => {
     const user = userEvent.setup();
     const { onDock, onDelete } = renderThinkingNode();
 
-    const writeText = vi.fn();
+    // ADR-011 stage 11.1 (D11): production now chains `.catch()` off this
+    // call, so the mock must return a real Promise (a bare vi.fn() returns
+    // undefined, and `.catch` on undefined would throw).
+    const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
 
     const label = screen.getByText("Thinking");
@@ -67,6 +89,29 @@ describe("ThinkingNodeView", () => {
     fireEvent.contextMenu(label);
     await user.click(screen.getByRole("menuitem", { name: "Delete Node" }));
     expect(onDelete).toHaveBeenCalledOnce();
+  });
+
+  // ADR-011 stage 11.1 (D11): Copy Content's clipboard write previously had
+  // no `.catch()` - a rejected promise (permission denied, no Clipboard API,
+  // insecure context) would surface as an unhandled promise rejection. Now
+  // it's caught and logged, matching ImageNodeView's own established pattern
+  // for its own clipboard write.
+  it("does not throw/reject unhandled when Copy Content's clipboard write fails", async () => {
+    const user = userEvent.setup();
+    renderThinkingNode();
+
+    const writeText = vi.fn().mockRejectedValue(new Error("permission denied"));
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    fireEvent.contextMenu(screen.getByText("Thinking"));
+    await user.click(screen.getByRole("menuitem", { name: "Copy Content" }));
+
+    await waitFor(() => expect(writeText).toHaveBeenCalled());
+    await waitFor(() => expect(consoleError).toHaveBeenCalled());
+    // The menu still closes normally - the failure is swallowed, not thrown.
+    expect(screen.queryByRole("menu")).toBeNull();
+    consoleError.mockRestore();
   });
 
   it("Hide Other Branches calls onToggleBranchFocus and closes the menu when branch focus is inactive", async () => {
@@ -110,5 +155,80 @@ describe("ThinkingNodeView", () => {
     expect(screen.getByRole("menu")).toBeInTheDocument();
     await user.click(document.body);
     expect(screen.queryByRole("menu")).toBeNull();
+  });
+});
+
+// ADR-011 stage 11.1: React.memo comparator correctness. `lodVisibilityCalls`
+// fires exactly once per ACTUAL render - never on a bailed-out one - so it's
+// the oracle for both directions (see ImageNodeView.test.tsx for the full
+// rationale of this technique).
+describe("ThinkingNodeView React.memo comparator (ADR-011 stage 11.1)", () => {
+  beforeEach(() => {
+    lodVisibilityCalls.count = 0;
+  });
+
+  function thinkingProps(overrides: Partial<ThinkingFlowNode["data"]> = {}) {
+    const data = {
+      thinkingText: "considering approaches",
+      onDock: vi.fn(),
+      onDelete: vi.fn(),
+      isBranchFocusActive: false,
+      onToggleBranchFocus: vi.fn(),
+      ...overrides,
+    };
+    return { id: "n0", selected: false, data } as unknown as NodeProps<ThinkingFlowNode>;
+  }
+
+  it("skips re-rendering when a fresh `data` object carries identical field values", () => {
+    const props = thinkingProps();
+    const { rerender } = render(
+      <ReactFlowProvider>
+        <ThinkingNodeView {...props} />
+      </ReactFlowProvider>,
+    );
+    expect(lodVisibilityCalls.count).toBe(1);
+
+    const sameValuesNewObject = { ...props.data };
+    rerender(
+      <ReactFlowProvider>
+        <ThinkingNodeView {...{ ...props, data: sameValuesNewObject }} />
+      </ReactFlowProvider>,
+    );
+    expect(lodVisibilityCalls.count).toBe(1);
+  });
+
+  it("re-renders when `thinkingText` (a field the view reads) changes", () => {
+    const props = thinkingProps({ thinkingText: "first draft" });
+    const { rerender } = render(
+      <ReactFlowProvider>
+        <ThinkingNodeView {...props} />
+      </ReactFlowProvider>,
+    );
+    expect(lodVisibilityCalls.count).toBe(1);
+
+    rerender(
+      <ReactFlowProvider>
+        <ThinkingNodeView {...{ ...props, data: { ...props.data, thinkingText: "revised draft" } }} />
+      </ReactFlowProvider>,
+    );
+    expect(lodVisibilityCalls.count).toBe(2);
+    expect(screen.getByText("revised draft")).toBeInTheDocument();
+  });
+
+  it("re-renders when `isBranchFocusActive` toggles", () => {
+    const props = thinkingProps({ isBranchFocusActive: false });
+    const { rerender } = render(
+      <ReactFlowProvider>
+        <ThinkingNodeView {...props} />
+      </ReactFlowProvider>,
+    );
+    expect(lodVisibilityCalls.count).toBe(1);
+
+    rerender(
+      <ReactFlowProvider>
+        <ThinkingNodeView {...{ ...props, data: { ...props.data, isBranchFocusActive: true } }} />
+      </ReactFlowProvider>,
+    );
+    expect(lodVisibilityCalls.count).toBe(2);
   });
 });

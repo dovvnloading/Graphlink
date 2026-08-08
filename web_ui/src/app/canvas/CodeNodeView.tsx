@@ -1,9 +1,10 @@
-import { Handle, Position, useStore, type Node, type NodeProps } from "@xyflow/react";
-import { useState } from "react";
-import { LOD_ZOOM_THRESHOLD } from "./canvasConstants";
+import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
+import { memo, useState } from "react";
 import { downloadTextFile } from "./downloadTextFile";
+import type { MenuPosition } from "./menuPosition";
 import { NodeMarkdown } from "./NodeMarkdown";
 import { NodeMenu } from "./NodeMenu";
+import { useLodVisibility } from "./useLodVisibility";
 
 /**
  * The code node (Qt-removal plan R3.5/R3.6) - a card holding a single code
@@ -56,11 +57,6 @@ export interface CodeNodeData extends Record<string, unknown> {
 }
 
 export type CodeFlowNode = Node<CodeNodeData, "code">;
-
-interface MenuPosition {
-  x: number;
-  y: number;
-}
 
 /** Wraps raw code in a markdown fenced code block so ReactMarkdown +
  * rehype-highlight can syntax-highlight it for free - no Shiki/Prism/
@@ -134,7 +130,15 @@ function CodeNodeMenu({
         type="button"
         role="menuitem"
         onClick={() => {
-          navigator.clipboard.writeText(code);
+          // Best-effort clipboard write - a failure (missing Clipboard API,
+          // a denied permissions prompt, an insecure context) is swallowed
+          // rather than left as an unhandled rejection, matching
+          // ImageNodeView.tsx's own handleCopyImage: a menu action like this
+          // should never crash the node, it should just silently not have
+          // copied anything.
+          navigator.clipboard.writeText(code).catch((error) => {
+            console.error("[code-node] Copy Code failed:", error);
+          });
           onClose();
         }}
       >
@@ -187,9 +191,33 @@ function CodeNodeMenu({
   );
 }
 
-export function CodeNodeView({ id, data, selected }: NodeProps<CodeFlowNode>) {
-  const zoom = useStore((s) => s.transform[2]);
-  const collapsed = zoom < LOD_ZOOM_THRESHOLD;
+/** ADR-011 stage 11.1: React.memo comparator - id (read into nodeId for the
+ * card menu's Export filename), selected, and every CodeNodeData field this
+ * component (or the card menu it renders) actually reads, including every
+ * callback prop. Every field here is a primitive or a function - no
+ * array/object-shaped field on CodeNodeData is ever read, so a plain `===`
+ * per field is correct as-is, no shape-aware compare needed. */
+export function codeNodePropsAreEqual(prev: NodeProps<CodeFlowNode>, next: NodeProps<CodeFlowNode>): boolean {
+  if (prev.id !== next.id || prev.selected !== next.selected) return false;
+  const a = prev.data;
+  const b = next.data;
+  return (
+    a.code === b.code &&
+    a.language === b.language &&
+    a.parentChatNodeId === b.parentChatNodeId &&
+    a.isBranchFocusActive === b.isBranchFocusActive &&
+    a.onRegenerate === b.onRegenerate &&
+    a.onDelete === b.onDelete &&
+    a.onToggleBranchFocus === b.onToggleBranchFocus
+  );
+}
+
+export const CodeNodeView = memo(function CodeNodeView({
+  id,
+  data,
+  selected,
+}: NodeProps<CodeFlowNode>) {
+  const collapsed = useLodVisibility();
   const [menuPosition, setMenuPosition] = useState<MenuPosition | null>(null);
 
   return (
@@ -226,4 +254,4 @@ export function CodeNodeView({ id, data, selected }: NodeProps<CodeFlowNode>) {
       )}
     </div>
   );
-}
+}, codeNodePropsAreEqual);

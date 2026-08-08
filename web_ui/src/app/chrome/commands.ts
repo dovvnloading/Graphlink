@@ -97,7 +97,7 @@ export function buildCommands(
       id: "export-canvas-png",
       name: "Export Canvas as PNG",
       aliases: ["export png", "download image", "save canvas image"],
-      run: () => void exportCanvasAsPng(rf, "--gl-surface-window"),
+      run: () => void exportCanvasAsPng(rf, "--gl-surface-window", (value) => store.setExportInProgress(value)),
       enabled: hasNodes,
     },
     {

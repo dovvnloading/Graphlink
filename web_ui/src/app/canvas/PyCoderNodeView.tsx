@@ -1,9 +1,10 @@
-import { Handle, Position, useStore, type Node, type NodeProps } from "@xyflow/react";
-import { useState } from "react";
-import { LOD_ZOOM_THRESHOLD } from "./canvasConstants";
+import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
+import { memo, useState } from "react";
 import { CodeExecutionApprovalPanel } from "./CodeExecutionApprovalPanel";
+import type { MenuPosition } from "./menuPosition";
 import { NodeMarkdown } from "./NodeMarkdown";
 import { NodeMenu } from "./NodeMenu";
+import { useLodVisibility } from "./useLodVisibility";
 
 /**
  * The Py-Coder node (Qt-removal plan R5.4) - the Py-Coder plugin's React
@@ -65,11 +66,6 @@ export interface PyCoderNodeData extends Record<string, unknown> {
 }
 
 export type PyCoderFlowNode = Node<PyCoderNodeData, "pycoder">;
-
-interface MenuPosition {
-  x: number;
-  y: number;
-}
 
 /** Same outside-click/Escape dismiss pattern every sibling node menu uses
  * (ChatNodeMenu/ArtifactNodeMenu/GitlinkNodeMenu/...). */
@@ -133,9 +129,8 @@ function toPythonFence(code: string): string {
 
 // -- view ----------------------------------------------------------------
 
-export function PyCoderNodeView({ id, data, selected }: NodeProps<PyCoderFlowNode>) {
-  const zoom = useStore((s) => s.transform[2]);
-  const lodCollapsed = zoom < LOD_ZOOM_THRESHOLD;
+function PyCoderNodeViewImpl({ id, data, selected }: NodeProps<PyCoderFlowNode>) {
+  const lodCollapsed = useLodVisibility();
   const collapsed = data.isCollapsed || lodCollapsed;
   const [menuPosition, setMenuPosition] = useState<MenuPosition | null>(null);
   const isManual = data.pycoderMode === "manual";
@@ -307,3 +302,44 @@ export function PyCoderNodeView({ id, data, selected }: NodeProps<PyCoderFlowNod
     </div>
   );
 }
+
+/** ADR-011 stage 11.1: every prop this view actually reads, compared -
+ * `id`/`selected` directly (id is read here, unlike some sibling views,
+ * since it's forwarded to CodeExecutionApprovalPanel's nodeId prop), then
+ * every field of `data`. All primitives/nullable-primitives or stable
+ * callback references - PyCoderNodeData has no array/object fields, so
+ * `===` is correct for every one of them. */
+function pyCoderNodeDataAreEqual(prev: PyCoderNodeData, next: PyCoderNodeData): boolean {
+  return (
+    prev.pycoderMode === next.pycoderMode &&
+    prev.pycoderPrompt === next.pycoderPrompt &&
+    prev.pycoderCode === next.pycoderCode &&
+    prev.pycoderOutput === next.pycoderOutput &&
+    prev.pycoderAnalysis === next.pycoderAnalysis &&
+    prev.pycoderLastRunFailed === next.pycoderLastRunFailed &&
+    prev.pycoderAwaitingApproval === next.pycoderAwaitingApproval &&
+    prev.pycoderError === next.pycoderError &&
+    prev.isCollapsed === next.isCollapsed &&
+    prev.pendingRequestId === next.pendingRequestId &&
+    prev.onSetMode === next.onSetMode &&
+    prev.onRun === next.onRun &&
+    prev.onCancel === next.onCancel &&
+    prev.onApprove === next.onApprove &&
+    prev.onDeny === next.onDeny &&
+    prev.onToggleCollapse === next.onToggleCollapse &&
+    prev.onDelete === next.onDelete
+  );
+}
+
+function pyCoderNodePropsAreEqual(
+  prev: Readonly<NodeProps<PyCoderFlowNode>>,
+  next: Readonly<NodeProps<PyCoderFlowNode>>,
+): boolean {
+  return (
+    prev.id === next.id &&
+    prev.selected === next.selected &&
+    pyCoderNodeDataAreEqual(prev.data, next.data)
+  );
+}
+
+export const PyCoderNodeView = memo(PyCoderNodeViewImpl, pyCoderNodePropsAreEqual);

@@ -163,6 +163,16 @@ export class SceneStore {
   // the same reason selectedNodeId/replyTargetNodeId already live on this
   // store rather than in whichever single component happens to set them.
   private focusAcceptedPaths = false;
+  // ADR-011 stage 11.2: true for exactly the duration of one
+  // exportCanvasAsPng capture (exportCanvasPng.ts) - local UI state only,
+  // same posture as focusAcceptedPaths above (its trigger, the app bar's
+  // Export PNG button/command-palette entry, and its consumer,
+  // SceneCanvas.tsx's <ReactFlow onlyRenderVisibleElements>, are two
+  // separate components). Suspends virtualization for the capture's
+  // duration - see that field's own comment in SceneCanvas.tsx for why a
+  // full-canvas export needs every node mounted regardless of the live
+  // on-screen container's actual size.
+  private exportInProgress = false;
   // ADR-003 stage 3.4 review-fix: true while a scene resync request is
   // outstanding, so a burst of refused patches asks once rather than once
   // per patch - see requestSceneResync for the measured failure this
@@ -511,6 +521,7 @@ export class SceneStore {
   getReplyTargetNodeId = (): string | null => this.replyTargetNodeId;
   getSynthesizeTargetNodeIds = (): string[] | null => this.synthesizeTargetNodeIds;
   getFocusAcceptedPaths = (): boolean => this.focusAcceptedPaths;
+  getExportInProgress = (): boolean => this.exportInProgress;
 
   // R5.1: no-op-if-unchanged, same discipline as every other setter here that
   // guards a redundant assignment before paying for an emit() fan-out.
@@ -536,6 +547,12 @@ export class SceneStore {
   setFocusAcceptedPaths(value: boolean): void {
     if (value === this.focusAcceptedPaths) return;
     this.focusAcceptedPaths = value;
+    this.emit();
+  }
+
+  setExportInProgress(value: boolean): void {
+    if (value === this.exportInProgress) return;
+    this.exportInProgress = value;
     this.emit();
   }
 

@@ -595,6 +595,82 @@ describe("WsTransport", () => {
     consoleError.mockRestore();
   });
 
+  // ADR-011 review-fix (HIGH): ADR-011's onlyRenderVisibleElements
+  // virtualization genuinely UNMOUNTS a live-streaming node's component
+  // (ChatNodeView/ConversationNodeView/CodeSandboxNodeView) when panned
+  // off-screen, then mounts a BRAND NEW instance when panned back - and this
+  // class has no server-side subscribe to replay from (see subscribeStream's
+  // own doc: "the server broadcasts stream frames to every connection
+  // unconditionally"). Without a client-side buffer, every delta broadcast
+  // during the unmounted window used to be lost forever, and the new
+  // instance's freshly-initialized local state had nothing to fall back on.
+  it("subscribeStream: replays everything accumulated so far to a listener that (re)subscribes after an earlier listener unsubscribed mid-stream (ADR-011 virtualization unmount/remount)", () => {
+    const t = makeTransport();
+    t.connect();
+    const socket = FakeSocket.instances[0];
+    socket.open();
+
+    const firstMount: unknown[] = [];
+    const unsub = t.subscribeStream("req-a", (delta, done, reset, seq) => firstMount.push({ delta, done, reset, seq }));
+    socket.receive({ kind: "stream", topic: "chat", requestId: "req-a", seq: 0, delta: "Hel", done: false, reset: false });
+    socket.receive({ kind: "stream", topic: "chat", requestId: "req-a", seq: 1, delta: "lo ", done: false, reset: false });
+    // Simulates the node scrolling off-screen: the component unmounts and
+    // its effect cleanup unsubscribes.
+    unsub();
+
+    // A delta broadcast while nothing is subscribed - the exact "off-screen"
+    // window this fix exists for.
+    socket.receive({ kind: "stream", topic: "chat", requestId: "req-a", seq: 2, delta: "there", done: false, reset: false });
+
+    // Simulates the node scrolling back into view: a BRAND NEW component
+    // instance subscribes fresh.
+    const secondMount: unknown[] = [];
+    t.subscribeStream("req-a", (delta, done, reset, seq) => secondMount.push({ delta, done, reset, seq }));
+
+    // It must catch up on everything broadcast so far, as a single synthetic
+    // reset frame - not just deltas that arrive from this point forward -
+    // and the first (now-unsubscribed) mount must not receive it.
+    expect(secondMount).toEqual([{ delta: "Hello there", done: false, reset: true, seq: 2 }]);
+    expect(firstMount).toEqual([
+      { delta: "Hel", done: false, reset: false, seq: 0 },
+      { delta: "lo ", done: false, reset: false, seq: 1 },
+    ]);
+
+    // Live deltas continue to arrive normally afterward.
+    socket.receive({ kind: "stream", topic: "chat", requestId: "req-a", seq: 3, delta: "!", done: true, reset: false });
+    expect(secondMount).toEqual([
+      { delta: "Hello there", done: false, reset: true, seq: 2 },
+      { delta: "!", done: true, reset: false, seq: 3 },
+    ]);
+  });
+
+  it("subscribeStream: a brand-new requestId nothing has streamed for yet gets no replay (unchanged first-subscribe behavior)", () => {
+    const t = makeTransport();
+    t.connect();
+    const socket = FakeSocket.instances[0];
+    socket.open();
+    const seen: unknown[] = [];
+    t.subscribeStream("req-fresh", (delta, done, reset, seq) => seen.push({ delta, done, reset, seq }));
+    expect(seen).toEqual([]);
+  });
+
+  it("subscribeStream: does not replay once the request has already completed (buffer is cleared on done)", () => {
+    const t = makeTransport();
+    t.connect();
+    const socket = FakeSocket.instances[0];
+    socket.open();
+    const unsub = t.subscribeStream("req-a", () => {});
+    socket.receive({ kind: "stream", topic: "chat", requestId: "req-a", seq: 0, delta: "finished text", done: true, reset: false });
+    unsub();
+
+    // A later subscriber (e.g. an unrelated remount racing a stale
+    // requestId) must not see the completed run's text replayed - by this
+    // point the persisted `content` field is the real source of truth.
+    const seen: unknown[] = [];
+    t.subscribeStream("req-a", (delta, done, reset, seq) => seen.push({ delta, done, reset, seq }));
+    expect(seen).toEqual([]);
+  });
+
   it("notifies status listeners through the lifecycle", () => {
     const t = makeTransport();
     const statuses: string[] = [];

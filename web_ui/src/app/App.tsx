@@ -1,5 +1,5 @@
 import { ReactFlowProvider, useReactFlow } from "@xyflow/react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { TOPIC_VALIDATORS } from "../lib/api-contract/topics";
 import type { AppSettingsState } from "../lib/bridge-core/generated/app-settings-state";
 import { isTextEditable } from "../lib/bridge-core/textFocus";
@@ -14,19 +14,29 @@ import { isGatedWhileTyping, resolveShortcut, type ShortcutId } from "./chrome/s
 import { DocumentViewPanel } from "./canvas/DocumentViewPanel";
 import { AboutDialog } from "./chrome/AboutDialog";
 import { AppBar } from "./chrome/AppBar";
-import { ChatLibraryDialog } from "./chrome/ChatLibraryDialog";
 import { CommandPalette } from "./chrome/CommandPalette";
 import { Composer } from "./chrome/Composer";
 import { ComposerStore } from "./chrome/composerStore";
 import { DiagnosticsDialog } from "./chrome/DiagnosticsDialog";
-import { HelpDialog } from "./chrome/HelpDialog";
 import { NotificationBanner } from "./chrome/NotificationBanner";
 import { PinOverlay } from "./chrome/PinOverlay";
 import { PluginPicker } from "./chrome/PluginPicker";
 import { SearchOverlay } from "./chrome/SearchOverlay";
-import { SettingsDialog } from "./chrome/SettingsDialog";
 import { ViewPopover } from "./chrome/ViewPopover";
 import { OverlayProvider, useOverlays } from "./overlays/overlays";
+
+// ADR-011 stage 11.6: ChatLibraryDialog, HelpDialog (+ its 76-item static
+// help-data content), and SettingsDialog are the three heaviest "behind a
+// click" chrome surfaces - none of them can contribute to first paint, so
+// none of them belongs in the initial chunk. React.lazy splits each into
+// its own chunk, fetched on demand; LazySurface below (not just Suspense)
+// is what makes "on demand" mean "the user actually opened it" rather than
+// "React attempted to render it," see that component's own comment.
+const ChatLibraryDialog = lazy(() =>
+  import("./chrome/ChatLibraryDialog").then((m) => ({ default: m.ChatLibraryDialog })),
+);
+const HelpDialog = lazy(() => import("./chrome/HelpDialog").then((m) => ({ default: m.HelpDialog })));
+const SettingsDialog = lazy(() => import("./chrome/SettingsDialog").then((m) => ({ default: m.SettingsDialog })));
 
 /**
  * The single-app shell (Qt-removal plan R0-R2).
@@ -225,6 +235,55 @@ function GlobalShortcuts({ store }: { store: SceneStore }) {
   return null;
 }
 
+/**
+ * ADR-011 stage 11.6: mounts a lazy chrome dialog once - and only once - its
+ * own overlay surface has genuinely been opened. Wrapping a `React.lazy`
+ * component in `<Suspense>` alone is not enough here: these three dialogs
+ * were, and still are, rendered unconditionally in App's own JSX (Dialog's
+ * `isOpen` check happens *inside* SettingsDialog/ChatLibraryDialog/
+ * HelpDialog, via the shared `<Dialog>` wrapper, which returns null while
+ * closed but is still a child these components render every time App
+ * renders). If this component just returned `<Suspense><Settings.../></Sus>`
+ * unconditionally, React would attempt to render the lazy child on App's
+ * very first mount regardless of whether Settings was ever opened, firing
+ * the dynamic import (and the network fetch behind it) moments after page
+ * load - splitting the JS but not deferring the fetch, which is the whole
+ * point of code-splitting something the user may never open this session.
+ *
+ * `hasOpened` latches true the first time the surface opens and never resets
+ * - closing the dialog again does not unmount it, so its own internal state
+ * (draft form fields, list scroll position, search text) survives being
+ * closed and reopened exactly as it did when these were eagerly mounted.
+ */
+function LazySurface({ overlayName, children }: { overlayName: string; children: ReactNode }) {
+  const overlays = useOverlays();
+  const isOpen = overlays.isOpen(overlayName);
+  const [hasOpened, setHasOpened] = useState(isOpen);
+  // Latch true the moment `isOpen` first flips true. Adjusted during render
+  // (React's documented pattern for state derived from a prop/subscription
+  // change) rather than in a useEffect, so there is no extra post-commit
+  // render pass: the setState call below is skipped on every render once
+  // `hasOpened` is already true, so it only ever fires once.
+  if (isOpen && !hasOpened) {
+    setHasOpened(true);
+  }
+  if (!hasOpened) return null;
+  return <Suspense fallback={<LazyDialogFallback />}>{children}</Suspense>;
+}
+
+/** Minimal Suspense fallback for the first-open chunk fetch above - same
+ * scrim/panel shell as `Dialog` itself (overlays.tsx) so the swap-in once
+ * the real dialog resolves doesn't jump the layout, just fills it in. */
+function LazyDialogFallback() {
+  return (
+    <div className="overlay-scrim">
+      <div className="overlay-dialog overlay-dialog-loading" role="status" aria-live="polite">
+        Loading…
+      </div>
+    </div>
+  );
+}
+
 function App() {
   const [status, setStatus] = useState<ConnectionStatus>("closed");
   const [system, setSystem] = useState<SystemState>({});
@@ -325,10 +384,16 @@ function App() {
                 </div>
                 <CommandPalette store={sceneStore} />
                 <AboutDialog transport={transport} />
-                <HelpDialog />
+                <LazySurface overlayName="help">
+                  <HelpDialog />
+                </LazySurface>
                 <DiagnosticsDialog transport={transport} />
-                <SettingsDialog transport={transport} />
-                <ChatLibraryDialog transport={transport} />
+                <LazySurface overlayName="settings">
+                  <SettingsDialog transport={transport} />
+                </LazySurface>
+                <LazySurface overlayName="library">
+                  <ChatLibraryDialog transport={transport} />
+                </LazySurface>
               </div>
             </div>
           </main>

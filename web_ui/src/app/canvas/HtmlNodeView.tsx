@@ -1,13 +1,13 @@
-import { Handle, Position, useStore, type Node, type NodeProps } from "@xyflow/react";
-import { useEffect, useRef, useState } from "react";
+import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
+import { memo, useEffect, useRef, useState } from "react";
 import {
   HTML_SPLIT_DEFAULT,
   HTML_SPLIT_MAX,
   HTML_SPLIT_MIN,
   HTML_SPLIT_TOTAL_PX,
   HTML_SPLITTER_REPORT_DEBOUNCE_MS,
-  LOD_ZOOM_THRESHOLD,
 } from "./canvasConstants";
+import { useLodVisibility } from "./useLodVisibility";
 
 /**
  * The HTML view node (Qt-removal plan R3.17/R3.18) - graphlink_node_htmlview.py's
@@ -126,9 +126,8 @@ export function makeDebouncedSplitterReport(
   };
 }
 
-export function HtmlNodeView({ data, selected }: NodeProps<HtmlFlowNode>) {
-  const zoom = useStore((s) => s.transform[2]);
-  const lodCollapsed = zoom < LOD_ZOOM_THRESHOLD;
+function HtmlNodeViewImpl({ data, selected }: NodeProps<HtmlFlowNode>) {
+  const lodCollapsed = useLodVisibility();
   const collapsed = data.isCollapsed || lodCollapsed;
 
   // Two separate pieces of local state, per the R3.18 spec: `sourceText`
@@ -269,3 +268,36 @@ export function HtmlNodeView({ data, selected }: NodeProps<HtmlFlowNode>) {
     </div>
   );
 }
+
+/** ADR-011 stage 11.1: every prop this view actually reads, compared - it
+ * never destructures `id`, so it is intentionally absent (this instance never
+ * receives a changed `id` without React Flow remounting it under a new key
+ * anyway). `htmlContent` and `htmlSplitterState` are intentionally OMITTED:
+ * each seeds local state ONCE via a `useState` initializer on mount
+ * (`sourceText`/`renderedDoc` and `splitterValue` respectively) and is never
+ * read again afterward by any JSX, effect, or event-handler closure - so
+ * comparing them would only cause spurious re-renders that produce
+ * byte-identical output, never fix a missed one (same reasoning
+ * WebResearchNodeView's own comparator applies to researchActiveSourceId).
+ * Everything else - `isCollapsed`, and every callback, including
+ * `onSplitterChange`, which IS captured fresh into a real event-handler
+ * closure on every render (onSplitterPointerDown's onPointerUp) and so must
+ * be compared, not just fields that show up directly in JSX - is a primitive
+ * or stable callback reference, so `===` is correct for all of them. */
+function htmlNodeDataAreEqual(prev: HtmlNodeData, next: HtmlNodeData): boolean {
+  return (
+    prev.isCollapsed === next.isCollapsed &&
+    prev.onToggleCollapse === next.onToggleCollapse &&
+    prev.onDelete === next.onDelete &&
+    prev.onSplitterChange === next.onSplitterChange
+  );
+}
+
+function htmlNodePropsAreEqual(
+  prev: Readonly<NodeProps<HtmlFlowNode>>,
+  next: Readonly<NodeProps<HtmlFlowNode>>,
+): boolean {
+  return prev.selected === next.selected && htmlNodeDataAreEqual(prev.data, next.data);
+}
+
+export const HtmlNodeView = memo(HtmlNodeViewImpl, htmlNodePropsAreEqual);

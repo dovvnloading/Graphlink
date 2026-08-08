@@ -1,8 +1,9 @@
-import { Handle, Position, useStore, type Node, type NodeProps } from "@xyflow/react";
-import { useState } from "react";
-import { LOD_ZOOM_THRESHOLD } from "./canvasConstants";
+import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
+import { memo, useState } from "react";
+import type { MenuPosition } from "./menuPosition";
 import { NodeMarkdown } from "./NodeMarkdown";
 import { NodeMenu } from "./NodeMenu";
+import { useLodVisibility } from "./useLodVisibility";
 
 /**
  * The thinking node (Qt-removal plan R3.13/R3.14) - graphlink_node_thinking.py's
@@ -42,11 +43,6 @@ export interface ThinkingNodeData extends Record<string, unknown> {
 
 export type ThinkingFlowNode = Node<ThinkingNodeData, "thinking">;
 
-interface MenuPosition {
-  x: number;
-  y: number;
-}
-
 function ThinkingNodeMenu({
   position,
   thinkingText,
@@ -75,7 +71,12 @@ function ThinkingNodeMenu({
         type="button"
         role="menuitem"
         onClick={() => {
-          navigator.clipboard.writeText(thinkingText);
+          // ADR-011 stage 11.1 (D11): a bare fire-and-forget clipboard write
+          // left this promise's rejection unhandled - same fix ImageNodeView's
+          // own Copy Image action already applies for its clipboard write.
+          navigator.clipboard.writeText(thinkingText).catch((error: unknown) => {
+            console.error("[thinking-node] Copy Content failed:", error);
+          });
           onClose();
         }}
       >
@@ -116,9 +117,8 @@ function ThinkingNodeMenu({
   );
 }
 
-export function ThinkingNodeView({ data, selected }: NodeProps<ThinkingFlowNode>) {
-  const zoom = useStore((s) => s.transform[2]);
-  const collapsed = zoom < LOD_ZOOM_THRESHOLD;
+function ThinkingNodeViewImpl({ data, selected }: NodeProps<ThinkingFlowNode>) {
+  const collapsed = useLodVisibility();
   const [menuPosition, setMenuPosition] = useState<MenuPosition | null>(null);
 
   return (
@@ -153,3 +153,28 @@ export function ThinkingNodeView({ data, selected }: NodeProps<ThinkingFlowNode>
     </div>
   );
 }
+
+/** ADR-011 stage 11.1: every prop this view actually reads, compared - it
+ * never destructures `id`, so it's intentionally absent (a changed `id`
+ * always means React Flow remounted this instance under a new key). Every
+ * `data` field ThinkingNodeData declares is a primitive/string or a stable
+ * callback reference - no array/object fields, so `===` is correct
+ * throughout. */
+function thinkingNodeDataAreEqual(prev: ThinkingNodeData, next: ThinkingNodeData): boolean {
+  return (
+    prev.thinkingText === next.thinkingText &&
+    prev.onDock === next.onDock &&
+    prev.onDelete === next.onDelete &&
+    prev.isBranchFocusActive === next.isBranchFocusActive &&
+    prev.onToggleBranchFocus === next.onToggleBranchFocus
+  );
+}
+
+function thinkingNodePropsAreEqual(
+  prev: Readonly<NodeProps<ThinkingFlowNode>>,
+  next: Readonly<NodeProps<ThinkingFlowNode>>,
+): boolean {
+  return prev.selected === next.selected && thinkingNodeDataAreEqual(prev.data, next.data);
+}
+
+export const ThinkingNodeView = memo(ThinkingNodeViewImpl, thinkingNodePropsAreEqual);

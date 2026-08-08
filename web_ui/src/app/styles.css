@@ -1643,6 +1643,19 @@ body,
   overflow-y: auto;
 }
 
+/* ADR-011 stage 11.6: the Suspense fallback shown for the brief window
+   between opening a lazy chrome dialog (Settings/Chat Library/Help) for the
+   first time this session and its code-split chunk finishing its fetch.
+   Deliberately plain - a real first-open flash is short enough that
+   anything fancier would just be motion for its own sake. */
+.overlay-dialog-loading {
+  min-width: 200px;
+  padding: 20px 24px;
+  color: var(--gl-surface-text-muted);
+  font-size: 13px;
+  text-align: center;
+}
+
 /* -- View popover -------------------------------------------------------- */
 
 .view-popover {

@@ -1,7 +1,27 @@
 import { ReactFlowProvider, type NodeProps } from "@xyflow/react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+// ADR-011 stage 11.1: wraps the real useLodVisibility so every ACTUAL
+// invocation (mount or re-render) is countable - a React.memo bailout skips
+// calling DocumentNodeView's function body entirely, so this hook (called
+// unconditionally on every real render) never fires during a bailed
+// re-render. Same "mock-wrap-and-delegate" technique ImageNodeView.test.tsx
+// established.
+const lodVisibilityCalls = { count: 0 };
+
+vi.mock("./useLodVisibility", async (importOriginal) => {
+  const original = await importOriginal<typeof import("./useLodVisibility")>();
+  return {
+    ...original,
+    useLodVisibility: (...args: Parameters<typeof original.useLodVisibility>) => {
+      lodVisibilityCalls.count += 1;
+      return original.useLodVisibility(...args);
+    },
+  };
+});
+
 import {
   DocumentNodeView,
   formatByteSize,
@@ -181,7 +201,11 @@ describe("DocumentNodeView", () => {
     const user = userEvent.setup();
     const { onDelete, onDock } = renderDocumentNode({ attachmentKind: "document", filePath: "" });
 
-    const writeText = vi.fn();
+    // ADR-011 stage 11.1: Copy Details now chains a .catch() onto the
+    // clipboard write (D11), so the mock must resolve like a real
+    // Promise-returning clipboard API - a bare vi.fn() would make that
+    // .catch() call throw synchronously on `undefined`.
+    const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
 
     const title = screen.getByText("notes.pdf");
@@ -286,5 +310,115 @@ describe("DocumentNodeView", () => {
     expect(screen.getByRole("menu")).toBeInTheDocument();
     await user.click(document.body);
     expect(screen.queryByRole("menu")).toBeNull();
+  });
+});
+
+// ADR-011 stage 11.1: React.memo comparator correctness. `lodVisibilityCalls`
+// (see the mock above) fires exactly once per ACTUAL render of this view -
+// never on a bailed-out one - so it's the oracle for both directions: it must
+// stay flat across an irrelevant/equivalent prop change (too-tight would fail
+// this) and must increment on a change to a prop the view actually reads
+// (too-loose would fail this).
+describe("DocumentNodeView React.memo comparator (ADR-011 stage 11.1)", () => {
+  beforeEach(() => {
+    lodVisibilityCalls.count = 0;
+  });
+
+  function baseDocumentProps(overrides: Partial<DocumentFlowNode["data"]> = {}) {
+    const data = {
+      title: "notes.pdf",
+      content: "Quarterly figures attached.",
+      attachmentKind: "document",
+      filePath: "",
+      mimeType: "",
+      durationSeconds: null,
+      byteSize: null,
+      previewLabel: "",
+      isCollapsed: false,
+      onToggleCollapse: vi.fn(),
+      onDock: vi.fn(),
+      onDelete: vi.fn(),
+      isBranchFocusActive: false,
+      onToggleBranchFocus: vi.fn(),
+      ...overrides,
+    };
+    return { id: "n0", selected: false, data } as unknown as NodeProps<DocumentFlowNode>;
+  }
+
+  it("skips re-rendering when a fresh `data` object carries identical field values", () => {
+    const props = baseDocumentProps();
+    const { rerender } = render(
+      <ReactFlowProvider>
+        <DocumentNodeView {...props} />
+      </ReactFlowProvider>,
+    );
+    expect(lodVisibilityCalls.count).toBe(1);
+
+    // A brand-new object, same primitives and same callback references -
+    // exactly what toFlowNodes may mint on an unrelated snapshot. A naive
+    // `data === nextData` reference compare (or React.memo's default shallow
+    // props compare) would wrongly re-render here.
+    const sameValuesNewObject = { ...props.data };
+    rerender(
+      <ReactFlowProvider>
+        <DocumentNodeView {...{ ...props, data: sameValuesNewObject }} />
+      </ReactFlowProvider>,
+    );
+    expect(lodVisibilityCalls.count).toBe(1);
+  });
+
+  it("skips re-rendering when only `previewLabel` (a field this view never reads) changes", () => {
+    // Pins the deliberate omission documented on documentNodeDataAreEqual:
+    // previewLabel isn't surfaced in this increment's render at all, so a
+    // change to it alone must never trigger a re-render.
+    const props = baseDocumentProps({ previewLabel: "old label" });
+    const { rerender } = render(
+      <ReactFlowProvider>
+        <DocumentNodeView {...props} />
+      </ReactFlowProvider>,
+    );
+    expect(lodVisibilityCalls.count).toBe(1);
+
+    rerender(
+      <ReactFlowProvider>
+        <DocumentNodeView {...{ ...props, data: { ...props.data, previewLabel: "a different label" } }} />
+      </ReactFlowProvider>,
+    );
+    expect(lodVisibilityCalls.count).toBe(1);
+  });
+
+  it("re-renders when `content` (a field the view reads) changes", () => {
+    const props = baseDocumentProps({ content: "Quarterly figures attached." });
+    const { rerender } = render(
+      <ReactFlowProvider>
+        <DocumentNodeView {...props} />
+      </ReactFlowProvider>,
+    );
+    expect(lodVisibilityCalls.count).toBe(1);
+
+    rerender(
+      <ReactFlowProvider>
+        <DocumentNodeView {...{ ...props, data: { ...props.data, content: "Updated figures attached." } }} />
+      </ReactFlowProvider>,
+    );
+    expect(lodVisibilityCalls.count).toBe(2);
+    expect(screen.getByText("Updated figures attached.")).toBeInTheDocument();
+  });
+
+  it("re-renders when a callback prop is rebound to a new closure (e.g. onDelete)", () => {
+    const props = baseDocumentProps();
+    const { rerender } = render(
+      <ReactFlowProvider>
+        <DocumentNodeView {...props} />
+      </ReactFlowProvider>,
+    );
+    expect(lodVisibilityCalls.count).toBe(1);
+
+    rerender(
+      <ReactFlowProvider>
+        <DocumentNodeView {...{ ...props, data: { ...props.data, onDelete: vi.fn() } }} />
+      </ReactFlowProvider>,
+    );
+    expect(lodVisibilityCalls.count).toBe(2);
   });
 });

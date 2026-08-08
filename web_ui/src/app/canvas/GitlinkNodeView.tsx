@@ -1,9 +1,10 @@
-import { Handle, Position, useStore, type Node, type NodeProps } from "@xyflow/react";
-import { useEffect, useRef, useState } from "react";
-import { LOD_ZOOM_THRESHOLD } from "./canvasConstants";
+import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
+import { memo, useEffect, useRef, useState } from "react";
 import { Dialog, useOverlays } from "../overlays/overlays";
+import type { MenuPosition } from "./menuPosition";
 import { NodeMarkdown } from "./NodeMarkdown";
 import { NodeMenu } from "./NodeMenu";
+import { useLodVisibility } from "./useLodVisibility";
 
 /**
  * The Gitlink node (Qt-removal plan R5.3) - the Gitlink plugin's React card.
@@ -110,11 +111,6 @@ export interface GitlinkNodeData extends Record<string, unknown> {
 
 export type GitlinkFlowNode = Node<GitlinkNodeData, "gitlink">;
 
-interface MenuPosition {
-  x: number;
-  y: number;
-}
-
 /** Same outside-click/Escape dismiss pattern every sibling node menu uses
  * (ChatNodeMenu/ThinkingNodeMenu/DocumentNodeMenu/ConversationNodeMenu/
  * WebResearchNodeMenu/ArtifactNodeMenu). */
@@ -181,9 +177,8 @@ const TABS: { key: TabKey; label: string }[] = [
 
 // -- view ----------------------------------------------------------------
 
-export function GitlinkNodeView({ id, data, selected }: NodeProps<GitlinkFlowNode>) {
-  const zoom = useStore((s) => s.transform[2]);
-  const lodCollapsed = zoom < LOD_ZOOM_THRESHOLD;
+function GitlinkNodeViewImpl({ id, data, selected }: NodeProps<GitlinkFlowNode>) {
+  const lodCollapsed = useLodVisibility();
   const collapsed = data.isCollapsed || lodCollapsed;
   const [menuPosition, setMenuPosition] = useState<MenuPosition | null>(null);
   const [activeTab, setActiveTab] = useState<TabKey>("setup");
@@ -659,3 +654,103 @@ export function GitlinkNodeView({ id, data, selected }: NodeProps<GitlinkFlowNod
     </div>
   );
 }
+
+/** ADR-011 stage 11.1 comparator helpers, mirroring WebResearchNodeView's own
+ * shape-aware approach: toFlowNodes may mint a fresh array/object for one of
+ * these fields on every snapshot even when its contents are unchanged, so a
+ * plain `===` would be "too tight" for every such field. Only the fields this
+ * view actually reads off each row/entry are compared (`reason`/`content` on
+ * GitlinkPendingChangeRow never reach the DOM from this file - only
+ * `operation`/`path` do, in the Apply confirmation list). */
+function stringArraysEqual(a: readonly string[], b: readonly string[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
+function gitlinkContextStatsEqual(a: Record<string, string>, b: Record<string, string>): boolean {
+  if (a === b) return true;
+  const aKeys = Object.keys(a);
+  const bKeys = Object.keys(b);
+  if (aKeys.length !== bKeys.length) return false;
+  for (const key of aKeys) {
+    if (a[key] !== b[key]) return false;
+  }
+  return true;
+}
+
+function gitlinkPendingChangesEqual(
+  a: readonly GitlinkPendingChangeRow[],
+  b: readonly GitlinkPendingChangeRow[],
+): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i].operation !== b[i].operation || a[i].path !== b[i].path) return false;
+  }
+  return true;
+}
+
+/** ADR-011 stage 11.1: every prop this view actually reads, compared.
+ * `gitlinkScopeMode`, `gitlinkSelectedPaths`, and `gitlinkTaskPrompt` are
+ * intentionally OMITTED: per this file's own "state-ownership discipline"
+ * module doc, each seeds a local draft `useState` ONCE on mount and is never
+ * read again afterward (no effect, no JSX, no closure references the prop
+ * itself past that one seed line) - comparing them would only cause spurious
+ * re-renders that render byte-identical output, never fix a missed one (same
+ * reasoning WebResearchNodeView's own comparator applies to
+ * researchActiveSourceId). `gitlinkRepo`/`gitlinkBranch` are NOT in that same
+ * bucket despite also seeding drafts - they're read again every render by the
+ * repo/branch-change effect that resets the file-tree selection (FIX 7), so
+ * they're compared. `gitlinkLocalRoot` is read directly in the Apply dialog's
+ * body text, not just as a seed, so it's compared too. */
+function gitlinkNodeDataAreEqual(prev: GitlinkNodeData, next: GitlinkNodeData): boolean {
+  return (
+    prev.gitlinkRepo === next.gitlinkRepo &&
+    prev.gitlinkBranch === next.gitlinkBranch &&
+    prev.gitlinkLocalRoot === next.gitlinkLocalRoot &&
+    stringArraysEqual(prev.gitlinkRepoFilePaths, next.gitlinkRepoFilePaths) &&
+    gitlinkContextStatsEqual(prev.gitlinkContextStats, next.gitlinkContextStats) &&
+    prev.gitlinkContextSummary === next.gitlinkContextSummary &&
+    prev.gitlinkContextVersion === next.gitlinkContextVersion &&
+    prev.gitlinkProposalMarkdown === next.gitlinkProposalMarkdown &&
+    gitlinkPendingChangesEqual(prev.gitlinkPendingChanges, next.gitlinkPendingChanges) &&
+    prev.gitlinkPreviewText === next.gitlinkPreviewText &&
+    prev.gitlinkChangeFingerprint === next.gitlinkChangeFingerprint &&
+    prev.gitlinkChangeState === next.gitlinkChangeState &&
+    prev.gitlinkError === next.gitlinkError &&
+    prev.isCollapsed === next.isCollapsed &&
+    prev.pendingRequestId === next.pendingRequestId &&
+    prev.onFetchRepositories === next.onFetchRepositories &&
+    prev.onLoadTree === next.onLoadTree &&
+    prev.onSetLocalRoot === next.onSetLocalRoot &&
+    prev.onBrowseLocalRoot === next.onBrowseLocalRoot &&
+    prev.onImportSnapshot === next.onImportSnapshot &&
+    prev.onBuildContext === next.onBuildContext &&
+    prev.onFetchContext === next.onFetchContext &&
+    prev.onRun === next.onRun &&
+    prev.onCancel === next.onCancel &&
+    prev.onApply === next.onApply &&
+    prev.onToggleCollapse === next.onToggleCollapse &&
+    prev.onDelete === next.onDelete
+  );
+}
+
+/** `id` is read here (it keys the per-instance Apply-confirmation overlay
+ * name, `gitlink-apply-${id}`), unlike some sibling views - so it's compared
+ * alongside `selected` and every `data` field above. */
+function gitlinkNodePropsAreEqual(
+  prev: Readonly<NodeProps<GitlinkFlowNode>>,
+  next: Readonly<NodeProps<GitlinkFlowNode>>,
+): boolean {
+  return (
+    prev.id === next.id &&
+    prev.selected === next.selected &&
+    gitlinkNodeDataAreEqual(prev.data, next.data)
+  );
+}
+
+export const GitlinkNodeView = memo(GitlinkNodeViewImpl, gitlinkNodePropsAreEqual);
