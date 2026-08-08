@@ -59,8 +59,5 @@
     "typescript-eslint": "^8.65.0",
     "vite": "^6.0.5",
     "vitest": "^4.1.10"
-  },
-  "overrides": {
-    "nanoid": "^3.3.17"
   }
 }
