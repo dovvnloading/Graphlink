@@ -226,4 +226,67 @@ describe("exportCanvasAsPng", () => {
     // The user must not be left stranded at the export zoom.
     expect(rf.setViewportCalls[rf.setViewportCalls.length - 1]).toEqual(USER_VIEWPORT);
   });
+
+  // -- ADR-011 stage 11.2: virtualization suspended for the capture --
+
+  describe("setExportInProgress (ADR-011 stage 11.2)", () => {
+    it("is set true before rasterizing and false again once the capture completes", async () => {
+      vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+      const calls: boolean[] = [];
+      const setExportInProgress = (value: boolean) => calls.push(value);
+
+      await exportCanvasAsPng(fakeRf([fakeNode("n1", 0, 0)]), "--gl-surface-window", setExportInProgress);
+
+      expect(calls).toEqual([true, false]);
+    });
+
+    it("is already true by the time toPng actually rasterizes", async () => {
+      // Audit finding (ADR-011 stage 11.2): the export computes a viewport
+      // that fits every node into a fixed 1920x1080 frame, which the LIVE
+      // on-screen canvas container can be smaller than - a node that fits
+      // the export frame can still fall outside the live container's real
+      // bounds under onlyRenderVisibleElements and never mount for capture.
+      // Suspending virtualization only works if it is ALREADY suspended
+      // by the time toPng actually reads the DOM, not merely by the time
+      // this function returns.
+      vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+      const rf = fakeRf([fakeNode("n1", 0, 0)]);
+      let currentFlag = false;
+      let flagAtCaptureTime: boolean | null = null;
+      toPngMock.mockImplementation(() => {
+        flagAtCaptureTime = currentFlag;
+        return Promise.resolve("data:image/png;base64,fake");
+      });
+
+      await exportCanvasAsPng(rf, "--gl-surface-window", (value) => {
+        currentFlag = value;
+      });
+
+      expect(flagAtCaptureTime).toBe(true);
+      // ...and restored to false once the whole export settles.
+      expect(currentFlag).toBe(false);
+    });
+
+    it("still resolves to false even when rasterization fails", async () => {
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+      toPngMock.mockRejectedValue(new Error("Failed to embed image"));
+      const calls: boolean[] = [];
+
+      await exportCanvasAsPng(fakeRf([fakeNode("n1", 0, 0)]), "--gl-surface-window", (value) => calls.push(value));
+
+      expect(calls).toEqual([true, false]);
+    });
+
+    it("is never called at all when there is nothing to export (no nodes)", async () => {
+      const calls: boolean[] = [];
+      await exportCanvasAsPng(fakeRf([]), "--gl-surface-window", (value) => calls.push(value));
+      expect(calls).toEqual([]);
+    });
+
+    it("defaults to a no-op when the caller omits it - every pre-11.2 call site keeps working unchanged", async () => {
+      vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+      await expect(exportCanvasAsPng(fakeRf([fakeNode("n1", 0, 0)]), "--gl-surface-window")).resolves.toBeUndefined();
+    });
+  });
 });

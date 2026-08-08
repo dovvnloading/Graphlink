@@ -7,7 +7,6 @@ import {
   ReactFlow,
   ViewportPortal,
   useReactFlow,
-  useStore,
   type Connection,
   type Edge,
   type Node,
@@ -18,7 +17,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import type { SceneState } from "../../lib/bridge-core/generated/scene-state";
+import type { SceneEdgeRow, SceneNodeRow, SceneState } from "../../lib/bridge-core/generated/scene-state";
 import type { StreamListener } from "../../lib/ws/transport";
 import { BridgeErrorState } from "../../lib/ui/BridgeErrorState";
 import { ArtifactNodeView, type ArtifactFlowNode } from "./ArtifactNodeView";
@@ -40,11 +39,11 @@ import { WebResearchNodeView, type WebResearchFlowNode } from "./WebResearchNode
 import {
   GROUP_FALLBACK_HEIGHT,
   GROUP_FALLBACK_WIDTH,
-  LOD_ZOOM_THRESHOLD,
   VIEWPORT_REPORT_DEBOUNCE_MS,
 } from "./canvasConstants";
 import { SceneStore, scaleDragPosition } from "./sceneStore";
 import { computeSmartGuideSnap, type GuideLine, type Rect } from "./smartGuides";
+import { useLodVisibility } from "./useLodVisibility";
 
 /**
  * The React Flow canvas (Qt-removal plan R1) - the QGraphicsScene/ChatView
@@ -81,8 +80,11 @@ export type SceneFlowNode =
   | ChartFlowNode;
 
 function PlaceholderNodeView({ data, selected }: NodeProps<PlaceholderNode>) {
-  const zoom = useStore((s) => s.transform[2]);
-  const collapsed = zoom < LOD_ZOOM_THRESHOLD;
+  // ADR-011 stage 11.6/11.1 dedup: was its own local
+  // `useStore((s) => s.transform[2]); zoom < LOD_ZOOM_THRESHOLD` pair (one of
+  // the 14 duplicated call sites) - now the shared extraction. Zero behavior
+  // change, see useLodVisibility.ts's own doc.
+  const collapsed = useLodVisibility();
   return (
     <div className={`scene-node${selected ? " selected" : ""}${collapsed ? " collapsed" : ""}`}>
       {/* Connection endpoints mirror the Qt canvas's flow: children hang off
@@ -376,6 +378,445 @@ export function computeNonAcceptedNodeIds(scene: SceneState): Set<string> {
   return excluded;
 }
 
+/**
+ * ADR-011 stage 11.1: one shared O(N+E) index-map pass, consumed by both
+ * toFlowNodes and toFlowEdges below in place of the three separate ad hoc
+ * maps they used to build on their own (toFlowNodes' own nodesById;
+ * toFlowEdges' own kindOf + dockedNodeIds) - and, more importantly, in
+ * place of the O(N*E) per-node edge scans that used to live INSIDE
+ * toFlowNodes' own per-node loop: the chat branch's dockedChildren used to
+ * do `for (const e of scene.edges)` (a full O(E) scan) for EVERY chat node,
+ * and the code branch did `scene.edges.find(...)` (another O(E) scan) for
+ * EVERY code node. edgesBySource/edgesByTarget below group every edge by
+ * its endpoint ONCE, so a per-node lookup is O(out-/in-degree) instead of
+ * O(E) - and since the sum of every node's out-/in-degree over the whole
+ * loop is exactly E, the total cost across the WHOLE function is O(N+E),
+ * not O(N*E).
+ *
+ * computeDimmedNodeIds/computeNonAcceptedNodeIds above deliberately build
+ * their OWN separate nodesById/parentOf/childrenOf maps rather than reusing
+ * this one - see computeDimmedNodeIds' own doc comment for why (exported
+ * standalone for direct unit testing, not worth coupling to save one more
+ * Map construction over a scene of at most a few hundred nodes).
+ */
+interface SceneIndexes {
+  nodesById: Map<string, SceneNodeRow>;
+  edgesBySource: Map<string, SceneEdgeRow[]>;
+  edgesByTarget: Map<string, SceneEdgeRow[]>;
+  dockedNodeIds: Set<string>;
+}
+
+function buildSceneIndexes(scene: SceneState): SceneIndexes {
+  const nodesById = new Map<string, SceneNodeRow>();
+  const dockedNodeIds = new Set<string>();
+  for (const n of scene.nodes) {
+    nodesById.set(n.id, n);
+    if (n.isDocked) dockedNodeIds.add(n.id);
+  }
+  const edgesBySource = new Map<string, SceneEdgeRow[]>();
+  const edgesByTarget = new Map<string, SceneEdgeRow[]>();
+  for (const e of scene.edges) {
+    const bySource = edgesBySource.get(e.source);
+    if (bySource) bySource.push(e);
+    else edgesBySource.set(e.source, [e]);
+    const byTarget = edgesByTarget.get(e.target);
+    if (byTarget) byTarget.push(e);
+    else edgesByTarget.set(e.target, [e]);
+  }
+  return { nodesById, edgesBySource, edgesByTarget, dockedNodeIds };
+}
+
+/**
+ * ADR-011 stage 11.1: a stable per-node-id callback dispatcher.
+ *
+ * Every *NodeView callback (onDelete, onToggleCollapse, ...) used to be a
+ * fresh inline closure minted on EVERY toFlowNodes call - ~20 allocations
+ * per chat node alone, on every single scene snapshot/patch, regardless of
+ * whether that node changed at all. React.memo on the node-view side
+ * (landing alongside this change on the other *NodeView.tsx files) can
+ * never see stable props while that keeps happening, no matter what else
+ * this function does.
+ *
+ * Fix: ONE function object per callback is created the FIRST time a given
+ * node id is seen (getDispatcher below, backed by cache.dispatchers), then
+ * reused for that id for as long as the node exists. Each function closes
+ * over the node's `id` (immutable for the dispatcher entry's whole
+ * lifetime - a node's kind/id never changes after creation) and a mutable
+ * `liveRef` that toFlowNodes updates on EVERY call, cache-hit or not,
+ * before any function in `fns` can run - so a click on a long-lived stable
+ * callback always observes the CURRENT n/store/onOpenDocumentView/
+ * onToggleBranchFocus, never a stale snapshot from whenever the closure
+ * happened to be created. This is the "read current values through a ref
+ * rather than closing over values that change every call" pattern.
+ */
+interface DispatcherLive {
+  n: SceneNodeRow;
+  store: SceneStore;
+  onOpenDocumentView: (markdown: string, sourceLabel: string) => void;
+  onToggleBranchFocus: (nodeId: string) => void;
+  // Kind-specific derived value(s) a dispatcher needs beyond `n` itself,
+  // NOT themselves part of `n` (e.g. the code branch's parentChatNodeId,
+  // resolved from edges rather than n's own fields) - cast to the concrete
+  // shape inside each dispatcher factory below that actually uses it.
+  extra?: unknown;
+}
+
+interface DispatcherEntry {
+  liveRef: { current: DispatcherLive };
+  fns: Record<string, unknown>;
+}
+
+export interface ToFlowNodesCache {
+  dispatchers: Map<string, DispatcherEntry>;
+  // Keyed by the SceneNode's OWN object reference - ADR-003 deltas
+  // guarantee an unchanged node keeps that EXACT reference (sceneStore.ts's
+  // applyScenePatch: "Untouched nodes keep their EXACT existing object
+  // references"), so a WeakMap hit here doubles as the "did this node
+  // change" check for free: an unchanged node's `n` is literally the same
+  // key it was cached under last call; a changed one is a brand-new object
+  // the WeakMap has never seen, so `.get` misses automatically. Using a
+  // WeakMap (not a plain Map keyed by node id) means a replaced node's old
+  // entry is reclaimed by GC on its own - no separate eviction pass needed
+  // for the fast-changing case (e.g. a streaming chat node's `content`
+  // changing every token, which mints a new SceneNodeRow every time).
+  //
+  // `extraSig` covers everything the emitted flow node depends on BESIDES
+  // `n` itself - dimming/branch-focus flags, dockedChildren, the code
+  // branch's parentChatNodeId, group memberKinds (see each kind's own
+  // comment in toFlowNodes below) - so a cache hit only fires when NOTHING
+  // relevant changed, not merely when `n`'s reference didn't.
+  flowNodes: WeakMap<SceneNodeRow, { extraSig: string; flowNode: SceneFlowNode }>;
+}
+
+export function createToFlowNodesCache(): ToFlowNodesCache {
+  return { dispatchers: new Map(), flowNodes: new WeakMap() };
+}
+
+// Drops dispatcher entries for node ids no longer in the scene - a node
+// once deleted never comes back under the same id, so its dispatcher (and
+// the liveRef it closes over) would otherwise sit in the Map forever for
+// the lifetime of the canvas. flowNodes above needs no equivalent: it is a
+// WeakMap keyed by the node object itself, so a deleted node's entry is
+// simply unreachable and reclaimed by GC on its own.
+function pruneDispatcherCache(cache: ToFlowNodesCache, nodesById: Map<string, SceneNodeRow>): void {
+  if (cache.dispatchers.size === 0) return;
+  for (const id of cache.dispatchers.keys()) {
+    if (!nodesById.has(id)) cache.dispatchers.delete(id);
+  }
+}
+
+function getDispatcher<T extends Record<string, unknown>>(
+  cache: ToFlowNodesCache,
+  id: string,
+  live: DispatcherLive,
+  factory: (id: string, liveRef: { current: DispatcherLive }) => T,
+): T {
+  const existing = cache.dispatchers.get(id);
+  if (existing) {
+    existing.liveRef.current = live;
+    return existing.fns as T;
+  }
+  const liveRef = { current: live };
+  const fns = factory(id, liveRef);
+  cache.dispatchers.set(id, { liveRef, fns: fns as Record<string, unknown> });
+  return fns;
+}
+
+function makeChatFns(id: string, liveRef: { current: DispatcherLive }) {
+  return {
+    onToggleCollapse: () => {
+      const { n, store } = liveRef.current;
+      store.setChatCollapsed(id, !n.isCollapsed);
+    },
+    onDelete: () => liveRef.current.store.deleteChatNode(id),
+    onUndockChild: (childId: string) => liveRef.current.store.setNodeDocked(childId, false),
+    onRegenerate: () => liveRef.current.store.regenerateResponse(id),
+    onGenerateImage: () => liveRef.current.store.generateImage(id),
+    // R6.2: real chart generation - fires the new generateChart intent with
+    // this chat node as the parent (see ChatNodeView.tsx's own Generate
+    // Chart submenu). Fire-and-forget, same posture as onGenerateImage.
+    onGenerateChart: (chartType: string) => liveRef.current.store.generateChart(id, chartType),
+    // R8a: the two note agents, restored from the deleted Qt app. Same
+    // fire-and-forget posture as onGenerateImage above.
+    onGenerateKeyTakeaway: () => liveRef.current.store.generateKeyTakeaway(id),
+    onGenerateExplainerNote: () => liveRef.current.store.generateExplainerNote(id),
+    // R8a: Open Document View - shows this node's own message text verbatim
+    // in the read-only document panel. Guards on non-blank content, matching
+    // legacy's own document-view action exactly: a notification on nothing,
+    // not a silent no-op.
+    onOpenDocumentView: () => {
+      const { n, onOpenDocumentView, store } = liveRef.current;
+      if (n.content.trim()) onOpenDocumentView(n.content, n.isUser ? "Your message" : "Assistant message");
+      else store.showInfoNotification(NO_DOCUMENT_VIEW_CONTENT_MESSAGE);
+    },
+    onToggleBranchFocus: () => liveRef.current.onToggleBranchFocus(id),
+    // ADR-002 Workstream 1: stages this node as sceneStore's
+    // replyTargetNodeId - the composer's next Send then reads and consumes
+    // it (see sceneStore.ts's sendMessage).
+    onBranchFromHere: () => liveRef.current.store.setReplyTargetNodeId(id),
+    // ADR-002 Workstream 1 ("Branch status and lifecycle"). Fire-and-forget,
+    // same posture as onBranchFromHere/onGenerateKeyTakeaway above.
+    onSetBranchStatus: (status: string) => liveRef.current.store.setBranchStatus(id, status),
+    onSetFinalDeliverable: (isFinal: boolean) => liveRef.current.store.setFinalDeliverable(id, isFinal),
+    onCollapseBranch: (collapsed: boolean) => liveRef.current.store.collapseBranch(id, collapsed),
+    // R6.3: the node's own scroll position within its content area - read on
+    // mount by ChatNodeView (restore) and reported (debounced) via the
+    // setChatScrollValue intent on every scroll.
+    onScrollChange: (value: number) => liveRef.current.store.setChatScrollValue(id, value),
+    // ADR-006 stage 6.4 (universal streaming): a Regenerate for this node now
+    // streams - subscribeStream is the same generic transport passthrough
+    // the code_sandbox branch below also injects.
+    subscribeStream: (requestId: string, listener: StreamListener) =>
+      liveRef.current.store.subscribeStream(requestId, listener),
+    // ADR-006 stage 6.4 review fix: per-node Stop for an in-flight streamed
+    // regenerate. Reuses cancelConversationRequest (fires the generic
+    // cancelChatRequest intent by requestId) rather than adding a new
+    // intent. Same null-guard pattern as the conversation branch's own
+    // onCancel.
+    onCancelRegenerate: () => {
+      const { n, store } = liveRef.current;
+      if (n.pendingRequestId) store.cancelConversationRequest(n.pendingRequestId);
+    },
+  };
+}
+
+function makeCodeFns(id: string, liveRef: { current: DispatcherLive }) {
+  return {
+    // parentChatNodeId (this code node's own one-hop parent lookup) arrives
+    // via `extra`, resolved by toFlowNodes' edgesByTarget index below - see
+    // that call site's own comment for why it can't just be `id`.
+    onRegenerate: () => {
+      const { store, extra } = liveRef.current;
+      const parentChatNodeId = extra as string | null;
+      if (parentChatNodeId) store.regenerateResponse(parentChatNodeId);
+    },
+    onDelete: () => liveRef.current.store.removeNodes([id]),
+    onToggleBranchFocus: () => liveRef.current.onToggleBranchFocus(id),
+  };
+}
+
+function makeDocumentFns(id: string, liveRef: { current: DispatcherLive }) {
+  return {
+    // setChatCollapsed's backend handler (backend/canvas.py) looks up ANY
+    // node by id and sets is_collapsed - it does not special-case "chat"
+    // kind despite the intent's name - so it is reused as-is here rather
+    // than inventing a setDocumentCollapsed intent the backend doesn't
+    // register.
+    onToggleCollapse: () => {
+      const { n, store } = liveRef.current;
+      store.setChatCollapsed(id, !n.isCollapsed);
+    },
+    onDock: () => liveRef.current.store.setNodeDocked(id, true),
+    onDelete: () => liveRef.current.store.removeNodes([id]),
+    onToggleBranchFocus: () => liveRef.current.onToggleBranchFocus(id),
+  };
+}
+
+function makeThinkingFns(id: string, liveRef: { current: DispatcherLive }) {
+  return {
+    onDock: () => liveRef.current.store.setNodeDocked(id, true),
+    onDelete: () => liveRef.current.store.removeNodes([id]),
+    onToggleBranchFocus: () => liveRef.current.onToggleBranchFocus(id),
+  };
+}
+
+function makeHtmlFns(id: string, liveRef: { current: DispatcherLive }) {
+  return {
+    onToggleCollapse: () => {
+      const { n, store } = liveRef.current;
+      store.setChatCollapsed(id, !n.isCollapsed);
+    },
+    onDelete: () => liveRef.current.store.removeNodes([id]),
+    // R6.3: the Source/Preview split position - read on mount by
+    // HtmlNodeView (restore) and reported (debounced) via the
+    // setHtmlSplitterState intent once a drag settles.
+    onSplitterChange: (value: number) => liveRef.current.store.setHtmlSplitterState(id, value),
+  };
+}
+
+function makeImageFns(id: string, liveRef: { current: DispatcherLive }) {
+  return {
+    onDelete: () => liveRef.current.store.removeNodes([id]),
+    // R4.4a: unlike CodeNodeView's onRegenerate, no client-side parent
+    // lookup/null-guard is needed here - the backend resolves the image's
+    // parent chat node internally.
+    onRegenerate: () => liveRef.current.store.regenerateImage(id),
+    onToggleBranchFocus: () => liveRef.current.onToggleBranchFocus(id),
+  };
+}
+
+function makeConversationFns(id: string, liveRef: { current: DispatcherLive }) {
+  return {
+    onToggleCollapse: () => {
+      const { n, store } = liveRef.current;
+      store.setChatCollapsed(id, !n.isCollapsed);
+    },
+    onDelete: () => liveRef.current.store.removeNodes([id]),
+    onSend: (text: string) => liveRef.current.store.sendConversationMessage(id, text),
+    onDeleteMessage: (index: number) => liveRef.current.store.deleteConversationMessage(id, index),
+    onCancel: () => {
+      const { n, store } = liveRef.current;
+      if (n.pendingRequestId) store.cancelConversationRequest(n.pendingRequestId);
+    },
+    // R8a: Open Document View - the node's ENTIRE message history, formatted
+    // as a numbered transcript. Guards on a non-empty formatted result the
+    // same way the chat branch's own onOpenDocumentView guards on non-blank
+    // content.
+    onOpenDocumentView: () => {
+      const { n, onOpenDocumentView, store } = liveRef.current;
+      const markdown = conversationHistoryToDocumentMarkdown(n.history);
+      if (markdown) onOpenDocumentView(markdown, "Conversation transcript");
+      else store.showInfoNotification(NO_DOCUMENT_VIEW_CONTENT_MESSAGE);
+    },
+    subscribeStream: (requestId: string, listener: StreamListener) =>
+      liveRef.current.store.subscribeStream(requestId, listener),
+  };
+}
+
+function makeWebResearchFns(id: string, liveRef: { current: DispatcherLive }) {
+  return {
+    onToggleCollapse: () => {
+      const { n, store } = liveRef.current;
+      store.setChatCollapsed(id, !n.isCollapsed);
+    },
+    onDelete: () => liveRef.current.store.removeNodes([id]),
+    onRun: (query: string) => liveRef.current.store.runWebResearch(id, query),
+    onCancel: () => {
+      const { n, store } = liveRef.current;
+      if (n.pendingRequestId) store.cancelWebResearchRequest(n.pendingRequestId);
+    },
+  };
+}
+
+function makeArtifactFns(id: string, liveRef: { current: DispatcherLive }) {
+  return {
+    onToggleCollapse: () => {
+      const { n, store } = liveRef.current;
+      store.setChatCollapsed(id, !n.isCollapsed);
+    },
+    onDelete: () => liveRef.current.store.removeNodes([id]),
+    onSubmit: (text: string) => liveRef.current.store.sendArtifactMessage(id, text),
+    onCancel: () => {
+      const { n, store } = liveRef.current;
+      if (n.pendingRequestId) store.cancelArtifactRequest(n.pendingRequestId);
+    },
+  };
+}
+
+function makeGitlinkFns(id: string, liveRef: { current: DispatcherLive }) {
+  return {
+    onToggleCollapse: () => {
+      const { n, store } = liveRef.current;
+      store.setChatCollapsed(id, !n.isCollapsed);
+    },
+    onDelete: () => liveRef.current.store.removeNodes([id]),
+    onFetchRepositories: () => liveRef.current.store.fetchGitlinkRepositories(id),
+    onLoadTree: (repo: string, branch: string) => liveRef.current.store.loadGitlinkRepoTree(id, repo, branch),
+    onSetLocalRoot: (localRoot: string) => liveRef.current.store.setGitlinkLocalRoot(id, localRoot),
+    onBrowseLocalRoot: () => liveRef.current.store.pickGitlinkLocalRoot(id),
+    onImportSnapshot: (repo: string, branch: string) => liveRef.current.store.importGitlinkSnapshot(id, repo, branch),
+    onBuildContext: (scopeMode: string, selectedPaths: string[]) =>
+      liveRef.current.store.buildGitlinkContext(id, scopeMode, selectedPaths),
+    onFetchContext: () => liveRef.current.store.fetchGitlinkContext(id),
+    onRun: (taskPrompt: string) => liveRef.current.store.runGitlinkChangeSet(id, taskPrompt),
+    onCancel: () => {
+      const { n, store } = liveRef.current;
+      if (n.pendingRequestId) store.cancelGitlinkRequest(n.pendingRequestId);
+    },
+    onApply: (fingerprint: string) => liveRef.current.store.applyGitlinkChanges(id, fingerprint),
+  };
+}
+
+function makePyCoderFns(id: string, liveRef: { current: DispatcherLive }) {
+  return {
+    onToggleCollapse: () => {
+      const { n, store } = liveRef.current;
+      store.setChatCollapsed(id, !n.isCollapsed);
+    },
+    onDelete: () => liveRef.current.store.removeNodes([id]),
+    onSetMode: (mode: string) => liveRef.current.store.setPyCoderMode(id, mode),
+    onRun: (inputText: string) => liveRef.current.store.runPyCoder(id, inputText),
+    onCancel: () => {
+      const { n, store } = liveRef.current;
+      if (n.pendingRequestId) store.cancelPyCoderRequest(n.pendingRequestId);
+    },
+    // CRITICAL (see CodeExecutionApprovalPanel.tsx's own module doc): these
+    // read n.pendingRequestId - the CURRENT scene snapshot's own value for
+    // THIS node via liveRef, never anything the UI layer could supply as a
+    // distinct argument.
+    onApprove: () => {
+      const { n, store } = liveRef.current;
+      if (n.pendingRequestId) store.approveCodeExecution(n.pendingRequestId);
+    },
+    onDeny: () => {
+      const { n, store } = liveRef.current;
+      if (n.pendingRequestId) store.denyCodeExecution(n.pendingRequestId);
+    },
+  };
+}
+
+function makeCodeSandboxFns(id: string, liveRef: { current: DispatcherLive }) {
+  return {
+    onToggleCollapse: () => {
+      const { n, store } = liveRef.current;
+      store.setChatCollapsed(id, !n.isCollapsed);
+    },
+    onDelete: () => liveRef.current.store.removeNodes([id]),
+    onSetRequirements: (requirementsText: string) =>
+      liveRef.current.store.setCodeSandboxRequirements(id, requirementsText),
+    onToggleAllowSourceBuilds: (allow: boolean) => liveRef.current.store.setCodeSandboxAllowSourceBuilds(id, allow),
+    onRun: (inputText: string) => liveRef.current.store.runCodeSandbox(id, inputText),
+    onCancel: () => {
+      const { n, store } = liveRef.current;
+      if (n.pendingRequestId) store.cancelCodeSandboxRequest(n.pendingRequestId);
+    },
+    // CRITICAL - same posture as the pycoder branch's own onApprove/onDeny.
+    onApprove: () => {
+      const { n, store } = liveRef.current;
+      if (n.pendingRequestId) store.approveCodeExecution(n.pendingRequestId);
+    },
+    onDeny: () => {
+      const { n, store } = liveRef.current;
+      if (n.pendingRequestId) store.denyCodeExecution(n.pendingRequestId);
+    },
+    // Generic passthrough to the transport's own stream fan-out - the live
+    // terminal pane keys its subscription off data.pendingRequestId itself,
+    // this closure only needs to exist so the component never touches the
+    // store/transport directly.
+    subscribeStream: (requestId: string, listener: StreamListener) =>
+      liveRef.current.store.subscribeStream(requestId, listener),
+  };
+}
+
+function makeNoteFns(id: string, liveRef: { current: DispatcherLive }) {
+  return {
+    onSetContent: (content: string) => liveRef.current.store.setNoteContent(id, content),
+    onSetColor: (color: string | null, headerColor: string | null) =>
+      liveRef.current.store.setGroupColor(id, color, headerColor),
+    onDelete: () => liveRef.current.store.removeNodes([id]),
+  };
+}
+
+function makeGroupFns(id: string, liveRef: { current: DispatcherLive }) {
+  return {
+    onSetLabel: (text: string) => liveRef.current.store.setGroupLabel(id, text),
+    onToggleCollapsed: () => liveRef.current.store.toggleGroupCollapsed(id),
+    onToggleLock: () => liveRef.current.store.toggleFrameLock(id),
+    onSetColor: (color: string | null, headerColor: string | null) =>
+      liveRef.current.store.setGroupColor(id, color, headerColor),
+    onResize: (width: number, height: number) => liveRef.current.store.resizeFrame(id, width, height),
+    onFitToContent: () => liveRef.current.store.fitFrameToContent(id),
+    onUngroup: () => liveRef.current.store.ungroup(id),
+  };
+}
+
+function makeChartFns(id: string, liveRef: { current: DispatcherLive }) {
+  return {
+    onToggleAspectLock: () => liveRef.current.store.toggleChartAspectLock(id),
+    onResize: (width: number, height: number) => liveRef.current.store.resizeChart(id, width, height),
+  };
+}
+
 // Exported standalone for direct unit testing (same posture as
 // scaleDragPosition in sceneStore.ts) - covers the parentChatNodeId
 // derivation below without needing a full <ReactFlow> mount.
@@ -390,11 +831,23 @@ export function toFlowNodes(
   // focusAcceptedPaths field - see that field's own comment for why it
   // lives there rather than as component state here).
   focusAcceptedPaths = false,
+  // ADR-011 stage 11.1: threaded from CanvasInner's own useRef (see
+  // CanvasInner below) so the SAME cache survives across every call for the
+  // canvas's whole lifetime, which is what actually makes the per-node
+  // dispatcher/whole-flow-node memoization below effective across
+  // snapshots. Callers that omit it - every existing direct unit test in
+  // SceneCanvas.test.tsx - get a fresh, single-use cache instead: still
+  // fully correct (a fresh cache just means nothing has been seen before,
+  // so every node "misses" and gets built the same way it always did), just
+  // not memoized across separate calls, which none of those tests need.
+  cache: ToFlowNodesCache = createToFlowNodesCache(),
 ): SceneFlowNode[] {
-  // Looked up per-chat-node below to build dockedChildren - a docked node is
-  // omitted from the returned array entirely (see the "thinking" branch), so
-  // this is the only remaining way a chat node's dock badge/menu can find it.
-  const nodesById = new Map(scene.nodes.map((n) => [n.id, n]));
+  // ADR-011 stage 11.1: ONE upfront O(N+E) pass replacing this function's
+  // old standalone `nodesById` map build, PLUS the O(N*E) per-node edge
+  // scans that used to live below (dockedChildren's full scene.edges scan
+  // per chat node; the code branch's scene.edges.find per code node) - see
+  // buildSceneIndexes' own doc above for the full reasoning.
+  const { nodesById, edgesBySource, edgesByTarget } = buildSceneIndexes(scene);
   // R8a: computed once per call, then just a Set.has() per node below -
   // see computeDimmedNodeIds' own doc for why it builds its own maps rather
   // than reusing nodesById above.
@@ -406,6 +859,12 @@ export function toFlowNodes(
   // than picked between - both dimming lenses can be active at once.
   const nonAcceptedIds = focusAcceptedPaths ? computeNonAcceptedNodeIds(scene) : new Set<string>();
   const isDimmed = (id: string) => dimmedIds.has(id) || nonAcceptedIds.has(id);
+  // BRANCH_FOCUS_KINDS-wide flag (chat/code/document/thinking/image only -
+  // every other kind's data below never reads it): whether "Hide Other
+  // Branches" is active from ANY origin, scene-wide. Computed once here
+  // (not per node) purely so each of those 5 kinds' cache key below can
+  // fold it in cheaply alongside isDimmed(n.id).
+  const isBranchFocusActive = branchFocusOriginId !== null;
   const flowNodes: SceneFlowNode[] = [];
 
   for (const n of scene.nodes) {
@@ -424,65 +883,53 @@ export function toFlowNodes(
       // docked - the new stack's equivalent of the legacy scene's per-node
       // docked-children list. title is the closest faithful stand-in for a
       // per-node-type "docked label" concept (none exists in the new stack).
+      // ADR-011 stage 11.1: reads ONLY this node's own outgoing edges via
+      // edgesBySource (O(out-degree)) instead of scanning the full
+      // scene.edges array (O(E)) - see buildSceneIndexes' own doc above.
       const dockedChildren: { id: string; label: string }[] = [];
-      for (const e of scene.edges) {
-        if (e.source !== n.id) continue;
+      for (const e of edgesBySource.get(n.id) ?? []) {
         const target = nodesById.get(e.target);
         if (target?.isDocked) dockedChildren.push({ id: target.id, label: target.title });
       }
-      flowNodes.push({
+      const dimmedVal = isDimmed(n.id);
+      // dockedChildren depends on OTHER nodes' isDocked/title (via edges),
+      // not on n's own reference - a child docking/undocking never touches
+      // the PARENT chat node's own object, so n-reference-only invalidation
+      // would go stale here without this signature folded into the cache
+      // key (see ToFlowNodesCache.flowNodes' own doc above).
+      const dockedChildrenSig = dockedChildren.map((c) => `${c.id}:${c.label}`).join("|");
+      const extraSig = `${dimmedVal ? 1 : 0}${isBranchFocusActive ? 1 : 0}|${dockedChildrenSig}`;
+      const cached = cache.flowNodes.get(n);
+      const fns = getDispatcher(cache, n.id, { n, store, onOpenDocumentView, onToggleBranchFocus }, makeChatFns);
+      if (cached && cached.extraSig === extraSig) {
+        flowNodes.push(cached.flowNode);
+        continue;
+      }
+      const flowNode: SceneFlowNode = {
         id: n.id,
         type: "chat" as const,
         position: { x: n.x, y: n.y },
         // R8a: "Hide Other Branches" dimming - see computeDimmedNodeIds' own
         // doc above. undefined (not an explicit opacity: 1) when not dimmed,
         // so this never overrides anything else that might set style later.
-        style: isDimmed(n.id) ? { opacity: BRANCH_DIM_OPACITY } : undefined,
+        style: dimmedVal ? { opacity: BRANCH_DIM_OPACITY } : undefined,
         data: {
           content: n.content,
           isUser: n.isUser,
           isCollapsed: n.isCollapsed,
           dockedChildren,
-          onToggleCollapse: () => store.setChatCollapsed(n.id, !n.isCollapsed),
-          onDelete: () => store.deleteChatNode(n.id),
-          onUndockChild: (childId: string) => store.setNodeDocked(childId, false),
-          onRegenerate: () => store.regenerateResponse(n.id),
-          onGenerateImage: () => store.generateImage(n.id),
-          // R6.2: real chart generation - fires the new generateChart intent
-          // with this chat node as the parent (see ChatNodeView.tsx's own
-          // Generate Chart submenu). Fire-and-forget, same posture as
-          // onGenerateImage above - the new chart node arrives through the
-          // next scene snapshot.
-          onGenerateChart: (chartType: string) => store.generateChart(n.id, chartType),
-          // R8a: the two note agents, restored from the deleted Qt app. Same
-          // fire-and-forget posture as onGenerateImage above - the new note
-          // arrives through the next scene snapshot.
-          onGenerateKeyTakeaway: () => store.generateKeyTakeaway(n.id),
-          onGenerateExplainerNote: () => store.generateExplainerNote(n.id),
-          // R8a: Open Document View - shows this node's own message text
-          // verbatim in the read-only document panel. Guards on non-blank
-          // content, matching legacy's own document-view action exactly:
-          // a notification on nothing, not a silent no-op (see
-          // conversationHistoryToDocumentMarkdown's own doc above for the
-          // sibling conversation-node guard).
-          onOpenDocumentView: () => {
-            if (n.content.trim()) onOpenDocumentView(n.content, n.isUser ? "Your message" : "Assistant message");
-            else store.showInfoNotification(NO_DOCUMENT_VIEW_CONTENT_MESSAGE);
-          },
+          // ADR-011 stage 11.1: the ~17 onXxx/subscribeStream callbacks that
+          // used to be minted inline here on every call now come from the
+          // stable per-node-id dispatcher (fns) built above - see
+          // makeChatFns' own doc for why that keeps the SAME function
+          // references across calls instead of allocating fresh closures.
+          ...fns,
           // R8a: "Hide Other Branches" - isBranchFocusActive is scene-wide
           // (not per-node), purely so the menu button can flip its own label
           // to "Show All Branches" once ANY branch focus is active, matching
           // legacy's own `"Show All Branches" if is_branch_hidden else
           // "Hide Other Branches"` regardless of which node's menu is open.
-          isBranchFocusActive: branchFocusOriginId !== null,
-          onToggleBranchFocus: () => onToggleBranchFocus(n.id),
-          // ADR-002 Workstream 1: stages this node as sceneStore's
-          // replyTargetNodeId - the composer's next Send then reads and
-          // consumes it (see sceneStore.ts's sendMessage). `store` is
-          // already threaded into toFlowNodes, so no new parameter is
-          // needed here (unlike onToggleBranchFocus, which lives as local
-          // state on SceneCanvas itself, not on the store).
-          onBranchFromHere: () => store.setReplyTargetNodeId(n.id),
+          isBranchFocusActive,
           // ADR-002 Workstream 1 ("Synthesize Branches"): provenance carried
           // by the result node. provider/model are None/absent for every
           // ordinary chat node (the vast majority), rendered as no badge at
@@ -497,36 +944,19 @@ export function toFlowNodes(
           // above - the new value arrives through the next scene snapshot.
           branchStatus: n.branchStatus,
           isFinalDeliverable: n.isFinalDeliverable,
-          onSetBranchStatus: (status: string) => store.setBranchStatus(n.id, status),
-          onSetFinalDeliverable: (isFinal: boolean) => store.setFinalDeliverable(n.id, isFinal),
-          onCollapseBranch: (collapsed: boolean) => store.collapseBranch(n.id, collapsed),
           // R6.3: the node's own scroll position within its content area -
           // read on mount by ChatNodeView (restore) and reported (debounced)
           // via the setChatScrollValue intent on every scroll.
           chatScrollValue: n.chatScrollValue,
-          onScrollChange: (value: number) => store.setChatScrollValue(n.id, value),
           // ADR-006 stage 6.4 (universal streaming): a Regenerate for this
           // node now streams - the in-flight request id arrives on the
           // node's OWN row (published on the scene topic, never via the
           // composer), and ChatNodeView keys its live subscription off it.
-          // subscribeStream is the same generic transport passthrough the
-          // code_sandbox branch below already injects.
           pendingRequestId: n.pendingRequestId ?? null,
           // ADR-006 stage 6.4 (partial-output preservation): true when the
           // content field is a partial response the backend committed after
           // a killed stream - ChatNodeView renders its "interrupted" banner.
           responseIncomplete: n.responseIncomplete,
-          subscribeStream: (requestId: string, listener: StreamListener) =>
-            store.subscribeStream(requestId, listener),
-          // ADR-006 stage 6.4 review fix: per-node Stop for an in-flight
-          // streamed regenerate. Reuses cancelConversationRequest - which
-          // fires the generic cancelChatRequest intent by requestId, not
-          // anything conversation-specific (see that store method's own
-          // naming comment) - rather than adding a new intent. Same
-          // null-guard pattern as the conversation branch's own onCancel.
-          onCancelRegenerate: () => {
-            if (n.pendingRequestId) store.cancelConversationRequest(n.pendingRequestId);
-          },
           // ADR-007 stage 7.4: this turn's tool calls + results, in call
           // order - [] for the overwhelming majority of chat nodes (see
           // ToolInvocationRow's own comment, contracts/graphlink_scene_
@@ -540,7 +970,9 @@ export function toFlowNodes(
           completionTokens: n.completionTokens ?? null,
           estimatedCostUsd: n.estimatedCostUsd ?? null,
         },
-      });
+      };
+      cache.flowNodes.set(n, { extraSig, flowNode });
+      flowNodes.push(flowNode);
       continue;
     }
     if (n.kind === "code") {
@@ -550,35 +982,61 @@ export function toFlowNodes(
       // dockedChildren above) since the backend never kind-sniffs a code
       // node id back to its parent chat node (see regenerateResponse's own
       // comment above and SceneCanvas's regenerate-response design notes).
-      const parentEdge = scene.edges.find((e) => e.target === n.id);
+      // ADR-011 stage 11.1: edgesByTarget.get(n.id)?.[0] replaces
+      // `scene.edges.find((e) => e.target === n.id)` - both return the
+      // FIRST edge in scene.edges' own order whose target is this node
+      // (edgesByTarget's per-target arrays are built by iterating
+      // scene.edges in order in buildSceneIndexes above, so `[0]` is
+      // exactly what `.find` would have returned), just without re-scanning
+      // the full array for every code node.
+      const parentEdge = edgesByTarget.get(n.id)?.[0];
       const parentChatNodeId = parentEdge ? parentEdge.source : null;
-      flowNodes.push({
+      const dimmedVal = isDimmed(n.id);
+      const extraSig = `${dimmedVal ? 1 : 0}${isBranchFocusActive ? 1 : 0}|${parentChatNodeId ?? ""}`;
+      const cached = cache.flowNodes.get(n);
+      const fns = getDispatcher(
+        cache,
+        n.id,
+        { n, store, onOpenDocumentView, onToggleBranchFocus, extra: parentChatNodeId },
+        makeCodeFns,
+      );
+      if (cached && cached.extraSig === extraSig) {
+        flowNodes.push(cached.flowNode);
+        continue;
+      }
+      const flowNode: SceneFlowNode = {
         id: n.id,
         type: "code" as const,
         position: { x: n.x, y: n.y },
-        style: isDimmed(n.id) ? { opacity: BRANCH_DIM_OPACITY } : undefined,
+        style: dimmedVal ? { opacity: BRANCH_DIM_OPACITY } : undefined,
         data: {
           code: n.code,
           language: n.language,
           parentChatNodeId,
-          onRegenerate: () => {
-            if (parentChatNodeId) store.regenerateResponse(parentChatNodeId);
-          },
-          onDelete: () => store.removeNodes([n.id]),
           // R8a: "Hide Other Branches" - see the chat branch above for why
           // isBranchFocusActive is scene-wide rather than per-node.
-          isBranchFocusActive: branchFocusOriginId !== null,
-          onToggleBranchFocus: () => onToggleBranchFocus(n.id),
+          isBranchFocusActive,
+          ...fns,
         },
-      });
+      };
+      cache.flowNodes.set(n, { extraSig, flowNode });
+      flowNodes.push(flowNode);
       continue;
     }
     if (n.kind === "document") {
-      flowNodes.push({
+      const dimmedVal = isDimmed(n.id);
+      const extraSig = `${dimmedVal ? 1 : 0}${isBranchFocusActive ? 1 : 0}`;
+      const cached = cache.flowNodes.get(n);
+      const fns = getDispatcher(cache, n.id, { n, store, onOpenDocumentView, onToggleBranchFocus }, makeDocumentFns);
+      if (cached && cached.extraSig === extraSig) {
+        flowNodes.push(cached.flowNode);
+        continue;
+      }
+      const flowNode: SceneFlowNode = {
         id: n.id,
         type: "document" as const,
         position: { x: n.x, y: n.y },
-        style: isDimmed(n.id) ? { opacity: BRANCH_DIM_OPACITY } : undefined,
+        style: dimmedVal ? { opacity: BRANCH_DIM_OPACITY } : undefined,
         data: {
           title: n.title,
           content: n.content,
@@ -594,40 +1052,41 @@ export function toFlowNodes(
           byteSize: n.byteSize ?? null,
           previewLabel: n.previewLabel,
           isCollapsed: n.isCollapsed,
-          // setChatCollapsed's backend handler (backend/canvas.py) looks up
-          // ANY node by id and sets is_collapsed - it does not special-case
-          // "chat" kind despite the intent's name - so it is reused here
-          // as-is rather than inventing a setDocumentCollapsed intent the
-          // backend doesn't register. See this increment's report for the
-          // full reasoning.
-          onToggleCollapse: () => store.setChatCollapsed(n.id, !n.isCollapsed),
-          onDock: () => store.setNodeDocked(n.id, true),
-          onDelete: () => store.removeNodes([n.id]),
           // R8a: "Hide Other Branches" - see the chat branch above.
-          isBranchFocusActive: branchFocusOriginId !== null,
-          onToggleBranchFocus: () => onToggleBranchFocus(n.id),
+          isBranchFocusActive,
+          ...fns,
         },
-      });
+      };
+      cache.flowNodes.set(n, { extraSig, flowNode });
+      flowNodes.push(flowNode);
       continue;
     }
     if (n.kind === "thinking") {
       // Docked-hiding is handled by the generic check above; once undocked,
       // it resurfaces as a badge + "Reveal Docked Items" entry on its parent
       // chat node (dockedChildren above).
-      flowNodes.push({
+      const dimmedVal = isDimmed(n.id);
+      const extraSig = `${dimmedVal ? 1 : 0}${isBranchFocusActive ? 1 : 0}`;
+      const cached = cache.flowNodes.get(n);
+      const fns = getDispatcher(cache, n.id, { n, store, onOpenDocumentView, onToggleBranchFocus }, makeThinkingFns);
+      if (cached && cached.extraSig === extraSig) {
+        flowNodes.push(cached.flowNode);
+        continue;
+      }
+      const flowNode: SceneFlowNode = {
         id: n.id,
         type: "thinking" as const,
         position: { x: n.x, y: n.y },
-        style: isDimmed(n.id) ? { opacity: BRANCH_DIM_OPACITY } : undefined,
+        style: dimmedVal ? { opacity: BRANCH_DIM_OPACITY } : undefined,
         data: {
           thinkingText: n.content,
-          onDock: () => store.setNodeDocked(n.id, true),
-          onDelete: () => store.removeNodes([n.id]),
           // R8a: "Hide Other Branches" - see the chat branch above.
-          isBranchFocusActive: branchFocusOriginId !== null,
-          onToggleBranchFocus: () => onToggleBranchFocus(n.id),
+          isBranchFocusActive,
+          ...fns,
         },
-      });
+      };
+      cache.flowNodes.set(n, { extraSig, flowNode });
+      flowNodes.push(flowNode);
       continue;
     }
     if (n.kind === "html") {
@@ -642,15 +1101,22 @@ export function toFlowNodes(
       // entry exists on this node's own header, and ChatNodeView's own
       // dockedChildren/undock badge is kind-agnostic already, so undocking
       // it is still possible from the parent chat node's side).
-      flowNodes.push({
+      // No isDimmed/isBranchFocusActive here - HtmlNodeView never carried
+      // this menu item (see BRANCH_FOCUS_KINDS above), so node-reference-
+      // only cache invalidation is already exact for this kind.
+      const cached = cache.flowNodes.get(n);
+      const fns = getDispatcher(cache, n.id, { n, store, onOpenDocumentView, onToggleBranchFocus }, makeHtmlFns);
+      if (cached) {
+        flowNodes.push(cached.flowNode);
+        continue;
+      }
+      const flowNode: SceneFlowNode = {
         id: n.id,
         type: "html" as const,
         position: { x: n.x, y: n.y },
         data: {
           htmlContent: n.content,
           isCollapsed: n.isCollapsed,
-          onToggleCollapse: () => store.setChatCollapsed(n.id, !n.isCollapsed),
-          onDelete: () => store.removeNodes([n.id]),
           // R6.3: the Source/Preview split position - read on mount by
           // HtmlNodeView (restore; null means "no saved value, use the
           // component's own 50/50 default") and reported (debounced) via the
@@ -658,9 +1124,11 @@ export function toFlowNodes(
           // canvasConstants.ts's own HTML_SPLIT_* doc for why this exists
           // now despite being scoped OUT back in R3.17/R3.18.
           htmlSplitterState: n.htmlSplitterState ?? null,
-          onSplitterChange: (value: number) => store.setHtmlSplitterState(n.id, value),
+          ...fns,
         },
-      });
+      };
+      cache.flowNodes.set(n, { extraSig: "", flowNode });
+      flowNodes.push(flowNode);
       continue;
     }
     if (n.kind === "image") {
@@ -669,25 +1137,29 @@ export function toFlowNodes(
       // never sets isDocked=true through any UI path of its own. The generic
       // `if (n.isDocked) continue` guard above still covers it correctly if
       // it were ever docked via a direct WS call, same as html.
-      flowNodes.push({
+      const dimmedVal = isDimmed(n.id);
+      const extraSig = `${dimmedVal ? 1 : 0}${isBranchFocusActive ? 1 : 0}`;
+      const cached = cache.flowNodes.get(n);
+      const fns = getDispatcher(cache, n.id, { n, store, onOpenDocumentView, onToggleBranchFocus }, makeImageFns);
+      if (cached && cached.extraSig === extraSig) {
+        flowNodes.push(cached.flowNode);
+        continue;
+      }
+      const flowNode: SceneFlowNode = {
         id: n.id,
         type: "image" as const,
         position: { x: n.x, y: n.y },
-        style: isDimmed(n.id) ? { opacity: BRANCH_DIM_OPACITY } : undefined,
+        style: dimmedVal ? { opacity: BRANCH_DIM_OPACITY } : undefined,
         data: {
           imageAssetId: n.imageAssetId,
           prompt: n.content,
-          onDelete: () => store.removeNodes([n.id]),
-          // R4.4a: unlike CodeNodeView's onRegenerate, no client-side parent
-          // lookup/null-guard is needed here - the backend resolves the
-          // image's parent chat node internally (see sceneStore.ts's
-          // regenerateImage / backend/canvas.py's resolve_regenerate_image).
-          onRegenerate: () => store.regenerateImage(n.id),
           // R8a: "Hide Other Branches" - see the chat branch above.
-          isBranchFocusActive: branchFocusOriginId !== null,
-          onToggleBranchFocus: () => onToggleBranchFocus(n.id),
+          isBranchFocusActive,
+          ...fns,
         },
-      });
+      };
+      cache.flowNodes.set(n, { extraSig, flowNode });
+      flowNodes.push(flowNode);
       continue;
     }
     if (n.kind === "conversation") {
@@ -696,7 +1168,21 @@ export function toFlowNodes(
       // action, so this kind never sets isDocked=true through any UI path
       // of its own; the generic `if (n.isDocked) continue` guard above still
       // covers it correctly if it were ever docked via a direct WS call.
-      flowNodes.push({
+      // No isDimmed/isBranchFocusActive here either - see the html branch's
+      // own comment above (ConversationNodeView is also outside
+      // BRANCH_FOCUS_KINDS), so node-reference-only invalidation is exact.
+      const cached = cache.flowNodes.get(n);
+      const fns = getDispatcher(
+        cache,
+        n.id,
+        { n, store, onOpenDocumentView, onToggleBranchFocus },
+        makeConversationFns,
+      );
+      if (cached) {
+        flowNodes.push(cached.flowNode);
+        continue;
+      }
+      const flowNode: SceneFlowNode = {
         id: n.id,
         type: "conversation" as const,
         position: { x: n.x, y: n.y },
@@ -704,38 +1190,11 @@ export function toFlowNodes(
           history: n.history,
           isCollapsed: n.isCollapsed,
           pendingRequestId: n.pendingRequestId ?? null,
-          // Reuses the existing generic setChatCollapsed intent - same
-          // reasoning as every other non-chat node kind's onToggleCollapse
-          // above (the backend handler looks up ANY node by id).
-          onToggleCollapse: () => store.setChatCollapsed(n.id, !n.isCollapsed),
-          onDelete: () => store.removeNodes([n.id]),
-          onSend: (text: string) => store.sendConversationMessage(n.id, text),
-          onDeleteMessage: (index: number) => store.deleteConversationMessage(n.id, index),
-          // Same null-guard pattern as Composer.tsx's own analogous cancel
-          // call site - only fire the intent if there is genuinely a
-          // non-null request id to target.
-          onCancel: () => {
-            if (n.pendingRequestId) store.cancelConversationRequest(n.pendingRequestId);
-          },
-          // R8a: Open Document View - the node's ENTIRE message history,
-          // formatted as a numbered transcript (see
-          // conversationHistoryToDocumentMarkdown's own doc above). Guards
-          // on a non-empty formatted result (empty history, or every
-          // message blank, both format to "") the same way the chat branch
-          // above guards on non-blank content.
-          onOpenDocumentView: () => {
-            const markdown = conversationHistoryToDocumentMarkdown(n.history);
-            if (markdown) onOpenDocumentView(markdown, "Conversation transcript");
-            else store.showInfoNotification(NO_DOCUMENT_VIEW_CONTENT_MESSAGE);
-          },
-          // ADR-006 stage 6.4 (universal streaming): a reply for this node
-          // now streams - ConversationNodeView keys a live assistant bubble
-          // off the pendingRequestId already mapped above. Same generic
-          // transport passthrough the code_sandbox branch below injects.
-          subscribeStream: (requestId: string, listener: StreamListener) =>
-            store.subscribeStream(requestId, listener),
+          ...fns,
         },
-      });
+      };
+      cache.flowNodes.set(n, { extraSig: "", flowNode });
+      flowNodes.push(flowNode);
       continue;
     }
     if (n.kind === "web_research") {
@@ -743,7 +1202,20 @@ export function toFlowNodes(
       // branches above) - WebResearchNodeView never offers a dock-into-parent
       // action; the generic `if (n.isDocked) continue` guard above still
       // covers it correctly if it were ever docked via a direct WS call.
-      flowNodes.push({
+      // No isDimmed/isBranchFocusActive here either - see the html branch's
+      // own comment above.
+      const cached = cache.flowNodes.get(n);
+      const fns = getDispatcher(
+        cache,
+        n.id,
+        { n, store, onOpenDocumentView, onToggleBranchFocus },
+        makeWebResearchFns,
+      );
+      if (cached) {
+        flowNodes.push(cached.flowNode);
+        continue;
+      }
+      const flowNode: SceneFlowNode = {
         id: n.id,
         type: "web_research" as const,
         position: { x: n.x, y: n.y },
@@ -757,20 +1229,11 @@ export function toFlowNodes(
           researchActiveSourceId: n.researchActiveSourceId ?? null,
           researchError: n.researchError,
           researchResult: n.researchResult ?? null,
-          // Reuses the existing generic setChatCollapsed intent - same
-          // reasoning as every other non-chat node kind's onToggleCollapse
-          // above (the backend handler looks up ANY node by id).
-          onToggleCollapse: () => store.setChatCollapsed(n.id, !n.isCollapsed),
-          onDelete: () => store.removeNodes([n.id]),
-          onRun: (query: string) => store.runWebResearch(n.id, query),
-          // Same null-guard pattern as the conversation node's own analogous
-          // cancel call site above - only fire the intent if there is
-          // genuinely a non-null request id to target.
-          onCancel: () => {
-            if (n.pendingRequestId) store.cancelWebResearchRequest(n.pendingRequestId);
-          },
+          ...fns,
         },
-      });
+      };
+      cache.flowNodes.set(n, { extraSig: "", flowNode });
+      flowNodes.push(flowNode);
       continue;
     }
     if (n.kind === "artifact") {
@@ -778,8 +1241,15 @@ export function toFlowNodes(
       // web_research branches above) - ArtifactNodeView never offers a
       // dock-into-parent action; the generic `if (n.isDocked) continue` guard
       // above still covers it correctly if it were ever docked via a direct
-      // WS call.
-      flowNodes.push({
+      // WS call. No isDimmed/isBranchFocusActive here either - see the html
+      // branch's own comment above.
+      const cached = cache.flowNodes.get(n);
+      const fns = getDispatcher(cache, n.id, { n, store, onOpenDocumentView, onToggleBranchFocus }, makeArtifactFns);
+      if (cached) {
+        flowNodes.push(cached.flowNode);
+        continue;
+      }
+      const flowNode: SceneFlowNode = {
         id: n.id,
         type: "artifact" as const,
         position: { x: n.x, y: n.y },
@@ -788,20 +1258,11 @@ export function toFlowNodes(
           history: n.history,
           isCollapsed: n.isCollapsed,
           pendingRequestId: n.pendingRequestId ?? null,
-          // Reuses the existing generic setChatCollapsed intent - same
-          // reasoning as every other non-chat node kind's onToggleCollapse
-          // above (the backend handler looks up ANY node by id).
-          onToggleCollapse: () => store.setChatCollapsed(n.id, !n.isCollapsed),
-          onDelete: () => store.removeNodes([n.id]),
-          onSubmit: (text: string) => store.sendArtifactMessage(n.id, text),
-          // Same null-guard pattern as the conversation/web_research nodes'
-          // own analogous cancel call sites above - only fire the intent if
-          // there is genuinely a non-null request id to target.
-          onCancel: () => {
-            if (n.pendingRequestId) store.cancelArtifactRequest(n.pendingRequestId);
-          },
+          ...fns,
         },
-      });
+      };
+      cache.flowNodes.set(n, { extraSig: "", flowNode });
+      flowNodes.push(flowNode);
       continue;
     }
     if (n.kind === "gitlink") {
@@ -812,7 +1273,14 @@ export function toFlowNodes(
       // direct WS call. gitlinkContextXml is deliberately absent below - it
       // is never part of the scene wire payload (fetched lazily on demand via
       // fetchGitlinkContext instead - see GitlinkNodeView's own Context tab).
-      flowNodes.push({
+      // No isDimmed/isBranchFocusActive here either.
+      const cached = cache.flowNodes.get(n);
+      const fns = getDispatcher(cache, n.id, { n, store, onOpenDocumentView, onToggleBranchFocus }, makeGitlinkFns);
+      if (cached) {
+        flowNodes.push(cached.flowNode);
+        continue;
+      }
+      const flowNode: SceneFlowNode = {
         id: n.id,
         type: "gitlink" as const,
         position: { x: n.x, y: n.y },
@@ -835,26 +1303,11 @@ export function toFlowNodes(
           gitlinkError: n.gitlinkError,
           isCollapsed: n.isCollapsed,
           pendingRequestId: n.pendingRequestId ?? null,
-          onToggleCollapse: () => store.setChatCollapsed(n.id, !n.isCollapsed),
-          onDelete: () => store.removeNodes([n.id]),
-          onFetchRepositories: () => store.fetchGitlinkRepositories(n.id),
-          onLoadTree: (repo: string, branch: string) => store.loadGitlinkRepoTree(n.id, repo, branch),
-          onSetLocalRoot: (localRoot: string) => store.setGitlinkLocalRoot(n.id, localRoot),
-          onBrowseLocalRoot: () => store.pickGitlinkLocalRoot(n.id),
-          onImportSnapshot: (repo: string, branch: string) => store.importGitlinkSnapshot(n.id, repo, branch),
-          onBuildContext: (scopeMode: string, selectedPaths: string[]) =>
-            store.buildGitlinkContext(n.id, scopeMode, selectedPaths),
-          onFetchContext: () => store.fetchGitlinkContext(n.id),
-          onRun: (taskPrompt: string) => store.runGitlinkChangeSet(n.id, taskPrompt),
-          // Same null-guard pattern as the conversation/web_research/artifact
-          // nodes' own analogous cancel call sites above - only fire the
-          // intent if there is genuinely a non-null request id to target.
-          onCancel: () => {
-            if (n.pendingRequestId) store.cancelGitlinkRequest(n.pendingRequestId);
-          },
-          onApply: (fingerprint: string) => store.applyGitlinkChanges(n.id, fingerprint),
+          ...fns,
         },
-      });
+      };
+      cache.flowNodes.set(n, { extraSig: "", flowNode });
+      flowNodes.push(flowNode);
       continue;
     }
     if (n.kind === "pycoder") {
@@ -862,8 +1315,14 @@ export function toFlowNodes(
       // plugin-node branch above) - PyCoderNodeView never offers a
       // dock-into-parent action; the generic `if (n.isDocked) continue`
       // guard above still covers it correctly if it were ever docked via a
-      // direct WS call.
-      flowNodes.push({
+      // direct WS call. No isDimmed/isBranchFocusActive here either.
+      const cached = cache.flowNodes.get(n);
+      const fns = getDispatcher(cache, n.id, { n, store, onOpenDocumentView, onToggleBranchFocus }, makePyCoderFns);
+      if (cached) {
+        flowNodes.push(cached.flowNode);
+        continue;
+      }
+      const flowNode: SceneFlowNode = {
         id: n.id,
         type: "pycoder" as const,
         position: { x: n.x, y: n.y },
@@ -878,30 +1337,11 @@ export function toFlowNodes(
           pycoderError: n.pycoderError,
           isCollapsed: n.isCollapsed,
           pendingRequestId: n.pendingRequestId ?? null,
-          onToggleCollapse: () => store.setChatCollapsed(n.id, !n.isCollapsed),
-          onDelete: () => store.removeNodes([n.id]),
-          onSetMode: (mode: string) => store.setPyCoderMode(n.id, mode),
-          onRun: (inputText: string) => store.runPyCoder(n.id, inputText),
-          // Same null-guard pattern as every other plugin node's own
-          // analogous cancel call site above - only fire the intent if there
-          // is genuinely a non-null request id to target.
-          onCancel: () => {
-            if (n.pendingRequestId) store.cancelPyCoderRequest(n.pendingRequestId);
-          },
-          // CRITICAL (see CodeExecutionApprovalPanel.tsx's own module doc):
-          // these read n.pendingRequestId - the CURRENT scene snapshot's own
-          // value for THIS node - never anything the UI layer could supply
-          // as a distinct argument. Same null-guard posture as onCancel
-          // above; approveCodeExecution/denyCodeExecution both require a
-          // non-null string.
-          onApprove: () => {
-            if (n.pendingRequestId) store.approveCodeExecution(n.pendingRequestId);
-          },
-          onDeny: () => {
-            if (n.pendingRequestId) store.denyCodeExecution(n.pendingRequestId);
-          },
+          ...fns,
         },
-      });
+      };
+      cache.flowNodes.set(n, { extraSig: "", flowNode });
+      flowNodes.push(flowNode);
       continue;
     }
     if (n.kind === "code_sandbox") {
@@ -912,8 +1352,20 @@ export function toFlowNodes(
       // direct WS call. code_sandbox_sandbox_id is deliberately absent below
       // - it is pure internal server bookkeeping (a sandbox directory name),
       // never part of the scene wire payload at all (see scene-state.ts) and
-      // never read/forwarded anywhere in this mapping.
-      flowNodes.push({
+      // never read/forwarded anywhere in this mapping. No isDimmed/
+      // isBranchFocusActive here either.
+      const cached = cache.flowNodes.get(n);
+      const fns = getDispatcher(
+        cache,
+        n.id,
+        { n, store, onOpenDocumentView, onToggleBranchFocus },
+        makeCodeSandboxFns,
+      );
+      if (cached) {
+        flowNodes.push(cached.flowNode);
+        continue;
+      }
+      const flowNode: SceneFlowNode = {
         id: n.id,
         type: "code_sandbox" as const,
         position: { x: n.x, y: n.y },
@@ -930,42 +1382,26 @@ export function toFlowNodes(
           codeSandboxError: n.codeSandboxError,
           isCollapsed: n.isCollapsed,
           pendingRequestId: n.pendingRequestId ?? null,
-          onToggleCollapse: () => store.setChatCollapsed(n.id, !n.isCollapsed),
-          onDelete: () => store.removeNodes([n.id]),
-          onSetRequirements: (requirementsText: string) =>
-            store.setCodeSandboxRequirements(n.id, requirementsText),
-          onToggleAllowSourceBuilds: (allow: boolean) =>
-            store.setCodeSandboxAllowSourceBuilds(n.id, allow),
-          onRun: (inputText: string) => store.runCodeSandbox(n.id, inputText),
-          onCancel: () => {
-            if (n.pendingRequestId) store.cancelCodeSandboxRequest(n.pendingRequestId);
-          },
-          // CRITICAL - same posture as the pycoder branch's own
-          // onApprove/onDeny above: always n.pendingRequestId, never a
-          // UI-supplied argument.
-          onApprove: () => {
-            if (n.pendingRequestId) store.approveCodeExecution(n.pendingRequestId);
-          },
-          onDeny: () => {
-            if (n.pendingRequestId) store.denyCodeExecution(n.pendingRequestId);
-          },
-          // Generic passthrough to the transport's own stream fan-out (see
-          // sceneStore.ts's own subscribeStream doc) - the live terminal
-          // pane keys its subscription off data.pendingRequestId itself,
-          // this closure only needs to exist so the component never touches
-          // the store/transport directly.
-          subscribeStream: (requestId: string, listener: StreamListener) =>
-            store.subscribeStream(requestId, listener),
+          ...fns,
         },
-      });
+      };
+      cache.flowNodes.set(n, { extraSig: "", flowNode });
+      flowNodes.push(flowNode);
       continue;
     }
     if (n.kind === "note") {
       // No onDock here either (same reasoning as every non-dockable kind
       // above) - a note never offers a dock-into-parent action of its own;
       // the generic `if (n.isDocked) continue` guard above still covers it
-      // correctly if it were ever docked via a direct WS call.
-      flowNodes.push({
+      // correctly if it were ever docked via a direct WS call. No isDimmed/
+      // isBranchFocusActive here either.
+      const cached = cache.flowNodes.get(n);
+      const fns = getDispatcher(cache, n.id, { n, store, onOpenDocumentView, onToggleBranchFocus }, makeNoteFns);
+      if (cached) {
+        flowNodes.push(cached.flowNode);
+        continue;
+      }
+      const flowNode: SceneFlowNode = {
         id: n.id,
         type: "note" as const,
         position: { x: n.x, y: n.y },
@@ -980,12 +1416,11 @@ export function toFlowNodes(
           // own comment on backend/domain/model.py.
           isBranchComparison: n.isBranchComparison,
           compareSourceNodeIds: n.itemIds,
-          onSetContent: (content: string) => store.setNoteContent(n.id, content),
-          onSetColor: (color: string | null, headerColor: string | null) =>
-            store.setGroupColor(n.id, color, headerColor),
-          onDelete: () => store.removeNodes([n.id]),
+          ...fns,
         },
-      });
+      };
+      cache.flowNodes.set(n, { extraSig: "", flowNode });
+      flowNodes.push(flowNode);
       continue;
     }
     if (n.kind === "frame" || n.kind === "container") {
@@ -1015,7 +1450,29 @@ export function toFlowNodes(
       // which gate the MEMBER-cascade on lock state, not draggability
       // itself; backend/canvas.py's move_node pins a manual position
       // anchor so the drag actually sticks instead of snapping back).
-      flowNodes.push({
+      // R6.1 follow-up: a simplified equivalent of legacy's collapsed-
+      // container hover "ghost frame" preview - just member kinds, not a
+      // rendered miniature of actual content. Looked up from the SAME
+      // nodesById map the dockedChildren computation above already builds
+      // once per call; a stale/dangling item_ids entry (a member deleted
+      // out from under a group) is silently skipped, matching
+      // _bbox_of_members' own posture on the backend. Doubles as this
+      // kind's own cache-invalidation signature below: a member's kind
+      // never changes after creation, so memberKinds only differs when
+      // n.itemIds itself differs (already covered by node-reference
+      // invalidation) OR a referenced member was deleted out from under the
+      // group WITHOUT n.itemIds being pruned server-side (the exact
+      // "dangling entry" case this comment already documents) - the one
+      // case node-reference-only invalidation would otherwise miss.
+      const memberKinds = n.itemIds.map((id) => nodesById.get(id)?.kind).filter((kind): kind is string => !!kind);
+      const extraSig = memberKinds.join(",");
+      const cached = cache.flowNodes.get(n);
+      const fns = getDispatcher(cache, n.id, { n, store, onOpenDocumentView, onToggleBranchFocus }, makeGroupFns);
+      if (cached && cached.extraSig === extraSig) {
+        flowNodes.push(cached.flowNode);
+        continue;
+      }
+      const flowNode: SceneFlowNode = {
         id: n.id,
         type: n.kind as "frame" | "container",
         position: { x: n.x, y: n.y },
@@ -1031,24 +1488,12 @@ export function toFlowNodes(
           isCollapsed: n.isCollapsed,
           isLocked: n.isLocked,
           itemIds: n.itemIds,
-          // R6.1 follow-up: a simplified equivalent of legacy's collapsed-
-          // container hover "ghost frame" preview - just member kinds, not
-          // a rendered miniature of actual content. Looked up from the
-          // SAME nodesById map the dockedChildren computation above
-          // already builds once per call; a stale/dangling item_ids entry
-          // (a member deleted out from under a group) is silently skipped,
-          // matching _bbox_of_members' own posture on the backend.
-          memberKinds: n.itemIds.map((id) => nodesById.get(id)?.kind).filter((kind): kind is string => !!kind),
-          onSetLabel: (text: string) => store.setGroupLabel(n.id, text),
-          onToggleCollapsed: () => store.toggleGroupCollapsed(n.id),
-          onToggleLock: () => store.toggleFrameLock(n.id),
-          onSetColor: (color: string | null, headerColor: string | null) =>
-            store.setGroupColor(n.id, color, headerColor),
-          onResize: (width: number, height: number) => store.resizeFrame(n.id, width, height),
-          onFitToContent: () => store.fitFrameToContent(n.id),
-          onUngroup: () => store.ungroup(n.id),
+          memberKinds,
+          ...fns,
         },
-      });
+      };
+      cache.flowNodes.set(n, { extraSig, flowNode });
+      flowNodes.push(flowNode);
       continue;
     }
     if (n.kind === "chart") {
@@ -1064,8 +1509,14 @@ export function toFlowNodes(
       // are part of the ordinary 9-field wire contract (scene_payload()
       // exposes them like every other chart field), so they're ALSO
       // duplicated into `data` below rather than living only on the flow
-      // node object.
-      flowNodes.push({
+      // node object. No isDimmed/isBranchFocusActive here either.
+      const cached = cache.flowNodes.get(n);
+      const fns = getDispatcher(cache, n.id, { n, store, onOpenDocumentView, onToggleBranchFocus }, makeChartFns);
+      if (cached) {
+        flowNodes.push(cached.flowNode);
+        continue;
+      }
+      const flowNode: SceneFlowNode = {
         id: n.id,
         type: "chart" as const,
         position: { x: n.x, y: n.y },
@@ -1081,20 +1532,34 @@ export function toFlowNodes(
           chartHeight: n.chartHeight,
           chartAspectLocked: n.chartAspectLocked,
           chartSourceNodeId: n.chartSourceNodeId,
-          onToggleAspectLock: () => store.toggleChartAspectLock(n.id),
-          onResize: (width: number, height: number) => store.resizeChart(n.id, width, height),
+          ...fns,
         },
-      });
+      };
+      cache.flowNodes.set(n, { extraSig: "", flowNode });
+      flowNodes.push(flowNode);
       continue;
     }
-    flowNodes.push({
+    // Fallback placeholder - unreachable in practice given the exhaustive
+    // kind list above, kept for forward-compat with a future kind this
+    // switch hasn't been taught yet. No callbacks at all, so no dispatcher
+    // is needed; node-reference-only invalidation is exact (title is n's
+    // own field).
+    const cachedPlaceholder = cache.flowNodes.get(n);
+    if (cachedPlaceholder) {
+      flowNodes.push(cachedPlaceholder.flowNode);
+      continue;
+    }
+    const placeholderFlowNode: SceneFlowNode = {
       id: n.id,
       type: "placeholder" as const,
       position: { x: n.x, y: n.y },
       data: { title: n.title },
-    });
+    };
+    cache.flowNodes.set(n, { extraSig: "", flowNode: placeholderFlowNode });
+    flowNodes.push(placeholderFlowNode);
   }
 
+  pruneDispatcherCache(cache, nodesById);
   return flowNodes;
 }
 
@@ -1257,6 +1722,113 @@ export function measuredNodeSize(reactFlow: MeasuredSizeSource, id: string): { w
 }
 
 /**
+ * ADR-011 stage 11.2: the virtualization-audit fallback for a smart-guide
+ * alignment CANDIDATE that `onlyRenderVisibleElements` (see CanvasInner's
+ * own `<ReactFlow>` below) has left unmounted - measuredNodeSize's own
+ * getInternalNode/DOM reads both come up empty for a node that was never
+ * rendered in the first place, since there is nothing to measure.
+ *
+ * Three of SceneFlowNode's kinds are the one exception: toFlowNodes above
+ * sets `width`/`height` DIRECTLY ON THE FLOW NODE OBJECT for frame/
+ * container (`n.groupWidth`/`n.groupHeight`) and chart (`n.chartWidth`/
+ * `n.chartHeight`) - the documented xyflow controlled-size mechanism their
+ * own <NodeResizer/> needs (see GroupNodeView.tsx's/ChartNodeView.tsx's own
+ * module docs on those branches). That is DATA carried on the node object
+ * itself, not a DOM measurement - present and correct regardless of mount
+ * state. Confirmed against backend/domain/graph.py's scene_payload(), which
+ * is the server-side source those four fields come from (groupWidth/
+ * groupHeight from FrameState/ContainerState, chartWidth/chartHeight from
+ * ChartState) - the one place in this app's domain model that tracks a
+ * node's size server-side at all.
+ *
+ * Every other kind's size is purely content-driven (CSS auto-sized, no
+ * backend field for it - the exact reason measuredNodeSize's DOM fallback
+ * existed in the first place), so this returns null for them and the
+ * caller (buildDragSizeCache below) simply omits that node from the cache -
+ * the sane fallback the audit called for: an off-viewport, unmeasurable
+ * candidate is excluded from alignment for that drag, never force-mounted
+ * or estimated.
+ */
+export function flowNodeOwnSize(node: SceneFlowNode): { width: number; height: number } | null {
+  if (typeof node.width === "number" && typeof node.height === "number") {
+    return { width: node.width, height: node.height };
+  }
+  return null;
+}
+
+/**
+ * ADR-011 stage 11.3: the drag-GESTURE-lifetime smart-guide size cache -
+ * built exactly ONCE, at the first frame of a NEW drag gesture (see
+ * CanvasInner's own dragSizeCacheRef and the `startingNewDrag` check in
+ * onNodesChange), never per frame. This is the fix for P3 in ADR-011's own
+ * audit: measuredNodeSize's DOM fallback (`document.querySelector` +
+ * `offsetWidth`/`offsetHeight`, a forced reflow) used to run for the
+ * dragged node AND every candidate node INSIDE onNodesChange's per-frame
+ * loop - up to N reflows PER DRAG FRAME, ~6,000/s at 100 nodes and 60fps.
+ * Now it runs at most once per node for the WHOLE gesture; every later
+ * frame of that same gesture reads back out of the Map this returns
+ * (computeSmartGuideFrame below) instead of touching the DOM again.
+ *
+ * flowNodeOwnSize is tried first (free, DOM-independent); measuredNodeSize
+ * is the fallback for every other kind. A node with neither (off-viewport
+ * and unmounted under onlyRenderVisibleElements, no server-tracked size) is
+ * simply absent from the returned map - see computeSmartGuideFrame's own
+ * `if (!size) continue`.
+ */
+export function buildDragSizeCache(
+  reactFlow: MeasuredSizeSource,
+  nodes: SceneFlowNode[],
+): Map<string, { width: number; height: number }> {
+  const cache = new Map<string, { width: number; height: number }>();
+  for (const n of nodes) {
+    const size = flowNodeOwnSize(n) ?? measuredNodeSize(reactFlow, n.id);
+    if (size) cache.set(n.id, size);
+  }
+  return cache;
+}
+
+/**
+ * R7.5b-3/ADR-011 stage 11.3: one drag frame's smart-guide snap
+ * computation, pulled out of onNodesChange's closure - callable directly
+ * (same standalone-for-direct-testing posture as applyGroupDragDelta/
+ * groupDragKindOf above, whose own doc explains why: driving a full
+ * <ReactFlow> mount + synthetic pointer drag isn't something this codebase
+ * exercises in tests anywhere else) so a test can drive N simulated frames
+ * without one.
+ *
+ * `sizeCache` is read-only here - see buildDragSizeCache above for where it
+ * gets populated (once, at drag start) and CanvasInner's dragSizeCacheRef
+ * for the ref it lives in across a gesture's many onNodesChange calls. A
+ * moving node absent from the cache (no resolvable size) is a no-op frame:
+ * the ORIGINAL (unsnapped) position passes through unchanged and no guides
+ * are produced, same as measuredNodeSize returning null did before this
+ * stage.
+ */
+export function computeSmartGuideFrame(
+  nodes: SceneFlowNode[],
+  changeId: string,
+  finalPosition: { x: number; y: number },
+  sizeCache: Map<string, { width: number; height: number }>,
+): { position: { x: number; y: number }; guides: GuideLine[] } {
+  const moving = nodes.find((n) => n.id === changeId);
+  const movingSize = sizeCache.get(changeId);
+  if (!moving || !movingSize) return { position: finalPosition, guides: [] };
+  const memberIds = groupDragKindOf(moving) ? collectTransitiveMemberIds(nodes, moving) : new Set<string>();
+  const candidates: Rect[] = [];
+  for (const n of nodes) {
+    if (n.id === changeId || n.selected || memberIds.has(n.id)) continue;
+    const size = sizeCache.get(n.id);
+    if (!size) continue;
+    candidates.push({ x: n.position.x, y: n.position.y, width: size.width, height: size.height });
+  }
+  const snap = computeSmartGuideSnap(
+    { x: finalPosition.x, y: finalPosition.y, width: movingSize.width, height: movingSize.height },
+    candidates,
+  );
+  return { position: { x: snap.x, y: snap.y }, guides: snap.guides };
+}
+
+/**
  * R7.5c: carry the current selection across a snapshot rebuild.
  *
  * toFlowNodes mints brand-new node objects from every scene snapshot, so
@@ -1288,10 +1860,14 @@ export function withPreservedSelection(
 // above - R7.5b-1's fade-connections opacity logic doesn't need a mounted
 // <ReactFlow> to verify.
 export function toFlowEdges(scene: SceneState, hoveredEdgeId: string | null): Edge[] {
+  // ADR-011 stage 11.1: dockedNodeIds now comes from the SAME
+  // buildSceneIndexes pass toFlowNodes above uses (was its own standalone
+  // `scene.nodes.filter(...)` here) - kindOf is looked up straight off
+  // nodesById's own node rows instead of a second separate `Map(scene.nodes
+  // .map((n) => [n.id, n.kind]))`, one less O(N) map built per call.
+  const { nodesById, dockedNodeIds } = buildSceneIndexes(scene);
   // An edge pointing at a docked node must not render either - mirrors the
   // legacy connection-item self-suppression when its end node is docked.
-  const dockedNodeIds = new Set(scene.nodes.filter((n) => n.isDocked).map((n) => n.id));
-  const kindOf = new Map(scene.nodes.map((n) => [n.id, n.kind]));
   return scene.edges
     .filter((e) => !dockedNodeIds.has(e.target))
     .map((e) => ({
@@ -1299,7 +1875,8 @@ export function toFlowEdges(scene: SceneState, hoveredEdgeId: string | null): Ed
       source: e.source,
       target: e.target,
       type:
-        scene.orthogonalRouting && isOrthogonalEligible(kindOf.get(e.source), kindOf.get(e.target))
+        scene.orthogonalRouting &&
+        isOrthogonalEligible(nodesById.get(e.source)?.kind, nodesById.get(e.target)?.kind)
           ? "orthogonal"
           : undefined,
       ...(scene.fadeConnectionsEnabled && e.id !== hoveredEdgeId
@@ -1360,6 +1937,18 @@ function CanvasInner({
   // component, hence living on sceneStore rather than as useState here -
   // see that field's own comment).
   const focusAcceptedPaths = useSyncExternalStore(store.subscribe, store.getFocusAcceptedPaths);
+  // ADR-011 stage 11.2: true for exactly the duration of one
+  // exportCanvasAsPng capture (AppBar.tsx's exportPng/commands.ts's
+  // export-canvas-png, both routed through SceneStore.setExportInProgress) -
+  // see exportCanvasPng.ts's own doc for why a full-canvas PNG export needs
+  // onlyRenderVisibleElements suspended: the export computes a viewport that
+  // fits every node into a 1920x1080 FRAME, but that framing has no way to
+  // know the LIVE on-screen canvas container might be smaller than that, and
+  // virtualization filters against the container's REAL client size - a node
+  // that fits inside the export frame can still fall outside the live
+  // container's actual bounds and never mount, silently missing from the
+  // captured DOM regardless of correct viewport math.
+  const exportInProgress = useSyncExternalStore(store.subscribe, store.getExportInProgress);
   // Hoisted above onNodesChange: smart guides (R7.5b-3) need node
   // dimensions. Neither the local `nodes` array NOR React Flow's internal
   // store reliably has them here: toFlowNodes rebuilds the array from every
@@ -1380,6 +1969,24 @@ function CanvasInner({
   const [nodes, setNodes] = useState<SceneFlowNode[]>([]);
   const dragStartRef = useRef<Map<string, { x: number; y: number }>>(new Map());
   const draggingRef = useRef(false);
+  // ADR-011 stage 11.3: the smart-guide size cache - populated ONCE per drag
+  // gesture (see the `startingNewDrag` check inside onNodesChange below,
+  // keyed off draggingRef's value from BEFORE that call) via
+  // buildDragSizeCache, then read back by computeSmartGuideFrame for every
+  // remaining frame of that SAME gesture instead of re-querying the DOM. A
+  // plain ref (not state) since a rebuild must never itself trigger a
+  // re-render - it only matters to onNodesChange's own closure.
+  const dragSizeCacheRef = useRef<Map<string, { width: number; height: number }>>(new Map());
+  // ADR-011 stage 11.1: ONE ToFlowNodesCache for this canvas's whole
+  // lifetime, threaded into every toFlowNodes call below - this is what
+  // actually makes the per-node dispatcher/whole-flow-node memoization in
+  // toFlowNodes effective across snapshots (a cache recreated every call
+  // would never see a previous call's entries to hit against). Lazy-
+  // initialized via the guarded-null pattern rather than
+  // `useRef(createToFlowNodesCache())` so a fresh cache object isn't
+  // allocated (and immediately discarded) on every re-render.
+  const toFlowNodesCacheRef = useRef<ToFlowNodesCache | null>(null);
+  if (toFlowNodesCacheRef.current === null) toFlowNodesCacheRef.current = createToFlowNodesCache();
 
   // R7.5b-1: which edge (if any) is under the mouse right now - the one
   // exemption from faded-connections' blanket low-opacity effect. Local-only
@@ -1486,13 +2093,42 @@ function CanvasInner({
     if (draggingRef.current) return;
     setNodes((current) =>
       withPreservedSelection(
-        toFlowNodes(scene, store, onOpenDocumentView, effectiveBranchFocusOriginId, onToggleBranchFocus, focusAcceptedPaths),
+        toFlowNodes(
+          scene,
+          store,
+          onOpenDocumentView,
+          effectiveBranchFocusOriginId,
+          onToggleBranchFocus,
+          focusAcceptedPaths,
+          // Non-null: the guarded-null lazy-init above runs synchronously on
+          // every render before this effect can fire, so `.current` is
+          // always populated by the time this closure executes - TS just
+          // can't prove that across the mutable ref indirection.
+          toFlowNodesCacheRef.current!,
+        ),
         current,
       ),
     );
   }, [scene, store, onOpenDocumentView, effectiveBranchFocusOriginId, onToggleBranchFocus, focusAcceptedPaths]);
 
-  const edges = useMemo(() => toFlowEdges(scene, hoveredEdgeId), [scene, hoveredEdgeId]);
+  // ADR-011 stage 11.3 (P4): toFlowEdges rebuilds the WHOLE edges array (an
+  // O(E) map over every edge) - hoveredEdgeId is only EVER read inside that
+  // rebuild when scene.fadeConnectionsEnabled is on (see toFlowEdges' own
+  // body), so unconditionally listing it as a dependency meant hovering an
+  // edge rebuilt this array on every enter/leave EVEN WHEN the fade feature
+  // is off and nothing in the output could possibly change. Passing `null`
+  // in place of hoveredEdgeId whenever fade is off collapses the dependency
+  // to a constant for that case - a hover-only state change no longer
+  // differs from the previous render's dependency, so useMemo correctly
+  // skips the recompute (and keeps returning the SAME array reference)
+  // instead of only skipping the WORK toFlowEdges would have done with it.
+  // Hoisted into its own variable (not an inline ternary in the deps array
+  // below) so the memo's dependency is a single, staticly-checkable
+  // reference - satisfies react-hooks/exhaustive-deps outright rather than
+  // suppressing it, and reads the same either way: null whenever fade is
+  // off, hoveredEdgeId whenever it's on.
+  const edgeHoverKey = scene.fadeConnectionsEnabled ? hoveredEdgeId : null;
+  const edges = useMemo(() => toFlowEdges(scene, edgeHoverKey), [scene, edgeHoverKey]);
 
   // R8a: the minimap used to render every node as React Flow's own default
   // plain rectangle (no nodeColor/nodeStrokeColor was ever passed), which
@@ -1544,6 +2180,21 @@ function CanvasInner({
       let sawDragging = false;
       let sawDragEnd = false;
 
+      // ADR-011 stage 11.3: rebuild the smart-guide size cache exactly ONCE,
+      // at the first frame of a NEW drag gesture - `draggingRef.current` here
+      // still holds whatever the PREVIOUS onNodesChange call left it as (the
+      // mutations below happen further down, inside this same call), so
+      // `!draggingRef.current` is true only when nothing was already
+      // dragging coming INTO this call. A multi-select drag's first frame
+      // reports several `dragging:true` changes in the SAME batch - this
+      // still only rebuilds once for the whole batch, not once per change.
+      // Guarded on scene.smartGuides so the feature being off costs nothing
+      // (matches the per-frame gate below, which already skipped all of
+      // this work in that case).
+      if (scene.smartGuides && !draggingRef.current && changes.some((c) => c.type === "position" && c.dragging)) {
+        dragSizeCacheRef.current = buildDragSizeCache(reactFlow, nodes);
+      }
+
       const scaled = changes.map((change) => {
         if (change.type !== "position" || !change.position) return change;
         if (change.dragging) {
@@ -1572,27 +2223,15 @@ function CanvasInner({
           // to answer: this canvas carries members via synthetic deltas, not
           // Qt child-item parenting - per the recorded design decision, only
           // the group's own rect snaps and members ride the delta).
+          // ADR-011 stage 11.3: reads dragSizeCacheRef (populated ONCE at
+          // this gesture's own drag-start, above) instead of calling
+          // measuredNodeSize directly here - see computeSmartGuideFrame's
+          // own doc for why this is now a pure, cache-only lookup with zero
+          // DOM access per frame.
           if (scene.smartGuides) {
-            const moving = nodes.find((n) => n.id === change.id);
-            const movingSize = measuredNodeSize(reactFlow, change.id);
-            if (moving && movingSize) {
-              const memberIds = groupDragKindOf(moving)
-                ? collectTransitiveMemberIds(nodes, moving)
-                : new Set<string>();
-              const candidates: Rect[] = [];
-              for (const n of nodes) {
-                if (n.id === change.id || n.selected || memberIds.has(n.id)) continue;
-                const size = measuredNodeSize(reactFlow, n.id);
-                if (!size) continue;
-                candidates.push({ x: n.position.x, y: n.position.y, width: size.width, height: size.height });
-              }
-              const snap = computeSmartGuideSnap(
-                { x: finalPosition.x, y: finalPosition.y, width: movingSize.width, height: movingSize.height },
-                candidates,
-              );
-              finalPosition = { x: snap.x, y: snap.y };
-              frameGuides.push(...snap.guides);
-            }
+            const frame = computeSmartGuideFrame(nodes, change.id, finalPosition, dragSizeCacheRef.current);
+            finalPosition = frame.position;
+            frameGuides.push(...frame.guides);
           }
           memberChanges.push(...applyGroupDragDelta(nodes, change.id, finalPosition));
           return {
@@ -1730,6 +2369,45 @@ function CanvasInner({
         deleteKeyCode={["Delete", "Backspace"]}
         proOptions={{ hideAttribution: true }}
         defaultEdgeOptions={{ type: "default" }}
+        /*
+         * ADR-011 stage 11.2: off-viewport nodes no longer mount at all (nor
+         * re-render, nor pay their markdown/highlight/KaTeX parse cost) -
+         * the single biggest lever this ADR has on a large canvas. Suspended
+         * for exactly the duration of one PNG export via exportInProgress
+         * (see that field's own doc above and exportCanvasPng.ts's).
+         *
+         * Every other "assumes all nodes are mounted" site the ADR called
+         * out for audit, and what each needed:
+         * - Group/collapse (GroupNodeView.tsx, applyGroupDragDelta/
+         *   collectTransitiveMemberIds above): reads the LOCAL `nodes` data
+         *   array and `data.itemIds` only - never the DOM or React Flow's
+         *   internal `measured` cache - so an unmounted member is exactly as
+         *   reachable as a mounted one. No fix needed.
+         * - LOD (useLodVisibility.ts): a hook called FROM WITHIN each
+         *   mounted node's own component - an unmounted node's hook simply
+         *   never runs, which is correct (no work to skip, nothing to get
+         *   wrong). No fix needed.
+         * - Smart guides: DID need a fix - see buildDragSizeCache/
+         *   computeSmartGuideFrame above (stage 11.3) for the drag-start
+         *   cache, and flowNodeOwnSize's own doc for the frame/container/
+         *   chart data-level fallback.
+         * - Search/pin-highlight (SearchOverlay.tsx/PinOverlay.tsx): both
+         *   already call React Flow's setCenter with the target's own
+         *   SCENE x/y (never a DOM-measured position) UNCONDITIONALLY, i.e.
+         *   before the target could possibly need to be mounted/
+         *   interactable - panning the viewport is what MAKES it mount
+         *   under virtualization, not something that requires it already
+         *   being mounted. Verified, not fixed; see the regression test
+         *   covering this in SceneCanvas.pinSearchJump.test.tsx.
+         * - Export-to-PNG (exportCanvasPng.ts): DID need a fix - the export
+         *   fits every node into a 1920x1080 FRAME, which the live
+         *   on-screen container can be smaller than, so virtualization
+         *   could leave a node that fits the export frame outside the
+         *   live container's real bounds and never mount for capture. Fixed
+         *   via exportInProgress above, which that module now sets for the
+         *   capture's duration.
+         */
+        onlyRenderVisibleElements={!exportInProgress}
       >
         <Background
           variant={GRID_VARIANTS[grid.gridStyle] ?? BackgroundVariant.Dots}

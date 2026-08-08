@@ -2,7 +2,7 @@ import { ReactFlowProvider, type NodeProps } from "@xyflow/react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CodeNodeView, type CodeFlowNode } from "./CodeNodeView";
+import { CodeNodeView, codeNodePropsAreEqual, type CodeFlowNode } from "./CodeNodeView";
 
 // R7.5a: jsdom implements neither URL.createObjectURL nor
 // URL.revokeObjectURL - same hand-installed-fakes pattern
@@ -74,7 +74,11 @@ describe("CodeNodeView", () => {
     const user = userEvent.setup();
     const { onDelete, container } = renderCodeNode();
 
-    const writeText = vi.fn();
+    // Resolves (not a bare vi.fn()) - matches the real Clipboard API's
+    // writeText, which always returns a Promise; CodeNodeMenu now chains
+    // .catch() onto this call (ADR-011 stage 11.1), which would throw on a
+    // mock returning undefined.
+    const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
 
     const label = titleLabel(container);
@@ -190,5 +194,94 @@ describe("CodeNodeView", () => {
     expect(screen.getByRole("menu")).toBeInTheDocument();
     await user.click(document.body);
     expect(screen.queryByRole("menu")).toBeNull();
+  });
+});
+
+// ADR-011 stage 11.1: the React.memo comparator. Direct unit tests of the
+// exported pure function (the same function reference wired into
+// `memo(CodeNodeView, codeNodePropsAreEqual)`) plus one real-render
+// integration test proving the wiring itself is correct.
+describe("CodeNodeView React.memo comparator (ADR-011 stage 11.1)", () => {
+  function props(overrides: Partial<CodeFlowNode["data"]> = {}, propOverrides: Record<string, unknown> = {}) {
+    return {
+      id: "n0",
+      selected: false,
+      data: {
+        code: "def add(a, b):\n    return a + b",
+        language: "python",
+        parentChatNodeId: "chat-1",
+        onRegenerate: vi.fn(),
+        onDelete: vi.fn(),
+        isBranchFocusActive: false,
+        onToggleBranchFocus: vi.fn(),
+        ...overrides,
+      },
+      ...propOverrides,
+    } as unknown as NodeProps<CodeFlowNode>;
+  }
+
+  it("treats identical props as equal", () => {
+    const p = props();
+    expect(codeNodePropsAreEqual(p, { ...p })).toBe(true);
+  });
+
+  it("is unaffected by unread NodeProps fields (dragging, zIndex)", () => {
+    const a = props({}, { dragging: false, zIndex: 0 });
+    const b = { ...a, dragging: true, zIndex: 9 };
+    expect(codeNodePropsAreEqual(a, b)).toBe(true);
+  });
+
+  it("returns false when id changes", () => {
+    const a = props({}, { id: "n0" });
+    const b = { ...a, id: "n1" };
+    expect(codeNodePropsAreEqual(a, b)).toBe(false);
+  });
+
+  it("returns false when selected changes", () => {
+    const a = props({}, { selected: false });
+    const b = { ...a, selected: true };
+    expect(codeNodePropsAreEqual(a, b)).toBe(false);
+  });
+
+  it.each([
+    ["code", { code: "print(1)" }],
+    ["language", { language: "javascript" }],
+    ["parentChatNodeId", { parentChatNodeId: null }],
+    ["isBranchFocusActive", { isBranchFocusActive: true }],
+    ["onRegenerate", { onRegenerate: vi.fn() }],
+    ["onDelete", { onDelete: vi.fn() }],
+    ["onToggleBranchFocus", { onToggleBranchFocus: vi.fn() }],
+  ] as const)("returns false when data.%s changes and nothing else does", (_name, override) => {
+    const a = props();
+    const b = { ...a, data: { ...a.data, ...override } };
+    expect(codeNodePropsAreEqual(a, b)).toBe(false);
+  });
+
+  it("real render: skipped when only an unread NodeProps field changes, and actually happens when language changes", () => {
+    const p = props({ language: "python" }, { selected: false });
+    const { container, rerender } = render(
+      <ReactFlowProvider>
+        <CodeNodeView {...p} />
+      </ReactFlowProvider>,
+    );
+    const root = container.querySelector(".scene-node") as HTMLElement;
+    expect(root).not.toBeNull();
+
+    root.className = "CORRUPTED";
+
+    rerender(
+      <ReactFlowProvider>
+        <CodeNodeView {...p} dragging />
+      </ReactFlowProvider>,
+    );
+    expect(root.className).toBe("CORRUPTED");
+
+    rerender(
+      <ReactFlowProvider>
+        <CodeNodeView {...p} selected />
+      </ReactFlowProvider>,
+    );
+    expect(root.className).not.toBe("CORRUPTED");
+    expect(root.className).toContain("selected");
   });
 });

@@ -1,7 +1,27 @@
 import { ReactFlowProvider, type NodeProps } from "@xyflow/react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+// ADR-011 stage 11.1: wraps the real useLodVisibility so every ACTUAL
+// invocation (mount or re-render) is countable - a React.memo bailout skips
+// calling HtmlNodeView's function body entirely, so this hook (called
+// unconditionally on every real render) never fires during a bailed
+// re-render. Same "mock-wrap-and-delegate" technique ImageNodeView.test.tsx
+// established.
+const lodVisibilityCalls = { count: 0 };
+
+vi.mock("./useLodVisibility", async (importOriginal) => {
+  const original = await importOriginal<typeof import("./useLodVisibility")>();
+  return {
+    ...original,
+    useLodVisibility: (...args: Parameters<typeof original.useLodVisibility>) => {
+      lodVisibilityCalls.count += 1;
+      return original.useLodVisibility(...args);
+    },
+  };
+});
+
 import {
   buildSandboxedHtmlDocument,
   clampSplitterValue,
@@ -349,5 +369,115 @@ describe("makeDebouncedSplitterReport", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// ADR-011 stage 11.1: React.memo comparator correctness. `lodVisibilityCalls`
+// (see the mock above) fires exactly once per ACTUAL render of this view -
+// never on a bailed-out one - so it's the oracle for both directions: it must
+// stay flat across an irrelevant/equivalent prop change (too-tight would fail
+// this) and must increment on a change to a prop the view actually reads
+// (too-loose would fail this).
+describe("HtmlNodeView React.memo comparator (ADR-011 stage 11.1)", () => {
+  beforeEach(() => {
+    lodVisibilityCalls.count = 0;
+  });
+
+  function baseHtmlProps(overrides: Partial<HtmlFlowNode["data"]> = {}) {
+    const data = {
+      htmlContent: "<p>hello</p>",
+      isCollapsed: false,
+      htmlSplitterState: null,
+      onToggleCollapse: vi.fn(),
+      onDelete: vi.fn(),
+      onSplitterChange: vi.fn(),
+      ...overrides,
+    };
+    return { id: "n0", selected: false, data } as unknown as NodeProps<HtmlFlowNode>;
+  }
+
+  it("skips re-rendering when a fresh `data` object carries identical field values", () => {
+    const props = baseHtmlProps();
+    const { rerender } = render(
+      <ReactFlowProvider>
+        <HtmlNodeView {...props} />
+      </ReactFlowProvider>,
+    );
+    expect(lodVisibilityCalls.count).toBe(1);
+
+    // A brand-new object, same primitives and same callback references -
+    // exactly what toFlowNodes may mint on an unrelated snapshot. A naive
+    // `data === nextData` reference compare (or React.memo's default shallow
+    // props compare) would wrongly re-render here.
+    const sameValuesNewObject = { ...props.data };
+    rerender(
+      <ReactFlowProvider>
+        <HtmlNodeView {...{ ...props, data: sameValuesNewObject }} />
+      </ReactFlowProvider>,
+    );
+    expect(lodVisibilityCalls.count).toBe(1);
+  });
+
+  it("skips re-rendering when only `htmlContent`/`htmlSplitterState` (seed-once fields this view never re-reads) change", () => {
+    // Pins the deliberate omission documented on htmlNodeDataAreEqual: both
+    // fields only seed local state via a useState initializer on mount and
+    // are never read again by any JSX/effect/closure - so a change to either
+    // alone must never re-render (and, per the "typing does NOT change the
+    // iframe" test above, could not visibly affect anything even if it did).
+    const props = baseHtmlProps({ htmlContent: "<p>original</p>", htmlSplitterState: 0.5 });
+    const { rerender } = render(
+      <ReactFlowProvider>
+        <HtmlNodeView {...props} />
+      </ReactFlowProvider>,
+    );
+    expect(lodVisibilityCalls.count).toBe(1);
+
+    rerender(
+      <ReactFlowProvider>
+        <HtmlNodeView
+          {...{ ...props, data: { ...props.data, htmlContent: "<p>different</p>", htmlSplitterState: 0.2 } }}
+        />
+      </ReactFlowProvider>,
+    );
+    expect(lodVisibilityCalls.count).toBe(1);
+  });
+
+  it("re-renders when `isCollapsed` (a field the view reads) changes", () => {
+    const props = baseHtmlProps({ isCollapsed: false });
+    const { rerender } = render(
+      <ReactFlowProvider>
+        <HtmlNodeView {...props} />
+      </ReactFlowProvider>,
+    );
+    expect(lodVisibilityCalls.count).toBe(1);
+
+    rerender(
+      <ReactFlowProvider>
+        <HtmlNodeView {...{ ...props, data: { ...props.data, isCollapsed: true } }} />
+      </ReactFlowProvider>,
+    );
+    expect(lodVisibilityCalls.count).toBe(2);
+    expect(screen.getByRole("button", { name: "Expand" })).toBeInTheDocument();
+  });
+
+  it("re-renders when `onSplitterChange` is rebound to a new closure, even though it's never rendered directly in JSX", () => {
+    // onSplitterChange is captured fresh into a real pointerdown event-handler
+    // closure on every render (onSplitterPointerDown's onPointerUp) - a
+    // comparator that only checked fields visible in JSX would miss this and
+    // leave a stale closure attached, a genuine "stale UI" bug.
+    const props = baseHtmlProps();
+    const { rerender } = render(
+      <ReactFlowProvider>
+        <HtmlNodeView {...props} />
+      </ReactFlowProvider>,
+    );
+    expect(lodVisibilityCalls.count).toBe(1);
+
+    rerender(
+      <ReactFlowProvider>
+        <HtmlNodeView {...{ ...props, data: { ...props.data, onSplitterChange: vi.fn() } }} />
+      </ReactFlowProvider>,
+    );
+    expect(lodVisibilityCalls.count).toBe(2);
   });
 });

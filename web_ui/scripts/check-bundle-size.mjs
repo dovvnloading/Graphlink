@@ -1,17 +1,25 @@
 // ADR-019 stage 19.2: the bundle-size CI counting gate.
 //
 // Fails the build when the built JS grows past a ratchet ceiling. This is a
-// REGRESSION ratchet pinned ~5% above today's measured reality (one chunk,
-// 1,255,741 bytes on 2026-08-06), NOT the ADR-019 budget itself - the budget
-// (initial chunk <= 500 KiB, rest lazy-loaded) is ADR-011's code-splitting
-// work. Until that lands, this gate's job is to make sure the number only
-// ever moves DOWN: nobody can add half a megabyte of dependencies without CI
-// saying so.
+// REGRESSION ratchet pinned ~5% above measured reality, NOT the ADR-019
+// budget itself (initial chunk <= 500 KiB, rest lazy-loaded) - this gate's
+// job is to make sure the number only ever moves DOWN: nobody can add half a
+// megabyte of dependencies without CI saying so.
 //
-// When ADR-011's splitting lands, tighten LARGEST_CHUNK_CEILING_BYTES to the
-// real 500 KiB budget (512_000) as part of that stage - per ADR-019 §4,
-// changing a ceiling is a deliberate, commented amendment, never a quiet edit
-// to make a red build green.
+// ADR-011 stage 11.6 landed the code-splitting this file's own prior comment
+// was waiting on (React.lazy for SettingsDialog/ChatLibraryDialog/HelpDialog
+// + manualChunks pulling katex/highlight.js - NodeMarkdown.tsx's own two
+// heaviest deps - out of the main chunk) and re-anchored both ceilings below
+// to the real post-split numbers (six chunks now, largest 775,553 bytes on
+// 2026-08-08, down from one 1,255,741-byte chunk). That real number is
+// STILL above the ADR-019 500 KiB (512_000-byte) budget for the initial
+// chunk - React + React Flow + every eagerly-rendered node view (memoized in
+// 11.1, virtualized in 11.2, but not themselves code-split) account for the
+// rest, and splitting those further is out of this stage's scope. Ratchet
+// against reality, not the aspiration: tighten LARGEST_CHUNK_CEILING_BYTES
+// again, as its own deliberate, commented amendment (ADR-019 §4), whenever a
+// later stage shrinks the main chunk further - never loosen it to paper over
+// a regression.
 //
 // Runs after `npm run build` in the `check` chain (see package.json), so CI's
 // existing frontend-checks job enforces it with no workflow changes.
@@ -23,15 +31,19 @@ import { fileURLToPath } from "node:url";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ASSETS_DIR = join(HERE, "..", "dist", "app", "assets");
 
-// Today's reality: a single 1,255,741-byte chunk. ~5% headroom absorbs
-// ordinary dependency-patch drift; a real regression (a new heavyweight
-// dependency, an accidental double-bundle) blows straight through it.
-const LARGEST_CHUNK_CEILING_BYTES = 1_320_000;
-// Slightly looser than the per-chunk ceiling so future code-splitting can add
-// small lazy chunks without tripping the TOTAL, while still catching the
-// "total payload quietly ballooned" class the per-chunk ceiling alone would
-// miss once there is more than one chunk.
-const TOTAL_JS_CEILING_BYTES = 1_400_000;
+// Post-11.6 reality: largest chunk (the main entry) is 775,553 bytes.
+// ~5% headroom absorbs ordinary dependency-patch drift; a real regression
+// (a new heavyweight dependency landing outside the katex/highlight.js
+// manualChunks, an accidental double-bundle) blows straight through it.
+const LARGEST_CHUNK_CEILING_BYTES = 815_000;
+// Post-11.6 reality: six chunks (main + katex + highlight.js + the three
+// lazy dialogs) total 1,288,075 bytes - essentially unchanged from the
+// pre-split single-chunk total, as expected: splitting redistributes code
+// across chunks, it doesn't shrink it. ~5% headroom over that measured
+// total, same rationale as the per-chunk ceiling above; still comfortably
+// looser than the per-chunk ceiling so a later stage adding one more small
+// lazy chunk doesn't trip this on its own.
+const TOTAL_JS_CEILING_BYTES = 1_355_000;
 
 let entries;
 try {

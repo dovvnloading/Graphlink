@@ -91,7 +91,12 @@ export function AppBar({ store }: { store: SceneStore }) {
     const viewport = getViewport();
     setViewport({ ...viewport, zoom: 1 }, { duration: 200 });
   };
-  const exportPng = () => void exportCanvasAsPng({ getNodes, getViewport, setViewport }, "--gl-surface-window");
+  const exportPng = () =>
+    void exportCanvasAsPng(
+      { getNodes, getViewport, setViewport },
+      "--gl-surface-window",
+      (value) => store.setExportInProgress(value),
+    );
 
   // Overlay-opening actions (Pins/View/Plugins/About/Help) close this popover
   // for free via OverlayProvider's own single-open policy - opening any

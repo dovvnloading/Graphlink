@@ -1,7 +1,8 @@
-import { Handle, Position, useStore, type Node, type NodeProps } from "@xyflow/react";
-import { useState } from "react";
-import { LOD_ZOOM_THRESHOLD } from "./canvasConstants";
+import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
+import { memo, useState } from "react";
+import type { MenuPosition } from "./menuPosition";
 import { NodeMenu } from "./NodeMenu";
+import { useLodVisibility } from "./useLodVisibility";
 
 /**
  * The document node (Qt-removal plan R3.9/R3.10) - graphlink_node_document.py's
@@ -56,11 +57,6 @@ export interface DocumentNodeData extends Record<string, unknown> {
 }
 
 export type DocumentFlowNode = Node<DocumentNodeData, "document">;
-
-interface MenuPosition {
-  x: number;
-  y: number;
-}
 
 // -- ported legacy formatting/heuristic rules (graphlink_node_document.py) --
 
@@ -214,7 +210,12 @@ function DocumentNodeMenu({
         type="button"
         role="menuitem"
         onClick={() => {
-          navigator.clipboard.writeText(content);
+          // ADR-011 stage 11.1 (D11): a bare fire-and-forget clipboard write
+          // left this promise's rejection unhandled - same fix ImageNodeView's
+          // own Copy Image action already applies for its clipboard write.
+          navigator.clipboard.writeText(content).catch((error: unknown) => {
+            console.error("[document-node] Copy Details failed:", error);
+          });
           onClose();
         }}
       >
@@ -283,9 +284,8 @@ function DocumentNodeMenu({
 
 // -- view ----------------------------------------------------------------
 
-export function DocumentNodeView({ data, selected }: NodeProps<DocumentFlowNode>) {
-  const zoom = useStore((s) => s.transform[2]);
-  const lodCollapsed = zoom < LOD_ZOOM_THRESHOLD;
+function DocumentNodeViewImpl({ data, selected }: NodeProps<DocumentFlowNode>) {
+  const lodCollapsed = useLodVisibility();
   const collapsed = data.isCollapsed || lodCollapsed;
   const [menuPosition, setMenuPosition] = useState<MenuPosition | null>(null);
 
@@ -363,3 +363,41 @@ export function DocumentNodeView({ data, selected }: NodeProps<DocumentFlowNode>
     </div>
   );
 }
+
+/** ADR-011 stage 11.1: every prop this view actually reads, compared - it
+ * never destructures `id`, so it is intentionally absent (this instance never
+ * receives a changed `id` without React Flow remounting it under a new key
+ * anyway). Every `data` field is a primitive/nullable-primitive or a stable
+ * callback reference (no array/object fields on DocumentNodeData), so `===`
+ * is correct throughout. `previewLabel` is intentionally OMITTED: per this
+ * file's own module doc, it is "not yet surfaced in this increment's
+ * render" - this view never reads `data.previewLabel` anywhere, so comparing
+ * it would only cause spurious re-renders, never fix a missed one (same
+ * reasoning WebResearchNodeView's own comparator applies to
+ * researchActiveSourceId). */
+function documentNodeDataAreEqual(prev: DocumentNodeData, next: DocumentNodeData): boolean {
+  return (
+    prev.title === next.title &&
+    prev.content === next.content &&
+    prev.attachmentKind === next.attachmentKind &&
+    prev.filePath === next.filePath &&
+    prev.mimeType === next.mimeType &&
+    prev.durationSeconds === next.durationSeconds &&
+    prev.byteSize === next.byteSize &&
+    prev.isCollapsed === next.isCollapsed &&
+    prev.onToggleCollapse === next.onToggleCollapse &&
+    prev.onDock === next.onDock &&
+    prev.onDelete === next.onDelete &&
+    prev.isBranchFocusActive === next.isBranchFocusActive &&
+    prev.onToggleBranchFocus === next.onToggleBranchFocus
+  );
+}
+
+function documentNodePropsAreEqual(
+  prev: Readonly<NodeProps<DocumentFlowNode>>,
+  next: Readonly<NodeProps<DocumentFlowNode>>,
+): boolean {
+  return prev.selected === next.selected && documentNodeDataAreEqual(prev.data, next.data);
+}
+
+export const DocumentNodeView = memo(DocumentNodeViewImpl, documentNodePropsAreEqual);

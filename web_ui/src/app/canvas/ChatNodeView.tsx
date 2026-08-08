@@ -1,11 +1,13 @@
-import { Handle, Position, useStore, type Node, type NodeProps } from "@xyflow/react";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
+import { memo, useEffect, useRef, useState, type ReactNode } from "react";
 import type { StreamListener } from "../../lib/ws/transport";
-import { CHAT_SCROLL_REPORT_DEBOUNCE_MS, LOD_ZOOM_THRESHOLD } from "./canvasConstants";
+import { CHAT_SCROLL_REPORT_DEBOUNCE_MS } from "./canvasConstants";
 import { downloadTextFile } from "./downloadTextFile";
 import { GROUP_MONO_COLORS, GROUP_NAMED_COLORS } from "./GroupColorPicker";
+import type { MenuPosition } from "./menuPosition";
 import { NodeMarkdown } from "./NodeMarkdown";
 import { NodeMenu } from "./NodeMenu";
+import { useLodVisibility } from "./useLodVisibility";
 
 /**
  * The chat node (Qt-removal plan R3.1/R3.2) - ChatNode's React successor:
@@ -173,11 +175,6 @@ export interface ToolInvocationData {
 
 export type ChatFlowNode = Node<ChatNodeData, "chat">;
 
-interface MenuPosition {
-  x: number;
-  y: number;
-}
-
 // R6.2: legacy's own Generate Chart submenu order, confirmed during recon
 // (graphlink_canvas_chart_item.py / the legacy chat-node menu build) - Bar,
 // Line, Histogram, Pie, Sankey. `value` is the exact lowercase chart_type
@@ -280,7 +277,15 @@ function ChatNodeMenu({
         type="button"
         role="menuitem"
         onClick={() => {
-          navigator.clipboard.writeText(content);
+          // Best-effort clipboard write - a failure (missing Clipboard API,
+          // a denied permissions prompt, an insecure context) is swallowed
+          // rather than left as an unhandled rejection, matching
+          // ImageNodeView.tsx's own handleCopyImage: a menu action like this
+          // should never crash the node, it should just silently not have
+          // copied anything.
+          navigator.clipboard.writeText(content).catch((error) => {
+            console.error("[chat-node] Copy Text failed:", error);
+          });
           onClose();
         }}
       >
@@ -595,9 +600,109 @@ export function contentExceedsCollapsedHeight(scrollHeight: number): boolean {
   return scrollHeight > CHAT_CONTENT_COLLAPSED_MAX_HEIGHT;
 }
 
-export function ChatNodeView({ id, data, selected }: NodeProps<ChatFlowNode>) {
-  const zoom = useStore((s) => s.transform[2]);
-  const lodCollapsed = zoom < LOD_ZOOM_THRESHOLD;
+function dockedChildrenEqual(a: { id: string; label: string }[], b: { id: string; label: string }[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i].id !== b[i].id || a[i].label !== b[i].label) return false;
+  }
+  return true;
+}
+
+function stringArraysEqual(a: string[], b: string[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
+function toolInvocationsEqual(a: ToolInvocationData[], b: ToolInvocationData[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i];
+    const y = b[i];
+    if (
+      x.id !== y.id ||
+      x.name !== y.name ||
+      x.argumentsJson !== y.argumentsJson ||
+      x.result !== y.result ||
+      x.isError !== y.isError
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/** ADR-011 stage 11.1: React.memo comparator - id (read into the card menu's
+ * Export filename), selected, and every ChatNodeData field this component
+ * (or the card menu it renders) actually reads, including every callback
+ * prop. Array/object-shaped fields (dockedChildren, toolInvocations,
+ * synthesisSourceNodeIds) get an element-by-element compare rather than
+ * `===` - toFlowNodes can legitimately mint a fresh, value-identical array
+ * on every snapshot even when nothing on this node changed; a bare `===`
+ * there would make this comparator too tight and quietly defeat the memo.
+ *
+ * chatScrollValue is deliberately excluded: it's read only inside the
+ * mount-only scroll-restore effect below (empty dep array, R6.3's own
+ * documented non-clobbering posture) - by the time this comparator ever
+ * runs on a re-render, that effect has already fired once and will never
+ * fire again, so no change to this field can ever affect what's on screen
+ * after mount. Comparing it would only produce spurious re-renders during
+ * active (debounced) scrolling - the "too tight" failure mode this
+ * comparator exists to avoid. */
+export function chatNodePropsAreEqual(prev: NodeProps<ChatFlowNode>, next: NodeProps<ChatFlowNode>): boolean {
+  if (prev.id !== next.id || prev.selected !== next.selected) return false;
+  const a = prev.data;
+  const b = next.data;
+  return (
+    a.content === b.content &&
+    a.isUser === b.isUser &&
+    a.isCollapsed === b.isCollapsed &&
+    a.isBranchFocusActive === b.isBranchFocusActive &&
+    a.branchStatus === b.branchStatus &&
+    a.isFinalDeliverable === b.isFinalDeliverable &&
+    a.provider === b.provider &&
+    a.model === b.model &&
+    a.isBranchSynthesis === b.isBranchSynthesis &&
+    a.synthesisInstructions === b.synthesisInstructions &&
+    a.pendingRequestId === b.pendingRequestId &&
+    a.responseIncomplete === b.responseIncomplete &&
+    a.promptTokens === b.promptTokens &&
+    a.completionTokens === b.completionTokens &&
+    a.estimatedCostUsd === b.estimatedCostUsd &&
+    a.onToggleCollapse === b.onToggleCollapse &&
+    a.onDelete === b.onDelete &&
+    a.onUndockChild === b.onUndockChild &&
+    a.onRegenerate === b.onRegenerate &&
+    a.onGenerateImage === b.onGenerateImage &&
+    a.onGenerateChart === b.onGenerateChart &&
+    a.onGenerateKeyTakeaway === b.onGenerateKeyTakeaway &&
+    a.onGenerateExplainerNote === b.onGenerateExplainerNote &&
+    a.onOpenDocumentView === b.onOpenDocumentView &&
+    a.onScrollChange === b.onScrollChange &&
+    a.onToggleBranchFocus === b.onToggleBranchFocus &&
+    a.onBranchFromHere === b.onBranchFromHere &&
+    a.onSetBranchStatus === b.onSetBranchStatus &&
+    a.onSetFinalDeliverable === b.onSetFinalDeliverable &&
+    a.onCollapseBranch === b.onCollapseBranch &&
+    a.onCancelRegenerate === b.onCancelRegenerate &&
+    a.subscribeStream === b.subscribeStream &&
+    dockedChildrenEqual(a.dockedChildren, b.dockedChildren) &&
+    toolInvocationsEqual(a.toolInvocations, b.toolInvocations) &&
+    stringArraysEqual(a.synthesisSourceNodeIds, b.synthesisSourceNodeIds)
+  );
+}
+
+export const ChatNodeView = memo(function ChatNodeView({
+  id,
+  data,
+  selected,
+}: NodeProps<ChatFlowNode>) {
+  const lodCollapsed = useLodVisibility();
   const collapsed = data.isCollapsed || lodCollapsed;
   const [copied, setCopied] = useState(false);
 
@@ -608,10 +713,18 @@ export function ChatNodeView({ id, data, selected }: NodeProps<ChatFlowNode>) {
   // (matching the established pattern DocumentViewPanel.tsx/NodeMarkdown.tsx's
   // own CodeBlock already use) independent of the menu's lifecycle.
   function onQuickCopy() {
-    navigator.clipboard.writeText(data.content).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    });
+    navigator.clipboard
+      .writeText(data.content)
+      .then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      })
+      .catch((error) => {
+        // Best-effort - see ChatNodeMenu's own Copy Text handler above for
+        // the same reasoning. No "copied" flash on failure, since nothing
+        // was actually copied.
+        console.error("[chat-node] Copy failed:", error);
+      });
   }
   const [menuPosition, setMenuPosition] = useState<MenuPosition | null>(null);
 
@@ -667,13 +780,67 @@ export function ChatNodeView({ id, data, selected }: NodeProps<ChatFlowNode>) {
     setStreamedContent("");
   }
 
+  // ADR-011 stage 11.4: deltas accumulate into these refs (not React state)
+  // as they arrive - only the rAF-scheduled flush below ever calls
+  // setStreamedContent, so a fast burst of many small deltas within one
+  // frame re-parses markdown (NodeMarkdown's full unified/remark/rehype/
+  // KaTeX/highlight pipeline) at most once per frame, not once per delta.
+  // Every byte still lands in streamedContent, in order - only the RE-PARSE
+  // cadence changes, never the data: pendingBufferRef always holds the full,
+  // in-order text accumulated since the last flush, and flushStreamBuffer
+  // moves the whole thing into state atomically. pendingResetRef tracks
+  // whether the buffered text should REPLACE streamedContent at the next
+  // flush (a `reset` frame) rather than append to it, mirroring the
+  // original un-throttled `reset ? delta : current + delta` semantics
+  // exactly - just deferred to flush time instead of applied delta-by-delta.
+  const pendingBufferRef = useRef("");
+  const pendingResetRef = useRef(false);
+  const rafHandleRef = useRef<number | null>(null);
+
+  function flushStreamBuffer() {
+    if (rafHandleRef.current !== null) {
+      cancelAnimationFrame(rafHandleRef.current);
+      rafHandleRef.current = null;
+    }
+    const bufferedText = pendingBufferRef.current;
+    const shouldReset = pendingResetRef.current;
+    pendingBufferRef.current = "";
+    pendingResetRef.current = false;
+    if (!bufferedText && !shouldReset) return;
+    setStreamedContent((current) => (shouldReset ? bufferedText : current + bufferedText));
+  }
+
   useEffect(() => {
     const requestId = data.pendingRequestId;
     if (!requestId) return;
-    const unsubscribe = data.subscribeStream(requestId, (delta, _done, reset) => {
-      setStreamedContent((current) => (reset ? delta : current + delta));
+    const unsubscribe = data.subscribeStream(requestId, (delta, done, reset) => {
+      if (reset) {
+        pendingBufferRef.current = delta;
+        pendingResetRef.current = true;
+      } else {
+        pendingBufferRef.current += delta;
+      }
+      // Stream completion/reset flushes synchronously - the final chunk (or
+      // a fresh restart) shouldn't wait an extra frame, and this is also
+      // what guarantees a trailing chunk never gets stranded in the buffer
+      // past the last render.
+      if (done || reset) {
+        flushStreamBuffer();
+      } else if (rafHandleRef.current === null) {
+        rafHandleRef.current = requestAnimationFrame(flushStreamBuffer);
+      }
     });
-    return () => unsubscribe();
+    return () => {
+      unsubscribe();
+      // A requestId change (new run, or this run finished) makes any
+      // content still sitting in the buffer for the OLD request moot - the
+      // render-time subscribedRequestId reset above already clears
+      // streamedContent to "" for a new id, and data.content is the source
+      // of truth once pendingRequestId returns to null - but flush (rather
+      // than silently drop) here too, so no buffered byte is ever lost even
+      // in that narrow window.
+      flushStreamBuffer();
+    };
     // data.subscribeStream is a fresh closure every render (see SceneCanvas's
     // toFlowNodes) - depending on it would resubscribe on every unrelated
     // re-render; data.pendingRequestId itself is the real re-subscribe key.
@@ -994,4 +1161,4 @@ export function ChatNodeView({ id, data, selected }: NodeProps<ChatFlowNode>) {
       )}
     </div>
   );
-}
+}, chatNodePropsAreEqual);

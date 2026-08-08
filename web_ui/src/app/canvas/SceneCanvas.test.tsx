@@ -3,9 +3,12 @@ import { act, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import {
   applyGroupDragDelta,
+  buildDragSizeCache,
   computeDimmedNodeIds,
   computeNonAcceptedNodeIds,
+  computeSmartGuideFrame,
   conversationHistoryToDocumentMarkdown,
+  flowNodeOwnSize,
   groupDragKindOf,
   handleSelectionChange,
   isOrthogonalEligible,
@@ -14,6 +17,7 @@ import {
   toFlowEdges,
   toFlowNodes,
   withPreservedSelection,
+  type MeasuredSizeSource,
   type SceneFlowNode,
 } from "./SceneCanvas";
 import type { ConversationMessage } from "./ConversationNodeView";
@@ -2221,6 +2225,155 @@ describe("applyGroupDragDelta (R6.1 group-drag)", () => {
     ];
 
     expect(() => applyGroupDragDelta(nodes, "container-a", { x: 5, y: 5 })).not.toThrow();
+  });
+});
+
+describe("flowNodeOwnSize (ADR-011 stage 11.2 virtualization audit)", () => {
+  it("returns the flow-node-level width/height for a frame/container/chart-shaped node", () => {
+    const node = {
+      id: "frame-1",
+      type: "frame",
+      position: { x: 0, y: 0 },
+      width: 260,
+      height: 140,
+      data: {},
+    } as unknown as SceneFlowNode;
+    expect(flowNodeOwnSize(node)).toEqual({ width: 260, height: 140 });
+  });
+
+  it("returns null for a plain content node with no flow-node-level width/height", () => {
+    const node = { id: "chat-1", type: "chat", position: { x: 0, y: 0 }, data: {} } as unknown as SceneFlowNode;
+    expect(flowNodeOwnSize(node)).toBeNull();
+  });
+
+  it("returns null when only one of width/height is set (defensive - should be unreachable via toFlowNodes)", () => {
+    const node = {
+      id: "odd-1",
+      type: "chart",
+      position: { x: 0, y: 0 },
+      width: 100,
+      data: {},
+    } as unknown as SceneFlowNode;
+    expect(flowNodeOwnSize(node)).toBeNull();
+  });
+});
+
+describe("buildDragSizeCache (ADR-011 stage 11.3 drag-start batch read)", () => {
+  function fakeReactFlow(measured: Record<string, { width?: number; height?: number } | undefined> = {}): MeasuredSizeSource {
+    return {
+      getInternalNode: (id: string) => {
+        const m = measured[id];
+        return m ? { measured: m } : undefined;
+      },
+    };
+  }
+
+  it("uses flowNodeOwnSize for a frame/container/chart node WITHOUT ever touching the DOM", () => {
+    const querySelectorSpy = vi.spyOn(document, "querySelector");
+    const nodes: SceneFlowNode[] = [
+      { id: "frame-1", type: "frame", position: { x: 0, y: 0 }, width: 200, height: 100, data: {} } as unknown as SceneFlowNode,
+    ];
+    const cache = buildDragSizeCache(fakeReactFlow(), nodes);
+    expect(cache.get("frame-1")).toEqual({ width: 200, height: 100 });
+    expect(querySelectorSpy).not.toHaveBeenCalled();
+    querySelectorSpy.mockRestore();
+  });
+
+  it("falls back to measuredNodeSize's DOM query for a plain content node, exactly once per node", () => {
+    const querySelectorSpy = vi.spyOn(document, "querySelector").mockReturnValue(null);
+    const nodes: SceneFlowNode[] = [
+      { id: "chat-1", type: "chat", position: { x: 0, y: 0 }, data: {} } as unknown as SceneFlowNode,
+      { id: "chat-2", type: "chat", position: { x: 100, y: 0 }, data: {} } as unknown as SceneFlowNode,
+    ];
+    buildDragSizeCache(fakeReactFlow(), nodes);
+    expect(querySelectorSpy).toHaveBeenCalledTimes(2);
+    querySelectorSpy.mockRestore();
+  });
+
+  it("prefers React Flow's own internal `measured` cache over the DOM fallback when populated", () => {
+    const querySelectorSpy = vi.spyOn(document, "querySelector");
+    const nodes: SceneFlowNode[] = [
+      { id: "chat-1", type: "chat", position: { x: 0, y: 0 }, data: {} } as unknown as SceneFlowNode,
+    ];
+    const cache = buildDragSizeCache(fakeReactFlow({ "chat-1": { width: 320, height: 90 } }), nodes);
+    expect(cache.get("chat-1")).toEqual({ width: 320, height: 90 });
+    expect(querySelectorSpy).not.toHaveBeenCalled();
+    querySelectorSpy.mockRestore();
+  });
+
+  it("omits a node whose size cannot be resolved at all (off-viewport, unmounted, no server-tracked size)", () => {
+    vi.spyOn(document, "querySelector").mockReturnValue(null);
+    const nodes: SceneFlowNode[] = [
+      { id: "chat-1", type: "chat", position: { x: 0, y: 0 }, data: {} } as unknown as SceneFlowNode,
+    ];
+    const cache = buildDragSizeCache(fakeReactFlow(), nodes);
+    expect(cache.has("chat-1")).toBe(false);
+    vi.restoreAllMocks();
+  });
+});
+
+describe("computeSmartGuideFrame (ADR-011 stage 11.3 per-frame smart-guide read)", () => {
+  it("passes the position through unsnapped, with no guides, when the moving node is not in `nodes`", () => {
+    const result = computeSmartGuideFrame([], "gone", { x: 10, y: 10 }, new Map());
+    expect(result).toEqual({ position: { x: 10, y: 10 }, guides: [] });
+  });
+
+  it("passes the position through unsnapped, with no guides, when the moving node's size is not in the cache", () => {
+    const nodes: SceneFlowNode[] = [
+      { id: "chat-1", type: "chat", position: { x: 0, y: 0 }, data: {} } as unknown as SceneFlowNode,
+    ];
+    const result = computeSmartGuideFrame(nodes, "chat-1", { x: 10, y: 10 }, new Map());
+    expect(result).toEqual({ position: { x: 10, y: 10 }, guides: [] });
+  });
+
+  it("snaps against a cached candidate's left edge, reading sizes purely from the cache", () => {
+    const nodes: SceneFlowNode[] = [
+      { id: "moving", type: "chat", position: { x: 0, y: 0 }, data: {} } as unknown as SceneFlowNode,
+      { id: "candidate", type: "chat", position: { x: 103, y: 300 }, data: {} } as unknown as SceneFlowNode,
+    ];
+    const cache = new Map([
+      ["moving", { width: 100, height: 50 }],
+      ["candidate", { width: 100, height: 50 }],
+    ]);
+    // moving's left edge (100) is within 5px of candidate's left edge (103).
+    const result = computeSmartGuideFrame(nodes, "moving", { x: 100, y: 10 }, cache);
+    expect(result.position.x).toBe(103);
+    expect(result.guides).toHaveLength(1);
+    expect(result.guides[0].orientation).toBe("vertical");
+  });
+
+  it("skips a candidate that is absent from the cache (off-viewport, unmounted) instead of crashing or estimating", () => {
+    const nodes: SceneFlowNode[] = [
+      { id: "moving", type: "chat", position: { x: 0, y: 0 }, data: {} } as unknown as SceneFlowNode,
+      { id: "unmeasured", type: "chat", position: { x: 103, y: 300 }, data: {} } as unknown as SceneFlowNode,
+    ];
+    // Only "moving" has a cached size - "unmeasured" is exactly the
+    // off-viewport-under-onlyRenderVisibleElements case.
+    const cache = new Map([["moving", { width: 100, height: 50 }]]);
+    const result = computeSmartGuideFrame(nodes, "moving", { x: 100, y: 10 }, cache);
+    // No crash, and no snap against the unmeasured candidate.
+    expect(result).toEqual({ position: { x: 100, y: 10 }, guides: [] });
+  });
+
+  it("excludes a dragged group's own members from candidates, same as the pre-11.3 inline logic did", () => {
+    const nodes: SceneFlowNode[] = [
+      {
+        id: "frame-1",
+        type: "frame",
+        position: { x: 0, y: 0 },
+        data: { isLocked: true, itemIds: ["member-1"] },
+      } as unknown as SceneFlowNode,
+      { id: "member-1", type: "chat", position: { x: 103, y: 300 }, data: {} } as unknown as SceneFlowNode,
+    ];
+    const cache = new Map([
+      ["frame-1", { width: 100, height: 50 }],
+      ["member-1", { width: 100, height: 50 }],
+    ]);
+    // member-1's left edge (103) would otherwise be within tolerance of
+    // frame-1's proposed left edge (100) - but a group's own members are
+    // never valid alignment candidates for the group dragging them.
+    const result = computeSmartGuideFrame(nodes, "frame-1", { x: 100, y: 10 }, cache);
+    expect(result).toEqual({ position: { x: 100, y: 10 }, guides: [] });
   });
 });
 

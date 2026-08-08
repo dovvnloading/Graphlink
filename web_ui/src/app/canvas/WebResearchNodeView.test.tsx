@@ -2,7 +2,26 @@ import { ReactFlowProvider, useStoreApi, type NodeProps } from "@xyflow/react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useEffect } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+// ADR-011 stage 11.1: wraps the real useLodVisibility so every ACTUAL render
+// of this view is countable - a React.memo bailout skips the function body
+// (and every hook inside it) entirely, so this never fires on a bailed
+// re-render. See ImageNodeView.test.tsx for the same technique's full
+// rationale.
+const lodVisibilityCalls = { count: 0 };
+
+vi.mock("./useLodVisibility", async (importOriginal) => {
+  const original = await importOriginal<typeof import("./useLodVisibility")>();
+  return {
+    ...original,
+    useLodVisibility: (...args: Parameters<typeof original.useLodVisibility>) => {
+      lodVisibilityCalls.count += 1;
+      return original.useLodVisibility(...args);
+    },
+  };
+});
+
 import {
   WebResearchNodeView,
   type WebResearchFlowNode,
@@ -366,5 +385,162 @@ describe("WebResearchNodeView", () => {
     expect(screen.getByRole("menu")).toBeInTheDocument();
     await user.click(document.body);
     expect(screen.queryByRole("menu")).toBeNull();
+  });
+});
+
+// ADR-011 stage 11.1: React.memo comparator correctness. `lodVisibilityCalls`
+// fires exactly once per ACTUAL render - never on a bailed-out one - so it's
+// the oracle for both directions (see ImageNodeView.test.tsx for the full
+// rationale of this technique). `researchResult` is the one nested-object
+// field on this data type, so it gets extra coverage beyond the usual
+// primitive-field pair.
+describe("WebResearchNodeView React.memo comparator (ADR-011 stage 11.1)", () => {
+  beforeEach(() => {
+    lodVisibilityCalls.count = 0;
+  });
+
+  function webResearchProps(overrides: Partial<WebResearchFlowNode["data"]> = {}) {
+    const data = baseData(overrides);
+    return { id: "n0", selected: false, data } as unknown as NodeProps<WebResearchFlowNode>;
+  }
+
+  it("skips re-rendering when a fresh `data` object carries identical field values", () => {
+    const props = webResearchProps();
+    const { rerender } = render(
+      <ReactFlowProvider>
+        <WebResearchNodeView {...props} />
+      </ReactFlowProvider>,
+    );
+    expect(lodVisibilityCalls.count).toBe(1);
+
+    const sameValuesNewObject = { ...props.data };
+    rerender(
+      <ReactFlowProvider>
+        <WebResearchNodeView {...{ ...props, data: sameValuesNewObject }} />
+      </ReactFlowProvider>,
+    );
+    expect(lodVisibilityCalls.count).toBe(1);
+  });
+
+  it("re-renders when `researchStage` (a field the view reads) changes", () => {
+    const props = webResearchProps({ researchStage: "searching" });
+    const { rerender } = render(
+      <ReactFlowProvider>
+        <WebResearchNodeView {...props} />
+      </ReactFlowProvider>,
+    );
+    expect(lodVisibilityCalls.count).toBe(1);
+
+    rerender(
+      <ReactFlowProvider>
+        <WebResearchNodeView {...{ ...props, data: { ...props.data, researchStage: "fetching" } }} />
+      </ReactFlowProvider>,
+    );
+    expect(lodVisibilityCalls.count).toBe(2);
+  });
+
+  it("skips re-rendering when `researchActiveSourceId` changes - this view never reads it", () => {
+    // Documented in this file's module doc: researchActiveSourceId is never
+    // looked up or rendered, so the comparator intentionally omits it -
+    // comparing it would only cause spurious re-renders, never fix a missed
+    // one.
+    const props = webResearchProps({ researchActiveSourceId: "src-a" });
+    const { rerender } = render(
+      <ReactFlowProvider>
+        <WebResearchNodeView {...props} />
+      </ReactFlowProvider>,
+    );
+    expect(lodVisibilityCalls.count).toBe(1);
+
+    rerender(
+      <ReactFlowProvider>
+        <WebResearchNodeView {...{ ...props, data: { ...props.data, researchActiveSourceId: "src-b" } }} />
+      </ReactFlowProvider>,
+    );
+    expect(lodVisibilityCalls.count).toBe(1);
+  });
+
+  it("skips re-rendering when `researchResult` is a fresh object with identical field values (including sources)", () => {
+    const result = makeResult({
+      answerMarkdown: "The answer.",
+      sources: [
+        {
+          sourceId: "src-1",
+          title: "Example",
+          url: "https://example.com",
+          canonicalUrl: "https://example.com",
+          snippet: "",
+          rank: 1,
+          provider: "search",
+          finalUrl: "https://example.com",
+          status: "accepted",
+          errorCode: "",
+          errorMessage: "",
+          truncated: false,
+          contentHash: "abc",
+          citationCount: 1,
+        },
+      ],
+    });
+    const props = webResearchProps({ researchStage: "completed", researchResult: result });
+    const { rerender } = render(
+      <ReactFlowProvider>
+        <WebResearchNodeView {...props} />
+      </ReactFlowProvider>,
+    );
+    expect(lodVisibilityCalls.count).toBe(1);
+
+    // A brand-new researchResult object AND a brand-new sources array, but
+    // every field value is identical - a plain `===` on either would wrongly
+    // re-render here.
+    const sameValuesNewResult = { ...result, sources: result.sources.map((s) => ({ ...s })) };
+    rerender(
+      <ReactFlowProvider>
+        <WebResearchNodeView {...{ ...props, data: { ...props.data, researchResult: sameValuesNewResult } }} />
+      </ReactFlowProvider>,
+    );
+    expect(lodVisibilityCalls.count).toBe(1);
+  });
+
+  it("re-renders when a source's status inside `researchResult.sources` actually changes", () => {
+    const result = makeResult({
+      sources: [
+        {
+          sourceId: "src-1",
+          title: "Example",
+          url: "https://example.com",
+          canonicalUrl: "https://example.com",
+          snippet: "",
+          rank: 1,
+          provider: "search",
+          finalUrl: "https://example.com",
+          status: "fetching",
+          errorCode: "",
+          errorMessage: "",
+          truncated: false,
+          contentHash: "",
+          citationCount: 0,
+        },
+      ],
+    });
+    const props = webResearchProps({ researchStage: "completed", researchResult: result });
+    const { rerender } = render(
+      <ReactFlowProvider>
+        <WebResearchNodeView {...props} />
+      </ReactFlowProvider>,
+    );
+    expect(lodVisibilityCalls.count).toBe(1);
+
+    const updatedResult: WebResearchResultRow = {
+      ...result,
+      sources: [{ ...result.sources[0], status: "accepted" }],
+    };
+    rerender(
+      <ReactFlowProvider>
+        <WebResearchNodeView {...{ ...props, data: { ...props.data, researchResult: updatedResult } }} />
+      </ReactFlowProvider>,
+    );
+    expect(lodVisibilityCalls.count).toBe(2);
+    expect(screen.getByText("accepted")).toBeInTheDocument();
   });
 });

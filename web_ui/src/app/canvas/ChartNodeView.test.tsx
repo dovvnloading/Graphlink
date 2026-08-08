@@ -1,7 +1,14 @@
 import { ReactFlowProvider, type NodeProps } from "@xyflow/react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { ChartNodeView, chartAssetUrl, chartExportUrl, makeDebouncedChartResize, type ChartFlowNode } from "./ChartNodeView";
+import {
+  ChartNodeView,
+  chartAssetUrl,
+  chartExportUrl,
+  chartNodePropsAreEqual,
+  makeDebouncedChartResize,
+  type ChartFlowNode,
+} from "./ChartNodeView";
 
 // Rendered directly (not through a real <ReactFlow nodes=.../> mount) - see
 // ChatNodeView.test.tsx for why a bare ReactFlowProvider is enough here too
@@ -152,5 +159,127 @@ describe("makeDebouncedChartResize", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// ADR-011 stage 11.1: the React.memo comparator. Direct unit tests of the
+// exported pure function (the same function reference wired into
+// `memo(ChartNodeView, chartNodePropsAreEqual)`) plus one real-render
+// integration test proving the wiring itself is correct.
+describe("ChartNodeView React.memo comparator (ADR-011 stage 11.1)", () => {
+  function props(overrides: Partial<ChartFlowNode["data"]> = {}, propOverrides: Record<string, unknown> = {}) {
+    return {
+      id: "n0",
+      selected: false,
+      data: {
+        chartType: "bar",
+        chartData: { type: "bar", title: "Quarterly Revenue" },
+        chartError: "",
+        chartAssetId: "asset-chart-1",
+        chartAssetVersion: 1,
+        chartWidth: 680,
+        chartHeight: 500,
+        chartAspectLocked: true,
+        chartSourceNodeId: "chat-1",
+        onToggleAspectLock: vi.fn(),
+        onResize: vi.fn(),
+        ...overrides,
+      },
+      ...propOverrides,
+    } as unknown as NodeProps<ChartFlowNode>;
+  }
+
+  it("treats identical props as equal", () => {
+    const p = props();
+    expect(chartNodePropsAreEqual(p, { ...p })).toBe(true);
+  });
+
+  it("treats a fresh-but-value-identical chartData object (same title) as equal", () => {
+    const a = props({ chartData: { type: "bar", title: "Quarterly Revenue", values: [1, 2, 3] } });
+    const b = {
+      ...a,
+      data: { ...a.data, chartData: { type: "line" as const, title: "Quarterly Revenue", values: [9, 9] } },
+    };
+    // Different object, even different unread sub-fields (type/values) - only
+    // `.title` is ever read by this component, and it matches.
+    expect(a.data.chartData).not.toBe(b.data.chartData);
+    expect(chartNodePropsAreEqual(a, b)).toBe(true);
+  });
+
+  it("is unaffected by ChartNodeData fields this component never reads (chartWidth, chartHeight, chartSourceNodeId) or unread NodeProps fields (dragging, zIndex)", () => {
+    const a = props({ chartWidth: 680, chartHeight: 500, chartSourceNodeId: "chat-1" }, { dragging: false, zIndex: 0 });
+    const b = {
+      ...a,
+      data: { ...a.data, chartWidth: 999, chartHeight: 999, chartSourceNodeId: "chat-2" },
+      dragging: true,
+      zIndex: 9,
+    };
+    expect(chartNodePropsAreEqual(a, b)).toBe(true);
+  });
+
+  it("returns false when id changes", () => {
+    const a = props({}, { id: "n0" });
+    const b = { ...a, id: "n1" };
+    expect(chartNodePropsAreEqual(a, b)).toBe(false);
+  });
+
+  it("returns false when selected changes", () => {
+    const a = props({}, { selected: false });
+    const b = { ...a, selected: true };
+    expect(chartNodePropsAreEqual(a, b)).toBe(false);
+  });
+
+  it.each([
+    ["chartType", { chartType: "line" }],
+    ["chartError", { chartError: "boom" }],
+    ["chartAssetId", { chartAssetId: "asset-2" }],
+    ["chartAssetVersion", { chartAssetVersion: 2 }],
+    ["chartAspectLocked", { chartAspectLocked: false }],
+    ["onToggleAspectLock", { onToggleAspectLock: vi.fn() }],
+    ["onResize", { onResize: vi.fn() }],
+  ] as const)("returns false when data.%s changes and nothing else does", (_name, override) => {
+    const a = props();
+    const b = { ...a, data: { ...a.data, ...override } };
+    expect(chartNodePropsAreEqual(a, b)).toBe(false);
+  });
+
+  it("returns false when chartData.title differs, even with everything else on chartData identical", () => {
+    const a = props({ chartData: { type: "bar", title: "A" } });
+    const b = { ...a, data: { ...a.data, chartData: { type: "bar" as const, title: "B" } } };
+    expect(chartNodePropsAreEqual(a, b)).toBe(false);
+  });
+
+  it("real render: skipped when only an unread field changes, and actually happens when chartType changes", () => {
+    const p = props({ chartType: "bar" }, { selected: false });
+    const { container, rerender } = render(
+      <ReactFlowProvider>
+        <ChartNodeView {...p} />
+      </ReactFlowProvider>,
+    );
+    const root = container.querySelector(".scene-node") as HTMLElement;
+    expect(root).not.toBeNull();
+
+    root.className = "CORRUPTED";
+
+    // chartWidth is never read by this component - the comparator must say
+    // "equal", so no re-render should occur.
+    rerender(
+      <ReactFlowProvider>
+        <ChartNodeView {...p} data={{ ...p.data, chartWidth: 999 }} />
+      </ReactFlowProvider>,
+    );
+    expect(root.className).toBe("CORRUPTED");
+
+    // chartType IS read (drives the badge text and, via `collapsed`
+    // rendering, this component's own class string too through re-render) -
+    // toggling `selected` (which this element's className directly reflects)
+    // proves a real re-render actually happened.
+    rerender(
+      <ReactFlowProvider>
+        <ChartNodeView {...p} selected />
+      </ReactFlowProvider>,
+    );
+    expect(root.className).not.toBe("CORRUPTED");
+    expect(root.className).toContain("selected");
   });
 });

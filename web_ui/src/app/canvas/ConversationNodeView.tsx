@@ -1,9 +1,10 @@
-import { Handle, Position, useStore, type Node, type NodeProps } from "@xyflow/react";
-import { useEffect, useState, type ReactNode } from "react";
+import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
+import { memo, useEffect, useState, type ReactNode } from "react";
 import type { StreamListener } from "../../lib/ws/transport";
-import { LOD_ZOOM_THRESHOLD } from "./canvasConstants";
+import type { MenuPosition } from "./menuPosition";
 import { NodeMarkdown } from "./NodeMarkdown";
 import { NodeMenu } from "./NodeMenu";
+import { useLodVisibility } from "./useLodVisibility";
 
 /**
  * The conversation node (Qt-removal plan R3.25/R3.26) - ConversationNode's
@@ -70,11 +71,6 @@ export interface ConversationNodeData extends Record<string, unknown> {
 }
 
 export type ConversationFlowNode = Node<ConversationNodeData, "conversation">;
-
-interface MenuPosition {
-  x: number;
-  y: number;
-}
 
 /** Shared outside-click/Escape dismiss behavior - identical pattern to every
  * sibling menu component (ChatNodeMenu/ThinkingNodeMenu/DocumentNodeMenu). */
@@ -159,7 +155,12 @@ function ConversationBubbleMenu({
         type="button"
         role="menuitem"
         onClick={() => {
-          navigator.clipboard.writeText(content);
+          // ADR-011 stage 11.1 (D11): a bare fire-and-forget clipboard write
+          // left this promise's rejection unhandled - same fix ImageNodeView's
+          // own Copy Image action already applies for its clipboard write.
+          navigator.clipboard.writeText(content).catch((error: unknown) => {
+            console.error("[conversation-node] Copy Message failed:", error);
+          });
           onClose();
         }}
       >
@@ -258,10 +259,15 @@ function ConversationBubble({
   // quick-action Copy button, for the identical reason: this one needs its
   // own transient "copied" flash independent of the menu's lifecycle.
   function onQuickCopy() {
-    navigator.clipboard.writeText(message.content).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    });
+    navigator.clipboard
+      .writeText(message.content)
+      .then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      })
+      .catch((error: unknown) => {
+        console.error("[conversation-node] Copy message failed:", error);
+      });
   }
 
   return (
@@ -369,9 +375,8 @@ function ConversationBubble({
 
 // -- view ----------------------------------------------------------------
 
-export function ConversationNodeView({ data, selected }: NodeProps<ConversationFlowNode>) {
-  const zoom = useStore((s) => s.transform[2]);
-  const lodCollapsed = zoom < LOD_ZOOM_THRESHOLD;
+function ConversationNodeViewImpl({ data, selected }: NodeProps<ConversationFlowNode>) {
+  const lodCollapsed = useLodVisibility();
   const collapsed = data.isCollapsed || lodCollapsed;
   const [menuPosition, setMenuPosition] = useState<MenuPosition | null>(null);
   const [draft, setDraft] = useState("");
@@ -529,3 +534,58 @@ export function ConversationNodeView({ data, selected }: NodeProps<ConversationF
     </div>
   );
 }
+
+/** `history` is the one array/object-shaped field on ConversationNodeData -
+ * toFlowNodes may mint a fresh array (and fresh message objects) on every
+ * snapshot even when the transcript itself hasn't changed, so a plain `===`
+ * here would be "too tight" (defeats memoization for every conversation node
+ * on every unrelated update). Element-wise compare instead, same shape-aware
+ * pattern WebResearchNodeView's own researchSourcesEqual/NoteNodeView's own
+ * stringArraysEqual use for their own array fields. */
+function conversationHistoryEqual(
+  a: readonly ConversationMessage[],
+  b: readonly ConversationMessage[],
+): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i];
+    const y = b[i];
+    if (x.role !== y.role || x.content !== y.content || x.incomplete !== y.incomplete) return false;
+  }
+  return true;
+}
+
+/** ADR-011 stage 11.1: every prop this view actually reads, compared - it
+ * never destructures `id`, so it is intentionally absent here (this instance
+ * never receives a changed `id` without React Flow remounting it under a new
+ * key anyway). Every field ConversationNodeData declares is read somewhere in
+ * render (the bubbles, the input row, the streaming subscription effect, or
+ * the two menus), so every one of them is compared here - `history` gets the
+ * shape-aware compare above, everything else (including every callback,
+ * per the memoization task's own warning that skipping a callback prop is a
+ * real "stale UI" bug, not a safe shortcut) is a stable primitive or callback
+ * reference, so `===` is correct for those. */
+function conversationNodeDataAreEqual(prev: ConversationNodeData, next: ConversationNodeData): boolean {
+  return (
+    conversationHistoryEqual(prev.history, next.history) &&
+    prev.isCollapsed === next.isCollapsed &&
+    prev.pendingRequestId === next.pendingRequestId &&
+    prev.onToggleCollapse === next.onToggleCollapse &&
+    prev.onDelete === next.onDelete &&
+    prev.onSend === next.onSend &&
+    prev.onDeleteMessage === next.onDeleteMessage &&
+    prev.onCancel === next.onCancel &&
+    prev.onOpenDocumentView === next.onOpenDocumentView &&
+    prev.subscribeStream === next.subscribeStream
+  );
+}
+
+function conversationNodePropsAreEqual(
+  prev: Readonly<NodeProps<ConversationFlowNode>>,
+  next: Readonly<NodeProps<ConversationFlowNode>>,
+): boolean {
+  return prev.selected === next.selected && conversationNodeDataAreEqual(prev.data, next.data);
+}
+
+export const ConversationNodeView = memo(ConversationNodeViewImpl, conversationNodePropsAreEqual);

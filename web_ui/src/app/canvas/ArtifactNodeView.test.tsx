@@ -3,7 +3,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useEffect } from "react";
 import { describe, expect, it, vi } from "vitest";
-import { ArtifactNodeView, type ArtifactFlowNode } from "./ArtifactNodeView";
+import { ArtifactNodeView, artifactNodePropsAreEqual, type ArtifactFlowNode } from "./ArtifactNodeView";
 
 // Rendered directly (not through a real <ReactFlow nodes=.../> mount) - see
 // ChatNodeView.test.tsx / ConversationNodeView.test.tsx / WebResearchNodeView.test.tsx
@@ -278,5 +278,117 @@ describe("ArtifactNodeView", () => {
     });
     expect(document.querySelector("img")).toBeNull();
     expect(screen.queryByRole("img")).toBeNull();
+  });
+});
+
+// ADR-011 stage 11.1: the React.memo comparator. Direct unit tests of the
+// exported pure function (the same function reference wired straight into
+// `memo(ArtifactNodeView, artifactNodePropsAreEqual)`) plus one real-render
+// integration test proving the wiring itself is correct - a passing unit
+// test of the comparator alone couldn't catch "the comparator is right but
+// never actually got passed to memo()".
+describe("ArtifactNodeView React.memo comparator (ADR-011 stage 11.1)", () => {
+  function props(overrides: Partial<ArtifactFlowNode["data"]> = {}, propOverrides: Record<string, unknown> = {}) {
+    return {
+      id: "n0",
+      selected: false,
+      data: baseData(overrides),
+      ...propOverrides,
+    } as unknown as NodeProps<ArtifactFlowNode>;
+  }
+
+  it("treats identical props as equal", () => {
+    const p = props({ artifactContent: "hello" });
+    expect(artifactNodePropsAreEqual(p, { ...p })).toBe(true);
+  });
+
+  it("treats a fresh-but-value-identical history array as equal (not a bare reference check)", () => {
+    const a = props({ history: [{ role: "user", content: "hi" }] });
+    // Same callbacks as `a` (comparator would correctly reject two
+    // independently-minted vi.fn() instances) - only history's ARRAY
+    // OBJECT differs, its contents do not.
+    const b = { ...a, data: { ...a.data, history: [{ role: "user" as const, content: "hi" }] } };
+    expect(a.data.history).not.toBe(b.data.history);
+    expect(artifactNodePropsAreEqual(a, b)).toBe(true);
+  });
+
+  it("is unaffected by NodeProps fields this component never reads (id, dragging, zIndex)", () => {
+    const a = props({}, { id: "n0", dragging: false, zIndex: 0 });
+    const b = { ...a, id: "n1", dragging: true, zIndex: 7 };
+    expect(artifactNodePropsAreEqual(a, b)).toBe(true);
+  });
+
+  it("returns false when selected changes", () => {
+    const a = props({}, { selected: false });
+    const b = props({}, { selected: true });
+    expect(artifactNodePropsAreEqual(a, b)).toBe(false);
+  });
+
+  it.each([
+    ["artifactContent", { artifactContent: "changed" }],
+    ["isCollapsed", { isCollapsed: true }],
+    ["pendingRequestId", { pendingRequestId: "req-1" }],
+    ["onToggleCollapse", { onToggleCollapse: vi.fn() }],
+    ["onDelete", { onDelete: vi.fn() }],
+    ["onSubmit", { onSubmit: vi.fn() }],
+    ["onCancel", { onCancel: vi.fn() }],
+  ] as const)("returns false when data.%s changes and nothing else does", (_name, override) => {
+    const a = props();
+    // Isolate the change to exactly this one field - everything else
+    // (including every callback reference) stays byte-for-byte identical,
+    // so a false result here can only be attributed to this field.
+    const b = { ...a, data: { ...a.data, ...override } };
+    expect(artifactNodePropsAreEqual(a, b)).toBe(false);
+  });
+
+  it("returns false when history's contents differ, not just its reference", () => {
+    const a = props({ history: [{ role: "user", content: "hi" }] });
+    const b = { ...a, data: { ...a.data, history: [{ role: "user" as const, content: "bye" }] } };
+    expect(artifactNodePropsAreEqual(a, b)).toBe(false);
+  });
+
+  it("returns false when history's length differs", () => {
+    const a = props({ history: [{ role: "user", content: "hi" }] });
+    const b = {
+      ...a,
+      data: { ...a.data, history: [{ role: "user" as const, content: "hi" }, { role: "assistant" as const, content: "hi" }] },
+    };
+    expect(artifactNodePropsAreEqual(a, b)).toBe(false);
+  });
+
+  it("real render: skipped when only an unread NodeProps field changes, and actually happens when selected changes", () => {
+    const p = props({ artifactContent: "hello" }, { selected: false });
+    const { container, rerender } = render(
+      <ReactFlowProvider>
+        <ArtifactNodeView {...p} />
+      </ReactFlowProvider>,
+    );
+    const root = container.querySelector(".scene-node") as HTMLElement;
+    expect(root).not.toBeNull();
+
+    // Corrupt the root element's class list directly, bypassing React - if
+    // the memoized component's render function is never called again, React
+    // never touches this element and the corruption survives.
+    root.className = "CORRUPTED";
+
+    // `dragging` is a real NodeProps field this component never reads -
+    // the comparator must say "equal" here, so no re-render should occur.
+    rerender(
+      <ReactFlowProvider>
+        <ArtifactNodeView {...p} dragging />
+      </ReactFlowProvider>,
+    );
+    expect(root.className).toBe("CORRUPTED");
+
+    // `selected` actually IS read (it drives the "selected" class) - the
+    // comparator must say "not equal" here, forcing a real re-render that
+    // recomputes and resets the class.
+    rerender(
+      <ReactFlowProvider>
+        <ArtifactNodeView {...p} selected />
+      </ReactFlowProvider>,
+    );
+    expect(root.className).not.toBe("CORRUPTED");
+    expect(root.className).toContain("selected");
   });
 });

@@ -5,10 +5,25 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CHAT_CONTENT_COLLAPSED_MAX_HEIGHT,
   ChatNodeView,
+  chatNodePropsAreEqual,
   contentExceedsCollapsedHeight,
   makeDebouncedScrollReport,
   type ChatFlowNode,
 } from "./ChatNodeView";
+import { NodeMarkdown } from "./NodeMarkdown";
+import { WsTransport } from "../../lib/ws/transport";
+
+// ADR-011 stage 11.4: wraps the REAL NodeMarkdown implementation in a
+// vi.fn() spy rather than replacing it - every other test in this file keeps
+// exercising the genuine unified/remark/rehype/KaTeX/highlight pipeline (bold
+// text, GFM tables, the SECURITY raw-HTML-passthrough guards, ...) exactly as
+// before; this only adds call-count instrumentation on top, letting the
+// throttled-streaming tests below assert "re-parsed fewer times than the
+// delta count" without touching what gets rendered.
+vi.mock("./NodeMarkdown", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./NodeMarkdown")>();
+  return { ...actual, NodeMarkdown: vi.fn(actual.NodeMarkdown) };
+});
 
 // R7.5a: jsdom implements neither URL.createObjectURL nor
 // URL.revokeObjectURL - same hand-installed-fakes pattern
@@ -140,7 +155,11 @@ describe("ChatNodeView", () => {
     const user = userEvent.setup();
     const { onDelete } = renderChatNode({ isUser: false });
 
-    const writeText = vi.fn();
+    // Resolves (not a bare vi.fn()) - matches the real Clipboard API's
+    // writeText, which always returns a Promise; ChatNodeMenu now chains
+    // .catch() onto this call (ADR-011 stage 11.1), which would throw on a
+    // mock returning undefined.
+    const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
 
     const role = screen.getByText("Assistant");
@@ -844,15 +863,26 @@ function makeSubscribeStreamMock() {
 
 describe("ChatNodeView live regenerate streaming (ADR-006 stage 6.4)", () => {
   it("subscribes for pendingRequestId and renders accumulated deltas instead of the persisted content", () => {
-    const { subscribeStream, listeners } = makeSubscribeStreamMock();
-    renderChatNode({ content: "old persisted answer", pendingRequestId: "req-1", subscribeStream });
-    expect(subscribeStream).toHaveBeenCalledWith("req-1", expect.any(Function));
-    expect(screen.queryByText("old persisted answer")).toBeNull();
+    // ADR-011 stage 11.4: non-reset/non-done deltas are throttled to a
+    // rAF-scheduled flush rather than applied synchronously - advance past
+    // one frame so the fake-timer-backed requestAnimationFrame fires.
+    vi.useFakeTimers();
+    try {
+      const { subscribeStream, listeners } = makeSubscribeStreamMock();
+      renderChatNode({ content: "old persisted answer", pendingRequestId: "req-1", subscribeStream });
+      expect(subscribeStream).toHaveBeenCalledWith("req-1", expect.any(Function));
+      expect(screen.queryByText("old persisted answer")).toBeNull();
 
-    const listener = listeners.get("req-1")!;
-    act(() => listener("Hello ", false, false, 1));
-    act(() => listener("World", false, false, 2));
-    expect(screen.getByText("Hello World")).toBeInTheDocument();
+      const listener = listeners.get("req-1")!;
+      act(() => listener("Hello ", false, false, 1));
+      act(() => listener("World", false, false, 2));
+      act(() => {
+        vi.advanceTimersByTime(20);
+      });
+      expect(screen.getByText("Hello World")).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("a reset frame clears prior accumulated output before appending", () => {
@@ -882,15 +912,25 @@ describe("ChatNodeView live regenerate streaming (ADR-006 stage 6.4)", () => {
   });
 
   it("shows a waiting placeholder (not a blank body) before the first delta arrives", () => {
-    const { subscribeStream, listeners } = makeSubscribeStreamMock();
-    renderChatNode({ content: "old persisted answer", pendingRequestId: "req-1", subscribeStream });
-    expect(screen.getByText("Waiting for response…")).toBeInTheDocument();
-    expect(screen.queryByText("old persisted answer")).toBeNull();
+    // ADR-011 stage 11.4: same rAF-throttled flush as above - the very
+    // first delta is no exception, so the placeholder only yields once that
+    // flush actually applies it to state.
+    vi.useFakeTimers();
+    try {
+      const { subscribeStream, listeners } = makeSubscribeStreamMock();
+      renderChatNode({ content: "old persisted answer", pendingRequestId: "req-1", subscribeStream });
+      expect(screen.getByText("Waiting for response…")).toBeInTheDocument();
+      expect(screen.queryByText("old persisted answer")).toBeNull();
 
-    // The placeholder yields to real content the moment the first delta lands.
-    act(() => listeners.get("req-1")!("first token", false, false, 1));
-    expect(screen.queryByText("Waiting for response…")).toBeNull();
-    expect(screen.getByText("first token")).toBeInTheDocument();
+      act(() => listeners.get("req-1")!("first token", false, false, 1));
+      act(() => {
+        vi.advanceTimersByTime(20);
+      });
+      expect(screen.queryByText("Waiting for response…")).toBeNull();
+      expect(screen.getByText("first token")).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("renders a Stop button only while a regenerate is in flight, firing onCancelRegenerate", async () => {
@@ -906,6 +946,150 @@ describe("ChatNodeView live regenerate streaming (ADR-006 stage 6.4)", () => {
   it("renders no Stop button when no regenerate is in flight", () => {
     renderChatNode({ pendingRequestId: null });
     expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
+  });
+});
+
+// ADR-011 review-fix (HIGH): onlyRenderVisibleElements virtualization
+// (SceneCanvas.tsx) genuinely UNMOUNTS a live-streaming node's component when
+// it's panned off-screen, then mounts a BRAND NEW instance when panned back.
+// streamedContent used to be plain component-local state seeded from "" with
+// no fallback to any accumulated-so-far value, so every delta broadcast
+// during the unmounted window was silently lost forever - the real fix lives
+// in transport.ts's subscribeStream (a client-side replay buffer, since the
+// server has no subscribe concept of its own to replay from), exercised here
+// through ChatNodeView exactly as production wires it: sceneStore.
+// subscribeStream is a pure passthrough to WsTransport.subscribeStream (see
+// sceneStore.ts's own comment on that method), so this uses the real
+// WsTransport class - not a hand-rolled listener-map stub like
+// makeSubscribeStreamMock above - so the test fails if the fix regresses at
+// either layer.
+class FakeStreamSocket {
+  static instances: FakeStreamSocket[] = [];
+  onopen: (() => void) | null = null;
+  onclose: (() => void) | null = null;
+  onerror: (() => void) | null = null;
+  onmessage: ((event: { data: string }) => void) | null = null;
+  constructor(public url: string) {
+    FakeStreamSocket.instances.push(this);
+  }
+  send() {}
+  close() {
+    this.onclose?.();
+  }
+  open() {
+    this.onopen?.();
+  }
+  receive(message: unknown) {
+    this.onmessage?.({ data: JSON.stringify(message) });
+  }
+}
+
+describe("ChatNodeView live streaming survives virtualization unmount/remount (ADR-011 review-fix)", () => {
+  function streamingProps(subscribeStream: ChatFlowNode["data"]["subscribeStream"]): NodeProps<ChatFlowNode> {
+    return {
+      id: "n0",
+      selected: false,
+      data: {
+        content: "old persisted answer",
+        isUser: false,
+        isCollapsed: false,
+        dockedChildren: [],
+        chatScrollValue: 0,
+        onToggleCollapse: vi.fn(),
+        onDelete: vi.fn(),
+        onUndockChild: vi.fn(),
+        onRegenerate: vi.fn(),
+        onGenerateImage: vi.fn(),
+        onGenerateChart: vi.fn(),
+        onGenerateKeyTakeaway: vi.fn(),
+        onGenerateExplainerNote: vi.fn(),
+        onOpenDocumentView: vi.fn(),
+        onScrollChange: vi.fn(),
+        isBranchFocusActive: false,
+        onToggleBranchFocus: vi.fn(),
+        onBranchFromHere: vi.fn(),
+        branchStatus: "active",
+        isFinalDeliverable: false,
+        onSetBranchStatus: vi.fn(),
+        onSetFinalDeliverable: vi.fn(),
+        onCollapseBranch: vi.fn(),
+        pendingRequestId: "req-1",
+        responseIncomplete: false,
+        subscribeStream,
+        onCancelRegenerate: vi.fn(),
+        toolInvocations: [],
+        promptTokens: null,
+        completionTokens: null,
+        estimatedCostUsd: null,
+        provider: null,
+        model: null,
+        isBranchSynthesis: false,
+        synthesisInstructions: "",
+        synthesisSourceNodeIds: [],
+      },
+    } as unknown as NodeProps<ChatFlowNode>;
+  }
+
+  it("a brand-new mounted instance recovers everything streamed while the previous instance was unmounted, through the real WsTransport", () => {
+    vi.useFakeTimers();
+    try {
+      FakeStreamSocket.instances = [];
+      const transport = new WsTransport("ws://test/ws", {
+        webSocketFactory: (url) => new FakeStreamSocket(url),
+      });
+      transport.connect();
+      const socket = FakeStreamSocket.instances[0];
+      socket.open();
+      const subscribeStream = transport.subscribeStream.bind(transport);
+
+      // Mount #1 - the node is on-screen and a regenerate is streaming in.
+      const { unmount } = render(
+        <ReactFlowProvider>
+          <ChatNodeView {...streamingProps(subscribeStream)} />
+        </ReactFlowProvider>,
+      );
+      act(() => {
+        socket.receive({ kind: "stream", topic: "chat", requestId: "req-1", seq: 0, delta: "Hello ", done: false, reset: false });
+      });
+      act(() => {
+        vi.advanceTimersByTime(20);
+      });
+      expect(screen.getByText("Hello")).toBeInTheDocument();
+
+      // The user pans the node off-screen: React Flow's virtualization
+      // genuinely unmounts this component instance (its effect cleanup
+      // unsubscribes from the stream).
+      unmount();
+
+      // More of the response streams in while the node is off-screen - the
+      // exact window this fix exists for.
+      act(() => {
+        socket.receive({ kind: "stream", topic: "chat", requestId: "req-1", seq: 1, delta: "there, ", done: false, reset: false });
+        socket.receive({ kind: "stream", topic: "chat", requestId: "req-1", seq: 2, delta: "friend!", done: false, reset: false });
+      });
+
+      // The user pans back: a BRAND NEW component instance mounts, with
+      // fresh component-local state (streamedContent re-seeded from "").
+      render(
+        <ReactFlowProvider>
+          <ChatNodeView {...streamingProps(subscribeStream)} />
+        </ReactFlowProvider>,
+      );
+
+      // It must show the FULL text streamed so far - not an empty "Waiting
+      // for response…" placeholder, and not a response that resumes
+      // mid-sentence missing what streamed while off-screen.
+      expect(screen.queryByText("Waiting for response…")).toBeNull();
+      expect(screen.getByText("Hello there, friend!")).toBeInTheDocument();
+
+      // And it keeps receiving live deltas normally afterward.
+      act(() => {
+        socket.receive({ kind: "stream", topic: "chat", requestId: "req-1", seq: 3, delta: " More.", done: true, reset: false });
+      });
+      expect(screen.getByText("Hello there, friend! More.")).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -1009,5 +1193,345 @@ describe("ChatNodeView usage badge (ADR-016 stage 16.2)", () => {
   it("still renders when only one of promptTokens/completionTokens is present", () => {
     renderChatNode({ promptTokens: 50, completionTokens: null, estimatedCostUsd: null });
     expect(screen.getByText("50→?")).toBeInTheDocument();
+  });
+});
+
+// ADR-011 stage 11.1: the React.memo comparator. Direct unit tests of the
+// exported pure function (the same function reference wired into
+// `memo(ChatNodeView, chatNodePropsAreEqual)`) plus one real-render
+// integration test proving the wiring itself is correct.
+describe("ChatNodeView React.memo comparator (ADR-011 stage 11.1)", () => {
+  function chatBaseData(overrides: Partial<ChatFlowNode["data"]> = {}): ChatFlowNode["data"] {
+    return {
+      content: "Hello",
+      isUser: true,
+      isCollapsed: false,
+      dockedChildren: [],
+      chatScrollValue: 0,
+      onToggleCollapse: vi.fn(),
+      onDelete: vi.fn(),
+      onUndockChild: vi.fn(),
+      onRegenerate: vi.fn(),
+      onGenerateImage: vi.fn(),
+      onGenerateChart: vi.fn(),
+      onGenerateKeyTakeaway: vi.fn(),
+      onGenerateExplainerNote: vi.fn(),
+      onOpenDocumentView: vi.fn(),
+      onScrollChange: vi.fn(),
+      isBranchFocusActive: false,
+      onToggleBranchFocus: vi.fn(),
+      onBranchFromHere: vi.fn(),
+      branchStatus: "active",
+      isFinalDeliverable: false,
+      onSetBranchStatus: vi.fn(),
+      onSetFinalDeliverable: vi.fn(),
+      onCollapseBranch: vi.fn(),
+      pendingRequestId: null,
+      responseIncomplete: false,
+      subscribeStream: vi.fn().mockReturnValue(vi.fn()),
+      onCancelRegenerate: vi.fn(),
+      toolInvocations: [],
+      promptTokens: null,
+      completionTokens: null,
+      estimatedCostUsd: null,
+      provider: null,
+      model: null,
+      isBranchSynthesis: false,
+      synthesisInstructions: "",
+      synthesisSourceNodeIds: [],
+      ...overrides,
+    };
+  }
+
+  function props(overrides: Partial<ChatFlowNode["data"]> = {}, propOverrides: Record<string, unknown> = {}) {
+    return {
+      id: "n0",
+      selected: false,
+      data: chatBaseData(overrides),
+      ...propOverrides,
+    } as unknown as NodeProps<ChatFlowNode>;
+  }
+
+  it("treats identical props as equal", () => {
+    const p = props();
+    expect(chatNodePropsAreEqual(p, { ...p })).toBe(true);
+  });
+
+  it("is unaffected by chatScrollValue (read only once, on mount) or unread NodeProps fields (dragging, zIndex)", () => {
+    const a = props({ chatScrollValue: 0 }, { dragging: false, zIndex: 0 });
+    const b = { ...a, data: { ...a.data, chatScrollValue: 900 }, dragging: true, zIndex: 9 };
+    expect(chatNodePropsAreEqual(a, b)).toBe(true);
+  });
+
+  it("returns false when id changes", () => {
+    const a = props({}, { id: "n0" });
+    const b = { ...a, id: "n1" };
+    expect(chatNodePropsAreEqual(a, b)).toBe(false);
+  });
+
+  it("returns false when selected changes", () => {
+    const a = props({}, { selected: false });
+    const b = { ...a, selected: true };
+    expect(chatNodePropsAreEqual(a, b)).toBe(false);
+  });
+
+  it.each([
+    ["content", { content: "changed" }],
+    ["isUser", { isUser: false }],
+    ["isCollapsed", { isCollapsed: true }],
+    ["isBranchFocusActive", { isBranchFocusActive: true }],
+    ["branchStatus", { branchStatus: "accepted" }],
+    ["isFinalDeliverable", { isFinalDeliverable: true }],
+    ["provider", { provider: "anthropic" }],
+    ["model", { model: "claude-opus-4-1" }],
+    ["isBranchSynthesis", { isBranchSynthesis: true }],
+    ["synthesisInstructions", { synthesisInstructions: "merge these" }],
+    ["pendingRequestId", { pendingRequestId: "req-1" }],
+    ["responseIncomplete", { responseIncomplete: true }],
+    ["promptTokens", { promptTokens: 10 }],
+    ["completionTokens", { completionTokens: 10 }],
+    ["estimatedCostUsd", { estimatedCostUsd: 0.01 }],
+    ["onToggleCollapse", { onToggleCollapse: vi.fn() }],
+    ["onDelete", { onDelete: vi.fn() }],
+    ["onUndockChild", { onUndockChild: vi.fn() }],
+    ["onRegenerate", { onRegenerate: vi.fn() }],
+    ["onGenerateImage", { onGenerateImage: vi.fn() }],
+    ["onGenerateChart", { onGenerateChart: vi.fn() }],
+    ["onGenerateKeyTakeaway", { onGenerateKeyTakeaway: vi.fn() }],
+    ["onGenerateExplainerNote", { onGenerateExplainerNote: vi.fn() }],
+    ["onOpenDocumentView", { onOpenDocumentView: vi.fn() }],
+    ["onScrollChange", { onScrollChange: vi.fn() }],
+    ["onToggleBranchFocus", { onToggleBranchFocus: vi.fn() }],
+    ["onBranchFromHere", { onBranchFromHere: vi.fn() }],
+    ["onSetBranchStatus", { onSetBranchStatus: vi.fn() }],
+    ["onSetFinalDeliverable", { onSetFinalDeliverable: vi.fn() }],
+    ["onCollapseBranch", { onCollapseBranch: vi.fn() }],
+    ["onCancelRegenerate", { onCancelRegenerate: vi.fn() }],
+    ["subscribeStream", { subscribeStream: vi.fn() }],
+  ] as const)("returns false when data.%s changes and nothing else does", (_name, override) => {
+    const a = props();
+    const b = { ...a, data: { ...a.data, ...override } };
+    expect(chatNodePropsAreEqual(a, b)).toBe(false);
+  });
+
+  describe("array-shaped fields get an element-by-element compare, not a bare reference check", () => {
+    it("dockedChildren: fresh-but-identical array is equal; differing contents or length are not", () => {
+      const a = props({ dockedChildren: [{ id: "d1", label: "Thinking" }] });
+      const bEqual = { ...a, data: { ...a.data, dockedChildren: [{ id: "d1", label: "Thinking" }] } };
+      expect(a.data.dockedChildren).not.toBe(bEqual.data.dockedChildren);
+      expect(chatNodePropsAreEqual(a, bEqual)).toBe(true);
+
+      const bContentDiff = { ...a, data: { ...a.data, dockedChildren: [{ id: "d1", label: "Different" }] } };
+      expect(chatNodePropsAreEqual(a, bContentDiff)).toBe(false);
+
+      const bLengthDiff = {
+        ...a,
+        data: { ...a.data, dockedChildren: [{ id: "d1", label: "Thinking" }, { id: "d2", label: "Other" }] },
+      };
+      expect(chatNodePropsAreEqual(a, bLengthDiff)).toBe(false);
+    });
+
+    it("toolInvocations: fresh-but-identical array is equal; differing contents or length are not", () => {
+      const invocation = { id: "call_1", name: "search", argumentsJson: "{}", result: "ok", isError: false };
+      const a = props({ toolInvocations: [invocation] });
+      const bEqual = { ...a, data: { ...a.data, toolInvocations: [{ ...invocation }] } };
+      expect(a.data.toolInvocations).not.toBe(bEqual.data.toolInvocations);
+      expect(chatNodePropsAreEqual(a, bEqual)).toBe(true);
+
+      const bContentDiff = { ...a, data: { ...a.data, toolInvocations: [{ ...invocation, isError: true }] } };
+      expect(chatNodePropsAreEqual(a, bContentDiff)).toBe(false);
+
+      const bLengthDiff = { ...a, data: { ...a.data, toolInvocations: [invocation, invocation] } };
+      expect(chatNodePropsAreEqual(a, bLengthDiff)).toBe(false);
+    });
+
+    it("synthesisSourceNodeIds: fresh-but-identical array is equal; differing contents or length are not", () => {
+      const a = props({ synthesisSourceNodeIds: ["n1", "n2"] });
+      const bEqual = { ...a, data: { ...a.data, synthesisSourceNodeIds: ["n1", "n2"] } };
+      expect(a.data.synthesisSourceNodeIds).not.toBe(bEqual.data.synthesisSourceNodeIds);
+      expect(chatNodePropsAreEqual(a, bEqual)).toBe(true);
+
+      const bContentDiff = { ...a, data: { ...a.data, synthesisSourceNodeIds: ["n1", "n3"] } };
+      expect(chatNodePropsAreEqual(a, bContentDiff)).toBe(false);
+
+      const bLengthDiff = { ...a, data: { ...a.data, synthesisSourceNodeIds: ["n1", "n2", "n3"] } };
+      expect(chatNodePropsAreEqual(a, bLengthDiff)).toBe(false);
+    });
+  });
+
+  it("real render: skipped when only an unread field (chatScrollValue) changes", () => {
+    const p = props({ content: "v1" }, { selected: false });
+    const { container, rerender } = render(
+      <ReactFlowProvider>
+        <ChatNodeView {...p} />
+      </ReactFlowProvider>,
+    );
+    const root = container.querySelector(".scene-node") as HTMLElement;
+    expect(root).not.toBeNull();
+
+    root.className = "CORRUPTED";
+
+    // chatScrollValue is read only inside the mount-only scroll-restore
+    // effect - the comparator must say "equal", so no re-render should
+    // occur here.
+    rerender(
+      <ReactFlowProvider>
+        <ChatNodeView {...p} data={{ ...p.data, chatScrollValue: 500 }} />
+      </ReactFlowProvider>,
+    );
+    expect(root.className).toBe("CORRUPTED");
+  });
+
+  // Review-fix: this test's own title used to claim "...and actually happens
+  // when content changes" while its body only ever changed `selected` - a
+  // real re-render, but not the one the title advertised. content DOES flow
+  // through the mounted component here (unlike chatNodePropsAreEqual's own
+  // pure-function it.each table above, which calls the comparator directly
+  // and never mounts anything), closing the gap between "the comparator
+  // returns false for a content diff" (proven above) and "a live component
+  // actually re-renders when content changes" (proven here).
+  it("real render: actually happens when content changes", () => {
+    // Deliberately NOT the className-corruption trick the two tests above
+    // use (mutate the DOM directly, then check a real re-render overwrites
+    // it): that only proves something when the changed prop actually feeds
+    // the className expression (selected/collapsed do; content does not),
+    // so it would pass here even with NO re-render at all - React skips
+    // reassigning a DOM attribute whose newly-computed value is unchanged
+    // from the fiber's last-rendered value, corrupted or not. Asserting on
+    // the rendered TEXT itself is the direct, unambiguous proof that a real
+    // re-render happened with the new content.
+    const p = props({ content: "v1" }, { selected: false });
+    const { rerender } = render(
+      <ReactFlowProvider>
+        <ChatNodeView {...p} />
+      </ReactFlowProvider>,
+    );
+    expect(screen.getByText("v1")).toBeInTheDocument();
+
+    rerender(
+      <ReactFlowProvider>
+        <ChatNodeView {...p} data={{ ...p.data, content: "v2" }} />
+      </ReactFlowProvider>,
+    );
+    expect(screen.getByText("v2")).toBeInTheDocument();
+    expect(screen.queryByText("v1")).toBeNull();
+  });
+
+  it("real render: also happens when selected changes", () => {
+    const p = props({ content: "v1" }, { selected: false });
+    const { container, rerender } = render(
+      <ReactFlowProvider>
+        <ChatNodeView {...p} />
+      </ReactFlowProvider>,
+    );
+    const root = container.querySelector(".scene-node") as HTMLElement;
+    root.className = "CORRUPTED";
+
+    rerender(
+      <ReactFlowProvider>
+        <ChatNodeView {...p} selected />
+      </ReactFlowProvider>,
+    );
+    expect(root.className).not.toBe("CORRUPTED");
+    expect(root.className).toContain("selected");
+  });
+});
+
+// ADR-011 stage 11.4: throttled in-node streaming markdown parse.
+describe("ChatNodeView throttled streaming markdown parse (ADR-011 stage 11.4)", () => {
+  it("coalesces a rapid burst of deltas into fewer markdown re-parses than the delta count, with the final text byte-identical to the un-throttled concatenation of every delta in order", () => {
+    vi.useFakeTimers();
+    try {
+      const { subscribeStream, listeners } = makeSubscribeStreamMock();
+      renderChatNode({ pendingRequestId: "req-1", subscribeStream });
+      const listener = listeners.get("req-1")!;
+
+      const NodeMarkdownMock = NodeMarkdown as unknown as ReturnType<typeof vi.fn>;
+      const callsBeforeBurst = NodeMarkdownMock.mock.calls.length;
+
+      // Leading (not trailing) space on every word after the first, so the
+      // final text has no trailing whitespace for the markdown paragraph
+      // renderer to trim - that trimming is a pre-existing, throttle-
+      // unrelated quirk of how remark serializes paragraph text, and
+      // stripping trailing spaces here keeps this test's "byte-identical"
+      // claim tied to the actual property under test (delta order/
+      // completeness) rather than an unrelated whitespace nuance.
+      const deltaCount = 50;
+      let expectedFullText = "";
+      act(() => {
+        for (let i = 0; i < deltaCount; i++) {
+          const delta = i === 0 ? `w${i}` : ` w${i}`;
+          expectedFullText += delta;
+          listener(delta, false, false, i + 1);
+        }
+      });
+
+      // The entire burst landed inside one synchronous batch, before the
+      // rAF-scheduled flush below ever fires - not one delta has re-parsed
+      // yet (proves accumulation happens in a ref, not via setState per
+      // delta).
+      expect(NodeMarkdownMock.mock.calls.length).toBe(callsBeforeBurst);
+      expect(screen.queryByText(/w0/)).toBeNull();
+
+      act(() => {
+        vi.advanceTimersByTime(20); // flushes the one scheduled rAF callback
+      });
+
+      const callsAfterFlush = NodeMarkdownMock.mock.calls.length;
+      const reparseCount = callsAfterFlush - callsBeforeBurst;
+      expect(reparseCount).toBeGreaterThan(0); // it did eventually flush...
+      expect(reparseCount).toBeLessThan(deltaCount); // ...far fewer times than the delta count
+
+      // No byte dropped or reordered: every delta, in order, still lands in
+      // the rendered content exactly.
+      const contentEl = document.querySelector(".chat-node-content");
+      expect(contentEl?.textContent).toBe(expectedFullText);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("flushes the final chunk immediately on stream completion (done=true) rather than waiting for the next frame", () => {
+    vi.useFakeTimers();
+    try {
+      const { subscribeStream, listeners } = makeSubscribeStreamMock();
+      renderChatNode({ pendingRequestId: "req-1", subscribeStream });
+      const listener = listeners.get("req-1")!;
+
+      act(() => {
+        listener("partial ", false, false, 1);
+        listener("final chunk", true, false, 2); // done=true
+      });
+
+      // No vi.advanceTimersByTime() call - completion must flush
+      // synchronously, not on the next rAF frame.
+      expect(screen.getByText("partial final chunk")).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("never strands a trailing buffered chunk when pendingRequestId changes away mid-stream", () => {
+    vi.useFakeTimers();
+    try {
+      const { subscribeStream, listeners } = makeSubscribeStreamMock();
+      const { rerenderWithData } = renderChatNode({ pendingRequestId: "req-1", subscribeStream });
+      const listener = listeners.get("req-1")!;
+
+      act(() => {
+        listener("buffered but not yet flushed", false, false, 1);
+      });
+      // Still un-flushed (no timer advance) - about to switch away from this
+      // request entirely.
+      rerenderWithData({ pendingRequestId: null, content: "final persisted answer" });
+
+      // The unsubscribe cleanup's own flush (and the render-time subscribed-
+      // request reset) leaves nothing stuck mid-flight - the node falls back
+      // cleanly to the persisted content, not a half-applied streamed value.
+      expect(screen.getByText("final persisted answer")).toBeInTheDocument();
+      expect(screen.queryByText(/buffered but not yet flushed/)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

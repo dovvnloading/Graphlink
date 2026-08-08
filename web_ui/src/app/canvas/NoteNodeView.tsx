@@ -1,5 +1,5 @@
 import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
-import { useRef, useState } from "react";
+import { memo, useRef, useState } from "react";
 import { GroupColorPicker, NOTE_SYSTEM_PROMPT_BORDER_COLOR } from "./GroupColorPicker";
 import { NodeMarkdown } from "./NodeMarkdown";
 
@@ -50,7 +50,7 @@ export interface NoteNodeData extends Record<string, unknown> {
 
 export type NoteFlowNode = Node<NoteNodeData, "note">;
 
-export function NoteNodeView({ data, selected }: NodeProps<NoteFlowNode>) {
+function NoteNodeViewImpl({ data, selected }: NodeProps<NoteFlowNode>) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(data.content);
   // Suppresses the redundant onBlur commit that fires when Escape/Enter
@@ -165,3 +165,47 @@ export function NoteNodeView({ data, selected }: NodeProps<NoteFlowNode>) {
     </div>
   );
 }
+
+/** Order-sensitive elementwise compare - `compareSourceNodeIds` is the one
+ * array field on NoteNodeData, and toFlowNodes may mint a fresh array
+ * instance even when its contents haven't changed, so a plain `===` here
+ * would be "too tight" (defeats memoization for every branch-comparison note
+ * on every unrelated snapshot). */
+function stringArraysEqual(a: readonly string[], b: readonly string[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
+/** ADR-011 stage 11.1: every prop this view actually reads - it never
+ * destructures `id`, so it is intentionally absent here (this instance never
+ * receives a changed `id` without React Flow remounting it under a new key
+ * anyway). Every other `data` field is compared; `compareSourceNodeIds` gets
+ * the shape-aware array compare above instead of `===`, everything else here
+ * is a primitive or stable callback reference. */
+function noteNodeDataAreEqual(prev: NoteNodeData, next: NoteNodeData): boolean {
+  return (
+    prev.content === next.content &&
+    prev.color === next.color &&
+    prev.headerColor === next.headerColor &&
+    prev.isSystemPrompt === next.isSystemPrompt &&
+    prev.isSummaryNote === next.isSummaryNote &&
+    prev.isBranchComparison === next.isBranchComparison &&
+    stringArraysEqual(prev.compareSourceNodeIds, next.compareSourceNodeIds) &&
+    prev.onSetContent === next.onSetContent &&
+    prev.onSetColor === next.onSetColor &&
+    prev.onDelete === next.onDelete
+  );
+}
+
+function noteNodePropsAreEqual(
+  prev: Readonly<NodeProps<NoteFlowNode>>,
+  next: Readonly<NodeProps<NoteFlowNode>>,
+): boolean {
+  return prev.selected === next.selected && noteNodeDataAreEqual(prev.data, next.data);
+}
+
+export const NoteNodeView = memo(NoteNodeViewImpl, noteNodePropsAreEqual);

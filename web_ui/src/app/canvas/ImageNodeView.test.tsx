@@ -2,6 +2,27 @@ import { ReactFlowProvider, type NodeProps } from "@xyflow/react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// ADR-011 stage 11.1: wraps the real useLodVisibility so every ACTUAL
+// invocation (mount or re-render) is countable - a React.memo bailout skips
+// calling ImageNodeView's function body entirely, so this hook (called
+// unconditionally on every real render) never fires during a bailed
+// re-render. This is the same "mock-wrap-and-delegate" technique
+// renderCountGate.test.tsx uses on ChatNodeView, applied at hook
+// granularity instead of whole-component granularity.
+const lodVisibilityCalls = { count: 0 };
+
+vi.mock("./useLodVisibility", async (importOriginal) => {
+  const original = await importOriginal<typeof import("./useLodVisibility")>();
+  return {
+    ...original,
+    useLodVisibility: (...args: Parameters<typeof original.useLodVisibility>) => {
+      lodVisibilityCalls.count += 1;
+      return original.useLodVisibility(...args);
+    },
+  };
+});
+
 import { ImageNodeView, type ImageFlowNode } from "./ImageNodeView";
 
 // Rendered directly (not through a real <ReactFlow nodes=.../> mount) - see
@@ -282,5 +303,88 @@ describe("ImageNodeView", () => {
     expect(screen.getByRole("menu")).toBeInTheDocument();
     await user.click(document.body);
     expect(screen.queryByRole("menu")).toBeNull();
+  });
+});
+
+// ADR-011 stage 11.1: React.memo comparator correctness. `lodVisibilityCalls`
+// (see the mock above) fires exactly once per ACTUAL render of this view -
+// never on a bailed-out one - so it's the oracle for both directions: it
+// must stay flat across an irrelevant/equivalent prop change (too-tight
+// would fail this) and must increment on a change to a prop the view
+// actually reads (too-loose would fail this).
+describe("ImageNodeView React.memo comparator (ADR-011 stage 11.1)", () => {
+  beforeEach(() => {
+    lodVisibilityCalls.count = 0;
+  });
+
+  function baseImageProps(overrides: Partial<ImageFlowNode["data"]> = {}) {
+    const data = {
+      imageAssetId: "asset-1",
+      prompt: "a fox",
+      onDelete: vi.fn(),
+      onRegenerate: vi.fn(),
+      isBranchFocusActive: false,
+      onToggleBranchFocus: vi.fn(),
+      ...overrides,
+    };
+    return { id: "n0", selected: false, data } as unknown as NodeProps<ImageFlowNode>;
+  }
+
+  it("skips re-rendering when a fresh `data` object carries identical field values", () => {
+    const props = baseImageProps();
+    const { rerender } = render(
+      <ReactFlowProvider>
+        <ImageNodeView {...props} />
+      </ReactFlowProvider>,
+    );
+    expect(lodVisibilityCalls.count).toBe(1);
+
+    // A brand-new object, same primitives and same callback references -
+    // exactly what toFlowNodes may mint on an unrelated snapshot. A naive
+    // `data === nextData` reference compare (or React.memo's default
+    // shallow-props compare, which would see a new `data` prop identity)
+    // would wrongly re-render here.
+    const sameValuesNewObject = { ...props.data };
+    rerender(
+      <ReactFlowProvider>
+        <ImageNodeView {...{ ...props, data: sameValuesNewObject }} />
+      </ReactFlowProvider>,
+    );
+    expect(lodVisibilityCalls.count).toBe(1);
+  });
+
+  it("re-renders when `prompt` (a field the view reads) changes", () => {
+    const props = baseImageProps({ prompt: "a fox" });
+    const { rerender } = render(
+      <ReactFlowProvider>
+        <ImageNodeView {...props} />
+      </ReactFlowProvider>,
+    );
+    expect(lodVisibilityCalls.count).toBe(1);
+
+    rerender(
+      <ReactFlowProvider>
+        <ImageNodeView {...{ ...props, data: { ...props.data, prompt: "a different fox" } }} />
+      </ReactFlowProvider>,
+    );
+    expect(lodVisibilityCalls.count).toBe(2);
+    expect(screen.getByText("a different fox")).toBeInTheDocument();
+  });
+
+  it("re-renders when a callback prop is rebound to a new closure (e.g. onDelete)", () => {
+    const props = baseImageProps();
+    const { rerender } = render(
+      <ReactFlowProvider>
+        <ImageNodeView {...props} />
+      </ReactFlowProvider>,
+    );
+    expect(lodVisibilityCalls.count).toBe(1);
+
+    rerender(
+      <ReactFlowProvider>
+        <ImageNodeView {...{ ...props, data: { ...props.data, onDelete: vi.fn() } }} />
+      </ReactFlowProvider>,
+    );
+    expect(lodVisibilityCalls.count).toBe(2);
   });
 });

@@ -200,6 +200,28 @@ export class WsTransport {
   /** Keyed by requestId - stream deltas are addressed to a specific in-flight
    * request, not a topic. See handleMessage()'s "stream" branch. */
   private readonly streamListeners = new Map<string, Set<StreamListener>>();
+  /** ADR-011 review-fix: the full text accumulated so far for a still-in-
+   * flight request, keyed by requestId like streamListeners - but a
+   * deliberately SEPARATE map that does NOT get cleared when a requestId's
+   * listener set goes empty (streamListeners itself deletes its entry the
+   * moment that happens - see subscribeStream()'s unsubscribe closure).
+   * ADR-011's onlyRenderVisibleElements virtualization (SceneCanvas.tsx) can
+   * genuinely unmount a live-streaming node's component (ChatNodeView/
+   * ConversationNodeView/CodeSandboxNodeView) when it's panned off-screen,
+   * then mount a BRAND NEW instance when it's panned back - and this class
+   * has no server-side subscribe concept to replay from ("the server
+   * broadcasts stream frames to every connection unconditionally", see this
+   * method's own doc below), so without a client-side buffer every delta
+   * broadcast during the unmounted window is lost forever. Updated on every
+   * inbound stream frame regardless of whether anyone is currently
+   * subscribed (handleMessage's "stream" branch), and replayed to a
+   * newly-subscribing listener as a synthetic reset frame (subscribeStream
+   * below) - the same "deliver current state on subscribe" contract
+   * onStatus()/onVersionRejection() already establish elsewhere in this
+   * file. Cleared once the request completes (`done`): after that point the
+   * persisted `content` field is the source of truth for a (re)mounted
+   * component, so nothing is left to replay. */
+  private readonly streamBuffers = new Map<string, { text: string; seq: number }>();
   /** ADR-003 stage 3.4: keyed by topic, like stateListeners, but a separate
    * Map rather than a widened StateListener signature - mirroring how
    * streamListeners is already its own parallel registry. A topic can have
@@ -398,6 +420,18 @@ export class WsTransport {
       this.streamListeners.set(requestId, set);
     }
     set.add(listener);
+    // ADR-011 review-fix: replay whatever has accumulated so far as a
+    // synthetic reset frame - the exact case this exists for is a
+    // component that unmounted (virtualization scrolled it off-screen) and
+    // has just remounted while the SAME request is still streaming; without
+    // this, every delta broadcast during the unmounted window (see
+    // streamBuffers' own doc above) is silently lost. A brand-new
+    // subscriber for a request nothing has streamed for yet finds no
+    // buffered entry and gets no replay, identical to today's behavior.
+    const buffered = this.streamBuffers.get(requestId);
+    if (buffered && buffered.text) {
+      listener(buffered.text, false, true, buffered.seq);
+    }
     return () => {
       set.delete(listener);
       if (set.size === 0) this.streamListeners.delete(requestId);
@@ -778,15 +812,32 @@ export class WsTransport {
       return;
     }
     if (kind === "stream") {
-      // A stream frame with no matching requestId subscriber is silently
-      // dropped - unlike a truly unrecognized kind below, this is an
-      // expected, routine occurrence (e.g. a request already completed and
-      // unsubscribed a moment before a straggling frame arrives).
+      // A stream frame with no matching requestId subscriber has nothing to
+      // dispatch to right now - unlike a truly unrecognized kind below, this
+      // is an expected, routine occurrence (e.g. a request already completed
+      // and unsubscribed a moment before a straggling frame arrives, or a
+      // node currently scrolled out of the virtualized viewport - see
+      // streamBuffers' own doc). It is still buffered below so a listener
+      // that (re)subscribes later can catch up.
       const requestId = message.requestId as string;
+      const delta = message.delta as string;
+      const done = Boolean(message.done);
+      const reset = Boolean(message.reset);
+      const seq = message.seq as number;
+      if (done) {
+        // The request is finished - `content` (persisted server-side) is
+        // the source of truth for any component that mounts from here on,
+        // so nothing is left to replay.
+        this.streamBuffers.delete(requestId);
+      } else {
+        const existing = this.streamBuffers.get(requestId);
+        const text = reset || !existing ? delta : existing.text + delta;
+        this.streamBuffers.set(requestId, { text, seq });
+      }
       const listeners = this.streamListeners.get(requestId);
       if (listeners) {
         for (const listener of [...listeners]) {
-          listener(message.delta as string, Boolean(message.done), Boolean(message.reset), message.seq as number);
+          listener(delta, done, reset, seq);
         }
       }
       return;

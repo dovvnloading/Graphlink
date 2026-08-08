@@ -38,6 +38,35 @@ export default defineConfig({
   build: {
     outDir: resolve(__dirname, "dist/app"),
     emptyOutDir: true,
-    sourcemap: false,
+    // ADR-011 stage 11.6: "hidden" writes real .js.map files (so a
+    // maintainer can load one into a debugger / symbolicate a stack trace
+    // pulled from the logs) without emitting a `//# sourceMappingURL`
+    // comment in the shipped .js - the pywebview shell's own devtools never
+    // auto-fetch them, and nothing about this desktop app's distribution
+    // model treats the source as secret (the dist bundle already ships the
+    // equivalent of the source client-side, readable via view-source, same
+    // as any other unminified-by-choice web app). Plain `true` would be
+    // fine functionally too; "hidden" is strictly better here since it
+    // costs nothing and avoids advertising the map to anything that just
+    // happens to load the built HTML in a normal browser tab.
+    sourcemap: "hidden",
+    rollupOptions: {
+      output: {
+        // ADR-011 stage 11.6: NodeMarkdown.tsx (every chat-bearing node
+        // view's shared markdown renderer, itself eagerly rendered - not a
+        // React.lazy boundary, so nothing splits it out automatically) is
+        // the ONLY thing in the app that imports katex/rehype-katex or
+        // highlight.js/rehype-highlight. Both are large (katex's parser +
+        // fonts-adjacent JS, highlight.js's grammar table) and otherwise
+        // land in the single main chunk just because one eagerly-rendered
+        // node view uses markdown - manualChunks forces them into their own
+        // chunks instead, so the main chunk's floor isn't set by two
+        // dependencies most sessions may only use through node text.
+        manualChunks: {
+          katex: ["katex", "rehype-katex"],
+          "highlight.js": ["highlight.js", "rehype-highlight"],
+        },
+      },
+    },
   },
 });

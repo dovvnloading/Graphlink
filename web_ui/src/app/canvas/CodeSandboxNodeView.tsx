@@ -1,10 +1,11 @@
-import { Handle, Position, useStore, type Node, type NodeProps } from "@xyflow/react";
-import { useEffect, useState } from "react";
+import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
+import { memo, useEffect, useState } from "react";
 import type { StreamListener } from "../../lib/ws/transport";
-import { LOD_ZOOM_THRESHOLD } from "./canvasConstants";
 import { CodeExecutionApprovalPanel } from "./CodeExecutionApprovalPanel";
+import type { MenuPosition } from "./menuPosition";
 import { NodeMarkdown } from "./NodeMarkdown";
 import { NodeMenu } from "./NodeMenu";
+import { useLodVisibility } from "./useLodVisibility";
 
 /**
  * The Virtual Environment Runner node (Qt-removal plan R5.4, renamed under
@@ -80,11 +81,6 @@ export interface CodeSandboxNodeData extends Record<string, unknown> {
 
 export type CodeSandboxFlowNode = Node<CodeSandboxNodeData, "code_sandbox">;
 
-interface MenuPosition {
-  x: number;
-  y: number;
-}
-
 /** Same outside-click/Escape dismiss pattern every sibling node menu uses
  * (ChatNodeMenu/ArtifactNodeMenu/GitlinkNodeMenu/PyCoderNodeMenu/...). */
 // -- card-level menu -------------------------------------------------------
@@ -138,9 +134,58 @@ function toPythonFence(code: string): string {
 
 // -- view ----------------------------------------------------------------
 
-export function CodeSandboxNodeView({ id, data, selected }: NodeProps<CodeSandboxFlowNode>) {
-  const zoom = useStore((s) => s.transform[2]);
-  const lodCollapsed = zoom < LOD_ZOOM_THRESHOLD;
+/** ADR-011 stage 11.1: React.memo comparator - id (read into
+ * CodeExecutionApprovalPanel's own nodeId), selected, and every
+ * CodeSandboxNodeData field this component actually reads on every render,
+ * including every callback prop. Every field on this data shape is a
+ * primitive or a function - none is array/object-shaped, so a plain `===`
+ * per field is correct as-is.
+ *
+ * codeSandboxRequirements and codeSandboxPrompt are deliberately excluded:
+ * both are read ONLY as a `useState(...)` initializer (requirementsDraft/
+ * promptDraft below), and a useState initializer is evaluated exactly once,
+ * on the component's first mount - by the time this comparator ever runs
+ * (on a RE-render), that value has already been consumed and the local draft
+ * lives independently of it from then on. Comparing them here would only
+ * force spurious re-renders while the user is actively typing elsewhere on
+ * the scene (every snapshot re-mints the wire value these fields started
+ * from), with no staleness this component could otherwise show. */
+export function codeSandboxNodePropsAreEqual(
+  prev: NodeProps<CodeSandboxFlowNode>,
+  next: NodeProps<CodeSandboxFlowNode>,
+): boolean {
+  if (prev.id !== next.id || prev.selected !== next.selected) return false;
+  const a = prev.data;
+  const b = next.data;
+  return (
+    a.codeSandboxApprovalRequirements === b.codeSandboxApprovalRequirements &&
+    a.codeSandboxApprovalAllowSourceBuilds === b.codeSandboxApprovalAllowSourceBuilds &&
+    a.codeSandboxApprovalIsRepair === b.codeSandboxApprovalIsRepair &&
+    a.codeSandboxCode === b.codeSandboxCode &&
+    a.codeSandboxOutput === b.codeSandboxOutput &&
+    a.codeSandboxAnalysis === b.codeSandboxAnalysis &&
+    a.codeSandboxAwaitingApproval === b.codeSandboxAwaitingApproval &&
+    a.codeSandboxError === b.codeSandboxError &&
+    a.isCollapsed === b.isCollapsed &&
+    a.pendingRequestId === b.pendingRequestId &&
+    a.onSetRequirements === b.onSetRequirements &&
+    a.onToggleAllowSourceBuilds === b.onToggleAllowSourceBuilds &&
+    a.onRun === b.onRun &&
+    a.onCancel === b.onCancel &&
+    a.onApprove === b.onApprove &&
+    a.onDeny === b.onDeny &&
+    a.onToggleCollapse === b.onToggleCollapse &&
+    a.onDelete === b.onDelete &&
+    a.subscribeStream === b.subscribeStream
+  );
+}
+
+export const CodeSandboxNodeView = memo(function CodeSandboxNodeView({
+  id,
+  data,
+  selected,
+}: NodeProps<CodeSandboxFlowNode>) {
+  const lodCollapsed = useLodVisibility();
   const collapsed = data.isCollapsed || lodCollapsed;
   const [menuPosition, setMenuPosition] = useState<MenuPosition | null>(null);
 
@@ -361,4 +406,4 @@ export function CodeSandboxNodeView({ id, data, selected }: NodeProps<CodeSandbo
       )}
     </div>
   );
-}
+}, codeSandboxNodePropsAreEqual);

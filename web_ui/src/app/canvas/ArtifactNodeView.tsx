@@ -1,8 +1,9 @@
-import { Handle, Position, useStore, type Node, type NodeProps } from "@xyflow/react";
-import { useState } from "react";
-import { LOD_ZOOM_THRESHOLD } from "./canvasConstants";
+import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
+import { memo, useState } from "react";
+import type { MenuPosition } from "./menuPosition";
 import { NodeMarkdown } from "./NodeMarkdown";
 import { NodeMenu } from "./NodeMenu";
+import { useLodVisibility } from "./useLodVisibility";
 
 /**
  * The artifact node (Qt-removal plan R5.2) - the Artifact/Drafter plugin's
@@ -54,11 +55,6 @@ export interface ArtifactNodeData extends Record<string, unknown> {
 }
 
 export type ArtifactFlowNode = Node<ArtifactNodeData, "artifact">;
-
-interface MenuPosition {
-  x: number;
-  y: number;
-}
 
 /** Same outside-click/Escape dismiss pattern every sibling node menu uses
  * (ChatNodeMenu/ThinkingNodeMenu/DocumentNodeMenu/ConversationNodeMenu/
@@ -123,9 +119,47 @@ function ArtifactBubble({ message }: { message: ArtifactMessage }) {
 
 // -- view ----------------------------------------------------------------
 
-export function ArtifactNodeView({ data, selected }: NodeProps<ArtifactFlowNode>) {
-  const zoom = useStore((s) => s.transform[2]);
-  const lodCollapsed = zoom < LOD_ZOOM_THRESHOLD;
+function historyEqual(a: ArtifactMessage[], b: ArtifactMessage[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i].role !== b[i].role || a[i].content !== b[i].content) return false;
+  }
+  return true;
+}
+
+/** ADR-011 stage 11.1: React.memo comparator - every ArtifactNodeData field
+ * this component actually reads (including every callback), plus `selected`.
+ * `id` is deliberately not compared - this component never destructures/reads
+ * NodeProps.id. `history` is the one array-shaped field: a bare `===` would
+ * make this comparator too tight (a fresh-but-value-identical array minted
+ * by an upstream rebuild would force a re-render even though nothing this
+ * node cares about changed), so it gets an element-by-element compare
+ * instead. */
+export function artifactNodePropsAreEqual(
+  prev: NodeProps<ArtifactFlowNode>,
+  next: NodeProps<ArtifactFlowNode>,
+): boolean {
+  if (prev.selected !== next.selected) return false;
+  const a = prev.data;
+  const b = next.data;
+  return (
+    a.artifactContent === b.artifactContent &&
+    a.isCollapsed === b.isCollapsed &&
+    a.pendingRequestId === b.pendingRequestId &&
+    a.onToggleCollapse === b.onToggleCollapse &&
+    a.onDelete === b.onDelete &&
+    a.onSubmit === b.onSubmit &&
+    a.onCancel === b.onCancel &&
+    historyEqual(a.history, b.history)
+  );
+}
+
+export const ArtifactNodeView = memo(function ArtifactNodeView({
+  data,
+  selected,
+}: NodeProps<ArtifactFlowNode>) {
+  const lodCollapsed = useLodVisibility();
   const collapsed = data.isCollapsed || lodCollapsed;
   const [menuPosition, setMenuPosition] = useState<MenuPosition | null>(null);
   // Local, ephemeral instruction draft - starts empty and is never re-synced
@@ -243,4 +277,4 @@ export function ArtifactNodeView({ data, selected }: NodeProps<ArtifactFlowNode>
       )}
     </div>
   );
-}
+}, artifactNodePropsAreEqual);
