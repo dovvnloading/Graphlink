@@ -59,6 +59,11 @@ export const initialTokenCounterState: TokenCounterState = {
   completionTokens: null,
   usageIsReal: false,
   estimatedCostUsd: null,
+  // ADR-016 stage 16.2: cumulative across every real-usage reply this
+  // session has seen so far - see backend/token_counter.py.
+  sessionPromptTokens: 0,
+  sessionCompletionTokens: 0,
+  sessionEstimatedCostUsd: 0,
 };
 
 export const initialNotificationState: NotificationState = {

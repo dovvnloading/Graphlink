@@ -533,6 +533,12 @@ export function toFlowNodes(
           // payload.py). Rendered as a collapsible section in
           // ChatNodeView.tsx.
           toolInvocations: n.toolCalls,
+          // ADR-016 stage 16.2: real usage + the cost snapshot taken when it
+          // was stamped - null for user messages and replies whose provider
+          // reports nothing. See ChatNodeView.tsx's own render guard.
+          promptTokens: n.promptTokens ?? null,
+          completionTokens: n.completionTokens ?? null,
+          estimatedCostUsd: n.estimatedCostUsd ?? null,
         },
       });
       continue;

@@ -282,6 +282,25 @@ def test_configure_logging_keeps_a_stderr_handler_so_terminal_runs_still_print(t
     assert stream_handlers, "terminal runs must still see log output"
 
 
+def test_configure_logging_file_handler_writes_json_lines(tmp_path, isolated_logging_state):
+    # ADR-016 stage 16.1: the FILE channel is JSON-lines (backend/
+    # observability.py.JsonLogFormatter); stderr stays plain text - see
+    # this module's own docstring on why.
+    configure_logging(tmp_path)
+    logging.getLogger("graphlink.test.jsonlines").info(
+        "hello world", extra={"run_id": "r-1", "kind": "chat"}
+    )
+
+    lines = [line for line in log_path(tmp_path).read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert lines, "expected at least one log line"
+    payload = json.loads(lines[-1])
+    assert payload["msg"] == "hello world"
+    assert payload["level"] == "INFO"
+    assert payload["logger"] == "graphlink.test.jsonlines"
+    assert payload["run_id"] == "r-1"
+    assert payload["kind"] == "chat"
+
+
 def test_install_exception_handlers_can_be_retried_after_a_failure(
     tmp_path, monkeypatch, isolated_exception_handler_state
 ):

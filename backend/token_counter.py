@@ -20,15 +20,19 @@ the provider's prompt count already covers context + input (the entire
 request), so summing it with the estimate columns would double-count. The
 four estimate keys stay in the payload either way - they remain the honest
 pre-flight view, and the only view for providers that report nothing
-(llama.cpp streams). A user-editable pricing config is deliberately out of
-scope here - that is ADR-016 stage 16.2's job; _MODEL_PRICES_PER_MTOK is a
-small built-in table for the common families only.
+(llama.cpp streams). _MODEL_PRICES_PER_MTOK is a small built-in table for
+the common families only; ADR-016 stage 16.2 adds a user-editable local
+override on top (SettingsManager.get_pricing_overrides), keyed by EXACT
+model id (not prefix-matched like the built-in table - a user typing their
+own model id wants that exact string priced, not a substring guess) and
+checked first, so a user can price a model this table doesn't know about,
+or correct a stale built-in price.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 from backend.events import SessionBus
 from graphlink_token_estimator import TokenEstimator
@@ -67,14 +71,31 @@ _MODEL_PRICES_PER_MTOK: tuple[tuple[str, tuple[float, float]], ...] = (
 _LOCAL_PROVIDERS = {"ollama", "llama.cpp", "llamacpp", "local"}
 
 
-def estimate_cost_usd(provider, model, prompt_tokens, completion_tokens) -> float | None:
+def estimate_cost_usd(
+    provider, model, prompt_tokens, completion_tokens, *, overrides: dict[str, dict[str, float]] | None = None,
+) -> float | None:
     """Best-effort USD cost for one reply. None when the model is unknown
-    (never guess a price) or no real counts exist; 0.0 for local providers."""
+    (never guess a price) or no real counts exist; 0.0 for local providers.
+
+    `overrides` (ADR-016 stage 16.2): a user-editable local pricing table
+    (SettingsManager.get_pricing_overrides), keyed by the EXACT model id -
+    checked BEFORE the built-in prefix table, so a user's own price always
+    wins over a built-in guess. Local-provider $0.00 still short-circuits
+    first: overriding a free local model's price is not a use case this
+    supports."""
     if prompt_tokens is None and completion_tokens is None:
         return None
     if str(provider or "").strip().lower() in _LOCAL_PROVIDERS:
         return 0.0
     normalized_model = str(model or "").strip().lower()
+    if overrides:
+        entry = overrides.get(normalized_model)
+        if entry is not None:
+            return round(
+                (prompt_tokens or 0) / 1_000_000 * float(entry.get("input", 0.0))
+                + (completion_tokens or 0) / 1_000_000 * float(entry.get("output", 0.0)),
+                6,
+            )
     for prefix, (input_price, output_price) in _MODEL_PRICES_PER_MTOK:
         if normalized_model.startswith(prefix):
             return round(
@@ -96,6 +117,35 @@ class TokenCounterState:
     usage_is_real: bool = False
     provider_name: str = ""
     model_id: str = ""
+    # ADR-016 stage 16.2: cumulative across every real-usage reply this
+    # session has seen so far (never reset by set_input_text/
+    # reset_real_usage - those describe the CURRENT draft/reply only). Session-
+    # scoped because TokenCounterState itself is one-per-session (see
+    # register_token_counter) - restarting the app or evicting the session
+    # starts a fresh counter, matching every other in-memory session total in
+    # this codebase (no persistence claim is made here).
+    session_prompt_tokens: int = 0
+    session_completion_tokens: int = 0
+    session_estimated_cost_usd: float = 0.0
+    # A zero-arg accessor rather than a stored dict: register_token_counter
+    # wires this to settings_manager.get_pricing_overrides so every read
+    # sees the LIVE value (a setPricingOverrides intent takes effect on the
+    # very next reply, no restart needed) - the same "read fresh, don't
+    # cache" posture every other settings-backed payload in this codebase
+    # already has.
+    pricing_overrides_fn: Callable[[], dict[str, dict[str, float]]] | None = None
+
+    def _pricing_overrides(self) -> dict[str, dict[str, float]] | None:
+        return self.pricing_overrides_fn() if self.pricing_overrides_fn is not None else None
+
+    def estimate_cost_for(self, prompt_tokens, completion_tokens, *, provider: str, model: str) -> float | None:
+        """Public wrapper around estimate_cost_usd, using this counter's own
+        LIVE pricing-overrides accessor. ADR-016 stage 16.2: lets a caller
+        (backend/api/intents_chat.py's _on_usage) compute the SAME cost
+        estimate the composer's token counter would, to stamp onto a reply
+        node as a point-in-time snapshot - see ChatState.estimated_cost_usd's
+        own comment for why that's a snapshot, not a live recomputation."""
+        return estimate_cost_usd(provider, model, prompt_tokens, completion_tokens, overrides=self._pricing_overrides())
 
     def set_input_text(self, text: str) -> None:
         self.input_tokens = estimate_tokens(text)
@@ -123,7 +173,10 @@ class TokenCounterState:
     def set_real_usage(self, prompt_tokens, completion_tokens, *, provider: str = "", model: str = "") -> None:
         """Record provider-reported counts for the reply that just
         completed. provider/model feed the cost estimate; omitted values
-        keep whatever was last recorded."""
+        keep whatever was last recorded. ADR-016 stage 16.2: also folds this
+        reply's counts/cost into the session-cumulative totals, exactly
+        once per real reply (never re-accumulated by reset_real_usage or a
+        later payload() read, which are non-mutating)."""
         self.prompt_tokens = prompt_tokens
         self.completion_tokens = completion_tokens
         self.usage_is_real = prompt_tokens is not None or completion_tokens is not None
@@ -131,6 +184,15 @@ class TokenCounterState:
             self.provider_name = provider
         if model:
             self.model_id = model
+        if self.usage_is_real:
+            self.session_prompt_tokens += prompt_tokens or 0
+            self.session_completion_tokens += completion_tokens or 0
+            reply_cost = estimate_cost_usd(
+                self.provider_name, self.model_id, prompt_tokens, completion_tokens,
+                overrides=self._pricing_overrides(),
+            )
+            if reply_cost is not None:
+                self.session_estimated_cost_usd += reply_cost
 
     def payload(self) -> dict[str, Any]:
         if self.usage_is_real:
@@ -149,15 +211,23 @@ class TokenCounterState:
             "usageIsReal": self.usage_is_real,
             "estimatedCostUsd": (
                 estimate_cost_usd(
-                    self.provider_name, self.model_id, self.prompt_tokens, self.completion_tokens
+                    self.provider_name, self.model_id, self.prompt_tokens, self.completion_tokens,
+                    overrides=self._pricing_overrides(),
                 )
                 if self.usage_is_real
                 else None
             ),
+            "sessionPromptTokens": self.session_prompt_tokens,
+            "sessionCompletionTokens": self.session_completion_tokens,
+            "sessionEstimatedCostUsd": self.session_estimated_cost_usd,
         }
 
 
-def register_token_counter(bus: SessionBus) -> TokenCounterState:
-    state = TokenCounterState()
+def register_token_counter(bus: SessionBus, settings_manager=None) -> TokenCounterState:
+    # ADR-016 stage 16.2: settings_manager is optional (many existing tests
+    # construct a bare register_token_counter(bus)) - None means "no
+    # overrides", i.e. exactly the pre-16.2 built-in-table-only behavior.
+    pricing_overrides_fn = settings_manager.get_pricing_overrides if settings_manager is not None else None
+    state = TokenCounterState(pricing_overrides_fn=pricing_overrides_fn)
     bus.register_topic("token-counter", state.payload)
     return state

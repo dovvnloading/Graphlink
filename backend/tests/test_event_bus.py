@@ -68,6 +68,52 @@ def test_broadcast_reaches_all_connections_and_drops_dead_ones():
     asyncio.run(run())
 
 
+# -- ADR-016 stage 16.3: publish-size recording --------------------------
+
+
+def test_on_publish_is_a_no_op_by_default():
+    # Every SessionBus() in this file (and the hundreds elsewhere in the
+    # suite) constructs with no on_publish - must never raise just from
+    # publishing.
+    bus, _ = make_session()
+    asyncio.run(bus.publish("counter"))  # must not raise
+
+
+def test_on_publish_fires_with_topic_and_a_positive_byte_size():
+    calls = []
+    bus = SessionBus("s1", on_publish=lambda topic, size: calls.append((topic, size)))
+    bus.register_topic("counter", lambda: {"count": 0})
+
+    asyncio.run(bus.publish("counter"))
+
+    assert len(calls) == 1
+    topic, size = calls[0]
+    assert topic == "counter"
+    assert size > 0
+
+
+def test_set_publish_recorder_applies_to_the_next_publish():
+    calls = []
+    bus, _ = make_session()
+    bus.set_publish_recorder(lambda topic, size: calls.append((topic, size)))
+
+    asyncio.run(bus.publish("counter"))
+
+    assert len(calls) == 1
+    assert calls[0][0] == "counter"
+
+
+def test_set_publish_recorder_of_none_disables_recording():
+    calls = []
+    bus = SessionBus("s1", on_publish=lambda topic, size: calls.append((topic, size)))
+    bus.register_topic("counter", lambda: {"count": 0})
+    bus.set_publish_recorder(None)
+
+    asyncio.run(bus.publish("counter"))
+
+    assert calls == []
+
+
 def test_intent_dispatch_sync_handler_runs_and_returns():
     bus, state = make_session()
     result = asyncio.run(bus.dispatch_intent("counter", "bump", [5]))

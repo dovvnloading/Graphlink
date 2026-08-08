@@ -1,0 +1,9 @@
+{
+  "name": "research_and_summarize_branch",
+  "kind": "agent_build",
+  "input": {
+    "goal": "Research a topic and produce a cited summary + chart branch on the canvas."
+  },
+  "scripted_response": null,
+  "expected": null
+}

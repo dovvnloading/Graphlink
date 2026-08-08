@@ -13,6 +13,9 @@ export interface TokenCounterState {
   completionTokens?: number | null;
   usageIsReal: boolean;
   estimatedCostUsd?: number | null;
+  sessionPromptTokens: number;
+  sessionCompletionTokens: number;
+  sessionEstimatedCostUsd: number;
   minCompatibleSchemaVersion?: number | null;
 }
 
@@ -79,6 +82,21 @@ function checkTokenCounterState(value: unknown, path: string, errors: string[]):
   {
     const fieldValue = value["estimatedCostUsd"];
     if (fieldValue !== undefined && fieldValue !== null) { if (typeof fieldValue !== "number") errors.push(`${path}.estimatedCostUsd` + ": expected number"); }
+  }
+  {
+    const fieldValue = value["sessionPromptTokens"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.sessionPromptTokens: missing required field`);
+    else { if (typeof fieldValue !== "number") errors.push(`${path}.sessionPromptTokens` + ": expected number"); }
+  }
+  {
+    const fieldValue = value["sessionCompletionTokens"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.sessionCompletionTokens: missing required field`);
+    else { if (typeof fieldValue !== "number") errors.push(`${path}.sessionCompletionTokens` + ": expected number"); }
+  }
+  {
+    const fieldValue = value["sessionEstimatedCostUsd"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.sessionEstimatedCostUsd: missing required field`);
+    else { if (typeof fieldValue !== "number") errors.push(`${path}.sessionEstimatedCostUsd` + ": expected number"); }
   }
   {
     const fieldValue = value["minCompatibleSchemaVersion"];

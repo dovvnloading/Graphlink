@@ -196,6 +196,11 @@ def settings_payload(manager: SettingsManager) -> dict[str, Any]:
         # graphlink_secrets.dpapi_available's own docstring for exactly
         # what this does and doesn't mean.
         "secretsEncryptedAtRest": manager.secrets_encrypted_at_rest(),
+        # ADR-016 stage 16.1: the log-level setting's current value - the
+        # Diagnostics panel (stage 16.3) renders the actual control; this
+        # field exists now so the backend contract carries it from the start
+        # rather than needing a second wire-payload touch later.
+        "logLevel": manager.get_log_level(),
     }
 
 

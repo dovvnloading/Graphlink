@@ -71,12 +71,26 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
 import threading
 import uuid
 from dataclasses import dataclass
 from typing import Any, Callable
 
 from backend.events import SessionBus  # type hint only
+
+# ADR-016 stage 16.1: every one of the app's dispatch surfaces (chat, chart,
+# note, image, web research, artifact, gitlink x2, pycoder, code sandbox - 12
+# kinds and counting) claims into and releases from ONE RunRegistry per
+# session (see this module's own docstring above). Logging at claim()/
+# cancel()/_pop() instead of at each of those 12 call sites gives every run,
+# past and future, a traced lifecycle for free - no per-surface duplication,
+# and no surface can forget to log. Deliberately explicit extra={} fields
+# rather than a contextvars-based run_id (see backend/observability.py's own
+# docstring for why): claim() is a plain synchronous method called from many
+# different call sites, so there is no single "task body" to scope a
+# ContextVar.set()/reset() around here.
+_logger = logging.getLogger("graphlink.run")
 
 
 @dataclass
@@ -173,7 +187,22 @@ class RunRegistry:
     """One in-flight-run registry per AgentDispatcher (session-scoped,
     like the dicts it replaces - never a module-level singleton)."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        on_claim: Callable[[str, str, str | None], None] | None = None,
+        on_end: Callable[[str, str], None] | None = None,
+    ) -> None:
+        # ADR-016 stage 16.3: optional diagnostics hooks - on_claim(run_id,
+        # kind, node_id) fires alongside the "run claimed" log line, on_end
+        # (run_id, outcome) alongside "run cancelled"/"run released".
+        # Explicit callbacks rather than a shared logging.Handler on
+        # "graphlink.run" (see backend/diagnostics.py's own docstring for
+        # why that would leak a handler per session). None by default so
+        # every existing RunRegistry() call site (dozens across the test
+        # suite) is unaffected.
+        self._on_claim = on_claim
+        self._on_end = on_end
         self._handles: dict[str, RunHandle] = {}
         # ADR-006 stage 6.2: tasks whose handle was popped by cancel() while
         # the task still runs. Held ONLY as an anti-GC reference (the event
@@ -220,6 +249,12 @@ class RunRegistry:
             loop=loop,
         )
         self._handles[handle.request_id] = handle
+        _logger.info(
+            "run claimed",
+            extra={"run_id": handle.request_id, "kind": kind, "node_id": node_id},
+        )
+        if self._on_claim is not None:
+            self._on_claim(handle.request_id, kind, node_id)
         return handle
 
     def attach_task(self, handle: RunHandle, task: asyncio.Task) -> None:
@@ -243,6 +278,10 @@ class RunRegistry:
             future = handle.approval_future
             if future is not None and not future.done():
                 future.set_result(False)
+            _logger.info(
+                "run released",
+                extra={"run_id": request_id, "kind": handle.kind, "node_id": handle.node_id},
+            )
         return handle
 
     def release(self, request_id: str) -> bool:
@@ -252,7 +291,18 @@ class RunRegistry:
         cancelled run's late teardown never re-runs the end transition that
         cancel() already performed (and never clobbers a newer run's state -
         see RunHandle.finalize)."""
-        return self._pop(request_id) is not None
+        handle = self._pop(request_id)
+        # ADR-016 stage 16.3: "completed" specifically - NOT fired from _pop
+        # itself, since _pop is also the cancel path's own pop (via
+        # _finish_cancel below), which already records "cancelled" from
+        # cancel()/cancel_all() before ever reaching here. Firing it here
+        # unconditionally would overwrite a cancelled run's outcome back to
+        # "completed" the instant its worker's own late `finally` calls
+        # release() - see run_single_shot's docstring on why that always
+        # happens regardless of which path actually freed the slot.
+        if handle is not None and self._on_end is not None:
+            self._on_end(request_id, "completed")
+        return handle is not None
 
     def _schedule_finalize(self, handle: RunHandle) -> None:
         if handle.finalize is None or handle.loop is None or handle.loop.is_closed():
@@ -287,6 +337,12 @@ class RunRegistry:
             handle.on_cancel()
             fired = True
         if fired:
+            _logger.info(
+                "run cancelled",
+                extra={"run_id": request_id, "kind": handle.kind, "node_id": handle.node_id},
+            )
+            if self._on_end is not None:
+                self._on_end(request_id, "cancelled")
             # ADR-006 stage 6.2: cancel frees the slot IMMEDIATELY. Before
             # this, release() lived only in the run's `finally`, downstream
             # of an uninterruptible asyncio.to_thread - so is_busy stayed
@@ -342,6 +398,12 @@ class RunRegistry:
                 handle.on_cancel()
                 fired = True
             if fired:
+                _logger.info(
+                    "run cancelled",
+                    extra={"run_id": handle.request_id, "kind": handle.kind, "node_id": handle.node_id},
+                )
+                if self._on_end is not None:
+                    self._on_end(handle.request_id, "cancelled")
                 self._finish_cancel(handle.request_id, handle)
 
     def has_any_live_work(self) -> bool:

@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "lastPublishBytes": {
+      "type": "integer"
+    },
+    "lastPublishTopic": {
+      "type": "string"
+    },
+    "minCompatibleSchemaVersion": {
+      "type": "integer"
+    },
+    "providerErrors": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "at": {
+            "type": "number"
+          },
+          "message": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "provider",
+          "message",
+          "at"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "publishBytesPerSecond": {
+      "type": "number"
+    },
+    "publishBytesTotal": {
+      "type": "integer"
+    },
+    "publishCount": {
+      "type": "integer"
+    },
+    "recentRuns": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "durationSeconds": {
+            "type": "number"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "nodeId": {
+            "type": "string"
+          },
+          "outcome": {
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "runId",
+          "kind",
+          "outcome"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "revision": {
+      "type": "integer"
+    },
+    "schemaVersion": {
+      "type": "integer"
+    },
+    "sessionCount": {
+      "type": "integer"
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "revision",
+    "recentRuns",
+    "publishCount",
+    "publishBytesTotal",
+    "publishBytesPerSecond",
+    "providerErrors"
+  ],
+  "title": "DiagnosticsState",
+  "type": "object"
+}

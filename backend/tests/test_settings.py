@@ -40,6 +40,7 @@ def test_settings_payload_shape_matches_generated_validator_shape(manager):
         "notificationPreferences",
         "githubTokenConfigured",
         "secretsEncryptedAtRest",
+        "logLevel",
     }
 
 
@@ -50,6 +51,7 @@ def test_settings_payload_reflects_real_manager_defaults(manager):
     assert payload["enableSystemPrompt"] is True
     assert payload["githubTokenConfigured"] is False
     assert set(payload["notificationPreferences"]) == set(SettingsManager.NOTIFICATION_TYPES)
+    assert payload["logLevel"] == "INFO"
 
 
 def test_settings_never_imports_qt():
@@ -116,6 +118,49 @@ def test_set_enable_system_prompt_intent(manager):
 
     asyncio.run(bus.dispatch_intent("app-settings", "setEnableSystemPrompt", [False]))
     assert manager.get_enable_system_prompt() is False
+
+
+# -- ADR-016 stage 16.1: log-level setting -------------------------------
+
+
+def test_get_log_level_defaults_to_info(manager):
+    assert manager.get_log_level() == "INFO"
+
+
+def test_set_log_level_persists_and_rejects_unknown_levels(manager):
+    manager.set_log_level("DEBUG")
+    assert manager.get_log_level() == "DEBUG"
+
+    manager.set_log_level("not-a-real-level")
+    assert manager.get_log_level() == "DEBUG"  # unchanged, not overwritten with garbage
+
+
+def test_set_log_level_intent_persists_and_applies_live(manager):
+    import logging
+
+    bus = SessionBus("settings-log-level-test")
+    register_settings(bus, manager)
+    root_level_before = logging.getLogger().level
+    try:
+        asyncio.run(bus.dispatch_intent("app-settings", "setLogLevel", ["DEBUG"]))
+        assert manager.get_log_level() == "DEBUG"
+        assert logging.getLogger().level == logging.DEBUG
+    finally:
+        logging.getLogger().setLevel(root_level_before)
+
+
+def test_set_log_level_intent_rejects_unknown_level_without_touching_root_logger(manager):
+    import logging
+
+    bus = SessionBus("settings-log-level-reject-test")
+    register_settings(bus, manager)
+    root_level_before = logging.getLogger().level
+    try:
+        asyncio.run(bus.dispatch_intent("app-settings", "setLogLevel", ["not-a-real-level"]))
+        assert manager.get_log_level() == "INFO"  # unchanged
+        assert logging.getLogger().level == root_level_before  # unchanged
+    finally:
+        logging.getLogger().setLevel(root_level_before)
 
 
 def test_set_notification_preference_intent_updates_a_single_type(manager):
@@ -252,6 +297,48 @@ def test_get_mcp_servers_tolerates_a_malformed_entry_on_disk_without_dropping_th
     )
     manager = SettingsManager(state_file)
     assert [entry["name"] for entry in manager.get_mcp_servers()] == ["ok"]
+
+
+# -- ADR-016 stage 16.2: pricing overrides -----------------------------------
+
+
+def test_get_pricing_overrides_defaults_to_empty(manager):
+    assert manager.get_pricing_overrides() == {}
+
+
+def test_set_pricing_overrides_persists_and_normalizes_a_round_trip(manager):
+    manager.set_pricing_overrides({"My-Custom-Model": {"input": 1.5, "output": 3.0}})
+    assert manager.get_pricing_overrides() == {
+        "my-custom-model": {"input": 1.5, "output": 3.0},  # lowercased key
+    }
+
+    reloaded = SettingsManager(manager.state_file)
+    assert reloaded.get_pricing_overrides() == manager.get_pricing_overrides()
+
+
+def test_set_pricing_overrides_replaces_the_whole_table_not_a_merge(manager):
+    manager.set_pricing_overrides({"model-a": {"input": 1.0, "output": 1.0}})
+    manager.set_pricing_overrides({"model-b": {"input": 2.0, "output": 2.0}})
+    assert set(manager.get_pricing_overrides()) == {"model-b"}
+
+
+def test_set_pricing_overrides_drops_malformed_entries(manager):
+    manager.set_pricing_overrides({
+        "": {"input": 1.0, "output": 1.0},  # empty key
+        "negative": {"input": -1.0, "output": 1.0},  # negative price
+        "not-a-dict": "oops",
+        "valid": {"input": 1.0, "output": 2.0},
+    })
+    assert manager.get_pricing_overrides() == {"valid": {"input": 1.0, "output": 2.0}}
+
+
+def test_get_pricing_overrides_tolerates_a_malformed_table_on_disk(tmp_path):
+    import json
+
+    state_file = tmp_path / "session.dat"
+    state_file.write_text(json.dumps({"pricing_overrides": "not a dict"}), encoding="utf-8")
+    manager = SettingsManager(state_file)
+    assert manager.get_pricing_overrides() == {}
 
 
 # -- R7.4a: API-provider settings page. New intents on the same "app-settings"

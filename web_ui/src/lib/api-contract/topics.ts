@@ -8,6 +8,7 @@ import { type AppChatLibraryState, validateAppChatLibraryState } from "../bridge
 import { type AppComposerState, validateAppComposerState } from "../bridge-core/generated/app-composer-state";
 import { type AppPluginsState, validateAppPluginsState } from "../bridge-core/generated/app-plugins-state";
 import { type AppSettingsState, validateAppSettingsState } from "../bridge-core/generated/app-settings-state";
+import { type DiagnosticsState, validateDiagnosticsState } from "../bridge-core/generated/diagnostics-state";
 import { type DragSpeedState, validateDragSpeedState } from "../bridge-core/generated/drag-speed-state";
 import { type ExecutionLimitsState, validateExecutionLimitsState } from "../bridge-core/generated/execution-limits-state";
 import { type FontControlState, validateFontControlState } from "../bridge-core/generated/font-control-state";
@@ -22,6 +23,7 @@ export const TOPIC_VALIDATORS = {
   "app-composer": validateAppComposerState,
   "app-plugins": validateAppPluginsState,
   "app-settings": validateAppSettingsState,
+  "diagnostics": validateDiagnosticsState,
   "drag-speed": validateDragSpeedState,
   "execution-limits": validateExecutionLimitsState,
   "font-control": validateFontControlState,
@@ -39,6 +41,7 @@ export interface TopicStates {
   "app-composer": AppComposerState;
   "app-plugins": AppPluginsState;
   "app-settings": AppSettingsState;
+  "diagnostics": DiagnosticsState;
   "drag-speed": DragSpeedState;
   "execution-limits": ExecutionLimitsState;
   "font-control": FontControlState;

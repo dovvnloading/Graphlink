@@ -221,6 +221,8 @@ CLASSIFICATION: tuple[Classified, ...] = (
     Classified("app-settings", "clearGithubToken", "B", "preference: write-only credential field, not document content"),
     # ADR-006 stage 6.5:
     Classified("app-settings", "setProviderMode", "B", "preference: which provider mode is live/persisted"),
+    # ADR-016 stage 16.1:
+    Classified("app-settings", "setLogLevel", "B", "preference: local logging verbosity"),
 
     # -- backend/api/intents_settings_api_provider.py (app-settings) --------
     Classified("app-settings", "setViewingApiProvider", "B", "preference: which provider sub-page is viewed"),
@@ -248,4 +250,9 @@ CLASSIFICATION: tuple[Classified, ...] = (
     Classified("app-settings", "scanLlamaCppSystem", "B", "run-lifecycle: scans/caches locally installed models"),
     Classified("app-settings", "pickLlamaCppScanFolder", "B", "run-lifecycle: native folder pick + scan"),
     Classified("app-settings", "saveLlamaCppSettings", "B", "preference: runtime configuration"),
+
+    # -- backend/api/intents_diagnostics.py (diagnostics) --------------------
+    # ADR-016 stage 16.4:
+    Classified("diagnostics", "exportDiagnosticBundle", "B", "read-only: assembles a redacted diagnostic snapshot, no document mutation"),
+    Classified("diagnostics", "openLogFolder", "B", "read-only: opens the OS file browser, no document mutation"),
 )

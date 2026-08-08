@@ -1032,6 +1032,74 @@ def test_connection_refused_in_api_mode_surfaces_the_friendly_endpoint_message(o
     assert "Details: connection refused by endpoint" in message  # raw cause kept, as detail only
 
 
+def test_translated_provider_failure_is_recorded_in_diagnostics(openai_api_mode):
+    """ADR-016 stage 16.3: _translate_chat_exception is the one choke point
+    both chat() and chat_stream() funnel every non-cancel failure through -
+    prove a real translated failure actually reaches
+    backend.diagnostics.record_provider_error, not just that the friendly
+    message comes out right (already pinned above).
+
+    ADR-016 stage 16.4 additionally proves the END-TO-END redaction here,
+    which the unit tests in test_diagnostics.py cannot: those call
+    record_provider_error directly, so they never exercise the real
+    exception text a live provider failure actually produces. This drives a
+    REAL raw exception through _translate_chat_exception and asserts none of
+    its text survives - only the fixed category label does (see
+    backend/diagnostics.py's _redact_provider_error_message for why raw
+    str(exc) is never storable)."""
+    import types
+
+    from backend.diagnostics import provider_errors, reset_provider_errors
+
+    reset_provider_errors()
+    try:
+        def refusing_create(**kwargs):
+            raise Exception("connection refused by endpoint")
+
+        client = types.SimpleNamespace(
+            chat=types.SimpleNamespace(completions=types.SimpleNamespace(create=refusing_create))
+        )
+        openai_api_mode(client)
+
+        with pytest.raises(ConnectionError):
+            _REAL_CHAT(config.TASK_CHAT, [{"role": "user", "content": "hi"}])
+
+        errors = provider_errors()
+        assert len(errors) == 1
+        assert errors[0]["provider"] == config.API_PROVIDER_OPENAI
+        assert errors[0]["message"] == "connection failed"
+        assert "endpoint" not in errors[0]["message"], (
+            "no substring of the raw exception text may survive redaction"
+        )
+    finally:
+        reset_provider_errors()
+
+
+def test_cancelled_requests_are_not_recorded_as_provider_errors(openai_api_mode):
+    """The RequestCancelledError sentinel re-raises before the diagnostics
+    recording line - a user-initiated cancel must never show up next to real
+    provider failures in the diagnostics panel."""
+    from backend.diagnostics import provider_errors, reset_provider_errors
+
+    reset_provider_errors()
+    try:
+        client, _ = _fake_openai_client()
+        openai_api_mode(client)
+        cancel_event = threading.Event()
+        cancel_event.set()
+
+        with pytest.raises(api_provider.RequestCancelledError):
+            _REAL_CHAT(
+                config.TASK_CHAT,
+                [{"role": "user", "content": "hi"}],
+                cancellation_event=cancel_event,
+            )
+
+        assert provider_errors() == []
+    finally:
+        reset_provider_errors()
+
+
 def test_all_four_new_providers_satisfy_the_protocol():
     """6.3: protocol conformance for the non-Ollama four. (The transitional
     stream()-wraps-complete() single-"done" assertion that used to live here

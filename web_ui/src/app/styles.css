@@ -1101,6 +1101,17 @@ body,
   max-width: 140px;
 }
 
+/* ADR-016 stage 16.2: real per-node token/cost usage, same plain-text
+   scale as .chat-node-model-badge next to it - a compact "prompt→completion
+   · $cost" label, not a pill (numbers vary too widely in width). */
+.chat-node-usage-badge {
+  font-size: 10px;
+  line-height: 1;
+  color: var(--gl-surface-text-muted);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
 /* ADR-002 Workstream 1 ("Branch status and lifecycle"): a small filled dot,
    ALWAYS rendered (unlike every other badge above, which is conditional) -
    backgroundColor is set inline per-node (one of 4 real, visually-distinct
@@ -2218,9 +2229,20 @@ body,
 .token-counter-popout {
   position: absolute;
   bottom: calc(100% + 8px);
-  left: 0;
+  /* ADR-016 stage 16.2 fix: the trigger sits at the composer's far right
+     edge (next to Send), and ADR-006 stage 6.8 grew this from 4 columns to
+     7 (prompt/completion/est. cost added) without revisiting this rule -
+     left:0 + nowrap let it grow rightward, unbounded, off the composer and
+     over whatever sat past it (reported: overlapping Document View).
+     Anchoring right and wrapping keeps it inside the viewport regardless
+     of column count. */
+  right: 0;
+  left: auto;
   display: flex;
-  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px 14px;
+  max-width: min(360px, 90vw);
   padding: 12px 14px;
   background-color: var(--gl-surface-node-body);
   border: 1px solid var(--gl-surface-border);
@@ -2231,7 +2253,6 @@ body,
      app, it just isn't driven by the shared overlay system (a hover
      fold-out has no "open surface" to register - see TokenCounter.tsx). */
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
-  white-space: nowrap;
 }
 
 .token-counter-row {
@@ -2239,6 +2260,7 @@ body,
   flex-direction: column;
   align-items: center;
   gap: 1px;
+  white-space: nowrap;
 }
 
 .token-counter-label {
@@ -2672,6 +2694,179 @@ body,
 .help-shell {
   display: flex;
   height: 100%;
+}
+
+/* -- Diagnostics dialog (ADR-016 stage 16.3) ------------------------------ */
+
+.diagnostics-dialog {
+  min-width: 480px;
+  max-width: min(640px, calc(100vw - 64px));
+  max-height: min(600px, calc(100vh - 96px));
+  overflow-y: auto;
+}
+
+.diagnostics-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px 14px;
+  margin-bottom: 16px;
+}
+
+.diagnostics-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.diagnostics-stat-label {
+  font-size: 11px;
+  color: var(--gl-surface-text-muted);
+}
+
+.diagnostics-stat-value {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--gl-surface-text-primary);
+}
+
+.diagnostics-section-title {
+  margin: 16px 0 8px;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--gl-surface-text-muted);
+}
+
+.diagnostics-empty {
+  margin: 0;
+  font-size: 12px;
+  color: var(--gl-surface-text-muted);
+}
+
+.diagnostics-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.diagnostics-table th,
+.diagnostics-table td {
+  text-align: left;
+  padding: 4px 8px 4px 0;
+  border-bottom: 1px solid var(--gl-surface-border);
+  color: var(--gl-surface-text-primary);
+}
+
+.diagnostics-table th {
+  color: var(--gl-surface-text-muted);
+  font-weight: 600;
+}
+
+.diagnostics-outcome-completed {
+  color: var(--gl-semantic-status-success, var(--gl-surface-text-primary));
+}
+
+.diagnostics-outcome-cancelled {
+  color: var(--gl-surface-text-muted);
+}
+
+.diagnostics-outcome-running {
+  color: var(--gl-semantic-status-warning, var(--gl-surface-text-primary));
+}
+
+.diagnostics-error-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.diagnostics-error-item {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  font-size: 12px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: var(--gl-surface-node-body);
+}
+
+.diagnostics-error-provider {
+  font-weight: 600;
+  color: var(--gl-surface-text-primary);
+}
+
+.diagnostics-error-time {
+  color: var(--gl-surface-text-muted);
+}
+
+.diagnostics-error-message {
+  flex-basis: 100%;
+  color: var(--gl-surface-text-primary);
+}
+
+/* ADR-016 stage 16.4: the action row (Open log folder / Export diagnostic
+   bundle) - same neutral-button language as .settings-button-row/.settings-
+   button (SettingsDialog's Ollama "Scan Folder..." row), just a size step
+   down to match this dialog's own 11-13px scale rather than settings'
+   13-14px chrome. */
+.diagnostics-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.diagnostics-action-button {
+  padding: 6px 12px;
+  font-size: 12px;
+  font-family: inherit;
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-neutral-button-hover);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.diagnostics-action-button:hover:not(:disabled) {
+  background-color: var(--gl-neutral-button-border);
+}
+
+.diagnostics-action-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.diagnostics-bundle-preview-wrap {
+  margin-top: 12px;
+}
+
+/* Same monospace/inset-surface treatment as .chat-node-tool-invocation-
+   arguments/-result (the app's other "pretty-printed JSON in a scrollable
+   box" precedent), just bounded with a max-height since a bundle can run
+   long (recentRuns/providerErrors are both included). */
+.diagnostics-bundle-preview {
+  margin: 8px 0 6px;
+  padding: 10px;
+  max-height: 240px;
+  overflow: auto;
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-surface-inset, var(--gl-surface-node-body));
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 6px;
+}
+
+.diagnostics-bundle-path {
+  margin: 0;
+  font-size: 11px;
+  color: var(--gl-surface-text-muted);
+  word-break: break-all;
 }
 
 /* -- Document view panel (R8a follow-up) ------------------------------------

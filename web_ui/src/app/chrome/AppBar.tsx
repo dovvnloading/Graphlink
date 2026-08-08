@@ -343,6 +343,15 @@ export function AppBar({ store }: { store: SceneStore }) {
         >
           Help
         </button>
+        <button
+          type="button"
+          className={"appbar-overflow-item" + (overlays.isOpen("diagnostics") ? " checked" : "")}
+          data-tier="1"
+          aria-pressed={overlays.isOpen("diagnostics")}
+          onClick={() => overlays.toggle("diagnostics", "dialog")}
+        >
+          Diagnostics
+        </button>
       </Popover>
 
       <button
@@ -373,6 +382,16 @@ export function AppBar({ store }: { store: SceneStore }) {
         onClick={() => overlays.toggle("help", "dialog")}
       >
         Help
+      </button>
+      <button
+        type="button"
+        className={chip("diagnostics") + " appbar-tier"}
+        data-tier="1"
+        data-overlay-trigger="diagnostics"
+        aria-pressed={overlays.isOpen("diagnostics")}
+        onClick={() => overlays.toggle("diagnostics", "dialog")}
+      >
+        Diagnostics
       </button>
     </div>
   );

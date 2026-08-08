@@ -82,6 +82,10 @@ function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}, selected:
         onCancelRegenerate,
         // ADR-007 stage 7.4
         toolInvocations: [],
+        // ADR-016 stage 16.2
+        promptTokens: null,
+        completionTokens: null,
+        estimatedCostUsd: null,
         ...dataOverrides,
       },
     } as unknown as NodeProps<ChatFlowNode>;
@@ -983,5 +987,27 @@ describe("ChatNodeView tool invocations (ADR-007 stage 7.4)", () => {
     });
     await user.click(screen.getByText("1 tool call"));
     expect(container.querySelector(".chat-node-tool-invocation.error")).not.toBeNull();
+  });
+});
+
+describe("ChatNodeView usage badge (ADR-016 stage 16.2)", () => {
+  it("renders nothing when neither promptTokens nor completionTokens is present", () => {
+    const { container } = renderChatNode({ promptTokens: null, completionTokens: null });
+    expect(container.querySelector(".chat-node-usage-badge")).toBeNull();
+  });
+
+  it("renders prompt/completion counts and the estimated cost when present", () => {
+    renderChatNode({ promptTokens: 111, completionTokens: 22, estimatedCostUsd: 0.0042 });
+    expect(screen.getByText("111→22 · $0.0042")).toBeInTheDocument();
+  });
+
+  it("renders the token counts without a cost suffix when estimatedCostUsd is null (unpriced model)", () => {
+    renderChatNode({ promptTokens: 111, completionTokens: 22, estimatedCostUsd: null });
+    expect(screen.getByText("111→22")).toBeInTheDocument();
+  });
+
+  it("still renders when only one of promptTokens/completionTokens is present", () => {
+    renderChatNode({ promptTokens: 50, completionTokens: null, estimatedCostUsd: null });
+    expect(screen.getByText("50→?")).toBeInTheDocument();
   });
 });

@@ -204,6 +204,9 @@
           "durationSeconds": {
             "type": "number"
           },
+          "estimatedCostUsd": {
+            "type": "number"
+          },
           "filePath": {
             "type": "string"
           },

@@ -1,0 +1,17 @@
+{
+  "name": "pie_engineering_budget",
+  "kind": "chart",
+  "input": {
+    "chart_type": "pie",
+    "source_text": "Our engineering budget breaks down as follows: 45% infrastructure, 30% personnel, 15% tooling, and 10% contingency."
+  },
+  "scripted_response": "{\"type\": \"pie\", \"title\": \"Engineering Budget Allocation\", \"labels\": [\"Infrastructure\", \"Personnel\", \"Tooling\", \"Contingency\"], \"values\": [45, 30, 15, 10]}",
+  "expected": {
+    "type": "pie",
+    "title": "Engineering Budget Allocation",
+    "labels": ["Infrastructure", "Personnel", "Tooling", "Contingency"],
+    "values": [45, 30, 15, 10],
+    "xAxis": "Sequence",
+    "yAxis": "Value"
+  }
+}

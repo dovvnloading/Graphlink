@@ -135,8 +135,17 @@ def main() -> int:
         previous_run_crashed,
     )
     from graphlink_scratch_dirs import sweep_stale_scratch_dirs_on_launch
+    from graphlink_settings_store import SettingsManager
 
-    configure_logging()
+    # ADR-016 stage 16.1: read the persisted log level before attaching
+    # handlers, so the very first log line already honors it. A throwaway
+    # SettingsManager here (create_app() below constructs its own, separate
+    # instance moments later, reading the same file) is safe: _load_state/
+    # _save_state and the secrets migration it runs are idempotent, and this
+    # function is the real entry point, never invoked by the test suite (see
+    # backend/crash_recovery.py's own docstring on that same guarantee).
+    configured_level = getattr(logging, SettingsManager().get_log_level(), logging.INFO)
+    configure_logging(level=configured_level)
     install_exception_handlers()
     crashed = previous_run_crashed()
     mark_running()

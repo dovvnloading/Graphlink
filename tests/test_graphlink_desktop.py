@@ -37,6 +37,7 @@ import pytest
 import graphlink_desktop
 import backend.crash_recovery as crash_recovery_module
 import graphlink_scratch_dirs as scratch_dirs_module
+import graphlink_settings_store as settings_store_module
 
 
 class _FakeThread:
@@ -185,6 +186,20 @@ def desktop_harness(tmp_path, monkeypatch):
     monkeypatch.setattr(crash_recovery_module, "configure_logging", lambda *a, **k: None)
     monkeypatch.setattr(crash_recovery_module, "install_exception_handlers", lambda *a, **k: None)
     monkeypatch.setattr(crash_recovery_module, "previous_run_crashed", lambda *a, **k: False)
+
+    # ADR-016 stage 16.1: main() reads the persisted log level via a
+    # throwaway SettingsManager() BEFORE configure_logging() - a real
+    # instance would touch ~/.graphlink/session.dat on whatever machine
+    # runs this suite. Same "patch the source module, not graphlink_desktop's
+    # local name" reasoning as configure_logging above (a fresh `from
+    # graphlink_settings_store import SettingsManager` runs every call).
+    class _FakeLogLevelSettingsManager:
+        def get_log_level(self):
+            return "INFO"
+
+    monkeypatch.setattr(
+        settings_store_module, "SettingsManager", lambda *a, **k: _FakeLogLevelSettingsManager()
+    )
 
     def fake_mark_running(*_a, **_k):
         state.mark_running_calls += 1

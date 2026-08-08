@@ -18,6 +18,7 @@ import { ChatLibraryDialog } from "./chrome/ChatLibraryDialog";
 import { CommandPalette } from "./chrome/CommandPalette";
 import { Composer } from "./chrome/Composer";
 import { ComposerStore } from "./chrome/composerStore";
+import { DiagnosticsDialog } from "./chrome/DiagnosticsDialog";
 import { HelpDialog } from "./chrome/HelpDialog";
 import { NotificationBanner } from "./chrome/NotificationBanner";
 import { PinOverlay } from "./chrome/PinOverlay";
@@ -325,6 +326,7 @@ function App() {
                 <CommandPalette store={sceneStore} />
                 <AboutDialog transport={transport} />
                 <HelpDialog />
+                <DiagnosticsDialog transport={transport} />
                 <SettingsDialog transport={transport} />
                 <ChatLibraryDialog transport={transport} />
               </div>

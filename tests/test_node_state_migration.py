@@ -263,12 +263,12 @@ def test_scene_node_core_field_count():
 
 
 # Captured from SceneDocument.scene_payload()'s real output pre-migration
-# (a single chat node, ADR-002 stage 2.5 PR1/image baseline) - sorted, 90
+# (a single chat node, ADR-002 stage 2.5 PR1/image baseline) - sorted, 91
 # keys (87 pre-6.8 + promptTokens/completionTokens, ADR-006 stage 6.8 +
-# toolCalls, ADR-007 stage 7.4). scene_payload emits this SAME key set for
-# every node regardless of kind (one flat dict literal, no per-kind
-# branching), so one representative node is sufficient; the point is the
-# KEY SET, not per-kind values.
+# toolCalls, ADR-007 stage 7.4 + estimatedCostUsd, ADR-016 stage 16.2).
+# scene_payload emits this SAME key set for every node regardless of kind
+# (one flat dict literal, no per-kind branching), so one representative node
+# is sufficient; the point is the KEY SET, not per-kind values.
 _EXPECTED_SCENE_NODE_WIRE_KEYS = sorted([
     "artifactContent", "attachmentKind", "branchStatus", "byteSize",
     "chartAspectLocked", "chartAssetId", "chartAssetVersion", "chartData",
@@ -278,7 +278,8 @@ _EXPECTED_SCENE_NODE_WIRE_KEYS = sorted([
     "codeSandboxApprovalRequirements",
     "codeSandboxAwaitingApproval", "codeSandboxCode", "codeSandboxError",
     "codeSandboxOutput", "codeSandboxPrompt", "codeSandboxRequirements", "color",
-    "content", "contentParts", "durationSeconds", "filePath", "gitlinkBranch",
+    "content", "contentParts", "durationSeconds", "estimatedCostUsd", "filePath",
+    "gitlinkBranch",
     "gitlinkChangeFingerprint", "gitlinkChangeState", "gitlinkContextStats",
     "gitlinkContextSummary", "gitlinkContextVersion", "gitlinkError",
     "gitlinkLocalRoot", "gitlinkPendingChanges", "gitlinkPreviewText",

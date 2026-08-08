@@ -37,6 +37,12 @@ class TokenCounterStatePayload:
     completionTokens: int | None = None
     usageIsReal: bool = False
     estimatedCostUsd: float | None = None
+    # ADR-016 stage 16.2: cumulative across every real-usage reply this
+    # session has seen so far (never reset by a new draft/reply, unlike the
+    # fields above) - see backend/token_counter.py's TokenCounterState.
+    sessionPromptTokens: int = 0
+    sessionCompletionTokens: int = 0
+    sessionEstimatedCostUsd: float = 0.0
     # See ComposerStatePayload's identical field for the full negotiation
     # rationale; optional for the same reason (models a sender predating this
     # field, not today's - IslandBridge.publish() always emits it).

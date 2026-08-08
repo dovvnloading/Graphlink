@@ -29,6 +29,15 @@
     "schemaVersion": {
       "type": "integer"
     },
+    "sessionCompletionTokens": {
+      "type": "integer"
+    },
+    "sessionEstimatedCostUsd": {
+      "type": "number"
+    },
+    "sessionPromptTokens": {
+      "type": "integer"
+    },
     "totalTokens": {
       "type": "integer"
     },
@@ -43,7 +52,10 @@
     "outputTokens",
     "contextTokens",
     "totalTokens",
-    "usageIsReal"
+    "usageIsReal",
+    "sessionPromptTokens",
+    "sessionCompletionTokens",
+    "sessionEstimatedCostUsd"
   ],
   "title": "TokenCounterState",
   "type": "object"

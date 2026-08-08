@@ -276,8 +276,13 @@ class AgentDispatcher:
     """One instance per session - never a module-level singleton, since two
     sessions must never share in-flight request state."""
 
-    def __init__(self, settings_manager: SettingsManager, provider_runtime=None):
+    def __init__(self, settings_manager: SettingsManager, provider_runtime=None, diagnostics=None):
         self._settings_manager = settings_manager
+        # ADR-016 stage 16.3: optional - None (every existing call site
+        # outside backend/app.py's real _configure_session) means "no
+        # diagnostics recording", exactly RunRegistry's own on_claim/on_end
+        # default. See backend/diagnostics.py's own module docstring.
+        self._diagnostics = diagnostics
         # ADR-006 stage 6.5: the session's ProviderRuntime. None means "the
         # default session": every provider call keeps going through
         # api_provider's module-level functions exactly as before (which the
@@ -295,7 +300,10 @@ class AgentDispatcher:
         # stage 2.4). "chat" is one shared kind for both start_chat_reply
         # and start_conversation_reply, mirroring the single dict they
         # already shared before this migration.
-        self._runs = RunRegistry()
+        self._runs = RunRegistry(
+            on_claim=diagnostics.record_run_claimed if diagnostics is not None else None,
+            on_end=diagnostics.record_run_ended if diagnostics is not None else None,
+        )
         # R4.4a/ADR-002 stage 2.4c: image generation ("image" kind, also
         # sharing self._runs now) is an INDEPENDENT single-slot kind,
         # separate from chat - preserves legacy's real, verified concurrent
@@ -3569,12 +3577,12 @@ def _call_gitlink_apply(local_root, pending_changes):
 
 
 def register_agents(
-    bus, composer_document, notifications_state, settings_manager, provider_runtime=None
+    bus, composer_document, notifications_state, settings_manager, provider_runtime=None, diagnostics=None
 ) -> AgentDispatcher:
     # ADR-006 stage 6.5: provider_runtime is None for the default session
     # (module-global path, byte-identical behavior) - see
     # AgentDispatcher.__init__'s own comment.
-    dispatcher = AgentDispatcher(settings_manager, provider_runtime=provider_runtime)
+    dispatcher = AgentDispatcher(settings_manager, provider_runtime=provider_runtime, diagnostics=diagnostics)
     # dispatcher.cancel is synchronous (just sets an Event and returns a
     # bool) - no publish/await needed here; the in-flight _run task's own
     # finally block handles the resulting state transition.

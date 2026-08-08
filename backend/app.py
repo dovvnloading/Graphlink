@@ -50,7 +50,9 @@ from backend.auth import (
 from backend.canvas import register_canvas
 from backend.chat_library import register_chat_library
 from backend.composer import register_composer
+from backend.api.intents_diagnostics import register_diagnostics_intents
 from backend.crash_recovery import maybe_show_crash_notice
+from backend.diagnostics import DiagnosticsState
 from backend.events import (
     DEFAULT_COALESCE_WINDOW_SECONDS,
     DEFAULT_SESSION_ID,
@@ -164,6 +166,7 @@ def _configure_session(
     settings_manager: SettingsManager,
     chat_db_path: Path | None,
     previous_run_crashed: bool = False,
+    session_count_fn=None,
 ) -> None:
     """Give every session the R0 topic surface. Later phases extend this
     with canvas/chrome/node topics - one registrar, one place to read the
@@ -194,8 +197,19 @@ def _configure_session(
     # into/out of "generating" state, and a real AgentDispatcher to hand off
     # to - both must exist before register_canvas builds the sendMessage
     # intent that calls them.
-    token_counter = register_token_counter(bus)
+    token_counter = register_token_counter(bus, settings_manager)
     composer_document = register_composer(bus, token_counter, settings_manager, notifications_state)
+
+    # ADR-016 stage 16.3: in-app diagnostics - fresh per session, same
+    # posture as token_counter/composer_document above (see backend/
+    # diagnostics.py's own module docstring for why this is safe despite
+    # RunRegistry's own logging already existing - explicit callbacks, not
+    # a shared logging.Handler). set_publish_recorder is a post-construction
+    # hook because bus (SessionBus) is already built by the time
+    # _configure_session runs (EventBus.session() constructs it).
+    diagnostics = DiagnosticsState(session_count_fn=session_count_fn)
+    bus.set_publish_recorder(diagnostics.record_publish)
+    bus.register_topic("diagnostics", diagnostics.payload)
 
     # R4 (doc/QT_REMOVAL_PLAN.md): the agent-dispatch service - one
     # AgentDispatcher per session (never a module-level singleton). Reachable
@@ -219,7 +233,7 @@ def _configure_session(
             api_provider.DEFAULT_RUNTIME.snapshot()
         )
     agent_dispatcher = register_agents(
-        bus, composer_document, notifications_state, settings_manager, provider_runtime
+        bus, composer_document, notifications_state, settings_manager, provider_runtime, diagnostics
     )
 
     # R1 (doc/QT_REMOVAL_PLAN.md): scene document + grid topics.
@@ -231,6 +245,14 @@ def _configure_session(
     canvas_document = register_canvas(
         bus, notifications_state, agent_dispatcher, composer_document, token_counter
     )
+
+    # ADR-016 stage 16.4: the diagnostics topic's two intents (export bundle,
+    # open log folder) - registered here, not immediately next to stage
+    # 16.3's `bus.register_topic("diagnostics", diagnostics.payload)` call
+    # above, because both need canvas_document (the SceneDocument the bundle
+    # tallies node counts from), which does not exist until register_canvas
+    # returns it, right above this line.
+    register_diagnostics_intents(bus, canvas_document, diagnostics)
 
     # ADR-002 stage 2.1d: ONE typed reference from here on
     # (backend/session_context.py), replacing what used to be two loose
@@ -334,9 +356,25 @@ def create_app(
     # SettingsManager exactly ONCE per process - process-global state, not
     # session state (see backend/agents.py's docstring).
     bootstrap_provider_state(settings_manager)
+    # ADR-016 stage 16.1: deliberately NOT calling apply_log_level here -
+    # create_app() is constructed dozens of times per pytest run (every test
+    # that touches the WS/HTTP surface), and mutating the ROOT logger's level
+    # as a side effect of that would silently change what caplog captures for
+    # every unrelated test running afterward (root defaults to WARNING;
+    # nothing here would ever set it back). The real boot path
+    # (graphlink_desktop.py's main(), never invoked by tests) applies the
+    # persisted level once; the live intent (setLogLevel, app-settings topic)
+    # applies a user-initiated change - both explicit, neither an invisible
+    # side effect of building the app.
     bus = EventBus(
         configure_session=lambda session_bus: _configure_session(
-            session_bus, settings_manager, chat_db_path, previous_run_crashed
+            session_bus, settings_manager, chat_db_path, previous_run_crashed,
+            # ADR-016 stage 16.3: `bus` here is EventBus.session()'s host
+            # instance, resolved by Python's normal closure late-binding -
+            # this lambda only ever RUNS after `bus = EventBus(...)` has
+            # fully returned and bound the name in the enclosing scope, even
+            # though it's syntactically referenced mid-construction here.
+            session_count_fn=lambda: len(bus._sessions),
         ),
         # ADR-004 stage 4.3: see _evict_idle_session's own docstring.
         evict_idle_session=_evict_idle_session,

@@ -483,3 +483,145 @@ def test_has_any_live_work_counts_a_popped_but_unfinished_orphan_task():
         assert registry.has_any_live_work() is False
 
     asyncio.run(run())
+
+
+# -- ADR-016 stage 16.1: run-lifecycle logging --------------------------
+#
+# Instrumented at the registry (claim/cancel/_pop) rather than at each of
+# the app's 12 dispatch surfaces - see run_lifecycle.py's own module-level
+# comment on _logger for why. These tests prove every kind gets a traced
+# lifecycle "for free" through the shared primitive, without needing a
+# real chat/chart/etc. dispatch surface in the loop.
+
+
+def test_claim_logs_run_claimed_with_run_id_kind_and_node_id(caplog):
+    registry = RunRegistry()
+    with caplog.at_level("INFO", logger="graphlink.run"):
+        handle = registry.claim("chart", node_id="n-1")
+
+    records = [r for r in caplog.records if r.name == "graphlink.run"]
+    assert len(records) == 1
+    assert records[0].message == "run claimed"
+    assert records[0].run_id == handle.request_id
+    assert records[0].kind == "chart"
+    assert records[0].node_id == "n-1"
+
+
+def test_release_logs_run_released(caplog):
+    registry = RunRegistry()
+    handle = registry.claim("note")
+    with caplog.at_level("INFO", logger="graphlink.run"):
+        registry.release(handle.request_id)
+
+    records = [r for r in caplog.records if r.name == "graphlink.run"]
+    assert len(records) == 1
+    assert records[0].message == "run released"
+    assert records[0].run_id == handle.request_id
+    assert records[0].kind == "note"
+
+
+def test_release_of_an_unknown_request_id_logs_nothing(caplog):
+    registry = RunRegistry()
+    with caplog.at_level("INFO", logger="graphlink.run"):
+        registry.release("never-claimed")
+
+    assert [r for r in caplog.records if r.name == "graphlink.run"] == []
+
+
+def test_cancel_logs_run_cancelled_then_run_released(caplog):
+    registry = RunRegistry()
+    handle = registry.claim("chat", cancel_event=threading.Event())
+    with caplog.at_level("INFO", logger="graphlink.run"):
+        assert registry.cancel(handle.request_id) is True
+
+    records = [r for r in caplog.records if r.name == "graphlink.run"]
+    messages = [r.message for r in records]
+    assert messages == ["run cancelled", "run released"], (
+        "cancel() fires the mechanism and immediately pops the slot - both "
+        "must be traced, in order"
+    )
+    assert all(r.run_id == handle.request_id for r in records)
+    assert all(r.kind == "chat" for r in records)
+
+
+def test_cancel_of_a_kind_with_no_mechanism_logs_nothing(caplog):
+    # Matches cancel()'s own "kind that cannot be cancelled" contract - a
+    # handle with neither cancel_event nor on_cancel never fires, so nothing
+    # about it should be logged either.
+    registry = RunRegistry()
+    handle = registry.claim("chart")
+    with caplog.at_level("INFO", logger="graphlink.run"):
+        assert registry.cancel(handle.request_id) is False
+
+    assert [r for r in caplog.records if r.name == "graphlink.run"] == []
+
+
+def test_cancel_all_logs_every_fired_handle(caplog):
+    registry = RunRegistry()
+    chat_handle = registry.claim("chat", cancel_event=threading.Event())
+    web_handle = registry.claim("web_research", on_cancel=lambda: None)
+    with caplog.at_level("INFO", logger="graphlink.run"):
+        registry.cancel_all()
+
+    records = [r for r in caplog.records if r.name == "graphlink.run"]
+    cancelled_run_ids = {r.run_id for r in records if r.message == "run cancelled"}
+    assert cancelled_run_ids == {chat_handle.request_id, web_handle.request_id}
+
+
+# -- ADR-016 stage 16.3: diagnostics on_claim/on_end callbacks ----------
+#
+# Explicit callbacks (not derived from the caplog-visible logging above) -
+# see backend/diagnostics.py's own module docstring for why. None by
+# default (every test above this point never passes them) - these tests
+# prove the callbacks fire with the right arguments and in the right order
+# relative to each other, independent of backend/diagnostics.py's own
+# DiagnosticsState (which has its own dedicated test file).
+
+
+def test_on_claim_fires_with_run_id_kind_and_node_id():
+    calls = []
+    registry = RunRegistry(on_claim=lambda *args: calls.append(args))
+    handle = registry.claim("chart", node_id="n-1")
+    assert calls == [(handle.request_id, "chart", "n-1")]
+
+
+def test_on_end_fires_completed_on_release():
+    calls = []
+    registry = RunRegistry(on_end=lambda *args: calls.append(args))
+    handle = registry.claim("note")
+    registry.release(handle.request_id)
+    assert calls == [(handle.request_id, "completed")]
+
+
+def test_on_end_does_not_fire_on_release_of_an_unknown_request_id():
+    calls = []
+    registry = RunRegistry(on_end=lambda *args: calls.append(args))
+    registry.release("never-claimed")
+    assert calls == []
+
+
+def test_on_end_fires_cancelled_not_completed_on_cancel():
+    calls = []
+    registry = RunRegistry(on_end=lambda *args: calls.append(args))
+    handle = registry.claim("chat", cancel_event=threading.Event())
+    registry.cancel(handle.request_id)
+    # cancel() pops via _finish_cancel -> _pop, but release() is never
+    # called for a cancelled run - the worker's own late `finally` calls
+    # release() too, and _pop only returns non-None once, so on_end must
+    # fire exactly once, as "cancelled", never overwritten to "completed".
+    assert calls == [(handle.request_id, "cancelled")]
+
+    # The worker's own late release() (registry.release is idempotent -
+    # _pop returns None the second time) must not re-fire on_end.
+    registry.release(handle.request_id)
+    assert calls == [(handle.request_id, "cancelled")]
+
+
+def test_on_end_fires_cancelled_for_every_fired_handle_in_cancel_all():
+    calls = []
+    registry = RunRegistry(on_end=lambda *args: calls.append(args))
+    chat_handle = registry.claim("chat", cancel_event=threading.Event())
+    chart_handle = registry.claim("chart")  # no cancel mechanism - never fires
+    registry.cancel_all()
+    assert calls == [(chat_handle.request_id, "cancelled")]
+    assert chart_handle.request_id not in [c[0] for c in calls]

@@ -3036,6 +3036,17 @@ def _translate_chat_exception(exc: Exception, state, messages: list) -> None:
     if isinstance(exc, RequestCancelledError):
         raise exc
 
+    # ADR-016 stage 16.3: the ONE choke point both chat() and chat_stream()
+    # funnel every non-cancel failure through - record it once here rather
+    # than at each of the two call sites (backend/diagnostics.py's own
+    # module docstring explains why this is process-global, not per-session).
+    from backend.diagnostics import record_provider_error
+
+    record_provider_error(
+        state.api_provider_type if state.use_api_mode else state.local_provider_type,
+        str(exc),
+    )
+
     error_str = str(exc).lower()
     status_code = getattr(exc, "status_code", None)
 

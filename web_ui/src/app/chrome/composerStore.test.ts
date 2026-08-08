@@ -112,6 +112,10 @@ describe("ComposerStore", () => {
       completionTokens: null,
       usageIsReal: false,
       estimatedCostUsd: null,
+      // ADR-016 stage 16.2: session-cumulative keys (required by the validator).
+      sessionPromptTokens: 0,
+      sessionCompletionTokens: 0,
+      sessionEstimatedCostUsd: 0,
     });
     listeners.get("notification")!({
       schemaVersion: 1,

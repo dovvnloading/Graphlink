@@ -6,11 +6,15 @@ it was originally introduced alongside the widget that displays its output.
 Nothing here has ever imported Qt.
 """
 
+import logging
+
 try:
     import tiktoken
     TIKTOKEN_AVAILABLE = True
 except ImportError:
     TIKTOKEN_AVAILABLE = False
+
+logger = logging.getLogger(__name__)
 
 
 class TokenEstimator:
@@ -25,7 +29,9 @@ class TokenEstimator:
                     cls._encoding = tiktoken.get_encoding("cl100k_base")
                 except Exception:
                     cls._encoding = None
-                    print("Warning: tiktoken installed, but failed to get encoding. Falling back to character count.")
+                    logger.warning(
+                        "tiktoken installed, but failed to get encoding. Falling back to character count."
+                    )
         return cls._instance
 
     def count_tokens(self, text: str) -> int:

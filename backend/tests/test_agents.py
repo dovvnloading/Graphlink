@@ -711,6 +711,13 @@ def test_real_usage_flows_to_the_token_counter_and_reply_node(monkeypatch):
         assert reply.state.completion_tokens == 22
         assert reply.state.provider == "ollama"
         assert reply.state.model  # the fake-configured chat model id
+        # ADR-016 stage 16.2: local providers cost $0.00, not None (a real
+        # answer, not "unknown") - stamped as a point-in-time snapshot
+        # alongside the counts above.
+        assert reply.state.estimated_cost_usd == 0.0
+        assert payload["sessionPromptTokens"] == 111
+        assert payload["sessionCompletionTokens"] == 22
+        assert payload["sessionEstimatedCostUsd"] == 0.0
 
     asyncio.run(run())
 

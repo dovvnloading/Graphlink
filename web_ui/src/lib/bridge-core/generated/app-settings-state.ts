@@ -19,6 +19,7 @@ export interface AppSettingsState {
   notificationPreferences: Record<string, boolean>;
   githubTokenConfigured: boolean;
   secretsEncryptedAtRest: boolean;
+  logLevel: string;
   activeApiProvider: string;
   viewingApiProvider: string;
   apiBaseUrl: string;
@@ -139,6 +140,11 @@ function checkAppSettingsState(value: unknown, path: string, errors: string[]): 
     const fieldValue = value["secretsEncryptedAtRest"];
     if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.secretsEncryptedAtRest: missing required field`);
     else { if (typeof fieldValue !== "boolean") errors.push(`${path}.secretsEncryptedAtRest` + ": expected boolean"); }
+  }
+  {
+    const fieldValue = value["logLevel"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.logLevel: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.logLevel` + ": expected string"); }
   }
   {
     const fieldValue = value["activeApiProvider"];

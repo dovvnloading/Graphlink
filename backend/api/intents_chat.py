@@ -179,6 +179,12 @@ def _make_on_usage(
             target = document.nodes[node_id]
             target.state.prompt_tokens = usage.get("prompt_tokens")
             target.state.completion_tokens = usage.get("completion_tokens")
+            # ADR-016 stage 16.2: a point-in-time cost snapshot - see
+            # ChatState.estimated_cost_usd's own comment.
+            target.state.estimated_cost_usd = token_counter.estimate_cost_for(
+                usage.get("prompt_tokens"), usage.get("completion_tokens"),
+                provider=provider, model=model,
+            )
             await publish_scene()
 
     return _on_usage
