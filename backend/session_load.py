@@ -384,6 +384,9 @@ def _restore_chat_payload(payload: dict[str, Any]) -> SceneNode:
             # matching the dataclass default ("not reported").
             prompt_tokens=payload.get("prompt_tokens"),
             completion_tokens=payload.get("completion_tokens"),
+            # ADR-016 stage 16.2: absent in every pre-16.2 save -> None,
+            # matching the dataclass default.
+            estimated_cost_usd=payload.get("estimated_cost_usd"),
             # ADR-007 stage 7.4: absent in every pre-7.4 save -> [], matching
             # the dataclass default. Each item is validated only loosely
             # (dict(...) below tolerates hand-edited/legacy entries missing a

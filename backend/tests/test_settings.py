@@ -299,6 +299,48 @@ def test_get_mcp_servers_tolerates_a_malformed_entry_on_disk_without_dropping_th
     assert [entry["name"] for entry in manager.get_mcp_servers()] == ["ok"]
 
 
+# -- ADR-016 stage 16.2: pricing overrides -----------------------------------
+
+
+def test_get_pricing_overrides_defaults_to_empty(manager):
+    assert manager.get_pricing_overrides() == {}
+
+
+def test_set_pricing_overrides_persists_and_normalizes_a_round_trip(manager):
+    manager.set_pricing_overrides({"My-Custom-Model": {"input": 1.5, "output": 3.0}})
+    assert manager.get_pricing_overrides() == {
+        "my-custom-model": {"input": 1.5, "output": 3.0},  # lowercased key
+    }
+
+    reloaded = SettingsManager(manager.state_file)
+    assert reloaded.get_pricing_overrides() == manager.get_pricing_overrides()
+
+
+def test_set_pricing_overrides_replaces_the_whole_table_not_a_merge(manager):
+    manager.set_pricing_overrides({"model-a": {"input": 1.0, "output": 1.0}})
+    manager.set_pricing_overrides({"model-b": {"input": 2.0, "output": 2.0}})
+    assert set(manager.get_pricing_overrides()) == {"model-b"}
+
+
+def test_set_pricing_overrides_drops_malformed_entries(manager):
+    manager.set_pricing_overrides({
+        "": {"input": 1.0, "output": 1.0},  # empty key
+        "negative": {"input": -1.0, "output": 1.0},  # negative price
+        "not-a-dict": "oops",
+        "valid": {"input": 1.0, "output": 2.0},
+    })
+    assert manager.get_pricing_overrides() == {"valid": {"input": 1.0, "output": 2.0}}
+
+
+def test_get_pricing_overrides_tolerates_a_malformed_table_on_disk(tmp_path):
+    import json
+
+    state_file = tmp_path / "session.dat"
+    state_file.write_text(json.dumps({"pricing_overrides": "not a dict"}), encoding="utf-8")
+    manager = SettingsManager(state_file)
+    assert manager.get_pricing_overrides() == {}
+
+
 # -- R7.4a: API-provider settings page. New intents on the same "app-settings"
 # -- topic: setViewingApiProvider (session-local, mirrors setActiveSection),
 # -- loadApiModels/saveApiConfiguration (async, wrap api_provider.py calls via

@@ -72,6 +72,7 @@ export interface SceneNodeRow {
   responseIncomplete: boolean;
   promptTokens?: number | null;
   completionTokens?: number | null;
+  estimatedCostUsd?: number | null;
   isFinalDeliverable: boolean;
   color?: string | null;
   headerColor?: string | null;
@@ -560,6 +561,10 @@ function checkSceneNodeRow(value: unknown, path: string, errors: string[]): void
   {
     const fieldValue = value["completionTokens"];
     if (fieldValue !== undefined && fieldValue !== null) { if (typeof fieldValue !== "number") errors.push(`${path}.completionTokens` + ": expected number"); }
+  }
+  {
+    const fieldValue = value["estimatedCostUsd"];
+    if (fieldValue !== undefined && fieldValue !== null) { if (typeof fieldValue !== "number") errors.push(`${path}.estimatedCostUsd` + ": expected number"); }
   }
   {
     const fieldValue = value["isFinalDeliverable"];

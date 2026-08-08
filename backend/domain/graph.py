@@ -2012,6 +2012,11 @@ class SceneDocument(BranchOps, GroupOps, CommandOps):
             "completionTokens": (
                 n.state.completion_tokens if isinstance(n.state, ChatState) else None
             ),
+            # ADR-016 stage 16.2: the cost snapshot taken when usage was
+            # stamped - see ChatState.estimated_cost_usd's own comment.
+            "estimatedCostUsd": (
+                n.state.estimated_cost_usd if isinstance(n.state, ChatState) else None
+            ),
             # ADR-007 stage 7.4: see ChatState.tool_invocations' own comment
             # and ToolInvocationRow's own docstring (contracts/graphlink_
             # scene_payload.py) for why `arguments` is JSON-encoded here

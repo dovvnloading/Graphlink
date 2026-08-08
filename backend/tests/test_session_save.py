@@ -586,6 +586,24 @@ def test_round_trip_preserves_chat_tool_invocations():
     ]
 
 
+def test_round_trip_preserves_chat_estimated_cost_usd():
+    # ADR-016 stage 16.2: the cost snapshot survives save/load, same
+    # posture as prompt_tokens/completion_tokens. The untouched sibling
+    # node pins the load path's absent-key -> None default (every pre-16.2
+    # save lacks the key).
+    doc = SceneDocument()
+    doc.add_chat_node(0, 0, "no cost recorded", is_user=False)
+    priced = doc.add_chat_node(0, 160, "a priced reply", is_user=False)
+    priced.state.estimated_cost_usd = 0.0042
+
+    doc2 = _round_trip(doc)
+    plain2 = next(n for n in doc2.nodes.values() if n.content == "no cost recorded")
+    priced2 = next(n for n in doc2.nodes.values() if n.content == "a priced reply")
+
+    assert plain2.state.estimated_cost_usd is None
+    assert priced2.state.estimated_cost_usd == 0.0042
+
+
 def test_round_trip_preserves_conversation_history_incomplete_marker():
     # ADR-006 stage 6.4 (H5): a conversation node's partial assistant
     # message carries its "incomplete" key through save/load untouched -

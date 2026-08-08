@@ -1101,6 +1101,17 @@ body,
   max-width: 140px;
 }
 
+/* ADR-016 stage 16.2: real per-node token/cost usage, same plain-text
+   scale as .chat-node-model-badge next to it - a compact "prompt→completion
+   · $cost" label, not a pill (numbers vary too widely in width). */
+.chat-node-usage-badge {
+  font-size: 10px;
+  line-height: 1;
+  color: var(--gl-surface-text-muted);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
 /* ADR-002 Workstream 1 ("Branch status and lifecycle"): a small filled dot,
    ALWAYS rendered (unlike every other badge above, which is conditional) -
    backgroundColor is set inline per-node (one of 4 real, visually-distinct

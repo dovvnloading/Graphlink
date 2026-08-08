@@ -344,10 +344,14 @@ def test_token_counter_payload_totals_all_three():
     assert set(payload) == {
         "inputTokens", "outputTokens", "contextTokens", "totalTokens",
         "promptTokens", "completionTokens", "usageIsReal", "estimatedCostUsd",
+        "sessionPromptTokens", "sessionCompletionTokens", "sessionEstimatedCostUsd",
     }
     assert payload["promptTokens"] is None
     assert payload["usageIsReal"] is False
     assert payload["estimatedCostUsd"] is None
+    assert payload["sessionPromptTokens"] == 0
+    assert payload["sessionCompletionTokens"] == 0
+    assert payload["sessionEstimatedCostUsd"] == 0.0
 
 
 def test_token_counter_real_usage_switches_total_and_estimates_cost():
@@ -380,6 +384,72 @@ def test_token_counter_unknown_cloud_model_has_no_cost_guess():
     assert estimate_cost_usd("OpenAI-Compatible", "totally-unknown", 100, 100) is None
     assert estimate_cost_usd("ollama", "anything", 100, 100) == 0.0
     assert estimate_cost_usd("Anthropic Claude", "claude-opus-5", None, None) is None
+
+
+# -- ADR-016 stage 16.2: pricing overrides + session-cumulative totals ------
+
+
+def test_estimate_cost_usd_prefers_an_exact_override_over_the_built_in_table():
+    from backend.token_counter import estimate_cost_usd
+
+    overrides = {"claude-sonnet-4-5": {"input": 1.0, "output": 2.0}}
+    cost = estimate_cost_usd(
+        "Anthropic Claude", "claude-sonnet-4-5", 1_000_000, 1_000_000, overrides=overrides,
+    )
+    assert cost == 3.0  # 1.0 + 2.0, not the built-in 3.0/15.0 claude-sonnet prices
+
+
+def test_estimate_cost_usd_falls_back_to_the_built_in_table_when_no_override_matches():
+    from backend.token_counter import estimate_cost_usd
+
+    overrides = {"some-other-model": {"input": 1.0, "output": 2.0}}
+    cost = estimate_cost_usd(
+        "Anthropic Claude", "claude-sonnet-4-5", 1_000_000, 1_000_000, overrides=overrides,
+    )
+    assert cost == 18.0  # the built-in claude-sonnet price, override didn't match
+
+
+def test_token_counter_state_reads_overrides_live_via_the_accessor():
+    # Not a stored snapshot at construction time - a later change to
+    # whatever pricing_overrides_fn returns is picked up on the next
+    # set_real_usage/payload() call, matching every other live-settings read
+    # in this codebase.
+    overrides = {}
+    state = TokenCounterState(pricing_overrides_fn=lambda: overrides)
+    state.set_real_usage(1_000_000, 1_000_000, provider="Anthropic Claude", model="claude-sonnet-4-5")
+    assert state.payload()["estimatedCostUsd"] == 18.0  # built-in price, no override yet
+
+    overrides["claude-sonnet-4-5"] = {"input": 0.0, "output": 0.0}
+    assert state.payload()["estimatedCostUsd"] == 0.0  # now free, override applied live
+
+
+def test_session_totals_accumulate_across_replies_and_survive_a_new_draft():
+    state = TokenCounterState()
+    state.set_real_usage(10, 20, provider="ollama", model="llama3:8b")
+    state.set_input_text("typing a new draft")  # resets prompt/completion, not session totals
+    state.set_real_usage(5, 15, provider="ollama", model="llama3:8b")
+
+    payload = state.payload()
+    assert payload["sessionPromptTokens"] == 15
+    assert payload["sessionCompletionTokens"] == 35
+
+
+def test_session_estimated_cost_accumulates_across_replies():
+    state = TokenCounterState()
+    state.set_real_usage(1_000_000, 1_000_000, provider="Anthropic Claude", model="claude-sonnet-4-5")
+    state.set_real_usage(1_000_000, 1_000_000, provider="Anthropic Claude", model="claude-sonnet-4-5")
+
+    assert state.payload()["sessionEstimatedCostUsd"] == 36.0  # 18.0 twice
+
+
+def test_session_totals_are_unaffected_by_a_reply_with_no_real_usage():
+    state = TokenCounterState()
+    state.set_real_usage(10, 20, provider="ollama", model="llama3:8b")
+    state.set_real_usage(None, None)  # e.g. a provider that reports nothing
+
+    payload = state.payload()
+    assert payload["sessionPromptTokens"] == 10
+    assert payload["sessionCompletionTokens"] == 20
 
 
 def test_set_output_text_estimates_the_same_way_as_set_input_text():

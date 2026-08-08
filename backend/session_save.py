@@ -215,6 +215,9 @@ def _serialize_chat_node(node: SceneNode) -> dict[str, Any]:
         # survives save/load like every other provenance field above.
         "prompt_tokens": node.state.prompt_tokens,
         "completion_tokens": node.state.completion_tokens,
+        # ADR-016 stage 16.2: the cost snapshot taken when usage was stamped
+        # - survives save/load like prompt_tokens/completion_tokens above.
+        "estimated_cost_usd": node.state.estimated_cost_usd,
         # ADR-007 stage 7.4: a plain list-of-dicts copy - see ChatState.
         # tool_invocations' own comment for the exact shape. Domain-side
         # `arguments` stays a real dict here (only JSON-encoded at the wire

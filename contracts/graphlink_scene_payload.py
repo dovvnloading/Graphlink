@@ -450,6 +450,9 @@ class SceneNodeRow:
     # providers that report nothing).
     promptTokens: int | None = None
     completionTokens: int | None = None
+    # ADR-016 stage 16.2: the USD cost estimated when usage was stamped -
+    # see backend/domain/node_states.py's ChatState.estimated_cost_usd.
+    estimatedCostUsd: float | None = None
     isFinalDeliverable: bool = False
     # R6.1: Notes/Frames/Containers - color/headerColor/itemIds are generic
     # (SceneNode core fields, any kind), the rest populated for kind in

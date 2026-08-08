@@ -149,6 +149,13 @@ export interface ChatNodeData extends Record<string, unknown> {
   // assistant turn that calls tools renders the calls and their results
   // (collapsible)".
   toolInvocations: ToolInvocationData[];
+  // ADR-016 stage 16.2: provider-reported real usage + the cost snapshot
+  // taken when it was stamped - null for user messages, non-chat kinds,
+  // and any reply whose provider reports nothing (e.g. llama.cpp streams).
+  // Rendered alongside the model badge below when present.
+  promptTokens: number | null;
+  completionTokens: number | null;
+  estimatedCostUsd: number | null;
 }
 
 // Mirrors the generated ToolInvocationRow (web_ui/src/lib/bridge-core/
@@ -763,6 +770,21 @@ export function ChatNodeView({ id, data, selected }: NodeProps<ChatFlowNode>) {
           {data.model && (
             <span className="chat-node-model-badge" title={data.provider ?? undefined}>
               {data.model}
+            </span>
+          )}
+          {(data.promptTokens != null || data.completionTokens != null) && (
+            // ADR-016 stage 16.2: real usage on the node itself - data
+            // exists on the wire since ADR-006 stage 6.8 but was never
+            // rendered until now (only the composer's own live counter
+            // showed it). estimatedCostUsd is null for local providers'
+            // genuine $0 vs an unpriced model - the "$" prefix distinguishes
+            // a real, if free, answer from nothing to show.
+            <span
+              className="chat-node-usage-badge"
+              title={`Prompt: ${data.promptTokens ?? "?"} · Completion: ${data.completionTokens ?? "?"}`}
+            >
+              {`${data.promptTokens ?? "?"}→${data.completionTokens ?? "?"}`}
+              {data.estimatedCostUsd != null && ` · $${data.estimatedCostUsd.toFixed(4)}`}
             </span>
           )}
           {data.isFinalDeliverable && (
