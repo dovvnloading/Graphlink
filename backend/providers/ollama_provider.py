@@ -57,6 +57,7 @@ from api_provider import (
     _is_ollama_bool_reasoning_model,
     _prepare_ollama_messages,
     _raise_if_cancelled,
+    ollama_supports_tools,
     ollama_think_kwarg,
     reasoning_budget_hint,
     split_reasoning_and_content,
@@ -66,6 +67,7 @@ from backend.providers.base import (
     ChatRequest,
     ProviderCapabilities,
     ProviderEvent,
+    ToolCall,
     normalize_usage,
 )
 
@@ -101,11 +103,21 @@ class OllamaProvider:
         # before; a False here would wrongly tell a future consumer to
         # disable attachments for vision-capable Ollama models (6.3
         # adversarial review finding on the first draft's under-claim).
+        # ADR-007 stage 7.1: unlike vision/audio (True unconditionally - see
+        # the comment above), tools IS a genuine per-model probe - see
+        # ollama_supports_tools' own docstring for why the two cases differ.
         self.capabilities = ProviderCapabilities(
             streaming=True,
             reasoning=ollama_think_kwarg(model, "high") is not None,
             vision=True,
             audio=True,
+            tools=ollama_supports_tools(model),
+            # ADR-007 stage 7.3: unlike tools (a genuine per-model probe),
+            # Ollama's `format` accepting a raw JSON Schema dict is a
+            # request-shape feature of the client/server protocol itself,
+            # not a per-model chat-template capability - True
+            # unconditionally, matching vision/audio's own reasoning above.
+            structured_output=True,
         )
 
     # -- shared request prep --------------------------------------------------
@@ -114,6 +126,24 @@ class OllamaProvider:
         _assert_ollama_audio_support(self.model_id, request.messages)
         messages = _prepare_ollama_messages(request.messages)
         kwargs = {k: v for k, v in request.extra_kwargs.items() if k != "cancellation_event"}
+        if request.tools:
+            # ADR-007 stage 7.1: Ollama's native shape mirrors OpenAI's -
+            # {"type":"function","function":{"name","description",
+            # "parameters"}} - `parameters` is the ToolSpec's own JSON
+            # Schema object, passed through untouched (Ollama does not
+            # narrow it to an OpenAPI subset the way Gemini's REST API
+            # does).
+            kwargs["tools"] = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": spec.name,
+                        "description": spec.description,
+                        "parameters": spec.input_schema,
+                    },
+                }
+                for spec in request.tools
+            ]
         if self.context_window:
             # Served context == budgeted context (see __init__). A caller's
             # own explicit options.num_ctx passthrough still wins.
@@ -152,6 +182,25 @@ class OllamaProvider:
             "Retry in Quick mode or choose a different chat format/model."
         )
 
+    @staticmethod
+    def _extract_tool_calls(message) -> tuple[ToolCall, ...]:
+        """ADR-007 stage 7.1: Ollama delivers tool calls whole - never
+        incrementally, so there is nothing to accumulate across chunks, in
+        contrast to OpenAI/Anthropic's per-delta buffers. Ollama's own
+        ToolCall has NO id field (see api_provider.ollama_supports_tools'
+        own docstring), so a stable per-turn id is synthesized from the
+        call's position - stable because Ollama's tool_calls list, once
+        delivered, is not re-ordered or re-delivered within the same turn."""
+        raw_calls = message.get("tool_calls") or []
+        return tuple(
+            ToolCall(
+                id=f"call_{index}",
+                name=raw["function"]["name"],
+                arguments=dict(raw["function"]["arguments"]),
+            )
+            for index, raw in enumerate(raw_calls)
+        )
+
     # -- the protocol ---------------------------------------------------------
 
     def stream(self, request: ChatRequest, cancel: CancelToken) -> Iterator[ProviderEvent]:
@@ -168,6 +217,7 @@ class OllamaProvider:
 
             content_parts: list[str] = []
             thinking_parts: list[str] = []
+            tool_calls: tuple[ToolCall, ...] = ()
             usage = None
             stream = ollama.chat(model=self.model_id, messages=messages, stream=True, **kwargs)
             try:
@@ -184,6 +234,14 @@ class OllamaProvider:
                     if delta_thinking:
                         thinking_parts.append(delta_thinking)
                         yield ProviderEvent("reasoning", delta_thinking)
+                    # ADR-007 stage 7.1: a tool-calling chunk is ALSO the
+                    # terminal chunk for this attempt (Ollama never streams
+                    # more content after tool_calls appear), so this check
+                    # sits ahead of the `done` check below rather than
+                    # inside it - `done` may not even be set the same chunk.
+                    if part["message"].get("tool_calls"):
+                        tool_calls = self._extract_tool_calls(part["message"])
+                        break
                     if part.get("done"):
                         # ADR-006 stage 6.8: the terminal chunk carries
                         # Ollama's real token counts.
@@ -193,6 +251,18 @@ class OllamaProvider:
                         break
             finally:
                 stream.close()  # idempotent on an already-exhausted generator
+
+            if tool_calls:
+                # ADR-007 stage 7.1: a pure tool-call turn is a legitimate,
+                # complete outcome - it must NOT enter the reasoning-retry
+                # loop below (that loop exists for "thinking but no visible
+                # ANSWER", not for "the model chose to call a tool instead
+                # of answering yet"). Any lead-in text before the call still
+                # streamed above as ordinary "text" events.
+                for call in tool_calls:
+                    yield ProviderEvent("tool_call", tool_call=call)
+                yield ProviderEvent("done", "".join(content_parts))
+                return
 
             try:
                 final = self._compose("".join(content_parts), "".join(thinking_parts))
@@ -204,6 +274,16 @@ class OllamaProvider:
         raise self._exhausted_retries_error() from last_reasoning_error
 
     # -- transitional non-streaming path (dies in stage 6.4) ------------------
+    #
+    # ADR-007 stage 7.1: deliberately NOT given tool-call support. complete()
+    # returns a bare str with no channel for ToolCall events to ride, and its
+    # only remaining callers (api_provider.chat()'s Ollama branch) never
+    # supply request.tools - the tool-use loop this stage introduces is
+    # built exclusively on stream()/chat_stream(), matching the ADR's own
+    # framing of tool calls as a streamed concept. If a future caller ever
+    # passes tools here, they are silently ignored (no `tools` kwarg is
+    # built below) rather than raising - consistent with `complete()`'s
+    # existing transitional-scope posture elsewhere in this class.
 
     def complete(self, request: ChatRequest, cancel: CancelToken) -> str:
         _raise_if_cancelled(cancel.event)

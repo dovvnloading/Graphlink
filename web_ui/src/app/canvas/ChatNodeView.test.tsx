@@ -80,6 +80,8 @@ function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}, selected:
         responseIncomplete: false,
         subscribeStream: vi.fn().mockReturnValue(vi.fn()),
         onCancelRegenerate,
+        // ADR-007 stage 7.4
+        toolInvocations: [],
         ...dataOverrides,
       },
     } as unknown as NodeProps<ChatFlowNode>;
@@ -926,5 +928,60 @@ describe("ChatNodeView interrupted banner (ADR-006 stage 6.4)", () => {
       subscribeStream: vi.fn().mockReturnValue(vi.fn()),
     });
     expect(screen.queryByText(/Response interrupted/)).toBeNull();
+  });
+});
+
+describe("ChatNodeView tool invocations (ADR-007 stage 7.4)", () => {
+  it("renders nothing when the turn made no tool calls (the overwhelming majority of chat nodes)", () => {
+    renderChatNode({ toolInvocations: [] });
+    expect(screen.queryByText(/tool call/)).toBeNull();
+  });
+
+  it("renders a collapsible summary, closed by default, with each call's name/arguments/result inside", async () => {
+    const user = userEvent.setup();
+    const { container } = renderChatNode({
+      isUser: false,
+      toolInvocations: [
+        {
+          id: "call_1",
+          name: "echo",
+          argumentsJson: '{"message": "hi"}',
+          result: "hi",
+          isError: false,
+        },
+      ],
+    });
+    const summary = screen.getByText("1 tool call");
+    const details = container.querySelector("details.chat-node-tool-invocations") as HTMLDetailsElement;
+    expect(details.open).toBe(false); // native <details> closed by default
+
+    await user.click(summary);
+    expect(details.open).toBe(true);
+    expect(screen.getByText("echo")).toBeInTheDocument();
+    expect(screen.getByText('{"message": "hi"}')).toBeInTheDocument();
+    expect(screen.getByText("hi")).toBeInTheDocument();
+  });
+
+  it("pluralizes the summary count for more than one call", () => {
+    renderChatNode({
+      isUser: false,
+      toolInvocations: [
+        { id: "call_1", name: "echo", argumentsJson: "{}", result: "one", isError: false },
+        { id: "call_2", name: "echo", argumentsJson: "{}", result: "two", isError: false },
+      ],
+    });
+    expect(screen.getByText("2 tool calls")).toBeInTheDocument();
+  });
+
+  it("marks a failed call visually distinct from a successful one", async () => {
+    const user = userEvent.setup();
+    const { container } = renderChatNode({
+      isUser: false,
+      toolInvocations: [
+        { id: "call_1", name: "broken_tool", argumentsJson: "{}", result: "boom", isError: true },
+      ],
+    });
+    await user.click(screen.getByText("1 tool call"));
+    expect(container.querySelector(".chat-node-tool-invocation.error")).not.toBeNull();
   });
 });

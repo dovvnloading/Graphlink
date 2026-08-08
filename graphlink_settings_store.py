@@ -311,6 +311,14 @@ class SettingsManager:
                     state['update_latest_version'] = ''
                 if 'update_available' not in state:
                     state['update_available'] = False
+                if 'mcp_servers' not in state or not isinstance(state.get('mcp_servers'), list):
+                    # ADR-007 stage 7.5: absent in every pre-7.5 save -> no
+                    # configured MCP servers, matching the initial-state
+                    # default below - a settings surface with nothing
+                    # configured yet is the correct, safe starting point,
+                    # not an error.
+                    state['mcp_servers'] = []
+                    state_changed = True
                 if 'schema_version' not in state:
                     state['schema_version'] = self.CURRENT_SCHEMA_VERSION
                     state_changed = True
@@ -410,6 +418,9 @@ class SettingsManager:
             "update_last_checked_at": "",
             "update_latest_version": "",
             "update_available": False,
+            # ADR-007 stage 7.5: MCP client configuration - see
+            # get_mcp_servers/set_mcp_servers' own docstrings.
+            "mcp_servers": [],
         }
         self._save_state(state)
         return state
@@ -965,4 +976,66 @@ class SettingsManager:
         self.state["gemini_api_key"] = ""
         self.state["api_models"] = {}
         self.state["api_models_by_provider"] = {}
+        self._save_state()
+
+    def get_mcp_servers(self) -> list:
+        """ADR-007 stage 7.5: configured MCP servers - the persisted
+        counterpart of backend/mcp_client.py's McpServerConfig (plain JSON-
+        safe dicts here; that module owns converting to/from its own
+        dataclass via to_dict/from_dict, keeping this store agnostic of
+        that module's types, same posture as get_llama_cpp_settings'
+        plain-dict return). Malformed/legacy entries are dropped rather
+        than raised on - a corrupted single entry must never break every
+        other configured server, or settings loading itself."""
+        raw_servers = self.state.get("mcp_servers", [])
+        if not isinstance(raw_servers, list):
+            return []
+        servers = []
+        for entry in raw_servers:
+            if not isinstance(entry, dict):
+                continue
+            name = str(entry.get("name", "")).strip()
+            command = str(entry.get("command", "")).strip()
+            if not name or not command:
+                continue
+            servers.append({
+                "name": name,
+                "command": command,
+                "args": [str(a) for a in (entry.get("args") or [])],
+                "scopes": sorted({str(s) for s in (entry.get("scopes") or [])}),
+                "approval": str(entry.get("approval") or "always"),
+                "enabled_tools": sorted({str(t) for t in (entry.get("enabled_tools") or [])}),
+                "enabled": bool(entry.get("enabled", True)),
+                "timeout": float(entry.get("timeout", 30.0) or 30.0),
+            })
+        return servers
+
+    def set_mcp_servers(self, servers: list) -> None:
+        """Replaces the WHOLE configured-server list, same "replace the
+        collection" posture as set_ollama_model_assignments - this is a
+        small, user-managed list edited as a unit (add/remove/edit one
+        server via a settings panel - ADR-012's own future surface, see
+        backend/mcp_client.py's module docstring), not an incrementally-
+        patched map. Validates the same way get_mcp_servers reads back
+        (name/command required, everything else normalized/defaulted) so
+        a round trip through set then get is always well-formed."""
+        normalized = []
+        for entry in (servers or []):
+            if not isinstance(entry, dict):
+                continue
+            name = str(entry.get("name", "")).strip()
+            command = str(entry.get("command", "")).strip()
+            if not name or not command:
+                continue
+            normalized.append({
+                "name": name,
+                "command": command,
+                "args": [str(a) for a in (entry.get("args") or [])],
+                "scopes": sorted({str(s) for s in (entry.get("scopes") or [])}),
+                "approval": str(entry.get("approval") or "always"),
+                "enabled_tools": sorted({str(t) for t in (entry.get("enabled_tools") or [])}),
+                "enabled": bool(entry.get("enabled", True)),
+                "timeout": float(entry.get("timeout", 30.0) or 30.0),
+            })
+        self.state["mcp_servers"] = normalized
         self._save_state()

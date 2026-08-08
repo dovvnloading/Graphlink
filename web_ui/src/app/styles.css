@@ -539,6 +539,57 @@ body,
   margin: 0 10px 8px;
 }
 
+/* ADR-007 stage 7.4: an assistant turn's tool calls + results - native
+   <details>/<summary>, styled to match the incomplete-banner's own bordered-
+   pill posture just above rather than a heavier custom disclosure widget. */
+.chat-node-tool-invocations {
+  margin: 0 10px 8px;
+  padding: 6px 10px;
+  font-size: 11px;
+  color: var(--gl-surface-text-primary);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 8px;
+}
+
+.chat-node-tool-invocations summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.chat-node-tool-invocations[open] summary {
+  margin-bottom: 6px;
+}
+
+.chat-node-tool-invocation {
+  padding: 6px 0;
+  border-top: 1px solid var(--gl-surface-border);
+}
+
+.chat-node-tool-invocation:first-of-type {
+  border-top: none;
+}
+
+.chat-node-tool-invocation-name {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.chat-node-tool-invocation.error .chat-node-tool-invocation-name {
+  color: var(--gl-semantic-status-error, currentColor);
+}
+
+.chat-node-tool-invocation-arguments,
+.chat-node-tool-invocation-result {
+  margin: 4px 0 0;
+  padding: 6px 8px;
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background-color: var(--gl-surface-inset, var(--gl-surface-node-body));
+  border-radius: 6px;
+}
+
 /* Node redesign, stage 2 ("typography and heading hierarchy"): headings
    were fixed px values (15/14/13/12) set independently of this element's
    own font-size, which itself is driven by the user-configurable

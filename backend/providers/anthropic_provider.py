@@ -20,6 +20,7 @@ exactly as _extract_anthropic_text does for the blocking path.
 
 from __future__ import annotations
 
+import json
 from typing import Iterator
 
 import graphlink_task_config as config
@@ -40,6 +41,7 @@ from backend.providers.base import (
     ChatRequest,
     ProviderCapabilities,
     ProviderEvent,
+    ToolCall,
     normalize_usage,
 )
 
@@ -76,7 +78,17 @@ class AnthropicProvider:
             audio=False,   # Anthropic has no audio input API; False is what
                            # keeps a future capability consumer from offering it
             image_generation=False,  # generate_image's branch raises the explicit "not yet" error
+            # ADR-007 stage 7.1: current Claude model families all support
+            # native tool use unconditionally (base.py's own
+            # ProviderCapabilities.tools comment) - no capability call needed.
+            tools=True,
         )
+
+    # ADR-007 stage 7.1: deliberately NOT given tool-call support, matching
+    # every other provider's complete() - it returns a bare str with no
+    # channel for ToolCall events, and its callers never supply
+    # request.tools. A future caller passing tools here has them silently
+    # ignored (no `tools` kwarg built below).
 
     def complete(self, request: ChatRequest, cancel: CancelToken) -> str:
         system_prompt, anthropic_messages = _prepare_anthropic_messages(
@@ -136,6 +148,15 @@ class AnthropicProvider:
         }
         if system_prompt:
             request_kwargs["system"] = _system_blocks_with_cache_control(system_prompt)
+        if request.tools:
+            # ADR-007 stage 7.1: Anthropic's native tool shape - {"name",
+            # "description", "input_schema"} - is the ToolSpec's own three
+            # fields verbatim, no wrapper object unlike OpenAI/Ollama's
+            # {"type":"function","function":{...}}.
+            request_kwargs["tools"] = [
+                {"name": tool.name, "description": tool.description, "input_schema": tool.input_schema}
+                for tool in request.tools
+            ]
 
         create_callable = getattr(getattr(self.client, "messages", None), "create", None)
         if callable(create_callable):
@@ -157,6 +178,12 @@ class AnthropicProvider:
 
         answer_parts: list[str] = []
         thinking_parts: list[str] = []
+        # ADR-007 stage 7.1: Anthropic streams a tool call as
+        # content_block_start (type "tool_use", carrying id/name) followed
+        # by zero or more content_block_delta "input_json_delta" events
+        # (partial_json fragments) - buffered per block INDEX, same shape
+        # as OpenAI's per-index buffering, then parsed once complete.
+        tool_call_buffers: dict = {}
         saw_message_stop = False
         # ADR-006 stage 6.8: input tokens arrive on message_start
         # (message.usage.input_tokens), output tokens on message_delta
@@ -200,6 +227,20 @@ class AnthropicProvider:
                         if thinking:
                             thinking_parts.append(thinking)
                             yield ProviderEvent("reasoning", thinking)
+                    elif delta_type == "input_json_delta":
+                        index = _extract_response_field(event, "index", None)
+                        buf = tool_call_buffers.get(index)
+                        if buf is not None:
+                            buf["json"] += str(_extract_response_field(delta, "partial_json", "") or "")
+                elif event_type == "content_block_start":
+                    content_block = _extract_response_field(event, "content_block", None)
+                    block_type = str(_extract_response_field(content_block, "type", "") or "").strip().lower()
+                    if block_type == "tool_use":
+                        tool_call_buffers[_extract_response_field(event, "index", None)] = {
+                            "id": str(_extract_response_field(content_block, "id", "") or ""),
+                            "name": str(_extract_response_field(content_block, "name", "") or ""),
+                            "json": "",
+                        }
                 elif event_type == "message_start":
                     message = _extract_response_field(event, "message", {})
                     start_usage = _extract_response_field(message, "usage", None)
@@ -224,6 +265,27 @@ class AnthropicProvider:
             raise RuntimeError(
                 "Anthropic stream ended unexpectedly before completion. Please try again."
             )
+
+        if tool_call_buffers:
+            # ADR-007 stage 7.1: a pure tool-call turn is a legitimate,
+            # complete outcome - it must NOT go through
+            # _compose_reasoned_response below, which raises for "thinking
+            # but no visible answer" (the exact, legitimate shape of a
+            # tool-call turn whose model reasoned before calling instead of
+            # answering), mirroring OllamaProvider.stream()'s own
+            # short-circuit ahead of its equivalent _compose() call.
+            for index in sorted(tool_call_buffers, key=str):
+                buf = tool_call_buffers[index]
+                yield ProviderEvent(
+                    "tool_call",
+                    tool_call=ToolCall(
+                        id=buf["id"],
+                        name=buf["name"],
+                        arguments=json.loads(buf["json"]) if buf["json"] else {},
+                    ),
+                )
+            yield ProviderEvent("done", "".join(answer_parts).strip())
+            return
 
         # The same composition contract as _extract_anthropic_text gives the
         # blocking path: answer + thinking through _compose_reasoned_response,

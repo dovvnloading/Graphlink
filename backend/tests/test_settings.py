@@ -181,6 +181,79 @@ def test_an_old_settings_file_without_schema_version_is_backfilled(tmp_path):
     assert json.loads(state_file.read_text(encoding="utf-8"))["schema_version"] == SettingsManager.CURRENT_SCHEMA_VERSION
 
 
+# -- ADR-007 stage 7.5: MCP server configuration -----------------------------
+
+
+def test_get_mcp_servers_defaults_to_an_empty_list(manager):
+    assert manager.get_mcp_servers() == []
+
+
+def test_a_pre_7_5_settings_file_backfills_mcp_servers_to_an_empty_list(tmp_path):
+    import json
+
+    state_file = tmp_path / "session.dat"
+    state_file.write_text(json.dumps({"show_token_counter": True}), encoding="utf-8")
+
+    old_manager = SettingsManager(state_file)
+    assert old_manager.get_mcp_servers() == []
+
+
+def test_set_mcp_servers_persists_and_normalizes_a_round_trip(manager):
+    manager.set_mcp_servers([
+        {
+            "name": "fs",
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+            "scopes": ["fs.read"],
+            "approval": "always",
+            "enabled_tools": ["read_file"],
+            "enabled": True,
+        },
+    ])
+    assert manager.get_mcp_servers() == [
+        {
+            "name": "fs",
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+            "scopes": ["fs.read"],
+            "approval": "always",
+            "enabled_tools": ["read_file"],
+            "enabled": True,
+            "timeout": 30.0,
+        },
+    ]
+
+    reloaded = SettingsManager(manager.state_file)
+    assert reloaded.get_mcp_servers() == manager.get_mcp_servers()
+
+
+def test_set_mcp_servers_replaces_the_whole_list_not_a_merge(manager):
+    manager.set_mcp_servers([{"name": "fs", "command": "npx"}])
+    manager.set_mcp_servers([{"name": "git", "command": "uvx"}])
+    assert [entry["name"] for entry in manager.get_mcp_servers()] == ["git"]
+
+
+def test_set_mcp_servers_drops_an_entry_missing_a_name_or_command(manager):
+    manager.set_mcp_servers([
+        {"name": "", "command": "npx"},
+        {"name": "fs"},  # no command
+        {"name": "valid", "command": "npx"},
+    ])
+    assert [entry["name"] for entry in manager.get_mcp_servers()] == ["valid"]
+
+
+def test_get_mcp_servers_tolerates_a_malformed_entry_on_disk_without_dropping_the_rest(tmp_path):
+    import json
+
+    state_file = tmp_path / "session.dat"
+    state_file.write_text(
+        json.dumps({"mcp_servers": ["not a dict", {"name": "ok", "command": "npx"}, {"command": "no name"}]}),
+        encoding="utf-8",
+    )
+    manager = SettingsManager(state_file)
+    assert [entry["name"] for entry in manager.get_mcp_servers()] == ["ok"]
+
+
 # -- R7.4a: API-provider settings page. New intents on the same "app-settings"
 # -- topic: setViewingApiProvider (session-local, mirrors setActiveSection),
 # -- loadApiModels/saveApiConfiguration (async, wrap api_provider.py calls via

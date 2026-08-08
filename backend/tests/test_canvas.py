@@ -205,6 +205,26 @@ def test_scene_payload_includes_chat_fields_defaulted_for_placeholders():
     assert chat_row["kind"] == "chat"
     assert chat_row["content"] == "real content"
     assert chat_row["isUser"] is True
+    # ADR-007 stage 7.4: the overwhelming common case - no tool-use loop has
+    # ever run against this node - defaults to an empty list, both for a
+    # placeholder and for an ordinary tool-less chat node.
+    assert rows["plain"]["toolCalls"] == []
+    assert chat_row["toolCalls"] == []
+
+
+def test_scene_payload_emits_a_chat_nodes_tool_invocations_with_json_encoded_arguments():
+    doc = SceneDocument()
+    node = doc.add_chat_node(0, 0, "assistant reply", False)
+    node.state.tool_invocations = [
+        {"id": "call_1", "name": "echo", "arguments": {"message": "hi"}, "result": "hi", "is_error": False},
+        {"id": "call_2", "name": "broken_tool", "arguments": {}, "result": "boom", "is_error": True},
+    ]
+    rows = {n["id"]: n for n in doc.scene_payload()["nodes"]}
+    tool_calls = rows[node.id]["toolCalls"]
+    assert tool_calls == [
+        {"id": "call_1", "name": "echo", "argumentsJson": '{"message": "hi"}', "result": "hi", "isError": False},
+        {"id": "call_2", "name": "broken_tool", "argumentsJson": "{}", "result": "boom", "isError": True},
+    ]
 
 
 # -- R3.5: code nodes --------------------------------------------------------

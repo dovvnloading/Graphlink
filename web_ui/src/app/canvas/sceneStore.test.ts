@@ -179,6 +179,8 @@ function validScenePayload(overrides: Record<string, unknown> = {}) {
         chartAspectLocked: true,
         chartSourceNodeId: "",
         chatScrollValue: 0.0,
+        // ADR-007 stage 7.4
+        toolCalls: [],
       },
     ],
     edges: [],

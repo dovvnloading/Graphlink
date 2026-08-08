@@ -562,6 +562,30 @@ def test_round_trip_preserves_chat_response_incomplete_marker():
     assert complete2.state.response_incomplete is False
 
 
+def test_round_trip_preserves_chat_tool_invocations():
+    # ADR-007 stage 7.4: a turn's tool calls + results survive save/load -
+    # `arguments` stays a real dict domain-side (only JSON-encoded at the
+    # wire boundary in graph.py's scene_payload()), so the round trip must
+    # preserve it as a dict, not a string. The untouched sibling node pins
+    # the load path's absent-key -> [] default (every pre-7.4 save lacks
+    # the key), same posture as the response_incomplete test above.
+    doc = SceneDocument()
+    doc.add_chat_node(0, 0, "no tools here", is_user=False)
+    with_tools = doc.add_chat_node(0, 160, "used a tool", is_user=False)
+    with_tools.state.tool_invocations = [
+        {"id": "call_1", "name": "echo", "arguments": {"message": "hi"}, "result": "hi", "is_error": False},
+    ]
+
+    doc2 = _round_trip(doc)
+    plain2 = next(n for n in doc2.nodes.values() if n.content == "no tools here")
+    tools2 = next(n for n in doc2.nodes.values() if n.content == "used a tool")
+
+    assert plain2.state.tool_invocations == []
+    assert tools2.state.tool_invocations == [
+        {"id": "call_1", "name": "echo", "arguments": {"message": "hi"}, "result": "hi", "is_error": False},
+    ]
+
+
 def test_round_trip_preserves_conversation_history_incomplete_marker():
     # ADR-006 stage 6.4 (H5): a conversation node's partial assistant
     # message carries its "incomplete" key through save/load untouched -

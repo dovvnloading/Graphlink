@@ -15,6 +15,8 @@ from backend.providers.base import (
     Provider,
     ProviderCapabilities,
     ProviderEvent,
+    ToolCall,
+    ToolSpec,
 )
 from backend.providers.fake import FakeProvider
 from backend.providers.gemini_provider import GeminiProvider
@@ -34,4 +36,6 @@ __all__ = [
     "Provider",
     "ProviderCapabilities",
     "ProviderEvent",
+    "ToolCall",
+    "ToolSpec",
 ]

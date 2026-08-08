@@ -127,6 +127,8 @@ function baseNode(overrides: Partial<SceneNodeRow> = {}): SceneNodeRow {
     chartSourceNodeId: "",
     htmlSplitterState: null,
     chatScrollValue: 0.0,
+    // ADR-007 stage 7.4
+    toolCalls: [],
     ...overrides,
   };
 }

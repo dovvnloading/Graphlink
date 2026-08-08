@@ -567,6 +567,37 @@
           "title": {
             "type": "string"
           },
+          "toolCalls": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "argumentsJson": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "isError": {
+                  "type": "boolean"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "result": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "argumentsJson",
+                "result",
+                "isError"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
           "x": {
             "type": "number"
           },
@@ -649,7 +680,8 @@
           "chartHeight",
           "chartAspectLocked",
           "chartSourceNodeId",
-          "chatScrollValue"
+          "chatScrollValue",
+          "toolCalls"
         ],
         "type": "object"
       },

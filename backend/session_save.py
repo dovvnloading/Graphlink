@@ -215,6 +215,12 @@ def _serialize_chat_node(node: SceneNode) -> dict[str, Any]:
         # survives save/load like every other provenance field above.
         "prompt_tokens": node.state.prompt_tokens,
         "completion_tokens": node.state.completion_tokens,
+        # ADR-007 stage 7.4: a plain list-of-dicts copy - see ChatState.
+        # tool_invocations' own comment for the exact shape. Domain-side
+        # `arguments` stays a real dict here (only JSON-encoded at the wire
+        # boundary in graph.py's scene_payload()), so the saved session file
+        # keeps it structured too.
+        "tool_invocations": [dict(call) for call in node.state.tool_invocations],
     }
 
 

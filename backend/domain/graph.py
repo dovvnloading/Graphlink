@@ -35,6 +35,7 @@ from __future__ import annotations
 
 from collections import deque
 import itertools
+import json
 import math
 import uuid
 from dataclasses import dataclass, field
@@ -2010,6 +2011,24 @@ class SceneDocument(BranchOps, GroupOps, CommandOps):
             "promptTokens": n.state.prompt_tokens if isinstance(n.state, ChatState) else None,
             "completionTokens": (
                 n.state.completion_tokens if isinstance(n.state, ChatState) else None
+            ),
+            # ADR-007 stage 7.4: see ChatState.tool_invocations' own comment
+            # and ToolInvocationRow's own docstring (contracts/graphlink_
+            # scene_payload.py) for why `arguments` is JSON-encoded here
+            # rather than passed through as a nested object.
+            "toolCalls": (
+                [
+                    {
+                        "id": str(call.get("id", "")),
+                        "name": str(call.get("name", "")),
+                        "argumentsJson": json.dumps(call.get("arguments") or {}, sort_keys=True),
+                        "result": str(call.get("result", "")),
+                        "isError": bool(call.get("is_error", False)),
+                    }
+                    for call in n.state.tool_invocations
+                ]
+                if isinstance(n.state, ChatState)
+                else []
             ),
             "isFinalDeliverable": n.id == self.final_deliverable_node_id,
             "researchStage": n.state.research_stage if isinstance(n.state, WebResearchState) else "",

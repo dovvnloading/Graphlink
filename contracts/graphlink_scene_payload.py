@@ -145,6 +145,13 @@ but SceneCanvas.tsx never reads it today (a backend-only multimodal
 round-trip capability, not a rendered feature) - C9 is specifically
 about fields an unsafe CAST reaches for, and no cast reaches for this
 one, so adding it here would not serve this stage's own exit criterion.
+
+ADR-007 stage 7.4 adds `toolCalls` (a list of `ToolInvocationRow`): the
+tool calls + results an assistant chat-node's turn made, populated for
+kind=="chat" rows whose turn actually invoked tools, defaulted `[]` for
+every other kind and for tool-less chat turns - same additive rule as
+everything above. See ToolInvocationRow's own docstring for why its
+`arguments` field is a JSON-encoded string, not a nested object.
 """
 
 from __future__ import annotations
@@ -227,6 +234,28 @@ class GitlinkPendingChangeRow:
     # default value, so this must be Optional for a delete-only item to
     # validate.
     content: str | None = None
+
+
+@dataclass
+class ToolInvocationRow:
+    """ADR-007 stage 7.4: one tool call + its result, attached to the
+    chat-kind assistant node whose turn made it - see SceneNodeRow.toolCalls'
+    own comment. `argumentsJson` is the call's arguments JSON-ENCODED as a
+    string, not a nested object: ToolCall.arguments (backend/providers/
+    base.py) is an arbitrary caller-defined JSON object shaped by whatever
+    tool was called, and graphlink_wire_schema.py's generator has no
+    construct for "any JSON object" (its own module docstring lists the
+    closed type set this deliberately refuses to guess beyond) - the same
+    reasoning that already makes gitlinkContextXml/similar opaque blobs
+    cross the wire as strings rather than structured fields. The frontend
+    renders it as formatted JSON text, which needs no structural typing
+    anyway."""
+
+    id: str
+    name: str
+    argumentsJson: str
+    result: str
+    isError: bool = False
 
 
 @dataclass
@@ -455,6 +484,14 @@ class SceneNodeRow:
     # kind=="chat" respectively, defaulted for every other kind.
     htmlSplitterState: float | None = None
     chatScrollValue: float = 0.0
+    # ADR-007 stage 7.4: an assistant turn's tool calls + their results,
+    # in call order - populated for kind=="chat" rows whose turn actually
+    # invoked tools (the overwhelming majority of chat nodes have none, the
+    # same "empty list, not null" default `history`/`itemIds` above already
+    # use), defaulted [] for every other kind. Rendered as a collapsible
+    # section (the ADR's own "an assistant turn that calls tools renders
+    # the calls and their results (collapsible)") in ChatNodeView.tsx.
+    toolCalls: list[ToolInvocationRow] = field(default_factory=list)
 
 
 @dataclass

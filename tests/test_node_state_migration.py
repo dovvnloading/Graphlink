@@ -263,11 +263,12 @@ def test_scene_node_core_field_count():
 
 
 # Captured from SceneDocument.scene_payload()'s real output pre-migration
-# (a single chat node, ADR-002 stage 2.5 PR1/image baseline) - sorted, 89
-# keys (87 pre-6.8 + promptTokens/completionTokens, ADR-006 stage 6.8).
-# scene_payload emits this SAME key set for every node regardless of
-# kind (one flat dict literal, no per-kind branching), so one representative
-# node is sufficient; the point is the KEY SET, not per-kind values.
+# (a single chat node, ADR-002 stage 2.5 PR1/image baseline) - sorted, 90
+# keys (87 pre-6.8 + promptTokens/completionTokens, ADR-006 stage 6.8 +
+# toolCalls, ADR-007 stage 7.4). scene_payload emits this SAME key set for
+# every node regardless of kind (one flat dict literal, no per-kind
+# branching), so one representative node is sufficient; the point is the
+# KEY SET, not per-kind values.
 _EXPECTED_SCENE_NODE_WIRE_KEYS = sorted([
     "artifactContent", "attachmentKind", "branchStatus", "byteSize",
     "chartAspectLocked", "chartAssetId", "chartAssetVersion", "chartData",
@@ -293,7 +294,7 @@ _EXPECTED_SCENE_NODE_WIRE_KEYS = sorted([
     "researchActiveSourceId", "researchCompleted", "researchError",
     "completionTokens", "promptTokens",
     "researchResult", "researchStage", "researchTotal", "responseIncomplete",
-    "synthesisInstructions", "title", "x", "y",
+    "synthesisInstructions", "title", "toolCalls", "x", "y",
 ])
 
 

@@ -94,6 +94,7 @@ function chatRow(id: string, x: number): SceneNodeRow {
         chartAssetId: "", chartAssetVersion: 0, chartWidth: 680.0, chartHeight: 500.0,
         chartAspectLocked: true, chartSourceNodeId: "", htmlSplitterState: null,
         chatScrollValue: 0.0,
+        toolCalls: [], // ADR-007 stage 7.4
       }),
     ) as unknown as SceneNodeRow),
   };

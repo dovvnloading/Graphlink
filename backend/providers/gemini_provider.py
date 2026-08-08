@@ -35,6 +35,7 @@ from backend.providers.base import (
     ChatRequest,
     ProviderCapabilities,
     ProviderEvent,
+    ToolCall,
     normalize_usage,
 )
 
@@ -63,6 +64,19 @@ class GeminiProvider:
             vision=True,
             audio=True,   # media rides the Files API upload path in _prepare_gemini_contents
             image_generation=True,
+            # ADR-007 stage 7.1: current Gemini model families all support
+            # native tool use unconditionally (base.py's own
+            # ProviderCapabilities.tools comment) - no capability call
+            # needed. NOTE: unlike the other three providers, this repo has
+            # no Gemini SDK to verify wire shapes against - stream()'s tool
+            # handling follows Gemini's documented public REST contract but
+            # is documentation-only, not SDK-source-verified (ToolSpec's own
+            # docstring flags the same caveat for input_schema).
+            tools=True,
+            # ADR-007 stage 7.3: native response_mime_type/response_schema
+            # structured outputs - see backend/structured_output.py's own
+            # _native_kwargs_for_active_provider comment.
+            structured_output=True,
         )
 
     def _request_body(self, request: ChatRequest, system_prompt, gemini_contents) -> dict:
@@ -80,6 +94,12 @@ class GeminiProvider:
         if generation_config:
             request_body["generationConfig"] = generation_config
         return request_body
+
+    # ADR-007 stage 7.1: deliberately NOT given tool-call support, matching
+    # every other provider's complete() - it returns a bare str with no
+    # channel for ToolCall events, and its callers never supply
+    # request.tools. A future caller passing tools here has them silently
+    # ignored (_request_body never reads request.tools; only stream() does).
 
     def complete(self, request: ChatRequest, cancel: CancelToken) -> str:
         system_prompt, gemini_contents, uploaded_files = _prepare_gemini_contents(
@@ -117,7 +137,22 @@ class GeminiProvider:
         )
         try:
             request_body = self._request_body(request, system_prompt, gemini_contents)
+            if request.tools:
+                # ADR-007 stage 7.1: Gemini's native shape wraps every tool
+                # in one functionDeclarations list under a single tools[0]
+                # entry (not one tools[] entry per tool, unlike the other
+                # three providers) - `parameters` is the ToolSpec's own
+                # input_schema passed through untouched; see ToolSpec's own
+                # docstring for the OpenAPI-subset caveat that imposes on
+                # callers targeting Gemini.
+                request_body["tools"] = [{
+                    "functionDeclarations": [
+                        {"name": tool.name, "description": tool.description, "parameters": tool.input_schema}
+                        for tool in request.tools
+                    ],
+                }]
             text_parts: list[str] = []
+            tool_calls: list[ToolCall] = []
             usage = None
             sse = _gemini_stream_sse(
                 f"{GEMINI_BASE_URL}/v1beta/models/{self.model_id}:streamGenerateContent?alt=sse",
@@ -161,6 +196,20 @@ class GeminiProvider:
                     for candidate in payload.get("candidates", []) or []:
                         content = candidate.get("content", {}) or {}
                         for part in content.get("parts", []) or []:
+                            # ADR-007 stage 7.1: Gemini delivers a function
+                            # call whole in one part - never incrementally,
+                            # like Ollama and unlike OpenAI/Anthropic's
+                            # per-delta JSON buffering - and, like Ollama,
+                            # gives it no native id, so one is synthesized
+                            # from this turn's call position.
+                            function_call = part.get("functionCall")
+                            if function_call is not None:
+                                tool_calls.append(ToolCall(
+                                    id=f"call_{len(tool_calls)}",
+                                    name=function_call.get("name", ""),
+                                    arguments=dict(function_call.get("args") or {}),
+                                ))
+                                continue
                             text = part.get("text")
                             if not text:
                                 continue
@@ -182,10 +231,21 @@ class GeminiProvider:
             # today, and giving the streamed path one would be a silent
             # behavior change. Revisit when Gemini gets composition.
             final = "".join(text_parts).strip()
-            if not final:
+            # ADR-007 stage 7.1: a pure tool-call turn legitimately has no
+            # text - only raise the empty-response error when there is
+            # ALSO no tool call to explain the silence, mirroring every
+            # other provider's short-circuit ahead of its own
+            # empty-response/reasoning-without-answer check.
+            if not final and not tool_calls:
                 raise RuntimeError("Gemini returned an empty response.")
         finally:
             for file_name in uploaded_files:
                 _gemini_delete_file(file_name, api_key=self.api_key)
+
+        if tool_calls:
+            for call in tool_calls:
+                yield ProviderEvent("tool_call", tool_call=call)
+            yield ProviderEvent("done", final)
+            return
 
         yield ProviderEvent("done", final, usage=usage)

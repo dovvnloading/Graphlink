@@ -384,6 +384,14 @@ def _restore_chat_payload(payload: dict[str, Any]) -> SceneNode:
             # matching the dataclass default ("not reported").
             prompt_tokens=payload.get("prompt_tokens"),
             completion_tokens=payload.get("completion_tokens"),
+            # ADR-007 stage 7.4: absent in every pre-7.4 save -> [], matching
+            # the dataclass default. Each item is validated only loosely
+            # (dict(...) below tolerates hand-edited/legacy entries missing a
+            # key - scene_payload()'s own .get()-based wire projection is
+            # what actually protects the frontend from a malformed one).
+            tool_invocations=[
+                dict(call) for call in (payload.get("tool_invocations") or []) if isinstance(call, dict)
+            ],
         ),
     )
 

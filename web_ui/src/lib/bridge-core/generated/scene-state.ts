@@ -93,6 +93,7 @@ export interface SceneNodeRow {
   chartSourceNodeId: string;
   htmlSplitterState?: number | null;
   chatScrollValue: number;
+  toolCalls: ToolInvocationRow[];
 }
 
 export interface ConversationMessageRow {
@@ -157,6 +158,14 @@ export interface ChartFlowRow {
   source: string;
   target: string;
   value: number;
+}
+
+export interface ToolInvocationRow {
+  id: string;
+  name: string;
+  argumentsJson: string;
+  result: string;
+  isError: boolean;
 }
 
 export interface SceneEdgeRow {
@@ -653,6 +662,12 @@ function checkSceneNodeRow(value: unknown, path: string, errors: string[]): void
     if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.chatScrollValue: missing required field`);
     else { if (typeof fieldValue !== "number") errors.push(`${path}.chatScrollValue` + ": expected number"); }
   }
+  {
+    const fieldValue = value["toolCalls"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.toolCalls: missing required field`);
+    else { if (!Array.isArray(fieldValue)) errors.push(`${path}.toolCalls` + ": expected array");
+    else (fieldValue as unknown[]).forEach((item, i) => { checkToolInvocationRow(item, `${path}.toolCalls` + `[${i}]`, errors); }); }
+  }
 }
 
 function checkConversationMessageRow(value: unknown, path: string, errors: string[]): void {
@@ -893,6 +908,35 @@ function checkChartFlowRow(value: unknown, path: string, errors: string[]): void
     const fieldValue = value["value"];
     if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.value: missing required field`);
     else { if (typeof fieldValue !== "number") errors.push(`${path}.value` + ": expected number"); }
+  }
+}
+
+function checkToolInvocationRow(value: unknown, path: string, errors: string[]): void {
+  if (!isRecord(value)) { errors.push(`${path}: expected object`); return; }
+  {
+    const fieldValue = value["id"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.id: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.id` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["name"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.name: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.name` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["argumentsJson"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.argumentsJson: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.argumentsJson` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["result"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.result: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.result` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["isError"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.isError: missing required field`);
+    else { if (typeof fieldValue !== "boolean") errors.push(`${path}.isError` + ": expected boolean"); }
   }
 }
 
