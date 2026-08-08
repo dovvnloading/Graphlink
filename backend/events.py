@@ -78,6 +78,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import inspect
+import json
 import logging
 import time
 from typing import Any, Awaitable, Callable, Protocol
@@ -375,6 +376,7 @@ class SessionBus:
         *,
         coalesce_window_seconds: float = 0.0,
         send_queue_maxsize: int = DEFAULT_SEND_QUEUE_MAXSIZE,
+        on_publish: Callable[[str, int], None] | None = None,
     ):
         """`coalesce_window_seconds` > 0 batches publishes of the SAME topic
         arriving within that window into one outbound message (ADR-003 stage
@@ -388,6 +390,14 @@ class SessionBus:
         `send_queue_maxsize` bounds each BUFFERED connection's outbound queue
         (see attach(buffered=True) and _BufferedConnection)."""
         self.session_id = session_id
+        # ADR-016 stage 16.3: optional - fires with (topic, serialized byte
+        # size) from _broadcast, once per outbound message. None by default
+        # (every test-constructed SessionBus, and this codebase has
+        # hundreds) - a single None-check, so nothing pays the extra
+        # json.dumps _broadcast otherwise has no reason to do (send_json
+        # implementations serialize on their own; this is diagnostics-only
+        # measurement, not the real wire encode).
+        self._on_publish = on_publish
         self._topics: dict[str, _Topic] = {}
         self._intents: dict[tuple[str, str], _IntentRegistration] = {}
         self._connections: set[Connection] = set()
@@ -406,6 +416,13 @@ class SessionBus:
         # its idle clock immediately, rather than being permanently exempt
         # from eviction by never having transitioned FROM connected.
         self.idle_since: float | None = time.monotonic()
+
+    def set_publish_recorder(self, on_publish: Callable[[str, int], None] | None) -> None:
+        """ADR-016 stage 16.3: post-construction hook for callers like
+        backend/app.py's _configure_session, which only receives the
+        already-constructed bus (via EventBus.session()) - never a chance
+        to pass on_publish at __init__ time."""
+        self._on_publish = on_publish
 
     # -- registration ------------------------------------------------------
 
@@ -678,6 +695,14 @@ class SessionBus:
         """Send one message to every attached connection, detaching any that
         fails. Snapshot the set first: a failed send detaches mid-loop, and a
         dead socket must never poison the broadcast for the rest."""
+        if self._on_publish is not None:
+            # ADR-016 stage 16.3: measured once per broadcast, not per
+            # connection - every attached connection receives the SAME
+            # message, so the size is a property of the publish, not the
+            # fan-out. json.dumps mirrors what a real send_json would
+            # serialize closely enough for a diagnostics estimate (exact
+            # wire bytes depend on the transport's own encoder).
+            self._on_publish(message.get("topic", ""), len(json.dumps(message)))
         for conn in list(self._connections):
             buffered_conn = self._buffered.get(conn)
             if buffered_conn is not None:

@@ -130,6 +130,7 @@ describe("AppBar", () => {
         "Fit All",
         "About",
         "Help",
+        "Diagnostics",
       ]) {
         expect(menuItems.getByRole("button", { name: label })).toBeInTheDocument();
       }
@@ -174,7 +175,7 @@ describe("AppBar", () => {
       expect(screen.getByRole("button", { name: "About" }).className).toContain("checked");
     });
 
-    it("the five overlay-opening overflow items (Pins/View/Plugins/About/Help) carry aria-pressed, matching their inline copies' real-state contract", async () => {
+    it("the six overlay-opening overflow items (Pins/View/Plugins/About/Help/Diagnostics) carry aria-pressed, matching their inline copies' real-state contract", async () => {
       // Cannot be driven to aria-pressed="true" through normal interaction
       // in this test: OverlayProvider is single-open, so the instant any of
       // these becomes the open surface, "toolbar-overflow" stops being it
@@ -185,7 +186,7 @@ describe("AppBar", () => {
       renderAppBar();
       await user.click(screen.getByRole("button", { name: "More toolbar actions" }));
       const menu = within(screen.getByRole("dialog"));
-      for (const label of ["Pins", "View", "Plugins", "About", "Help"]) {
+      for (const label of ["Pins", "View", "Plugins", "About", "Help", "Diagnostics"]) {
         expect(menu.getByRole("button", { name: label })).toHaveAttribute("aria-pressed", "false");
       }
     });
@@ -208,6 +209,7 @@ describe("AppBar", () => {
         ["Fit All", "3"],
         ["About", "1"],
         ["Help", "1"],
+        ["Diagnostics", "1"],
       ];
       for (const [label, tier] of pairs) {
         // Every duplicated pair shares its exact label except Plugins (the

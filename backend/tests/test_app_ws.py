@@ -147,14 +147,16 @@ def test_subscribe_without_topics_sends_every_registered_topic():
         ws.send_json({"kind": "subscribe"})
         # R2 surface: canvas + View-popover + composer/counter/notification +
         # R2.5 about/plugins/settings/chat-library topics + ADR-005 stage 5.4's
-        # execution-limits topic, sorted.
-        topics = [ws.receive_json()["topic"] for _ in range(13)]
+        # execution-limits topic + ADR-016 stage 16.3's diagnostics topic,
+        # sorted.
+        topics = [ws.receive_json()["topic"] for _ in range(14)]
         assert topics == [
             "app-about",
             "app-chat-library",
             "app-composer",
             "app-plugins",
             "app-settings",
+            "diagnostics",
             "drag-speed",
             "execution-limits",
             "font-control",

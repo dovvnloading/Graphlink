@@ -51,6 +51,7 @@ from backend.canvas import register_canvas
 from backend.chat_library import register_chat_library
 from backend.composer import register_composer
 from backend.crash_recovery import maybe_show_crash_notice
+from backend.diagnostics import DiagnosticsState
 from backend.events import (
     DEFAULT_COALESCE_WINDOW_SECONDS,
     DEFAULT_SESSION_ID,
@@ -164,6 +165,7 @@ def _configure_session(
     settings_manager: SettingsManager,
     chat_db_path: Path | None,
     previous_run_crashed: bool = False,
+    session_count_fn=None,
 ) -> None:
     """Give every session the R0 topic surface. Later phases extend this
     with canvas/chrome/node topics - one registrar, one place to read the
@@ -197,6 +199,17 @@ def _configure_session(
     token_counter = register_token_counter(bus, settings_manager)
     composer_document = register_composer(bus, token_counter, settings_manager, notifications_state)
 
+    # ADR-016 stage 16.3: in-app diagnostics - fresh per session, same
+    # posture as token_counter/composer_document above (see backend/
+    # diagnostics.py's own module docstring for why this is safe despite
+    # RunRegistry's own logging already existing - explicit callbacks, not
+    # a shared logging.Handler). set_publish_recorder is a post-construction
+    # hook because bus (SessionBus) is already built by the time
+    # _configure_session runs (EventBus.session() constructs it).
+    diagnostics = DiagnosticsState(session_count_fn=session_count_fn)
+    bus.set_publish_recorder(diagnostics.record_publish)
+    bus.register_topic("diagnostics", diagnostics.payload)
+
     # R4 (doc/QT_REMOVAL_PLAN.md): the agent-dispatch service - one
     # AgentDispatcher per session (never a module-level singleton). Reachable
     # via SessionContext (backend/session_context.py) so ws_endpoint's
@@ -219,7 +232,7 @@ def _configure_session(
             api_provider.DEFAULT_RUNTIME.snapshot()
         )
     agent_dispatcher = register_agents(
-        bus, composer_document, notifications_state, settings_manager, provider_runtime
+        bus, composer_document, notifications_state, settings_manager, provider_runtime, diagnostics
     )
 
     # R1 (doc/QT_REMOVAL_PLAN.md): scene document + grid topics.
@@ -346,7 +359,13 @@ def create_app(
     # side effect of building the app.
     bus = EventBus(
         configure_session=lambda session_bus: _configure_session(
-            session_bus, settings_manager, chat_db_path, previous_run_crashed
+            session_bus, settings_manager, chat_db_path, previous_run_crashed,
+            # ADR-016 stage 16.3: `bus` here is EventBus.session()'s host
+            # instance, resolved by Python's normal closure late-binding -
+            # this lambda only ever RUNS after `bus = EventBus(...)` has
+            # fully returned and bound the name in the enclosing scope, even
+            # though it's syntactically referenced mid-construction here.
+            session_count_fn=lambda: len(bus._sessions),
         ),
         # ADR-004 stage 4.3: see _evict_idle_session's own docstring.
         evict_idle_session=_evict_idle_session,

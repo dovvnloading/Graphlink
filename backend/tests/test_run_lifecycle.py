@@ -566,3 +566,62 @@ def test_cancel_all_logs_every_fired_handle(caplog):
     records = [r for r in caplog.records if r.name == "graphlink.run"]
     cancelled_run_ids = {r.run_id for r in records if r.message == "run cancelled"}
     assert cancelled_run_ids == {chat_handle.request_id, web_handle.request_id}
+
+
+# -- ADR-016 stage 16.3: diagnostics on_claim/on_end callbacks ----------
+#
+# Explicit callbacks (not derived from the caplog-visible logging above) -
+# see backend/diagnostics.py's own module docstring for why. None by
+# default (every test above this point never passes them) - these tests
+# prove the callbacks fire with the right arguments and in the right order
+# relative to each other, independent of backend/diagnostics.py's own
+# DiagnosticsState (which has its own dedicated test file).
+
+
+def test_on_claim_fires_with_run_id_kind_and_node_id():
+    calls = []
+    registry = RunRegistry(on_claim=lambda *args: calls.append(args))
+    handle = registry.claim("chart", node_id="n-1")
+    assert calls == [(handle.request_id, "chart", "n-1")]
+
+
+def test_on_end_fires_completed_on_release():
+    calls = []
+    registry = RunRegistry(on_end=lambda *args: calls.append(args))
+    handle = registry.claim("note")
+    registry.release(handle.request_id)
+    assert calls == [(handle.request_id, "completed")]
+
+
+def test_on_end_does_not_fire_on_release_of_an_unknown_request_id():
+    calls = []
+    registry = RunRegistry(on_end=lambda *args: calls.append(args))
+    registry.release("never-claimed")
+    assert calls == []
+
+
+def test_on_end_fires_cancelled_not_completed_on_cancel():
+    calls = []
+    registry = RunRegistry(on_end=lambda *args: calls.append(args))
+    handle = registry.claim("chat", cancel_event=threading.Event())
+    registry.cancel(handle.request_id)
+    # cancel() pops via _finish_cancel -> _pop, but release() is never
+    # called for a cancelled run - the worker's own late `finally` calls
+    # release() too, and _pop only returns non-None once, so on_end must
+    # fire exactly once, as "cancelled", never overwritten to "completed".
+    assert calls == [(handle.request_id, "cancelled")]
+
+    # The worker's own late release() (registry.release is idempotent -
+    # _pop returns None the second time) must not re-fire on_end.
+    registry.release(handle.request_id)
+    assert calls == [(handle.request_id, "cancelled")]
+
+
+def test_on_end_fires_cancelled_for_every_fired_handle_in_cancel_all():
+    calls = []
+    registry = RunRegistry(on_end=lambda *args: calls.append(args))
+    chat_handle = registry.claim("chat", cancel_event=threading.Event())
+    chart_handle = registry.claim("chart")  # no cancel mechanism - never fires
+    registry.cancel_all()
+    assert calls == [(chat_handle.request_id, "cancelled")]
+    assert chart_handle.request_id not in [c[0] for c in calls]

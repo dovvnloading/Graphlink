@@ -2229,9 +2229,20 @@ body,
 .token-counter-popout {
   position: absolute;
   bottom: calc(100% + 8px);
-  left: 0;
+  /* ADR-016 stage 16.2 fix: the trigger sits at the composer's far right
+     edge (next to Send), and ADR-006 stage 6.8 grew this from 4 columns to
+     7 (prompt/completion/est. cost added) without revisiting this rule -
+     left:0 + nowrap let it grow rightward, unbounded, off the composer and
+     over whatever sat past it (reported: overlapping Document View).
+     Anchoring right and wrapping keeps it inside the viewport regardless
+     of column count. */
+  right: 0;
+  left: auto;
   display: flex;
-  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px 14px;
+  max-width: min(360px, 90vw);
   padding: 12px 14px;
   background-color: var(--gl-surface-node-body);
   border: 1px solid var(--gl-surface-border);
@@ -2242,7 +2253,6 @@ body,
      app, it just isn't driven by the shared overlay system (a hover
      fold-out has no "open surface" to register - see TokenCounter.tsx). */
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
-  white-space: nowrap;
 }
 
 .token-counter-row {
@@ -2250,6 +2260,7 @@ body,
   flex-direction: column;
   align-items: center;
   gap: 1px;
+  white-space: nowrap;
 }
 
 .token-counter-label {
@@ -2683,6 +2694,118 @@ body,
 .help-shell {
   display: flex;
   height: 100%;
+}
+
+/* -- Diagnostics dialog (ADR-016 stage 16.3) ------------------------------ */
+
+.diagnostics-dialog {
+  min-width: 480px;
+  max-width: min(640px, calc(100vw - 64px));
+  max-height: min(600px, calc(100vh - 96px));
+  overflow-y: auto;
+}
+
+.diagnostics-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px 14px;
+  margin-bottom: 16px;
+}
+
+.diagnostics-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.diagnostics-stat-label {
+  font-size: 11px;
+  color: var(--gl-surface-text-muted);
+}
+
+.diagnostics-stat-value {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--gl-surface-text-primary);
+}
+
+.diagnostics-section-title {
+  margin: 16px 0 8px;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--gl-surface-text-muted);
+}
+
+.diagnostics-empty {
+  margin: 0;
+  font-size: 12px;
+  color: var(--gl-surface-text-muted);
+}
+
+.diagnostics-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.diagnostics-table th,
+.diagnostics-table td {
+  text-align: left;
+  padding: 4px 8px 4px 0;
+  border-bottom: 1px solid var(--gl-surface-border);
+  color: var(--gl-surface-text-primary);
+}
+
+.diagnostics-table th {
+  color: var(--gl-surface-text-muted);
+  font-weight: 600;
+}
+
+.diagnostics-outcome-completed {
+  color: var(--gl-semantic-status-success, var(--gl-surface-text-primary));
+}
+
+.diagnostics-outcome-cancelled {
+  color: var(--gl-surface-text-muted);
+}
+
+.diagnostics-outcome-running {
+  color: var(--gl-semantic-status-warning, var(--gl-surface-text-primary));
+}
+
+.diagnostics-error-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.diagnostics-error-item {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  font-size: 12px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: var(--gl-surface-node-body);
+}
+
+.diagnostics-error-provider {
+  font-weight: 600;
+  color: var(--gl-surface-text-primary);
+}
+
+.diagnostics-error-time {
+  color: var(--gl-surface-text-muted);
+}
+
+.diagnostics-error-message {
+  flex-basis: 100%;
+  color: var(--gl-surface-text-primary);
 }
 
 /* -- Document view panel (R8a follow-up) ------------------------------------

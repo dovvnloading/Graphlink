@@ -437,6 +437,15 @@ GENERATED_ARTIFACTS = [
         "schema_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "app-chat-library-state.schema.json",
         "ts_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "app-chat-library-state.ts",
     },
+    {
+        # ADR-016 stage 16.3: the diagnostics topic (backend/diagnostics.py).
+        "dataclass": None,  # resolved lazily in main() to avoid importing
+        "dataclass_import": ("graphlink_diagnostics_payload", "DiagnosticsStatePayload"),
+        "title": "DiagnosticsState",
+        "source": "contracts/graphlink_diagnostics_payload.py::DiagnosticsStatePayload",
+        "schema_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "diagnostics-state.schema.json",
+        "ts_path": _REPO_ROOT / "web_ui" / "src" / "lib" / "bridge-core" / "generated" / "diagnostics-state.ts",
+    },
 ]
 
 
