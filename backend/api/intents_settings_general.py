@@ -22,6 +22,7 @@ import graphlink_task_config as config
 from backend.api._settings_shared import SettingsSessionState, run_locked
 from backend.events import SessionBus
 from backend.notifications import NotificationState
+from backend.observability import apply_log_level
 from graphlink_settings_store import SettingsManager
 
 # ADR-006 stage 6.5: the three persisted provider-mode strings
@@ -62,6 +63,18 @@ def register_settings_general_intents(
 
     async def set_enable_system_prompt(enabled: bool):
         await asyncio.to_thread(run_locked, manager.set_enable_system_prompt, bool(enabled))
+        await bus.publish("app-settings")
+
+    async def set_log_level(level: str):
+        # ADR-016 stage 16.1: persists AND applies live - unlike the boot-time
+        # read in graphlink_desktop.py's main(), a user flipping this in a
+        # running app expects the next log line to honor it immediately, not
+        # after a restart. apply_log_level no-ops on an unrecognized string
+        # (same closed-vocabulary posture as manager.set_log_level itself),
+        # so a malformed intent arg is silently ignored rather than raising.
+        level = str(level)
+        await asyncio.to_thread(run_locked, manager.set_log_level, level)
+        apply_log_level(level)
         await bus.publish("app-settings")
 
     async def set_notification_preference(notification_type: str, enabled: bool):
@@ -117,6 +130,7 @@ def register_settings_general_intents(
     bus.register_intent("app-settings", "setActiveSection", set_active_section)
     bus.register_intent("app-settings", "setShowTokenCounter", set_show_token_counter)
     bus.register_intent("app-settings", "setEnableSystemPrompt", set_enable_system_prompt)
+    bus.register_intent("app-settings", "setLogLevel", set_log_level)
     bus.register_intent("app-settings", "setNotificationPreference", set_notification_preference)
     bus.register_intent("app-settings", "setGithubToken", set_github_token)
     bus.register_intent("app-settings", "clearGithubToken", clear_github_token)

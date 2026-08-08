@@ -27,6 +27,7 @@ independent reimplementation against SceneDocument, not this function.
 """
 
 import json
+import logging
 from collections import OrderedDict
 
 import graphlink_task_config as config
@@ -34,6 +35,8 @@ import api_provider
 from graphlink_prompts import CONTEXT_SUMMARY_SYSTEM_PROMPT
 from graphlink_token_estimator import TokenEstimator
 from graphlink_memory import clone_history, history_to_transcript, trim_history
+
+logger = logging.getLogger(__name__)
 
 
 # ADR-006 stage 6.8 review fix (summary re-run + toast spam): dropped-turn
@@ -229,9 +232,9 @@ class ChatWorker:
                         pass  # accounting must never fail the reply
             ai_message = response['message']['content']
             return ai_message
-        except Exception as e:
-            print(f"  [LOG-CHATWORKER] API call failed: {e}")
-            raise e
+        except Exception:
+            logger.exception("ChatWorker API call failed")
+            raise
 
     def _summary_for_dropped_turns(self, dropped_messages, cancellation_event, runtime_kwargs):
         """Cache-aware wrapper around _summarize_dropped_turns (6.8 review

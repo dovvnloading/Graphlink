@@ -334,6 +334,16 @@ def create_app(
     # SettingsManager exactly ONCE per process - process-global state, not
     # session state (see backend/agents.py's docstring).
     bootstrap_provider_state(settings_manager)
+    # ADR-016 stage 16.1: deliberately NOT calling apply_log_level here -
+    # create_app() is constructed dozens of times per pytest run (every test
+    # that touches the WS/HTTP surface), and mutating the ROOT logger's level
+    # as a side effect of that would silently change what caplog captures for
+    # every unrelated test running afterward (root defaults to WARNING;
+    # nothing here would ever set it back). The real boot path
+    # (graphlink_desktop.py's main(), never invoked by tests) applies the
+    # persisted level once; the live intent (setLogLevel, app-settings topic)
+    # applies a user-initiated change - both explicit, neither an invisible
+    # side effect of building the app.
     bus = EventBus(
         configure_session=lambda session_bus: _configure_session(
             session_bus, settings_manager, chat_db_path, previous_run_crashed

@@ -123,6 +123,9 @@
     "llamaCppTitleModelPath": {
       "type": "string"
     },
+    "logLevel": {
+      "type": "string"
+    },
     "minCompatibleSchemaVersion": {
       "type": "integer"
     },
@@ -187,6 +190,7 @@
     "notificationPreferences",
     "githubTokenConfigured",
     "secretsEncryptedAtRest",
+    "logLevel",
     "activeApiProvider",
     "viewingApiProvider",
     "apiBaseUrl",

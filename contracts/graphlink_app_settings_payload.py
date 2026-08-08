@@ -44,6 +44,8 @@ class AppSettingsStatePayload:
     # written in plaintext - the Settings UI renders a persistent badge
     # when this is false (closes audit finding H12's silence).
     secretsEncryptedAtRest: bool
+    # ADR-016 stage 16.1: General page - the log-level setting.
+    logLevel: str
     # R7.4a: API-provider page.
     activeApiProvider: str
     viewingApiProvider: str

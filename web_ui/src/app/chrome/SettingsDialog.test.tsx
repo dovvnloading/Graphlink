@@ -22,6 +22,7 @@ const snapshot = {
   notificationPreferences: { info: true, success: true, warning: true, error: true },
   githubTokenConfigured: false,
   secretsEncryptedAtRest: true,
+  logLevel: "INFO",
   activeApiProvider: "OpenAI-Compatible",
   viewingApiProvider: "OpenAI-Compatible",
   apiBaseUrl: "https://api.openai.com/v1",

@@ -100,6 +100,8 @@ const initialState: AppSettingsState = {
   // on the very first "app-settings" publish, same as every other field
   // here.
   secretsEncryptedAtRest: true,
+  // ADR-016 stage 16.1: mirrors SettingsManager.get_log_level()'s own default.
+  logLevel: "INFO",
   activeApiProvider: API_PROVIDER_OPENAI,
   viewingApiProvider: API_PROVIDER_OPENAI,
   apiBaseUrl: DEFAULT_OPENAI_BASE_URL,

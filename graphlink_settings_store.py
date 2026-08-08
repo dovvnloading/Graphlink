@@ -27,6 +27,11 @@ class SettingsManager:
     # reasoning-level fields below - see api_provider.py's own REASONING_LEVELS
     # docstring for the full per-provider mapping story this feeds.
     REASONING_LEVELS = ("off", "low", "medium", "high")
+    # ADR-016 stage 16.1: the log-level setting's closed vocabulary - the
+    # same names Python's logging module already uses, so
+    # backend/observability.py.apply_log_level can pass this straight to
+    # logging.getLevelName without a translation table.
+    LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR")
     # Bumped whenever session.dat's shape changes in a way future code needs to branch
     # on. Version 2 introduces provider-scoped cloud profiles and explicit local
     # model assignment modes. Version 3 persists refreshed cloud model catalogs so
@@ -352,14 +357,14 @@ class SettingsManager:
                 os.chmod(backup_path, 0o600)
             except OSError:
                 logger.warning("could not chmod %s to 0600 - continuing with existing permissions", backup_path)
-            print(
-                f"Warning: {self.state_file} could not be read ({error}). "
-                f"Backed it up to {backup_path} and reset settings to defaults."
+            logger.warning(
+                "%s could not be read (%s). Backed it up to %s and reset settings to defaults.",
+                self.state_file, error, backup_path,
             )
         except OSError as backup_error:
-            print(
-                f"Warning: {self.state_file} could not be read ({error}) and could not "
-                f"be backed up ({backup_error}). Resetting settings to defaults."
+            logger.warning(
+                "%s could not be read (%s) and could not be backed up (%s). Resetting settings to defaults.",
+                self.state_file, error, backup_error,
             )
 
     def _create_initial_state(self):
@@ -513,7 +518,7 @@ class SettingsManager:
                 os.fsync(f.fileno())
             os.replace(tmp_path, self.state_file)
         except IOError as e:
-            print(f"Error: Could not save session state to {self.state_file}. Reason: {e}")
+            logger.error("Could not save session state to %s. Reason: %s", self.state_file, e)
             try:
                 tmp_path.unlink(missing_ok=True)
             except OSError:
@@ -536,6 +541,18 @@ class SettingsManager:
     def set_enable_system_prompt(self, enabled: bool):
         self.state["enable_system_prompt"] = bool(enabled)
         self._save_state()
+
+    def get_log_level(self):
+        # ADR-016 stage 16.1. INFO by default - matches
+        # backend/crash_recovery.py's own pre-existing default so a fresh
+        # install's boot-time behavior is unchanged until a user opts into
+        # more or less verbosity.
+        return self.state.get("log_level", "INFO")
+
+    def set_log_level(self, level: str):
+        if level in self.LOG_LEVELS:
+            self.state["log_level"] = level
+            self._save_state()
 
     def get_notification_preferences(self):
         saved_preferences = self.state.get("notification_preferences", {}) or {}

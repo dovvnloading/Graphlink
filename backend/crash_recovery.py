@@ -16,9 +16,12 @@ Same file path/shape as the legacy app for continuity - it's plain JSON with
 no Qt dependency, nothing here needs to change about it.
 
 LOGGING + UNHANDLED-EXCEPTION CAPTURE (ported): configure_logging() attaches
-a RotatingFileHandler to the root logger, same path/rotation/format as
+a RotatingFileHandler to the root logger, same path/rotation as
 graphlink_logging.py's configure_logging() (~/.graphlink/graphlink.log, 2MB
-x3 backups), so the many logger.exception()/logger.error() calls already
+x3 backups). ADR-016 stage 16.1 changed the FILE handler's format from plain
+text to JSON-lines (backend/observability.py's JsonLogFormatter) so the log
+is machine-parseable; the stderr handler below stays plain text. So the
+many logger.exception()/logger.error() calls already
 scattered across backend/ (app.py, autosave.py, agents.py, canvas.py, ...)
 land somewhere durable instead of going nowhere (no root handler is
 configured anywhere in backend/ today) or to stderr, invisible in a
@@ -69,6 +72,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from backend.notifications import NotificationState
+from backend.observability import JsonLogFormatter
 
 _LOG_MAX_BYTES = 2 * 1024 * 1024
 _LOG_BACKUP_COUNT = 3
@@ -118,7 +122,12 @@ def configure_logging(base_dir: Path | str | None = None, level: int = logging.I
     handler = logging.handlers.RotatingFileHandler(
         resolved, maxBytes=_LOG_MAX_BYTES, backupCount=_LOG_BACKUP_COUNT, encoding="utf-8",
     )
-    handler.setFormatter(formatter)
+    # ADR-016 stage 16.1: the file is JSON-lines (one JSON object per line,
+    # with run_id/session/kind/node_id when a call site supplies them via
+    # extra=) so it is machine-parseable - by the diagnostics bundle builder
+    # (stage 16.4) and by grep/jq alike. See observability.py's own
+    # docstring for why stderr below stays plain text.
+    handler.setFormatter(JsonLogFormatter())
 
     root_logger = logging.getLogger()
     root_logger.addHandler(handler)

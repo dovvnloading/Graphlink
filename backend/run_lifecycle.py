@@ -71,12 +71,26 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
 import threading
 import uuid
 from dataclasses import dataclass
 from typing import Any, Callable
 
 from backend.events import SessionBus  # type hint only
+
+# ADR-016 stage 16.1: every one of the app's dispatch surfaces (chat, chart,
+# note, image, web research, artifact, gitlink x2, pycoder, code sandbox - 12
+# kinds and counting) claims into and releases from ONE RunRegistry per
+# session (see this module's own docstring above). Logging at claim()/
+# cancel()/_pop() instead of at each of those 12 call sites gives every run,
+# past and future, a traced lifecycle for free - no per-surface duplication,
+# and no surface can forget to log. Deliberately explicit extra={} fields
+# rather than a contextvars-based run_id (see backend/observability.py's own
+# docstring for why): claim() is a plain synchronous method called from many
+# different call sites, so there is no single "task body" to scope a
+# ContextVar.set()/reset() around here.
+_logger = logging.getLogger("graphlink.run")
 
 
 @dataclass
@@ -220,6 +234,10 @@ class RunRegistry:
             loop=loop,
         )
         self._handles[handle.request_id] = handle
+        _logger.info(
+            "run claimed",
+            extra={"run_id": handle.request_id, "kind": kind, "node_id": node_id},
+        )
         return handle
 
     def attach_task(self, handle: RunHandle, task: asyncio.Task) -> None:
@@ -243,6 +261,10 @@ class RunRegistry:
             future = handle.approval_future
             if future is not None and not future.done():
                 future.set_result(False)
+            _logger.info(
+                "run released",
+                extra={"run_id": request_id, "kind": handle.kind, "node_id": handle.node_id},
+            )
         return handle
 
     def release(self, request_id: str) -> bool:
@@ -287,6 +309,10 @@ class RunRegistry:
             handle.on_cancel()
             fired = True
         if fired:
+            _logger.info(
+                "run cancelled",
+                extra={"run_id": request_id, "kind": handle.kind, "node_id": handle.node_id},
+            )
             # ADR-006 stage 6.2: cancel frees the slot IMMEDIATELY. Before
             # this, release() lived only in the run's `finally`, downstream
             # of an uninterruptible asyncio.to_thread - so is_busy stayed
@@ -342,6 +368,10 @@ class RunRegistry:
                 handle.on_cancel()
                 fired = True
             if fired:
+                _logger.info(
+                    "run cancelled",
+                    extra={"run_id": handle.request_id, "kind": handle.kind, "node_id": handle.node_id},
+                )
                 self._finish_cancel(handle.request_id, handle)
 
     def has_any_live_work(self) -> bool:
