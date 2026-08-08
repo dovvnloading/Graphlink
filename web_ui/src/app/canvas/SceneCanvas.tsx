@@ -527,6 +527,12 @@ export function toFlowNodes(
           onCancelRegenerate: () => {
             if (n.pendingRequestId) store.cancelConversationRequest(n.pendingRequestId);
           },
+          // ADR-007 stage 7.4: this turn's tool calls + results, in call
+          // order - [] for the overwhelming majority of chat nodes (see
+          // ToolInvocationRow's own comment, contracts/graphlink_scene_
+          // payload.py). Rendered as a collapsible section in
+          // ChatNodeView.tsx.
+          toolInvocations: n.toolCalls,
         },
       });
       continue;

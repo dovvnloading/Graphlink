@@ -705,3 +705,14 @@ class ChatState(NodeState):
     # replies also stamp as of 6.8.
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
+    # ADR-007 stage 7.4: this turn's tool calls + their results, in call
+    # order - empty for the overwhelming majority of chat nodes (no tool-use
+    # loop exists yet to populate this; ADR-008 is the first real writer).
+    # Each item: {"id", "name", "arguments" (a real dict - only JSON-encoded
+    # at the wire boundary, see graph.py's scene_payload()), "result",
+    # "is_error"} - directly ToolCall's own three fields plus ToolResult's
+    # two (backend/providers/base.py, backend/tools.py), not a new shape.
+    # Rendered as a collapsible section in ChatNodeView.tsx (the ADR's own
+    # "an assistant turn that calls tools renders the calls and their
+    # results (collapsible)").
+    tool_invocations: list[dict[str, Any]] = field(default_factory=list)

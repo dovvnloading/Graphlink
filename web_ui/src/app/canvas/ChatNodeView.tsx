@@ -142,6 +142,26 @@ export interface ChatNodeData extends Record<string, unknown> {
   // established. Fires the SAME generic cancelChatRequest intent that
   // cancel path uses - no new intent (see SceneCanvas's chat branch).
   onCancelRegenerate: () => void;
+  // ADR-007 stage 7.4: this turn's tool calls + their results, in call
+  // order - [] for the overwhelming majority of chat nodes (no tool-use
+  // loop exists yet to populate this; ADR-008 is the first real writer).
+  // Rendered as a collapsible section below the content, the ADR's own "an
+  // assistant turn that calls tools renders the calls and their results
+  // (collapsible)".
+  toolInvocations: ToolInvocationData[];
+}
+
+// Mirrors the generated ToolInvocationRow (web_ui/src/lib/bridge-core/
+// generated/scene-state.ts) field-for-field - a local interface rather than
+// importing that generated type directly, matching how every other field on
+// ChatNodeData above is a plain, ChatNodeView-local shape rather than a
+// re-export of its own generated row type.
+export interface ToolInvocationData {
+  id: string;
+  name: string;
+  argumentsJson: string;
+  result: string;
+  isError: boolean;
 }
 
 export type ChatFlowNode = Node<ChatNodeData, "chat">;
@@ -854,6 +874,34 @@ export function ChatNodeView({ id, data, selected }: NodeProps<ChatFlowNode>) {
             </button>
           )}
         </div>
+      )}
+      {/* ADR-007 stage 7.4: an assistant turn's tool calls + results - the
+          ADR's own "renders the calls and their results (collapsible)".
+          Native <details>/<summary> rather than the useState-driven
+          expand/collapse pattern above (contentExpanded) - this section's
+          state doesn't need to survive a re-render triggered by anything
+          else on the node, and a native disclosure widget is free
+          keyboard/AT support for a debug-style panel like this one. Hidden
+          entirely (not just collapsed) when the turn made no tool calls -
+          the overwhelming majority of chat nodes. */}
+      {!collapsed && data.toolInvocations.length > 0 && (
+        <details className="chat-node-tool-invocations">
+          <summary>
+            {data.toolInvocations.length === 1
+              ? "1 tool call"
+              : `${data.toolInvocations.length} tool calls`}
+          </summary>
+          {data.toolInvocations.map((invocation, index) => (
+            <div
+              key={invocation.id || index}
+              className={`chat-node-tool-invocation${invocation.isError ? " error" : ""}`}
+            >
+              <div className="chat-node-tool-invocation-name">{invocation.name}</div>
+              <pre className="chat-node-tool-invocation-arguments">{invocation.argumentsJson}</pre>
+              <pre className="chat-node-tool-invocation-result">{invocation.result}</pre>
+            </div>
+          ))}
+        </details>
       )}
       {/* ADR-006 stage 6.4 review fix: per-node Stop for an in-flight
           streamed regenerate - see onCancelRegenerate's own comment on
