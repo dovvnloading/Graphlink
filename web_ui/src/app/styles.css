@@ -2808,6 +2808,67 @@ body,
   color: var(--gl-surface-text-primary);
 }
 
+/* ADR-016 stage 16.4: the action row (Open log folder / Export diagnostic
+   bundle) - same neutral-button language as .settings-button-row/.settings-
+   button (SettingsDialog's Ollama "Scan Folder..." row), just a size step
+   down to match this dialog's own 11-13px scale rather than settings'
+   13-14px chrome. */
+.diagnostics-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.diagnostics-action-button {
+  padding: 6px 12px;
+  font-size: 12px;
+  font-family: inherit;
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-neutral-button-hover);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.diagnostics-action-button:hover:not(:disabled) {
+  background-color: var(--gl-neutral-button-border);
+}
+
+.diagnostics-action-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.diagnostics-bundle-preview-wrap {
+  margin-top: 12px;
+}
+
+/* Same monospace/inset-surface treatment as .chat-node-tool-invocation-
+   arguments/-result (the app's other "pretty-printed JSON in a scrollable
+   box" precedent), just bounded with a max-height since a bundle can run
+   long (recentRuns/providerErrors are both included). */
+.diagnostics-bundle-preview {
+  margin: 8px 0 6px;
+  padding: 10px;
+  max-height: 240px;
+  overflow: auto;
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-surface-inset, var(--gl-surface-node-body));
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 6px;
+}
+
+.diagnostics-bundle-path {
+  margin: 0;
+  font-size: 11px;
+  color: var(--gl-surface-text-muted);
+  word-break: break-all;
+}
+
 /* -- Document view panel (R8a follow-up) ------------------------------------
    Docked flush-left, border-right only - restores legacy's
    DocumentViewerPanel chrome (a permanent embedded QWidget, corner_radius=0,

@@ -2,6 +2,8 @@
 subscribe snapshots, the system/ping acceptance round-trip, and error paths.
 Runs the real ASGI app through Starlette's TestClient - no network, no Qt."""
 
+import asyncio
+import os
 import tempfile
 import threading
 import time
@@ -9,7 +11,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from backend import BACKEND_VERSION
+from backend import BACKEND_VERSION, crash_recovery
 from backend.app import create_app
 from backend.session_context import get_session_context
 from backend.tests.conftest import chat_slots, pycoder_slots
@@ -586,3 +588,43 @@ def test_disconnect_auto_denies_any_pending_pycoder_approval(monkeypatch):
         time.sleep(0.01)
     assert approval_future.done(), "the pending approval must be auto-denied on disconnect"
     assert approval_future.result() is False
+
+
+def test_diagnostics_intents_dispatch_through_the_real_bus(tmp_path, monkeypatch):
+    # ADR-016 stage 16.4: exportDiagnosticBundle/openLogFolder registered by
+    # backend/api/intents_diagnostics.py, wired into the real create_app()
+    # via backend/app.py's _configure_session - dispatched here directly
+    # against the real SessionBus (not a hand-rolled make_session() bus),
+    # same "the real app.py wiring" posture as
+    # test_showerror_intent_round_trips_through_the_real_app_and_updates_the_notification_snapshot
+    # above.
+    #
+    # backend.crash_recovery._data_dir() is monkeypatched to a tmp_path so
+    # this never writes into the developer's real ~/.graphlink/diagnostics,
+    # and os.startfile is monkeypatched so openLogFolder never actually
+    # spawns Explorer during the test run.
+    monkeypatch.setattr(crash_recovery, "_data_dir", lambda *args, **kwargs: tmp_path)
+    monkeypatch.setattr(os, "name", "nt")
+    startfile_calls = []
+    monkeypatch.setattr(os, "startfile", lambda path: startfile_calls.append(path), raising=False)
+
+    client = make_client()
+    with client.websocket_connect("/ws?session=default") as ws:
+        # Force this session to exist and be fully configured before
+        # dispatching straight into its bus.
+        ws.send_json({"kind": "subscribe", "topics": ["system"]})
+        ws.receive_json()
+
+        session_bus = client.app.state.bus.session("default")
+
+        bundle_result = asyncio.run(session_bus.dispatch_intent("diagnostics", "exportDiagnosticBundle", []))
+        assert set(bundle_result.keys()) == {"bundle", "path"}
+        assert bundle_result["bundle"]["bundleSchemaVersion"] == 1
+        assert bundle_result["bundle"]["appVersion"]
+        written_path = Path(bundle_result["path"])
+        assert written_path.exists()
+        assert written_path.parent == tmp_path / "diagnostics"
+
+        log_folder_result = asyncio.run(session_bus.dispatch_intent("diagnostics", "openLogFolder", []))
+        assert log_folder_result == {"opened": True}
+        assert len(startfile_calls) == 1

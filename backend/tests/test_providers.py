@@ -1037,7 +1037,16 @@ def test_translated_provider_failure_is_recorded_in_diagnostics(openai_api_mode)
     both chat() and chat_stream() funnel every non-cancel failure through -
     prove a real translated failure actually reaches
     backend.diagnostics.record_provider_error, not just that the friendly
-    message comes out right (already pinned above)."""
+    message comes out right (already pinned above).
+
+    ADR-016 stage 16.4 additionally proves the END-TO-END redaction here,
+    which the unit tests in test_diagnostics.py cannot: those call
+    record_provider_error directly, so they never exercise the real
+    exception text a live provider failure actually produces. This drives a
+    REAL raw exception through _translate_chat_exception and asserts none of
+    its text survives - only the fixed category label does (see
+    backend/diagnostics.py's _redact_provider_error_message for why raw
+    str(exc) is never storable)."""
     import types
 
     from backend.diagnostics import provider_errors, reset_provider_errors
@@ -1058,7 +1067,10 @@ def test_translated_provider_failure_is_recorded_in_diagnostics(openai_api_mode)
         errors = provider_errors()
         assert len(errors) == 1
         assert errors[0]["provider"] == config.API_PROVIDER_OPENAI
-        assert errors[0]["message"] == "connection refused by endpoint"
+        assert errors[0]["message"] == "connection failed"
+        assert "endpoint" not in errors[0]["message"], (
+            "no substring of the raw exception text may survive redaction"
+        )
     finally:
         reset_provider_errors()
 

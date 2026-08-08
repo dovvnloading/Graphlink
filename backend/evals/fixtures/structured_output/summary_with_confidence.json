@@ -1,0 +1,26 @@
+{
+  "name": "summary_with_confidence",
+  "kind": "structured_output",
+  "input": {
+    "task": "task_chat",
+    "schema_name": "summary_response",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "summary": {"type": "string"},
+        "confidence": {"type": "number"},
+        "tags": {"type": "array", "items": {"type": "string"}}
+      },
+      "required": ["summary", "confidence", "tags"]
+    },
+    "messages": [
+      {"role": "user", "content": "Summarize: Quarterly revenue grew 12%, driven by the EU region."}
+    ]
+  },
+  "scripted_response": "{\"summary\": \"Quarterly revenue grew 12%, driven by the EU region.\", \"confidence\": 0.82, \"tags\": [\"revenue\", \"quarterly\", \"EU\"]}",
+  "expected": {
+    "summary": "Quarterly revenue grew 12%, driven by the EU region.",
+    "confidence": 0.82,
+    "tags": ["revenue", "quarterly", "EU"]
+  }
+}

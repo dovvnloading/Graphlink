@@ -50,6 +50,7 @@ from backend.auth import (
 from backend.canvas import register_canvas
 from backend.chat_library import register_chat_library
 from backend.composer import register_composer
+from backend.api.intents_diagnostics import register_diagnostics_intents
 from backend.crash_recovery import maybe_show_crash_notice
 from backend.diagnostics import DiagnosticsState
 from backend.events import (
@@ -244,6 +245,14 @@ def _configure_session(
     canvas_document = register_canvas(
         bus, notifications_state, agent_dispatcher, composer_document, token_counter
     )
+
+    # ADR-016 stage 16.4: the diagnostics topic's two intents (export bundle,
+    # open log folder) - registered here, not immediately next to stage
+    # 16.3's `bus.register_topic("diagnostics", diagnostics.payload)` call
+    # above, because both need canvas_document (the SceneDocument the bundle
+    # tallies node counts from), which does not exist until register_canvas
+    # returns it, right above this line.
+    register_diagnostics_intents(bus, canvas_document, diagnostics)
 
     # ADR-002 stage 2.1d: ONE typed reference from here on
     # (backend/session_context.py), replacing what used to be two loose

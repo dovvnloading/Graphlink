@@ -250,4 +250,9 @@ CLASSIFICATION: tuple[Classified, ...] = (
     Classified("app-settings", "scanLlamaCppSystem", "B", "run-lifecycle: scans/caches locally installed models"),
     Classified("app-settings", "pickLlamaCppScanFolder", "B", "run-lifecycle: native folder pick + scan"),
     Classified("app-settings", "saveLlamaCppSettings", "B", "preference: runtime configuration"),
+
+    # -- backend/api/intents_diagnostics.py (diagnostics) --------------------
+    # ADR-016 stage 16.4:
+    Classified("diagnostics", "exportDiagnosticBundle", "B", "read-only: assembles a redacted diagnostic snapshot, no document mutation"),
+    Classified("diagnostics", "openLogFolder", "B", "read-only: opens the OS file browser, no document mutation"),
 )

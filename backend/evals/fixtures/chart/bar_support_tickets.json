@@ -1,0 +1,17 @@
+{
+  "name": "bar_support_tickets",
+  "kind": "chart",
+  "input": {
+    "chart_type": "bar",
+    "source_text": "Our support team resolved this month's tickets by category: 42 tickets for billing issues, 87 for login problems, 65 for feature requests, and 23 for bug reports."
+  },
+  "scripted_response": "{\"type\": \"bar\", \"title\": \"Support Tickets by Category\", \"labels\": [\"Billing Issues\", \"Login Problems\", \"Feature Requests\", \"Bug Reports\"], \"values\": [42, 87, 65, 23], \"xAxis\": \"Category\", \"yAxis\": \"Ticket Count\"}",
+  "expected": {
+    "type": "bar",
+    "title": "Support Tickets by Category",
+    "labels": ["Billing Issues", "Login Problems", "Feature Requests", "Bug Reports"],
+    "values": [42, 87, 65, 23],
+    "xAxis": "Category",
+    "yAxis": "Ticket Count"
+  }
+}

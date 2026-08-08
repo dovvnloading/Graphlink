@@ -1,0 +1,17 @@
+{
+  "name": "line_daily_active_users",
+  "kind": "chart",
+  "input": {
+    "chart_type": "line",
+    "source_text": "Daily active users this week: Monday 3200, Tuesday 3450, Wednesday 3100, Thursday 3800, Friday 4200, Saturday 2900, Sunday 2700."
+  },
+  "scripted_response": "{\"type\": \"line\", \"title\": \"Daily Active Users This Week\", \"labels\": [\"Monday\", \"Tuesday\", \"Wednesday\", \"Thursday\", \"Friday\", \"Saturday\", \"Sunday\"], \"values\": [3200, 3450, 3100, 3800, 4200, 2900, 2700], \"xAxis\": \"Day\", \"yAxis\": \"Active Users\"}",
+  "expected": {
+    "type": "line",
+    "title": "Daily Active Users This Week",
+    "labels": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
+    "values": [3200, 3450, 3100, 3800, 4200, 2900, 2700],
+    "xAxis": "Day",
+    "yAxis": "Active Users"
+  }
+}

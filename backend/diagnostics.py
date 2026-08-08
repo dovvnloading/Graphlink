@@ -24,6 +24,20 @@ failure through - records into a module-level bounded deque here, and every
 session's DiagnosticsState.payload() reads the same shared view. This
 matches every session already seeing the same module-global provider
 config today for the default session.
+
+record_provider_error's own `message` argument is raw str(exc) from
+whatever exception fired - there is no way to structurally guarantee an
+arbitrary exception's text contains neither a filesystem path (an OSError's
+__str__ embeds the FULL absolute path, including the OS username and any
+private folder/file names - see api_provider.py's _read_attachment_bytes,
+whose own error text interpolates a raw OSError) nor literal chat content
+(some provider SDKs' client-side request validation echoes the offending
+field's literal value). So the raw text is NEVER stored here: see
+_redact_provider_error_message below, which classifies it into one of a
+small, fixed vocabulary of category labels instead - this is the ONE place
+in the whole diagnostics allowlist that isn't inherently content-free by
+construction, so it gets its own explicit redaction step rather than
+inheriting "never chat content" for free the way every other field does.
 """
 
 from __future__ import annotations
@@ -38,9 +52,58 @@ from typing import Any, Callable
 _MAX_PROVIDER_ERRORS = 10
 _provider_errors: deque[dict[str, Any]] = deque(maxlen=_MAX_PROVIDER_ERRORS)
 
+# Keyword (lowercase substring) -> fixed category label, checked in order -
+# first match wins. Deliberately never echoes back any substring of the
+# original message: only ever one of the fixed strings on the right below,
+# or the generic fallback (see _redact_provider_error_message's own
+# docstring for why this can't be a best-effort filter instead).
+_PROVIDER_ERROR_CATEGORIES: tuple[tuple[str, str], ...] = (
+    ("no longer available", "attachment file unavailable"),
+    ("failed to read attached", "attachment file unavailable"),
+    ("timed out", "request timed out"),
+    ("timeout", "request timed out"),
+    ("429", "rate limited or quota exceeded"),
+    ("quota", "rate limited or quota exceeded"),
+    ("resourceexhausted", "rate limited or quota exceeded"),
+    ("rate limit", "rate limited or quota exceeded"),
+    ("401", "authentication failed"),
+    ("403", "authentication failed"),
+    ("unauthorized", "authentication failed"),
+    ("forbidden", "authentication failed"),
+    ("api key", "authentication failed"),
+    ("apikey", "authentication failed"),
+    ("404", "resource not found"),
+    ("not found", "resource not found"),
+    ("connection", "connection failed"),
+    ("connect", "connection failed"),
+    ("network", "connection failed"),
+    ("refused", "connection failed"),
+)
+_GENERIC_PROVIDER_ERROR_CATEGORY = "provider error (see application log for detail)"
+
+
+def _redact_provider_error_message(message: str) -> str:
+    """Classifies `message` (raw str(exc)) into one of the fixed category
+    labels in _PROVIDER_ERROR_CATEGORIES above, falling back to a generic
+    label when nothing matches. NEVER returns any substring of `message`
+    itself - a regex that only strips out "known-dangerous-looking"
+    patterns (e.g. absolute paths) would still leak whatever it doesn't
+    recognize (arbitrary chat content echoed by an SDK's own validation
+    error, say), which is exactly the failure this function exists to
+    close off structurally rather than best-effort."""
+    lowered = message.lower()
+    for needle, category in _PROVIDER_ERROR_CATEGORIES:
+        if needle in lowered:
+            return category
+    return _GENERIC_PROVIDER_ERROR_CATEGORY
+
 
 def record_provider_error(provider: str, message: str) -> None:
-    _provider_errors.append({"provider": provider, "message": message, "at": time.time()})
+    _provider_errors.append({
+        "provider": provider,
+        "message": _redact_provider_error_message(message),
+        "at": time.time(),
+    })
 
 
 def provider_errors() -> list[dict[str, Any]]:

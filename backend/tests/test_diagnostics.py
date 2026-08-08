@@ -30,21 +30,26 @@ def test_provider_errors_starts_empty():
 
 
 def test_record_provider_error_appends_provider_and_message():
+    # "connection refused" is redacted to its fixed category label - see
+    # the redaction tests below for why the raw text is never stored.
     record_provider_error("ollama", "connection refused")
     errors = provider_errors()
     assert len(errors) == 1
     assert errors[0]["provider"] == "ollama"
-    assert errors[0]["message"] == "connection refused"
+    assert errors[0]["message"] == "connection failed"
     assert isinstance(errors[0]["at"], float)
 
 
 def test_provider_errors_is_bounded():
+    # Distinguish entries by `provider` (not `message`, which is now
+    # collapsed to a redacted category label - see the redaction tests
+    # below) to keep proving FIFO eviction of the bounded deque.
     for i in range(15):
-        record_provider_error("ollama", f"error {i}")
+        record_provider_error(f"provider-{i}", "some transient failure")
     errors = provider_errors()
     assert len(errors) == 10  # _MAX_PROVIDER_ERRORS
-    assert errors[0]["message"] == "error 5"  # oldest 5 evicted
-    assert errors[-1]["message"] == "error 14"
+    assert errors[0]["provider"] == "provider-5"  # oldest 5 evicted
+    assert errors[-1]["provider"] == "provider-14"
 
 
 # -- DiagnosticsState: run history --------------------------------------
@@ -150,9 +155,65 @@ def test_session_count_reads_the_live_accessor():
 
 
 def test_payload_includes_provider_errors_from_the_shared_process_global_view():
-    record_provider_error("Anthropic Claude", "timeout")
+    record_provider_error("Anthropic Claude", "the request timed out")
     diagnostics = DiagnosticsState()
     errors = diagnostics.payload()["providerErrors"]
     assert len(errors) == 1
     assert errors[0]["provider"] == "Anthropic Claude"
-    assert errors[0]["message"] == "timeout"
+    assert errors[0]["message"] == "request timed out"
+
+
+# -- provider error message redaction (see backend/diagnostics.py's own ----
+# -- module docstring: this is the one field in the whole diagnostics ------
+# -- allowlist that isn't inherently content-free by construction) ---------
+
+
+CANARY = "CANARY-SECRET-CHAT-CONTENT-DO-NOT-LEAK-12345"
+
+
+def test_record_provider_error_never_stores_arbitrary_message_text():
+    """The empirical proof: literal content passed as `message` (standing
+    in for a provider SDK's raw exception text, which can embed anything -
+    an absolute filesystem path, or even echoed chat content) must never
+    survive into provider_errors() verbatim."""
+    record_provider_error("openai", CANARY)
+    errors = provider_errors()
+    assert len(errors) == 1
+    assert CANARY not in errors[0]["message"]
+    assert errors[0]["message"] == "provider error (see application log for detail)"
+
+
+def test_record_provider_error_redacts_an_absolute_windows_path_in_an_os_error():
+    """The concretely-demonstrated real-world trigger: api_provider.py's
+    _read_attachment_bytes interpolates a raw OSError, whose __str__ for a
+    failed open() embeds the FULL absolute path - including the OS
+    username and any private folder/file names."""
+    leaky_message = (
+        r"Failed to read attached image file 'secret_photo.png': "
+        r"[Errno 2] No such file or directory: "
+        r"'C:\\Users\\Someone\\Documents\\Private\\secret_photo.png'"
+    )
+    record_provider_error("openai", leaky_message)
+    errors = provider_errors()
+    assert "Someone" not in errors[0]["message"]
+    assert "Private" not in errors[0]["message"]
+    assert "secret_photo" not in errors[0]["message"]
+    assert errors[0]["message"] == "attachment file unavailable"
+
+
+@pytest.mark.parametrize(
+    "message,expected_category",
+    [
+        ("Request timed out after 30s", "request timed out"),
+        ("HTTP 429: rate limit exceeded", "rate limited or quota exceeded"),
+        ("google.api_core.exceptions.ResourceExhausted: quota exceeded", "rate limited or quota exceeded"),
+        ("401 Unauthorized: invalid API key provided", "authentication failed"),
+        ("Connection refused by remote host", "connection failed"),
+        ("HTTP 404: model not found", "resource not found"),
+        ("Attached audio file is no longer available: clip.wav", "attachment file unavailable"),
+    ],
+)
+def test_record_provider_error_classifies_known_shapes_without_echoing_them(message, expected_category):
+    record_provider_error("openai", message)
+    errors = provider_errors()
+    assert errors[0]["message"] == expected_category
