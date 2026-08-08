@@ -1225,6 +1225,30 @@ def _assert_ollama_audio_support(model_name: str, messages: list):
 def _prepare_ollama_messages(messages: list) -> list:
     processed_messages = []
     for msg in messages:
+        # ADR-007 stage 7.1: the two tool-turn roles the app's generic
+        # message shape adds (ChatRequest's own docstring), translated to
+        # Ollama's native shape - checked BEFORE the multimodal-content
+        # branch below since neither ever carries list-shaped content.
+        # Ollama's ToolCall has no `id` field at all (unlike OpenAI/
+        # Anthropic), so the app's own call.id is simply dropped here - it
+        # only ever existed to correlate a result back to ITS call, and
+        # Ollama's own request/response cycle has no use for it.
+        role = msg.get("role")
+        if role == "tool":
+            processed_messages.append({"role": "tool", "content": str(msg.get("content") or "")})
+            continue
+        tool_calls = msg.get("tool_calls")
+        if tool_calls:
+            processed_messages.append({
+                "role": "assistant",
+                "content": str(msg.get("content") or ""),
+                "tool_calls": [
+                    {"function": {"name": call["name"], "arguments": call["arguments"]}}
+                    for call in tool_calls
+                ],
+            })
+            continue
+
         content = msg.get("content")
         if isinstance(content, list):
             text_parts = []
@@ -2248,6 +2272,38 @@ def _prepare_anthropic_messages(messages: list, cancel_event=None) -> tuple[str 
     for msg in messages:
         _raise_if_cancelled(cancel_event)
         role_name = str(msg.get("role") or "user").strip().lower()
+
+        # ADR-007 stage 7.1: the two tool-turn roles ChatRequest's docstring
+        # adds, translated to Anthropic's native shape - checked before the
+        # system/text branches below since neither carries plain string/
+        # part-list content the way ordinary turns do. Anthropic has no
+        # separate "tool" role: a tool's result travels as a "user"-role
+        # tool_result block, keyed by tool_use_id - the same value this
+        # app's ToolCall.id / the generic message's tool_call_id carries.
+        if role_name == "tool":
+            blocks = [{
+                "type": "tool_result",
+                "tool_use_id": msg.get("tool_call_id", ""),
+                "content": str(msg.get("content") or ""),
+            }]
+            if anthropic_messages and anthropic_messages[-1]["role"] == "user":
+                anthropic_messages[-1]["content"].extend(blocks)
+            else:
+                anthropic_messages.append({"role": "user", "content": blocks})
+            continue
+        tool_calls = msg.get("tool_calls")
+        if tool_calls:
+            blocks = []
+            lead_in_text = str(msg.get("content") or "").strip()
+            if lead_in_text:
+                blocks.append({"type": "text", "text": lead_in_text})
+            blocks.extend(
+                {"type": "tool_use", "id": call["id"], "name": call["name"], "input": call["arguments"]}
+                for call in tool_calls
+            )
+            anthropic_messages.append({"role": "assistant", "content": blocks})
+            continue
+
         content = msg.get("content")
 
         if role_name == "system":
@@ -2581,6 +2637,38 @@ def _prepare_gemini_contents(messages: list, cancel_event=None, api_key: str | N
     for msg in messages:
         _raise_if_cancelled(cancel_event)
         role_name = msg.get("role")
+
+        # ADR-007 stage 7.1: the two tool-turn roles ChatRequest's docstring
+        # adds, translated to Gemini's native shape - checked before the
+        # system/text branches below. Gemini has its own dedicated
+        # "function" role for a tool's result (unlike Anthropic's user-role
+        # tool_result block) and, like Ollama, provides no native call id -
+        # GeminiProvider.stream() synthesizes one the same way Ollama's does.
+        if role_name == "tool":
+            parts = [{
+                "functionResponse": {
+                    "name": msg.get("name", ""),
+                    "response": {"result": str(msg.get("content") or "")},
+                },
+            }]
+            if contents and contents[-1]["role"] == "function":
+                contents[-1]["parts"].extend(parts)
+            else:
+                contents.append({"role": "function", "parts": parts})
+            continue
+        tool_calls = msg.get("tool_calls")
+        if tool_calls:
+            parts = []
+            lead_in_text = str(msg.get("content") or "").strip()
+            if lead_in_text:
+                parts.append({"text": lead_in_text})
+            parts.extend(
+                {"functionCall": {"name": call["name"], "args": call["arguments"]}}
+                for call in tool_calls
+            )
+            contents.append({"role": "model", "parts": parts})
+            continue
+
         if role_name == "system":
             system_prompt = msg.get("content")
             continue
@@ -3440,6 +3528,28 @@ def gemini_supports_reasoning(model_id: str) -> bool:
 
 def openai_supports_reasoning(model_id: str) -> bool:
     return _is_openai_reasoning_model(model_id)
+
+
+def ollama_supports_tools(model_name: str) -> bool:
+    """ADR-007 stage 7.1: unlike reasoning (a pure string-family check) and
+    unlike vision/audio (the request path sends attachment bytes
+    unconditionally and lets the model ignore them), tool use is genuinely
+    per-model server-side - sending a `tools` param to a model whose chat
+    template doesn't support it is a real request-shape mismatch, not a
+    politely-ignored extra. Reuses the SAME cached show()-backed probe
+    _assert_ollama_audio_support already established (api_provider.py's
+    _get_ollama_capabilities / _OLLAMA_CAPABILITY_CACHE) - Ollama's own
+    /api/show response reports "tools" in its top-level `capabilities` list
+    for models whose template actually supports function calling. None
+    (server/model/metadata unavailable) is treated as NOT capable - the
+    conservative default, matching _get_ollama_context_window's own
+    fall-back-to-safe-default posture, since advertising tool support that
+    doesn't exist would fail loudly mid-request instead of degrading
+    gracefully to the no-tools path."""
+    capabilities = _get_ollama_capabilities(model_name)
+    if capabilities is None:
+        return False
+    return "tools" in capabilities
 
 
 def get_mode() -> str:

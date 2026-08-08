@@ -27,6 +27,7 @@ every provider in this package.
 from __future__ import annotations
 
 import base64
+import json
 from pathlib import Path
 from typing import Iterator
 
@@ -42,6 +43,7 @@ from backend.providers.base import (
     ChatRequest,
     ProviderCapabilities,
     ProviderEvent,
+    ToolCall,
     normalize_usage,
 )
 
@@ -75,6 +77,40 @@ def prepare_openai_messages(messages: list) -> list:
     requests are byte-identical to the pre-port behavior."""
     prepared = []
     for message in messages:
+        # ADR-007 stage 7.1: the two tool-turn roles ChatRequest's docstring
+        # adds, translated to OpenAI's native shape - checked before the
+        # list-content branch below since neither ever carries part-list
+        # content. OpenAI's tool_call.function.arguments is a JSON STRING on
+        # the wire (unlike Ollama's already-parsed dict), so the app's
+        # parsed dict is re-serialized here, mirroring how api_provider.
+        # _prepare_ollama_messages handles the same two roles for Ollama.
+        role = message.get("role")
+        if role == "tool":
+            prepared.append({
+                "role": "tool",
+                "tool_call_id": message.get("tool_call_id", ""),
+                "content": str(message.get("content") or ""),
+            })
+            continue
+        tool_calls = message.get("tool_calls")
+        if tool_calls:
+            prepared.append({
+                "role": "assistant",
+                "content": message.get("content") or None,
+                "tool_calls": [
+                    {
+                        "id": call["id"],
+                        "type": "function",
+                        "function": {
+                            "name": call["name"],
+                            "arguments": json.dumps(call["arguments"]),
+                        },
+                    }
+                    for call in tool_calls
+                ],
+            })
+            continue
+
         content = message.get("content")
         if not isinstance(content, list):
             prepared.append(message)
@@ -148,7 +184,18 @@ class OpenAIProvider:
             image_generation=callable(
                 getattr(getattr(client, "images", None), "generate", None)
             ),
+            # ADR-007 stage 7.1: unlike Ollama's per-model probe, OpenAI's
+            # current model families all support native tool use
+            # unconditionally (base.py's own ProviderCapabilities.tools
+            # comment) - no capability call needed.
+            tools=True,
         )
+
+    # ADR-007 stage 7.1: deliberately NOT given tool-call support, matching
+    # OllamaProvider.complete()'s own exclusion comment - complete() returns
+    # a bare str with no channel for ToolCall events, and its callers never
+    # supply request.tools. A future caller passing tools here has them
+    # silently ignored (no `tools` kwarg built below).
 
     def complete(self, request: ChatRequest, cancel: CancelToken) -> str:
         kwargs = {k: v for k, v in request.extra_kwargs.items() if k != "cancellation_event"}
@@ -182,8 +229,26 @@ class OpenAIProvider:
         kwargs.pop("stream", None)  # ours to set - a passthrough kwarg can't turn it back off
         if request.task == config.TASK_CHAT:
             kwargs.update(openai_reasoning_kwargs(self.model_id, self.reasoning_level))
+        if request.tools:
+            kwargs["tools"] = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": tool.name,
+                        "description": tool.description,
+                        "parameters": tool.input_schema,
+                    },
+                }
+                for tool in request.tools
+            ]
 
         content_parts: list[str] = []
+        # ADR-007 stage 7.1: OpenAI streams each tool call's arguments as
+        # JSON TEXT FRAGMENTS keyed by the call's `index` (never by `id` -
+        # only the first delta for a given call carries one), unlike
+        # Ollama's whole-object delivery - buffered here and parsed once
+        # complete, so ToolCall.arguments is always an already-parsed dict.
+        tool_call_buffers: dict[int, dict] = {}
         prepared_messages = prepare_openai_messages(request.messages)
         # ADR-006 stage 6.8: ask for the final usage chunk. Some
         # OpenAI-compatible servers (older vLLM/LM Studio builds) reject
@@ -246,8 +311,40 @@ class OpenAIProvider:
                 )
                 if delta_reasoning:
                     yield ProviderEvent("reasoning", delta_reasoning)
+                # ADR-007 stage 7.1: each delta carries one fragment of one
+                # tool call, addressed by `index` - `id`/`function.name`
+                # arrive whole on that call's first delta (the `or` below
+                # preserves them against later empty-string deltas),
+                # `function.arguments` accumulates char-by-char.
+                for tc in getattr(delta, "tool_calls", None) or ():
+                    buf = tool_call_buffers.setdefault(
+                        tc.index, {"id": "", "name": "", "arguments": ""}
+                    )
+                    buf["id"] = getattr(tc, "id", None) or buf["id"]
+                    function = getattr(tc, "function", None)
+                    if function is not None:
+                        buf["name"] = getattr(function, "name", None) or buf["name"]
+                        buf["arguments"] += getattr(function, "arguments", None) or ""
         finally:
             stream.close()  # idempotent on an already-closed/exhausted stream
+
+        if tool_call_buffers:
+            # ADR-007 stage 7.1: mirrors OllamaProvider.stream()'s own
+            # tool_calls branch - a pure tool-call turn is a complete,
+            # legitimate outcome, so `done` carries whatever lead-in text
+            # streamed (often none) rather than being treated as an error.
+            for index in sorted(tool_call_buffers):
+                buf = tool_call_buffers[index]
+                yield ProviderEvent(
+                    "tool_call",
+                    tool_call=ToolCall(
+                        id=buf["id"] or f"call_{index}",
+                        name=buf["name"],
+                        arguments=json.loads(buf["arguments"]) if buf["arguments"] else {},
+                    ),
+                )
+            yield ProviderEvent("done", "".join(content_parts), usage=usage)
+            return
 
         # Deliberate parity with complete(), which returns message.content
         # untouched (no <think> composition anywhere on the OpenAI path
