@@ -201,6 +201,11 @@ _KNOWN_NON_NODE_FIELD_ACCESS_SHAPES = {
         # api_provider's fallback-chain wrapper hands it the model it just
         # substituted in, never a SceneNode.
         {"root": "fallback_ref", "file": "agents.py"},
+        # ADR-018 stage 18.5 review-fix regression test: `catalog[0].provider`
+        # is a unified_catalog() result (list[ModelDescriptor]), never a
+        # SceneNode collection - test_model_routing.py is entirely about
+        # model catalogs, so "catalog" never means anything else there.
+        {"root": "catalog", "file": "test_model_routing.py"},
     ),
 }
 

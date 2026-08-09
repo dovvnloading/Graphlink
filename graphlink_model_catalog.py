@@ -10,6 +10,7 @@ the settings layer aware of a provider SDK.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import Callable, Iterable, Mapping, NamedTuple
 
 
@@ -455,8 +456,16 @@ def unified_catalog(
             descriptors.append(ModelDescriptor(model_id=model_id, provider=_OLLAMA, source="installed"))
 
     llama_cpp_models = settings_manager.get_llama_cpp_scanned_models() or ()
-    for model_id in llama_cpp_models:
-        model_id = normalize_model_id(model_id)
+    for model_path in llama_cpp_models:
+        # Scanned entries are full filesystem paths (SettingsManager's own
+        # scan-results shape) - reduced to a basename here to match the
+        # ONLY identity _provider_for_model_ref's llama.cpp branch (and
+        # describe_active_model's own display convention) actually accepts:
+        # llama.cpp has no "load any installed model by id" catalog the way
+        # Ollama does, so the two currently-configured paths' own basenames
+        # are the entire addressable set. A full-path model_id here would
+        # never match and every auto/fallback pick would be rejected.
+        model_id = normalize_model_id(Path(model_path).name if model_path else "")
         if model_id:
             descriptors.append(ModelDescriptor(model_id=model_id, provider=_LLAMACPP, source="installed"))
 

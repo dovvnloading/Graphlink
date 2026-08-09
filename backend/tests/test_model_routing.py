@@ -706,3 +706,95 @@ def test_fallback_never_fires_on_cancellation(monkeypatch, no_backoff):
         )
 
     assert fallback_calls == []
+
+
+# -- review-fix regressions --------------------------------------------------
+
+
+def test_unified_catalog_reduces_llama_cpp_scanned_paths_to_a_basename():
+    """Review-fix regression: SettingsManager.get_llama_cpp_scanned_models()
+    returns FULL scanned paths (confirmed by backend/tests/test_settings.py's
+    own test_scan_llama_cpp_system_persists_results_and_reports_done, which
+    asserts a raw "C:/models/a.gguf" path), but _provider_for_model_ref's
+    llama.cpp branch only ever accepts a model_id matching the BASENAME of a
+    configured path - the same convention describe_active_model already
+    uses. Before this fix, unified_catalog stored the raw scanned path
+    verbatim, so any auto/fallback pick landing on a llama.cpp candidate
+    would be unconditionally rejected by _provider_for_model_ref."""
+    settings = _FakeSettingsManager(llama_cpp=["C:/models/local-model.gguf"])
+    catalog = mc.unified_catalog(settings)
+    assert catalog[0].provider == "Llama.cpp"
+    assert catalog[0].model_id == "local-model.gguf"
+
+
+def test_auto_fallback_can_actually_dispatch_to_a_scanned_llama_cpp_model(monkeypatch):
+    """Live-dispatch counterpart to the pure-function test above: the
+    catalog's basename-reduced llama.cpp candidate must not just LOOK
+    right, it must actually be constructible by _provider_for_model_ref and
+    complete a real (faked) request."""
+    from backend.providers import llama_cpp_provider as lp
+
+    monkeypatch.setattr(api_provider, "USE_API_MODE", False)
+    monkeypatch.setattr(api_provider, "LOCAL_PROVIDER_TYPE", config.LOCAL_PROVIDER_OLLAMA)
+    monkeypatch.setitem(config.OLLAMA_MODELS, config.TASK_CHAT, "")  # deliberately unconfigured
+    monkeypatch.setitem(api_provider.LLAMA_CPP_SETTINGS, "chat_model_path", "C:/models/local-model.gguf")
+
+    class FakeLlamaClient:
+        def create_chat_completion(self, messages=None, **kwargs):
+            return {"choices": [{"message": {"content": "llama answer"}}]}
+
+    monkeypatch.setattr(lp, "_get_llama_cpp_client", lambda task, s: FakeLlamaClient())
+
+    settings = _FakeSettingsManager(llama_cpp=["C:/models/local-model.gguf"])
+    response = api_provider.chat(
+        config.TASK_CHAT, [{"role": "user", "content": "hi"}], settings_manager=settings,
+    )
+    assert response["message"]["content"] == "llama answer"
+
+
+def test_auto_pick_recursion_preserves_settings_manager_for_a_further_fallback(monkeypatch, no_backoff):
+    """Review-fix regression: when NOTHING is configured for a fallback-
+    enabled task (task_title), chat()'s "no model configured" branch
+    recurses into itself with an auto-picked model_ref (18.4). Before this
+    fix, that recursive call silently dropped settings_manager, so if the
+    auto-picked model then ALSO failed, 18.5's fallback-on-failure could
+    never fire - the ONLY population of requests this would ever affect
+    (auto-picked because nothing was configured) is exactly the same
+    population FALLBACK_ENABLED_TASKS targets. Ollama (alphabetically
+    first, so the auto-pick's own tie-break lands here) is down for every
+    attempt; llama.cpp is the only OTHER configured provider, so a
+    surviving fallback can only mean settings_manager reached the SECOND
+    dispatch too."""
+    from backend.providers import llama_cpp_provider as lp
+
+    monkeypatch.setattr(api_provider, "USE_API_MODE", False)
+    monkeypatch.setattr(api_provider, "LOCAL_PROVIDER_TYPE", config.LOCAL_PROVIDER_OLLAMA)
+    monkeypatch.setitem(config.OLLAMA_MODELS, config.TASK_TITLE, "")  # deliberately unconfigured
+    monkeypatch.setitem(api_provider.LLAMA_CPP_SETTINGS, "chat_model_path", "C:/models/fallback.gguf")
+
+    import ollama
+    monkeypatch.setattr(ollama, "chat", lambda **kwargs: (_ for _ in ()).throw(ConnectionError("Connection refused")))
+
+    class FakeLlamaClient:
+        def create_chat_completion(self, messages=None, **kwargs):
+            return {"choices": [{"message": {"content": "llama fallback answered"}}]}
+
+    monkeypatch.setattr(lp, "_get_llama_cpp_client", lambda task, s: FakeLlamaClient())
+
+    settings = _FakeSettingsManager(ollama=["auto-picked-ollama"], llama_cpp=["C:/models/fallback.gguf"])
+    fallback_calls = []
+    response = api_provider.chat(
+        config.TASK_TITLE, [{"role": "user", "content": "name this"}],
+        settings_manager=settings,
+        on_fallback=lambda *args: fallback_calls.append(args),
+    )
+
+    assert response["message"]["content"] == "llama fallback answered"
+    # on_fallback itself is a KNOWN, documented gap for this specific
+    # compound scenario (see the two "settings_manager re-included" review-
+    # fix comments in api_provider.py's recursive auto-pick branches): the
+    # wrapper that owns on_fallback already popped it before ever calling
+    # into this recursive path, so it is out of scope here - the important,
+    # PREVIOUSLY-BROKEN thing this test pins is that the reply still
+    # succeeds at all.
+    assert fallback_calls == []

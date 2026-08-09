@@ -3056,8 +3056,21 @@ def _chat_dispatch(task: str, messages: list, **kwargs) -> dict:
                 if not model:
                     auto_ref = _auto_fallback_model_ref(task, settings_manager, state)
                     if auto_ref is not None:
+                        # ADR-018 stage 18.5 review fix: settings_manager
+                        # re-included (this function popped it into a local
+                        # above, and the plain module-level `chat` name below
+                        # resolves to the 18.5 fallback wrapper, not back to
+                        # this function) - without it, a failure on THIS
+                        # auto-picked ref could never trigger a further
+                        # fallback attempt, silently defeating 18.5 for the
+                        # exact population of requests 18.4's own auto-pick
+                        # serves. on_fallback is NOT re-includable here: the
+                        # wrapper already popped it before ever calling this
+                        # function, so it is simply out of scope at this
+                        # point - a fallback retry after THIS recursive hop
+                        # still fires, just without a notification.
                         return chat(
-                            task, messages, model_ref=auto_ref,
+                            task, messages, model_ref=auto_ref, settings_manager=settings_manager,
                             cancellation_event=cancel_event, runtime=runtime, **kwargs,
                         )
                     raise ValueError(f"No Ollama model configured for task: {task}")
@@ -3133,8 +3146,12 @@ def _chat_dispatch(task: str, messages: list, **kwargs) -> dict:
         if not api_model:
             auto_ref = _auto_fallback_model_ref(task, settings_manager, state)
             if auto_ref is not None:
+                # ADR-018 stage 18.5 review fix: see the Ollama branch's own
+                # comment above - settings_manager re-included so a failure
+                # on this auto-picked ref can still trigger a further
+                # fallback attempt.
                 return chat(
-                    task, messages, model_ref=auto_ref,
+                    task, messages, model_ref=auto_ref, settings_manager=settings_manager,
                     cancellation_event=cancel_event, runtime=runtime, **kwargs,
                 )
             raise RuntimeError(
@@ -3472,8 +3489,15 @@ def _chat_stream_dispatch(task: str, messages: list, on_chunk: Callable[[str, bo
                 if not model:
                     auto_ref = _auto_fallback_model_ref(task, settings_manager, state)
                     if auto_ref is not None:
+                        # ADR-018 stage 18.5 review fix: settings_manager
+                        # re-included - see chat()'s own identical fix for
+                        # why (this function popped it into a local above;
+                        # without re-including it, a failure on THIS
+                        # auto-picked ref could never trigger a further
+                        # fallback attempt).
                         return chat_stream(
-                            task, messages, on_chunk, model_ref=auto_ref, runtime=runtime, **kwargs,
+                            task, messages, on_chunk, model_ref=auto_ref,
+                            settings_manager=settings_manager, runtime=runtime, **kwargs,
                         )
                     raise ValueError(f"No Ollama model configured for task: {task}")
                 from backend.providers.ollama_provider import OllamaProvider
@@ -3496,8 +3520,11 @@ def _chat_stream_dispatch(task: str, messages: list, on_chunk: Callable[[str, bo
             if not api_model:
                 auto_ref = _auto_fallback_model_ref(task, settings_manager, state)
                 if auto_ref is not None:
+                    # ADR-018 stage 18.5 review fix: settings_manager
+                    # re-included - see chat()'s own identical fix.
                     return chat_stream(
-                        task, messages, on_chunk, model_ref=auto_ref, runtime=runtime, **kwargs,
+                        task, messages, on_chunk, model_ref=auto_ref,
+                        settings_manager=settings_manager, runtime=runtime, **kwargs,
                     )
                 raise RuntimeError(
                     f"No API model configured for task '{task}'.\n"
