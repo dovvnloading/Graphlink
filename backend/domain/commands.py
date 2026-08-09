@@ -299,7 +299,7 @@ class UndoRefusedError(Exception):
     failed - carries a message meant to be shown to the user verbatim."""
 
 
-def _merge_commands(command_type, provenance, commands):
+def _merge_commands(command_type, provenance, commands, run_id=None):
     """ADR-010 stage 10.3: folds a composite's buffered commands into one.
 
     Merge order matters and is asymmetric: for the BEFORE state the FIRST
@@ -307,17 +307,24 @@ def _merge_commands(command_type, provenance, commands):
     while for the AFTER state the LAST write wins (the final value is what
     the group ended up producing). Getting this backwards would make undo
     restore an intermediate state rather than the state before the action.
+
+    `run_id` (ADR-008): the composite's own run attribution. Applied to the
+    single-command passthrough as well as the merged case - a composite
+    that happened to buffer exactly one real command must still come out
+    run-stamped, or undo_run would skip that step of a build.
     """
     real = [c for c in commands if not c.is_noop]
     if not real:
         return None
     if len(real) == 1:
+        if run_id and real[0].run_id is None:
+            real[0].run_id = run_id
         return real[0]
 
     merged = Command(
         command_type=command_type,
         provenance=provenance,
-        run_id=next((c.run_id for c in real if c.run_id), None),
+        run_id=run_id or next((c.run_id for c in real if c.run_id), None),
     )
     for command in real:
         for field_name in ("node_before", "edge_before", "asset_before"):
@@ -369,6 +376,7 @@ class CommandOps:
         *,
         node_ids: Iterable[str] = (),
         edge_ids: Iterable[str] = (),
+        run_id: "str | None" = None,
     ) -> "tuple[T, Command]":
         """Runs `mutator` (a zero-arg closure wrapping exactly one call into
         an existing SceneDocument mutator, e.g. `lambda:
@@ -530,6 +538,7 @@ class CommandOps:
             asset_after=asset_after_out,
             pin_before=pin_before_out,
             pin_after=pin_after_out,
+            run_id=run_id,
         )
         # A no-op command (an idempotent connect() that created nothing, a
         # setter called with the value it already had) is never logged -
@@ -558,7 +567,7 @@ class CommandOps:
         self.command_log.append(command)
 
     @contextmanager
-    def composite(self, command_type: str, provenance: str = "user"):
+    def composite(self, command_type: str, provenance: str = "user", *, run_id: "str | None" = None):
         """ADR-010 stage 10.3: groups every command recorded inside the block
         into ONE undoable action.
 
@@ -583,7 +592,7 @@ class CommandOps:
             if outermost:
                 buffered = list(self._composite_buffer)
                 self._composite_buffer.clear()
-                merged = _merge_commands(command_type, provenance, buffered)
+                merged = _merge_commands(command_type, provenance, buffered, run_id=run_id)
                 # is_noop is re-checked AFTER merging, not just on the inputs:
                 # a group whose steps cancel out (create a node then delete it
                 # inside the same composite) has real non-noop members but

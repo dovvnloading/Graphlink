@@ -2886,6 +2886,7 @@ def _provider_for_model_ref(model_ref: ModelRef, state: "_ProviderSnapshot"):
 
 def _auto_fallback_model_ref(
     task: str, settings_manager, state: "_ProviderSnapshot", *, exclude_provider: str | None = None,
+    extra_required: "tuple[str, ...]" = (),
 ) -> ModelRef | None:
     """ADR-018 stage 18.4: the auto rung of the resolution chain, tried by
     chat()/chat_stream() ONLY at the exact point they are about to raise
@@ -2905,7 +2906,15 @@ def _auto_fallback_model_ref(
     `exclude_provider` (ADR-018 stage 18.5): reused by the fallback-on-
     failure path below to rule out the provider that just failed - a
     fallback that could re-pick the SAME broken provider would not be a
-    fallback at all."""
+    fallback at all.
+
+    `extra_required` (ADR-008): capabilities the CALL demands beyond the
+    task's own TASK_REQUIREMENTS - chat_turn_with_tools passes ("tools",)
+    so the auto rung never hands a tool-calling turn a model that cannot
+    call tools. Best-effort at this layer (catalog entries with unknown
+    capabilities pass permissively - graphlink_model_catalog's own
+    matches_capabilities contract); the authoritative gate stays the
+    constructed provider's own capabilities check at the call site."""
     if settings_manager is None:
         return None
     from graphlink_model_catalog import TASK_REQUIREMENTS, choose_auto_model_ref, unified_catalog
@@ -2926,7 +2935,8 @@ def _auto_fallback_model_ref(
         )
     ]
     policy = settings_manager.get_auto_model_policy()
-    return choose_auto_model_ref(catalog, TASK_REQUIREMENTS.get(task, ()), policy=policy)
+    required = tuple(TASK_REQUIREMENTS.get(task, ())) + tuple(extra_required)
+    return choose_auto_model_ref(catalog, required, policy=policy)
 
 
 def _fallback_model_ref_on_failure(
@@ -3620,6 +3630,186 @@ def _chat_stream_dispatch(task: str, messages: list, on_chunk: Callable[[str, bo
         # quota failure here must show the same friendly, actionable message
         # as the blocking path, not raw exception text (this is the ONLY
         # code path Composer send uses).
+        _translate_chat_exception(exc, state, messages)
+
+
+def chat_turn_with_tools(task: str, messages: list, tools: tuple = (), **kwargs) -> dict:
+    """ADR-008 stage 8.1: ONE model turn that can call tools - the primitive
+    the Builder loop alternates with ToolRegistry.invoke().
+
+    This is the layer the ADR-007 recon identified as the exact gap:
+    _chat_stream_dispatch's consuming loop silently drops "tool_call"
+    events and never sets ChatRequest.tools. This sibling collects them
+    instead: it constructs the SAME provider the streaming path would
+    (same snapshot credentials, same model_ref precedence, same lazy
+    imports), passes `tools` through ChatRequest, and returns
+
+        {"message": {"content": str, "role": "assistant"},
+         "tool_calls": [backend.providers.base.ToolCall, ...],   # [] = a plain turn
+         "usage": {"prompt_tokens", "completion_tokens"} | None}
+
+    so the caller can invoke each ToolCall via the registry, append the
+    {"role": "tool", ...} result messages (the app-neutral shapes each
+    provider's own message-prep helper already translates - proven
+    end-to-end per provider in backend/tests/test_tool_calling.py), and
+    call this again for the next turn. The loop, budgets, and approval
+    routing live in backend/builder.py - this function is deliberately
+    single-turn and stateless.
+
+    Tools capability is gated HERE, authoritatively: ChatRequest's own
+    contract (backend/providers/base.py) says a provider with
+    capabilities.tools=False must never receive non-empty tools, and the
+    caller is the checker - so a non-tools model (llama.cpp always;
+    Ollama per-model) raises an actionable RuntimeError before any
+    request is sent, rather than a provider-level surprise mid-build.
+
+    No 18.5 fallback wrapper: builder tasks are correctness-sensitive
+    (FALLBACK_ENABLED_TASKS covers naming/triage only), and a mid-build
+    silent model swap is exactly what ADR-018 decision #4 rules out.
+    Transport retry IS kept (same policy/attempt cap as the streaming
+    path) and is unconditionally safe here: nothing is forwarded to any
+    on_chunk mid-attempt, so a failed attempt's partial collection is
+    discarded wholesale and retried - there is no half-delivered UI state
+    to corrupt, the exact hazard that forces the streaming path's
+    "nothing forwarded yet" guard."""
+    cancel_event = kwargs.get("cancellation_event")
+    model_ref = kwargs.pop("model_ref", None)
+    runtime = kwargs.pop("runtime", None)
+    settings_manager = kwargs.pop("settings_manager", None)
+    state = runtime.snapshot() if runtime is not None else _snapshot_provider_state()
+
+    try:
+        _raise_if_cancelled(cancel_event)
+        from backend.providers.base import CancelToken, ChatRequest
+
+        if model_ref is not None:
+            provider = _provider_for_model_ref(model_ref, state)
+        elif not state.use_api_mode:
+            if state.local_provider_type == config.LOCAL_PROVIDER_OLLAMA:
+                model = state.ollama_models.get(task)
+                if not model:
+                    auto_ref = _auto_fallback_model_ref(
+                        task, settings_manager, state,
+                        extra_required=("tools",) if tools else (),
+                    )
+                    if auto_ref is not None:
+                        return chat_turn_with_tools(
+                            task, messages, tools, model_ref=auto_ref,
+                            settings_manager=settings_manager, runtime=runtime, **kwargs,
+                        )
+                    raise ValueError(f"No Ollama model configured for task: {task}")
+                from backend.providers.ollama_provider import OllamaProvider
+
+                provider = OllamaProvider(
+                    model=model, reasoning_level=state.ollama_reasoning_level,
+                    context_window=_ollama_effective_context_window(model),
+                )
+            elif state.local_provider_type == config.LOCAL_PROVIDER_LLAMACPP:
+                from backend.providers.llama_cpp_provider import LlamaCppProvider
+
+                provider = LlamaCppProvider(settings=state.llama_cpp_settings)
+            else:
+                raise RuntimeError(f"Unsupported local provider: {state.local_provider_type}")
+        else:
+            if not state.api_client:
+                raise RuntimeError("API client not initialized. Configure API settings first.")
+            api_model = state.api_models.get(task)
+            if not api_model:
+                auto_ref = _auto_fallback_model_ref(
+                    task, settings_manager, state,
+                    extra_required=("tools",) if tools else (),
+                )
+                if auto_ref is not None:
+                    return chat_turn_with_tools(
+                        task, messages, tools, model_ref=auto_ref,
+                        settings_manager=settings_manager, runtime=runtime, **kwargs,
+                    )
+                raise RuntimeError(
+                    f"No API model configured for task '{task}'.\n"
+                    "Please configure models in API Settings."
+                )
+            if state.api_provider_type == config.API_PROVIDER_OPENAI:
+                from backend.providers.openai_provider import OpenAIProvider
+
+                provider = OpenAIProvider(
+                    client=state.api_client, model=api_model,
+                    reasoning_level=state.openai_reasoning_level,
+                )
+            elif state.api_provider_type == config.API_PROVIDER_ANTHROPIC:
+                from backend.providers.anthropic_provider import AnthropicProvider
+
+                provider = AnthropicProvider(
+                    client=state.api_client, api_key=state.api_key, model=api_model,
+                    reasoning_level=state.anthropic_reasoning_level,
+                )
+            elif state.api_provider_type == config.API_PROVIDER_GEMINI:
+                from backend.providers.gemini_provider import GeminiProvider
+
+                provider = GeminiProvider(
+                    api_key=state.api_key, model=api_model,
+                    reasoning_level=state.gemini_reasoning_level,
+                )
+            else:
+                raise RuntimeError(f"Unsupported API provider: {state.api_provider_type}")
+
+        if tools and not provider.capabilities.tools:
+            model_label = getattr(provider, "model_id", None) or type(provider).__name__
+            raise RuntimeError(
+                f"The selected model ({model_label}) does not support tool "
+                "calling. The Builder needs a tools-capable model - pick one "
+                "in the model override or configure a tools-capable chat model."
+            )
+
+        if model_ref is not None:
+            transport_retry_allowed = model_ref.provider != config.LOCAL_PROVIDER_LLAMACPP
+        else:
+            transport_retry_allowed = (
+                state.use_api_mode
+                or state.local_provider_type == config.LOCAL_PROVIDER_OLLAMA
+            )
+        attempt = 0
+        while True:
+            full_response_content = None
+            usage = None
+            tool_calls = []
+            try:
+                for event in provider.stream(
+                    ChatRequest(
+                        task=task, messages=messages, extra_kwargs=kwargs,
+                        tools=tuple(tools), model_ref=model_ref,
+                    ),
+                    CancelToken(cancel_event),
+                ):
+                    if event.type == "tool_call" and event.tool_call is not None:
+                        tool_calls.append(event.tool_call)
+                    elif event.type == "reset":
+                        # A reasoning-retry discarded the prior attempt
+                        # wholesale - its collected tool calls go with it,
+                        # exactly like the streaming path's partial text.
+                        tool_calls = []
+                    elif event.type == "done":
+                        full_response_content = event.text
+                        usage = getattr(event, "usage", None)
+                break
+            except Exception as retry_exc:
+                if (
+                    not transport_retry_allowed
+                    or attempt >= _TRANSPORT_RETRY_MAX_ATTEMPTS
+                    or not _is_transient_transport_error(retry_exc)
+                ):
+                    raise
+                _transport_retry_wait(retry_exc, attempt, cancel_event)
+                attempt += 1
+
+        return {
+            "message": {
+                "content": full_response_content or "",
+                "role": "assistant",
+            },
+            "tool_calls": tool_calls,
+            "usage": usage,
+        }
+    except Exception as exc:
         _translate_chat_exception(exc, state, messages)
 
 
