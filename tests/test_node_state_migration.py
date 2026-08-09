@@ -185,9 +185,17 @@ _KNOWN_NON_NODE_FIELD_ACCESS_SHAPES = {
     # backend/api/intents_settings_api_provider.py's load_api_models,
     # iterating a get_available_model_descriptors() list) - neither is
     # ever a SceneNode.
+    #
+    # ADR-018 stage 18.1: graphlink_model_catalog.ModelDescriptor is now a
+    # standing type (not just an inline iteration variable), so a THIRD
+    # shape joins these two - backend/tests/test_model_routing.py's own
+    # `descriptor` loop variable over a `unified_catalog()` result, same
+    # non-SceneNode type as the intents_settings_api_provider.py entry
+    # above, just a different file/root pair.
     "provider": (
         {"root": "s", "file": "canvas.py"},
         {"root": "descriptor", "file": "intents_settings_api_provider.py"},
+        {"root": "descriptor", "file": "test_model_routing.py"},
     ),
 }
 

@@ -24,7 +24,7 @@ except ImportError:
 # this module must be importable from backend/ without PySide6 loading.
 import graphlink_task_config as config
 from graphlink_audio import guess_audio_mime_type
-from graphlink_model_catalog import ModelDescriptor, ollama_descriptor, sort_descriptors
+from graphlink_model_catalog import ModelDescriptor, ModelRef, ollama_descriptor, sort_descriptors
 
 
 USE_API_MODE = False
@@ -2802,8 +2802,95 @@ def generate_image(prompt: str, size: str = "1024x1024", *, runtime=None) -> byt
         raise
 
 
+def _provider_for_model_ref(model_ref: ModelRef, state: "_ProviderSnapshot"):
+    """ADR-018 stage 18.1: construct the provider a resolved ModelRef names,
+    the alternative to chat()/chat_stream()'s own task-keyed branch-select
+    below. Only called when a caller supplies `model_ref` (every pre-18.1
+    caller does not, and gets the byte-identical original behavior).
+
+    Both local providers are constructible from the snapshot REGARDLESS of
+    the session's active mode (`state.ollama_reasoning_level`/
+    `state.llama_cpp_settings` are always populated, not mode-gated) - so a
+    node/branch override CAN pin to "my local Ollama model" while the
+    session's configured default is a cloud provider, and vice versa; that
+    is the realistic mixed local+cloud comparison the ADR's context section
+    describes. A CLOUD override is honored only when it names the session's
+    OWN currently-configured provider (reusing state.api_client/api_key,
+    the exact credentials already snapshotted) - pinning to a DIFFERENT
+    cloud provider than the session's active one raises a clear,
+    actionable error rather than either silently falling back to the
+    session default or reaching for a second provider's stored credentials
+    the request snapshot was never given. Genuine simultaneous multi-
+    cloud-credential routing is deliberately out of scope for this stage;
+    see doc/adr/ADR-018-model-routing.md's own status note.
+
+    llama.cpp overrides are accepted only when the named model_id matches
+    one of the two paths already configured in
+    state.llama_cpp_settings (chat_model_path/title_model_path) - llama.cpp
+    has no "many installed models" catalog the way Ollama does, so free
+    model_id selection isn't meaningful there; a mismatch raises the same
+    actionable-error posture as an unconfigured cloud override."""
+
+    if model_ref.provider == config.LOCAL_PROVIDER_OLLAMA:
+        from backend.providers.ollama_provider import OllamaProvider
+
+        return OllamaProvider(
+            model=model_ref.model_id, reasoning_level=state.ollama_reasoning_level,
+            context_window=_ollama_effective_context_window(model_ref.model_id),
+        )
+
+    if model_ref.provider == config.LOCAL_PROVIDER_LLAMACPP:
+        configured_paths = {
+            Path(str(state.llama_cpp_settings.get("chat_model_path") or "")).name,
+            Path(str(state.llama_cpp_settings.get("title_model_path") or "")).name,
+        }
+        if model_ref.model_id not in configured_paths:
+            raise RuntimeError(
+                f"'{model_ref.model_id}' is not one of this session's configured "
+                "Llama.cpp model paths. Configure it in Settings > Llama.cpp first."
+            )
+        from backend.providers.llama_cpp_provider import LlamaCppProvider
+
+        return LlamaCppProvider(settings=state.llama_cpp_settings)
+
+    if model_ref.provider in (config.API_PROVIDER_OPENAI, config.API_PROVIDER_ANTHROPIC, config.API_PROVIDER_GEMINI):
+        if not (state.use_api_mode and state.api_provider_type == model_ref.provider and state.api_client):
+            raise RuntimeError(
+                f"This model is pinned to {model_ref.provider}, but the session's active "
+                f"API provider is {state.api_provider_type or 'not configured'}. Switch "
+                "API Endpoint in Settings to use it, or change the pinned model."
+            )
+        if model_ref.provider == config.API_PROVIDER_OPENAI:
+            from backend.providers.openai_provider import OpenAIProvider
+
+            return OpenAIProvider(
+                client=state.api_client, model=model_ref.model_id,
+                reasoning_level=state.openai_reasoning_level,
+            )
+        if model_ref.provider == config.API_PROVIDER_ANTHROPIC:
+            from backend.providers.anthropic_provider import AnthropicProvider
+
+            return AnthropicProvider(
+                client=state.api_client, api_key=state.api_key, model=model_ref.model_id,
+                reasoning_level=state.anthropic_reasoning_level,
+            )
+        from backend.providers.gemini_provider import GeminiProvider
+
+        return GeminiProvider(
+            api_key=state.api_key, model=model_ref.model_id,
+            reasoning_level=state.gemini_reasoning_level,
+        )
+
+    raise RuntimeError(f"Unknown model provider: {model_ref.provider!r}")
+
+
 def chat(task: str, messages: list, **kwargs) -> dict:
     cancel_event = kwargs.pop("cancellation_event", None)
+    # ADR-018 stage 18.1: an explicitly resolved ModelRef, popped BEFORE
+    # the remaining kwargs flow into ChatRequest.extra_kwargs - see
+    # _provider_for_model_ref's own docstring. None (every pre-18.1 caller)
+    # falls through to today's unchanged task-keyed branch-select below.
+    model_ref = kwargs.pop("model_ref", None)
     # ADR-006 stage 6.5: an explicit per-session ProviderRuntime, popped
     # BEFORE the remaining kwargs flow into the provider call. None (every
     # pre-6.5 caller) means the default session's module-backed runtime.
@@ -2818,6 +2905,36 @@ def chat(task: str, messages: list, **kwargs) -> dict:
 
     try:
         _raise_if_cancelled(cancel_event)
+
+        if model_ref is not None:
+            # ADR-018 stage 18.1: an already-resolved ModelRef takes
+            # absolute precedence over every task-keyed branch below - see
+            # _provider_for_model_ref's own docstring for exactly which
+            # provider it constructs and why. Only the LOCAL branches
+            # report real usage today (see the Ollama branch's own scope
+            # comment below); a model_ref-driven local call keeps that.
+            from backend.providers.base import CancelToken, ChatRequest
+
+            provider = _provider_for_model_ref(model_ref, state)
+            chat_request = ChatRequest(task=task, messages=messages, extra_kwargs=kwargs, model_ref=model_ref)
+            token = CancelToken(cancel_event)
+            if model_ref.provider == config.LOCAL_PROVIDER_LLAMACPP:
+                # llama.cpp is excluded from transport retry - in-process
+                # inference has no transport (mirrors every other branch's
+                # own posture, see chat_stream's twin comment).
+                content = provider.complete(chat_request, token)
+            else:
+                content = _complete_with_transport_retry(provider, chat_request, token, cancel_event)
+            return {
+                "message": {"content": content, "role": "assistant"},
+                # Real usage today only for the two branches that ever
+                # populate provider.last_usage (Ollama/llama.cpp) - see the
+                # unchanged branches below's own scope comment; getattr
+                # simply returns None for the three cloud providers here,
+                # matching that same documented gap exactly.
+                "usage": getattr(provider, "last_usage", None),
+            }
+
         if not state.use_api_mode:
             if state.local_provider_type == config.LOCAL_PROVIDER_OLLAMA:
                 # ADR-006 stage 6.5 (H6): read from the SNAPSHOT's copy of
@@ -3146,6 +3263,11 @@ def chat_stream(task: str, messages: list, on_chunk: Callable[[str, bool], None]
     `cancellation_event`).
     """
     cancel_event = kwargs.get("cancellation_event")
+    # ADR-018 stage 18.1: same short-circuit as chat() - see
+    # _provider_for_model_ref's own docstring. Left in kwargs by kwargs.get
+    # above's sibling; popped here since it must never reach
+    # ChatRequest.extra_kwargs.
+    model_ref = kwargs.pop("model_ref", None)
     # ADR-006 stage 6.5: same per-session runtime resolution as chat().
     runtime = kwargs.pop("runtime", None)
     state = runtime.snapshot() if runtime is not None else _snapshot_provider_state()
@@ -3164,7 +3286,9 @@ def chat_stream(task: str, messages: list, on_chunk: Callable[[str, bool], None]
         # recursing into chat(); real streaming owns its own.)
         from backend.providers.base import CancelToken, ChatRequest
 
-        if not state.use_api_mode:
+        if model_ref is not None:
+            provider = _provider_for_model_ref(model_ref, state)
+        elif not state.use_api_mode:
             if state.local_provider_type == config.LOCAL_PROVIDER_OLLAMA:
                 # ADR-006 stage 6.5 (H6): snapshot copy, not a live table
                 # read - see chat()'s twin comment.
@@ -3230,10 +3354,13 @@ def chat_stream(task: str, messages: list, on_chunk: Callable[[str, bool], None]
         # to translation exactly as before (silently replaying a half-
         # delivered stream would corrupt the caller's accumulated text).
         # llama.cpp is excluded: in-process inference has no transport.
-        transport_retry_allowed = (
-            state.use_api_mode
-            or state.local_provider_type == config.LOCAL_PROVIDER_OLLAMA
-        )
+        if model_ref is not None:
+            transport_retry_allowed = model_ref.provider != config.LOCAL_PROVIDER_LLAMACPP
+        else:
+            transport_retry_allowed = (
+                state.use_api_mode
+                or state.local_provider_type == config.LOCAL_PROVIDER_OLLAMA
+            )
         attempt = 0
         while True:
             full_response_content = None
@@ -3241,7 +3368,7 @@ def chat_stream(task: str, messages: list, on_chunk: Callable[[str, bool], None]
             delivered_any = False
             try:
                 for event in provider.stream(
-                    ChatRequest(task=task, messages=messages, extra_kwargs=kwargs),
+                    ChatRequest(task=task, messages=messages, extra_kwargs=kwargs, model_ref=model_ref),
                     CancelToken(cancel_event),
                 ):
                     if event.type == "text":
