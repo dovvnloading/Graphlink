@@ -202,11 +202,28 @@ def test_the_background_eviction_loop_survives_a_sweep_that_raises():
 
 
 def _make_client() -> TestClient:
-    return TestClient(
-        create_app(auth_token="test-token"),
+    # settings_state_file/chat_db_path: without an explicit override,
+    # create_app() falls through to its real production defaults
+    # (~/.graphlink/session.dat, ~/.graphlink/chats.db) - every one of this
+    # helper's callers would read AND rewrite the developer's real live
+    # settings/chat data. Matches test_assets.py's own make_client() and
+    # test_http_trust_boundary.py's _make_client().
+    import tempfile
+    from pathlib import Path
+
+    state_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+    state_path = Path(state_dir.name)
+    client = TestClient(
+        create_app(
+            auth_token="test-token",
+            settings_state_file=state_path / "session.dat",
+            chat_db_path=state_path / "chats.db",
+        ),
         base_url="http://127.0.0.1",
         headers={"host": "127.0.0.1"},
     )
+    client._state_tmpdir = state_dir  # type: ignore[attr-defined]
+    return client
 
 
 def test_ws_rejects_an_unknown_session_id():
