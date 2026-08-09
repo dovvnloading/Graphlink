@@ -24,7 +24,7 @@ except ImportError:
 # this module must be importable from backend/ without PySide6 loading.
 import graphlink_task_config as config
 from graphlink_audio import guess_audio_mime_type
-from graphlink_model_catalog import ModelDescriptor, ModelRef, ollama_descriptor, sort_descriptors
+from graphlink_model_catalog import FALLBACK_ENABLED_TASKS, ModelDescriptor, ModelRef, ollama_descriptor, sort_descriptors
 
 
 USE_API_MODE = False
@@ -2884,7 +2884,9 @@ def _provider_for_model_ref(model_ref: ModelRef, state: "_ProviderSnapshot"):
     raise RuntimeError(f"Unknown model provider: {model_ref.provider!r}")
 
 
-def _auto_fallback_model_ref(task: str, settings_manager, state: "_ProviderSnapshot") -> ModelRef | None:
+def _auto_fallback_model_ref(
+    task: str, settings_manager, state: "_ProviderSnapshot", *, exclude_provider: str | None = None,
+) -> ModelRef | None:
     """ADR-018 stage 18.4: the auto rung of the resolution chain, tried by
     chat()/chat_stream() ONLY at the exact point they are about to raise
     "no model configured" - an explicit task assignment (the common case)
@@ -2898,7 +2900,12 @@ def _auto_fallback_model_ref(task: str, settings_manager, state: "_ProviderSnaps
     policy ever picks from it - unified_catalog() otherwise spans every
     provider with a cached catalog, including ones this session has no
     live client for, and choose_auto_model_ref must never hand back a ref
-    _provider_for_model_ref would then reject."""
+    _provider_for_model_ref would then reject.
+
+    `exclude_provider` (ADR-018 stage 18.5): reused by the fallback-on-
+    failure path below to rule out the provider that just failed - a
+    fallback that could re-pick the SAME broken provider would not be a
+    fallback at all."""
     if settings_manager is None:
         return None
     from graphlink_model_catalog import TASK_REQUIREMENTS, choose_auto_model_ref, unified_catalog
@@ -2912,14 +2919,81 @@ def _auto_fallback_model_ref(task: str, settings_manager, state: "_ProviderSnaps
                 provider, model_id, overrides=settings_manager.get_pricing_overrides(),
             ),
         )
-        if descriptor.provider in (config.LOCAL_PROVIDER_OLLAMA, config.LOCAL_PROVIDER_LLAMACPP)
-        or (state.use_api_mode and descriptor.provider == state.api_provider_type)
+        if descriptor.provider != exclude_provider
+        and (
+            descriptor.provider in (config.LOCAL_PROVIDER_OLLAMA, config.LOCAL_PROVIDER_LLAMACPP)
+            or (state.use_api_mode and descriptor.provider == state.api_provider_type)
+        )
     ]
     policy = settings_manager.get_auto_model_policy()
     return choose_auto_model_ref(catalog, TASK_REQUIREMENTS.get(task, ()), policy=policy)
 
 
+def _fallback_model_ref_on_failure(
+    task: str, exc: Exception, model_ref: "ModelRef | None", settings_manager, state: "_ProviderSnapshot",
+) -> ModelRef | None:
+    """ADR-018 stage 18.5: called from chat()/chat_stream()'s OUTER wrapper
+    after the primary attempt (task-keyed lookup, or an explicit model_ref
+    override) has raised - never from inside _chat_dispatch/
+    _chat_stream_dispatch itself, which stay byte-identical to pre-18.5
+    behavior. Returns None (no fallback) unless ALL of:
+
+    - the task opts in (graphlink_model_catalog.FALLBACK_ENABLED_TASKS -
+      "off by default for correctness-sensitive tasks, on by default for
+      naming/triage", per the ADR's own decision #4)
+    - a settings_manager was supplied (same precondition as the 18.4 auto
+      rung - no catalog to fall back into otherwise)
+    - the failure is the SAME "retryable/unavailable" shape ADR-006
+      section 6 already classifies (_is_transient_transport_error) -
+      never a cancellation, never a content/validation error a different
+      model would fail identically at."""
+    if settings_manager is None or task not in FALLBACK_ENABLED_TASKS or not _is_transient_transport_error(exc):
+        return None
+    failed_provider = model_ref.provider if model_ref is not None else (
+        state.api_provider_type if state.use_api_mode else state.local_provider_type
+    )
+    return _auto_fallback_model_ref(task, settings_manager, state, exclude_provider=failed_provider)
+
+
 def chat(task: str, messages: list, **kwargs) -> dict:
+    """ADR-018 stage 18.5: the fallback-chain outer wrapper around
+    _chat_dispatch (this function's entire pre-18.5 body, unchanged). The
+    primary attempt always dispatches exactly as before; only on a
+    _fallback_model_ref_on_failure-approved failure does a SECOND attempt
+    fire, against a different provider, with `on_fallback` (additive,
+    popped here so it never reaches _chat_dispatch/ChatRequest.extra_kwargs)
+    invoked first so the caller can surface the substitution - "never a
+    silent swap" per the ADR's own decision #4. `runtime`/`settings_manager`
+    are peeked (kwargs.get, not pop) purely so this layer can compute the
+    same snapshot _chat_dispatch will independently take - the inner call
+    still receives its own untouched, unpopped copy of every kwarg."""
+    on_fallback = kwargs.pop("on_fallback", None)
+    runtime = kwargs.get("runtime")
+    settings_manager = kwargs.get("settings_manager")
+    try:
+        return _chat_dispatch(task, messages, **kwargs)
+    except Exception as exc:
+        if isinstance(exc, RequestCancelledError):
+            raise
+        state = runtime.snapshot() if runtime is not None else _snapshot_provider_state()
+        fallback_ref = _fallback_model_ref_on_failure(task, exc, kwargs.get("model_ref"), settings_manager, state)
+        if fallback_ref is None:
+            raise
+        if on_fallback is not None:
+            failed_provider = (
+                kwargs["model_ref"].provider if kwargs.get("model_ref") is not None
+                else (state.api_provider_type if state.use_api_mode else state.local_provider_type)
+            )
+            try:
+                on_fallback(failed_provider, fallback_ref, exc)
+            except Exception:
+                pass  # a broken notification callback must never mask the real fallback result
+        fallback_kwargs = dict(kwargs)
+        fallback_kwargs["model_ref"] = fallback_ref
+        return _chat_dispatch(task, messages, **fallback_kwargs)
+
+
+def _chat_dispatch(task: str, messages: list, **kwargs) -> dict:
     cancel_event = kwargs.pop("cancellation_event", None)
     # ADR-018 stage 18.1: an explicitly resolved ModelRef, popped BEFORE
     # the remaining kwargs flow into ChatRequest.extra_kwargs - see
@@ -3294,6 +3368,56 @@ def _translate_chat_exception(exc: Exception, state, messages: list) -> None:
 
 
 def chat_stream(task: str, messages: list, on_chunk: Callable[[str, bool], None], **kwargs) -> dict:
+    """ADR-018 stage 18.5: the streaming sibling of chat()'s own fallback-
+    chain outer wrapper, around _chat_stream_dispatch (this function's
+    entire pre-18.5 body, unchanged, renamed). Same on_fallback/exclude-
+    the-failed-provider mechanics as chat() - see its own docstring -
+    with one streaming-specific guard: a fallback attempt is legal ONLY
+    while `on_chunk` has delivered NOTHING real yet for this request,
+    mirroring the transport-retry layer's own "nothing forwarded yet"
+    invariant (chat_stream's module docstring) - replaying a stream that
+    already showed the user partial text, against a DIFFERENT model, would
+    corrupt rather than continue that partial output. A `reset` event
+    (mirrored below) already means the caller's own display is meant to be
+    empty again, so it re-arms the guard exactly like it re-arms
+    chat_stream's own accumulator (backend/agents.py's accumulated["text"]
+    handling)."""
+    on_fallback = kwargs.pop("on_fallback", None)
+    runtime = kwargs.get("runtime")
+    settings_manager = kwargs.get("settings_manager")
+    delivered = {"any": False}
+
+    def _tracking_on_chunk(delta: str, reset: bool) -> None:
+        if reset:
+            delivered["any"] = False
+        elif delta:
+            delivered["any"] = True
+        on_chunk(delta, reset)
+
+    try:
+        return _chat_stream_dispatch(task, messages, _tracking_on_chunk, **kwargs)
+    except Exception as exc:
+        if isinstance(exc, RequestCancelledError) or delivered["any"]:
+            raise
+        state = runtime.snapshot() if runtime is not None else _snapshot_provider_state()
+        fallback_ref = _fallback_model_ref_on_failure(task, exc, kwargs.get("model_ref"), settings_manager, state)
+        if fallback_ref is None:
+            raise
+        if on_fallback is not None:
+            failed_provider = (
+                kwargs["model_ref"].provider if kwargs.get("model_ref") is not None
+                else (state.api_provider_type if state.use_api_mode else state.local_provider_type)
+            )
+            try:
+                on_fallback(failed_provider, fallback_ref, exc)
+            except Exception:
+                pass  # a broken notification callback must never mask the real fallback result
+        fallback_kwargs = dict(kwargs)
+        fallback_kwargs["model_ref"] = fallback_ref
+        return _chat_stream_dispatch(task, messages, on_chunk, **fallback_kwargs)
+
+
+def _chat_stream_dispatch(task: str, messages: list, on_chunk: Callable[[str, bool], None], **kwargs) -> dict:
     """Streaming sibling of chat() (Qt-removal R4.4: true token streaming).
 
     ADR-006 stage 6.5b: EVERY provider streams real incremental chunks now -

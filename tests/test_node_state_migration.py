@@ -196,6 +196,11 @@ _KNOWN_NON_NODE_FIELD_ACCESS_SHAPES = {
         {"root": "s", "file": "canvas.py"},
         {"root": "descriptor", "file": "intents_settings_api_provider.py"},
         {"root": "descriptor", "file": "test_model_routing.py"},
+        # ADR-018 stage 18.5: _thread_on_fallback's own `fallback_ref` param
+        # (backend/agents.py) is a graphlink_model_catalog.ModelRef -
+        # api_provider's fallback-chain wrapper hands it the model it just
+        # substituted in, never a SceneNode.
+        {"root": "fallback_ref", "file": "agents.py"},
     ),
 }
 

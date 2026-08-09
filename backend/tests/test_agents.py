@@ -7287,17 +7287,20 @@ def test_default_dispatcher_still_calls_the_drivers_with_the_exact_pre_65_arity(
     # runtime kwarg, and (6.7) no persona_is_override kwarg on the default-
     # persona path. ADR-006 stage 6.6 widened the contract by exactly ONE
     # always-passed keyword: on_context_trimmed (the trim/summarize
-    # notification closure). ADR-018 stage 18.4 widens it by exactly ONE
+    # notification closure). ADR-018 stage 18.4 widened it by exactly ONE
     # more: settings_manager (the auto-policy fallback's own dependency) -
     # unlike model_ref (still genuinely conditional: this test's minimal
     # env has no canvas_document/node override, so model_ref_kwargs stays
     # empty), settings_manager is always available on a real dispatcher, so
-    # it is always passed. Both pinned here as keyword-only so no FURTHER
-    # kwargs creep in unnoticed.
+    # it is always passed. ADR-018 stage 18.5 widens it by exactly ONE more:
+    # on_fallback (the fallback-substitution notification closure), same
+    # always-available posture. All three pinned here as keyword-only so no
+    # FURTHER kwargs creep in unnoticed.
     def strict_pre_65_fake(conversation_history, persona_text, cancel_event, on_chunk, *,
-                           on_context_trimmed, settings_manager):
+                           on_context_trimmed, settings_manager, on_fallback):
         assert callable(on_context_trimmed)
         assert settings_manager is not None
+        assert callable(on_fallback)
         return "default reply"
 
     monkeypatch.setattr(agents_module, "_call_chat_agent_stream", strict_pre_65_fake)

@@ -303,6 +303,20 @@ AUTO_POLICY_FASTEST = "fastest"
 AUTO_POLICY_BEST_QUALITY = "best-quality"
 AUTO_POLICIES = (AUTO_POLICY_CHEAPEST_CAPABLE, AUTO_POLICY_FASTEST, AUTO_POLICY_BEST_QUALITY)
 
+# ADR-018 stage 18.5: tasks where a retryable/unavailable request failure
+# (ADR-006 section 6's transient-transport classification, exhausted) falls
+# back to a DIFFERENT provider instead of surfacing the error - "naming/
+# triage" per the ADR's own "off by default for correctness-sensitive
+# tasks, on by default for naming/triage" framing. task_title is literally
+# naming; task_web_validate is the web-research pipeline's fast per-
+# document relevance triage. Every other task (task_chat's own visible
+# reply, task_chart's generated code, task_image_gen's specific request,
+# task_web_summarize's fidelity to source text) is correctness-sensitive -
+# a silent model swap there would corrupt exactly the model-comparison
+# workflow this ADR's own "Alternatives considered" section rejects
+# enabling by default for.
+FALLBACK_ENABLED_TASKS = frozenset({"task_title", "task_web_validate"})
+
 _LATENCY_RANK = {"fast": 0, "standard": 1, "slow": 2, "": 3}
 
 

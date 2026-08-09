@@ -1004,6 +1004,27 @@ class AgentDispatcher:
 
                     asyncio.run_coroutine_threadsafe(_notify(), dispatch_loop)
 
+                # ADR-018 stage 18.5: fallback-substitution notification.
+                # api_provider's chat()/chat_stream() outer wrapper invokes
+                # this on the WORKER thread the instant it decides to
+                # dispatch a SECOND time against a different provider -
+                # "never a silent swap" per the ADR's own decision #4. Same
+                # marshal-to-loop pattern as _thread_on_context_trimmed
+                # above; always supplied (unconditionally, matching
+                # on_context_trimmed's own posture), since notifications_state/
+                # bus/dispatch_loop are always available in this scope.
+                def _thread_on_fallback(failed_provider: str, fallback_ref, exc: Exception) -> None:
+                    message = (
+                        f"{failed_provider} is unavailable right now - this reply used "
+                        f"{fallback_ref.provider} ({fallback_ref.model_id}) instead."
+                    )
+
+                    async def _notify() -> None:
+                        notifications_state.show(message, "warning")
+                        await bus.publish("notification")
+
+                    asyncio.run_coroutine_threadsafe(_notify(), dispatch_loop)
+
                 # ADR-006 stage 6.8: real-usage capture. The worker writes
                 # the provider's normalized usage dict into this holder
                 # BEFORE its to_thread future resolves (ChatWorker.run calls
@@ -1137,6 +1158,7 @@ class AgentDispatcher:
                                 **model_ref_kwargs,
                                 **settings_manager_kwargs,
                                 on_context_trimmed=_thread_on_context_trimmed,
+                                on_fallback=_thread_on_fallback,
                             ),
                             timeout=WATCHDOG_TIMEOUT_SECONDS,
                         )
@@ -1160,6 +1182,7 @@ class AgentDispatcher:
                             **model_ref_kwargs,
                             **settings_manager_kwargs,
                             on_context_trimmed=_thread_on_context_trimmed,
+                            on_fallback=_thread_on_fallback,
                         ),
                         timeout=WATCHDOG_TIMEOUT_SECONDS,
                     )
@@ -3210,7 +3233,7 @@ def _is_sandbox_error_output(output_text, return_code) -> bool:
 
 def _call_chat_agent(conversation_history, persona_text, cancel_event, *, runtime=None,
                      persona_is_override=False, on_context_trimmed=None, on_usage=None,
-                     model_ref=None, settings_manager=None) -> str:
+                     model_ref=None, settings_manager=None, on_fallback=None) -> str:
     """Runs inside asyncio.to_thread - a real OS thread, not the event loop.
 
     ADR-006 stage 6.5: `runtime` is an additive keyword-only kwarg, forwarded
@@ -3254,12 +3277,15 @@ def _call_chat_agent(conversation_history, persona_text, cancel_event, *, runtim
         # fallback (see its own docstring), never by anything in this
         # module or ChatAgent/ChatWorker themselves.
         **({"settings_manager": settings_manager} if settings_manager is not None else {}),
+        # ADR-018 stage 18.5: fallback-substitution notification - forwarded
+        # omit-when-None, same posture as every other additive kwarg here.
+        **({"on_fallback": on_fallback} if on_fallback is not None else {}),
     )
 
 
 def _call_chat_agent_stream(conversation_history, persona_text, cancel_event, on_chunk, *, runtime=None,
                             persona_is_override=False, on_context_trimmed=None, on_usage=None,
-                            model_ref=None, settings_manager=None) -> str:
+                            model_ref=None, settings_manager=None, on_fallback=None) -> str:
     """Runs inside asyncio.to_thread - a real OS thread, not the event loop.
     Streaming counterpart to _call_chat_agent (R4.4) - same persona/
     current_node/resolved_system_prompt guarantees as that function (see its
@@ -3301,6 +3327,9 @@ def _call_chat_agent_stream(conversation_history, persona_text, cancel_event, on
         # ADR-018 stage 18.4: forwarded omit-when-None, same posture as
         # _call_chat_agent's own settings_manager kwarg.
         **({"settings_manager": settings_manager} if settings_manager is not None else {}),
+        # ADR-018 stage 18.5: forwarded omit-when-None, same posture as
+        # _call_chat_agent's own on_fallback kwarg.
+        **({"on_fallback": on_fallback} if on_fallback is not None else {}),
     )
 
 

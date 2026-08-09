@@ -511,3 +511,198 @@ def test_auto_fallback_never_crosses_to_a_cheaper_model_from_a_different_cloud_p
     )
     assert response["message"]["content"] == "ok"
     assert captured["model"] == "gpt-4o"
+
+
+# -- stage 18.5: fallback chains with visible substitution ------------------
+#
+# The 18.4 tests above prove the auto rung fires when NOTHING is configured.
+# This section proves the DIFFERENT scenario stage 18.5 targets: something
+# IS configured and working, but fails at request time - "Ollama-down falls
+# back and says so" (the ADR's own literal exit criterion). Exercised from
+# the cloud-down/local-fallback direction (API mode fails, Ollama - always
+# constructible - is the fallback) since it reuses the existing
+# ollama_chat/_fake_openai_client fixtures without needing to fake
+# llama.cpp's SDK too; the reverse direction (Ollama down, cloud/llama.cpp
+# fallback) is the SAME code path with the exclude_provider argument
+# flipped, not a distinct branch.
+
+
+def _raising_openai_client(exc: Exception):
+    import types
+
+    def create(**kwargs):
+        raise exc
+
+    return types.SimpleNamespace(chat=types.SimpleNamespace(completions=types.SimpleNamespace(create=create)))
+
+
+def test_fallback_fires_for_a_fallback_enabled_task_when_the_configured_provider_is_down(
+    monkeypatch, ollama_chat, no_backoff,
+):
+    """THE 18.5 exit criterion: task_title (naming - fallback-enabled by
+    default) is fully CONFIGURED for OpenAI, but the client is down
+    (connection refused, retried and exhausted exactly like ADR-006
+    section 6 already does for same-provider transport blips) - the reply
+    still succeeds, via Ollama, and on_fallback is told about it."""
+    monkeypatch.setattr(api_provider, "USE_API_MODE", True)
+    monkeypatch.setattr(api_provider, "API_PROVIDER_TYPE", config.API_PROVIDER_OPENAI)
+    monkeypatch.setattr(api_provider, "API_KEY", "sk-fake")
+    monkeypatch.setitem(api_provider.API_MODELS, config.TASK_TITLE, "gpt-4o-mini")  # genuinely configured
+    monkeypatch.setattr(
+        api_provider, "API_CLIENT", _raising_openai_client(ConnectionError("Connection refused")),
+    )
+
+    settings = _FakeSettingsManager(ollama=["fallback-model:8b"])
+    ollama_chat.responses = [{"message": {"content": "A Title"}}]
+
+    fallback_calls = []
+    response = api_provider.chat(
+        config.TASK_TITLE, [{"role": "user", "content": "name this"}],
+        settings_manager=settings,
+        on_fallback=lambda failed_provider, ref, exc: fallback_calls.append((failed_provider, ref, exc)),
+    )
+
+    assert response["message"]["content"] == "A Title"
+    assert ollama_chat.calls[0]["model"] == "fallback-model:8b"
+    assert len(fallback_calls) == 1
+    failed_provider, ref, exc = fallback_calls[0]
+    assert failed_provider == config.API_PROVIDER_OPENAI
+    assert ref == mc.ModelRef("Ollama", "fallback-model:8b")
+    assert isinstance(exc, ConnectionError)
+
+
+def test_fallback_fires_for_chat_stream_too(monkeypatch, ollama_chat, no_backoff):
+    monkeypatch.setattr(api_provider, "chat_stream", _REAL_CHAT_STREAM)
+    monkeypatch.setattr(api_provider, "USE_API_MODE", True)
+    monkeypatch.setattr(api_provider, "API_PROVIDER_TYPE", config.API_PROVIDER_OPENAI)
+    monkeypatch.setattr(api_provider, "API_KEY", "sk-fake")
+    monkeypatch.setitem(api_provider.API_MODELS, config.TASK_WEB_VALIDATE, "gpt-4o-mini")
+    monkeypatch.setattr(
+        api_provider, "API_CLIENT", _raising_openai_client(ConnectionError("Connection refused")),
+    )
+
+    settings = _FakeSettingsManager(ollama=["fallback-model:8b"])
+    ollama_chat.streams = [_FakeOllamaStream([_part(content="validated", done=True)])]
+
+    chunks = []
+    fallback_calls = []
+    response = api_provider.chat_stream(
+        config.TASK_WEB_VALIDATE, [{"role": "user", "content": "assess this"}],
+        lambda d, r: chunks.append((d, r)),
+        settings_manager=settings,
+        on_fallback=lambda failed_provider, ref, exc: fallback_calls.append((failed_provider, ref)),
+    )
+
+    assert response["message"]["content"] == "validated"
+    assert ollama_chat.calls[0]["model"] == "fallback-model:8b"
+    assert fallback_calls == [(config.API_PROVIDER_OPENAI, mc.ModelRef("Ollama", "fallback-model:8b"))]
+    # The primary (failing) attempt never reached on_chunk - only the
+    # fallback attempt's real delta arrives.
+    assert chunks == [("validated", False)]
+
+
+def test_correctness_sensitive_tasks_never_fall_back(monkeypatch, no_backoff):
+    """task_chat is NOT in FALLBACK_ENABLED_TASKS - "off by default for
+    correctness-sensitive tasks" per the ADR's own decision #4. The same
+    down-provider setup as the tests above must surface the real error,
+    never silently swap to a different model the user never asked for."""
+    monkeypatch.setattr(api_provider, "USE_API_MODE", True)
+    monkeypatch.setattr(api_provider, "API_PROVIDER_TYPE", config.API_PROVIDER_OPENAI)
+    monkeypatch.setattr(api_provider, "API_KEY", "sk-fake")
+    monkeypatch.setitem(api_provider.API_MODELS, config.TASK_CHAT, "gpt-4o-mini")
+    monkeypatch.setattr(
+        api_provider, "API_CLIENT", _raising_openai_client(ConnectionError("Connection refused")),
+    )
+
+    settings = _FakeSettingsManager(ollama=["fallback-model:8b"])
+    fallback_calls = []
+
+    with pytest.raises(ConnectionError):
+        api_provider.chat(
+            config.TASK_CHAT, [{"role": "user", "content": "hi"}],
+            settings_manager=settings,
+            on_fallback=lambda *args: fallback_calls.append(args),
+        )
+
+    assert fallback_calls == []
+
+
+def test_fallback_never_fires_once_the_stream_has_delivered_real_text(monkeypatch, no_backoff):
+    """The streaming-specific guard: chat_stream's own module docstring
+    already establishes transport retry is legal ONLY before anything
+    reaches on_chunk - stage 18.5 extends that invariant to the cross-model
+    fallback attempt too. A provider that streams some real text and THEN
+    fails must surface the failure, never silently start a second reply
+    from a different model (which would look like corrupted/duplicated
+    output to the user)."""
+    monkeypatch.setattr(api_provider, "chat_stream", _REAL_CHAT_STREAM)
+    monkeypatch.setattr(api_provider, "USE_API_MODE", True)
+    monkeypatch.setattr(api_provider, "API_PROVIDER_TYPE", config.API_PROVIDER_OPENAI)
+    monkeypatch.setattr(api_provider, "API_KEY", "sk-fake")
+    monkeypatch.setitem(api_provider.API_MODELS, config.TASK_TITLE, "gpt-4o-mini")
+
+    import types
+
+    def _text_chunk(content):
+        return types.SimpleNamespace(
+            choices=[types.SimpleNamespace(delta=types.SimpleNamespace(content=content), finish_reason=None)],
+        )
+
+    class _PartialThenFailStream:
+        def __init__(self):
+            self._delivered = False
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            if not self._delivered:
+                self._delivered = True
+                return _text_chunk("partial")
+            raise ConnectionError("Connection refused mid-stream")
+
+        def close(self):
+            pass
+
+    def create(**kwargs):
+        assert kwargs.get("stream") is True
+        return _PartialThenFailStream()
+
+    client = types.SimpleNamespace(chat=types.SimpleNamespace(completions=types.SimpleNamespace(create=create)))
+    monkeypatch.setattr(api_provider, "API_CLIENT", client)
+
+    settings = _FakeSettingsManager(ollama=["fallback-model:8b"])
+    fallback_calls = []
+    chunks = []
+
+    with pytest.raises(ConnectionError):
+        api_provider.chat_stream(
+            config.TASK_TITLE, [{"role": "user", "content": "name this"}], lambda d, r: chunks.append((d, r)),
+            settings_manager=settings,
+            on_fallback=lambda *args: fallback_calls.append(args),
+        )
+
+    assert chunks == [("partial", False)]
+    assert fallback_calls == []
+
+
+def test_fallback_never_fires_on_cancellation(monkeypatch, no_backoff):
+    monkeypatch.setattr(api_provider, "USE_API_MODE", True)
+    monkeypatch.setattr(api_provider, "API_PROVIDER_TYPE", config.API_PROVIDER_OPENAI)
+    monkeypatch.setattr(api_provider, "API_KEY", "sk-fake")
+    monkeypatch.setitem(api_provider.API_MODELS, config.TASK_TITLE, "gpt-4o-mini")
+    monkeypatch.setattr(
+        api_provider, "API_CLIENT", _raising_openai_client(api_provider.RequestCancelledError("Request cancelled.")),
+    )
+
+    settings = _FakeSettingsManager(ollama=["fallback-model:8b"])
+    fallback_calls = []
+
+    with pytest.raises(api_provider.RequestCancelledError):
+        api_provider.chat(
+            config.TASK_TITLE, [{"role": "user", "content": "name this"}],
+            settings_manager=settings,
+            on_fallback=lambda *args: fallback_calls.append(args),
+        )
+
+    assert fallback_calls == []
