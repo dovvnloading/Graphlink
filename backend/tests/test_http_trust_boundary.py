@@ -22,6 +22,9 @@ full reasoning:
 
 from __future__ import annotations
 
+import tempfile
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -36,11 +39,30 @@ def _make_client(**create_app_kwargs) -> TestClient:
     # and headers= are required (websocket_connect hardcodes its own Host
     # independent of base_url - a Starlette TestClient quirk, confirmed via
     # a raw-ASGI-scope probe, not assumed).
-    return TestClient(
-        create_app(auth_token=TOKEN, **create_app_kwargs),
+    #
+    # settings_state_file/chat_db_path: without an explicit override,
+    # create_app() falls through to its real production defaults
+    # (~/.graphlink/session.dat, ~/.graphlink/chats.db) - every one of this
+    # file's ~14 callers would read AND rewrite the developer's real live
+    # settings/chat data. A TemporaryDirectory here (not a tmp_path fixture
+    # argument) matches test_assets.py's own make_client() exactly, since
+    # this helper is called directly by test functions with no tmp_path
+    # parameter of their own. **create_app_kwargs is applied last, so an
+    # individual test can still override these if it ever needs to.
+    state_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+    state_path = Path(state_dir.name)
+    kwargs = {
+        "settings_state_file": state_path / "session.dat",
+        "chat_db_path": state_path / "chats.db",
+        **create_app_kwargs,
+    }
+    client = TestClient(
+        create_app(auth_token=TOKEN, **kwargs),
         base_url="http://127.0.0.1",
         headers={"host": "127.0.0.1"},
     )
+    client._state_tmpdir = state_dir  # type: ignore[attr-defined]
+    return client
 
 
 # -- TrustedHostMiddleware: the Host-header check ----------------------------
@@ -255,7 +277,12 @@ def test_the_spa_bootstrap_is_not_gated_by_origin(tmp_path):
     (spa_dir / "assets").mkdir(parents=True)
     (spa_dir / "index.html").write_text("<html>graphlink</html>", encoding="utf-8")
     client = TestClient(
-        create_app(spa_dir=spa_dir, auth_token=TOKEN),
+        create_app(
+            spa_dir=spa_dir,
+            auth_token=TOKEN,
+            settings_state_file=tmp_path / "session.dat",
+            chat_db_path=tmp_path / "chats.db",
+        ),
         base_url="http://127.0.0.1",
         headers={"host": "127.0.0.1"},
     )

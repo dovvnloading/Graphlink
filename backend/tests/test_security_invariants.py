@@ -23,6 +23,9 @@ separate CI wiring was needed for this file to be "in CI".
 
 from __future__ import annotations
 
+import tempfile
+from pathlib import Path
+
 import pytest
 from fastapi import WebSocketDisconnect
 
@@ -40,11 +43,27 @@ def _make_client(**create_app_kwargs) -> TestClient:
     # hardcodes its own Host independent of base_url - both kwargs are
     # required for every other test in this file to even reach the checks
     # under test. Matches backend/tests/test_auth.py's authed_client fixture.
-    return TestClient(
-        create_app(auth_token=TOKEN, **create_app_kwargs),
+    #
+    # settings_state_file/chat_db_path: without an explicit override,
+    # create_app() falls through to its real production defaults
+    # (~/.graphlink/session.dat, ~/.graphlink/chats.db) - every one of this
+    # file's create_app()-backed callers would read AND rewrite the
+    # developer's real live settings/chat data. Matches test_assets.py's own
+    # make_client() and test_http_trust_boundary.py's _make_client().
+    state_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+    state_path = Path(state_dir.name)
+    kwargs = {
+        "settings_state_file": state_path / "session.dat",
+        "chat_db_path": state_path / "chats.db",
+        **create_app_kwargs,
+    }
+    client = TestClient(
+        create_app(auth_token=TOKEN, **kwargs),
         base_url="http://127.0.0.1",
         headers={"host": "127.0.0.1"},
     )
+    client._state_tmpdir = state_dir  # type: ignore[attr-defined]
+    return client
 
 
 # -- Invariant 1: auth-required ----------------------------------------------

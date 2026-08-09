@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 import backend  # noqa: F401 - exercises the package import
@@ -6,6 +8,66 @@ import backend  # noqa: F401 - exercises the package import
 # importable, so this needs no setup and no particular ordering relative to
 # the import above.
 import api_provider
+
+
+_REAL_DATA_DIR = (Path.home() / ".graphlink").resolve()
+
+
+@pytest.fixture(autouse=True)
+def _never_touch_the_real_user_data_dir(monkeypatch):
+    """Hard-fail any test that opens the developer's REAL ~/.graphlink files.
+
+    create_app() defaults settings_state_file/chat_db_path to
+    ~/.graphlink/session.dat and ~/.graphlink/chats.db (see
+    graphlink_settings_store.SettingsManager and chat_library.DEFAULT_DB_PATH).
+    A test that constructs the app without overriding BOTH therefore reads and
+    REWRITES the live settings/chat history of whoever runs the suite - which
+    is exactly what happened: several files here called create_app() bare, and
+    every `pytest` run silently rewrote the real session.dat (empirically
+    confirmed by watching its mtime change). It was benign only by luck -
+    bootstrap_provider_state() happened to write back an identical value, and
+    its except-branch would have overwritten the real current_mode outright.
+
+    This guard makes that class of bug impossible to reintroduce silently: it
+    fails loudly at the moment of access, naming the offending path, rather
+    than leaving a future contributor to notice their own data drifting. Every
+    test must pass a tmp_path/TemporaryDirectory-derived override - see
+    test_assets.py's or test_http_trust_boundary.py's make_client helpers for
+    the established shape.
+    """
+    def _guard(path, what):
+        try:
+            resolved = Path(path).resolve()
+        except (OSError, ValueError):  # unresolvable path - nothing real to hit
+            return
+        if resolved == _REAL_DATA_DIR or _REAL_DATA_DIR in resolved.parents:
+            raise AssertionError(
+                f"test touched REAL user data: {what} -> {resolved}. Pass a "
+                f"tmp_path-derived settings_state_file=/chat_db_path= instead "
+                f"(see backend/tests/conftest.py's own docstring)."
+            )
+
+    import graphlink_settings_store as settings_store
+    from backend import chat_library
+
+    real_settings_init = settings_store.SettingsManager.__init__
+
+    def guarded_settings_init(self, state_file=None, *args, **kwargs):
+        _guard(
+            state_file if state_file is not None else _REAL_DATA_DIR / "session.dat",
+            "SettingsManager(state_file=...)",
+        )
+        return real_settings_init(self, state_file, *args, **kwargs)
+
+    real_connect = chat_library._connect
+
+    def guarded_connect(db_path, *args, **kwargs):
+        _guard(db_path, "chat_library._connect(db_path=...)")
+        return real_connect(db_path, *args, **kwargs)
+
+    monkeypatch.setattr(settings_store.SettingsManager, "__init__", guarded_settings_init)
+    monkeypatch.setattr(chat_library, "_connect", guarded_connect)
+    yield
 
 
 @pytest.fixture(autouse=True)
