@@ -55,11 +55,16 @@ FS_READ = "fs.read"
 CODE_EXECUTE = "code.execute"
 NET_FETCH = "net.fetch"
 PROVIDER_CALL = "provider.call"
+# ADR-017 stage 17.2: read-only access to the local knowledge store
+# (backend/knowledge_store.py) - distinct from FS_READ, since it gates a
+# tool that only ever reads FROM the already-ingested store, never an
+# arbitrary path on disk.
+KNOWLEDGE_READ = "knowledge.read"
 
 # The ADR's own closed vocabulary (§2) - register() rejects anything outside
 # it immediately, the same fail-fast posture EVENT_TYPES/ProviderEvent.type
 # already take for their own closed vocabularies (backend/providers/base.py).
-KNOWN_SCOPES = frozenset({GRAPH_READ, GRAPH_MUTATE, FS_READ, CODE_EXECUTE, NET_FETCH, PROVIDER_CALL})
+KNOWN_SCOPES = frozenset({GRAPH_READ, GRAPH_MUTATE, FS_READ, CODE_EXECUTE, NET_FETCH, PROVIDER_CALL, KNOWLEDGE_READ})
 
 ApprovalPolicy = Literal["auto", "once", "always"]
 _KNOWN_APPROVAL_POLICIES = frozenset({"auto", "once", "always"})

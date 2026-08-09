@@ -250,3 +250,96 @@ class TestCorruptDbRescue:
         assert not list(db_path.parent.glob(f"{db_path.name}.corrupted-*")), (
             "a transient lock must never trigger quarantine"
         )
+
+
+# -- FTS5 lexical index (ADR-017 stage 17.2) ---------------------------------
+
+
+class TestMigrationBackfill:
+    def test_a_migration_from_1_to_2_backfills_pre_existing_chunks_into_fts(self, db_path, monkeypatch):
+        # Simulates a real user's stage-17.1-only knowledge.db upgrading in
+        # place: ingest against schema version 1 (chunks_fts does not exist
+        # yet), THEN let the module's own real target version (2) take
+        # over on the next connect - the migration's own backfill INSERT
+        # must make those already-stored chunks searchable, not just new
+        # ones ingested after the upgrade.
+        monkeypatch.setattr(ks, "KNOWLEDGE_DB_SCHEMA_VERSION", 1)
+        monkeypatch.setattr(ks, "_MIGRATIONS", {1: ks._migration_001_initial_schema})
+        outcome = _ingest(db_path, text="Pre-existing content about elephants.")
+
+        monkeypatch.undo()
+        results = ks.search_chunks(db_path, "elephants")
+        assert len(results) == 1
+        assert results[0]["document_id"] == outcome.document_id
+
+
+class TestFts5LexicalSearch:
+    def test_search_finds_a_matching_chunk_with_correct_citation_fields(self, db_path):
+        text = "The quick brown fox jumps over the lazy dog."
+        outcome = _ingest(db_path, text=text, source_uri="fox.txt", title="Fox Story")
+        results = ks.search_chunks(db_path, "brown fox")
+        assert len(results) == 1
+        result = results[0]
+        assert result["document_id"] == outcome.document_id
+        assert result["document_title"] == "Fox Story"
+        assert result["source_uri"] == "fox.txt"
+        assert text[result["offset_start"]:result["offset_end"]] == result["text"]
+
+    def test_search_with_no_matching_terms_returns_no_results(self, db_path):
+        _ingest(db_path, text="Content about giraffes and savannas.")
+        assert ks.search_chunks(db_path, "submarine reactor") == []
+
+    def test_a_blank_or_punctuation_only_query_returns_no_results_not_an_error(self, db_path):
+        _ingest(db_path, text="Some content.")
+        assert ks.search_chunks(db_path, "") == []
+        assert ks.search_chunks(db_path, "???...") == []
+
+    def test_a_query_containing_fts5_operator_syntax_is_treated_as_literal_terms(self, db_path):
+        # "OR"/"-"/"*"/quotes are real FTS5 query-syntax operators - a naive
+        # MATCH ? with the raw string would either throw a syntax error or
+        # silently change the query's meaning. Proves it's treated as safe
+        # literal terms instead: this document contains none of these
+        # words, so the "operator soup" query must find nothing, not raise.
+        _ingest(db_path, text="Unrelated content about baking bread.")
+        results = ks.search_chunks(db_path, 'OR -"exclude" wildcard* term')
+        assert results == []
+
+    def test_search_is_scoped_to_one_collection_when_requested(self, db_path):
+        _ingest(db_path, text="Shared searchable phrase zebra.", collection_id=1)
+        _ingest(db_path, text="Shared searchable phrase zebra.", collection_id=2)
+        assert len(ks.search_chunks(db_path, "zebra")) == 2
+        scoped = ks.search_chunks(db_path, "zebra", collection_id=1)
+        assert len(scoped) == 1
+
+    def test_k_bounds_the_number_of_results_returned(self, db_path):
+        for i in range(5):
+            _ingest(db_path, text=f"Document number {i} about walruses.", source_uri=f"doc{i}.txt")
+        assert len(ks.search_chunks(db_path, "walruses", k=2)) == 2
+        assert len(ks.search_chunks(db_path, "walruses", k=100)) == 5
+
+    def test_k_below_one_raises(self, db_path):
+        _ingest(db_path)
+        with pytest.raises(ValueError, match="k must be >= 1"):
+            ks.search_chunks(db_path, "hello", k=0)
+
+    def test_deleting_a_document_removes_its_chunks_from_the_fts_index_too(self, db_path):
+        # Proves the AFTER DELETE trigger actually fires - both for a
+        # direct delete_document call and (separately, below) for the ON
+        # DELETE CASCADE from a documents-row delete.
+        outcome = _ingest(db_path, text="Content about narwhals.")
+        assert len(ks.search_chunks(db_path, "narwhals")) == 1
+        ks.delete_document(db_path, outcome.document_id)
+        assert ks.search_chunks(db_path, "narwhals") == []
+
+    def test_results_are_ranked_best_match_first(self, db_path):
+        # Two documents both contain "python", but only one ALSO repeats it
+        # - bm25 must rank the more term-dense document first.
+        _ingest(db_path, text="Python is mentioned here exactly once.", source_uri="sparse.txt")
+        _ingest(
+            db_path,
+            text="Python python python - this document is all about python programming in python.",
+            source_uri="dense.txt",
+        )
+        results = ks.search_chunks(db_path, "python")
+        assert len(results) == 2
+        assert results[0]["source_uri"] == "dense.txt"

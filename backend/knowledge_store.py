@@ -42,6 +42,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import re
 import sqlite3
 import time
 from collections.abc import Callable
@@ -70,7 +71,7 @@ BACKUP_FILENAME_PREFIX = "knowledge-"
 # a mid-batch crash without re-snapshotting on every single document.
 BACKUP_CADENCE_SECONDS = 600.0
 
-KNOWLEDGE_DB_SCHEMA_VERSION = 1
+KNOWLEDGE_DB_SCHEMA_VERSION = 2
 
 
 def content_hash(text: str) -> str:
@@ -137,8 +138,55 @@ def _migration_001_initial_schema(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_chunks_document_id ON chunks (document_id)")
 
 
+def _migration_002_fts5_lexical_index(conn: sqlite3.Connection) -> None:
+    """1 -> 2 (ADR-017 stage 17.2): an FTS5 external-content index over
+    `chunks.text`, kept in sync by triggers rather than by every write
+    call site remembering to double-write - the standard SQLite pattern
+    for `content=`/`content_rowid=` FTS5 tables (see the SQLite docs' own
+    "External Content Tables" section). Only INSERT/DELETE triggers exist:
+    `chunks` rows are never UPDATEd anywhere in this codebase (an ingest
+    that changes content produces a NEW document+chunks via the content-
+    hash path - backend.knowledge_store's own module docstring), so an
+    UPDATE trigger would be untested dead code.
+
+    The DELETE trigger fires for both a direct `delete_document` call and
+    a `documents` row's ON DELETE CASCADE (SQLite's cascade is itself
+    implemented as real DELETE statements against the child table, so the
+    child table's own triggers still run) - chunks_fts never accumulates
+    orphaned rows either way.
+
+    The final INSERT backfills any chunk rows that predate this migration
+    (an already-populated stage-17.1-only knowledge.db upgrading in
+    place) - a no-op SELECT on a brand new database."""
+    conn.execute(
+        """
+        CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+            text,
+            content='chunks',
+            content_rowid='id'
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS chunks_fts_ai AFTER INSERT ON chunks BEGIN
+            INSERT INTO chunks_fts(rowid, text) VALUES (new.id, new.text);
+        END
+        """
+    )
+    conn.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS chunks_fts_ad AFTER DELETE ON chunks BEGIN
+            INSERT INTO chunks_fts(chunks_fts, rowid, text) VALUES ('delete', old.id, old.text);
+        END
+        """
+    )
+    conn.execute("INSERT INTO chunks_fts(rowid, text) SELECT id, text FROM chunks")
+
+
 _MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {
     1: _migration_001_initial_schema,
+    2: _migration_002_fts5_lexical_index,
 }
 
 
@@ -431,5 +479,75 @@ def delete_document(db_path: Path, document_id: int) -> bool:
         with conn:
             cursor = conn.execute("DELETE FROM documents WHERE id = ?", (document_id,))
             return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
+# -- FTS5 lexical search (ADR-017 stage 17.2) --------------------------------
+
+
+def _fts5_match_expression(query: str) -> str:
+    """Turns free-form user text into a safe FTS5 MATCH expression: every
+    \\w+ token double-quoted (an FTS5 string literal, immune to the
+    query-syntax operators - `AND`/`OR`/`NOT`/`NEAR`/`-`/`*`/`^` - raw user
+    text might otherwise contain and fail to parse or silently change
+    meaning), joined with a space, which FTS5 treats as an implicit AND.
+    Returns "" for a query with no word characters at all (blank, or pure
+    punctuation) - callers treat that as "no results", not a query to run."""
+    terms = re.findall(r"\w+", query, flags=re.UNICODE)
+    return " ".join('"' + term.replace('"', '""') + '"' for term in terms)
+
+
+def search_chunks(
+    db_path: Path, query: str, *, collection_id: int | None = None, k: int = 10,
+) -> list[dict[str, Any]]:
+    """Lexical (BM25) search over every ingested chunk's text, ranked best
+    match first. Returns a list of dicts carrying enough to both display a
+    result and cite it exactly: `chunk_id`, `document_id`, `document_title`,
+    `source_uri`, `ordinal`, `text`, `offset_start`, `offset_end`, `score`
+    (raw bm25() value - more negative is a better match, per FTS5's own
+    convention; ordering, not the magnitude, is the contract callers should
+    rely on). Returns `[]` for a query with no indexable terms rather than
+    matching everything (an empty FTS5 MATCH string is itself invalid
+    syntax, and "no terms" has no reasonable non-empty answer).
+
+    `k` bounds the result count outright, not a suggestion - a caller doing
+    budget-aware selection (ADR-017 stage 17.4) still needs a hard upper
+    bound on rows actually pulled from SQLite before it starts trimming by
+    token budget."""
+    if k < 1:
+        raise ValueError(f"k must be >= 1, got {k!r}.")
+    match_expression = _fts5_match_expression(query)
+    if not match_expression:
+        return []
+
+    conn = _connect(db_path)
+    try:
+        params: tuple[Any, ...] = (match_expression,)
+        collection_filter = ""
+        if collection_id is not None:
+            collection_filter = "AND d.collection_id = ?"
+            params = (match_expression, collection_id)
+        rows = conn.execute(
+            f"""
+            SELECT c.id, c.document_id, c.ordinal, c.text, c.offset_start, c.offset_end,
+                   d.title, d.source_uri, bm25(chunks_fts) AS score
+            FROM chunks_fts
+            JOIN chunks c ON c.id = chunks_fts.rowid
+            JOIN documents d ON d.id = c.document_id
+            WHERE chunks_fts MATCH ? {collection_filter}
+            ORDER BY score
+            LIMIT ?
+            """,
+            (*params, k),
+        ).fetchall()
+        return [
+            {
+                "chunk_id": row[0], "document_id": row[1], "ordinal": row[2], "text": row[3],
+                "offset_start": row[4], "offset_end": row[5], "document_title": row[6],
+                "source_uri": row[7], "score": row[8],
+            }
+            for row in rows
+        ]
     finally:
         conn.close()
