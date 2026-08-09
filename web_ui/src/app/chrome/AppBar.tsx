@@ -366,6 +366,15 @@ export function AppBar({ store }: { store: SceneStore }) {
         >
           Knowledge
         </button>
+        <button
+          type="button"
+          className={"appbar-overflow-item" + (overlays.isOpen("builder-launch") ? " checked" : "")}
+          data-tier="1"
+          aria-pressed={overlays.isOpen("builder-launch")}
+          onClick={() => overlays.toggle("builder-launch", "dialog")}
+        >
+          Builder
+        </button>
       </Popover>
 
       <button
@@ -416,6 +425,16 @@ export function AppBar({ store }: { store: SceneStore }) {
         onClick={() => overlays.toggle("knowledge", "dialog")}
       >
         Knowledge
+      </button>
+      <button
+        type="button"
+        className={chip("builder-launch") + " appbar-tier"}
+        data-tier="1"
+        data-overlay-trigger="builder-launch"
+        aria-pressed={overlays.isOpen("builder-launch")}
+        onClick={() => overlays.toggle("builder-launch", "dialog")}
+      >
+        Builder
       </button>
     </div>
   );
