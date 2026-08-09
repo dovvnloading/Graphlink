@@ -682,6 +682,29 @@ class AgentDispatcher:
             return ""
         return BASE_SYSTEM_PROMPT
 
+    def _resolve_model_ref_for_dispatch(self, canvas_document, node_id: str | None):
+        """ADR-018 stage 18.2: the node/branch-override rungs of
+        graphlink_model_catalog.resolve_model_ref, computed here (mirroring
+        _resolve_branch_system_prompt's own "only when canvas_document/
+        node_id are supplied" restriction) and returned already resolved.
+        auto/workspace-default (which need the unified catalog and the
+        session's task-keyed default) stay out of scope here - when neither
+        rung fires, this returns None and the caller passes no model_ref at
+        all, falling through to api_provider's existing task-keyed lookup
+        UNCHANGED (see _provider_for_model_ref's own docstring in
+        api_provider.py). Diagnostics-worthy (the "why this model" rung
+        name) is thrown away at this layer on purpose - stage 18.3's
+        explain-resolution intent recomputes it fresh from the SAME
+        SceneDocument state the UI can already read, rather than this
+        already-in-flight dispatch trying to smuggle it back out."""
+        if canvas_document is None or node_id is None:
+            return None
+        resolve_model_for_node = getattr(canvas_document, "resolve_model_for_node", None)
+        if resolve_model_for_node is None:
+            return None
+        node_ref, branch_ref = resolve_model_for_node(node_id)
+        return node_ref or branch_ref
+
     def _resolve_branch_system_prompt(self, canvas_document, node_id: str | None) -> str | None:
         """R6.1 port of legacy graphlink_chat_agent.py's
         resolve_branch_system_prompt: given the id of a chat node about to be
@@ -937,6 +960,10 @@ class AgentDispatcher:
                 # now both read this single resolved value instead).
                 override = self._resolve_branch_system_prompt(canvas_document, node_id)
                 persona_text = override if override is not None else self.persona()
+                # ADR-018 stage 18.2: computed once, shared by both branches
+                # below, exactly like persona_text/override_kwargs above.
+                model_ref = self._resolve_model_ref_for_dispatch(canvas_document, node_id)
+                model_ref_kwargs = {"model_ref": model_ref} if model_ref is not None else {}
                 # ADR-006 stage 6.7: a note override reaches the wire RAW
                 # (never wrapped in "You are Graphlink Assistant. ...") -
                 # flagged to _call_chat_agent(_stream) only when an override
@@ -1098,6 +1125,7 @@ class AgentDispatcher:
                                 **self._runtime_kwargs(),
                                 **override_kwargs,
                                 **usage_kwargs,
+                                **model_ref_kwargs,
                                 on_context_trimmed=_thread_on_context_trimmed,
                             ),
                             timeout=WATCHDOG_TIMEOUT_SECONDS,
@@ -1119,6 +1147,7 @@ class AgentDispatcher:
                             **self._runtime_kwargs(),
                             **override_kwargs,
                             **usage_kwargs,
+                            **model_ref_kwargs,
                             on_context_trimmed=_thread_on_context_trimmed,
                         ),
                         timeout=WATCHDOG_TIMEOUT_SECONDS,
@@ -3169,7 +3198,8 @@ def _is_sandbox_error_output(output_text, return_code) -> bool:
 
 
 def _call_chat_agent(conversation_history, persona_text, cancel_event, *, runtime=None,
-                     persona_is_override=False, on_context_trimmed=None, on_usage=None) -> str:
+                     persona_is_override=False, on_context_trimmed=None, on_usage=None,
+                     model_ref=None) -> str:
     """Runs inside asyncio.to_thread - a real OS thread, not the event loop.
 
     ADR-006 stage 6.5: `runtime` is an additive keyword-only kwarg, forwarded
@@ -3205,11 +3235,15 @@ def _call_chat_agent(conversation_history, persona_text, cancel_event, *, runtim
         **({"on_context_trimmed": on_context_trimmed} if on_context_trimmed is not None else {}),
         # ADR-006 stage 6.8: real-usage signal - forwarded omit-when-None.
         **({"on_usage": on_usage} if on_usage is not None else {}),
+        # ADR-018 stage 18.2: resolved node/branch model pin - forwarded
+        # omit-when-None, same posture as every other additive kwarg here.
+        **({"model_ref": model_ref} if model_ref is not None else {}),
     )
 
 
 def _call_chat_agent_stream(conversation_history, persona_text, cancel_event, on_chunk, *, runtime=None,
-                            persona_is_override=False, on_context_trimmed=None, on_usage=None) -> str:
+                            persona_is_override=False, on_context_trimmed=None, on_usage=None,
+                            model_ref=None) -> str:
     """Runs inside asyncio.to_thread - a real OS thread, not the event loop.
     Streaming counterpart to _call_chat_agent (R4.4) - same persona/
     current_node/resolved_system_prompt guarantees as that function (see its
@@ -3245,6 +3279,9 @@ def _call_chat_agent_stream(conversation_history, persona_text, cancel_event, on
         **({"on_context_trimmed": on_context_trimmed} if on_context_trimmed is not None else {}),
         # ADR-006 stage 6.8: real-usage signal - forwarded omit-when-None.
         **({"on_usage": on_usage} if on_usage is not None else {}),
+        # ADR-018 stage 18.2: resolved node/branch model pin - forwarded
+        # omit-when-None, same posture as every other additive kwarg here.
+        **({"model_ref": model_ref} if model_ref is not None else {}),
     )
 
 
