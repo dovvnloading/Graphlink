@@ -77,6 +77,13 @@ class GeminiProvider:
             # structured outputs - see backend/structured_output.py's own
             # _native_kwargs_for_active_provider comment.
             structured_output=True,
+            # ADR-017 stage 17.3: Gemini's REST :embedContent endpoint is
+            # real and mechanically reachable the same way this class
+            # already hand-rolls every other REST call, but this stage's
+            # exit criterion ("at minimum" Ollama + one API provider) is
+            # met by OpenAIProvider - not implemented here to keep this
+            # stage's surface area to what is actually tested end-to-end.
+            embedding=False,
         )
 
     def _request_body(self, request: ChatRequest, system_prompt, gemini_contents) -> dict:

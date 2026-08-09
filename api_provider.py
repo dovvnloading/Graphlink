@@ -3903,6 +3903,24 @@ def ollama_supports_tools(model_name: str) -> bool:
     return "tools" in capabilities
 
 
+def ollama_supports_embedding(model_name: str) -> bool:
+    """ADR-017 stage 17.3: same cached show()-backed probe as
+    ollama_supports_tools' own docstring describes, checking for
+    "embedding" in the model's own reported `capabilities` list instead of
+    "tools" - Ollama's model library tags embedding-only models (e.g.
+    nomic-embed-text, mxbai-embed-large) this way. A CHAT model (e.g.
+    llama3) does NOT report "embedding" here, so this is what stops
+    OllamaProvider.capabilities.embedding from being wrongly True just
+    because SOME Ollama model somewhere supports it - ADR-017's own
+    "Provider.embed()" is per configured-model, not per-server. None
+    (server/model/metadata unavailable) is treated as NOT capable, the
+    same conservative default ollama_supports_tools uses."""
+    capabilities = _get_ollama_capabilities(model_name)
+    if capabilities is None:
+        return False
+    return "embedding" in capabilities
+
+
 def get_mode() -> str:
     if USE_API_MODE:
         return "API"

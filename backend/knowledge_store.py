@@ -71,7 +71,7 @@ BACKUP_FILENAME_PREFIX = "knowledge-"
 # a mid-batch crash without re-snapshotting on every single document.
 BACKUP_CADENCE_SECONDS = 600.0
 
-KNOWLEDGE_DB_SCHEMA_VERSION = 2
+KNOWLEDGE_DB_SCHEMA_VERSION = 3
 
 
 def content_hash(text: str) -> str:
@@ -184,9 +184,45 @@ def _migration_002_fts5_lexical_index(conn: sqlite3.Connection) -> None:
     conn.execute("INSERT INTO chunks_fts(rowid, text) SELECT id, text FROM chunks")
 
 
+def _migration_003_vector_index(conn: sqlite3.Connection) -> None:
+    """2 -> 3 (ADR-017 stage 17.3): the vector-embedding cache/index - the
+    ADR's own schema sketch's `embeddings` table. Keyed by
+    `(chunk_id, model_id)`, NOT a bare `chunk_id`: switching embedding
+    models (or trying a second one alongside the first) must not collide
+    with or overwrite a still-valid vector for the model that produced it,
+    and re-running an embed pass after a partial failure must skip chunks
+    that already have a row for THIS model - the exit criterion's own
+    "cache prevents re-embedding" (ADR-017 doc, stage 17.3 row). Ordinary
+    FK ON DELETE CASCADE (not a trigger, unlike chunks_fts - this is a
+    plain table, not an FTS5 external-content one) means a document delete
+    or content-hash-idempotent skip never orphans embedding rows.
+
+    `vector` is a packed little-endian float32 BLOB (struct.pack via
+    backend.knowledge_embeddings' own pack/unpack helpers) rather than JSON
+    text - a 768-dim vector is 3KB as float32 bytes vs. ~10x that as a JSON
+    array of decimal strings, and this table is written once per chunk per
+    model then read back in bulk for every vector search. `dim` is stored
+    redundantly (recoverable from `len(vector) // 4`) so a dimension
+    mismatch from a swapped embedding model is a cheap integer comparison,
+    not a silent shape error deep in a numpy call."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS embeddings (
+            chunk_id INTEGER NOT NULL REFERENCES chunks (id) ON DELETE CASCADE,
+            model_id TEXT NOT NULL,
+            dim INTEGER NOT NULL,
+            vector BLOB NOT NULL,
+            PRIMARY KEY (chunk_id, model_id)
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_embeddings_model_id ON embeddings (model_id)")
+
+
 _MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {
     1: _migration_001_initial_schema,
     2: _migration_002_fts5_lexical_index,
+    3: _migration_003_vector_index,
 }
 
 
@@ -479,6 +515,103 @@ def delete_document(db_path: Path, document_id: int) -> bool:
         with conn:
             cursor = conn.execute("DELETE FROM documents WHERE id = ?", (document_id,))
             return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
+# -- embedding cache/index CRUD (ADR-017 stage 17.3) -------------------------
+#
+# Deliberately byte-blob level - no numpy import in this module. Packing a
+# vector into bytes and back is backend.knowledge_embeddings' job (the
+# module that also owns the actual Provider.embed() calls and the
+# similarity math); this module stays what every other store.py in this
+# codebase is, plain CRUD with no ML-library dependency.
+
+
+def upsert_embeddings(db_path: Path, model_id: str, rows: list[tuple[int, int, bytes]]) -> None:
+    """`rows`: `(chunk_id, dim, vector_blob)` tuples, all for the SAME
+    `model_id` (the cache key's other half). ON CONFLICT DO UPDATE rather
+    than INSERT OR IGNORE - defensive, not load-bearing today: every real
+    caller (knowledge_embeddings.embed_pending_chunks) only ever passes
+    chunk_ids that chunks_pending_embedding() just confirmed have no row
+    yet, so this is a plain insert in practice, but a caller that DOES
+    pass an already-embedded chunk_id (e.g. a forced re-embed) gets a
+    correct overwrite instead of a silently-ignored no-op or a UNIQUE-
+    constraint crash."""
+    if not rows:
+        return
+    conn = _connect(db_path)
+    try:
+        with conn:
+            conn.executemany(
+                "INSERT INTO embeddings (chunk_id, model_id, dim, vector) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(chunk_id, model_id) DO UPDATE SET dim = excluded.dim, vector = excluded.vector",
+                [(chunk_id, model_id, dim, vector_blob) for chunk_id, dim, vector_blob in rows],
+            )
+    finally:
+        conn.close()
+
+
+def chunks_pending_embedding(
+    db_path: Path, model_id: str, *, collection_id: int | None = None,
+) -> list[dict[str, Any]]:
+    """Every chunk with no `(chunk_id, model_id)` row yet - the embedding
+    CACHE's read side (ADR-017 stage 17.3's own exit criterion: "cache
+    prevents re-embedding"). A LEFT JOIN ... WHERE e.chunk_id IS NULL
+    anti-join, not a NOT IN subquery - the standard SQLite idiom for "rows
+    in A with no matching row in B", and avoids a NOT IN's own NULL
+    pitfall entirely (moot here since chunk_id is never NULL, but the
+    anti-join form is the one with no such trap to reason about)."""
+    conn = _connect(db_path)
+    try:
+        query = (
+            "SELECT c.id, c.text FROM chunks c "
+            "JOIN documents d ON d.id = c.document_id "
+            "LEFT JOIN embeddings e ON e.chunk_id = c.id AND e.model_id = ? "
+            "WHERE e.chunk_id IS NULL"
+        )
+        params: list[Any] = [model_id]
+        if collection_id is not None:
+            query += " AND d.collection_id = ?"
+            params.append(collection_id)
+        rows = conn.execute(query, params).fetchall()
+        return [{"chunk_id": row[0], "text": row[1]} for row in rows]
+    finally:
+        conn.close()
+
+
+def list_embeddings_for_search(
+    db_path: Path, model_id: str, *, collection_id: int | None = None,
+) -> list[dict[str, Any]]:
+    """Every embedded chunk for `model_id`, joined with enough of its
+    parent chunk/document to build a citation-ready vector_search() result
+    directly - the same fields search_chunks() (FTS5) already returns,
+    matching shapes so stage 17.4's fusion can treat both result lists
+    uniformly. `vector` is the raw packed BLOB - unpacking is
+    knowledge_embeddings.vector_search's job, not this module's."""
+    conn = _connect(db_path)
+    try:
+        query = (
+            "SELECT e.chunk_id, e.dim, e.vector, c.document_id, c.ordinal, c.text, "
+            "c.offset_start, c.offset_end, d.title, d.source_uri "
+            "FROM embeddings e "
+            "JOIN chunks c ON c.id = e.chunk_id "
+            "JOIN documents d ON d.id = c.document_id "
+            "WHERE e.model_id = ?"
+        )
+        params: list[Any] = [model_id]
+        if collection_id is not None:
+            query += " AND d.collection_id = ?"
+            params.append(collection_id)
+        rows = conn.execute(query, params).fetchall()
+        return [
+            {
+                "chunk_id": row[0], "dim": row[1], "vector": row[2], "document_id": row[3],
+                "ordinal": row[4], "text": row[5], "offset_start": row[6], "offset_end": row[7],
+                "document_title": row[8], "source_uri": row[9],
+            }
+            for row in rows
+        ]
     finally:
         conn.close()
 

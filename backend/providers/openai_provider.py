@@ -194,6 +194,17 @@ class OpenAIProvider:
             # _native_kwargs_for_active_provider comment for the verified
             # SDK shape.
             structured_output=True,
+            # ADR-017 stage 17.3: derived from the CLIENT (same posture as
+            # `image_generation` above), NOT a per-model probe - the OpenAI
+            # SDK (and most OpenAI-compatible proxies) exposes an
+            # `embeddings.create` endpoint unconditionally. A model_id
+            # configured for CHAT is still not an embedding model even
+            # though this returns True for it - callers construct a
+            # DIFFERENT OpenAIProvider instance with an actual embedding
+            # model_id (e.g. "text-embedding-3-small") to embed, matching
+            # this class's existing one-instance-one-model_id shape rather
+            # than embed() taking a second, separate model parameter.
+            embedding=callable(getattr(getattr(client, "embeddings", None), "create", None)),
         )
 
     # ADR-007 stage 7.1: deliberately NOT given tool-call support, matching
@@ -355,3 +366,18 @@ class OpenAIProvider:
         # untouched (no <think> composition anywhere on the OpenAI path
         # today): the final text is the raw concatenated content deltas.
         yield ProviderEvent("done", "".join(content_parts), usage=usage)
+
+    # -- embeddings (ADR-017 stage 17.3) ---------------------------------------
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        """Batch embedding via the SDK's own `embeddings.create(input=[...])`
+        - a single call for the whole batch (the OpenAI API's own designed
+        usage), returning vectors in the SAME order as `texts` (the SDK's
+        own documented `data[].index` ordering guarantee, trusted here
+        rather than re-sorted by index - matching OllamaProvider.embed()'s
+        identical trust-the-batch-order posture). Returns `[]` for an
+        empty `texts` without a network call."""
+        if not texts:
+            return []
+        response = self.client.embeddings.create(model=self.model_id, input=list(texts))
+        return [item.embedding for item in response.data]
