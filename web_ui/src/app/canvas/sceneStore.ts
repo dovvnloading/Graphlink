@@ -1198,6 +1198,17 @@ export class SceneStore {
     this.transport.fireIntent("scene", "ungroup", [nodeId]);
   }
 
+  // ADR-018 stage 18.3: the model-override pin. Idempotent (setting/
+  // clearing the same value twice is safe), same queueable posture as
+  // setGroupColor above.
+  setModelOverride(nodeId: string, provider: string, modelId: string): void {
+    this.transport.fireIntent("scene", "setModelOverride", [nodeId, provider, modelId], undefined, true);
+  }
+
+  clearModelOverride(nodeId: string): void {
+    this.transport.fireIntent("scene", "clearModelOverride", [nodeId], undefined, true);
+  }
+
   // -- R6.2: Chart node -----------------------------------------------------
   //
   // Mirrors backend/canvas.py's register_canvas() intent names/argument order

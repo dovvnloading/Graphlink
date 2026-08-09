@@ -62,6 +62,8 @@ function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}, selected:
   const onSetFinalDeliverable = vi.fn();
   const onCollapseBranch = vi.fn();
   const onCancelRegenerate = vi.fn();
+  const onPinToCurrentModel = vi.fn();
+  const onClearModelOverride = vi.fn();
   function buildProps(dataOverrides: Partial<ChatFlowNode["data"]>) {
     return {
       id: "n0",
@@ -101,6 +103,11 @@ function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}, selected:
         promptTokens: null,
         completionTokens: null,
         estimatedCostUsd: null,
+        // ADR-018 stage 18.3
+        overrideProvider: "",
+        overrideModelId: "",
+        onPinToCurrentModel,
+        onClearModelOverride,
         ...dataOverrides,
       },
     } as unknown as NodeProps<ChatFlowNode>;
@@ -127,6 +134,7 @@ function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}, selected:
     onGenerateChart, onGenerateKeyTakeaway, onGenerateExplainerNote,
     onOpenDocumentView, onScrollChange, onToggleBranchFocus, onBranchFromHere,
     onSetBranchStatus, onSetFinalDeliverable, onCollapseBranch, onCancelRegenerate,
+    onPinToCurrentModel, onClearModelOverride,
     container, rerenderWithData,
   };
 }
@@ -505,6 +513,59 @@ describe("ChatNodeView Synthesize Branches provenance (ADR-002 Workstream 1)", (
       model: null,
     });
     expect(screen.queryByText("claude-sonnet-5")).toBeNull();
+  });
+});
+
+// ADR-018 stage 18.3: the model-override PIN - opposite direction from the
+// provenance badge above (an explicit input pin, not output provenance),
+// so both must be able to render at once on the same node.
+describe("ChatNodeView model-override pin (ADR-018 stage 18.3)", () => {
+  it("renders no pin badge or Clear Model Pin item for an ordinary node", () => {
+    renderChatNode({ overrideProvider: "", overrideModelId: "" });
+    expect(screen.queryByText(/📌/)).toBeNull();
+    fireEvent.contextMenu(screen.getByText("You"));
+    expect(screen.queryByRole("menuitem", { name: /Clear Model Pin/ })).toBeNull();
+    expect(screen.getByRole("menuitem", { name: "Pin to Current Model" })).toBeInTheDocument();
+  });
+
+  it("renders the pin badge with the full provider/model as its tooltip", () => {
+    renderChatNode({ overrideProvider: "Anthropic Claude", overrideModelId: "claude-opus-5" });
+    const badge = screen.getByText("📌 claude-opus-5");
+    expect(badge).toHaveAttribute("title", "Pinned to Anthropic Claude - claude-opus-5");
+  });
+
+  it("co-renders the pin badge alongside the provenance model badge - they are distinct signals", () => {
+    renderChatNode({
+      provider: "OpenAI-Compatible", model: "gpt-4o",
+      overrideProvider: "Anthropic Claude", overrideModelId: "claude-opus-5",
+    });
+    expect(screen.getByText("gpt-4o")).toBeInTheDocument();
+    expect(screen.getByText("📌 claude-opus-5")).toBeInTheDocument();
+  });
+
+  it("Pin to Current Model calls onPinToCurrentModel and closes the menu", async () => {
+    const user = userEvent.setup();
+    const { onPinToCurrentModel } = renderChatNode();
+
+    fireEvent.contextMenu(screen.getByText("You"));
+    await user.click(screen.getByRole("menuitem", { name: "Pin to Current Model" }));
+
+    expect(onPinToCurrentModel).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("Clear Model Pin names the pinned model, calls onClearModelOverride, and closes the menu", async () => {
+    const user = userEvent.setup();
+    const { onClearModelOverride } = renderChatNode({
+      overrideProvider: "Anthropic Claude", overrideModelId: "claude-opus-5",
+    });
+
+    fireEvent.contextMenu(screen.getByText("You"));
+    const item = screen.getByRole("menuitem", { name: "Clear Model Pin (claude-opus-5)" });
+    await user.click(item);
+
+    expect(onClearModelOverride).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("menu")).toBeNull();
   });
 });
 
@@ -1236,6 +1297,10 @@ describe("ChatNodeView React.memo comparator (ADR-011 stage 11.1)", () => {
       estimatedCostUsd: null,
       provider: null,
       model: null,
+      overrideProvider: "",
+      overrideModelId: "",
+      onPinToCurrentModel: vi.fn(),
+      onClearModelOverride: vi.fn(),
       isBranchSynthesis: false,
       synthesisInstructions: "",
       synthesisSourceNodeIds: [],

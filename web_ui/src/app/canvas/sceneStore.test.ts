@@ -181,6 +181,9 @@ function validScenePayload(overrides: Record<string, unknown> = {}) {
         chatScrollValue: 0.0,
         // ADR-007 stage 7.4
         toolCalls: [],
+        // ADR-018 stage 18.3
+        overrideProvider: "",
+        overrideModelId: "",
       },
     ],
     edges: [],
@@ -1212,6 +1215,22 @@ describe("SceneStore", () => {
       { topic: "scene", intent: "setGroupColor", args: ["n1", "#3f8f5c", null] },
       { topic: "scene", intent: "setGroupColor", args: ["n1", null, null] },
     ]);
+  });
+
+  it("setModelOverride sends the scene-topic setModelOverride intent with [nodeId, provider, modelId]", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.setModelOverride("n1", "Anthropic Claude", "claude-opus-5");
+    expect(intents).toEqual([
+      { topic: "scene", intent: "setModelOverride", args: ["n1", "Anthropic Claude", "claude-opus-5"] },
+    ]);
+  });
+
+  it("clearModelOverride sends the scene-topic clearModelOverride intent with [nodeId]", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.clearModelOverride("n1");
+    expect(intents).toEqual([{ topic: "scene", intent: "clearModelOverride", args: ["n1"] }]);
   });
 
   it("toggleFrameLock sends the scene-topic toggleFrameLock intent with [nodeId]", () => {

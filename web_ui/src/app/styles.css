@@ -1101,6 +1101,24 @@ body,
   max-width: 140px;
 }
 
+/* ADR-018 stage 18.3: the model-override PIN - same plain-text scale as
+   .chat-node-model-badge above, but tinted (not muted) since it reflects a
+   deliberate user choice governing the NEXT reply, not passive provenance
+   of a past one - the two can legitimately co-occur (see ChatNodeView.tsx's
+   own comment), so they need to read as visually distinct at a glance. */
+.chat-node-model-override-badge {
+  font-size: 10px;
+  line-height: 1;
+  /* --gl-palette-selection, same real (non-hardcoded-fallback) token
+     .about-links a already uses for "the one non-grey accent" - see that
+     rule's own comment on why --gl-accent itself is never real here. */
+  color: var(--gl-palette-selection, var(--gl-surface-text-primary));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 140px;
+}
+
 /* ADR-016 stage 16.2: real per-node token/cost usage, same plain-text
    scale as .chat-node-model-badge next to it - a compact "prompt→completion
    · $cost" label, not a pill (numbers vary too widely in width). */

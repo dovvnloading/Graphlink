@@ -311,6 +311,14 @@ function App() {
   const transport = useMemo(() => new WsTransport(defaultWsUrl()), []);
   const sceneStore = useMemo(() => new SceneStore(transport), [transport]);
   const composerStore = useMemo(() => new ComposerStore(transport), [transport]);
+  // ADR-018 stage 18.3: "Pin to Current Model" reads the Composer's live
+  // route at CLICK time (getComposer() is a stable per-instance getter, not
+  // a subscription) - see SceneCanvas.tsx's toFlowNodes own comment on why
+  // this stays a getter, never a value threaded down.
+  const getComposerRoute = useCallback(() => {
+    const { provider, modelId } = composerStore.getComposer().route;
+    return { provider, modelId };
+  }, [composerStore]);
 
   useEffect(() => {
     const offStatus = transport.onStatus(setStatus);
@@ -364,7 +372,11 @@ function App() {
               />
               <div className="app-canvas-content">
                 <ExecutionLimitsProvider transport={transport}>
-                  <SceneCanvas store={sceneStore} onOpenDocumentView={onOpenDocumentView} />
+                  <SceneCanvas
+                    store={sceneStore}
+                    onOpenDocumentView={onOpenDocumentView}
+                    getComposerRoute={getComposerRoute}
+                  />
                 </ExecutionLimitsProvider>
                 <div className="app-search-layer">
                   <SearchOverlay store={sceneStore} />

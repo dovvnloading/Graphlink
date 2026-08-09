@@ -454,6 +454,10 @@ interface DispatcherLive {
   store: SceneStore;
   onOpenDocumentView: (markdown: string, sourceLabel: string) => void;
   onToggleBranchFocus: (nodeId: string) => void;
+  // ADR-018 stage 18.3: optional - only the chat dispatcher's own call
+  // site below supplies it; every other kind's getDispatcher call omits
+  // it exactly like they already omit `extra` above.
+  getComposerRoute?: () => { provider: string; modelId: string };
   // Kind-specific derived value(s) a dispatcher needs beyond `n` itself,
   // NOT themselves part of `n` (e.g. the code branch's parentChatNodeId,
   // resolved from edges rather than n's own fields) - cast to the concrete
@@ -577,6 +581,18 @@ function makeChatFns(id: string, liveRef: { current: DispatcherLive }) {
       const { n, store } = liveRef.current;
       if (n.pendingRequestId) store.cancelConversationRequest(n.pendingRequestId);
     },
+    // ADR-018 stage 18.3: pins this node to whichever model is CURRENTLY
+    // active in the Composer (getComposerRoute reads composerStore.
+    // getComposer().route at CLICK time - see toFlowNodes' own comment on
+    // why that's a plain getter, not a subscribed value). A blank
+    // provider/modelId (no route resolved yet, e.g. no provider
+    // configured) is a genuine no-op rather than pinning to nothing.
+    onPinToCurrentModel: () => {
+      const { store, getComposerRoute } = liveRef.current;
+      const route = getComposerRoute?.() ?? { provider: "", modelId: "" };
+      if (route.provider && route.modelId) store.setModelOverride(id, route.provider, route.modelId);
+    },
+    onClearModelOverride: () => liveRef.current.store.clearModelOverride(id),
   };
 }
 
@@ -841,6 +857,15 @@ export function toFlowNodes(
   // so every node "misses" and gets built the same way it always did), just
   // not memoized across separate calls, which none of those tests need.
   cache: ToFlowNodesCache = createToFlowNodesCache(),
+  // ADR-018 stage 18.3: read at CLICK time inside makeChatFns' own
+  // onPinToCurrentModel (never subscribed/rendered), so a plain getter -
+  // not a value - keeps this out of every cache key/memo comparator above,
+  // matching onOpenDocumentView/onToggleBranchFocus's own "callback, not
+  // data" posture. Default returns "" so every existing caller (every
+  // direct unit test in SceneCanvas.test.tsx) that omits it keeps working:
+  // the resulting Pin action would just pin to an empty ref, exactly as
+  // unreachable in a real session as this default itself.
+  getComposerRoute: () => { provider: string; modelId: string } = () => ({ provider: "", modelId: "" }),
 ): SceneFlowNode[] {
   // ADR-011 stage 11.1: ONE upfront O(N+E) pass replacing this function's
   // old standalone `nodesById` map build, PLUS the O(N*E) per-node edge
@@ -900,7 +925,9 @@ export function toFlowNodes(
       const dockedChildrenSig = dockedChildren.map((c) => `${c.id}:${c.label}`).join("|");
       const extraSig = `${dimmedVal ? 1 : 0}${isBranchFocusActive ? 1 : 0}|${dockedChildrenSig}`;
       const cached = cache.flowNodes.get(n);
-      const fns = getDispatcher(cache, n.id, { n, store, onOpenDocumentView, onToggleBranchFocus }, makeChatFns);
+      const fns = getDispatcher(
+        cache, n.id, { n, store, onOpenDocumentView, onToggleBranchFocus, getComposerRoute }, makeChatFns,
+      );
       if (cached && cached.extraSig === extraSig) {
         flowNodes.push(cached.flowNode);
         continue;
@@ -936,6 +963,10 @@ export function toFlowNodes(
           // all - see ChatNodeView.tsx's own guard.
           provider: n.provider ?? null,
           model: n.model ?? null,
+          // ADR-018 stage 18.3: the model-override PIN, opposite direction
+          // from provider/model above - see ChatNodeData's own comment.
+          overrideProvider: n.overrideProvider,
+          overrideModelId: n.overrideModelId,
           isBranchSynthesis: n.isBranchSynthesis,
           synthesisInstructions: n.synthesisInstructions,
           synthesisSourceNodeIds: n.itemIds,
@@ -1926,9 +1957,13 @@ function useCssVar(name: string, fallback: string): string {
 function CanvasInner({
   store,
   onOpenDocumentView,
+  getComposerRoute,
 }: {
   store: SceneStore;
   onOpenDocumentView: (markdown: string, sourceLabel: string) => void;
+  // ADR-018 stage 18.3: passed straight through to toFlowNodes - see that
+  // function's own comment on why a getter, not a subscribed value.
+  getComposerRoute: () => { provider: string; modelId: string };
 }) {
   const scene = useSyncExternalStore(store.subscribe, store.getScene);
   const grid = useSyncExternalStore(store.subscribe, store.getGrid);
@@ -2105,11 +2140,15 @@ function CanvasInner({
           // always populated by the time this closure executes - TS just
           // can't prove that across the mutable ref indirection.
           toFlowNodesCacheRef.current!,
+          getComposerRoute,
         ),
         current,
       ),
     );
-  }, [scene, store, onOpenDocumentView, effectiveBranchFocusOriginId, onToggleBranchFocus, focusAcceptedPaths]);
+  }, [
+    scene, store, onOpenDocumentView, effectiveBranchFocusOriginId, onToggleBranchFocus, focusAcceptedPaths,
+    getComposerRoute,
+  ]);
 
   // ADR-011 stage 11.3 (P4): toFlowEdges rebuilds the WHOLE edges array (an
   // O(E) map over every edge) - hoveredEdgeId is only EVER read inside that
@@ -2473,9 +2512,15 @@ function CanvasInner({
 export function SceneCanvas({
   store,
   onOpenDocumentView,
+  // ADR-018 stage 18.3: optional (default no-op) so every existing direct
+  // render of <SceneCanvas> - App.tsx aside - keeps working unchanged; only
+  // App.tsx's real render supplies the composer's live route. See
+  // toFlowNodes' own comment for why this is a getter, not a value.
+  getComposerRoute = () => ({ provider: "", modelId: "" }),
 }: {
   store: SceneStore;
   onOpenDocumentView: (markdown: string, sourceLabel: string) => void;
+  getComposerRoute?: () => { provider: string; modelId: string };
 }) {
   // ADR-003 stage 3.5: renders BridgeErrorState INSTEAD of the canvas - not
   // alongside it - the moment the scene topic's schema version is rejected.
@@ -2498,5 +2543,5 @@ export function SceneCanvas({
       <BridgeErrorState title="Canvas unavailable" rejection={versionRejection} className="scene-bridge-error" />
     );
   }
-  return <CanvasInner store={store} onOpenDocumentView={onOpenDocumentView} />;
+  return <CanvasInner store={store} onOpenDocumentView={onOpenDocumentView} getComposerRoute={getComposerRoute} />;
 }

@@ -8,6 +8,7 @@ import {
   computeNonAcceptedNodeIds,
   computeSmartGuideFrame,
   conversationHistoryToDocumentMarkdown,
+  createToFlowNodesCache,
   flowNodeOwnSize,
   groupDragKindOf,
   handleSelectionChange,
@@ -133,6 +134,9 @@ function baseNode(overrides: Partial<SceneNodeRow> = {}): SceneNodeRow {
     chatScrollValue: 0.0,
     // ADR-007 stage 7.4
     toolCalls: [],
+    // ADR-018 stage 18.3
+    overrideProvider: "",
+    overrideModelId: "",
     ...overrides,
   };
 }
@@ -319,6 +323,62 @@ describe("toFlowNodes (R8a Open Document View wiring)", () => {
 
     (chatFlowNode!.data as { onBranchFromHere: () => void }).onBranchFromHere();
     expect(setReplyTargetSpy).toHaveBeenCalledWith("chat-1");
+  });
+
+  it(
+    "a chat node's onPinToCurrentModel reads getComposerRoute at click time and calls " +
+      "store.setModelOverride (ADR-018 stage 18.3)",
+    () => {
+      const scene = baseScene({
+        nodes: [baseNode({ id: "chat-1", kind: "chat", content: "Hello world" })],
+        edges: [],
+      });
+      const store = makeStore();
+      const setModelOverrideSpy = vi.spyOn(store, "setModelOverride");
+      const getComposerRoute = vi.fn(() => ({ provider: "Anthropic Claude", modelId: "claude-opus-5" }));
+
+      const flowNodes = toFlowNodes(
+        scene, store, () => {}, null, () => {}, false, createToFlowNodesCache(), getComposerRoute,
+      );
+      const chatFlowNode = flowNodes.find((n) => n.id === "chat-1");
+
+      (chatFlowNode!.data as { onPinToCurrentModel: () => void }).onPinToCurrentModel();
+      expect(getComposerRoute).toHaveBeenCalledOnce();
+      expect(setModelOverrideSpy).toHaveBeenCalledWith("chat-1", "Anthropic Claude", "claude-opus-5");
+    },
+  );
+
+  it("onPinToCurrentModel is a genuine no-op when the composer route has no provider/model resolved yet", () => {
+    const scene = baseScene({
+      nodes: [baseNode({ id: "chat-1", kind: "chat", content: "Hello world" })],
+      edges: [],
+    });
+    const store = makeStore();
+    const setModelOverrideSpy = vi.spyOn(store, "setModelOverride");
+    const getComposerRoute = vi.fn(() => ({ provider: "", modelId: "" }));
+
+    const flowNodes = toFlowNodes(
+      scene, store, () => {}, null, () => {}, false, createToFlowNodesCache(), getComposerRoute,
+    );
+    const chatFlowNode = flowNodes.find((n) => n.id === "chat-1");
+
+    (chatFlowNode!.data as { onPinToCurrentModel: () => void }).onPinToCurrentModel();
+    expect(setModelOverrideSpy).not.toHaveBeenCalled();
+  });
+
+  it("a chat node's onClearModelOverride calls store.clearModelOverride with its own id (ADR-018 stage 18.3)", () => {
+    const scene = baseScene({
+      nodes: [baseNode({ id: "chat-1", kind: "chat", content: "Hello world" })],
+      edges: [],
+    });
+    const store = makeStore();
+    const clearModelOverrideSpy = vi.spyOn(store, "clearModelOverride");
+
+    const flowNodes = toFlowNodes(scene, store);
+    const chatFlowNode = flowNodes.find((n) => n.id === "chat-1");
+
+    (chatFlowNode!.data as { onClearModelOverride: () => void }).onClearModelOverride();
+    expect(clearModelOverrideSpy).toHaveBeenCalledWith("chat-1");
   });
 
   it("a chat node's onOpenDocumentView labels the source as the user's own message when isUser is true", () => {

@@ -123,6 +123,9 @@ function chatRow(id: string, x: number, y: number, title = id): SceneNodeRow {
         chartAspectLocked: true, chartSourceNodeId: "", htmlSplitterState: null,
         chatScrollValue: 0.0,
         toolCalls: [],
+        // ADR-018 stage 18.3
+        overrideProvider: "",
+        overrideModelId: "",
       }),
     ) as unknown as SceneNodeRow),
   };
