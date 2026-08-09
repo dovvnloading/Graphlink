@@ -133,6 +133,7 @@ def vector_search(
         {
             "chunk_id": rows[i]["chunk_id"], "document_id": rows[i]["document_id"],
             "ordinal": rows[i]["ordinal"], "text": rows[i]["text"],
+            "token_count": rows[i]["token_count"],
             "offset_start": rows[i]["offset_start"], "offset_end": rows[i]["offset_end"],
             "document_title": rows[i]["document_title"], "source_uri": rows[i]["source_uri"],
             "score": float(similarities[i]),

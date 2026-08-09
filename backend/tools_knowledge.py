@@ -1,4 +1,4 @@
-"""ADR-017 stage 17.2: registers `knowledge.search` on a ToolRegistry.
+"""ADR-017 stage 17.2/17.4: registers `knowledge.search` on a ToolRegistry.
 
 Note on how this is exercised today: ADR-007's own tool-use LOOP (offering
 `registry.specs()` to a live model mid-conversation and feeding a returned
@@ -14,15 +14,24 @@ rendering (backend/tools.py's sibling stages).
 
 ADR-017's OTHER surfacing mechanism - automatic per-branch context
 augmentation, injected before a chat turn is sent - needs no tool-loop at
-all and is where stage 17.4 delivers genuine end-to-end retrieval value.
-"""
+all; backend.knowledge_retrieval's own format_untrusted_context/
+select_within_budget are what stage 17.4 built for it.
+
+Stage 17.4: this tool now runs HYBRID search (backend.knowledge_retrieval.
+hybrid_search - FTS5 fused with vector search via reciprocal rank fusion)
+whenever an embedding provider/model is supplied to
+register_knowledge_tools; omitted, it degrades to the same lexical-only
+search stage 17.2 shipped (ADR-017 doc's own "degraded gracefully to
+lexical-only when no embedding model is configured" consequence) - never
+an error, since plenty of real setups are lexical-only by design."""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
 
-from backend.knowledge_store import DEFAULT_DB_PATH, search_chunks
+from backend.knowledge_retrieval import hybrid_search
+from backend.knowledge_store import DEFAULT_DB_PATH
 from backend.providers.base import ToolCall, ToolSpec
 from backend.tools import KNOWLEDGE_READ, RunContext, ToolRegistry, ToolResult
 
@@ -70,13 +79,19 @@ def _format_results(results: list[dict]) -> str:
     return json.dumps(payload, ensure_ascii=False)
 
 
-def make_knowledge_search_handler(db_path: Path | None = None):
+def make_knowledge_search_handler(
+    db_path: Path | None = None, *, embedding_provider=None, embedding_model_id: str | None = None,
+):
     """Builds the `knowledge.search` handler bound to `db_path` (defaults
     to knowledge_store.DEFAULT_DB_PATH) - a factory rather than a bare
     module-level handler so tests can bind a throwaway tmp_path db without
     monkeypatching module state, matching this codebase's own established
     "inject the path, don't patch the default" preference elsewhere (e.g.
-    backend.knowledge_ingest.ingest_file's own db_path parameter)."""
+    backend.knowledge_ingest.ingest_file's own db_path parameter).
+
+    `embedding_provider`/`embedding_model_id` are passed straight through
+    to hybrid_search() - see that function's own docstring for the exact
+    lexical-only degradation rule when either is omitted."""
     resolved_db_path = db_path if db_path is not None else DEFAULT_DB_PATH
 
     async def handle_knowledge_search(call: ToolCall, ctx: RunContext) -> ToolResult:
@@ -93,19 +108,28 @@ def make_knowledge_search_handler(db_path: Path | None = None):
             return ToolResult(content="'k' must be a positive integer.", is_error=True)
         k = min(k, _MAX_K)
 
-        results = search_chunks(resolved_db_path, query, collection_id=collection_id, k=k)
+        results = hybrid_search(
+            resolved_db_path, query,
+            embedding_provider=embedding_provider, embedding_model_id=embedding_model_id,
+            collection_id=collection_id, k=k,
+        )
         return ToolResult(content=_format_results(results))
 
     return handle_knowledge_search
 
 
-def register_knowledge_tools(registry: ToolRegistry, *, db_path: Path | None = None) -> None:
+def register_knowledge_tools(
+    registry: ToolRegistry, *, db_path: Path | None = None,
+    embedding_provider=None, embedding_model_id: str | None = None,
+) -> None:
     """Registers `knowledge.search` as `auto`-approval (read-only, matching
     every other read-only tool's approval posture in backend/tools.py's own
     module docstring) under the `knowledge.read` scope."""
     registry.register(
         KNOWLEDGE_SEARCH_SPEC,
-        make_knowledge_search_handler(db_path),
+        make_knowledge_search_handler(
+            db_path, embedding_provider=embedding_provider, embedding_model_id=embedding_model_id,
+        ),
         scopes={KNOWLEDGE_READ},
         approval="auto",
     )

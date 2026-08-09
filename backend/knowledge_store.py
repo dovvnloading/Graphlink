@@ -592,7 +592,7 @@ def list_embeddings_for_search(
     conn = _connect(db_path)
     try:
         query = (
-            "SELECT e.chunk_id, e.dim, e.vector, c.document_id, c.ordinal, c.text, "
+            "SELECT e.chunk_id, e.dim, e.vector, c.document_id, c.ordinal, c.text, c.token_count, "
             "c.offset_start, c.offset_end, d.title, d.source_uri "
             "FROM embeddings e "
             "JOIN chunks c ON c.id = e.chunk_id "
@@ -607,8 +607,8 @@ def list_embeddings_for_search(
         return [
             {
                 "chunk_id": row[0], "dim": row[1], "vector": row[2], "document_id": row[3],
-                "ordinal": row[4], "text": row[5], "offset_start": row[6], "offset_end": row[7],
-                "document_title": row[8], "source_uri": row[9],
+                "ordinal": row[4], "text": row[5], "token_count": row[6], "offset_start": row[7],
+                "offset_end": row[8], "document_title": row[9], "source_uri": row[10],
             }
             for row in rows
         ]
@@ -637,17 +637,21 @@ def search_chunks(
     """Lexical (BM25) search over every ingested chunk's text, ranked best
     match first. Returns a list of dicts carrying enough to both display a
     result and cite it exactly: `chunk_id`, `document_id`, `document_title`,
-    `source_uri`, `ordinal`, `text`, `offset_start`, `offset_end`, `score`
-    (raw bm25() value - more negative is a better match, per FTS5's own
-    convention; ordering, not the magnitude, is the contract callers should
-    rely on). Returns `[]` for a query with no indexable terms rather than
+    `source_uri`, `ordinal`, `text`, `token_count`, `offset_start`,
+    `offset_end`, `score` (raw bm25() value - more negative is a better
+    match, per FTS5's own convention; ordering, not the magnitude, is the
+    contract callers should rely on). `token_count` is the chunk's own
+    already-computed count (backend.knowledge_chunking's TextChunk, stored
+    at ingest time) - included so a caller doing budget-aware selection
+    (ADR-017 stage 17.4's own backend.knowledge_retrieval.select_within_
+    budget) never needs a second round-trip just to learn each result's
+    size. Returns `[]` for a query with no indexable terms rather than
     matching everything (an empty FTS5 MATCH string is itself invalid
     syntax, and "no terms" has no reasonable non-empty answer).
 
     `k` bounds the result count outright, not a suggestion - a caller doing
-    budget-aware selection (ADR-017 stage 17.4) still needs a hard upper
-    bound on rows actually pulled from SQLite before it starts trimming by
-    token budget."""
+    budget-aware selection still needs a hard upper bound on rows actually
+    pulled from SQLite before it starts trimming by token budget."""
     if k < 1:
         raise ValueError(f"k must be >= 1, got {k!r}.")
     match_expression = _fts5_match_expression(query)
@@ -663,7 +667,7 @@ def search_chunks(
             params = (match_expression, collection_id)
         rows = conn.execute(
             f"""
-            SELECT c.id, c.document_id, c.ordinal, c.text, c.offset_start, c.offset_end,
+            SELECT c.id, c.document_id, c.ordinal, c.text, c.token_count, c.offset_start, c.offset_end,
                    d.title, d.source_uri, bm25(chunks_fts) AS score
             FROM chunks_fts
             JOIN chunks c ON c.id = chunks_fts.rowid
@@ -677,8 +681,8 @@ def search_chunks(
         return [
             {
                 "chunk_id": row[0], "document_id": row[1], "ordinal": row[2], "text": row[3],
-                "offset_start": row[4], "offset_end": row[5], "document_title": row[6],
-                "source_uri": row[7], "score": row[8],
+                "token_count": row[4], "offset_start": row[5], "offset_end": row[6],
+                "document_title": row[7], "source_uri": row[8], "score": row[9],
             }
             for row in rows
         ]
