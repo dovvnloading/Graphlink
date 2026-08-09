@@ -48,7 +48,7 @@ from backend.auth import (
     token_matches,
 )
 from backend.canvas import register_canvas
-from backend.chat_library import register_chat_library
+from backend.chat_library import flush_dirty_session_before_teardown, register_chat_library
 from backend.composer import register_composer
 from backend.api.intents_diagnostics import register_diagnostics_intents
 from backend.crash_recovery import maybe_show_crash_notice
@@ -320,6 +320,40 @@ def _evict_idle_session(bus: SessionBus) -> bool:
     # AgentDispatcher.dispose_all_pycoder_repls' own docstring for why this
     # does NOT also remove each REPL's scratch directory.
     context.agent_dispatcher.dispose_all_pycoder_repls()
+
+    # ADR-009 stage 9.2 / ADR-004 stage 4.3 interaction: flush a dirty
+    # session's chat BEFORE cancelling its autosave task - see
+    # flush_dirty_session_before_teardown's own docstring for the real gap
+    # this closes (cancelling the task outright, the pre-9.2 behavior here,
+    # could silently lose up to one full autosave interval's worth of
+    # edits on every idle eviction) and for why it deliberately does NOT
+    # get a notifications reference from this call site (nothing could
+    # ever observe it - eviction only ever runs for a session with zero
+    # live connections). Only attempted when chat_library.py's own
+    # register_chat_library actually ran for this bus (bus.chat_db_path
+    # unset - e.g. several tests in this suite build a bare SessionBus/
+    # SessionContext directly, without ever registering the chat library -
+    # means there is nothing to flush) and when no write is already in
+    # flight (mutation_guard active): a tick genuinely mid-write will
+    # still complete and record its own result correctly once
+    # autosave_task.cancel() below lets it finish (see
+    # test_evict_idle_session_releases_the_mutation_guard_when_cancelling_
+    # mid_write in backend/tests/test_session_lifecycle.py) - racing a
+    # SECOND write against it here would only risk an avoidable lost-race
+    # warning for no benefit.
+    chat_db_path = getattr(bus, "chat_db_path", None)
+    last_saved = getattr(bus, "chat_save_state", None)
+    mutation_guard = getattr(bus, "chat_mutation_guard", None)
+    if (
+        chat_db_path is not None
+        and last_saved is not None
+        and not (mutation_guard is not None and mutation_guard.get("active"))
+    ):
+        try:
+            flush_dirty_session_before_teardown(chat_db_path, context.canvas_document, last_saved)
+        except Exception:
+            logger.exception("eviction flush crashed - proceeding with eviction anyway")
+
     autosave_task = getattr(bus, "autosave_task", None)
     if autosave_task is not None and not autosave_task.done():
         autosave_task.cancel()

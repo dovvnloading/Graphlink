@@ -226,6 +226,127 @@ def test_an_old_settings_file_without_schema_version_is_backfilled(tmp_path):
     assert json.loads(state_file.read_text(encoding="utf-8"))["schema_version"] == SettingsManager.CURRENT_SCHEMA_VERSION
 
 
+# -- ADR-009 stage 9.1: scattered `if 'field' not in state` backfills refactored
+# -- into an explicit, ordered migration chain (graphlink_migrations.
+# -- run_dict_migrations). These are before/after equivalence tests: loading an
+# -- OLD-shape state dict through the new chain must land on exactly what the
+# -- old scattered-if-check code produced, not just "doesn't crash".
+
+
+def test_migration_chain_backfills_baseline_fields_to_documented_defaults(tmp_path):
+    import json
+
+    state_file = tmp_path / "session.dat"
+    # A genuinely old file: only two of the ~35 migration-"1" (baseline)
+    # fields present, everything else - including schema_version itself -
+    # absent, the same shape a pre-schema-version session.dat had.
+    state_file.write_text(
+        json.dumps({"api_provider": "Anthropic", "current_mode": "API Endpoint"}),
+        encoding="utf-8",
+    )
+
+    manager = SettingsManager(state_file)
+
+    # Values that were already present survive untouched...
+    assert manager.get_api_provider() == "Anthropic"
+    assert manager.get_current_mode() == "API Endpoint"
+    # ...and every missing baseline field lands on exactly the default
+    # _create_initial_state() documents for a brand-new file - the retired
+    # scattered if-check chain and the new migration chain must agree byte
+    # for byte on these.
+    assert manager.get_show_token_counter() is False
+    assert manager.get_ollama_chat_model() == ""
+    assert manager.get_ollama_scanned_models() == []
+    assert manager.get_llama_cpp_n_ctx() == 4096
+    assert manager.get_llama_cpp_n_gpu_layers() == 0
+    assert manager.get_llama_cpp_n_threads() == 0
+    assert manager.get_api_base_url() == "https://api.openai.com/v1"
+    assert manager.get_openai_key() == ""
+    assert manager.get_enable_system_prompt() is True
+    assert manager.get_update_notifications_enabled() is False
+    assert manager.get_notification_preferences() == {
+        notification_type: True for notification_type in SettingsManager.NOTIFICATION_TYPES
+    }
+    assert manager.get_update_status_message() == "Automatic update checks are off."
+    assert manager.get_update_status_level() == "info"
+    assert manager.get_update_available() is False
+    assert manager.get_schema_version() == SettingsManager.CURRENT_SCHEMA_VERSION
+
+
+def test_migration_chain_applies_in_order_across_multiple_version_boundaries(tmp_path):
+    # A file old enough to predate every version boundary at once: no
+    # schema_version, no api_provider/api_models (migration "1", baseline),
+    # no api_models_by_provider (migration "2") or
+    # api_model_catalog_by_provider (migration "3"), and the pre-R8a 2-value
+    # reasoning "mode" instead of the graded "level" (migration "4").
+    #
+    # api_provider is deliberately OMITTED (not just left at its default)
+    # rather than set explicitly, so this test actually proves ordering, not
+    # just presence: migration "2"'s api_models_by_provider default is keyed
+    # by state['api_provider'] - which exists in the working dict ONLY
+    # because migration "1" already ran and backfilled it earlier in the
+    # SAME chain application. If the runner applied these out of order (or a
+    # future edit reordered the migrations dict), this would key
+    # api_models_by_provider by "" or crash instead of landing on the
+    # documented "OpenAI-Compatible" default.
+    import json
+
+    state_file = tmp_path / "session.dat"
+    state_file.write_text(
+        json.dumps({
+            "ollama_reasoning_mode": "Quick",
+            "llama_cpp_reasoning_mode": "Thinking",
+        }),
+        encoding="utf-8",
+    )
+
+    manager = SettingsManager(state_file)
+
+    # Migration "1" backfilled api_provider to its documented default...
+    assert manager.get_api_provider() == "OpenAI-Compatible"
+    # ...and migration "2" read that freshly-backfilled value (not a
+    # missing/blank one) when it built api_models_by_provider - asserted
+    # directly against the stored dict's own key, not through get_api_models'
+    # provider-defaulting fallback, which would pass even if the key were
+    # wrong.
+    assert set(manager.state["api_models_by_provider"].keys()) == {"OpenAI-Compatible"}
+    assert manager.state["api_models_by_provider"]["OpenAI-Compatible"] == {}
+    # Migration "3" backfilled the empty catalog table.
+    assert manager.get_api_model_catalog("OpenAI-Compatible") == []
+    # Migration "4" faithfully translated the legacy 2-value mode fields
+    # (Quick -> off, Thinking -> high), added the 3 new cloud fields, and
+    # removed the retired legacy keys - and its own mcp_servers backfill
+    # (added later, no version bump of its own - see that migration's
+    # docstring) still ran too.
+    assert manager.get_ollama_reasoning_level() == "off"
+    assert manager.get_llama_cpp_reasoning_level() == "high"
+    assert manager.get_anthropic_reasoning_level() == "off"
+    assert manager.get_gemini_reasoning_level() == "off"
+    assert manager.get_openai_reasoning_level() == "off"
+    assert manager.get_mcp_servers() == []
+    assert manager.get_schema_version() == SettingsManager.CURRENT_SCHEMA_VERSION
+
+    assert "ollama_reasoning_mode" not in manager.state
+    assert "llama_cpp_reasoning_mode" not in manager.state
+
+
+def test_migration_chain_is_a_no_op_on_an_already_current_freshly_created_file(tmp_path):
+    # Pin for the eager-save timing this refactor had to preserve
+    # (test_migration_does_not_rewrite_when_nothing_needs_migrating in
+    # test_backend_secrets_at_rest.py already covers the on-disk mtime side
+    # of this from a fresh file; this covers the in-memory signal the
+    # refactor derives that from) - re-running every migration function
+    # against a dict _create_initial_state() already fully populated must
+    # change nothing at all, not even incidentally.
+    state_file = tmp_path / "session.dat"
+    first = SettingsManager(state_file)  # creates the file fresh
+    on_disk_after_create = state_file.read_text(encoding="utf-8")
+
+    SettingsManager(state_file)  # second load - every migration is a no-op
+
+    assert state_file.read_text(encoding="utf-8") == on_disk_after_create
+
+
 # -- ADR-007 stage 7.5: MCP server configuration -----------------------------
 
 

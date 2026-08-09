@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import graphlink_secrets
+from graphlink_migrations import run_dict_migrations
 from graphlink_model_catalog import (
     AUTO_MODEL,
     INHERIT_MODEL,
@@ -200,142 +201,253 @@ class SettingsManager:
         if migrated:
             self._save_state()
 
+    # ADR-009 stage 9.1: keyed by the version each function PRODUCES
+    # (migration "1" takes a state dict from 0 -> 1), matching
+    # graphlink_migrations' own ordering convention and
+    # backend/chat_library.py's sibling _MIGRATIONS table - see
+    # run_dict_migrations' own docstring for the calling contract each
+    # function below must honor (receive the in-progress dict, return the
+    # migrated dict, never manage a "changed" side channel - _load_state
+    # derives that from a single whole-state comparison instead, see its
+    # own comment). Built fresh per call (not a class-level dict) because
+    # these are bound instance methods - _migration_002_provider_scoped_
+    # cloud_profiles reaches self._migrate_model_settings, and
+    # _migration_001_baseline_fields reaches self.NOTIFICATION_TYPES.
+    def _dict_migrations(self):
+        return {
+            1: self._migration_001_baseline_fields,
+            2: self._migration_002_provider_scoped_cloud_profiles,
+            3: self._migration_003_cloud_model_catalogs,
+            4: self._migration_004_graded_reasoning_levels,
+        }
+
+    def _migration_001_baseline_fields(self, state: dict) -> dict:
+        """Migration "1" (0 -> 1): every field that already existed in
+        session.dat before schema_version existed at all (see commit
+        6a7e326, "schema_version fields added to session.dat and chat
+        payloads" - CURRENT_SCHEMA_VERSION was introduced there as 1, over a
+        file shape every one of these fields was already part of). None of
+        these were ever gated on a version number, only on the field's own
+        presence - ported verbatim from the old scattered
+        `if 'x' not in state` chain that used to live directly in
+        _load_state."""
+        if 'show_token_counter' not in state:
+            state['show_token_counter'] = False
+        if 'ollama_chat_model' not in state:
+            state['ollama_chat_model'] = ''
+        if 'ollama_title_model' not in state:
+            state['ollama_title_model'] = ''
+        if 'ollama_chart_model' not in state:
+            state['ollama_chart_model'] = ''
+        if 'ollama_web_validate_model' not in state:
+            state['ollama_web_validate_model'] = ''
+        if 'ollama_web_summarize_model' not in state:
+            state['ollama_web_summarize_model'] = ''
+        if 'ollama_scanned_models' not in state:
+            state['ollama_scanned_models'] = []
+        if 'ollama_model_scan_mode' not in state:
+            state['ollama_model_scan_mode'] = ''
+        if 'ollama_model_scan_path' not in state:
+            state['ollama_model_scan_path'] = ''
+        if 'ollama_model_scan_locations' not in state:
+            state['ollama_model_scan_locations'] = []
+        if 'llama_cpp_chat_model_path' not in state:
+            state['llama_cpp_chat_model_path'] = ''
+        if 'llama_cpp_title_model_path' not in state:
+            state['llama_cpp_title_model_path'] = ''
+        if 'llama_cpp_chat_format' not in state:
+            state['llama_cpp_chat_format'] = ''
+        if 'llama_cpp_n_ctx' not in state:
+            state['llama_cpp_n_ctx'] = 4096
+        if 'llama_cpp_n_gpu_layers' not in state:
+            state['llama_cpp_n_gpu_layers'] = 0
+        if 'llama_cpp_n_threads' not in state:
+            state['llama_cpp_n_threads'] = 0
+        if 'llama_cpp_scanned_models' not in state:
+            state['llama_cpp_scanned_models'] = []
+        if 'llama_cpp_model_scan_mode' not in state:
+            state['llama_cpp_model_scan_mode'] = ''
+        if 'llama_cpp_model_scan_path' not in state:
+            state['llama_cpp_model_scan_path'] = ''
+        if 'llama_cpp_model_scan_locations' not in state:
+            state['llama_cpp_model_scan_locations'] = []
+        if 'current_mode' not in state:
+            state['current_mode'] = 'Ollama (Local)'
+        if 'api_provider' not in state:
+            state['api_provider'] = 'OpenAI-Compatible'
+        if 'api_base_url' not in state:
+            state['api_base_url'] = 'https://api.openai.com/v1'
+        if 'openai_api_key' not in state:
+            state['openai_api_key'] = ''
+        if 'anthropic_api_key' not in state:
+            state['anthropic_api_key'] = ''
+        if 'gemini_api_key' not in state:
+            state['gemini_api_key'] = ''
+        if 'github_access_token' not in state:
+            state['github_access_token'] = ''
+        if 'api_models' not in state:
+            state['api_models'] = {}
+        if 'enable_system_prompt' not in state:
+            state['enable_system_prompt'] = True
+        if 'update_notifications_enabled' not in state:
+            state['update_notifications_enabled'] = False
+        if 'notification_preferences' not in state or not isinstance(state.get('notification_preferences'), dict):
+            state['notification_preferences'] = {}
+        for notification_type in self.NOTIFICATION_TYPES:
+            if notification_type not in state['notification_preferences']:
+                state['notification_preferences'][notification_type] = True
+        if 'update_status_message' not in state:
+            state['update_status_message'] = 'Automatic update checks are off.'
+        if 'update_status_level' not in state:
+            state['update_status_level'] = 'info'
+        if 'update_last_checked_at' not in state:
+            state['update_last_checked_at'] = ''
+        if 'update_latest_version' not in state:
+            state['update_latest_version'] = ''
+        if 'update_available' not in state:
+            state['update_available'] = False
+        return state
+
+    def _migration_002_provider_scoped_cloud_profiles(self, state: dict) -> dict:
+        """Migration "2" (1 -> 2, commit a1dbaeda): provider-scoped cloud
+        model profiles (api_models_by_provider) and explicit local model
+        assignment modes (ollama_model_assignments, via the pre-existing
+        _migrate_model_settings helper) - see that commit's own
+        CURRENT_SCHEMA_VERSION bump comment ("provider-scoped cloud profiles
+        and explicit local model assignment modes"). Depends on
+        ollama_chat_model/ollama_title_model/ollama_chart_model/
+        ollama_web_validate_model/ollama_web_summarize_model/api_provider/
+        api_models all already being present, which migration "1" above
+        guarantees by running first."""
+        if 'api_models_by_provider' not in state or not isinstance(state.get('api_models_by_provider'), dict):
+            state['api_models_by_provider'] = {
+                str(state.get('api_provider', 'OpenAI-Compatible')): dict(state.get('api_models', {}) or {})
+            }
+        self._migrate_model_settings(state)
+        return state
+
+    def _migration_003_cloud_model_catalogs(self, state: dict) -> dict:
+        """Migration "3" (2 -> 3, commit 7a1f19e): persisted refreshed cloud
+        model catalogs (api_model_catalog_by_provider), so the composer can
+        offer a useful selector without a network request on every render -
+        see that commit's own CURRENT_SCHEMA_VERSION bump comment."""
+        if 'api_model_catalog_by_provider' not in state or not isinstance(state.get('api_model_catalog_by_provider'), dict):
+            state['api_model_catalog_by_provider'] = {}
+        return state
+
+    def _migration_004_graded_reasoning_levels(self, state: dict) -> dict:
+        """Migration "4" (3 -> 4, commit ed467c9 / R8a): the 2-value
+        Ollama/Llama.cpp reasoning "mode" (Thinking/Quick) becomes a graded
+        4-value "level" (off/low/medium/high) shared by all 5 providers -
+        migrate any already-persisted choice faithfully rather than
+        resetting it ("Quick" meant no reasoning at all -> off, "Thinking"
+        meant full reasoning -> high, this field's own default), and add the
+        3 new cloud reasoning-level fields that had no equivalent before,
+        defaulting to off (extended thinking on a paid API is an opt-in
+        cost/latency tradeoff, never a silent default, unlike the local
+        providers whose compute is free to the user) - see that commit's own
+        CURRENT_SCHEMA_VERSION bump comment.
+
+        mcp_servers (ADR-007 stage 7.5) is grouped in here too even though
+        it was added later without its own CURRENT_SCHEMA_VERSION bump -
+        there is no version number to place it at. Since every migration in
+        this chain always runs on every load regardless of the file's own
+        declared version (see _load_state's own comment on why), attaching
+        it to the chain's current terminal function is the deliberate,
+        least-surprising home for it, not a guess."""
+        if 'ollama_reasoning_level' not in state:
+            # R8a: reasoning went from a 2-value Ollama/Llama.cpp bool
+            # "mode" to a graded 4-value level shared by every provider -
+            # migrate any already-persisted choice faithfully rather than
+            # silently resetting it: "Quick" meant no reasoning at all
+            # (-> off), "Thinking" meant full reasoning (-> high, this
+            # field's own default).
+            state['ollama_reasoning_level'] = 'off' if state.get('ollama_reasoning_mode') == 'Quick' else 'high'
+        state.pop('ollama_reasoning_mode', None)
+        if 'llama_cpp_reasoning_level' not in state:
+            # Same migration story as ollama_reasoning_level above.
+            state['llama_cpp_reasoning_level'] = 'off' if state.get('llama_cpp_reasoning_mode') == 'Quick' else 'high'
+        state.pop('llama_cpp_reasoning_mode', None)
+        if 'anthropic_reasoning_level' not in state:
+            # New cloud-provider fields (R8a) - "off" by default, matching
+            # api_provider.py's own conservative default: extended thinking
+            # on a paid API is an opt-in cost/latency tradeoff, never a
+            # silent default.
+            state['anthropic_reasoning_level'] = 'off'
+        if 'gemini_reasoning_level' not in state:
+            state['gemini_reasoning_level'] = 'off'
+        if 'openai_reasoning_level' not in state:
+            state['openai_reasoning_level'] = 'off'
+        if 'mcp_servers' not in state or not isinstance(state.get('mcp_servers'), list):
+            # ADR-007 stage 7.5: absent in every pre-7.5 save -> no
+            # configured MCP servers, matching the initial-state default in
+            # _create_initial_state - a settings surface with nothing
+            # configured yet is the correct, safe starting point, not an
+            # error.
+            state['mcp_servers'] = []
+        return state
+
     def _load_state(self):
         if not self.state_file.exists():
             return self._create_initial_state()
         try:
             with open(self.state_file, 'r') as f:
-                state = json.load(f)
-                if 'show_token_counter' not in state:
-                    state['show_token_counter'] = False
-                state_changed = False
-                if 'ollama_chat_model' not in state:
-                    state['ollama_chat_model'] = ''
-                    state_changed = True
-                if 'ollama_title_model' not in state:
-                    state['ollama_title_model'] = ''
-                if 'ollama_chart_model' not in state:
-                    state['ollama_chart_model'] = ''
-                if 'ollama_web_validate_model' not in state:
-                    state['ollama_web_validate_model'] = ''
-                if 'ollama_web_summarize_model' not in state:
-                    state['ollama_web_summarize_model'] = ''
-                if 'ollama_reasoning_level' not in state:
-                    # R8a: reasoning went from a 2-value Ollama/Llama.cpp
-                    # bool "mode" to a graded 4-value level shared by every
-                    # provider - migrate any already-persisted choice
-                    # faithfully rather than silently resetting it: "Quick"
-                    # meant no reasoning at all (-> off), "Thinking" meant
-                    # full reasoning (-> high, this field's own default).
-                    state['ollama_reasoning_level'] = 'off' if state.get('ollama_reasoning_mode') == 'Quick' else 'high'
-                state.pop('ollama_reasoning_mode', None)
-                if 'ollama_scanned_models' not in state:
-                    state['ollama_scanned_models'] = []
-                if 'ollama_model_scan_mode' not in state:
-                    state['ollama_model_scan_mode'] = ''
-                if 'ollama_model_scan_path' not in state:
-                    state['ollama_model_scan_path'] = ''
-                if 'ollama_model_scan_locations' not in state:
-                    state['ollama_model_scan_locations'] = []
-                if 'llama_cpp_chat_model_path' not in state:
-                    state['llama_cpp_chat_model_path'] = ''
-                if 'llama_cpp_title_model_path' not in state:
-                    state['llama_cpp_title_model_path'] = ''
-                if 'llama_cpp_reasoning_level' not in state:
-                    # Same migration story as ollama_reasoning_level above.
-                    state['llama_cpp_reasoning_level'] = 'off' if state.get('llama_cpp_reasoning_mode') == 'Quick' else 'high'
-                state.pop('llama_cpp_reasoning_mode', None)
-                if 'anthropic_reasoning_level' not in state:
-                    # New cloud-provider fields (R8a) - "off" by default,
-                    # matching api_provider.py's own conservative default:
-                    # extended thinking on a paid API is an opt-in cost/
-                    # latency tradeoff, never a silent default.
-                    state['anthropic_reasoning_level'] = 'off'
-                if 'gemini_reasoning_level' not in state:
-                    state['gemini_reasoning_level'] = 'off'
-                if 'openai_reasoning_level' not in state:
-                    state['openai_reasoning_level'] = 'off'
-                if 'llama_cpp_chat_format' not in state:
-                    state['llama_cpp_chat_format'] = ''
-                if 'llama_cpp_n_ctx' not in state:
-                    state['llama_cpp_n_ctx'] = 4096
-                if 'llama_cpp_n_gpu_layers' not in state:
-                    state['llama_cpp_n_gpu_layers'] = 0
-                if 'llama_cpp_n_threads' not in state:
-                    state['llama_cpp_n_threads'] = 0
-                if 'llama_cpp_scanned_models' not in state:
-                    state['llama_cpp_scanned_models'] = []
-                if 'llama_cpp_model_scan_mode' not in state:
-                    state['llama_cpp_model_scan_mode'] = ''
-                if 'llama_cpp_model_scan_path' not in state:
-                    state['llama_cpp_model_scan_path'] = ''
-                if 'llama_cpp_model_scan_locations' not in state:
-                    state['llama_cpp_model_scan_locations'] = []
-                if 'current_mode' not in state:
-                    state['current_mode'] = 'Ollama (Local)'
-                if 'api_provider' not in state:
-                    state['api_provider'] = 'OpenAI-Compatible'
-                if 'api_base_url' not in state:
-                    state['api_base_url'] = 'https://api.openai.com/v1'
-                if 'openai_api_key' not in state:
-                    state['openai_api_key'] = ''
-                if 'anthropic_api_key' not in state:
-                    state['anthropic_api_key'] = ''
-                if 'gemini_api_key' not in state:
-                    state['gemini_api_key'] = ''
-                if 'github_access_token' not in state:
-                    state['github_access_token'] = ''
-                if 'api_models' not in state:
-                    state['api_models'] = {}
-                    state_changed = True
-                if 'api_models_by_provider' not in state or not isinstance(state.get('api_models_by_provider'), dict):
-                    state['api_models_by_provider'] = {
-                        str(state.get('api_provider', 'OpenAI-Compatible')): dict(state.get('api_models', {}) or {})
-                    }
-                    state_changed = True
-                if 'api_model_catalog_by_provider' not in state or not isinstance(state.get('api_model_catalog_by_provider'), dict):
-                    state['api_model_catalog_by_provider'] = {}
-                    state_changed = True
-                state_changed = self._migrate_model_settings(state) or state_changed
-                if 'enable_system_prompt' not in state:
-                    state['enable_system_prompt'] = True
-                if 'update_notifications_enabled' not in state:
-                    state['update_notifications_enabled'] = False
-                if 'notification_preferences' not in state or not isinstance(state.get('notification_preferences'), dict):
-                    state['notification_preferences'] = {}
-                for notification_type in self.NOTIFICATION_TYPES:
-                    if notification_type not in state['notification_preferences']:
-                        state['notification_preferences'][notification_type] = True
-                if 'update_status_message' not in state:
-                    state['update_status_message'] = 'Automatic update checks are off.'
-                if 'update_status_level' not in state:
-                    state['update_status_level'] = 'info'
-                if 'update_last_checked_at' not in state:
-                    state['update_last_checked_at'] = ''
-                if 'update_latest_version' not in state:
-                    state['update_latest_version'] = ''
-                if 'update_available' not in state:
-                    state['update_available'] = False
-                if 'mcp_servers' not in state or not isinstance(state.get('mcp_servers'), list):
-                    # ADR-007 stage 7.5: absent in every pre-7.5 save -> no
-                    # configured MCP servers, matching the initial-state
-                    # default below - a settings surface with nothing
-                    # configured yet is the correct, safe starting point,
-                    # not an error.
-                    state['mcp_servers'] = []
-                    state_changed = True
-                if 'schema_version' not in state:
-                    state['schema_version'] = self.CURRENT_SCHEMA_VERSION
-                    state_changed = True
-                elif state.get('schema_version', 0) < self.CURRENT_SCHEMA_VERSION:
-                    state['schema_version'] = self.CURRENT_SCHEMA_VERSION
-                    state_changed = True
-                if state_changed:
-                    self._state_needs_save = True
-                return state
+                raw_state = json.load(f)
         except (json.JSONDecodeError, IOError) as e:
             self._backup_corrupt_state_file(e)
             return self._create_initial_state()
+
+        # ADR-009 stage 9.1: every backfill above now runs through
+        # graphlink_migrations.run_dict_migrations instead of one long
+        # inline `if 'field' not in state: ...` chain. Deliberately always
+        # called with current_version=0 here - never
+        # `raw_state.get('schema_version', 0)` - so migrations 1 through
+        # CURRENT_SCHEMA_VERSION run on EVERY load, exactly matching what
+        # the old inline chain did: those if-checks were never actually
+        # gated on the file's own declared schema_version at all (that is
+        # the "scattered, no explicit boundary" shape this refactor was
+        # asked to fix structurally, not a version-gated migration system to
+        # begin with) - they ran unconditionally, keyed only on whether each
+        # individual field was already present. Switching to a genuinely
+        # version-gated read (skipping migration N whenever the stored
+        # schema_version is already >= N) would be a real behavior change: a
+        # file that already claims the current version but is missing a
+        # field an earlier migration would have added (hand-edited,
+        # corrupted, or written by a future build this one doesn't fully
+        # understand) would stop being self-healed on load. Each migration
+        # function is idempotent (the same `if key not in state` shape as
+        # before), so re-running all of them against an already-fully-
+        # populated state is a correct, cheap no-op - not wasted risk.
+        migrated_state, _ = run_dict_migrations(
+            raw_state, 0, self.CURRENT_SCHEMA_VERSION, self._dict_migrations()
+        )
+
+        # The persisted version stamp itself is bumped separately from the
+        # migrations dict above, since its "never move it backward" rule
+        # doesn't fit run_dict_migrations' landed-on-target contract: a file
+        # that already declares a NEWER version than this build knows about
+        # (opened by an older build after a downgrade) must keep that
+        # number, not have it overwritten with this build's lower
+        # CURRENT_SCHEMA_VERSION.
+        if 'schema_version' not in migrated_state:
+            migrated_state['schema_version'] = self.CURRENT_SCHEMA_VERSION
+        elif migrated_state.get('schema_version', 0) < self.CURRENT_SCHEMA_VERSION:
+            migrated_state['schema_version'] = self.CURRENT_SCHEMA_VERSION
+
+        # Save immediately only if this load actually changed something -
+        # the refactored equivalent of the old per-field state_changed flag
+        # (persist a migrated file right away rather than leaving it only in
+        # memory until the next explicit set_*() call), expressed as one
+        # whole-state comparison instead of that flag's own inconsistent
+        # per-field coverage (several fields - e.g. a missing
+        # ollama_title_model alone - never flipped it at all in the old
+        # code). run_dict_migrations guarantees raw_state itself is never
+        # mutated in place, so this compares the untouched on-disk shape
+        # against the fully migrated+stamped result.
+        if migrated_state != raw_state:
+            self._state_needs_save = True
+
+        return migrated_state
 
     def _backup_corrupt_state_file(self, error):
         # Preserve the unreadable file for forensic recovery instead of silently
