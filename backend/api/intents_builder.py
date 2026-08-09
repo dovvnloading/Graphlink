@@ -51,13 +51,25 @@ def register_builder_intents(
 ) -> None:
     publish_scene = make_publish_scene(bus)
 
-    async def start(goal, mode=None, max_steps=None, max_tokens=None, max_wall_seconds=None):
+    async def start(goal, mode=None, max_steps=None, max_tokens=None, max_wall_seconds=None, recipe=None):
+        from backend.builder import recipe_by_name
+
         goal_text = str(goal or "").strip()
+        seeded = None
+        if recipe:
+            seeded = recipe_by_name(agent_dispatcher._settings_manager, str(recipe))
+            if seeded is None:
+                notifications.show(f"Unknown recipe: {recipe}", "warning")
+                await bus.publish("notification")
+                return None
+            # The recipe's goal is the frame; the user's text (optional
+            # here) is the specific task inside it.
+            goal_text = f"{seeded['goal']}\n\nTask:\n{goal_text}" if goal_text else seeded["goal"]
         if not goal_text:
             notifications.show("Give the Builder a goal first.", "info")
             await bus.publish("notification")
             return None
-        chosen_mode = str(mode or "copilot")
+        chosen_mode = str(mode or (seeded["mode"] if seeded else "copilot"))
         if chosen_mode not in ("copilot", "autopilot"):
             chosen_mode = "copilot"
         x, y = _place_plan_node(document)
@@ -68,16 +80,30 @@ def register_builder_intents(
             except (TypeError, ValueError):
                 return default
 
-        node, command = document.record_command(
-            "builderPlan", "agent",
-            lambda: document.add_plan_node(
+        def mutator():
+            node = document.add_plan_node(
                 x, y, goal_text, mode=chosen_mode,
                 max_steps=clamp(max_steps, _MIN_STEPS_BUDGET, _MAX_STEPS_BUDGET, 12),
                 max_tokens=clamp(max_tokens, _MIN_TOKENS_BUDGET, _MAX_TOKENS_BUDGET, 150_000),
                 max_wall_seconds=clamp(max_wall_seconds, _MIN_WALL_BUDGET, _MAX_WALL_BUDGET, 900),
-            ),
-        )
+            )
+            if seeded is not None and seeded["steps"]:
+                document.set_plan_steps(node.id, [
+                    {"id": f"s{i+1}", "title": t, "status": "pending", "detail": ""}
+                    for i, t in enumerate(seeded["steps"])
+                ])
+                node.state.builder_status = "awaiting_start"
+            return node
+
+        node, command = document.record_command("builderPlan", "agent", mutator)
         await publish_scene()
+
+        if seeded is not None and seeded["steps"]:
+            # A recipe-seeded plan needs no planning run at all - the
+            # checklist is already there, awaiting review/Start. Its
+            # creation is a normal Ctrl+Z-undoable command; undo_run covers
+            # the EXECUTION run's own mutations once one starts.
+            return node.id
 
         request_id = await agent_dispatcher.start_builder_run(
             bus=bus, notifications_state=notifications, document=document,
@@ -89,6 +115,35 @@ def register_builder_intents(
             # not exist before the node did (the claim needs a node_id).
             command.run_id = request_id
         return node.id
+
+    async def list_recipes():
+        from backend.builder import list_all_recipes
+
+        return {"recipes": list_all_recipes(agent_dispatcher._settings_manager)}
+
+    async def save_recipe(node_id, name):
+        from backend.builder import BUILT_IN_RECIPES, recipe_from_plan_node
+
+        node = document.nodes.get(node_id)
+        if node is None or not isinstance(node.state, PlanState):
+            notifications.show("This plan node no longer exists.", "warning")
+            await bus.publish("notification")
+            return None
+        clean_name = str(name or "").strip() or node.state.plan_goal[:40]
+        if any(r["name"] == clean_name for r in BUILT_IN_RECIPES):
+            notifications.show(f'"{clean_name}" is a built-in recipe name - pick another.', "warning")
+            await bus.publish("notification")
+            return None
+        if not node.state.plan_steps:
+            notifications.show("This plan has no steps to save.", "info")
+            await bus.publish("notification")
+            return None
+        settings = agent_dispatcher._settings_manager
+        existing = [r for r in settings.get_recipes() if r["name"] != clean_name]
+        settings.set_recipes(existing + [recipe_from_plan_node(node, clean_name)])
+        notifications.show(f'Saved recipe "{clean_name}".', "info")
+        await bus.publish("notification")
+        return clean_name
 
     async def start_execution(node_id):
         node = document.nodes.get(node_id)
@@ -138,4 +193,6 @@ def register_builder_intents(
     bus.register_intent("builder", "cancel", cancel)
     bus.register_intent("builder", "approveTool", approve_tool)
     bus.register_intent("builder", "denyTool", deny_tool)
+    bus.register_intent("builder", "listRecipes", list_recipes)
+    bus.register_intent("builder", "saveRecipe", save_recipe)
     bus.register_intent("scene", "setPlanSteps", set_plan_steps)

@@ -555,6 +555,83 @@ class TestBuilderIntents:
 
         asyncio.run(run())
 
+    def test_a_shipped_recipe_seeds_a_build_with_no_planning_run(self, monkeypatch):
+        """8.6 exit: a shipped recipe seeds a run - the checklist lands
+        immediately at awaiting_start with NO planning model call."""
+
+        async def run():
+            bus, document, recorder, dispatcher = make_bus_with_dispatcher()
+            planning_calls = []
+            monkeypatch.setattr(
+                builder_module, "plan_steps_for_goal",
+                lambda goal, **kwargs: planning_calls.append(goal) or [],
+            )
+            node_id = await bus.dispatch_intent("builder", "start", [
+                "solar output trends", "copilot", None, None, None, "Research and summarize",
+            ])
+            node = document.nodes[node_id]
+            assert node.state.builder_status == "awaiting_start"
+            assert planning_calls == [], "a recipe-seeded build must not run the planner"
+            titles = [s["title"] for s in node.state.plan_steps]
+            assert titles == [
+                "Create a web research node with the topic as its query and run it",
+                "Write the findings into a summary note, citing sources",
+            ]
+            assert "solar output trends" in node.state.plan_goal
+
+        asyncio.run(run())
+
+    def test_save_recipe_then_start_from_it_seeds_the_saved_plan(self, monkeypatch):
+        """8.6 exit: a user-saved build seeds a run."""
+
+        async def run():
+            bus, document, recorder, dispatcher = make_bus_with_dispatcher()
+            source = document.add_plan_node(0, 0, "compare two datasets")
+            source.state.plan_steps = [
+                {"id": "s1", "title": "Load both datasets", "status": "done", "detail": ""},
+                {"id": "s2", "title": "Chart the difference", "status": "done", "detail": ""},
+            ]
+            source.state.builder_status = "done"
+
+            saved_name = await bus.dispatch_intent(
+                "builder", "saveRecipe", [source.id, "My comparison"],
+            )
+            assert saved_name == "My comparison"
+
+            listing = await bus.dispatch_intent("builder", "listRecipes", [])
+            names = [r["name"] for r in listing["recipes"]]
+            assert "My comparison" in names
+            assert "Research and summarize" in names, "built-ins stay listed"
+
+            monkeypatch.setattr(
+                builder_module, "plan_steps_for_goal",
+                lambda goal, **kwargs: (_ for _ in ()).throw(AssertionError("planner ran")),
+            )
+            node_id = await bus.dispatch_intent("builder", "start", [
+                "", None, None, None, None, "My comparison",
+            ])
+            node = document.nodes[node_id]
+            assert node.state.builder_status == "awaiting_start"
+            assert [s["title"] for s in node.state.plan_steps] == [
+                "Load both datasets", "Chart the difference",
+            ]
+
+        asyncio.run(run())
+
+    def test_a_built_in_recipe_name_cannot_be_overwritten(self):
+        async def run():
+            bus, document, recorder, dispatcher = make_bus_with_dispatcher()
+            source = document.add_plan_node(0, 0, "goal")
+            source.state.plan_steps = [
+                {"id": "s1", "title": "step", "status": "done", "detail": ""},
+            ]
+            result = await bus.dispatch_intent(
+                "builder", "saveRecipe", [source.id, "Research and summarize"],
+            )
+            assert result is None
+
+        asyncio.run(run())
+
     def test_completed_steps_cannot_be_rewritten_via_set_plan_steps(self):
         async def run():
             bus, document, recorder, dispatcher = make_bus_with_dispatcher()

@@ -29,9 +29,18 @@ function OpenBuilderButton() {
   );
 }
 
-async function setup() {
+async function setup(startResult: unknown = "n42", recipes: unknown[] = []) {
   const user = userEvent.setup();
   const fake = makeTransport();
+  // The dialog fires listRecipes on open - dispatch by intent so each
+  // test's start-result expectation is never consumed by the list call.
+  fake.request.mockImplementation((topic: string, intent: string) =>
+    intent === "listRecipes"
+      ? Promise.resolve({ recipes })
+      : startResult instanceof Error
+        ? Promise.reject(startResult)
+        : Promise.resolve(startResult),
+  );
   render(
     <OverlayProvider>
       <OpenBuilderButton />
@@ -44,14 +53,28 @@ async function setup() {
 
 describe("BuilderLaunchDialog", () => {
   it("submits the goal with mode and default budgets through builder/start", async () => {
-    const { user, intents, request } = await setup();
-    request.mockResolvedValueOnce("n42");
+    const { user, intents } = await setup();
 
     await user.type(screen.getByLabelText(/what should the builder construct/i), "chart solar trends");
     await user.click(screen.getByRole("button", { name: "Plan the build" }));
 
     expect(intents).toContainEqual([
-      "builder", "start", ["chart solar trends", "copilot", 12, 150_000, 900],
+      "builder", "start", ["chart solar trends", "copilot", 12, 150_000, 900, null],
+    ]);
+  });
+
+  it("selecting a recipe enables launch without a typed goal and passes the name", async () => {
+    const { user, intents } = await setup("n9", [
+      { name: "Research and summarize", description: "d", builtIn: true },
+    ]);
+
+    await user.selectOptions(
+      screen.getByLabelText("Recipe"), "Research and summarize",
+    );
+    await user.click(screen.getByRole("button", { name: "Start from recipe" }));
+
+    expect(intents).toContainEqual([
+      "builder", "start", ["", "copilot", 12, 150_000, 900, "Research and summarize"],
     ]);
   });
 
@@ -71,8 +94,7 @@ describe("BuilderLaunchDialog", () => {
   });
 
   it("a null start result (backend refused) shows an error instead of closing", async () => {
-    const { user, request } = await setup();
-    request.mockResolvedValueOnce(null);
+    const { user } = await setup(null);
 
     await user.type(screen.getByLabelText(/what should the builder construct/i), "goal");
     await user.click(screen.getByRole("button", { name: "Plan the build" }));
@@ -81,8 +103,7 @@ describe("BuilderLaunchDialog", () => {
   });
 
   it("a successful start closes the dialog", async () => {
-    const { user, request } = await setup();
-    request.mockResolvedValueOnce("n7");
+    const { user } = await setup("n7");
 
     await user.type(screen.getByLabelText(/what should the builder construct/i), "goal");
     await user.click(screen.getByRole("button", { name: "Plan the build" }));

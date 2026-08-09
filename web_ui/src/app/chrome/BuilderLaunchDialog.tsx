@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { WsTransport } from "../../lib/ws/transport";
 import { Dialog, useOverlays } from "../overlays/overlays";
 
@@ -20,6 +20,12 @@ const DEFAULT_MAX_STEPS = 12;
 const DEFAULT_MAX_TOKENS = 150_000;
 const DEFAULT_MAX_WALL_SECONDS = 900;
 
+interface RecipeRow {
+  name: string;
+  description: string;
+  builtIn: boolean;
+}
+
 export function BuilderLaunchDialog({ transport }: { transport: WsTransport }) {
   const overlays = useOverlays();
   const [goal, setGoal] = useState("");
@@ -27,18 +33,41 @@ export function BuilderLaunchDialog({ transport }: { transport: WsTransport }) {
   const [maxSteps, setMaxSteps] = useState(DEFAULT_MAX_STEPS);
   const [maxTokens, setMaxTokens] = useState(DEFAULT_MAX_TOKENS);
   const [maxWallSeconds, setMaxWallSeconds] = useState(DEFAULT_MAX_WALL_SECONDS);
+  const [recipes, setRecipes] = useState<RecipeRow[]>([]);
+  const [recipe, setRecipe] = useState("");
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const latestRequestId = useRef(0);
+  const open = overlays.isOpen("builder-launch");
+
+  useEffect(() => {
+    if (!open) return;
+    let stale = false;
+    transport
+      .request("builder", "listRecipes", [])
+      .then((value) => {
+        if (stale) return;
+        const payload = value as { recipes: RecipeRow[] };
+        setRecipes(payload.recipes ?? []);
+      })
+      .catch(() => {
+        // Recipes are a convenience - a failed list never blocks a
+        // from-scratch launch.
+      });
+    return () => {
+      stale = true;
+    };
+  }, [open, transport]);
 
   function startBuild() {
     const trimmed = goal.trim();
-    if (!trimmed || starting) return;
+    // A recipe carries its own goal; from-scratch needs one typed.
+    if ((!trimmed && !recipe) || starting) return;
     const requestId = ++latestRequestId.current;
     setStarting(true);
     setError(null);
     transport
-      .request("builder", "start", [trimmed, mode, maxSteps, maxTokens, maxWallSeconds])
+      .request("builder", "start", [trimmed, mode, maxSteps, maxTokens, maxWallSeconds, recipe || null])
       .then((nodeId) => {
         if (requestId !== latestRequestId.current) return;
         if (nodeId != null) {
@@ -59,6 +88,24 @@ export function BuilderLaunchDialog({ transport }: { transport: WsTransport }) {
 
   return (
     <Dialog name="builder-launch" title="Builder" className="builder-launch-dialog">
+      <label className="builder-launch-label" htmlFor="builder-recipe">
+        Recipe
+      </label>
+      <select
+        id="builder-recipe"
+        className="builder-launch-recipe"
+        value={recipe}
+        onChange={(event) => setRecipe(event.target.value)}
+      >
+        <option value="">Start from scratch</option>
+        {recipes.map((r) => (
+          <option key={r.name} value={r.name}>
+            {r.name}
+            {r.builtIn ? " (built-in)" : ""}
+          </option>
+        ))}
+      </select>
+
       <label className="builder-launch-label" htmlFor="builder-goal">
         What should the Builder construct?
       </label>
@@ -145,9 +192,9 @@ export function BuilderLaunchDialog({ transport }: { transport: WsTransport }) {
           type="button"
           className="builder-launch-start"
           onClick={startBuild}
-          disabled={starting || !goal.trim()}
+          disabled={starting || (!goal.trim() && !recipe)}
         >
-          {starting ? "Planning…" : "Plan the build"}
+          {starting ? "Planning…" : recipe ? "Start from recipe" : "Plan the build"}
         </button>
       </div>
     </Dialog>

@@ -740,6 +740,9 @@ function makePlanFns(id: string, liveRef: { current: DispatcherLive }) {
       const { n, store } = liveRef.current;
       if (n.builderRunId) store.undoRun(n.builderRunId);
     },
+    // ADR-008 stage 8.6: save-your-build - the backend derives the name
+    // from the goal when none is given.
+    onSaveRecipe: () => liveRef.current.store.saveBuilderRecipe(id),
   };
 }
 

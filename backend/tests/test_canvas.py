@@ -2105,10 +2105,21 @@ class Recorder:
 
 class _FakeSettingsManager:
     """Stand-in for AgentDispatcher's settings_manager - canvas tests only
-    need persona() to resolve, not real settings persistence."""
+    need persona() to resolve, not real settings persistence. ADR-008
+    stage 8.6 adds the in-memory recipe pair so builder intents exercise
+    the real list/save flow against it."""
+
+    def __init__(self):
+        self._recipes: list = []
 
     def get_enable_system_prompt(self):
         return True
+
+    def get_recipes(self):
+        return list(self._recipes)
+
+    def set_recipes(self, recipes):
+        self._recipes = list(recipes or [])
 
 
 def make_bus_with_dispatcher():

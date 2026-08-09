@@ -37,6 +37,7 @@ function makeData(overrides: Partial<PlanNodeData> = {}): PlanNodeData {
     onApproveTool: vi.fn(),
     onDenyTool: vi.fn(),
     onUndoBuild: vi.fn(),
+    onSaveRecipe: vi.fn(),
     ...overrides,
   };
 }
@@ -133,6 +134,19 @@ describe("PlanNodeView", () => {
     renderPlan(done);
     await user.click(screen.getByRole("button", { name: "Undo build" }));
     expect(done.onUndoBuild).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers Save as recipe only on a done build with steps, and fires it", async () => {
+    const user = userEvent.setup();
+    const done = makeData({ builderStatus: "done", pendingRequestId: null });
+    renderPlan(done);
+    await user.click(screen.getByRole("button", { name: "Save as recipe" }));
+    expect(done.onSaveRecipe).toHaveBeenCalledTimes(1);
+  });
+
+  it("hides Save as recipe on a failed build", () => {
+    renderPlan(makeData({ builderStatus: "failed", pendingRequestId: null }));
+    expect(screen.queryByRole("button", { name: "Save as recipe" })).not.toBeInTheDocument();
   });
 
   it("hides Undo build when no run ever stamped the plan", () => {

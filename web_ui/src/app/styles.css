@@ -6582,6 +6582,14 @@ mark.document-view-search-match-current {
   min-width: 420px;
 }
 .builder-launch-label { font-size: 13px; font-weight: 600; }
+.builder-launch-recipe {
+  font: inherit;
+  padding: 5px 8px;
+  background: var(--gl-surface-node-body);
+  color: var(--gl-surface-text-primary);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 6px;
+}
 .builder-launch-goal {
   width: 100%;
   resize: vertical;

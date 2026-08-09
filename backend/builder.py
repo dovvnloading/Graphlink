@@ -270,6 +270,70 @@ def register_builder_control_tools(registry: ToolRegistry) -> None:
     registry.register(ABORT_SPEC, abort, scopes={GRAPH_READ}, approval="auto")
 
 
+# -- recipes (stage 8.6) -----------------------------------------------------
+
+# Shipped as constants, merged READ-ONLY into the list the launcher shows -
+# never written to the settings store, so a rename here never desyncs a
+# user's file, and a user recipe with the same name simply shadows nothing
+# (both are listed; names are labels, not keys). Shapes match
+# graphlink_settings_store._normalize_recipe exactly.
+BUILT_IN_RECIPES: tuple = (
+    {
+        "name": "Research and summarize",
+        "description": "Research a topic on the web and produce a cited summary note.",
+        "goal": "Research the topic below on the web, then write a concise summary note citing the sources.",
+        "steps": [
+            "Create a web research node with the topic as its query and run it",
+            "Write the findings into a summary note, citing sources",
+        ],
+        "mode": "copilot",
+    },
+    {
+        "name": "Scaffold and run a script",
+        "description": "Write a small Python script for the goal, execute it, and note the result.",
+        "goal": "Write a small Python script that accomplishes the task below, run it, and record the output in a note.",
+        "steps": [
+            "Create a Py-Coder node and write the script into it",
+            "Run the script and check the output",
+            "Record the result and any caveats in a note",
+        ],
+        "mode": "copilot",
+    },
+)
+
+
+def list_all_recipes(settings_manager) -> list:
+    """Built-ins first, then the user's saved recipes - each tagged with
+    builtIn so the launcher can label (and refuse to overwrite) them."""
+    merged = [dict(r, builtIn=True) for r in BUILT_IN_RECIPES]
+    if settings_manager is not None:
+        try:
+            merged.extend(dict(r, builtIn=False) for r in settings_manager.get_recipes())
+        except Exception:
+            pass  # a corrupt store must not cost the launcher its built-ins
+    return merged
+
+
+def recipe_by_name(settings_manager, name: str) -> "dict | None":
+    for recipe in list_all_recipes(settings_manager):
+        if recipe["name"] == name:
+            return recipe
+    return None
+
+
+def recipe_from_plan_node(node, name: str) -> dict:
+    """Save-your-build: a terminal plan node's goal + step titles become a
+    reusable recipe. Statuses are deliberately dropped - a recipe is the
+    PLAN, not this run's history."""
+    return {
+        "name": name,
+        "description": f"Saved from a build on {node.title}.",
+        "goal": node.state.plan_goal,
+        "steps": [s["title"] for s in node.state.plan_steps],
+        "mode": node.state.builder_mode,
+    }
+
+
 # -- planning ----------------------------------------------------------------
 
 def plan_steps_for_goal(goal: str, *, runtime=None, settings_manager=None) -> list[dict]:

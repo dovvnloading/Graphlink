@@ -226,6 +226,8 @@ CLASSIFICATION: tuple[Classified, ...] = (
     Classified("builder", "cancel", "B", "run-lifecycle: cancel"),
     Classified("builder", "approveTool", "B", "security: builder tool-call approval gate"),
     Classified("builder", "denyTool", "B", "security: builder tool-call approval gate"),
+    Classified("builder", "listRecipes", "B", "read-only: returns the recipe list"),
+    Classified("builder", "saveRecipe", "B", "preference: writes the settings store's recipe list, not document state"),
     Classified("scene", "setPlanSteps", "A", "content: the plan checklist is document state"),
 
     # -- backend/api/intents_settings_general.py (app-settings) -------------

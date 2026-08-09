@@ -2181,3 +2181,31 @@ def test_set_provider_mode_failure_does_not_persist_the_mode(manager, monkeypatc
     assert manager.get_current_mode() == config.MODE_API_ENDPOINT  # unchanged
     assert notifications.msg_type == "error"
     assert "ollama daemon unreachable" in notifications.message
+
+
+# -- ADR-008 stage 8.6: Builder recipes ---------------------------------------
+
+def test_get_recipes_defaults_to_an_empty_list(manager):
+    assert manager.get_recipes() == []
+
+
+def test_recipes_round_trip_normalized(manager):
+    manager.set_recipes([
+        {"name": " My recipe ", "goal": "do the thing", "steps": ["a", " b ", ""],
+         "mode": "autopilot", "description": "d"},
+        {"name": "", "goal": "nameless - dropped"},
+        "not a dict",
+        {"name": "goalless - dropped"},
+        {"name": "bad mode", "goal": "g", "mode": "warp-speed"},
+    ])
+    recipes = manager.get_recipes()
+    assert [r["name"] for r in recipes] == ["My recipe", "bad mode"]
+    assert recipes[0]["steps"] == ["a", "b"]
+    assert recipes[0]["mode"] == "autopilot"
+    assert recipes[1]["mode"] == "copilot", "an unknown mode normalizes to copilot"
+
+
+def test_set_recipes_replaces_the_whole_list(manager):
+    manager.set_recipes([{"name": "one", "goal": "g"}])
+    manager.set_recipes([{"name": "two", "goal": "g"}])
+    assert [r["name"] for r in manager.get_recipes()] == ["two"]

@@ -51,6 +51,7 @@ export interface PlanNodeData extends Record<string, unknown> {
   onApproveTool: () => void;
   onDenyTool: () => void;
   onUndoBuild: () => void;
+  onSaveRecipe: () => void;
 }
 
 export type PlanFlowNode = Node<PlanNodeData, "plan">;
@@ -168,6 +169,11 @@ function PlanNodeViewInner({ data, selected }: NodeProps<PlanFlowNode>) {
             {UNDOABLE.has(data.builderStatus) && data.builderRunId && (
               <button type="button" className="plan-node-button nodrag" onClick={data.onUndoBuild}>
                 Undo build
+              </button>
+            )}
+            {data.builderStatus === "done" && data.planSteps.length > 0 && (
+              <button type="button" className="plan-node-button nodrag" onClick={data.onSaveRecipe}>
+                Save as recipe
               </button>
             )}
           </div>
