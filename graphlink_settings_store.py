@@ -654,6 +654,21 @@ class SettingsManager:
         self.state["enable_system_prompt"] = bool(enabled)
         self._save_state()
 
+    def get_auto_model_policy(self):
+        # ADR-018 stage 18.4. "cheapest-capable" by default - matching the
+        # ADR's own framing (cost-aware routing is the headline feature;
+        # "fastest"/"best-quality" are deliberate opt-ins).
+        from graphlink_model_catalog import AUTO_POLICY_CHEAPEST_CAPABLE
+
+        return self.state.get("auto_model_policy", AUTO_POLICY_CHEAPEST_CAPABLE)
+
+    def set_auto_model_policy(self, policy: str):
+        from graphlink_model_catalog import AUTO_POLICIES
+
+        if policy in AUTO_POLICIES:
+            self.state["auto_model_policy"] = policy
+            self._save_state()
+
     def get_log_level(self):
         # ADR-016 stage 16.1. INFO by default - matches
         # backend/crash_recovery.py's own pre-existing default so a fresh

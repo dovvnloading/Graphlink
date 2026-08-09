@@ -91,7 +91,8 @@ class ChatWorker:
         self.MAX_TOKENS = 8000
 
     def run(self, conversation_history, current_node, cancellation_event=None, resolved_system_prompt=None,
-            on_chunk=None, *, runtime=None, on_context_trimmed=None, on_usage=None, model_ref=None):
+            on_chunk=None, *, runtime=None, on_context_trimmed=None, on_usage=None, model_ref=None,
+            settings_manager=None):
         """
         Executes the chat logic for a single turn.
 
@@ -131,6 +132,17 @@ class ChatWorker:
                 api_provider.chat/chat_stream, which use it instead of their
                 own task-keyed model lookup when supplied. Additive,
                 keyword-only, default-None.
+            settings_manager (graphlink_settings_store.SettingsManager,
+                optional): ADR-018 stage 18.4. Forwarded straight through to
+                api_provider.chat/chat_stream's own settings_manager kwarg,
+                which consults it ONLY when model_ref is absent AND its own
+                task-keyed lookup found nothing configured - the auto-policy
+                rung of the resolution chain. Never used by this method
+                directly, and never threaded onto the nested trim-
+                summarization call below (that call always uses
+                TASK_WEB_SUMMARIZE's own workspace default - an auto-picked
+                fallback is scoped to the reply itself, same posture as
+                model_ref_kwargs). Additive, keyword-only, default-None.
 
         Returns:
             str: The AI-generated response text.
@@ -159,6 +171,11 @@ class ChatWorker:
             # always uses TASK_WEB_SUMMARIZE's own workspace default; a
             # node/branch model pin is scoped to the reply itself).
             model_ref_kwargs = {"model_ref": model_ref} if model_ref is not None else {}
+            # ADR-018 stage 18.4: same omit-when-None, main-request-only
+            # posture as model_ref_kwargs above.
+            settings_manager_kwargs = (
+                {"settings_manager": settings_manager} if settings_manager is not None else {}
+            )
 
             # ADR-006 stage 6.6: the history budget derives from the ACTIVE
             # model's real context window (llama.cpp n_ctx / Ollama show() /
@@ -226,6 +243,7 @@ class ChatWorker:
                     cancellation_event=cancellation_event,
                     **runtime_kwargs,
                     **model_ref_kwargs,
+                    **settings_manager_kwargs,
                 )
             else:
                 response = api_provider.chat(
@@ -234,6 +252,7 @@ class ChatWorker:
                     cancellation_event=cancellation_event,
                     **runtime_kwargs,
                     **model_ref_kwargs,
+                    **settings_manager_kwargs,
                 )
             # ADR-006 stage 6.8: surface the provider's real usage counts
             # when present (chat_stream always includes the key; blocking
@@ -336,7 +355,8 @@ class ChatAgent:
             self.system_prompt = ""
 
     def get_response(self, conversation_history, current_node, cancellation_event=None, resolved_system_prompt=None,
-                      on_chunk=None, *, runtime=None, on_context_trimmed=None, on_usage=None, model_ref=None):
+                      on_chunk=None, *, runtime=None, on_context_trimmed=None, on_usage=None, model_ref=None,
+                      settings_manager=None):
         """
         Gets an AI response for a given conversation history.
 
@@ -357,6 +377,9 @@ class ChatAgent:
             model_ref (graphlink_model_catalog.ModelRef, optional): ADR-018 stage
                 18.2; passed straight through to ChatWorker.run (see its docstring).
                 Additive, keyword-only, default-None.
+            settings_manager (graphlink_settings_store.SettingsManager, optional):
+                ADR-018 stage 18.4; passed straight through to ChatWorker.run
+                (see its docstring). Additive, keyword-only, default-None.
 
         Returns:
             str: The AI-generated response text.
@@ -374,5 +397,6 @@ class ChatAgent:
             on_context_trimmed=on_context_trimmed,
             on_usage=on_usage,
             model_ref=model_ref,
+            settings_manager=settings_manager,
         )
         return ai_response

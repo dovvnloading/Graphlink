@@ -964,6 +964,15 @@ class AgentDispatcher:
                 # below, exactly like persona_text/override_kwargs above.
                 model_ref = self._resolve_model_ref_for_dispatch(canvas_document, node_id)
                 model_ref_kwargs = {"model_ref": model_ref} if model_ref is not None else {}
+                # ADR-018 stage 18.4: the auto-policy rung's own catalog/
+                # settings access lives in api_provider, not here (mirrors
+                # model_ref's own node/branch-only scope at this layer) -
+                # this only threads the SettingsManager reference down,
+                # same omit-when-None posture as every other additive kwarg
+                # in this dispatch.
+                settings_manager_kwargs = (
+                    {"settings_manager": self._settings_manager} if self._settings_manager is not None else {}
+                )
                 # ADR-006 stage 6.7: a note override reaches the wire RAW
                 # (never wrapped in "You are Graphlink Assistant. ...") -
                 # flagged to _call_chat_agent(_stream) only when an override
@@ -1126,6 +1135,7 @@ class AgentDispatcher:
                                 **override_kwargs,
                                 **usage_kwargs,
                                 **model_ref_kwargs,
+                                **settings_manager_kwargs,
                                 on_context_trimmed=_thread_on_context_trimmed,
                             ),
                             timeout=WATCHDOG_TIMEOUT_SECONDS,
@@ -1148,6 +1158,7 @@ class AgentDispatcher:
                             **override_kwargs,
                             **usage_kwargs,
                             **model_ref_kwargs,
+                            **settings_manager_kwargs,
                             on_context_trimmed=_thread_on_context_trimmed,
                         ),
                         timeout=WATCHDOG_TIMEOUT_SECONDS,
@@ -3199,7 +3210,7 @@ def _is_sandbox_error_output(output_text, return_code) -> bool:
 
 def _call_chat_agent(conversation_history, persona_text, cancel_event, *, runtime=None,
                      persona_is_override=False, on_context_trimmed=None, on_usage=None,
-                     model_ref=None) -> str:
+                     model_ref=None, settings_manager=None) -> str:
     """Runs inside asyncio.to_thread - a real OS thread, not the event loop.
 
     ADR-006 stage 6.5: `runtime` is an additive keyword-only kwarg, forwarded
@@ -3238,12 +3249,17 @@ def _call_chat_agent(conversation_history, persona_text, cancel_event, *, runtim
         # ADR-018 stage 18.2: resolved node/branch model pin - forwarded
         # omit-when-None, same posture as every other additive kwarg here.
         **({"model_ref": model_ref} if model_ref is not None else {}),
+        # ADR-018 stage 18.4: the session's SettingsManager, forwarded
+        # omit-when-None - only ever consumed by api_provider's auto-policy
+        # fallback (see its own docstring), never by anything in this
+        # module or ChatAgent/ChatWorker themselves.
+        **({"settings_manager": settings_manager} if settings_manager is not None else {}),
     )
 
 
 def _call_chat_agent_stream(conversation_history, persona_text, cancel_event, on_chunk, *, runtime=None,
                             persona_is_override=False, on_context_trimmed=None, on_usage=None,
-                            model_ref=None) -> str:
+                            model_ref=None, settings_manager=None) -> str:
     """Runs inside asyncio.to_thread - a real OS thread, not the event loop.
     Streaming counterpart to _call_chat_agent (R4.4) - same persona/
     current_node/resolved_system_prompt guarantees as that function (see its
@@ -3282,6 +3298,9 @@ def _call_chat_agent_stream(conversation_history, persona_text, cancel_event, on
         # ADR-018 stage 18.2: resolved node/branch model pin - forwarded
         # omit-when-None, same posture as every other additive kwarg here.
         **({"model_ref": model_ref} if model_ref is not None else {}),
+        # ADR-018 stage 18.4: forwarded omit-when-None, same posture as
+        # _call_chat_agent's own settings_manager kwarg.
+        **({"settings_manager": settings_manager} if settings_manager is not None else {}),
     )
 
 

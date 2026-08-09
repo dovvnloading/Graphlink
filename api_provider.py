@@ -2884,6 +2884,41 @@ def _provider_for_model_ref(model_ref: ModelRef, state: "_ProviderSnapshot"):
     raise RuntimeError(f"Unknown model provider: {model_ref.provider!r}")
 
 
+def _auto_fallback_model_ref(task: str, settings_manager, state: "_ProviderSnapshot") -> ModelRef | None:
+    """ADR-018 stage 18.4: the auto rung of the resolution chain, tried by
+    chat()/chat_stream() ONLY at the exact point they are about to raise
+    "no model configured" - an explicit task assignment (the common case)
+    is never second-guessed, so an already-working setup dispatches
+    byte-identically to before this stage.
+
+    Reuses _provider_for_model_ref's own single-live-cloud-credential
+    posture: the catalog is filtered to what THIS session can actually
+    dispatch right now (both local providers always constructible; a cloud
+    provider only when it is the session's live credentialed one) BEFORE a
+    policy ever picks from it - unified_catalog() otherwise spans every
+    provider with a cached catalog, including ones this session has no
+    live client for, and choose_auto_model_ref must never hand back a ref
+    _provider_for_model_ref would then reject."""
+    if settings_manager is None:
+        return None
+    from graphlink_model_catalog import TASK_REQUIREMENTS, choose_auto_model_ref, unified_catalog
+    from backend.token_counter import price_per_mtok
+
+    catalog = [
+        descriptor
+        for descriptor in unified_catalog(
+            settings_manager,
+            price_lookup=lambda provider, model_id: price_per_mtok(
+                provider, model_id, overrides=settings_manager.get_pricing_overrides(),
+            ),
+        )
+        if descriptor.provider in (config.LOCAL_PROVIDER_OLLAMA, config.LOCAL_PROVIDER_LLAMACPP)
+        or (state.use_api_mode and descriptor.provider == state.api_provider_type)
+    ]
+    policy = settings_manager.get_auto_model_policy()
+    return choose_auto_model_ref(catalog, TASK_REQUIREMENTS.get(task, ()), policy=policy)
+
+
 def chat(task: str, messages: list, **kwargs) -> dict:
     cancel_event = kwargs.pop("cancellation_event", None)
     # ADR-018 stage 18.1: an explicitly resolved ModelRef, popped BEFORE
@@ -2895,6 +2930,9 @@ def chat(task: str, messages: list, **kwargs) -> dict:
     # BEFORE the remaining kwargs flow into the provider call. None (every
     # pre-6.5 caller) means the default session's module-backed runtime.
     runtime = kwargs.pop("runtime", None)
+    # ADR-018 stage 18.4: popped the same way - only used by the auto-
+    # fallback rung below, never forwarded to a provider call.
+    settings_manager = kwargs.pop("settings_manager", None)
 
     # One consistent view of the provider state for the whole request (#9). Worker
     # threads call chat() while the UI thread can re-run initialize_* at any time;
@@ -2942,6 +2980,12 @@ def chat(task: str, messages: list, **kwargs) -> dict:
                 # _ProviderSnapshot.ollama_models.
                 model = state.ollama_models.get(task)
                 if not model:
+                    auto_ref = _auto_fallback_model_ref(task, settings_manager, state)
+                    if auto_ref is not None:
+                        return chat(
+                            task, messages, model_ref=auto_ref,
+                            cancellation_event=cancel_event, runtime=runtime, **kwargs,
+                        )
                     raise ValueError(f"No Ollama model configured for task: {task}")
 
                 # ADR-006 stage 6.1: the Ollama branch routes through the
@@ -3013,6 +3057,12 @@ def chat(task: str, messages: list, **kwargs) -> dict:
         api_model = state.api_models.get(task)
 
         if not api_model:
+            auto_ref = _auto_fallback_model_ref(task, settings_manager, state)
+            if auto_ref is not None:
+                return chat(
+                    task, messages, model_ref=auto_ref,
+                    cancellation_event=cancel_event, runtime=runtime, **kwargs,
+                )
             raise RuntimeError(
                 f"No API model configured for task '{task}'.\n"
                 "Please configure models in API Settings."
@@ -3270,6 +3320,8 @@ def chat_stream(task: str, messages: list, on_chunk: Callable[[str, bool], None]
     model_ref = kwargs.pop("model_ref", None)
     # ADR-006 stage 6.5: same per-session runtime resolution as chat().
     runtime = kwargs.pop("runtime", None)
+    # ADR-018 stage 18.4: same auto-fallback popping as chat().
+    settings_manager = kwargs.pop("settings_manager", None)
     state = runtime.snapshot() if runtime is not None else _snapshot_provider_state()
 
     try:
@@ -3294,6 +3346,11 @@ def chat_stream(task: str, messages: list, on_chunk: Callable[[str, bool], None]
                 # read - see chat()'s twin comment.
                 model = state.ollama_models.get(task)
                 if not model:
+                    auto_ref = _auto_fallback_model_ref(task, settings_manager, state)
+                    if auto_ref is not None:
+                        return chat_stream(
+                            task, messages, on_chunk, model_ref=auto_ref, runtime=runtime, **kwargs,
+                        )
                     raise ValueError(f"No Ollama model configured for task: {task}")
                 from backend.providers.ollama_provider import OllamaProvider
 
@@ -3313,6 +3370,11 @@ def chat_stream(task: str, messages: list, on_chunk: Callable[[str, bool], None]
                 raise RuntimeError("API client not initialized. Configure API settings first.")
             api_model = state.api_models.get(task)
             if not api_model:
+                auto_ref = _auto_fallback_model_ref(task, settings_manager, state)
+                if auto_ref is not None:
+                    return chat_stream(
+                        task, messages, on_chunk, model_ref=auto_ref, runtime=runtime, **kwargs,
+                    )
                 raise RuntimeError(
                     f"No API model configured for task '{task}'.\n"
                     "Please configure models in API Settings."

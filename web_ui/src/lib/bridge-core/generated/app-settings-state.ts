@@ -20,6 +20,7 @@ export interface AppSettingsState {
   githubTokenConfigured: boolean;
   secretsEncryptedAtRest: boolean;
   logLevel: string;
+  autoModelPolicy: string;
   activeApiProvider: string;
   viewingApiProvider: string;
   apiBaseUrl: string;
@@ -145,6 +146,11 @@ function checkAppSettingsState(value: unknown, path: string, errors: string[]): 
     const fieldValue = value["logLevel"];
     if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.logLevel: missing required field`);
     else { if (typeof fieldValue !== "string") errors.push(`${path}.logLevel` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["autoModelPolicy"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.autoModelPolicy: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.autoModelPolicy` + ": expected string"); }
   }
   {
     const fieldValue = value["activeApiProvider"];

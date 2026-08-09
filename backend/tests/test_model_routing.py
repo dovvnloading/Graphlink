@@ -145,10 +145,11 @@ def test_an_explicit_override_is_never_capability_filtered():
 
 
 class _FakeSettingsManager:
-    def __init__(self, *, ollama=(), llama_cpp=(), api_catalogs=None):
+    def __init__(self, *, ollama=(), llama_cpp=(), api_catalogs=None, auto_policy=mc.AUTO_POLICY_CHEAPEST_CAPABLE):
         self._ollama = list(ollama)
         self._llama_cpp = list(llama_cpp)
         self._api_catalogs = api_catalogs or {}
+        self._auto_policy = auto_policy
 
     def get_ollama_scanned_models(self):
         return list(self._ollama)
@@ -158,6 +159,16 @@ class _FakeSettingsManager:
 
     def get_api_model_catalog(self, provider):
         return list(self._api_catalogs.get(provider, ()))
+
+    # ADR-018 stage 18.4: read by _auto_fallback_model_ref (api_provider.py)
+    # - get_pricing_overrides feeds the SAME price_lookup unified_catalog
+    # applies everywhere else, so a real backend.token_counter.price_per_mtok
+    # call always succeeds against this fake.
+    def get_auto_model_policy(self):
+        return self._auto_policy
+
+    def get_pricing_overrides(self):
+        return {}
 
 
 def test_unified_catalog_aggregates_every_configured_source():
@@ -318,3 +329,185 @@ def test_chat_blocking_call_also_honors_model_ref(monkeypatch, ollama_chat):
     )
     assert response["message"]["content"] == "A Title"
     assert ollama_chat.calls[0]["model"] == "pinned-title-model"
+
+
+# -- stage 18.4: the auto-fallback rung, wired into LIVE dispatch -----------
+#
+# 18.1 already proves choose_auto_model_ref/resolve_model_ref are correct as
+# pure functions (including the capability-filter invariant). What was still
+# untested before this stage: that api_provider.chat()/chat_stream() ever
+# actually CALL those functions on the real "no model configured" path, with
+# a real SettingsManager-shaped catalog and a real
+# backend.token_counter.price_per_mtok price_lookup - not just that the
+# functions themselves behave when invoked directly by a test.
+
+
+def test_auto_fallback_fires_when_the_ollama_task_lookup_is_empty(monkeypatch, ollama_chat):
+    """THE 18.4 exit criterion for the local branch: a task with NOTHING
+    configured in config.OLLAMA_MODELS (the pre-18.4 code raises "No Ollama
+    model configured") now dispatches anyway when a settings_manager with a
+    scanned model is supplied."""
+    monkeypatch.setattr(api_provider, "chat_stream", _REAL_CHAT_STREAM)
+    monkeypatch.setattr(api_provider, "USE_API_MODE", False)
+    monkeypatch.setattr(api_provider, "LOCAL_PROVIDER_TYPE", config.LOCAL_PROVIDER_OLLAMA)
+    monkeypatch.setitem(config.OLLAMA_MODELS, config.TASK_CHAT, "")  # deliberately unconfigured
+
+    settings = _FakeSettingsManager(ollama=["auto-picked:8b"])
+    ollama_chat.streams = [_FakeOllamaStream([_part(content="auto reply", done=True)])]
+
+    response = api_provider.chat_stream(
+        config.TASK_CHAT, [{"role": "user", "content": "hi"}], lambda d, r: None,
+        settings_manager=settings,
+    )
+    assert response["message"]["content"] == "auto reply"
+    assert ollama_chat.calls[0]["model"] == "auto-picked:8b"
+
+
+def test_auto_fallback_fires_for_the_blocking_ollama_call_too(monkeypatch, ollama_chat):
+    monkeypatch.setattr(api_provider, "USE_API_MODE", False)
+    monkeypatch.setattr(api_provider, "LOCAL_PROVIDER_TYPE", config.LOCAL_PROVIDER_OLLAMA)
+    monkeypatch.setitem(config.OLLAMA_MODELS, config.TASK_TITLE, "")
+
+    settings = _FakeSettingsManager(ollama=["auto-title-model"])
+    ollama_chat.responses = [{"message": {"content": "Auto Title"}}]
+
+    response = api_provider.chat(
+        config.TASK_TITLE, [{"role": "user", "content": "name this"}],
+        settings_manager=settings,
+    )
+    assert response["message"]["content"] == "Auto Title"
+    assert ollama_chat.calls[0]["model"] == "auto-title-model"
+
+
+def test_without_a_settings_manager_the_original_no_model_error_is_unchanged(monkeypatch):
+    """Backward-compat pin: every pre-18.4 caller (nothing threads
+    settings_manager) must keep raising the exact original message - the
+    auto rung is additive, never a silent behavior change for callers that
+    don't opt in."""
+    monkeypatch.setattr(api_provider, "USE_API_MODE", False)
+    monkeypatch.setattr(api_provider, "LOCAL_PROVIDER_TYPE", config.LOCAL_PROVIDER_OLLAMA)
+    monkeypatch.setitem(config.OLLAMA_MODELS, config.TASK_CHAT, "")
+
+    with pytest.raises(ValueError, match="No Ollama model configured for task"):
+        api_provider.chat_stream(config.TASK_CHAT, [{"role": "user", "content": "hi"}], lambda d, r: None)
+
+    with pytest.raises(ValueError, match="No Ollama model configured for task"):
+        api_provider.chat(config.TASK_CHAT, [{"role": "user", "content": "hi"}])
+
+
+def test_auto_fallback_fires_for_the_api_mode_branch_and_honors_the_persisted_policy(monkeypatch):
+    """The API-mode sibling of the Ollama tests above, combined with the
+    18.4 setting itself: two OpenAI catalog entries with real, DIFFERENT
+    known prices (via the real backend.token_counter pricing table, not a
+    stub) - "cheapest-capable" must pick the cheap one, "best-quality" must
+    pick the priciest KNOWN-cost one. Proves both that the auto rung fires
+    on the API-mode "no api_model configured" branch and that
+    SettingsManager.get_auto_model_policy is actually consulted, not just
+    unified_catalog's aggregation."""
+    import types
+
+    monkeypatch.setattr(api_provider, "USE_API_MODE", True)
+    monkeypatch.setattr(api_provider, "API_PROVIDER_TYPE", config.API_PROVIDER_OPENAI)
+    monkeypatch.setattr(api_provider, "API_KEY", "sk-fake")
+    monkeypatch.setitem(api_provider.API_MODELS, config.TASK_CHAT, None)  # deliberately unconfigured
+
+    captured = {}
+
+    def create(**kwargs):
+        captured.update(kwargs)
+        return types.SimpleNamespace(
+            choices=[types.SimpleNamespace(message=types.SimpleNamespace(content="ok"))]
+        )
+
+    client = types.SimpleNamespace(chat=types.SimpleNamespace(completions=types.SimpleNamespace(create=create)))
+    monkeypatch.setattr(api_provider, "API_CLIENT", client)
+
+    catalog = {
+        "OpenAI-Compatible": [
+            {"model_id": "gpt-4o-mini", "capabilities": ["text"]},   # cheap, known price
+            {"model_id": "gpt-4o", "capabilities": ["text"]},        # pricier, known price
+        ],
+    }
+
+    cheap_first = _FakeSettingsManager(api_catalogs=catalog, auto_policy=mc.AUTO_POLICY_CHEAPEST_CAPABLE)
+    api_provider.chat(config.TASK_CHAT, [{"role": "user", "content": "hi"}], settings_manager=cheap_first)
+    assert captured["model"] == "gpt-4o-mini"
+
+    captured.clear()
+    quality_first = _FakeSettingsManager(api_catalogs=catalog, auto_policy=mc.AUTO_POLICY_BEST_QUALITY)
+    api_provider.chat(config.TASK_CHAT, [{"role": "user", "content": "hi"}], settings_manager=quality_first)
+    assert captured["model"] == "gpt-4o"
+
+
+def test_auto_fallback_never_dispatches_a_capability_incapable_model_live(monkeypatch):
+    """The live-dispatch counterpart to choose_auto_model_ref's own pure-
+    function capability test above: task_chart requires {text, code}
+    (TASK_REQUIREMENTS) - a catalog where the cheaper candidate lacks
+    "code" must still result in the code-capable model actually being
+    constructed and called, never the cheaper incapable one."""
+    import types
+
+    monkeypatch.setattr(api_provider, "USE_API_MODE", True)
+    monkeypatch.setattr(api_provider, "API_PROVIDER_TYPE", config.API_PROVIDER_OPENAI)
+    monkeypatch.setattr(api_provider, "API_KEY", "sk-fake")
+    monkeypatch.setitem(api_provider.API_MODELS, config.TASK_CHART, None)
+
+    captured = {}
+
+    def create(**kwargs):
+        captured.update(kwargs)
+        return types.SimpleNamespace(
+            choices=[types.SimpleNamespace(message=types.SimpleNamespace(content="ok"))]
+        )
+
+    client = types.SimpleNamespace(chat=types.SimpleNamespace(completions=types.SimpleNamespace(create=create)))
+    monkeypatch.setattr(api_provider, "API_CLIENT", client)
+
+    settings = _FakeSettingsManager(api_catalogs={
+        "OpenAI-Compatible": [
+            # Cheaper (unknown price sorts last under cheapest-capable, but
+            # even a KNOWN cheap price must lose here - it lacks "code").
+            {"model_id": "gpt-4o-mini", "capabilities": ["text"]},
+            {"model_id": "gpt-4o", "capabilities": ["text", "code"]},
+        ],
+    })
+
+    api_provider.chat(config.TASK_CHART, [{"role": "user", "content": "build a chart"}], settings_manager=settings)
+    assert captured["model"] == "gpt-4o"
+
+
+def test_auto_fallback_never_crosses_to_a_cheaper_model_from_a_different_cloud_provider(monkeypatch):
+    """Reuses _provider_for_model_ref's own single-live-cloud-credential
+    posture (18.1): even though the persisted catalog has a much cheaper
+    Anthropic entry, the session's live client is OpenAI - the auto rung
+    must never resolve to a ref _provider_for_model_ref would then reject,
+    so it falls through to the OpenAI catalog entry, not the cheaper
+    Anthropic one."""
+    import types
+
+    monkeypatch.setattr(api_provider, "USE_API_MODE", True)
+    monkeypatch.setattr(api_provider, "API_PROVIDER_TYPE", config.API_PROVIDER_OPENAI)
+    monkeypatch.setattr(api_provider, "API_KEY", "sk-fake")
+    monkeypatch.setitem(api_provider.API_MODELS, config.TASK_CHAT, None)
+
+    captured = {}
+
+    def create(**kwargs):
+        captured.update(kwargs)
+        return types.SimpleNamespace(
+            choices=[types.SimpleNamespace(message=types.SimpleNamespace(content="ok"))]
+        )
+
+    client = types.SimpleNamespace(chat=types.SimpleNamespace(completions=types.SimpleNamespace(create=create)))
+    monkeypatch.setattr(api_provider, "API_CLIENT", client)
+
+    settings = _FakeSettingsManager(api_catalogs={
+        "Anthropic Claude": [{"model_id": "claude-haiku", "capabilities": ["text"]}],  # far cheaper
+        "OpenAI-Compatible": [{"model_id": "gpt-4o", "capabilities": ["text"]}],
+    })
+
+    response = api_provider.chat(
+        config.TASK_CHAT, [{"role": "user", "content": "hi"}], settings_manager=settings,
+    )
+    assert response["message"]["content"] == "ok"
+    assert captured["model"] == "gpt-4o"
