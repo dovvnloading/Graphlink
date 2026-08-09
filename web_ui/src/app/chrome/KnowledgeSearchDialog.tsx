@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { WsTransport } from "../../lib/ws/transport";
 import { Dialog } from "../overlays/overlays";
 
@@ -88,20 +88,39 @@ export function KnowledgeSearchDialog({ transport }: { transport: WsTransport })
   const [results, setResults] = useState<KnowledgeSearchResult[] | null>(null);
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Adversarial-review finding: vector search embeds the query via a
+  // network round-trip, so latency is not correlated with send order - a
+  // second search fired while the first is still pending could otherwise
+  // have its response arrive AFTER a later request's and silently
+  // overwrite fresher results (or a slow failure could hide a fast
+  // success). A monotonically increasing sequence token, checked before
+  // ever touching state in a resolved/rejected handler, makes only the
+  // MOST RECENTLY SENT request's own response ever win - matches the
+  // "ignore stale in-flight responses" pattern this codebase already uses
+  // elsewhere for the same reason (e.g. WsTransport's own per-request id
+  // correlation).
+  const latestRequestId = useRef(0);
 
   function runSearch() {
     const trimmed = query.trim();
-    if (!trimmed) return;
+    if (!trimmed || searching) return;
+    const requestId = ++latestRequestId.current;
     setSearching(true);
     setError(null);
     transport
       .request("knowledge", "search", [trimmed, 10])
       .then((value) => {
+        if (requestId !== latestRequestId.current) return; // a newer search has since been sent
         const payload = value as { results: KnowledgeSearchResult[] };
         setResults(payload.results);
       })
-      .catch(() => setError("Search failed - see graphlink.log for details."))
-      .finally(() => setSearching(false));
+      .catch(() => {
+        if (requestId !== latestRequestId.current) return;
+        setError("Search failed - see graphlink.log for details.");
+      })
+      .finally(() => {
+        if (requestId === latestRequestId.current) setSearching(false);
+      });
   }
 
   return (
@@ -110,6 +129,7 @@ export function KnowledgeSearchDialog({ transport }: { transport: WsTransport })
         <input
           type="text"
           className="knowledge-search-input"
+          aria-label="Search the knowledge base"
           placeholder="Search your ingested knowledge base…"
           value={query}
           onChange={(event) => setQuery(event.target.value)}

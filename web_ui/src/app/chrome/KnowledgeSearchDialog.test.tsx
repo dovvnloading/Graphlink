@@ -166,4 +166,37 @@ describe("KnowledgeSearchDialog", () => {
 
     expect(intents).toContainEqual(["knowledge", "search", ["enter query", 10]]);
   });
+
+  it("the search input has an accessible label", async () => {
+    await setup();
+    expect(screen.getByLabelText("Search the knowledge base")).toBeInTheDocument();
+  });
+
+  // Adversarial-review regression: the input (unlike the Search button) was
+  // never disabled while a search was pending, and the Enter-key handler
+  // called runSearch() with no `searching` check - so a second Enter press
+  // while the first request was still in flight fired a genuine second
+  // request. Whichever response happened to resolve last silently won,
+  // regardless of which was actually sent last. The fix adds the same
+  // `searching` early-return to runSearch() that the Search button's
+  // `disabled` already implied, so a second Enter press during an in-flight
+  // search is a no-op instead of a duplicate request.
+  it("a second Enter press while a search is already in flight does not fire a duplicate request", async () => {
+    const { user, request } = await setup();
+    let resolveFirst: (value: unknown) => void = () => {};
+    request.mockImplementationOnce(
+      () => new Promise((resolve) => { resolveFirst = resolve; }),
+    );
+
+    const input = screen.getByPlaceholderText(/search your ingested knowledge base/i);
+    await user.type(input, "first query{Enter}");
+    expect(request).toHaveBeenCalledTimes(1);
+
+    await user.clear(input);
+    await user.type(input, "second query{Enter}");
+    expect(request).toHaveBeenCalledTimes(1);
+
+    resolveFirst({ results: [RESULT_A] });
+    expect(await screen.findByText("Fox Story")).toBeInTheDocument();
+  });
 });

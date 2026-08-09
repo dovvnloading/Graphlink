@@ -17,6 +17,8 @@ actual knowledge-store write happens BEFORE that call, not inside it.
 
 from __future__ import annotations
 
+import asyncio
+
 from backend.api._shared import make_publish_scene
 from backend.domain.graph import SceneDocument, SceneError
 from backend.events import SessionBus
@@ -78,7 +80,12 @@ def register_knowledge_intents(
 
     async def search(query, k):
         k = min(max(int(k or _DEFAULT_K), 1), _MAX_K)
-        results = hybrid_search(DEFAULT_DB_PATH, query, k=k)
+        # Adversarial-review finding: hybrid_search() does real blocking
+        # SQLite I/O (and, when an embedding provider is wired, a network
+        # round-trip) - called inline, it would stall the whole event loop
+        # for every other connection, unlike every other blocking-I/O
+        # intent handler in this codebase (e.g. intents_settings_*.py).
+        results = await asyncio.to_thread(hybrid_search, DEFAULT_DB_PATH, query, k=k)
         return {"results": _format_search_results(results)}
 
     async def set_chat_index_into_knowledge(node_id, enabled):
@@ -109,7 +116,12 @@ def register_knowledge_intents(
             history = document.chat_branch_history(node_id)
             text = branch_history_to_text(history)
             try:
-                ingest_text(text, source_uri=f"branch:{node_id}", title=f"Branch (node {node_id})")
+                # Same blocking-I/O concern as search() above - ingest_text()
+                # does real SQLite writes (chunk + embedding-cache rows).
+                await asyncio.to_thread(
+                    ingest_text, text,
+                    source_uri=f"branch:{node_id}", title=f"Branch (node {node_id})",
+                )
             except IngestError as exc:
                 if notifications is not None:
                     notifications.show(str(exc), "error")

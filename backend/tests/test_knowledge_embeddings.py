@@ -249,6 +249,26 @@ class TestEmbedPendingChunks:
             embed_pending_chunks(db_path, provider, "chat-model")
         assert provider.calls == []  # never even tried
 
+    def test_raises_instead_of_silently_mispairing_when_the_provider_returns_too_few_vectors(self, tmp_path):
+        # Adversarial-review finding: zip(batch, vectors) alone would
+        # silently truncate to the shorter length, pairing chunk_id[0]
+        # with vectors[0] but leaving chunk_id[1] unembedded with NO
+        # error - this proves the length guard fires instead.
+        db_path = tmp_path / "knowledge.db"
+        _ingest(db_path, text="First document.", source_uri="a.txt")
+        _ingest(db_path, text="Second document.", source_uri="b.txt")
+
+        class DroppingProvider(FakeEmbeddingProvider):
+            def embed(self, texts):
+                super().embed(texts)
+                return [self.vectors[texts[0]]]  # drops every entry after the first
+
+        provider = DroppingProvider(
+            {"First document.": [1.0, 0.0], "Second document.": [0.0, 1.0]}
+        )
+        with pytest.raises(ValueError, match="returned 1 vector"):
+            embed_pending_chunks(db_path, provider, "fake-model")
+
 
 # -- vector_search: brute-force cosine similarity -----------------------------
 
@@ -358,3 +378,27 @@ class TestVectorSearch:
         assert result["document_title"] == "Cited Doc"
         assert result["source_uri"] == "cited.txt"
         assert text[result["offset_start"]:result["offset_end"]] == result["text"]
+
+    def test_a_dimension_mismatch_raises_a_clear_error_instead_of_a_numpy_crash(self, tmp_path):
+        # Adversarial-review finding: knowledge_store.py's own migration-003
+        # docstring says `dim` exists precisely so this is "a cheap integer
+        # comparison, not a silent shape error deep in a numpy call" - this
+        # proves that promise holds. Simulates the same model_id backing two
+        # different vector lengths (e.g. a re-pulled Ollama tag with a
+        # different architecture) by embedding under one dim, then directly
+        # corrupting one stored row's dim/vector to a different length.
+        db_path = tmp_path / "knowledge.db"
+        _ingest(db_path, text="Good vector doc.", source_uri="a.txt")
+        provider = FakeEmbeddingProvider(
+            {"Good vector doc.": [1.0, 0.0, 0.0], "query": [1.0, 0.0, 0.0]}
+        )
+        embed_pending_chunks(db_path, provider, "fake-model")
+
+        from backend.knowledge_embeddings import _pack_vector
+        from backend.knowledge_store import upsert_embeddings, list_embeddings_for_search
+
+        [row] = list_embeddings_for_search(db_path, "fake-model")
+        upsert_embeddings(db_path, "fake-model", [(row["chunk_id"], 4, _pack_vector([1.0, 0.0, 0.0, 0.0]))])
+
+        with pytest.raises(ValueError, match="mismatched dimension"):
+            vector_search(db_path, provider, "query", model_id="fake-model")

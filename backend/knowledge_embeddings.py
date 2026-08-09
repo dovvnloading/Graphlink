@@ -71,6 +71,23 @@ def embed_pending_chunks(
     for start in range(0, len(pending), batch_size):
         batch = pending[start : start + batch_size]
         vectors = provider.embed([row["text"] for row in batch])
+        # Adversarial-review finding: zip() alone silently truncates/
+        # mispairs if a provider ever returns a different-length list than
+        # it was given (a non-conforming proxy, a future provider) -
+        # chunk_id N would get pickled up against whatever vector landed
+        # at position N instead of the one actually computed for its own
+        # text, and the mistake is invisible from here on (the chunk is
+        # marked "embedded" and never retried). A hard length check turns
+        # that silent data corruption into an immediate, loud failure -
+        # both OllamaProvider.embed() and OpenAIProvider.embed() are
+        # documented as trusted for order, but trusted is not the same as
+        # verified, and the check costs nothing on the happy path.
+        if len(vectors) != len(batch):
+            raise ValueError(
+                f"provider.embed() returned {len(vectors)} vector(s) for a batch of "
+                f"{len(batch)} text(s) - refusing to pair vectors to chunk_ids by "
+                "position when the counts disagree."
+            )
         rows = [
             (row["chunk_id"], len(vector), _pack_vector(vector))
             for row, vector in zip(batch, vectors)
@@ -113,11 +130,32 @@ def vector_search(
     if not rows:
         return []
 
-    [query_vector] = provider.embed([query])
-    query_array = np.asarray(query_vector, dtype=_VECTOR_DTYPE)
+    query_vectors = provider.embed([query])
+    if len(query_vectors) != 1:
+        raise ValueError(
+            f"provider.embed() returned {len(query_vectors)} vector(s) for a single query "
+            f"(model_id={model_id!r}) - expected exactly 1."
+        )
+    query_array = np.asarray(query_vectors[0], dtype=_VECTOR_DTYPE)
     query_norm = np.linalg.norm(query_array)
     if query_norm == 0.0:
         return []
+
+    # Adversarial-review finding: knowledge_store.py's own migration-003
+    # docstring names `dim` specifically so a dimension mismatch (the same
+    # model_id backing two different vector lengths - a re-pulled Ollama
+    # tag with a different architecture, a repointed OpenAI-compatible
+    # base_url) is "a cheap integer comparison, not a silent shape error
+    # deep in a numpy call" - checked here, since np.stack() below is
+    # exactly that silent-shape-error call the comment warns against.
+    mismatched = [row for row in rows if row["dim"] != query_array.shape[0]]
+    if mismatched:
+        raise ValueError(
+            f"model_id {model_id!r} has embeddings of mismatched dimension "
+            f"(query embedded to {query_array.shape[0]}, but {len(mismatched)} stored "
+            f"row(s) have dim={mismatched[0]['dim']}) - re-embed the affected chunks or "
+            "delete their stale embedding rows before searching."
+        )
 
     matrix = np.stack([_unpack_vector(row["vector"]) for row in rows])
     matrix_norms = np.linalg.norm(matrix, axis=1)
