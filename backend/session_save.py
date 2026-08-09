@@ -108,10 +108,21 @@ dedicated recon/design/test cycle, not bolted onto a serializer):
 
 from __future__ import annotations
 
+import contextvars
 import re
 from typing import Any
 
 from backend.canvas import SceneDocument, SceneNode, _content_codec
+
+# ADR-009 stage 9.5: the asset store in effect for the CURRENT save. Same
+# contextvar rationale as session_load.py's own _ACTIVE_ASSET_STORE - the
+# per-kind serializer dispatch below is a table of (node, document)
+# lambdas, and widening all of them for the one kind that needs a store
+# would be churn. Set and reset by build_chat_data around a synchronous
+# call, so it can never leak between sessions.
+_ACTIVE_SAVE_ASSET_STORE: contextvars.ContextVar = contextvars.ContextVar(
+    "graphlink_active_save_asset_store", default=None
+)
 
 # The 12 "regular" node kinds - everything that is NOT note/frame/container/
 # chart. Mirrors scene_index.py's own NODE_LIST_NAMES (7 kinds, the current,
@@ -247,9 +258,31 @@ def _serialize_document_node(node: SceneNode) -> dict[str, Any]:
     }
 
 
-def _serialize_image_node(node: SceneNode, document: SceneDocument) -> dict[str, Any]:
+def _serialize_image_node(
+    node: SceneNode, document: SceneDocument, asset_store: Any | None = None
+) -> dict[str, Any]:
+    """ADR-009 stage 9.5: writes the image's bytes to the content-addressed
+    asset store when one is supplied, emitting only a ref - so autosave
+    stops rewriting megabytes of base64 on every 30-second tick for an
+    image that has not changed.
+
+    WRITE-NEW / READ-BOTH, not a destructive migration. With no store
+    (every existing direct caller and test), this emits the historical
+    inline `image_bytes` exactly as before. session_load.py reads either
+    shape, so a chat saved by an older build keeps loading untouched and no
+    row ever has to be rewritten to make this safe. The inline path is
+    what a future cleanup deletes, once no old rows remain in the wild."""
     asset = document.image_assets.get(node.state.image_asset_id)
     image_bytes = asset[0] if asset is not None else b""
+    mime_type = asset[1] if asset is not None else "image/png"
+
+    if asset_store is not None and image_bytes:
+        return {
+            "node_type": "image",
+            "asset_ref": asset_store.put(image_bytes),
+            "mime_type": mime_type,
+            "prompt": node.content,
+        }
     return {
         "node_type": "image",
         "image_bytes": _content_codec.encode_image_bytes(image_bytes),
@@ -363,7 +396,7 @@ _NODE_SERIALIZERS = {
     "chat": lambda node, document: _serialize_chat_node(node),
     "code": lambda node, document: _serialize_code_node(node),
     "document": lambda node, document: _serialize_document_node(node),
-    "image": lambda node, document: _serialize_image_node(node, document),
+    "image": lambda node, document: _serialize_image_node(node, document, _ACTIVE_SAVE_ASSET_STORE.get()),
     "thinking": lambda node, document: _serialize_thinking_node(node),
     "conversation": lambda node, document: _serialize_conversation_node(node),
     "html": lambda node, document: _serialize_html_node(node),
@@ -597,7 +630,19 @@ def _classify_edges(
     }
 
 
-def build_chat_data(document: SceneDocument) -> dict[str, Any]:
+def build_chat_data(document: SceneDocument, asset_store: Any | None = None) -> dict[str, Any]:
+    """ADR-009 stage 9.5 entry point. Publishes `asset_store` for the
+    duration of this save so _serialize_image_node can externalize bytes
+    instead of inlining base64, then delegates. Reset in a finally so a
+    failed save cannot leave a stale store visible to the next one."""
+    token = _ACTIVE_SAVE_ASSET_STORE.set(asset_store)
+    try:
+        return _build_chat_data(document)
+    finally:
+        _ACTIVE_SAVE_ASSET_STORE.reset(token)
+
+
+def _build_chat_data(document: SceneDocument) -> dict[str, Any]:
     """The top-level orchestrator - ports SceneSerializer.serialize_chat_
     data()'s own exact top-level shape. notes_data/pins_data are nested
     INSIDE this single returned dict (matching legacy's own
@@ -701,6 +746,25 @@ def build_chat_data(document: SceneDocument) -> dict[str, Any]:
         # shape in a way that would warrant bumping it.
         "schema_version": 1,
         "nodes": node_payloads,
+        # ADR-009 stage 9.6: the AUTHORITATIVE edge list. Every edge in the
+        # document, written flat, by persistent node id - exactly the shape
+        # the document itself holds. session_load.py prefers this key and
+        # ignores the legacy buckets entirely when it is present.
+        #
+        # The 12 legacy connection lists below are still written because
+        # older builds (and the legacy app's own SQL reader) only know how
+        # to read those; a file this build writes therefore still opens
+        # everywhere it used to. That is the ONLY reason they survive - the
+        # classification pass that fills them exists to reconstruct a
+        # distinction this backend no longer makes, and reading it back is
+        # now dead weight rather than the source of truth. Dropping the
+        # write side is a separate, later decision with a real
+        # compatibility cost; dropping the READ side, which is where the
+        # lossiness actually bit, is done.
+        "edges": [
+            {"source": edge.source, "target": edge.target}
+            for edge in document.edges.values()
+        ],
         "system_prompt_connections": system_prompt_connections,
         "group_summary_connections": group_summary_connections,
         "frames": frame_payloads,

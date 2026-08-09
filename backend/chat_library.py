@@ -51,6 +51,7 @@ from backend.canvas import SceneDocument
 from backend.events import SessionBus
 from backend.notifications import NotificationState
 from backend.session_load import restore_chat_into_document
+from backend.asset_store import store_for
 from backend.session_save import build_chat_data
 from graphlink_migrations import run_sqlite_migrations
 
@@ -1178,7 +1179,10 @@ def make_load_chat(
             if canvas_document is None:
                 return
 
-            restore_chat_into_document(canvas_document, row, notes_rows, pins_rows)
+            restore_chat_into_document(
+                canvas_document, row, notes_rows, pins_rows,
+                asset_store=store_for(resolved_path),
+            )
             # R6.5: remember which row this scene now corresponds to, so a
             # later Save updates THIS row instead of always inserting a new
             # one - the backend analog of ChatSessionManager.current_chat_id
@@ -1189,7 +1193,11 @@ def make_load_chat(
             # byte-identical row and bumped updated_at, re-sorting the Chat
             # Library under the user for a session they had only just opened.
             try:
-                fresh = build_chat_data(canvas_document)
+                # Must use the SAME store as autosave below, or the
+                # first tick after a load would see a payload that
+                # differs only in image representation and rewrite a
+                # row that is already correct.
+                fresh = build_chat_data(canvas_document, asset_store=store_for(resolved_path))
                 fresh_notes = fresh.pop("notes_data", [])
                 fresh_pins = fresh.pop("pins_data", [])
                 # ADR-009 stage 9.2: row["updated_at"] is the value that
@@ -1275,7 +1283,7 @@ def make_save_chat(
             return
 
         try:
-            chat_data = build_chat_data(canvas_document)
+            chat_data = build_chat_data(canvas_document, asset_store=store_for(resolved_path))
         except Exception as exc:
             if notifications is not None:
                 notifications.show(f"Failed to prepare chat save payload: {exc}", "error")
@@ -1573,7 +1581,7 @@ def flush_dirty_session_before_teardown(
         return
 
     try:
-        chat_data = build_chat_data(canvas_document)
+        chat_data = build_chat_data(canvas_document, asset_store=store_for(db_path))
     except Exception:
         logger.exception("eviction flush: failed to build chat data - the last edit may be lost")
         return

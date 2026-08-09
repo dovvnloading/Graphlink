@@ -181,6 +181,7 @@ literal values for the same concept):
 
 from __future__ import annotations
 
+import contextvars
 import re
 import uuid
 from typing import Any
@@ -204,6 +205,20 @@ from backend.canvas import (
 )
 from graphlink_chart_data import ChartDataError, canonicalize_chart_data
 from graphlink_navigation_pins import NavigationPinRecord
+
+# ADR-009 stage 9.5: the asset store in effect for the CURRENT restore.
+#
+# Threaded as a contextvar rather than as a parameter because the per-kind
+# restorer dispatch table below is ~20 lambdas all sharing the signature
+# (payload, document); widening every one of them to carry a store only
+# _restore_image_payload reads would be churn for no gain. A contextvar,
+# not a bare module global, so the value can never leak between concurrently
+# restoring sessions - restore_chat_into_document sets it, and resets it in
+# a finally, around a fully synchronous call (no awaits inside), so the
+# window is atomic with respect to the event loop.
+_ACTIVE_ASSET_STORE: contextvars.ContextVar = contextvars.ContextVar(
+    "graphlink_active_asset_store", default=None
+)
 
 
 # -- small, generic helpers --------------------------------------------------
@@ -439,16 +454,38 @@ def _restore_image_payload(payload: dict[str, Any], document: SceneDocument) -> 
 
     x, y = _position(payload)
     node = SceneNode(id="", x=x, y=y, title="Image", kind="image", state=ImageState())
-    raw_b64 = payload.get("image_bytes")
-    if isinstance(raw_b64, str) and raw_b64:
-        try:
-            image_bytes = _content_codec.decode_image_bytes(raw_b64)
-        except Exception:
-            image_bytes = b""
-        if image_bytes:
-            asset_id = f"img{_uuid.uuid4().hex}"
-            document.image_assets[asset_id] = (image_bytes, "image/png")
-            node.state.image_asset_id = asset_id
+    asset_store = _ACTIVE_ASSET_STORE.get()
+
+    # ADR-009 stage 9.5: READ BOTH SHAPES. A chat saved with an asset store
+    # in play carries only `asset_ref`; every chat saved before that (and
+    # any saved without a store) still carries inline base64 `image_bytes`.
+    # Both are read here so no stored row ever has to be rewritten - which
+    # is what lets the externalization roll out without a destructive
+    # migration over real user data.
+    image_bytes = b""
+    mime_type = "image/png"
+    asset_ref = payload.get("asset_ref")
+    if asset_store is not None and isinstance(asset_ref, str) and asset_ref:
+        stored = asset_store.get(asset_ref)
+        if stored is not None:
+            image_bytes = stored
+            mime_type = str(payload.get("mime_type") or "image/png")
+        # A ref the store has never seen degrades to "this image does not
+        # render", never to "this chat will not load" - the conversation is
+        # worth far more than one of its pictures.
+
+    if not image_bytes:
+        raw_b64 = payload.get("image_bytes")
+        if isinstance(raw_b64, str) and raw_b64:
+            try:
+                image_bytes = _content_codec.decode_image_bytes(raw_b64)
+            except Exception:
+                image_bytes = b""
+
+    if image_bytes:
+        asset_id = f"img{_uuid.uuid4().hex}"
+        document.image_assets[asset_id] = (image_bytes, mime_type)
+        node.state.image_asset_id = asset_id
     node.content = str(payload.get("prompt", ""))
     return node
 
@@ -996,6 +1033,51 @@ def _restore_system_prompt_and_summary_connections(
                     continue
 
 
+def _restore_flat_edges(
+    document: SceneDocument,
+    chat_data: dict[str, Any],
+    by_payload_id: dict[str, str],
+) -> bool:
+    """ADR-009 stage 9.6: restore edges from the flat `edges` list.
+
+    Returns True if that list was present and used, False to tell the
+    caller to fall back to the legacy bucket reconstruction below.
+
+    Why this exists at all: the 12 legacy connection lists plus the
+    system-prompt/group-summary pair lists are a *classification* of edges
+    invented by an app that had 14 separate visual edge types. This backend
+    has exactly one - document.connect() - so save-side classification is a
+    guess (see session_save._classify_edges' own comments) and load-side
+    reconstruction has to unpick that guess through index-vs-id fallbacks
+    that differ per bucket. A flat list of (source, target) by persistent
+    id is what the document actually holds, so it round-trips exactly and
+    needs no reconstruction.
+
+    Endpoints resolve against a map spanning nodes, notes AND charts,
+    because an edge in this document may legitimately end on any of them -
+    the legacy path needed three different maps for the same reason. An
+    endpoint that no longer resolves (hand-edited file, a node dropped by
+    an earlier restore step) skips that one edge; same tolerant posture as
+    every other reference restored here, since a missing line must never
+    cost the user the whole conversation."""
+    entries = chat_data.get("edges")
+    if not isinstance(entries, list):
+        return False
+
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        source_id = by_payload_id.get(str(entry.get("source")))
+        target_id = by_payload_id.get(str(entry.get("target")))
+        if source_id is None or target_id is None or source_id == target_id:
+            continue
+        try:
+            document.connect(source_id, target_id)
+        except Exception:
+            continue
+    return True
+
+
 def _restore_branch_provenance_item_ids(
     document: SceneDocument,
     node_payloads: list,
@@ -1082,6 +1164,25 @@ def _restore_view_state(document: SceneDocument, chat_data: dict[str, Any]) -> N
 
 
 def restore_chat_into_document(
+    document: SceneDocument,
+    chat: dict[str, Any],
+    notes_data: list,
+    pins_data: list,
+    asset_store: Any | None = None,
+) -> None:
+    """ADR-009 stage 9.5 entry point. Publishes `asset_store` for the
+    duration of this restore (see _ACTIVE_ASSET_STORE's own comment for why
+    a contextvar and not a parameter), then delegates. The reset is in a
+    finally so a failed restore can never leave a stale store visible to
+    the next one."""
+    token = _ACTIVE_ASSET_STORE.set(asset_store)
+    try:
+        _restore_chat_into_document(document, chat, notes_data, pins_data)
+    finally:
+        _ACTIVE_ASSET_STORE.reset(token)
+
+
+def _restore_chat_into_document(
     document: SceneDocument, chat: dict[str, Any], notes_data: list, pins_data: list,
 ) -> None:
     """The top-level orchestrator - ports SceneDeserializer.restore_chat()'s
@@ -1159,8 +1260,30 @@ def restore_chat_into_document(
         all_items_map[node_slot_count + note_slot_count + chart_slot_count + frame_index] = frame_new_id
     _restore_containers(document, chat_data.get("containers", []), all_items_map)
 
-    _restore_basic_connections(document, chat_data, all_nodes_map, nodes_by_id)
-    _restore_system_prompt_and_summary_connections(document, chat_data, notes_map, chat_nodes_map, nodes_by_id)
+    # ADR-009 stage 9.6. A file written by this build carries a flat
+    # `edges` list and it is authoritative; the legacy buckets are only
+    # consulted for files written before this stage. Structural parent and
+    # child edges have already been created by the restore loops above -
+    # re-asserting them here is harmless because SceneDocument.connect() is
+    # idempotent on (source, target), which is also what makes it safe for
+    # the flat list to simply contain EVERY edge rather than only the ones
+    # no earlier step covered.
+    by_payload_id = dict(nodes_by_id)
+    if isinstance(notes_data, list):
+        for note_index, note_payload in enumerate(notes_data):
+            note_new_id = notes_map.get(note_index)
+            if not isinstance(note_payload, dict) or note_new_id is None:
+                continue
+            note_payload_id = note_payload.get("id")
+            if note_payload_id:
+                by_payload_id[str(note_payload_id)] = note_new_id
+    by_payload_id.update(charts_by_id)
+
+    if not _restore_flat_edges(document, chat_data, by_payload_id):
+        _restore_basic_connections(document, chat_data, all_nodes_map, nodes_by_id)
+        _restore_system_prompt_and_summary_connections(
+            document, chat_data, notes_map, chat_nodes_map, nodes_by_id
+        )
 
     _restore_pins(document, pins_data)
     _restore_view_state(document, chat_data)

@@ -82,6 +82,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from backend.asset_store import store_for
 from backend.canvas import SceneDocument
 from backend.chat_library import (
     AUTOSAVE_OWNER,
@@ -121,7 +122,11 @@ async def autosave_tick(
         return
 
     try:
-        chat_data = build_chat_data(canvas_document)
+        # ADR-009 stage 9.5: image bytes go to the content-addressed store
+        # and only a ref is written into the row. This path is the whole
+        # reason that stage exists - without it every 30-second tick
+        # rewrote megabytes of base64 for pictures that had not changed.
+        chat_data = build_chat_data(canvas_document, asset_store=store_for(db_path))
     except Exception:
         logger.exception("autosave: failed to build chat data for session %r", bus.session_id)
         return

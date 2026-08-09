@@ -71,6 +71,13 @@ def assets_dir_for(db_path: Path) -> Path:
     return db_path.parent / "assets"
 
 
+def store_for(db_path: Path) -> "AssetStore":
+    """The live asset store belonging to a database. The one place the
+    save/load paths call to get a store, so "which directory" is decided
+    here rather than at four separate call sites."""
+    return AssetStore(assets_dir_for(db_path))
+
+
 class AssetStore:
     """A directory of content-addressed blobs. Construct with the directory
     itself, not a db path, so it is equally usable for the live store and
