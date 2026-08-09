@@ -136,7 +136,7 @@ _ACTIVE_SAVE_ASSET_STORE: contextvars.ContextVar = contextvars.ContextVar(
 # deleted their deserializer branches).
 _REGULAR_KINDS = (
     "chat", "code", "document", "image", "thinking", "conversation", "html",
-    "web_research", "artifact", "gitlink", "pycoder", "code_sandbox",
+    "web_research", "artifact", "gitlink", "pycoder", "code_sandbox", "plan",
 )
 
 # Mirrors backend/session_load.py's own _PARENT_CONTENT_INDEX_KINDS /
@@ -397,6 +397,32 @@ def _serialize_code_sandbox_node(node: SceneNode) -> dict[str, Any]:
     }
 
 
+def _serialize_plan_node(node: SceneNode) -> dict[str, Any]:
+    """ADR-008 stage 8.3: the Builder plan node. NEW-app-only kind (the
+    legacy app never had a Builder) - a legacy load silently skips it, the
+    same documented tolerant behavior every post-legacy kind gets. The
+    LIVE-run fields (awaiting approval + its summary) are deliberately NOT
+    persisted: they describe a RunHandle that cannot survive a restart;
+    session_load's restorer likewise normalizes a non-terminal
+    builder_status to "interrupted" (see PlanState's own docstring)."""
+    return {
+        "node_type": "plan",
+        "goal": node.state.plan_goal,
+        "steps": [dict(s) for s in node.state.plan_steps],
+        "builder_status": node.state.builder_status,
+        "builder_mode": node.state.builder_mode,
+        "builder_run_id": node.state.builder_run_id,
+        "max_steps": node.state.builder_max_steps,
+        "max_tokens": node.state.builder_max_tokens,
+        "max_wall_seconds": node.state.builder_max_wall_seconds,
+        "spent_steps": node.state.builder_spent_steps,
+        "spent_tokens": node.state.builder_spent_tokens,
+        "spent_wall_seconds": node.state.builder_spent_wall_seconds,
+        "status_detail": node.state.builder_status_detail,
+        "is_collapsed": bool(node.is_collapsed),
+    }
+
+
 _NODE_SERIALIZERS = {
     "chat": lambda node, document: _serialize_chat_node(node),
     "code": lambda node, document: _serialize_code_node(node),
@@ -410,6 +436,7 @@ _NODE_SERIALIZERS = {
     "gitlink": lambda node, document: _serialize_gitlink_node(node),
     "pycoder": lambda node, document: _serialize_pycoder_node(node),
     "code_sandbox": lambda node, document: _serialize_code_sandbox_node(node),
+    "plan": lambda node, document: _serialize_plan_node(node),
 }
 
 

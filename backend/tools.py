@@ -167,6 +167,14 @@ class ToolRegistry:
             raise ValueError(f"Tool {spec.name!r} is already registered.")
         self._registrations[spec.name] = _Registration(spec, handler, scope_set, approval)
 
+    def scopes_for(self, name: str) -> frozenset[str] | None:
+        """The scope set `name` was registered with, or None for an unknown
+        tool - ADR-008's mode-aware approval router keys autopilot's
+        auto-approve decision on this (a call whose scopes fit inside the
+        autopilot set proceeds; anything touching net.fetch still prompts)."""
+        registration = self._registrations.get(name)
+        return frozenset(registration.scopes) if registration is not None else None
+
     def specs(self) -> tuple[ToolSpec, ...]:
         """Every registered tool's neutral spec, in registration order - what
         a caller passes as ChatRequest.tools for a run granted access to all

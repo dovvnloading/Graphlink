@@ -94,6 +94,7 @@ from backend.domain.node_states import (
     GitlinkState,
     HtmlState,
     ImageState,
+    PlanState,
     PycoderState,
     WebResearchState,
 )
@@ -264,6 +265,7 @@ from backend.api.intents_knowledge import register_knowledge_intents  # noqa: E4
 from backend.api.intents_model_routing import register_model_routing_intents  # noqa: E402
 from backend.api.intents_nodes import register_node_intents  # noqa: E402
 from backend.api.intents_pins import register_pins_intents  # noqa: E402
+from backend.api.intents_builder import register_builder_intents  # noqa: E402
 from backend.api.intents_pycoder import register_pycoder_intents  # noqa: E402
 from backend.api.intents_view import register_view_intents  # noqa: E402
 from backend.api.intents_undo import register_undo_intents  # noqa: E402
@@ -360,6 +362,7 @@ def register_canvas(
     register_gitlink_intents(bus, document, notifications, agent_dispatcher)
     register_pycoder_intents(bus, document, notifications, agent_dispatcher)
     register_code_sandbox_intents(bus, document, notifications, agent_dispatcher)
+    register_builder_intents(bus, document, notifications, agent_dispatcher)
 
     register_groups_intents(bus, document)
     register_knowledge_intents(bus, document, notifications)

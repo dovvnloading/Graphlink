@@ -40,6 +40,9 @@ EXPECTED_PROMPT_IDS = frozenset(
         "code-sandbox-generation",
         "code-sandbox-repair",
         "gitlink-system",
+        # ADR-008 stage 8.3: the Builder's planner/executor pair.
+        "builder-planner",
+        "builder-executor",
         "reasoning-hint-low",
         "reasoning-hint-high",
     }

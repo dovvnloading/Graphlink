@@ -216,6 +216,18 @@ CLASSIFICATION: tuple[Classified, ...] = (
     Classified("scene", "approveCodeExecution", "B", "security: code-execution approval gate"),
     Classified("scene", "denyCodeExecution", "B", "security: code-execution approval gate"),
 
+    # -- backend/api/intents_builder.py (builder + scene) --------------------
+    # ADR-008 stage 8.3. Run-lifecycle intents are B exactly like runPyCoder:
+    # the CONTENT a build produces is undoable through its own
+    # run_id-stamped commands (and reversible wholesale via scene/undoRun);
+    # starting/steering/stopping the run is not itself a document mutation.
+    Classified("builder", "start", "A", "content: creates the plan node (the run it then starts is separate lifecycle; the build's own mutations are run_id-stamped commands)"),
+    Classified("builder", "startExecution", "B", "run-lifecycle: start/resume the build's executor run"),
+    Classified("builder", "cancel", "B", "run-lifecycle: cancel"),
+    Classified("builder", "approveTool", "B", "security: builder tool-call approval gate"),
+    Classified("builder", "denyTool", "B", "security: builder tool-call approval gate"),
+    Classified("scene", "setPlanSteps", "A", "content: the plan checklist is document state"),
+
     # -- backend/api/intents_settings_general.py (app-settings) -------------
     Classified("app-settings", "setActiveSection", "B", "preference: which Settings page is open"),
     Classified("app-settings", "setShowTokenCounter", "B", "preference: appearance toggle"),

@@ -259,6 +259,20 @@ class ToolInvocationRow:
 
 
 @dataclass
+class PlanStepRow:
+    """ADR-008 stage 8.3: one Builder plan step - the typed wire shape of
+    PlanState.steps' own {"id","title","status","detail"} dicts (backend/
+    domain/node_states.py). status is one of pending|running|done|failed|
+    skipped - pinned as a plain string rather than an enum for the same
+    additive-evolution reason researchStage crosses as a string."""
+
+    id: str
+    title: str
+    status: str = "pending"
+    detail: str = ""
+
+
+@dataclass
 class ChartFlowRow:
     """One Sankey flow - the shape canonicalize_chart_data() (graphlink_
     chart_data.py) always builds every item of its "flows" list from, for
@@ -507,6 +521,27 @@ class SceneNodeRow:
     # ADR-017 stage 17.5: branch-indexing opt-in - see backend/domain/
     # node_states.py's own comment on ChatState.index_into_knowledge.
     indexIntoKnowledge: bool = False
+    # ADR-008 stage 8.3: the Builder plan node (kind=="plan") - the
+    # checklist + run-state surface PlanNodeView renders. Populated only
+    # for plan rows; every other kind carries the defaults. See
+    # backend/domain/node_states.py's PlanState docstring for the
+    # builder_status state machine and the plan-node-as-resume-point
+    # contract these fields serialize.
+    planGoal: str = ""
+    planSteps: list["PlanStepRow"] = field(default_factory=list)
+    builderStatus: str = ""
+    builderMode: str = ""
+    builderRunId: str = ""
+    builderMaxSteps: int = 0
+    builderMaxTokens: int = 0
+    builderMaxWallSeconds: int = 0
+    builderSpentSteps: int = 0
+    builderSpentTokens: int = 0
+    builderSpentWallSeconds: int = 0
+    builderAwaitingToolApproval: bool = False
+    builderApprovalToolName: str = ""
+    builderApprovalSummary: str = ""
+    builderStatusDetail: str = ""
 
 
 @dataclass

@@ -100,6 +100,7 @@ from backend.domain.node_states import (
     HtmlState,
     ImageState,
     NoteState,
+    PlanState,
     PycoderState,
     WebResearchState,
 )
@@ -1508,6 +1509,97 @@ class SceneDocument(BranchOps, GroupOps, CommandOps):
             raise SceneError(f"unknown node: {node_id}")
         node.content = str(content)
 
+    # -- ADR-008 stage 8.3: plan node (the Builder's checklist) --------------
+
+    def add_plan_node(
+        self,
+        x: float,
+        y: float,
+        goal: str,
+        *,
+        mode: str = "copilot",
+        max_steps: int = 12,
+        max_tokens: int = 150_000,
+        max_wall_seconds: int = 900,
+    ) -> SceneNode:
+        """The Builder plan node's creation primitive. Free-floating like a
+        note (a build STARTS from a goal, it does not continue an existing
+        branch - the nodes the build creates are the ones that connect);
+        `content` reuses the goal text the same way web_research reuses
+        content for its query. Everything else lives on PlanState - see its
+        own docstring for the state machine and the plan-node-as-resume-
+        point contract."""
+        if mode not in ("copilot", "autopilot"):
+            raise SceneError(f"unknown builder mode: {mode}")
+        node_id = f"n{next(self._counter)}"
+        node = SceneNode(
+            id=node_id,
+            x=float(x),
+            y=float(y),
+            title=f"Build: {str(goal)[:CHAT_TITLE_PREVIEW_LENGTH]}" if goal else "Build",
+            kind="plan",
+            content=str(goal),
+            state=PlanState(
+                plan_goal=str(goal),
+                builder_mode=mode,
+                builder_max_steps=int(max_steps),
+                builder_max_tokens=int(max_tokens),
+                builder_max_wall_seconds=int(max_wall_seconds),
+            ),
+        )
+        self.nodes[node_id] = node
+        return node
+
+    _PLAN_STEP_STATUSES = ("pending", "running", "done", "failed", "skipped")
+
+    def set_plan_steps(self, node_id: str, steps: list) -> SceneNode:
+        """Replaces the plan's step list - the one plan mutator that goes
+        through record_command (a user editing the checklist, or the
+        model's replan tool): step CONTENT is document state a Ctrl+Z must
+        reach, unlike the run-lifecycle fields (builder_status/spent_*/
+        awaiting_*) which the loop writes directly, exactly as pycoder's
+        run pipeline writes its own awaiting/progress fields.
+
+        Steps whose status is not "pending" are immutable history - a
+        replacement must carry every non-pending step through unchanged
+        (same id, title, status), enforced here so neither a user edit nor
+        a model replan can rewrite what already happened."""
+        node = self.nodes.get(node_id)
+        if node is None or not isinstance(node.state, PlanState):
+            raise SceneError(f"not a plan node: {node_id}")
+        normalized: list[dict[str, Any]] = []
+        seen_ids: set[str] = set()
+        for raw in steps:
+            if not isinstance(raw, dict):
+                raise SceneError("each step must be an object")
+            step_id = str(raw.get("id") or f"s{len(normalized) + 1}")
+            if step_id in seen_ids:
+                raise SceneError(f"duplicate step id: {step_id}")
+            seen_ids.add(step_id)
+            status = str(raw.get("status") or "pending")
+            if status not in self._PLAN_STEP_STATUSES:
+                raise SceneError(f"unknown step status: {status}")
+            title = str(raw.get("title") or "").strip()
+            if not title:
+                raise SceneError("each step needs a title")
+            normalized.append({
+                "id": step_id, "title": title, "status": status,
+                "detail": str(raw.get("detail") or ""),
+            })
+        frozen = {s["id"]: s for s in node.state.plan_steps if s.get("status") != "pending"}
+        for step_id, original in frozen.items():
+            replacement = next((s for s in normalized if s["id"] == step_id), None)
+            if replacement is None:
+                raise SceneError(
+                    f"step {step_id!r} has already run ({original['status']}) and cannot be removed"
+                )
+            if replacement["title"] != original["title"] or replacement["status"] != original["status"]:
+                raise SceneError(
+                    f"step {step_id!r} has already run ({original['status']}) and cannot be rewritten"
+                )
+        node.state.plan_steps = normalized
+        return node
+
     # -- R6.2: chart node ----------------------------------------------------
 
     def add_chart_node(
@@ -2197,6 +2289,41 @@ class SceneDocument(BranchOps, GroupOps, CommandOps):
             # (in memory) keeps holding real bytes, per the field's
             # own contract.
             "contentParts": _content_parts_wire(n.state.content_parts if isinstance(n.state, ChatState) else None),
+            # ADR-008 stage 8.3: plan node (the Builder's checklist). Steps
+            # cross as typed PlanStepRow dicts - see PlanState's own
+            # docstring for the state machine these render.
+            "planGoal": n.state.plan_goal if isinstance(n.state, PlanState) else "",
+            "planSteps": (
+                [
+                    {
+                        "id": s["id"], "title": s["title"],
+                        "status": s["status"], "detail": s["detail"],
+                    }
+                    for s in n.state.plan_steps
+                ]
+                if isinstance(n.state, PlanState) else []
+            ),
+            "builderStatus": n.state.builder_status if isinstance(n.state, PlanState) else "",
+            "builderMode": n.state.builder_mode if isinstance(n.state, PlanState) else "",
+            "builderRunId": n.state.builder_run_id if isinstance(n.state, PlanState) else "",
+            "builderMaxSteps": n.state.builder_max_steps if isinstance(n.state, PlanState) else 0,
+            "builderMaxTokens": n.state.builder_max_tokens if isinstance(n.state, PlanState) else 0,
+            "builderMaxWallSeconds": n.state.builder_max_wall_seconds if isinstance(n.state, PlanState) else 0,
+            "builderSpentSteps": n.state.builder_spent_steps if isinstance(n.state, PlanState) else 0,
+            "builderSpentTokens": n.state.builder_spent_tokens if isinstance(n.state, PlanState) else 0,
+            "builderSpentWallSeconds": (
+                n.state.builder_spent_wall_seconds if isinstance(n.state, PlanState) else 0
+            ),
+            "builderAwaitingToolApproval": (
+                n.state.builder_awaiting_tool_approval if isinstance(n.state, PlanState) else False
+            ),
+            "builderApprovalToolName": (
+                n.state.builder_approval_tool_name if isinstance(n.state, PlanState) else ""
+            ),
+            "builderApprovalSummary": (
+                n.state.builder_approval_summary if isinstance(n.state, PlanState) else ""
+            ),
+            "builderStatusDetail": n.state.builder_status_detail if isinstance(n.state, PlanState) else "",
         }
 
     def _edge_wire(self, e: SceneEdge) -> dict[str, Any]:

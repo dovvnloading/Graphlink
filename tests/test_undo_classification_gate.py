@@ -239,11 +239,13 @@ def test_the_scan_finds_the_real_population_of_registered_intents():
     # intents (exportDiagnosticBundle, openLogFolder), 140 -> 142 when
     # ADR-018 stage 18.3 added scene's own setModelOverride/
     # clearModelOverride, 142 -> 143 when ADR-018 stage 18.4 added
-    # app-settings' own setAutoModelPolicy, and 143 -> 145 when ADR-017
+    # app-settings' own setAutoModelPolicy, 143 -> 145 when ADR-017
     # stage 17.5 added the new "knowledge" topic's own search intent plus
-    # scene's own setChatIndexIntoKnowledge.
+    # scene's own setChatIndexIntoKnowledge, and 145 -> 151 when ADR-008
+    # stage 8.3 added the "builder" topic's five run-lifecycle intents
+    # plus scene's own setPlanSteps.
     real = _collect_real_registrations()
-    assert len(real) == 145, (
+    assert len(real) == 151, (
         f"expected exactly 145 real registered intents, found {len(real)} - "
         "either the scan broke, or the app's registered-intent surface "
         "genuinely changed and tests/undo_classification.py's own count "

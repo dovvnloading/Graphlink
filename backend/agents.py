@@ -424,6 +424,153 @@ class AgentDispatcher:
             return {}
         return {"runtime": self._provider_runtime}
 
+    # -- ADR-008 stage 8.3: the Builder --------------------------------------
+
+    def builder_tool_registry(self, document) -> "object":
+        """The session's one ToolRegistry, built lazily on first builder
+        start (ADR-007 shipped the registry with zero production
+        constructors; the Builder is its designated first consumer).
+        Cached: tools bind the session's own SceneDocument/dispatcher, and
+        both live exactly as long as this dispatcher does."""
+        if getattr(self, "_builder_registry", None) is None:
+            from backend.builder import register_builder_control_tools
+            from backend.tools import ToolRegistry
+            from backend.tools_graph import register_graph_tools, register_run_node_tool
+            from backend.tools_knowledge import register_knowledge_tools
+
+            registry = ToolRegistry()
+            register_graph_tools(registry, document)
+            register_run_node_tool(registry, document, self)
+            register_knowledge_tools(registry)
+            register_builder_control_tools(registry)
+            self._builder_registry = registry
+        return self._builder_registry
+
+    async def start_builder_run(
+        self,
+        *,
+        bus,
+        notifications_state,
+        document,
+        plan_node_id: str,
+        phase: str,
+        model_ref=None,
+    ) -> str | None:
+        """Claims the "builder" kind and runs one Builder phase as a
+        background task: "plan" (one respond_json turn -> the checklist ->
+        awaiting_start) or "execute" (backend/builder.run_build - the
+        tool-use loop). One build per session at a time (the same
+        kind-level busy guard every other run kind has). Stop lands
+        through finalize: RunRegistry.cancel frees the slot immediately
+        and finalize writes the terminal "stopped" state, so the UI
+        returns to idle without waiting for the worker (6.2 posture)."""
+        from backend.domain.node_states import PlanState
+
+        if self._runs.is_busy("builder"):
+            notifications_state.show("A build is already running.", "info")
+            await bus.publish("notification")
+            return None
+        node = document.nodes.get(plan_node_id)
+        if node is None or not isinstance(node.state, PlanState):
+            notifications_state.show("This plan node no longer exists.", "warning")
+            await bus.publish("notification")
+            return None
+
+        cancel_event = threading.Event()
+
+        async def _finalize() -> None:
+            if node.state.builder_status in ("planning", "running", "awaiting_start"):
+                node.state.builder_status = "stopped"
+                node.state.builder_status_detail = "Stopped by user."
+            node.state.builder_awaiting_tool_approval = False
+            node.state.builder_approval_tool_name = ""
+            node.state.builder_approval_summary = ""
+            if node.pending_request_id == handle.request_id:
+                node.pending_request_id = None
+            await bus.publish("scene")
+
+        handle = self._runs.claim(
+            "builder", node_id=plan_node_id, cancel_event=cancel_event, finalize=_finalize,
+        )
+        request_id = handle.request_id
+
+        async def _run() -> None:
+            from backend import builder as builder_module
+
+            try:
+                if phase == "plan":
+                    await self._run_builder_planning(
+                        bus, notifications_state, document, node, request_id, cancel_event,
+                    )
+                else:
+                    await builder_module.run_build(
+                        document=document, dispatcher=self,
+                        registry=self.builder_tool_registry(document),
+                        bus=bus, notifications=notifications_state,
+                        plan_node_id=plan_node_id, request_id=request_id,
+                        handle=handle, cancel_event=cancel_event,
+                        model_ref=model_ref, settings_manager=self._settings_manager,
+                        **self._runtime_kwargs(),
+                    )
+            finally:
+                self._runs.release(request_id)
+
+        self._runs.attach_task(handle, asyncio.create_task(_run()))
+        return request_id
+
+    async def _run_builder_planning(
+        self, bus, notifications_state, document, node, request_id: str, cancel_event,
+    ) -> None:
+        from backend import builder as builder_module
+
+        node.state.builder_status = "planning"
+        node.state.builder_run_id = request_id
+        node.pending_request_id = request_id
+        await bus.publish("scene")
+        try:
+            steps = await asyncio.wait_for(
+                asyncio.to_thread(
+                    builder_module.plan_steps_for_goal, node.state.plan_goal,
+                    settings_manager=self._settings_manager, **self._runtime_kwargs(),
+                ),
+                timeout=WATCHDOG_TIMEOUT_SECONDS,
+            )
+            if self._runs.get(request_id) is None:
+                return
+            if not steps:
+                node.state.builder_status = "failed"
+                node.state.builder_status_detail = "The planner produced no steps - refine the goal and try again."
+            else:
+                document.record_command(
+                    "builderPlan", "agent",
+                    lambda: document.set_plan_steps(node.id, steps),
+                    node_ids=[node.id], run_id=request_id,
+                )
+                node.state.builder_status = "awaiting_start"
+                node.state.builder_status_detail = ""
+        except api_provider.RequestCancelledError:
+            return  # finalize owns the stopped transition
+        except Exception as exc:
+            if self._runs.get(request_id) is None:
+                return
+            node.state.builder_status = "failed"
+            node.state.builder_status_detail = f"Planning failed: {exc}"
+            notifications_state.show(f"Planning failed: {exc}", "error")
+            await bus.publish("notification")
+        finally:
+            if node.pending_request_id == request_id:
+                node.pending_request_id = None
+            await bus.publish("scene")
+
+    def cancel_builder(self, request_id: str) -> None:
+        """Stop for the Builder: deny any parked approval first (cancel
+        means deny - the pycoder precedent), then the standard
+        release-on-cancel."""
+        handle = self._runs.get(request_id)
+        if handle is not None and handle.approval_future is not None and not handle.approval_future.done():
+            handle.approval_future.set_result(False)
+        self._runs.cancel(request_id, kind="builder")
+
     def get_pycoder_repl(self, node_id: str, repl_id: str) -> PythonREPL:
         """Lazy-create-or-reuse - mirrors PyCoderReplManager.get_repl's own
         shape, keyed by node_id (transient, session-scoped: this dict and
