@@ -504,6 +504,9 @@ class SceneNodeRow:
     # own comment on ChatState.override_provider/override_model_id.
     overrideProvider: str = ""
     overrideModelId: str = ""
+    # ADR-017 stage 17.5: branch-indexing opt-in - see backend/domain/
+    # node_states.py's own comment on ChatState.index_into_knowledge.
+    indexIntoKnowledge: bool = False
 
 
 @dataclass

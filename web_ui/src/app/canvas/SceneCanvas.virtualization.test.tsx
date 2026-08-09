@@ -134,6 +134,8 @@ function chatRow(id: string, x: number, y = 0): SceneNodeRow {
         // ADR-018 stage 18.3
         overrideProvider: "",
         overrideModelId: "",
+        // ADR-017 stage 17.5
+        indexIntoKnowledge: false,
       }),
     ) as unknown as SceneNodeRow),
   };

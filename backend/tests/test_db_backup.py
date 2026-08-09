@@ -99,6 +99,36 @@ def test_take_backup_filename_matches_the_documented_convention(db_path):
     datetime.strptime(raw, "%Y%m%dT%H%M%SZ")  # raises ValueError if wrong shape
 
 
+def test_take_backup_honors_a_custom_prefix_end_to_end(db_path):
+    """ADR-017 stage 17.1: backend/knowledge_store.py shares this module
+    with a "knowledge-" prefix so its own backups never wear a filename
+    that says "chats-" - prune/list/newest/restore must all recognize and
+    round-trip that custom prefix, not just take_backup's own naming."""
+    _make_real_db(db_path, title="Knowledge Row")
+
+    backup_path = take_backup(db_path, prefix="knowledge-")
+    assert backup_path.name.startswith("knowledge-")
+    assert not backup_path.name.startswith(BACKUP_FILENAME_PREFIX)
+
+    assert list_backups(db_path, prefix="knowledge-") == [backup_path]
+    # The default prefix must never pick up a differently-prefixed backup -
+    # proves the two naming conventions stay genuinely isolated, not just
+    # that the custom one alone works.
+    assert list_backups(db_path) == []
+    assert newest_backup(db_path, prefix="knowledge-") == backup_path
+    assert newest_backup(db_path) is None
+
+    db_path.unlink()
+    restored_from = restore_from_newest_backup(db_path, prefix="knowledge-")
+    assert restored_from == backup_path
+    conn = sqlite3.connect(db_path)
+    try:
+        rows = conn.execute("SELECT title FROM chats").fetchall()
+    finally:
+        conn.close()
+    assert rows == [("Knowledge Row",)]
+
+
 def test_take_backup_is_wal_safe_against_a_live_writer_holding_a_transaction(db_path):
     # This is the property that distinguishes the backup API from a raw
     # shutil.copy: a writer holding an open transaction on the SOURCE at
@@ -144,7 +174,8 @@ def test_take_backup_calls_prune_after_every_backup(db_path, monkeypatch):
 
     real_prune = db_backup_module.prune_backups
     monkeypatch.setattr(
-        db_backup_module, "prune_backups", lambda p: (calls.append(p), real_prune(p))[1],
+        db_backup_module, "prune_backups",
+        lambda p, **kwargs: (calls.append(p), real_prune(p, **kwargs))[1],
     )
     take_backup(db_path)
     assert calls == [db_path]

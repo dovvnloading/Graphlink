@@ -64,6 +64,15 @@ _TIMESTAMP_FORMAT = "%Y%m%dT%H%M%SZ"
 KEEP_MOST_RECENT = 10
 
 
+# ADR-017 stage 17.1 note: every function below now accepts an optional
+# `prefix` (default BACKUP_FILENAME_PREFIX, i.e. every existing chats.db
+# call site is byte-identical to before this stage) so a SECOND database
+# file - backend/knowledge_store.py's knowledge.db - can share this module
+# without its backups being misleadingly named "chats-...". backups_dir_for()
+# itself needs no such parameter: it already isolates per db_path
+# (`db_path.parent / "backups"`), so chats.db and knowledge.db - living in
+# different directories - never share a backups/ folder to begin with; only
+# the FILENAME convention inside that folder needed parametrizing.
 def backups_dir_for(db_path: Path) -> Path:
     """Mirrors backend/crash_recovery.py's own base_dir override pattern
     (`_data_dir(base_dir)`  Path.home()/".graphlink" by default,
@@ -83,27 +92,27 @@ def _timestamp_now() -> str:
     return datetime.now(timezone.utc).strftime(_TIMESTAMP_FORMAT)
 
 
-def backup_filename(timestamp: str) -> str:
-    return f"{BACKUP_FILENAME_PREFIX}{timestamp}{BACKUP_FILENAME_SUFFIX}"
+def backup_filename(timestamp: str, *, prefix: str = BACKUP_FILENAME_PREFIX) -> str:
+    return f"{prefix}{timestamp}{BACKUP_FILENAME_SUFFIX}"
 
 
-def _parse_backup_timestamp(path: Path) -> datetime | None:
+def _parse_backup_timestamp(path: Path, *, prefix: str = BACKUP_FILENAME_PREFIX) -> datetime | None:
     """None for anything that isn't one of OUR OWN backup filenames -
     list_backups/prune_backups must never trip over an unrelated file a
     user (or a future feature) happens to drop into the same directory;
     silently ignoring it, not raising, is the safe direction here since
     this is a read-only classification, not a delete decision by itself."""
     name = path.name
-    if not (name.startswith(BACKUP_FILENAME_PREFIX) and name.endswith(BACKUP_FILENAME_SUFFIX)):
+    if not (name.startswith(prefix) and name.endswith(BACKUP_FILENAME_SUFFIX)):
         return None
-    raw = name[len(BACKUP_FILENAME_PREFIX):-len(BACKUP_FILENAME_SUFFIX)]
+    raw = name[len(prefix):-len(BACKUP_FILENAME_SUFFIX)]
     try:
         return datetime.strptime(raw, _TIMESTAMP_FORMAT).replace(tzinfo=timezone.utc)
     except ValueError:
         return None
 
 
-def list_backups(db_path: Path) -> list[Path]:
+def list_backups(db_path: Path, *, prefix: str = BACKUP_FILENAME_PREFIX) -> list[Path]:
     """Every recognized backup for db_path, newest first. Empty (not an
     error) when the backups directory doesn't exist yet - a session that
     has never taken a backup is a normal, common state, not a fault."""
@@ -114,19 +123,19 @@ def list_backups(db_path: Path) -> list[Path]:
     for candidate in backups_dir.iterdir():
         if not candidate.is_file():
             continue
-        timestamp = _parse_backup_timestamp(candidate)
+        timestamp = _parse_backup_timestamp(candidate, prefix=prefix)
         if timestamp is not None:
             entries.append((timestamp, candidate))
     entries.sort(key=lambda pair: pair[0], reverse=True)
     return [path for _, path in entries]
 
 
-def newest_backup(db_path: Path) -> Path | None:
-    backups = list_backups(db_path)
+def newest_backup(db_path: Path, *, prefix: str = BACKUP_FILENAME_PREFIX) -> Path | None:
+    backups = list_backups(db_path, prefix=prefix)
     return backups[0] if backups else None
 
 
-def prune_backups(db_path: Path) -> list[Path]:
+def prune_backups(db_path: Path, *, prefix: str = BACKUP_FILENAME_PREFIX) -> list[Path]:
     """Applies the retention policy described in this module's own
     docstring and deletes whatever doesn't survive it. Returns the paths
     actually deleted (empty if nothing needed pruning) - real signal for
@@ -137,7 +146,7 @@ def prune_backups(db_path: Path) -> list[Path]:
     block every other backup this call would otherwise have pruned, and
     the next prune_backups call (the very next take_backup) will simply
     try it again."""
-    backups = list_backups(db_path)  # newest first
+    backups = list_backups(db_path, prefix=prefix)  # newest first
     recent = backups[:KEEP_MOST_RECENT]
     older = backups[KEEP_MOST_RECENT:]
     keep: set[Path] = set(recent)
@@ -181,7 +190,7 @@ def prune_backups(db_path: Path) -> list[Path]:
     return deleted
 
 
-def take_backup(db_path: Path) -> Path | None:
+def take_backup(db_path: Path, *, prefix: str = BACKUP_FILENAME_PREFIX) -> Path | None:
     """Snapshots db_path into backups_dir_for(db_path) via SQLite's own
     online backup API - see this module's own docstring for why that API,
     not a raw file copy. Returns the new backup's path, or None when
@@ -204,7 +213,7 @@ def take_backup(db_path: Path) -> Path | None:
     backups_dir = backups_dir_for(db_path)
     backups_dir.mkdir(parents=True, exist_ok=True)
     timestamp = _timestamp_now()
-    final_name = backup_filename(timestamp)
+    final_name = backup_filename(timestamp, prefix=prefix)
     final_path = backups_dir / final_name
     tmp_path = backups_dir / f".{final_name}.tmp"
 
@@ -243,11 +252,11 @@ def take_backup(db_path: Path) -> Path | None:
         logger.warning("could not chmod %s to 0600 - continuing", tmp_path)
     os.replace(tmp_path, final_path)
 
-    prune_backups(db_path)
+    prune_backups(db_path, prefix=prefix)
     return final_path
 
 
-def restore_from_newest_backup(db_path: Path) -> Path | None:
+def restore_from_newest_backup(db_path: Path, *, prefix: str = BACKUP_FILENAME_PREFIX) -> Path | None:
     """Copies the newest surviving backup for db_path INTO db_path,
     overwriting whatever (if anything) is currently there. Returns the
     backup path that was restored, or None when no backup exists at all
@@ -277,7 +286,7 @@ def restore_from_newest_backup(db_path: Path) -> Path | None:
     The source backup file itself is never touched (not deleted, not
     moved) - restoring from it must be repeatable, e.g. if this exact
     restore is itself somehow interrupted and retried."""
-    source = newest_backup(db_path)
+    source = newest_backup(db_path, prefix=prefix)
     if source is None:
         return None
 

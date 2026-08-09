@@ -1995,6 +1995,9 @@ class SceneDocument(BranchOps, GroupOps, CommandOps):
             # input routing pin).
             "overrideProvider": n.state.override_provider if isinstance(n.state, ChatState) else "",
             "overrideModelId": n.state.override_model_id if isinstance(n.state, ChatState) else "",
+            # ADR-017 stage 17.5: see ChatState's own comment on
+            # index_into_knowledge.
+            "indexIntoKnowledge": n.state.index_into_knowledge if isinstance(n.state, ChatState) else False,
             "isBranchSynthesis": n.state.is_branch_synthesis if isinstance(n.state, ChatState) else False,
             "synthesisInstructions": (
                 n.state.synthesis_instructions if isinstance(n.state, ChatState) else ""

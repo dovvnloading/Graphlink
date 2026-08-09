@@ -82,6 +82,11 @@ class AnthropicProvider:
             # native tool use unconditionally (base.py's own
             # ProviderCapabilities.tools comment) - no capability call needed.
             tools=True,
+            # ADR-017 stage 17.3: Anthropic has no embeddings API at all
+            # (unlike audio, which is a real "this provider genuinely
+            # cannot" case with the same False value) - False, and this
+            # class deliberately has no `.embed()` method to call.
+            embedding=False,
         )
 
     # ADR-007 stage 7.1: deliberately NOT given tool-call support, matching

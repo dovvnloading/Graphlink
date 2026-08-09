@@ -61,6 +61,11 @@ class LlamaCppProvider:
             # for this provider), structured output needs no per-model
             # capability probe.
             structured_output=True,
+            # ADR-017 stage 17.3: out of this stage's scope for llama.cpp
+            # (ADR-017 doc's own stage-17.3 row names Ollama + API
+            # providers, matching ADR-007 stage 7.1's own precedent for
+            # leaving llama.cpp out of a new capability's first pass).
+            embedding=False,
         )
 
     def complete(self, request: ChatRequest, cancel: CancelToken) -> str:

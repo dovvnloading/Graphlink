@@ -2900,6 +2900,138 @@ body,
   word-break: break-all;
 }
 
+/* -- Knowledge search dialog (ADR-017 stage 17.5) ---------------------------
+   Same size/scale contract as .diagnostics-dialog (both are "medium
+   content, scrollable" dialogs), reusing that dialog's own 11-13px text
+   scale and neutral-button language rather than inventing a third one. */
+.knowledge-search-dialog {
+  min-width: 480px;
+  max-width: min(640px, calc(100vw - 64px));
+  max-height: min(600px, calc(100vh - 96px));
+  overflow-y: auto;
+}
+
+.knowledge-search-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.knowledge-search-input {
+  flex: 1;
+  padding: 6px 10px;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-surface-inset, var(--gl-surface-node-body));
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 6px;
+}
+
+.knowledge-search-button {
+  padding: 6px 14px;
+  font-size: 12px;
+  font-family: inherit;
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-neutral-button-hover);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.knowledge-search-button:hover:not(:disabled) {
+  background-color: var(--gl-neutral-button-border);
+}
+
+.knowledge-search-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.knowledge-empty {
+  margin: 0;
+  font-size: 12px;
+  color: var(--gl-surface-text-muted);
+}
+
+.knowledge-section-title {
+  margin: 16px 0 8px;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--gl-surface-text-muted);
+}
+
+.knowledge-result-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.knowledge-result-item {
+  border-radius: 6px;
+  background: var(--gl-surface-node-body);
+  border: 1px solid var(--gl-surface-border);
+}
+
+.knowledge-result-header {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 8px 10px;
+  font-family: inherit;
+  text-align: left;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.knowledge-result-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--gl-surface-text-primary);
+}
+
+.knowledge-result-source {
+  font-size: 11px;
+  color: var(--gl-surface-text-muted);
+  word-break: break-all;
+}
+
+.knowledge-result-body {
+  padding: 0 10px 10px;
+}
+
+.knowledge-result-excerpt {
+  margin: 0 0 8px;
+  padding: 8px;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-surface-inset, var(--gl-surface-node-body));
+  border-radius: 4px;
+}
+
+.knowledge-result-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--gl-surface-text-muted);
+}
+
+.knowledge-result-open-link {
+  color: var(--gl-surface-text-primary);
+}
+
 /* -- Document view panel (R8a follow-up) ------------------------------------
    Docked flush-left, border-right only - restores legacy's
    DocumentViewerPanel chrome (a permanent embedded QWidget, corner_radius=0,

@@ -89,6 +89,18 @@ class ProviderCapabilities:
     # ADR-007 stage 7.3 - declared now so capability consumers have a
     # stable shape, but nothing sets it True until that stage.
     structured_output: bool = False
+    # ADR-017 stage 17.3: True where THIS configured (provider, model) pair
+    # can produce embedding vectors via `.embed()` - a NEW method this
+    # stage adds concretely to OllamaProvider/OpenAIProvider only, not a
+    # required member of the `Provider` Protocol below (mirrors how
+    # `generate_image` is a capability-gated, provider-specific method
+    # rather than a Protocol requirement every provider must implement -
+    # see OpenAIProvider's own `image_generation` capability comment for
+    # the identical reasoning). A model configured for CHAT is not
+    # automatically an embedding model even on a provider whose CLASS
+    # supports `.embed()` - each concrete provider's own capabilities
+    # comment documents how it decides this per-instance.
+    embedding: bool = False
 
 
 @dataclass(frozen=True)

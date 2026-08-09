@@ -21,6 +21,10 @@ from .domain import (
 from .ports import ContentExtractor, DocumentFetcher, ResearchModel, SearchProvider
 from .providers import BeautifulSoupContentExtractor, DuckDuckGoSearchProvider, RequestsDocumentFetcher, ApiResearchModel
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 class WebResearchService:
     def __init__(
@@ -78,6 +82,37 @@ class WebResearchService:
     @staticmethod
     def _citation_markers(answer: str) -> set[str]:
         return {marker.lower() for marker in re.findall(r"\[(s\d+(?:-[a-f0-9]+)?)\]", answer, flags=re.IGNORECASE)}
+
+    @staticmethod
+    def _retain_documents(accepted_documents, source_records) -> None:
+        """ADR-017 stage 17.5: opt-in retention of this run's accepted
+        source documents into the local knowledge store - the ADR's own
+        "Web Research fetches, summarizes, and discards; nothing is
+        retained" gap (doc's own Context section). One ingest_text() call
+        per accepted document, `source_uri` the page's own final_url (not
+        `WebResearchRequest.node_id` - a real URL is what a citation should
+        point back to). A retention failure is logged and swallowed, never
+        raised - this is auxiliary persistence riding alongside the run's
+        real job (the synthesized answer), matching this codebase's own
+        established "best-effort side write must never fail the primary
+        operation" posture (e.g. backend.knowledge_store.maybe_backup_
+        before_write's identical swallow-and-log)."""
+        from backend.knowledge_ingest import ingest_text
+
+        titles_by_id = {source.source_id: source.title for source in source_records}
+        for document in accepted_documents:
+            try:
+                ingest_text(
+                    document.text,
+                    source_uri=document.final_url,
+                    title=titles_by_id.get(document.source_id, document.final_url),
+                    mime="text/html",
+                )
+            except Exception:
+                logger.exception(
+                    "web research retention failed for %s - continuing (the answer is unaffected)",
+                    document.final_url,
+                )
 
     def run(self, request: WebResearchRequest, *, token: CancellationToken | None = None, progress: ProgressCallback | None = None) -> ResearchResult:
         token = token or CancellationToken()
@@ -154,6 +189,9 @@ class WebResearchService:
 
         if not accepted_documents:
             raise ResearchFailure("No usable source content could be retrieved.", code="no_usable_sources", retryable=True)
+
+        if request.retain_to_knowledge:
+            self._retain_documents(accepted_documents, source_records)
 
         chunks = self._select_evidence(accepted_documents, request.limits, token)
         if not chunks:

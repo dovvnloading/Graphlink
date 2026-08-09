@@ -304,7 +304,7 @@ _EXPECTED_SCENE_NODE_WIRE_KEYS = sorted([
     "gitlinkProposalMarkdown", "gitlinkRepo", "gitlinkRepoFilePaths",
     "gitlinkScopeMode", "gitlinkSelectedPaths", "gitlinkTaskPrompt", "groupHeight",
     "groupWidth", "headerColor", "history", "htmlSplitterState", "id",
-    "imageAssetId", "isBranchComparison", "isBranchSynthesis", "isCollapsed",
+    "imageAssetId", "indexIntoKnowledge", "isBranchComparison", "isBranchSynthesis", "isCollapsed",
     "isDocked", "isFinalDeliverable", "isLocked", "isSummaryNote",
     "isSystemPrompt", "isUser", "itemIds", "kind", "language", "mimeType",
     "model", "overrideModelId", "overrideProvider",

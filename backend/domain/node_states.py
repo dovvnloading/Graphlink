@@ -737,3 +737,22 @@ class ChatState(NodeState):
     # clear_model_override always clears both together.
     override_provider: str = ""
     override_model_id: str = ""
+    # ADR-017 stage 17.5: "a branch can be indexed so later branches can
+    # retrieve from it" (ADR-017 doc's own Decision #2, "Sources"
+    # paragraph) - True after the user has opted THIS node's branch
+    # history (chat_branch_history(this node's id): root down to this
+    # node) into knowledge indexing. Per-node, not cascaded to ancestors/
+    # descendants - the same no-write-time-inheritance posture
+    # branch_status's own comment documents; toggling it on a leaf node
+    # indexes that leaf's own root-to-here history, toggling it on an
+    # earlier node in the same chain indexes a shorter prefix, and neither
+    # write touches the other node's own flag. Setting this to True is
+    # also the TRIGGER for a one-time indexing pass over that history as
+    # of right now (backend/api/intents_knowledge.py's own
+    # set_chat_index_into_knowledge intent runs the ingest BEFORE flipping
+    # this flag) - there is no live "index every new turn automatically"
+    # pipeline yet (that needs ADR-008's tool-use loop machinery to hook a
+    # real per-turn point; this field's job is the opt-in flag + one
+    # honest snapshot, not a promise of continuous re-indexing this
+    # codebase cannot make yet).
+    index_into_knowledge: bool = False

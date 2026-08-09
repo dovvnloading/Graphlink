@@ -57,6 +57,7 @@ from api_provider import (
     _is_ollama_bool_reasoning_model,
     _prepare_ollama_messages,
     _raise_if_cancelled,
+    ollama_supports_embedding,
     ollama_supports_tools,
     ollama_think_kwarg,
     reasoning_budget_hint,
@@ -118,6 +119,11 @@ class OllamaProvider:
             # not a per-model chat-template capability - True
             # unconditionally, matching vision/audio's own reasoning above.
             structured_output=True,
+            # ADR-017 stage 17.3: a genuine per-model probe, like tools -
+            # see ollama_supports_embedding's own docstring for why a CHAT
+            # model must not claim this just because SOME Ollama model
+            # supports it.
+            embedding=ollama_supports_embedding(model),
         )
 
     # -- shared request prep --------------------------------------------------
@@ -314,3 +320,20 @@ class OllamaProvider:
                 last_reasoning_error = exc
                 continue
         raise self._exhausted_retries_error() from last_reasoning_error
+
+    # -- embeddings (ADR-017 stage 17.3) ---------------------------------------
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        """Batch embedding via Ollama's own `/api/embed` (ollama.embed()) -
+        one call for the whole batch rather than one per text, matching
+        the endpoint's own designed usage (it accepts a list `input`
+        natively). Ollama returns vectors in the SAME order as `input` (its
+        own documented contract) - trusted here rather than re-verified,
+        the same caller-trusts-server posture every other provider method
+        in this class already takes. Returns `[]` for an empty `texts`
+        WITHOUT a network call - an empty batch is a valid no-op, not
+        worth a round trip."""
+        if not texts:
+            return []
+        response = ollama.embed(model=self.model_id, input=list(texts))
+        return [list(vector) for vector in response["embeddings"]]

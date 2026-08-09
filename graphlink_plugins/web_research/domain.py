@@ -114,6 +114,14 @@ class WebResearchRequest:
     branch_history: list[dict[str, Any]] = field(default_factory=list)
     limits: ResearchLimits = field(default_factory=ResearchLimits)
     provider_snapshot: dict[str, Any] = field(default_factory=dict)
+    # ADR-017 stage 17.5: opt-in retention of this run's accepted source
+    # documents into the local knowledge store (backend/knowledge_ingest.py's
+    # ingest_text()) - False by default (every existing caller/test
+    # constructs a WebResearchRequest with no opinion on this, and Web
+    # Research's own long-standing "fetches, summarizes, and discards"
+    # behavior - ADR-017 doc's own Context section - must stay the default,
+    # not silently start persisting fetched pages to disk).
+    retain_to_knowledge: bool = False
 
 
 @dataclass(frozen=True)
