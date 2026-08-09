@@ -95,6 +95,8 @@ export interface SceneNodeRow {
   htmlSplitterState?: number | null;
   chatScrollValue: number;
   toolCalls: ToolInvocationRow[];
+  overrideProvider: string;
+  overrideModelId: string;
 }
 
 export interface ConversationMessageRow {
@@ -672,6 +674,16 @@ function checkSceneNodeRow(value: unknown, path: string, errors: string[]): void
     if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.toolCalls: missing required field`);
     else { if (!Array.isArray(fieldValue)) errors.push(`${path}.toolCalls` + ": expected array");
     else (fieldValue as unknown[]).forEach((item, i) => { checkToolInvocationRow(item, `${path}.toolCalls` + `[${i}]`, errors); }); }
+  }
+  {
+    const fieldValue = value["overrideProvider"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.overrideProvider: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.overrideProvider` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["overrideModelId"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.overrideModelId: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.overrideModelId` + ": expected string"); }
   }
 }
 

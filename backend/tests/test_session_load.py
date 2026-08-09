@@ -660,6 +660,25 @@ def test_restore_chat_payload_downgrades_an_unrecognized_branch_status_to_active
     assert node.state.branch_status == "active"
 
 
+def test_restore_chat_payload_restores_a_model_override_pin():
+    # ADR-018 stage 18.3.
+    document = _restore(nodes=[
+        _chat("n0", override_provider="Anthropic Claude", override_model_id="claude-opus-5"),
+    ])
+    node = next(iter(document.nodes.values()))
+    assert node.state.override_provider == "Anthropic Claude"
+    assert node.state.override_model_id == "claude-opus-5"
+
+
+def test_restore_chat_payload_with_no_override_keys_defaults_to_no_pin():
+    # Every save written before this stage - the "" default, never a crash
+    # on the missing keys.
+    document = _restore(nodes=[_chat("n0")])
+    node = next(iter(document.nodes.values()))
+    assert node.state.override_provider == ""
+    assert node.state.override_model_id == ""
+
+
 def test_restore_chat_payload_defaults_branch_status_to_active_when_absent():
     document = _restore(nodes=[_chat("n0")])
     node = next(iter(document.nodes.values()))

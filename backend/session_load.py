@@ -410,6 +410,10 @@ def _restore_chat_payload(payload: dict[str, Any]) -> SceneNode:
             tool_invocations=[
                 dict(call) for call in (payload.get("tool_invocations") or []) if isinstance(call, dict)
             ],
+            # ADR-018 stage 18.3: absent in every pre-18.3 save -> "",
+            # matching the dataclass default ("no pin").
+            override_provider=str(payload.get("override_provider", "") or ""),
+            override_model_id=str(payload.get("override_model_id", "") or ""),
         ),
     )
 

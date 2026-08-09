@@ -473,6 +473,27 @@ def test_chat_node_serializes_synthesis_provenance_and_branch_status():
     assert payload["branch_status"] == "accepted"
 
 
+def test_chat_node_serializes_a_model_override_pin():
+    # ADR-018 stage 18.3 - the input-routing opposite of provider/model
+    # above (an explicit pin, not a completed reply's provenance).
+    doc = SceneDocument()
+    root = doc.add_chat_node(0, 0, "root", True)
+    doc.set_model_override(root.id, "Anthropic Claude", "claude-opus-5")
+
+    payload = next(p for p in build_chat_data(doc)["nodes"] if p.get("raw_content") == "root")
+    assert payload["override_provider"] == "Anthropic Claude"
+    assert payload["override_model_id"] == "claude-opus-5"
+
+
+def test_chat_node_with_no_model_override_serializes_empty_strings():
+    doc = SceneDocument()
+    root = doc.add_chat_node(0, 0, "root", True)
+
+    payload = next(p for p in build_chat_data(doc)["nodes"] if p.get("raw_content") == "root")
+    assert payload["override_provider"] == ""
+    assert payload["override_model_id"] == ""
+
+
 def test_note_serializes_branch_comparison_provenance():
     doc = SceneDocument()
     first = doc.add_chat_node(0, 0, "first", True)

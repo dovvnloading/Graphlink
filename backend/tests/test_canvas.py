@@ -6622,6 +6622,25 @@ def test_note_frame_container_ws_intents_mutate_and_publish():
     asyncio.run(run())
 
 
+def test_set_and_clear_model_override_ws_intents_mutate_and_publish():
+    # ADR-018 stage 18.3.
+    async def run():
+        bus, document, recorder = make_bus()
+
+        root = document.add_chat_node(0, 0, "root message", True)
+        root_id = root.id
+
+        await bus.dispatch_intent("scene", "setModelOverride", [root_id, "Anthropic Claude", "claude-opus-5"])
+        assert document.nodes[root_id].state.override_provider == "Anthropic Claude"
+        assert document.nodes[root_id].state.override_model_id == "claude-opus-5"
+
+        await bus.dispatch_intent("scene", "clearModelOverride", [root_id])
+        assert document.nodes[root_id].state.override_provider == ""
+        assert document.nodes[root_id].state.override_model_id == ""
+
+    asyncio.run(run())
+
+
 # -- R6.2: chart node (add_chart_node/resize_chart/toggle_chart_aspect_lock) --
 
 _CHART_DATA = {"type": "bar", "title": "Widgets Sold", "labels": ["Q1", "Q2"], "values": [10.0, 20.0]}
