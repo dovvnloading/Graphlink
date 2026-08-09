@@ -287,6 +287,113 @@ class TestAutopilot:
         assert any(n.kind == "note" for n in document.nodes.values())
 
 
+class TestAutopilotNetworkGate:
+    """The 8.5 exit criterion's 'no network unless approved': autopilot
+    auto-approves by scope, and anything touching net.fetch still prompts -
+    including run_node, whose REGISTERED scope is only graph.read (the
+    exercised scope is derived per call from the target kind/action)."""
+
+    def test_a_net_fetch_scoped_tool_still_prompts_in_autopilot(self, monkeypatch):
+        from backend.providers.base import ToolSpec
+        from backend.tools import NET_FETCH, ToolResult
+
+        document, dispatcher, registry, bus = make_harness()
+
+        async def net_handler(call, ctx):
+            return ToolResult(content="fetched")
+
+        registry.register(
+            ToolSpec(name="net.probe", description="d", input_schema={"type": "object"}),
+            net_handler, scopes={NET_FETCH}, approval="once",
+        )
+        node = seed_plan(document, ["one step"], mode="autopilot")
+        scripted_turns(monkeypatch, [
+            {"tool_calls": [call("c1", "net.probe")]},
+            {"tool_calls": [call("c2", "builder.complete_step", summary="done")]},
+        ], [])
+
+        approvals, _ = asyncio.run(drive_build(document, dispatcher, registry, bus, node))
+
+        assert approvals == ["net.probe"], "net.fetch must prompt even in autopilot"
+        assert node.state.builder_status == "done"
+
+    def test_run_node_research_prompts_in_autopilot_via_the_derived_scope(self, monkeypatch):
+        from graphlink_plugins.web_research import service as wr_service
+        from graphlink_plugins.web_research.domain import ResearchResult
+
+        document, dispatcher, registry, bus = make_harness()
+        parent = document.add_chat_node(0, 0, "ctx", True)
+        research = document.add_web_research_node(0, 200, parent.id)
+        research.content = "the query"
+        monkeypatch.setattr(
+            wr_service.WebResearchService, "run",
+            lambda self, request, **kw: ResearchResult(
+                request_id=request.request_id, original_query=request.original_query,
+                effective_query=request.original_query, answer_markdown="answer",
+            ),
+        )
+        node = seed_plan(document, ["research it"], mode="autopilot")
+        scripted_turns(monkeypatch, [
+            {"tool_calls": [call("c1", "run_node", node_id=research.id)]},
+            {"tool_calls": [call("c2", "builder.complete_step", summary="done")]},
+        ], [])
+
+        approvals, _ = asyncio.run(drive_build(document, dispatcher, registry, bus, node))
+
+        assert approvals == ["run_node"], (
+            "run_node registers graph.read only - the router must derive the "
+            "research action's net.fetch scope or autopilot silently reaches "
+            "the network"
+        )
+        assert node.state.builder_status == "done"
+
+
+class TestPlanPersistence:
+    def test_round_trip_preserves_the_plan_and_normalizes_live_states(self):
+        from backend.session_load import _restore_plan_payload
+        from backend.session_save import _serialize_plan_node
+
+        document = SceneDocument()
+        node = document.add_plan_node(10, 20, "the goal", mode="autopilot", max_steps=7)
+        node.state.plan_steps = [
+            {"id": "s1", "title": "done step", "status": "done", "detail": "d"},
+            {"id": "s2", "title": "mid-flight", "status": "running", "detail": ""},
+            {"id": "s3", "title": "not yet", "status": "pending", "detail": ""},
+        ]
+        node.state.builder_status = "running"  # a live run when the app died
+        node.state.builder_run_id = "run-9"
+        node.state.builder_spent_tokens = 1234
+
+        restored = _restore_plan_payload(_serialize_plan_node(node))
+
+        assert restored.kind == "plan"
+        assert restored.state.plan_goal == "the goal"
+        assert restored.state.builder_mode == "autopilot"
+        assert restored.state.builder_max_steps == 7
+        assert restored.state.builder_spent_tokens == 1234
+        assert restored.state.builder_run_id == "run-9"
+        # The load-time normalization: no RunHandle survives a restart, so a
+        # "running" build restores as interrupted (terminal, resumable) and
+        # a mid-flight step as failed - never a spinner no run backs.
+        assert restored.state.builder_status == "interrupted"
+        statuses = [s["status"] for s in restored.state.plan_steps]
+        assert statuses == ["done", "failed", "pending"]
+
+    def test_terminal_states_round_trip_verbatim(self):
+        from backend.session_load import _restore_plan_payload
+        from backend.session_save import _serialize_plan_node
+
+        document = SceneDocument()
+        node = document.add_plan_node(0, 0, "g")
+        node.state.builder_status = "done"
+        node.state.builder_status_detail = "Build complete."
+
+        restored = _restore_plan_payload(_serialize_plan_node(node))
+
+        assert restored.state.builder_status == "done"
+        assert restored.state.builder_status_detail == "Build complete."
+
+
 class TestReplanAndAbort:
     def test_replan_replaces_pending_steps_and_preserves_history(self, monkeypatch):
         document, dispatcher, registry, bus = make_harness()

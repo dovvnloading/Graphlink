@@ -141,6 +141,25 @@ GRAPH_READ_SUBGRAPH_SPEC = ToolSpec(
 )
 
 
+def run_node_effective_scope(document: SceneDocument, call: ToolCall) -> str | None:
+    """The scope a run_node CALL actually exercises - derived from its
+    target node's kind + the requested action, exactly as the handler will
+    enforce it. The mode-aware approval router needs this BEFORE invocation
+    (autopilot auto-approves by registered scope, but run_node registers
+    only graph.read; without this derivation, autopilot would silently
+    auto-approve a net.fetch research run - the exact 'no network unless
+    approved' hole the router exists to close). Returns None when the call
+    is malformed/unknown - the handler's own validation will reject it with
+    a proper error, so the router treats None as 'prompt'."""
+    if call.name != "run_node":
+        return None
+    node = document.nodes.get(str(call.arguments.get("node_id") or ""))
+    if node is None:
+        return None
+    action = str(call.arguments.get("action") or "") or _RUN_NODE_DEFAULT_ACTIONS.get(node.kind, "")
+    return _RUN_NODE_ACTION_SCOPES.get(action)
+
+
 def _run_id_of(ctx: RunContext) -> str | None:
     """The builder's BuilderRunContext carries run_id; a bare RunContext
     (tests, a future non-builder caller) does not - unstamped is the
@@ -360,6 +379,11 @@ _RUN_NODE_ACTION_SCOPES = {
     "execute": "code.execute",
     "reply": "provider.call",
     "chart": "provider.call",
+    # ADR-008 stage 8.5: research is THE net.fetch action - in autopilot it
+    # is the one thing that still always prompts (the ADR's "no network
+    # unless approved" exit criterion), enforced by the mode router keying
+    # on this scope.
+    "research": "net.fetch",
 }
 
 # A node kind's default action (what "run this node" means with no explicit
@@ -367,11 +391,12 @@ _RUN_NODE_ACTION_SCOPES = {
 # never a default: it runs ON a content node (the UI's own "Generate chart"
 # is an action offered on content nodes, not a node kind's own run), so it
 # must be asked for by name.
-_RUN_NODE_DEFAULT_ACTIONS = {"pycoder": "execute", "chat": "reply"}
+_RUN_NODE_DEFAULT_ACTIONS = {"pycoder": "execute", "chat": "reply", "web_research": "research"}
 _RUN_NODE_ACTION_KINDS = {
     "execute": ("pycoder",),
     "reply": ("chat",),
     "chart": ("chat", "note", "document", "code"),
+    "research": ("web_research",),
 }
 
 _RUN_OUTPUT_EXCERPT_CHARS = 4000
@@ -397,12 +422,6 @@ def make_run_node_handler(document: SceneDocument, dispatcher):
         node = document.nodes.get(node_id)
         if node is None:
             return _error(f"Unknown node: {node_id!r}.")
-        if node.kind == "web_research":
-            return _error(
-                "web_research nodes are not yet runnable via run_node - "
-                "create the node with the query as content; running it lands "
-                "with network gating in a later stage."
-            )
         action = str(call.arguments.get("action") or "") or _RUN_NODE_DEFAULT_ACTIONS.get(node.kind, "")
         if action not in _RUN_NODE_ACTION_SCOPES:
             return _error(
@@ -435,6 +454,8 @@ def make_run_node_handler(document: SceneDocument, dispatcher):
                 return await _run_pycoder(document, dispatcher, node, node_id, cancel_event)
             if action == "reply":
                 return await _run_chat(document, dispatcher, node_id, run_id, cancel_event, ctx)
+            if action == "research":
+                return await _run_research(document, node, node_id, claim, cancel_event)
             return await _run_chart(document, node, node_id, run_id, call, _agents)
         finally:
             if node.pending_request_id == claim:
@@ -503,6 +524,72 @@ def make_run_node_handler(document: SceneDocument, dispatcher):
             "reply_node_id": reply_node.id,
             "reply": reply_text[:_RUN_REPLY_EXCERPT_CHARS],
             "truncated": len(reply_text) > _RUN_REPLY_EXCERPT_CHARS,
+        }))
+
+    async def _run_research(document, node, node_id, claim, cancel_event):
+        """ADR-008 stage 8.5: the net.fetch action. Runs the SAME sync
+        pipeline the dedicated surface runs (WebResearchService.run - all
+        of ADR-004's SSRF/IP-pinning/robots machinery included, since it
+        lives inside the service's fetcher), landing results through the
+        same complete/fail domain methods, inline under the builder's run.
+        Cancellation bridges the builder's threading.Event onto the
+        service's own CancellationToken via a watcher task - the service's
+        stages checkpoint on the token, not on our event."""
+        from backend.canvas import _research_result_wire
+        from graphlink_plugins.web_research.domain import (
+            CancellationToken,
+            ResearchFailure,
+            WebResearchRequest,
+        )
+        from graphlink_plugins.web_research.service import WebResearchService
+
+        query = (node.content or "").strip()
+        if not query:
+            return _error(
+                f"Node {node_id!r} has no research query - set it via "
+                "graph.set_node_content (the node's content IS the query)."
+            )
+        document.start_web_research_run(node_id, query)
+        parent_edge = document._branch_parent_edge(node_id)
+        branch_history = (
+            document.chat_branch_history(parent_edge.source) if parent_edge else []
+        )
+        request = WebResearchRequest(
+            request_id=claim, node_id=node_id, chat_epoch=0,
+            original_query=query, branch_history=list(branch_history),
+        )
+        token = CancellationToken()
+
+        async def _bridge_cancel() -> None:
+            while not token.cancelled:
+                if cancel_event is not None and cancel_event.is_set():
+                    token.cancel()
+                    return
+                await asyncio.sleep(0.1)
+
+        watcher = asyncio.create_task(_bridge_cancel())
+        try:
+            result = await asyncio.wait_for(
+                asyncio.to_thread(WebResearchService().run, request, token=token),
+                timeout=_agents_const("WEB_RESEARCH_WATCHDOG_TIMEOUT_SECONDS"),
+            )
+        except ResearchFailure as exc:
+            document.fail_web_research_run(node_id, cancelled=token.cancelled, message=str(exc))
+            return _error(f"Research failed: {exc}")
+        except asyncio.TimeoutError:
+            token.cancel()
+            document.fail_web_research_run(
+                node_id, cancelled=False, message="Research timed out.",
+            )
+            return _error(f"Research on node {node_id!r} timed out.")
+        finally:
+            watcher.cancel()
+        document.complete_web_research_run(node_id, _research_result_wire(result))
+        return ToolResult(content=json.dumps({
+            "node_id": node_id,
+            "answer": result.answer_markdown[:_RUN_OUTPUT_EXCERPT_CHARS],
+            "truncated": len(result.answer_markdown) > _RUN_OUTPUT_EXCERPT_CHARS,
+            "sources": [s.final_url for s in result.sources][:8],
         }))
 
     async def _run_chart(document, node, node_id, run_id, call, _agents):

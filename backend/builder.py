@@ -377,7 +377,18 @@ async def run_build(
 
     async def request_approval(call: ToolCall) -> bool:
         if autopilot:
+            from backend.tools_graph import run_node_effective_scope
+
             spec_scopes = registry.scopes_for(call.name)
+            # run_node's registered scope is graph.read; the scope it
+            # actually EXERCISES depends on the target's kind/action -
+            # derive it or a research run would slip through autopilot
+            # unprompted (see run_node_effective_scope's own doc).
+            effective = run_node_effective_scope(document, call)
+            if call.name == "run_node" and effective is None:
+                spec_scopes = None  # malformed - let the human see it
+            elif effective is not None and spec_scopes is not None:
+                spec_scopes = spec_scopes | {effective}
             if spec_scopes is not None and spec_scopes <= _AUTOPILOT_AUTO_SCOPES:
                 return True
         future: asyncio.Future = loop.create_future()

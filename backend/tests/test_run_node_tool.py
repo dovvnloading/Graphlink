@@ -225,6 +225,126 @@ class TestRunChart:
         assert called == []
 
 
+class TestRunResearch:
+    def _seed_research(self, document):
+        parent = document.add_chat_node(0, 0, "context", True)
+        node = document.add_web_research_node(0, 200, parent.id)
+        node.content = "solar output trends 2025"
+        return node
+
+    def test_research_runs_the_service_and_lands_results_on_the_node(self, monkeypatch):
+        from graphlink_plugins.web_research import service as wr_service
+        from graphlink_plugins.web_research.domain import ResearchResult, ResearchSource
+
+        document, dispatcher, registry = make_setup()
+        node = self._seed_research(document)
+
+        def fake_run(self, request, *, token=None, progress=None):
+            return ResearchResult(
+                request_id=request.request_id, original_query=request.original_query,
+                effective_query=request.original_query,
+                answer_markdown="Solar output doubled since 2015 [s1].",
+                sources=[ResearchSource(
+                    source_id="s1", title="Report", url="https://example.com/r",
+                    canonical_url="https://example.com/r", final_url="https://example.com/r",
+                )],
+            )
+
+        monkeypatch.setattr(wr_service.WebResearchService, "run", fake_run)
+
+        result = run_node(registry, make_ctx(scopes=ALL_SCOPES | frozenset({"net.fetch"})), node.id)
+
+        assert not result.is_error
+        payload = json.loads(result.content)
+        assert "doubled since 2015" in payload["answer"]
+        assert payload["sources"] == ["https://example.com/r"]
+        assert node.state.research_stage == "completed"
+        assert node.state.research_result is not None
+        assert node.pending_request_id is None
+
+    def test_a_research_failure_lands_on_the_node_and_returns_a_tool_error(self, monkeypatch):
+        from graphlink_plugins.web_research import service as wr_service
+        from graphlink_plugins.web_research.domain import ResearchFailure
+
+        document, dispatcher, registry = make_setup()
+        node = self._seed_research(document)
+
+        def fake_run(self, request, *, token=None, progress=None):
+            raise ResearchFailure("No sources could be fetched.", code="no_sources")
+
+        monkeypatch.setattr(wr_service.WebResearchService, "run", fake_run)
+
+        result = run_node(registry, make_ctx(scopes=ALL_SCOPES | frozenset({"net.fetch"})), node.id)
+
+        assert result.is_error
+        assert "No sources" in result.content
+        assert node.state.research_error
+
+    def test_an_empty_query_is_rejected_before_any_network(self, monkeypatch):
+        from graphlink_plugins.web_research import service as wr_service
+
+        document, dispatcher, registry = make_setup()
+        node = self._seed_research(document)
+        node.content = "   "
+        called = []
+        monkeypatch.setattr(
+            wr_service.WebResearchService, "run",
+            lambda self, request, **kw: called.append(1),
+        )
+
+        result = run_node(registry, make_ctx(scopes=ALL_SCOPES | frozenset({"net.fetch"})), node.id)
+
+        assert result.is_error
+        assert called == []
+
+    def test_the_builders_cancel_event_bridges_onto_the_service_token(self, monkeypatch):
+        import threading
+        import time
+
+        from backend.providers.base import CancelToken
+        from graphlink_plugins.web_research import service as wr_service
+        from graphlink_plugins.web_research.domain import ResearchFailure
+
+        document, dispatcher, registry = make_setup()
+        node = self._seed_research(document)
+        cancel = threading.Event()
+
+        def fake_run(self, request, *, token=None, progress=None):
+            cancel.set()  # the user hits Stop mid-run
+            deadline = time.monotonic() + 5
+            while not token.cancelled:
+                if time.monotonic() > deadline:
+                    raise AssertionError("the bridge never cancelled the token")
+                time.sleep(0.01)
+            raise ResearchFailure("Cancelled.", code="cancelled")
+
+        monkeypatch.setattr(wr_service.WebResearchService, "run", fake_run)
+
+        async def approve(call):
+            return True
+
+        ctx = RunContext(
+            granted_scopes=ALL_SCOPES | frozenset({"net.fetch"}),
+            request_approval=approve, cancel=CancelToken(cancel),
+        )
+        result = asyncio.run(registry.invoke(
+            ToolCall(id="c1", name="run_node", arguments={"node_id": node.id}), ctx,
+        ))
+
+        assert result.is_error
+        assert node.state.research_error
+
+    def test_research_requires_the_net_fetch_scope(self):
+        document, dispatcher, registry = make_setup()
+        node = self._seed_research(document)
+        ctx = make_ctx()  # ALL_SCOPES has no net.fetch
+
+        result = run_node(registry, ctx, node.id)
+
+        assert result.is_error
+        assert "net.fetch" in result.content
+
+
 class TestGuards:
     def test_kind_scope_is_enforced_dynamically(self):
         document, dispatcher, registry = make_setup()
@@ -246,16 +366,6 @@ class TestGuards:
 
         assert result.is_error
         assert "in flight" in result.content
-
-    def test_web_research_is_a_named_not_yet_supported_error(self):
-        document, dispatcher, registry = make_setup()
-        parent = document.add_chat_node(0, 0, "p", True)
-        research = document.add_web_research_node(0, 200, parent.id)
-
-        result = run_node(registry, make_ctx(), research.id)
-
-        assert result.is_error
-        assert "not yet runnable" in result.content
 
     def test_cancellation_inside_the_handler_propagates_not_an_error_result(self, monkeypatch):
         import threading

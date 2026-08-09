@@ -443,8 +443,55 @@ class AgentDispatcher:
             register_run_node_tool(registry, document, self)
             register_knowledge_tools(registry)
             register_builder_control_tools(registry)
+            self._register_configured_mcp_tools(registry)
             self._builder_registry = registry
         return self._builder_registry
+
+    def _register_configured_mcp_tools(self, registry) -> None:
+        """ADR-008 stage 8.5: ADR-007's deferred MCP runtime wiring lands in
+        its designated consumer. Reads the persisted server list, connects
+        each ENABLED one, and registers its tools (namespaced, per-server
+        scopes, approval="always" by config default - MCP servers are
+        untrusted user-configured code). Per-server failure tolerance: a
+        server that won't start/handshake is logged + surfaced as a warning
+        and skipped - one broken config must not cost the Builder its graph
+        tools. Connected clients are kept for disposal at session end."""
+        from backend.mcp_client import McpError, McpServerConfig, McpStdioClient, register_mcp_server_tools
+
+        if self._settings_manager is None:
+            return
+        try:
+            server_dicts = self._settings_manager.get_mcp_servers()
+        except Exception:
+            logger.exception("could not read MCP server config")
+            return
+        self._mcp_clients: list = getattr(self, "_mcp_clients", [])
+        for raw in server_dicts:
+            try:
+                config_entry = McpServerConfig.from_dict(raw)
+            except Exception:
+                logger.exception("malformed MCP server entry skipped")
+                continue
+            if not config_entry.enabled:
+                continue
+            client = McpStdioClient(
+                command=config_entry.command, args=tuple(config_entry.args),
+                timeout=config_entry.timeout,
+            )
+            try:
+                client.connect()
+                registered = register_mcp_server_tools(registry, client, config_entry)
+                self._mcp_clients.append(client)
+                logger.info(
+                    "MCP server connected", extra={"kind": "builder"},
+                )
+                _ = registered
+            except (McpError, OSError) as exc:
+                logger.warning("MCP server %r unavailable: %s", config_entry.name, exc)
+                try:
+                    client.close()
+                except Exception:
+                    pass
 
     async def start_builder_run(
         self,
