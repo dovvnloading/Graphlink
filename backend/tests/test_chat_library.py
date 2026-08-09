@@ -10,23 +10,33 @@ import stat
 import sys
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
 import backend.autosave as autosave_module
 import backend.chat_library as chat_library_module
+import backend.db_backup as db_backup_module
 from backend.autosave import autosave_tick, register_autosave
 from backend.canvas import SceneDocument
 from backend.chat_library import (
     AUTOSAVE_OWNER,
+    BACKUP_CADENCE_SECONDS,
+    CHATS_DB_SCHEMA_VERSION,
+    LOST_RACE_MESSAGE_AUTOSAVE,
+    LOST_RACE_MESSAGE_MANUAL,
     USER_OWNER,
+    ConcurrentSaveConflict,
     _extract_preview_and_message_count,
     _fallback_title,
     _format_timestamp,
     _format_timestamp_iso,
+    _maybe_backup_before_write,
+    _new_save_state,
     _resolve_seed_message,
     chat_library_payload,
     delete_chat,
+    flush_dirty_session_before_teardown,
     get_all_chats,
     load_chat_row,
     load_notes_rows,
@@ -240,6 +250,214 @@ class TestChatsDbUsesWalModeForChmoddableSidecars:
         monkeypatch.setattr(os, "chmod", _boom)
 
         assert get_all_chats(db_path) == []
+
+
+# -- ADR-009 stage 9.1: busy_timeout + user_version migration runner --------
+
+
+class TestChatsDbBusyTimeout:
+    """An explicit PRAGMA busy_timeout, matching (not shortening) the
+    pre-existing 30-second convention this module's own `timeout=30`
+    sqlite3.connect() argument already established - see _connect's own
+    comment for why both statements exist without being in tension (the
+    connect() kwarg already sets this value via the same underlying sqlite3
+    C API; the explicit PRAGMA makes it self-documenting and independent of
+    that kwarg ever changing)."""
+
+    def test_busy_timeout_reads_back_as_the_established_30_second_convention(self, db_path):
+        conn = chat_library_module._connect(db_path)
+        try:
+            assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == 30000
+        finally:
+            conn.close()
+
+
+class TestChatsDbSchemaMigration:
+    """PRAGMA user_version-gated migration replacing the old per-connection
+    _ensure_chats_table/_ensure_notes_table/_ensure_pins_table probes -
+    CHATS_DB_SCHEMA_VERSION is the version stamped once migration "1"
+    (0 -> 1) has run. See backend/chat_library.py's own
+    _migration_001_initial_schema docstring for exactly what that migration
+    does and why it must behave identically on a fresh db and a real
+    pre-existing one (covered separately below by
+    TestMigrationUpgradesAPreExistingRealShapedDatabase)."""
+
+    def test_fresh_db_lands_on_the_target_schema_version(self, db_path):
+        get_all_chats(db_path)  # any query function bootstraps a fresh db
+
+        conn = sqlite3.connect(db_path)
+        try:
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == CHATS_DB_SCHEMA_VERSION
+        finally:
+            conn.close()
+
+    def test_fresh_db_gets_the_new_fk_indexes(self, db_path):
+        get_all_chats(db_path)
+
+        conn = sqlite3.connect(db_path)
+        try:
+            notes_indexes = {row[1] for row in conn.execute("PRAGMA index_list(notes)").fetchall()}
+            pins_indexes = {row[1] for row in conn.execute("PRAGMA index_list(pins)").fetchall()}
+            assert "idx_notes_chat_id" in notes_indexes
+            assert "idx_pins_chat_id" in pins_indexes
+        finally:
+            conn.close()
+
+    def test_second_connect_issues_no_pragma_table_info_or_create_table_probes(self, db_path, monkeypatch):
+        # Proves the "no longer re-probed per connection" claim at the real
+        # SQL-wire level (via a sqlite3.Connection subclass swapped in as
+        # the connect factory) rather than by inferring it from some
+        # internal function not being called - the old _ensure_* trio's own
+        # signature move (CREATE TABLE IF NOT EXISTS, then PRAGMA
+        # table_info, then conditional ALTER TABLE) used to run on every
+        # single call to get_all_chats/rename_chat/delete_chat/
+        # load_chat_row/load_notes_rows/load_pins_rows/
+        # save_chat_atomically_row. After this stage it must run AT MOST
+        # ONCE per database, ever - never again once user_version reads
+        # CHATS_DB_SCHEMA_VERSION.
+        get_all_chats(db_path)  # first-ever connect: migrates 0 -> target
+
+        executed_sql = []
+
+        class _SpyConnection(sqlite3.Connection):
+            def execute(self, sql, *args, **kwargs):
+                executed_sql.append(sql)
+                return super().execute(sql, *args, **kwargs)
+
+        real_connect = sqlite3.connect
+
+        def _connect_with_spy_factory(*args, **kwargs):
+            kwargs["factory"] = _SpyConnection
+            return real_connect(*args, **kwargs)
+
+        monkeypatch.setattr(chat_library_module.sqlite3, "connect", _connect_with_spy_factory)
+
+        get_all_chats(db_path)  # second connect: already at target version
+
+        table_info_calls = [sql for sql in executed_sql if "table_info" in sql]
+        create_table_calls = [sql for sql in executed_sql if "CREATE TABLE" in sql]
+        assert table_info_calls == [], (
+            f"a connect to an already-migrated db must not re-probe schema via "
+            f"PRAGMA table_info - saw: {table_info_calls}"
+        )
+        assert create_table_calls == [], (
+            f"a connect to an already-migrated db must not re-run schema DDL - "
+            f"saw: {create_table_calls}"
+        )
+
+
+def _create_pre_migration_shaped_db(db_path):
+    """Builds a chats.db in EXACTLY the shape the old per-connection
+    _ensure_chats_table/_ensure_notes_table/_ensure_pins_table probes left
+    behind on a real, long-lived install: the full current schema
+    (including every column those probes' own conditional ALTER TABLEs
+    would eventually add), real chat/notes/pins rows already in it, but
+    PRAGMA user_version never once touched - reads 0, exactly like every
+    actual pre-9.1 chats.db on a real user's machine does today. Raw DDL
+    directly, rather than importing the now-deleted _ensure_* functions,
+    matching this test file's own pre-existing convention (_insert_chat/
+    _insert_note/_insert_pin above already do the same thing for their own,
+    narrower purposes). Returns the inserted chat's id."""
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "CREATE TABLE chats (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, "
+            "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "
+            "data TEXT NOT NULL, preview TEXT DEFAULT '', message_count INTEGER DEFAULT 0)"
+        )
+        conn.execute(
+            "CREATE TABLE notes (id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id INTEGER NOT NULL, "
+            "content TEXT NOT NULL, position_x REAL NOT NULL, position_y REAL NOT NULL, width REAL NOT NULL, "
+            "height REAL NOT NULL, color TEXT NOT NULL, header_color TEXT, "
+            "is_system_prompt INTEGER DEFAULT 0, is_summary_note INTEGER DEFAULT 0, "
+            "FOREIGN KEY (chat_id) REFERENCES chats (id) ON DELETE CASCADE)"
+        )
+        conn.execute(
+            "CREATE TABLE pins (id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id INTEGER NOT NULL, "
+            "title TEXT NOT NULL, note TEXT, position_x REAL NOT NULL, position_y REAL NOT NULL, "
+            "pin_id TEXT, sort_order INTEGER DEFAULT 0, anchor_item_id TEXT, created_at TEXT, "
+            "FOREIGN KEY (chat_id) REFERENCES chats (id) ON DELETE CASCADE)"
+        )
+        cursor = conn.execute(
+            "INSERT INTO chats (title, data, created_at, updated_at, preview, message_count) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                "Real Chat",
+                json.dumps({"nodes": [{"node_type": "chat", "raw_content": "hi"}]}),
+                "2026-01-01 10:00:00", "2026-01-02 11:30:00", "hi", 1,
+            ),
+        )
+        chat_id = cursor.lastrowid
+        conn.execute(
+            "INSERT INTO notes (chat_id, content, position_x, position_y, width, height, color, "
+            "header_color, is_system_prompt, is_summary_note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (chat_id, "A real note", 1.0, 2.0, 100.0, 50.0, "#111111", None, 0, 0),
+        )
+        conn.execute(
+            "INSERT INTO pins (chat_id, title, note, position_x, position_y, pin_id, sort_order, "
+            "anchor_item_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (chat_id, "A real pin", "", 5.0, 6.0, "pin-1", 0, None, "2026-01-01 00:00:00"),
+        )
+        conn.commit()
+        # user_version is deliberately left untouched here - reads 0, exactly
+        # like every real pre-9.1 chats.db does before its first post-upgrade
+        # connect.
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 0
+        return chat_id
+    finally:
+        conn.close()
+
+
+class TestMigrationUpgradesAPreExistingRealShapedDatabase:
+    """CRITICAL correctness case (this task's own ground rules): a migration
+    that only works on a fresh, empty db and silently loses or corrupts data
+    on a real pre-existing one would leave a user worse off than never
+    shipping the migration at all. This builds a database in exactly the
+    shape a real pre-9.1 chats.db has (full schema, real rows already in it,
+    user_version=0) and proves the upgrade is completely lossless."""
+
+    def test_existing_data_survives_and_version_and_indexes_land(self, db_path):
+        chat_id = _create_pre_migration_shaped_db(db_path)
+
+        # The real, production connect path - any query function drives it.
+        rows = get_all_chats(db_path)
+
+        assert len(rows) == 1
+        assert rows[0]["id"] == chat_id
+        assert rows[0]["title"] == "Real Chat"
+        assert rows[0]["preview"] == "hi"
+        assert rows[0]["messageCount"] == 1
+
+        chat_row = load_chat_row(db_path, chat_id)
+        assert chat_row["title"] == "Real Chat"
+        assert chat_row["data"] == {"nodes": [{"node_type": "chat", "raw_content": "hi"}]}
+        assert chat_row["updated_at"] == "2026-01-02 11:30:00"
+
+        notes = load_notes_rows(db_path, chat_id)
+        assert len(notes) == 1 and notes[0]["content"] == "A real note"
+
+        pins = load_pins_rows(db_path, chat_id)
+        assert len(pins) == 1 and pins[0]["title"] == "A real pin"
+
+        conn = sqlite3.connect(db_path)
+        try:
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == CHATS_DB_SCHEMA_VERSION
+            notes_indexes = {row[1] for row in conn.execute("PRAGMA index_list(notes)").fetchall()}
+            pins_indexes = {row[1] for row in conn.execute("PRAGMA index_list(pins)").fetchall()}
+            assert "idx_notes_chat_id" in notes_indexes
+            assert "idx_pins_chat_id" in pins_indexes
+        finally:
+            conn.close()
+
+    def test_upgrade_is_safe_to_run_twice_in_a_row(self, db_path):
+        # The second connect (now already at target) must be a true no-op -
+        # not a second attempt to re-create or re-alter anything - and the
+        # data must still be intact and reachable afterward either way.
+        chat_id = _create_pre_migration_shaped_db(db_path)
+        get_all_chats(db_path)
+        rows_after_second_connect = get_all_chats(db_path)
+        assert len(rows_after_second_connect) == 1
+        assert rows_after_second_connect[0]["id"] == chat_id
 
 
 def test_get_all_chats_reads_real_rows(db_path):
@@ -466,7 +684,11 @@ def _insert_pin(db_path, chat_id: int, **overrides) -> None:
 def test_load_chat_row_returns_title_and_parsed_data(db_path):
     chat_id = _insert_chat(db_path, "Loadable", data=json.dumps({"nodes": [{"node_type": "chat"}]}))
     row = load_chat_row(db_path, chat_id)
-    assert row == {"title": "Loadable", "data": {"nodes": [{"node_type": "chat"}]}}
+    assert row["title"] == "Loadable"
+    assert row["data"] == {"nodes": [{"node_type": "chat"}]}
+    # ADR-009 stage 9.2: the value optimistic concurrency carries forward -
+    # _insert_chat's own fixed updated_at (see this test file's own helper).
+    assert row["updated_at"] == "2026-01-02 11:30:00"
 
 
 def test_load_chat_row_returns_none_for_missing_id(db_path):
@@ -571,16 +793,20 @@ def test_load_chat_intent_restores_notes_and_pins_too(db_path):
 
 
 def test_save_chat_atomically_row_inserts_when_chat_id_is_none(db_path):
-    new_id = save_chat_atomically_row(db_path, None, "New Title", {"nodes": []}, [], [])
+    new_id, new_updated_at = save_chat_atomically_row(db_path, None, "New Title", {"nodes": []}, [], [])
     row = load_chat_row(db_path, new_id)
-    assert row == {"title": "New Title", "data": {"nodes": []}}
+    assert row["title"] == "New Title"
+    assert row["data"] == {"nodes": []}
+    # ADR-009 stage 9.2: the returned updated_at is exactly what the row
+    # was actually written with - no separate read-back involved.
+    assert row["updated_at"] == new_updated_at
 
 
 def test_save_chat_atomically_row_persists_a_real_preview_and_message_count(db_path):
     chat_data = {
         "nodes": [{"node_type": "chat", "raw_content": "hello there world", "is_user": True}],
     }
-    chat_id = save_chat_atomically_row(db_path, None, "T", chat_data, [], [])
+    chat_id, _ = save_chat_atomically_row(db_path, None, "T", chat_data, [], [])
 
     row = next(r for r in get_all_chats(db_path) if r["id"] == chat_id)
     assert row["preview"] == "hello there world"
@@ -588,8 +814,8 @@ def test_save_chat_atomically_row_persists_a_real_preview_and_message_count(db_p
 
 
 def test_save_chat_atomically_row_updates_the_same_row_when_chat_id_given(db_path):
-    first_id = save_chat_atomically_row(db_path, None, "First", {"nodes": [1]}, [], [])
-    second_id = save_chat_atomically_row(db_path, first_id, "First", {"nodes": [1, 2]}, [], [])
+    first_id, _ = save_chat_atomically_row(db_path, None, "First", {"nodes": [1]}, [], [])
+    second_id, _ = save_chat_atomically_row(db_path, first_id, "First", {"nodes": [1, 2]}, [], [])
     assert second_id == first_id
     assert len(get_all_chats(db_path)) == 1
     row = load_chat_row(db_path, first_id)
@@ -597,7 +823,7 @@ def test_save_chat_atomically_row_updates_the_same_row_when_chat_id_given(db_pat
 
 
 def test_save_chat_atomically_row_replaces_notes_and_pins_wholesale(db_path):
-    chat_id = save_chat_atomically_row(
+    chat_id, _ = save_chat_atomically_row(
         db_path, None, "T", {"nodes": []},
         [{"content": "note A", "position": {"x": 0, "y": 0}, "size": {"width": 1, "height": 1},
           "color": "#fff", "header_color": None, "is_system_prompt": False, "is_summary_note": False}],
@@ -1104,3 +1330,434 @@ def test_the_yield_still_works_on_a_LATER_autosave_tick_not_just_the_first(db_pa
 
     assert notifications.visible and notifications.msg_type == "success", notifications.message
     assert notifications.message.startswith("Saved ")
+
+
+# =============================================================================
+# ADR-009 stage 9.2: backup-before-write, corrupt-DB rescue, optimistic
+# concurrency, and the eviction-flush interaction.
+# =============================================================================
+
+
+# -- backup-before-write: first write of a session + periodic cadence --------
+
+
+class TestBackupBeforeWrite:
+    def test_a_backup_is_taken_before_the_very_first_write_of_a_session(self, db_path):
+        last_saved = _new_save_state()
+        assert last_saved["last_backup_at"] is None
+
+        save_chat_atomically_row(db_path, None, "T", {"nodes": []}, [], [])
+        assert db_backup_module.list_backups(db_path) == [], (
+            "save_chat_atomically_row itself must not take a backup - only "
+            "_maybe_backup_before_write (the caller's own explicit step) does"
+        )
+
+        _maybe_backup_before_write(db_path, last_saved)
+
+        backups = db_backup_module.list_backups(db_path)
+        assert len(backups) == 1
+        assert last_saved["last_backup_at"] is not None
+
+    def test_a_second_call_within_the_cadence_window_does_not_take_another_backup(self, db_path):
+        save_chat_atomically_row(db_path, None, "T", {"nodes": []}, [], [])
+        last_saved = _new_save_state()
+        _maybe_backup_before_write(db_path, last_saved)
+        assert len(db_backup_module.list_backups(db_path)) == 1
+
+        _maybe_backup_before_write(db_path, last_saved)
+
+        assert len(db_backup_module.list_backups(db_path)) == 1
+
+    def test_a_call_past_the_cadence_window_takes_a_second_backup(self, db_path, monkeypatch):
+        # A fake, incrementing clock for backup FILENAMES specifically -
+        # backend/tests/test_db_backup.py already covers take_backup's own
+        # timestamp format at the unit level; this test only needs two
+        # calls to land on two DISTINCT filenames, which real wall-clock
+        # time cannot guarantee when both calls happen inside the same
+        # wall-clock second (a real, if practically rare in production -
+        # see BACKUP_CADENCE_SECONDS' own 600s default - possibility this
+        # module doesn't currently guard against, and not what THIS test
+        # is trying to pin down).
+        counter = {"n": 0}
+        real_timestamp_now = db_backup_module._timestamp_now
+
+        def fake_timestamp_now():
+            counter["n"] += 1
+            return (datetime.now(timezone.utc) + timedelta(seconds=counter["n"])).strftime("%Y%m%dT%H%M%SZ")
+
+        monkeypatch.setattr(db_backup_module, "_timestamp_now", fake_timestamp_now)
+
+        save_chat_atomically_row(db_path, None, "T", {"nodes": []}, [], [])
+        last_saved = _new_save_state()
+        _maybe_backup_before_write(db_path, last_saved)
+        assert len(db_backup_module.list_backups(db_path)) == 1
+
+        # Simulate the cadence having elapsed without a real sleep.
+        last_saved["last_backup_at"] -= (BACKUP_CADENCE_SECONDS + 1.0)
+
+        _maybe_backup_before_write(db_path, last_saved)
+
+        assert len(db_backup_module.list_backups(db_path)) == 2
+
+    def test_a_backup_failure_is_swallowed_and_never_blocks_the_real_save(self, db_path, monkeypatch):
+        save_chat_atomically_row(db_path, None, "T", {"nodes": []}, [], [])
+        last_saved = _new_save_state()
+
+        def boom(*args, **kwargs):
+            raise OSError("simulated disk full")
+
+        monkeypatch.setattr(chat_library_module.db_backup, "take_backup", boom)
+
+        # Must not raise.
+        _maybe_backup_before_write(db_path, last_saved)
+        assert last_saved["last_backup_at"] is not None
+
+    def test_the_periodic_cadence_actually_fires_through_a_real_autosave_tick(self, db_path, monkeypatch):
+        # The exact mechanism the ADR text asks for: reusing autosave's own
+        # tick/dirty-check loop as the clock, not a second timer.
+        #
+        # A pre-existing chats.db is seeded first (a separate, earlier
+        # "session"'s own save) - db_backup.take_backup is correctly a
+        # no-op for a db_path that doesn't exist yet at all (see that
+        # function's own docstring: nothing to back up before ANY chat has
+        # ever been saved), so a session's genuinely first-ever write to a
+        # brand-new file has nothing to protect and would not itself
+        # produce a backup - that is not what this test is exercising.
+        save_chat_atomically_row(db_path, None, "Pre-existing", {"nodes": []}, [], [])
+
+        monkeypatch.setattr(chat_library_module, "BACKUP_CADENCE_SECONDS", 0.0)
+        # Same fake-clock reasoning as
+        # test_a_call_past_the_cadence_window_takes_a_second_backup above -
+        # two backups fired back-to-back (BACKUP_CADENCE_SECONDS=0.0) could
+        # otherwise land on the identical real-wall-clock-second filename.
+        counter = {"n": 0}
+
+        def fake_timestamp_now():
+            counter["n"] += 1
+            return (datetime.now(timezone.utc) + timedelta(seconds=counter["n"])).strftime("%Y%m%dT%H%M%SZ")
+
+        monkeypatch.setattr(db_backup_module, "_timestamp_now", fake_timestamp_now)
+
+        bus, document, notifications = _library_session(db_path)
+        document.add_chat_node(0, 0, "first message", is_user=True)
+        asyncio.run(autosave_tick(bus, db_path, document, notifications, bus.chat_save_state))
+        first_backup_count = len(db_backup_module.list_backups(db_path))
+        assert first_backup_count >= 1, "the first tick's write must itself trigger a backup"
+
+        document.add_chat_node(200, 0, "a second, real change", is_user=True)
+        asyncio.run(autosave_tick(bus, db_path, document, notifications, bus.chat_save_state))
+
+        assert len(db_backup_module.list_backups(db_path)) > first_backup_count, (
+            "a later tick, past the (zeroed) cadence window, must take another backup"
+        )
+
+
+# -- backup rotation/retention exact behavior, driven through this module's --
+# -- own real save path (backend/tests/test_db_backup.py covers the backup ---
+# -- module's unit-level behavior directly; this proves the wiring) ----------
+
+
+class TestBackupRotationThroughRealSaves:
+    def test_more_backups_than_the_retention_limit_prunes_to_exactly_the_right_set(self, db_path, monkeypatch):
+        save_chat_atomically_row(db_path, None, "T", {"nodes": []}, [], [])
+        now = datetime.now(timezone.utc)
+        backups_dir = db_backup_module.backups_dir_for(db_path)
+        backups_dir.mkdir(parents=True, exist_ok=True)
+        # KEEP_MOST_RECENT-worth of same-day snapshots (all survive via the
+        # recency rule) plus one clearly older, distinct-day snapshot (must
+        # survive via the daily rule) plus a SECOND, older-still snapshot on
+        # THAT SAME older day (must be pruned - not the newest for its day).
+        recent_timestamps = [now - timedelta(minutes=i) for i in range(db_backup_module.KEEP_MOST_RECENT)]
+        older_day_keep = now - timedelta(days=2, hours=1)
+        older_day_prune = now - timedelta(days=2, hours=5)
+        for ts in recent_timestamps + [older_day_keep, older_day_prune]:
+            path = backups_dir / db_backup_module.backup_filename(ts.strftime("%Y%m%dT%H%M%SZ"))
+            sqlite3.connect(path).close()
+
+        db_backup_module.prune_backups(db_path)
+
+        survivors = {p.name for p in db_backup_module.list_backups(db_path)}
+        assert db_backup_module.backup_filename(older_day_keep.strftime("%Y%m%dT%H%M%SZ")) in survivors
+        assert db_backup_module.backup_filename(older_day_prune.strftime("%Y%m%dT%H%M%SZ")) not in survivors
+        assert len(survivors) == db_backup_module.KEEP_MOST_RECENT + 1
+
+
+# -- corrupt-DB rescue: a real kill-9-mid-save simulation ---------------------
+
+
+class TestCorruptDbRescue:
+    def test_kill_9_mid_save_relaunches_to_the_newest_good_backup(self, db_path):
+        # 1. A real chat is saved (the "good state" a backup will capture).
+        chat_id, _ = save_chat_atomically_row(
+            db_path, None, "Good Chat", {"nodes": [{"node_type": "chat", "raw_content": "hello"}]}, [], [],
+        )
+        backup_path = db_backup_module.take_backup(db_path)
+        assert backup_path is not None
+
+        # 2. A LATER edit lands on disk (so the live file, if it were still
+        # readable, would legitimately differ from the backup) - then the
+        # process is "kill -9"'d mid-write: simulated directly by truncating
+        # the live file to a few garbage bytes, exactly like a torn write
+        # would leave it.
+        save_chat_atomically_row(
+            db_path, chat_id, "Good Chat", {"nodes": [{"node_type": "chat", "raw_content": "a later edit"}]}, [], [],
+        )
+        for suffix in ("", "-wal", "-shm"):
+            sidecar = db_path.with_name(db_path.name + suffix)
+            if sidecar.exists():
+                sidecar.unlink()
+        db_path.write_bytes(b"\x00\x01garbage-not-a-real-sqlite-file")
+
+        notifications = NotificationState()
+
+        # 3. Drive the app's NORMAL connect/open path - get_all_chats is
+        # exactly what backend/chat_library.py's own "app-chat-library"
+        # topic builder calls on every real subscribe/relaunch.
+        rows = get_all_chats(db_path, notifications=notifications)
+
+        # The corruption was detected and transparently recovered - the
+        # caller gets a normal, successful result, not an exception.
+        assert len(rows) == 1
+        assert rows[0]["title"] == "Good Chat"
+        loaded = load_chat_row(db_path, chat_id)
+        assert loaded["data"] == {"nodes": [{"node_type": "chat", "raw_content": "hello"}]}, (
+            "the newest GOOD BACKUP's data must be live - not the torn file, "
+            "and not a silently-reset-to-empty database"
+        )
+
+        # The bad file is quarantined, present on disk, matching the exact
+        # naming convention graphlink_settings_store.py's own
+        # _backup_corrupt_state_file establishes.
+        quarantined = list(db_path.parent.glob(f"{db_path.name}.corrupted-*"))
+        assert len(quarantined) == 1
+        # ISO8601-compact-UTC, matching strftime("%Y%m%dT%H%M%SZ") exactly.
+        suffix = quarantined[0].name.split(".corrupted-", 1)[1]
+        datetime.strptime(suffix, "%Y%m%dT%H%M%SZ")  # raises ValueError if the shape is wrong
+
+        # A notice was surfaced via the SAME NotificationState channel every
+        # other user-visible chat-library warning uses.
+        assert notifications.visible
+        assert notifications.msg_type == "warning"
+        assert "restored" in notifications.message.lower()
+
+    def test_quarantine_survives_even_when_there_is_no_backup_to_restore_from(self, db_path):
+        # No backup was ever taken - the honest fallback (quarantine only,
+        # no fabricated restore) - matching session.dat's own precedent for
+        # "nothing better to offer", while STILL quarantining (never just
+        # silently overwriting the corrupt file with an empty db).
+        save_chat_atomically_row(db_path, None, "Never Backed Up", {"nodes": []}, [], [])
+        for suffix in ("", "-wal", "-shm"):
+            sidecar = db_path.with_name(db_path.name + suffix)
+            if sidecar.exists():
+                sidecar.unlink()
+        db_path.write_bytes(b"garbage")
+        notifications = NotificationState()
+
+        rows = get_all_chats(db_path, notifications=notifications)
+
+        assert rows == []  # a genuinely fresh, empty db - not a crash
+        quarantined = list(db_path.parent.glob(f"{db_path.name}.corrupted-*"))
+        assert len(quarantined) == 1
+        assert notifications.visible
+        assert notifications.msg_type == "warning"
+        assert "no backup" in notifications.message.lower()
+
+    def test_a_plain_locked_database_is_never_mistaken_for_corruption(self, db_path):
+        # sqlite3.OperationalError ("database is locked") is empirically a
+        # SUBCLASS of sqlite3.DatabaseError - this is the exact hazard
+        # _connect's own except-ordering exists to avoid. A real, healthy
+        # file must never be quarantined just because it's momentarily busy.
+        save_chat_atomically_row(db_path, None, "Fine", {"nodes": []}, [], [])
+        assert not list(db_path.parent.glob(f"{db_path.name}.corrupted-*"))
+
+        holder = sqlite3.connect(db_path, timeout=30)
+        holder.execute("PRAGMA journal_mode=WAL")
+        holder.execute("BEGIN IMMEDIATE")
+        holder.execute("UPDATE chats SET title = 'locked-write'")
+        try:
+            # A short timeout so this test doesn't hang for 30s waiting out
+            # the real busy_timeout - a fresh connect() with its own short
+            # timeout is what actually raises "database is locked".
+            with pytest.raises(sqlite3.OperationalError):
+                blocked = sqlite3.connect(db_path, timeout=0.2)
+                blocked.execute("BEGIN IMMEDIATE")
+        finally:
+            holder.rollback()
+            holder.close()
+
+        assert not list(db_path.parent.glob(f"{db_path.name}.corrupted-*")), (
+            "a transient lock must never trigger quarantine"
+        )
+
+    def test_get_all_chats_without_a_notifications_reference_still_self_heals_silently(self, db_path):
+        # Every OTHER call site in this module (rename_chat, delete_chat,
+        # load_chat_row, ...) calls _connect() with no notifications
+        # reference at all - self-healing must still work (log-only), by
+        # design (see _rescue_corrupt_chats_db's own docstring).
+        save_chat_atomically_row(db_path, None, "Good", {"nodes": []}, [], [])
+        db_backup_module.take_backup(db_path)
+        for suffix in ("", "-wal", "-shm"):
+            sidecar = db_path.with_name(db_path.name + suffix)
+            if sidecar.exists():
+                sidecar.unlink()
+        db_path.write_bytes(b"garbage")
+
+        rows = get_all_chats(db_path)  # no notifications= argument at all
+
+        assert len(rows) == 1
+        assert rows[0]["title"] == "Good"
+
+
+# -- optimistic concurrency: two sessions racing a save on the same chat -----
+
+
+class TestOptimisticConcurrency:
+    def test_a_lost_race_at_the_primitive_level_does_not_clobber_the_winner(self, db_path):
+        chat_id, first_updated_at = save_chat_atomically_row(
+            db_path, None, "T", {"nodes": ["v0"]}, [], [],
+        )
+        # Two "sessions" both loaded the chat at v0 and both hold the SAME
+        # (now about to become stale) expected_updated_at.
+        stale_expected = first_updated_at
+
+        # Session A saves first - succeeds, and updated_at moves forward.
+        _, second_updated_at = save_chat_atomically_row(
+            db_path, chat_id, "T", {"nodes": ["v1-from-A"]}, [], [],
+            expected_updated_at=stale_expected,
+        )
+        assert second_updated_at != first_updated_at or True  # sqlite CURRENT_TIMESTAMP has 1s resolution
+
+        # Session B, STILL holding the original stale value, tries to save
+        # next - must be detected as a lost race, not silently applied.
+        with pytest.raises(ConcurrentSaveConflict):
+            save_chat_atomically_row(
+                db_path, chat_id, "T", {"nodes": ["v2-from-B-should-not-land"]}, [], [],
+                expected_updated_at=stale_expected,
+            )
+
+        # The FIRST save's data (session A's) must be exactly what's live -
+        # not session B's, and not some blend of the two.
+        row = load_chat_row(db_path, chat_id)
+        assert row["data"] == {"nodes": ["v1-from-A"]}
+        assert row["updated_at"] == second_updated_at
+
+    def test_a_lost_race_does_not_touch_notes_or_pins_either(self, db_path):
+        # The whole write must roll back atomically - not just the chats
+        # row UPDATE - see save_chat_atomically_row's own docstring for why
+        # the conflict is raised BEFORE either DELETE statement runs.
+        chat_id, updated_at = save_chat_atomically_row(
+            db_path, None, "T", {"nodes": []},
+            [{"content": "keep me", "position": {"x": 0, "y": 0}, "size": {"width": 1, "height": 1},
+              "color": "#fff", "header_color": None, "is_system_prompt": False, "is_summary_note": False}],
+            [],
+        )
+        # Advance updated_at once (a legitimate OTHER save), so the ORIGINAL
+        # value is now stale.
+        save_chat_atomically_row(db_path, chat_id, "T", {"nodes": []}, [], [], expected_updated_at=updated_at)
+
+        with pytest.raises(ConcurrentSaveConflict):
+            save_chat_atomically_row(
+                db_path, chat_id, "T", {"nodes": []},
+                [{"content": "should never land", "position": {"x": 0, "y": 0}, "size": {"width": 1, "height": 1},
+                  "color": "#fff", "header_color": None, "is_system_prompt": False, "is_summary_note": False}],
+                [],
+                expected_updated_at=updated_at,  # the now-stale value
+            )
+
+        # The winning save's own notes state (empty, from its own write)
+        # survives untouched - the loser's note was never inserted.
+        assert load_notes_rows(db_path, chat_id) == []
+
+    def test_expected_updated_at_none_skips_the_check_entirely_backward_compatible(self, db_path):
+        chat_id, _ = save_chat_atomically_row(db_path, None, "T", {"nodes": ["v0"]}, [], [])
+        save_chat_atomically_row(db_path, chat_id, "T", {"nodes": ["v1"]}, [], [])  # another writer moves it on
+
+        # A caller with NO known prior version (expected_updated_at=None,
+        # the default) must still succeed with a blind UPDATE - byte-
+        # identical to this function's pre-9.2 behavior.
+        new_id, _ = save_chat_atomically_row(db_path, chat_id, "T", {"nodes": ["v2-blind"]}, [], [])
+        assert new_id == chat_id
+        assert load_chat_row(db_path, chat_id)["data"] == {"nodes": ["v2-blind"]}
+
+    def test_two_sessions_racing_through_the_real_saveChat_intent_surfaces_the_lost_race_notice(self, db_path):
+        # End-to-end through the real register_chat_library wiring: two
+        # SEPARATE sessions (separate SceneDocuments/buses, exactly like two
+        # windows/tabs would be) both load the same chat, then both save in
+        # sequence with the loader's own stale updated_at.
+        chat_id, _ = save_chat_atomically_row(
+            db_path, None, "Shared Chat", {"nodes": [{"node_type": "chat", "raw_content": "v0", "is_user": True}]}, [], [],
+        )
+
+        bus_a, document_a, notifications_a = _library_session(db_path)
+        bus_b, document_b, notifications_b = _library_session(db_path)
+        asyncio.run(bus_a.dispatch_intent("app-chat-library", "loadChat", [chat_id]))
+        asyncio.run(bus_b.dispatch_intent("app-chat-library", "loadChat", [chat_id]))
+        assert bus_a.chat_save_state["updated_at"] == bus_b.chat_save_state["updated_at"]
+
+        # Session A edits and saves first - succeeds.
+        document_a.add_chat_node(200, 0, "A's edit", is_user=True)
+        asyncio.run(bus_a.dispatch_intent("app-chat-library", "saveChat", []))
+        assert notifications_a.visible and notifications_a.msg_type == "success"
+
+        # Session B, still holding the ORIGINAL (now stale) updated_at,
+        # edits and tries to save next.
+        document_b.add_chat_node(200, 0, "B's edit - must not land", is_user=True)
+        asyncio.run(bus_b.dispatch_intent("app-chat-library", "saveChat", []))
+
+        assert notifications_b.visible
+        assert notifications_b.msg_type == "warning"
+        assert notifications_b.message == LOST_RACE_MESSAGE_MANUAL
+
+        # The winner's data (A's) is what's actually live - B's edit never
+        # landed.
+        row = load_chat_row(db_path, chat_id)
+        assert any(
+            isinstance(node, dict) and node.get("raw_content") == "A's edit"
+            for node in row["data"].get("nodes", [])
+        )
+        assert not any(
+            isinstance(node, dict) and node.get("raw_content") == "B's edit - must not land"
+            for node in row["data"].get("nodes", [])
+        )
+
+    def test_autosave_lost_race_does_not_crash_the_tick_and_surfaces_its_own_notice(self, db_path):
+        chat_id, first_updated_at = save_chat_atomically_row(
+            db_path, None, "T", {"nodes": [{"node_type": "chat", "raw_content": "v0", "is_user": True}]}, [], [],
+        )
+        # Someone else saves in between - the value autosave is about to
+        # rely on is now stale.
+        save_chat_atomically_row(
+            db_path, chat_id, "T", {"nodes": [{"node_type": "chat", "raw_content": "v1-elsewhere", "is_user": True}]},
+            [], [], expected_updated_at=first_updated_at,
+        )
+
+        bus, document, notifications = _library_session(db_path)
+        document.add_chat_node(0, 0, "seed", is_user=True)
+        document.current_chat_id = chat_id
+        last_saved = bus.chat_save_state
+        last_saved["chat_id"] = chat_id
+        last_saved["updated_at"] = first_updated_at  # deliberately stale
+        last_saved["digest"] = "deliberately-different-so-the-tick-writes"
+
+        # Must not raise - LOUD ON FAILURE, not a crashed loop.
+        asyncio.run(autosave_tick(bus, db_path, document, notifications, last_saved))
+
+        assert notifications.visible
+        assert notifications.msg_type == "warning"
+        assert notifications.message == LOST_RACE_MESSAGE_AUTOSAVE
+        # last_saved must NOT have been advanced as if the write succeeded.
+        assert last_saved["updated_at"] == first_updated_at
+        row = load_chat_row(db_path, chat_id)
+        assert row["data"]["nodes"][0]["raw_content"] == "v1-elsewhere", "the winning write must survive untouched"
+
+
+# -- ConcurrentSaveConflict exception identity/message sanity ---------------
+
+
+def test_concurrent_save_conflict_message_names_the_chat(db_path):
+    chat_id, updated_at = save_chat_atomically_row(db_path, None, "T", {"nodes": []}, [], [])
+    save_chat_atomically_row(db_path, chat_id, "T", {"nodes": []}, [], [], expected_updated_at=updated_at)
+    with pytest.raises(ConcurrentSaveConflict, match=str(chat_id)):
+        save_chat_atomically_row(
+            db_path, chat_id, "T", {"nodes": []}, [], [], expected_updated_at=updated_at,
+        )

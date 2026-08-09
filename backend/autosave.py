@@ -85,8 +85,11 @@ from typing import Any
 from backend.canvas import SceneDocument
 from backend.chat_library import (
     AUTOSAVE_OWNER,
+    LOST_RACE_MESSAGE_AUTOSAVE,
+    ConcurrentSaveConflict,
     _content_digest,
     _fallback_title,
+    _maybe_backup_before_write,
     _resolve_seed_message,
     load_chat_row,
     save_chat_atomically_row,
@@ -136,6 +139,13 @@ async def autosave_tick(
         return
 
     chat_id_for_save: int | None = None
+    # ADR-009 stage 9.2: what THIS session believes is on disk for the chat
+    # it's about to (re)save - see backend/chat_library.py's own saveChat
+    # closure for the identical reasoning (only trusted when it actually
+    # describes the SAME row; otherwise expected_updated_at stays None and
+    # save_chat_atomically_row falls back to a blind UPDATE, matching this
+    # function's pre-9.2 behavior for that case).
+    expected_updated_at: str | None = None
     current_id = canvas_document.current_chat_id
     if current_id:
         try:
@@ -162,15 +172,40 @@ async def autosave_tick(
             # saveChat's own resave path follows.
             title = str(existing_row.get("title") or "Untitled")
             chat_id_for_save = int(current_id)
+            if last_saved.get("chat_id") == int(current_id):
+                expected_updated_at = last_saved.get("updated_at")
         else:
             title = _fallback_title(_resolve_seed_message(canvas_document))
     else:
         title = _fallback_title(_resolve_seed_message(canvas_document))
 
     try:
-        new_chat_id = await asyncio.to_thread(
+        # ADR-009 stage 9.2: backup-before-write, the SAME call
+        # backend/chat_library.py's own saveChat closure makes - see
+        # _maybe_backup_before_write's own docstring for why this one call
+        # covers both "before the first mutating write of a session" and
+        # the ongoing periodic cadence, reusing THIS tick loop as the clock
+        # rather than a second timer. Best-effort: a backup failure is
+        # logged inside that function and never raised.
+        await asyncio.to_thread(_maybe_backup_before_write, db_path, last_saved)
+        new_chat_id, new_updated_at = await asyncio.to_thread(
             save_chat_atomically_row, db_path, chat_id_for_save, title, chat_data, notes_data, pins_data,
+            expected_updated_at=expected_updated_at,
         )
+    except ConcurrentSaveConflict:
+        # ADR-009 stage 9.2 exit criterion: a lost autosave race must
+        # neither clobber the newer version NOR crash this tick/the loop -
+        # last_saved is deliberately left untouched (still pointing at the
+        # STALE updated_at), so the very next tick detects the same
+        # conflict again rather than silently believing it caught up.
+        logger.warning(
+            "autosave: lost a save race for chat %r (session=%r) - not clobbering the newer version",
+            current_id, bus.session_id,
+        )
+        if notifications is not None:
+            notifications.show(LOST_RACE_MESSAGE_AUTOSAVE, "warning")
+            await bus.publish("notification")
+        return
     except Exception as exc:
         logger.exception("autosave: DB write failed for session %r", bus.session_id)
         if notifications is not None:
@@ -181,6 +216,7 @@ async def autosave_tick(
     canvas_document.current_chat_id = int(new_chat_id)
     last_saved["digest"] = digest
     last_saved["chat_id"] = int(new_chat_id)
+    last_saved["updated_at"] = new_updated_at
     await bus.publish("app-chat-library")
 
 

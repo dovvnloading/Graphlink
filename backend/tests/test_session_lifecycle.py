@@ -29,6 +29,7 @@ from fastapi.testclient import TestClient
 
 from backend.app import create_app, _evict_idle_session
 from backend.events import DEFAULT_SESSION_ID, EventBus, SessionBus, UnknownSessionError
+from backend.notifications import NotificationState
 from backend.session_context import SessionContext, attach_session_context, get_session_context
 
 
@@ -422,7 +423,13 @@ def test_evict_idle_session_releases_the_mutation_guard_when_cancelling_mid_writ
         def slow_write(*args, **kwargs):
             loop.call_soon_threadsafe(write_entered.set)
             time.sleep(0.3)
-            return 1  # any truthy chat_id; DB unused for this assertion
+            # ADR-009 stage 9.2: (chat_id, updated_at) - any truthy chat_id
+            # and a well-formed timestamp string; DB unused for this
+            # assertion, but the shape must match the real function's
+            # contract so autosave_tick's own unpacking doesn't itself
+            # raise (masking this test's actual assertion behind a
+            # swallowed TypeError in autosave_tick's own except Exception).
+            return 1, "2026-01-01 00:00:00"
 
         state_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         db_path = Path(state_dir.name) / "chats.db"
@@ -505,3 +512,121 @@ def test_evict_idle_session_does_not_remove_the_repls_scratch_dir():
 
     assert result is True
     assert repl.cwd.is_dir(), "eviction must not delete the REPL's scratch directory"
+
+
+# -- ADR-009 stage 9.2 / ADR-004 stage 4.3 interaction: flush-before-evict ---
+
+
+def test_evict_idle_session_flushes_a_dirty_chat_before_teardown(tmp_path):
+    """Before this fix, _evict_idle_session cancelled the autosave task
+    outright with no final write - any edit made since the last successful
+    autosave tick (up to a full interval_seconds, 30s by default) was
+    silently lost the instant an idle session was torn down. Confirmed as
+    a real, live gap by reading the pre-9.2 _evict_idle_session directly:
+    cancel_all -> cancel_all_pending_approvals -> dispose_all_pycoder_repls
+    -> autosave_task.cancel(), with no flush anywhere in that sequence.
+
+    Drives the REAL backend.chat_library.register_chat_library wiring (so
+    bus.chat_db_path/bus.chat_save_state/bus.chat_mutation_guard are all
+    genuinely set, not stand-ins a test constructed by hand) with
+    autosave's own background timer explicitly DISABLED
+    (autosave_interval_seconds=None) - so only the eviction-time flush
+    itself, never a lucky prior tick, could possibly be what persists the
+    edit below."""
+    from backend.chat_library import get_all_chats, load_chat_row, register_chat_library
+
+    db_path = tmp_path / "chats.db"
+    bus = SessionBus("s1")
+    context, _tmp = _real_session_context()
+    attach_session_context(bus, context)
+    notifications = NotificationState()
+    bus.register_topic("notification", notifications.payload)
+    register_chat_library(bus, db_path, context.canvas_document, notifications, autosave_interval_seconds=None)
+    assert getattr(bus, "autosave_task", None) is None, (
+        "test setup: no background autosave timer should be running"
+    )
+
+    context.canvas_document.add_chat_node(0, 0, "unsaved edit", is_user=True)
+    assert get_all_chats(db_path) == [], "test setup: nothing saved yet is the whole point of this test"
+
+    result = _evict_idle_session(bus)
+
+    assert result is True
+    rows = get_all_chats(db_path)
+    assert len(rows) == 1, "the dirty edit must be flushed to disk before the session is torn down"
+    row = load_chat_row(db_path, rows[0]["id"])
+    assert row["data"]["nodes"][0]["raw_content"] == "unsaved edit"
+
+
+def test_evict_idle_session_does_not_write_a_redundant_row_for_a_clean_session(tmp_path):
+    # The flush must honor the SAME change-guard autosave_tick's own docstring
+    # establishes - a session that has nothing unsaved must not get a
+    # pointless extra write (and re-sorted Chat Library) just because it
+    # happened to go idle.
+    from backend.chat_library import get_all_chats, register_chat_library
+
+    db_path = tmp_path / "chats.db"
+    bus = SessionBus("s1")
+    context, _tmp = _real_session_context()
+    attach_session_context(bus, context)
+    notifications = NotificationState()
+    bus.register_topic("notification", notifications.payload)
+    register_chat_library(bus, db_path, context.canvas_document, notifications, autosave_interval_seconds=None)
+
+    asyncio.run(bus.dispatch_intent("app-chat-library", "saveChat", []))
+    assert bus.chat_save_state["digest"] is None, (
+        "test setup: an empty, never-touched canvas has nothing to save at all"
+    )
+    assert get_all_chats(db_path) == []
+
+    context.canvas_document.add_chat_node(0, 0, "hello", is_user=True)
+    asyncio.run(bus.dispatch_intent("app-chat-library", "saveChat", []))
+    saved_updated_at = bus.chat_save_state["updated_at"]
+    assert len(get_all_chats(db_path)) == 1
+
+    result = _evict_idle_session(bus)
+
+    assert result is True
+    rows = get_all_chats(db_path)
+    assert len(rows) == 1, "eviction must not duplicate the already-saved row"
+    assert rows[0]["updatedAtIso"] is not None
+    # The row's own updated_at must be byte-identical to what the manual
+    # Save already wrote - a redundant flush write would have bumped it.
+    from backend.chat_library import load_chat_row
+    assert load_chat_row(db_path, rows[0]["id"])["updated_at"] == saved_updated_at
+
+
+def test_evict_idle_session_does_not_flush_while_a_write_is_genuinely_in_flight(tmp_path):
+    # If the mutation guard is already held (a tick or manual op mid-write),
+    # the flush must not race a SECOND write against it - autosave_task.
+    # cancel() below still lets any genuinely in-flight tick finish and
+    # record its own result correctly (see
+    # test_evict_idle_session_releases_the_mutation_guard_when_cancelling_
+    # mid_write above), so attempting a flush here would only risk an
+    # avoidable spurious lost-race warning for no real benefit.
+    from backend.chat_library import register_chat_library
+
+    db_path = tmp_path / "chats.db"
+    bus = SessionBus("s1")
+    context, _tmp = _real_session_context()
+    attach_session_context(bus, context)
+    notifications = NotificationState()
+    bus.register_topic("notification", notifications.payload)
+    register_chat_library(bus, db_path, context.canvas_document, notifications, autosave_interval_seconds=None)
+    context.canvas_document.add_chat_node(0, 0, "unsaved edit", is_user=True)
+
+    bus.chat_mutation_guard["active"] = True
+    bus.chat_mutation_guard["owner"] = "autosave"
+
+    import backend.app as app_module
+
+    flush_calls = []
+    real_flush = app_module.flush_dirty_session_before_teardown
+    app_module.flush_dirty_session_before_teardown = lambda *a, **k: flush_calls.append(a)
+    try:
+        result = _evict_idle_session(bus)
+    finally:
+        app_module.flush_dirty_session_before_teardown = real_flush
+
+    assert result is True
+    assert flush_calls == [], "a flush must not be attempted while a write is already in flight"

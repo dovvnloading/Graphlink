@@ -109,6 +109,7 @@ py-modules = [
     "graphlink_execution_guard",
     "graphlink_grid_view_settings",
     "graphlink_memory",
+    "graphlink_migrations",
     "graphlink_model_catalog",
     "graphlink_navigation_pins",
     "graphlink_note_agent",
