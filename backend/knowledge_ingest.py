@@ -100,6 +100,48 @@ def extract_text(path: Path) -> tuple[str, str]:
     raise IngestError(f"Unsupported file type: {path.name}")
 
 
+def _chunk_and_store(
+    *,
+    text: str,
+    source_uri: str,
+    title: str,
+    mime: str,
+    collection_id: int,
+    db_path: Path | None,
+    notifications: NotificationState | None,
+    last_saved: dict[str, Any] | None,
+    target_tokens: int | None,
+    overlap_tokens: int | None,
+) -> IngestOutcome:
+    """The shared tail of both ingest_file() and ingest_text() (stage
+    17.5): chunk -> store, idempotent by content hash (see
+    backend.knowledge_store's own docstring for the exact idempotency
+    scope). `target_tokens`/`overlap_tokens` default to
+    backend.knowledge_chunking's own module defaults when omitted (None,
+    not the defaults themselves, so a future config surface can distinguish
+    "caller didn't ask" from "caller explicitly wants the default value")."""
+    chunk_kwargs: dict[str, int] = {}
+    if target_tokens is not None:
+        chunk_kwargs["target_tokens"] = target_tokens
+    if overlap_tokens is not None:
+        chunk_kwargs["overlap_tokens"] = overlap_tokens
+    chunks = chunk_text(text, **chunk_kwargs)
+    if not chunks:
+        raise IngestError(f"'{title}' contained no indexable text.")
+
+    return add_document_with_chunks(
+        db_path if db_path is not None else DEFAULT_DB_PATH,
+        source_uri=source_uri,
+        title=title,
+        mime=mime,
+        text=text,
+        chunks=chunks,
+        collection_id=collection_id,
+        notifications=notifications,
+        last_saved=last_saved,
+    )
+
+
 def ingest_file(
     path: str,
     *,
@@ -111,32 +153,40 @@ def ingest_file(
     overlap_tokens: int | None = None,
 ) -> IngestOutcome:
     """The one call ADR-017 stage 17.1's exit criterion names: extract ->
-    chunk -> store, idempotent by content hash (see
-    backend.knowledge_store's own docstring for the exact idempotency
-    scope). `target_tokens`/`overlap_tokens` default to
-    backend.knowledge_chunking's own module defaults when omitted (None,
-    not the defaults themselves, so a future config surface can distinguish
-    "caller didn't ask" from "caller explicitly wants the default value")."""
+    chunk -> store."""
     resolved = Path(path).resolve()
     text, mime = extract_text(resolved)
+    return _chunk_and_store(
+        text=text, source_uri=str(resolved), title=resolved.name, mime=mime,
+        collection_id=collection_id, db_path=db_path, notifications=notifications,
+        last_saved=last_saved, target_tokens=target_tokens, overlap_tokens=overlap_tokens,
+    )
 
-    chunk_kwargs: dict[str, int] = {}
-    if target_tokens is not None:
-        chunk_kwargs["target_tokens"] = target_tokens
-    if overlap_tokens is not None:
-        chunk_kwargs["overlap_tokens"] = overlap_tokens
-    chunks = chunk_text(text, **chunk_kwargs)
-    if not chunks:
-        raise IngestError(f"'{resolved.name}' contained no indexable text.")
 
-    return add_document_with_chunks(
-        db_path if db_path is not None else DEFAULT_DB_PATH,
-        source_uri=str(resolved),
-        title=resolved.name,
-        mime=mime,
-        text=text,
-        chunks=chunks,
-        collection_id=collection_id,
-        notifications=notifications,
-        last_saved=last_saved,
+def ingest_text(
+    text: str,
+    *,
+    source_uri: str,
+    title: str,
+    mime: str = "text/plain",
+    collection_id: int = 0,
+    db_path: Path | None = None,
+    notifications: NotificationState | None = None,
+    last_saved: dict[str, Any] | None = None,
+    target_tokens: int | None = None,
+    overlap_tokens: int | None = None,
+) -> IngestOutcome:
+    """ADR-017 stage 17.5: ingests already-in-memory text with no file on
+    disk to extract from - web-research retention (a fetched page's own
+    text) and branch indexing (a branch's assembled chat history) both
+    have TEXT, not a path extract_text()'s extension-dispatch could do
+    anything with. Shares ingest_file()'s own chunk+store tail exactly
+    (_chunk_and_store) - the only difference is where `text`/`mime` come
+    from. `source_uri` is caller-supplied rather than derived from a path
+    (a URL for web research, a synthetic `branch:<node_id>` marker for
+    branch indexing - see each caller's own convention)."""
+    return _chunk_and_store(
+        text=text, source_uri=source_uri, title=title, mime=mime,
+        collection_id=collection_id, db_path=db_path, notifications=notifications,
+        last_saved=last_saved, target_tokens=target_tokens, overlap_tokens=overlap_tokens,
     )

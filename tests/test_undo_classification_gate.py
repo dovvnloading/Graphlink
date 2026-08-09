@@ -230,7 +230,7 @@ def _collect_real_registrations() -> dict[tuple[str, str], _FileIntents]:
 
 def test_the_scan_finds_the_real_population_of_registered_intents():
     # Guards the guard: a broken predicate here would make every check below
-    # vacuously pass. 143 is the exact count locked by ADR-010's close-out
+    # vacuously pass. 145 is the exact count locked by ADR-010's close-out
     # recon (scene=89, app-settings=30, app-composer=6, app-chat-library=5,
     # grid-control=4, notification=3, app-plugins=1, system=1, diagnostics=2)
     # - app-settings went 27 -> 28 when ADR-006 stage 6.5 added
@@ -238,11 +238,13 @@ def test_the_scan_finds_the_real_population_of_registered_intents():
     # 138 -> 140 when ADR-016 stage 16.4 added the diagnostics topic's two
     # intents (exportDiagnosticBundle, openLogFolder), 140 -> 142 when
     # ADR-018 stage 18.3 added scene's own setModelOverride/
-    # clearModelOverride, and 142 -> 143 when ADR-018 stage 18.4 added
-    # app-settings' own setAutoModelPolicy.
+    # clearModelOverride, 142 -> 143 when ADR-018 stage 18.4 added
+    # app-settings' own setAutoModelPolicy, and 143 -> 145 when ADR-017
+    # stage 17.5 added the new "knowledge" topic's own search intent plus
+    # scene's own setChatIndexIntoKnowledge.
     real = _collect_real_registrations()
-    assert len(real) == 143, (
-        f"expected exactly 143 real registered intents, found {len(real)} - "
+    assert len(real) == 145, (
+        f"expected exactly 145 real registered intents, found {len(real)} - "
         "either the scan broke, or the app's registered-intent surface "
         "genuinely changed and tests/undo_classification.py's own count "
         "comment (and this assertion) need a deliberate update alongside it"

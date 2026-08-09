@@ -18,6 +18,7 @@ import { CommandPalette } from "./chrome/CommandPalette";
 import { Composer } from "./chrome/Composer";
 import { ComposerStore } from "./chrome/composerStore";
 import { DiagnosticsDialog } from "./chrome/DiagnosticsDialog";
+import { KnowledgeSearchDialog } from "./chrome/KnowledgeSearchDialog";
 import { NotificationBanner } from "./chrome/NotificationBanner";
 import { PinOverlay } from "./chrome/PinOverlay";
 import { PluginPicker } from "./chrome/PluginPicker";
@@ -400,6 +401,7 @@ function App() {
                   <HelpDialog />
                 </LazySurface>
                 <DiagnosticsDialog transport={transport} />
+                <KnowledgeSearchDialog transport={transport} />
                 <LazySurface overlayName="settings">
                   <SettingsDialog transport={transport} />
                 </LazySurface>

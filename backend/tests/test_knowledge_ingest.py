@@ -7,7 +7,7 @@ from __future__ import annotations
 import pytest
 
 from backend.attachments import AttachmentError
-from backend.knowledge_ingest import IngestError, extract_text, ingest_file
+from backend.knowledge_ingest import IngestError, extract_text, ingest_file, ingest_text
 
 
 @pytest.fixture
@@ -182,3 +182,50 @@ class TestIngestFile:
         # A tighter token budget must produce strictly more chunks for the
         # SAME source text.
         assert small_target_outcome.chunk_count > default_outcome.chunk_count
+
+
+# -- ingest_text: web-research retention / branch indexing's own entry point
+
+
+class TestIngestText:
+    def test_ingesting_text_produces_a_document_with_chunks(self, db_path):
+        outcome = ingest_text(
+            "First paragraph of real content.\n\nSecond paragraph with more words.",
+            source_uri="https://example.com/page", title="Example Page", db_path=db_path,
+        )
+        assert outcome.was_new is True
+        assert outcome.chunk_count >= 1
+
+        from backend.knowledge_store import list_chunks_for_document
+        chunks = list_chunks_for_document(db_path, outcome.document_id)
+        assert len(chunks) == outcome.chunk_count
+
+    def test_ingesting_text_stores_the_given_source_uri_title_and_mime(self, db_path):
+        outcome = ingest_text(
+            "Some retained web content here.",
+            source_uri="https://example.com/article", title="Article Title",
+            mime="text/html", db_path=db_path,
+        )
+        from backend.knowledge_store import get_document
+        doc = get_document(db_path, outcome.document_id)
+        assert doc["source_uri"] == "https://example.com/article"
+        assert doc["title"] == "Article Title"
+        assert doc["mime"] == "text/html"
+
+    def test_reingesting_the_same_text_is_a_no_op(self, db_path):
+        first = ingest_text("Identical retained content.", source_uri="u1", title="t1", db_path=db_path)
+        second = ingest_text("Identical retained content.", source_uri="u2", title="t2", db_path=db_path)
+        # Idempotency is by content hash (+ collection), matching
+        # ingest_file()'s own contract - a DIFFERENT source_uri/title for
+        # the SAME text is still the same document.
+        assert second.was_new is False
+        assert second.document_id == first.document_id
+
+    def test_blank_text_raises_ingest_error(self, db_path):
+        with pytest.raises(IngestError, match="no indexable text"):
+            ingest_text("   ", source_uri="u", title="Empty", db_path=db_path)
+
+    def test_default_mime_is_text_plain(self, db_path):
+        outcome = ingest_text("Plain retained text.", source_uri="u", title="t", db_path=db_path)
+        from backend.knowledge_store import get_document
+        assert get_document(db_path, outcome.document_id)["mime"] == "text/plain"

@@ -184,6 +184,8 @@ function validScenePayload(overrides: Record<string, unknown> = {}) {
         // ADR-018 stage 18.3
         overrideProvider: "",
         overrideModelId: "",
+        // ADR-017 stage 17.5
+        indexIntoKnowledge: false,
       },
     ],
     edges: [],

@@ -97,6 +97,7 @@ export interface SceneNodeRow {
   toolCalls: ToolInvocationRow[];
   overrideProvider: string;
   overrideModelId: string;
+  indexIntoKnowledge: boolean;
 }
 
 export interface ConversationMessageRow {
@@ -684,6 +685,11 @@ function checkSceneNodeRow(value: unknown, path: string, errors: string[]): void
     const fieldValue = value["overrideModelId"];
     if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.overrideModelId: missing required field`);
     else { if (typeof fieldValue !== "string") errors.push(`${path}.overrideModelId` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["indexIntoKnowledge"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.indexIntoKnowledge: missing required field`);
+    else { if (typeof fieldValue !== "boolean") errors.push(`${path}.indexIntoKnowledge` + ": expected boolean"); }
   }
 }
 

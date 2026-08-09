@@ -149,6 +149,29 @@ class BranchOps:
         node.state.override_provider = ""
         node.state.override_model_id = ""
 
+    def set_chat_index_into_knowledge(self, node_id: str, enabled: bool) -> None:
+        """ADR-017 stage 17.5: sets the branch-indexing opt-in flag - see
+        backend/domain/node_states.py's own comment on ChatState.
+        index_into_knowledge for what this flag means and why it lives on
+        the node it's set on (the caller's job to pass the branch ROOT's
+        node_id, mirroring set_model_override's own "branch root" framing
+        for override fields). PURE - this method only flips the flag; the
+        actual one-time indexing pass over the branch's text is
+        backend/api/intents_knowledge.py's own job (that intent calls
+        chat_branch_history() + backend.knowledge_ingest.ingest_text()
+        BEFORE calling this method, so a document I/O failure never leaves
+        the flag set without the indexing having actually happened) -
+        mirroring this whole file's own "SceneDocument mutates the graph,
+        intents own the side effects" separation (chat_library persistence
+        is owned by intents_chat_library.py, never by graph.py/branches.py
+        directly)."""
+        node = self.nodes.get(node_id)
+        if node is None:
+            raise SceneError(f"unknown node: {node_id}")
+        if node.kind != "chat":
+            raise SceneError(f"node is not a chat node: {node_id}")
+        node.state.index_into_knowledge = bool(enabled)
+
     def resolve_model_for_node(self, node_id: str | None):
         """ADR-018 stage 18.2: the node-override -> branch-override half of
         graphlink_model_catalog.resolve_model_ref's chain - returns

@@ -335,6 +335,9 @@
           "imageAssetId": {
             "type": "string"
           },
+          "indexIntoKnowledge": {
+            "type": "boolean"
+          },
           "isBranchComparison": {
             "type": "boolean"
           },
@@ -692,7 +695,8 @@
           "chatScrollValue",
           "toolCalls",
           "overrideProvider",
-          "overrideModelId"
+          "overrideModelId",
+          "indexIntoKnowledge"
         ],
         "type": "object"
       },

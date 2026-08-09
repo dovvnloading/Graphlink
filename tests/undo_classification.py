@@ -261,4 +261,8 @@ CLASSIFICATION: tuple[Classified, ...] = (
     # ADR-016 stage 16.4:
     Classified("diagnostics", "exportDiagnosticBundle", "B", "read-only: assembles a redacted diagnostic snapshot, no document mutation"),
     Classified("diagnostics", "openLogFolder", "B", "read-only: opens the OS file browser, no document mutation"),
+
+    # -- backend/api/intents_knowledge.py (knowledge, scene) - ADR-017 stage 17.5 --
+    Classified("knowledge", "search", "B", "read-only: queries the local knowledge store, no document mutation"),
+    Classified("scene", "setChatIndexIntoKnowledge", "A", "content: branch-indexing opt-in is document state, same posture as setGroupColor"),
 )
