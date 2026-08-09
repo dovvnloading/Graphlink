@@ -36,6 +36,7 @@ function makeData(overrides: Partial<PlanNodeData> = {}): PlanNodeData {
     onCancel: vi.fn(),
     onApproveTool: vi.fn(),
     onDenyTool: vi.fn(),
+    onUndoBuild: vi.fn(),
     ...overrides,
   };
 }
@@ -119,6 +120,36 @@ describe("PlanNodeView", () => {
     expect(data.onApproveTool).toHaveBeenCalledTimes(1);
     await user.click(screen.getByRole("button", { name: "Deny" }));
     expect(data.onDenyTool).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers Undo build only once the run is over, and fires it", async () => {
+    const user = userEvent.setup();
+    const running = makeData(); // builderStatus: "running"
+    const { unmount } = renderPlan(running);
+    expect(screen.queryByRole("button", { name: "Undo build" })).not.toBeInTheDocument();
+    unmount();
+
+    const done = makeData({ builderStatus: "done", pendingRequestId: null });
+    renderPlan(done);
+    await user.click(screen.getByRole("button", { name: "Undo build" }));
+    expect(done.onUndoBuild).toHaveBeenCalledTimes(1);
+  });
+
+  it("hides Undo build when no run ever stamped the plan", () => {
+    renderPlan(makeData({ builderStatus: "done", builderRunId: "", pendingRequestId: null }));
+    expect(screen.queryByRole("button", { name: "Undo build" })).not.toBeInTheDocument();
+  });
+
+  it("every action button carries the nodrag class so React Flow's drag handler cannot swallow the click", () => {
+    renderPlan(makeData({
+      builderStatus: "paused", pendingRequestId: null,
+      builderAwaitingToolApproval: true,
+      builderApprovalToolName: "graph.create_node",
+      builderApprovalSummary: "x",
+    }));
+    for (const name of ["Resume", "Undo build", "Approve", "Deny"]) {
+      expect(screen.getByRole("button", { name })).toHaveClass("nodrag");
+    }
   });
 
   it("marks a failed build's detail as an alert and shows the autopilot chip", () => {

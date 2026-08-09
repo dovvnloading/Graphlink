@@ -50,6 +50,7 @@ export interface PlanNodeData extends Record<string, unknown> {
   onCancel: () => void;
   onApproveTool: () => void;
   onDenyTool: () => void;
+  onUndoBuild: () => void;
 }
 
 export type PlanFlowNode = Node<PlanNodeData, "plan">;
@@ -76,6 +77,12 @@ const STATUS_LABELS: Record<string, string> = {
 };
 
 const RESUMABLE = new Set(["awaiting_start", "paused", "interrupted"]);
+// ADR-008 stage 8.4: "undo this build" is offered once the run is OVER -
+// the domain's own live-run guard would refuse it mid-run anyway
+// (Stop-then-undo is the supported sequence), so the button only appears
+// on states no run backs. undo_run's reach stops at the first command a
+// DIFFERENT actor made after the build - later user edits survive.
+const UNDOABLE = new Set(["done", "failed", "stopped", "interrupted", "paused"]);
 
 function PlanNodeViewInner({ data, selected }: NodeProps<PlanFlowNode>) {
   const collapsed = useLodVisibility() || data.isCollapsed;
@@ -137,10 +144,10 @@ function PlanNodeViewInner({ data, selected }: NodeProps<PlanFlowNode>) {
               </div>
               <pre className="plan-node-approval-summary">{data.builderApprovalSummary}</pre>
               <div className="plan-node-approval-actions">
-                <button type="button" className="plan-node-button" onClick={data.onApproveTool}>
+                <button type="button" className="plan-node-button nodrag" onClick={data.onApproveTool}>
                   Approve
                 </button>
-                <button type="button" className="plan-node-button plan-node-button-deny" onClick={data.onDenyTool} autoFocus>
+                <button type="button" className="plan-node-button plan-node-button-deny nodrag" onClick={data.onDenyTool} autoFocus>
                   Deny
                 </button>
               </div>
@@ -149,13 +156,18 @@ function PlanNodeViewInner({ data, selected }: NodeProps<PlanFlowNode>) {
 
           <div className="plan-node-actions">
             {resumable && (
-              <button type="button" className="plan-node-button plan-node-button-start" onClick={data.onStartExecution}>
+              <button type="button" className="plan-node-button plan-node-button-start nodrag" onClick={data.onStartExecution}>
                 {startLabel}
               </button>
             )}
             {running && (
-              <button type="button" className="plan-node-button plan-node-button-stop" onClick={data.onCancel}>
+              <button type="button" className="plan-node-button plan-node-button-stop nodrag" onClick={data.onCancel}>
                 Stop
+              </button>
+            )}
+            {UNDOABLE.has(data.builderStatus) && data.builderRunId && (
+              <button type="button" className="plan-node-button nodrag" onClick={data.onUndoBuild}>
+                Undo build
               </button>
             )}
           </div>

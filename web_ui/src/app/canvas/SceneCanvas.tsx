@@ -732,6 +732,14 @@ function makePlanFns(id: string, liveRef: { current: DispatcherLive }) {
       const { n, store } = liveRef.current;
       if (n.pendingRequestId) store.denyBuilderTool(n.pendingRequestId);
     },
+    // ADR-008 stage 8.4: "undo this build" - the ADR-010 stage-10.5
+    // machinery (scene/undoRun) finally gets its affordance. Keyed on the
+    // ROW's builderRunId, not pendingRequestId: the run is over when this
+    // is offered.
+    onUndoBuild: () => {
+      const { n, store } = liveRef.current;
+      if (n.builderRunId) store.undoRun(n.builderRunId);
+    },
   };
 }
 
