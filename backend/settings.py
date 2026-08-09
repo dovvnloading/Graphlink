@@ -201,6 +201,10 @@ def settings_payload(manager: SettingsManager) -> dict[str, Any]:
         # field exists now so the backend contract carries it from the start
         # rather than needing a second wire-payload touch later.
         "logLevel": manager.get_log_level(),
+        # ADR-018 stage 18.4: the auto-policy rung's current setting - the
+        # policy api_provider's auto-fallback consults when neither an
+        # explicit task assignment nor a node/branch override exists.
+        "autoModelPolicy": manager.get_auto_model_policy(),
     }
 
 

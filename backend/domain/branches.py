@@ -122,6 +122,62 @@ class BranchOps:
         elif self.final_deliverable_node_id == node_id:
             self.final_deliverable_node_id = None
 
+    def set_model_override(self, node_id: str, provider: str, model_id: str) -> None:
+        """ADR-018 stage 18.2: pin the model this node (and, when it is a
+        branch root, every descendant that doesn't pin its own - see
+        resolve_model_for_node's own docstring) resolves to. Both fields
+        write together, mirroring set_group_color's own "no partial value"
+        posture - a pin is a real (provider, model_id) pair or nothing."""
+        node = self.nodes.get(node_id)
+        if node is None:
+            raise SceneError(f"unknown node: {node_id}")
+        if node.kind != "chat":
+            raise SceneError(f"node is not a chat node: {node_id}")
+        provider = str(provider or "").strip()
+        model_id = str(model_id or "").strip()
+        if not provider or not model_id:
+            raise SceneError("set_model_override requires both provider and model_id")
+        node.state.override_provider = provider
+        node.state.override_model_id = model_id
+
+    def clear_model_override(self, node_id: str) -> None:
+        node = self.nodes.get(node_id)
+        if node is None:
+            raise SceneError(f"unknown node: {node_id}")
+        if node.kind != "chat":
+            raise SceneError(f"node is not a chat node: {node_id}")
+        node.state.override_provider = ""
+        node.state.override_model_id = ""
+
+    def resolve_model_for_node(self, node_id: str | None):
+        """ADR-018 stage 18.2: the node-override -> branch-override half of
+        graphlink_model_catalog.resolve_model_ref's chain - returns
+        (node_ref, branch_ref), both `ModelRef | None`, for the caller
+        (backend/agents.py's _dispatch) to pass straight through to that
+        function alongside the workspace-default/catalog/policy it already
+        owns. Mirrors _resolve_branch_system_prompt's own root-walk shape
+        exactly (get_branch_root, then read one field off the root) - the
+        two features share the same "root pin, inherited down the branch"
+        semantics, just against a different field."""
+        from graphlink_model_catalog import ModelRef
+
+        if node_id is None:
+            return None, None
+        node = self.nodes.get(node_id)
+        if node is None:
+            return None, None
+
+        def _ref_from(candidate) -> "ModelRef | None":
+            state = getattr(candidate, "state", None)
+            provider = getattr(state, "override_provider", "") if state is not None else ""
+            model_id = getattr(state, "override_model_id", "") if state is not None else ""
+            return ModelRef(provider, model_id) if provider and model_id else None
+
+        node_ref = _ref_from(node) if node.kind == "chat" else None
+        root = self.get_branch_root(node_id)
+        branch_ref = _ref_from(root) if root is not None and root.id != node_id and root.kind == "chat" else None
+        return node_ref, branch_ref
+
     def _branch_parent_edge(self, node_id: str) -> SceneEdge | None:
         """R6.1: the shared 'find the edge whose target == node_id' lookup
         chat_branch_history/get_branch_root/regenerate_response/

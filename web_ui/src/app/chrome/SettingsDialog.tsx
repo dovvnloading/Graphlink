@@ -42,6 +42,15 @@ const REASONING_LEVEL_OPTIONS = [
   { id: "high", label: "High" },
 ] as const;
 
+// ADR-018 stage 18.4: mirrors graphlink_model_catalog.AUTO_POLICIES - the
+// policy the auto rung of the resolution chain applies when neither an
+// explicit task assignment nor a node/branch pin resolves a model.
+const AUTO_MODEL_POLICY_OPTIONS = [
+  { id: "cheapest-capable", label: "Cheapest Capable" },
+  { id: "fastest", label: "Fastest" },
+  { id: "best-quality", label: "Best Quality" },
+] as const;
+
 // Llama.cpp has no per-task assignment concept like Ollama's OLLAMA_TASKS -
 // just one global chat model path plus an optional title/naming override
 // (api_provider.py's _get_llama_cpp_model_path: chart/web-validate/web-
@@ -102,6 +111,9 @@ const initialState: AppSettingsState = {
   secretsEncryptedAtRest: true,
   // ADR-016 stage 16.1: mirrors SettingsManager.get_log_level()'s own default.
   logLevel: "INFO",
+  // ADR-018 stage 18.4: mirrors SettingsManager.get_auto_model_policy()'s
+  // own default.
+  autoModelPolicy: "cheapest-capable",
   activeApiProvider: API_PROVIDER_OPENAI,
   viewingApiProvider: API_PROVIDER_OPENAI,
   apiBaseUrl: DEFAULT_OPENAI_BASE_URL,
@@ -175,6 +187,20 @@ function GeneralPage({
         />
         Enable Assistant System Prompt
       </label>
+
+      <div className="settings-field">
+        <span className="settings-field-label">Automatic Model Selection Policy</span>
+        <CustomSelect
+          ariaLabel="Automatic Model Selection Policy"
+          value={state.autoModelPolicy}
+          options={AUTO_MODEL_POLICY_OPTIONS.map((option) => ({ id: option.id, label: option.label }))}
+          onChange={(id) => transport.fireIntent("app-settings", "setAutoModelPolicy", [id], undefined, true)}
+        />
+        <p className="settings-field-hint">
+          Used when a task has no explicitly assigned model and no node/branch pin - picks the cheapest, fastest,
+          or highest-quality capable model from your configured providers.
+        </p>
+      </div>
 
       <fieldset className="settings-fieldset">
         <legend>Notification types</legend>

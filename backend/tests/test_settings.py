@@ -41,6 +41,7 @@ def test_settings_payload_shape_matches_generated_validator_shape(manager):
         "githubTokenConfigured",
         "secretsEncryptedAtRest",
         "logLevel",
+        "autoModelPolicy",
     }
 
 
@@ -52,6 +53,8 @@ def test_settings_payload_reflects_real_manager_defaults(manager):
     assert payload["githubTokenConfigured"] is False
     assert set(payload["notificationPreferences"]) == set(SettingsManager.NOTIFICATION_TYPES)
     assert payload["logLevel"] == "INFO"
+    # ADR-018 stage 18.4: "cheapest-capable" by default.
+    assert payload["autoModelPolicy"] == "cheapest-capable"
 
 
 def test_settings_never_imports_qt():

@@ -562,6 +562,161 @@ def test_regenerate_response_also_resolves_the_branch_attached_system_prompt_not
     asyncio.run(run())
 
 
+# -- ADR-018 stage 18.2: node/branch model-override resolution ---------------
+#
+# Mirrors the System Prompt note tests above exactly - _resolve_model_ref_
+# for_dispatch is unit-tested directly first, then send_message/regenerate_
+# response are proven to actually carry the resolved ModelRef through the
+# real dispatch pipeline into _call_chat_agent_stream's model_ref kwarg.
+
+
+def test_resolve_model_ref_for_dispatch_returns_none_with_no_canvas_context():
+    dispatcher = AgentDispatcher(_FakeSettingsManager())
+    document = SceneDocument()
+    root = document.add_chat_node(0, 0, "root message", True)
+    assert dispatcher._resolve_model_ref_for_dispatch(None, root.id) is None
+    assert dispatcher._resolve_model_ref_for_dispatch(document, None) is None
+
+
+def test_resolve_model_ref_for_dispatch_returns_none_with_no_pin_anywhere():
+    dispatcher = AgentDispatcher(_FakeSettingsManager())
+    document = SceneDocument()
+    root = document.add_chat_node(0, 0, "root message", True)
+    assert dispatcher._resolve_model_ref_for_dispatch(document, root.id) is None
+
+
+def test_resolve_model_ref_for_dispatch_finds_a_pin_on_the_true_branch_root():
+    import graphlink_model_catalog as mc
+
+    dispatcher = AgentDispatcher(_FakeSettingsManager())
+    document = SceneDocument()
+    root = document.add_chat_node(0, 0, "root message", True)
+    mid = document.add_chat_node(0, 100, "mid reply", False, parent_id=root.id)
+    leaf = document.add_chat_node(0, 200, "leaf message", True, parent_id=mid.id)
+    document.set_model_override(root.id, "Anthropic Claude", "claude-opus-5")
+
+    expected = mc.ModelRef("Anthropic Claude", "claude-opus-5")
+    assert dispatcher._resolve_model_ref_for_dispatch(document, leaf.id) == expected
+    assert dispatcher._resolve_model_ref_for_dispatch(document, mid.id) == expected
+    assert dispatcher._resolve_model_ref_for_dispatch(document, root.id) == expected
+
+
+def test_resolve_model_ref_for_dispatch_prefers_the_nodes_own_pin_over_the_branch_root():
+    import graphlink_model_catalog as mc
+
+    dispatcher = AgentDispatcher(_FakeSettingsManager())
+    document = SceneDocument()
+    root = document.add_chat_node(0, 0, "root message", True)
+    leaf = document.add_chat_node(0, 100, "leaf reply", False, parent_id=root.id)
+    document.set_model_override(root.id, "Anthropic Claude", "claude-opus-5")
+    document.set_model_override(leaf.id, "Ollama", "llama3")
+
+    assert dispatcher._resolve_model_ref_for_dispatch(document, leaf.id) == mc.ModelRef("Ollama", "llama3")
+
+
+def test_send_message_carries_the_branch_pinned_model_ref_into_dispatch(monkeypatch):
+    import graphlink_model_catalog as mc
+
+    _configure_fake_ollama_provider_only(monkeypatch)
+    captured = {}
+
+    def fake_stream(conversation_history, persona_text, cancel_event, on_chunk, **kwargs):
+        captured["model_ref"] = kwargs.get("model_ref")
+        on_chunk("a reply", False)
+        return "a reply"
+
+    monkeypatch.setattr(agents_module, "_call_chat_agent_stream", fake_stream)
+
+    async def run():
+        bus = SessionBus("agents-model-override-test")
+        notifications = NotificationState()
+        bus.register_topic("notification", notifications.payload)
+        composer_document = ComposerDocument()
+        bus.register_topic("app-composer", composer_document.payload)
+        dispatcher = AgentDispatcher(_FakeSettingsManager())
+        document = register_canvas(bus, notifications, dispatcher, composer_document)
+
+        root = document.add_chat_node(0, 0, "root message", True)
+        document.last_chat_node_id = root.id
+        document.set_model_override(root.id, "Anthropic Claude", "claude-opus-5")
+
+        await bus.dispatch_intent("scene", "sendMessage", ["continue the branch"])
+        entry = next(iter(chat_slots(dispatcher).values()))
+        await entry["task"]
+
+        assert captured["model_ref"] == mc.ModelRef("Anthropic Claude", "claude-opus-5")
+
+    asyncio.run(run())
+
+
+def test_send_message_omits_model_ref_entirely_when_nothing_is_pinned(monkeypatch):
+    # The behavior-preservation half of 18.2: no pin anywhere means
+    # _call_chat_agent_stream never even RECEIVES a model_ref kwarg -
+    # falling all the way through to api_provider's unchanged task-keyed
+    # lookup, exactly like every pre-18.2 call site.
+    _configure_fake_ollama_provider_only(monkeypatch)
+    captured = {"saw_model_ref_kwarg": "unset"}
+
+    def fake_stream(conversation_history, persona_text, cancel_event, on_chunk, **kwargs):
+        captured["saw_model_ref_kwarg"] = "model_ref" in kwargs
+        on_chunk("a reply", False)
+        return "a reply"
+
+    monkeypatch.setattr(agents_module, "_call_chat_agent_stream", fake_stream)
+
+    async def run():
+        bus = SessionBus("agents-no-model-override-test")
+        notifications = NotificationState()
+        bus.register_topic("notification", notifications.payload)
+        composer_document = ComposerDocument()
+        bus.register_topic("app-composer", composer_document.payload)
+        dispatcher = AgentDispatcher(_FakeSettingsManager())
+        register_canvas(bus, notifications, dispatcher, composer_document)
+
+        await bus.dispatch_intent("scene", "sendMessage", ["first message, no pin"])
+        entry = next(iter(chat_slots(dispatcher).values()))
+        await entry["task"]
+
+        assert captured["saw_model_ref_kwarg"] is False
+
+    asyncio.run(run())
+
+
+def test_regenerate_response_also_resolves_the_branch_pinned_model_ref(monkeypatch):
+    import graphlink_model_catalog as mc
+
+    _configure_fake_ollama_provider_only(monkeypatch)
+    captured = {}
+
+    def fake_stream(conversation_history, persona_text, cancel_event, on_chunk, **kwargs):
+        captured["model_ref"] = kwargs.get("model_ref")
+        on_chunk("regenerated reply", False)
+        return "regenerated reply"
+
+    monkeypatch.setattr(agents_module, "_call_chat_agent_stream", fake_stream)
+
+    async def run():
+        bus = SessionBus("agents-regenerate-model-override-test")
+        notifications = NotificationState()
+        bus.register_topic("notification", notifications.payload)
+        composer_document = ComposerDocument()
+        bus.register_topic("app-composer", composer_document.payload)
+        dispatcher = AgentDispatcher(_FakeSettingsManager())
+        document = register_canvas(bus, notifications, dispatcher, composer_document)
+
+        root = document.add_chat_node(0, 0, "root message", True)
+        assistant_reply = document.add_chat_node(0, 100, "old reply", False, parent_id=root.id)
+        document.set_model_override(root.id, "Anthropic Claude", "claude-opus-5")
+
+        await bus.dispatch_intent("scene", "regenerateResponse", [assistant_reply.id])
+        entry = next(iter(chat_slots(dispatcher).values()))
+        await entry["task"]
+
+        assert captured["model_ref"] == mc.ModelRef("Anthropic Claude", "claude-opus-5")
+
+    asyncio.run(run())
+
+
 # -- ADR-006 stage 6.7: system-prompt wire shape at the api_provider seam -----
 #
 # These drive the REAL _call_chat_agent_stream -> ChatAgent -> ChatWorker
@@ -7132,11 +7287,20 @@ def test_default_dispatcher_still_calls_the_drivers_with_the_exact_pre_65_arity(
     # runtime kwarg, and (6.7) no persona_is_override kwarg on the default-
     # persona path. ADR-006 stage 6.6 widened the contract by exactly ONE
     # always-passed keyword: on_context_trimmed (the trim/summarize
-    # notification closure) - pinned here as keyword-only so no further
-    # kwargs creep in unnoticed.
+    # notification closure). ADR-018 stage 18.4 widened it by exactly ONE
+    # more: settings_manager (the auto-policy fallback's own dependency) -
+    # unlike model_ref (still genuinely conditional: this test's minimal
+    # env has no canvas_document/node override, so model_ref_kwargs stays
+    # empty), settings_manager is always available on a real dispatcher, so
+    # it is always passed. ADR-018 stage 18.5 widens it by exactly ONE more:
+    # on_fallback (the fallback-substitution notification closure), same
+    # always-available posture. All three pinned here as keyword-only so no
+    # FURTHER kwargs creep in unnoticed.
     def strict_pre_65_fake(conversation_history, persona_text, cancel_event, on_chunk, *,
-                           on_context_trimmed):
+                           on_context_trimmed, settings_manager, on_fallback):
         assert callable(on_context_trimmed)
+        assert settings_manager is not None
+        assert callable(on_fallback)
         return "default reply"
 
     monkeypatch.setattr(agents_module, "_call_chat_agent_stream", strict_pre_65_fake)

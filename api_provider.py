@@ -24,7 +24,7 @@ except ImportError:
 # this module must be importable from backend/ without PySide6 loading.
 import graphlink_task_config as config
 from graphlink_audio import guess_audio_mime_type
-from graphlink_model_catalog import ModelDescriptor, ollama_descriptor, sort_descriptors
+from graphlink_model_catalog import FALLBACK_ENABLED_TASKS, ModelDescriptor, ModelRef, ollama_descriptor, sort_descriptors
 
 
 USE_API_MODE = False
@@ -2802,12 +2802,211 @@ def generate_image(prompt: str, size: str = "1024x1024", *, runtime=None) -> byt
         raise
 
 
+def _provider_for_model_ref(model_ref: ModelRef, state: "_ProviderSnapshot"):
+    """ADR-018 stage 18.1: construct the provider a resolved ModelRef names,
+    the alternative to chat()/chat_stream()'s own task-keyed branch-select
+    below. Only called when a caller supplies `model_ref` (every pre-18.1
+    caller does not, and gets the byte-identical original behavior).
+
+    Both local providers are constructible from the snapshot REGARDLESS of
+    the session's active mode (`state.ollama_reasoning_level`/
+    `state.llama_cpp_settings` are always populated, not mode-gated) - so a
+    node/branch override CAN pin to "my local Ollama model" while the
+    session's configured default is a cloud provider, and vice versa; that
+    is the realistic mixed local+cloud comparison the ADR's context section
+    describes. A CLOUD override is honored only when it names the session's
+    OWN currently-configured provider (reusing state.api_client/api_key,
+    the exact credentials already snapshotted) - pinning to a DIFFERENT
+    cloud provider than the session's active one raises a clear,
+    actionable error rather than either silently falling back to the
+    session default or reaching for a second provider's stored credentials
+    the request snapshot was never given. Genuine simultaneous multi-
+    cloud-credential routing is deliberately out of scope for this stage;
+    see doc/adr/ADR-018-model-routing.md's own status note.
+
+    llama.cpp overrides are accepted only when the named model_id matches
+    one of the two paths already configured in
+    state.llama_cpp_settings (chat_model_path/title_model_path) - llama.cpp
+    has no "many installed models" catalog the way Ollama does, so free
+    model_id selection isn't meaningful there; a mismatch raises the same
+    actionable-error posture as an unconfigured cloud override."""
+
+    if model_ref.provider == config.LOCAL_PROVIDER_OLLAMA:
+        from backend.providers.ollama_provider import OllamaProvider
+
+        return OllamaProvider(
+            model=model_ref.model_id, reasoning_level=state.ollama_reasoning_level,
+            context_window=_ollama_effective_context_window(model_ref.model_id),
+        )
+
+    if model_ref.provider == config.LOCAL_PROVIDER_LLAMACPP:
+        configured_paths = {
+            Path(str(state.llama_cpp_settings.get("chat_model_path") or "")).name,
+            Path(str(state.llama_cpp_settings.get("title_model_path") or "")).name,
+        }
+        if model_ref.model_id not in configured_paths:
+            raise RuntimeError(
+                f"'{model_ref.model_id}' is not one of this session's configured "
+                "Llama.cpp model paths. Configure it in Settings > Llama.cpp first."
+            )
+        from backend.providers.llama_cpp_provider import LlamaCppProvider
+
+        return LlamaCppProvider(settings=state.llama_cpp_settings)
+
+    if model_ref.provider in (config.API_PROVIDER_OPENAI, config.API_PROVIDER_ANTHROPIC, config.API_PROVIDER_GEMINI):
+        if not (state.use_api_mode and state.api_provider_type == model_ref.provider and state.api_client):
+            raise RuntimeError(
+                f"This model is pinned to {model_ref.provider}, but the session's active "
+                f"API provider is {state.api_provider_type or 'not configured'}. Switch "
+                "API Endpoint in Settings to use it, or change the pinned model."
+            )
+        if model_ref.provider == config.API_PROVIDER_OPENAI:
+            from backend.providers.openai_provider import OpenAIProvider
+
+            return OpenAIProvider(
+                client=state.api_client, model=model_ref.model_id,
+                reasoning_level=state.openai_reasoning_level,
+            )
+        if model_ref.provider == config.API_PROVIDER_ANTHROPIC:
+            from backend.providers.anthropic_provider import AnthropicProvider
+
+            return AnthropicProvider(
+                client=state.api_client, api_key=state.api_key, model=model_ref.model_id,
+                reasoning_level=state.anthropic_reasoning_level,
+            )
+        from backend.providers.gemini_provider import GeminiProvider
+
+        return GeminiProvider(
+            api_key=state.api_key, model=model_ref.model_id,
+            reasoning_level=state.gemini_reasoning_level,
+        )
+
+    raise RuntimeError(f"Unknown model provider: {model_ref.provider!r}")
+
+
+def _auto_fallback_model_ref(
+    task: str, settings_manager, state: "_ProviderSnapshot", *, exclude_provider: str | None = None,
+) -> ModelRef | None:
+    """ADR-018 stage 18.4: the auto rung of the resolution chain, tried by
+    chat()/chat_stream() ONLY at the exact point they are about to raise
+    "no model configured" - an explicit task assignment (the common case)
+    is never second-guessed, so an already-working setup dispatches
+    byte-identically to before this stage.
+
+    Reuses _provider_for_model_ref's own single-live-cloud-credential
+    posture: the catalog is filtered to what THIS session can actually
+    dispatch right now (both local providers always constructible; a cloud
+    provider only when it is the session's live credentialed one) BEFORE a
+    policy ever picks from it - unified_catalog() otherwise spans every
+    provider with a cached catalog, including ones this session has no
+    live client for, and choose_auto_model_ref must never hand back a ref
+    _provider_for_model_ref would then reject.
+
+    `exclude_provider` (ADR-018 stage 18.5): reused by the fallback-on-
+    failure path below to rule out the provider that just failed - a
+    fallback that could re-pick the SAME broken provider would not be a
+    fallback at all."""
+    if settings_manager is None:
+        return None
+    from graphlink_model_catalog import TASK_REQUIREMENTS, choose_auto_model_ref, unified_catalog
+    from backend.token_counter import price_per_mtok
+
+    catalog = [
+        descriptor
+        for descriptor in unified_catalog(
+            settings_manager,
+            price_lookup=lambda provider, model_id: price_per_mtok(
+                provider, model_id, overrides=settings_manager.get_pricing_overrides(),
+            ),
+        )
+        if descriptor.provider != exclude_provider
+        and (
+            descriptor.provider in (config.LOCAL_PROVIDER_OLLAMA, config.LOCAL_PROVIDER_LLAMACPP)
+            or (state.use_api_mode and descriptor.provider == state.api_provider_type)
+        )
+    ]
+    policy = settings_manager.get_auto_model_policy()
+    return choose_auto_model_ref(catalog, TASK_REQUIREMENTS.get(task, ()), policy=policy)
+
+
+def _fallback_model_ref_on_failure(
+    task: str, exc: Exception, model_ref: "ModelRef | None", settings_manager, state: "_ProviderSnapshot",
+) -> ModelRef | None:
+    """ADR-018 stage 18.5: called from chat()/chat_stream()'s OUTER wrapper
+    after the primary attempt (task-keyed lookup, or an explicit model_ref
+    override) has raised - never from inside _chat_dispatch/
+    _chat_stream_dispatch itself, which stay byte-identical to pre-18.5
+    behavior. Returns None (no fallback) unless ALL of:
+
+    - the task opts in (graphlink_model_catalog.FALLBACK_ENABLED_TASKS -
+      "off by default for correctness-sensitive tasks, on by default for
+      naming/triage", per the ADR's own decision #4)
+    - a settings_manager was supplied (same precondition as the 18.4 auto
+      rung - no catalog to fall back into otherwise)
+    - the failure is the SAME "retryable/unavailable" shape ADR-006
+      section 6 already classifies (_is_transient_transport_error) -
+      never a cancellation, never a content/validation error a different
+      model would fail identically at."""
+    if settings_manager is None or task not in FALLBACK_ENABLED_TASKS or not _is_transient_transport_error(exc):
+        return None
+    failed_provider = model_ref.provider if model_ref is not None else (
+        state.api_provider_type if state.use_api_mode else state.local_provider_type
+    )
+    return _auto_fallback_model_ref(task, settings_manager, state, exclude_provider=failed_provider)
+
+
 def chat(task: str, messages: list, **kwargs) -> dict:
+    """ADR-018 stage 18.5: the fallback-chain outer wrapper around
+    _chat_dispatch (this function's entire pre-18.5 body, unchanged). The
+    primary attempt always dispatches exactly as before; only on a
+    _fallback_model_ref_on_failure-approved failure does a SECOND attempt
+    fire, against a different provider, with `on_fallback` (additive,
+    popped here so it never reaches _chat_dispatch/ChatRequest.extra_kwargs)
+    invoked first so the caller can surface the substitution - "never a
+    silent swap" per the ADR's own decision #4. `runtime`/`settings_manager`
+    are peeked (kwargs.get, not pop) purely so this layer can compute the
+    same snapshot _chat_dispatch will independently take - the inner call
+    still receives its own untouched, unpopped copy of every kwarg."""
+    on_fallback = kwargs.pop("on_fallback", None)
+    runtime = kwargs.get("runtime")
+    settings_manager = kwargs.get("settings_manager")
+    try:
+        return _chat_dispatch(task, messages, **kwargs)
+    except Exception as exc:
+        if isinstance(exc, RequestCancelledError):
+            raise
+        state = runtime.snapshot() if runtime is not None else _snapshot_provider_state()
+        fallback_ref = _fallback_model_ref_on_failure(task, exc, kwargs.get("model_ref"), settings_manager, state)
+        if fallback_ref is None:
+            raise
+        if on_fallback is not None:
+            failed_provider = (
+                kwargs["model_ref"].provider if kwargs.get("model_ref") is not None
+                else (state.api_provider_type if state.use_api_mode else state.local_provider_type)
+            )
+            try:
+                on_fallback(failed_provider, fallback_ref, exc)
+            except Exception:
+                pass  # a broken notification callback must never mask the real fallback result
+        fallback_kwargs = dict(kwargs)
+        fallback_kwargs["model_ref"] = fallback_ref
+        return _chat_dispatch(task, messages, **fallback_kwargs)
+
+
+def _chat_dispatch(task: str, messages: list, **kwargs) -> dict:
     cancel_event = kwargs.pop("cancellation_event", None)
+    # ADR-018 stage 18.1: an explicitly resolved ModelRef, popped BEFORE
+    # the remaining kwargs flow into ChatRequest.extra_kwargs - see
+    # _provider_for_model_ref's own docstring. None (every pre-18.1 caller)
+    # falls through to today's unchanged task-keyed branch-select below.
+    model_ref = kwargs.pop("model_ref", None)
     # ADR-006 stage 6.5: an explicit per-session ProviderRuntime, popped
     # BEFORE the remaining kwargs flow into the provider call. None (every
     # pre-6.5 caller) means the default session's module-backed runtime.
     runtime = kwargs.pop("runtime", None)
+    # ADR-018 stage 18.4: popped the same way - only used by the auto-
+    # fallback rung below, never forwarded to a provider call.
+    settings_manager = kwargs.pop("settings_manager", None)
 
     # One consistent view of the provider state for the whole request (#9). Worker
     # threads call chat() while the UI thread can re-run initialize_* at any time;
@@ -2818,6 +3017,36 @@ def chat(task: str, messages: list, **kwargs) -> dict:
 
     try:
         _raise_if_cancelled(cancel_event)
+
+        if model_ref is not None:
+            # ADR-018 stage 18.1: an already-resolved ModelRef takes
+            # absolute precedence over every task-keyed branch below - see
+            # _provider_for_model_ref's own docstring for exactly which
+            # provider it constructs and why. Only the LOCAL branches
+            # report real usage today (see the Ollama branch's own scope
+            # comment below); a model_ref-driven local call keeps that.
+            from backend.providers.base import CancelToken, ChatRequest
+
+            provider = _provider_for_model_ref(model_ref, state)
+            chat_request = ChatRequest(task=task, messages=messages, extra_kwargs=kwargs, model_ref=model_ref)
+            token = CancelToken(cancel_event)
+            if model_ref.provider == config.LOCAL_PROVIDER_LLAMACPP:
+                # llama.cpp is excluded from transport retry - in-process
+                # inference has no transport (mirrors every other branch's
+                # own posture, see chat_stream's twin comment).
+                content = provider.complete(chat_request, token)
+            else:
+                content = _complete_with_transport_retry(provider, chat_request, token, cancel_event)
+            return {
+                "message": {"content": content, "role": "assistant"},
+                # Real usage today only for the two branches that ever
+                # populate provider.last_usage (Ollama/llama.cpp) - see the
+                # unchanged branches below's own scope comment; getattr
+                # simply returns None for the three cloud providers here,
+                # matching that same documented gap exactly.
+                "usage": getattr(provider, "last_usage", None),
+            }
+
         if not state.use_api_mode:
             if state.local_provider_type == config.LOCAL_PROVIDER_OLLAMA:
                 # ADR-006 stage 6.5 (H6): read from the SNAPSHOT's copy of
@@ -2825,6 +3054,25 @@ def chat(task: str, messages: list, **kwargs) -> dict:
                 # _ProviderSnapshot.ollama_models.
                 model = state.ollama_models.get(task)
                 if not model:
+                    auto_ref = _auto_fallback_model_ref(task, settings_manager, state)
+                    if auto_ref is not None:
+                        # ADR-018 stage 18.5 review fix: settings_manager
+                        # re-included (this function popped it into a local
+                        # above, and the plain module-level `chat` name below
+                        # resolves to the 18.5 fallback wrapper, not back to
+                        # this function) - without it, a failure on THIS
+                        # auto-picked ref could never trigger a further
+                        # fallback attempt, silently defeating 18.5 for the
+                        # exact population of requests 18.4's own auto-pick
+                        # serves. on_fallback is NOT re-includable here: the
+                        # wrapper already popped it before ever calling this
+                        # function, so it is simply out of scope at this
+                        # point - a fallback retry after THIS recursive hop
+                        # still fires, just without a notification.
+                        return chat(
+                            task, messages, model_ref=auto_ref, settings_manager=settings_manager,
+                            cancellation_event=cancel_event, runtime=runtime, **kwargs,
+                        )
                     raise ValueError(f"No Ollama model configured for task: {task}")
 
                 # ADR-006 stage 6.1: the Ollama branch routes through the
@@ -2896,6 +3144,16 @@ def chat(task: str, messages: list, **kwargs) -> dict:
         api_model = state.api_models.get(task)
 
         if not api_model:
+            auto_ref = _auto_fallback_model_ref(task, settings_manager, state)
+            if auto_ref is not None:
+                # ADR-018 stage 18.5 review fix: see the Ollama branch's own
+                # comment above - settings_manager re-included so a failure
+                # on this auto-picked ref can still trigger a further
+                # fallback attempt.
+                return chat(
+                    task, messages, model_ref=auto_ref, settings_manager=settings_manager,
+                    cancellation_event=cancel_event, runtime=runtime, **kwargs,
+                )
             raise RuntimeError(
                 f"No API model configured for task '{task}'.\n"
                 "Please configure models in API Settings."
@@ -3127,6 +3385,56 @@ def _translate_chat_exception(exc: Exception, state, messages: list) -> None:
 
 
 def chat_stream(task: str, messages: list, on_chunk: Callable[[str, bool], None], **kwargs) -> dict:
+    """ADR-018 stage 18.5: the streaming sibling of chat()'s own fallback-
+    chain outer wrapper, around _chat_stream_dispatch (this function's
+    entire pre-18.5 body, unchanged, renamed). Same on_fallback/exclude-
+    the-failed-provider mechanics as chat() - see its own docstring -
+    with one streaming-specific guard: a fallback attempt is legal ONLY
+    while `on_chunk` has delivered NOTHING real yet for this request,
+    mirroring the transport-retry layer's own "nothing forwarded yet"
+    invariant (chat_stream's module docstring) - replaying a stream that
+    already showed the user partial text, against a DIFFERENT model, would
+    corrupt rather than continue that partial output. A `reset` event
+    (mirrored below) already means the caller's own display is meant to be
+    empty again, so it re-arms the guard exactly like it re-arms
+    chat_stream's own accumulator (backend/agents.py's accumulated["text"]
+    handling)."""
+    on_fallback = kwargs.pop("on_fallback", None)
+    runtime = kwargs.get("runtime")
+    settings_manager = kwargs.get("settings_manager")
+    delivered = {"any": False}
+
+    def _tracking_on_chunk(delta: str, reset: bool) -> None:
+        if reset:
+            delivered["any"] = False
+        elif delta:
+            delivered["any"] = True
+        on_chunk(delta, reset)
+
+    try:
+        return _chat_stream_dispatch(task, messages, _tracking_on_chunk, **kwargs)
+    except Exception as exc:
+        if isinstance(exc, RequestCancelledError) or delivered["any"]:
+            raise
+        state = runtime.snapshot() if runtime is not None else _snapshot_provider_state()
+        fallback_ref = _fallback_model_ref_on_failure(task, exc, kwargs.get("model_ref"), settings_manager, state)
+        if fallback_ref is None:
+            raise
+        if on_fallback is not None:
+            failed_provider = (
+                kwargs["model_ref"].provider if kwargs.get("model_ref") is not None
+                else (state.api_provider_type if state.use_api_mode else state.local_provider_type)
+            )
+            try:
+                on_fallback(failed_provider, fallback_ref, exc)
+            except Exception:
+                pass  # a broken notification callback must never mask the real fallback result
+        fallback_kwargs = dict(kwargs)
+        fallback_kwargs["model_ref"] = fallback_ref
+        return _chat_stream_dispatch(task, messages, on_chunk, **fallback_kwargs)
+
+
+def _chat_stream_dispatch(task: str, messages: list, on_chunk: Callable[[str, bool], None], **kwargs) -> dict:
     """Streaming sibling of chat() (Qt-removal R4.4: true token streaming).
 
     ADR-006 stage 6.5b: EVERY provider streams real incremental chunks now -
@@ -3146,8 +3454,15 @@ def chat_stream(task: str, messages: list, on_chunk: Callable[[str, bool], None]
     `cancellation_event`).
     """
     cancel_event = kwargs.get("cancellation_event")
+    # ADR-018 stage 18.1: same short-circuit as chat() - see
+    # _provider_for_model_ref's own docstring. Left in kwargs by kwargs.get
+    # above's sibling; popped here since it must never reach
+    # ChatRequest.extra_kwargs.
+    model_ref = kwargs.pop("model_ref", None)
     # ADR-006 stage 6.5: same per-session runtime resolution as chat().
     runtime = kwargs.pop("runtime", None)
+    # ADR-018 stage 18.4: same auto-fallback popping as chat().
+    settings_manager = kwargs.pop("settings_manager", None)
     state = runtime.snapshot() if runtime is not None else _snapshot_provider_state()
 
     try:
@@ -3164,12 +3479,26 @@ def chat_stream(task: str, messages: list, on_chunk: Callable[[str, bool], None]
         # recursing into chat(); real streaming owns its own.)
         from backend.providers.base import CancelToken, ChatRequest
 
-        if not state.use_api_mode:
+        if model_ref is not None:
+            provider = _provider_for_model_ref(model_ref, state)
+        elif not state.use_api_mode:
             if state.local_provider_type == config.LOCAL_PROVIDER_OLLAMA:
                 # ADR-006 stage 6.5 (H6): snapshot copy, not a live table
                 # read - see chat()'s twin comment.
                 model = state.ollama_models.get(task)
                 if not model:
+                    auto_ref = _auto_fallback_model_ref(task, settings_manager, state)
+                    if auto_ref is not None:
+                        # ADR-018 stage 18.5 review fix: settings_manager
+                        # re-included - see chat()'s own identical fix for
+                        # why (this function popped it into a local above;
+                        # without re-including it, a failure on THIS
+                        # auto-picked ref could never trigger a further
+                        # fallback attempt).
+                        return chat_stream(
+                            task, messages, on_chunk, model_ref=auto_ref,
+                            settings_manager=settings_manager, runtime=runtime, **kwargs,
+                        )
                     raise ValueError(f"No Ollama model configured for task: {task}")
                 from backend.providers.ollama_provider import OllamaProvider
 
@@ -3189,6 +3518,14 @@ def chat_stream(task: str, messages: list, on_chunk: Callable[[str, bool], None]
                 raise RuntimeError("API client not initialized. Configure API settings first.")
             api_model = state.api_models.get(task)
             if not api_model:
+                auto_ref = _auto_fallback_model_ref(task, settings_manager, state)
+                if auto_ref is not None:
+                    # ADR-018 stage 18.5 review fix: settings_manager
+                    # re-included - see chat()'s own identical fix.
+                    return chat_stream(
+                        task, messages, on_chunk, model_ref=auto_ref,
+                        settings_manager=settings_manager, runtime=runtime, **kwargs,
+                    )
                 raise RuntimeError(
                     f"No API model configured for task '{task}'.\n"
                     "Please configure models in API Settings."
@@ -3230,10 +3567,13 @@ def chat_stream(task: str, messages: list, on_chunk: Callable[[str, bool], None]
         # to translation exactly as before (silently replaying a half-
         # delivered stream would corrupt the caller's accumulated text).
         # llama.cpp is excluded: in-process inference has no transport.
-        transport_retry_allowed = (
-            state.use_api_mode
-            or state.local_provider_type == config.LOCAL_PROVIDER_OLLAMA
-        )
+        if model_ref is not None:
+            transport_retry_allowed = model_ref.provider != config.LOCAL_PROVIDER_LLAMACPP
+        else:
+            transport_retry_allowed = (
+                state.use_api_mode
+                or state.local_provider_type == config.LOCAL_PROVIDER_OLLAMA
+            )
         attempt = 0
         while True:
             full_response_content = None
@@ -3241,7 +3581,7 @@ def chat_stream(task: str, messages: list, on_chunk: Callable[[str, bool], None]
             delivered_any = False
             try:
                 for event in provider.stream(
-                    ChatRequest(task=task, messages=messages, extra_kwargs=kwargs),
+                    ChatRequest(task=task, messages=messages, extra_kwargs=kwargs, model_ref=model_ref),
                     CancelToken(cancel_event),
                 ):
                     if event.type == "text":

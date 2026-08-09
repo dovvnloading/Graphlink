@@ -46,6 +46,9 @@ class AppSettingsStatePayload:
     secretsEncryptedAtRest: bool
     # ADR-016 stage 16.1: General page - the log-level setting.
     logLevel: str
+    # ADR-018 stage 18.4: General page - the auto-policy rung's setting
+    # ("cheapest-capable" | "fastest" | "best-quality").
+    autoModelPolicy: str
     # R7.4a: API-provider page.
     activeApiProvider: str
     viewingApiProvider: str

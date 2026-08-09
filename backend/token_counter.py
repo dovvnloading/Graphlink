@@ -71,6 +71,30 @@ _MODEL_PRICES_PER_MTOK: tuple[tuple[str, tuple[float, float]], ...] = (
 _LOCAL_PROVIDERS = {"ollama", "llama.cpp", "llamacpp", "local"}
 
 
+def price_per_mtok(
+    provider, model, *, overrides: dict[str, dict[str, float]] | None = None,
+) -> tuple[float, float] | None:
+    """(input, output) USD per million tokens for `model`, or None when
+    unknown (never guess). 0.0/0.0 for local providers - a real, stated
+    price, not "no data". ADR-018 stage 18.1: extracted from
+    estimate_cost_usd's own lookup so graphlink_model_catalog.
+    unified_catalog can annotate ModelDescriptor.cost_*_per_mtok with the
+    SAME table a completed reply's cost is billed against, via a
+    caller-supplied callback (this module is not imported by the
+    dependency-free catalog module - see ModelRef's own docstring)."""
+    if str(provider or "").strip().lower() in _LOCAL_PROVIDERS:
+        return (0.0, 0.0)
+    normalized_model = str(model or "").strip().lower()
+    if overrides:
+        entry = overrides.get(normalized_model)
+        if entry is not None:
+            return (float(entry.get("input", 0.0)), float(entry.get("output", 0.0)))
+    for prefix, prices in _MODEL_PRICES_PER_MTOK:
+        if normalized_model.startswith(prefix):
+            return prices
+    return None
+
+
 def estimate_cost_usd(
     provider, model, prompt_tokens, completion_tokens, *, overrides: dict[str, dict[str, float]] | None = None,
 ) -> float | None:
@@ -85,25 +109,15 @@ def estimate_cost_usd(
     supports."""
     if prompt_tokens is None and completion_tokens is None:
         return None
-    if str(provider or "").strip().lower() in _LOCAL_PROVIDERS:
-        return 0.0
-    normalized_model = str(model or "").strip().lower()
-    if overrides:
-        entry = overrides.get(normalized_model)
-        if entry is not None:
-            return round(
-                (prompt_tokens or 0) / 1_000_000 * float(entry.get("input", 0.0))
-                + (completion_tokens or 0) / 1_000_000 * float(entry.get("output", 0.0)),
-                6,
-            )
-    for prefix, (input_price, output_price) in _MODEL_PRICES_PER_MTOK:
-        if normalized_model.startswith(prefix):
-            return round(
-                (prompt_tokens or 0) / 1_000_000 * input_price
-                + (completion_tokens or 0) / 1_000_000 * output_price,
-                6,
-            )
-    return None
+    prices = price_per_mtok(provider, model, overrides=overrides)
+    if prices is None:
+        return None
+    input_price, output_price = prices
+    return round(
+        (prompt_tokens or 0) / 1_000_000 * input_price
+        + (completion_tokens or 0) / 1_000_000 * output_price,
+        6,
+    )
 
 
 @dataclass

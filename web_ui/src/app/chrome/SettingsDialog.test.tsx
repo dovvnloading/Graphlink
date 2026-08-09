@@ -23,6 +23,7 @@ const snapshot = {
   githubTokenConfigured: false,
   secretsEncryptedAtRest: true,
   logLevel: "INFO",
+  autoModelPolicy: "cheapest-capable",
   activeApiProvider: "OpenAI-Compatible",
   viewingApiProvider: "OpenAI-Compatible",
   apiBaseUrl: "https://api.openai.com/v1",
@@ -161,6 +162,24 @@ describe("SettingsDialog", () => {
     await user.click(screen.getByRole("button", { name: "Integrations" }));
 
     expect(intents).toContainEqual(["app-settings", "setActiveSection", ["integrations"]]);
+  });
+
+  it("General page renders the auto model policy select at its current value", async () => {
+    const { user } = setup();
+    await user.click(screen.getByText("open settings"));
+
+    expect(screen.getByRole("button", { name: "Automatic Model Selection Policy" })).toHaveTextContent(
+      "Cheapest Capable",
+    );
+  });
+
+  it("choosing an auto model policy option fires setAutoModelPolicy with the option's id", async () => {
+    const { user, intents } = setup();
+    await user.click(screen.getByText("open settings"));
+
+    await chooseCustomOption(user, "Automatic Model Selection Policy", "Best Quality");
+
+    expect(intents).toContainEqual(["app-settings", "setAutoModelPolicy", ["best-quality"]]);
   });
 
   it("API Endpoint page renders for the real (not deferred-placeholder) section", async () => {

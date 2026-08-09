@@ -380,6 +380,12 @@
           "model": {
             "type": "string"
           },
+          "overrideModelId": {
+            "type": "string"
+          },
+          "overrideProvider": {
+            "type": "string"
+          },
           "pendingRequestId": {
             "type": "string"
           },
@@ -684,7 +690,9 @@
           "chartAspectLocked",
           "chartSourceNodeId",
           "chatScrollValue",
-          "toolCalls"
+          "toolCalls",
+          "overrideProvider",
+          "overrideModelId"
         ],
         "type": "object"
       },

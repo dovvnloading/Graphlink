@@ -33,6 +33,8 @@ import threading
 from dataclasses import dataclass, field
 from typing import Any, Iterator, Literal, Mapping, Protocol, runtime_checkable
 
+from graphlink_model_catalog import ModelRef
+
 # ADR-006 stage 6.8: "usage" joins the union the module docstring reserved
 # for it. Convention: providers do NOT emit a separate "usage" event - they
 # attach normalized usage to the terminal "done" event (done.usage), which
@@ -162,12 +164,22 @@ class ChatRequest:
     second source of truth that a provider could silently ignore
     (adversarial-review finding on the first draft, which carried exactly
     that dead field). Stage 6.5's per-session ProviderRuntime owns where the
-    level ultimately lives."""
+    level ultimately lives.
+
+    `model_ref` (ADR-018 stage 18.1): the resolved graphlink_model_catalog.
+    ModelRef that DROVE this provider instance's construction - carried here
+    for TRACEABILITY (diagnostics, "why this model" inspectability), not as
+    a second source of truth a provider re-derives its model from. A
+    provider still gets its model at construction time exactly as before
+    (each `*Provider.__init__` takes `model`); this field never overrides
+    that. None for every call site that predates ADR-018 (nothing has
+    broken; `model_ref` is purely additive)."""
 
     task: str
     messages: list
     extra_kwargs: Mapping[str, Any] = field(default_factory=dict)
     tools: tuple[ToolSpec, ...] = ()
+    model_ref: ModelRef | None = None
 
 
 @dataclass(frozen=True)

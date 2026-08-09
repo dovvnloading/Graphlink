@@ -173,6 +173,10 @@ CLASSIFICATION: tuple[Classified, ...] = (
     Classified("scene", "fitFrameToContent", "A", "content: size is document state"),
     Classified("scene", "ungroup", "A", "content: delete grouping"),
 
+    # -- backend/api/intents_model_routing.py (scene) - ADR-018 stage 18.3 --
+    Classified("scene", "setModelOverride", "A", "content: model pin is document state, same posture as setGroupColor"),
+    Classified("scene", "clearModelOverride", "A", "content: model pin is document state, same posture as setGroupColor"),
+
     # -- backend/api/intents_pins.py (scene) ---------------------------------
     Classified("scene", "addPin", "A", "content: user-placed navigation waypoint"),
     Classified("scene", "movePin", "A", "content: user-placed navigation waypoint"),
@@ -223,6 +227,8 @@ CLASSIFICATION: tuple[Classified, ...] = (
     Classified("app-settings", "setProviderMode", "B", "preference: which provider mode is live/persisted"),
     # ADR-016 stage 16.1:
     Classified("app-settings", "setLogLevel", "B", "preference: local logging verbosity"),
+    # ADR-018 stage 18.4:
+    Classified("app-settings", "setAutoModelPolicy", "B", "preference: auto-routing policy, not document content"),
 
     # -- backend/api/intents_settings_api_provider.py (app-settings) --------
     Classified("app-settings", "setViewingApiProvider", "B", "preference: which provider sub-page is viewed"),

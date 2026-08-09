@@ -185,9 +185,27 @@ _KNOWN_NON_NODE_FIELD_ACCESS_SHAPES = {
     # backend/api/intents_settings_api_provider.py's load_api_models,
     # iterating a get_available_model_descriptors() list) - neither is
     # ever a SceneNode.
+    #
+    # ADR-018 stage 18.1: graphlink_model_catalog.ModelDescriptor is now a
+    # standing type (not just an inline iteration variable), so a THIRD
+    # shape joins these two - backend/tests/test_model_routing.py's own
+    # `descriptor` loop variable over a `unified_catalog()` result, same
+    # non-SceneNode type as the intents_settings_api_provider.py entry
+    # above, just a different file/root pair.
     "provider": (
         {"root": "s", "file": "canvas.py"},
         {"root": "descriptor", "file": "intents_settings_api_provider.py"},
+        {"root": "descriptor", "file": "test_model_routing.py"},
+        # ADR-018 stage 18.5: _thread_on_fallback's own `fallback_ref` param
+        # (backend/agents.py) is a graphlink_model_catalog.ModelRef -
+        # api_provider's fallback-chain wrapper hands it the model it just
+        # substituted in, never a SceneNode.
+        {"root": "fallback_ref", "file": "agents.py"},
+        # ADR-018 stage 18.5 review-fix regression test: `catalog[0].provider`
+        # is a unified_catalog() result (list[ModelDescriptor]), never a
+        # SceneNode collection - test_model_routing.py is entirely about
+        # model catalogs, so "catalog" never means anything else there.
+        {"root": "catalog", "file": "test_model_routing.py"},
     ),
 }
 
@@ -289,7 +307,8 @@ _EXPECTED_SCENE_NODE_WIRE_KEYS = sorted([
     "imageAssetId", "isBranchComparison", "isBranchSynthesis", "isCollapsed",
     "isDocked", "isFinalDeliverable", "isLocked", "isSummaryNote",
     "isSystemPrompt", "isUser", "itemIds", "kind", "language", "mimeType",
-    "model", "pendingRequestId", "previewLabel", "provider", "pycoderAnalysis",
+    "model", "overrideModelId", "overrideProvider",
+    "pendingRequestId", "previewLabel", "provider", "pycoderAnalysis",
     "pycoderAwaitingApproval", "pycoderCode", "pycoderError",
     "pycoderLastRunFailed", "pycoderMode", "pycoderOutput", "pycoderPrompt",
     "researchActiveSourceId", "researchCompleted", "researchError",

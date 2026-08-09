@@ -91,7 +91,8 @@ class ChatWorker:
         self.MAX_TOKENS = 8000
 
     def run(self, conversation_history, current_node, cancellation_event=None, resolved_system_prompt=None,
-            on_chunk=None, *, runtime=None, on_context_trimmed=None, on_usage=None):
+            on_chunk=None, *, runtime=None, on_context_trimmed=None, on_usage=None, model_ref=None,
+            settings_manager=None, on_fallback=None):
         """
         Executes the chat logic for a single turn.
 
@@ -123,6 +124,33 @@ class ChatWorker:
                 ({"prompt_tokens": int | None, "completion_tokens": int | None})
                 when the response carried real counts. Never called when the
                 provider reported nothing.
+            model_ref (graphlink_model_catalog.ModelRef, optional): ADR-018
+                stage 18.2. Already resolved by the caller (AgentDispatcher's
+                node/branch-override chain, mirroring resolved_system_prompt's
+                own "resolved on the caller's side, this worker never walks
+                the scene itself" posture) - forwarded straight through to
+                api_provider.chat/chat_stream, which use it instead of their
+                own task-keyed model lookup when supplied. Additive,
+                keyword-only, default-None.
+            settings_manager (graphlink_settings_store.SettingsManager,
+                optional): ADR-018 stage 18.4. Forwarded straight through to
+                api_provider.chat/chat_stream's own settings_manager kwarg,
+                which consults it ONLY when model_ref is absent AND its own
+                task-keyed lookup found nothing configured - the auto-policy
+                rung of the resolution chain. Never used by this method
+                directly, and never threaded onto the nested trim-
+                summarization call below (that call always uses
+                TASK_WEB_SUMMARIZE's own workspace default - an auto-picked
+                fallback is scoped to the reply itself, same posture as
+                model_ref_kwargs). Additive, keyword-only, default-None.
+            on_fallback (callable, optional): ADR-018 stage 18.5. Forwarded
+                straight through to api_provider.chat/chat_stream's own
+                on_fallback kwarg, called (on THIS worker thread) with
+                (failed_provider, fallback_ref, exc) the instant a retryable/
+                unavailable failure is substituted for a different provider -
+                "never a silent swap" per the ADR's own decision #4. Same
+                main-request-only scoping as settings_manager above.
+                Additive, keyword-only, default-None.
 
         Returns:
             str: The AI-generated response text.
@@ -145,6 +173,21 @@ class ChatWorker:
             # calls (runtime=None) stay byte-identical for every existing
             # api_provider.chat/chat_stream monkeypatch.
             runtime_kwargs = {"runtime": runtime} if runtime is not None else {}
+            # ADR-018 stage 18.2: same omit-when-None posture as runtime_kwargs
+            # above - only threaded onto the MAIN request below, never onto
+            # the trim-summarization's own nested chat() call (that call
+            # always uses TASK_WEB_SUMMARIZE's own workspace default; a
+            # node/branch model pin is scoped to the reply itself).
+            model_ref_kwargs = {"model_ref": model_ref} if model_ref is not None else {}
+            # ADR-018 stage 18.4: same omit-when-None, main-request-only
+            # posture as model_ref_kwargs above.
+            settings_manager_kwargs = (
+                {"settings_manager": settings_manager} if settings_manager is not None else {}
+            )
+            # ADR-018 stage 18.5: same omit-when-None, main-request-only
+            # posture as model_ref_kwargs/settings_manager_kwargs above -
+            # never threaded onto the nested trim-summarization call either.
+            on_fallback_kwargs = {"on_fallback": on_fallback} if on_fallback is not None else {}
 
             # ADR-006 stage 6.6: the history budget derives from the ACTIVE
             # model's real context window (llama.cpp n_ctx / Ollama show() /
@@ -211,6 +254,9 @@ class ChatWorker:
                     on_chunk=on_chunk,
                     cancellation_event=cancellation_event,
                     **runtime_kwargs,
+                    **model_ref_kwargs,
+                    **settings_manager_kwargs,
+                    **on_fallback_kwargs,
                 )
             else:
                 response = api_provider.chat(
@@ -218,6 +264,9 @@ class ChatWorker:
                     messages=messages,
                     cancellation_event=cancellation_event,
                     **runtime_kwargs,
+                    **model_ref_kwargs,
+                    **settings_manager_kwargs,
+                    **on_fallback_kwargs,
                 )
             # ADR-006 stage 6.8: surface the provider's real usage counts
             # when present (chat_stream always includes the key; blocking
@@ -320,7 +369,8 @@ class ChatAgent:
             self.system_prompt = ""
 
     def get_response(self, conversation_history, current_node, cancellation_event=None, resolved_system_prompt=None,
-                      on_chunk=None, *, runtime=None, on_context_trimmed=None, on_usage=None):
+                      on_chunk=None, *, runtime=None, on_context_trimmed=None, on_usage=None, model_ref=None,
+                      settings_manager=None, on_fallback=None):
         """
         Gets an AI response for a given conversation history.
 
@@ -338,6 +388,15 @@ class ChatAgent:
             on_context_trimmed (callable, optional): ADR-006 stage 6.6 trim/summarize
                 signal; passed straight through to ChatWorker.run (see its docstring).
                 Additive, keyword-only, default-None.
+            model_ref (graphlink_model_catalog.ModelRef, optional): ADR-018 stage
+                18.2; passed straight through to ChatWorker.run (see its docstring).
+                Additive, keyword-only, default-None.
+            settings_manager (graphlink_settings_store.SettingsManager, optional):
+                ADR-018 stage 18.4; passed straight through to ChatWorker.run
+                (see its docstring). Additive, keyword-only, default-None.
+            on_fallback (callable, optional): ADR-018 stage 18.5; passed straight
+                through to ChatWorker.run (see its docstring). Additive,
+                keyword-only, default-None.
 
         Returns:
             str: The AI-generated response text.
@@ -354,5 +413,8 @@ class ChatAgent:
             runtime=runtime,
             on_context_trimmed=on_context_trimmed,
             on_usage=on_usage,
+            model_ref=model_ref,
+            settings_manager=settings_manager,
+            on_fallback=on_fallback,
         )
         return ai_response

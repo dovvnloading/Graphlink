@@ -77,6 +77,14 @@ def register_settings_general_intents(
         apply_log_level(level)
         await bus.publish("app-settings")
 
+    async def set_auto_model_policy(policy: str):
+        # ADR-018 stage 18.4: closed-vocabulary persist, same posture as
+        # set_log_level - manager.set_auto_model_policy itself already
+        # silently ignores an unrecognized string (see its own docstring),
+        # so a malformed intent arg just leaves the setting unchanged.
+        await asyncio.to_thread(run_locked, manager.set_auto_model_policy, str(policy))
+        await bus.publish("app-settings")
+
     async def set_notification_preference(notification_type: str, enabled: bool):
         await asyncio.to_thread(
             run_locked, manager.set_notification_preferences, {str(notification_type): bool(enabled)}
@@ -131,6 +139,7 @@ def register_settings_general_intents(
     bus.register_intent("app-settings", "setShowTokenCounter", set_show_token_counter)
     bus.register_intent("app-settings", "setEnableSystemPrompt", set_enable_system_prompt)
     bus.register_intent("app-settings", "setLogLevel", set_log_level)
+    bus.register_intent("app-settings", "setAutoModelPolicy", set_auto_model_policy)
     bus.register_intent("app-settings", "setNotificationPreference", set_notification_preference)
     bus.register_intent("app-settings", "setGithubToken", set_github_token)
     bus.register_intent("app-settings", "clearGithubToken", clear_github_token)

@@ -1989,6 +1989,12 @@ class SceneDocument(BranchOps, GroupOps, CommandOps):
             # ChatState's own comment, backend/domain/node_states.py.
             "provider": n.state.provider if isinstance(n.state, ChatState) else None,
             "model": n.state.model if isinstance(n.state, ChatState) else None,
+            # ADR-018 stage 18.3: see ChatState's own comment on override_
+            # provider/override_model_id for why this is a distinct pair
+            # from provider/model directly above (output provenance vs.
+            # input routing pin).
+            "overrideProvider": n.state.override_provider if isinstance(n.state, ChatState) else "",
+            "overrideModelId": n.state.override_model_id if isinstance(n.state, ChatState) else "",
             "isBranchSynthesis": n.state.is_branch_synthesis if isinstance(n.state, ChatState) else False,
             "synthesisInstructions": (
                 n.state.synthesis_instructions if isinstance(n.state, ChatState) else ""
