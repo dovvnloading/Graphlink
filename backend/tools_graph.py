@@ -33,6 +33,7 @@ horizontal fan-out for siblings so parallel children don't stack.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
@@ -320,6 +321,241 @@ def make_read_subgraph_handler(document: SceneDocument):
         return ToolResult(content=json.dumps({"nodes": nodes_out, "edges": edges_out}))
 
     return handler
+
+
+RUN_NODE_SPEC = ToolSpec(
+    name="run_node",
+    description=(
+        "Run a node's action and return its result. Actions: execute (a "
+        "pycoder node's default - runs its current code in its Python REPL; "
+        "requires the code.execute scope), reply (a chat node's default - "
+        "generates an assistant reply as a new child node from its branch "
+        "history; requires provider.call), chart (explicit action on any "
+        "content node - chat/note/document/code - generates a chart node "
+        "FROM that node's content; requires provider.call; optional "
+        "chart_type, default bar). Omit `action` to run the node's own "
+        "default. web_research nodes are not yet runnable via this tool."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "node_id": {"type": "string"},
+            "action": {"type": "string", "enum": ["execute", "reply", "chart"]},
+            "chart_type": {
+                "type": "string",
+                "description": "chart action only: bar, line, pie, scatter... (default bar).",
+            },
+        },
+        "required": ["node_id"],
+    },
+)
+
+# What each ACTION demands, enforced inside the handler: the registry's own
+# scope check is static per-tool (registration-time), but the ADR's decision
+# #1 says run_node "additionally carries the scope of what it runs" - a
+# dynamic, per-call property only the handler can evaluate. The error
+# message mirrors the registry's own scope-denial wording so the model sees
+# one consistent shape for both static and dynamic denials.
+_RUN_NODE_ACTION_SCOPES = {
+    "execute": "code.execute",
+    "reply": "provider.call",
+    "chart": "provider.call",
+}
+
+# A node kind's default action (what "run this node" means with no explicit
+# `action`), and which kinds each action accepts. Chart is deliberately
+# never a default: it runs ON a content node (the UI's own "Generate chart"
+# is an action offered on content nodes, not a node kind's own run), so it
+# must be asked for by name.
+_RUN_NODE_DEFAULT_ACTIONS = {"pycoder": "execute", "chat": "reply"}
+_RUN_NODE_ACTION_KINDS = {
+    "execute": ("pycoder",),
+    "reply": ("chat",),
+    "chart": ("chat", "note", "document", "code"),
+}
+
+_RUN_OUTPUT_EXCERPT_CHARS = 4000
+_RUN_REPLY_EXCERPT_CHARS = 2000
+
+
+def make_run_node_handler(document: SceneDocument, dispatcher):
+    """`dispatcher` is the session's AgentDispatcher - run_node reuses its
+    REPL registry (get_pycoder_repl - same REPL a manual Run would use, so
+    builder runs and manual runs share one kernel per node) and its branch
+    System-Prompt resolution. Execution results land on nodes through the
+    SAME domain methods the dedicated surfaces call (complete_pycoder_run /
+    fail_pycoder_run, add_chart_node, add_chat_node) - deliberately NOT
+    re-entering the fire-and-forget AgentDispatcher surfaces themselves:
+    those claim their own busy kinds, wire callbacks to intents, and offer
+    no awaitable completion; this runs inline under the BUILDER's run and
+    cancel event instead (the design doc's D9)."""
+
+    async def handler(call: ToolCall, ctx: RunContext) -> ToolResult:
+        from backend import agents as _agents  # late import + late binding (test seam)
+
+        node_id = str(call.arguments.get("node_id") or "")
+        node = document.nodes.get(node_id)
+        if node is None:
+            return _error(f"Unknown node: {node_id!r}.")
+        if node.kind == "web_research":
+            return _error(
+                "web_research nodes are not yet runnable via run_node - "
+                "create the node with the query as content; running it lands "
+                "with network gating in a later stage."
+            )
+        action = str(call.arguments.get("action") or "") or _RUN_NODE_DEFAULT_ACTIONS.get(node.kind, "")
+        if action not in _RUN_NODE_ACTION_SCOPES:
+            return _error(
+                f"Node {node_id!r} is kind {node.kind!r} with no default run "
+                "action - pass an explicit `action` (execute, reply, chart)."
+            )
+        if node.kind not in _RUN_NODE_ACTION_KINDS[action]:
+            return _error(
+                f"Action {action!r} does not apply to a {node.kind!r} node "
+                f"(accepts: {', '.join(_RUN_NODE_ACTION_KINDS[action])})."
+            )
+        required_scope = _RUN_NODE_ACTION_SCOPES[action]
+        if required_scope not in ctx.granted_scopes:
+            return _error(
+                f"Tool 'run_node' action {action!r} requires scope(s) "
+                f"['{required_scope}'] that this run was not granted."
+            )
+        if node.pending_request_id:
+            return _error(f"Node {node_id!r} already has a run in flight.")
+
+        run_id = _run_id_of(ctx)
+        cancel_event = ctx.cancel.event if ctx.cancel is not None else None
+        claim = run_id or "builder-run"
+        # The pending stamp is what gives the builder path per-node conflict
+        # guarding, the live-run undo refusal, and the spinner UI - the same
+        # three things it provides every dedicated surface.
+        node.pending_request_id = claim
+        try:
+            if action == "execute":
+                return await _run_pycoder(document, dispatcher, node, node_id, cancel_event)
+            if action == "reply":
+                return await _run_chat(document, dispatcher, node_id, run_id, cancel_event, ctx)
+            return await _run_chart(document, node, node_id, run_id, call, _agents)
+        finally:
+            if node.pending_request_id == claim:
+                node.pending_request_id = None
+
+    async def _run_pycoder(document, dispatcher, node, node_id, cancel_event):
+        code = node.state.pycoder_code
+        if not str(code).strip():
+            return _error(
+                f"Node {node_id!r} has no code to execute - set it first via "
+                "graph.set_node_content."
+            )
+        repl = dispatcher.get_pycoder_repl(node_id, node.state.pycoder_repl_id)
+        try:
+            output = await asyncio.wait_for(
+                asyncio.to_thread(repl.execute, code),
+                timeout=_agents_const("PYCODER_EXECUTE_TIMEOUT_SECONDS"),
+            )
+            failed = bool(getattr(repl, "last_run_failed", False))
+        except asyncio.TimeoutError:
+            await dispatcher.dispose_pycoder_repl(node_id)
+            document.fail_pycoder_run(node_id, "Execution timed out and was terminated.")
+            return _error(f"Execution of node {node_id!r} timed out and was terminated.")
+        output_text = output if output else "[No output produced]"
+        # No analysis turn: the BUILDER model is the analyst here - it reads
+        # the output itself in this same loop, so a second model call to
+        # summarize it would be spend with no reader.
+        document.complete_pycoder_run(node_id, code, output_text, "", failed)
+        return ToolResult(content=json.dumps({
+            "node_id": node_id,
+            "failed": failed,
+            "output": output_text[:_RUN_OUTPUT_EXCERPT_CHARS],
+            "truncated": len(output_text) > _RUN_OUTPUT_EXCERPT_CHARS,
+        }))
+
+    async def _run_chat(document, dispatcher, node_id, run_id, cancel_event, ctx):
+        source = document.nodes[node_id]
+        if source.kind != "chat":
+            return _error(f"Node {node_id!r} is not a chat node.")
+        history = document.chat_branch_history(node_id)
+        persona_text = dispatcher._resolve_branch_system_prompt(document, node_id)
+        from backend import agents as _agents
+
+        reply_text = await asyncio.wait_for(
+            asyncio.to_thread(
+                _agents._call_chat_agent, history, persona_text, cancel_event,
+                model_ref=getattr(ctx, "model_ref", None),
+                settings_manager=getattr(ctx, "settings_manager", None),
+                runtime=getattr(ctx, "runtime", None),
+            ),
+            timeout=_agents_const("WATCHDOG_TIMEOUT_SECONDS"),
+        )
+        x, y = _place_child(document, node_id)
+
+        def mutator():
+            reply = document.add_chat_node(x, y, reply_text, False, node_id)
+            provider, model = dispatcher.active_provider_model()
+            reply.state.provider = provider
+            reply.state.model = model
+            return reply
+
+        reply_node, _command = document.record_command(
+            "builderRunChat", "agent", mutator, node_ids=[node_id], run_id=run_id,
+        )
+        return ToolResult(content=json.dumps({
+            "reply_node_id": reply_node.id,
+            "reply": reply_text[:_RUN_REPLY_EXCERPT_CHARS],
+            "truncated": len(reply_text) > _RUN_REPLY_EXCERPT_CHARS,
+        }))
+
+    async def _run_chart(document, node, node_id, run_id, call, _agents):
+        from graphlink_chart_data import SUPPORTED_CHART_TYPES
+
+        chart_type = str(call.arguments.get("chart_type") or "bar")
+        if chart_type not in SUPPORTED_CHART_TYPES:
+            return _error(
+                f"Unsupported chart_type {chart_type!r}. Supported: "
+                f"{', '.join(sorted(SUPPORTED_CHART_TYPES))}."
+            )
+        source_text = node.content or ""
+        if not source_text.strip():
+            return _error(f"Node {node_id!r} has no content to chart.")
+        parsed = await asyncio.wait_for(
+            asyncio.to_thread(_agents._call_chart_agent, source_text, chart_type),
+            timeout=_agents_const("WATCHDOG_TIMEOUT_SECONDS"),
+        )
+        if isinstance(parsed, dict) and parsed.get("error"):
+            return _error(f"Chart generation failed: {parsed['error']}")
+        x, y = _place_child(document, node_id)
+        chart_node, _command = document.record_command(
+            "builderRunChart", "agent",
+            lambda: document.add_chart_node(x, y, node_id, chart_type, parsed),
+            node_ids=[node_id], run_id=run_id,
+        )
+        return ToolResult(content=json.dumps({
+            "chart_node_id": chart_node.id, "chart_type": chart_type,
+        }))
+
+    return handler
+
+
+def _agents_const(name: str):
+    """Timeout constants read late off backend.agents so tests that shrink
+    them (and any future tuning) bind at call time, not import time."""
+    from backend import agents as _agents
+
+    return getattr(_agents, name)
+
+
+def register_run_node_tool(registry: ToolRegistry, document: SceneDocument, dispatcher) -> None:
+    """Separate from register_graph_tools because run_node genuinely needs
+    the AgentDispatcher (REPLs, persona resolution, provider identity) -
+    the pure graph tools don't, and tests of those shouldn't have to build
+    one. Registered with the GRAPH_READ scope only (it always reads the
+    node); the kind-specific execution scope is enforced dynamically inside
+    the handler per the ADR's "run_node additionally carries the scope of
+    what it runs"."""
+    registry.register(
+        RUN_NODE_SPEC, make_run_node_handler(document, dispatcher),
+        scopes={GRAPH_READ}, approval="once",
+    )
 
 
 def register_graph_tools(registry: ToolRegistry, document: SceneDocument) -> None:

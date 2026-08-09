@@ -215,5 +215,13 @@ class ToolRegistry:
 
         try:
             return await registration.handler(call, ctx)
+        except RequestCancelledError:
+            # ADR-008 stage 8.2: a long-running handler (run_node parks in
+            # code execution / model calls for minutes) observing the SAME
+            # cancel event this function checks at its own checkpoints must
+            # follow the same contract - cancellation propagates to the
+            # loop, never fed back to the model as a tool "error" it would
+            # then try to reason about.
+            raise
         except Exception as exc:
             return ToolResult(content=f"Tool {call.name!r} raised {type(exc).__name__}: {exc}", is_error=True)
