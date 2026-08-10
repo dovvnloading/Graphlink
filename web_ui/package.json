@@ -17,6 +17,11 @@
     "check:bundle": "node scripts/check-bundle-size.mjs",
     "check": "npm run check:schema && npm run typecheck && npm run lint && npm run test && npm run build && npm run check:bundle"
   },
+  "overrides": {
+    "eslint-plugin-jsx-a11y": {
+      "eslint": "$eslint"
+    }
+  },
   "dependencies": {
     "@xyflow/react": "^12.11.2",
     "github-slugger": "^2.0.0",
