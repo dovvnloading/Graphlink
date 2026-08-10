@@ -86,57 +86,76 @@ export function BuilderLaunchDialog({ transport }: { transport: WsTransport }) {
       });
   }
 
+  // The selected recipe's own description - listRecipes has always
+  // returned it, but nothing ever rendered it, so the picker gave no clue
+  // what a recipe actually builds until after launching it.
+  const selectedRecipe = recipes.find((r) => r.name === recipe) ?? null;
+
   return (
     <Dialog name="builder-launch" title="Builder" className="builder-launch-dialog">
-      <label className="builder-launch-label" htmlFor="builder-recipe">
-        Recipe
-      </label>
-      <select
-        id="builder-recipe"
-        className="builder-launch-recipe"
-        value={recipe}
-        onChange={(event) => setRecipe(event.target.value)}
-      >
-        <option value="">Start from scratch</option>
-        {recipes.map((r) => (
-          <option key={r.name} value={r.name}>
-            {r.name}
-            {r.builtIn ? " (built-in)" : ""}
-          </option>
-        ))}
-      </select>
+      <div className="builder-launch-field">
+        <label className="builder-launch-label" htmlFor="builder-recipe">
+          Recipe
+        </label>
+        <select
+          id="builder-recipe"
+          className="builder-launch-select"
+          value={recipe}
+          onChange={(event) => setRecipe(event.target.value)}
+        >
+          <option value="">Start from scratch</option>
+          {recipes.map((r) => (
+            <option key={r.name} value={r.name}>
+              {r.name}
+              {r.builtIn ? " (built-in)" : ""}
+            </option>
+          ))}
+        </select>
+        <p className="builder-launch-hint">
+          {selectedRecipe?.description || "Describe a build yourself, or pick a saved recipe."}
+        </p>
+      </div>
 
-      <label className="builder-launch-label" htmlFor="builder-goal">
-        What should the Builder construct?
-      </label>
-      <textarea
-        id="builder-goal"
-        className="builder-launch-goal"
-        placeholder="e.g. Research recent solar output trends, compute the growth rate, and chart it"
-        value={goal}
-        onChange={(event) => setGoal(event.target.value)}
-        rows={3}
-      />
+      <div className="builder-launch-field">
+        <label className="builder-launch-label" htmlFor="builder-goal">
+          What should the Builder construct?
+        </label>
+        <textarea
+          id="builder-goal"
+          className="builder-launch-goal"
+          placeholder="e.g. Research recent solar output trends, compute the growth rate, and chart it"
+          value={goal}
+          onChange={(event) => setGoal(event.target.value)}
+          rows={3}
+        />
+        {recipe && (
+          <p className="builder-launch-hint">
+            Optional - the recipe carries its own goal. Anything typed here is added to it.
+          </p>
+        )}
+      </div>
 
-      <fieldset className="builder-launch-mode">
+      <fieldset className="builder-launch-fieldset">
         <legend>Oversight</legend>
-        <label>
+        <label className={`builder-launch-choice${mode === "copilot" ? " selected" : ""}`}>
           <input
             type="radio"
             name="builder-mode"
             checked={mode === "copilot"}
             onChange={() => setMode("copilot")}
           />
-          Co-pilot — approve every mutating step
+          <span className="builder-launch-choice-title">Co-pilot</span>
+          <span className="builder-launch-choice-desc">Approve every mutating step.</span>
         </label>
-        <label>
+        <label className={`builder-launch-choice${mode === "autopilot" ? " selected" : ""}`}>
           <input
             type="radio"
             name="builder-mode"
             checked={mode === "autopilot"}
             onChange={() => setMode("autopilot")}
           />
-          Autopilot — run to completion within the budgets
+          <span className="builder-launch-choice-title">Autopilot</span>
+          <span className="builder-launch-choice-desc">Run to completion within the budgets.</span>
         </label>
         {mode === "autopilot" && (
           <p className="builder-launch-disclosure" role="note">
@@ -147,38 +166,44 @@ export function BuilderLaunchDialog({ transport }: { transport: WsTransport }) {
         )}
       </fieldset>
 
-      <fieldset className="builder-launch-budgets">
-        <legend>Budgets (hard limits — a breach pauses the build)</legend>
-        <label>
-          Max steps
-          <input
-            type="number"
-            min={1}
-            max={50}
-            value={maxSteps}
-            onChange={(event) => setMaxSteps(Number(event.target.value) || DEFAULT_MAX_STEPS)}
-          />
-        </label>
-        <label>
-          Max tokens
-          <input
-            type="number"
-            min={1000}
-            step={10_000}
-            value={maxTokens}
-            onChange={(event) => setMaxTokens(Number(event.target.value) || DEFAULT_MAX_TOKENS)}
-          />
-        </label>
-        <label>
-          Max seconds
-          <input
-            type="number"
-            min={30}
-            step={60}
-            value={maxWallSeconds}
-            onChange={(event) => setMaxWallSeconds(Number(event.target.value) || DEFAULT_MAX_WALL_SECONDS)}
-          />
-        </label>
+      <fieldset className="builder-launch-fieldset">
+        <legend>Budgets</legend>
+        <p className="builder-launch-hint">Hard limits - a breach pauses the build.</p>
+        <div className="builder-launch-budgets">
+          <label className="builder-launch-budget">
+            <span className="builder-launch-budget-label">Max steps</span>
+            <input
+              className="builder-launch-number"
+              type="number"
+              min={1}
+              max={50}
+              value={maxSteps}
+              onChange={(event) => setMaxSteps(Number(event.target.value) || DEFAULT_MAX_STEPS)}
+            />
+          </label>
+          <label className="builder-launch-budget">
+            <span className="builder-launch-budget-label">Max tokens</span>
+            <input
+              className="builder-launch-number"
+              type="number"
+              min={1000}
+              step={10_000}
+              value={maxTokens}
+              onChange={(event) => setMaxTokens(Number(event.target.value) || DEFAULT_MAX_TOKENS)}
+            />
+          </label>
+          <label className="builder-launch-budget">
+            <span className="builder-launch-budget-label">Max seconds</span>
+            <input
+              className="builder-launch-number"
+              type="number"
+              min={30}
+              step={60}
+              value={maxWallSeconds}
+              onChange={(event) => setMaxWallSeconds(Number(event.target.value) || DEFAULT_MAX_WALL_SECONDS)}
+            />
+          </label>
+        </div>
       </fieldset>
 
       {error && (

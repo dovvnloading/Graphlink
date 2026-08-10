@@ -93,6 +93,32 @@ describe("BuilderLaunchDialog", () => {
     expect(screen.getByRole("note")).toHaveTextContent(/network access will still ask/i);
   });
 
+  it("marks only the chosen oversight row selected (drives its highlight)", async () => {
+    const { user } = await setup();
+    const copilot = screen.getByRole("radio", { name: /co-pilot/i });
+    const autopilot = screen.getByRole("radio", { name: /autopilot/i });
+
+    expect(copilot.closest("label")).toHaveClass("selected");
+    expect(autopilot.closest("label")).not.toHaveClass("selected");
+
+    await user.click(autopilot);
+
+    expect(autopilot.closest("label")).toHaveClass("selected");
+    expect(copilot.closest("label")).not.toHaveClass("selected");
+  });
+
+  it("shows the selected recipe's own description", async () => {
+    const { user } = await setup("n9", [
+      { name: "Research and summarize", description: "Researches a topic, then writes a summary.", builtIn: true },
+    ]);
+
+    await user.selectOptions(screen.getByLabelText("Recipe"), "Research and summarize");
+
+    expect(
+      await screen.findByText("Researches a topic, then writes a summary."),
+    ).toBeInTheDocument();
+  });
+
   it("a null start result (backend refused) shows an error instead of closing", async () => {
     const { user } = await setup(null);
 
