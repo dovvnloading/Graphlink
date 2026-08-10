@@ -24,6 +24,8 @@ from backend.plugin_sdk import (
     discover_plugins,
 )
 from backend.plugins import _PLUGINS, register_plugins
+from backend.session_load import restore_chat_into_document
+from backend.session_save import build_chat_data
 
 
 def _write_plugin(
@@ -306,3 +308,306 @@ def test_undo_reverts_a_plugin_created_node_and_its_parent_edge(tmp_path):
     # The parent itself must survive the undo - only the plugin's own
     # command_type ("plugin:undo_plugin.thing") should have been reversed.
     assert parent.id in canvas_document.nodes
+
+
+# -- ADR-014 stage 14.2: generic node persistence/serialization -------------
+#
+# Every test below deliberately uses a FRESH tmp_path plugin, never known to
+# session_save.py/session_load.py's own source code, to prove the mechanism
+# is genuinely generic - not a special case for plugins/hello_node/ or
+# plugins/counter_node/ (which get their own, separate, real-plugin-
+# integration coverage further down). No test in this section adds a single
+# line to session_save.py/session_load.py to pass - that IS the proof that
+# a future plugin needs zero edits there.
+
+# A real NodeState subclass + real serialize/deserialize hooks, written out
+# as a plugin.py body string so _write_plugin can place it under a tmp_path
+# plugin directory exactly like a real third-party plugin would ship it.
+_STATEFUL_PY_BODY = textwrap.dedent("""\
+    from dataclasses import dataclass
+
+    from backend.domain.node_states import NodeState
+    from backend.plugin_sdk import HostContext, PluginNodeSeed, PluginRunContext
+
+
+    @dataclass
+    class WidgetState(NodeState):
+        clicks: int = 0
+        label: str = ""
+
+
+    def _make(document, run_ctx, parent_id):
+        return PluginNodeSeed(
+            title="Widget", content="", state=WidgetState(clicks=3, label="initial"),
+        )
+
+
+    def _serialize(node):
+        return {"clicks": node.state.clicks, "label": node.state.label}
+
+
+    def _deserialize(data):
+        return WidgetState(clicks=int(data.get("clicks", 0)), label=str(data.get("label", "")))
+
+
+    def register(host: HostContext) -> None:
+        host.register_node_kind(
+            "widget", _make, requires_parent=True,
+            serialize=_serialize, deserialize=_deserialize,
+        )
+        host.register_picker_entry(
+            node_kind="widget", name="Stateful Widget",
+            description="a test plugin with real NodeState", category="More Plugins",
+        )
+""")
+
+
+def _round_trip_via_files(document, plugin_registry):
+    """Mirrors test_session_save.py's own _round_trip helper exactly, plus
+    the plugin_registry threading this stage adds - build_chat_data's
+    output, popped/re-nested exactly the way backend/chat_library.py's own
+    saveChat/loadChat intents do it, fed straight back through
+    restore_chat_into_document."""
+    chat_data = build_chat_data(document, plugin_registry=plugin_registry)
+    notes_data = chat_data.pop("notes_data")
+    pins_data = chat_data.pop("pins_data")
+    doc2 = SceneDocument()
+    restore_chat_into_document(doc2, {"data": chat_data}, notes_data, pins_data, plugin_registry=plugin_registry)
+    return chat_data, doc2
+
+
+def test_plugin_node_with_no_serializer_round_trips_title_and_content_only(tmp_path):
+    # _write_plugin's default py_body registers a factory with NO `state=`
+    # at all - the "no opt-in" baseline case. The parent is a real "chat"
+    # node (add_chat_node), not add_node's bare "placeholder" kind - a
+    # placeholder was never a persisted kind even before ADR-014 (it isn't
+    # in session_save.py's own _REGULAR_KINDS), so it would vanish on
+    # reload regardless of anything this stage changes.
+    _write_plugin(tmp_path, "no_state_plugin", kind="thing", picker_name="No State Thing")
+    registry = discover_plugins(tmp_path)
+    bus, notifications, canvas_document = _make_wired_bus(registry)
+    parent = canvas_document.add_chat_node(10, 20, "parent", is_user=False)
+
+    node_id = asyncio.run(
+        bus.dispatch_intent("app-plugins", "executePlugin", ["No State Thing", parent.id])
+    )
+    assert node_id is not None
+
+    chat_data, reloaded = _round_trip_via_files(canvas_document, registry)
+
+    saved_payload = next(n for n in chat_data["nodes"] if n["node_type"] == "no_state_plugin.thing")
+    assert saved_payload["title"] == "Greeting"
+    assert saved_payload["content"] == "hello from no_state_plugin"
+    assert "plugin_state" not in saved_payload
+
+    assert len(reloaded.nodes) == 2
+    plugin_node = next(n for n in reloaded.nodes.values() if n.kind == "no_state_plugin.thing")
+    assert plugin_node.title == "Greeting"
+    assert plugin_node.content == "hello from no_state_plugin"
+    assert plugin_node.state is None
+    reloaded_parent = next(n for n in reloaded.nodes.values() if n.id != plugin_node.id)
+    assert reloaded_parent.kind == "chat"
+    assert any(
+        e.source == reloaded_parent.id and e.target == plugin_node.id
+        for e in reloaded.edges.values()
+    )
+
+
+def test_plugin_node_with_real_state_round_trips_custom_fields_through_save_and_reload(tmp_path):
+    _write_plugin(
+        tmp_path, "stateful_plugin", py_body=_STATEFUL_PY_BODY, kind="widget",
+        picker_name="Stateful Widget",
+    )
+    registry = discover_plugins(tmp_path)
+    bus, notifications, canvas_document = _make_wired_bus(registry)
+    parent = canvas_document.add_chat_node(10, 20, "parent", is_user=False)
+
+    node_id = asyncio.run(
+        bus.dispatch_intent("app-plugins", "executePlugin", ["Stateful Widget", parent.id])
+    )
+    assert node_id is not None
+    # A real LIVE edit after creation, not just the factory's initial
+    # value - proves the round-trip reflects the node's actual current
+    # state, not merely what _make_tally-equivalent seeded it with.
+    canvas_document.nodes[node_id].state.clicks = 7
+    canvas_document.nodes[node_id].state.label = "edited"
+
+    chat_data, reloaded = _round_trip_via_files(canvas_document, registry)
+
+    saved_payload = next(n for n in chat_data["nodes"] if n["node_type"] == "stateful_plugin.widget")
+    assert saved_payload["plugin_state"] == {"clicks": 7, "label": "edited"}
+
+    assert len(reloaded.nodes) == 2
+    plugin_node = next(n for n in reloaded.nodes.values() if n.kind == "stateful_plugin.widget")
+    assert plugin_node.title == "Widget"
+    assert plugin_node.state.clicks == 7
+    assert plugin_node.state.label == "edited"
+    reloaded_parent = next(n for n in reloaded.nodes.values() if n.id != plugin_node.id)
+    assert reloaded_parent.kind == "chat"
+    assert any(
+        e.source == reloaded_parent.id and e.target == plugin_node.id
+        for e in reloaded.edges.values()
+    )
+
+
+def test_plugin_node_whose_kind_is_no_longer_registered_is_dropped_not_crashed(tmp_path):
+    # A plugin removed/renamed between save and load - the same "unrecognized
+    # node_type -> skip, never crash" posture session_load.py already applies
+    # to every other kind (this module's own docstring documents 5 kinds
+    # R5-closeout deleted with the exact same tolerant behavior).
+    _write_plugin(tmp_path, "temporary_plugin", kind="thing", picker_name="Temporary Thing")
+    registry = discover_plugins(tmp_path)
+    bus, notifications, canvas_document = _make_wired_bus(registry)
+    parent = canvas_document.add_chat_node(10, 20, "parent", is_user=False)
+    node_id = asyncio.run(
+        bus.dispatch_intent("app-plugins", "executePlugin", ["Temporary Thing", parent.id])
+    )
+    assert node_id is not None
+
+    chat_data = build_chat_data(canvas_document, plugin_registry=registry)
+    notes_data = chat_data.pop("notes_data")
+    pins_data = chat_data.pop("pins_data")
+    empty_registry = discover_plugins(tmp_path / "does_not_exist")
+
+    doc2 = SceneDocument()
+    restore_chat_into_document(
+        doc2, {"data": chat_data}, notes_data, pins_data, plugin_registry=empty_registry,
+    )
+
+    assert not any(n.kind == "temporary_plugin.thing" for n in doc2.nodes.values())
+    # The parent node itself (a plain built-in "chat" node, unaffected by
+    # the missing plugin) must still be there - one dropped node is not a
+    # failed load.
+    assert any(n.kind == "chat" for n in doc2.nodes.values())
+
+
+def test_live_wire_scene_payload_includes_plugin_state_when_serializer_registered(tmp_path):
+    # ADR-014 stage 14.2's OTHER half - the live WS wire, not save/reload.
+    # register_plugins populates SceneDocument.plugin_node_serializers from
+    # the SAME registry _round_trip_via_files' save path reads its
+    # serialize hooks from - one function, two call sites.
+    _write_plugin(
+        tmp_path, "stateful_plugin", py_body=_STATEFUL_PY_BODY, kind="widget",
+        picker_name="Stateful Widget",
+    )
+    registry = discover_plugins(tmp_path)
+    bus, notifications, canvas_document = _make_wired_bus(registry)
+    parent = canvas_document.add_node(10, 20, "parent")
+
+    node_id = asyncio.run(
+        bus.dispatch_intent("app-plugins", "executePlugin", ["Stateful Widget", parent.id])
+    )
+
+    wire = canvas_document.scene_payload()
+    node_wire = next(n for n in wire["nodes"] if n["id"] == node_id)
+    # Coerced to str on the wire (SceneNodeRow.pluginState is dict[str, str]
+    # - see contracts/graphlink_scene_payload.py's own comment) even though
+    # `clicks` is a real int in memory and in the save file.
+    assert node_wire["pluginState"] == {"clicks": "3", "label": "initial"}
+
+    parent_wire = next(n for n in wire["nodes"] if n["id"] == parent.id)
+    assert parent_wire["pluginState"] == {}
+
+
+def test_live_wire_plugin_state_is_empty_for_a_plugin_kind_with_no_serializer(tmp_path):
+    _write_plugin(tmp_path, "no_state_plugin", kind="thing", picker_name="No State Thing")
+    registry = discover_plugins(tmp_path)
+    bus, notifications, canvas_document = _make_wired_bus(registry)
+    parent = canvas_document.add_node(10, 20, "parent")
+
+    node_id = asyncio.run(
+        bus.dispatch_intent("app-plugins", "executePlugin", ["No State Thing", parent.id])
+    )
+
+    wire = canvas_document.scene_payload()
+    node_wire = next(n for n in wire["nodes"] if n["id"] == node_id)
+    assert node_wire["pluginState"] == {}
+
+
+def test_a_plugin_serializer_that_raises_degrades_to_empty_plugin_state_on_the_wire(tmp_path):
+    raising_body = textwrap.dedent("""\
+        from backend.plugin_sdk import HostContext, PluginNodeSeed
+
+
+        def _make(document, run_ctx, parent_id):
+            return PluginNodeSeed(title="Boom", content="")
+
+
+        def _serialize(node):
+            raise RuntimeError("this plugin's serializer is broken")
+
+
+        def register(host: HostContext) -> None:
+            host.register_node_kind("boom", _make, requires_parent=True, serialize=_serialize)
+            host.register_picker_entry(
+                node_kind="boom", name="Boom Thing", description="raises", category="More Plugins",
+            )
+    """)
+    _write_plugin(tmp_path, "raising_plugin", py_body=raising_body, kind="boom", picker_name="Boom Thing")
+    registry = discover_plugins(tmp_path)
+    bus, notifications, canvas_document = _make_wired_bus(registry)
+    parent = canvas_document.add_node(10, 20, "parent")
+
+    node_id = asyncio.run(
+        bus.dispatch_intent("app-plugins", "executePlugin", ["Boom Thing", parent.id])
+    )
+    assert node_id is not None
+
+    # Live wire: a raising serializer degrades to {}, never crashes the
+    # whole scene publish.
+    wire = canvas_document.scene_payload()
+    node_wire = next(n for n in wire["nodes"] if n["id"] == node_id)
+    assert node_wire["pluginState"] == {}
+
+    # Save file: same degrade-not-crash posture - the node's universal
+    # title/content still saves, just without plugin_state.
+    chat_data = build_chat_data(canvas_document, plugin_registry=registry)
+    saved_payload = next(n for n in chat_data["nodes"] if n["node_type"] == "raising_plugin.boom")
+    assert saved_payload["title"] == "Boom"
+    assert "plugin_state" not in saved_payload
+
+
+# -- Integration coverage using the REAL shipped demo plugins ---------------
+#
+# The tests above prove the MECHANISM is generic against an arbitrary,
+# never-before-seen plugin. These two prove the actual shipped
+# plugins/hello_node/ and plugins/counter_node/ (real discover_plugins(),
+# no tmp_path override) round-trip correctly through the real default
+# discovery root - the production configuration, not just the test harness.
+
+
+def test_real_hello_node_plugin_round_trips_through_save_and_reload():
+    registry = discover_plugins()
+    bus, notifications, canvas_document = _make_wired_bus(registry)
+    parent = canvas_document.add_chat_node(10, 20, "parent", is_user=False)
+
+    node_id = asyncio.run(
+        bus.dispatch_intent("app-plugins", "executePlugin", ["Hello Node", parent.id])
+    )
+    assert node_id is not None
+
+    _chat_data, reloaded = _round_trip_via_files(canvas_document, registry)
+
+    plugin_node = next(n for n in reloaded.nodes.values() if n.kind == "hello_node.hello_note")
+    assert plugin_node.title == "Hello Node"
+    assert "hello_node" in plugin_node.content
+    assert plugin_node.state is None
+
+
+def test_real_counter_node_plugin_round_trips_its_custom_state_through_save_and_reload():
+    registry = discover_plugins()
+    bus, notifications, canvas_document = _make_wired_bus(registry)
+    parent = canvas_document.add_chat_node(10, 20, "parent", is_user=False)
+
+    node_id = asyncio.run(
+        bus.dispatch_intent("app-plugins", "executePlugin", ["Counter Node", parent.id])
+    )
+    assert node_id is not None
+    canvas_document.nodes[node_id].state.count = 42
+
+    _chat_data, reloaded = _round_trip_via_files(canvas_document, registry)
+
+    plugin_node = next(n for n in reloaded.nodes.values() if n.kind == "counter_node.tally")
+    assert plugin_node.title == "Counter"
+    assert plugin_node.state.count == 42
+    assert plugin_node.state.label == "from counter_node"

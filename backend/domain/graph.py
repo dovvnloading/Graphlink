@@ -35,10 +35,11 @@ from __future__ import annotations
 from collections import deque
 import itertools
 import json
+import logging
 import math
 import uuid
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 from graphlink_chart_data import SUPPORTED_CHART_TYPES
 from graphlink_grid_view_settings import (
@@ -203,6 +204,41 @@ class SceneDocument(BranchOps, GroupOps, CommandOps):
     # New Chat confirm skips only when the canvas is empty AND there is no
     # current chat - a predicate the frontend cannot evaluate without it.
     current_chat_id: int | None = None
+    # ADR-014 stage 14.2: the live-wire half of the Plugin SDK's generic
+    # persistence seam - keyed by a plugin's ALREADY-namespaced node kind
+    # (f"{plugin_id}.{kind}", HostContext.register_node_kind's own
+    # contract), value is that plugin's own `serialize(node) -> dict` hook,
+    # verbatim (the SAME callable HostContext.register_node_kind's
+    # `serialize` parameter stores on NodeKindSpec - see backend/plugin_sdk.
+    # py's own docstring there for the full contract shared with
+    # session_save.py's persisted-file use of the same hook).
+    #
+    # WHY A PLAIN dict[str, Callable] HERE, RATHER THAN THIS MODULE
+    # IMPORTING backend.plugin_sdk.PluginRegistry AND CONSULTING IT
+    # DIRECTLY: backend/plugin_sdk.py imports backend.canvas (for
+    # SceneDocument's own type), and backend/canvas.py imports THIS module
+    # back (see this module's own docstring) - a domain-layer import of
+    # plugin_sdk would be a real circular import (ImportError on a
+    # partially-initialized backend.canvas), not just a domain-purity
+    # style violation tests/test_domain_purity.py happens not to enumerate
+    # by name. A bare, duck-typed dict of callables carries zero import
+    # coupling either direction.
+    #
+    # POPULATED BY: backend/plugins.py's register_plugins(), once per
+    # session activation, from the (already-discovered) PluginRegistry -
+    # NOT by this dataclass's own constructor (defaults empty), and NOT
+    # reset by clear_for_load below (a plugin's live registration is a
+    # session-lifecycle capability, exactly like grid/font settings below,
+    # not per-loaded-chat-file data - reloading a DIFFERENT chat into the
+    # same session must not un-register a still-active plugin).
+    #
+    # A lookup miss (the overwhelming majority of nodes: every built-in
+    # kind, AND any plugin kind whose author never opted into
+    # register_node_kind(..., serialize=...)) is not an error - see
+    # _plugin_state_wire's own docstring.
+    plugin_node_serializers: dict[str, Callable[["SceneNode"], dict[str, Any]]] = field(
+        default_factory=dict, repr=False, compare=False,
+    )
     # ADR-010 stage 10.1: every invertible mutation this session has
     # recorded, oldest first. Bounded per the ADR's own durability boundary
     # ("session-scoped and in-memory (bounded, e.g. 100 composite commands),
@@ -2320,7 +2356,40 @@ class SceneDocument(BranchOps, GroupOps, CommandOps):
                 n.state.builder_approval_summary if isinstance(n.state, PlanState) else ""
             ),
             "builderStatusDetail": n.state.builder_status_detail if isinstance(n.state, PlanState) else "",
+            # ADR-014 stage 14.2: the Plugin SDK's generic live-wire
+            # fallback - see plugin_node_serializers' own field comment and
+            # _plugin_state_wire's own docstring below.
+            "pluginState": self._plugin_state_wire(n),
         }
+
+    def _plugin_state_wire(self, n: SceneNode) -> dict[str, str]:
+        """ADR-014 stage 14.2: the live-WS-wire analog of session_save.py's
+        generic plugin persistence fallback. `plugin_node_serializers` is
+        keyed by a plugin's already-namespaced kind string (never a
+        built-in kind - no built-in kind string contains "."), so a lookup
+        miss covers every non-plugin node AND any plugin node whose author
+        never opted into HostContext.register_node_kind(...,
+        serialize=...) - both are the ordinary case, not an error.
+
+        Coerced to dict[str, str] (never a richer nested shape): mirrors
+        contracts/graphlink_scene_payload.py's own ResearchResultRow.
+        providerSnapshot precedent for "genuinely free-form data under a
+        schema generator with a closed, dict[str, X]-only type set" - see
+        that field's own comment. A plugin's serializer raising, or
+        returning something that isn't a plain dict, degrades to {} rather
+        than breaking the whole scene publish that every other node on the
+        canvas rides along with."""
+        serializer = self.plugin_node_serializers.get(n.kind)
+        if serializer is None:
+            return {}
+        try:
+            raw = serializer(n)
+        except Exception:
+            logging.warning("plugin node %s (%s): serialize hook raised", n.id, n.kind, exc_info=True)
+            return {}
+        if not isinstance(raw, dict):
+            return {}
+        return {str(k): str(v) for k, v in raw.items()}
 
     def _edge_wire(self, e: SceneEdge) -> dict[str, Any]:
         return {"id": e.id, "source": e.source, "target": e.target}

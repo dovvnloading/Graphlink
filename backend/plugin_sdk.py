@@ -68,7 +68,7 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - not exercised on this repo's CI (3.12+)
     import tomli as tomllib  # type: ignore[no-redef]
 
-from backend.canvas import SceneDocument
+from backend.canvas import SceneDocument, SceneNode
 from backend.domain.node_states import NodeState
 from backend.notifications import NotificationState
 
@@ -119,13 +119,13 @@ class PluginNodeSeed:
     SceneNode.state. This works TODAY for the live session: WS updates and
     undo/redo both operate on the live/deepcopied SceneNode object, which
     is kind-agnostic (record_command's snapshot is
-    copy.deepcopy(self.nodes[nid]) - no isinstance check anywhere). What
-    does NOT happen yet in 14.1: _node_wire only reads state fields behind
-    isinstance(n.state, XState) checks for the built-in dataclasses - a
-    plugin's own subclass matches none of them, so any field beyond
-    title/content is invisible on the wire until stage 14.2 teaches
-    _node_wire/session_save/session_load to consult a plugin's own
-    serializer."""
+    copy.deepcopy(self.nodes[nid]) - no isinstance check anywhere).
+
+    ADR-014 stage 14.2 closed the two gaps this docstring used to name here
+    (live-wire visibility beyond title/content, and save/reload dropping the
+    node entirely): a plugin that wants either now passes `serialize`/
+    `deserialize` to `HostContext.register_node_kind` - see that method's own
+    docstring and NodeKindSpec's own fields."""
 
     title: str
     content: str = ""
@@ -134,6 +134,18 @@ class PluginNodeSeed:
 
 NodeFactory = Callable[[SceneDocument, "PluginRunContext", str], PluginNodeSeed]
 PluginIntentHandler = Callable[..., Any]  # (document, run_ctx, *args) -> Any; sync or async
+# ADR-014 stage 14.2: the generic persistence/wire seam. `NodeSerializeHook`
+# is reused for BOTH the live WS wire's pluginState field (backend/domain/
+# graph.py's _node_wire, via SceneDocument.plugin_node_serializers - see that
+# field's own comment for why the domain layer consults a plain dict of
+# callables rather than importing this module) AND the persisted save file's
+# "plugin_state" key (backend/session_save.py) - one function a plugin author
+# writes once, read from two different call sites for two different
+# purposes. `NodeDeserializeHook` is the save-side-only mirror (there is no
+# live-wire equivalent to deserialize INTO - the wire is write-only from the
+# backend's perspective).
+NodeSerializeHook = Callable[[SceneNode], "dict[str, Any]"]
+NodeDeserializeHook = Callable[["dict[str, Any]"], "NodeState | None"]
 
 
 @dataclass(frozen=True)
@@ -154,6 +166,14 @@ class NodeKindSpec:
     kind: str  # ALREADY namespaced: f"{plugin_id}.{local_kind}"
     factory: NodeFactory
     requires_parent: bool  # always True in v1
+    # ADR-014 stage 14.2: OPTIONAL persistence/wire hooks - see
+    # HostContext.register_node_kind's own docstring for the full contract.
+    # A plugin that passes neither still gets its node's universal title/
+    # content/is_collapsed fields persisted and reloaded (session_save.py's
+    # own generic fallback default) - these two are strictly for a plugin's
+    # OWN NodeState subclass fields, beyond that baseline.
+    serialize: NodeSerializeHook | None = None
+    deserialize: NodeDeserializeHook | None = None
 
 
 @dataclass(frozen=True)
@@ -193,6 +213,8 @@ class HostContext:
         factory: NodeFactory,
         *,
         requires_parent: bool = True,
+        serialize: NodeSerializeHook | None = None,
+        deserialize: NodeDeserializeHook | None = None,
     ) -> None:
         """Registers 'factory' as this plugin's creation primitive for
         'kind'. The kind actually stored (and later stamped onto
@@ -204,7 +226,37 @@ class HostContext:
         v1 ONLY supports requires_parent=True. False is rejected outright:
         PluginPicker.tsx's executePlugin(name, parentId) wire call carries
         no x/y at all, so a parentless node has no host-decided place to
-        spawn."""
+        spawn.
+
+        ADR-014 stage 14.2: 'serialize'/'deserialize' are the OPTIONAL
+        generic persistence/wire seam for a plugin's own NodeState subclass
+        (the "'state' IS the real ADR-002 seam" seam PluginNodeSeed's own
+        docstring names). Neither is required - a plugin with no state
+        (like plugins/hello_node/, which fits its one string in `content`)
+        passes neither and its node's title/content/is_collapsed still
+        round-trips through save/reload via session_save.py's generic
+        fallback default; a plugin WITH real state opts in to round-trip it
+        too:
+          - serialize(node) -> dict: called with the live SceneNode both by
+            backend/domain/graph.py's _node_wire (the live WS wire's
+            pluginState field - see SceneDocument.plugin_node_serializers'
+            own comment for why THAT call site is wired separately, from
+            outside this class, to keep the domain layer import-free of
+            this module) and by backend/session_save.py (the persisted
+            "plugin_state" key). Must return a plain, JSON-serializable
+            dict - session_save.py drops (never crashes on) a dict that
+            isn't; the live-wire path coerces every value through str()
+            regardless (SceneNodeRow.pluginState is dict[str, str], the
+            same "narrowest accurate supertype under a closed schema
+            generator" precedent already established by ResearchResultRow.
+            providerSnapshot - see contracts/graphlink_scene_payload.py).
+          - deserialize(data) -> NodeState | None: the save-side-only
+            mirror, called by backend/session_load.py with whatever dict
+            serialize(node) most recently produced, to reconstruct the
+            plugin's own NodeState subclass instance. A raised exception
+            here is caught by the caller - the node still restores with
+            its title/content, just without its extra state - never a
+            failed load."""
         if not requires_parent:
             raise PluginRegistrationError(
                 f'plugin "{self.plugin_id}": requires_parent=False is not supported in SDK '
@@ -223,6 +275,7 @@ class HostContext:
             )
         self._node_kinds[namespaced] = NodeKindSpec(
             plugin_id=self.plugin_id, kind=namespaced, factory=factory, requires_parent=True,
+            serialize=serialize, deserialize=deserialize,
         )
 
     def register_picker_entry(

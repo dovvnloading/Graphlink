@@ -200,6 +200,17 @@ def register_plugins(
     if plugin_registry is None:
         plugin_registry = discover_plugins(builtin_names=frozenset(p[0] for p in _PLUGINS))
 
+    # ADR-014 stage 14.2: populate the live-wire half of the Plugin SDK's
+    # generic persistence seam - see SceneDocument.plugin_node_serializers'
+    # own field comment (backend/domain/graph.py) for why this dict of bare
+    # callables, rather than the domain layer importing PluginRegistry
+    # itself, is what _node_wire's pluginState field actually reads.
+    # Generic against whatever discover_plugins() found - adding a NEW
+    # plugin with its own serialize hook needs no edit here.
+    for kind, kind_spec in plugin_registry.node_kinds.items():
+        if kind_spec.serialize is not None:
+            canvas_document.plugin_node_serializers[kind] = kind_spec.serialize
+
     # Topic name "app-plugins" (matching the codegen artifact's derived
     # name - same reasoning as "app-composer"/"app-about"): no existing
     # "plugins" schema collision today, but the pattern is now consistent

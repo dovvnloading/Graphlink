@@ -204,6 +204,7 @@ from backend.canvas import (
     _content_codec,
     _placeholder_chart_data,
 )
+from backend.plugin_sdk import NodeKindSpec, PluginRegistry, discover_plugins
 from graphlink_chart_data import ChartDataError, canonicalize_chart_data
 from graphlink_navigation_pins import NavigationPinRecord
 
@@ -738,6 +739,45 @@ def _restore_plan_payload(payload: dict[str, Any]) -> SceneNode:
     )
 
 
+def _restore_plugin_payload(payload: dict[str, Any], kind_spec: "NodeKindSpec") -> SceneNode:
+    """ADR-014 stage 14.2: the load-side mirror of session_save.py's
+    _serialize_plugin_node - restores the universal title/content/
+    is_collapsed fields that generic fallback always wrote, unconditionally
+    (every plugin-kind payload this project's own save path ever produced
+    carries them, with no opt-in required), then - only when THIS SAME
+    kind is still registered with a `deserialize` hook today - reconstructs
+    the plugin's own NodeState subclass from the isolated 'plugin_state'
+    dict serialize(node) most recently produced.
+
+    A plugin that dropped its serialize/deserialize opt-in since this node
+    was saved (or never had one) degrades to a plain title/content node
+    rather than losing it outright - matches every other per-kind
+    restorer's own "a missing/unusable piece of state is not fatal" posture
+    (e.g. _restore_gitlink_payload's repo_state/proposal_data isinstance
+    guards). The caller (_restore_node) is the one that decides whether to
+    call this at all - it requires `kind_spec` (i.e. the kind is currently
+    registered in the discovered PluginRegistry) BEFORE reaching here; an
+    unregistered plugin kind is treated exactly like any other unrecognized
+    node_type (skipped, not resurrected from a bare payload string with no
+    validation)."""
+    x, y = _position(payload)
+    kind = str(payload.get("node_type", "") or "")
+    title = str(payload.get("title", "") or kind)
+    content = str(payload.get("content", "") or "")
+    state = None
+    if kind_spec.deserialize is not None:
+        plugin_state = payload.get("plugin_state")
+        if isinstance(plugin_state, dict):
+            try:
+                state = kind_spec.deserialize(plugin_state)
+            except Exception:
+                state = None
+    return SceneNode(
+        id="", x=x, y=y, title=title, kind=kind, content=content, state=state,
+        is_collapsed=bool(payload.get("is_collapsed", False)),
+    )
+
+
 _NODE_RESTORERS = {
     "chat": lambda payload, document: _restore_chat_payload(payload),
     "code": lambda payload, document: _restore_code_payload(payload),
@@ -777,7 +817,11 @@ _CHILD_LINK_KINDS = {"chat", "conversation", "html"}
 
 
 def _restore_node(
-    document: SceneDocument, node_type: str, payload: dict[str, Any], all_nodes_map: dict[int, str],
+    document: SceneDocument,
+    node_type: str,
+    payload: dict[str, Any],
+    all_nodes_map: dict[int, str],
+    plugin_registry: "PluginRegistry | None" = None,
 ) -> tuple[SceneNode | None, str | None]:
     """Ports deserialize_node's own dispatch: default to "chat" for an
     untagged payload (old-old sessions predating the node_type tag), and
@@ -786,9 +830,30 @@ def _restore_node(
     fall-through / `if parent_node:` guard. Returns (node_or_None,
     resolved_parent_new_id_or_None) - the caller connects the edge itself
     once the node is registered, since register_restored_node needs to run
-    first to mint the child's own id."""
+    first to mint the child's own id.
+
+    ADR-014 stage 14.2: a node_type not in _NODE_RESTORERS at all is no
+    longer AUTOMATICALLY unrecognized - it now ALSO falls back to
+    `plugin_registry.node_kinds`, generic against whatever discover_
+    plugins() found (never a per-plugin branch here). This path returns
+    parent_new_id=None unconditionally (a plugin kind is never in
+    _PARENT_CONTENT_INDEX_KINDS/_PARENT_NODE_INDEX_KINDS - it has no legacy
+    index-based parent field to read at all) - its parent edge is restored
+    separately, generically, by _restore_flat_edges below (session_save.py
+    ALWAYS writes the authoritative flat `edges` list for any file this
+    project's own build produces, so this is not a gap for a plugin kind,
+    which only this project's own build could ever have written in the
+    first place)."""
     restorer = _NODE_RESTORERS.get(node_type or "chat")
     if restorer is None:
+        if plugin_registry is not None:
+            kind_spec = plugin_registry.node_kinds.get(node_type)
+            if kind_spec is not None:
+                try:
+                    plugin_node = _restore_plugin_payload(payload, kind_spec)
+                except Exception:
+                    return None, None
+                return document.register_restored_node(plugin_node), None
         return None, None
 
     parent_new_id: str | None = None
@@ -1231,21 +1296,32 @@ def restore_chat_into_document(
     notes_data: list,
     pins_data: list,
     asset_store: Any | None = None,
+    plugin_registry: "PluginRegistry | None" = None,
 ) -> None:
     """ADR-009 stage 9.5 entry point. Publishes `asset_store` for the
     duration of this restore (see _ACTIVE_ASSET_STORE's own comment for why
     a contextvar and not a parameter), then delegates. The reset is in a
     finally so a failed restore can never leave a stale store visible to
-    the next one."""
+    the next one.
+
+    ADR-014 stage 14.2: `plugin_registry` mirrors backend/session_save.py's
+    build_chat_data(..., plugin_registry=None) precedent exactly - None
+    (every real call site: backend/chat_library.py) triggers a real
+    discover_plugins() call, memoized by resolved path; tests inject a
+    specific registry for isolation."""
     token = _ACTIVE_ASSET_STORE.set(asset_store)
     try:
-        _restore_chat_into_document(document, chat, notes_data, pins_data)
+        _restore_chat_into_document(document, chat, notes_data, pins_data, plugin_registry)
     finally:
         _ACTIVE_ASSET_STORE.reset(token)
 
 
 def _restore_chat_into_document(
-    document: SceneDocument, chat: dict[str, Any], notes_data: list, pins_data: list,
+    document: SceneDocument,
+    chat: dict[str, Any],
+    notes_data: list,
+    pins_data: list,
+    plugin_registry: "PluginRegistry | None" = None,
 ) -> None:
     """The top-level orchestrator - ports SceneDeserializer.restore_chat()'s
     own exact ordering, reimplemented against SceneDocument. See this
@@ -1258,6 +1334,9 @@ def _restore_chat_into_document(
     escapes."""
     if not isinstance(chat, dict):
         raise ValueError("chat payload must be a mapping")
+
+    if plugin_registry is None:
+        plugin_registry = discover_plugins()
 
     document.clear_for_load()
 
@@ -1276,7 +1355,7 @@ def _restore_chat_into_document(
         if not isinstance(node_payload, dict):
             continue
         node_type = node_payload.get("node_type", "chat")
-        node, parent_new_id = _restore_node(document, node_type, node_payload, all_nodes_map)
+        node, parent_new_id = _restore_node(document, node_type, node_payload, all_nodes_map, plugin_registry)
         if node is not None:
             all_nodes_map[index] = node.id
             kind_by_new_id[node.id] = node.kind

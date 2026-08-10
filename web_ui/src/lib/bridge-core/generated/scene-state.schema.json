@@ -458,6 +458,12 @@
             },
             "type": "array"
           },
+          "pluginState": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
           "previewLabel": {
             "type": "string"
           },
@@ -775,7 +781,8 @@
           "builderAwaitingToolApproval",
           "builderApprovalToolName",
           "builderApprovalSummary",
-          "builderStatusDetail"
+          "builderStatusDetail",
+          "pluginState"
         ],
         "type": "object"
       },
