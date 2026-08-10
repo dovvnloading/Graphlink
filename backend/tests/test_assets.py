@@ -133,25 +133,49 @@ def test_asset_ids_do_not_collide_across_sessions_with_identical_creation_order(
 _CHART_DATA = {"type": "bar", "title": "Widgets Sold", "labels": ["Q1", "Q2"], "values": [10.0, 20.0]}
 
 
-def test_export_chart_returns_a_real_higher_resolution_png():
+def test_export_chart_returns_a_real_png():
     client = make_client()
     bus = client.app.state.bus
     document = get_session_context(bus.session("default")).canvas_document
     parent = document.add_node(0, 0, "parent")
     chart = document.add_chart_node(0, 0, parent.id, "bar", dict(_CHART_DATA))
 
-    display_bytes, _ = document.get_image_asset(chart.state.chart_asset_id)
     response = client.get(f"/api/assets/chart/{chart.id}/export")
 
     assert response.status_code == 200
     assert response.headers["content-type"] == "image/png"
     assert response.content.startswith(b"\x89PNG\r\n\x1a\n")
-    # A real 3x re-render, not a copy of the cached display asset - export is
-    # a distinct render pass at CHART_EXPORT_DPI_SCALE, so its bytes (and, in
-    # practice, its size at 3x the pixel dimensions) differ from the display
-    # asset's.
-    assert response.content != display_bytes
-    assert len(response.content) > len(display_bytes)
+    assert len(response.content) > 1000
+
+
+def test_export_chart_svg_returns_real_svg_bytes():
+    # ADR-013 stage 13.4's new export option - vector, so no dpi_scale
+    # multiplier applies (see render_chart_svg's own docstring).
+    client = make_client()
+    bus = client.app.state.bus
+    document = get_session_context(bus.session("default")).canvas_document
+    parent = document.add_node(0, 0, "parent")
+    chart = document.add_chart_node(0, 0, parent.id, "bar", dict(_CHART_DATA))
+
+    response = client.get(f"/api/assets/chart/{chart.id}/export?fmt=svg")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/svg+xml"
+    assert response.content.startswith(b"<?xml") or response.content.lstrip().startswith(b"<svg")
+    assert response.headers["content-disposition"] == 'attachment; filename="Widgets_Sold.svg"'
+
+
+def test_export_chart_rejects_an_unsupported_format():
+    client = make_client()
+    bus = client.app.state.bus
+    document = get_session_context(bus.session("default")).canvas_document
+    parent = document.add_node(0, 0, "parent")
+    chart = document.add_chart_node(0, 0, parent.id, "bar", dict(_CHART_DATA))
+
+    response = client.get(f"/api/assets/chart/{chart.id}/export?fmt=pdf")
+
+    assert response.status_code == 400
+    assert response.json() == {"error": "unsupported export format"}
 
 
 def test_export_chart_content_disposition_uses_the_sanitized_title():

@@ -14,15 +14,14 @@ fresh-instance-per-call shape), so token counts - which feed
 total_session_tokens, saved chats.db rows, and autosave's change hash -
 are bit-identical.
 
-render_chart_png (matplotlib, via root module graphlink_chart_rendering)
-is imported here deliberately: it is a pure (chart_type, data, w, h,
-dpi_scale) -> PNG-bytes function with no I/O and no backend
-infrastructure, and "a chart node owns a versioned rendered asset"
-(chart_asset_id/chart_asset_version/image_assets) genuinely is a document
-invariant - the same category of root-module dependency as
-NavigationPinStore/GridViewSettings, which this class has always carried
-as fields. Keeping it module-level also preserves today's import-order
-side effects (matplotlib backend selection at import time).
+ADR-013 stage 13.4 retired this module's own render_chart_png import: a
+chart node's PNG used to be rendered here (add_chart_node's initial
+render, resize_chart's re-render), but that output went dead the moment
+stage 13.2 shipped the client-side interactive renderer - nothing has
+fetched it since. Matplotlib rendering now lives only behind the export/
+copy endpoint (backend/assets.py), off the event loop via asyncio.to_thread
+- a domain method staying synchronous (record_command's own contract)
+could never do that itself, so it was never this layer's job to keep.
 
 backend/canvas.py imports SceneDocument back, so every existing
 `from backend.canvas import SceneDocument` consumer keeps working
@@ -42,7 +41,6 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from graphlink_chart_data import SUPPORTED_CHART_TYPES
-from graphlink_chart_rendering import render_chart_png
 from graphlink_grid_view_settings import (
     GRID_SIZE_PRESETS,
     GRID_STYLE_PRESETS,
@@ -1642,13 +1640,11 @@ class SceneDocument(BranchOps, GroupOps, CommandOps):
         else the literal "Chart" (not a chart-type-specific default; that is
         genuinely what legacy does).
 
-        Renders the display PNG immediately at the freshly-constructed
-        node's OWN chart_width/chart_height (the dataclass defaults, 680x500
-        - read off `node`, not a second literal, so they can never drift
-        apart - see those fields' own comments), stores the bytes in the
-        SAME image_assets dict R3.21's image nodes already use (reused, not
-        a parallel store), and sets chart_asset_version = 1 for this first
-        render."""
+        ADR-013 stage 13.4: no longer renders a PNG here - the client-side
+        interactive renderer (stage 13.2) draws straight from chart_data,
+        and nothing has consumed the backend-rendered display asset since.
+        A chart's ONLY remaining matplotlib render is the export/copy
+        endpoint (backend/assets.py), a fresh re-render on every request."""
         if parent_id is not None and parent_id not in self.nodes:
             raise SceneError(f"unknown parent node: {parent_id}")
         normalized_type = str(chart_type or "").strip().lower()
@@ -1672,15 +1668,6 @@ class SceneDocument(BranchOps, GroupOps, CommandOps):
             ),
         )
 
-        png_bytes = render_chart_png(
-            node.state.chart_type, node.state.chart_data, node.state.chart_width, node.state.chart_height,
-            dpi_scale=1.0,
-        )
-        asset_id = f"chart{uuid.uuid4().hex}"
-        self.image_assets[asset_id] = (png_bytes, "image/png")
-        node.state.chart_asset_id = asset_id
-        node.state.chart_asset_version = 1
-
         self.nodes[node_id] = node
         if parent_id is not None:
             self.connect(parent_id, node_id)
@@ -1703,10 +1690,8 @@ class SceneDocument(BranchOps, GroupOps, CommandOps):
         re-clamps once more, so the final stored size never violates either
         the lock or the min/max bounds even after that re-derivation.
 
-        Re-renders the PNG at the final clamped size, OVERWRITING
-        self.image_assets[chart_asset_id] IN PLACE (same id, new bytes - the
-        old bytes are simply replaced, never left behind) and increments
-        chart_asset_version so the frontend can cache-bust the <img> src."""
+        ADR-013 stage 13.4: no longer re-renders a PNG here - see
+        add_chart_node's own docstring for why."""
         node = self.nodes.get(node_id)
         if node is None:
             raise SceneError(f"unknown node: {node_id}")
@@ -1737,18 +1722,8 @@ class SceneDocument(BranchOps, GroupOps, CommandOps):
         node.state.chart_width = clamped_width
         node.state.chart_height = clamped_height
 
-        png_bytes = render_chart_png(
-            node.state.chart_type, node.state.chart_data, node.state.chart_width, node.state.chart_height,
-            dpi_scale=1.0,
-        )
-        self.image_assets[node.state.chart_asset_id] = (png_bytes, "image/png")
-        node.state.chart_asset_version += 1
-
     def toggle_chart_aspect_lock(self, node_id: str) -> None:
-        """Chart kind only (SceneError otherwise). Flips chart_aspect_locked.
-        No re-render - the current PNG is still correct for the current
-        size regardless of the lock flag; only a later resize_chart call's
-        BEHAVIOR changes."""
+        """Chart kind only (SceneError otherwise). Flips chart_aspect_locked."""
         node = self.nodes.get(node_id)
         if node is None:
             raise SceneError(f"unknown node: {node_id}")
@@ -1962,16 +1937,12 @@ class SceneDocument(BranchOps, GroupOps, CommandOps):
                 image_asset_id = getattr(node.state, "image_asset_id", None)
                 if image_asset_id:
                     self.image_assets.pop(image_asset_id, None)
-                # R6.2: a chart node's rendered PNG lives in the SAME
-                # image_assets dict (reused, not a parallel store - see
-                # ChartState's own docstring, backend/domain/node_states.py)
-                # - same leak-prevention reasoning as image_asset_id just
-                # above, and the same ADR-002 stage 2.5 getattr posture
-                # (chart_asset_id lives on node.state now, None for every
-                # non-chart kind).
-                chart_asset_id = getattr(node.state, "chart_asset_id", None)
-                if chart_asset_id:
-                    self.image_assets.pop(chart_asset_id, None)
+                # R6.2 minted a chart node's rendered PNG into this same
+                # image_assets dict, evicted here on delete - ADR-013 stage
+                # 13.4 retired that render (add_chart_node/resize_chart no
+                # longer produce one; see ChartState's own docstring), so
+                # there is no longer a chart-owned image_assets entry to
+                # clean up here.
                 self._detach_node_from_membership(node_id)
 
     # -- edges -------------------------------------------------------------
@@ -2269,8 +2240,6 @@ class SceneDocument(BranchOps, GroupOps, CommandOps):
             "chartType": n.state.chart_type if isinstance(n.state, ChartState) else "",
             "chartData": dict(n.state.chart_data) if isinstance(n.state, ChartState) else {},
             "chartError": n.state.chart_error if isinstance(n.state, ChartState) else "",
-            "chartAssetId": n.state.chart_asset_id if isinstance(n.state, ChartState) else "",
-            "chartAssetVersion": n.state.chart_asset_version if isinstance(n.state, ChartState) else 0,
             "chartWidth": n.state.chart_width if isinstance(n.state, ChartState) else 680.0,
             "chartHeight": n.state.chart_height if isinstance(n.state, ChartState) else 500.0,
             "chartAspectLocked": n.state.chart_aspect_locked if isinstance(n.state, ChartState) else True,

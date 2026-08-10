@@ -24,8 +24,6 @@ function renderChartNode(overrides: Partial<ChartFlowNode["data"]> = {}, id = "n
       chartType: "bar",
       chartData: { type: "bar", title: "Quarterly Revenue" },
       chartError: "",
-      chartAssetId: "asset-chart-1",
-      chartAssetVersion: 1,
       chartWidth: 680,
       chartHeight: 500,
       chartAspectLocked: true,
@@ -93,17 +91,24 @@ describe("ChartNodeView", () => {
     expect(button).toHaveAttribute("aria-pressed", "false");
   });
 
-  it("the Export link points at the dedicated export endpoint for this node's id", () => {
+  it("the Export PNG/SVG links point at the dedicated export endpoint for this node's id", () => {
     renderChartNode({}, "chart-42");
-    const link = screen.getByRole("link", { name: "Export" });
-    expect(link).toHaveAttribute("href", "/api/assets/chart/chart-42/export?session=default");
-    expect(link).toHaveAttribute("target", "_blank");
+    const pngLink = screen.getByRole("link", { name: "Export PNG" });
+    expect(pngLink).toHaveAttribute("href", "/api/assets/chart/chart-42/export?session=default&fmt=png");
+    expect(pngLink).toHaveAttribute("target", "_blank");
+    const svgLink = screen.getByRole("link", { name: "Export SVG" });
+    expect(svgLink).toHaveAttribute("href", "/api/assets/chart/chart-42/export?session=default&fmt=svg");
+    expect(svgLink).toHaveAttribute("target", "_blank");
   });
 });
 
 describe("chartExportUrl", () => {
-  it("chartExportUrl builds /api/assets/chart/{nodeId}/export?session=default", () => {
-    expect(chartExportUrl("node-1")).toBe("/api/assets/chart/node-1/export?session=default");
+  it("defaults to fmt=png", () => {
+    expect(chartExportUrl("node-1")).toBe("/api/assets/chart/node-1/export?session=default&fmt=png");
+  });
+
+  it("builds an fmt=svg url when asked", () => {
+    expect(chartExportUrl("node-1", "svg")).toBe("/api/assets/chart/node-1/export?session=default&fmt=svg");
   });
 });
 
@@ -161,8 +166,6 @@ describe("ChartNodeView React.memo comparator (ADR-011 stage 11.1)", () => {
         chartType: "bar",
         chartData: { type: "bar", title: "Quarterly Revenue" },
         chartError: "",
-        chartAssetId: "asset-chart-1",
-        chartAssetVersion: 1,
         chartWidth: 680,
         chartHeight: 500,
         chartAspectLocked: true,

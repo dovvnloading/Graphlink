@@ -68,7 +68,7 @@ MIGRATED_KIND_FIELDS = {
         "research_active_source_id", "research_error", "research_result",
     ],
     "chart": [
-        "chart_type", "chart_data", "chart_error", "chart_asset_id", "chart_asset_version",
+        "chart_type", "chart_data", "chart_error",
         "chart_width", "chart_height", "chart_aspect_locked", "chart_source_node_id",
     ],
     # is_locked/group_manual_* are frame-only; group_width/group_height are
@@ -304,7 +304,7 @@ def test_scene_node_core_field_count():
 # is sufficient; the point is the KEY SET, not per-kind values.
 _EXPECTED_SCENE_NODE_WIRE_KEYS = sorted([
     "artifactContent", "attachmentKind", "branchStatus", "byteSize",
-    "chartAspectLocked", "chartAssetId", "chartAssetVersion", "chartData",
+    "chartAspectLocked", "chartData",
     "chartError", "chartHeight", "chartSourceNodeId", "chartType", "chartWidth",
     "chatScrollValue", "code", "codeSandboxAnalysis",
     "codeSandboxApprovalAllowSourceBuilds", "codeSandboxApprovalIsRepair",
@@ -399,8 +399,6 @@ _EXPECTED_NON_OWNING_KIND_WIRE_DEFAULTS = {
     "chartType": "",
     "chartData": {},
     "chartError": "",
-    "chartAssetId": "",
-    "chartAssetVersion": 0,
     "chartWidth": 680.0,
     "chartHeight": 500.0,
     "chartAspectLocked": True,

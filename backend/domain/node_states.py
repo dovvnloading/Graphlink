@@ -198,25 +198,21 @@ class ChartState(NodeState):
       hard-fail contract, rather than add_chart_node raising and aborting
       node creation entirely.
     - chart_error: non-empty if generation/canonicalization degraded to a
-      placeholder - the chart still has a real (if minimal) chart_asset_id
-      and renders SOMETHING, never a blank/broken state (the intent layer's
-      own never-hard-fail contract - ADR-013 stage 13.3's respond_json
-      raises StructuredOutputError rather than silently degrading through
-      several fallback tiers the way the retired ChartDataAgent used to;
-      catching that and showing a placeholder is this layer's job, not
-      generation's).
-    - chart_asset_id: opaque key into the EXISTING
-      SceneDocument.image_assets dict (REUSED, not a parallel store - same
-      dict R3.21's image nodes already use, see that field's own
-      transport-decision comment on image_assets) - the rendered
-      display-resolution PNG. Export (the 3x-resolution download)
-      re-renders fresh rather than reading this asset - see
-      backend/assets.py.
-    - chart_asset_version: incremented every time chart_asset_id's bytes
-      are (re)written (by add_chart_node's initial render, or
-      resize_chart's re-render) - lets the frontend cache-bust the <img>
-      src with a version query param after a resize re-render, since the
-      asset id itself never changes.
+      placeholder - the chart still has real (if minimal) chart_data and
+      renders SOMETHING client-side, never a blank/broken state (the intent
+      layer's own never-hard-fail contract - ADR-013 stage 13.3's
+      respond_json raises StructuredOutputError rather than silently
+      degrading through several fallback tiers the way the retired
+      ChartDataAgent used to; catching that and showing a placeholder is
+      this layer's job, not generation's).
+    - ADR-013 stage 13.4 retired chart_asset_id/chart_asset_version: the
+      backend-rendered display PNG they addressed (add_chart_node's initial
+      render, resize_chart's re-render) went dead the moment stage 13.2
+      shipped the client-side interactive renderer - the frontend has drawn
+      every chart straight from chart_data ever since, never fetching that
+      PNG. Matplotlib now renders ONLY for the export/copy endpoint
+      (backend/assets.py), which re-renders fresh on every request rather
+      than reading anything cached on this state.
     - chart_width/chart_height: default to legacy ChartItem.DEFAULT_WIDTH/
       DEFAULT_HEIGHT - add_chart_node reads these dataclass defaults
       directly off a freshly-constructed node's state (not a second
@@ -237,8 +233,6 @@ class ChartState(NodeState):
     chart_type: str = ""
     chart_data: dict = field(default_factory=dict)
     chart_error: str = ""
-    chart_asset_id: str = ""
-    chart_asset_version: int = 0
     chart_width: float = 680.0
     chart_height: float = 500.0
     chart_aspect_locked: bool = True

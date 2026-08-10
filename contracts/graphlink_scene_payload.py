@@ -99,11 +99,14 @@ scroll-position round-trip), it declares them here so codegen emits a
 real type and a real runtime validator for them, and the unsafe casts
 can be deleted outright rather than merely narrowed.
 
-`chartType`/`chartData`/`chartError`/`chartAssetId`/`chartAssetVersion`/
-`chartWidth`/`chartHeight`/`chartAspectLocked`/`chartSourceNodeId` are
-the R6.2 chart node's real persisted shape - populated for kind=="chart"
-rows, defaulted for every other kind, same additive rule as every field
-above. `chartData` is the one genuinely hard case: graphlink_chart_data.
+`chartType`/`chartData`/`chartError`/`chartWidth`/`chartHeight`/
+`chartAspectLocked`/`chartSourceNodeId` are the R6.2 chart node's real
+persisted shape - populated for kind=="chart" rows, defaulted for every
+other kind, same additive rule as every field above. `chartAssetId`/
+`chartAssetVersion` (the backend-rendered display PNG's own key/version)
+rode this same shape until ADR-013 stage 13.4 retired them - the client-
+side interactive renderer (stage 13.2) draws straight from chartData, so
+nothing had read them since. `chartData` is the one genuinely hard case: graphlink_chart_data.
 py's canonicalize_chart_data() returns one of THREE different shapes
 depending on chart type (bar/line/pie: labels+values+xAxis+yAxis;
 histogram: values+bins+xAxis+yAxis; sankey: flows only) - a real
@@ -496,8 +499,6 @@ class SceneNodeRow:
     chartType: str = ""
     chartData: ChartDataRow = field(default_factory=ChartDataRow)
     chartError: str = ""
-    chartAssetId: str = ""
-    chartAssetVersion: int = 0
     chartWidth: float = 680.0
     chartHeight: float = 500.0
     chartAspectLocked: bool = True

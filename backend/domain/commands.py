@@ -430,11 +430,13 @@ class CommandOps:
         recon, not just the one the recon happened to name.
 
         Asset bytes (image_assets) are snapshotted only for explicitly
-        named node_ids that currently carry an image_asset_id/
-        chart_asset_id - deliberately NOT defensive like the frame case,
-        since asset bytes are the one genuinely expensive thing here and
-        only a node's OWN delete evicts its OWN asset (see
-        remove_nodes' - never a side effect of some other node's edit).
+        named node_ids that currently carry an image_asset_id -
+        deliberately NOT defensive like the frame case, since asset bytes
+        are the one genuinely expensive thing here and only a node's OWN
+        delete evicts its OWN asset (see remove_nodes' - never a side
+        effect of some other node's edit). Chart nodes carried a second
+        such attr (chart_asset_id) before ADR-013 stage 13.4 retired their
+        backend-rendered display PNG - see ChartState's own docstring.
 
         Raises AssertionError if a node/edge disappears during `mutator()`
         that was not in the watched set - a Command silently missing a
@@ -471,10 +473,9 @@ class CommandOps:
             node = self.nodes.get(nid)
             if node is None or node.state is None:
                 continue
-            for attr in ("image_asset_id", "chart_asset_id"):
-                asset_id = getattr(node.state, attr, None)
-                if asset_id and asset_id in self.image_assets:
-                    asset_snapshot_before[asset_id] = self.image_assets[asset_id]
+            asset_id = getattr(node.state, "image_asset_id", None)
+            if asset_id and asset_id in self.image_assets:
+                asset_snapshot_before[asset_id] = self.image_assets[asset_id]
 
         node_ids_before = set(self.nodes.keys())
         edge_ids_before = set(self.edges.keys())

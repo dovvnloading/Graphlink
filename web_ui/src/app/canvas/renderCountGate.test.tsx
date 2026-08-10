@@ -140,7 +140,7 @@ function chatRow(id: string, x: number): SceneNodeRow {
         color: null, headerColor: null, isSystemPrompt: false, isSummaryNote: false,
         isBranchComparison: false, itemIds: [], isLocked: true, groupWidth: null,
         groupHeight: null, chartType: "", chartData: {}, chartError: "",
-        chartAssetId: "", chartAssetVersion: 0, chartWidth: 680.0, chartHeight: 500.0,
+        chartWidth: 680.0, chartHeight: 500.0,
         chartAspectLocked: true, chartSourceNodeId: "", htmlSplitterState: null,
         chatScrollValue: 0.0,
         toolCalls: [], // ADR-007 stage 7.4

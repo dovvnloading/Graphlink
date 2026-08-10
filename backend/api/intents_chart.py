@@ -96,9 +96,9 @@ def register_chart_intents(
             # ADR-010 stage 10.1: agent provenance - this node is produced by
             # a model generation, not a direct user action (stage 10.5's
             # "undo this build" is what will consume that distinction).
-            # add_chart_node also mints chart asset bytes into image_assets;
-            # record_command captures those alongside the node, so undoing a
-            # generated chart does not strand its PNG.
+            # ADR-013 stage 13.4 retired add_chart_node's own PNG render (see
+            # ChartState's own docstring) - there is no longer an asset for
+            # record_command to snapshot alongside the node.
             node, _command = document.record_command(
                 "generateChart", "agent",
                 lambda: document.add_chart_node(

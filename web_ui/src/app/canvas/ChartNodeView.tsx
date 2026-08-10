@@ -44,19 +44,18 @@ const LazyChartRenderer = lazy(() => import("./charts/ChartRenderer"));
  * rendered box directly (see charts/chartHooks.ts's useElementSize).
  *
  * Resize -> re-render: the interactive renderer re-lays-out INSTANTLY at
- * any size (no network round-trip - stage 13.2's whole point), but
- * onResizeEnd is still debounced (CHART_RESIZE_DEBOUNCE_MS, see
- * makeDebouncedChartResize below) before firing resizeChart, because that
- * call still persists the settled chartWidth/chartHeight server-side (and,
- * until stage 13.4 lands, still regenerates the export-quality PNG the
- * Export link downloads) - guarding against a user chaining several quick
- * resize gestures each hitting the network for no display-visible benefit.
- * Aspect-lock uses xyflow's own NodeResizer `keepAspectRatio` prop rather
- * than any hand-rolled ratio math - the backend's own resize_chart still
- * re-derives/clamps against MIN/MAX server-side regardless of what the
- * client sends (this component's MIN/MAX are just a UI-side floor/ceiling
- * matching legacy's own bounds, not the authoritative clamp - same posture
- * as GROUP_RESIZE_MIN_WIDTH/HEIGHT).
+ * any size (no network round-trip - stage 13.2's whole point); onResizeEnd
+ * is still debounced (CHART_RESIZE_DEBOUNCE_MS, see makeDebouncedChartResize
+ * below) before firing resizeChart purely to avoid hitting the network on
+ * every intermediate frame of a drag - ADR-013 stage 13.4 retired the
+ * backend's own display-PNG re-render entirely (nothing has read it since
+ * this renderer shipped), so resizeChart today persists only the settled
+ * chartWidth/chartHeight. Aspect-lock uses xyflow's own NodeResizer
+ * `keepAspectRatio` prop rather than any hand-rolled ratio math - the
+ * backend's own resize_chart still re-derives/clamps against MIN/MAX
+ * server-side regardless of what the client sends (this component's MIN/MAX
+ * are just a UI-side floor/ceiling matching legacy's own bounds, not the
+ * authoritative clamp - same posture as GROUP_RESIZE_MIN_WIDTH/HEIGHT).
  *
  * chartError never hides or blocks the card (the backend's own
  * never-hard-fail contract guarantees a renderable chart always exists) -
@@ -65,20 +64,19 @@ const LazyChartRenderer = lazy(() => import("./charts/ChartRenderer"));
  * can't render (fails its own canonicalizeChartSpec re-check) shows its own
  * inline placeholder instead of crashing - see ChartRenderer.tsx.
  *
- * Export still hits the dedicated export endpoint (a real 3x-resolution
- * matplotlib re-render server-side, not anything this renderer draws) -
- * opened directly in a new tab. That stays server-side deliberately (a
- * downloadable, print-quality raster/vector asset is a different job than
- * "draw this interactively," and stage 13.4 is where that path moves off
- * the event loop and gains a real SVG export option).
+ * Export/PNG and Export/SVG both hit the same dedicated export endpoint (a
+ * real matplotlib re-render server-side - PNG at 3x resolution, SVG as
+ * vector - not anything this renderer draws), opened directly in a new tab.
+ * That stays server-side deliberately: a downloadable, print-quality
+ * raster/vector asset is a different job than "draw this interactively."
+ * ADR-013 stage 13.4 moved that render off the event loop
+ * (asyncio.to_thread, backend/assets.py) and added the SVG option.
  */
 
 export interface ChartNodeData extends Record<string, unknown> {
   chartType: string;
   chartData: ChartDataRow;
   chartError: string;
-  chartAssetId: string;
-  chartAssetVersion: number;
   chartWidth: number;
   chartHeight: number;
   chartAspectLocked: boolean;
@@ -89,15 +87,16 @@ export interface ChartNodeData extends Record<string, unknown> {
 
 export type ChartFlowNode = Node<ChartNodeData, "chart">;
 
-/** The dedicated export endpoint (a real 3x-resolution re-render - see
- * graphlink_chart_rendering.py's dpi_scale - never the cached display
- * asset), matching this increment's contract exactly. `session=default`
- * mirrors this app's single-session-per-window assumption everywhere else
- * (see lib/ws/transport.ts's own defaultWsUrl default parameter). */
-export function chartExportUrl(nodeId: string): string {
+/** The dedicated export endpoint - a real matplotlib re-render server-side
+ * (PNG at 3x resolution via graphlink_chart_rendering.py's dpi_scale, or
+ * SVG as vector - see render_chart_png/render_chart_svg), never anything
+ * cached. `session=default` mirrors this app's single-session-per-window
+ * assumption everywhere else (see lib/ws/transport.ts's own defaultWsUrl
+ * default parameter). */
+export function chartExportUrl(nodeId: string, format: "png" | "svg" = "png"): string {
   // ADR-004 stage 4.1: this one is a plain <a href> the user clicks, so it
   // has no way to carry a header either - same query-param treatment.
-  return withAuthToken(`/api/assets/chart/${nodeId}/export?session=default`);
+  return withAuthToken(`/api/assets/chart/${nodeId}/export?session=default&fmt=${format}`);
 }
 
 function chartTypeBadgeLabel(chartType: string): string {
@@ -133,11 +132,11 @@ export function makeDebouncedChartResize(
  * module doc) but this component never reads them directly - the node's
  * own width/height comes through the flow node object itself, not `data` -
  * so they're deliberately excluded rather than compared for no reason.
- * Likewise chartAssetId/chartAssetVersion are no longer compared: the
- * interactive renderer draws from `chartData` alone now, not a PNG asset
- * URL, so those two fields are dead weight in this comparator even though
- * they still ride the wire (stage 13.4 is where their backend role gets
- * revisited). chartData IS now compared by reference rather than scoped to
+ * chartAssetId/chartAssetVersion (the backend-rendered display PNG's own
+ * key/version) rode ChartNodeData until ADR-013 stage 13.4 retired them
+ * outright - the interactive renderer draws from `chartData` alone, so
+ * nothing had read them since stage 13.2 shipped. chartData IS compared by
+ * reference rather than scoped to
  * `.title` - the renderer reads the whole shape, and SceneCanvas.tsx's own
  * toFlowNodes cache (keyed by the raw scene-node object) guarantees a fresh
  * chartData reference only appears when the underlying node actually
@@ -218,11 +217,19 @@ export const ChartNodeView = memo(function ChartNodeView({
             </button>
             <a
               className="chart-node-btn chart-node-export-link"
-              href={chartExportUrl(id)}
+              href={chartExportUrl(id, "png")}
               target="_blank"
               rel="noreferrer"
             >
-              Export
+              Export PNG
+            </a>
+            <a
+              className="chart-node-btn chart-node-export-link"
+              href={chartExportUrl(id, "svg")}
+              target="_blank"
+              rel="noreferrer"
+            >
+              Export SVG
             </a>
           </div>
         </div>

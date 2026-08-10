@@ -86,8 +86,6 @@ export interface SceneNodeRow {
   chartType: string;
   chartData: ChartDataRow;
   chartError: string;
-  chartAssetId: string;
-  chartAssetVersion: number;
   chartWidth: number;
   chartHeight: number;
   chartAspectLocked: boolean;
@@ -653,16 +651,6 @@ function checkSceneNodeRow(value: unknown, path: string, errors: string[]): void
     const fieldValue = value["chartError"];
     if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.chartError: missing required field`);
     else { if (typeof fieldValue !== "string") errors.push(`${path}.chartError` + ": expected string"); }
-  }
-  {
-    const fieldValue = value["chartAssetId"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.chartAssetId: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.chartAssetId` + ": expected string"); }
-  }
-  {
-    const fieldValue = value["chartAssetVersion"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.chartAssetVersion: missing required field`);
-    else { if (typeof fieldValue !== "number") errors.push(`${path}.chartAssetVersion` + ": expected number"); }
   }
   {
     const fieldValue = value["chartWidth"];
