@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import time
 
 import pytest
 
@@ -645,4 +646,189 @@ class TestBuilderIntents:
             # Refused with a notification, not applied.
             assert node.state.plan_steps[0]["title"] == "already ran"
 
-        asyncio.run(run())
+
+class TestReviewFixRegressions:
+    """Pinning coverage for the adversarial-review fix pass (2026-08-10)."""
+
+    def test_autopilot_does_not_auto_approve_an_unscoped_mcp_style_tool(self, monkeypatch):
+        """An empty scope set is a subset of every set, including the
+        autopilot auto-approve set - it must NOT be treated as "declared
+        safe". A tool registered with scopes=frozenset() (an MCP server
+        configured with no scopes, the default) must still prompt."""
+        from backend.providers.base import ToolSpec
+        from backend.tools import ToolResult
+
+        document, dispatcher, registry, bus = make_harness()
+
+        async def unscoped_handler(call, ctx):
+            return ToolResult(content="did something")
+
+        registry.register(
+            ToolSpec(name="mcp.unscoped_tool", description="d", input_schema={"type": "object"}),
+            unscoped_handler, scopes=frozenset(), approval="always",
+        )
+        node = seed_plan(document, ["one step"], mode="autopilot")
+        scripted_turns(monkeypatch, [
+            {"tool_calls": [call("c1", "mcp.unscoped_tool")]},
+            {"tool_calls": [call("c2", "builder.complete_step", summary="done")]},
+        ], [])
+
+        approvals, _ = asyncio.run(drive_build(document, dispatcher, registry, bus, node))
+
+        assert approvals == ["mcp.unscoped_tool"], (
+            "an unscoped tool must always prompt, even in autopilot - an "
+            "empty scope set is a subset of the auto-approve set"
+        )
+        assert node.state.builder_status == "done"
+
+    def test_two_consecutive_replans_do_not_mint_colliding_step_ids(self, monkeypatch):
+        document, dispatcher, registry, bus = make_harness()
+        node = seed_plan(document, ["s1", "s2", "s3", "s4", "s5"])
+        scripted_turns(monkeypatch, [
+            {"tool_calls": [call("c1", "builder.complete_step", summary="s1 done")]},
+            # First replan: kept=[s1,s2], new ids minted past 5 -> s6, s7.
+            {"tool_calls": [call("c2", "builder.replan", steps=["A", "B"], reason="r1")]},
+            {"tool_calls": [call("c3", "builder.complete_step", summary="s2 done")]},
+            {"tool_calls": [call("c4", "builder.complete_step", summary="A done")]},
+            # Second replan: everything left is non-pending (kept=all 4) -
+            # a length-based next_index would re-mint s6, colliding with
+            # the surviving step already named s6.
+            {"tool_calls": [call("c5", "builder.replan", steps=["C", "D"], reason="r2")]},
+            {"tool_calls": [call("c6", "builder.complete_step", summary="B done")]},
+            {"tool_calls": [call("c7", "builder.complete_step", summary="C done")]},
+            {"tool_calls": [call("c8", "builder.complete_step", summary="D done")]},
+        ], [])
+
+        asyncio.run(drive_build(document, dispatcher, registry, bus, node))
+
+        assert node.state.builder_status == "done", node.state.builder_status_detail
+        ids = [s["id"] for s in node.state.plan_steps]
+        assert len(ids) == len(set(ids)), f"duplicate step ids minted across replans: {ids}"
+
+    def test_mid_turn_budget_breach_does_not_clobber_an_already_completed_step(self, monkeypatch):
+        """A turn that calls builder.complete_step THEN another tool: a
+        breach discovered on the SECOND call must not reset the just-
+        completed step back to pending."""
+        # Token spend is credited ONCE per turn, before any of that turn's
+        # tool calls are processed - only the WALL clock genuinely advances
+        # between per-call breach checks within one turn (_sync_wall_spend
+        # re-reads time.monotonic() on every check). A custom tool bumps a
+        # fake clock as a side effect of c1's own invoke, so c1's OWN
+        # breach check (before it runs) sees no breach, and c2's breach
+        # check (after c1 landed) does.
+        from backend.providers.base import ToolSpec
+        from backend.tools import GRAPH_READ, ToolResult
+
+        document, dispatcher, registry, bus = make_harness()
+        node = seed_plan(document, ["only step"], max_wall_seconds=30)
+        fake_now = [1000.0]
+        monkeypatch.setattr(builder_module.time, "monotonic", lambda: fake_now[0])
+
+        async def complete_and_bump_clock(call, ctx):
+            ctx.controls.step_completed = True
+            ctx.controls.step_summary = "done"
+            fake_now[0] += 10_000  # crosses max_wall_seconds AFTER c1 lands
+            return ToolResult(content="Step marked complete.")
+
+        registry.register(
+            ToolSpec(name="test.complete_and_bump", description="d", input_schema={"type": "object"}),
+            complete_and_bump_clock, scopes={GRAPH_READ}, approval="auto",
+        )
+        scripted_turns(monkeypatch, [
+            {
+                "tool_calls": [
+                    call("c1", "test.complete_and_bump"),
+                    call("c2", "graph.create_node", kind="note", content="x"),
+                ],
+            },
+        ], [])
+
+        asyncio.run(drive_build(document, dispatcher, registry, bus, node))
+
+        assert node.state.plan_steps[0]["status"] == "done", (
+            "a breach discovered on a LATER call in the same turn must not "
+            "clobber a step an EARLIER call in that turn already completed"
+        )
+        assert node.state.builder_status == "paused"
+
+    def test_mid_turn_budget_breach_after_a_declared_finish_lands_done_not_paused(self, monkeypatch):
+        from backend.providers.base import ToolSpec
+        from backend.tools import GRAPH_READ, ToolResult
+
+        document, dispatcher, registry, bus = make_harness()
+        node = seed_plan(document, ["only step"], max_wall_seconds=30)
+        fake_now = [1000.0]
+        monkeypatch.setattr(builder_module.time, "monotonic", lambda: fake_now[0])
+
+        async def finish_and_bump_clock(call, ctx):
+            ctx.controls.step_completed = True
+            ctx.controls.step_summary = "done"
+            ctx.controls.finished = True
+            ctx.controls.finish_summary = "all done"
+            fake_now[0] += 10_000  # crosses max_wall_seconds AFTER c1 lands
+            return ToolResult(content="Build marked finished.")
+
+        registry.register(
+            ToolSpec(name="test.finish_and_bump", description="d", input_schema={"type": "object"}),
+            finish_and_bump_clock, scopes={GRAPH_READ}, approval="auto",
+        )
+        scripted_turns(monkeypatch, [
+            {
+                "tool_calls": [
+                    call("c1", "test.finish_and_bump"),
+                    call("c2", "graph.create_node", kind="note", content="x"),
+                ],
+            },
+        ], [])
+
+        asyncio.run(drive_build(document, dispatcher, registry, bus, node))
+
+        assert node.state.builder_status == "done", (
+            "a declared finish earlier in the turn must not be dropped by "
+            "a budget breach discovered on a later call in that same turn"
+        )
+
+    def test_watchdog_timeout_resets_the_running_step_so_resume_does_not_skip_it(self, monkeypatch):
+        from backend import agents as agents_module
+
+        monkeypatch.setattr(agents_module, "WATCHDOG_TIMEOUT_SECONDS", 0.05)
+        document, dispatcher, registry, bus = make_harness()
+        node = seed_plan(document, ["slow step"])
+
+        def hang_turn(task, messages, tools=(), **kwargs):
+            time.sleep(0.3)  # longer than the watchdog above
+            raise AssertionError("should have hit the watchdog first")
+
+        monkeypatch.setattr(api_provider, "chat_turn_with_tools", hang_turn)
+
+        asyncio.run(drive_build(document, dispatcher, registry, bus, node))
+
+        assert node.state.builder_status == "paused"
+        assert node.state.plan_steps[0]["status"] == "pending", (
+            "a step wedged at 'running' by a watchdog timeout is immutable "
+            "history and permanently skipped by _current_step on resume"
+        )
+
+    def test_a_generic_provider_exception_lands_failed_but_stays_resumable(self, monkeypatch):
+        document, dispatcher, registry, bus = make_harness()
+        node = seed_plan(document, ["a step"])
+
+        def boom_turn(task, messages, tools=(), **kwargs):
+            raise RuntimeError("rate limited")
+
+        monkeypatch.setattr(api_provider, "chat_turn_with_tools", boom_turn)
+
+        asyncio.run(drive_build(document, dispatcher, registry, bus, node))
+
+        assert node.state.builder_status == "failed"
+        assert node.state.plan_steps[0]["status"] == "pending", (
+            "the in-flight step must not stay wedged at 'running' behind a "
+            "now-resumable 'failed' status"
+        )
+
+        from backend.api.intents_builder import _RESUMABLE_STATUSES
+
+        assert "failed" in _RESUMABLE_STATUSES, (
+            "a transient provider fault must not permanently kill a build "
+            "whose goal/checklist/spent budgets are still on the canvas"
+        )

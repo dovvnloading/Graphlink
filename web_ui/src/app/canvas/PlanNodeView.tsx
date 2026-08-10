@@ -77,7 +77,11 @@ const STATUS_LABELS: Record<string, string> = {
   interrupted: "Interrupted",
 };
 
-const RESUMABLE = new Set(["awaiting_start", "paused", "interrupted"]);
+// review-fix: "failed" joined the backend's own _RESUMABLE_STATUSES - a
+// transient provider fault (rate limit, a 5xx, a network blip) used to be
+// a permanent dead end even though the plan node's goal/checklist/spent
+// budgets sit right there on the canvas, resumable like any other pause.
+const RESUMABLE = new Set(["awaiting_start", "paused", "interrupted", "failed"]);
 // ADR-008 stage 8.4: "undo this build" is offered once the run is OVER -
 // the domain's own live-run guard would refuse it mid-run anyway
 // (Stop-then-undo is the supported sequence), so the button only appears

@@ -1065,7 +1065,17 @@ def _get_ollama_capabilities(model_name: str | None) -> set[str] | None:
         except TypeError:
             show_response = show_fn(model=normalized_model)
     except Exception:
-        _OLLAMA_CAPABILITY_CACHE[cache_key] = None
+        # review-fix: do NOT cache a probe exception (daemon unreachable,
+        # a transient connection error, ...) - it is not evidence the
+        # model lacks the capability, only that this one probe failed.
+        # Caching it as None poisoned every later capability check
+        # (ollama_supports_tools et al map None -> False) for the rest of
+        # the process, so one bad moment (app started before the daemon,
+        # a brief restart) permanently and silently blocked the Builder
+        # with a false "model does not support tool calling" error even
+        # after the daemon came back - same negative-caching bug class as
+        # crawl_etiquette's robots.txt fix. Returning None uncached lets
+        # the next call retry the probe fresh.
         return None
 
     raw_capabilities = _extract_response_field(show_response, "capabilities")

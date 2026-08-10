@@ -975,3 +975,41 @@ def test_undo_never_resurrects_a_snapshotted_pending_request_id():
     assert document.nodes[node.id].pending_request_id is None, (
         "redo must not resurrect it either"
     )
+
+
+def test_undo_never_resurrects_a_snapshotted_run_owned_builder_status():
+    """review-fix: a builderReplan/builderPlan command recorded MID-RUN
+    snapshots the plan node while builder_status was a run-owned value
+    ("running"/"planning"/"awaiting_approval"). By the time undo/redo of
+    it can run at all, _guard_live_runs guarantees that run has already
+    landed for real (same reasoning test_undo_never_resurrects_a_
+    snapshotted_pending_request_id documents for pending_request_id) -
+    restoring the stale value would render the node permanently
+    "Building..."/"Waiting for approval" with no live run behind it and
+    no button that could ever advance it."""
+    document = SceneDocument()
+    node = document.add_plan_node(0, 0, "goal")
+    node.state.plan_steps = [{"id": "s1", "title": "old", "status": "pending", "detail": ""}]
+    node.state.builder_status = "running"  # mid-run when this command was recorded
+
+    document.record_command(
+        "builderReplan", "agent",
+        lambda: document.set_plan_steps(node.id, [
+            {"id": "s2", "title": "new", "status": "pending", "detail": ""},
+        ]),
+        node_ids=[node.id],
+    )
+    node.state.builder_status = "done"  # the run landed for real after recording
+
+    command = document.command_log[-1]
+    command.invert(document)
+    assert document.nodes[node.id].state.plan_steps[0]["title"] == "old"
+    assert document.nodes[node.id].state.builder_status == "interrupted", (
+        "undo must not resurrect a run-owned status no live run backs"
+    )
+
+    command.apply(document)
+    assert document.nodes[node.id].state.plan_steps[0]["title"] == "new"
+    assert document.nodes[node.id].state.builder_status == "interrupted", (
+        "redo must not resurrect it either"
+    )

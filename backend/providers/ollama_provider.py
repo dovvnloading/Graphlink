@@ -247,6 +247,18 @@ class OllamaProvider:
                     # inside it - `done` may not even be set the same chunk.
                     if part["message"].get("tool_calls"):
                         tool_calls = self._extract_tool_calls(part["message"])
+                        # review-fix: a tool-calling chunk IS the terminal
+                        # chunk (this comment block's own opening line) and
+                        # Ollama marks it done with real token counts, same
+                        # as the plain-answer path below - but this branch
+                        # broke out before ever reading them, so every
+                        # builder tool-call turn (almost the entire loop)
+                        # silently reported usage=None and the token budget
+                        # went unenforced on real spend.
+                        if part.get("done"):
+                            usage = normalize_usage(
+                                part.get("prompt_eval_count"), part.get("eval_count")
+                            )
                         break
                     if part.get("done"):
                         # ADR-006 stage 6.8: the terminal chunk carries
@@ -267,7 +279,7 @@ class OllamaProvider:
                 # streamed above as ordinary "text" events.
                 for call in tool_calls:
                     yield ProviderEvent("tool_call", tool_call=call)
-                yield ProviderEvent("done", "".join(content_parts))
+                yield ProviderEvent("done", "".join(content_parts), usage=usage)
                 return
 
             try:

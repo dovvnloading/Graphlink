@@ -453,7 +453,14 @@ async def run_build(
                 spec_scopes = None  # malformed - let the human see it
             elif effective is not None and spec_scopes is not None:
                 spec_scopes = spec_scopes | {effective}
-            if spec_scopes is not None and spec_scopes <= _AUTOPILOT_AUTO_SCOPES:
+            # An EMPTY scope set (an MCP server configured with no scopes -
+            # the default) is a subset of every set, including this one -
+            # `spec_scopes and ...` excludes it so an unscoped/undeclared
+            # tool always falls through to a human approval instead of
+            # silently auto-running. Scope labels are config metadata, not
+            # enforcement; "declared safe" must be an explicit, non-empty
+            # claim to auto-approve on.
+            if spec_scopes and spec_scopes <= _AUTOPILOT_AUTO_SCOPES:
                 return True
         future: asyncio.Future = loop.create_future()
         handle.approval_future = future
@@ -545,6 +552,7 @@ async def run_build(
         },
     ]
 
+    step: dict | None = None
     try:
         while True:
             if cancel_event.is_set():
@@ -633,8 +641,21 @@ async def run_build(
                 for call in tool_calls:
                     breach = _spend_breach()
                     if breach is not None:
-                        step["status"] = "pending"
-                        await _land("paused", breach + " Raise the budget and resume to continue.")
+                        # An EARLIER call in this same turn may already have
+                        # completed the step (builder.complete_step) or
+                        # declared the build finished/aborted - a breach
+                        # discovered on a LATER call in the same turn must
+                        # not clobber that work back to "pending" or drop a
+                        # declared finish (both were previously lost here,
+                        # only ever consulted at the outer loop's top).
+                        if step["status"] == "running":
+                            step["status"] = "pending"
+                        if controls.finished:
+                            await _land("done", controls.finish_summary or "Build complete.")
+                        elif controls.aborted:
+                            await _land("failed", controls.abort_reason or "The model aborted the build.")
+                        else:
+                            await _land("paused", breach + " Raise the budget and resume to continue.")
                         return
                     result = await registry.invoke(call, ctx)
                     messages.append({
@@ -675,9 +696,26 @@ async def run_build(
     except api_provider.RequestCancelledError:
         await _land("stopped", "Stopped by user.")
     except asyncio.TimeoutError:
+        # Same "don't leave a step wedged at running" contract the two
+        # spend-breach pause sites already honor - a step frozen at
+        # "running" is immutable history (set_plan_steps) and permanently
+        # skipped by _current_step on resume.
+        if step is not None and step.get("status") == "running":
+            step["status"] = "pending"
         await _land("paused", "The model stopped responding - resume to try again.")
     except Exception as exc:
-        await _land("failed", f"Build failed: {exc}")
+        # A transient fault (rate limit, a 5xx past the transport retry
+        # cap, a one-off network blip) must not permanently kill the
+        # build - "failed" is now a RESUMABLE terminal status (see
+        # intents_builder._RESUMABLE_STATUSES) for exactly this reason,
+        # matching this module's own "state lives on the canvas, always
+        # resumable" design. Status/label/alert-styling stay "failed" (the
+        # frontend's existing red-alert treatment is correct - something
+        # DID go wrong); only resumability changes. Same step-unwedging as
+        # the timeout path above so resume doesn't skip the in-flight step.
+        if step is not None and step.get("status") == "running":
+            step["status"] = "pending"
+        await _land("failed", f"Build failed: {exc} — resume to retry.")
         if notifications is not None:
             notifications.show(f"Build failed: {exc}", "error")
             await bus.publish("notification")
@@ -685,7 +723,22 @@ async def run_build(
 
 def _apply_replan(document, node, controls: BuilderControls, run_id: str) -> None:
     kept = [s for s in node.state.plan_steps if s.get("status") != "pending"]
-    next_index = len(node.state.plan_steps) + 1
+    # The next id must exceed every id EVER minted, not just len(current
+    # list) - a replan that shrinks the pending tail (kept < original
+    # length) would otherwise let a LATER replan re-mint an id a surviving
+    # step already holds (set_plan_steps rejects the duplicate and the
+    # build dies unresumable). Scanning the full pre-replan list (kept +
+    # about-to-be-replaced) for the highest "sN" suffix keeps every
+    # minted id monotonically increasing across any number of replans.
+    import re
+
+    used = [
+        int(m.group(1))
+        for s in node.state.plan_steps
+        for m in [re.fullmatch(r"s(\d+)", str(s.get("id", "")))]
+        if m
+    ]
+    next_index = (max(used) + 1) if used else (len(node.state.plan_steps) + 1)
     new_steps = list(kept)
     for title in controls.replan_steps or []:
         new_steps.append({

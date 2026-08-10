@@ -79,6 +79,8 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Callable, Iterable, TypeVar
 
+from backend.domain.node_states import PlanState
+
 if TYPE_CHECKING:
     from backend.domain.model import SceneEdge, SceneNode
     from graphlink_navigation_pins import NavigationPinRecord
@@ -211,6 +213,29 @@ def _restore(live: dict, snapshot: dict) -> None:
             # refused the undo/redo if a REAL run is live on this node.
             if hasattr(restored, "pending_request_id"):
                 restored.pending_request_id = None
+            # review-fix: the same phantom-state hazard applies to a plan
+            # node's builder_status. A builderReplan/builderPlan command
+            # recorded MID-RUN snapshots the node while builder_status was
+            # a run-owned value ("running"/"planning"/"awaiting_approval").
+            # By the same _guard_live_runs guarantee above (pending_
+            # request_id already proven not-live on the CURRENT node before
+            # any undo/redo of a plan node reaches here), that run has
+            # necessarily already landed a terminal/paused status for real -
+            # restoring the snapshot's stale run-owned value would render
+            # the node permanently "Building..."/"Waiting for approval"
+            # with no live run behind it and no button that can advance it.
+            # Normalize to "interrupted", the same resume-safe landing
+            # session reload already uses for exactly this situation.
+            if isinstance(getattr(restored, "state", None), PlanState) and restored.state.builder_status in (
+                "running", "planning", "awaiting_approval",
+            ):
+                restored.state.builder_status = "interrupted"
+                restored.state.builder_status_detail = (
+                    "Restored from undo/redo history - resume to continue."
+                )
+                restored.state.builder_awaiting_tool_approval = False
+                restored.state.builder_approval_tool_name = ""
+                restored.state.builder_approval_summary = ""
             live[key] = restored
 
 

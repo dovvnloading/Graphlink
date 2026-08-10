@@ -257,6 +257,44 @@ class TestReadSubgraph:
         assert ids == {a.id, b.id}
         assert c.id not in ids
 
+    def test_node_count_is_capped_and_flagged_truncated(self):
+        """review-fix: depth alone doesn't bound node COUNT - a hub node
+        can have hundreds of descendants within a couple hops. Each one
+        re-enters the builder's messages list and is re-sent on every
+        later turn (messages only ever grow), so an unbounded read could
+        alone overflow a turn's context window."""
+        from backend.tools_graph import _READ_MAX_NODES
+
+        document = SceneDocument()
+        root = document.add_chat_node(0, 0, "root", True)
+        for i in range(_READ_MAX_NODES + 15):
+            document.add_chat_node(0, 200 + i, f"child {i}", False, root.id)
+        registry = make_registry(document)
+        ctx, _ = make_ctx()
+
+        payload = json.loads(invoke(registry, ctx, "graph.read_subgraph", {
+            "root_id": root.id, "depth": 1,
+        }).content)
+
+        assert len(payload["nodes"]) == _READ_MAX_NODES
+        assert payload["nodes_truncated"] is True
+        node_ids = {n["id"] for n in payload["nodes"]}
+        edge_targets = {e["target"] for e in payload["edges"]}
+        assert edge_targets <= node_ids, "no edge should reference a node excluded by the cap"
+
+    def test_a_small_subgraph_is_not_flagged_truncated(self):
+        document = SceneDocument()
+        root = document.add_chat_node(0, 0, "root", True)
+        document.add_chat_node(0, 200, "child", False, root.id)
+        registry = make_registry(document)
+        ctx, _ = make_ctx()
+
+        payload = json.loads(invoke(registry, ctx, "graph.read_subgraph", {
+            "root_id": root.id,
+        }).content)
+
+        assert payload["nodes_truncated"] is False
+
 
 class TestApprovalAndScopeGating:
     def test_denied_approval_leaves_the_document_untouched(self):

@@ -224,6 +224,39 @@ class TestRunChart:
         assert result.is_error
         assert called == []
 
+    def test_the_stored_chart_data_is_canonicalized_not_the_raw_model_output(self, monkeypatch):
+        """review-fix: add_chart_node deliberately does NOT canonicalize
+        itself - every caller must. The raw structured-output dict the
+        model returns has no "type"/"title" keys; the stored chart_data
+        must be canonicalize_chart_data's output shape (ChartState's own
+        documented invariant), not the raw dict passed straight through."""
+        document, dispatcher, registry = make_setup()
+        source = document.add_chat_node(0, 0, "sales: Q1 10, Q2 20", False)
+        raw = {"labels": ["Q1", "Q2"], "values": [10, 20]}
+        monkeypatch.setattr(agents_module, "_call_chart_agent", lambda text, chart_type: dict(raw))
+
+        result = run_node(registry, make_ctx(), source.id, action="chart", chart_type="bar")
+
+        assert not result.is_error
+        payload = json.loads(result.content)
+        chart = document.nodes[payload["chart_node_id"]]
+        assert chart.state.chart_data != raw, "the raw uncanonicalized dict must not be stored verbatim"
+        assert chart.state.chart_data["type"] == "bar"
+        assert chart.state.chart_data["title"]  # canonicalize_chart_data fills a default
+
+    def test_non_finite_chart_values_are_rejected_not_stored(self, monkeypatch):
+        document, dispatcher, registry = make_setup()
+        source = document.add_chat_node(0, 0, "bad data", False)
+        monkeypatch.setattr(
+            agents_module, "_call_chart_agent",
+            lambda text, chart_type: {"labels": ["a", "b"], "values": [1, float("nan")]},
+        )
+
+        result = run_node(registry, make_ctx(), source.id, action="chart", chart_type="bar")
+
+        assert result.is_error
+        assert not any(n.kind == "chart" for n in document.nodes.values())
+
 
 class TestRunResearch:
     def _seed_research(self, document):
@@ -343,6 +376,48 @@ class TestRunResearch:
 
         assert result.is_error
         assert "net.fetch" in result.content
+
+    def test_a_real_request_cancelled_from_the_service_propagates_as_the_loops_cancellation(
+        self, monkeypatch,
+    ):
+        """review-fix: the service's OWN CancellationToken.raise_if_cancelled
+        raises graphlink_plugins.web_research.domain.RequestCancelled - a
+        DIFFERENT class from api_provider's RequestCancelledError, same
+        name, wrong module. Previously uncaught here, it fell into
+        ToolRegistry.invoke's generic except and was fed back to the model
+        as an ordinary tool error instead of propagating as a real
+        cancellation, and the node was never landed."""
+        import api_provider
+        from graphlink_plugins.web_research import service as wr_service
+        from graphlink_plugins.web_research.domain import RequestCancelled
+
+        document, dispatcher, registry = make_setup()
+        node = self._seed_research(document)
+
+        def fake_run(self, request, *, token=None, progress=None):
+            raise RequestCancelled("Web research was cancelled.")
+
+        monkeypatch.setattr(wr_service.WebResearchService, "run", fake_run)
+
+        with pytest.raises(api_provider.RequestCancelledError):
+            run_node(registry, make_ctx(scopes=ALL_SCOPES | frozenset({"net.fetch"})), node.id)
+
+        assert node.state.research_error
+        assert node.pending_request_id is None
+
+
+class TestRunNodeSchema:
+    def test_the_action_enum_advertises_research(self):
+        """review-fix: stage 8.5 added the research action to the handler
+        and the autopilot net gate, but the tool's own advertised schema
+        still said 'web_research nodes are not yet runnable' and omitted
+        "research" from the action enum - a provider that validates tool
+        arguments against the schema (or a model that trusts the enum as
+        the exhaustive option list) could never explicitly request it."""
+        from backend.tools_graph import RUN_NODE_SPEC
+
+        assert "research" in RUN_NODE_SPEC.input_schema["properties"]["action"]["enum"]
+        assert "not yet runnable" not in RUN_NODE_SPEC.description
 
 
 class TestGuards:

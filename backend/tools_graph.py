@@ -54,6 +54,15 @@ _SIBLING_HORIZONTAL_SPACING = 360
 # over; the model can ask for a specific node again if it truly needs more.
 _READ_EXCERPT_CHARS = 1000
 _READ_MAX_DEPTH = 3
+# review-fix: depth alone doesn't bound node COUNT - a hub node can have
+# hundreds of descendants within 3 hops. Each carries up to
+# _READ_EXCERPT_CHARS of content that then re-enters the builder's
+# messages list and gets re-sent on every subsequent turn (messages only
+# ever grow - see builder.py's run_build), so an unbounded read can alone
+# overflow a turn's context window and land the whole build as terminal
+# "failed". 40 nodes * 1000 chars stays comfortably under any provider's
+# context budget for one tool result.
+_READ_MAX_NODES = 40
 
 _CREATABLE_KINDS = ("chat", "note", "code", "document", "pycoder", "web_research")
 
@@ -127,8 +136,10 @@ GRAPH_READ_SUBGRAPH_SPEC = ToolSpec(
     description=(
         "Read the subgraph under a node: the node itself plus descendants "
         "(depth-limited). Returns JSON nodes [{id, kind, title, content "
-        "(excerpt), truncated}] and edges [{source, target}]. Use this to "
-        "see what exists before creating or connecting."
+        "(excerpt), truncated}], edges [{source, target}], and "
+        "nodes_truncated (true if the branch has more nodes than fit in one "
+        "read - narrow the root or depth to see the rest). Use this to see "
+        "what exists before creating or connecting."
     ),
     input_schema={
         "type": "object",
@@ -312,16 +323,20 @@ def make_read_subgraph_handler(document: SceneDocument):
         seen = {root_id}
         frontier = [root_id]
         edges_out: list[dict[str, str]] = []
+        nodes_truncated = False
         for _ in range(depth):
             next_frontier = []
             for node_id in frontier:
                 for edge in document.edges.values():
                     if edge.source != node_id:
                         continue
-                    edges_out.append({"source": edge.source, "target": edge.target})
                     if edge.target not in seen:
+                        if len(seen) >= _READ_MAX_NODES:
+                            nodes_truncated = True
+                            continue  # neither node nor edge included past the cap
                         seen.add(edge.target)
                         next_frontier.append(edge.target)
+                    edges_out.append({"source": edge.source, "target": edge.target})
             frontier = next_frontier
             if not frontier:
                 break
@@ -337,7 +352,9 @@ def make_read_subgraph_handler(document: SceneDocument):
                 "content": content[:_READ_EXCERPT_CHARS],
                 "truncated": len(content) > _READ_EXCERPT_CHARS,
             })
-        return ToolResult(content=json.dumps({"nodes": nodes_out, "edges": edges_out}))
+        return ToolResult(content=json.dumps({
+            "nodes": nodes_out, "edges": edges_out, "nodes_truncated": nodes_truncated,
+        }))
 
     return handler
 
@@ -352,14 +369,16 @@ RUN_NODE_SPEC = ToolSpec(
         "history; requires provider.call), chart (explicit action on any "
         "content node - chat/note/document/code - generates a chart node "
         "FROM that node's content; requires provider.call; optional "
-        "chart_type, default bar). Omit `action` to run the node's own "
-        "default. web_research nodes are not yet runnable via this tool."
+        "chart_type, default bar), research (a web_research node's default "
+        "- runs a web search/fetch on its content as the query and returns "
+        "cited findings; requires net.fetch - always prompts for approval, "
+        "even in autopilot). Omit `action` to run the node's own default."
     ),
     input_schema={
         "type": "object",
         "properties": {
             "node_id": {"type": "string"},
-            "action": {"type": "string", "enum": ["execute", "reply", "chart"]},
+            "action": {"type": "string", "enum": ["execute", "reply", "chart", "research"]},
             "chart_type": {
                 "type": "string",
                 "description": "chart action only: bar, line, pie, scatter... (default bar).",
@@ -535,9 +554,11 @@ def make_run_node_handler(document: SceneDocument, dispatcher):
         Cancellation bridges the builder's threading.Event onto the
         service's own CancellationToken via a watcher task - the service's
         stages checkpoint on the token, not on our event."""
+        from api_provider import RequestCancelledError
         from backend.canvas import _research_result_wire
         from graphlink_plugins.web_research.domain import (
             CancellationToken,
+            RequestCancelled,
             ResearchFailure,
             WebResearchRequest,
         )
@@ -576,6 +597,20 @@ def make_run_node_handler(document: SceneDocument, dispatcher):
         except ResearchFailure as exc:
             document.fail_web_research_run(node_id, cancelled=token.cancelled, message=str(exc))
             return _error(f"Research failed: {exc}")
+        except RequestCancelled:
+            # review-fix: this is a DIFFERENT class from api_provider's own
+            # RequestCancelledError (same name, wrong module) - the service
+            # raises it when the bridged builder Stop trips `token`.
+            # Uncaught, it fell into ToolRegistry.invoke's generic
+            # `except Exception`, which turns it into an ERROR ToolResult
+            # fed back to the model as ordinary tool feedback instead of
+            # propagating as a real cancellation - the node was also never
+            # landed, leaving it wedged mid-run. Land it properly, then
+            # re-raise as the type invoke() DOES special-case so Stop is
+            # honored immediately instead of only at the loop's next
+            # cancel_event checkpoint.
+            document.fail_web_research_run(node_id, cancelled=True, message="Web research was cancelled.")
+            raise RequestCancelledError("Web research was cancelled.")
         except asyncio.TimeoutError:
             token.cancel()
             document.fail_web_research_run(
@@ -593,7 +628,7 @@ def make_run_node_handler(document: SceneDocument, dispatcher):
         }))
 
     async def _run_chart(document, node, node_id, run_id, call, _agents):
-        from graphlink_chart_data import SUPPORTED_CHART_TYPES
+        from graphlink_chart_data import ChartDataError, SUPPORTED_CHART_TYPES, canonicalize_chart_data
 
         chart_type = str(call.arguments.get("chart_type") or "bar")
         if chart_type not in SUPPORTED_CHART_TYPES:
@@ -610,10 +645,21 @@ def make_run_node_handler(document: SceneDocument, dispatcher):
         )
         if isinstance(parsed, dict) and parsed.get("error"):
             return _error(f"Chart generation failed: {parsed['error']}")
+        # review-fix: add_chart_node deliberately does NOT canonicalize
+        # itself (its own docstring) - every other caller (intents_chart.py,
+        # session_load.py) runs the model's raw structured output through
+        # canonicalize_chart_data first. Skipping it here stored a
+        # non-canonical shape, violating ChartState's documented invariant
+        # (wrong containers, non-finite numbers, duplicate Sankey flows all
+        # pass through uncaught).
+        try:
+            chart_data = canonicalize_chart_data(parsed, chart_type)
+        except ChartDataError as exc:
+            return _error(f"Chart generation produced invalid data: {exc}")
         x, y = _place_child(document, node_id)
         chart_node, _command = document.record_command(
             "builderRunChart", "agent",
-            lambda: document.add_chart_node(x, y, node_id, chart_type, parsed),
+            lambda: document.add_chart_node(x, y, node_id, chart_type, chart_data),
             node_ids=[node_id], run_id=run_id,
         )
         return ToolResult(content=json.dumps({

@@ -149,6 +149,14 @@ describe("PlanNodeView", () => {
     expect(screen.queryByRole("button", { name: "Save as recipe" })).not.toBeInTheDocument();
   });
 
+  it("review-fix: shows Resume on a failed build - the backend now treats it as resumable", () => {
+    renderPlan(makeData({
+      builderStatus: "failed", pendingRequestId: null,
+      builderStatusDetail: "Build failed: rate limited — resume to retry.",
+    }));
+    expect(screen.getByRole("button", { name: "Resume" })).toBeInTheDocument();
+  });
+
   it("hides Undo build when no run ever stamped the plan", () => {
     renderPlan(makeData({ builderStatus: "done", builderRunId: "", pendingRequestId: null }));
     expect(screen.queryByRole("button", { name: "Undo build" })).not.toBeInTheDocument();

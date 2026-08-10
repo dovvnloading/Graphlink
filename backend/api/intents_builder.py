@@ -29,7 +29,14 @@ _MAX_TOKENS_BUDGET = 2_000_000
 _MIN_WALL_BUDGET = 30
 _MAX_WALL_BUDGET = 7_200
 
-_RESUMABLE_STATUSES = ("awaiting_start", "paused", "interrupted")
+_RESUMABLE_STATUSES = ("awaiting_start", "paused", "interrupted", "failed")
+# "failed" review-fix: a transient provider fault (rate limit, a 5xx past
+# the retry cap, a network blip) used to land here as a PERMANENT dead
+# end - the plan node's goal/checklist/spent budgets stay right there on
+# the canvas, so refusing to resume from them contradicted this app's own
+# "state lives on the canvas" design for the single most common mid-build
+# fault class. run_build resets the wedged in-flight step back to
+# "pending" before landing "failed" so resume picks up exactly there.
 
 
 def _place_plan_node(document: SceneDocument) -> tuple[float, float]:

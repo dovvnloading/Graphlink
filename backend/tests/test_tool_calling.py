@@ -183,6 +183,37 @@ def test_ollama_round_trips_an_echo_tool_call(monkeypatch):
     assert second_call_messages[2] == {"role": "tool", "content": "hello"}
 
 
+def test_ollama_tool_call_turn_reports_usage_when_the_terminal_chunk_carries_it(monkeypatch):
+    """review-fix: a tool-calling chunk IS the terminal chunk (see
+    _extract_tool_calls' own docstring) and Ollama marks it done with real
+    token counts, same as a plain-answer turn - but the code used to break
+    out before ever reading them, so every builder tool-call turn silently
+    reported usage=None and the token budget went unenforced on real
+    spend."""
+    import ollama
+
+    def fake_chat(**kwargs):
+        return FakeOllamaStream([{
+            "message": {
+                "content": "",
+                "tool_calls": [{"function": {"name": "echo", "arguments": {"message": "hi"}}}],
+            },
+            "done": True,
+            "prompt_eval_count": 30,
+            "eval_count": 8,
+        }])
+
+    monkeypatch.setattr(ollama, "chat", fake_chat)
+    provider = OllamaProvider(model="m")
+
+    events = _collect(provider.stream(
+        ChatRequest(task=config.TASK_CHAT, messages=[{"role": "user", "content": "echo hi"}], tools=(ECHO_TOOL,)),
+        CancelToken(),
+    ))
+
+    assert events[-1].usage == {"prompt_tokens": 30, "completion_tokens": 8}
+
+
 def test_ollama_tool_call_turn_never_enters_the_reasoning_retry_loop(monkeypatch):
     """A pure tool-call turn (no visible answer text) must NOT be treated
     as the "reasoning but no answer" retryable case - that retry exists for
@@ -446,6 +477,33 @@ def test_anthropic_round_trips_an_echo_tool_call():
     }
 
 
+def test_anthropic_tool_call_turn_reports_usage(monkeypatch):
+    """review-fix: prompt_tokens/completion_tokens are collected from
+    message_start/message_delta regardless of how the turn ends, but the
+    tool-call short-circuit dropped them before yielding "done" - every
+    builder tool-call turn silently reported usage=None and the token
+    budget went unenforced on real spend."""
+    client, calls = _fake_anthropic_client([[
+        {"type": "message_start", "message": {"role": "assistant", "usage": {"input_tokens": 40}}},
+        {
+            "type": "content_block_start", "index": 0,
+            "content_block": {"type": "tool_use", "id": "toolu_xyz", "name": "echo"},
+        },
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": '{"message": "hi"}'}},
+        {"type": "content_block_stop", "index": 0},
+        {"type": "message_delta", "delta": {"stop_reason": "tool_use"}, "usage": {"output_tokens": 12}},
+        {"type": "message_stop"},
+    ]])
+    provider = AnthropicProvider(client=client, api_key="k", model="claude-opus-5")
+
+    events = _collect(provider.stream(
+        ChatRequest(task=config.TASK_CHAT, messages=[{"role": "user", "content": "echo hi"}], tools=(ECHO_TOOL,)),
+        CancelToken(),
+    ))
+
+    assert events[-1].usage == {"prompt_tokens": 40, "completion_tokens": 12}
+
+
 # -- Gemini --------------------------------------------------------------------
 #
 # Unlike the other three sections, Gemini's wire shapes here are
@@ -481,6 +539,31 @@ def test_gemini_stream_translates_tools_into_the_native_function_declarations_sh
             {"name": "echo", "description": "Echoes the given message back.", "parameters": ECHO_TOOL.input_schema},
         ],
     }]
+
+
+def test_gemini_tool_call_turn_reports_usage(monkeypatch):
+    """review-fix: usageMetadata is collected from every SSE payload
+    (including the trailing frame of a function-call response) but the
+    tool-call short-circuit dropped it before yielding "done" - every
+    builder tool-call turn silently reported usage=None and the token
+    budget went unenforced on real spend."""
+    def fake_stream_sse(url, body, timeout=120, cancel_event=None, api_key=None):
+        yield {
+            "candidates": [{"content": {"parts": [
+                {"functionCall": {"name": "echo", "args": {"message": "hi"}}},
+            ]}}],
+            "usageMetadata": {"promptTokenCount": 22, "candidatesTokenCount": 6},
+        }
+
+    monkeypatch.setattr("backend.providers.gemini_provider._gemini_stream_sse", fake_stream_sse)
+    provider = GeminiProvider(api_key="k", model="gemini-2.5-pro")
+
+    events = _collect(provider.stream(
+        ChatRequest(task=config.TASK_CHAT, messages=[{"role": "user", "content": "echo hi"}], tools=(ECHO_TOOL,)),
+        CancelToken(),
+    ))
+
+    assert events[-1].usage == {"prompt_tokens": 22, "completion_tokens": 6}
 
 
 def test_gemini_round_trips_an_echo_tool_call(monkeypatch):
