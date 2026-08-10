@@ -323,7 +323,7 @@ _EXPECTED_SCENE_NODE_WIRE_KEYS = sorted([
     "isDocked", "isFinalDeliverable", "isLocked", "isSummaryNote",
     "isSystemPrompt", "isUser", "itemIds", "kind", "language", "mimeType",
     "model", "overrideModelId", "overrideProvider",
-    "pendingRequestId", "previewLabel", "provider", "pycoderAnalysis",
+    "pendingRequestId", "pluginState", "previewLabel", "provider", "pycoderAnalysis",
     "pycoderAwaitingApproval", "pycoderCode", "pycoderError",
     "pycoderLastRunFailed", "pycoderMode", "pycoderOutput", "pycoderPrompt",
     "researchActiveSourceId", "researchCompleted", "researchError",
