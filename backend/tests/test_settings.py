@@ -42,6 +42,7 @@ def test_settings_payload_shape_matches_generated_validator_shape(manager):
         "secretsEncryptedAtRest",
         "logLevel",
         "autoModelPolicy",
+        "theme",
     }
 
 
@@ -55,6 +56,8 @@ def test_settings_payload_reflects_real_manager_defaults(manager):
     assert payload["logLevel"] == "INFO"
     # ADR-018 stage 18.4: "cheapest-capable" by default.
     assert payload["autoModelPolicy"] == "cheapest-capable"
+    # ADR-012 stage 12.2: "system" by default - defers to prefers-color-scheme.
+    assert payload["theme"] == "system"
 
 
 def test_settings_never_imports_qt():
@@ -164,6 +167,37 @@ def test_set_log_level_intent_rejects_unknown_level_without_touching_root_logger
         assert logging.getLogger().level == root_level_before  # unchanged
     finally:
         logging.getLogger().setLevel(root_level_before)
+
+
+# -- ADR-012 stage 12.2: theme setting -----------------------------------
+
+
+def test_get_theme_defaults_to_system(manager):
+    assert manager.get_theme() == "system"
+
+
+def test_set_theme_persists_and_rejects_unknown_themes(manager):
+    manager.set_theme("dark")
+    assert manager.get_theme() == "dark"
+
+    manager.set_theme("not-a-real-theme")
+    assert manager.get_theme() == "dark"  # unchanged, not overwritten with garbage
+
+
+def test_set_theme_intent_persists_and_republishes(manager):
+    bus = SessionBus("settings-theme-test")
+    register_settings(bus, manager)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "setTheme", ["light"]))
+    assert manager.get_theme() == "light"
+
+
+def test_set_theme_intent_rejects_unknown_theme(manager):
+    bus = SessionBus("settings-theme-reject-test")
+    register_settings(bus, manager)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "setTheme", ["not-a-real-theme"]))
+    assert manager.get_theme() == "system"  # unchanged
 
 
 def test_set_notification_preference_intent_updates_a_single_type(manager):

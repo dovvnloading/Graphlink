@@ -205,6 +205,11 @@ def settings_payload(manager: SettingsManager) -> dict[str, Any]:
         # policy api_provider's auto-fallback consults when neither an
         # explicit task assignment nor a node/branch override exists.
         "autoModelPolicy": manager.get_auto_model_policy(),
+        # ADR-012 stage 12.2: "system" | "light" | "dark" - the frontend
+        # stamps this straight onto <html data-theme=...> (or removes the
+        # attribute entirely for "system", handing off to
+        # prefers-color-scheme - see App.tsx's own applyTheme).
+        "theme": manager.get_theme(),
     }
 
 

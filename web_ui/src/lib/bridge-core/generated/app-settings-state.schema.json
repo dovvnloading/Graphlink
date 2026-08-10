@@ -180,6 +180,9 @@
     "showTokenCounter": {
       "type": "boolean"
     },
+    "theme": {
+      "type": "string"
+    },
     "viewingApiProvider": {
       "type": "string"
     }
@@ -195,6 +198,7 @@
     "secretsEncryptedAtRest",
     "logLevel",
     "autoModelPolicy",
+    "theme",
     "activeApiProvider",
     "viewingApiProvider",
     "apiBaseUrl",

@@ -24,6 +24,7 @@ const snapshot = {
   secretsEncryptedAtRest: true,
   logLevel: "INFO",
   autoModelPolicy: "cheapest-capable",
+  theme: "system",
   activeApiProvider: "OpenAI-Compatible",
   viewingApiProvider: "OpenAI-Compatible",
   apiBaseUrl: "https://api.openai.com/v1",
@@ -180,6 +181,22 @@ describe("SettingsDialog", () => {
     await chooseCustomOption(user, "Automatic Model Selection Policy", "Best Quality");
 
     expect(intents).toContainEqual(["app-settings", "setAutoModelPolicy", ["best-quality"]]);
+  });
+
+  it("General page renders the theme select at its current value", async () => {
+    const { user } = setup();
+    await user.click(screen.getByText("open settings"));
+
+    expect(screen.getByRole("button", { name: "Theme" })).toHaveTextContent("Match System");
+  });
+
+  it("choosing a theme option fires setTheme with the option's id", async () => {
+    const { user, intents } = setup();
+    await user.click(screen.getByText("open settings"));
+
+    await chooseCustomOption(user, "Theme", "Dark");
+
+    expect(intents).toContainEqual(["app-settings", "setTheme", ["dark"]]);
   });
 
   it("API Endpoint page renders for the real (not deferred-placeholder) section", async () => {

@@ -49,6 +49,8 @@ class AppSettingsStatePayload:
     # ADR-018 stage 18.4: General page - the auto-policy rung's setting
     # ("cheapest-capable" | "fastest" | "best-quality").
     autoModelPolicy: str
+    # ADR-012 stage 12.2: General page - "system" | "light" | "dark".
+    theme: str
     # R7.4a: API-provider page.
     activeApiProvider: str
     viewingApiProvider: str

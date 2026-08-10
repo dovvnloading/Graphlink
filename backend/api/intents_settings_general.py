@@ -85,6 +85,14 @@ def register_settings_general_intents(
         await asyncio.to_thread(run_locked, manager.set_auto_model_policy, str(policy))
         await bus.publish("app-settings")
 
+    async def set_theme(theme: str):
+        # ADR-012 stage 12.2: persist only, same shape as set_auto_model_policy
+        # above - unlike set_log_level, there is no backend-side live-apply
+        # step, since theme is purely a frontend DOM concern (App.tsx's own
+        # applyTheme reads it straight off the republished snapshot below).
+        await asyncio.to_thread(run_locked, manager.set_theme, str(theme))
+        await bus.publish("app-settings")
+
     async def set_notification_preference(notification_type: str, enabled: bool):
         await asyncio.to_thread(
             run_locked, manager.set_notification_preferences, {str(notification_type): bool(enabled)}
@@ -140,6 +148,7 @@ def register_settings_general_intents(
     bus.register_intent("app-settings", "setEnableSystemPrompt", set_enable_system_prompt)
     bus.register_intent("app-settings", "setLogLevel", set_log_level)
     bus.register_intent("app-settings", "setAutoModelPolicy", set_auto_model_policy)
+    bus.register_intent("app-settings", "setTheme", set_theme)
     bus.register_intent("app-settings", "setNotificationPreference", set_notification_preference)
     bus.register_intent("app-settings", "setGithubToken", set_github_token)
     bus.register_intent("app-settings", "clearGithubToken", clear_github_token)

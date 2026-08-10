@@ -243,6 +243,8 @@ CLASSIFICATION: tuple[Classified, ...] = (
     Classified("app-settings", "setLogLevel", "B", "preference: local logging verbosity"),
     # ADR-018 stage 18.4:
     Classified("app-settings", "setAutoModelPolicy", "B", "preference: auto-routing policy, not document content"),
+    # ADR-012 stage 12.2:
+    Classified("app-settings", "setTheme", "B", "preference: local theme choice, not document content"),
 
     # -- backend/api/intents_settings_api_provider.py (app-settings) --------
     Classified("app-settings", "setViewingApiProvider", "B", "preference: which provider sub-page is viewed"),

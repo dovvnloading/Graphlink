@@ -4,6 +4,7 @@ import { TOPIC_VALIDATORS } from "../lib/api-contract/topics";
 import type { AppSettingsState } from "../lib/bridge-core/generated/app-settings-state";
 import { isTextEditable } from "../lib/bridge-core/textFocus";
 import { ConnectionStatus, WsTransport, defaultWsUrl } from "../lib/ws/transport";
+import { applyTheme } from "./applyTheme";
 import { connectionBadgeLabel } from "./connectionBadge";
 import { ExecutionLimitsProvider } from "./canvas/ExecutionLimitsContext";
 import { SceneCanvas, measuredNodeSize } from "./canvas/SceneCanvas";
@@ -334,6 +335,7 @@ function App() {
       const validated = TOPIC_VALIDATORS["app-settings"](payload);
       if (validated.ok) {
         setSettingsVisibility({ showTokenCounter: (validated.value as AppSettingsState).showTokenCounter });
+        applyTheme((validated.value as AppSettingsState).theme);
       } else {
         console.error("[app-settings] rejected snapshot:", validated.errors);
       }

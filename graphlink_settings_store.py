@@ -33,6 +33,15 @@ class SettingsManager:
     # backend/observability.py.apply_log_level can pass this straight to
     # logging.getLevelName without a translation table.
     LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR")
+    # ADR-012 stage 12.2: "system" defers to prefers-color-scheme (no
+    # explicit [data-theme] stamped on <html> at all - see gl-vars-dev.css's
+    # own cascade docstring); "light"/"dark" force that theme regardless of
+    # OS preference. A prior theme setting existed and was removed for being
+    # provably inert (commit 585d747, "R8a: remove the dead Theme setting") -
+    # this one is a different, now-resolved problem: stage 12.1 gave the
+    # frontend a real light palette and a real [data-theme] cascade to apply
+    # this value to, so persisting it is no longer a no-op.
+    THEMES = ("system", "light", "dark")
     # Bumped whenever session.dat's shape changes in a way future code needs to branch
     # on. Version 2 introduces provider-scoped cloud profiles and explicit local
     # model assignment modes. Version 3 persists refreshed cloud model catalogs so
@@ -679,6 +688,16 @@ class SettingsManager:
     def set_log_level(self, level: str):
         if level in self.LOG_LEVELS:
             self.state["log_level"] = level
+            self._save_state()
+
+    def get_theme(self):
+        # ADR-012 stage 12.2. "system" by default - the app never forces a
+        # theme choice on a user who hasn't made one.
+        return self.state.get("theme", "system")
+
+    def set_theme(self, theme: str):
+        if theme in self.THEMES:
+            self.state["theme"] = theme
             self._save_state()
 
     def get_notification_preferences(self):

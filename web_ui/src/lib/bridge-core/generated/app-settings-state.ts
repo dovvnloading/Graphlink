@@ -21,6 +21,7 @@ export interface AppSettingsState {
   secretsEncryptedAtRest: boolean;
   logLevel: string;
   autoModelPolicy: string;
+  theme: string;
   activeApiProvider: string;
   viewingApiProvider: string;
   apiBaseUrl: string;
@@ -151,6 +152,11 @@ function checkAppSettingsState(value: unknown, path: string, errors: string[]): 
     const fieldValue = value["autoModelPolicy"];
     if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.autoModelPolicy: missing required field`);
     else { if (typeof fieldValue !== "string") errors.push(`${path}.autoModelPolicy` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["theme"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.theme: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.theme` + ": expected string"); }
   }
   {
     const fieldValue = value["activeApiProvider"];

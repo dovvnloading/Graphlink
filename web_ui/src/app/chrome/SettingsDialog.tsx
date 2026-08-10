@@ -51,6 +51,13 @@ const AUTO_MODEL_POLICY_OPTIONS = [
   { id: "best-quality", label: "Best Quality" },
 ] as const;
 
+// ADR-012 stage 12.2: mirrors SettingsManager.THEMES (graphlink_settings_store.py).
+const THEME_OPTIONS = [
+  { id: "system", label: "Match System" },
+  { id: "light", label: "Light" },
+  { id: "dark", label: "Dark" },
+] as const;
+
 // Llama.cpp has no per-task assignment concept like Ollama's OLLAMA_TASKS -
 // just one global chat model path plus an optional title/naming override
 // (api_provider.py's _get_llama_cpp_model_path: chart/web-validate/web-
@@ -114,6 +121,8 @@ const initialState: AppSettingsState = {
   // ADR-018 stage 18.4: mirrors SettingsManager.get_auto_model_policy()'s
   // own default.
   autoModelPolicy: "cheapest-capable",
+  // ADR-012 stage 12.2: mirrors SettingsManager.get_theme()'s own default.
+  theme: "system",
   activeApiProvider: API_PROVIDER_OPENAI,
   viewingApiProvider: API_PROVIDER_OPENAI,
   apiBaseUrl: DEFAULT_OPENAI_BASE_URL,
@@ -161,15 +170,27 @@ function GeneralPage({
   state: AppSettingsState;
   transport: WsTransport;
 }) {
-  // R8a (UI/UX issue list finding #9): a Theme select (Dark/Muted/
-  // Monochromatic) used to live here. It persisted a real setTheme intent,
-  // but nothing in the SPA ever applied the value - no data-theme attribute,
-  // no alternate token set, the app rendered identically no matter what was
-  // selected. Removed rather than wired up: building two real alternate
-  // palettes is a design decision, not a bug fix, and a persisted preference
-  // that provably does nothing is worse than no preference at all.
+  // R8a (UI/UX issue list finding #9) removed the prior Theme select
+  // (Dark/Muted/Monochromatic): it persisted a real setTheme intent, but
+  // nothing in the SPA ever applied the value - no data-theme attribute, no
+  // alternate token set, the app rendered identically no matter what was
+  // selected. A persisted preference that provably does nothing is worse
+  // than no preference at all, so it was cut rather than left inert.
+  // ADR-012 stages 12.1 (a real light+dark token palette) and 12.2 (this
+  // control, plus App.tsx's own applyTheme effect) resolve exactly that gap
+  // - system/light/dark all genuinely repaint the app now.
   return (
     <div className="settings-general-page">
+      <div className="settings-field">
+        <span className="settings-field-label">Theme</span>
+        <CustomSelect
+          ariaLabel="Theme"
+          value={state.theme}
+          options={THEME_OPTIONS.map((option) => ({ id: option.id, label: option.label }))}
+          onChange={(id) => transport.fireIntent("app-settings", "setTheme", [id], undefined, true)}
+        />
+      </div>
+
       <label className="settings-checkbox-row">
         <input
           type="checkbox"
