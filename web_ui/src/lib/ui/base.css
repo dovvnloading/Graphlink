@@ -11,12 +11,32 @@
    `scrollbar-color` inherits, so setting it once on :root covers the page
    and every inner scroll container of every island.
 
-   --gl-neutral-button-border is the same runtime-injected token island
-   cards already use for their borders; before the bridge's first theme
-   snapshot the declaration is simply invalid-and-ignored, which only
-   matters if something scrolls during the first frames. */
+   --gl-neutral-button-border is the same token node cards already use for
+   their borders (web_ui/src/lib/tokens/gl-vars-dev.css) - it resolves via
+   the ordinary CSS cascade like any other custom property, so it already
+   follows theme switching (ADR-012 stage 12.1/12.2) with no extra wiring
+   here.
+
+   color-scheme tells the browser what native form controls (this file's
+   own scrollbar-color target, plus date pickers, checkboxes, etc.) should
+   render as - it must track the SAME light/dark cascade as the tokens
+   above it, or native controls would mismatch the page's own theme. Same
+   three-layer structure as gl-vars-dev.css's own header explains: dark is
+   the unconditional default (:root), overridden by prefers-color-scheme
+   for a user who hasn't explicitly chosen, overridden again by an explicit
+   [data-theme] choice regardless of OS preference. */
 :root {
   color-scheme: dark;
   scrollbar-color: var(--gl-neutral-button-border) transparent;
   scrollbar-width: thin;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    color-scheme: light;
+  }
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
 }
